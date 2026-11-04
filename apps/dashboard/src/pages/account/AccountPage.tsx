@@ -368,7 +368,8 @@ function MyStats() {
       <div className="cs-page">
         {toolbar}
         <div className="status-panel empty" role="alert">
-          <p className="empty-title">Не удалось посчитать статистику.</p>
+          <p className="empty-title">Hub не ответил</p>
+          <p className="empty-text">Числа не пришли. Это не ноль: данные могут быть, просто экран их не получил.</p>
           <div className="empty-actions">
             <button type="button" className="btn btn-sm" disabled={stats.isFetching} onClick={() => void stats.refetch()}>Повторить</button>
           </div>

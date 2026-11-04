@@ -58,7 +58,7 @@ function AccordionSection({
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="flex w-full items-center justify-between gap-3 py-2.5 text-left text-sm font-semibold text-text-primary transition-colors hover:text-accent"
+        className="flex w-full items-center justify-between gap-3 py-2 text-left text-sm font-semibold text-text-primary transition-colors hover:text-accent"
         aria-expanded={open}
       >
         <span>{heading}</span>

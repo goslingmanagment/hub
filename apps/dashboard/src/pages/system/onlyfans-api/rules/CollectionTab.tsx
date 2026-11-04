@@ -25,7 +25,7 @@ import {
 import { useAdminUsers } from "@/api/adminUsers";
 import { KernelApiError } from "@/api/sdk";
 import { ModalShell } from "@/components/shared/ModalShell";
-import { StatusPanel } from "@/components/shared/StatusPanel";
+import { NoAnswerPanel } from "@/components/shared/StatusPanel";
 import { StaleDataNotice } from "@/components/shared/StaleDataNotice";
 import { TableSkeleton } from "@/components/shared/TableSkeleton";
 import { Tooltip } from "@/components/shared/Tooltip";
@@ -373,16 +373,7 @@ function RulesScreen() {
       <div className="space-y-6">
         <OfapiOffBar ofapi={ofapi} />
         <div className="card">
-          <StatusPanel
-            tone="error"
-            title="Настройки сбора недоступны"
-            description="Hub не ответил. Настройки сбора не прочитаны."
-            action={(
-              <button type="button" className="btn btn-sm" onClick={() => void snapshotQuery.refetch()}>
-                Повторить
-              </button>
-            )}
-          />
+          <NoAnswerPanel retry={snapshotQuery.refetch} />
         </div>
       </div>
     );
@@ -617,7 +608,7 @@ function RulesScreen() {
           <p className="text-sm text-text-secondary">
             Черновика нет; экран показывает актуальные настройки.
           </p>
-          <div className="mt-5 flex justify-end">
+          <div className="mt-6 flex justify-end">
             <button type="button" className="btn" onClick={() => { setConflictMessage(null); setModal(null); }}>
               Понятно
             </button>
@@ -711,7 +702,7 @@ export function StaleBanner(props: { entries: StaleEntry[] }) {
           Сбор по расписанию отстаёт: {n} {ruPlural(n, "категория не завершалась", "категории не завершались", "категорий не завершались")} успешно
           дольше двух интервалов
         </p>
-        <ul className="mt-1.5 space-y-1">
+        <ul className="mt-2 space-y-1">
           {props.entries.map((entry) => (
             <li key={`${entry.pageId}:${entry.category}`}>
               <span className="font-semibold">{categoryLabel(entry.category)}</span>
@@ -726,7 +717,7 @@ export function StaleBanner(props: { entries: StaleEntry[] }) {
           ))}
         </ul>
         {outgrows && (
-          <p className="mt-1.5">
+          <p className="mt-2">
             Запуск начинается каждый интервал и тратит лимит задачи, но до конца списка не доходит.
             {levers.length > 0 && <>
               {" "}Поднять лимит: раскройте категорию и увеличьте {levers.map((lever) => CAP_LEVER_FIELD_RU[lever]).join(" или ")}.
@@ -1007,7 +998,7 @@ export function CategoryEditor(props: {
                 <p className="mb-2 text-danger">Глобальная пауза: режимы сохранены, правки откроются после возобновления.</p>
               )}
               {modes.map((mode) => (
-                <label key={mode} className="grid cursor-pointer grid-cols-[16px_1fr] gap-2.5 py-1.5 text-text-primary">
+                <label key={mode} className="grid cursor-pointer grid-cols-[16px_1fr] gap-2 py-2 text-text-primary">
                   <input
                     type="radio"
                     name={`${legendId}-mode`}
@@ -1143,7 +1134,7 @@ export function CategoryEditor(props: {
           {settings.mode === "off"
             ? "Новых запросов не будет."
             : <>
-              <span className="badge mr-1.5">не измерена</span>
+              <span className="badge mr-2">не измерена</span>
               <span className="text-text-secondary">
                 Сервер не даёт прогноза по этой категории; цена — {PRICE_UNIT_LABELS_RU[view.entry.priceUnit] ?? view.entry.priceUnit}.
                 Ограничитель — дневной лимит {fmtCredits(settings.dailyCreditLimit)} {creditsWord(settings.dailyCreditLimit)}
@@ -1284,7 +1275,7 @@ export function JobsCard(props: { snapshot: OfapiCollectionSnapshot; scope: Coll
                 <td className="min-w-[160px] whitespace-normal align-top">
                   <span className="font-medium">{jobStateLabel(job.state)}</span>
                   {jobReasonText(job) && <div className="cell-second">{jobReasonText(job)}</div>}
-                  <div className="mt-1.5 flex flex-wrap gap-2 empty:hidden">
+                  <div className="mt-2 flex flex-wrap gap-2 empty:hidden">
                     {job.category === "vault_files"
                       ? <Link className="btn btn-sm" to="/system/onlyfans-api/media">Открыть загрузку</Link>
                       : ["paused", "blocked", "budget_exhausted"].includes(job.state) && (
@@ -1315,7 +1306,7 @@ export function JobsCard(props: { snapshot: OfapiCollectionSnapshot; scope: Coll
                   </div>
                 </td>
                 <td className="muted min-w-[130px] whitespace-normal align-top tabular-nums">{jobProgress(job)}</td>
-                <td className="muted align-top whitespace-nowrap tabular-nums">{localDateTime(job.createdAt)}</td>
+                <td className="muted align-top tabular-nums">{localDateTime(job.createdAt)}</td>
               </tr>
             ))}
           </tbody>
@@ -1360,7 +1351,7 @@ export function FinishIncompleteRunModal(props: {
     <p className="text-sm text-text-primary">{categoryLabel(props.job.category)} · {props.pageLabel}</p>
     <p className="mt-3 text-sm text-text-secondary">Сохранённые данные, курсор и учёт неподтверждённых списаний останутся. Этот запуск завершится как неполный. Новых запросов сейчас не будет; следующий проход начнётся по штатному расписанию, если сбор включён.</p>
     {props.error && <p role="alert" className="mt-3 text-sm text-danger">{props.error}</p>}
-    <div className="mt-5 flex flex-wrap justify-end gap-2">
+    <div className="mt-6 flex flex-wrap justify-end gap-2">
       <button type="button" className="btn" disabled={props.pending} onClick={props.onClose}>Оставить на паузе</button>
       <button type="button" className="btn btn-primary" disabled={props.pending} onClick={props.onConfirm}>{props.pending ? "Завершаем…" : "Завершить неполный запуск"}</button>
     </div>
@@ -1379,11 +1370,11 @@ function AuditCard(props: { snapshot: OfapiCollectionSnapshot; actorName: (userI
         : `${rows.length} ${ruPlural(rows.length, "запись", "записи", "записей")} · последняя ${localDateTime(latest.createdAt)} · ${props.actorName(latest.actorUserId)}`}
     >
       {rows.length === 0
-        ? <p className="px-5 py-4 text-sm text-text-secondary">Записей нет: настройки сбора ещё не менялись (версия {props.snapshot.revision}).</p>
+        ? <p className="px-6 py-4 text-sm text-text-secondary">Записей нет: настройки сбора ещё не менялись (версия {props.snapshot.revision}).</p>
         : (
           <ul className="divide-y divide-border-light">
             {rows.map((row) => (
-              <li key={row.revision} className="grid gap-1 px-5 py-3 text-sm sm:grid-cols-[160px_1fr]">
+              <li key={row.revision} className="grid gap-1 px-6 py-3 text-sm sm:grid-cols-[160px_1fr]">
                 <div className="text-xs text-text-secondary tabular-nums">
                   <div className="font-semibold text-text-primary">Версия {row.revision}</div>
                   <div>{localDateTime(row.createdAt)}</div>
@@ -1469,7 +1460,7 @@ export function DraftBar(props: {
 function ModalSection(props: { title: string; children: ReactNode }) {
   return (
     <div className="border-t border-border-light py-3">
-      <div className="mb-1.5 text-xs font-semibold text-text-secondary">{props.title}</div>
+      <div className="mb-2 text-xs font-semibold text-text-secondary">{props.title}</div>
       {props.children}
     </div>
   );
@@ -1479,7 +1470,7 @@ function CostSection(props: { preview: OfapiCollectionPreview; enabling: boolean
   const { preview } = props;
   return (
     <ModalSection title="Расход">
-      <dl className="grid gap-x-4 gap-y-1.5 text-sm sm:grid-cols-[180px_1fr]">
+      <dl className="grid gap-x-4 gap-y-2 text-sm sm:grid-cols-[180px_1fr]">
         <dt className="text-text-secondary">Периодический</dt>
         <dd className="text-text-primary">
           {preview.cost.maximumNewCreditsPerDay > 0
@@ -1618,7 +1609,7 @@ export function PauseModal(props: {
   return (
     <ModalShell title={props.resume ? "Возобновить фоновый сбор?" : "Остановить фоновый сбор?"} onClose={props.onClose}>
       <ModalSection title={props.resume ? "Возобновится" : "Остановится"}>
-        <dl className="grid gap-x-4 gap-y-1.5 text-sm sm:grid-cols-[180px_1fr]">
+        <dl className="grid gap-x-4 gap-y-2 text-sm sm:grid-cols-[180px_1fr]">
           <dt className="text-text-secondary">Категории по расписанию</dt>
           <dd className="text-text-primary">{list(summary.scheduled)}</dd>
           <dt className="text-text-secondary">Категории по запросу</dt>
@@ -1630,7 +1621,7 @@ export function PauseModal(props: {
         </dl>
       </ModalSection>
       <ModalSection title="Продолжит работать и списывать">
-        <dl className="grid gap-x-4 gap-y-1.5 text-sm sm:grid-cols-[180px_1fr]">
+        <dl className="grid gap-x-4 gap-y-2 text-sm sm:grid-cols-[180px_1fr]">
           <dt className="text-text-secondary">События OnlyFans API</dt>
           <dd className="text-text-primary">приходят и учитываются как прежде; отписка — отдельное действие, здесь не выполняется</dd>
           <dt className="text-text-secondary">Действия чаттеров</dt>
@@ -1822,7 +1813,7 @@ export function JobModal(props: {
           <span className="field-hint block">{selection.length} из 100 элементов.</span>
         </label>
       </div>
-      <div className="mt-5 flex flex-wrap items-center justify-end gap-2 border-t border-border-light pt-4">
+      <div className="mt-6 flex flex-wrap items-center justify-end gap-2 border-t border-border-light pt-4">
         <button type="button" className="btn" onClick={props.onClose} disabled={props.pending}>Отмена</button>
         <Tooltip focusable content="Сервер проверит потолки и версию настроек; задача попадёт в очередь только при совпадении версии.">
           <button type="button" className="btn btn-primary" onClick={submit} disabled={!canSubmit}>

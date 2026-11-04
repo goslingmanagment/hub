@@ -45,7 +45,7 @@ export function EditModelModal({
   }
 
   return (
-    <ModalShell title={`Переименовать модель «${model.name}»`} onClose={() => { if (!updateModel.isPending) onClose(); }}>
+    <ModalShell title={`Переименовать модель «${model.name}»`} onClose={() => { if (!updateModel.isPending) onClose(); }} size="short">
       <div className="space-y-4">
         <Field label="Имя модели">
           <input

@@ -13,7 +13,7 @@ const CYRILLIC: Readonly<Record<string, string>> = {
 };
 
 /** A short name proposed from the model's name: Latin, lower case, words
- *  joined by a dash ("Лора Вип" → "lora-vip"). The owner may type another. */
+ *  joined by a dash ("Мия Вип" → "mia-vip"). The owner may type another. */
 export function slugFromName(name: string): string {
   return [...name.trim().toLowerCase()]
     .map((char) => CYRILLIC[char] ?? char)
@@ -49,13 +49,13 @@ export function CreateModelModal({ onClose }: { onClose: () => void }) {
   }
 
   return (
-    <ModalShell title="Новая модель" onClose={onClose}>
+    <ModalShell title="Новая модель" onClose={onClose} size="short">
       <div className="space-y-4">
         <Field label="Имя модели">
           <input
             value={name}
             onChange={(event) => { setName(event.target.value); setConflict(false); }}
-            placeholder="например, Лора"
+            placeholder="например, Мия"
             autoComplete="off"
             className="input"
           />
@@ -69,7 +69,7 @@ export function CreateModelModal({ onClose }: { onClose: () => void }) {
             value={slug}
             aria-invalid={conflict}
             onChange={(event) => { setTypedSlug(event.target.value); setConflict(false); }}
-            placeholder="lora"
+            placeholder="mia"
             autoComplete="off"
             spellCheck={false}
             className="input"

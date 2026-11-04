@@ -66,7 +66,7 @@ function Table({ customs, now, paid }: { customs: readonly Custom[]; now: number
             return (
               <tr key={custom.id} className="align-top">
                 <td className="whitespace-nowrap"><PageLink label={custom.pageLabel} /></td>
-                <td className="whitespace-nowrap"><FanLink pageLabel={custom.pageLabel} platform={platformOf(custom.pageLabel)} fanRef={custom.fanRef} /></td>
+                <td><FanLink pageLabel={custom.pageLabel} platform={platformOf(custom.pageLabel)} fanRef={custom.fanRef} /></td>
                 <td className="team-text-cell">{custom.description}</td>
                 <td className="num">{custom.priceMills === null ? "—" : formatMills(custom.priceMills)}</td>
                 <td className="whitespace-nowrap">

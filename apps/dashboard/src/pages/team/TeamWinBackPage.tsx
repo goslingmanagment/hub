@@ -134,7 +134,7 @@ function Results({ rows, inactive }: { rows: readonly Row[]; inactive: ReadonlyS
 }
 
 function ApproachesEditor() {
-  const { data, isLoading } = useTeamWinBackApproaches(true);
+  const { data, isLoading, refetch } = useTeamWinBackApproaches(true);
   const save = useSaveWinBackApproach();
   const [draft, setDraft] = useState("");
 
@@ -151,7 +151,7 @@ function ApproachesEditor() {
       description="Чаттеры видят включённые, по порядку. Выключенный подход пропадает из расширения, его итоги остаются."
       meta={data ? `${data.approaches.filter((approach) => approach.active).length} включено` : undefined}
     >
-      {isLoading || !data ? <TableSkeleton rows={3} columns={2} /> : (
+      {!data ? (isLoading ? <TableSkeleton rows={3} columns={2} /> : <NoAnswerPanel retry={refetch} />) : (
         <ul className="team-list">
           {data.approaches.map((approach) => (
             <li key={approach.id} className="team-list-row">

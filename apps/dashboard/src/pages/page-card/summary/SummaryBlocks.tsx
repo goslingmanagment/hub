@@ -116,7 +116,7 @@ export function MoneyBlock({ page, period, onShowThirty, onShowWeek }: { page: S
         )}
         <div className="card-footer">
           <span>{page.platform === "onlyfans" ? OFAPI_FEED_NOTE : "После комиссии площадки, по операциям, которые сохранил Hub."}</span>
-          <Link className="link" to={`/?${new URLSearchParams({ page: page.label, period })}`}>Открыть на Главной →</Link>
+          <Link className="link" to={`/?${new URLSearchParams({ page: page.label, period })}`}>Открыть на Главной</Link>
         </div>
       </section>
       {!empty && (
@@ -266,8 +266,8 @@ export function CollectionBlock({ page, collection, owner, compact = false }: { 
         {owner && (
           <div className="summary-collection-actions">
             {page.platform === "fansly" && <Link className="btn btn-sm" to={buildPageSectionRoute(page.label, "browser-login")}>Войти в Fansly</Link>}
-            {page.platform === "onlyfans" && <Link className="link" to="/system/onlyfans-api">OnlyFans API →</Link>}
-            <Link className="link" to={buildPageCollectionRoute(page.label)}>Сбор данных страницы →</Link>
+            {page.platform === "onlyfans" && <Link className="link" to="/system/onlyfans-api">OnlyFans API</Link>}
+            <Link className="link" to={buildPageCollectionRoute(page.label)}>Сбор данных страницы</Link>
           </div>
         )}
       </div>
@@ -371,7 +371,7 @@ export function LastOperationsBlock({ page }: { page: SummaryPage }) {
       )}
       <div className="card-footer">
         <span />
-        <Link className="link" to={`/money/transactions?${new URLSearchParams({ page: page.label })}`}>Все операции →</Link>
+        <Link className="link" to={`/money/transactions?${new URLSearchParams({ page: page.label })}`}>Все операции</Link>
       </div>
     </section>
   );

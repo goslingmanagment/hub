@@ -38,9 +38,13 @@ interface PageFilterState {
   /** A label the address asked for and the catalog does not have, with the path
    *  it was asked on: the screen shows every page and says so. */
   rejected: { label: string; pathname: string } | null;
+  /** The page a one-page screen took by itself, with the path it did it on: said
+   *  once, on that screen, and not on the next tab that was simply handed it. */
+  substituted: { label: string; pathname: string } | null;
   setPage: (page: string | null) => void;
   setLastOnePage: (label: string | null) => void;
   setRejected: (rejected: { label: string; pathname: string } | null) => void;
+  setSubstituted: (substituted: { label: string; pathname: string } | null) => void;
   /** Sign-out: the next person starts from every page. */
   clear: () => void;
 }
@@ -51,15 +55,17 @@ export const usePageFilterStore = create<PageFilterState>()(
       page: null,
       lastOnePage: readLastOnePage(),
       rejected: null,
-      setPage: (page) => set({ page, rejected: null }),
+      substituted: null,
+      setPage: (page) => set({ page, rejected: null, substituted: null }),
       setLastOnePage: (lastOnePage) => {
         writeLastOnePage(lastOnePage);
         set({ lastOnePage });
       },
       setRejected: (rejected) => set({ rejected }),
+      setSubstituted: (substituted) => set({ substituted }),
       clear: () => {
         writeLastOnePage(null);
-        set({ page: null, lastOnePage: null, rejected: null });
+        set({ page: null, lastOnePage: null, rejected: null, substituted: null });
       },
     }),
     {

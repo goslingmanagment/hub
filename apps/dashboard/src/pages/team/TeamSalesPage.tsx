@@ -59,7 +59,7 @@ function allReplies(rows: ReadonlyArray<readonly ReplyCell[]>): Array<Replies & 
 function PpvTd({ cell, strong }: { cell: Ppv; strong?: boolean }) {
   if (cell.sent === 0) return <td className="num muted">—</td>;
   return (
-    <td className="num">
+    <td className="num num-wrap">
       <span className={strong ? "font-semibold" : undefined}>{percentOf(cell.bought, cell.sent)}</span>
       <span className="team-sub">{formatCount(cell.bought)} из {formatCount(cell.sent)}{cell.bought > 0 ? `, ${formatMills(cell.netMills)}` : ""}</span>
     </td>

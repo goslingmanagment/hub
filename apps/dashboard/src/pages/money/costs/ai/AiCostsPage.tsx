@@ -77,9 +77,10 @@ export function AiCostsPage() {
           {/* A change of the period folds the people's rows, as before. */}
           <AiPeopleBlock key={`${range.from}-${range.to}`} data={data} range={range} />
           <AiUnitPrices features={data.features} />
-          <AiDetails data={data} usage={usage.data} />
         </div>
       )}
+      <div className="help-row">
+      {data && <AiDetails data={data} usage={usage.data} />}
       <Disclosure>
         <p>
           Цена каждого вызова — расчёт Hub по токенам и прайсу Anthropic, включая ошибки и отмены: Anthropic берёт деньги и
@@ -97,6 +98,7 @@ export function AiCostsPage() {
           принят, подписка не активна или символы на исходе.
         </p>
       </Disclosure>
+      </div>
     </div>
   );
 }

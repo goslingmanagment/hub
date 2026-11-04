@@ -230,7 +230,7 @@ export function ResolveSendDialog({ item, serverNow, isPending, failure, onSubmi
   };
 
   return (
-    <ModalShell title="Разобрать отправку" onClose={closeUnlessPending} closeLabel="Закрыть">
+    <ModalShell title="Разобрать отправку" onClose={closeUnlessPending} closeLabel="Закрыть" size="short">
       <form
         className="space-y-4"
         onSubmit={(event) => {
@@ -274,7 +274,7 @@ export function ResolveSendDialog({ item, serverNow, isPending, failure, onSubmi
           ] as const).map(([value, title, description]) => (
             <label
               key={value}
-              className={`flex cursor-pointer items-start gap-3 rounded-lg border px-3 py-2.5 ${
+              className={`flex cursor-pointer items-start gap-3 rounded-lg border px-3 py-2 ${
                 draft.outcome === value ? "border-accent bg-hover" : "border-border hover:bg-hover"
               }`}
             >

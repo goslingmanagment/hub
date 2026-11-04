@@ -44,7 +44,6 @@ export function FanCell({ name, to, state, handle, marks, note, title }: {
       {(handle || hasNote) && (
         <div className="fan-cell-sub">
           {handle && <span>@{handle}</span>}
-          {handle && hasNote ? <span aria-hidden="true"> · </span> : null}
           {note}
         </div>
       )}

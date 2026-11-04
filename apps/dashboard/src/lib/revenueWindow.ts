@@ -35,7 +35,7 @@ function oneDay(at: string): string {
 /**
  * The header's dates:
  * «28 окт. – 3 нояб., у OnlyFans с 27 окт., сравнение с 21–27 окт.»,
- * with a page «lora-1 · 28 окт. – 3 нояб., сравнение с 21–27 окт.»,
+ * with a page «mia-1 · 28 окт. – 3 нояб., сравнение с 21–27 окт.»,
  * today «3 нояб., с 03:00 по Москве», all time «Вся сохранённая история».
  */
 export function revenueWindowLabel(input: { windows: readonly RevenueWindow[]; period: string; pageLabel?: string | null | undefined }): string {

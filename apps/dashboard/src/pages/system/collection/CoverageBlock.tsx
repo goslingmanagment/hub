@@ -92,13 +92,13 @@ export function CoverageBlock({ pageLabel, pageId }: { pageLabel: string; pageId
                         <th>Статус</th>
                         <th>Подтверждение</th>
                         <th>Собрано с</th>
-                        <th className="num">Получено / ожидалось</th>
+                        <th className="num whitespace-normal">Получено / ожидалось</th>
                       </tr>
                     </thead>
                     <tbody>
                       {data.planes.map((row) => (
                         <tr key={`${row.plane}:${row.scopeRef}`}>
-                          <td className="whitespace-nowrap">{plane(row.plane)}</td>
+                          <td>{plane(row.plane)}</td>
                           <td className="muted">{scopeText(row, pageId)}</td>
                           <td>{captureStatusWords(row.status)}</td>
                           <td className="muted">{captureProofWords(row.proof)}</td>

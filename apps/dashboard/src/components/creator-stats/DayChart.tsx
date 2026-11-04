@@ -25,6 +25,7 @@ import {
   yAxisProps,
   type ChartSeries,
   type ChartTooltipRenderProps,
+  edgeAnchoredTick,
 } from "@/components/charts/ChartKit";
 import { countAxisLabel, durationAxisLabel } from "@/components/charts/format";
 import { durationTicks, evenTickIndices, linearTicks, niceStep, stackedExtent } from "@/components/charts/scale";
@@ -119,7 +120,7 @@ export function DayChart({
   const axes = (
     <>
       <CartesianGrid {...chartGridProps} />
-      <XAxis {...xAxisProps} dataKey="bucketStart" ticks={xTicks} tickFormatter={formatX} />
+      <XAxis {...xAxisProps} dataKey="bucketStart" ticks={xTicks} tickFormatter={formatX} {...(hours ? { tick: edgeAnchoredTick(formatX, xTicks.at(-1)) } : {})} />
       <YAxis
         {...yAxisProps}
         domain={yScale.domain}

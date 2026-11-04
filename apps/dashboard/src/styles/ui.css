@@ -384,6 +384,7 @@
   .menu-item .platform-tag,
   .menu-item-note { margin-left: auto; }
   .menu-item-note { font-size: 14px; line-height: 20px; color: var(--color-text-muted); }
+  [role="menu"] .menu-item:not(:has(.menu-item-hint)) { white-space: nowrap; }
   .menu-item-hint { display: block; font-size: 14px; line-height: 20px; color: var(--color-text-muted); }
   .menu-check { flex: 0 0 auto; width: 16px; height: 16px; }
   .menu-rule { height: 1px; margin: 4px 0; background: var(--color-border); }
@@ -729,12 +730,23 @@
   .data-table td:last-child { padding-right: 24px; }
   .data-table tbody tr:first-child td { border-top: 0; }
   .data-table tbody tr:hover td { background: var(--color-hover-alt); }
+  /* A laptop: the columns move closer before anything scrolls. */
+  @media (max-width: 1360px) {
+    .data-table th,
+    .data-table td { padding-inline: 12px; }
+    .data-table th:first-child,
+    .data-table td:first-child { padding-left: 24px; }
+    .data-table th:last-child,
+    .data-table td:last-child { padding-right: 24px; }
+  }
   .data-table .num,
   .data-table th.num {
     text-align: right;
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
   }
+  /* A number with a line of words under it: the words may wrap before the table scrolls. */
+  .data-table .num-wrap { white-space: normal; }
   .data-table .muted { color: var(--color-text-secondary); }
   .data-table .btn-sm { margin-block: -4px; }
   .data-table-dense td { padding-block: 8px; }
@@ -967,6 +979,14 @@
     line-height: 22px;
     transition: border-color 0.15s, box-shadow 0.15s;
   }
+  /* One arrow on a list, the chip's; a mid grey reads on both themes. */
+  .select:not([multiple]) {
+    appearance: none;
+    padding-right: 32px;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%238f877d' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 10px center;
+  }
   .input::placeholder,
   .textarea::placeholder { color: var(--color-text-muted); }
   .input:focus,
@@ -1079,6 +1099,9 @@
   }
   .help[open] > summary::before { transform: rotate(45deg); }
   .help > summary:hover { color: var(--color-text-primary); }
+  /* The closing explanations of a screen side by side; one opened takes the row. */
+  .help-row { display: flex; flex-wrap: wrap; gap: 8px 32px; }
+  .help-row > .help[open] { flex: 1 1 100%; }
   .help-body {
     display: grid;
     gap: 8px;
@@ -1160,6 +1183,7 @@
     box-shadow: var(--shadow-float);
   }
   .dialog-confirm { max-width: 480px; }
+  .dialog-short { max-width: 560px; }
   .dialog-form { max-width: 672px; }
   .dialog-wide { max-width: 1024px; }
   .dialog-head {
@@ -1205,6 +1229,9 @@
     box-shadow: var(--shadow-float);
     animation: hub-drawer-in 0.2s ease-out;
   }
+  /* Focus is moved into a window or a panel when it opens: nothing to point at. */
+  .dialog:focus,
+  .drawer:focus { outline: none; }
   @keyframes hub-drawer-in { from { transform: translateX(16px); opacity: 0; } }
   .drawer-head {
     display: flex;

@@ -8,6 +8,7 @@ type PageCatalogState = "loading" | "ready" | "error";
 interface DashboardShellValue {
   pageCatalogState: PageCatalogState;
   pageCatalogError: Error | null;
+  retryPageCatalog: () => unknown;
   pages: PageItem[];
   findPageByLabel: (pageLabel: string | undefined) => PageItem | null;
 }

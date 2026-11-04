@@ -247,6 +247,14 @@
   .customs-col-price { width: 112px; }
   .customs-col-wait { width: 176px; }
   .customs-col-who { width: 192px; }
+  @media (max-width: 1360px) {
+    .customs-table { min-width: 0; }
+    .customs-col-page { width: 112px; }
+    .customs-col-fan { width: 168px; }
+    .customs-col-price { width: 96px; }
+    .customs-col-wait { width: 160px; }
+    .customs-col-who { width: 176px; }
+  }
 
   /* ── A person's card ─────────────────────────────────────────────────── */
   .person-grid { display: grid; gap: 24px; grid-template-columns: minmax(0, 1fr); }
@@ -407,4 +415,9 @@
     .entry-card { padding: 24px 16px; }
     .entry-submit { min-height: 44px; }
   }
+}
+
+@layer components {
+  /* A fan's long number breaks before the table scrolls. */
+  .team-fan-ref { overflow-wrap: anywhere; }
 }

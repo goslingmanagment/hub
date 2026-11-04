@@ -50,6 +50,20 @@ export const xAxisProps = {
   interval: 0,
 } as const;
 
+/**
+ * A date axis with wide labels («4 нояб., 11:00»): the newest one ends on its bar
+ * instead of centring on it, so it stays inside the card however narrow the chart.
+ */
+export function edgeAnchoredTick(format: (value: unknown) => string, last: unknown) {
+  return function EdgeAnchoredTick({ x, y, payload }: { x?: string | number | undefined; y?: string | number | undefined; payload: { value?: unknown } }) {
+    return (
+      <text x={x} y={y} dy={12} textAnchor={payload.value === last ? "end" : "middle"} {...axisTick}>
+        {format(payload.value)}
+      </text>
+    );
+  };
+}
+
 export const yAxisProps = {
   axisLine: false,
   tickLine: false,

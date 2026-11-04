@@ -76,7 +76,7 @@ export function SyncStatusPage() {
     return (
       <div className="space-y-6 sys-screen">
         <PageHeader title={`Запуск сбора №${runId}`} />
-        <div className="card"><StatusPanel title="Запуск не загрузился" description="Hub не вернул данные этого запуска." action={TO_LOG} /></div>
+        <div className="card"><StatusPanel tone="error" title="Hub не ответил" description="Данные этого запуска не пришли. Это не значит, что запуска не было." action={TO_LOG} /></div>
       </div>
     );
   }

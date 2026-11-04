@@ -312,7 +312,7 @@ export function ResolveDialog({ publication, username, todayKey, onClose }: {
   ] as const;
 
   return (
-    <ModalShell title="Ушёл ли пост?" onClose={closeUnlessPending}>
+    <ModalShell title="Ушёл ли пост?" onClose={closeUnlessPending} size="short">
       <form onSubmit={(event) => { event.preventDefault(); submit(); }}>
         <p className="dialog-text">
           Hub отправил пост на площадку, но ответа не получил. Сам он отправку не повторит. Откройте стену и расписание

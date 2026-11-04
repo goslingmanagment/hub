@@ -110,8 +110,8 @@ export function InviteModal({
   const dirty = username.trim() !== "" || pageLabels.length > 0 || role !== "chatter" || days !== INVITE_DEFAULT_DAYS;
 
   return (
-    <ModalShell title="Пригласить в команду" onClose={closeUnlessPending} closeLabel="Закрыть" explicitCloseOnly={dirty || create.isPending}>
-      <form className="space-y-5" onSubmit={handleSubmit}>
+    <ModalShell title="Пригласить в команду" onClose={closeUnlessPending} closeLabel="Закрыть" explicitCloseOnly={dirty || create.isPending} size="short">
+      <form className="space-y-6" onSubmit={handleSubmit}>
         <div>
           <div className="field-label">Роль</div>
           <Segmented
@@ -155,7 +155,7 @@ export function InviteModal({
         )}
         {(!users || usersError) && (
           <div role="alert" className="flex flex-wrap items-center gap-2 text-sm text-text-secondary" aria-live="polite">
-            {usersError ? "Не удалось проверить, свободен ли логин." : "Проверяем список участников…"}
+            {usersError ? "Не удалось проверить, свободен ли логин." : "Проверяем список сотрудников…"}
             {usersError && (
               <button type="button" disabled={usersFetching} onClick={() => void refetchUsers()} className="btn btn-sm">
                 Повторить
@@ -170,7 +170,7 @@ export function InviteModal({
         )}
 
         {!existing && (
-          <fieldset disabled={create.isPending} className="space-y-5">
+          <fieldset disabled={create.isPending} className="space-y-6">
             <div>
               <div className="field-label">Страницы</div>
               {pagesLoading && !pages && <p className="text-sm text-text-secondary">Загружаем страницы…</p>}
@@ -266,13 +266,13 @@ export function ExistingMemberNotice({ user, onOpen, disabled = false }: { user:
       <p className="font-medium">Логин «{user.username}» уже занят</p>
       <p className="mt-1">
         {user.disabledAt
-          ? "У этого участника отключён доступ, логин и история сохранены — если возвращается тот же человек, восстановите доступ. Чтобы создать новый аккаунт с этим логином, сначала удалите прежний в его карточке."
+          ? "У этого сотрудника отключён доступ, логин и история сохранены — если возвращается тот же человек, восстановите доступ. Чтобы создать новый аккаунт с этим логином, сначала удалите прежний в его карточке."
           : user.registrationState === "invited"
-            ? "Участник уже приглашён, но ещё не задал пароль. Откройте его карточку, чтобы создать новую ссылку."
-            : "Этот участник уже в команде. Откройте его карточку, чтобы проверить доступ или помочь со входом."}
+            ? "Сотрудник уже приглашён, но ещё не задал пароль. Откройте его карточку, чтобы создать новую ссылку."
+            : "Этот сотрудник уже в команде. Откройте его карточку, чтобы проверить доступ или помочь со входом."}
       </p>
       <button type="button" disabled={disabled} onClick={onOpen} className="btn btn-sm mt-3">
-        {user.disabledAt ? "Перейти к восстановлению" : "Открыть участника"}
+        {user.disabledAt ? "Перейти к восстановлению" : "Открыть сотрудника"}
       </button>
       </div>
     </div>

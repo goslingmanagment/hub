@@ -28,7 +28,7 @@ const KIND_LABELS: Readonly<Record<string, string>> = {
 };
 const MARK_LABELS: Readonly<Record<string, string>> = { mine: "моё", share: "делим", not_mine: "не моё" };
 
-/** «Платное отправил vanya · писали за 48 ч: nikita 40, vanya 3 · без автора 2». */
+/** «Платное отправил alex.k · писали за 48 ч: kate.v 40, alex.k 3 · без автора 2». */
 export function factsLine(sale: ShiftReportSale): string {
   const parts: string[] = [];
   if (sale.ppvSender !== null) parts.push(`Платное отправил ${sale.ppvSender}`);

@@ -1,8 +1,8 @@
 import type { ReactNode } from "react";
-import { useSearchParams } from "react-router";
+import { Link, useSearchParams } from "react-router";
 import { useOverview } from "@/api/queries";
 import { PLATFORM_WORD, PlatformBadge } from "@/components/shared/PlatformBadge";
-import { StatusPanel } from "@/components/shared/StatusPanel";
+import { NoAnswerPanel, StatusPanel } from "@/components/shared/StatusPanel";
 import { TableSkeleton } from "@/components/shared/TableSkeleton";
 import { useDashboardShell } from "./DashboardShellContext.js";
 import { usePageFilter } from "./usePageFilter.js";
@@ -92,21 +92,25 @@ function OutOfScopePanel() {
     const fansly = pages.filter((page) => page.platform === "fansly");
     return (
       <StatusPanel
-        title={`Статистику Hub собирает только для Fansly. ${item.label} — страница ${PLATFORM_WORD[item.platform]}`}
-        description={fansly.length === 0 ? "Нет страниц Fansly." : "Выберите страницу Fansly."}
+        title="Статистику Hub собирает только для Fansly"
+        description={`${item.label} — страница ${PLATFORM_WORD[item.platform]}.${fansly.length === 0 ? " Страниц Fansly нет." : ""}`}
         action={fansly.map((page) => (
           <button key={page.label} type="button" className="btn btn-sm" onClick={() => filter.select(page.label)}>{page.label}</button>
         ))}
       />
     );
   }
-  const title = item.platform === "telegram"
-    ? "Hub не собирает данные Telegram"
+  // A screen may say its own thing about Telegram (Публикации); elsewhere Hub just
+  // collects nothing there.
+  const telegram = item.platform === "telegram";
+  const title = telegram
+    ? screen.telegramNote?.title ?? "Hub не собирает данные Telegram"
     : screen.platformsNote ?? `У страницы ${item.label} нет таких данных`;
   const onPageCard = screen.section === "page";
   return (
     <StatusPanel
       title={title}
+      {...(telegram && screen.telegramNote ? { description: screen.telegramNote.text } : {})}
       action={onPageCard
         ? undefined
         : <button type="button" className="btn btn-sm" onClick={() => filter.select(null)}>Все страницы</button>}
@@ -120,7 +124,7 @@ function OutOfScopePanel() {
  */
 export function PageScopeGate({ children }: { children: ReactNode }) {
   const filter = usePageFilter();
-  const { pages, pageCatalogState } = useDashboardShell();
+  const { pages, pageCatalogState, retryPageCatalog } = useDashboardShell();
   const [search] = useSearchParams();
   if (filter.outOfScope) return <OutOfScopePanel />;
   // The remembered page is on its way to the address (the frame's sync): the old
@@ -130,10 +134,18 @@ export function PageScopeGate({ children }: { children: ReactNode }) {
   }
   if (filter.mode === "one" && filter.page === null) {
     if (pageCatalogState === "loading") return <TableSkeleton rows={6} columns={5} />;
+    // No answer is not «no pages».
+    if (pageCatalogState === "error") return <NoAnswerPanel retry={retryPageCatalog} />;
     if (filter.onePageWay === "picker") return <PagePicker />;
     // «Статистика» is about to get its page from the sync, unless there is none.
     const hasOne = pages.some((page) => !filter.screen?.platforms || filter.screen.platforms.includes(page.platform));
-    return hasOne ? null : <StatusPanel title="Нет страниц Fansly" description="Статистика собирается только для страниц Fansly." />;
+    return hasOne ? null : (
+      <StatusPanel
+        title="Нет страниц Fansly"
+        description="Статистика собирается только для страниц Fansly."
+        action={<Link className="btn btn-sm" to="/settings/pages">Модели и страницы</Link>}
+      />
+    );
   }
   return <>{children}</>;
 }

@@ -7,8 +7,10 @@ import { usePageFilterStore } from "@/stores/pageFilterStore";
 import { useDashboardShell } from "./DashboardShellContext.js";
 
 /** Address parameters a change of the page makes meaningless: a list position,
- *  an expanded row, an opened record or panel. The period stays. */
-const RESET_WITH_PAGE = ["offset", "row", "chart", "txOffset", "spendersOffset", "publication", "failure", "media", "fan", "show"] as const;
+ *  an expanded row, an opened record or panel. The period stays. So does an open
+ *  post (`publication`): its panel reads the post by its own id, and the post keeps
+ *  its own page whatever the filter says (design/screens/publications.md). */
+const RESET_WITH_PAGE = ["offset", "row", "chart", "txOffset", "spendersOffset", "failure", "media", "fan", "show"] as const;
 
 export interface PageFilterView {
   screen: Screen | null;
@@ -25,6 +27,8 @@ export interface PageFilterView {
   outOfScope: boolean;
   /** A label from the address the catalog does not have, on this address. */
   rejected: string | null;
+  /** The screen took this page by itself: nothing asked for it. Said once. */
+  substituted: string | null;
   /** The choice by hand, from the chip or a table of pages. */
   select: (label: string | null) => void;
 }
@@ -41,6 +45,7 @@ export function usePageFilter(): PageFilterView {
   const { pages, pageCatalogState } = useDashboardShell();
   const remembered = usePageFilterStore((state) => state.page);
   const rejectedState = usePageFilterStore((state) => state.rejected);
+  const substitutedState = usePageFilterStore((state) => state.substituted);
   const setPage = usePageFilterStore((state) => state.setPage);
   const setLastOnePage = usePageFilterStore((state) => state.setLastOnePage);
 
@@ -81,6 +86,7 @@ export function usePageFilter(): PageFilterView {
     remembered,
     outOfScope,
     rejected: rejectedState?.pathname === location.pathname ? rejectedState.label : null,
+    substituted: substitutedState?.pathname === location.pathname && substitutedState.label === page ? page : null,
     select,
   };
 }
@@ -103,6 +109,7 @@ export function usePageFilterSync(): void {
   const lastOnePage = usePageFilterStore((state) => state.lastOnePage);
   const setPage = usePageFilterStore((state) => state.setPage);
   const setRejected = usePageFilterStore((state) => state.setRejected);
+  const setSubstituted = usePageFilterStore((state) => state.setSubstituted);
 
   useEffect(() => {
     if (pageCatalogState === "loading") return;
@@ -142,6 +149,7 @@ export function usePageFilterSync(): void {
           : pages.find((page) => scoped(page.label))?.label ?? null;
         if (substitute !== null) {
           query.set("page", substitute);
+          setSubstituted({ label: substitute, pathname: location.pathname });
           changed = true;
         }
       }
@@ -150,7 +158,7 @@ export function usePageFilterSync(): void {
       const text = query.toString();
       navigate({ pathname: location.pathname, search: text ? `?${text}` : "", hash: location.hash }, { replace: true, state: location.state });
     }
-  }, [lastOnePage, location.hash, location.pathname, location.search, location.state, navigate, pageCatalogState, pages, remembered, setPage, setRejected]);
+  }, [lastOnePage, location.hash, location.pathname, location.search, location.state, navigate, pageCatalogState, pages, remembered, setPage, setRejected, setSubstituted]);
 }
 
 /**

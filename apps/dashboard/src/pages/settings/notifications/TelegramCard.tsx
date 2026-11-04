@@ -297,7 +297,7 @@ export function TelegramCard({ settings, isError, update, sendTest }: {
       )}
 
       {editing && (
-        <ModalShell title="Данные Telegram" onClose={() => { if (!busy) setEditing(false); }} explicitCloseOnly>
+        <ModalShell title="Данные Telegram" onClose={() => { if (!busy) setEditing(false); }} explicitCloseOnly size="short">
           <div className="space-y-4">
             <label className="block">
               <span className="field-label">Токен бота</span>

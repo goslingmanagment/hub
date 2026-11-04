@@ -184,17 +184,17 @@ function GreetingsTable({ pages }: { pages: readonly GreetingsPage[] }) {
                 </td>
                 <td className="num font-medium">{formatCount(page.newSubscribers)}</td>
                 <td className="num">{page.newSubscribers === 0 ? "—" : share(page.autoWelcomed, page.newSubscribers)}</td>
-                <td className="num">
+                <td className="num num-wrap">
                   {formatCount(page.greeted)}
-                  {page.greeted > 0 && <span className="team-sub whitespace-nowrap">{share(page.greeted, page.newSubscribers)}, медиана {delayOf(page.greetingMedianSeconds)}</span>}
+                  {page.greeted > 0 && <span className="team-sub">{share(page.greeted, page.newSubscribers)}, медиана {delayOf(page.greetingMedianSeconds)}</span>}
                 </td>
                 <td className="num">
                   {formatCount(page.repliedWithinHour)}
                   {page.greeted > 0 && <span className="team-sub">{share(page.repliedWithinHour, page.greeted)}</span>}
                 </td>
-                <td className="num">
-                  <span className="team-line whitespace-nowrap">{page.greeted > 0 ? `с личным ${share(page.boughtGreeted, page.greeted)}: ${page.boughtGreeted} из ${page.greeted}` : "с личным —"}</span>
-                  <span className="team-sub whitespace-nowrap">{notGreeted > 0 ? `без личного ${share(page.boughtNotGreeted, notGreeted)}: ${page.boughtNotGreeted} из ${notGreeted}` : "без личного —"}</span>
+                <td className="num num-wrap">
+                  <span className="team-line">{page.greeted > 0 ? `с личным ${share(page.boughtGreeted, page.greeted)}: ${page.boughtGreeted} из ${page.greeted}` : "с личным —"}</span>
+                  <span className="team-sub">{notGreeted > 0 ? `без личного ${share(page.boughtNotGreeted, notGreeted)}: ${page.boughtNotGreeted} из ${notGreeted}` : "без личного —"}</span>
                 </td>
               </tr>
             );

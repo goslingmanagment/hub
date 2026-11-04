@@ -99,8 +99,8 @@ describe("permanent account deletion", () => {
     expect(markup).toContain("без возможности восстановления");
     expect(markup).toContain("Все его входы, ссылки и доступ к страницам будут отозваны");
     expect(markup).toContain("Логин освободится");
-    expect(markup).toContain("новый участник с этим логином получит отдельный аккаунт");
-    expect(markup).toContain("финансовые записи останутся за прежним участником");
+    expect(markup).toContain("новый сотрудник с этим логином получит отдельный аккаунт");
+    expect(markup).toContain("финансовые записи останутся за прежним сотрудником");
     expect(queries.useAdminDeleteUser).toHaveBeenCalledWith(17);
     expect(deletion.mutateAsync).not.toHaveBeenCalled();
 

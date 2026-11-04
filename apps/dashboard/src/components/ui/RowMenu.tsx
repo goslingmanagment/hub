@@ -12,7 +12,9 @@ export interface RowMenuItem {
   hint?: string | undefined;
 }
 
-const MENU_WIDTH = 220;
+/** As wide as its longest item, between these: an item stays on one line. */
+const MENU_MIN_WIDTH = 220;
+const MENU_MAX_WIDTH = 360;
 const GAP = 4;
 
 /** The secondary actions of a list row behind one "⋯" button, so a row shows
@@ -30,10 +32,11 @@ export function RowMenu({ label, items }: { label: string; items: readonly RowMe
     if (!open || !button.current) return;
     const rect = button.current.getBoundingClientRect();
     const height = menu.current?.offsetHeight ?? items.length * 40 + 12;
+    const width = menu.current?.offsetWidth ?? MENU_MIN_WIDTH;
     const up = rect.bottom + GAP + height > window.innerHeight && rect.top - GAP - height > 0;
     setPlace({
       top: up ? rect.top - GAP - height : rect.bottom + GAP,
-      left: Math.max(8, Math.min(rect.right - MENU_WIDTH, window.innerWidth - MENU_WIDTH - 8)),
+      left: Math.max(8, Math.min(rect.right - width, window.innerWidth - width - 8)),
     });
   }, [open, items.length]);
 
@@ -89,7 +92,9 @@ export function RowMenu({ label, items }: { label: string; items: readonly RowMe
           aria-label={label}
           className="menu fixed z-20"
           style={{
-            width: MENU_WIDTH,
+            minWidth: MENU_MIN_WIDTH,
+            maxWidth: `min(${MENU_MAX_WIDTH}px, calc(100vw - 16px))`,
+            width: "max-content",
             top: place?.top ?? -9999,
             left: place?.left ?? -9999,
             visibility: place ? "visible" : "hidden",

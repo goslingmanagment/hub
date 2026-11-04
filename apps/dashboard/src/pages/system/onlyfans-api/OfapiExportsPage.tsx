@@ -247,15 +247,15 @@ export function OfapiExportsPage() {
       <div className="table-wrap"><table className="data-table"><thead><tr><th>День</th><th className="num">Всего</th><th className="num">Гости</th><th className="num">Пользователи</th><th className="num">Подписчики</th><th className="num">Длительность</th><th>Полнота</th></tr></thead><tbody>
         {visitors.data?.days.map(row => <tr key={row.date}><td>{formatBusinessDateShort(row.date)}</td><td className="num">{metric(row.totalVisitors)}</td><td className="num">{metric(row.guestVisitors)}</td><td className="num">{metric(row.userVisitors)}</td><td className="num">{metric(row.subscriberVisitors)}</td><td className="num">{metric(source === "export" ? row.avgViewDuration : row.chartDuration)}</td><td className={row.availability === "complete" ? "" : "muted"} title={`${row.availability} · ${row.source}${row.observationId ? ` · наблюдение ${row.observationId} · ${row.observedAt}` : ""}`}>{availabilityLabels[row.availability] ?? row.availability}</td></tr>)}
       </tbody></table></div>
-      {visitors.data?.note && <div className="border-t border-border-light px-5 py-3"><details className="help"><summary>Подробнее</summary><div className="help-body"><p>{visitors.data.note}</p><p>Единицы длительности задаёт OnlyFans API.</p></div></details></div>}
+      {visitors.data?.note && <div className="border-t border-border-light px-6 py-3"><details className="help"><summary>Подробнее</summary><div className="help-body"><p>{visitors.data.note}</p><p>Единицы длительности задаёт OnlyFans API.</p></div></details></div>}
     </section>
     <section className="card" aria-labelledby="export-jobs-title">
       <div className="card-header">
         <h2 id="export-jobs-title" className="card-title">Выгрузки</h2>
         {owner && Boolean(jobs.data?.jobs.length) && <label className="flex flex-wrap items-center gap-2 text-sm text-text-secondary"><span>Запуск или повтор: не больше</span><input disabled={writeOff !== null || busy} className="input min-h-[32px] w-20 py-1" type="number" min={1} max={50} value={startCredits} onChange={e => { setStartCredits(Number(e.target.value)); setApprovedPreview(null); setControlPreview(null); }} /><span>кредитов</span></label>}
       </div>
-      {!validStartCredits && <div className="px-5 pt-4"><p role="alert" className="notice notice-danger">Лимит на запуск — целое число от 1 до 50.</p></div>}
-      {pageId > 0 && jobs.isPending && <p role="status" className="px-5 py-4 text-sm text-text-muted">Загружаем выгрузки…</p>}
+      {!validStartCredits && <div className="px-6 pt-4"><p role="alert" className="notice notice-danger">Лимит на запуск — целое число от 1 до 50.</p></div>}
+      {pageId > 0 && jobs.isPending && <p role="status" className="px-6 py-4 text-sm text-text-muted">Загружаем выгрузки…</p>}
       {jobs.data && !jobs.isError && !jobs.data.jobs.length && <div className="empty"><p className="empty-title">Выгрузок для этой страницы пока нет</p></div>}
       {jobs.data && jobs.data.jobs.length > 0 && <ul className="divide-y divide-border-light">
         {jobs.data.jobs.map(job => {
@@ -268,7 +268,7 @@ export function OfapiExportsPage() {
           const isRetry = job.reason === "export_failed";
           const startShown = owner && approvedPreview?.jobId === job.jobId ? approvedPreview : null;
           const controlShown = owner && controlPreview?.sourceJobId === job.jobId ? controlPreview : null;
-          return <li key={job.jobId} className="space-y-3 px-5 py-4 text-sm">
+          return <li key={job.jobId} className="space-y-3 px-6 py-4 text-sm">
             <div className="flex flex-wrap items-start justify-between gap-2">
               <div className="flex min-w-0 flex-wrap items-center gap-2">
                 <span className="font-medium text-text-primary">{job.controlAction ? `${job.controlAction === "cancel" ? "Отмена" : "Повтор"} · ` : ""}{labels[job.profile]}</span>

@@ -57,8 +57,8 @@ export function LinkRevealModal({
     : `Приглашение для ${link.username}`;
 
   return (
-    <ModalShell title={title} onClose={onClose} closeLabel="Закрыть" explicitCloseOnly>
-      <div className="space-y-5">
+    <ModalShell title={title} onClose={onClose} closeLabel="Закрыть" explicitCloseOnly size="short">
+      <div className="space-y-6">
         <p className="notice notice-warning">
           Ссылка показывается один раз. Скопируйте её сейчас и отправьте человеку
           в Telegram — заново её не посмотреть, можно только создать новую.

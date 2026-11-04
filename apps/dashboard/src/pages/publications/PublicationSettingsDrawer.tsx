@@ -222,7 +222,7 @@ export function SettingsDialog({ settings, globalEnabled, modelName, ofapiOff, o
 
   const priceInvalid = form.errors.price !== undefined;
   return (
-    <ModalShell title={`Публикация на ${settings.pageLabel}`} onClose={closeUnlessPending}>
+    <ModalShell title={`Публикация на ${settings.pageLabel}`} onClose={closeUnlessPending} size="short">
       <form className="pub-settings-form" onSubmit={(event) => { event.preventDefault(); submit(); }}>
         {stopped && (
           <Notice tone="danger" role="alert" detail={`${autostopReasonLabel(settings.autostopReason)}. Включите снова, когда разберётесь: включение снимает остановку.`}>

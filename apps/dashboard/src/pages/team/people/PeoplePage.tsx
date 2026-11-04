@@ -114,9 +114,9 @@ export function PeoplePage() {
 
       {disabled.length > 0 && (
         <details className="help">
-          <summary>Отключённые участники ({disabled.length})</summary>
+          <summary>Отключённые сотрудники ({disabled.length})</summary>
           <div className="team-fold-body">
-            <p>Логины и история сохранены. Восстановить доступ можно в карточке участника.</p>
+            <p>Логины и история сохранены. Восстановить доступ можно в карточке сотрудника.</p>
             <div className="table-wrap">
               <table className="data-table">
                 <thead>

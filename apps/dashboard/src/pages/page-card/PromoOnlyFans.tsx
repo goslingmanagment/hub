@@ -106,7 +106,7 @@ export function PromoOnlyFans() {
         )}
         <div className="card-footer">
           <span />
-          <Link className="link" to="/system/onlyfans-api/collection">Правила сбора →</Link>
+          <Link className="link" to="/system/onlyfans-api/collection">Правила сбора</Link>
         </div>
       </section>
       <details className="help">

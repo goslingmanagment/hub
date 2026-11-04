@@ -43,7 +43,7 @@ export function PersonaFields({
           readOnly={readOnly}
           aria-invalid={nameError !== undefined}
           onChange={(event) => onDisplayNameChange(event.target.value)}
-          placeholder="например, Лора: нежная и игривая"
+          placeholder="например, Мия: нежная и игривая"
           className="input"
         />
       </Field>

@@ -505,12 +505,8 @@ export function BooleanConfigEditor({ item, alwaysConfirm = false }: { item: Con
             aria-describedby={CONFIG_COPY_RU[item.key]?.short ? `config-description-${item.key}` : undefined}
             onClick={toggle}
             disabled={pending || needsReview}
-            className="inline-flex h-10 w-11 shrink-0 items-center disabled:opacity-50"
-          >
-            <span className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${current ? "bg-accent" : "bg-border"}`}>
-              <span className={`inline-block h-5 w-5 rounded-full bg-card shadow-sm transition-transform ${current ? "translate-x-[22px]" : "translate-x-0.5"}`} />
-            </span>
-          </button>
+            className="switch"
+          />
           <span className="text-sm text-text-primary">{current ? "Включено" : "Выключено"}</span>
         </div>
         {confirm?.action === "save" && !needsReview && (

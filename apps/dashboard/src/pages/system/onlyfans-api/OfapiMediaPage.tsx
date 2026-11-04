@@ -317,7 +317,7 @@ export function OfapiMediaPage() {
               </button>
             )}
           </div>
-          {collectionPreview && collectionPreview.selection.length > 1 && <div className="px-5 pt-4">{collectionConfirm}</div>}
+          {collectionPreview && collectionPreview.selection.length > 1 && <div className="px-6 pt-4">{collectionConfirm}</div>}
           <div className="overflow-x-auto">
             <table className="data-table">
               <thead>
@@ -414,7 +414,7 @@ export function OfapiMediaPage() {
             </div>
           </div>
           {saved.data?.inventory.note && (
-            <div className="border-t border-border-light px-5 py-3">
+            <div className="border-t border-border-light px-6 py-3">
               <details className="help">
                 <summary>Подробнее</summary>
                 <div className="help-body text-xs">
@@ -442,7 +442,7 @@ export function OfapiMediaPage() {
               const canResume = owner && job.state === "blocked" && ["background_paused", "job_unavailable", "collection_off", "on_demand_only"].includes(job.reason ?? "");
               const readiness = collectionPreview?.selection.length === 1 && collectionPreview.selection[0] === `vault_item:${job.mediaRef}`;
               return (
-                <li key={job.id} className="space-y-2 px-5 py-4 text-sm">
+                <li key={job.id} className="space-y-2 px-6 py-4 text-sm">
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div className="min-w-0">
                       <div className="flex flex-wrap items-center gap-2">
@@ -703,7 +703,7 @@ export function OfapiMediaPage() {
             </Step>
           </ol>
           {(source || preview) && (
-            <div className="border-t border-border-light px-5 py-3">
+            <div className="border-t border-border-light px-6 py-3">
               <details className="help">
                 <summary>Подробнее</summary>
                 <div className="help-body break-all text-xs">

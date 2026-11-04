@@ -138,7 +138,7 @@ export function formatMoment(iso: string, now: Date, timeZone?: string): string 
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return "—";
   const format = new Intl.DateTimeFormat("ru-RU", {
-    day: "numeric", month: "long", year: "numeric", hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+    day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", hourCycle: "h23",
     ...(timeZone === undefined ? {} : { timeZone }),
   });
   const at = parts(format, date);

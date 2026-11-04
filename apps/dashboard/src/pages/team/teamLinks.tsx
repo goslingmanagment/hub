@@ -22,7 +22,7 @@ export function FanLink({ pageLabel, platform, fanRef }: { pageLabel: string; pl
   const navigation = buildFanProfileNavigation(pageLabel, platform, fanRef, `${location.pathname}${location.search}`, fanRef);
   return (
     <Link to={navigation.to} state={navigation.state} className="team-link">
-      фан <span className="tabular-nums">{fanRef}</span>
+      фан <span className="tabular-nums team-fan-ref">{fanRef}</span>
     </Link>
   );
 }

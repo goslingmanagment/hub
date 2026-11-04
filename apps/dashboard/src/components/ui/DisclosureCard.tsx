@@ -31,7 +31,7 @@ export function DisclosureCard(props: {
         if (event.currentTarget.open) setOpened(true);
       }}
     >
-      <summary className="flex cursor-pointer list-none items-center justify-between gap-4 rounded-[var(--radius-card)] px-5 py-4 hover:bg-hover-alt group-open:rounded-b-none group-open:border-b group-open:border-border [&::-webkit-details-marker]:hidden">
+      <summary className="flex cursor-pointer list-none items-center justify-between gap-4 rounded-[var(--radius-card)] px-6 py-4 hover:bg-hover-alt group-open:rounded-b-none group-open:border-b group-open:border-border [&::-webkit-details-marker]:hidden">
         <div className="min-w-0">
           <h3 id={props.headingId} className="card-title">{props.title}</h3>
           {props.description && <p className="card-description">{props.description}</p>}

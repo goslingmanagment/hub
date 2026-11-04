@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef, type ReactNode, type RefObject } from "react";
+import { X } from "lucide-react";
 
 export function ModalShell({
   children,
@@ -21,8 +22,9 @@ export function ModalShell({
   explicitCloseOnly?: boolean;
   /** Room for charts side by side. */
   wide?: boolean;
-  /** `confirm`: the narrow window of a question. */
-  size?: "confirm";
+  /** `confirm`: the narrow window of a question (480). `short`: a form of a few
+   *  fields or a window of settings (560). */
+  size?: "confirm" | "short";
 }) {
   const titleId = useId();
   const dialogRef = useRef<HTMLDivElement>(null);
@@ -47,9 +49,12 @@ export function ModalShell({
   useEffect(() => {
     const previouslyFocused = document.activeElement as HTMLElement | null;
     // A dialog may name where the focus starts: «Отмена» when nothing can be undone.
-    const focusable = dialogRef.current?.querySelector<HTMLElement>("[data-autofocus]") ?? dialogRef.current?.querySelector<HTMLElement>(
-      'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
-    );
+    // Else the first field; else the first control under the title, not its cross.
+    const dialog = dialogRef.current;
+    const focusable = dialog?.querySelector<HTMLElement>("[data-autofocus]")
+      ?? dialog?.querySelector<HTMLElement>('input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled])')
+      ?? dialog?.querySelector<HTMLElement>(':scope > :not(.dialog-head) :is(a[href], button:not([disabled]), [tabindex]:not([tabindex="-1"]))')
+      ?? dialog?.querySelector<HTMLElement>("button:not([disabled])");
     focusable?.focus();
     return () => {
       const target = previouslyFocused?.isConnected && previouslyFocused.getClientRects().length > 0
@@ -72,19 +77,22 @@ export function ModalShell({
         tabIndex={-1}
         aria-modal="true"
         aria-labelledby={titleId}
-        className={`dialog ${size === "confirm" ? "dialog-confirm" : wide ? "dialog-wide" : "dialog-form"}`}
+        className={`dialog ${size === "confirm" ? "dialog-confirm" : size === "short" ? "dialog-short" : wide ? "dialog-wide" : "dialog-form"}`}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="dialog-head">
           <h2 id={titleId} className="dialog-title">
             {title}
           </h2>
+          {/* The same cross as a panel's; the words of the choice stand at the bottom. */}
           <button
             type="button"
             onClick={onClose}
-            className="btn btn-ghost btn-sm shrink-0"
+            aria-label={closeLabel}
+            title={closeLabel}
+            className="btn btn-ghost btn-icon btn-sm shrink-0"
           >
-            {closeLabel}
+            <X size={16} aria-hidden="true" />
           </button>
         </div>
         {children}

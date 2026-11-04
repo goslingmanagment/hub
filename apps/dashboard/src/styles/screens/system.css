@@ -53,8 +53,9 @@
     justify-content: center;
     width: 24px;
     height: 24px;
-    margin: -2px 4px -2px -8px;
-    border-radius: 6px;
+    /* The name after it stands at 28 px, the same in every table of the console. */
+    margin: -2px 8px -2px -4px;
+    border-radius: var(--radius-inner);
     color: var(--color-text-muted);
     vertical-align: middle;
     transition: transform 0.15s, background-color 0.15s;
@@ -144,6 +145,10 @@
   .sys-card-tail { padding-top: 12px; border-top: 1px solid var(--color-border-light); }
   .sys-header-link { font-size: 14px; line-height: 20px; }
   .sys-indent { padding-left: 28px; }
+  /* A long name that wraps stays beside its chevron, not under it. */
+  .data-table td:first-child:has(> .row-chevron:first-child) { padding-left: 52px; text-indent: -28px; }
+  .data-table td:first-child:has(> .row-chevron:first-child) > * { text-indent: 0; }
+  .data-table td:first-child:has(> .row-chevron:first-child) > .sys-indent { padding-left: 0; }
   .sys-block-name { display: inline-flex; align-items: center; font-weight: 500; }
   .sys-lines { display: grid; gap: 4px; }
   .sys-lines > li { position: relative; padding-left: 14px; }
@@ -387,6 +392,10 @@
 }
 @layer components {
   @media (max-width: 1499px) { .sys-failures .sys-col-telegram { display: none; } }
+  /* «Выключено с 1 ноября» in a narrow state column takes two lines, not a scroll. */
+  .sys-rules td.sys-rules-state .badge,
+  .sys-rules td.sys-rules-state .btn { white-space: normal; }
+  .sys-rules td.sys-rules-state .btn { height: auto; }
   @media (max-width: 1359px) {
     .sys-rules td.sys-rules-cat { min-width: 150px; }
     .sys-rules td.sys-rules-mode { min-width: 110px; }

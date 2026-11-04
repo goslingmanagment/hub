@@ -57,11 +57,8 @@
     color: var(--color-text-muted);
   }
   .stats-chart-table { margin-top: 12px; }
-  /* The newest date sits on the last bar, at the plot's edge: its label may reach into the card's padding. */
-  .stats-screen .recharts-surface,
-  .stats-drawer .recharts-surface { overflow: visible; }
   .stats-table-after { padding-top: 12px; }
-  .stats-empty { padding-block: 40px; }
+  .stats-empty { padding-block: 48px; }
   .stats-block-title { margin-bottom: 12px; }
   .stats-rollup { justify-content: flex-start; gap: 4px 8px; }
 
@@ -174,5 +171,12 @@
   @media (max-width: 639px) {
     .stats-kv-pair { grid-template-columns: minmax(0, 1fr); }
     .stats-strip-action { margin-left: 0; width: 100%; }
+  }
+}
+
+@layer components {
+  @media (max-width: 1360px) {
+    .stats-bar-col-sm { width: 16%; min-width: 48px; }
+    .table-wrap:has(.stats-bar-col-sm) th { white-space: normal; vertical-align: bottom; }
   }
 }

@@ -44,14 +44,14 @@ export function formatPercent(value: number, options: { precise?: boolean } = {}
   if (size === 0) return `0${NBSP}%`;
   if (options.precise && size < 10) return `${size.toFixed(1).replace(".", ",")}${NBSP}%`;
   if (size < 1) return `<${NBSP}1${NBSP}%`;
-  return `${Math.round(size)}${NBSP}%`;
+  return `${formatCount(Math.round(size))}${NBSP}%`;
 }
 
 /** «+64 %», «−4 %», «0 %». Always whole, no arrows. */
 export function formatSignedPercent(value: number): string {
   const whole = Math.round(value);
   if (whole === 0) return `0${NBSP}%`;
-  return `${whole > 0 ? "+" : MINUS}${Math.abs(whole)}${NBSP}%`;
+  return `${whole > 0 ? "+" : MINUS}${formatCount(Math.abs(whole))}${NBSP}%`;
 }
 
 /**

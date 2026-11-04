@@ -6,7 +6,7 @@ import type { ConfigItem, ConfigViewResponse } from "@agency_hub_core/contracts"
 import { useAdminConfig } from "@/api/adminConfig";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Segmented } from "@/components/ui/Segmented";
-import { formatDateTime } from "@/lib/format";
+import { formatAiUsd, formatCount, formatDateTime } from "@/lib/format";
 import { CONFIG_COPY_RU, SUBSYSTEM_COPY_RU } from "@/pages/settings/configCopyRu";
 import { findHubFeature, featureReturnHref, type HubFeature } from "./featureCatalog.js";
 import { CONFIG_MODE_CHOICES, humanConfigValue } from "./configurationChoices.js";
@@ -115,10 +115,18 @@ export function RunningCell({ item, friendly = false }: { item: ConfigItem; frie
   }
 
   const value = item.running[0]!.value;
+  // A sum stored in millionths reads as dollars; the raw number stays in the title.
+  if (typeof value === "number" && isMicroDollars(item.key)) {
+    return <span className="font-medium tabular-nums text-text-primary" title={`${formatCount(value)} микродолларов`}>{formatAiUsd(value)}</span>;
+  }
+  if (typeof value === "number") return <span className="font-medium tabular-nums text-text-primary">{formatCount(value)}</span>;
+  if (typeof value === "boolean") return <span className="font-medium text-text-primary">{humanConfigValue(item.key, value)}</span>;
   return human
     ? <span className="font-medium text-text-primary" title={formatScalar(value)}>{humanConfigValue(item.key, value)}</span>
     : <span className="font-mono text-text-primary">{formatScalar(value)}</span>;
 }
+
+const isMicroDollars = (key: string) => CONFIG_COPY_RU[key]?.unit?.startsWith("микродоллар") === true;
 
 function SettingLabel({ item }: { item: ConfigItem }) {
   const copy = CONFIG_COPY_RU[item.key];
@@ -126,7 +134,7 @@ function SettingLabel({ item }: { item: ConfigItem }) {
     <>
       <div className="break-words text-sm font-semibold leading-6 text-text-primary">{settingTitle(item)}</div>
       {copy?.short && <p id={`config-description-${item.key}`} className="mt-1 text-xs leading-relaxed text-text-secondary">{copy.short}</p>}
-      <div className="mt-2 flex flex-wrap items-center gap-1.5 empty:hidden">
+      <div className="mt-2 flex flex-wrap items-center gap-2 empty:hidden">
         {configRiskBadges(item).map((badge) => <Badge key={badge.text} tone={badge.tone}>{badge.text}</Badge>)}
       </div>
       {item.destructive && <p className="mt-1 text-xs text-text-secondary">Снижение или очистка безвозвратно удаляет данные.</p>}
@@ -167,7 +175,7 @@ function SettingRow({ item, friendly = false, alwaysConfirm = false }: { item: C
       <div className="config-setting-control">
         <div className="config-setting-current">
           <span>Сейчас:</span><RunningCell item={item} friendly={friendly} />
-          {CONFIG_COPY_RU[item.key]?.unit && <span>{CONFIG_COPY_RU[item.key]?.unit}</span>}
+          {CONFIG_COPY_RU[item.key]?.unit && !isMicroDollars(item.key) && <span>{CONFIG_COPY_RU[item.key]?.unit}</span>}
         </div>
 
         {editorKind === "number" && (
@@ -439,7 +447,7 @@ export function ConfigurationView({ hash, feature = null, featureBackTo, allSett
       )}
 
       {/* Hide rather than unmount: searching and filtering must not discard a draft. */}
-      <div className="space-y-5">
+      <div className="space-y-6">
         {groups.map((group) => (
           <section className="card overflow-clip" key={group.subsystem} hidden={!group.items.some((item) => visibleKeys.has(item.key))}>
             {feature && !featureHeader && !scopeExpanded ? (

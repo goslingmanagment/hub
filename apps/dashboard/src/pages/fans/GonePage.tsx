@@ -81,7 +81,7 @@ function DeletedList({ pageLabel, offset, query, onOffset }: {
         <p className="fan-count">
           {accountsWord(total)}. Даты показывают, когда Hub заметил удаление, а не точное время. Операции этих фанов остаются в истории.
         </p>
-        <Link className="link" to={`/money/transactions?${new URLSearchParams({ page: pageLabel })}`}>Все операции страницы →</Link>
+        <Link className="link" to={`/money/transactions?${new URLSearchParams({ page: pageLabel })}`}>Все операции страницы</Link>
       </div>
       <section className="card" aria-label="Удалили аккаунт">
         <div className="table-wrap">

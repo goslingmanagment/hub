@@ -24,18 +24,18 @@
 .config-setting {
   display: grid;
   gap: 16px;
-  padding: 20px;
+  padding: 16px 24px;
   scroll-margin-top: 88px;
 }
 .config-setting:focus-visible { outline: 2px solid var(--color-accent); outline-offset: -2px; border-radius: var(--radius-card); }
 .config-setting-main,
 .config-setting-control { min-width: 0; }
-.config-setting-control { display: grid; align-content: start; gap: 10px; }
+.config-setting-control { display: grid; align-content: start; gap: 8px; }
 .config-setting-current {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 6px 8px;
+  gap: 4px 8px;
   font-size: 14px;
   line-height: 20px;
   color: var(--color-text-secondary);
@@ -47,10 +47,10 @@
   .settings-editor-controls { grid-template-columns: minmax(0, 1fr); }
 }
 @container config (min-width: 690px) {
-  .config-setting { grid-template-columns: minmax(0, 1fr) 300px; gap: 28px; align-items: start; }
+  .config-setting { grid-template-columns: minmax(0, 1fr) 300px; gap: 32px; align-items: start; }
 }
 @media (max-width: 639px) {
-  .config-setting { padding: 16px; gap: 14px; }
+  .config-setting { padding: 16px; gap: 16px; }
 }
 @media (prefers-reduced-motion: reduce) {
   .config-screen * { transition: none !important; scroll-behavior: auto !important; }

@@ -348,6 +348,7 @@ function DaysTable({ data, days }: { data: Data; days: number }) {
                 <th scope="col" className="num">Разница</th>
                 <th scope="col" className="num">%</th>
                 <th scope="col">Статус</th>
+                <th scope="col"><span className="sr-only">По моделям</span></th>
               </tr>
             </thead>
             <tbody>
@@ -374,21 +375,23 @@ function DaysTable({ data, days }: { data: Data; days: number }) {
                             <td className="num">{formatAiUsd(row.hubMicroUsd)}</td>
                             <td className="num" title={row.source === "csv" ? "из CSV консоли" : row.source === "admin_api" ? "из отчёта Anthropic" : undefined}>
                               {row.providerMicroUsd === null ? "—" : formatAiUsd(row.providerMicroUsd)}
-                              {row.unmappedMicroUsd !== 0 && <div className="ai-sub ai-warn">+ ? {formatAiUsd(row.unmappedMicroUsd)} ключа без решения</div>}
+                              {row.unmappedMicroUsd !== 0 && <div className="ai-sub ai-warn whitespace-normal">+ ? {formatAiUsd(row.unmappedMicroUsd)} ключа без решения</div>}
                             </td>
                             <td className={`num${mismatch ? " ai-warn" : ""}`}>{row.diffMicroUsd === null ? "—" : signedUsd(row.diffMicroUsd)}</td>
                             <td className={`num${mismatch ? " ai-warn" : ""}`}>{row.diffPct === null ? "—" : percent(row.diffPct)}</td>
                             <td className="status-col whitespace-nowrap">
                               {word && <StatusBadge status={word} title={STATUS_HINT[row.status]} />}
+                            </td>
+                            <td className="rc-models-col">
                               {row.models.length > 0 && (
-                                <button type="button" className="btn btn-ghost btn-sm ml-2" aria-expanded={open === key} onClick={() => setOpen(open === key ? null : key)}>
+                                <button type="button" className="btn btn-ghost btn-sm" aria-expanded={open === key} onClick={() => setOpen(open === key ? null : key)}>
                                   {open === key ? "Скрыть" : "По моделям"}
                                 </button>
                               )}
                             </td>
                           </tr>
                           {open === key && (
-                            <tr className="row-detail"><td colSpan={7}><ModelBreakdown row={row} /></td></tr>
+                            <tr className="row-detail"><td colSpan={8}><ModelBreakdown row={row} /></td></tr>
                           )}
                         </Fragment>
                       );
@@ -410,6 +413,7 @@ function DaysTable({ data, days }: { data: Data; days: number }) {
                             ? <StatusBadge tone="attention" title="Не решено, чей это ключ: отметьте его в «Откуда данные»">Не решено</StatusBadge>
                             : <StatusBadge tone="off" title="Эти траты не прошли через Hub: в его учёте их нет">Вне Hub</StatusBadge>}
                         </td>
+                        <td />
                       </tr>
                     ))}
                     {unattributed && (
@@ -420,6 +424,7 @@ function DaysTable({ data, days }: { data: Data; days: number }) {
                         <td className="num">—</td>
                         <td className="num" />
                         <td className="num" />
+                        <td />
                         <td />
                       </tr>
                     )}

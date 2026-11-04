@@ -14,7 +14,7 @@
 
   /* ── Главная: tiles, table, footnote ─────────────────────────────────── */
   .home-tiles { grid-template-columns: repeat(4, minmax(0, 1fr)); }
-  .home-tiles-two { grid-template-columns: repeat(2, minmax(0, 1fr)); max-width: 640px; }
+  .home-tiles-two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .home-mover { font-size: 20px; line-height: 36px; }
   .home-footnote { font-size: 14px; line-height: 20px; color: var(--color-text-secondary); }
   .home-table .row-group td { font-weight: 600; }
@@ -62,7 +62,7 @@
 
 
   /* ── Деньги → Операции ───────────────────────────────────────────────── */
-  .tx-tiles { grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); max-width: 880px; }
+  .tx-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   /* A list's sticky header keeps the card's rounded top. */
   .card > .table-wrap > .data-table-sticky thead th:first-child { border-top-left-radius: var(--radius-card); }
   .card > .table-wrap > .data-table-sticky thead th:last-child { border-top-right-radius: var(--radius-card); }
@@ -123,6 +123,7 @@
   .btn.is-disabled { opacity: 0.45; pointer-events: none; }
   .data-table tbody tr.rc-day-first:not(:first-child) td { border-top-color: var(--color-border); }
   .rc-other td { color: var(--color-text-secondary); }
+  .data-table td.rc-models-col { width: 1%; padding-block: 4px; text-align: right; white-space: nowrap; }
   .rc-models { max-width: 960px; }
   .rc-models .data-table tbody tr.rc-pair td { border-top: 0; padding-top: 0; }
 

@@ -23,7 +23,7 @@ function useAuthors(owner: boolean) {
 }
 
 /**
- * «Заметка для страницы lora-1». The page and the fan come from the path, never
+ * «Заметка для страницы mia-1». The page and the fan come from the path, never
  * from the filter; one press, one request, the draft stays until it succeeds (§8.4).
  */
 export function FanNotes({ pageLabel, platformUserId, routeKey, principalId, notes, owner }: {

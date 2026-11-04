@@ -3,7 +3,7 @@
    the language's: 13 px is the floor, 14 the second line, 15 the text; 8/12/16/24. */
 @layer components {
   /* ── Lists of «Фаны» ─────────────────────────────────────────────── */
-  .fan-screen { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+  .fan-screen { display: flex; flex-direction: column; gap: 24px; min-width: 0; }
   .fan-screen > .help { margin-top: 8px; }
   .fan-toolbar { flex-wrap: nowrap; align-items: flex-start; margin-bottom: 0; }
   .fan-toolbar > .input { flex: 0 0 240px; }
@@ -51,14 +51,14 @@
   .fan-link { font-weight: 500; color: var(--color-text-primary); text-decoration: none; }
   .fan-link:hover { text-decoration: underline; text-underline-offset: 3px; text-decoration-color: var(--color-border-strong); }
   .fan-link-plain { font-weight: 500; color: var(--color-text-primary); }
-  .fan-cell-sub { font-size: 14px; line-height: 20px; color: var(--color-text-secondary); font-variant-numeric: tabular-nums; }
+  .fan-cell-sub { display: flex; flex-wrap: wrap; column-gap: 8px; font-size: 14px; line-height: 20px; color: var(--color-text-secondary); font-variant-numeric: tabular-nums; }
   .fan-cell-sub .delta { font-size: 14px; }
   .fan-table td.num .fan-cell-sub { white-space: nowrap; }
   .fan-table .fan-cell-sub.fan-preview,
   .fan-table[data-of-links] .fan-cell-sub { white-space: normal; }
-  .fan-awaiting { display: inline-flex; align-items: center; gap: 6px; color: var(--color-text-secondary); white-space: nowrap; }
+  .fan-awaiting { display: inline-flex; align-items: center; gap: 8px; color: var(--color-text-secondary); white-space: nowrap; }
   .fan-awaiting .status-dot { background: var(--color-text-muted); }
-  .fan-online { display: inline-flex; align-items: center; gap: 6px; }
+  .fan-online { display: inline-flex; align-items: center; gap: 8px; }
   .fan-dm { max-width: 280px; }
   .fan-preview {
     display: -webkit-box;
@@ -148,8 +148,8 @@
   .fan-dossier > summary { list-style: none; }
   .fan-dossier > summary::-webkit-details-marker { display: none; }
   .fan-dossier-summary { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 16px 24px; cursor: pointer; border-radius: var(--radius-card); }
-  .fan-dossier-summary::before { content: ""; flex: 0 0 auto; width: 8px; height: 8px; margin-right: 4px; border-right: 1.5px solid var(--color-text-muted); border-bottom: 1.5px solid var(--color-text-muted); transform: rotate(-45deg); transition: transform 0.15s; }
-  .fan-dossier[open] > .fan-dossier-summary::before { transform: rotate(45deg); }
+  .fan-dossier-summary > svg { flex: 0 0 auto; color: var(--color-text-muted); transition: transform 0.15s; }
+  .fan-dossier[open] > .fan-dossier-summary > svg { transform: rotate(180deg); }
   .fan-dossier-summary .card-title { margin-right: auto; }
   .fan-dossier-summary:hover { background: var(--color-hover-alt); }
   .fan-dossier[open] > .fan-dossier-summary { border-radius: var(--radius-card) var(--radius-card) 0 0; }
@@ -162,7 +162,6 @@
   .fan-version:hover { background: var(--color-hover-alt); }
   .fan-version[aria-pressed="true"] { background: var(--color-accent-soft); }
   .fan-version-current { color: var(--color-text-secondary); }
-  .fan-help-row { display: flex; flex-wrap: wrap; gap: 8px 32px; }
 
   /* ── A page's card ───────────────────────────────────────────────── */
   .page-card-notice { margin-bottom: 24px; }
@@ -192,7 +191,7 @@
   .summary-collection-compact .card-body { flex-direction: row; flex-wrap: wrap; align-items: center; justify-content: space-between; }
   .summary-collection-compact .summary-collection-word { flex-direction: row; flex-wrap: wrap; align-items: center; gap: 4px 12px; }
   .summary-shift { display: inline-flex; align-items: center; gap: 12px; font-size: 14px; color: var(--color-text-secondary); }
-  .summary-go { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 20px; padding-top: 8px; font-size: 15px; line-height: 22px; }
+  .summary-go { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 24px; padding-top: 8px; font-size: 15px; line-height: 22px; }
   .summary-go-label { font-size: 14px; color: var(--color-text-secondary); }
 
   .account-looks { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 24px 32px; }

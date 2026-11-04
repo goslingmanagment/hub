@@ -30,7 +30,7 @@ export function AddPageWindow({ ofapi, onClose, onChooseOnlyFans }: {
     },
   ];
   return (
-    <ModalShell title="Добавить страницу" onClose={onClose}>
+    <ModalShell title="Добавить страницу" onClose={onClose} size="short">
       <div className="settings-options" role="list">
         {options.map((option) => (
           <button

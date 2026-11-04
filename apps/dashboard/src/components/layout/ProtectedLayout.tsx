@@ -135,6 +135,7 @@ function ConsoleLayout() {
     pageCatalogError: isPageCatalogError
       ? (pageCatalogError instanceof Error ? pageCatalogError : new Error("Page catalog failed to load"))
       : null,
+    retryPageCatalog: refetchPages,
     pages: pages ?? [],
     findPageByLabel: (pageLabel: string | undefined) =>
       pages?.find((page) => page.label === pageLabel) ?? null,

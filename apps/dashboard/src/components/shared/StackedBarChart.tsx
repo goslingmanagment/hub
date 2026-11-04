@@ -22,6 +22,7 @@ import {
   yAxisProps,
   type ChartSeries,
   type ChartTooltipRenderProps,
+  edgeAnchoredTick,
 } from "@/components/charts/ChartKit";
 import { evenTickIndices, linearTicks, stackedExtent, type LinearTicks } from "@/components/charts/scale";
 
@@ -92,6 +93,9 @@ export function StackedBarChart(props: {
             dataKey={props.xKey}
             ticks={xTicks}
             tickFormatter={(value: unknown) => xFormat(String(value))}
+            {...((props.tickSpacing?.spacing ?? 0) >= 100
+              ? { tick: edgeAnchoredTick((value) => xFormat(String(value)), xTicks.at(-1)) }
+              : {})}
           />
           <YAxis
             {...yAxisProps}

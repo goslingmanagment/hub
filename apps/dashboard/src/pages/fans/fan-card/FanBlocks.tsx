@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { ChevronDown } from "lucide-react";
 import { Link } from "react-router";
 import { useQuery } from "@tanstack/react-query";
 import type { SpenderDetailResponse } from "@agency_hub_core/contracts";
@@ -244,6 +245,7 @@ export function FanDossier({ pageLabel, platformUserId }: { pageLabel: string; p
         <span className="fan-card-meta">
           {latestProfile ? `Версия ${latestProfile.version} · ${formatDateTime(latestProfile.createdAt, { yearUnlessCurrent: true })}` : latest.isLoading ? "" : "нет"}
         </span>
+        <ChevronDown size={18} aria-hidden="true" />
       </summary>
       <div className="card-body">
         <p className="fan-muted-line">Полное саммари ИИ, которое чаттер сохранил из расширения.</p>

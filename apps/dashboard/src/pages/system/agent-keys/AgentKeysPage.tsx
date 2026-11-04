@@ -203,7 +203,7 @@ function AgentKeysSection({ creating, onCreating }: { creating: boolean; onCreat
                       <td>{firstTwo(key.capabilities.map((capability) => CAPABILITY_SHORT[capability] ?? capability))}</td>
                       <td>{firstTwo(key.pageLabels)}</td>
                       <td>
-                        до {formatDateTime(key.expiresAt, { yearUnlessCurrent: true })}
+                        <span className="whitespace-nowrap">до {formatDateTime(key.expiresAt, { yearUnlessCurrent: true })}</span>
                         <span className="cell-second">{key.lastUsedAt ? `использован ${formatAgo(key.lastUsedAt)}` : "ещё не использовался"}</span>
                       </td>
                       <td className="status-col"><StatusBadge status={keyStatus(key)} /></td>
@@ -335,7 +335,7 @@ function CreateAgentKeyModal({
 
   return (
     <ModalShell title="Новый ключ агента" onClose={closeUnlessPending} closeLabel="Закрыть">
-      <form className="space-y-5" onSubmit={handleSubmit}>
+      <form className="space-y-6" onSubmit={handleSubmit}>
         <Field label="Название">
           <input
             value={name}
@@ -444,7 +444,7 @@ function EditAgentKeyCapabilitiesModal({
 
   return (
     <ModalShell title={`Права ключа «${agentKey.name}»`} onClose={closeUnlessPending} closeLabel="Закрыть">
-      <form className="space-y-5" onSubmit={handleSubmit}>
+      <form className="space-y-6" onSubmit={handleSubmit}>
         <p className="text-sm text-text-secondary">
           Новые права действуют со следующего запроса агента: выпускать ключ заново не нужно. Страницы
           остаются прежними: {agentKey.pageLabels.join(", ")}. Чтобы добавить страницу, выпустите новый ключ.
@@ -501,7 +501,7 @@ function TokenRevealModal({
   }
 
   return (
-    <ModalShell title={`Ключ «${name}»`} onClose={onClose} closeLabel="Закрыть" explicitCloseOnly>
+    <ModalShell title={`Ключ «${name}»`} onClose={onClose} closeLabel="Закрыть" explicitCloseOnly size="short">
       <div className="space-y-4">
         <Notice tone="warning">
           Ключ показывается один раз. Hub хранит только его отпечаток: потерянный ключ выпускают заново,

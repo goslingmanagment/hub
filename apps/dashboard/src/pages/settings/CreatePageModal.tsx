@@ -92,8 +92,8 @@ export function CreatePageModal({
     modelSlug.length > 0;
 
   return (
-    <ModalShell title="Добавить страницу OnlyFans" onClose={onClose}>
-      <div className="space-y-5">
+    <ModalShell title="Добавить страницу OnlyFans" onClose={onClose} size="short">
+      <div className="space-y-6">
         <Field label="Модель">
           <select
             value={modelSlug}
@@ -113,14 +113,14 @@ export function CreatePageModal({
           <input
             value={label}
             onChange={(event) => setLabel(event.target.value)}
-            placeholder="например, lora-of"
+            placeholder="например, mia-of"
             autoComplete="off"
             spellCheck={false}
             className="input"
           />
         </Field>
 
-        <section className="space-y-4 border-t border-border-light pt-5" aria-label="Аккаунт">
+        <section className="space-y-4 border-t border-border-light pt-6" aria-label="Аккаунт">
           <h3 className="card-title">Аккаунт</h3>
           <Field
             label="Имя пользователя на OnlyFans"

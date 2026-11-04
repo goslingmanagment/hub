@@ -78,6 +78,8 @@ export interface Screen {
   platformsNote?: string;
   /** The same, short, beside a grey row of the chip's list. */
   platformsShort?: string;
+  /** Said instead of «Hub не собирает данные Telegram» where that is not the point. */
+  telegramNote?: { title: string; text: string };
   period?: ScreenPeriod;
   /** Old names: the search finds a screen by the word a habit remembers. */
   keywords?: string;
@@ -141,7 +143,7 @@ export const SCREENS: readonly Screen[] = [
   // ── Деньги ─────────────────────────────────────────────────────────────
   {
     id: "transactions", path: "/money/transactions", label: "Операции", title: "Операции", section: "money",
-    why: "Какие именно операции дали сумму.",
+    why: "Из каких операций сложилась сумма.",
     pageFilter: "any", platforms: REPORTED,
     platformsNote: "Hub не собирает данные Telegram.",
     period: { class: "shared", options: COMMON_PERIODS },
@@ -270,6 +272,7 @@ export const SCREENS: readonly Screen[] = [
     why: "Что и когда выйдет на стенах страниц.",
     pageFilter: "any", platforms: REPORTED,
     platformsNote: "Hub не публикует в Telegram.",
+    telegramNote: { title: "Hub не публикует в Telegram", text: "У страниц Telegram публикаций нет." },
     keywords: "посты стена расписание утвердить настройки публикации",
   },
 
@@ -515,7 +518,7 @@ export const SCREENS: readonly Screen[] = [
   },
   {
     id: "system-dev-extension", path: "/system/dev/extension", label: "Расширение: замеры", title: "Расширение: замеры", section: "system", ownerOnly: true,
-    why: "Как работает расширение: скорость, версии, счётчики. Без имён людей, страниц и фанов.",
+    why: "Скорость, версии и счётчики расширения. Без имён людей, страниц и фанов.",
     pageFilter: "none",
     period: { class: "own", options: ["today", "7d", "30d"], default: "7d" },
     keywords: "client health наблюдение",

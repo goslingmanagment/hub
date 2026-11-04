@@ -36,7 +36,7 @@ export function incomeKindRows(report: {
  */
 export function IncomeKinds({ rows, label, compare, previousLabel = "Прошлый период", amountLink, total }: {
   rows: readonly IncomeKindRow[];
-  /** What the table is about, for a screen reader: «Виды дохода lora-1». */
+  /** What the table is about, for a screen reader: «Виды дохода mia-1». */
   label: string;
   compare: boolean;
   previousLabel?: string;

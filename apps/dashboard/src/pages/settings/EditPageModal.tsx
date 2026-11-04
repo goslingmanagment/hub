@@ -120,7 +120,7 @@ export function EditPageModal({
   }
 
   return (
-    <ModalShell title={`Изменить страницу ${page.label}`} onClose={close}>
+    <ModalShell title={`Изменить страницу ${page.label}`} onClose={close} size="short">
       <div className="space-y-4">
         <p className="text-sm text-text-secondary">{platformName(page.platform)}. Площадку страницы изменить нельзя.</p>
         <Field label="Название страницы" error={conflict ? "Страница с таким названием уже есть." : undefined}>

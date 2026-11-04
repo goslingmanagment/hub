@@ -129,7 +129,7 @@ function EndAccess({ user, onAsk, deleteDisabled, canDelete }: {
     },
     canDelete && {
       key: "delete",
-      text: "Необратимо, логин освободится. История работы сохранится за прежним участником.",
+      text: "Необратимо, логин освободится. История работы сохранится за прежним сотрудником.",
       label: "Удалить аккаунт",
       kind: "deleteAccount" as const,
       danger: true,
@@ -302,7 +302,7 @@ function LinksSection({ user, createLink, onLinkCreated }: {
 function SavedPages({ user }: { user: AdminUser }) {
   return (
     <Block title="Сохранённые страницы">
-      <p className="team-muted">После восстановления доступа участник снова сможет работать с этими страницами.</p>
+      <p className="team-muted">После восстановления доступа сотрудник снова сможет работать с этими страницами.</p>
       {user.assignedPages.length === 0
         ? <p className="team-muted mt-2">Страниц пока нет.</p>
         : <div className="team-chips mt-3">{user.assignedPages.map((page) => <span key={page.id} className="badge">{page.label} · {page.modelName}</span>)}</div>}
@@ -430,7 +430,7 @@ const FAILURE: Readonly<Record<Confirmation, string>> = {
   terminateAccess: "Не удалось завершить входы: Hub вернул ошибку.",
   deactivate: "Не удалось отключить доступ: Hub вернул ошибку.",
   reactivate: "Не удалось восстановить доступ: Hub вернул ошибку.",
-  deleteAccount: "Не удалось подтвердить удаление. Проверьте состояние участника в списке.",
+  deleteAccount: "Не удалось подтвердить удаление. Проверьте состояние сотрудника в списке.",
 };
 
 export function ConfirmationDialog({
@@ -477,7 +477,7 @@ export function ConfirmationDialog({
     },
     deactivate: {
       title: `Отключить доступ ${user.username}?`,
-      message: "Все входы и ссылки перестанут работать, участник перейдёт в «Отключённые участники». "
+      message: "Все входы и ссылки перестанут работать, сотрудник перейдёт в «Отключённые сотрудники». "
         + "Логин (он останется занят), история, роль и страницы сохранятся — доступ можно будет восстановить.",
       confirmLabel: "Отключить доступ",
       isPending: deactivate.isPending,
@@ -489,8 +489,8 @@ export function ConfirmationDialog({
     deleteAccount: {
       title: `Удалить аккаунт ${user.username}?`,
       message: "Все его входы, ссылки и доступ к страницам будут отозваны, аккаунт удалится без возможности восстановления. "
-        + "Логин освободится — новый участник с этим логином получит отдельный аккаунт, "
-        + "а история работы и финансовые записи останутся за прежним участником.",
+        + "Логин освободится — новый сотрудник с этим логином получит отдельный аккаунт, "
+        + "а история работы и финансовые записи останутся за прежним сотрудником.",
       confirmLabel: "Удалить навсегда",
       isPending: deleteAccount.isPending,
       run: async () => {
@@ -556,9 +556,9 @@ export function PersonPage() {
   if (!user) {
     return (
       <div className="team-screen">
-        <PageHeader title="Участник больше недоступен" />
+        <PageHeader title="Сотрудник больше недоступен" />
         <StatusPanel
-          title="Участник больше недоступен"
+          title="Сотрудник больше недоступен"
           description="Этот аккаунт удалён или больше не доступен."
           action={<Link to="/team/people" className="btn btn-sm">К списку сотрудников</Link>}
         />

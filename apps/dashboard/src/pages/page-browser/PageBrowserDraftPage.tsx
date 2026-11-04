@@ -87,7 +87,7 @@ export function PageBrowserDraftPage() {
   const preview = proxyPreviewOf(text, order);
   const browserName = kind === "new" ? name.trim() : pageLabel;
   const nameProblem = kind === "new" && browserName !== "" && !NAME.test(browserName)
-    ? "Название — строчные латинские буквы, цифры и дефис (как у страниц: ari-2)"
+    ? "Название — строчные латинские буквы, цифры и дефис (как у страниц: mia-2)"
     : null;
   const env = envOfFields(fields);
   const proxyReady = kind === "existing" ? chosenPage?.proxy != null : pasting ? preview.kind === "parsed" && preview.problem === null : storedProxy !== null;
@@ -182,7 +182,7 @@ export function PageBrowserDraftPage() {
             {kind === "new" ? (
               <div>
                 <label htmlFor="pb-draft-name" className="field-label">Название страницы</label>
-                <input id="pb-draft-name" value={name} onChange={(event) => setName(event.target.value.toLowerCase())} placeholder="ari-2" className="input connect-input" disabled={editing !== null} spellCheck={false} />
+                <input id="pb-draft-name" value={name} onChange={(event) => setName(event.target.value.toLowerCase())} placeholder="mia-2" className="input connect-input" disabled={editing !== null} spellCheck={false} />
                 {nameProblem !== null
                   ? <p className="field-error">{nameProblem}</p>
                   : <p className="field-hint">Так же будет называться браузер на сервере.</p>}

@@ -189,7 +189,7 @@ export function FanCardPage() {
       <FanDossier key={routeKey} pageLabel={pageLabel} platformUserId={platformUserId} />
       <FanOperations pageLabel={pageLabel} platformUserId={platformUserId} offset={txOffset} onOffset={(next) => update({ txOffset: next === 0 ? null : String(next) }, { keepPosition: true })} />
 
-      <div className="fan-help-row">
+      <div className="help-row">
         <Disclosure>
           <p>За всё время и за период — после комиссии, по операциям этой страницы. Всего на {site} — по всем страницам {site}, которые вам видны.</p>
           <p>Уровень считается по тратам на этой странице за всё время: Кит от $500, VIP от $100, Постоянный от $50.</p>

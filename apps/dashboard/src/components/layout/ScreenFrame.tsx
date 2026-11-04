@@ -147,15 +147,19 @@ function FilterNotices() {
   const filter = usePageFilter();
   const notices: ReactNode[] = [];
   if (filter.rejected) {
+    // What is on the screen instead: one page, or every page. A screen that waits
+    // for a choice shows neither yet, and its table says so.
+    const shown = filter.page !== null
+      ? ` Показана ${filter.page}.`
+      : filter.mode === "one" ? "" : " Показаны все страницы.";
     notices.push(
       <Notice key="rejected" tone="warning" role="status">
-        Страница «{filter.rejected}» не найдена или недоступна. Показаны все страницы.
+        Страница «{filter.rejected}» не найдена или недоступна.{shown}
       </Notice>,
     );
-  }
-  if (filter.mode === "one" && filter.onePageWay === "substitute" && filter.page && filter.remembered === null && !filter.outOfScope) {
+  } else if (filter.substituted !== null) {
     notices.push(
-      <Notice key="substituted" role="status">Статистика только по одной странице. Показана {filter.page}.</Notice>,
+      <Notice key="substituted" role="status">Статистика только по одной странице. Показана {filter.substituted}.</Notice>,
     );
   }
   return notices.length > 0 ? <div className="screen-notices">{notices}</div> : null;
