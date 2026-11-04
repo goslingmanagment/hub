@@ -715,7 +715,8 @@ describe("OFAPI REST transactions backfill", () => {
        and slp.fan_id = t.fan_id
       left join revenue_daily rd
         on rd.platform_account_id = t.platform_account_id
-       and rd.business_date = '2026-06-26'::date
+       -- 26 Jun 22:36 UTC is 27 Jun 01:36 in Moscow, Hub's business day.
+       and rd.business_date = '2026-06-27'::date
        and rd.canonical_type = 'message_purchase'
        and rd.transaction_state = 'posted'
       where t.platform_account_id = $1
