@@ -2,6 +2,7 @@ import { Fragment, useEffect, useLayoutEffect, useRef, type ReactNode } from "re
 import { Link, useLocation, useNavigationType, useSearchParams } from "react-router";
 import { ArrowUpDown, ChevronRight, TrendingDown, TrendingUp } from "lucide-react";
 import { CHATTER_SHIFT_END_IDLE_MINUTES, type OverviewRevenueResponse } from "@agency_hub_core/contracts";
+import { millsFromDollars, millsToNumber } from "@agency_hub_core/shared";
 import { useAuthMe, useOverview, useOverviewRevenue } from "@/api/queries";
 import { useOfapiStatus } from "@/api/waiting";
 import { usePeriodStore, type PeriodOption } from "@/stores/periodStore";
@@ -193,6 +194,9 @@ function ChartScope({ report, scope, valid, onChange }: { report: Report; scope:
   );
 }
 
+/** The agency's day bar, net: the owner's line on the whole agency's chart (2026-11-05). */
+const AGENCY_DAY_GOAL = { mills: millsToNumber(millsFromDollars(1_000)), label: "$1 000" };
+
 function AgencyChart({ report, period, scope, onScope, onShowWeek }: {
   report: Report;
   period: PeriodOption;
@@ -218,6 +222,7 @@ function AgencyChart({ report, period, scope, onScope, onShowWeek }: {
         totalMills={valid ? (selectedPage ?? selectedModel ?? report).netEarningsMills : null}
         select={<ChartScope report={report} scope={scope} valid={valid} onChange={onScope} />}
         onShowWeek={onShowWeek}
+        goal={scope === "agency" ? AGENCY_DAY_GOAL : undefined}
         enabled={valid}
       />
       {!valid && period !== "today" && <p className="home-footnote mt-2">Для этого выбора график недоступен.</p>}

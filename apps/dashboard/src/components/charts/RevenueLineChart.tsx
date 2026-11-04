@@ -31,6 +31,13 @@ export interface RevenueLinePoint {
 
 const COLOR = "var(--color-chart-blue)";
 const COMPARE = "var(--color-chart-compare)";
+const GOAL = "var(--color-chart-green)";
+
+/** A level the day should reach: a dashed line across the chart, signed on the right. */
+export interface RevenueGoal {
+  mills: number;
+  label: string;
+}
 
 /** The change of one day, for the tooltip: a whole number of mills by the money helper. */
 export function dayChange(point: RevenueLinePoint): string | null {
@@ -45,12 +52,14 @@ export function dayChange(point: RevenueLinePoint): string | null {
  * window on the same positions. No fill, no gradient, no invented humps. A day
  * without data is a hole, never a zero.
  */
-export function RevenueLineChart({ points, currentLabel, previousLabel, formatDate, height = 300 }: {
+export function RevenueLineChart({ points, currentLabel, previousLabel, formatDate, goal, height = 300 }: {
   points: readonly RevenueLinePoint[];
   currentLabel: string;
   /** With it the second line is drawn and the legend appears. */
   previousLabel?: string | undefined;
   formatDate: (date: string) => string;
+  /** The day's bar: the axis always reaches it, so the line is seen on a weak week too. */
+  goal?: RevenueGoal | undefined;
   height?: number;
 }) {
   const { budget, onResize } = useTickBudget();
@@ -59,7 +68,7 @@ export function RevenueLineChart({ points, currentLabel, previousLabel, formatDa
     ...(previousLabel ? [{ key: "previous", label: previousLabel, color: COMPARE }] : []),
   ];
   const values = points.flatMap((point) => [point.current, previousLabel ? point.previous ?? null : null]).filter((value): value is number => value !== null);
-  const yScale = linearTicks(Math.min(0, ...values), Math.max(0, ...values), { integer: true });
+  const yScale = linearTicks(Math.min(0, ...values), Math.max(0, goal?.mills ?? 0, ...values), { integer: true });
   const step = (yScale.ticks[1] ?? 1) - (yScale.ticks[0] ?? 0);
   const xTicks = evenTickIndices(points.length, Math.min(budget, 7)).map((index) => points[index]!.date);
   const dotOf = (props: { cx?: number | undefined; cy?: number | undefined; index: number }) => {
@@ -90,6 +99,16 @@ export function RevenueLineChart({ points, currentLabel, previousLabel, formatDa
           <XAxis {...xAxisProps} dataKey="date" ticks={xTicks} tickFormatter={(value: unknown) => formatDate(String(value))} />
           <YAxis {...yAxisProps} domain={yScale.domain} ticks={yScale.ticks} tickFormatter={usdAxisFormatter(step)} />
           {values.some((value) => value < 0) ? <ReferenceLine y={0} stroke="var(--color-border-strong)" /> : null}
+          {goal ? (
+            <ReferenceLine
+              y={goal.mills}
+              stroke={GOAL}
+              strokeWidth={1.5}
+              strokeDasharray="6 4"
+              ifOverflow="extendDomain"
+              label={{ value: goal.label, position: "insideBottomLeft", fontSize: 12, fontWeight: 600, fill: GOAL }}
+            />
+          ) : null}
           {previousLabel && (
             <Line type="linear" dataKey="previous" name={previousLabel} stroke={COMPARE} strokeWidth={2} dot={false} activeDot={activeDot(COMPARE)} connectNulls={false} {...CHART_ANIMATION} />
           )}
