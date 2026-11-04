@@ -546,6 +546,28 @@ describe("a request derived from the approval and the dispatch's results (spec �
     expect(() => form({ albumRef: "al9" })).toThrow("test form does not parse");
   });
 
+  it("a vault album's album is one (audit, 2026-11-04): the one its send recorded on the publication, never a second create", () => {
+    const vault = { kind: "create" as const, mode: "vault", revisionId: 33 };
+    const album = form({
+      kind: "vault_album", text: "Пак", wallRefs: [], tierRefs: [], albumRef: null,
+      media: [{ role: "media", position: 0, source: "vault", mediaRef: "m-master", fileId: null, fileSha256: null }],
+    });
+    const addMedia = command({ step: "album_media" });
+    // The page's album with its title, found right before a create and recorded: the media go there, no create.
+    const found = { status: "submitting", platformPostRef: null, vaultAlbumRef: "al7" };
+    expect(deriveFanslyWrite(deriveInput({ command: addMedia, dispatch: vault, form: album, publication: found })))
+      .toMatchObject({ ok: true, request: { spec: "publish.vault_album_media", params: { albumId: "al7", mediaIds: ["m-master"] } } });
+    expect(deriveFanslyWrite(deriveInput({ command: command({ step: "album_create" }), dispatch: vault, form: album, publication: found })))
+      .toEqual({ ok: false, reason: "album_on_publication" });
+    // The album its create made, recorded: the same one.
+    const created = done("album_create", "", { albumId: "al1" }, {}, 80);
+    expect(deriveFanslyWrite(deriveInput({ command: addMedia, dispatch: vault, form: album, commands: [created], publication: { ...found, vaultAlbumRef: "al1" } })))
+      .toMatchObject({ ok: true, request: { params: { albumId: "al1" } } });
+    // Another album than the publication's: never.
+    expect(deriveFanslyWrite(deriveInput({ command: addMedia, dispatch: vault, form: album, commands: [created], publication: found })))
+      .toEqual({ ok: false, reason: "album_not_the_publications" });
+  });
+
   it("a vault pack (0347): a file that failed goes without; a card is renamed to its file's name, only once its media is in the album", () => {
     const vault = { kind: "create" as const, mode: "vault", revisionId: 33 };
     const second: FanslyWriteFileFacts = { ...FILE, id: 6, contentSha256: SHA_B, originalName: "IMG_0191.jpeg" };

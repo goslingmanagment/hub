@@ -91,6 +91,18 @@ describe("publications: a vault album (0323)", () => {
     expect(() => normalizePublicationDraft(album(), { ...CONTEXT, page: ONLYFANS })).toThrow(/cannot publish vault_album/);
   });
 
+  it("named by its id (audit, 2026-11-04): an album of the page Hub knows, whatever its title; only an album names one", () => {
+    // Sent again from publication-get: its album, though two albums carry the title now.
+    const named = normalizePublicationDraft(album({ vaultAlbumRef: "al5" }), { ...CONTEXT, vaultAlbumRefs: ["al1", "al2"], vaultAlbumKnown: true });
+    expect(named.vaultAlbumRef).toBe("al5");
+    expect(publicationApprovalForm({ publicationId: 5, content: named, page: FANSLY, files: new Map() }).form).toMatchObject({ albumRef: "al5" });
+    expect(() => normalizePublicationDraft(album({ vaultAlbumRef: "al404" }), { ...CONTEXT, vaultAlbumKnown: false })).toThrow(/not an album of this page Hub knows/);
+    // Null is no album named: its title finds one, as before.
+    expect(normalizePublicationDraft(album({ vaultAlbumRef: null }), { ...CONTEXT, vaultAlbumRefs: ["al9"] }).vaultAlbumRef).toBe("al9");
+    expect(() => normalizePublicationDraft(body({ vaultAlbumRef: "al5" }), { ...CONTEXT, vaultAlbumKnown: true })).toThrow(/only a vault album names an album/);
+    expect(normalizePublicationDraft(body({ vaultAlbumRef: null }), CONTEXT).vaultAlbumRef).toBeNull();
+  });
+
   it("checks its files, never repeats, the day's volume, walls or its time having passed", () => {
     const content = normalizePublicationDraft(album({ publishAt: new Date(NOW.getTime() - DAY).toISOString() }), CONTEXT);
     expect(codes(content, { history: [{ key: "vault:m1", lastPostedAt: NOW, lastPostRef: "p1", nearestPublicationAt: null, nearestPublicationId: null, scheduledAt: null, scheduledPostRef: null }], volume: { dayCount: 99, usualPerDay: 1 } })).toEqual([]);

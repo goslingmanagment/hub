@@ -16,7 +16,7 @@ import {
   runFanslyPublishingTick,
   type FanslyPublishingOptions,
 } from "../apps/runtime/src/services/publications-fansly.ts";
-import { approvePublications, createPublicationDraft } from "../apps/runtime/src/services/publications.ts";
+import { approvePublications, checkApprovedPublication, createPublicationDraft } from "../apps/runtime/src/services/publications.ts";
 import { resetIntegrationDatabase, startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 import { seedSyncPage } from "./helpers/sync-engine-host.ts";
@@ -256,6 +256,102 @@ describe("a Fansly story (spec §3.5)", () => {
     expect(await publication(id)).toMatchObject({ status: "missed", status_reason: "window_passed" });
     expect(await sql("select id from publication_dispatches")).toEqual([]);
     expect(await sql("select id from fansly_write_commands")).toEqual([]);
+  });
+});
+
+describe("a vault album's album is one (audit, 2026-11-04)", () => {
+  const album = (overrides: Partial<PublicationContentBody> = {}) => body({
+    kind: "vault_album", text: "Pack", media: [{ source: "vault", mediaRef: "m1" }], publishAt: new Date(Date.now() - MIN).toISOString(), ...overrides,
+  });
+
+  const albumOf = async (id: number) => (await sql<{ vault_album_ref: string | null }>("select vault_album_ref from publications where id = $1", [id]))[0]!.vault_album_ref;
+
+  /** An album of the page as the listing collected it. */
+  async function listed(ref: string, title: string, gone = false) {
+    await sql(
+      `insert into creator_vault_albums (page_id, platform, vault_kind, album_ref, title, missing_since, first_observed_at, last_observed_at,
+                                         content_hash, source_event_id, source_observation_id, source_account_seq)
+       values ($1, 'fansly', 'creator', $2, $3, $4, now(), now(), $5, 1, 1, 1)`,
+      [pageId, ref, title, gone ? new Date() : null, HASH],
+    );
+  }
+
+  const steps = async (id: number) => (await commandsOf(id)).map((row) => `${row.step}:${row.state}`);
+
+  it("the album its create made is recorded at once; one of that title drafted before it existed goes there too — never a second create", async () => {
+    const first = await approved(album());
+    const second = await approved(album({ media: [{ source: "vault", mediaRef: "m2" }] }));
+    // Drafted before the page had an album of that title: neither names one.
+    expect([await albumOf(first), await albumOf(second)]).toEqual([null, null]);
+    await tick();
+    expect(await steps(first)).toEqual(["album_create:queued"]);
+    await settleCommand((await commandsOf(first))[0]!.id, "answered", { albumId: "al1" });
+    await tick();
+    // Recorded before its files go in, whatever comes after.
+    expect(await albumOf(first)).toBe("al1");
+    expect(await steps(first)).toEqual(["album_create:answered", "album_media:queued"]);
+    // Its next step still stands on its approval: the album its create made is no change to it.
+    const { approved_revision_id: revisionId } = (await sql<{ approved_revision_id: string }>("select approved_revision_id::text from publications where id = $1", [first]))[0]!;
+    expect(await checkApprovedPublication(app.db, first, { statuses: ["approved", "submitting"], revisionId: Number(revisionId) })).toMatchObject({ ok: true });
+    await settleCommand((await commandsOf(first))[1]!.id, "answered", { albumId: "al1", added: 1 });
+    await tick();
+    expect(await publication(first)).toMatchObject({ status: "published" });
+    // The second: right before it would make an album, it finds the first one's and fills it.
+    expect(await albumOf(second)).toBe("al1");
+    expect(await steps(second)).toEqual(["album_media:queued"]);
+    await settleCommand((await commandsOf(second))[0]!.id, "answered", { albumId: "al1", added: 1 });
+    await tick();
+    expect(await publication(second)).toMatchObject({ status: "published" });
+    expect(await albumOf(second)).toBe("al1");
+  });
+
+  it("a create refused before it left looks again before it goes again; two albums of the title: it stops and makes none", async () => {
+    const later = await approved(album({ text: "Later" }));
+    await tick();
+    const [create] = await commandsOf(later);
+    expect(await refuseFanslyWriteCommand(app.db, { id: Number(create!.id), reason: "page_publishing_off" })).toBe(true);
+    // Meanwhile the listing collected an album of that title.
+    await listed("al3", "Later");
+    await tick();
+    expect(await albumOf(later)).toBe("al3");
+    await tick();
+    expect(await steps(later)).toEqual(["album_create:refused", "album_media:queued"]);
+    await settleCommand((await commandsOf(later))[1]!.id, "answered", { albumId: "al3", added: 1 });
+    await tick();
+    expect(await publication(later)).toMatchObject({ status: "published" });
+
+    const twin = await approved(album({ text: "Twin" }));
+    await listed("al8", "Twin");
+    await listed("al9", "Twin");
+    await tick();
+    expect(await publication(twin)).toMatchObject({ status: "missed", status_reason: "not_sent:album_title_ambiguous:2:al8,al9" });
+    expect(await commandsOf(twin)).toEqual([]);
+  });
+
+  it("a create whose answer was lost may have made the album: unknown, never a second create", async () => {
+    const lost = await approved(album());
+    await tick();
+    await settleCommand((await commandsOf(lost))[0]!.id, "unknown", null, "no_answer:timeout");
+    await tick();
+    expect(await publication(lost)).toMatchObject({ status: "unknown", status_reason: "album_create:no_answer:timeout" });
+    expect(await steps(lost)).toEqual(["album_create:unknown"]);
+  });
+
+  it("a draft names its album by id: one the listing or a publication of the page knows, whatever its title now", async () => {
+    await listed("al5", "Old title");
+    const draft = (vaultAlbumRef: string, text = "New title") =>
+      createPublicationDraft(app.db, { pageId, body: album({ text, vaultAlbumRef }), author: { kind: "human", userId: ownerId }, idempotencyKey: null });
+    expect(await draft("al5")).toMatchObject({ vaultAlbumRef: "al5", text: "New title" });
+    await expect(draft("al404")).rejects.toThrow(/not an album of this page Hub knows/);
+    // One only a publication of the page knows yet: the album its create made.
+    const made = await approved(album({ text: "Made" }));
+    await tick();
+    await settleCommand((await commandsOf(made))[0]!.id, "answered", { albumId: "al6" });
+    await tick();
+    expect(await draft("al6", "Renamed")).toMatchObject({ vaultAlbumRef: "al6" });
+    // Gone from the last full listing: no more.
+    await listed("al6", "Renamed", true);
+    await expect(draft("al6", "Renamed again")).rejects.toThrow(/not an album of this page Hub knows/);
   });
 });
 

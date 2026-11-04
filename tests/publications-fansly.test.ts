@@ -107,9 +107,13 @@ describe("a vault album (0323, the contract §13)", () => {
     // Its answer lost: a person decides.
     expect(next(["album_create", "album_media"], [created, command("album_media", "unknown", { stateReason: "no_answer:timeout" })]))
       .toMatchObject({ kind: "settle", to: "unknown" });
-    // The album's create lost: its media never went.
+    // The album's create lost: Hub cannot tell whether the album was made — a
+    // send after it would make a second one (audit, 2026-11-04). A person decides.
     expect(next(["album_create", "album_media"], [command("album_create", "unknown", { stateReason: "no_answer:timeout" })]))
-      .toMatchObject({ kind: "settle", to: "missed" });
+      .toEqual({ kind: "settle", to: "unknown", reason: "album_create:no_answer:timeout", platformPostRef: null });
+    // Fansly refused it: no album was made.
+    expect(next(["album_create", "album_media"], [command("album_create", "rejected", { stateReason: "fansly_http_400" })]))
+      .toMatchObject({ kind: "settle", to: "rejected" });
   });
 });
 

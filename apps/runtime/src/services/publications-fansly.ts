@@ -1,5 +1,6 @@
 import {
   countPagePublicationDispatchesSince,
+  findPageVaultAlbumRefs,
   getFanslyWriteFileFacts,
   getPublication,
   getPublicationRevision,
@@ -8,6 +9,7 @@ import {
   listFanslyUploadedMedia,
   listFanslyWriteCommandsOfDispatch,
   listSubmittingFanslyPublications,
+  setPublicationVaultAlbumRef,
   transitionPublication,
   type Database,
   type FanslyWriteCommandRecord,
@@ -15,6 +17,7 @@ import {
   type FanslyWriteStep,
   type PublicationDispatchMode,
   type PublicationDispatchRecord,
+  type PublicationRecord,
 } from "@agency_hub_core/db";
 import { FANSLY_PUBLISH_FACTS_VERIFIED, isFanslyWriteSendable, type FanslyWireId } from "@agency_hub_core/fansly";
 import {
@@ -103,11 +106,17 @@ import { ensureQueueCreated, type QueueCreationClient } from "./sync-queue.ts";
 //
 // A vault album (0323, the contract §13) goes at its time, with no rush: its
 // new files go up into the vault alone, a few at once as the site's own
-// "Upload to Vault" (0347, `FANSLY_VAULT_FILES_IN_FLIGHT`), then the album is
-// created (when the approval names none) and every file is added to it in one
-// request, last first. A file that failed for itself goes without: the album
-// gets the rest. Then each card not named as its file — bytes Fansly had come
-// back as their old media, under the old name — is renamed. That done, the
+// "Upload to Vault" (0347, `FANSLY_VAULT_FILES_IN_FLIGHT`), then into its
+// album: the one its approval names; else the page's album with its title,
+// looked for again right before one would be made (two with it: it stops);
+// else one created. Whichever, it is recorded on the publication the moment
+// it is known (audit, 2026-11-04), so every later step, and a draft sent again
+// from it, fills that one album — never a second one made for it. A create
+// whose answer was lost may have made one: "unknown", like a post's. Every
+// file is added in one request, last first. A file that failed for itself
+// goes without: the album gets the rest. Then each card not named as its
+// file — bytes Fansly had come back as their old media, under the old name —
+// is renamed. That done, the
 // album is as approved: "published", its reason naming the files that failed
 // (`files_failed:<n>/<all>:<name>=<why>,…`) and the cards left unrenamed —
 // nobody's wall shows it, and no read of the wall checks it. Every file
@@ -438,8 +447,10 @@ export function fanslyCreateNext(input: {
           return { kind: "settle", to: "rejected", reason: `${step}:${live.stateReason ?? "rejected"}`, platformPostRef: null };
         case "unknown":
           // The post or story itself may have gone: a person or a read
-          // decides. A step before it: the post was never sent.
-          return last
+          // decides. So may a vault album's album (audit, 2026-11-04): Hub
+          // cannot tell whether it was made, and a send after would make
+          // another. A step before the post: the post was never sent.
+          return last || step === "album_create"
             ? { kind: "settle", to: "unknown", reason: `${step}:${live.stateReason ?? "unknown"}`, platformPostRef: null }
             : { kind: "settle", to: "missed", reason: `not_sent:${step}_unknown:${live.stateReason ?? "unknown"}`, platformPostRef: null };
         case "refused":
@@ -757,9 +768,25 @@ async function beginCreate(
   }
   // The first request: the first file's upload, or the chain's first step.
   const window = uploads.length > 0 ? fanslyUploadWindow(mode, record.publishAt) : fanslyCommandWindow(mode, record.publishAt);
-  const first = uploads.length > 0 ? { step: "upload_create" as const, item: uploads[0]! } : chain[0]!;
+  let first: FanslyChainStep = uploads.length > 0 ? { step: "upload_create", item: uploads[0]! } : chain[0]!;
   const notBefore = uploads.length === 0 ? publishNotBefore(mode, record.publishAt, ctx.now) : ctx.now;
   if (ctx.now.getTime() >= window.notAfter.getTime()) return "raced";
+  // A vault album with nothing to upload makes its album first — unless the
+  // page has one with its title by now (audit, 2026-11-04).
+  let foundAlbum: string | null = null;
+  if (first.step === "album_create") {
+    const album = await albumBeforeCreate(app.db, record.pageId, form);
+    if (album.kind === "ambiguous") {
+      if (await transitionPublication(app.db, {
+        id: record.id, from: "approved", to: "missed", actor: { kind: "hub" }, reason: album.reason,
+      })) report.missed += 1;
+      return "returned";
+    }
+    if (album.kind === "found") {
+      foundAlbum = album.albumRef;
+      first = { step: "album_media", item: "" };
+    }
+  }
   const outcome = await app.db.transaction(async (rawTx) => {
     const tx = rawTx as unknown as Database;
     const dispatch = await insertPublicationDispatch(tx, {
@@ -769,6 +796,7 @@ async function beginCreate(
     if (!await transitionPublication(tx, { id: record.id, from: "approved", to: "submitting", actor: { kind: "hub" }, onlyIfRevisionId: revisionId })) {
       throw new PublicationMovedError();
     }
+    if (foundAlbum !== null) await setPublicationVaultAlbumRef(tx, { id: record.id, albumRef: foundAlbum });
     await enqueueFanslyWriteCommand(tx, {
       dispatchId: dispatch.id, step: first.step, item: first.item, priority: window.priority,
       notBefore, notAfter: window.notAfter, config: ctx.config, now: ctx.now, isSendable: ctx.isSendable,
@@ -811,7 +839,9 @@ async function followCreate(
     listFanslyWriteCommandsOfDispatch(app.db, dispatch.id),
   ]);
   const form = revision === null ? null : parseApprovedForm(revision.form);
-  const chain = form === null ? null : fanslyCreateChain(form);
+  // A vault album's album, once known, is the one its chain fills: no create.
+  const album = form?.kind === "vault_album" ? await vaultAlbumOf(app, record, form, commands) : null;
+  const chain = form === null ? null : fanslyCreateChain(form.kind === "vault_album" ? { ...form, albumRef: album } : form);
   const uploaded = form === null ? [] : await listFanslyUploadedMedia(app.db, record.pageId, fileSha256s(form));
   const onAccount = new Set(uploaded.map((media) => media.sha256));
   const begun = new Set(commands.filter((command) => command.step === "upload_create" && command.state !== "refused").map((command) => command.item));
@@ -850,6 +880,18 @@ async function followCreate(
     await settle(app, record.id, { kind: "settle", to: "missed", reason: "window_passed", platformPostRef: null }, report);
     return SETTLED;
   };
+  if (next.kind === "enqueue" && next.step === "album_create" && form !== null) {
+    const album = await albumBeforeCreate(app.db, record.pageId, form);
+    if (album.kind === "ambiguous") {
+      await settle(app, record.id, missed(album.reason), report);
+      return SETTLED;
+    }
+    if (album.kind === "found") {
+      // Recorded: the next pass adds the files to it.
+      await setPublicationVaultAlbumRef(app.db, { id: record.id, albumRef: album.albumRef });
+      return { state: "in_flight", wakeAt: ctx.now };
+    }
+  }
   if (next.kind === "enqueue") {
     const own = publishNotBefore(dispatch.mode, record.publishAt, ctx.now);
     const notBefore = next.notBefore !== undefined && next.notBefore.getTime() > own.getTime() ? next.notBefore : own;
@@ -874,6 +916,42 @@ async function followCreate(
   }
   await settle(app, record.id, next, report);
   return SETTLED;
+}
+
+type AlbumBeforeCreate = { kind: "none" } | { kind: "found"; albumRef: string } | { kind: "ambiguous"; reason: string };
+
+/**
+ * Right before a vault album's album would be made (audit, 2026-11-04): the
+ * page may have one with its title by now — another publication of the page
+ * recorded one, or the listing collected it. One: the files go there. More:
+ * which one is not Hub's to guess — it stops and makes none. None: made.
+ */
+async function albumBeforeCreate(db: Database, pageId: number, form: Pick<ApprovedForm, "text">): Promise<AlbumBeforeCreate> {
+  const found = await findPageVaultAlbumRefs(db, pageId, form.text.trim());
+  if (found.length === 0) return { kind: "none" };
+  if (found.length === 1) return { kind: "found", albumRef: found[0]! };
+  return { kind: "ambiguous", reason: `not_sent:album_title_ambiguous:${found.length}:${found.join(",")}`.slice(0, 300) };
+}
+
+/**
+ * A vault album's album as its send knows it (audit, 2026-11-04): the one its
+ * approval names; else the one recorded on the publication (found before a
+ * create, or made by it); else the one its create answered — recorded now,
+ * before anything after it goes. Null: none yet, its create is next.
+ */
+async function vaultAlbumOf(
+  app: AppContext,
+  record: Pick<PublicationRecord, "id" | "vaultAlbumRef">,
+  form: ApprovedForm,
+  commands: readonly FanslyWriteCommandRecord[],
+): Promise<string | null> {
+  if (form.albumRef !== null) return form.albumRef;
+  if (record.vaultAlbumRef !== null) return record.vaultAlbumRef;
+  const created = commands.find((command) => command.step === "album_create" && command.state === "answered");
+  const albumId = created?.result?.albumId;
+  if (typeof albumId !== "string" || albumId === "") return null;
+  await setPublicationVaultAlbumRef(app.db, { id: record.id, albumRef: albumId });
+  return albumId;
 }
 
 /**

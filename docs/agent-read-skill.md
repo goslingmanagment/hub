@@ -626,7 +626,15 @@ The path of one post:
    files go up into the vault, the album with that title is made when the page
    has none, and every file is added in one request so the album shows them in
    your order (re-adding a file it holds moves it; nothing is removed from the
-   album: files you leave out sink below yours). Up to 300 files; no walls,
+   album: files you leave out sink below yours). To name the album by its id
+   instead, put `vaultAlbumRef` in the `--file` body: an album of the page Hub
+   knows (its album listing, or a publication of the page), whatever its title
+   now. `publication-get` prints it and `--file` keeps it, so an album sent
+   again from that answer goes into the same album even after a rename. Hub
+   records the album on the publication as soon as its send knows it; right
+   before it would make one it looks for the page's album with that title
+   again, uses it when there is one, and stops (`missed`,
+   `not_sent:album_title_ambiguous:<n>:<ids>`) when there are several. Up to 300 files; no walls,
    tiers, price, previews or expiry; `--publish-at` now. A file not yet on the
    platform is uploaded to Hub first: `hub publication-file-upload --page-label
    <page> <file…>` streams each file whole from disk (any size up to Hub's
@@ -701,7 +709,9 @@ person cannot approve the draft as it is:
 Statuses after you: `draft` → a person approves → `approved` → Hub puts it on
 the platform's schedule (`submitting`, `scheduled`, `processing`) → `published`;
 or `not_published`, `rejected` (the platform refused), `unknown` (the answer was
-lost: a person checks the wall), `missed` (a story not started in time),
+lost: a person checks the wall; for a vault album, Hub does not know whether
+Fansly applied its last step — the album made, the files added: do not send it
+again or retry, tell the owner, Dima), `missed` (a story not started in time),
 `withdrawn` (taken off the schedule), `cancelled` (by a person before sending).
 
 ## Fan queues for chatters (`hub queue-*`)
