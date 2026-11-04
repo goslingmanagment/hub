@@ -1,84 +1,83 @@
-import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
-import { Link, useSearchParams } from "react-router";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { useSearchParams } from "react-router";
 import { toast } from "sonner";
-import { PUBLICATION_STATUSES, type PublicationStatus } from "@agency_hub_core/shared";
-import type { PublicationQueueSnapshotWire, PublicationWire, PublicationWithdrawResult } from "@agency_hub_core/contracts";
-import { useAdminUsers, useAgentKeys } from "@/api/queries";
+import { PUBLICATION_APPROVE_BATCH_MAX, PUBLICATION_SCHEDULE_HORIZON_DAYS, PUBLICATION_STATUSES } from "@agency_hub_core/shared";
+import type { PublicationWire, PublicationWithdrawResult } from "@agency_hub_core/contracts";
+import { useAdminConfig } from "@/api/adminConfig";
+import { useAuthMe } from "@/api/queries";
 import {
+  publicationsQueryOptions,
   useApprovePublications,
   useCancelPublication,
   useDeletePublicationPost,
-  usePublicationDetail,
   usePublicationQueues,
-  usePublications,
   usePublicationSettings,
+  usePublicationsNotOut,
+  usePublicationsWaiting,
   useRefreshPublicationQueue,
   useReplacePublication,
-  useResolvePublication,
   useWithdrawPagePublications,
   useWithdrawPublication,
 } from "@/api/publications";
-import { keepAllPages } from "@/lib/pageParam";
-import { usePageFilterStore } from "@/stores/pageFilterStore";
-import { ConfirmModal } from "@/components/shared/ConfirmModal";
-import { ModalShell } from "@/components/shared/ModalShell";
-import { PlatformTag } from "@/components/shared/PlatformBadge";
+import { useOfapiStatus, useWaitingCounts } from "@/api/waiting";
+import { useDashboardShell } from "@/components/layout/DashboardShellContext";
+import { usePageFilter } from "@/components/layout/usePageFilter";
+import { QueryNotice } from "@/components/shared/QueryNotice";
 import { StatusPanel } from "@/components/shared/StatusPanel";
-import { TableSkeleton } from "@/components/shared/TableSkeleton";
-import { GlobalSwitchLine, PageStateMark } from "./PublicationParts.js";
+import { Disclosure } from "@/components/ui/Disclosure";
+import { Notice } from "@/components/ui/Notice";
+import { PageHeader } from "@/components/ui/PageHeader";
+import { Segmented } from "@/components/ui/Segmented";
+import { formatWindowRange } from "@/lib/format";
+import { ruPlural } from "@/lib/plural";
+import { seedValue } from "@/pages/settings/ConfigurationEditors";
 import {
-  EMPTY_RESOLVE_DRAFT,
-  FINDING_TONES,
-  DELETE_POST_CONFIRM_TEXT,
-  KIND_LABELS,
+  ApprovalReport,
+  ApproveManyDialog,
+  ApproveOneDialog,
+  CancelDialog,
+  DeletePostDialog,
+  RefreshOnlyfansDialog,
+  ResolveDialog,
+  WithdrawDialog,
+  WithdrawPageDialog,
+  WithdrawReport,
+  type PagePlace,
+} from "./PublicationDialogs.js";
+import { PublicationDrawer } from "./PublicationDrawer.js";
+import { FeedSkeleton, PublicationsFeed, type RowActions } from "./PublicationsFeed.js";
+import { PublicationsPagesStrip, type StripPage } from "./PublicationsPagesStrip.js";
+import { PublicationSettingsDrawer, SettingsDialog, type SettingsPageRow } from "./PublicationSettingsDrawer.js";
+import {
   PUBLICATIONS_LIST_LIMIT,
+  PUBLICATIONS_WAITING_LIMIT,
   PUBLICATION_WINDOWS,
-  STATUS_BADGES,
-  STATUS_LABELS,
+  STATUS_FILTER_LABELS,
   actionFailure,
-  actorLabel,
   approvalItems,
   approvalOutcome,
-  authorLabel,
+  approvalSummary,
   dayKeyOf,
-  deletePostBlock,
   deletePostResultText,
-  deletionNote,
-  eventReasonLabel,
-  findingText,
-  groupPublicationsByDay,
+  feedCountLabel,
+  feedDays,
   isApprovable,
-  attachmentAccessLabel,
-  isCancellable,
-  mediaList,
-  mediaSummary,
-  momentLabel,
-  orderedFindings,
+  isStopped,
+  manualFeedRows,
+  pagePublishing,
   parsePublicationsView,
-  priceLabel,
-  priceRangeLabel,
-  publicationsCountLabel,
+  postsCountLabel,
   publicationsSearch,
-  queueIncompleteText,
-  replyLockLabel,
-  resolveForm,
-  textStart,
-  timeOf,
+  selectionLabel,
+  windowPhrase,
   windowRange,
-  platformName,
-  withdrawalNote,
-  withdrawBlock,
-  withdrawConfirmText,
   withdrawResultText,
   type ApprovalRefusal,
-  type Names,
-  type PublicationWindow,
+  type PagePublishing,
+  type PublicationStatusFilter,
   type PublicationsView,
-  type ResolveDraft,
 } from "./publicationsView.js";
-
-const CELL = "align-top";
-const SUB = "mt-0.5 text-xs text-text-muted";
 
 /** Today's Moscow day, read again each minute: the date window follows the calendar, not the clock. */
 function useTodayKey(): string {
@@ -90,643 +89,165 @@ function useTodayKey(): string {
   return today;
 }
 
-function useNames(): Names {
-  const users = useAdminUsers();
-  const keys = useAgentKeys();
-  return useMemo(() => ({
-    users: new Map((users.data ?? []).map((user) => [user.id, user.username])),
-    agentKeys: new Map((keys.data ?? []).map((key) => [key.id, key.name])),
-  }), [users.data, keys.data]);
+type Segment = "all" | "draft" | "unknown" | "not_out";
+const SEGMENT_TARGETS: Readonly<Record<Segment, Pick<PublicationsView, "status" | "window">>> = {
+  all: { status: null, window: "next7" },
+  draft: { status: "draft", window: "all" },
+  unknown: { status: "unknown", window: "all" },
+  not_out: { status: "not_out", window: "last7" },
+};
+const SEGMENT_LABELS: Readonly<Record<Segment, string>> = {
+  all: "Все",
+  draft: "Ждут утверждения",
+  unknown: "Исход неизвестен",
+  not_out: "Не вышли за 7 дней",
+};
+
+function capitalize(text: string): string {
+  return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
-/** A checkbox that can say "some of these". */
-function Checkbox({ checked, indeterminate = false, disabled = false, label, onChange }: {
-  checked: boolean;
-  indeterminate?: boolean;
-  disabled?: boolean;
-  label: string;
-  onChange: (checked: boolean) => void;
-}) {
-  const ref = useRef<HTMLInputElement>(null);
-  useEffect(() => {
-    if (ref.current) ref.current.indeterminate = indeterminate;
-  }, [indeterminate]);
-  return (
-    <input
-      ref={ref}
-      type="checkbox"
-      checked={checked}
-      disabled={disabled}
-      aria-label={label}
-      title={label}
-      onChange={(event) => onChange(event.target.checked)}
-    />
-  );
-}
-
-function Findings({ publication, todayKey }: { publication: PublicationWire; todayKey: string }) {
-  if (publication.findings.length === 0) return <span className="text-text-muted">—</span>;
-  return (
-    <ul className="space-y-1">
-      {orderedFindings(publication.findings).map((finding, index) => (
-        <li key={`${finding.code}:${finding.mediaKey ?? ""}:${index}`} className={`text-xs ${FINDING_TONES[finding.severity]}`}>
-          {finding.severity === "blocking" && <span className="font-semibold">Нельзя утвердить: </span>}
-          {findingText(finding, todayKey)}
-        </li>
-      ))}
-    </ul>
-  );
-}
-
-interface RowActions {
-  busy: boolean;
-  /** Pages whose publishing stopped itself: nothing is sent for them, withdrawal included. */
-  stoppedPages: ReadonlySet<string>;
-  onApprove: (publication: PublicationWire) => void;
-  onCancel: (publication: PublicationWire) => void;
-  onResolve: (publication: PublicationWire) => void;
-  onOpen: (publication: PublicationWire) => void;
-  onWithdraw: (publication: PublicationWire) => void;
-  onDeletePost: (publication: PublicationWire) => void;
-  onReplace: (publication: PublicationWire) => void;
-}
-
-function ActionButtons({ publication, actions }: { publication: PublicationWire; actions: RowActions }) {
-  const withdraw = withdrawBlock(publication, actions.stoppedPages.has(publication.pageLabel), new Date());
-  const deletePost = deletePostBlock(publication, actions.stoppedPages.has(publication.pageLabel));
-  return (
-    <div className="flex flex-wrap justify-end gap-1.5">
-      {deletePost !== undefined && (
-        <button
-          type="button"
-          className="btn btn-ghost btn-sm text-danger"
-          disabled={actions.busy || deletePost !== null}
-          title={deletePost ?? "Удалить пост со стены Fansly"}
-          onClick={() => actions.onDeletePost(publication)}
-        >
-          Удалить с площадки
-        </button>
-      )}
-      {withdraw !== undefined && (
-        <button
-          type="button"
-          className="btn btn-ghost btn-sm"
-          disabled={actions.busy || withdraw !== null}
-          title={withdraw ?? `Убрать пост из расписания ${platformName(publication.platform)}`}
-          onClick={() => actions.onWithdraw(publication)}
-        >
-          Снять
-        </button>
-      )}
-      {publication.status === "withdrawn" && (
-        <button type="button" className="btn btn-ghost btn-sm" disabled={actions.busy} onClick={() => actions.onReplace(publication)}>
-          Заменить
-        </button>
-      )}
-      {publication.status === "draft" && (
-        <button
-          type="button"
-          className="btn btn-primary btn-sm"
-          disabled={actions.busy || !isApprovable(publication)}
-          title={publication.blocked ? "Есть замечания, которые не дают утвердить" : undefined}
-          onClick={() => actions.onApprove(publication)}
-        >
-          Утвердить
-        </button>
-      )}
-      {publication.status === "unknown" && (
-        <button type="button" className="btn btn-primary btn-sm" disabled={actions.busy} onClick={() => actions.onResolve(publication)}>
-          Разобрать
-        </button>
-      )}
-      {isCancellable(publication) && (
-        <button type="button" className="btn btn-ghost btn-sm" disabled={actions.busy} onClick={() => actions.onCancel(publication)}>
-          Отменить
-        </button>
-      )}
-    </div>
-  );
-}
-
-function DayTable({ publications, todayKey, names, selected, onSelect, actions }: {
-  publications: PublicationWire[];
-  todayKey: string;
-  names: Names;
-  selected: ReadonlySet<number>;
-  onSelect: (ids: number[], checked: boolean) => void;
-  actions: RowActions;
-}) {
-  return (
-    <table className="data-table min-w-[1080px] w-full table-fixed">
-      {/* One set of widths for every day, so the days' columns line up. */}
-      <colgroup>
-        <col className="w-8" />
-        <col className="w-16" />
-        <col className="w-[140px]" />
-        <col />
-        <col className="w-[72px]" />
-        <col className="w-[104px]" />
-        <col className="w-[230px]" />
-        <col className="w-[96px]" />
-        <col className="w-[112px]" />
-      </colgroup>
-      <thead>
-        <tr>
-          <th><span className="sr-only">Выбор</span></th>
-          <th>Время</th>
-          <th>Страница</th>
-          <th>Пост</th>
-          <th className="num">Цена</th>
-          <th>Статус</th>
-          <th>Замечания</th>
-          <th>Автор</th>
-          <th><span className="sr-only">Действия</span></th>
-        </tr>
-      </thead>
-      <tbody>
-        {publications.map((publication) => (
-          <tr key={publication.id}>
-            <td className={CELL}>
-              {isApprovable(publication) && (
-                <Checkbox
-                  checked={selected.has(publication.id)}
-                  label={`Выбрать: ${publication.pageLabel}, ${timeOf(publication.publishAt)}`}
-                  onChange={(checked) => onSelect([publication.id], checked)}
-                />
-              )}
-            </td>
-            <td className={`${CELL} whitespace-nowrap font-medium tabular-nums`}>{timeOf(publication.publishAt)}</td>
-            <td className={`${CELL} whitespace-nowrap`}>
-              <span className="inline-flex items-center gap-1.5">{publication.pageLabel} <PlatformTag platform={publication.platform} /></span>
-            </td>
-            <td className={`${CELL} break-words`}>
-              <button type="button" className="link text-left font-medium" onClick={() => actions.onOpen(publication)}>
-                {KIND_LABELS[publication.kind]}
-              </button>
-              {publication.repost && <span className="ml-1.5 text-xs text-text-muted">перезалив</span>}
-              <div className="mt-0.5 truncate text-sm text-text-secondary" title={publication.text}>{textStart(publication.text)}</div>
-              <div className={`${SUB} break-all`}>{mediaSummary(publication.media)}</div>
-              {withdrawalNote(publication) !== null && <div className="mt-0.5 text-xs text-warning">{withdrawalNote(publication)}</div>}
-              {deletionNote(publication) !== null && <div className="mt-0.5 text-xs text-warning">{deletionNote(publication)}</div>}
-            </td>
-            <td className={`${CELL} num`}>{publication.priceMills !== null ? priceLabel(publication.priceMills) : "—"}</td>
-            <td className={`${CELL} whitespace-nowrap`}>
-              <span className={STATUS_BADGES[publication.status]}>{STATUS_LABELS[publication.status]}</span>
-              {publication.platformPostRef !== null && <div className={SUB}>пост <span className="font-mono">{publication.platformPostRef}</span></div>}
-            </td>
-            <td className={`${CELL} max-w-[300px]`}><Findings publication={publication} todayKey={todayKey} /></td>
-            <td className={`${CELL} text-sm text-text-secondary`}>{authorLabel(publication.author, names)}</td>
-            <td className={`${CELL} whitespace-nowrap`}><ActionButtons publication={publication} actions={actions} /></td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
-  );
-}
-
-function Line({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <div className="flex gap-3 py-0.5 text-sm">
-      <dt className="w-36 shrink-0 text-text-muted">{label}</dt>
-      <dd className="min-w-0 break-words text-text-primary">{children}</dd>
-    </div>
-  );
-}
-
-/** Everything about one publication, with its status journal (spec §4: who and when moved it). */
-function DetailDialog({ publication, todayKey, names, actions, onClose }: {
-  publication: PublicationWire;
-  todayKey: string;
-  names: Names;
-  actions: RowActions;
-  onClose: () => void;
-}) {
-  const detail = usePublicationDetail(publication.id);
-  const shown = detail.data ?? publication;
-  const files = mediaList(shown.media, "media");
-  const previews = mediaList(shown.media, "preview");
-  return (
-    <ModalShell title={`Публикация №${shown.id}`} onClose={onClose} wide>
-      <div className="space-y-4">
-        <dl className="rounded-lg border border-border bg-hover-alt px-4 py-2">
-          <Line label="Страница">{shown.pageLabel}</Line>
-          <Line label="Тип">{KIND_LABELS[shown.kind]}{shown.repost ? ", перезалив" : ""}</Line>
-          <Line label="Выход, МСК">{momentLabel(shown.publishAt, todayKey)}</Line>
-          <Line label="Снять со стены">{shown.expiresAt === null ? "не снимать" : momentLabel(shown.expiresAt, todayKey)}</Line>
-          <Line label="Статус">
-            <span className={STATUS_BADGES[shown.status]}>{STATUS_LABELS[shown.status]}</span>
-            {shown.statusReason !== null && <span className="ml-2 text-text-secondary">{eventReasonLabel(shown.statusReason)}</span>}
-          </Line>
-          {shown.platformPostRef !== null && <Line label="Пост на площадке"><span className="font-mono">{shown.platformPostRef}</span></Line>}
-          <Line label="Файлы">{files.length === 0 ? "нет" : files.join(", ")}</Line>
-          {previews.length > 0 && <Line label="Превью">{previews.join(", ")}</Line>}
-          {shown.extraAttachments.map((extra) => {
-            const extraPreviews = mediaList(shown.media, "preview", extra.attachment);
-            return (
-              <Line key={extra.attachment} label={`Вложение ${extra.attachment + 1}`}>
-                {attachmentAccessLabel(extra)}: {mediaList(shown.media, "media", extra.attachment).join(", ")}
-                {extraPreviews.length > 0 ? `; превью: ${extraPreviews.join(", ")}` : ""}
-              </Line>
-            );
-          })}
-          {shown.priceMills !== null && <Line label={shown.kind === "paid_post" ? "Цена" : "Цена для остальных"}>{priceLabel(shown.priceMills)}</Line>}
-          {shown.wallRefs.length > 0 && <Line label="Стены">{shown.wallRefs.join(", ")}</Line>}
-          {shown.tierRefs.length > 0 && <Line label="Уровни подписки">{shown.tierRefs.join(", ")}</Line>}
-          {shown.subscribersOnly && <Line label="Покупают">только подписчики</Line>}
-          {shown.pinWallRefs.length > 0 && <Line label="Закреплён на стенах">{shown.pinWallRefs.join(", ")}</Line>}
-          {shown.replyLock.length > 0 && <Line label="Отвечать могут">{replyLockLabel(shown.replyLock)}</Line>}
-          <Line label="Автор">{authorLabel(shown.author, names)}, {momentLabel(shown.createdAt, todayKey)}</Line>
-          {shown.previousPublicationId !== null && <Line label="Замена для">публикации №{shown.previousPublicationId}</Line>}
-          {detail.data?.revision && (
-            <Line label="Утверждена">
-              {names.users.get(detail.data.revision.approvedByUserId) ?? `человек №${detail.data.revision.approvedByUserId}`},{" "}
-              {momentLabel(detail.data.revision.approvedAt, todayKey)}
-            </Line>
-          )}
-        </dl>
-
-        <div>
-          <p className="field-label">Текст</p>
-          <p className="whitespace-pre-wrap break-words rounded-lg border border-border px-4 py-3 text-sm text-text-primary">
-            {shown.text === "" ? <span className="text-text-muted">без текста</span> : shown.text}
-          </p>
-        </div>
-
-        <div>
-          <p className="field-label">Замечания проверки</p>
-          <Findings publication={shown} todayKey={todayKey} />
-        </div>
-
-        <div>
-          <p className="field-label">Журнал статусов</p>
-          {detail.isLoading && <p role="status" className="text-sm text-text-muted">Загружаем журнал…</p>}
-          {detail.isError && <p role="alert" className="text-sm text-danger">Журнал не загрузился.</p>}
-          {detail.data && (
-            <ol className="space-y-1 text-sm">
-              {detail.data.events.map((event, index) => (
-                <li key={`${event.at}:${index}`} className="flex flex-wrap gap-x-2">
-                  <span className="whitespace-nowrap text-text-muted">{momentLabel(event.at, todayKey)}</span>
-                  <span className="text-text-primary">
-                    {event.fromStatus === null ? "" : `${STATUS_LABELS[event.fromStatus]} → `}{STATUS_LABELS[event.toStatus]}
-                  </span>
-                  <span className="text-text-secondary">{actorLabel(event, names)}</span>
-                  {eventReasonLabel(event.reason) !== null && <span className="text-text-muted">({eventReasonLabel(event.reason)})</span>}
-                </li>
-              ))}
-            </ol>
-          )}
-        </div>
-
-        <div className="flex justify-end border-t border-border pt-4">
-          <ActionButtons publication={shown} actions={actions} />
-        </div>
-      </div>
-    </ModalShell>
-  );
-}
+type CountedQuery = { data?: { publications: PublicationWire[] } | undefined; isError: boolean };
 
 /**
- * «Неизвестно» (spec §8.2): Hub sent the request and lost the answer, so it
- * does not know whether the post went out, and never sends it again by
- * itself. A person looks at the wall and the platform's schedule and says.
- */
-function ResolveDialog({ publication, todayKey, onClose }: { publication: PublicationWire; todayKey: string; onClose: () => void }) {
-  const resolve = useResolvePublication();
-  const [draft, setDraft] = useState<ResolveDraft>(EMPTY_RESOLVE_DRAFT);
-  const [failure, setFailure] = useState<string | null>(null);
-  const outcomeName = useId();
-  const stateName = useId();
-  const form = resolveForm(draft);
-  const closeUnlessPending = () => { if (!resolve.isPending) onClose(); };
-
-  function submit() {
-    if (form.body === null || resolve.isPending) return;
-    setFailure(null);
-    resolve.mutate({ id: publication.id, body: form.body }, {
-      onSuccess: (result) => {
-        toast.success(result.replacement === null
-          ? "Записано: пост ушёл"
-          : `Записано: пост не ушёл. Новый черновик №${result.replacement.id} ждёт утверждения`);
-        onClose();
-      },
-      onError: (error) => setFailure(actionFailure(error)),
-    });
-  }
-
-  const choices = [
-    ["went_out", "Пост ушёл", "Укажите его ID на площадке и где он: в расписании или уже на стене."],
-    ["did_not_go_out", "Пост не ушёл", "Hub отметит «Не вышел» и создаст новый черновик со ссылкой на этот. Его нужно будет утвердить заново."],
-  ] as const;
-
-  return (
-    <ModalShell title="Ушёл ли пост?" onClose={closeUnlessPending}>
-      <form className="space-y-4" onSubmit={(event) => { event.preventDefault(); submit(); }}>
-        <dl className="rounded-lg border border-border bg-hover-alt px-4 py-2">
-          <Line label="Страница">{publication.pageLabel}</Line>
-          <Line label="Выход, МСК">{momentLabel(publication.publishAt, todayKey)}</Line>
-          <Line label="Пост">{KIND_LABELS[publication.kind]}: {textStart(publication.text, 120)}</Line>
-          <Line label="Файлы">{mediaSummary(publication.media)}</Line>
-        </dl>
-        <p className="text-xs text-text-secondary">
-          Hub отправил пост на площадку, но ответа не получил. Сам он отправку не повторит. Откройте стену и расписание
-          страницы на площадке и найдите этот пост около указанного времени.
-        </p>
-
-        <fieldset disabled={resolve.isPending} className="space-y-2">
-          <legend className="mb-1 text-sm font-semibold text-text-primary">Что вы увидели на площадке</legend>
-          {choices.map(([value, title, hint]) => (
-            <label
-              key={value}
-              className={`flex cursor-pointer items-start gap-3 rounded-lg border px-3 py-2.5 ${draft.outcome === value ? "border-accent bg-hover" : "border-border hover:bg-hover"}`}
-            >
-              <input
-                type="radio"
-                name={outcomeName}
-                checked={draft.outcome === value}
-                onChange={() => setDraft((current) => ({ ...current, outcome: value }))}
-                className="mt-1"
-              />
-              <span>
-                <span className="block text-sm font-medium text-text-primary">{title}</span>
-                <span className="block text-xs text-text-muted">{hint}</span>
-              </span>
-            </label>
-          ))}
-        </fieldset>
-
-        {draft.outcome === "went_out" && (
-          <div className="space-y-3">
-            <label className="block">
-              <span className="field-label">ID поста на площадке</span>
-              <input
-                className="input font-mono"
-                value={draft.postRef}
-                autoComplete="off"
-                maxLength={64}
-                disabled={resolve.isPending}
-                aria-invalid={form.postRefError !== null}
-                onChange={(event) => setDraft((current) => ({ ...current, postRef: event.target.value }))}
-              />
-              {form.postRefError !== null && <p role="alert" className="field-hint text-danger">{form.postRefError}</p>}
-            </label>
-            <fieldset disabled={resolve.isPending} className="flex flex-wrap gap-4 text-sm">
-              <legend className="field-label">Где он сейчас</legend>
-              {([["scheduled", "Стоит в расписании"], ["published", "Уже на стене"]] as const).map(([value, title]) => (
-                <label key={value} className="flex items-center gap-2">
-                  <input
-                    type="radio"
-                    name={stateName}
-                    checked={draft.state === value}
-                    onChange={() => setDraft((current) => ({ ...current, state: value }))}
-                  />
-                  {title}
-                </label>
-              ))}
-            </fieldset>
-          </div>
-        )}
-
-        {draft.outcome === "did_not_go_out" && (
-          <p role="note" className="notice notice-warning">
-            Проверьте и стену, и расписание, прежде чем записать «не ушёл»: если пост всё-таки там, новый черновик после
-            утверждения выложит его второй раз.
-          </p>
-        )}
-
-        {failure !== null && <p role="alert" className="notice notice-danger">{failure}</p>}
-
-        <div className="flex flex-wrap items-center justify-end gap-3 border-t border-border pt-4">
-          {form.missing !== null && <span className="mr-auto text-xs text-text-muted">{form.missing}</span>}
-          <button type="button" className="btn" disabled={resolve.isPending} onClick={closeUnlessPending}>Отмена</button>
-          <button
-            type="submit"
-            className={draft.outcome === "did_not_go_out" ? "btn btn-danger" : "btn btn-primary"}
-            disabled={form.body === null || resolve.isPending}
-          >
-            {resolve.isPending ? "Записываем…"
-              : draft.outcome === "did_not_go_out" ? "Записать: не ушёл"
-                : "Записать: ушёл"}
-          </button>
-        </div>
-      </form>
-    </ModalShell>
-  );
-}
-
-/** What the last approval did: how many went through, and every refusal with its reason. */
-function ApprovalReport({ report, onClose }: { report: { approved: number; refused: ApprovalRefusal[] }; onClose: () => void }) {
-  return (
-    <div role="status" className={`notice ${report.refused.length > 0 ? "notice-warning" : "notice-success"} flex-col items-stretch`}>
-      <div className="flex items-start justify-between gap-3">
-        <p className="font-medium">
-          Утверждено: {report.approved}.{report.refused.length > 0 ? ` Не утверждено: ${report.refused.length}.` : ""}
-        </p>
-        <button type="button" className="btn btn-ghost btn-sm" onClick={onClose}>Скрыть</button>
-      </div>
-      {report.refused.length > 0 && (
-        <ul className="mt-1 space-y-1 text-sm">
-          {report.refused.map((item) => (
-            <li key={item.id}>
-              <span className="font-medium">{item.title}</span> — {item.reason}
-              {item.findings.length > 0 && <span>: {item.findings.join("; ")}</span>}
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
-  );
-}
-
-/** Each withdrawal's own outcome (OnlyFans plan PR 5b, Fansly PR 9): one command per post. */
-function WithdrawReport({ results, todayKey, onClose }: { results: PublicationWithdrawResult[]; todayKey: string; onClose: () => void }) {
-  return (
-    <div role="status" className="notice notice-info flex-col items-stretch gap-2">
-      <div className="flex items-center justify-between gap-3">
-        <span className="font-medium">Снятие с расписания {platformName(results.find((result) => result.publication !== null)?.publication?.platform ?? "onlyfans")}</span>
-        <button type="button" className="btn btn-ghost btn-sm" onClick={onClose}>Закрыть</button>
-      </div>
-      {results.length === 0 ? <p className="text-sm">Hub не ставил на эту страницу постов, которые можно снять.</p> : (
-        <ul className="space-y-1 text-sm">
-          {results.map((result) => (
-            <li key={result.id}>
-              {result.publication === null ? `№${result.id}`
-                : `${result.publication.pageLabel}, ${momentLabel(result.publication.publishAt, todayKey)}, ${textStart(result.publication.text, 40)}`}
-              {" — "}{withdrawResultText(result)}
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
-  );
-}
-
-const QUEUE_TITLES = { onlyfans: "Расписание OnlyFans", fansly: "Расписание Fansly" } as const;
-const QUEUE_CADENCE = {
-  onlyfans: "Hub читает его раз в час, пока там стоят его посты, иначе раз в сутки; «Обновить» — сразу (тратит кредиты).",
-  fansly: "Hub читает его раз в час через браузер страницы; «Обновить» — в течение пары минут.",
-} as const;
-
-/**
- * A platform's own schedule per page (spec §9; OnlyFans plan PR 5b, Fansly
- * PR 9): when Hub last read it, whether the read was whole and fresh, the
- * posts put there by hand, and the owner's «Обновить» and «Снять всё, что
- * поставил Hub» (where Hub can withdraw).
- */
-function PlatformQueues({ platform, queues, stoppedPages, todayKey, busy, onRefresh, onWithdrawAll }: {
-  platform: "onlyfans" | "fansly";
-  queues: PublicationQueueSnapshotWire[];
-  stoppedPages: ReadonlySet<string>;
-  todayKey: string;
-  busy: boolean;
-  onRefresh: (pageLabel: string) => void;
-  onWithdrawAll?: (pageLabel: string) => void;
-}) {
-  const titleId = `${platform}-queue-title`;
-  return (
-    <section className="card" aria-labelledby={titleId}>
-      <div className="card-header">
-        <div>
-          <h2 id={titleId} className="card-title">{QUEUE_TITLES[platform]}</h2>
-          <p className="card-description">
-            {QUEUE_CADENCE[platform]} Неполный или несвежий список не доказывает, что поста там нет.
-          </p>
-        </div>
-      </div>
-      <div className="card-body space-y-3">
-        {queues.map((queue) => {
-          const manual = queue.entries.filter((entry) => entry.publicationId === null);
-          const hubCount = queue.entries.length - manual.length;
-          const stopped = stoppedPages.has(queue.pageLabel);
-          return (
-            <div key={queue.pageLabel} className="rounded-lg border border-border px-3 py-2">
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="inline-flex items-center gap-1.5 text-sm font-medium text-text-primary">
-                  {queue.pageLabel} <PlatformTag platform={platform} />
-                </span>
-                <span className="text-xs text-text-muted">
-                  {queue.readAt === null ? "ещё не читалось" : `прочитано ${momentLabel(queue.readAt, todayKey)}`}
-                  {queue.windowFrom !== null && queue.windowTo !== null ? ` · дни ${queue.windowFrom} — ${queue.windowTo} (UTC)` : ""}
-                </span>
-                {queue.readAt !== null && !queue.complete && (
-                  <span className="badge badge-warning" title={queueIncompleteText(queue.incompleteReasons)}>неполно</span>
-                )}
-                {queue.stale && queue.readAt !== null && <span className="badge badge-warning">несвежее</span>}
-                <span className="ml-auto flex flex-wrap gap-1.5">
-                  <button
-                    type="button"
-                    className="btn btn-sm"
-                    disabled={busy || queue.refreshRequestedAt !== null}
-                    onClick={() => onRefresh(queue.pageLabel)}
-                  >
-                    {queue.refreshRequestedAt !== null ? "Обновление запрошено…" : "Обновить"}
-                  </button>
-                  {onWithdrawAll !== undefined && (
-                    <button
-                      type="button"
-                      className="btn btn-ghost btn-sm"
-                      disabled={busy || stopped}
-                      title={stopped ? "Публикация на странице остановлена: снять нельзя, расписание на площадке осталось" : undefined}
-                      onClick={() => onWithdrawAll(queue.pageLabel)}
-                    >
-                      Снять всё, что поставил Hub
-                    </button>
-                  )}
-                </span>
-              </div>
-              {queue.readAt !== null && !queue.complete && (
-                <p className="mt-1 text-xs text-warning">Неполно: {queueIncompleteText(queue.incompleteReasons)}.</p>
-              )}
-              {stopped && (
-                <p className="mt-1 text-xs text-danger">Публикация остановлена: снять нельзя, расписание на площадке осталось.</p>
-              )}
-              {queue.lastFailure !== null && (queue.readAt === null || (queue.lastFailedAt !== null && queue.lastFailedAt > queue.readAt)) && (
-                <p className="mt-1 text-xs text-danger" title={queue.lastFailure}>Последнее чтение не удалось: {textStart(queue.lastFailure, 80)}</p>
-              )}
-              {queue.readAt !== null && (
-                <p className="mt-1 text-xs text-text-muted">
-                  В расписании: постов Hub — {hubCount}, поставлено вручную — {manual.length}.
-                </p>
-              )}
-              {manual.length > 0 && (
-                <ul className="mt-1 space-y-0.5 text-sm">
-                  {manual.slice(0, 20).map((entry) => (
-                    <li key={entry.queueId} className="flex gap-2">
-                      <span className="w-40 shrink-0 whitespace-nowrap tabular-nums text-text-secondary">{entry.publishAt === null ? "—" : momentLabel(entry.publishAt, todayKey)}</span>
-                      <span className="min-w-0 truncate" title={entry.text}>{entry.text === "" ? "без текста" : textStart(entry.text, 80)}</span>
-                      <span className="shrink-0 text-xs text-text-muted">поставлено вручную{entry.mediaCount === null ? "" : `, файлов: ${entry.mediaCount}`}</span>
-                    </li>
-                  ))}
-                  {manual.length > 20 && <li className="text-xs text-text-muted">…и ещё {manual.length - 20}</li>}
-                </ul>
-              )}
-            </div>
-          );
-        })}
-      </div>
-    </section>
-  );
-}
-
-/**
- * «Публикации» (spec §9): every page's posts by day. A person approves drafts
- * (one or a selection), cancels what has not gone yet, and answers
- * «Неизвестно». Hub puts approved posts on the platforms by itself.
+ * «Публикации» (design/screens/publications.md): what goes out on every page
+ * and when, what waits for approval or an answer, and whether a page can
+ * publish. The page filter only narrows what is shown: every write takes its
+ * target from its own row, card or form.
  */
 export function PublicationsPage() {
   const [search, setSearch] = useSearchParams();
   const view = parsePublicationsView(search);
+  const filter = usePageFilter();
+  const pageLabel = filter.page;
+  const { pages: catalog } = useDashboardShell();
+  const { data: auth } = useAuthMe();
+  const role = auth?.user.role ?? "owner";
+  const ofapi = useOfapiStatus(role);
+  const { loginPages } = useWaitingCounts(role);
   const todayKey = useTodayKey();
-  const range = windowRange(view.window, todayKey);
-  const list = usePublications({
-    ...(view.pageLabel === null ? {} : { pageLabel: view.pageLabel }),
-    ...(view.status === null ? {} : { status: view.status }),
-    ...range,
-    limit: PUBLICATIONS_LIST_LIMIT,
+  const range = useMemo(() => windowRange(view.window, todayKey), [view.window, todayKey]);
+  const lastWeek = useMemo(() => windowRange("last7", todayKey), [todayKey]);
+  const notOut = view.status === "not_out";
+
+  // ── reads ──
+  const single = useQuery({
+    ...publicationsQueryOptions({
+      ...(pageLabel === null ? {} : { pageLabel }),
+      ...(view.status === null || view.status === "not_out" ? {} : { status: view.status }),
+      ...range,
+      limit: PUBLICATIONS_LIST_LIMIT,
+    }),
+    enabled: !notOut,
   });
-  // Every «Неизвестно», whatever the filters: each one waits for a person.
-  const unknown = usePublications({ status: "unknown", limit: 200 });
+  const merged = usePublicationsNotOut(range, pageLabel, PUBLICATIONS_LIST_LIMIT, notOut);
+  const list = notOut
+    ? merged
+    : {
+      data: single.data,
+      longest: single.data?.publications.length ?? 0,
+      isLoading: single.isLoading,
+      isError: single.isError,
+      isFetching: single.isFetching,
+      isPlaceholderData: single.isPlaceholderData,
+      dataUpdatedAt: single.dataUpdatedAt,
+      refetch: single.refetch,
+    };
+  const waiting = usePublicationsWaiting();
+  const weekNotOut = usePublicationsNotOut(lastWeek, null, PUBLICATIONS_WAITING_LIMIT);
   const settings = usePublicationSettings();
-  const names = useNames();
+  const queues = usePublicationQueues();
+  const config = useAdminConfig();
+
+  // ── writes: the mutations as they were, each called with its row's own target ──
   const approve = useApprovePublications();
   const cancel = useCancelPublication();
-  const queues = usePublicationQueues();
   const refreshQueue = useRefreshPublicationQueue();
   const withdraw = useWithdrawPublication();
   const withdrawPage = useWithdrawPagePublications();
   const deletePost = useDeletePublicationPost();
   const replace = useReplacePublication();
-  const [withdrawing, setWithdrawing] = useState<PublicationWire | null>(null);
-  const [deleting, setDeleting] = useState<PublicationWire | null>(null);
-  const [withdrawingPage, setWithdrawingPage] = useState<string | null>(null);
-  const [withdrawReport, setWithdrawReport] = useState<PublicationWithdrawResult[] | null>(null);
+  const busy = approve.isPending || cancel.isPending || withdraw.isPending || withdrawPage.isPending || deletePost.isPending || replace.isPending;
+
   const [selected, setSelected] = useState<ReadonlySet<number>>(new Set());
   // The ticks do not outlive the view they were made on: a hidden row cannot be
-  // approved together with the visible ones. The page filter changes the address
-  // from outside this screen, so this listens to the address itself.
+  // approved together with the visible ones.
   useEffect(() => {
     setSelected(new Set());
-  }, [view.pageLabel, view.status, view.window]);
-  const [report, setReport] = useState<{ approved: number; refused: ApprovalRefusal[] } | null>(null);
-  const [opened, setOpened] = useState<PublicationWire | null>(null);
-  const [resolving, setResolving] = useState<PublicationWire | null>(null);
+  }, [pageLabel, view.status, view.window]);
+  /** The rows of an approval window, frozen when it opened: the versions the person saw. */
+  const [approving, setApproving] = useState<PublicationWire[] | null>(null);
   const [cancelling, setCancelling] = useState<PublicationWire | null>(null);
-  const statusFilterId = useId();
-  const windowFilterId = useId();
+  const [withdrawing, setWithdrawing] = useState<PublicationWire | null>(null);
+  const [deleting, setDeleting] = useState<PublicationWire | null>(null);
+  const [resolving, setResolving] = useState<PublicationWire | null>(null);
+  const [withdrawingPage, setWithdrawingPage] = useState<StripPage | null>(null);
+  const [refreshingOf, setRefreshingOf] = useState<StripPage | null>(null);
+  const [editing, setEditing] = useState<string | null>(null);
+  const [approvalReport, setApprovalReport] = useState<{ approved: number; refused: ApprovalRefusal[] } | null>(null);
+  const [withdrawReport, setWithdrawReport] = useState<{ pageLabel: string; platform: string; results: PublicationWithdrawResult[] } | null>(null);
 
+  /** A change of the view's own parameters; the page and every other parameter stay. */
+  const change = useCallback((next: Partial<Omit<PublicationsView, "pageLabel">>, replaceEntry: boolean) => {
+    setSearch(publicationsSearch(next, new URLSearchParams(window.location.search)), { replace: replaceEntry });
+  }, [setSearch]);
+
+  // ── pages ──
+  const configItems = useMemo(() => config.data?.subsystems.flatMap((subsystem) => subsystem.items), [config.data]);
+  const onlyfansItem = configItems?.find((item) => item.key === "publishingOnlyfansEnabled");
+  const onlyfansSwitch = onlyfansItem === undefined ? null : seedValue(onlyfansItem) === "true";
+  const places = useMemo(() => new Map<string, PagePlace>(catalog.map((page) => [page.label, { modelName: page.modelName, username: page.username }])), [catalog]);
+  const queueByPage = useMemo(() => new Map((queues.data?.pages ?? []).map((queue) => [queue.pageLabel, queue])), [queues.data]);
+  const settingsPages = useMemo(() => {
+    const order = new Map(catalog.map((page, index) => [page.label, index]));
+    // Hub does not publish in Telegram: its page answers like any other and is left out here.
+    return (settings.data?.pages ?? [])
+      .filter((page) => page.platform === "fansly" || page.platform === "onlyfans")
+      .sort((a, b) => (order.get(a.pageLabel) ?? 999) - (order.get(b.pageLabel) ?? 999));
+  }, [settings.data, catalog]);
+  const pageStates = useMemo(() => {
+    const login = new Set(loginPages);
+    return new Map<string, PagePublishing>(settingsPages.map((page) => [page.pageLabel, pagePublishing({
+      platform: page.platform,
+      settings: page,
+      globalEnabled: settings.data?.globalEnabled ?? true,
+      ofapi,
+      onlyfansSwitch,
+      needsLogin: login.has(page.pageLabel),
+      queue: queueByPage.get(page.pageLabel),
+      todayKey,
+    })]));
+  }, [settingsPages, settings.data, ofapi, onlyfansSwitch, loginPages, queueByPage, todayKey]);
+  const stoppedPages = useMemo(() => new Set(settingsPages.filter(isStopped).map((page) => page.pageLabel)), [settingsPages]);
+  const ofapiOffPages = useMemo(() => new Set(ofapi === "off"
+    ? [...catalog.filter((page) => page.platform === "onlyfans").map((page) => page.label), ...settingsPages.filter((page) => page.platform === "onlyfans").map((page) => page.pageLabel)]
+    : []), [ofapi, catalog, settingsPages]);
+  const stripPages: StripPage[] = settingsPages.flatMap((page) => {
+    const state = pageStates.get(page.pageLabel);
+    return state === undefined ? [] : [{
+      pageLabel: page.pageLabel,
+      platform: page.platform as "fansly" | "onlyfans",
+      username: places.get(page.pageLabel)?.username ?? null,
+      state,
+      queue: queueByPage.get(page.pageLabel),
+    }];
+  });
+
+  // ── the feed ──
   const publications = useMemo(() => list.data?.publications ?? [], [list.data]);
-  const days = useMemo(() => groupPublicationsByDay(publications, todayKey), [publications, todayKey]);
-  const shownInOrder = useMemo(() => days.flatMap((day) => day.publications), [days]);
-  const approvable = shownInOrder.filter(isApprovable);
-  // A selected draft that left the list or stopped being approvable is not selected any more.
-  const selection = new Set(approvable.filter((item) => selected.has(item.id)).map((item) => item.id));
-  const busy = approve.isPending || cancel.isPending || withdraw.isPending || withdrawPage.isPending || deletePost.isPending || replace.isPending;
-  const stoppedPages = new Set((settings.data?.pages ?? []).filter((page) => page.autostoppedAt !== null).map((page) => page.pageLabel));
-
-  function show(change: Partial<PublicationsView>) {
-    const current = new URLSearchParams(window.location.search);
-    const next = publicationsSearch({ ...parsePublicationsView(current), ...change });
-    setSearch(change.pageLabel === undefined ? keepAllPages(current, next) : next);
-  }
+  const manual = useMemo(
+    () => manualFeedRows(queues.data?.pages ?? [], { pageLabel, status: view.status, window: view.window }, range, ofapi === "off"),
+    [queues.data, pageLabel, view.status, view.window, range, ofapi],
+  );
+  const days = useMemo(() => feedDays(publications, manual, todayKey), [publications, manual, todayKey]);
+  const shownInOrder = useMemo(() => days.flatMap((day) => day.rows.flatMap((row) => (row.kind === "post" ? [row.publication] : []))), [days]);
+  const canSelect = useCallback((publication: PublicationWire) => isApprovable(publication) && !ofapiOffPages.has(publication.pageLabel), [ofapiOffPages]);
+  const selectable = shownInOrder.filter(canSelect);
+  // A ticked row that left the list or stopped being approvable is not ticked any more.
+  const selection = new Set(selectable.filter((item) => selected.has(item.id)).map((item) => item.id));
+  const selectedRows = selectable.filter((item) => selection.has(item.id));
+  const placeholder = list.isPlaceholderData;
+  const tooMany = selection.size > PUBLICATION_APPROVE_BATCH_MAX;
 
   function select(ids: number[], checked: boolean) {
     setSelected((current) => {
@@ -739,312 +260,437 @@ export function PublicationsPage() {
     });
   }
 
-  function runApproval(items: Array<{ id: number; version: number }>) {
-    if (items.length === 0 || approve.isPending) return;
-    setReport(null);
-    approve.mutate(items, {
-      onSuccess: (result) => {
-        const outcome = approvalOutcome(result.results, todayKey);
-        setSelected(new Set());
-        if (outcome.refused.length === 0 && items.length === 1) toast.success("Утверждено");
-        else setReport(outcome);
-      },
-      onError: (error) => toast.error(actionFailure(error)),
-    });
-  }
+  const openHref = (id: number) => `?${publicationsSearch({ publication: id, panel: null }, search).toString()}`;
 
   const actions: RowActions = {
     busy,
     stoppedPages,
-    onApprove: (publication) => runApproval([{ id: publication.id, version: publication.version }]),
+    ofapiOffPages,
+    usernameOf: (label) => places.get(label)?.username ?? null,
+    openHref: (publication) => openHref(publication.id),
+    onOpen: (publication) => change({ publication: publication.id, panel: null }, true),
+    onApprove: (publication) => setApproving([publication]),
     onCancel: setCancelling,
-    onResolve: (publication) => { setOpened(null); setResolving(publication); },
-    onOpen: setOpened,
-    onWithdraw: (publication) => { setOpened(null); setWithdrawing(publication); },
-    onDeletePost: (publication) => { setOpened(null); setDeleting(publication); },
+    onResolve: setResolving,
+    onWithdraw: setWithdrawing,
+    onDeletePost: setDeleting,
     onReplace: (publication) => replace.mutate(publication.id, {
-      onSuccess: () => { toast.success("Замена создана черновиком: утвердите её"); setOpened(null); },
+      onSuccess: () => toast.success("Замена создана черновиком: утвердите её"),
       onError: (error) => toast.error(actionFailure(error)),
     }),
   };
 
-  const filters = (
-    <div className="flex flex-wrap items-end gap-3">
-      <label htmlFor={statusFilterId} className="flex items-center gap-2 text-sm text-text-secondary">
-        Статус
-        <select
-          id={statusFilterId}
-          value={view.status ?? ""}
-          onChange={(event) => show({ status: event.target.value === "" ? null : event.target.value as PublicationStatus })}
-          className="select w-auto min-h-[34px] py-1.5"
-        >
-          <option value="">Все статусы</option>
-          {PUBLICATION_STATUSES.map((status) => <option key={status} value={status}>{STATUS_LABELS[status]}</option>)}
-        </select>
-      </label>
-      <label htmlFor={windowFilterId} className="flex items-center gap-2 text-sm text-text-secondary">
-        Даты
-        <select
-          id={windowFilterId}
-          value={view.window}
-          onChange={(event) => show({ window: event.target.value as PublicationWindow })}
-          className="select w-auto min-h-[34px] py-1.5"
-        >
-          {PUBLICATION_WINDOWS.map((item) => <option key={item.key} value={item.key}>{item.label}</option>)}
-        </select>
-      </label>
-      <span className="ml-auto text-xs text-text-muted">Время московское (МСК)</span>
-    </div>
-  );
+  function runApproval(rows: PublicationWire[]) {
+    // The body comes from the rows frozen when the window opened, in the order shown.
+    const items = approvalItems(rows, new Set(rows.map((row) => row.id)));
+    if (items.length === 0 || approve.isPending) return;
+    const summary = approvalSummary(rows, pageStates, todayKey);
+    setApprovalReport(null);
+    approve.mutate(items, {
+      onSuccess: (result) => {
+        const outcome = approvalOutcome(result.results, todayKey);
+        setSelected(new Set());
+        if (outcome.refused.length === 0) toast.success(summary.toast);
+        else setApprovalReport(outcome);
+      },
+      onError: (error) => toast.error(`Не удалось утвердить: ${actionFailure(error)}`),
+      onSettled: () => setApproving(null),
+    });
+  }
 
-  const unknownCount = unknown.data?.publications.length ?? 0;
+  function refresh(page: StripPage) {
+    refreshQueue.mutate(page.pageLabel, {
+      onSuccess: () => toast.success(page.platform === "fansly" ? "Hub прочитает расписание в течение пары минут" : "Hub прочитает расписание в течение минуты"),
+      onError: (error) => toast.error(actionFailure(error)),
+      onSettled: () => setRefreshingOf(null),
+    });
+  }
+
+  // ── «Ждут вас» of this screen: the home's reads, the page counted here ──
+  const onPage = (rows: readonly PublicationWire[]) => (pageLabel === null ? rows : rows.filter((row) => row.pageLabel === pageLabel));
+  const counted = (query: CountedQuery): number | null => {
+    if (query.data === undefined) return query.isError ? null : 0;
+    return onPage(query.data.publications).length;
+  };
+  const capped = (query: CountedQuery) => query.data?.publications.length === PUBLICATIONS_WAITING_LIMIT;
+  const segment: Segment | null = view.status === null ? "all"
+    : view.status === "draft" || view.status === "unknown" || view.status === "not_out" ? view.status : null;
+  const counts: Partial<Record<Segment, { value: number | null; capped: boolean; ink: boolean }>> = {
+    draft: { value: counted(waiting.drafts), capped: capped(waiting.drafts), ink: true },
+    unknown: { value: counted(waiting.unknown), capped: capped(waiting.unknown), ink: true },
+    not_out: { value: counted(weekNotOut), capped: false, ink: false },
+  };
+  const waitingRows = [...(waiting.drafts.data?.publications ?? []), ...(waiting.unknown.data?.publications ?? [])];
+  const elsewhere = pageLabel === null ? 0 : waitingRows.filter((row) => row.pageLabel !== pageLabel).length;
+  const outsideDates = (view.status === null || view.status === "draft") && view.window !== "all"
+    ? onPage(waiting.drafts.data?.publications ?? []).filter((row) => {
+      const at = Date.parse(row.publishAt);
+      return (range.from !== undefined && at < Date.parse(range.from)) || (range.to !== undefined && at >= Date.parse(range.to));
+    }).length
+    : 0;
+
+  // ── header ──
+  const dates = view.window === "all" || range.from === undefined || range.to === undefined ? "Все даты" : formatWindowRange(range.from, range.to);
+  const freshAt = list.dataUpdatedAt;
+  const refreshing = list.isFetching || settings.isFetching || queues.isFetching;
+  const refetchAll = () => {
+    void list.refetch();
+    void settings.refetch();
+    void queues.refetch();
+  };
+
+  const globalOff = settings.data?.globalEnabled === false;
+  const pickedOfOff = filter.item?.platform === "onlyfans" && ofapi === "off";
+  const shownPublication = view.publication;
+  const drawerRow = shownPublication === null ? undefined
+    : [...publications, ...waitingRows].find((row) => row.id === shownPublication);
+  const editingSettings = editing === null ? undefined : settingsPages.find((page) => page.pageLabel === editing);
+
+  const settingsRows: SettingsPageRow[] = settingsPages.flatMap((page) => {
+    const state = pageStates.get(page.pageLabel);
+    return state === undefined ? [] : [{ settings: page, state, queue: queueByPage.get(page.pageLabel) }];
+  });
+
+  const statusPhrase = view.status === null ? ""
+    : view.status === "not_out" ? " невышедших постов"
+      : ` постов со статусом «${STATUS_FILTER_LABELS[view.status]}»`;
+  const totalRows = days.reduce((sum, day) => sum + day.total, 0);
 
   return (
-    <div className="space-y-5">
-      <section className="card" aria-labelledby="publication-pages-title">
-        <div className="card-header">
-          <div>
-            <h2 id="publication-pages-title" className="card-title">Страницы</h2>
-            {settings.data && <div className="mt-1"><GlobalSwitchLine enabled={settings.data.globalEnabled} /></div>}
-          </div>
-          <Link to="/publications?panel=settings" className="btn btn-sm">Настроить страницы</Link>
-        </div>
-        <div className="card-body">
-          {settings.isLoading && <p role="status" className="text-sm text-text-muted">Загружаем настройки страниц…</p>}
-          {settings.isError && !settings.data && (
-            <p role="alert" className="text-sm text-danger">
-              Настройки страниц не загрузились.{" "}
-              <button type="button" className="link" onClick={() => void settings.refetch()}>Повторить</button>
-            </p>
-          )}
-          {settings.data && (
-            <ul className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
-              {settings.data.pages.map((page) => (
-                <li key={page.pageLabel} className="rounded-lg border border-border px-3 py-2">
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="inline-flex min-w-0 items-center gap-1.5 truncate text-sm font-medium text-text-primary">
-                      {page.pageLabel} <PlatformTag platform={page.platform} />
-                    </span>
-                    <PageStateMark settings={page} />
-                  </div>
-                  <div className="mt-0.5 text-xs text-text-muted">Платные: {priceRangeLabel(page.paidPriceMinMills, page.paidPriceMaxMills)}</div>
-                  {page.autostopReason !== null && (
-                    <div className="mt-0.5 text-xs text-danger" title={page.autostopReason}>{page.autostopReason}</div>
-                  )}
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-      </section>
-
-      {(["onlyfans", "fansly"] as const).map((platform) => {
-        const pages = queues.data?.pages.filter((queue) => queue.platform === platform) ?? [];
-        if (pages.length === 0) return null;
-        return (
-          <PlatformQueues
-            key={platform}
-            platform={platform}
-            queues={pages}
-            stoppedPages={stoppedPages}
-            todayKey={todayKey}
-            busy={busy || refreshQueue.isPending}
-            onRefresh={(pageLabel) => refreshQueue.mutate(pageLabel, {
-              onSuccess: () => toast.success(platform === "fansly" ? "Hub прочитает расписание в течение пары минут" : "Hub прочитает расписание в течение минуты"),
-              onError: (error) => toast.error(actionFailure(error)),
-            })}
-            onWithdrawAll={setWithdrawingPage}
+    <div className="pub-screen">
+      <PageHeader
+        actions={(
+          <Segmented
+            className="pub-window-seg"
+            label="Даты"
+            value={view.window}
+            onChange={(window) => change({ window }, false)}
+            options={PUBLICATION_WINDOWS.map((item) => ({ value: item.key, label: item.label }))}
           />
-        );
-      })}
+        )}
+        window={dates}
+        fresh={freshAt > 0 ? { at: freshAt, onRefresh: refetchAll, refreshing } : undefined}
+      />
 
-      {withdrawReport !== null && <WithdrawReport results={withdrawReport} todayKey={todayKey} onClose={() => setWithdrawReport(null)} />}
-
-      {unknownCount > 0 && view.status !== "unknown" && (
-        <div role="alert" className="notice notice-warning flex-wrap items-center justify-between">
-          <span>
-            {publicationsCountLabel(unknownCount)} с исходом «Неизвестно»: Hub не знает, ушёл ли пост, и ждёт ответа человека.
-          </span>
-          <button type="button" className="btn btn-sm" onClick={() => {
-            usePageFilterStore.getState().setPage(null);
-            show({ status: "unknown", window: "all", pageLabel: null });
-          }}>
-            Разобрать
-          </button>
+      {(globalOff || pickedOfOff) && (
+        <div className="pub-notices">
+          {globalOff && (
+            <Notice
+              tone="off"
+              detail="Hub ничего не публикует ни на одной странице, что бы ни стояло у страниц."
+              action={<button type="button" className="btn btn-sm" onClick={() => change({ panel: "settings", publication: null }, true)}>Настройки публикации</button>}
+            >
+              <b>Общий выключатель выключен.</b>
+            </Notice>
+          )}
+          {pickedOfOff && (
+            <Notice tone="off" detail="OnlyFans API выключен с 1 ноября. Записи ниже не обновляются.">
+              <b>{filter.page}: публикация недоступна.</b>
+            </Notice>
+          )}
         </div>
       )}
 
-      {filters}
+      <PublicationsPagesStrip
+        pages={stripPages}
+        picked={pageLabel}
+        loading={settings.isLoading}
+        failed={settings.data === undefined && settings.isError}
+        onRetry={() => void settings.refetch()}
+        busy={busy}
+        refreshing={refreshQueue.isPending}
+        onPick={(label) => filter.select(label)}
+        onEdit={(label) => { setEditing(label); change({ panel: "settings", publication: null }, true); }}
+        onOpenSettings={() => change({ panel: "settings", publication: null }, true)}
+        onRefresh={(page) => (page.platform === "onlyfans" ? setRefreshingOf(page) : refresh(page))}
+        onWithdrawAll={setWithdrawingPage}
+      />
 
-      {report !== null && <ApprovalReport report={report} onClose={() => setReport(null)} />}
+      <div className="table-toolbar pub-toolbar">
+        <div className="pub-filters">
+          <div className="segmented" role="group" aria-label="Статус">
+            {(Object.keys(SEGMENT_LABELS) as Segment[]).map((key) => {
+              const count = counts[key];
+              const value = count?.value;
+              return (
+                <button
+                  key={key}
+                  type="button"
+                  className="segment"
+                  aria-pressed={segment === key}
+                  title={value === null ? "Не удалось проверить" : undefined}
+                  onClick={() => { if (segment !== key) change(SEGMENT_TARGETS[key], false); }}
+                >
+                  {SEGMENT_LABELS[key]}
+                  {count !== undefined && value !== 0 && value !== undefined && (
+                    <span className={`segment-count ${count.ink && value !== null ? "pub-count-ink" : ""}`.trim()}>
+                      {value === null ? "—" : count.capped && pageLabel === null ? `${value}+` : value}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+          <select
+            className={`select pub-status-select ${segment === null ? "is-picked" : ""}`.trim()}
+            aria-label="Другой статус"
+            value={segment === null ? view.status ?? "" : ""}
+            onChange={(event) => { if (event.target.value !== "") change({ status: event.target.value as PublicationStatusFilter }, false); }}
+          >
+            <option value="">Другой статус</option>
+            {PUBLICATION_STATUSES.map((status) => <option key={status} value={status}>{STATUS_FILTER_LABELS[status]}</option>)}
+          </select>
+        </div>
+        <div className="pub-toolbar-notes">
+          {elsewhere > 0 && (
+            <span className="table-toolbar-note">
+              Показана только {pageLabel}. На других страницах ждут ещё {postsCountLabel(elsewhere)}.{" "}
+              <button type="button" className="link" onClick={() => filter.select(null)}>Показать все страницы</button>
+            </span>
+          )}
+          {outsideDates > 0 && (
+            <span className="table-toolbar-note">
+              Ещё {postsCountLabel(outsideDates)} {ruPlural(outsideDates, "ждёт", "ждут", "ждут")} утверждения вне этих дат.{" "}
+              <button type="button" className="link" onClick={() => change({ window: "all" }, false)}>Показать все даты</button>
+            </span>
+          )}
+          {elsewhere === 0 && outsideDates === 0 && selection.size === 0 && selectable.length > 0 && (
+            <span className="table-toolbar-note">Можно утвердить: {selectable.length}</span>
+          )}
+        </div>
+      </div>
+
+      {approvalReport !== null && <ApprovalReport report={approvalReport} onClose={() => setApprovalReport(null)} />}
+      {withdrawReport !== null && <WithdrawReport report={withdrawReport} todayKey={todayKey} onClose={() => setWithdrawReport(null)} />}
 
       {!list.data ? (
-        list.isLoading
-          ? <TableSkeleton rows={5} columns={8} />
-          : (
+        list.isLoading ? <FeedSkeleton /> : (
+          <div className="card">
             <StatusPanel
-              title="Список не загрузился"
-              description="Hub не ответил. Публикации никуда не делись: попробуйте ещё раз."
               tone="error"
+              title="Hub не ответил"
+              description="Список не пришёл. Публикации никуда не делись: попробуйте ещё раз."
               action={<button type="button" className="btn btn-sm" onClick={() => void list.refetch()}>Повторить</button>}
             />
-          )
+          </div>
+        )
       ) : (
-        <div aria-busy={list.isPlaceholderData} className={`space-y-5 ${list.isPlaceholderData ? "opacity-60" : ""}`}>
-          {list.isError && (
-            <div role="alert" className="notice notice-warning flex-wrap items-center justify-between">
-              <span>Обновить не получилось. Показан список прошлой загрузки: он мог устареть.</span>
-              <button type="button" className="btn btn-sm" onClick={() => void list.refetch()}>Повторить</button>
-            </div>
+        <>
+          <QueryNotice error={list.isError} stale retry={list.refetch} at={freshAt} />
+          {queues.isError && (
+            <Notice
+              tone="warning"
+              role="alert"
+              className="mb-3"
+              action={<button type="button" className="btn btn-sm" onClick={() => void queues.refetch()}>Повторить</button>}
+            >
+              Не удалось прочитать, что стоит на площадках. Посты, поставленные вручную, не показаны.
+            </Notice>
           )}
-          {publications.length >= PUBLICATIONS_LIST_LIMIT && (
-            <p className="notice notice-warning">Показаны первые {PUBLICATIONS_LIST_LIMIT}. Сузьте фильтр, чтобы увидеть остальные.</p>
+          {list.longest >= PUBLICATIONS_LIST_LIMIT && (
+            <Notice tone="warning" className="mb-3">Показаны первые {PUBLICATIONS_LIST_LIMIT}. Сузьте фильтр, чтобы увидеть остальные.</Notice>
           )}
-
-          {approvable.length > 0 && (
-            <div className="flex flex-wrap items-center gap-3 rounded-lg border border-border bg-card px-4 py-2.5 text-sm">
-              <Checkbox
-                checked={selection.size === approvable.length}
-                indeterminate={selection.size > 0 && selection.size < approvable.length}
-                label="Выбрать все черновики, которые можно утвердить"
-                onChange={(checked) => select(approvable.map((item) => item.id), checked)}
-              />
-              <span className="text-text-secondary">
-                {selection.size === 0
-                  ? `Можно утвердить: ${approvable.length}`
-                  : `Выбрано ${selection.size} из ${approvable.length}`}
-              </span>
-              <button
-                type="button"
-                className="btn btn-primary btn-sm ml-auto"
-                disabled={selection.size === 0 || busy}
-                onClick={() => runApproval(approvalItems(shownInOrder, selection))}
-              >
-                {approve.isPending ? "Утверждаем…" : `Утвердить выбранные${selection.size > 0 ? ` (${selection.size})` : ""}`}
-              </button>
-            </div>
-          )}
-
           {days.length === 0 ? (
-            <StatusPanel
-              title="Публикаций нет"
-              description={view.status === null && view.pageLabel === null
-                ? "В эти даты публикаций нет. Черновики создают агенты и люди; здесь их утверждают."
-                : "Под этот фильтр ничего не подошло."}
+            <div className="card">
+              {view.status !== null ? (
+                <StatusPanel
+                  title={`${capitalize(windowPhrase(view.window))}${pageLabel === null ? "" : ` на ${pageLabel}`}${statusPhrase} нет`}
+                  action={<button type="button" className="btn btn-sm" onClick={() => change({ status: null }, false)}>Показать все статусы</button>}
+                />
+              ) : pageLabel !== null ? (
+                <StatusPanel
+                  title={`На ${pageLabel} ${windowPhrase(view.window)} публикаций нет`}
+                  action={<button type="button" className="btn btn-sm" onClick={() => filter.select(null)}>Показать все страницы</button>}
+                />
+              ) : (
+                <StatusPanel
+                  title={`${capitalize(windowPhrase(view.window))} публикаций нет`}
+                  description="Черновики создают агенты и люди; здесь их утверждают."
+                  action={view.window === "all" ? undefined : <button type="button" className="btn btn-sm" onClick={() => change({ window: "all" }, false)}>Показать все даты</button>}
+                />
+              )}
+            </div>
+          ) : (
+            <PublicationsFeed
+              days={days}
+              todayKey={todayKey}
+              showPage={pageLabel === null}
+              selection={selection}
+              canSelect={canSelect}
+              selectDisabled={placeholder || busy}
+              onSelect={select}
+              pageStates={pageStates}
+              actions={actions}
+              dimmed={placeholder}
+              footer={`Показано ${feedCountLabel(totalRows, manual.length)}`}
+              selectBar={selection.size > 0 ? (
+                <div className="select-bar pub-select-bar">
+                  <span className="select-bar-text">{selectionLabel(selectedRows)}</span>
+                  {tooMany && <span className="pub-select-note">За один раз можно утвердить не больше {PUBLICATION_APPROVE_BATCH_MAX} постов</span>}
+                  <button type="button" className="btn btn-ghost btn-sm" onClick={() => setSelected(new Set())}>Снять выбор</button>
+                  <button
+                    type="button"
+                    className="btn btn-primary btn-sm"
+                    disabled={busy || tooMany || placeholder}
+                    onClick={() => setApproving(selectedRows)}
+                  >
+                    {approve.isPending ? "Утверждаем…" : `Утвердить ${postsCountLabel(selection.size)}`}
+                  </button>
+                </div>
+              ) : null}
             />
-          ) : days.map((day) => {
-            const dayApprovable = day.publications.filter(isApprovable).map((item) => item.id);
-            const daySelected = dayApprovable.filter((id) => selection.has(id)).length;
-            return (
-              <section key={day.key} className="card" aria-label={day.label}>
-                <div className="card-header">
-                  <div>
-                    <h2 className="card-title">{day.label}</h2>
-                    <p className="card-description">{publicationsCountLabel(day.publications.length)}</p>
-                  </div>
-                  {dayApprovable.length > 0 && (
-                    <label className="flex items-center gap-2 text-sm text-text-secondary">
-                      <Checkbox
-                        checked={daySelected === dayApprovable.length}
-                        indeterminate={daySelected > 0 && daySelected < dayApprovable.length}
-                        label={`Выбрать черновики дня: ${day.label}`}
-                        onChange={(checked) => select(dayApprovable, checked)}
-                      />
-                      Черновики дня ({dayApprovable.length})
-                    </label>
-                  )}
-                </div>
-                <div className="overflow-x-auto">
-                  <DayTable
-                    publications={day.publications}
-                    todayKey={todayKey}
-                    names={names}
-                    selected={selection}
-                    onSelect={select}
-                    actions={actions}
-                  />
-                </div>
-              </section>
-            );
-          })}
-        </div>
+          )}
+        </>
       )}
 
-      {opened !== null && (
-        <DetailDialog
-          key={opened.id}
-          publication={publications.find((item) => item.id === opened.id) ?? opened}
+      <Disclosure label="Как это считается" className="pub-help">
+        <p>Время везде московское, день — московские сутки.</p>
+        <p>«Ждут утверждения» и «Исход неизвестен» считают все даты. «Не вышли за 7 дней» — статусы «Не вышел», «Отклонён» и «Пропущен» за последние 7 дней, сегодня включительно.</p>
+        <p>Hub ставит посты в расписание площадки за {PUBLICATION_SCHEDULE_HORIZON_DAYS} дней до выхода, позже стоящие посты ждут в Hub.</p>
+        <p>Посты, поставленные вручную, Hub видит в расписании самой площадки. Расписание Fansly он читает раз в час через браузер страницы, по кнопке — в течение пары минут. Расписание OnlyFans — раз в час, пока там стоят его посты, иначе раз в сутки, по кнопке — сразу, и это тратит кредиты.</p>
+        <p>Неполный или несвежий список не доказывает, что поста там нет.</p>
+      </Disclosure>
+
+      {shownPublication !== null ? (
+        <PublicationDrawer
+          key={shownPublication}
+          id={shownPublication}
+          row={drawerRow}
           todayKey={todayKey}
-          names={names}
+          pageState={drawerRow ? pageStates.get(drawerRow.pageLabel) : undefined}
+          username={drawerRow ? places.get(drawerRow.pageLabel)?.username ?? null : null}
           actions={actions}
-          onClose={() => setOpened(null)}
+          publicationHref={openHref}
+          onClose={() => change({ publication: null }, true)}
+        />
+      ) : view.panel === "settings" ? (
+        <PublicationSettingsDrawer
+          rows={settingsRows}
+          settingsState={settings.data ? "ready" : settings.isLoading ? "loading" : "failed"}
+          globalEnabled={settings.data?.globalEnabled ?? null}
+          config={configItems}
+          configState={config.data ? "ready" : config.isLoading ? "loading" : "failed"}
+          ofapiOff={ofapi === "off"}
+          focusPage={pageLabel}
+          onRetrySettings={() => void settings.refetch()}
+          onRetryConfig={() => void config.refetch()}
+          onEdit={setEditing}
+          onClose={() => change({ panel: null }, true)}
+        />
+      ) : null}
+
+      {approving !== null && approving.length === 1 && approving[0] !== undefined && (
+        <ApproveOneDialog
+          publication={approving[0]}
+          place={places.get(approving[0].pageLabel)}
+          page={pageStates.get(approving[0].pageLabel)}
+          ofapiOn={ofapi === "on"}
+          todayKey={todayKey}
+          isPending={approve.isPending}
+          onConfirm={() => runApproval(approving)}
+          onClose={() => { if (!approve.isPending) setApproving(null); }}
         />
       )}
-      {resolving !== null && (
-        <ResolveDialog key={resolving.id} publication={resolving} todayKey={todayKey} onClose={() => setResolving(null)} />
+      {approving !== null && approving.length > 1 && (
+        <ApproveManyDialog
+          summary={approvalSummary(approving, pageStates, todayKey)}
+          ofapiOnPages={ofapi === "on" && approving.some((row) => row.platform === "onlyfans")}
+          isPending={approve.isPending}
+          onConfirm={() => runApproval(approving)}
+          onClose={() => { if (!approve.isPending) setApproving(null); }}
+        />
+      )}
+      {cancelling !== null && (
+        <CancelDialog
+          publication={cancelling}
+          place={places.get(cancelling.pageLabel)}
+          todayKey={todayKey}
+          isPending={cancel.isPending}
+          onClose={() => { if (!cancel.isPending) setCancelling(null); }}
+          onConfirm={() => cancel.mutate(cancelling.id, {
+            onSuccess: () => toast.success("Публикация отменена"),
+            onError: (error) => toast.error(actionFailure(error)),
+            onSettled: () => setCancelling(null),
+          })}
+        />
       )}
       {withdrawing !== null && (
-        <ConfirmModal
-          title={`Снять пост с расписания ${platformName(withdrawing.platform)}?`}
-          message={`${withdrawing.pageLabel}, ${momentLabel(withdrawing.publishAt, todayKey)} МСК. ${withdrawConfirmText(withdrawing.platform)}`}
-          confirmLabel="Снять"
-          cancelLabel="Не снимать"
+        <WithdrawDialog
+          publication={withdrawing}
+          place={places.get(withdrawing.pageLabel)}
+          todayKey={todayKey}
           isPending={withdraw.isPending}
           onClose={() => { if (!withdraw.isPending) setWithdrawing(null); }}
           onConfirm={() => withdraw.mutate(withdrawing.id, {
-            onSuccess: (response) => { setWithdrawReport(response.results); setWithdrawing(null); },
-            onError: (error) => { toast.error(actionFailure(error)); setWithdrawing(null); },
+            onSuccess: (response) => {
+              const result = response.results[0];
+              const text = result === undefined ? "Hub не прислал исход команды" : capitalize(withdrawResultText(result));
+              if (result !== undefined && (result.outcome === "accepted" || result.outcome === "withdrawn")) toast.success(text);
+              else toast.error(text, { duration: Infinity });
+            },
+            onError: (error) => toast.error(actionFailure(error)),
+            onSettled: () => setWithdrawing(null),
           })}
         />
       )}
       {deleting !== null && (
-        <ConfirmModal
-          title="Удалить пост с площадки?"
-          message={`${deleting.pageLabel}, ${momentLabel(deleting.publishAt, todayKey)} МСК, пост ${deleting.platformPostRef ?? "—"}. ${DELETE_POST_CONFIRM_TEXT}`}
-          confirmLabel="Удалить с площадки"
-          cancelLabel="Не удалять"
+        <DeletePostDialog
+          publication={deleting}
+          place={places.get(deleting.pageLabel)}
+          todayKey={todayKey}
           isPending={deletePost.isPending}
           onClose={() => { if (!deletePost.isPending) setDeleting(null); }}
           onConfirm={() => deletePost.mutate(deleting.id, {
             onSuccess: (response) => {
               const result = response.results[0];
               if (result?.outcome === "accepted") toast.success(deletePostResultText(result));
-              else toast.error(result === undefined ? "Нет ответа" : deletePostResultText(result));
-              setDeleting(null);
+              else toast.error(result === undefined ? "Hub не прислал исход команды" : deletePostResultText(result), { duration: Infinity });
             },
-            onError: (error) => { toast.error(actionFailure(error)); setDeleting(null); },
+            onError: (error) => toast.error(actionFailure(error)),
+            onSettled: () => setDeleting(null),
           })}
         />
       )}
       {withdrawingPage !== null && (
-        <ConfirmModal
-          title={`Снять всё, что Hub поставил на ${withdrawingPage}?`}
-          message={`Каждый пост Hub в расписании ${platformName(queues.data?.pages.find((queue) => queue.pageLabel === withdrawingPage)?.platform ?? "onlyfans")} `
-            + "этой страницы — отдельной командой со своим исходом. "
-            + "Посты, до выхода которых меньше 15 минут, Hub не трогает. Посты, поставленные вручную, остаются."}
-          confirmLabel="Снять всё"
-          cancelLabel="Не снимать"
+        <WithdrawPageDialog
+          pageLabel={withdrawingPage.pageLabel}
+          platform={withdrawingPage.platform}
+          place={places.get(withdrawingPage.pageLabel)}
+          queue={withdrawingPage.queue}
           isPending={withdrawPage.isPending}
           onClose={() => { if (!withdrawPage.isPending) setWithdrawingPage(null); }}
-          onConfirm={() => withdrawPage.mutate(withdrawingPage, {
-            onSuccess: (response) => { setWithdrawReport(response.results); setWithdrawingPage(null); },
-            onError: (error) => { toast.error(actionFailure(error)); setWithdrawingPage(null); },
+          onConfirm={() => withdrawPage.mutate(withdrawingPage.pageLabel, {
+            onSuccess: (response) => setWithdrawReport({ pageLabel: withdrawingPage.pageLabel, platform: withdrawingPage.platform, results: response.results }),
+            onError: (error) => toast.error(actionFailure(error)),
+            onSettled: () => setWithdrawingPage(null),
           })}
         />
       )}
-      {cancelling !== null && (
-        <ConfirmModal
-          title="Отменить публикацию?"
-          message={`${cancelling.pageLabel}, ${momentLabel(cancelling.publishAt, todayKey)} МСК: ${KIND_LABELS[cancelling.kind].toLowerCase()} не уйдёт на площадку. `
-            + "Вернуть отменённую нельзя, понадобится новый черновик."}
-          confirmLabel="Отменить публикацию"
-          cancelLabel="Не отменять"
-          isPending={cancel.isPending}
-          onClose={() => { if (!cancel.isPending) setCancelling(null); }}
-          onConfirm={() => cancel.mutate(cancelling.id, {
-            onSuccess: () => { toast.success("Публикация отменена"); setCancelling(null); setOpened(null); },
-            onError: (error) => { toast.error(actionFailure(error)); setCancelling(null); },
-          })}
+      {refreshingOf !== null && (
+        <RefreshOnlyfansDialog
+          pageLabel={refreshingOf.pageLabel}
+          isPending={refreshQueue.isPending}
+          onConfirm={() => refresh(refreshingOf)}
+          onClose={() => { if (!refreshQueue.isPending) setRefreshingOf(null); }}
+        />
+      )}
+      {resolving !== null && (
+        <ResolveDialog
+          key={resolving.id}
+          publication={resolving}
+          username={places.get(resolving.pageLabel)?.username ?? null}
+          todayKey={todayKey}
+          onClose={() => setResolving(null)}
+        />
+      )}
+      {editingSettings !== undefined && settings.data !== undefined && (
+        <SettingsDialog
+          key={editingSettings.pageLabel}
+          settings={editingSettings}
+          globalEnabled={settings.data.globalEnabled}
+          modelName={places.get(editingSettings.pageLabel)?.modelName ?? null}
+          ofapiOff={ofapiOffPages.has(editingSettings.pageLabel)}
+          onClose={() => setEditing(null)}
         />
       )}
     </div>

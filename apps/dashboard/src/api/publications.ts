@@ -1,4 +1,5 @@
-import { keepPreviousData, queryOptions, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useCallback } from "react";
+import { keepPreviousData, queryOptions, useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { PublicationStatus } from "@agency_hub_core/shared";
 
 import { kernel } from "./sdk.js";
@@ -9,7 +10,7 @@ import { kernel } from "./sdk.js";
  * here talks to a platform: approving hands a draft to Hub's sender, which
  * puts it on the platform later, by itself.
  */
-const PUBLICATIONS_KEY = ["admin", "publications"] as const;
+export const PUBLICATIONS_KEY = ["admin", "publications"] as const;
 
 export interface PublicationListParams {
   pageLabel?: string;
@@ -44,7 +45,58 @@ export function usePublicationSettings() {
     queryKey: [...PUBLICATIONS_KEY, "settings"] as const,
     queryFn: () => kernel.adminPublicationSettingsList(),
     meta: { suppressGlobalError: true },
+    // Hub stops a page by itself (an autostop): the strip says so within a minute.
+    refetchInterval: 60_000,
   });
+}
+
+/** The reads behind «Ждут вас»: the same keys as the home's rows (api/waiting.ts), so the counts agree. */
+const WAITING_LIMIT = 1000;
+
+/** Every draft and every «Исход неизвестен», over all dates and pages; a page is counted in the browser. */
+export function usePublicationsWaiting() {
+  const [drafts, unknown] = useQueries({
+    queries: [
+      { ...publicationsQueryOptions({ status: "draft", limit: WAITING_LIMIT }), placeholderData: undefined },
+      { ...publicationsQueryOptions({ status: "unknown", limit: WAITING_LIMIT }), placeholderData: undefined },
+    ],
+  });
+  return { drafts, unknown };
+}
+
+/**
+ * «Не вышли»: «Не вышел», «Отклонён» and «Пропущен» read as one list, one
+ * read per status (the API takes one status), the rows merged in publish order.
+ */
+export function usePublicationsNotOut(range: { from?: string; to?: string }, pageLabel: string | null, limit: number, enabled = true) {
+  const results = useQueries({
+    queries: (["not_published", "rejected", "missed"] as const).map((status) => ({
+      ...publicationsQueryOptions({ ...(pageLabel === null ? {} : { pageLabel }), status, ...range, limit }),
+      enabled,
+    })),
+  });
+  const answered = results.every((result) => result.data !== undefined);
+  const publications = answered
+    ? results.flatMap((result) => result.data?.publications ?? []).sort((a, b) => Date.parse(a.publishAt) - Date.parse(b.publishAt) || a.id - b.id)
+    : undefined;
+  const refetch = useCallback(() => Promise.all(results.map((result) => result.refetch())), [results]);
+  return {
+    data: publications === undefined ? undefined : { publications },
+    /** The longest of the three lists: the screen's «первые 500» note reads it. */
+    longest: Math.max(0, ...results.map((result) => result.data?.publications.length ?? 0)),
+    isLoading: results.some((result) => result.isLoading),
+    isError: results.some((result) => result.isError),
+    isFetching: results.some((result) => result.isFetching),
+    isPlaceholderData: results.some((result) => result.isPlaceholderData),
+    dataUpdatedAt: Math.min(...results.map((result) => result.dataUpdatedAt || Number.MAX_SAFE_INTEGER)),
+    refetch,
+  };
+}
+
+/** Reads the whole screen again: after a switch elsewhere changed what the pages may do. */
+export function useRereadPublications() {
+  const qc = useQueryClient();
+  return useCallback(() => qc.invalidateQueries({ queryKey: PUBLICATIONS_KEY }), [qc]);
 }
 
 /** One publication with its status journal; null asks for nothing. */

@@ -1,14 +1,15 @@
 /**
  * «Публикации»: wall posts Hub drafts, approves and puts on the pages. The
  * feature went live ten days before the request, so the list runs from ten
- * days back to twelve days ahead: published history, two «Неизвестно» waiting
- * for a person, scheduled posts for the next two days, approved and drafts
- * after that. OnlyFans pages stopped publishing when collection through the
- * vendor stopped.
+ * days back to twelve days ahead: published history, one «Исход неизвестен»
+ * waiting for a person, three drafts waiting for approval, the rest of the
+ * week in the platforms' schedules and approved posts after it — modest, as on
+ * production. OnlyFans pages publish nothing new since the vendor was switched
+ * off; nova-1 is stopped by Hub (Fansly signed its browser out).
  */
 import type { KernelOperationResponse } from "@agency_hub_core/contracts";
 
-import { iso, pick, rng, intBetween, mills } from "../core.ts";
+import { hashString, iso, pick, rng, intBetween, mills } from "../core.ts";
 import { DEMO_DATA_PAGES, DEMO_PAGES, type DemoPage } from "../world.ts";
 import { DAY_MS, HOUR_MS, demoDigits, demoSha, mskAt, mskDayKey, ofStop } from "./publish-of-common.ts";
 
@@ -24,8 +25,8 @@ type Queue = KernelOperationResponse<"adminPublicationQueueList">["pages"][numbe
 const FIRST_DAY = -10;
 const LAST_DAY = 12;
 
-/** The agent key that drafts most posts (ContentOps). */
-const CONTENT_AGENT_KEY_ID = 2;
+/** The agent key that drafts most posts (ContentOps, key 9 in system.ts). */
+const CONTENT_AGENT_KEY_ID = 9;
 const OWNER_ID = 1;
 const LEAD_ID = 2;
 
@@ -70,13 +71,28 @@ const CAPTIONS = [
 const ALBUM_TITLES = ["October beach set", "Hotel mirror series", "Cozy weekend", "Red lingerie set", "Mountain cabin"] as const;
 const FILE_NAMES = ["beach_03.jpg", "mirror_set_12.jpg", "bts_clip_02.mp4", "lace_07.jpg", "cabin_04.jpg", "pool_day_09.mp4", "hoodie_01.jpg", "teaser_weekend.mp4"] as const;
 
-/** Fansly walls and tiers of a page, stable. */
-function wallRef(page: DemoPage): string {
-  return demoDigits(`wall:${page.label}`, 18);
+/**
+ * Fansly walls and tiers of a page: the same numbers as the page's profile and
+ * promo (page-insights.ts `ref`), so the panel finds their names.
+ */
+function insightsRef(page: DemoPage, kind: string, index: number): string {
+  return `${7 + (hashString(`${kind}:${page.label}`) % 2)}${String(hashString(`${kind}:${page.label}:${index}`)).padStart(10, "3")}${String(index).padStart(6, "0")}`;
+}
+function wallRef(page: DemoPage, index = 1): string {
+  return insightsRef(page, "wall", index);
 }
 function tierRef(page: DemoPage, index: number): string {
-  return demoDigits(`tier:${page.label}:${index}`, 18);
+  return insightsRef(page, "tier", index);
 }
+
+/** The three drafts that wait for approval, each a different case. */
+const DRAFT_KEYS: ReadonlySet<string> = new Set(["mia-1:2:1", "nova-1:4:1", "mia-2:5:0"]);
+/** A scheduled post whose withdrawal Fansly refused. */
+const WITHDRAW_REFUSED_KEY = "mia-1:1:0";
+/** A published post whose deletion did not leave in time. */
+const DELETE_STUCK_KEY = "mia-2:-1:0";
+/** A paid post with a second attachment for subscribers. */
+const EXTRA_ATTACHMENT_KEY = "nova-1:2:1";
 
 interface Built {
   publication: Publication;
@@ -113,6 +129,12 @@ function finding(code: Finding["code"], severity: Finding["severity"], extra: Pa
   return { code, severity, mediaKey: null, at: null, postRef: null, publicationId: null, detail: {}, ...extra };
 }
 
+/** The first uploaded file of a post, as a finding names it. */
+function uploadedKey(media: Publication["media"]): string | null {
+  const file = media.find((item) => item.source === "file");
+  return file ? `file:${file.fileId ?? ""}` : null;
+}
+
 function vaultKey(media: Publication["media"]): string | null {
   const first = media.find((item) => item.role === "media");
   if (!first) return null;
@@ -122,11 +144,10 @@ function vaultKey(media: Publication["media"]): string | null {
 /** Special fates in the past and odd drafts in the future: the natural exceptions. */
 const PAST_OVERRIDES: Readonly<Record<string, { status: Status; reason: string | null }>> = {
   "nova-1:-1:1": { status: "unknown", reason: "absent_unproven:timeline_read_failed" },
-  "mia-2:-3:0": { status: "unknown", reason: "reads_failed" },
   "mia-1:-4:0": { status: "withdrawn", reason: "deleted_after_publish" },
   "mia-3:-6:0": { status: "not_published", reason: "absent_by_id_schedule_and_timeline" },
   "ivy-2:-2:0": { status: "missed", reason: "window_passed" },
-  "nova-1:-5:2": { status: "rejected", reason: "Fansly: media is still processing" },
+  "nova-1:-5:2": { status: "rejected", reason: "fansly_http_400" },
   "mia-of:-2:0": { status: "missed", reason: "window_passed after held: OnlyFans API выключен" },
 };
 
@@ -151,8 +172,13 @@ function buildOne(now: Date, page: DemoPage, day: number, slot: number, hour: nu
 
   const pageIndex = Object.keys(SLOTS).indexOf(page.label);
   const id = 4000 + (day - FIRST_DAY) * 24 + (pageIndex === -1 ? 7 : pageIndex) * 3 + slot;
-  const kind = kindFor(page, random, day - FIRST_DAY, slot);
+  const kind = key === EXTRA_ATTACHMENT_KEY ? "paid_post" : key === "mia-2:5:0" ? "subscriber_post" : kindFor(page, random, day - FIRST_DAY, slot);
   const media = mediaFor(page, kind, random, key);
+  if (key === "mia-2:5:0" && !media.some((item) => item.source === "file")) {
+    // The draft whose uploaded file the server already deleted.
+    media.unshift({ role: "media", position: 0, source: "file", mediaRef: null, fileId: 455, attachment: 0, name: "beach_03.jpg" });
+    media.forEach((item, index) => { if (item.role === "media") item.position = index; });
+  }
   // Captions rotate by day and slot, so one day never repeats a caption.
   const caption = CAPTIONS[((day - FIRST_DAY) * 11 + (pageIndex === -1 ? 7 : pageIndex) * 3 + slot) % CAPTIONS.length] ?? CAPTIONS[0];
   const text = kind === "story" ? "" : kind === "vault_album" ? pick(random, ALBUM_TITLES) : caption;
@@ -177,13 +203,16 @@ function buildOne(now: Date, page: DemoPage, day: number, slot: number, hour: nu
   } else if (page.platform === "onlyfans") {
     status = "scheduled";
     statusReason = "found_in_schedule";
-  } else if (hoursAhead < 44) {
+  } else if (DRAFT_KEYS.has(key)) {
+    status = "draft";
+    // Approved once, then the page's account changed: back to the drafts.
+    if (key === "mia-1:2:1") statusReason = "account_changed";
+  } else if (day <= 6) {
+    // Hub puts approved posts in the platform's schedule a week ahead.
     status = random() < 0.9 ? "scheduled" : "approved";
     if (status === "scheduled") statusReason = "found_in_schedule";
-  } else if (day <= 3) {
-    status = random() < 0.62 ? "approved" : "draft";
   } else {
-    status = random() < 0.25 ? "approved" : "draft";
+    status = "approved";
   }
   if (key === "mia-3:5:0" || key === "ivy-1:-7:0") status = "cancelled";
 
@@ -193,8 +222,10 @@ function buildOne(now: Date, page: DemoPage, day: number, slot: number, hour: nu
   const mediaKey = vaultKey(media);
   const earlier = (days: number) => iso(new Date(nowMs - days * DAY_MS));
   if (status === "draft" || status === "approved" || status === "scheduled") {
-    if (key === "mia-1:3:0") {
-      findings.push(finding("repost_within_threshold", "blocking", { mediaKey, at: earlier(12), postRef: demoDigits(`post:${key}`, 18), detail: { thresholdDays: 30 } }));
+    if (key === "mia-2:5:0") {
+      findings.push(finding("file_deleted", "blocking", { mediaKey: uploadedKey(media), at: earlier(8) }));
+      const vault = media.find((item) => item.source === "vault" && item.role === "media");
+      if (vault) findings.push(finding("repost_within_threshold", "blocking", { mediaKey: `vault:${vault.mediaRef ?? ""}`, at: earlier(12), postRef: demoDigits(`post:${key}`, 18), detail: { thresholdDays: 30 } }));
     } else if (key === "mia-2:2:1" && status !== "draft") {
       repost = true;
       findings.push(finding("repost_within_threshold", "warning", { mediaKey, at: earlier(19), postRef: demoDigits(`post:${key}`, 18), detail: { thresholdDays: 30 } }));
@@ -204,13 +235,7 @@ function buildOne(now: Date, page: DemoPage, day: number, slot: number, hour: nu
       findings.push(finding("posted_before", "info", { mediaKey, at: earlier(intBetween(random, 34, 80)), postRef: demoDigits(`old:${key}`, page.platform === "fansly" ? 18 : 10) }));
     }
   }
-  if (status === "draft" && kind === "paid_post") {
-    if (page.label === "ivy-2") findings.push(finding("price_range_not_set", "blocking"));
-    else if (page.label === "mia-2" && day === 5) {
-      priceMills = mills(59.99);
-      findings.push(finding("price_out_of_range", "blocking", { detail: { priceMills: mills(59.99), minMills: mills(5), maxMills: mills(40) } }));
-    }
-  }
+  if (status === "draft" && kind === "paid_post" && page.label === "ivy-2") findings.push(finding("price_range_not_set", "blocking"));
   const blocked = findings.some((item) => item.severity === "blocking");
 
   // --- times ---
@@ -219,7 +244,8 @@ function buildOne(now: Date, page: DemoPage, day: number, slot: number, hour: nu
   const createdAt = handedBeforeStop ? stop - 31 * HOUR_MS
     : Math.min(publishAt - intBetween(random, 30, 110) * HOUR_MS, nowMs - intBetween(random, 1, 26) * HOUR_MS);
   const approvedAt = handedBeforeStop ? stop - 27 * HOUR_MS : Math.min(createdAt + intBetween(random, 1, 9) * HOUR_MS, nowMs - 20 * 60_000);
-  const submittedAt = handedBeforeStop ? stop - 20 * HOUR_MS : Math.max(approvedAt + 12 * 60_000, publishAt - 44 * HOUR_MS);
+  const submittedAt = handedBeforeStop ? stop - 20 * HOUR_MS
+    : Math.min(Math.max(approvedAt + 12 * 60_000, publishAt - 7 * DAY_MS), nowMs - 5 * 60_000);
   const scheduledAt = submittedAt + 70_000;
   const settledAt = publishAt + intBetween(random, 2, 9) * 60_000;
 
@@ -229,6 +255,10 @@ function buildOne(now: Date, page: DemoPage, day: number, slot: number, hour: nu
   const approver = author.kind === "human" && author.userId === LEAD_ID ? LEAD_ID : (random() < 0.7 ? OWNER_ID : LEAD_ID);
   const hub = { actorKind: "hub" as const, actorUserId: null, actorAgentKeyId: null };
   const events: Event[] = [{ fromStatus: null, toStatus: "draft", ...author0, reason: null, at: iso(new Date(createdAt)) }];
+  if (statusReason === "account_changed") {
+    events.push({ fromStatus: "draft", toStatus: "approved", actorKind: "human", actorUserId: OWNER_ID, actorAgentKeyId: null, reason: null, at: iso(new Date(approvedAt)) });
+    events.push({ fromStatus: "approved", toStatus: "draft", ...hub, reason: "account_changed", at: iso(new Date(Math.min(approvedAt + 3 * HOUR_MS, nowMs - 30 * 60_000))) });
+  }
   const approvedOnce = status !== "draft" && !(status === "cancelled" && random() < 0.5);
   if (approvedOnce) {
     events.push({ fromStatus: "draft", toStatus: "approved", actorKind: "human", actorUserId: approver, actorAgentKeyId: null, reason: null, at: iso(new Date(approvedAt)) });
@@ -265,7 +295,7 @@ function buildOne(now: Date, page: DemoPage, day: number, slot: number, hour: nu
   const last = events.at(-1);
   const statusChangedAt = last?.at ?? iso(new Date(createdAt));
 
-  const hasPost = ["scheduled", "published", "withdrawn"].includes(status) || key === "mia-2:-3:0";
+  const hasPost = ["scheduled", "published", "withdrawn"].includes(status);
   const platformPostRef = hasPost ? (page.platform === "fansly" ? demoDigits(`post:${key}`, 18) : demoDigits(`post:${key}`, 10)) : null;
   const revisionId = approvedOnce && status !== "draft" ? id * 3 + 1 : null;
   const fansly = page.platform === "fansly";
@@ -287,8 +317,12 @@ function buildOne(now: Date, page: DemoPage, day: number, slot: number, hour: nu
     pinWallRefs: fansly && kind === "fyp_post" && random() < 0.08 ? [wallRef(page)] : [],
     replyLock: fansly && kind === "paid_post" && random() < 0.3 ? ["subscribers"] : [],
     subscribersOnly: false,
-    extraAttachments: [],
-    media,
+    extraAttachments: key === EXTRA_ATTACHMENT_KEY
+      ? [{ attachment: 1, access: "subscribers", tierRefs: [], priceMills: mills(9.99), subscribersOnly: false }]
+      : [],
+    media: key === EXTRA_ATTACHMENT_KEY
+      ? [...media, { role: "media", position: 0, source: "vault", mediaRef: demoDigits(`${key}:x0`, 18), fileId: null, attachment: 1, name: null }, { role: "media", position: 1, source: "file", mediaRef: null, fileId: 812, attachment: 1, name: "bonus_clip.mp4" }]
+      : media,
     findings,
     blocked,
     author,
@@ -297,8 +331,12 @@ function buildOne(now: Date, page: DemoPage, day: number, slot: number, hour: nu
     vaultAlbumRef: kind === "vault_album" && sent ? demoDigits(`album:${key}`, 18) : null,
     statusReason,
     previousPublicationId: null,
-    withdrawal: null,
-    deletion: status === "withdrawn" ? { state: "confirmed", errorCode: null, at: iso(new Date(settledAt + 26 * HOUR_MS - 4 * 60_000)) } : null,
+    withdrawal: key === WITHDRAW_REFUSED_KEY && status === "scheduled"
+      ? { state: "rejected", errorCode: "fansly_http_400", at: iso(new Date(nowMs - 40 * 60_000)) }
+      : null,
+    deletion: status === "withdrawn" ? { state: "confirmed", errorCode: null, at: iso(new Date(settledAt + 26 * HOUR_MS - 4 * 60_000)) }
+      : key === DELETE_STUCK_KEY && status === "published" ? { state: "prepared", errorCode: "window_passed", at: iso(new Date(nowMs - 3 * HOUR_MS)) }
+        : null,
     createdAt: iso(new Date(createdAt)),
     updatedAt: statusChangedAt,
     statusChangedAt,
@@ -342,11 +380,21 @@ export function publicationSettings(now: Date): KernelOperationResponse<"adminPu
   const pages: Settings[] = DEMO_PAGES.map((page) => {
     const updated = iso(new Date(now.getTime() - (3 + (page.id % 5)) * DAY_MS));
     if (page.platform === "onlyfans") {
+      // As on production: switched on, never stopped; the switched-off API is what keeps them quiet.
       return {
         pageLabel: page.label, platform: page.platform, enabled: true,
-        autostopReason: "Сбор OnlyFans через OnlyFans API выключен: Hub не видит расписание страницы и ничего не отправляет",
-        autostoppedAt: iso(new Date(stop.getTime() + 6 * 60_000)),
-        paidPriceMinMills: null, paidPriceMaxMills: null, repostThresholdDays: 30, dailyLimit: 4, updatedAt: updated,
+        autostopReason: null,
+        autostoppedAt: null,
+        paidPriceMinMills: null, paidPriceMaxMills: null, repostThresholdDays: 30, dailyLimit: 4, updatedAt: iso(new Date(stop.getTime() - 3 * DAY_MS)),
+      };
+    }
+    if (page.label === "nova-1") {
+      // The one live stop: Fansly signed the page's browser out five hours ago (a stop always turns the page off).
+      return {
+        pageLabel: page.label, platform: page.platform, enabled: false,
+        autostopReason: "browser_login_lost",
+        autostoppedAt: iso(new Date(now.getTime() - 5 * HOUR_MS)),
+        paidPriceMinMills: mills(8), paidPriceMaxMills: mills(50), repostThresholdDays: 45, dailyLimit: 8, updatedAt: updated,
       };
     }
     const ranges: Record<string, [number, number] | null> = {
@@ -407,15 +455,21 @@ export function publicationQueues(now: Date, publications: readonly Publication[
       const day = entry.publishAt.slice(0, 10);
       postsPerDay[day] = (postsPerDay[day] ?? 0) + 1;
     }
-    const incomplete = page.label === "mia-3";
+    if (page.label === "mia-1") {
+      // An entry Fansly answered without a time.
+      entries.push({ queueId: demoDigits("qm:mia-1:undated", 9), postRef: null, publishAt: null, text: "Polaroid dump from the weekend", mediaCount: 4, publicationId: null });
+    }
+    // As on production: Fansly's whole-list read is never confirmed (a permanent reason the
+    // screen hides) and Fansly has no read window; mia-3 also ran out of reads.
+    const fansly = page.platform === "fansly";
     pages.push({
       pageLabel: page.label,
       platform: page.platform,
       readAt: iso(new Date(readAt)),
-      windowFrom: new Date(readAt).toISOString().slice(0, 10),
-      windowTo: new Date(readAt + 14 * DAY_MS).toISOString().slice(0, 10),
-      complete: !incomplete,
-      incompleteReasons: incomplete ? ["read_budget"] : [],
+      windowFrom: fansly ? null : new Date(readAt).toISOString().slice(0, 10),
+      windowTo: fansly ? null : new Date(readAt + 7 * DAY_MS).toISOString().slice(0, 10),
+      complete: !fansly,
+      incompleteReasons: fansly ? (page.label === "mia-3" ? ["list_whole_unverified", "read_budget"] : ["list_whole_unverified"]) : [],
       stale: off,
       postsPerDay,
       refreshRequestedAt: null,

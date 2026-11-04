@@ -259,6 +259,8 @@ export const PUBLICATION_SEARCH_DAYS = 7;
  * already went out.
  */
 export const PUBLICATION_WITHDRAW_MIN_LEAD_MINUTES = 15;
+/** One approval takes at most this many publications (the batch body's cap). */
+export const PUBLICATION_APPROVE_BATCH_MAX = 200;
 /** The platform's schedule is read this many days ahead (Hub schedules 7 days ahead, spec §3.4). */
 export const PUBLICATION_QUEUE_READ_DAYS = 7;
 /** ...hourly while the page has Hub posts in it, otherwise daily (and on the owner's button). */
