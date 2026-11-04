@@ -263,6 +263,7 @@ export const kernelOperations = {
   login: { method: "POST", path: "/api/v1/auth/login" },
   logout: { method: "POST", path: "/api/v1/auth/logout" },
   me: { method: "GET", path: "/api/v1/auth/me" },
+  modelApplicationSubmit: { method: "POST", path: "/api/v1/model-applications" },
   modelRevenue: { method: "GET", path: "/api/v1/models/:modelSlug/revenue" },
   modelRevenueDaily: { method: "GET", path: "/api/v1/models/:modelSlug/revenue/daily" },
   models: { method: "GET", path: "/api/v1/models" },

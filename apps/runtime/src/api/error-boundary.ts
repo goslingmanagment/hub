@@ -101,3 +101,34 @@ export function formatRequestValidationMessage(
     fallbackMessage: "Request validation failed",
   }).message;
 }
+
+/**
+ * Fastify's own refusal of a request body — its content-type parser's
+ * `FST_ERR_CTP_*` errors: malformed or empty JSON, a body over the route's
+ * limit, an unsupported content type. Null for any other error. The message is
+ * fixed: nothing of the body is echoed.
+ */
+export function requestBodyErrorStatus(
+  error: unknown,
+): { statusCode: number; code: string; message: string } | null {
+  if (!(error instanceof Error)) {
+    return null;
+  }
+  const { code, statusCode } = error as { code?: unknown; statusCode?: unknown };
+  if (
+    typeof code !== "string"
+    || !code.startsWith("FST_ERR_CTP_")
+    || typeof statusCode !== "number"
+    || statusCode < 400
+    || statusCode >= 500
+  ) {
+    return null;
+  }
+  if (statusCode === 413) {
+    return { statusCode, code: "payload_too_large", message: "Request body is too large" };
+  }
+  if (statusCode === 415) {
+    return { statusCode, code: "unsupported_media_type", message: "Unsupported content type" };
+  }
+  return { statusCode, code: "bad_request", message: "Invalid request body" };
+}

@@ -37,7 +37,9 @@ import {
 //   direct fallback): a direct request would ride the
 //   shared VPS IP. OnlyFans pages without a proxy still egress direct under
 //   egress key "direct" (their platform traffic is vendor-side anyway).
-// - vendor "elevenlabs" / "telegram" — the boot-only service SOCKS5 identity.
+// - vendor "elevenlabs" / "telegram" / "google_forms" — the boot-only service
+//   SOCKS5 identity (google_forms: the model questionnaire's copy sent to the
+//   agency's Google Form, services/model-applications.ts).
 //   Telegram alone retains a transition fallback to its deprecated page proxy
 //   when the entire dedicated tuple is absent. A configured tuple never falls
 //   back after an auth/connect failure.
@@ -73,7 +75,7 @@ export async function resolveEgress(
         'Egress scope vendor:"fansly" is refused: Fansly egress is direct-to-platform and must be page-scoped',
       );
     }
-    if (scope.vendor === "elevenlabs" || scope.vendor === "telegram") {
+    if (scope.vendor === "elevenlabs" || scope.vendor === "telegram" || scope.vendor === "google_forms") {
       // Calling the strict resolver first is the transition precedence guard:
       // a partial/malformed dedicated tuple throws and can never reach the
       // Telegram legacy branch.
@@ -81,9 +83,9 @@ export async function resolveEgress(
       if (serviceProxy) {
         return buildServiceEgressContext(app.config);
       }
-      if (scope.vendor === "elevenlabs") {
+      if (scope.vendor !== "telegram") {
         throw new ServiceEgressProxyConfigError(
-          "ElevenLabs egress requires the service proxy",
+          `${scope.vendor === "elevenlabs" ? "ElevenLabs" : "Google Forms"} egress requires the service proxy`,
         );
       }
       return resolveLegacyTelegramEgress(app);
