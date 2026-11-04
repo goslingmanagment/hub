@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { errorResponseSchema, intId } from "./primitives.ts";
+import { errorResponseSchema, intId, isoTimestamp } from "./primitives.ts";
 
 // The model questionnaire («анкета модели») from the agency site
 // gosling-agency.ru: its nginx proxies /api/ to Hub, so the page posts here
@@ -53,7 +53,70 @@ export const modelApplicationSubmitResponseSchema = z.object({
   id: intId,
 });
 
+// --- The owner's console (Команда → Анкеты) ---
+
+/** A filling being typed, left unsent for 30 minutes, or sent. */
+export const modelApplicationStatusSchema = z.enum(["filling", "abandoned", "sent"]);
+
+export const adminModelApplicationItemSchema = z.object({
+  /** A filling's session uuid, or a sent questionnaire's id when its page reported no filling. */
+  ref: z.string(),
+  name: z.string().nullable(),
+  filled: z.number().int(),
+  total: z.number().int(),
+  section: z.string().nullable(),
+  startedAt: isoTimestamp,
+  updatedAt: isoTimestamp,
+  status: modelApplicationStatusSchema,
+  applicationId: intId.nullable(),
+  googleStatus: z.enum(["recorded", "failed", "skipped"]).nullable(),
+});
+
+export const adminModelApplicationsResponseSchema = z.object({
+  serverNow: isoTimestamp,
+  items: z.array(adminModelApplicationItemSchema),
+});
+
+export const adminModelApplicationResponseSchema = adminModelApplicationItemSchema.extend({
+  serverNow: isoTimestamp,
+  googleError: z.string().nullable(),
+  /** `submitted` — the sent questionnaire; `snapshot` — the filling's latest; `none` — its page sent none. */
+  answersFrom: z.enum(["submitted", "snapshot", "none"]),
+  answers: z.array(modelApplicationAnswerSchema),
+});
+
+const modelApplicationRefSchema = z.string()
+  .regex(/^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[1-9][0-9]{0,15})$/i);
+
 export const modelApplicationRouteSchemas = {
+  adminModelApplications: {
+    auth: { kind: "owner-session" },
+    tags: ["admin"],
+    summary: "Model questionnaires: fillings and sent ones, newest activity first",
+    description: "At most 200 fillings and 200 sent questionnaires a page reported "
+      + "no filling for, merged by their last activity. A filling silent for 30 "
+      + "minutes and not sent is `abandoned`.",
+    response: {
+      200: adminModelApplicationsResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+    },
+  },
+  adminModelApplication: {
+    auth: { kind: "owner-session" },
+    tags: ["admin"],
+    summary: "One model questionnaire or filling with its answers",
+    description: "`ref` is a filling's session uuid or a sent questionnaire's id. A "
+      + "sent filling shows the sent answers; one in progress its latest snapshot.",
+    params: z.object({ ref: modelApplicationRefSchema }),
+    response: {
+      200: adminModelApplicationResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+    },
+  },
   modelApplicationSubmit: {
     auth: { kind: "public" },
     tags: ["site"],

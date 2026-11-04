@@ -4,6 +4,10 @@ import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import { runModelApplicationAbandonSweep } from "../apps/runtime/src/services/model-application-sessions.ts";
 import {
+  getModelApplicationConsoleEntry,
+  listModelApplicationConsole,
+} from "../apps/runtime/src/services/model-application-console.ts";
+import {
   resetIntegrationDatabase,
   startIntegrationTestDatabase,
   type StartedTestDatabase,
@@ -349,5 +353,50 @@ describe("POST /api/v1/model-applications/progress", () => {
     });
     expect(second.statusCode).toBe(201);
     expect(await sessionRow(setup.testDb, unreported)).toMatchObject({ name: "Карина", filled: 0 });
+  });
+});
+
+describe("the owner's console (Команда → Анкеты)", () => {
+  it("lists fillings and sent questionnaires by last activity, each with its answers", async (context) => {
+    const setup = requireSetup(context);
+    if (!setup) return;
+    const post = (url: string, remoteAddress: string, payload: unknown) =>
+      setup.server.inject({ method: "POST", url, remoteAddress, payload: payload as Record<string, unknown> });
+
+    // Sent without a filling, then a filling left, then one sent, then one typing.
+    expect((await post("/api/v1/model-applications", "203.0.113.100", VALID_BODY)).statusCode).toBe(201);
+    const left = "11111111-1111-4111-8111-111111111111";
+    const sentFilling = "22222222-2222-4222-8222-222222222222";
+    const typing = "33333333-3333-4333-8333-333333333333";
+    expect((await post("/api/v1/model-applications/progress", "203.0.113.101", { session: left, form: "model-full", filled: 4, total: 90, section: "Опыт", name: "Вероника" })).statusCode).toBe(204);
+    await setup.testDb.pool.query("update model_application_sessions set updated_at = now() - interval '40 minutes' where session = $1", [left]);
+    expect((await post("/api/v1/model-applications/progress", "203.0.113.102", { session: sentFilling, form: "model-full", filled: 88, total: 90, name: "Mira" })).statusCode).toBe(204);
+    expect((await post("/api/v1/model-applications", "203.0.113.102", { ...VALID_BODY, session: sentFilling })).statusCode).toBe(201);
+    expect((await post("/api/v1/model-applications/progress", "203.0.113.103", {
+      session: typing, form: "model-full", filled: 1, total: 90, section: "Основное",
+      answers: [{ section: "1. Основное", key: "name", label: "Имя", value: "Алина" }, { section: "1. Основное", key: "age", label: "Возраст", value: "" }],
+    })).statusCode).toBe(204);
+
+    const list = await listModelApplicationConsole(setup.app);
+    expect(list.items.map((item) => [item.ref.length > 10 ? item.ref : "application", item.status, item.name, item.filled, item.total])).toEqual([
+      [typing, "filling", null, 1, 90],
+      [sentFilling, "sent", "Mira", 88, 90],
+      ["application", "sent", "Карина", 2, 3],
+      [left, "abandoned", "Вероника", 4, 90],
+    ]);
+    const sent = list.items[1]!;
+    expect(sent.applicationId).not.toBeNull();
+    expect(sent.googleStatus).toBe("skipped");
+
+    const sentDetail = await getModelApplicationConsoleEntry(setup.app, sentFilling);
+    expect(sentDetail.answersFrom).toBe("submitted");
+    expect(sentDetail.answers).toEqual(VALID_BODY.answers);
+    const typingDetail = await getModelApplicationConsoleEntry(setup.app, typing);
+    expect(typingDetail.answersFrom).toBe("snapshot");
+    expect(typingDetail.answers.map((answer) => answer.value)).toEqual(["Алина", ""]);
+    expect((await getModelApplicationConsoleEntry(setup.app, left)).answersFrom).toBe("none");
+    const bare = await getModelApplicationConsoleEntry(setup.app, list.items[2]!.ref);
+    expect(bare.answersFrom).toBe("submitted");
+    await expect(getModelApplicationConsoleEntry(setup.app, "44444444-4444-4444-8444-444444444444")).rejects.toMatchObject({ statusCode: 404 });
   });
 });

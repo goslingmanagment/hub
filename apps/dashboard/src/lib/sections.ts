@@ -354,6 +354,19 @@ export const SCREENS: readonly Screen[] = [
     deep: true, notSearched: true,
     crumbs: () => [{ label: "Команда", to: "/team/shifts" }, { label: "Сотрудники", to: "/team/people" }],
   },
+  {
+    id: "team-applications", path: "/team/applications", label: "Анкеты", title: "Анкеты моделей", section: "team", ownerOnly: true,
+    why: "Кто сейчас заполняет анкету модели на сайте, кто бросил, кто отправил.",
+    pageFilter: "none",
+    keywords: "анкета модели сайт найм заявки кандидатки",
+  },
+  {
+    id: "team-application", path: "/team/applications/:ref", label: "Анкета", title: "Анкета модели", section: "team", ownerOnly: true,
+    why: "Ответы одной анкеты по разделам.",
+    pageFilter: "none",
+    deep: true, notSearched: true,
+    crumbs: () => [{ label: "Команда", to: "/team/shifts" }, { label: "Анкеты", to: "/team/applications" }],
+  },
 
   // ── Настройки ──────────────────────────────────────────────────────────
   {
@@ -690,6 +703,7 @@ export const SECTIONS: readonly Section[] = [
       tab("payouts", "Выплаты", "team-payouts"),
       tab("sales", "Продажи", "team-sales", "team-win-back", "team-customs"),
       tab("people", "Сотрудники", "team-people", "team-person"),
+      tab("applications", "Анкеты", "team-applications", "team-application"),
     ],
   },
   {
