@@ -39,7 +39,7 @@ import {
 } from "../lib/audience-rules.ts";
 import { upsertHydratedFansForPage } from "../lib/fan-hydration.ts";
 import { followersReconcileDecision } from "../lib/followers-reconcile-decision.ts";
-import { followersReconcileDeactivationLimit } from "../lib/followers-reconcile-safety.ts";
+import { followersReconcileBacklogCeiling, followersReconcileDeactivationLimit } from "../lib/followers-reconcile-safety.ts";
 import { ApplyQuarantine } from "../../engine/commit.ts";
 import type {
   ApplyInput,
@@ -399,6 +399,24 @@ export function parseFollowersReconcileCursor(value: unknown): FollowersReconcil
   };
 }
 
+/** The follower count Fansly stated at the page's newest closed reconcile
+ *  that recorded one (certified or withheld), else null. */
+async function previousStatedFollowerCount(db: Database, pageId: number): Promise<number | null> {
+  const result = await db.execute<{ count: number | string | null }>(sql`
+    select (cursor -> 'last' ->> 'sourceFollowerCount')::bigint as count
+      from sync_work
+     where page_id = ${pageId}
+       and not shadow
+       and resource = ${RECONCILE_KEY}
+       and closed_at is not null
+       and jsonb_typeof(cursor -> 'last' -> 'sourceFollowerCount') = 'number'
+     order by closed_at desc, id desc
+     limit 1
+  `);
+  const raw = result.rows[0]?.count;
+  return raw === null || raw === undefined ? null : Number(raw);
+}
+
 /** The legacy reconcile's anchor: its last walk start, else its last success. */
 async function legacyReconcileAnchor(db: Database, pageId: number): Promise<Date | null> {
   const result = await db.execute<{ startedAt: string | null; succeededAt: Date | string | null }>(sql`
@@ -615,7 +633,19 @@ async function applyReconcileVerify(
   }
 
   const deactivationLimit = followersReconcileDeactivationLimit(activity.activeFollowerCount);
-  if (activity.deactivationCandidateCount > deactivationLimit) {
+  const pastLimit = activity.deactivationCandidateCount > deactivationLimit;
+  // Past the limit: churn piled up while sweeps were withheld or held retires
+  // when Fansly's own count did not fall since the page's previous stated one.
+  const previousSourceFollowerCount = pastLimit ? await previousStatedFollowerCount(tx, pageId) : null;
+  const backlogCeiling = pastLimit
+    ? followersReconcileBacklogCeiling({
+      activeFollowerCount: activity.activeFollowerCount,
+      sourceFollowerCount: finalizationFollowerCount,
+      previousSourceFollowerCount,
+      deactivationLimit,
+    })
+    : null;
+  if (pastLimit && (backlogCeiling === null || activity.deactivationCandidateCount > backlogCeiling)) {
     const candidateGenerationBuckets = await readPageFollowDeactivationGenerationBuckets(tx, {
       platformAccountId: pageId,
       generation: walk.generation,
@@ -624,6 +654,8 @@ async function applyReconcileVerify(
     throw new ApplyQuarantine("followers_reconcile_deactivation_blast_radius", {
       membershipProof,
       deactivationLimit,
+      previousSourceFollowerCount,
+      backlogCeiling,
       candidateGenerationBuckets,
       ...evidence,
     });
@@ -641,6 +673,7 @@ async function applyReconcileVerify(
     membershipProof,
     destructiveFinalization: true,
     deactivationLimit,
+    ...(pastLimit ? { previousSourceFollowerCount, backlogCeiling } : {}),
     deactivatedCount: deactivated.length,
     ...evidence,
   };

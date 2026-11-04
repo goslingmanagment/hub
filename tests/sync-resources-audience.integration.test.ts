@@ -512,6 +512,56 @@ describe("followers", () => {
     expect(attempt.rows[0]).toEqual({ apply_state: "quarantined", apply_error: "quarantine:followers_reconcile_deactivation_blast_radius" });
     expect(alerts.opened.some((alert) => alert.subKey === "live_degraded" && alert.detail === "quarantined")).toBe(true);
   });
+
+  it("reconcile: churn piled up past the limit retires when Fansly's own count did not fall since the previous sweep", async (context) => {
+    if (!testDb) return context.skip();
+    const pageId = await seedPage({ followerCount: 2 });
+    const now = Date.now();
+    const served = {
+      followers: [
+        { id: followId(new Date(now - 60_000), 1), followerId: "640000000000000001" },
+        { id: followId(new Date(now - 120_000), 2), followerId: "640000000000000002" },
+      ],
+      aggregationData: { accounts: [fanAccount("640000000000000001"), fanAccount("640000000000000002")] },
+    };
+    const respond = (req: FanslyWireRequest) => {
+      if (req.spec === "account.me") return okResponse(accountMe(OWN_ID, { followCount: 2 }));
+      if (req.spec === "followers.page") return okResponse(served);
+      throw new Error(`unexpected ${req.spec}`);
+    };
+    // The previous sweep: Fansly stated 2 followers.
+    await makeDue(pageId, "followers.reconcile", { reason: "owner" });
+    await runLive(pageId, respond, async () => (await workRow(pageId, "followers.reconcile"))?.state === "done");
+    expect((await workRow(pageId, "followers.reconcile"))!.cursor).toMatchObject({ last: { sourceFollowerCount: 2 } });
+
+    // Then 60 follows Fansly no longer lists (past the limit of 50) and 600 the
+    // head wrote during the next sweep (not candidates, the page is 662 rows).
+    const fans = await upsertFans(db(), Array.from({ length: 660 }, (_, index) => ({
+      platform: "fansly" as const,
+      platformUserId: `65${String(index).padStart(16, "0")}`,
+    })));
+    await testDb.pool.query(
+      `insert into page_follows (platform_account_id, fan_id, platform_follow_id, followed_at, first_seen_at, last_seen_at, is_active)
+       select $1, fan_id, follow_id, clock_timestamp() - interval '30 days', clock_timestamp() - interval '30 days',
+              case when ord <= 60 then clock_timestamp() - interval '2 days' else clock_timestamp() + interval '1 day' end, true
+         from unnest($2::bigint[], $3::text[]) with ordinality as rows(fan_id, follow_id, ord)`,
+      [pageId, fans.map((fan) => fan.id), fans.map((_, index) => String(3000 + index))],
+    );
+    await makeDue(pageId, "followers.reconcile", { reason: "owner" });
+    await runLive(pageId, respond, async () => (await workRow(pageId, "followers.reconcile"))?.state === "done");
+
+    expect(await countRows(testDb.pool, "select count(*)::int as n from page_follows where platform_account_id = $1 and is_active and platform_follow_id::numeric between 3000 and 3059", [pageId])).toBe(0);
+    expect(await countRows(testDb.pool, "select count(*)::int as n from page_follows where platform_account_id = $1 and is_active and platform_follow_id::numeric between 3060 and 3659", [pageId])).toBe(600);
+    const work = await workRow(pageId, "followers.reconcile");
+    expect(work!.proof).toMatchObject({
+      outcome: "complete",
+      membershipProof: "exact_generation",
+      deactivationLimit: 50,
+      previousSourceFollowerCount: 2,
+      backlogCeiling: 66,
+      deactivatedCount: 60,
+    });
+  });
 });
 
 describe("fan-profiles", () => {
