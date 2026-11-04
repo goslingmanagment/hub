@@ -1,7 +1,8 @@
 export interface SegmentOption<T extends string> {
   value: T;
   label: string;
-  count?: number | undefined;
+  /** A number, or the number already written for the eye («1 420»). */
+  count?: number | string | undefined;
   disabled?: boolean | undefined;
   title?: string | undefined;
 }
