@@ -41,11 +41,14 @@ concurrency:
 # Every push to main runs the whole suite, and main's Quality Gate is what a
 # deploy requires (scripts/main-ci-gate.sh).
 #
-# Runners: GitHub-hosted only (owner, 2026-10-21) — the repository is public,
-# so they are free, and a public repository must never reach the owner's PC:
-# no job here names a self-hosted label, and none is registered to the repo.
-# The gates run on ubuntu-slim, the static parts on ubuntu-24.04 (4 vCPUs
-# each), the integration shards on ubuntu-24.04-arm.
+# Runners: GitHub-hosted, unless the repository variable CI_POOL=pc sends the
+# gate jobs to the owner's own runners (label ci-pc): since 2026-11-04 a Linux
+# VM on his Mac with no access to the Mac's files or keys, because GitHub locked
+# its hosted runners over billing. A fork's PR never picks them here, yet it can
+# edit this file, so the real fence is the repository's setting: a PR from an
+# outside contributor runs nothing until someone approves it. Unset CI_POOL to
+# go back. On GitHub the gates run on ubuntu-slim, the static parts on
+# ubuntu-24.04 (4 vCPUs each), the integration shards on ubuntu-24.04-arm.
 #
 # Layout of a full run (measured 20.10, ~2.5 min wall): Gate fingerprint
 # (~15 s) → five static parts side by side — typecheck, lint, unit 1/2,
@@ -64,7 +67,7 @@ jobs:
     name: Gate fingerprint
     if: (github.event.action != 'edited' || github.event.changes.title || github.event.changes.base) && (github.event.action != 'labeled' || github.event.label.name == 'ci:full')
     # ubuntu-slim ships Node.js; these scripts import nothing outside Node.
-    runs-on: ubuntu-slim
+    runs-on: ${{ vars.CI_POOL == 'pc' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","ci-pc"]') || 'ubuntu-slim' }}
     timeout-minutes: 5
     # Artifact lookup and producer validation need actions:read; no writes.
     permissions:
@@ -159,7 +162,7 @@ jobs:
   # the Quality Gate needs every part green.
   static:
     name: Static checks (${{ matrix.part }})
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.CI_POOL == 'pc' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","ci-pc"]') || 'ubuntu-24.04' }}
     needs: [fingerprint]
     if: github.event.pull_request.draft != true && needs.fingerprint.outputs.proven_by == '' && needs.fingerprint.outputs.gate_invisible != 'true'
     timeout-minutes: 25
@@ -200,7 +203,7 @@ jobs:
         uses: actions/setup-node@v6
         with:
           node-version: 22
-          cache: ${{ matrix.part != 'image' && 'pnpm' || '' }}
+          cache: ${{ runner.environment == 'github-hosted' && matrix.part != 'image' && 'pnpm' || '' }}
 
       - name: Install dependencies
         if: matrix.part != 'image'
@@ -264,7 +267,7 @@ jobs:
         if: matrix.part == 'image'
         uses: docker/setup-buildx-action@v4
         with:
-          driver: docker-container
+          driver: ${{ runner.environment == 'self-hosted' && 'docker' || 'docker-container' }}
           cleanup: false
 
       # Every run only reads the layer cache; the image-cache job writes it
@@ -280,7 +283,9 @@ jobs:
         with:
           builder: ${{ steps.buildx.outputs.name }}
           context: .
-          platforms: linux/amd64
+          # Our own runners are arm64 and build natively: amd64 emulated would
+          # outlast the job. Production images build on the server anyway.
+          platforms: ${{ runner.arch == 'ARM64' && 'linux/arm64' || 'linux/amd64' }}
           target: runtime
           load: true
           pull: true
@@ -289,7 +294,7 @@ jobs:
             APP_SOURCE_REVISION=${{ steps.metadata.outputs.source_revision }}
             APP_DEPENDENCY_CHECKSUM=${{ steps.metadata.outputs.dependency_checksum }}
             CI_TYPECHECK_ALREADY_PASSED=true
-          cache-from: type=gha,scope=hub-runtime-amd64
+          cache-from: ${{ runner.environment == 'github-hosted' && 'type=gha,scope=hub-runtime-amd64' || '' }}
 
       - name: Chromium Headless Shell runtime smoke
         if: matrix.part == 'image'
@@ -315,6 +320,11 @@ jobs:
             process.stdout.write(JSON.stringify(capabilities) + "\n");
           ' "$capabilities"
 
+      # Our own runner's daemon outlives the job: drop this run's tag.
+      - name: Remove this run's image
+        if: always() && matrix.part == 'image' && runner.environment == 'self-hosted'
+        run: docker rmi "$IMAGE" > /dev/null 2>&1 || true
+
   # The image's layer cache, written on every push to main beside the gate,
   # not in it: exporting every layer to the Actions cache (mode=max) took 93 s
   # of the gate's 181 s image build on main (22.10), and the Quality Gate (and
@@ -324,7 +334,8 @@ jobs:
   image-cache:
     name: Image layer cache
     runs-on: ubuntu-24.04
-    if: github.event_name == 'push'
+    # Our own runners keep their layers in the local daemon: nothing to write.
+    if: github.event_name == 'push' && vars.CI_POOL != 'pc'
     timeout-minutes: 25
     continue-on-error: true
     steps:
@@ -403,7 +414,7 @@ jobs:
   # both outputs.
   integration:
     name: Integration ${{ matrix.shard }}/${{ needs.fingerprint.outputs.shard_total || 6 }}
-    runs-on: ubuntu-24.04-arm
+    runs-on: ${{ vars.CI_POOL == 'pc' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","ci-pc"]') || 'ubuntu-24.04-arm' }}
     needs: [fingerprint]
     if: github.event.pull_request.draft != true && needs.fingerprint.outputs.proven_by == '' && needs.fingerprint.outputs.integration_proven_by == '' && needs.fingerprint.outputs.gate_invisible != 'true' && (github.event_name != 'pull_request' || needs.fingerprint.outputs.integration_needed != 'false')
     # 30 stopped fitting on 2026-08-17: vitest --shard then split by FILE
@@ -440,7 +451,7 @@ jobs:
         uses: actions/setup-node@v6
         with:
           node-version: 22
-          cache: pnpm
+          cache: ${{ runner.environment == 'github-hosted' && 'pnpm' || '' }}
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -503,7 +514,7 @@ jobs:
   #
   quality:
     name: Quality Gate
-    runs-on: ubuntu-slim
+    runs-on: ${{ vars.CI_POOL == 'pc' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","ci-pc"]') || 'ubuntu-slim' }}
     needs: [fingerprint, static, integration]
     if: always()
     # The mirror's wait for a real run on the same head plus setup; the
