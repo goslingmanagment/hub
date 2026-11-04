@@ -58,6 +58,43 @@ export const publishOfHandlers: DemoHandlers = {
 
   adminPublicationSettingsList: (request) => publicationSettings(request.now),
 
+  // Two writes answer in the demo, so the reports of the screen can be seen;
+  // nothing is saved and every other write still answers 403.
+  adminPublicationApprove: (request) => {
+    const body = request.body as { items?: Array<{ id: number; version: number }> } | null;
+    const all = demoPublications(request.now).map((item) => item.publication);
+    const results = (body?.items ?? []).map((item, index) => {
+      const publication = all.find((candidate) => candidate.id === item.id) ?? null;
+      // The first one was changed while the window was open: the hub refuses it.
+      if (index === 0 && (body?.items?.length ?? 0) > 1) {
+        return { id: item.id, outcome: "refused" as const, reason: "version_conflict", publication };
+      }
+      if (publication === null) return { id: item.id, outcome: "refused" as const, reason: "not_found", publication: null };
+      return { id: item.id, outcome: "approved" as const, reason: null, publication: { ...publication, status: "approved" as const, version: publication.version + 1 } };
+    });
+    return { results };
+  },
+
+  adminPublicationWithdrawPage: (request) => {
+    const body = request.body as { pageLabel?: string } | null;
+    const scheduled = demoPublications(request.now).map((item) => item.publication)
+      .filter((item) => item.pageLabel === body?.pageLabel && item.status === "scheduled" && item.kind !== "story");
+    const outcomes = [
+      { outcome: "accepted", reason: "schedule_read_then_cancel" },
+      { outcome: "refused", reason: "too_close_to_publish_time" },
+      { outcome: "withdrawn", reason: null },
+      { outcome: "unknown", reason: "withdraw_unconfirmed_read_failed" },
+      { outcome: "rejected", reason: "fansly_http_400" },
+      { outcome: "not_sent", reason: null },
+    ] as const;
+    return {
+      results: scheduled.map((publication, index) => {
+        const answer = outcomes[index % outcomes.length]!;
+        return { id: publication.id, outcome: answer.outcome, reason: answer.reason, publication };
+      }),
+    };
+  },
+
   adminPublicationQueueList: (request) =>
     publicationQueues(request.now, demoPublications(request.now).map((item) => item.publication)),
 

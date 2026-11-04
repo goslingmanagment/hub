@@ -65,6 +65,9 @@ const RUNNING: Readonly<Record<string, Scalar>> = {
   crossSpendersLists: "{\"mia-1\": {}, \"mia-2\": {}}",
   ofHistoryAutoApproveEnabled: false,
   publicationFilesMaxTotalGb: 40,
+  // As on production: both publishing switches on (publications group).
+  publishingEnabled: true,
+  publishingOnlyfansEnabled: true,
 };
 
 /** Owner's overrides from the console (live/boot keys only), with their row version. */
@@ -84,6 +87,9 @@ const OVERRIDES: Readonly<Record<string, { value: string | number | boolean; ver
   ofHistoryAutoApproveEnabled: { value: false, version: 2 },
   // Saved a few minutes ago: the sync process has not re-read it yet.
   aiMediaDescribeDailyImageLimit: { value: 220, version: 3 },
+  // Publishing: switched on by the owner, version 1 (publications group).
+  publishingEnabled: { value: true, version: 1 },
+  publishingOnlyfansEnabled: { value: true, version: 1 },
 };
 
 /** A value the sync process still holds from before the last save (the one pending key). */

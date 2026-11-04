@@ -312,6 +312,8 @@ function incidentSeeds(now: Date): IncidentSeed[] {
   const seeds: IncidentSeed[] = [
     { kind: "stream_failed_threshold", page: "ivy-1", stream: "followers", openedHoursAgo: 8.7, durationHours: null, error: "followers: HTTP 429 from apiv3.fansly.com, 3 failed runs in a row", code: "rate_limited" },
     { kind: "auth_blocked", page: "nova-1", stream: null, openedHoursAgo: 5.2, durationHours: null, error: "Fansly signed the page's browser out", code: "login_required" },
+    // Hub stopped nova-1's publishing when the browser lost its login (publications group).
+    { kind: "publishing_stopped", page: "nova-1", stream: null, openedHoursAgo: 5, durationHours: null, error: "Publishing stopped: browser_login_lost", code: "browser_login_lost" },
     { kind: "ofapi_webhook_silence", page: null, stream: null, openedHoursAgo: sinceOff - 6.1, durationHours: null, error: "No OnlyFans webhook events for 6 h (last at 2026-11-01 10:20 UTC)", code: "webhook_silence" },
     { kind: "golden_signal_lag", page: null, stream: null, tail: "ofapi_delivery_history_age", openedHoursAgo: sinceOff - 0.5, durationHours: null, error: "ofapi delivery history age is over its threshold", code: "lag" },
     { kind: "ofapi_platform_notice", page: "mia-vip-of", stream: null, openedHoursAgo: sinceOff - 2.5, durationHours: null, error: "OnlyFans notice: «Updated Terms of Service» — effective 1 November 2026", code: "platform_notice" },

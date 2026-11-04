@@ -37,6 +37,29 @@ export function buildProfileUrl(
   }
 }
 
+/**
+ * A post on the platform by its number: Fansly `https://fansly.com/post/<id>`,
+ * OnlyFans `https://onlyfans.com/<id>/<username>`. No number, no link.
+ */
+export function buildPostUrl(
+  platform: ExternalLinkPlatform,
+  username: string | null | undefined,
+  postRef: string | null | undefined,
+) {
+  const ref = typeof postRef === "string" ? postRef.trim() : "";
+  if (ref === "") return null;
+  switch (platform) {
+    case "fansly":
+      return `https://fansly.com/post/${encodeURIComponent(ref)}`;
+    case "onlyfans": {
+      const normalized = normalizeUsername(username);
+      return normalized ? `https://onlyfans.com/${encodeURIComponent(ref)}/${encodeURIComponent(normalized)}` : null;
+    }
+    case "telegram":
+      return null;
+  }
+}
+
 export function buildMessagesUrl(
   platform: ExternalLinkPlatform,
   platformConversationId: string | null | undefined,
