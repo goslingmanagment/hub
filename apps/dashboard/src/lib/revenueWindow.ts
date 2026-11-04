@@ -18,6 +18,20 @@ export function revenueComparisonRange(window: RevenueWindow | null): string | n
   return window?.comparisonFrom && window.comparisonTo ? formatUtcWindowRange(window.comparisonFrom, window.comparisonTo) : null;
 }
 
+/** «21–27 окт.», and when the platforms' windows differ «21–27 окт., у OnlyFans с 19 окт.». */
+export function revenuePreviousLabel(windows: readonly RevenueWindow[]): string | null {
+  const main = mainRevenueWindow(windows);
+  const range = revenueComparisonRange(main);
+  if (range === null) return null;
+  const other = windows.find((window) => window !== main && window.comparisonFrom && window.comparisonFrom !== main?.comparisonFrom);
+  return other?.comparisonFrom ? `${range}, у OnlyFans с ${oneDay(other.comparisonFrom)}` : range;
+}
+
+/** One day of a window's edge: «27 окт.». */
+function oneDay(at: string): string {
+  return formatUtcWindowRange(at, new Date(Date.parse(at) + 1).toISOString());
+}
+
 /**
  * The header's dates:
  * «28 окт. – 3 нояб., у OnlyFans с 27 окт., сравнение с 21–27 окт.»,
@@ -32,7 +46,7 @@ export function revenueWindowLabel(input: { windows: readonly RevenueWindow[]; p
   const range = formatUtcWindowRange(main.from, main.to);
   if (period === "today") return `${prefix}${range}, с 03:00 по Москве`;
   const other = windows.find((window) => window !== main && window.from && window.from !== main.from);
-  const longer = other?.from ? `, у OnlyFans с ${formatUtcWindowRange(other.from, new Date(Date.parse(other.from) + 1).toISOString())}` : "";
+  const longer = other?.from ? `, у OnlyFans с ${oneDay(other.from)}` : "";
   const comparison = revenueComparisonRange(main);
   return `${prefix}${range}${longer}${comparison ? `, сравнение с ${comparison}` : ""}`;
 }

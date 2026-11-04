@@ -3,14 +3,14 @@ import { persist } from "zustand/middleware";
 
 /**
  * The one remembered reporting period of the console. Every screen of the
- * shared class reads it (lib/sections.ts), so 30 days chosen on Income are
+ * shared class reads it (lib/sections.ts), so 30 days chosen on Главная are
  * still 30 days on Fans and on a page's card. A `?period=` in the URL wins on
  * the screen it is on, and only a choice by hand is remembered: a link opens
  * what its sender saw and changes nothing else.
  */
 export type Period = "today" | "7d" | "14d" | "30d" | "90d" | "180d" | "365d" | "all";
 
-/** The periods the revenue reports (Income, a page's summary) answer for. */
+/** The periods the revenue reports (Главная, a page's summary) answer for. */
 export type PeriodOption = "today" | "7d" | "30d" | "all";
 
 /** The periods the spender reports (fans, auto-lists, a fan) answer for. */

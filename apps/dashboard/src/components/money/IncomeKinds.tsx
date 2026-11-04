@@ -15,7 +15,7 @@ export interface IncomeKindRow {
 /** The report's kinds, biggest first: `comparison.sources`, for all time `breakdown`.
  *  Nothing is computed here: every sum is the server's. */
 export function incomeKindRows(report: {
-  comparison?: { sources: ReadonlyArray<IncomeKindRow> } | null | undefined;
+  comparison?: { sources?: ReadonlyArray<IncomeKindRow> | undefined } | null | undefined;
   breakdown: ReadonlyArray<{ canonicalType: string; netAmountMills: number }>;
 }): IncomeKindRow[] {
   const rows = report.comparison?.sources ?? report.breakdown.map((source) => ({
@@ -64,7 +64,7 @@ export function IncomeKinds({ rows, label, compare, previousLabel = "Прошл�
         <tbody>
           {rows.map((row) => (
             <tr key={row.canonicalType}>
-              <th scope="row">{SOURCE_LABELS[row.canonicalType] ?? row.canonicalType}</th>
+              <td>{SOURCE_LABELS[row.canonicalType] ?? row.canonicalType}</td>
               <td className="num">{amount(row, false)}</td>
               {compare && <td className="num muted">{amount(row, true)}</td>}
               {compare && <td className="num"><MoneyDelta mills={row.deltaNetMills} pct={row.deltaPct} bare /></td>}
@@ -72,7 +72,7 @@ export function IncomeKinds({ rows, label, compare, previousLabel = "Прошл�
           ))}
           {total && (
             <tr className="row-total">
-              <th scope="row">{total.label}</th>
+              <td>{total.label}</td>
               <td className="num">{formatMills(total.currentNetMills)}</td>
               {compare && <td className="num">{total.previousNetMills === null ? "—" : formatMills(total.previousNetMills)}</td>}
               {compare && <td className="num"><MoneyDelta mills={total.deltaNetMills} pct={total.deltaPct} bare /></td>}

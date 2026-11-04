@@ -24,7 +24,7 @@ export interface ChartSeries {
 
 /** The right margin holds half of the last date label: it sits on the last
  *  point, at the plot's edge. */
-export const CHART_MARGIN = { top: 8, right: 20, left: 0, bottom: 0 } as const;
+export const CHART_MARGIN = { top: 8, right: 28, left: 0, bottom: 0 } as const;
 
 /**
  * Off. An entrance animation replays on every resize and period switch, costs
