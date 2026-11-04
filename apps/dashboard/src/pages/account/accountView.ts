@@ -25,18 +25,14 @@ interface ClientOffer {
 
 /**
  * One offer per platform, keyed by platform so a new platform is a map entry
- * and not a branch.
+ * and not a branch. OnlyFans has none: its desktop app is retired (owner,
+ * 2026-11-04), so an OnlyFans chatter gets the cabinet and the guide only.
  */
 const CLIENT_OFFERS = new Map<Platform, ClientOffer>([
   ["fansly", {
     platform: "fansly",
     label: "Установить расширение для Fansly",
     href: `${CHATTER_SITE_ORIGIN}/fansly/`,
-  }],
-  ["onlyfans", {
-    platform: "onlyfans",
-    label: "Скачать приложение для OnlyFans",
-    href: `${CHATTER_SITE_ORIGIN}/desktop/`,
   }],
 ]);
 
