@@ -51,8 +51,9 @@ export async function registerModelApplicationRoutes(server: ApiServer, ctx: Api
     instance.post("/api/v1/model-applications/progress", {
       schema: routeSchemas.modelApplicationProgress,
       bodyLimit: MODEL_APPLICATION_PROGRESS_BODY_LIMIT_BYTES,
-      // 240 posts an address an hour; 50 new fillings an address a day is the service's.
-      config: { rateLimit: { max: 240, timeWindow: 60 * 60_000 } },
+      // 1000 posts an address an hour (the page posts at most every 5 s while
+      // the model types); 50 new fillings an address a day is the service's.
+      config: { rateLimit: { max: 1000, timeWindow: 60 * 60_000 } },
     }, async (request, reply) => {
       await recordModelApplicationProgressPost(appContext, {
         progress: request.body,

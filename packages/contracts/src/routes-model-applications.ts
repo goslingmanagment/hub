@@ -80,7 +80,7 @@ export const modelApplicationRouteSchemas = {
       + "when one starts (first post with filled ≥ 1) and when one is left "
       + "unsent for 30 minutes. JSON as application/json or text/plain "
       + "(navigator.sendBeacon). A filled `website` (honeypot) is ignored. At "
-      + "most 240 posts and 50 new fillings per client address (an hour / a "
+      + "most 1000 posts and 50 new fillings per client address (an hour / a "
       + "day; 429 beyond). With `answers`, the latest snapshot is kept on "
       + "the filling. Body cap 128 KiB.",
     body: modelApplicationProgressBodySchema,
