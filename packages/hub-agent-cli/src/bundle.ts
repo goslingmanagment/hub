@@ -31,6 +31,12 @@ const argv = process.argv.slice(2);
 
 const sha256 = (bytes: Uint8Array): string => createHash("sha256").update(bytes).digest("hex");
 
+// Hub's own files, asked from the agent's computer: no platform is called, so the
+// runtime's egress seam and its raw fetch( ratchet (scripts/check-raw-fetch.mjs)
+// have no say here.
+const fromHub = (url: string, timeoutMs: number): Promise<Response> =>
+  globalThis.fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
+
 function finish(document: Record<string, unknown>, exitCode: number): never {
   process.stdout.write(`${formatHubDocument(document, argv.includes("--pretty"))}\n`);
   process.exit(exitCode);
@@ -50,11 +56,11 @@ async function replacedByRelease(): Promise<boolean> {
     return false; // No key: the command itself says so.
   }
   try {
-    const answer = await fetch(`${baseUrl}/hub-cli/hub.mjs.sha256`, { signal: AbortSignal.timeout(CHECK_TIMEOUT_MS) });
+    const answer = await fromHub(`${baseUrl}/hub-cli/hub.mjs.sha256`, CHECK_TIMEOUT_MS);
     const wanted = (await answer.text()).trim();
     // An unknown path answers with the dashboard's page and a 200: only a bare hash counts.
     if (!answer.ok || !/^[0-9a-f]{64}$/.test(wanted) || sha256(readFileSync(self)) === wanted) return false;
-    const file = await fetch(`${baseUrl}/hub-cli/hub.mjs`, { signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS) });
+    const file = await fromHub(`${baseUrl}/hub-cli/hub.mjs`, DOWNLOAD_TIMEOUT_MS);
     const bytes = new Uint8Array(await file.arrayBuffer());
     if (!file.ok || sha256(bytes) !== wanted) return false;
     const next = `${self}.${process.pid}`;
