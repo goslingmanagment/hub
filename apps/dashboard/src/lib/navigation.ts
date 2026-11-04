@@ -92,59 +92,6 @@ export function buildPageSpenderAutoListRoute(
   return withQuery(`/fans/by-spend/${pathSegment(bucketKey)}`, { page: pageLabel, ...params });
 }
 
-/**
- * The Analytics page's range presets.
- *
- * The periods of «Статистика», and 30d is the default because that is the window
- * Fansly's own widget shows — which is also the ONLY window where the Suggestions
- * denominator warning applies (A8).
- */
-export const ANALYTICS_RANGES = ["7d", "30d", "90d", "180d", "365d"] as const;
-
-export type AnalyticsRange = (typeof ANALYTICS_RANGES)[number];
-
-const ANALYTICS_RANGE_DAYS: Readonly<Record<AnalyticsRange, number>> = {
-  "7d": 7,
-  "30d": 30,
-  "90d": 90,
-  "180d": 180,
-  "365d": 365,
-};
-
-/** An unknown or absent value resolves to 30d rather than throwing: a deep link
- *  someone edited by hand should land on the page, not on an error. */
-export function resolveAnalyticsRange(value: string | null | undefined): AnalyticsRange {
-  return (ANALYTICS_RANGES as readonly string[]).includes(value ?? "")
-    ? value as AnalyticsRange
-    : "30d";
-}
-
-/** The granularity `now` is truncated to before it becomes a window bound.
- *
- *  A millisecond-precise `to` makes every remount a cache miss: the seven
- *  Analytics queries key on `window.from`/`window.to`, so a fresh `new Date()`
- *  produced seven new keys and seven refetches on every navigation back to the
- *  page, `staleTime` notwithstanding. A minute is coarse enough to hit the
- *  cache and fine enough that nobody can see the difference in a 7–90 day
- *  window. Keying by the PRESET alone would be wrong the other way — the
- *  window would never advance for as long as the tab stayed open. */
-const ANALYTICS_WINDOW_GRANULARITY_MS = 60_000;
-
-/** `[from, to)` for a range preset, as RFC 3339 instants with an explicit
- *  offset — the only form the serving routes accept. `to` is truncated to the
- *  minute so the bounds (and therefore the query keys built from them) are
- *  stable for every call made within the same minute. */
-export function analyticsRange(
-  range: AnalyticsRange,
-  now: Date = new Date(),
-): { from: string; to: string } {
-  const to = new Date(
-    Math.floor(now.getTime() / ANALYTICS_WINDOW_GRANULARITY_MS) * ANALYTICS_WINDOW_GRANULARITY_MS,
-  );
-  const from = new Date(to.getTime() - ANALYTICS_RANGE_DAYS[range] * 24 * 60 * 60 * 1000);
-  return { from: from.toISOString(), to: to.toISOString() };
-}
-
 function buildFanProfileRoute(
   pageLabel: string,
   platform: string,

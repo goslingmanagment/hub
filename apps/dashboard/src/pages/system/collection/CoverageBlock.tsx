@@ -2,7 +2,7 @@ import type { StatsCoverageResponse } from "@agency_hub_core/contracts";
 import { ChevronDown } from "lucide-react";
 import { useStatsCoverage } from "@/api/insights";
 import { captureProofWords, captureStatusWords, planeLabel, projectionLabel } from "@/components/analytics/analytics-words";
-import { coverageSummary, engineStreamBadge } from "@/components/analytics/CoveragePanel";
+import { coverageSummary, engineStreamBadge } from "./coverageWords.js";
 import { Disclosure } from "@/components/ui/Disclosure";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { formatCount, formatDateTime } from "@/lib/format";

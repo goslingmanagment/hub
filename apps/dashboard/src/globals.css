@@ -1,6 +1,5 @@
 @import "tailwindcss";
 @import "./styles/ui.css";
-@import "./pages/overview.css";
 @import "./pages/settings/settings-ui.css";
 @import "./pages/account/stats/chatter-stats.css";
 @import "./styles/screens/home-money.css";
