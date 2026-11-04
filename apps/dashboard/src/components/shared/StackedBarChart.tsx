@@ -22,8 +22,9 @@ import {
   yAxisProps,
   type ChartSeries,
   type ChartTooltipRenderProps,
+  edgeAnchoredTick,
 } from "@/components/charts/ChartKit";
-import { evenTickIndices, linearTicks, stackedExtent } from "@/components/charts/scale";
+import { evenTickIndices, linearTicks, stackedExtent, type LinearTicks } from "@/components/charts/scale";
 
 export type StackedBarChartSeries = ChartSeries;
 
@@ -58,15 +59,23 @@ export function StackedBarChart(props: {
   /** Vertical marks at x values (an event on that date), labelled on hover
    *  of the line's title. */
   markers?: ReadonlyArray<{ x: string; label: string }>;
+  /** The summed row of the tooltip; `null`: no such row, the series do not add up. */
+  totalLabel?: string | null | undefined;
+  /** A line under the tooltip's values, for the row it is given. */
+  note?: ((row: Record<string, unknown>) => ReactNode) | undefined;
+  /** The value axis from the stack's extent, when whole numbers are not its unit (durations). */
+  scale?: ((min: number, max: number) => LinearTicks) | undefined;
+  /** Room per date label and how many at most (wide labels such as «3 нояб., 15:00»). */
+  tickSpacing?: { spacing: number; max: number } | undefined;
 }) {
   const height = props.height ?? 300;
-  const { budget, onResize } = useTickBudget();
+  const { budget, onResize } = useTickBudget(props.tickSpacing?.spacing, props.tickSpacing?.max);
   const format = props.valueFormatter ?? ((value: number) => String(value));
   const tooltipFormat = props.tooltipValueFormatter ?? format;
   const xFormat = props.xTickFormatter ?? ((value: string) => value);
 
   const extent = stackedExtent(props.data, props.series.map((series) => series.key));
-  const yScale = linearTicks(extent.min, extent.max, { integer: true });
+  const yScale = props.scale?.(extent.min, extent.max) ?? linearTicks(extent.min, extent.max, { integer: true });
   const step = (yScale.ticks[1] ?? 1) - (yScale.ticks[0] ?? 0);
   const axisFormat = props.axisFormatter?.(step) ?? format;
   const xTicks = evenTickIndices(props.data.length, budget)
@@ -84,6 +93,9 @@ export function StackedBarChart(props: {
             dataKey={props.xKey}
             ticks={xTicks}
             tickFormatter={(value: unknown) => xFormat(String(value))}
+            {...((props.tickSpacing?.spacing ?? 0) >= 100
+              ? { tick: edgeAnchoredTick((value) => xFormat(String(value)), xTicks.at(-1)) }
+              : {})}
           />
           <YAxis
             {...yAxisProps}
@@ -99,7 +111,7 @@ export function StackedBarChart(props: {
               x={marker.x}
               stroke="var(--color-text-muted)"
               strokeDasharray="3 3"
-              label={{ value: marker.label, position: "insideTopLeft", fontSize: 10, fill: "var(--color-text-muted)" }}
+              label={{ value: marker.label, position: "insideTopLeft", fontSize: 13, fill: "var(--color-text-muted)" }}
             />
           ))}
           {props.series.map((series) => (
@@ -128,7 +140,8 @@ export function StackedBarChart(props: {
                 series={props.series}
                 formatValue={tooltipFormat}
                 formatLabel={(label) => xFormat(String(label))}
-                totalLabel="Итого"
+                totalLabel={props.totalLabel === null ? undefined : props.totalLabel ?? "Итого"}
+                note={props.note}
               />
             )}
           />

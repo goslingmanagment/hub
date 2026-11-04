@@ -42,7 +42,7 @@ function escapeHtml(text: string) {
 export function renderTeamBlock(facts: TeamBlockFacts, now: Date): string[] {
   const lines: string[] = [];
   if (facts.shifts > 0) lines.push(`Смены за сутки: ${facts.shifts} · подтверждено ${facts.confirmed}`);
-  if (facts.disputesOpen > 0) lines.push(`Споры по продажам: ${facts.disputesOpen} — «Команда → Отчёты смен»`);
+  if (facts.disputesOpen > 0) lines.push(`Споры по продажам: ${facts.disputesOpen} — «Команда → Выплаты»`);
   if (facts.customsOpen > 0) {
     const oldest = facts.oldestCustomPaidAt === null ? "" : ` · самый старый оплачен ${Math.floor((now.getTime() - facts.oldestCustomPaidAt.getTime()) / DAY_MS)} дн назад`;
     lines.push(`Кастомы не отданы: ${facts.customsOpen}${oldest}`);

@@ -9,6 +9,7 @@ export function useAdminAiSpend(range: { from: string; to: string }) {
     queryKey: ["admin", "ai-spend", range.from, range.to] as const,
     queryFn: () => kernel.adminAiSpend({ query: range }),
     placeholderData: (previous) => previous,
+    meta: { suppressGlobalError: true },
   });
 }
 
@@ -21,6 +22,7 @@ export function useAdminAiChatterLimits(day: string, live: boolean) {
     queryFn: () => kernel.adminAiChatterLimits({ query: { day } }),
     placeholderData: (previous) => previous,
     refetchInterval: live ? 60_000 : false,
+    meta: { suppressGlobalError: true },
   });
 }
 
@@ -28,6 +30,7 @@ export function useAdminAiChatterLimits(day: string, live: boolean) {
 export function useAdminUpdateAiChatterLimit() {
   const qc = useQueryClient();
   return useMutation({
+    meta: { suppressGlobalError: true },
     mutationFn: (input: { userId: number; body: AdminAiChatterLimitUpdateBody }) =>
       kernel.adminAiChatterLimitUpdate({ params: { userId: input.userId }, body: input.body }),
     onSuccess: (data) => {

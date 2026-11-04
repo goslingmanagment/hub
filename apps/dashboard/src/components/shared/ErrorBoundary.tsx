@@ -2,17 +2,24 @@ import { Component, type ErrorInfo, type ReactNode } from "react";
 
 interface ErrorBoundaryProps {
   children: ReactNode;
+  /** Going to another screen clears the error. */
+  resetKey?: string;
 }
 
 interface ErrorBoundaryState {
   hasError: boolean;
 }
 
+/** A broken screen does not take the menu with it: this sits inside `<main>`. */
 export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
   state: ErrorBoundaryState = { hasError: false };
 
   static getDerivedStateFromError(): ErrorBoundaryState {
     return { hasError: true };
+  }
+
+  componentDidUpdate(previous: ErrorBoundaryProps) {
+    if (this.state.hasError && previous.resetKey !== this.props.resetKey) this.setState({ hasError: false });
   }
 
   componentDidCatch(error: Error, info: ErrorInfo) {
@@ -26,17 +33,11 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
   render() {
     if (this.state.hasError) {
       return (
-        <div className="flex min-h-screen items-center justify-center p-6">
-          <div role="alert" className="max-w-sm rounded-xl border border-border bg-card p-6 text-center">
-            <h1 className="text-lg font-semibold text-text-primary">Не удалось открыть страницу</h1>
-            <p className="mt-2 text-sm text-text-secondary">
-              Произошла ошибка интерфейса. Попробуйте загрузить страницу заново.
-            </p>
-            <button
-              type="button"
-              onClick={this.handleReload}
-              className="btn btn-primary mt-4"
-            >
+        <div role="alert" className="status-panel empty">
+          <h1 className="empty-title">Не удалось открыть экран</h1>
+          <p className="empty-text">Произошла ошибка интерфейса. Загрузите экран заново.</p>
+          <div className="empty-actions">
+            <button type="button" onClick={this.handleReload} className="btn btn-sm">
               Перезагрузить
             </button>
           </div>

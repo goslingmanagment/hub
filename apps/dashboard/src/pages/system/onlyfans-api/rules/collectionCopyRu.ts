@@ -1,0 +1,201 @@
+// Russian copy for the Collection screen. Keys are the registry ids from the
+// GET catalog; anything the server returns that has no entry falls back to
+// the server's own label so a new category never renders blank.
+
+export interface CategoryCopy {
+  /** Row title. */
+  label: string;
+  /** One line: what the data is for. */
+  why: string;
+}
+
+export const CATEGORY_COPY_RU: Record<string, CategoryCopy> = {
+  core_messages: {
+    label: "Сообщения",
+    why: "Чат в десктопе, сообщения без ответа, история переписки",
+  },
+  core_payments: {
+    label: "Оплаты и подписки",
+    why: "Операции, статусы подписок, продления и истечения",
+  },
+  core_audience: {
+    label: "Аудитория",
+    why: "Карточки фанов, подписчики и истёкшие, топ фанов",
+  },
+  posts_comments: {
+    label: "Посты и комментарии",
+    why: "История публикаций и обсуждений под ними",
+  },
+  visitors: {
+    label: "Посещаемость профиля",
+    why: "Количество посещений профиля по дням; без списка посетителей",
+  },
+  tracking_links: {
+    label: "Трекинговые ссылки",
+    why: "Результат источников трафика: клики, подписки, доход",
+  },
+  smart_links: {
+    label: "Смарт-ссылки",
+    why: "Переходы и конверсия смарт-ссылок",
+  },
+  vault_catalog: {
+    label: "Медиатека: каталог",
+    why: "Поиск медиа и связи с постами, без скачивания файлов",
+  },
+  vault_files: {
+    label: "Загрузка своих медиа",
+    why: "Загрузка своего файла в медиатеку OnlyFans с отдельным подтверждением",
+  },
+  balances: {
+    label: "Балансы и выплаты",
+    why: "Доступный и ожидаемый баланс модели, история выплат",
+  },
+  profile_notifications: {
+    label: "Профиль и уведомления",
+    why: "Данные профиля модели и лента уведомлений",
+  },
+  content_history: {
+    label: "Сторис, хайлайты и очередь",
+    why: "История сторис, хайлайтов и запланированных публикаций",
+  },
+  media_previews: {
+    label: "Картинки в десктопе",
+    why: "Превью и фото в чате, галерее и медиатеке ChatGoose Desktop; бесплатные ссылки работают и без включения",
+  },
+  account_settings: {
+    label: "Приветственное сообщение",
+    why: "Автоприветствие новым подписчикам (включено ли, текст, медиа, цена) для панели «Новые»; раз в сутки — 1 кредит",
+  },
+};
+
+/** A category whose schedule has nothing to read (server `noScheduledReads`:
+ *  Smart Links and the stored link lists since their freeze, traffic plan
+ *  §2.9). The tracking-links policy still admits the paid fan sweep (plan
+ *  amendment П9.4), so its row says not to switch it off. */
+const NO_SCHEDULED_READS_KEEP_RU: Record<string, string> = {
+  tracking_links: "под этой политикой идёт обход фанов — не выключать",
+};
+/** The row state of a scheduled category without scheduled reads: the state
+ *  line, and under it why the policy stays scheduled when something else runs
+ *  under it. */
+export function noScheduledReadsState(id: string) {
+  return { label: "плановых чтений нет", detail: NO_SCHEDULED_READS_KEEP_RU[id] ?? null };
+}
+/** The same in the category editor, where the owner changes the mode. */
+export function noScheduledReadsNote(id: string) {
+  return {
+    text: "Плановых чтений нет: расписание не создаёт задач этой категории. Разовое чтение — задачей с явным выбором.",
+    keep: id === "tracking_links"
+      ? "Под этой политикой идёт платный обход фанов по ссылкам, и он работает только в режиме «Расписание» — не выключать."
+      : null,
+  };
+}
+
+export const CONSUMER_LABELS_RU: Record<string, string> = {
+  chatters: "Чаттеры",
+  dashboard: "Дашборд",
+  "Agent Read": "AI-агенты",
+};
+
+export const MODE_LABELS_RU: Record<string, string> = {
+  off: "Выключено",
+  on_demand: "По запросу",
+  scheduled: "Расписание",
+};
+
+export const MODE_DESCRIPTIONS_RU: Record<string, string> = {
+  off: "Новых запросов нет. Сохранённое читается с его реальной свежестью.",
+  on_demand: "Только после явного действия: кнопка на экране или разрешённый запрос агента. Открытие страницы не считается запросом.",
+  scheduled: "Фоновый обход с интервалом и лимитом. Повторное включение продолжает с места остановки, пропущенное не догружается само.",
+};
+
+export const SOURCE_LABELS_RU: Record<string, string> = {
+  page: "настройка страницы",
+  default: "общая настройка",
+  legacy_baseline: "прежняя конфигурация",
+  default_off: "выключено по умолчанию",
+};
+
+export const JOB_STATE_LABELS_RU: Record<string, string> = {
+  queued: "в очереди",
+  running: "выполняется",
+  paused: "пауза",
+  completed: "завершена",
+  failed: "ошибка",
+};
+
+/** The job list's state filter (server `jobState`); "" = no filter. */
+export const JOB_STATE_FILTER_OPTIONS_RU: ReadonlyArray<{ value: "" | "unfinished" | "paused" | "queued" | "running" | "failed" | "completed"; label: string }> = [
+  { value: "", label: "Все задачи" },
+  { value: "unfinished", label: "Незавершённые" },
+  { value: "paused", label: "На паузе" },
+  { value: "queued", label: "В очереди" },
+  { value: "running", label: "Выполняются" },
+  { value: "failed", label: "С ошибкой" },
+  { value: "completed", label: "Завершённые" },
+];
+
+export const PREREQUISITE_LABELS_RU: Record<string, string> = {
+  "active OFAPI page binding": "страница подключена к OnlyFans API",
+  "owned source and explicit upload approval": "свой файл и отдельное подтверждение загрузки",
+  "explicit bounded file selection": "явный ограниченный список файлов",
+};
+
+export const PRICE_UNIT_LABELS_RU: Record<string, string> = {
+  physical_calls: "за физический запрос",
+  calls_and_bytes: "за запрос и объём файлов",
+};
+
+export const WEBHOOK_STATE_LABELS_RU: Record<string, string> = {
+  stable: "работает",
+  create_prepared: "создание подготовлено",
+  create_dispatching: "создаётся у OnlyFans API",
+  create_indeterminate: "создание не подтверждено",
+  create_failed: "ошибка создания",
+  update_prepared: "обновление подготовлено",
+  update_dispatching: "перерегистрация · ждём подтверждения",
+  update_indeterminate: "обновление не подтверждено",
+};
+
+export function categoryLabel(id: string, serverLabel?: string) {
+  return CATEGORY_COPY_RU[id]?.label ?? serverLabel ?? id;
+}
+
+export function categoryWhy(id: string) {
+  return CATEGORY_COPY_RU[id]?.why ?? "";
+}
+
+export function consumerLabel(consumer: string) {
+  return CONSUMER_LABELS_RU[consumer] ?? consumer;
+}
+
+export function modeLabel(mode: string) {
+  return MODE_LABELS_RU[mode] ?? mode;
+}
+
+export function sourceLabel(source: string) {
+  return SOURCE_LABELS_RU[source] ?? source;
+}
+
+export function jobStateLabel(state: string) {
+  return JOB_STATE_LABELS_RU[state] ?? state;
+}
+
+export function prerequisiteLabel(value: string) {
+  return PREREQUISITE_LABELS_RU[value] ?? value;
+}
+
+export function webhookStateLabel(state: string | null) {
+  if (state === null) return "не зарегистрирован";
+  return WEBHOOK_STATE_LABELS_RU[state] ?? state;
+}
+
+/** What a prepared webhook registration is about to do (server `operation`). */
+export const WEBHOOK_OPERATION_LABELS_RU: Record<string, string> = {
+  create: "создание",
+  update: "обновление",
+};
+
+export function webhookOperationLabel(operation: string) {
+  return WEBHOOK_OPERATION_LABELS_RU[operation] ?? operation;
+}

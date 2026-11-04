@@ -49,7 +49,7 @@ const sdk = vi.hoisted(() => ({
 }));
 vi.mock("../apps/dashboard/src/api/sdk.ts", () => ({ kernel: sdk }));
 
-import { REVOCATION_LABEL } from "../apps/dashboard/src/pages/settings/team/teamView.ts";
+import { REVOCATION_LABEL } from "../apps/dashboard/src/pages/team/people/teamView.ts";
 
 const USER = 17;
 const clients: QueryClient[] = [];

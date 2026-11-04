@@ -152,6 +152,69 @@ export async function readCreatorStatsContent(
   }));
 }
 
+export interface CreatorStatsTopSale {
+  mediaOfferId: string;
+  mediaType: number | null;
+  durationMs: number | null;
+  postId: string | null;
+  postedAt: string | null;
+  deletedAt: string | null;
+  caption: string | null;
+  priceMills: string | null;
+  salesCount: number | null;
+  salesNetMills: string | null;
+  salesPendingMills: string | null;
+  windowViews: number | null;
+}
+
+/** The page's media with sales, the most net first, and how many there are.
+ *  Sales are Fansly's all-time totals; only the views belong to the window. */
+export async function readCreatorStatsTopSales(
+  db: Database,
+  input: { pageId: number; fromDay: string; toDay: string; limit: number },
+): Promise<{ rows: CreatorStatsTopSale[]; total: number }> {
+  const { pageId, fromDay, toDay } = input;
+  const found = await rows(db, sql`
+    with sold as (
+      select m.media_offer_ref, m.media_type, m.duration_ms, m.created_at_platform, m.deleted_at_platform,
+             m.price_mills, m.sales_count, m.sales_net_mills, m.sales_pending_mills, count(*) over () as total
+        from creator_media m
+       where m.page_id = ${pageId} and m.platform = 'fansly' and m.sales_net_mills > 0
+       order by m.sales_net_mills desc, m.media_offer_ref
+       limit ${input.limit}
+    ), window_views as (
+      select d.media_offer_id, sum(d.views) as views
+        from fansly_creator_stats_media_daily d
+       where d.page_id = ${pageId} and d.day between ${fromDay}::date and ${toDay}::date
+         and d.media_offer_id in (select media_offer_ref from sold)
+       group by d.media_offer_id
+    ), posts as (${OFFER_POSTS(pageId)})
+    select s.*, s.sales_net_mills::text as net_text, s.sales_pending_mills::text as pending_text, s.price_mills::text as price_text,
+           v.views as window_views, p.platform_post_id, p.published_at, left(p.text_plain, 200) as caption
+      from sold s
+      left join window_views v on v.media_offer_id = s.media_offer_ref
+      left join posts p on p.offer_ref = s.media_offer_ref
+     order by s.sales_net_mills desc, s.media_offer_ref
+  `);
+  return {
+    total: num(found[0]?.total) ?? 0,
+    rows: found.map((r) => ({
+      mediaOfferId: String(r.media_offer_ref),
+      mediaType: num(r.media_type),
+      durationMs: num(r.duration_ms),
+      postId: text(r.platform_post_id),
+      postedAt: instant(r.published_at) ?? instant(r.created_at_platform),
+      deletedAt: instant(r.deleted_at_platform),
+      caption: text(r.caption),
+      priceMills: text(r.price_text),
+      salesCount: num(r.sales_count),
+      salesNetMills: text(r.net_text),
+      salesPendingMills: text(r.pending_text),
+      windowViews: num(r.window_views),
+    })),
+  };
+}
+
 export interface CreatorStatsMediaDetail {
   daily: { day: string; source: number; views: number | null; videoViews: number | null; completedViews: number | null;
     watchMs: number | null; uniqueViewers: number | null }[];

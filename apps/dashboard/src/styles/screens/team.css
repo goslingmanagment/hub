@@ -1,0 +1,424 @@
+/* The classes of the team screens. Only this group edits this file, and every
+   rule goes inside @layer components (design/build-rules.md). */
+@layer components {
+  /* ── A screen of Команда: blocks 24 apart ───────────────────────────── */
+  .team-screen { display: flex; flex-direction: column; gap: 24px; min-width: 0; }
+  .team-stack { display: flex; flex-direction: column; gap: 24px; min-width: 0; }
+  .team-note { font-size: 14px; line-height: 20px; color: var(--color-text-secondary); }
+  .team-muted { font-size: 14px; line-height: 20px; color: var(--color-text-secondary); }
+  .team-sub {
+    display: block;
+    margin-top: 2px;
+    font-size: 14px;
+    line-height: 20px;
+    font-weight: 400;
+    color: var(--color-text-secondary);
+  }
+  .team-faint { color: var(--color-text-muted); }
+  .team-line { display: block; }
+  .team-of, .team-count { font-weight: 400; color: var(--color-text-secondary); }
+  .team-of { font-size: 15px; }
+  .team-count { margin-left: 4px; }
+  .team-warning-text { color: var(--color-warning-text); }
+  .team-struck { color: var(--color-text-muted); text-decoration: line-through; }
+  .team-off-row td { color: var(--color-text-secondary); }
+
+  /* Names, labels and fans as links: quiet at rest, a line on hover. */
+  .team-link {
+    color: inherit;
+    text-decoration: none;
+    text-underline-offset: 3px;
+    text-decoration-color: var(--color-border-strong);
+  }
+  .team-link:hover { text-decoration: underline; text-decoration-color: currentColor; }
+  .team-row-link { cursor: pointer; }
+  /* A row of several lines reads from its top. */
+  .data-table tr.align-top > td { vertical-align: top; }
+
+  /* Under a sticky bar an anchor lands below it. */
+  .team-anchor { scroll-margin-top: calc(var(--bar-height) + 16px); }
+
+  /* A table anywhere inside a card runs to the card's edges, without a frame of its own. */
+  .team-screen .card .table-wrap { border: 0; border-radius: 0; background: transparent; }
+  .team-screen .card > :last-child > .table-wrap:last-child,
+  .team-screen .card > .table-wrap:last-child { border-radius: 0 0 var(--radius-card) var(--radius-card); }
+
+  /* Inside a card: the notice and text line up with the title. */
+  .team-card-inner { padding: 0 24px 16px; }
+  .team-card-inner:empty { display: none; }
+  .team-card-top { padding-top: 16px; }
+  .team-card-flush { padding-top: 0; }
+  .team-card-fold { padding: 12px 24px 16px; border-top: 1px solid var(--color-border-light); }
+  .team-card-fold > .table-wrap,
+  .team-card-fold > .dispute-list { margin: 12px -24px -16px; border: 0; border-radius: 0 0 var(--radius-card) var(--radius-card); }
+  .team-fold-text { margin-top: 8px; }
+  /* Two tables in one opened card: a heavier line between them. */
+  .team-fold-tables > .table-wrap + .table-wrap { border-top: 1px solid var(--color-border); }
+  .team-fold-body { display: grid; gap: 12px; margin-top: 8px; }
+  .team-fold-body .data-table { font-size: 15px; }
+
+  /* Three or two tiles fill the strip. */
+  .team-stats-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .team-stats-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  @media (max-width: 767px) {
+    .team-stats-3, .team-stats-2 { grid-template-columns: minmax(0, 1fr); }
+  }
+
+  /* A row that opens into its parts: the arrow on the left. */
+  .team-expand { display: inline-flex; align-items: center; gap: 8px; }
+  .team-expand-button {
+    display: inline-grid;
+    place-items: center;
+    width: 24px;
+    height: 24px;
+    margin-left: -4px;
+    border-radius: var(--radius-inner);
+    color: var(--color-text-muted);
+  }
+  .team-expand-button:hover { background: var(--color-hover); color: var(--color-text-primary); }
+  .team-expand-button svg { transition: transform 0.15s; }
+  .team-expand-button[aria-expanded="true"] svg { transform: rotate(90deg); }
+  .team-expand-space { display: inline-block; width: 20px; }
+  .team-expand-indent { display: inline-block; padding-left: 28px; color: var(--color-text-secondary); }
+  .data-table tr.team-subrow td { background: var(--color-hover-alt); font-size: 14px; line-height: 20px; color: var(--color-text-secondary); }
+
+  /* A long text in a cell wraps; a broadcast's opens to its whole text. */
+  .team-text-cell { min-width: 240px; max-width: 420px; white-space: normal; }
+  .team-clamp > summary {
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    list-style: none;
+    cursor: pointer;
+  }
+  .team-clamp > summary::-webkit-details-marker { display: none; }
+  .team-clamp[open] > summary { display: none; }
+
+  /* Sorting buttons in a header: the label and room for the arrow. */
+  .team-sort { width: 100%; justify-content: flex-end; font: inherit; color: inherit; }
+  .team-sort-space { display: inline-block; width: 16px; }
+  th.is-sorted .team-sort { color: var(--color-text-primary); }
+
+  /* On a narrow window the first column stays while the table scrolls. */
+  @media (max-width: 1099px) {
+    .team-sticky-first th:first-child,
+    .team-sticky-first td:first-child { position: sticky; left: 0; z-index: 1; background: var(--color-card); }
+    .team-sticky-first tr:hover td:first-child { background: var(--color-hover-alt); }
+  }
+  /* «Разобрать» stays at the right edge of a table that scrolls. */
+  .team-sticky-action { position: sticky; right: 0; z-index: 1; background: var(--color-card); }
+  .data-table tbody tr:hover td.team-sticky-action { background: var(--color-hover-alt); }
+
+  .team-toolbar { margin-bottom: 0; }
+  /* Long headers of many number columns wrap instead of pushing the table out. */
+  .data-table.team-wrap-head th, .data-table.team-wrap-head th.num { white-space: normal; vertical-align: bottom; }
+  .team-wrap-head .team-sort { white-space: normal; text-align: right; }
+  .team-wrap-head th.num { min-width: 96px; }
+  .team-picker { width: auto; min-width: 180px; }
+  @media (max-width: 767px) {
+    /* The payouts' window in the header scrolls sideways on a phone, as the period does. */
+    .page-controls .segmented.team-span-picker { max-width: calc(100vw - 32px); overflow-x: auto; scrollbar-width: none; }
+  }
+  .team-copy { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px 12px; }
+  .team-copy-why { font-size: 14px; line-height: 20px; color: var(--color-text-secondary); }
+  .team-dates { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px 16px; }
+  .team-date { width: 180px; }
+  .team-dates .field-error { flex-basis: 100%; margin-top: 0; }
+
+  /* A chosen mark or decision: the selection's ink, the same size as the rest. */
+  .btn.team-picked,
+  .select.team-picked {
+    border-color: var(--color-accent-border);
+    background: var(--color-accent-soft);
+    color: var(--color-accent);
+  }
+
+  /* Lists of rows on a sheet: a line between them, a button on the right. */
+  .team-list { display: flex; flex-direction: column; }
+  .team-list-row,
+  .person-action {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px 16px;
+    padding: 12px 24px;
+    border-top: 1px solid var(--color-border-light);
+  }
+  .team-list-row:first-child { border-top: 0; }
+  .team-list-flush .team-list-row,
+  .team-list-flush .person-action { padding-inline: 0; }
+  .team-list-flush .team-list-row:first-child { padding-top: 0; }
+  .team-list-what { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; min-width: 0; }
+  .team-add-form {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 12px 24px 16px;
+    border-top: 1px solid var(--color-border-light);
+  }
+  .team-add-form .input { flex: 1 1 240px; width: auto; }
+  .team-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+  .team-assign { display: flex; gap: 8px; }
+
+  /* ── Кто ждал: the map of empty hours, 13/18 as every heat map ───────── */
+  .hour-map-wrap { border: 0; border-radius: 0; }
+  .hour-map {
+    width: 100%;
+    min-width: 860px;
+    border-collapse: separate;
+    border-spacing: 2px;
+    table-layout: fixed;
+    font-size: 13px;
+    line-height: 18px;
+    font-variant-numeric: tabular-nums;
+  }
+  .hour-map th {
+    padding: 0 0 4px;
+    font-weight: 400;
+    color: var(--color-text-muted);
+    text-align: center;
+  }
+  .hour-map .hour-map-label {
+    width: 128px;
+    padding: 0 12px 0 0;
+    text-align: left;
+    font-size: 14px;
+    line-height: 20px;
+    font-weight: 400;
+    color: var(--color-text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .hour-map-total .hour-map-label { font-weight: 500; }
+  .hour-cell {
+    height: 32px;
+    border-radius: 4px;
+    text-align: center;
+    color: var(--color-text-primary);
+  }
+  .hour-cell[data-step="0"] { color: var(--color-text-muted); }
+  .hour-cell[data-step="1"] { background: color-mix(in oklab, var(--color-chart-blue) 12%, transparent); }
+  .hour-cell[data-step="2"] { background: color-mix(in oklab, var(--color-chart-blue) 30%, transparent); font-weight: 500; }
+  .hour-map-total .hour-cell { box-shadow: inset 0 -1px 0 var(--color-border); }
+  .hour-map-note { height: 32px; padding-left: 8px; font-size: 14px; color: var(--color-text-secondary); }
+  @media (max-width: 1099px) {
+    .hour-map .hour-map-label { position: sticky; left: 0; z-index: 1; background: var(--color-card); }
+  }
+
+  /* ── Выплаты: a dispute is a line on the sheet, not a card in a card ─── */
+  .dispute-list { display: flex; flex-direction: column; }
+  .dispute-row {
+    display: grid;
+    gap: 4px;
+    padding: 16px 24px;
+    border-top: 1px solid var(--color-border-light);
+  }
+  .dispute-list > .dispute-row:first-child { border-top: 0; }
+  .dispute-head { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; }
+  .dispute-what { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; min-width: 0; }
+  .dispute-facts { color: var(--color-text-primary); }
+  .dispute-money { font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .dispute-marks { font-size: 14px; line-height: 20px; color: var(--color-text-secondary); }
+  .dispute-marks > span:first-child { color: var(--color-text-primary); }
+  .dispute-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+  .dispute-list-settled .dispute-row:first-child { border-top: 0; }
+
+  /* The export is the sheet's preview: its first two columns stay while the days scroll. */
+  .payout-sheet th:nth-child(-n + 2),
+  .payout-sheet td:nth-child(-n + 2) { position: sticky; z-index: 1; background: var(--color-card); }
+  .payout-sheet th:first-child,
+  .payout-sheet td:first-child { left: 0; min-width: 120px; }
+  .payout-sheet th:nth-child(2),
+  .payout-sheet td:nth-child(2) { left: 120px; box-shadow: inset -1px 0 0 var(--color-border-light); }
+  .payout-sheet tbody tr:hover td:nth-child(-n + 2) { background: var(--color-hover-alt); }
+  .payout-sheet th.num,
+  .payout-sheet td.num { padding-inline: 12px; }
+  .payout-sheet th:last-child,
+  .payout-sheet td:last-child { padding-right: 24px; }
+
+  /* Кастомы: both groups keep the same columns. */
+  .customs-table { min-width: 1040px; table-layout: fixed; }
+  .customs-table .team-text-cell { min-width: 0; max-width: none; }
+  .customs-col-page { width: 136px; }
+  .customs-col-fan { width: 232px; }
+  .customs-col-price { width: 112px; }
+  .customs-col-wait { width: 176px; }
+  .customs-col-who { width: 192px; }
+  @media (max-width: 1360px) {
+    .customs-table { min-width: 0; }
+    .customs-col-page { width: 104px; }
+    .customs-col-fan { width: 232px; }
+    .customs-col-price { width: 88px; }
+    .customs-col-wait { width: 160px; }
+    .customs-col-who { width: 176px; }
+  }
+
+  /* ── A person's card ─────────────────────────────────────────────────── */
+  .person-grid { display: grid; gap: 24px; grid-template-columns: minmax(0, 1fr); }
+  @media (min-width: 1100px) {
+    .person-grid { grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); }
+  }
+  .person-action { padding-inline: 0; }
+  .person-action > p { flex: 1 1 320px; min-width: 0; font-size: 14px; line-height: 20px; color: var(--color-text-secondary); }
+  .person-action:first-child { border-top: 0; padding-top: 0; }
+  .person-action-top { margin-top: 12px; border-top: 1px solid var(--color-border-light); padding-top: 12px; padding-bottom: 0; }
+  .person-more { margin-top: 12px; }
+  .person-more > .team-list { margin-top: 8px; }
+  .person-more .person-action:first-child { border-top: 1px solid var(--color-border-light); padding-top: 12px; }
+  .person-limit { font-size: 15px; line-height: 22px; color: var(--color-text-secondary); }
+  .person-limit b { font-size: 17px; font-weight: 600; color: var(--color-text-primary); }
+
+  /* The invitation's pages: grouped by platform, a box that scrolls. */
+  .invite-pages {
+    display: grid;
+    gap: 12px;
+    max-height: 240px;
+    overflow-y: auto;
+    padding: 12px 16px;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-button);
+  }
+  .invite-group { margin-bottom: 4px; font-size: 14px; line-height: 20px; font-weight: 500; color: var(--color-text-secondary); }
+  .invite-page { display: flex; align-items: center; gap: 8px; min-height: 32px; cursor: pointer; }
+
+  /* ── The chatter's cabinet ───────────────────────────────────────────── */
+  .cabinet-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    height: 56px;
+    padding: 0 32px;
+    border-bottom: 1px solid var(--color-border);
+    background: var(--color-bg);
+  }
+  .cabinet-logo,
+  .entry-logo {
+    font-size: 17px;
+    line-height: 24px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    color: var(--color-text-primary);
+  }
+  .cabinet-logo > span,
+  .entry-logo > span { font-weight: 500; color: var(--color-text-muted); }
+  .cabinet-main { width: 100%; max-width: 1200px; margin: 0 auto; padding: 32px 32px 48px; }
+  @media (max-width: 767px) {
+    .cabinet-bar { padding: 0 16px; }
+    .cabinet-main { padding: 16px 16px 32px; }
+  }
+  .ac-page { display: flex; flex-direction: column; min-width: 0; }
+  .ac-narrow { display: flex; flex-direction: column; gap: 24px; width: 100%; max-width: 720px; }
+  .ac-login { font-size: 24px; line-height: 32px; font-weight: 600; letter-spacing: -0.01em; word-break: break-all; }
+  .ac-role { margin-top: 4px; color: var(--color-text-secondary); }
+  .ac-pages { margin-top: 16px; }
+  .ac-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+  .ac-muted { font-size: 14px; line-height: 20px; color: var(--color-text-secondary); }
+  .ac-text { color: var(--color-text-secondary); }
+  .ac-lines { display: grid; gap: 12px; }
+  .ac-retry { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; font-size: 14px; color: var(--color-text-secondary); }
+  .ac-rows { display: flex; flex-direction: column; }
+  .ac-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px 16px;
+    padding: 12px 0;
+    border-top: 1px solid var(--color-border-light);
+  }
+  .ac-row:first-child { border-top: 0; padding-top: 0; }
+  .ac-row-title { font-weight: 500; }
+  .ac-row-meta { font-size: 14px; line-height: 20px; color: var(--color-text-secondary); }
+  .ac-foot { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--color-border-light); }
+  .ac-confirm { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; color: var(--color-text-primary); }
+  .ac-form { display: flex; flex-direction: column; gap: 16px; max-width: 360px; }
+  .ac-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .ac-block { margin-top: 24px; }
+  .ac-subtitle { margin-bottom: 8px; font-size: 15px; line-height: 22px; font-weight: 500; }
+  .ac-features { display: flex; flex-direction: column; }
+  .ac-features li {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto 88px;
+    gap: 16px;
+    padding: 8px 0;
+    border-top: 1px solid var(--color-border-light);
+  }
+  .ac-features li:first-child { border-top: 0; }
+  .ac-feature-calls { color: var(--color-text-secondary); font-variant-numeric: tabular-nums; }
+  .ac-feature-cost { text-align: right; font-weight: 500; font-variant-numeric: tabular-nums; }
+  .ac-guide { font-size: 15px; }
+
+  /* The shift report: each shift a sheet of its own, up to 720 wide. */
+  .sr-page { display: flex; flex-direction: column; gap: 24px; }
+  .sr-head { display: grid; gap: 4px; }
+  .sr-lead { color: var(--color-text-secondary); }
+  .sr-group { display: flex; flex-direction: column; gap: 16px; }
+  .sr-done > .sr-group { margin-top: 16px; font-size: 15px; line-height: 22px; color: var(--color-text-primary); }
+  .sr-shift { padding: 16px 24px 8px; }
+  .sr-shift-head { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: 12px 24px; padding-bottom: 12px; }
+  .sr-shift-facts { display: flex; flex-wrap: wrap; gap: 4px 16px; margin-top: 4px; font-size: 14px; line-height: 20px; color: var(--color-text-secondary); }
+  .sr-shift-facts b { font-weight: 600; color: var(--color-text-primary); }
+  .sr-shift-action { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; max-width: 240px; text-align: right; }
+  .sr-why { font-size: 14px; line-height: 20px; color: var(--color-text-secondary); }
+  .sr-none { padding: 12px 0 16px; border-top: 1px solid var(--color-border-light); font-size: 14px; color: var(--color-text-secondary); }
+  .sr-sales { display: flex; flex-direction: column; }
+  .sr-sale { padding: 12px 0; border-top: 1px solid var(--color-border-light); }
+  .sr-sale-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+  .sr-sale-money { font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .sr-sale-facts { margin-top: 2px; font-size: 14px; line-height: 20px; color: var(--color-text-secondary); }
+  .sr-sale-marks { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 8px; }
+  .sr-share { width: auto; min-height: 32px; height: 32px; padding-block: 0; font-size: 14px; }
+  .sr-amount { display: inline-flex; align-items: center; gap: 8px; font-size: 14px; color: var(--color-text-secondary); }
+  .sr-amount .input { width: 96px; min-height: 32px; height: 32px; }
+  @media (max-width: 767px) {
+    .sr-shift { padding-inline: 16px; }
+    .sr-shift-head { grid-template-columns: minmax(0, 1fr); }
+    .sr-shift-action { align-items: flex-start; max-width: none; text-align: left; }
+  }
+  @media (pointer: coarse) {
+    .sr-sale-marks .btn, .sr-share, .sr-amount .input, .ac-page .btn { min-height: 44px; height: auto; }
+  }
+
+  /* ── Sign-in and the invitation: one card in the middle ──────────────── */
+  .entry-screen {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 24px;
+    min-height: 100vh;
+    padding: 16px;
+    background: var(--color-bg);
+  }
+  .entry-logo { font-size: 24px; line-height: 32px; }
+  .entry-card {
+    width: 100%;
+    max-width: 380px;
+    padding: 32px;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-card);
+    background: var(--color-card);
+  }
+  .entry-card-wide { max-width: 420px; }
+  .entry-text { text-align: center; color: var(--color-text-secondary); }
+  .entry-sub { margin-top: 8px; color: var(--color-text-secondary); }
+  .entry-caption { margin-top: 16px; text-align: center; font-size: 14px; line-height: 20px; color: var(--color-text-secondary); }
+  .entry-login { margin-top: 4px; text-align: center; font-size: 28px; line-height: 36px; font-weight: 600; word-break: break-all; }
+  .entry-hint { margin-top: 8px; text-align: center; font-size: 14px; line-height: 20px; color: var(--color-text-secondary); }
+  .entry-after { margin-top: 24px; padding-top: 24px; border-top: 1px solid var(--color-border-light); }
+  .entry-submit { width: 100%; min-height: 40px; }
+  @media (max-width: 479px) {
+    .entry-card { padding: 24px 16px; }
+    .entry-submit { min-height: 44px; }
+  }
+}
+
+@layer components {
+  .team-sticky-first td:first-child { white-space: nowrap; }
+  /* A fan's long number breaks before the table scrolls. */
+  .team-fan-ref { overflow-wrap: anywhere; }
+}

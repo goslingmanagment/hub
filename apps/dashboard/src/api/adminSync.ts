@@ -19,15 +19,16 @@ export function useSyncOverview() {
     queryKey: ["syncBlocks", "overview"],
     queryFn: () => kernel.syncOverview(),
     refetchInterval: 10_000,
+    meta: { suppressGlobalError: true },
   });
 }
 
-export function usePageSyncBlocks(pageLabel: string) {
+export function usePageSyncBlocks(pageLabel: string, options: { enabled?: boolean } = {}) {
   return useQuery({
     queryKey: ["syncBlocks", "page", pageLabel],
     queryFn: () => kernel.pageSyncBlocks({ params: { pageLabel } }),
     refetchInterval: 10_000,
-    enabled: !!pageLabel,
+    enabled: !!pageLabel && (options.enabled ?? true),
   });
 }
 
@@ -93,6 +94,7 @@ export function useSyncEnginePages(options: { enabled?: boolean } = {}) {
     queryFn: () => kernel.syncPages(),
     refetchInterval: 10_000,
     enabled: options.enabled ?? true,
+    meta: { suppressGlobalError: true },
   });
 }
 

@@ -1,4 +1,4 @@
-import { formatDurationMs } from "@/components/analytics/analytics-words";
+import { formatDuration, formatSeconds } from "@/lib/format";
 
 /** Axis labels for money in mills. Presentation only — the exact amount is in
  *  the tooltip, formatted by the ledger's own `formatUsdFromMills`. */
@@ -38,7 +38,10 @@ export function countAxisLabel(value: number): string {
   return Math.abs(value) >= 10_000 ? countCompact.format(value) : countFull.format(value);
 }
 
-/** A duration on an axis; the zero line is just `0`. */
+/** A duration on an axis, from milliseconds: «5 ч 7 мин», «40 мин»; the zero line is just `0`. */
 export function durationAxisLabel(ms: number): string {
-  return ms === 0 ? "0" : formatDurationMs(ms);
+  if (ms === 0) return "0";
+  const seconds = Math.abs(ms) / 1_000;
+  const text = seconds < 60 ? formatSeconds(seconds) : formatDuration(Math.round(seconds / 60));
+  return ms < 0 ? `−${text}` : text;
 }

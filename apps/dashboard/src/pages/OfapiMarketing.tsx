@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Link, useSearchParams } from "react-router";
+import { Link, useParams, useSearchParams } from "react-router";
+import { decodeRouteSegment } from "@/lib/navigation";
 import type { OfapiMarketingResource } from "@agency_hub_core/contracts";
 import { ofapiCollectionQueryOptions } from "@/api/ofapiCollection";
 import { useOfLinks } from "@/api/ofLinks";
@@ -159,7 +160,11 @@ export function OfapiMarketing() {
   const smartOpen = smartToggle ?? smartLinksHaveData(data.data);
   const [searchParams, setSearchParams] = useSearchParams();
   const pages = links.data?.pages ?? [];
-  const page = pages.find(row => row.pageLabel === searchParams.get("page")) ?? pages[0] ?? null;
+  // On a page's card the page is in the path and nothing replaces it.
+  const { pageLabel: cardPage } = useParams<{ pageLabel?: string }>();
+  const page = cardPage !== undefined
+    ? pages.find(row => row.pageLabel === decodeRouteSegment(cardPage)) ?? null
+    : pages.find(row => row.pageLabel === searchParams.get("page")) ?? pages[0] ?? null;
   const pageId = page?.pageId ?? 0;
   const [filter, setFilter] = useState<LinkFilter>("all");
   const [tab, setTab] = useState<"links" | "postbacks" | "analytics" | "history">("links");
@@ -212,12 +217,12 @@ export function OfapiMarketing() {
   };
   const linkName = (id: string) => allLinks.find(link => link.id === id)?.name ?? pageLinks.find(link => link.linkRef === id)?.name ?? `Ссылка ${id}`;
   const collectCategory = selection.startsWith("smart_") ? "smart_links" : "tracking_links";
-  return <div className="space-y-5">
+  return <div className="space-y-6">
     <div className="flex flex-wrap items-end gap-x-3 gap-y-2">
-      <label className="w-full sm:w-64"><span className="field-label">Страница</span><select disabled={busy || !pages.length} className="select" value={page?.pageLabel ?? ""} onChange={e => selectPage(e.target.value)}>{pages.map(row => <option key={row.pageId} value={row.pageLabel}>{row.pageLabel}</option>)}</select></label>
+      {cardPage === undefined && <label className="w-full sm:w-64"><span className="field-label">Страница</span><select disabled={busy || !pages.length} className="select" value={page?.pageLabel ?? ""} onChange={e => selectPage(e.target.value)}>{pages.map(row => <option key={row.pageId} value={row.pageLabel}>{row.pageLabel}</option>)}</select></label>}
       <button type="button" className="btn" disabled={busy} onClick={() => void run(async () => {}, "Данные перечитаны из Hub. Запросов к OnlyFans API не было.")}>Обновить</button>
       {links.data && <span className="order-last w-full text-xs text-text-muted sm:order-none sm:w-auto sm:pb-2" title={`Прочитано ${moscowDateTime(links.data.generatedAt)} МСК`}>Данные обновляются 4 раза в сутки · экран перечитывает их каждые 5 минут</span>}
-      <Link className="link ml-auto pb-2 text-sm" to="/settings?tab=collection">Настройки сбора</Link>
+      <Link className="link ml-auto pb-2 text-sm" to="/system/onlyfans-api/collection">Настройки сбора</Link>
     </div>
     {(error || links.error) && <p role="alert" className="notice notice-danger">{error || links.error?.message}</p>}
     {links.isPending && <p role="status" className="text-sm text-text-muted">Загружаем ссылки…</p>}
@@ -236,7 +241,7 @@ export function OfapiMarketing() {
       {!pageLinks.length && <div className="empty"><p className="empty-title">{page.kinds.some(kind => kind.lastUsableAt !== null) ? "В последнем сборе нет ссылок этой страницы" : "Ссылки этой страницы ещё не собирались"}</p></div>}
       {pageLinks.length > 0 && !shownLinks.length && <div className="empty"><p className="empty-title">Таких ссылок нет</p></div>}
       {shownLinks.length > 0 && <OfLinksTable links={shownLinks} now={now} />}
-      <div className="border-t border-border-light px-5 py-3">
+      <div className="border-t border-border-light px-6 py-3">
         <details className="help"><summary>Как считаются фаны и доход</summary><div className="help-body">
           <p>Фаны: у trial-ссылок — активации пробного периода, у tracking-ссылок — подписчики.</p>
           <p>«Доход по OnlyFans» — расчёт OnlyFans API по подпискам с этой ссылки; его иногда пересчитывают задним числом. «Доход по Hub» — собственный расчёт Hub по журналу транзакций с даты, когда Hub начал видеть фанов ссылки.</p>
@@ -249,7 +254,7 @@ export function OfapiMarketing() {
         <div className="min-w-0"><h2 id="smart-links-title" className="card-title">Smart Links</h2><p className="card-description">{data.data && !smartLinksHaveData(data.data) ? "Не используются: нет ни ссылок, ни пикселей, ни postbacks, ни действий." : "Ссылки, пиксели и postbacks OnlyFans API и история действий с ними."}</p></div>
         <button type="button" className="btn btn-sm" aria-expanded={smartOpen} onClick={() => setSmartToggle(!smartOpen)}>{smartOpen ? "Скрыть" : "Показать"}</button>
       </div>
-      {data.error && <div className="px-5 pb-4"><p role="alert" className="notice notice-danger">Smart Links не прочитаны: {data.error.message}</p></div>}
+      {data.error && <div className="px-6 pb-4"><p role="alert" className="notice notice-danger">Smart Links не прочитаны: {data.error.message}</p></div>}
       {smartOpen && <div className="card-body space-y-4">
         <p className="text-sm text-text-secondary">Окно атрибуции — 6 часов. Эти суммы не прибавляются к финансовому журналу Hub.</p>
         {data.isPending && <p role="status" className="text-sm text-text-muted">Загружаем сохранённые данные Smart Links…</p>}
@@ -269,7 +274,7 @@ export function OfapiMarketing() {
             </div>
             {link.publicUrl && <a className="link inline-block max-w-full break-all text-sm" href={link.publicUrl} target="_blank" rel="noreferrer">{link.publicUrl}</a>}
             <p className="text-sm text-text-secondary">Клики {value(link.clicks)} · Подписки {value(link.subscribers)} · Платящие {value(link.spenders)} · Доход {money(link.revenueMills)} ({basis(link.revenueBasis)})</p>
-            {!!link.tags.length && <div className="flex flex-wrap gap-1.5">{link.tags.map(tag => <span key={tag} className="badge">{tag}</span>)}</div>}
+            {!!link.tags.length && <div className="flex flex-wrap gap-2">{link.tags.map(tag => <span key={tag} className="badge">{tag}</span>)}</div>}
             {link.cost && <p className="text-xs text-text-muted">Расход кампании по настройкам OnlyFans API: {value(link.cost.inputValue)} {value(link.cost.currency)}. Это не фактическое списание из банка.</p>}
             {pixels.filter(pixel => pixel.parentId === link.id && pixel.pageId === link.pageId).map(pixel => {
               const canTest = marketingPixelCanTest(pixel.platform);

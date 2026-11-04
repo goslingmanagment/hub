@@ -2,6 +2,7 @@ import { z } from "zod";
 
 import {
   PUBLICATION_ACTOR_KINDS,
+  PUBLICATION_APPROVE_BATCH_MAX,
   PUBLICATION_ATTACHMENT_ACCESS,
   PUBLICATION_AUTHOR_KINDS,
   PUBLICATION_EXTRA_ATTACHMENTS_MAX,
@@ -261,7 +262,7 @@ export const publicationIdParamsSchema = z.object({ id: z.coerce.number().int().
 
 export const publicationApproveBodySchema = z.strictObject({
   /** One or many; each with the version the person saw. Approved in this order. */
-  items: z.array(z.strictObject({ id: intId, version: z.number().int().positive() })).min(1).max(200),
+  items: z.array(z.strictObject({ id: intId, version: z.number().int().positive() })).min(1).max(PUBLICATION_APPROVE_BATCH_MAX),
 });
 export const publicationApproveResponseSchema = z.object({
   results: z.array(z.object({

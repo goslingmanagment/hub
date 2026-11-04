@@ -361,6 +361,7 @@ export const kernelOperations = {
   pageConversationPreview: { method: "GET", path: "/api/v1/pages/:pageLabel/conversations/:platformConversationId/preview" },
   pageConversationProfile: { method: "GET", path: "/api/v1/pages/:pageLabel/conversations/:conversationId/profile" },
   pageDeletedFans: { method: "GET", path: "/api/v1/pages/:pageLabel/deleted-fans" },
+  pageFanCard: { method: "GET", path: "/api/v1/pages/:pageLabel/fans/:platformUserId/card" },
   pageFanDetail: { method: "GET", path: "/api/v1/pages/:pageLabel/fans/:platformUserId" },
   pageFanProfile: { method: "GET", path: "/api/v1/pages/:pageLabel/fans/:platformUserId/profile" },
   pageFanProfileVersion: { method: "GET", path: "/api/v1/pages/:pageLabel/fans/:platformUserId/profile/versions/:version" },

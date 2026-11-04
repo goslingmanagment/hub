@@ -25,6 +25,7 @@ import {
   getPageSubscribersReport,
   getPageSummary,
 } from "../../services/reporting.ts";
+import { readPageFanCard } from "../../services/fan-card.ts";
 import { searchVisibleFans } from "../../services/spenders.ts";
 import { loadEffectiveConfig } from "../../services/effective-config.ts";
 import { engineStreamState, readEngineStatusFacts } from "../../services/sync-status-engine.ts";
@@ -188,6 +189,13 @@ export function registerAudienceRoutes(server: ApiServer, ctx: ApiModuleContext)
       throw new ForbiddenError("Page access denied");
     }
     return getPageDeletedFansReport(appContext, request.params.pageLabel, request.query);
+  });
+
+  server.get("/api/v1/pages/:pageLabel/fans/:platformUserId/card", {
+    schema: routeSchemas.pageFanCard,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    return readPageFanCard(appContext, principal, { pageLabel: request.params.pageLabel, platformUserId: request.params.platformUserId });
   });
 
   server.get("/api/v1/pages/:pageLabel/fans/:platformUserId", {

@@ -1189,20 +1189,29 @@ export async function getSpenderBatch(
     autoRenew: boolean | null;
     autoRenewOffDetectedAt: string | null;
   }>();
-  if (fanIds.length > 0 && scope.pageIds.length === 1) {
+  // A scope wider than one page has no one subscription: there, the fan's pages instead.
+  const pagesByFanId = new Map<number, Array<{ pageLabel: string; creatorNetAmountMills: number }>>();
+  if (fanIds.length > 0) {
     const memberships = await getVisibleFanPageMemberships(app.db, {
       fanIds,
       pageIds: scope.pageIds,
     });
     for (const m of memberships) {
-      subscriptionByFanId.set(m.fanId, {
-        status: m.subscriptionStatus,
-        expiresAt: serializeTimestamp(m.subscriptionExpiresAt),
-        autoRenew: m.autoRenew,
-        autoRenewOffDetectedAt: serializeTimestamp(m.autoRenewOffDetectedAt),
-      });
+      if (scope.pageIds.length === 1) {
+        subscriptionByFanId.set(m.fanId, {
+          status: m.subscriptionStatus,
+          expiresAt: serializeTimestamp(m.subscriptionExpiresAt),
+          autoRenew: m.autoRenew,
+          autoRenewOffDetectedAt: serializeTimestamp(m.autoRenewOffDetectedAt),
+        });
+      } else {
+        const pages = pagesByFanId.get(m.fanId) ?? [];
+        pages.push({ pageLabel: m.pageLabel, creatorNetAmountMills: millsToNumber(m.creatorNetAmountMills) });
+        pagesByFanId.set(m.fanId, pages);
+      }
     }
   }
+  for (const pages of pagesByFanId.values()) pages.sort((a, b) => b.creatorNetAmountMills - a.creatorNetAmountMills);
 
   return {
     scope: scope.responseScope,
@@ -1245,6 +1254,7 @@ export async function getSpenderBatch(
         typeBreakdown: typeBreakdownByFanId.get(fan.fanId) ?? [],
         lifetimeLastTransactionAt: serializeTimestamp(scopeLifetime?.lastTransactionAt),
         subscription: subscriptionByFanId.get(fan.fanId) ?? null,
+        ...(scope.pageIds.length > 1 ? { pages: pagesByFanId.get(fan.fanId) ?? [] } : {}),
       };
     }),
   };

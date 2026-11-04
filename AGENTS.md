@@ -9,6 +9,9 @@ chatters' AI features, the owner's dashboard. Production is `agency-de` (`root@1
 - `pnpm dev:seed-client` — dev data: `dev-owner` / `dev-owner-password` (dashboard), `dev-chatter` /
   `dev-chatter-password` (client token), pages `dev-lora-of`, `dev-lora-vip-of`.
 - Dashboard: http://localhost:5173 (Vite, proxied to the API) — look at UI changes there, with your own eyes.
+- `pnpm dev:demo` — the dashboard alone, every screen full of an invented agency (no Docker, no API):
+  http://localhost:5180, `/__demo/role?as=team_lead|chatter` switches the role. Data: `apps/dashboard/demo/fixtures/`
+  (typed by the contracts: `pnpm --dir apps/dashboard typecheck:demo`). A new screen or API field gets its fixture there.
 - API: `curl localhost:3000/api/v1/health`; the token and sample requests — `docs/runbooks/client-dev-hub.md`.
 - AI without spending money: `pnpm dev:fake-ai` + the variables from the same runbook.
 
@@ -54,7 +57,7 @@ chatters' AI features, the owner's dashboard. Production is `agency-de` (`root@1
 ## Good to know
 - What AI money went to (Hub's ledger, by feature/model/effort/window/chatter/page/key/branch, unit costs, dearest calls,
   setting changes): `ssh root@152.53.191.242 'docker exec agency-hub-api-1 node /app/apps/runtime/dist/cli.js ai:spend --from YYYY-MM-DD [--to …] [--json]'`
-  (default: yesterday, Moscow). The owner's page: dashboard → Расходы → «Траты на ИИ».
+  (default: yesterday, Moscow). The owner's page: Деньги → Расходы → ИИ.
 - Don't babysit long rollouts and update windows (`page-browser-update.sh`, an hour of watching): start it,
   then end the turn or do one background check later. No foreground SSH polling loops.
 - `docs/` is in `.gitignore`: a new file there needs `git add -f`.

@@ -14,6 +14,7 @@ import { join } from "node:path";
  * where one-shot invocations left eight abandoned receipts behind. A missing file
  * is not an error worth a stack trace; it is one clear message naming both places
  * the key could have been.
+ * The one-file build's explicit `setup` (bundle.ts) is the only thing that writes it.
  *
  * BUT IT DOES REFUSE AN OVER-PERMISSIVE ONE (review round 1). The file holds a
  * live bearer token to every granted page's transcripts and money. Because the
@@ -45,6 +46,8 @@ function defaultReadFile(path: string): string | null {
 }
 
 function defaultFileMode(path: string): number | null {
+  // Windows has no such bits: every file stats as 0666, and refusing it would refuse them all.
+  if (process.platform === "win32") return null;
   try {
     return statSync(path).mode & 0o777;
   } catch {

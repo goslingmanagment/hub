@@ -3415,6 +3415,8 @@ export const chatterNumbersSchema = z.object({
 export const teamChatterNumbersQuerySchema = z.object({
   from: isoTimestamp.optional(),
   to: isoTimestamp.optional(),
+  /** Only this person: one person's shifts are read in seconds, everyone's take most of a minute. */
+  userId: z.coerce.number().int().positive().optional(),
 });
 
 export const teamChatterNumbersResponseSchema = z.object({
@@ -4605,7 +4607,8 @@ export const clientRouteSchemas = {
     summary: "The eight numbers of each chatter's shifts and week",
     description: "The owner and team leads, for the pages they reach; read-only. Shifts are week 1's actual shifts that "
       + "started in [from, to) (default: the last 7 days, at most 31); only messages with the chatter as their author "
-      + "count, revenue only from confirmed shift reports. A guide, not a basis for pay.",
+      + "count, revenue only from confirmed shift reports. A guide, not a basis for pay. With `userId`, only that person; "
+      + "someone with no shifts on the viewer's pages gives an empty list.",
     querystring: teamChatterNumbersQuerySchema,
     response: {
       200: teamChatterNumbersResponseSchema,

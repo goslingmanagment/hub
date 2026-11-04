@@ -6,6 +6,7 @@ import {
   type ClientSendCustodyResolveBody,
 } from "@agency_hub_core/contracts";
 
+import { keepAllPages, pageFromSearch } from "@/lib/pageParam";
 import { ruPlural } from "@/lib/plural";
 
 /**
@@ -48,11 +49,11 @@ export interface HeldSendsView {
  * the filter is kept until it can be checked.
  */
 export function parseHeldSendsView(search: URLSearchParams, pageLabels: readonly string[] | null): HeldSendsView {
-  const page = search.get("page");
+  const page = pageFromSearch(search);
   const offset = Number(search.get("offset"));
   return {
     state: search.get("state") === "resolved" ? "resolved" : "held",
-    pageLabel: page !== null && page !== "" && (pageLabels === null || pageLabels.includes(page)) ? page : null,
+    pageLabel: page !== null && (pageLabels === null || pageLabels.includes(page)) ? page : null,
     offset: Number.isSafeInteger(offset) && offset >= 0 ? offset : 0,
   };
 }
@@ -84,7 +85,8 @@ export function changeHeldSendsView(
   pageLabels: readonly string[] | null,
   change: Partial<HeldSendsView>,
 ): URLSearchParams {
-  return heldSendsSearch({ ...parseHeldSendsView(current, pageLabels), ...change, offset: change.offset ?? 0 });
+  const next = heldSendsSearch({ ...parseHeldSendsView(current, pageLabels), ...change, offset: change.offset ?? 0 });
+  return change.pageLabel === undefined ? keepAllPages(current, next) : next;
 }
 
 /**
@@ -136,7 +138,7 @@ export function formatMoment(iso: string, now: Date, timeZone?: string): string 
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return "—";
   const format = new Intl.DateTimeFormat("ru-RU", {
-    day: "numeric", month: "long", year: "numeric", hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+    day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", hourCycle: "h23",
     ...(timeZone === undefined ? {} : { timeZone }),
   });
   const at = parts(format, date);

@@ -27,7 +27,7 @@ for at password sign-in (`client: "chat-extension"`): it reaches only the
 61 routes marked "yes", and every route marked "no" refuses it with 403.
 A full device token is not affected.
 
-## Routes (421)
+## Routes (422)
 
 | Method | Path | Route key | Kind | Roles | Page scope | chat-extension token |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -383,6 +383,7 @@ A full device token is not affected.
 | GET | `/api/v1/pages/:pageLabel/deleted-fans` | `pageDeletedFans` | `any` | — | page | no |
 | GET | `/api/v1/pages/:pageLabel/fans` | `pageFans` | `any` | — | page | no |
 | GET | `/api/v1/pages/:pageLabel/fans/:platformUserId` | `pageFanDetail` | `any` | — | page | no |
+| GET | `/api/v1/pages/:pageLabel/fans/:platformUserId/card` | `pageFanCard` | `session` | — | page | no |
 | POST | `/api/v1/pages/:pageLabel/fans/:platformUserId/notes` | `createFanNote` | `any` | — | page | no |
 | GET | `/api/v1/pages/:pageLabel/fans/:platformUserId/profile` | `pageFanProfile` | `any` | — | page | yes |
 | PUT | `/api/v1/pages/:pageLabel/fans/:platformUserId/profile` | `upsertFanProfile` | `any` | — | page | no |

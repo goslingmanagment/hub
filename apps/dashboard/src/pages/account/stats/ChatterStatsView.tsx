@@ -1,9 +1,17 @@
 import type { ReactNode } from "react";
 import { Link } from "react-router";
-import { CHATTER_SHIFT_MIN_MESSAGES, CHATTER_SHIFT_MIN_WORKED_MINUTES } from "@agency_hub_core/contracts";
+import { CHATTER_SHIFT_MIN_MESSAGES, CHATTER_SHIFT_MIN_WORKED_MINUTES, SHIFT_REPORT_MAX_DAYS } from "@agency_hub_core/contracts";
+import { sumMills } from "@agency_hub_core/shared";
 
-import { StackedBarChart } from "@/components/shared/StackedBarChart";
+import { ChartTable } from "@/components/charts/ChartTable";
 import { usdAxisFormatter } from "@/components/charts/format";
+import { StackedBarChart } from "@/components/shared/StackedBarChart";
+import { Disclosure } from "@/components/ui/Disclosure";
+import { Stat, StatGrid } from "@/components/ui/StatGrid";
+import { StatusBadge } from "@/components/ui/StatusBadge";
+import { formatDayRange, formatSignedPercent } from "@/lib/format";
+import { ruPlural } from "@/lib/plural";
+import { TEAM_STATUS } from "@/lib/statusWords";
 
 import { ShiftRibbon } from "./ShiftRibbon.js";
 import { Card, KindSplit, RankedRows, RateRows, type RateRow } from "./StatsBlocks.js";
@@ -11,7 +19,6 @@ import {
   DELAY_LABELS,
   KINDS,
   KIND_LABEL,
-  PERIODS,
   PRICE_LABELS,
   PRICE_PHRASES,
   bestPriceBucket,
@@ -20,9 +27,8 @@ import {
   dayLabel,
   duration,
   money,
-  moneyExact,
+  moscowOf,
   percent,
-  plural,
   quickReplyShare,
   recordedDays,
   replyContrast,
@@ -31,90 +37,122 @@ import {
   shortDay,
   timeOf,
   type Stats,
+  type StatsShift,
 } from "./statsView.js";
+import { platformName } from "@/lib/platformUrls";
 
 // «Статистика»: a chatter's shifts and their money, how they sell and write,
-// their records. The cabinet shows the chatter's own (`self`); the console
-// shows a chatter's to the owner and team leads with the same blocks.
+// their records. The cabinet shows the chatter's own (`self`, on «ты»); the
+// console shows a chatter's to the owner and team leads with the same blocks,
+// on «вы» and about the chatter in the third person.
 
 export interface StatsViewProps {
   stats: Stats;
-  days: number;
-  onDays: (days: number) => void;
   /** The cabinet: the chatter's own. Else a chatter shown to the owner or a lead. */
   self: boolean;
-  /** Where the shift report is. */
-  reportTo: string;
-  /** Beside the period switch: the console's chatter picker. */
-  toolbar?: ReactNode;
+  /** Where the shifts of these Moscow days get confirmed: the cabinet's report, the console's payouts. */
+  reportTo: (from: string, to: string) => string;
+  /** The console: page labels lead to the page's card. The cabinet has no console to lead to. */
+  linkPages?: boolean;
+  /** Under the shifts, before «Как это считается»: the console's «Подробно по сменам». */
+  extra?: ReactNode;
+  /** An empty period offers the month. */
+  onShowMonth?: (() => void) | undefined;
   refreshing?: boolean;
 }
 
-const SHORT_DATE = new Intl.DateTimeFormat("ru-RU", { day: "numeric", month: "long", timeZone: "Europe/Moscow" });
+const SHORT_DATE = new Intl.DateTimeFormat("ru-RU", { day: "numeric", month: "short", timeZone: "Europe/Moscow" });
 /** What makes a shift, in words: `2 ч работы и 50 сообщений`. */
 const SHIFT_RULE = `${duration(CHATTER_SHIFT_MIN_WORKED_MINUTES)} работы и ${CHATTER_SHIFT_MIN_MESSAGES} сообщений`;
+const DAY_MS = 86_400_000;
+
+function addDays(day: string, days: number): string {
+  return new Date(Date.parse(`${day}T00:00:00Z`) + days * DAY_MS).toISOString().slice(0, 10);
+}
+
+/** A shift whose report can still be confirmed: over, not confirmed, not older than the API takes. */
+function confirmable(shift: StatsShift, now: number): boolean {
+  return !shift.ongoing && shift.confirmedNetMills === null && now - Date.parse(shift.startedAt) <= SHIFT_REPORT_MAX_DAYS * DAY_MS;
+}
+
+function tooOld(shift: StatsShift, now: number): boolean {
+  return !shift.ongoing && shift.confirmedNetMills === null && now - Date.parse(shift.startedAt) > SHIFT_REPORT_MAX_DAYS * DAY_MS;
+}
+
+/** The window's Moscow days: its first and today. */
+function windowDays(stats: Stats): { from: string; to: string } {
+  const today = moscowOf(Date.parse(stats.serverNow)).day;
+  return { from: stats.daily[0]?.date ?? today, to: today };
+}
 
 function Delta({ value, label }: { value: number | null; label: string }) {
   if (value === null) return null;
-  const rounded = Math.round(value * 100);
-  const direction = rounded > 0 ? "up" : rounded < 0 ? "down" : "flat";
-  return (
-    <span className="cs-delta" data-direction={direction}>
-      <span aria-hidden="true">{direction === "up" ? "↑" : direction === "down" ? "↓" : "→"}</span>
-      {Math.abs(rounded)}% {label}
-    </span>
-  );
+  const whole = Math.round(value * 100);
+  const tone = whole > 0 ? "delta-up" : whole < 0 ? "delta-down" : "delta-pct";
+  return <span className={`delta ${tone}`}>{formatSignedPercent(value * 100)} {label}</span>;
 }
 
-function Tile({ label, value, meta }: { label: string; value: ReactNode; meta?: ReactNode }) {
+function PageLabel({ label, link }: { label: string; link: boolean }) {
+  return link ? <Link to={`/pages/${encodeURIComponent(label)}`} className="team-link">{label}</Link> : <>{label}</>;
+}
+
+function Pages({ pages, link }: { pages: readonly string[]; link: boolean }) {
   return (
-    <div className="stat cs-tile">
-      <p className="stat-label">{label}</p>
-      <p className="cs-tile-value">{value}</p>
-      {meta && <p className="stat-meta">{meta}</p>}
-    </div>
+    <>
+      {pages.map((page, index) => (
+        <span key={page}>{index > 0 && ", "}<PageLabel label={page} link={link} /></span>
+      ))}
+    </>
   );
 }
 
 function Hero({ stats, self, reportTo }: Pick<StatsViewProps, "stats" | "self" | "reportTo">) {
   const { totals, previous } = stats;
-  const live = stats.shifts[0]?.ongoing ? stats.shifts[0] : null;
-  const versus = `к прошлым ${stats.days} ${plural(stats.days, ["дню", "дням", "дням"])}`;
+  const now = Date.parse(stats.serverNow);
+  const live = stats.shifts.find((shift) => shift.ongoing) ?? null;
+  const first = stats.daily[0]?.date;
+  // The cabinet has no dates in its header: the change names the days by their count.
+  const versus = self || first === undefined
+    ? `к прошлым ${stats.days} ${ruPlural(stats.days, "дню", "дням", "дням")}`
+    : `к ${formatDayRange(addDays(first, -stats.days), addDays(first, -1))}`;
+  const waiting = stats.shifts.filter((shift) => confirmable(shift, now)).length;
+  const late = stats.shifts.filter((shift) => tooOld(shift, now)).length;
+  const window = windowDays(stats);
   return (
     <section className="card cs-hero" aria-labelledby="cs-hero-title">
       <div className="cs-hero-top">
         <div className="cs-hero-figure">
           <h2 id="cs-hero-title" className="cs-hero-label">{self ? "Продажи за твои смены" : `Продажи за смены ${stats.user.username}`}</h2>
           <p className="cs-hero-number">{money(totals.salesNetMills)}</p>
-          <div className="cs-hero-facts">
-            <span>{count(totals.shifts)} {plural(totals.shifts, ["смена", "смены", "смен"])}</span>
+          <p className="cs-hero-facts">
+            <span>{count(totals.shifts)} {ruPlural(totals.shifts, "смена", "смены", "смен")}</span>
             <span>{duration(totals.workedMinutes)} работы</span>
             {totals.perHourMills !== null && <span>{money(totals.perHourMills)} в час</span>}
             <Delta value={change(totals.salesNetMills, previous?.salesNetMills)} label={versus} />
-          </div>
+          </p>
         </div>
         <div className="cs-hero-side">
-          {live && (
-            <div className="cs-live" role="status">
-              <span className="cs-live-dot" aria-hidden="true" />
-              <span>
-                Смена идёт с {timeOf(live.startedAt)}: {duration(live.workedMinutes)}, {money(live.salesNetMills)}
-              </span>
-            </div>
-          )}
-          <div className="cs-confirm">
-            <p>
-              Подтверждено в отчётах смен: <strong>{money(totals.confirmedNetMills)}</strong>
+          <h2 className="cs-hero-label">Подтверждено к выплате</h2>
+          <p className="cs-hero-second">{money(totals.confirmedNetMills)}</p>
+          {waiting > 0 && (
+            <p className="cs-hero-note">
+              {waiting} {ruPlural(waiting, "смена ждёт", "смены ждут", "смен ждут")} подтверждения.{" "}
+              <Link to={reportTo(window.from, window.to)} className="link">{self ? "Подтвердить" : "Выплаты"}</Link>
             </p>
-            {totals.unconfirmedShifts > 0 && (
-              <p className="cs-confirm-wait">
-                {totals.unconfirmedShifts} {plural(totals.unconfirmedShifts, ["смена ждёт", "смены ждут", "смен ждут"])} подтверждения.{" "}
-                <Link to={reportTo} className="link">{self ? "Подтвердить" : "Отчёты смен"}</Link>
-              </p>
-            )}
-          </div>
+          )}
+          {late > 0 && (
+            <p className="cs-hero-note">
+              {late} {ruPlural(late, "смена", "смены", "смен")} старше {SHIFT_REPORT_MAX_DAYS} дней: подтвердить уже нельзя
+            </p>
+          )}
         </div>
       </div>
+      {live && (
+        <p className="cs-hero-live" role="status">
+          <StatusBadge status={TEAM_STATUS.onShift} />
+          <span>с {timeOf(live.startedAt)}: {duration(live.workedMinutes)}, {money(live.salesNetMills)}</span>
+        </p>
+      )}
       {totals.overlapNetMills > 0 && (
         <p className="cs-hero-overlap">
           Из них {money(totals.overlapNetMills)} видны и у коллег: страницу вели двое, а этим фанам никто из них не писал.
@@ -128,11 +166,11 @@ function Hero({ stats, self, reportTo }: Pick<StatsViewProps, "stats" | "self" |
 
 function VisitsLine({ visits }: { visits: Stats["visits"] }) {
   const minutes = visits.reduce((sum, visit) => sum + visit.workedMinutes, 0);
-  const net = visits.reduce((sum, visit) => sum + visit.salesNetMills, 0);
+  const net = sumMills(visits.map((visit) => visit.salesNetMills));
   return (
     <p className="cs-hero-overlap">
-      Вне смен: {count(visits.length)} {plural(visits.length, ["заход", "захода", "заходов"])}, {duration(minutes)}
-      {net > 0 && <>, продажи {money(net)}</>}. В сумме выше их нет: смена — от {SHIFT_RULE}.
+      Вне смен: {count(visits.length)} {ruPlural(visits.length, "раз", "раза", "раз")}, {duration(minutes)}
+      {net > 0n && <>, продажи {money(Number(net))}</>}. В сумме выше их нет: смена — от {SHIFT_RULE}.
     </p>
   );
 }
@@ -145,7 +183,7 @@ function priceRows(stats: Stats): RateRow[] {
     base: cell.sent,
     teamHits: cell.teamBought,
     teamBase: cell.teamSent,
-    detail: `${count(cell.bought)} из ${count(cell.sent)}`,
+    detail: `${count(cell.bought)} из ${count(cell.sent)}${cell.bought > 0 ? `, ${money(cell.netMills)}` : ""}`,
   }));
 }
 
@@ -157,13 +195,13 @@ function replyRows(stats: Stats): RateRow[] {
     base: cell.replies,
     teamHits: cell.teamBought,
     teamBase: cell.teamReplies,
-    detail: `${count(cell.replies)} ${plural(cell.replies, ["ответ", "ответа", "ответов"])}`,
+    detail: `${count(cell.bought)} из ${count(cell.replies)}`,
   }));
 }
 
-function Records({ stats }: { stats: Stats }) {
+function Records({ stats, linkPages }: { stats: Stats; linkPages: boolean }) {
   const { records } = stats;
-  const items: Array<{ key: string; label: string; value: string; detail: string }> = [];
+  const items: Array<{ key: string; label: string; value: string; detail: ReactNode }> = [];
   if (records.bestShift) {
     const shift = stats.shifts.find((one) => one.startedAt === records.bestShift!.startedAt);
     items.push({ key: "shift", label: "Лучшая смена", value: money(records.bestShift.salesNetMills), detail: shift ? shiftWhen(shift) : "" });
@@ -174,8 +212,12 @@ function Records({ stats }: { stats: Stats }) {
     items.push({
       key: "sale",
       label: "Самая крупная продажа",
-      value: moneyExact(sale.netMills),
-      detail: [KIND_LABEL[sale.kind], sale.fanName, sale.pageLabel, SHORT_DATE.format(new Date(sale.at))].filter(Boolean).join(", "),
+      value: money(sale.netMills),
+      detail: (
+        <>
+          {[KIND_LABEL[sale.kind], sale.fanName].filter(Boolean).join(", ")}, <PageLabel label={sale.pageLabel} link={linkPages} />, {SHORT_DATE.format(new Date(sale.at))}
+        </>
+      ),
     });
   }
   items.push({
@@ -199,8 +241,10 @@ function Records({ stats }: { stats: Stats }) {
   );
 }
 
-function TopFans({ stats }: { stats: Stats }) {
-  if (stats.topFans.length === 0) return <p className="cs-empty-line">Пока никто не платил за твои смены.</p>;
+function TopFans({ stats, self, linkPages }: { stats: Stats; self: boolean; linkPages: boolean }) {
+  if (stats.topFans.length === 0) {
+    return <p className="cs-empty-line">{self ? "Пока никто не платил за твои смены." : "Пока никто не платил за смены этого чаттера."}</p>;
+  }
   return (
     <ol className="cs-fans">
       {stats.topFans.map((fan, index) => (
@@ -208,11 +252,11 @@ function TopFans({ stats }: { stats: Stats }) {
           <span className="cs-fan-rank">{index + 1}</span>
           <span className="cs-fan-name">
             <strong>{fan.fanName ?? "Фан без имени"}</strong>
-            <span>{fan.pageLabel}</span>
+            <span><PageLabel label={fan.pageLabel} link={linkPages} /></span>
           </span>
           <span className="cs-fan-money">
             <strong>{money(fan.netMills)}</strong>
-            <span>{fan.sales} {plural(fan.sales, ["покупка", "покупки", "покупок"])}</span>
+            <span>{fan.sales} {ruPlural(fan.sales, "покупка", "покупки", "покупок")}</span>
           </span>
         </li>
       ))}
@@ -220,7 +264,22 @@ function TopFans({ stats }: { stats: Stats }) {
   );
 }
 
-function Shifts({ stats, reportTo, self }: { stats: Stats; reportTo: string; self: boolean }) {
+function ReportCell({ shift, now, self, reportTo }: { shift: StatsShift; now: number; self: boolean; reportTo: StatsViewProps["reportTo"] }) {
+  if (shift.ongoing) return <StatusBadge status={TEAM_STATUS.onShift} />;
+  if (shift.confirmedNetMills !== null) {
+    return <StatusBadge tone="good">{`Подтверждён, ${money(shift.confirmedNetMills)}`}</StatusBadge>;
+  }
+  if (tooOld(shift, now)) return <StatusBadge tone="off" bare>Срок прошёл</StatusBadge>;
+  if (self) return <Link to={reportTo(shift.date, shift.date)} className="link">Подтвердить</Link>;
+  return (
+    <Link to={reportTo(shift.date, shift.date)} className="team-link" title="Открыть в выплатах">
+      <StatusBadge status={TEAM_STATUS.reportNotConfirmed} bare />
+    </Link>
+  );
+}
+
+function Shifts({ stats, reportTo, self, linkPages }: { stats: Stats; reportTo: StatsViewProps["reportTo"]; self: boolean; linkPages: boolean }) {
+  const now = Date.parse(stats.serverNow);
   if (stats.shifts.length === 0) return <p className="cs-empty-line">За эти дни смен не было.</p>;
   return (
     <div className="table-wrap cs-shifts">
@@ -228,10 +287,10 @@ function Shifts({ stats, reportTo, self }: { stats: Stats; reportTo: string; sel
         <thead>
           <tr>
             <th scope="col">Смена</th>
-            <th scope="col" className="cs-num">Работа</th>
-            <th scope="col" className="cs-num">Продажи</th>
-            <th scope="col" className="cs-num">Сообщений</th>
-            <th scope="col" className="cs-num">Фаны</th>
+            <th scope="col" className="num">Работа</th>
+            <th scope="col" className="num">Продажи</th>
+            <th scope="col" className="num">Сообщений</th>
+            <th scope="col" className="num">Фаны</th>
             <th scope="col">Отчёт</th>
           </tr>
         </thead>
@@ -241,21 +300,21 @@ function Shifts({ stats, reportTo, self }: { stats: Stats; reportTo: string; sel
               <td>
                 <span className="cs-shift-when">{shiftWhen(shift)}</span>
                 <span className="cs-shift-meta">
-                  {shift.pages.join(", ")}
-                  {shift.together.length > 0 && ` — вместе с ${shift.together.join(", ")}`}
+                  <Pages pages={shift.pages} link={linkPages} />
+                  {shift.together.length > 0 && <>, вместе с {shift.together.join(", ")}</>}
                 </span>
               </td>
-              <td className="cs-num">{duration(shift.workedMinutes)}</td>
-              <td className="cs-num"><strong>{money(shift.salesNetMills)}</strong></td>
-              <td className="cs-num">{count(shift.messages)}{shift.ppvSent > 0 && <span className="cs-shift-meta">PPV {shift.ppvSent}</span>}</td>
-              <td className="cs-num">{count(shift.fansWritten)}<span className="cs-shift-meta">заплатили {shift.fansPaid}</span></td>
-              <td>
-                {shift.ongoing
-                  ? <span className="badge badge-info">идёт</span>
-                  : shift.confirmedNetMills !== null
-                    ? <span className="badge badge-success">подтверждён, {money(shift.confirmedNetMills)}</span>
-                    : <Link to={reportTo} className="link">{self ? "подтвердить" : "не подтверждён"}</Link>}
+              <td className="num">{duration(shift.workedMinutes)}</td>
+              <td className="num"><strong className="font-semibold">{money(shift.salesNetMills)}</strong></td>
+              <td className="num">
+                {count(shift.messages)}
+                {shift.ppvSent > 0 && <span className="cs-shift-meta">платных {count(shift.ppvSent)}</span>}
               </td>
+              <td className="num">
+                {count(shift.fansWritten)}
+                <span className="cs-shift-meta">заплатили {count(shift.fansPaid)}</span>
+              </td>
+              <td><ReportCell shift={shift} now={now} self={self} reportTo={reportTo} /></td>
             </tr>
           ))}
         </tbody>
@@ -264,12 +323,35 @@ function Shifts({ stats, reportTo, self }: { stats: Stats; reportTo: string; sel
   );
 }
 
-export function ChatterStatsView({ stats, days, onDays, self, reportTo, toolbar, refreshing = false }: StatsViewProps) {
+function HowItCounts({ stats, self }: { stats: Stats; self: boolean }) {
+  const since = stats.activitySince === null ? null : SHORT_DATE.format(new Date(stats.activitySince));
+  return (
+    <Disclosure>
+      <p>Смена — минимум {SHIFT_RULE} подряд: перерыв до часа и перезапуск браузера её не прерывают.</p>
+      <p>
+        Продажи — деньги после комиссии площадки за смены, на страницах, где {self ? "ты писал" : "чаттер писал"} в смене,
+        с {self ? "твоего" : "его"} первого действия на странице. Если страницу в это время вели двое, продажа у того, кто
+        последним писал этому фану; если никто из них не писал, она видна у обоих.
+      </p>
+      <p>Подтверждено к выплате — суммы из подтверждённых отчётов смен. Подтвердить отчёт можно {SHIFT_REPORT_MAX_DAYS} дней.</p>
+      <p>
+        {self
+          ? "Это ориентир, а не расчёт зарплаты: к выплате идут подтверждённые отчёты смен и таблица."
+          : "Это ориентир, а не основание для оплаты: к выплате идут подтверждённые отчёты смен и таблица."}
+      </p>
+      <p>
+        {since ? `Смены считаются по расширению с ${since}` : "Смены считаются по расширению"}; время московское, обновлено в {timeOf(stats.serverNow)}.
+      </p>
+    </Disclosure>
+  );
+}
+
+export function ChatterStatsView({ stats, self, reportTo, linkPages = false, extra, onShowMonth, refreshing = false }: StatsViewProps) {
   const { totals } = stats;
-  // A day before Hub had the chatter's shifts carries no values: the chart says «no data», never a zero.
   // The days before Hub had the chatter's shifts are not drawn at all: unknown, not empty.
   const known = recordedDays(stats);
-  const daily = stats.daily.filter((day) => known.has(day.date)).map((day) => ({ date: day.date, ...day.byKind }));
+  const knownDays = stats.daily.filter((day) => known.has(day.date));
+  const daily = knownDays.map((day) => ({ date: day.date, ...day.byKind }));
   const trimmedFrom = daily.length < stats.daily.length && daily.length > 0 ? shortDay(daily[0]!.date) : null;
   const best = bestPriceBucket(stats.ppv.byPrice);
   const contrast = replyContrast(stats.replies.byDelay);
@@ -277,63 +359,58 @@ export function ChatterStatsView({ stats, days, onDays, self, reportTo, toolbar,
   const composedTotal = Object.values(stats.composed).reduce((sum, value) => sum + value, 0);
   const since = stats.activitySince === null ? null : SHORT_DATE.format(new Date(stats.activitySince));
   const empty = totals.shifts === 0;
+  const perHourChange = change(totals.perHourMills ?? 0, stats.previous?.perHourMills);
 
   return (
     <div className="cs-page" data-refreshing={refreshing || undefined}>
-      <div className="cs-toolbar">
-        {toolbar ?? <h1 className="cs-greeting">Привет, {stats.user.username}</h1>}
-        <div className="segmented" role="group" aria-label="Период">
-          {PERIODS.map((period) => (
-            <button key={period.days} type="button" className="segment" aria-pressed={days === period.days} onClick={() => onDays(period.days)}>
-              {period.label}
-            </button>
-          ))}
-        </div>
-      </div>
-
       <Hero stats={stats} self={self} reportTo={reportTo} />
 
       {empty ? (
-        <section className="card cs-card">
-          <div className="empty">
-            <p className="empty-title">За эти дни смен нет</p>
-            <p className="empty-text">
-              Смена — минимум {SHIFT_RULE} подряд в расширении ChatGoose под {self ? "твоим" : "своим"} входом.
-              {since ? ` Смены видны с ${since}.` : ""}
-            </p>
-          </div>
+        <section className="status-panel empty">
+          <p className="empty-title">За эти дни смен нет</p>
+          <p className="empty-text">
+            Смена — минимум {SHIFT_RULE} подряд в расширении ChatGoose под {self ? "твоим" : "своим"} входом.
+            {since ? ` Смены видны с ${since}.` : ""}
+          </p>
+          {onShowMonth && stats.days < 30 && (
+            <div className="empty-actions">
+              <button type="button" className="btn btn-sm" onClick={onShowMonth}>Показать 30 дней</button>
+            </div>
+          )}
         </section>
       ) : (
         <>
-          <div className="stat-grid cs-tiles">
-            <Tile
+          <StatGrid>
+            <Stat
               label="В час"
               value={totals.perHourMills === null ? "—" : money(totals.perHourMills)}
-              meta={change(totals.perHourMills ?? 0, stats.previous?.perHourMills) === null
+              meta={perHourChange === null
                 ? `за ${duration(totals.workedMinutes)} работы`
-                : <Delta value={change(totals.perHourMills ?? 0, stats.previous?.perHourMills)} label="к прошлому периоду" />}
+                : <Delta value={perHourChange} label="к прошлому периоду" />}
             />
-            <Tile
-              label="PPV купили"
+            <Stat
+              label="Платные сообщения"
               value={<>{count(stats.ppv.bought)} <span className="cs-tile-of">из {count(stats.ppv.sent)}</span></>}
-              meta={stats.ppv.sent > 0 ? `${percent(share(stats.ppv.bought, stats.ppv.sent))}, принесли ${money(stats.ppv.netMills)}` : "PPV за период не было"}
+              meta={stats.ppv.sent > 0
+                ? `купили ${percent(share(stats.ppv.bought, stats.ppv.sent))}, принесли ${money(stats.ppv.netMills)}`
+                : "платных сообщений за период не было"}
             />
-            <Tile
+            <Stat
               label="Ответ за 15 минут"
               value={percent(quick)}
-              meta={stats.replies.replies > 0 ? `из ${count(stats.replies.replies)} ${plural(stats.replies.replies, ["ответа", "ответов", "ответов"])} ждущим фанам` : "ответов пока нет"}
+              meta={stats.replies.replies > 0 ? `из ${count(stats.replies.replies)} ${ruPlural(stats.replies.replies, "ответа", "ответов", "ответов")} ждущим фанам` : "ответов пока нет"}
             />
-            <Tile
+            <Stat
               label="Фаны заплатили"
               value={<>{count(totals.fansPaid)} <span className="cs-tile-of">из {count(totals.fansWritten)}</span></>}
-              meta="кому писал в смене — заплатили до её конца"
+              meta={self ? "кому писал в смене, заплатили до её конца" : "кому чаттер писал в смене, заплатили до её конца"}
             />
-          </div>
+          </StatGrid>
 
           <div className="cs-grid cs-grid-daily">
             <Card
               title="По дням"
-              note={`Деньги смены — в день, на который пришлась большая её часть, как в таблице выплат.${trimmedFrom ? ` Смены записываются с ${trimmedFrom}` : ""}`}
+              note={`Деньги смены — в день, на который пришлась большая её часть, как в таблице выплат.${trimmedFrom ? ` Смены записываются с ${trimmedFrom}.` : ""}`}
             >
               <StackedBarChart
                 title=""
@@ -342,10 +419,23 @@ export function ChatterStatsView({ stats, days, onDays, self, reportTo, toolbar,
                 series={KINDS.map((kind) => ({ key: kind.key, label: kind.label, color: kind.color }))}
                 xTickFormatter={shortDay}
                 valueFormatter={money}
-                tooltipValueFormatter={moneyExact}
+                tooltipValueFormatter={money}
                 axisFormatter={usdAxisFormatter}
+                totalLabel="Всего"
                 height={240}
               />
+              <div className="mt-3">
+                <ChartTable
+                  caption="Продажи по дням"
+                  rows={knownDays}
+                  rowKey={(day) => day.date}
+                  columns={[
+                    { key: "date", label: "День", value: (day) => dayLabel(day.date) },
+                    ...KINDS.map((kind) => ({ key: kind.key, label: kind.label, num: true, value: (day: Stats["daily"][number]) => money(day.byKind[kind.key]) })),
+                    { key: "total", label: "Всего", num: true, value: (day) => money(day.salesNetMills) },
+                  ]}
+                />
+              </div>
             </Card>
             <Card title="Из чего продажи">
               <KindSplit byKind={totals.byKind} />
@@ -354,12 +444,12 @@ export function ChatterStatsView({ stats, days, onDays, self, reportTo, toolbar,
 
           <div className="cs-grid cs-grid-halves">
             <Card
-              title="Цена PPV и покупки"
+              title="Цена платных сообщений и покупки"
               note={best
                 ? <>Лучше всего покупают {PRICE_PHRASES[best.bucket]}: {percent(best.rate)}. Серая метка — команда на тех же страницах.</>
-                : "Сколько из отправленных PPV купили. Серая метка — команда на тех же страницах."}
+                : "Сколько из отправленных платных сообщений купили. Серая метка — команда на тех же страницах."}
             >
-              <RateRows rows={priceRows(stats)} empty="Личных PPV за период не было." baseWord="PPV" />
+              <RateRows rows={priceRows(stats)} empty="Личных платных сообщений за период не было." baseWord="платных" />
             </Card>
             <Card
               title="Скорость ответа и покупки"
@@ -373,21 +463,24 @@ export function ChatterStatsView({ stats, days, onDays, self, reportTo, toolbar,
 
           <div className="cs-grid cs-grid-thirds">
             <Card title="Лучшие фаны" note="Кто больше всех принёс за смены периода.">
-              <TopFans stats={stats} />
+              <TopFans stats={stats} self={self} linkPages={linkPages} />
             </Card>
-            <Card title="Страницы">
+            <Card title="Страницы" note="Продажи и время работы на странице.">
               <RankedRows
                 empty="Продаж за период нет."
                 rows={stats.pages.filter((page) => page.salesNetMills > 0 || page.activeMinutes >= 15).map((page) => ({
                   key: page.pageLabel,
-                  label: <>{page.pageLabel} <span className={`platform-tag platform-${page.platform}`}>{page.platform === "onlyfans" ? "OF" : "Fansly"}</span></>,
+                  label: <><PageLabel label={page.pageLabel} link={linkPages} /> <span className="platform-tag">{platformName(page.platform)}</span></>,
                   value: page.salesNetMills,
                   valueText: money(page.salesNetMills),
                   detail: duration(page.activeMinutes),
                 }))}
               />
             </Card>
-            <Card title="Как пишешь" note={`${count(composedTotal)} ${plural(composedTotal, ["сообщение", "сообщения", "сообщений"])} за период.`}>
+            <Card
+              title={self ? "Как пишешь" : "Как пишет"}
+              note={`${count(composedTotal)} ${ruPlural(composedTotal, "сообщение", "сообщения", "сообщений")} за период. Reply, Fix, Hi и Ping — кнопки расширения.`}
+            >
               <RankedRows
                 empty="Сообщений за период нет."
                 rows={[
@@ -404,22 +497,18 @@ export function ChatterStatsView({ stats, days, onDays, self, reportTo, toolbar,
           </div>
 
           <div className="cs-grid cs-grid-shifts">
-            <Card title="Рекорды" note={`За ${stats.days} ${plural(stats.days, ["день", "дня", "дней"])}.`}>
-              <Records stats={stats} />
+            <Card title="Рекорды" note={`За ${stats.days} ${ruPlural(stats.days, "день", "дня", "дней")}.`}>
+              <Records stats={stats} linkPages={linkPages} />
             </Card>
             <Card title="Смены" note="Новые сверху.">
-              <Shifts stats={stats} reportTo={reportTo} self={self} />
+              <Shifts stats={stats} reportTo={reportTo} self={self} linkPages={linkPages} />
             </Card>
           </div>
         </>
       )}
 
-      <p className="cs-footnote">
-        Смена — минимум {SHIFT_RULE} подряд: перерыв до часа и перезапуск браузера её не прерывают. Деньги — net, после комиссии площадки: продажи за смену на страницах, где {self ? "ты писал" : "чаттер писал"} в ней, с {self ? "твоего" : "его"} первого действия на странице.
-        Если страницу в это время вели двое, продажа у того, кто последним писал этому фану; если никто из них не писал, она видна у обоих. Это ориентир, а не расчёт зарплаты: к выплате идут подтверждённые отчёты смен и таблица.
-        {since ? ` Смены считаются по расширению с ${since}` : " Смены считаются по расширению"}; время московское, обновлено в {timeOf(stats.serverNow)}.
-      </p>
+      {extra}
+      <HowItCounts stats={stats} self={self} />
     </div>
   );
 }
-

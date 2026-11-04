@@ -49,6 +49,7 @@ import {
   countPageUniqueCreatorMedia,
   readCreatorStatsAudience,
   readCreatorStatsContent,
+  readCreatorStatsTopSales,
   readCreatorStatsMediaDetail,
   readCreatorStatsMediaWalk,
   readCreatorStatsOverview,
@@ -360,7 +361,31 @@ export function registerInsightsRoutes(server: ApiServer, ctx: ApiModuleContext)
     const window = creatorStatsWindow(request.query);
     const media = await readCreatorStatsContent(appContext.db, { pageId: page.id, fromDay: window.fromDay, toDay: window.toDay, limit: 200 });
     const walk = await readCreatorStatsMediaWalk(appContext.db, page.id);
-    return { page: { label: page.label, platform: page.platform }, window, walk, media };
+    const sold = await readCreatorStatsTopSales(appContext.db, { pageId: page.id, fromDay: window.fromDay, toDay: window.toDay, limit: 50 });
+    return {
+      page: { label: page.label, platform: page.platform },
+      window,
+      walk,
+      media,
+      topSales: sold.rows.map((row) => ({
+        mediaOfferId: row.mediaOfferId,
+        mediaType: row.mediaType,
+        durationMs: row.durationMs,
+        postId: row.postId,
+        postedAt: row.postedAt,
+        deletedAt: row.deletedAt,
+        caption: row.caption,
+        priceMills: millsOrNull(row.priceMills),
+        sales: {
+          count: row.salesCount,
+          netMills: millsOrNull(row.salesNetMills),
+          pendingMills: millsOrNull(row.salesPendingMills),
+          grossMills: deriveGrossFromNet(row.salesNetMills),
+        },
+        windowViews: row.windowViews,
+      })),
+      topSalesTotal: sold.total,
+    };
   });
 
   server.get("/api/v1/pages/:pageLabel/stats/creator/media/:mediaOfferId", {
@@ -953,6 +978,8 @@ export function registerInsightsRoutes(server: ApiServer, ctx: ApiModuleContext)
         missingCount: row.missingCount,
         oldestAt: isoOrNull(row.oldestAt),
         newestAt: isoOrNull(row.newestAt),
+        caption: row.caption,
+        publishedAt: isoOrNull(row.publishedAt),
       })),
       // Declared rather than omitted: WP-F2's liker lane writes nothing on
       // Fansly because no like code is live-confirmed ([E4]). The rows array is

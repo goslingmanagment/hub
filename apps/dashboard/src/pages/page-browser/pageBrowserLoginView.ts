@@ -24,7 +24,8 @@ export type LoginView =
   /** Closed by the owner: the engine brings the automation back. */
   | { kind: "closing" };
 
-export type Tone = "neutral" | "progress" | "good" | "warning" | "danger";
+/** `waiting`: the owner's turn (the accent); `off`: closed on purpose. */
+export type Tone = "neutral" | "progress" | "good" | "warning" | "danger" | "waiting" | "off";
 
 const PROBLEMS: Record<string, string> = {
   "no browser profile is bound to the page": "к странице не привязан браузер",
@@ -36,9 +37,14 @@ const PROBLEMS: Record<string, string> = {
   "the profile is bound to a page": "профиль уже привязан к странице",
 };
 
-/** The API's reason a browser is not ready, in the owner's words. */
+/** The API's reason a browser is not ready, in the owner's words; an unknown one is not printed raw. */
 export function browserProblemText(problem: string): string {
-  return PROBLEMS[problem] ?? problem;
+  return PROBLEMS[problem] ?? "";
+}
+
+/** The server's own words of a reason the screen does not know, for «Подробнее». */
+export function browserProblemDetail(problem: string | null | undefined): string | null {
+  return problem && PROBLEMS[problem] === undefined ? problem : null;
 }
 
 export function loginViewOf(data: PageBrowserLoginResponse): LoginView {
@@ -78,21 +84,21 @@ export function loginChipOf(view: LoginView): { label: string; tone: Tone } {
     case "landing":
       return { label: "Окно входа ещё закрыто", tone: "progress" };
     case "closed":
-      return { label: "Вход закрыт", tone: "neutral" };
+      return { label: "Вход закрыт", tone: "off" };
     case "preparing":
       return { label: "Готовим браузер", tone: "progress" };
     case "unreachable":
       return { label: "Браузер не отвечает", tone: "danger" };
     case "form":
       if (view.screen === "error") return { label: "Fansly показал ошибку", tone: "danger" };
-      if (view.screen === "login") return { label: "Ждёт логин и пароль", tone: "progress" };
-      return view.codeFrom === "email" ? { label: "Ждёт код из письма", tone: "progress" } : { label: "Ждёт код 2FA", tone: "progress" };
+      if (view.screen === "login") return { label: "Ждёт логин и пароль", tone: "waiting" };
+      return view.codeFrom === "email" ? { label: "Ждёт код из письма", tone: "waiting" } : { label: "Ждёт код из приложения", tone: "waiting" };
     case "success":
       return { label: "Вход выполнен", tone: "good" };
     case "unknown":
       return { label: "Незнакомый экран", tone: "warning" };
     case "closing":
-      return { label: "Возвращаем автоматику", tone: "progress" };
+      return { label: "Снимаем паузу", tone: "progress" };
   }
 }
 
@@ -105,7 +111,7 @@ export function stepProblemText(answer: PageBrowserLoginStepResponse): string | 
     case "busy":
       return "Браузер ещё выполняет прошлый шаг.";
     case "screen_changed":
-      return "Экран в браузере изменился — ничего не нажато. Посмотрите на снимок.";
+      return "Экран в браузере изменился: ничего не нажато. Посмотрите на снимок.";
     case "not_manual_login":
       return "Браузер не в режиме входа. Подождите пару секунд.";
     case "token":

@@ -1,0 +1,270 @@
+/* The classes of the publications screens. Only this group edits this file, and every
+   rule goes inside @layer components (design/build-rules.md). */
+@layer components {
+  /* ── The dates in the header: five values, a little tighter on a narrow desktop ── */
+  .page-actions:has(> .pub-window-seg) { min-width: 0; max-width: 100%; }
+  .pub-window-seg { max-width: 100%; overflow-x: auto; scrollbar-width: none; }
+  @media (max-width: 1400px) {
+    .pub-window-seg .segment { padding-inline: 9px; font-size: 14px; }
+  }
+  @media (max-width: 1300px) {
+    .pub-window-seg .segment { padding-inline: 6px; }
+  }
+
+  /* ── Notices above the strip ─────────────────────────────────────────── */
+  .pub-notices { display: grid; gap: 8px; margin-bottom: 16px; }
+
+  /* ── The strip of pages ──────────────────────────────────────────────── */
+  .pub-strip {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 24px;
+  }
+  .pub-strip-item {
+    display: inline-flex;
+    align-items: center;
+    height: 36px;
+    padding-right: 2px;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-button);
+    background: var(--color-card);
+    transition: background-color 0.15s, border-color 0.15s;
+  }
+  .pub-strip-item:hover { background: var(--color-hover-alt); }
+  .pub-strip-item.is-picked { border-color: var(--color-accent-border); background: var(--color-accent-soft); }
+  .pub-strip-pick {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    height: 100%;
+    padding: 0 4px 0 12px;
+    border-radius: var(--radius-button) 0 0 var(--radius-button);
+    font-size: 15px;
+    line-height: 22px;
+    white-space: nowrap;
+    cursor: pointer;
+  }
+  .pub-strip-label { font-weight: 500; color: var(--color-text-primary); }
+  .pub-strip-item.is-picked .pub-strip-label { color: var(--color-accent); }
+  .pub-strip-word { font-size: 14px; line-height: 20px; color: var(--color-text-secondary); }
+  .pub-strip-word-broken { color: var(--color-danger-text); }
+  .pub-strip-word-attention { color: var(--color-warning-text); }
+  .pub-strip-word-off { color: var(--color-text-muted); }
+  .pub-strip-item .btn-icon { width: 28px; min-height: 28px; color: var(--color-text-muted); }
+  .pub-strip-item .btn-icon:hover { color: var(--color-text-primary); }
+  .pub-strip-skeleton { width: 104px; border-color: transparent; background: var(--color-hover); }
+  .pub-strip-settings { margin-left: auto; }
+  .pub-strip-note { font-size: 14px; line-height: 20px; color: var(--color-text-secondary); }
+
+  /* A page's state: a filled dot, or a hollow ring when it is off on purpose. */
+  .pub-dot {
+    flex: 0 0 auto;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--color-text-muted);
+  }
+  .pub-dot-good { background: var(--color-green); }
+  .pub-dot-attention { background: var(--color-warning); }
+  .pub-dot-broken { background: var(--color-danger); }
+  .pub-dot-off { background: transparent; box-shadow: inset 0 0 0 1.5px var(--color-text-muted); }
+
+  /* ── The row of filters ──────────────────────────────────────────────── */
+  .pub-toolbar { align-items: flex-start; }
+  .pub-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; min-width: 0; }
+  .pub-count-ink { color: var(--color-accent); }
+  .pub-status-select { width: auto; min-height: 36px; padding-block: 6px; color: var(--color-text-secondary); }
+  .pub-status-select.is-picked { color: var(--color-text-primary); font-weight: 500; border-color: var(--color-accent-border); background-color: var(--color-accent-soft); }
+  .pub-toolbar-notes {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    justify-content: center;
+    gap: 4px;
+    min-height: 36px;
+    text-align: right;
+  }
+
+  /* ── Reports ─────────────────────────────────────────────────────────── */
+  .pub-report { margin-bottom: 16px; scroll-margin-top: calc(var(--bar-height) + 16px); }
+  .pub-report-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .pub-report-head b { font-weight: 500; }
+  .pub-report-head .btn { margin-block: -6px; }
+  .pub-report-list { display: grid; gap: 2px; margin-top: 4px; font-size: 14px; line-height: 20px; color: var(--color-text-secondary); }
+
+  /* ── The feed ────────────────────────────────────────────────────────── */
+  .pub-feed { position: relative; }
+  .pub-table { table-layout: fixed; min-width: 820px; }
+  .pub-col-check { width: 48px; }
+  .pub-col-time { width: 76px; }
+  .pub-col-page { width: 112px; }
+  .pub-col-price { width: 104px; }
+  .pub-col-status { width: 188px; }
+  .pub-col-actions { width: 156px; }
+  @media (max-width: 1360px) {
+    .pub-col-price { width: 88px; }
+    .pub-col-status { width: 168px; }
+    .pub-col-actions { width: 156px; }
+  }
+  .pub-table th:first-child,
+  .pub-table td:first-child { padding-right: 0; }
+  .pub-table td { vertical-align: top; }
+  .pub-table .row-day td { vertical-align: middle; }
+  .pub-table td.status-col,
+  .pub-table td.num { padding-top: 11px; }
+  .pub-table td:first-child { padding-top: 14px; }
+  .pub-table .row-day td:first-child { padding-top: 8px; }
+  .pub-check { width: 16px; height: 16px; margin: 0; vertical-align: middle; cursor: pointer; }
+  .pub-check:disabled { cursor: not-allowed; }
+  .pub-time { font-weight: 500; font-variant-numeric: tabular-nums; }
+  .pub-page { white-space: nowrap; }
+  .pub-post { min-width: 0; }
+  .pub-ellipsis { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .pub-post-link { color: var(--color-text-primary); text-decoration: none; }
+  .pub-post-link:hover { text-decoration: underline; text-decoration-color: var(--color-border-strong); text-underline-offset: 3px; }
+  .pub-post-link.is-empty { font-weight: 400; color: var(--color-text-secondary); }
+  .post-note { margin-top: 2px; font-size: 14px; line-height: 20px; color: var(--color-text-secondary); }
+  .post-note-danger { color: var(--color-danger-text); }
+  .post-note-warning { color: var(--color-warning-text); }
+  .post-note-muted { color: var(--color-text-secondary); }
+  .pub-row { cursor: pointer; }
+  .pub-row-actions { display: inline-flex; align-items: center; justify-content: flex-end; gap: 4px; margin-block: -4px; }
+  .pub-row-actions .btn-icon { width: 32px; min-height: 32px; }
+  .data-table tbody tr.pub-row-manual:hover td { background: transparent; }
+  .pub-row-manual td,
+  .pub-row-manual .pub-page { color: var(--color-text-secondary); }
+  .pub-row-manual .post-text { font-weight: 400; color: var(--color-text-secondary); }
+  .pub-row-manual .pub-time { font-weight: 400; }
+  .pub-row-skeleton td { vertical-align: middle; }
+  .pub-day { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+  .pub-day-count { font-weight: 400; color: var(--color-text-muted); }
+  /* While something is ticked the bar stays in view; the table's header goes under it. */
+  .pub-select-bar { position: sticky; top: var(--bar-height); z-index: 5; }
+  .pub-select-note { font-size: 14px; line-height: 20px; color: var(--color-warning-text); }
+
+  .pub-help { margin-top: 24px; }
+  .pub-help .help-body p + p { margin-top: 6px; }
+
+  /* ── The post's panel ────────────────────────────────────────────────── */
+  .pub-drawer { display: flex; flex-direction: column; gap: 24px; min-height: 100%; }
+  .pub-drawer-lead { margin-top: -8px; font-size: 15px; line-height: 22px; color: var(--color-text-secondary); }
+  .pub-drawer-status { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; margin-top: -4px; font-size: 14px; line-height: 20px; color: var(--color-text-secondary); }
+  .pub-drawer-kv { grid-template-columns: 152px minmax(0, 1fr); }
+  .pub-drawer-block { display: grid; gap: 8px; }
+  .pub-drawer-heading { font-size: 15px; font-weight: 600; line-height: 22px; color: var(--color-text-primary); }
+  .pub-drawer-text { font-size: 15px; line-height: 22px; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--color-text-primary); }
+  .pub-muted { font-size: 14px; line-height: 20px; color: var(--color-text-secondary); }
+  .pub-file-groups { display: grid; gap: 12px; }
+  .pub-file-group { margin-bottom: 4px; font-size: 14px; font-weight: 500; line-height: 20px; color: var(--color-text-secondary); }
+  .pub-files { display: grid; gap: 2px; font-size: 15px; line-height: 22px; }
+  .pub-files li { display: flex; gap: 12px; min-width: 0; overflow-wrap: anywhere; }
+  .pub-files-n { flex: 0 0 16px; text-align: right; color: var(--color-text-muted); font-variant-numeric: tabular-nums; }
+  .pub-findings { display: grid; gap: 6px; font-size: 14px; line-height: 20px; }
+  .pub-findings b { font-weight: 500; }
+  .pub-journal { display: grid; gap: 6px; font-size: 14px; line-height: 20px; }
+  .pub-journal li { display: grid; grid-template-columns: 112px minmax(0, 1fr); gap: 12px; }
+  .pub-journal-at { color: var(--color-text-muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .pub-journal-what { color: var(--color-text-primary); }
+  .pub-journal-who { color: var(--color-text-secondary); }
+  .pub-journal-why { color: var(--color-text-muted); }
+  .pub-raw { grid-template-columns: 152px minmax(0, 1fr); gap: 4px 16px; font-size: 14px; line-height: 20px; }
+  .pub-raw dd { overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+  .pub-drawer-foot {
+    position: sticky;
+    bottom: -24px;
+    z-index: 1;
+    margin: auto -24px -24px;
+    padding: 16px 24px;
+    border-top: 1px solid var(--color-border);
+    background: var(--color-raised);
+  }
+  .pub-drawer-buttons { display: flex; flex-wrap: wrap; gap: 8px; }
+  .pub-drawer-why { margin-top: 8px; font-size: 14px; line-height: 20px; color: var(--color-text-secondary); }
+  .pub-drawer-skeleton { display: grid; gap: 14px; padding-top: 8px; }
+
+  /* ── The settings' panel ─────────────────────────────────────────────── */
+  .pub-switches { border-block: 1px solid var(--color-border-light); }
+  .pub-switch + .pub-switch { border-top: 1px solid var(--color-border-light); }
+  .pub-switch-title { font-size: 15px; font-weight: 500; line-height: 22px; color: var(--color-text-primary); }
+  .pub-switch-off { color: var(--color-text-muted); }
+  .pub-switch .switch-control { padding-top: 1px; white-space: nowrap; }
+  .pub-switch-status { padding-bottom: 12px; font-size: 14px; line-height: 20px; color: var(--color-text-secondary); }
+  .pub-switch .notice { margin-bottom: 12px; }
+  .pub-switches > .pub-muted { padding-bottom: 12px; }
+  .pub-settings-list { margin-top: 4px; border-top: 1px solid var(--color-border-light); }
+  .pub-settings-row { padding: 12px 0; border-bottom: 1px solid var(--color-border-light); scroll-margin: 16px; }
+  .pub-settings-row.is-picked { margin-inline: -12px; padding-inline: 12px; border-radius: var(--radius-inner); background: var(--color-accent-soft); }
+  .pub-settings-head { display: flex; align-items: center; gap: 12px; min-height: 32px; }
+  .pub-settings-head .btn { margin-left: auto; }
+  .pub-settings-name { display: inline-flex; align-items: baseline; gap: 8px; }
+  .pub-settings-name b { font-size: 15px; font-weight: 500; line-height: 22px; color: var(--color-text-primary); }
+  .pub-settings-lines { margin-top: 2px; font-size: 14px; line-height: 20px; color: var(--color-text-secondary); }
+  .pub-settings-lines p + p { margin-top: 2px; }
+  .pub-reason-broken { color: var(--color-danger-text); }
+  .pub-reason-attention { color: var(--color-warning-text); }
+  .pub-limits { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 16px; }
+  .pub-limits dd { color: var(--color-text-primary); text-align: right; font-variant-numeric: tabular-nums; }
+
+  /* ── Windows ─────────────────────────────────────────────────────────── */
+  .pub-settings-form { display: grid; gap: 24px; margin-top: 16px; }
+  .pub-check-row { display: flex; align-items: flex-start; gap: 12px; cursor: pointer; }
+  .pub-check-row .pub-check { margin-top: 3px; }
+  .pub-check-title { display: block; font-size: 15px; font-weight: 500; line-height: 22px; color: var(--color-text-primary); }
+  .pub-check-row .field-hint { display: block; margin-top: 2px; }
+  .pub-indent { padding-left: 28px; }
+  .pub-range { display: flex; align-items: center; gap: 8px; }
+  .pub-range .input { flex: 1 1 0; min-width: 0; }
+  .pub-range-dash { color: var(--color-text-muted); }
+  .pub-settings-pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+  .pub-settings-hints { display: grid; gap: 4px; margin-top: -12px; }
+  .pub-settings-hints .field-hint { margin-top: 0; }
+  .pub-dialog-link { margin-top: 12px; font-size: 15px; line-height: 22px; }
+  .pub-choices { display: grid; gap: 8px; margin-top: 24px; }
+  .pub-choice {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 10px 12px;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-inner);
+    cursor: pointer;
+    transition: background-color 0.15s, border-color 0.15s;
+  }
+  .pub-choice:hover { background: var(--color-hover-alt); }
+  .pub-choice.is-picked { border-color: var(--color-accent-border); background: var(--color-accent-soft); }
+  .pub-choice input { margin-top: 4px; accent-color: var(--color-text-primary); }
+  .pub-choice-title { display: block; font-size: 15px; font-weight: 500; line-height: 22px; color: var(--color-text-primary); }
+  .pub-choice-hint { display: block; font-size: 14px; line-height: 20px; color: var(--color-text-secondary); }
+  .pub-form-block { display: grid; gap: 12px; margin-top: 16px; }
+  .pub-inline-radios { display: flex; flex-wrap: wrap; gap: 8px 24px; }
+  .pub-inline-radios .field-label { width: 100%; }
+  .pub-inline-radio { display: inline-flex; align-items: center; gap: 8px; font-size: 15px; line-height: 22px; cursor: pointer; }
+  .pub-inline-radio input { accent-color: var(--color-text-primary); }
+  .pub-dialog-actions { align-items: center; }
+  .pub-dialog-missing { margin-right: auto; font-size: 14px; line-height: 20px; color: var(--color-text-secondary); }
+
+  /* Below 1100 px the table scrolls inside its wrapper: a header pinned to the page bar would float over the rows. */
+  @media (max-width: 1099px) {
+    .pub-table.data-table-sticky th { position: relative; top: auto; box-shadow: none; }
+  }
+
+  /* ── Phone ───────────────────────────────────────────────────────────── */
+  @media (max-width: 767px) {
+    .pub-strip { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
+    .pub-strip-item { flex: 0 0 auto; }
+    .pub-strip-settings { margin-left: 0; }
+    .pub-filters { width: 100%; }
+    .pub-filters .segmented { max-width: 100%; overflow-x: auto; scrollbar-width: none; flex-wrap: nowrap; }
+    .pub-toolbar-notes { align-items: flex-start; min-height: 0; text-align: left; }
+    .pub-select-bar { position: fixed; top: auto; right: 0; bottom: 0; left: 0; z-index: 15; border-top: 1px solid var(--color-accent-border); border-radius: 0; }
+    .pub-drawer-kv,
+    .pub-raw { grid-template-columns: minmax(0, 1fr); }
+    .pub-drawer-kv > div + div > dt { margin-top: 8px; }
+    .pub-journal li { grid-template-columns: minmax(0, 1fr); gap: 0; }
+    .pub-settings-pair { grid-template-columns: minmax(0, 1fr); }
+    .pub-switch .switch-row { gap: 12px; }
+    .pub-settings-hints { margin-top: 0; }
+  }
+}

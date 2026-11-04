@@ -240,7 +240,7 @@ export function registerPublicationRoutes(server: ApiServer, ctx: ApiModuleConte
   async function agentScope(
     request: Parameters<typeof requireAgentKeyPrincipal>[0],
     operation: string,
-    requiredCapabilities: Array<"write:publication_drafts" | "approve:publications"> = ["write:publication_drafts"],
+    requiredCapabilities: Array<"write:publication_drafts" | "approve:publications" | "approve:vault_albums"> = ["write:publication_drafts"],
   ) {
     const principal = await requireAgentKeyPrincipal(request);
     const scope = await beginAgentRequest(appContext, principal, { operation, requiredCapabilities });
@@ -448,15 +448,21 @@ export function registerPublicationRoutes(server: ApiServer, ctx: ApiModuleConte
 
   // The agent approves on the owner's word in the chat: the revision names
   // the key's owner (who gave the key this right) and the key itself.
+  // approve:vault_albums alone approves albums and refuses every other kind.
   server.post("/api/v1/agent/publications/approve", { schema: routeSchemas.agentPublicationApprove }, async (request) => {
-    const { principal, scope } = await agentScope(request, "agentPublicationApprove", ["write:publication_drafts", "approve:publications"]);
+    const caller = await requireAgentKeyPrincipal(request);
+    const vaultAlbumsOnly = !caller.capabilities.includes("approve:publications") && caller.capabilities.includes("approve:vault_albums");
+    const { principal, scope } = await agentScope(request, "agentPublicationApprove", [
+      "write:publication_drafts",
+      vaultAlbumsOnly ? "approve:vault_albums" : "approve:publications",
+    ]);
     return settled(scope, async () => {
       const key = await getAgentKeyById(db, principal.agentKeyId);
       if (key?.createdBy == null) throw new ConflictError("this key names no owner to approve for: issue a new key");
       const pageIds = scope.pages.map((page) => page.id);
       const results = await approvePublications(db, {
         items: request.body.items,
-        approver: { kind: "agent", agentKeyId: principal.agentKeyId, ownerUserId: key.createdBy, allowedPageIds: pageIds },
+        approver: { kind: "agent", agentKeyId: principal.agentKeyId, ownerUserId: key.createdBy, allowedPageIds: pageIds, vaultAlbumsOnly },
       });
       await writeAgentAudit(db, {
         agentKeyId: principal.agentKeyId,

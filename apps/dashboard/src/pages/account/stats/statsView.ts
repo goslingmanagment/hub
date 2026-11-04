@@ -1,4 +1,5 @@
 import type { ChatterSaleKind, ChatterStats } from "@agency_hub_core/contracts";
+import { formatDuration, formatMills, formatPercent } from "@/lib/format";
 
 // Pure helpers of the cabinet's «Статистика»: words, numbers and the layout
 // of the shift ribbon. No React here.
@@ -10,13 +11,13 @@ export type StatsVisit = Stats["visits"][number];
 
 /** The kinds of a sale in their fixed order and hue (the validated chart order: blue · orange · aqua · violet). */
 export const KINDS: ReadonlyArray<{ key: ChatterSaleKind; label: string; color: string }> = [
-  { key: "ppv", label: "PPV", color: "var(--color-chart-blue)" },
+  { key: "ppv", label: "Платные сообщения", color: "var(--color-chart-blue)" },
   { key: "tip", label: "Чаевые", color: "var(--color-chart-orange)" },
   { key: "subscription", label: "Подписки", color: "var(--color-chart-aqua)" },
   { key: "post", label: "Посты", color: "var(--color-chart-violet)" },
 ];
 
-export const KIND_LABEL: Readonly<Record<ChatterSaleKind, string>> = { ppv: "PPV", tip: "Чаевые", subscription: "Подписка", post: "Пост" };
+export const KIND_LABEL: Readonly<Record<ChatterSaleKind, string>> = { ppv: "Платное сообщение", tip: "Чаевые", subscription: "Подписка", post: "Пост" };
 export const KIND_COLOR: Readonly<Record<ChatterSaleKind, string>> = Object.fromEntries(KINDS.map((kind) => [kind.key, kind.color])) as Record<ChatterSaleKind, string>;
 
 export const PRICE_LABELS: Readonly<Record<string, string>> = {
@@ -27,13 +28,13 @@ export const PRICE_LABELS: Readonly<Record<string, string>> = {
   over100: "от $100",
 };
 
-/** The price bucket inside a sentence: «Лучше всего покупают PPV до $10». */
+/** The price bucket inside a sentence: «Лучше всего покупают платные сообщения до $10». */
 export const PRICE_PHRASES: Readonly<Record<string, string>> = {
-  upTo10: "PPV до $10",
-  "10to25": "PPV за $10–25",
-  "25to50": "PPV за $25–50",
-  "50to100": "PPV за $50–100",
-  over100: "PPV от $100",
+  upTo10: "платные сообщения до $10",
+  "10to25": "платные сообщения за $10–25",
+  "25to50": "платные сообщения за $25–50",
+  "50to100": "платные сообщения за $50–100",
+  over100: "платные сообщения от $100",
 };
 
 export const DELAY_LABELS: Readonly<Record<string, string>> = {
@@ -50,18 +51,16 @@ export const PERIODS = [
   { days: 30, label: "30 дней" },
 ] as const;
 
-const usdWhole = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
-const usdCents = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const countFormat = new Intl.NumberFormat("ru-RU");
 
-/** Whole dollars: `$3,699` (Intl rounds the cents). */
+/** Money as everywhere in the console: `$3,699.40`, always the cents. */
 export function money(mills: number): string {
-  return usdWhole.format(mills / 1000);
+  return formatMills(mills);
 }
 
-/** To the cent: `$45.60`. */
+/** The same; kept for the tooltips that ask for it by name. */
 export function moneyExact(mills: number): string {
-  return usdCents.format(mills / 1000);
+  return formatMills(mills);
 }
 
 export function count(value: number): string {
@@ -70,10 +69,7 @@ export function count(value: number): string {
 
 /** `65 ч 36 мин`, `45 мин`, `8 ч`. */
 export function duration(minutes: number): string {
-  const hours = Math.floor(minutes / 60);
-  const rest = minutes % 60;
-  if (hours === 0) return `${rest} мин`;
-  return rest === 0 ? `${hours} ч` : `${hours} ч ${rest} мин`;
+  return formatDuration(minutes);
 }
 
 /** `part / whole`, null without a whole. */
@@ -81,8 +77,9 @@ export function share(part: number, whole: number): number | null {
   return whole > 0 ? part / whole : null;
 }
 
+/** A share as `30 %`; no share is «—». */
 export function percent(value: number | null): string {
-  return value === null ? "—" : `${Math.round(value * 100)}%`;
+  return value === null ? "—" : formatPercent(value * 100);
 }
 
 /** The Russian plural of a count: plural(5, ["смена", "смены", "смен"]). */
@@ -309,7 +306,7 @@ export function beadRadius(netMills: number, maxMills: number): number {
 }
 
 /** The price bucket where the chatter's PPVs sell best, with at least `minSent` of them sent. Pure. */
-export function bestPriceBucket(byPrice: Stats["ppv"]["byPrice"], minSent = 5): { bucket: string; rate: number; sent: number; bought: number } | null {
+export function bestPriceBucket(byPrice: ReadonlyArray<{ bucket: string; sent: number; bought: number }>, minSent = 5): { bucket: string; rate: number; sent: number; bought: number } | null {
   let best: { bucket: string; rate: number; sent: number; bought: number } | null = null;
   for (const cell of byPrice) {
     if (cell.sent < minSent) continue;
@@ -320,7 +317,7 @@ export function bestPriceBucket(byPrice: Stats["ppv"]["byPrice"], minSent = 5): 
 }
 
 /** How often a fan bought after a fast reply and after a slow one (an hour and more), each with enough replies. Pure. */
-export function replyContrast(byDelay: Stats["replies"]["byDelay"], minReplies = 10): { fast: number; slow: number } | null {
+export function replyContrast(byDelay: ReadonlyArray<{ bucket: string; replies: number; bought: number }>, minReplies = 10): { fast: number; slow: number } | null {
   const fast = byDelay.find((cell) => cell.bucket === "under5m");
   const slow = byDelay.filter((cell) => cell.bucket === "1to6h" || cell.bucket === "over6h")
     .reduce((total, cell) => ({ replies: total.replies + cell.replies, bought: total.bought + cell.bought }), { replies: 0, bought: 0 });
@@ -329,7 +326,7 @@ export function replyContrast(byDelay: Stats["replies"]["byDelay"], minReplies =
 }
 
 /** The share of replies sent within 15 minutes. Pure. */
-export function quickReplyShare(byDelay: Stats["replies"]["byDelay"]): number | null {
+export function quickReplyShare(byDelay: ReadonlyArray<{ bucket: string; replies: number }>): number | null {
   const total = byDelay.reduce((sum, cell) => sum + cell.replies, 0);
   const quick = byDelay.filter((cell) => cell.bucket === "under5m" || cell.bucket === "5to15m").reduce((sum, cell) => sum + cell.replies, 0);
   return share(quick, total);

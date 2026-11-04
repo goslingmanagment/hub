@@ -48,11 +48,12 @@ export function useAdminIncidents(params: { severity?: string; code?: string; li
 }
 
 /** The owner's view of the chat extension's health reports for a range of days (chat-extension H-11c). */
-export function useAdminClientHealth(params: { from: string; to: string }) {
+export function useAdminClientHealth(params: { from: string; to: string; clientName?: string }) {
   return useQuery({
     queryKey: ["admin", "client-health", params],
     queryFn: () => kernel.adminClientHealth({ query: params }),
     // The extension reports every 15 minutes; a minute is as fresh as the page gets.
     refetchInterval: 60_000,
+    meta: { suppressGlobalError: true },
   });
 }

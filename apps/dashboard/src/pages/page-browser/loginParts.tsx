@@ -13,11 +13,13 @@ import { loginChipOf, wantsCode, wantsEmailCode, type LoginView, type Tone } fro
 
 /** A tone as a status badge (a chip in a card's header or a list row). */
 export const TONE_BADGE: Record<Tone, string> = {
-  neutral: "badge",
+  neutral: "badge badge-off",
   progress: "badge badge-info",
   good: "badge badge-success",
   warning: "badge badge-warning",
   danger: "badge badge-danger",
+  waiting: "badge badge-accent",
+  off: "badge badge-off",
 };
 
 /** A tone as a notice (an answer under a button). */
@@ -27,6 +29,8 @@ export const TONE_NOTICE: Record<Tone, string> = {
   good: "notice notice-success",
   warning: "notice notice-warning",
   danger: "notice notice-danger",
+  waiting: "notice",
+  off: "notice notice-off",
 };
 
 export function ToneChip({ label, tone, data }: { label: string; tone: Tone; data?: Record<string, string> | undefined }) {
@@ -44,44 +48,13 @@ export function Chip({ view }: { view: LoginView }) {
 
 export function Card({ title, children, aside, muted = false }: { title: ReactNode; children: ReactNode; aside?: ReactNode; muted?: boolean | undefined }) {
   return (
-    <section className={`card ${muted ? "opacity-70" : ""}`}>
+    <section className={`card login-card ${muted ? "login-card-locked" : ""}`}>
       <div className="card-header">
         <h2 className="card-title">{title}</h2>
-        {aside}
+        {aside && <div className="login-card-aside">{aside}</div>}
       </div>
       <div className="card-body">{children}</div>
     </section>
-  );
-}
-
-/** Commands for whoever runs the server, kept out of the owner's way: a
- *  collapsed disclosure, each command with its own copy button. */
-export function ServerAdminCommand({ text, command }: { text: ReactNode; command: string | readonly string[] }) {
-  const commands = typeof command === "string" ? [command] : command;
-  return (
-    <details className="help">
-      <summary>Для администратора сервера</summary>
-      <div className="help-body">
-        <p>{text}</p>
-        {commands.map((line) => <CommandLine key={line} command={line} />)}
-      </div>
-    </details>
-  );
-}
-
-function CommandLine({ command }: { command: string }) {
-  const [copied, setCopied] = useState(false);
-  const copy = () => {
-    void navigator.clipboard?.writeText(command).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2_000);
-    }, () => undefined);
-  };
-  return (
-    <div className="flex flex-wrap items-start gap-2">
-      <pre className="min-w-0 flex-1 overflow-x-auto rounded-lg border border-border bg-hover-alt px-3 py-2 font-mono text-xs text-text-primary" data-draft-command>{command}</pre>
-      <button type="button" className="btn btn-sm" onClick={copy}>{copied ? "Скопировано" : "Скопировать"}</button>
-    </div>
   );
 }
 
@@ -110,7 +83,7 @@ export function LiveScreenshot({ urlFor, live }: { urlFor: (tick: number) => str
   }, [live]);
   const url = urlFor(tick);
   return (
-    <div className="relative aspect-video w-full overflow-hidden rounded-lg border border-border bg-hover-alt">
+    <div className="login-screen">
       {shown !== null && <img src={shown} alt="Экран серверного браузера" className="absolute inset-0 h-full w-full object-contain" />}
       {live && (
         // The next screenshot loads unseen and replaces the shown one.
@@ -132,8 +105,8 @@ export function LiveScreenshot({ urlFor, live }: { urlFor: (tick: number) => str
         />
       )}
       {shown === null && (
-        <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 p-6 text-center text-sm text-text-muted">
-          <MonitorSmartphone size={28} className="text-text-muted" aria-hidden />
+        <div className="login-screen-empty">
+          <MonitorSmartphone size={28} aria-hidden />
           {live ? (failed ? "Снимка пока нет: браузер ещё не открыл экран входа." : "Загружаем снимок…") : "Снимок появится, когда вход открыт."}
         </div>
       )}
@@ -143,9 +116,9 @@ export function LiveScreenshot({ urlFor, live }: { urlFor: (tick: number) => str
 
 export function SiteError({ text }: { text: string }) {
   return (
-    <p role="alert" className="notice notice-danger block">
-      <span className="font-semibold">Fansly:</span> {text}
-    </p>
+    <div role="alert" className="notice notice-danger">
+      <div className="notice-body">Fansly: {text}</div>
+    </div>
   );
 }
 
@@ -179,18 +152,18 @@ export function LoginForm({
     send(next).then(onAnswer, () => onAnswer({ screen: null, refused: null, unreachable: true }));
   };
   return (
-    <form onSubmit={handle} className="flex flex-col gap-3" aria-busy={pending} autoComplete="off">
+    <form onSubmit={handle} className="login-form" aria-busy={pending} autoComplete="off">
       {view.siteError !== null && <SiteError text={view.siteError} />}
       {emailCode && (
         // A login from a new device (owner decision 2026-10-15): Fansly sent
         // a code to the account's e-mail; the browser types it in as a 2FA code.
-        <p className="notice" data-email-code>
+        <p className="login-text" data-email-code>
           Fansly видит вход с нового устройства и отправил код на почту аккаунта. Найдите письмо от Fansly (проверьте и «Спам») и введите код сюда.
         </p>
       )}
       {codeStep ? (
         <div>
-          <label htmlFor="pb-code" className="field-label">{emailCode ? "Код из письма" : "Код 2FA"}</label>
+          <label htmlFor="pb-code" className="field-label">{emailCode ? "Код из письма" : "Код из приложения (2FA)"}</label>
           <input id="pb-code" inputMode="numeric" autoComplete="one-time-code" spellCheck={false} value={code} disabled={pending}
             onChange={(event) => setCode(event.target.value)} placeholder={emailCode ? "Код из письма Fansly" : "Код из приложения"} className="input tracking-widest" required maxLength={32} />
         </div>
@@ -208,10 +181,10 @@ export function LoginForm({
           </div>
         </>
       )}
-      <button type="submit" className="btn btn-primary w-full" disabled={pending || (codeStep ? code.trim() === "" : login.trim() === "" || password === "")}>
+      <button type="submit" className="btn btn-primary login-wide" disabled={pending || (codeStep ? code.trim() === "" : login.trim() === "" || password === "")}>
         {pending ? "Передаём в браузер…" : codeStep ? "Подтвердить код" : "Войти"}
       </button>
-      <p className="text-xs text-text-secondary">
+      <p className="field-hint">
         Браузер сам вставит {codeStep ? "код" : "логин и пароль"} в форму Fansly и нажмёт кнопку. Hub {codeStep ? "его" : "их"} не сохраняет.
       </p>
     </form>
@@ -223,9 +196,9 @@ export function OpenLoginDialog({ step, onAnswer }: {
   step: { pending: boolean; send: (step: PageBrowserLoginStep) => Promise<PageBrowserLoginStepResponse> };
   onAnswer: (answer: PageBrowserLoginStepResponse) => void;
 }) {
-  return <div className="flex flex-col gap-3">
-    <p className="text-sm text-text-secondary">Fansly открыт, окно входа ещё закрыто. Сначала откройте его, затем появятся поля логина и пароля.</p>
-    <button type="button" className="btn btn-primary w-full" disabled={step.pending} onClick={() => {
+  return <div className="login-form">
+    <p className="login-text">Fansly открыт, окно входа ещё закрыто. Сначала откройте его, затем появятся поля логина и пароля.</p>
+    <button type="button" className="btn btn-primary login-wide" disabled={step.pending} onClick={() => {
       if (step.pending) return;
       void step.send({ kind: "open" }).then(onAnswer, () => onAnswer({ screen: null, refused: null, unreachable: true }));
     }}>{step.pending ? "Открываем…" : "Открыть окно входа"}</button>

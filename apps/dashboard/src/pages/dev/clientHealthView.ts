@@ -16,10 +16,10 @@ const PERF_METRICS: ReadonlyArray<readonly [metric: string, label: string]> = [
   ["routeToDockMs", "Смена чата → панель обновилась"],
   ["panelOpenMs", "Клавиша или клик → видимый отклик"],
   ["requestOverheadMs", "Клик → запрос ушёл (своя задержка расширения)"],
-  ["ttfcMs", "Клик → первый кусок ответа AI (вместе с ожиданием модели)"],
+  ["ttfcMs", "Клик → первый кусок ответа ИИ (вместе с ожиданием модели)"],
   ["firstChunkPaintMs", "Первый кусок ответа → показан на экране"],
   ["insertMs", "Вставка текста в поле с проверкой"],
-  ["boardOpenMs", "Открытие доски Spenders из сохранённых данных"],
+  ["boardOpenMs", "Открытие доски трат фанов из сохранённых данных"],
   ["searchMs", "Поиск по доске"],
   ["handlerMs", "Обработчики расширения (каждый двадцатый)"],
   ["eventLatencyMs", "Клавиша или клик → следующая отрисовка"],
@@ -54,6 +54,13 @@ const BOOKKEEPING_COUNTERS: ReadonlyArray<readonly [code: string, label: string]
   ["health.bad-counter", "Счётчики с недопустимым именем, отброшены"],
 ];
 
+/** The errors the extension counts by name. A code without a name here is listed by its code alone. */
+const ERROR_COUNTER_NAMES: ReadonlyArray<readonly [code: string, label: string]> = [
+  ["error.network", "Сеть не ответила"],
+  ["error.hub-5xx", "Hub вернул ошибку сервера"],
+  ["error.dom-observer", "Сбой слежения за страницей"],
+];
+
 /** The ranges the page offers: each ends today. */
 export const CLIENT_HEALTH_PERIODS = [
   { key: "today", label: "Сегодня", days: 1 },
@@ -76,7 +83,7 @@ export function clientHealthRange(period: ClientHealthPeriod, today: string): { 
   return { from: new Date(utcDay(today).getTime() - (days - 1) * DAY_MS).toISOString().slice(0, 10), to: today };
 }
 
-const DAY_AND_MONTH = new Intl.DateTimeFormat("ru-RU", { day: "numeric", month: "long", timeZone: "UTC" });
+const DAY_AND_MONTH = new Intl.DateTimeFormat("ru-RU", { day: "numeric", month: "short", timeZone: "UTC" });
 
 /** "3 октября" or "27 сентября – 3 октября". */
 export function clientHealthRangeLabel(range: { from: string; to: string }): string {
@@ -248,7 +255,7 @@ export function clientHealthPageModel(data: AdminClientHealthResponse): ClientHe
     ...COUNTERS.map(([code], index) => [code, index] as const),
     ...BOOKKEEPING_COUNTERS.map(([code], index) => [code, COUNTERS.length + 1 + index] as const),
   ]);
-  const counterLabels = new Map([...COUNTERS, ...BOOKKEEPING_COUNTERS]);
+  const counterLabels = new Map([...COUNTERS, ...ERROR_COUNTER_NAMES, ...BOOKKEEPING_COUNTERS]);
   const counters = [...data.counters]
     .sort((left, right) => {
       const known = (counterOrder.get(left.code) ?? COUNTERS.length) - (counterOrder.get(right.code) ?? COUNTERS.length);

@@ -1,0 +1,180 @@
+/* The classes of the home-money screens. Only this group edits this file, and every
+   rule goes inside @layer components (design/build-rules.md). */
+@layer components {
+  /* ── Главная: the two lines above the money ──────────────────────────── */
+  .home-strip { padding: 4px 0; }
+  .home-strip-row { display: flex; align-items: baseline; gap: 16px; padding: 8px 24px; font-size: 15px; line-height: 24px; }
+  .home-strip-row + .home-strip-row { border-top: 1px solid var(--color-border-light); }
+  .home-strip-label { flex: 0 0 88px; font-weight: 600; color: var(--color-text-primary); }
+  a.home-strip-label:hover { text-decoration: underline; text-underline-offset: 3px; }
+  .home-strip-items { display: flex; flex: 1 1 auto; flex-wrap: wrap; gap: 0 24px; min-width: 0; }
+  .home-strip-item { display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; border-radius: 4px; }
+  .home-strip-item:hover > span:first-of-type { text-decoration: underline; text-underline-offset: 3px; }
+  .home-count { font-weight: 600; color: var(--color-accent); font-variant-numeric: tabular-nums; }
+
+  /* ── Главная: tiles, table, footnote ─────────────────────────────────── */
+  .home-tiles { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .home-tiles-two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .home-mover { font-size: 20px; line-height: 36px; }
+  .home-footnote { font-size: 14px; line-height: 20px; color: var(--color-text-secondary); }
+  .home-table .row-group td { font-weight: 600; }
+  .home-table tbody tr.is-expanded td { background: var(--color-hover-alt); }
+  .home-page-cell { display: flex; align-items: center; gap: 8px; min-width: 0; margin-left: -8px; }
+  .home-expander {
+    display: inline-flex; flex: 0 0 auto; align-items: center; justify-content: center;
+    width: 28px; height: 28px; border-radius: var(--radius-inner);
+    color: var(--color-text-muted); cursor: pointer; transition: background-color 0.15s, color 0.15s;
+  }
+  .home-expander:hover { background: var(--color-hover); color: var(--color-text-primary); }
+  .home-expander svg { transition: transform 0.15s; }
+  .home-expander[aria-expanded="true"] { color: var(--color-text-primary); }
+  .home-expander[aria-expanded="true"] svg { transform: rotate(90deg); }
+  .home-page-link { font-weight: 500; color: var(--color-text-primary); text-underline-offset: 3px; }
+  .home-page-link:hover { text-decoration: underline; }
+  .home-sort {
+    display: inline-flex; align-items: center; gap: 4px; margin: -4px -8px; padding: 4px 8px;
+    border-radius: var(--radius-inner); font: inherit; color: inherit; cursor: pointer;
+    transition: background-color 0.15s, color 0.15s;
+  }
+  .home-sort svg { color: var(--color-text-muted); }
+  .home-sort:hover { background: var(--color-hover); color: var(--color-text-primary); }
+  .home-sort[data-active="true"], .home-sort[data-active="true"] svg { color: var(--color-text-primary); }
+  .audience-cell { display: inline-flex; flex-direction: column; align-items: flex-end; }
+  .audience-note { font-size: 14px; line-height: 20px; color: var(--color-text-muted); }
+  .home-page-footer { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; }
+
+  /* ── An expanded row of a table: replaces ov-detail* ─────────────────── */
+  .data-table tr.row-detail > td { padding: 16px 24px 24px 56px; background: var(--color-hover-alt); white-space: normal; }
+  .data-table tbody tr.row-detail:hover > td { background: var(--color-hover-alt); }
+  /* Its own width never widens the table around it; the inner table scrolls instead. */
+  .row-detail-body { display: grid; gap: 12px; max-width: 720px; contain: inline-size; }
+  .row-detail-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; }
+  .row-detail-title { font-size: 15px; line-height: 22px; font-weight: 600; color: var(--color-text-primary); }
+  .row-detail-dates, .row-detail-note { font-size: 14px; line-height: 20px; color: var(--color-text-secondary); }
+  .row-detail-table { overflow-x: auto; border: 1px solid var(--color-border); border-radius: var(--radius-button); background: var(--color-card); }
+  .row-detail-table > .row-detail-note,
+  .row-detail-table > div > .row-detail-note { padding: 12px 16px; }
+  .row-detail-table .data-table { font-size: 14px; line-height: 20px; }
+  .row-detail-table .data-table td { padding-block: 8px; }
+  .row-detail-table .data-table th:first-child, .row-detail-table .data-table td:first-child { padding-left: 16px; }
+  .row-detail-table .data-table th:last-child, .row-detail-table .data-table td:last-child { padding-right: 16px; }
+  .row-detail-skeleton { display: grid; gap: 12px; padding: 16px; }
+
+
+  /* ── Деньги → Операции ───────────────────────────────────────────────── */
+  .tx-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  /* A list's sticky header keeps the card's rounded top. */
+  .card > .table-wrap > .data-table-sticky thead th:first-child { border-top-left-radius: var(--radius-card); }
+  .card > .table-wrap > .data-table-sticky thead th:last-child { border-top-right-radius: var(--radius-card); }
+  .tx-differ { display: block; margin-top: 4px; color: var(--color-warning-text); }
+  .tx-filters { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 16px 24px; }
+  .tx-field { display: grid; gap: 4px; }
+  .tx-field .select { width: auto; min-width: 224px; }
+  .tx-reportable { margin-left: auto; padding-bottom: 8px; font-size: 14px; line-height: 20px; color: var(--color-text-secondary); }
+  .tx-sub { font-size: 14px; line-height: 20px; color: var(--color-text-secondary); }
+  .tx-sort { display: inline-flex; align-items: center; gap: 4px; font: inherit; color: inherit; cursor: pointer; }
+  .tx-sort:hover, .tx-sort[data-active="true"] { color: var(--color-text-primary); }
+  /* Below the width where the page keeps a table's header under its bar, the table scrolls by itself. */
+  @media (max-width: 1099px) { .tx-table th { top: 0; } }
+  @media (max-width: 767px) {
+    .page-actions:has(> .tx-period) { min-width: 0; max-width: 100%; }
+    .page-actions > .segmented.tx-period, .tx-filters .segmented.segmented { max-width: calc(100vw - 32px); overflow-x: auto; }
+    .tx-field { min-width: 0; max-width: 100%; }
+    .tx-field .select { min-width: 0; width: 100%; }
+    .tx-tiles { grid-template-columns: minmax(0, 1fr); }
+    .tx-filters { flex-direction: column; align-items: stretch; }
+    .tx-reportable { margin-left: 0; }
+  }
+
+  /* ── Расходы → ИИ ────────────────────────────────────────────────────── */
+  .ai-strip { grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }
+  /* Inside a card a strip of numbers is a row with lines between, not a card of its own (DL §5.8). */
+  .stat-grid.ai-strip { border: 0; border-radius: 0; background: transparent; overflow: visible; }
+  .stat-grid.ai-strip > .stat { padding: 0 20px; box-shadow: -1px 0 0 var(--color-border); }
+  .stat-grid.ai-strip > .stat:first-child { padding-left: 0; box-shadow: none; }
+  @media (max-width: 767px) {
+    .stat-grid.ai-strip { gap: 16px; }
+    .stat-grid.ai-strip > .stat { padding: 0; box-shadow: none; }
+  }
+  /* The keys of an organization: one set of columns for every organization, a line, no frame. */
+  .table-wrap.rc-keys { margin-inline: -24px; border: 0; border-radius: 0; background: transparent; box-shadow: none; }
+  .rc-keys .data-table { table-layout: fixed; min-width: 640px; }
+  .rc-keys .data-table :is(th, td):nth-child(1) { width: 18%; }
+  .rc-keys .data-table :is(th, td):nth-child(2) { width: 30%; }
+  .rc-keys .data-table :is(th, td):nth-child(3) { width: 12%; }
+  .rc-keys .data-table :is(th, td):nth-child(4) { width: 16%; }
+  .rc-keys .data-table td { overflow-wrap: anywhere; white-space: normal; }
+  .ai-sub { font-size: 14px; line-height: 20px; color: var(--color-text-secondary); white-space: nowrap; }
+  .ai-sub-inline { font-size: 14px; color: var(--color-text-muted); }
+  .ai-warn { color: var(--color-warning-text); }
+  .ai-muted-row td { opacity: 0.6; }
+  .ai-account { display: flex; align-items: flex-start; gap: 8px; margin-left: -8px; }
+  .ai-account .home-expander { margin-top: -2px; }
+  .ai-balance { font-weight: 600; font-variant-numeric: tabular-nums; text-decoration: underline dotted; text-underline-offset: 4px; cursor: pointer; }
+  .ai-balance-form { display: grid; gap: 4px; justify-items: end; }
+  .ai-balance-label { font-size: 14px; line-height: 20px; color: var(--color-text-secondary); }
+  .ai-voice { display: flex; align-items: flex-start; gap: 16px; padding: 16px 24px; border-top: 1px solid var(--color-border); }
+  .ai-voice-title { flex: 0 0 auto; font-weight: 500; }
+  .ai-voice-main { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 16px; }
+  .ai-voice .ai-sub { white-space: normal; }
+  .ai-subtitle { margin-bottom: 12px; font-size: 17px; line-height: 24px; font-weight: 600; color: var(--color-text-primary); }
+  .ai-subtitle-note { margin-left: 12px; font-size: 14px; font-weight: 400; color: var(--color-text-secondary); }
+  .ai-limit-link { display: inline-flex; flex-direction: column; align-items: flex-end; gap: 4px; }
+  .ai-limit-link:hover > span:first-child { text-decoration: underline; text-underline-offset: 3px; }
+  .ai-hub-name { padding-left: 28px; font-weight: 500; color: var(--color-text-secondary); }
+  .ai-person-detail { max-width: 960px; font-size: 14px; line-height: 20px; }
+  .ai-feature-list { display: grid; gap: 4px; }
+  .ai-feature-list li { display: grid; grid-template-columns: 200px 260px minmax(0, 1fr); gap: 16px; }
+  .ai-details > .help-body { max-width: none; display: grid; gap: 32px; padding-top: 16px; }
+  .ai-detail-section .table-wrap, .ai-cut { overflow-x: auto; border: 1px solid var(--color-border); border-radius: var(--radius-card); background: var(--color-card); }
+  .ai-cuts { display: grid; gap: 16px; }
+  .ai-change { max-width: 320px; font-size: 14px; line-height: 20px; color: var(--color-text-secondary); overflow-wrap: anywhere; }
+  @media (min-width: 1280px) { .ai-cuts { grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; } }
+  @media (max-width: 767px) {
+    .ai-voice { flex-direction: column; gap: 8px; padding: 16px; }
+    .ai-feature-list li { grid-template-columns: minmax(0, 1fr); gap: 0; }
+  }
+
+  /* ── Расходы → Сверка с Anthropic ────────────────────────────────────── */
+  .btn.is-disabled { opacity: 0.45; pointer-events: none; }
+  .data-table tbody tr.rc-day-first:not(:first-child) td { border-top-color: var(--color-border); }
+  .rc-other td { color: var(--color-text-secondary); }
+  .data-table td.rc-models-col { width: 1%; padding-block: 4px; text-align: right; white-space: nowrap; }
+  .rc-models { max-width: 960px; }
+  .rc-models .data-table tbody tr.rc-pair td { border-top: 0; padding-top: 0; }
+
+  /* ── Расходы → OnlyFans API ──────────────────────────────────────────── */
+  .ofc-tiles { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .ofc-unit { font-size: 15px; font-weight: 500; letter-spacing: 0; color: var(--color-text-secondary); }
+  .ofc-note { font-size: 14px; line-height: 20px; color: var(--color-text-secondary); }
+  .ofc-danger { color: var(--color-danger-text); }
+  .ofc-good { color: var(--color-success-text); }
+  .ofc-today { display: grid; gap: 24px; grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr); }
+  .ofc-today-value { margin-top: 4px; font-size: 20px; line-height: 28px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .ofc-sources { display: flex; flex-wrap: wrap; gap: 4px 16px; margin-top: 8px; font-size: 14px; line-height: 20px; color: var(--color-text-secondary); font-variant-numeric: tabular-nums; }
+  .ofc-dot { display: inline-block; width: 8px; height: 8px; margin-right: 8px; border-radius: 50%; }
+  .ofc-bar { height: 6px; margin-top: 8px; overflow: hidden; border-radius: 4px; background: var(--color-hover); }
+  .ofc-bar > div { height: 100%; }
+  .ofc-bar-on { background: var(--color-accent); }
+  .ofc-bar-off { background: var(--color-text-muted); }
+  .ofc-bar-warning { background: var(--color-warning); }
+  .ofc-bar-danger { background: var(--color-danger); }
+  .ofc-charts { display: grid; gap: 24px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .ofc-second { border-top: 1px solid var(--color-border); }
+  .ofc-share { display: inline-block; width: 40px; height: 4px; overflow: hidden; border-radius: 4px; background: var(--color-hover); }
+  .ofc-share > span { display: block; height: 100%; background: var(--color-text-muted); }
+  .data-table .ofc-chevron { width: 40px; padding-right: 0; }
+  @media (max-width: 1023px) {
+    .ofc-charts, .ofc-today { grid-template-columns: minmax(0, 1fr); }
+  }
+  @media (max-width: 639px) { .ofc-tiles { grid-template-columns: minmax(0, 1fr); } }
+
+  @media (max-width: 1023px) {
+    .home-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  }
+  @media (max-width: 767px) {
+    .home-strip-row { flex-direction: column; gap: 4px; padding: 8px 16px; }
+    .home-strip-label { flex: 0 0 auto; }
+    .data-table tr.row-detail > td { padding: 12px 16px 16px; }
+  }
+}

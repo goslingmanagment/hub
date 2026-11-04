@@ -21,7 +21,7 @@
     "worker:watch": "node --import tsx/esm --watch apps/runtime/src/worker.ts",
     "build": "pnpm typecheck && pnpm --dir apps/dashboard build",
     "build:production": "pnpm typecheck && pnpm build:artifacts",
-    "build:artifacts": "node scripts/build-production.mjs && pnpm --dir apps/dashboard build",
+    "build:artifacts": "node scripts/build-production.mjs && pnpm --dir apps/dashboard build && node scripts/build-hub-cli.mjs",
     "cli": "node --import tsx/esm apps/runtime/src/cli.ts",
     "hub": "node --import tsx/esm packages/hub-agent-cli/src/cli.ts",
     "contracts:generate": "node --import tsx/esm packages/contracts/src/generate.ts",
@@ -44,6 +44,7 @@
     "dev": "bash scripts/dev-local.sh",
     "dev:db": "docker compose up -d postgres",
     "dev:dashboard": "cd apps/dashboard && npx vite",
+    "dev:demo": "cd apps/dashboard && npx vite --mode demo --port 5180 --strictPort",
     "dev:seed-client": "node --import tsx/esm scripts/dev-seed-client.ts",
     "dev:fake-ai": "node scripts/dev-fake-ai-provider.mjs"
   },

@@ -1,5 +1,6 @@
 import { formatUsdFromMills } from "@agency_hub_core/shared";
 import type { OfLink, OfLinksResponse } from "@agency_hub_core/contracts";
+import { formatAgo, formatDate, formatDateTime } from "@/lib/format";
 
 // «Ссылки OnlyFans»: what the owner reads in each cell of the links table,
 // and the warning lines above it. Pure: the time is a parameter.
@@ -7,38 +8,31 @@ import type { OfLink, OfLinksResponse } from "@agency_hub_core/contracts";
 type OfLinksPage = OfLinksResponse["pages"][number];
 type OfLinksPageKind = OfLinksPage["kinds"][number];
 
-const TIME_ZONE = "Europe/Moscow";
-
-/** "09.09.26": the table's short date. */
+/** «9 сент.», a year only when it is not this one: the console's date (lib/format.ts). */
 export function moscowShortDate(iso: string): string {
-  return new Date(iso).toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit", year: "2-digit", timeZone: TIME_ZONE });
+  return new Date(iso).getFullYear() === new Date().getFullYear() ? formatDate(iso) : formatDate(iso, { includeYear: true });
 }
 
+/** «1 нояб., 03:00», by Moscow. */
 export function moscowDateTime(iso: string): string {
-  return new Date(iso).toLocaleString("ru-RU", {
-    day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit", timeZone: TIME_ZONE,
-  });
+  return formatDateTime(iso, { yearUnlessCurrent: true });
 }
 
-/** "5 мин назад", "7 ч назад", "2 дн. назад". */
+/** «5 мин назад», «7 ч назад», «2 дня назад». */
 export function agoText(iso: string, now: number): string {
-  const minutes = Math.max(0, Math.floor((now - new Date(iso).getTime()) / 60_000));
-  if (minutes < 60) return `${minutes} мин назад`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 48) return `${hours} ч назад`;
-  return `${Math.floor(hours / 24)} дн. назад`;
+  return formatAgo(iso, now);
 }
 
 export const money = (mills: number) => formatUsdFromMills(mills);
 export const count = (value: number) => value.toLocaleString("ru-RU");
 
-export const linkKindLabels = { tracking: "tracking", trial: "trial" } as const;
-const kindTitles = { tracking: "Tracking-ссылки", trial: "Trial-ссылки" } as const;
+export const linkKindLabels = { tracking: "Трекинг-ссылка", trial: "Пробная ссылка" } as const;
+const kindTitles = { tracking: "Трекинг-ссылки", trial: "Пробные ссылки" } as const;
 
 export type Tone = "ok" | "muted" | "warn";
 
-/** The badge class of a tone. */
-export const toneBadge: Record<Tone, string> = { ok: "badge badge-success", muted: "badge", warn: "badge badge-warning" };
+/** The badge class of a tone. Everything of the links froze with the API: grey (fans-page.md §9.6). */
+export const toneBadge: Record<Tone, string> = { ok: "badge badge-off", muted: "badge badge-off", warn: "badge badge-off" };
 
 export function linkStateView(link: Pick<OfLink, "state" | "linkEndsAt">): { label: string; detail: string; tone: Tone } {
   if (link.state === "expired") {
@@ -70,7 +64,7 @@ export function vendorMoneyView(link: Pick<OfLink, "vendorMoney">): { amount: st
   const vendor = link.vendorMoney;
   const last = vendor.lastRecalculation;
   const recalculation = last === null ? null : {
-    when: `пересчёт ${moscowShortDate(last.observedAt)}`,
+    when: moscowShortDate(last.observedAt),
     change: `${money(last.fromMills)} → ${money(last.toMills)}`,
     account: last.bindingChanged
       ? "вместе со сменой аккаунта OnlyFans API"
@@ -132,16 +126,16 @@ export function differenceView(link: Pick<OfLink, "comparison">): DifferenceView
   const since = comparison.fromAt ? moscowShortDate(comparison.fromAt) : null;
   const figures = comparison.vendorDeltaMills === null || comparison.hubNetMills === null
     ? ""
-    : `OnlyFans ${money(comparison.vendorDeltaMills)} · Hub ${money(comparison.hubNetMills)}`;
+    : `OnlyFans ${money(comparison.vendorDeltaMills)}, Hub ${money(comparison.hubNetMills)}`;
   if (comparison.state === "incomplete") {
-    return { amount: null, period: "", figures: "", note: `${comparisonLabels.incomplete} — сравнивать рано` };
+    return { amount: null, period: "", figures: "", note: `${comparisonLabels.incomplete}: сравнивать рано` };
   }
   if (comparison.state === "different_history") {
     return {
       amount: null,
       period: since ? `OnlyFans за всё время, Hub с ${since}` : "",
       figures,
-      note: `${comparisonLabels.different_history} — не сравнимы`,
+      note: `${comparisonLabels.different_history}: не сравнимы`,
     };
   }
   const difference = comparison.differenceMills;
@@ -154,7 +148,7 @@ export function differenceView(link: Pick<OfLink, "comparison">): DifferenceView
   return {
     amount,
     period: since ? `за период с ${since}` : "",
-    figures,
+    figures: figures.replace(" · ", ", "),
     note: comparisonLabels[comparison.state],
   };
 }
@@ -164,7 +158,7 @@ export function bindingView(link: Pick<OfLink, "binding">): { channel: string; c
   if (binding === null) return null;
   const dates = binding.validTo === null
     ? `с ${moscowShortDate(binding.validFrom)}`
-    : `${moscowShortDate(binding.validFrom)} — ${moscowShortDate(binding.validTo)}`;
+    : `${moscowShortDate(binding.validFrom)} – ${moscowShortDate(binding.validTo)}`;
   return {
     channel: binding.channelTitle,
     contractor: binding.contractor === null ? "подрядчик не указан" : binding.contractor.contractorTitle,
@@ -195,7 +189,7 @@ const reasonLabels: Record<string, string> = {
 
 export function attemptText(attempt: NonNullable<OfLinksPageKind["lastAttempt"]>): string {
   const reason = attempt.reason === null ? "" : attempt.reason.split(",").map((code) => reasonLabels[code] ?? code).join(", ");
-  return `${moscowDateTime(attempt.observedAt)} — ${runStatusLabels[attempt.status]}${reason ? `: ${reason}` : ""}`;
+  return `${moscowDateTime(attempt.observedAt)}: ${runStatusLabels[attempt.status]}${reason ? `, ${reason}` : ""}`;
 }
 
 /** The warning lines above the table: a page nobody can read, a list not
@@ -211,7 +205,7 @@ export function pageWarnings(page: OfLinksPage, staleAfterHours: number): string
     if (kind.stale) {
       const since = kind.lastUsableAt === null
         ? "ещё ни разу не собирались"
-        : `не обновлялись с ${moscowDateTime(kind.lastUsableAt)} — дольше ${staleAfterHours} ч`;
+        : `не обновлялись с ${moscowDateTime(kind.lastUsableAt)}, дольше ${staleAfterHours} ч`;
       lines.push(`${title}: ${since}.${last}`);
     } else if (kind.lastAttempt !== null && !kind.lastAttempt.usable) {
       const shown = kind.lastUsableAt === null ? "" : ` Показаны данные сбора ${moscowDateTime(kind.lastUsableAt)}.`;

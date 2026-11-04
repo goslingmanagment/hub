@@ -9,6 +9,13 @@ import { kernel } from "./sdk.js";
  * Both operations are owner-session: an agent key can file a request and poll
  * its own, and can never see the board or decide anything.
  */
+/** Whether this queue can approve the request: only a platform with a
+ *  hydration lane to run it. A Fansly request is the Fansly Sync Engine's
+ *  history request and takes no approval. */
+export function hydrationRequestTakesApproval(request: { platform: string }): boolean {
+  return request.platform !== "fansly";
+}
+
 export function useAgentHydrationRequests(params: { state?: string; limit?: number } = {}) {
   return useQuery({
     queryKey: ["agent", "hydration", params],
@@ -16,6 +23,7 @@ export function useAgentHydrationRequests(params: { state?: string; limit?: numb
       query: params as Parameters<typeof kernel.agentHydrationRequestList>[0]["query"],
     }),
     refetchInterval: 15_000,
+    meta: { suppressGlobalError: true },
   });
 }
 

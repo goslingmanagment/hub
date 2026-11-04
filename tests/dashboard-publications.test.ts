@@ -4,12 +4,15 @@ import type { PublicationWire } from "@agency_hub_core/contracts";
 
 import {
   approvalItems,
+  approvalSummary,
   dayKeyOf,
   dayStartIso,
   dollarsInput,
   groupPublicationsByDay,
   parseDollars,
+  parsePublicationsView,
   priceLabel,
+  publicationsSearch,
   settingsForm,
   windowRange,
   type SettingsDraft,
@@ -89,7 +92,7 @@ describe("dollars and mills", () => {
     expect(dollarsInput(5500)).toBe("5.50");
     expect(dollarsInput(5010)).toBe("5.01");
     expect(dollarsInput(null)).toBe("");
-    expect(priceLabel(15000)).toBe("$15");
+    expect(priceLabel(15000)).toBe("$15.00");
     expect(priceLabel(9990)).toBe("$9.99");
     for (const mills of [100, 5000, 9990, 12500, 99_999_990]) {
       expect(parseDollars(dollarsInput(mills)).mills).toBe(mills);
@@ -130,5 +133,53 @@ describe("approving a selection", () => {
       publication(1, "2026-10-24T11:00:00.000Z", { version: 7 }),
     ];
     expect(approvalItems(shown, new Set([1, 2, 5, 9]))).toEqual([{ id: 5, version: 3 }, { id: 1, version: 7 }]);
+  });
+});
+
+describe("the approval window's facts", () => {
+  it("names the pages of the ticked rows, never another page", () => {
+    // The filter may show mia-9; the window speaks of the rows themselves.
+    const rows = [
+      publication(1, "2026-10-24T08:00:00.000Z", { pageLabel: "mia-1" }),
+      publication(2, "2026-10-24T09:00:00.000Z", { pageLabel: "nova-1" }),
+      publication(3, "2026-10-24T10:00:00.000Z", { pageLabel: "mia-1" }),
+    ];
+    const summary = approvalSummary(rows, new Map(), "2026-10-23");
+    expect(summary.count).toBe(3);
+    expect(summary.pages).toEqual(["mia-1", "nova-1"]);
+    expect(summary.notNow).toBeNull();
+  });
+
+  it("says which of the rows' pages do not publish now", () => {
+    const rows = [publication(1, "2026-10-24T08:00:00.000Z", { pageLabel: "mia-2" }), publication(2, "2026-10-24T09:00:00.000Z", { pageLabel: "mia-1" })];
+    const states = new Map([
+      ["mia-2", { notPublishing: true, badge: { word: "Выключена", tone: "off" as const } }],
+      ["mia-1", { notPublishing: false, badge: { word: "Публикует", tone: "good" as const } }],
+    ]);
+    expect(approvalSummary(rows, states, "2026-10-23").notNow).toContain("mia-2");
+    expect(approvalSummary(rows, states, "2026-10-23").notNow).not.toContain("mia-1");
+  });
+});
+
+describe("the address of the screen", () => {
+  it("reads the panels, «not out» and falls back on anything unknown", () => {
+    expect(parsePublicationsView(new URLSearchParams("status=not_out&window=last7&panel=settings&publication=4012"))).toEqual({
+      pageLabel: null, status: "not_out", window: "last7", panel: "settings", publication: 4012,
+    });
+    expect(parsePublicationsView(new URLSearchParams("status=nope&window=week&panel=x&publication=-3"))).toEqual({
+      pageLabel: null, status: null, window: "next7", panel: null, publication: null,
+    });
+    // `?page=all` is every page by link: never a label sent to the hub.
+    expect(parsePublicationsView(new URLSearchParams("page=all")).pageLabel).toBeNull();
+  });
+
+  it("changes only its own parameters and keeps every other one", () => {
+    const next = publicationsSearch({ status: "draft", window: "all", publication: null }, new URLSearchParams("page=all&publication=7&row=1"));
+    expect(next.get("page")).toBe("all");
+    expect(next.get("row")).toBe("1");
+    expect(next.get("status")).toBe("draft");
+    expect(next.get("window")).toBe("all");
+    expect(next.has("publication")).toBe(false);
+    expect(publicationsSearch({ window: "next7" }, new URLSearchParams("window=last7")).has("window")).toBe(false);
   });
 });

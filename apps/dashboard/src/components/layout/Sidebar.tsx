@@ -1,205 +1,196 @@
+import { useEffect, useRef, useState } from "react";
 import { Link, useLocation } from "react-router";
-import { BarChart3, CalendarClock, ChevronRight, Coins, Inbox, Layers, LayoutDashboard, LineChart, Search, Settings, Users, Wrench, type LucideIcon } from "lucide-react";
-import { useState, type ReactNode } from "react";
-import { useAdminConnections, useAttentionCounts } from "@/api/queries";
-import { isAlertState } from "@/components/shared/syncUxDisplay";
-import { PlatformTag } from "@/components/shared/PlatformBadge";
-import { buildAnalyticsRoute, buildPageRoute, decodeRouteSegment } from "@/lib/navigation";
-import { SYSTEM_HOME, TABBED_SECTIONS, isSystemPath, sectionHome, sectionOfPath } from "@/lib/sections";
-import { PALETTE_ARIA_SHORTCUT, PALETTE_SHORTCUT } from "./CommandPalette.js";
-import { useDashboardShell } from "./DashboardShellContext.js";
+import {
+  CalendarClock,
+  ChartColumn,
+  ChevronsUpDown,
+  Heart,
+  House,
+  LogOut,
+  Monitor,
+  Moon,
+  Search,
+  Settings,
+  Sun,
+  Users,
+  Wallet,
+  Wrench,
+  type LucideIcon,
+} from "lucide-react";
+import { useLogout } from "@/api/queries";
+import { useWaitingCounts } from "@/api/waiting";
+import { PALETTE_ARIA_SHORTCUT, PALETTE_SHORTCUT } from "@/lib/paletteShortcut";
+import { clearDashboardSession } from "@/lib/queryClient";
+import { matchScreen, menuOf, sectionHome, type Section } from "@/lib/sections";
+import { THEME_OPTIONS, useThemeStore, type ThemePreference } from "@/lib/theme";
 
 interface SidebarProps {
   user: { username: string; role: string };
   onOpenPalette?: (() => void) | undefined;
 }
 
-function prefetchAnalyticsCatalog() {
-  void import("@/api/pages").then((module) => module.prefetchPages());
-}
+const ICONS: Readonly<Record<Section["icon"], LucideIcon>> = {
+  House,
+  Wallet,
+  Heart,
+  ChartColumn,
+  CalendarClock,
+  Users,
+  Settings,
+  Wrench,
+};
 
-const COLLAPSED_KEY = "hub-sidebar-collapsed-models";
+const THEME_ICONS: Record<ThemePreference, LucideIcon> = { system: Monitor, light: Sun, dark: Moon };
 
-function readCollapsed(): Set<string> {
-  try {
-    const saved: unknown = JSON.parse(localStorage.getItem(COLLAPSED_KEY) ?? "[]");
-    return new Set(Array.isArray(saved) ? saved.filter((item): item is string => typeof item === "string") : []);
-  } catch {
-    return new Set();
-  }
-}
+const ROLE_LABELS: Record<string, string> = {
+  owner: "Владелец",
+  team_lead: "Тимлид",
+  chatter: "Чаттер",
+};
 
-function NavItem({ to, icon: Icon, active, children, trailing, onPointerEnter }: {
-  to: string;
-  icon: LucideIcon;
-  active: boolean;
-  children: ReactNode;
-  trailing?: ReactNode;
-  onPointerEnter?: () => void;
-}) {
+function ThemeSwitch() {
+  const { theme, setTheme } = useThemeStore();
   return (
-    <Link
-      to={to}
-      className="nav-item"
-      aria-current={active ? "page" : undefined}
-      onMouseEnter={onPointerEnter}
-      onFocus={onPointerEnter}
-    >
-      <Icon size={17} strokeWidth={1.8} />
-      <span className="min-w-0 truncate">{children}</span>
-      {trailing}
-    </Link>
-  );
-}
-
-export function Sidebar({ user, onOpenPalette }: SidebarProps) {
-  const { pages, pageCatalogState } = useDashboardShell();
-  const location = useLocation();
-  const [collapsed, setCollapsed] = useState(readCollapsed);
-  const owner = user.role === "owner";
-  const { data: connections } = useAdminConnections({ enabled: owner });
-  const hasSyncWarning = owner && (connections?.some((c) => isAlertState(c.syncUx)) ?? false);
-  const attention = useAttentionCounts(user.role);
-
-  type PageItem = (typeof pages)[number];
-  const modelPages = new Map<string, { modelName: string; pages: PageItem[] }>();
-  for (const page of pages) {
-    const existing = modelPages.get(page.modelSlug);
-    if (existing) existing.pages.push(page);
-    else modelPages.set(page.modelSlug, { modelName: page.modelName, pages: [page] });
-  }
-
-  const { pathname, search } = location;
-  const activePageLabel = (() => {
-    const parts = pathname.split("/").filter(Boolean);
-    return parts[0] === "pages" && parts[1] ? decodeRouteSegment(parts[1]) : null;
-  })();
-  const activeFanslyPageLabel = pages.some((page) => page.platform === "fansly" && page.label === activePageLabel)
-    ? activePageLabel
-    : null;
-  // The Analytics link carries the Fansly page already in view: landing on
-  // someone else's page is a worse default than landing on the first one.
-  const analyticsRoute = buildAnalyticsRoute(activeFanslyPageLabel);
-  const section = sectionOfPath(pathname);
-  const system = isSystemPath(pathname, search);
-  const onlyFansHome = sectionHome(TABBED_SECTIONS.onlyfans, user.role);
-  const attentionHome = sectionHome(TABBED_SECTIONS.attention, user.role);
-  const teamHome = sectionHome(TABBED_SECTIONS.team, user.role);
-
-  function toggleModel(slug: string) {
-    setCollapsed((current) => {
-      const next = new Set(current);
-      if (next.has(slug)) next.delete(slug);
-      else next.add(slug);
-      try {
-        localStorage.setItem(COLLAPSED_KEY, JSON.stringify([...next]));
-      } catch {
-        /* Remembering a collapsed model is a convenience only. */
-      }
-      return next;
-    });
-  }
-
-  return (
-    <nav aria-label="Разделы" className="fixed top-0 bottom-0 z-20 flex w-[248px] flex-col border-r border-border bg-card">
-      <Link to="/" className="flex h-[56px] shrink-0 items-center px-5 text-[17px] font-bold tracking-[-0.03em] text-text-primary">
-        <span className="text-accent">Agency</span>Hub
-      </Link>
-
-      <div className="flex-1 overflow-y-auto px-3 pb-4">
-        {onOpenPalette && (
-          <button type="button" className="palette-trigger mb-3" onClick={onOpenPalette} aria-keyshortcuts={PALETTE_ARIA_SHORTCUT}>
-            <Search size={16} aria-hidden="true" />
-            <span>Поиск</span>
-            <kbd className="kbd" aria-hidden="true">{PALETTE_SHORTCUT}</kbd>
-          </button>
-        )}
-        <div className="space-y-0.5">
-          <NavItem to="/" icon={LayoutDashboard} active={pathname === "/" || pathname === "/transactions"}>Обзор</NavItem>
-          {owner && (
-            <>
-              <NavItem to="/stats" icon={BarChart3} active={pathname === "/stats"}>
-                Статистика
-              </NavItem>
-              <NavItem to={analyticsRoute} icon={LineChart} active={pathname === "/analytics"} onPointerEnter={prefetchAnalyticsCatalog}>
-                Аналитика
-              </NavItem>
-              <NavItem to="/publications" icon={CalendarClock} active={section === "publications"}>
-                Публикации
-              </NavItem>
-            </>
-          )}
-          {onlyFansHome && (
-            <NavItem to={onlyFansHome} icon={Layers} active={section === "onlyfans"}>OnlyFans</NavItem>
-          )}
-          {teamHome && (
-            <NavItem to={teamHome} icon={Users} active={section === "team"}>Команда</NavItem>
-          )}
-          {attentionHome && (
-            <NavItem
-              to={attentionHome}
-              icon={Inbox}
-              active={section === "attention"}
-              trailing={attention.total > 0 ? <span className="nav-count" aria-label={`ждут: ${attention.total}`}>{attention.total}</span> : undefined}
-            >
-              Требует внимания
-            </NavItem>
-          )}
-        </div>
-
-        <div className="nav-group-label">Модели</div>
-        {pageCatalogState === "loading" && <p role="status" className="px-2.5 py-2 text-sm text-text-muted">Загружаем страницы…</p>}
-        {pageCatalogState === "error" && <p className="px-2.5 py-2 text-sm text-text-muted">Список страниц недоступен.</p>}
-        {pageCatalogState === "ready" && pages.length === 0 && (
-          <p className="px-2.5 py-2 text-sm text-text-muted">
-            Нет доступных страниц.
-            {owner && <> <Link className="link" to="/settings?tab=pages">Подключить страницу</Link></>}
-          </p>
-        )}
-        {[...modelPages.entries()].map(([slug, model]) => {
-          const isCollapsed = collapsed.has(slug) && !model.pages.some((page) => page.label === activePageLabel);
+    <div className="flex items-center justify-between gap-2 px-2 py-1">
+      <span className="text-sm text-text-secondary" id="theme-switch-label">Тема</span>
+      <div className="segmented" role="group" aria-labelledby="theme-switch-label">
+        {THEME_OPTIONS.map((option) => {
+          const Icon = THEME_ICONS[option.value];
           return (
-            <div key={slug} className="mb-1">
-              <button
-                type="button"
-                className="nav-model"
-                aria-expanded={!isCollapsed}
-                onClick={() => toggleModel(slug)}
-              >
-                <ChevronRight size={14} className={`text-text-muted transition-transform ${isCollapsed ? "" : "rotate-90"}`} />
-                <span className="min-w-0 truncate">{model.modelName}</span>
-                <span className="nav-model-count">{model.pages.length}</span>
-              </button>
-              {!isCollapsed && model.pages.map((page) => (
-                <Link
-                  key={page.id}
-                  to={buildPageRoute(page.label)}
-                  className="nav-page"
-                  aria-current={activePageLabel === page.label ? "page" : undefined}
-                >
-                  <span className="nav-page-label">{page.label}</span>
-                  <PlatformTag platform={page.platform} />
-                </Link>
-              ))}
-            </div>
+            <button
+              key={option.value}
+              type="button"
+              className="segment !px-2"
+              aria-pressed={theme === option.value}
+              aria-label={option.label}
+              title={option.label}
+              onClick={() => setTheme(option.value)}
+            >
+              <Icon size={16} aria-hidden="true" />
+            </button>
           );
         })}
       </div>
+    </div>
+  );
+}
 
-      {owner && (
-        <div className="shrink-0 space-y-0.5 border-t border-border p-3">
-          <NavItem to="/ofapi-credits" icon={Coins} active={section === "costs"}>Расходы</NavItem>
-          <NavItem
-            to="/settings"
-            icon={Settings}
-            active={pathname === "/settings" && !system}
-            trailing={hasSyncWarning ? <span className="nav-dot" role="img" aria-label="Нужна проверка подключения" /> : undefined}
-          >
-            Настройки
-          </NavItem>
-          <NavItem to={SYSTEM_HOME} icon={Wrench} active={system}>Система</NavItem>
+/** Who is signed in, the theme and the way out: at the bottom of the menu. */
+function AccountMenu({ user }: { user: SidebarProps["user"] }) {
+  const logout = useLogout();
+  const [open, setOpen] = useState(false);
+  const wrap = useRef<HTMLDivElement>(null);
+  const button = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    function onPointer(event: MouseEvent) {
+      if (!wrap.current?.contains(event.target as Node)) setOpen(false);
+    }
+    function onKey(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setOpen(false);
+        button.current?.focus();
+      }
+    }
+    window.addEventListener("mousedown", onPointer);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("mousedown", onPointer);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  async function handleLogout() {
+    if (logout.isPending) return;
+    try {
+      await logout.mutateAsync();
+      clearDashboardSession();
+      window.location.assign("/login");
+    } catch { /* The mutation retains the failure; do not report an unconfirmed logout. */ }
+  }
+
+  return (
+    <div ref={wrap} className="account-wrap">
+      {open && (
+        <div className="menu account-menu !w-auto">
+          <ThemeSwitch />
+          <div className="menu-rule" />
+          <button type="button" className="menu-item" disabled={logout.isPending} onClick={() => void handleLogout()}>
+            <LogOut size={16} aria-hidden="true" />
+            {logout.isPending ? "Выходим…" : "Выйти"}
+          </button>
+          {logout.isError && <p role="alert" className="field-error px-2 py-1">Выход не подтверждён. Повторите попытку.</p>}
         </div>
       )}
+      <button
+        ref={button}
+        type="button"
+        className="account"
+        aria-label="Меню аккаунта"
+        aria-expanded={open}
+        onClick={() => setOpen((value) => !value)}
+      >
+        <span className="avatar" aria-hidden="true">{user.username.charAt(0).toUpperCase()}</span>
+        <span className="account-text">
+          <span className="account-name">{user.username}</span>
+          <span className="account-role">{ROLE_LABELS[user.role] ?? "Сотрудник"}</span>
+        </span>
+        <ChevronsUpDown size={16} aria-hidden="true" />
+      </button>
+    </div>
+  );
+}
+
+/**
+ * The menu by topics (owner, 2026-11-04). One number only: at «Главная», the sum
+ * of what waits for the owner; no dots anywhere else. A page is not a branch of
+ * the menu: it is a filter in the screen's header.
+ */
+export function Sidebar({ user, onOpenPalette }: SidebarProps) {
+  const location = useLocation();
+  const waiting = useWaitingCounts(user.role);
+  const currentSection = matchScreen(location.pathname)?.screen.section ?? null;
+  const menu = menuOf(user.role);
+  const upper = menu.filter((section) => !section.lower);
+  const lower = menu.filter((section) => section.lower);
+
+  const item = (section: Section) => {
+    const Icon = ICONS[section.icon];
+    return (
+      <Link
+        key={section.id}
+        to={sectionHome(section, user.role)}
+        className="nav-item"
+        aria-current={currentSection === section.id ? "page" : undefined}
+      >
+        <Icon size={18} strokeWidth={1.75} aria-hidden="true" />
+        <span className="min-w-0 truncate">{section.label}</span>
+        {section.id === "home" && waiting.total > 0 && (
+          <span className="nav-count" aria-label={`Ждут вас: ${waiting.total}`}>{waiting.total}</span>
+        )}
+      </Link>
+    );
+  };
+
+  return (
+    <nav aria-label="Разделы" className="sidebar">
+      <Link to="/" className="logo"><span>Agency</span>Hub</Link>
+      {onOpenPalette && (
+        <button type="button" className="palette-trigger" onClick={onOpenPalette} aria-keyshortcuts={PALETTE_ARIA_SHORTCUT} title="Найти: раздел, страницу, фана">
+          <Search size={16} aria-hidden="true" />
+          <span>Найти</span>
+          <kbd className="kbd" aria-hidden="true">{PALETTE_SHORTCUT}</kbd>
+        </button>
+      )}
+      <div className="nav">{upper.map(item)}</div>
+      {lower.length > 0 && (
+        <>
+          <div className="nav-rule" />
+          <div className="nav !mt-0">{lower.map(item)}</div>
+        </>
+      )}
+      <AccountMenu user={user} />
     </nav>
   );
 }

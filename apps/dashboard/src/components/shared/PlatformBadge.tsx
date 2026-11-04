@@ -1,25 +1,18 @@
 import type { Platform } from "@agency_hub_core/shared";
+import { PLATFORM_DISPLAY_NAME } from "@/lib/platformUrls";
 
-const LABELS: Readonly<Record<Platform, { short: string; long: string }>> = {
-  fansly: { short: "Fansly", long: "Fansly" },
-  onlyfans: { short: "OF", long: "OnlyFans" },
-  telegram: { short: "TG", long: "Telegram" },
-};
+export const PLATFORM_WORD: Readonly<Record<Platform, string>> = PLATFORM_DISPLAY_NAME;
 
 interface PlatformBadgeProps {
   platform: Platform;
 }
 
-/** The platform of a page, in its brand tint. One look on every screen. */
+/** The platform of a page: plain text, one look on every screen. */
 export function PlatformBadge({ platform }: PlatformBadgeProps) {
-  return <span className={`platform-tag platform-${platform}`}>{LABELS[platform].long}</span>;
+  return <span className="platform-tag">{PLATFORM_WORD[platform]}</span>;
 }
 
-/** The compact form for dense lists (the sidebar's page tree). */
+/** The same word in a dense list. */
 export function PlatformTag({ platform }: PlatformBadgeProps) {
-  return (
-    <span className={`platform-tag platform-${platform}`} title={LABELS[platform].long}>
-      {LABELS[platform].short}
-    </span>
-  );
+  return <span className="platform-tag">{PLATFORM_WORD[platform]}</span>;
 }

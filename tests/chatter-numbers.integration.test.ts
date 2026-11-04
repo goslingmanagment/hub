@@ -170,5 +170,15 @@ describe("the numbers of a chatter's shift", () => {
     // One shift, however little of it the lead's page holds: a view of a page does not cut it in two.
     expect(numbers.shifts.map((shift) => shift.numbers.revenueMills)).toEqual([40_000]);
     expect(numbers.week.revenueMills).toBe(40_000);
+
+    // One person asked: the same numbers, nobody else; the lead's pages still decide.
+    const window = { from: new Date(start.getTime() - MIN).toISOString(), to: new Date().toISOString() };
+    const one = await readTeamChatterNumbers(app, lead, { ...window, userId: kolya, pageScope: [a] });
+    expect(one.chatters.map((chatter) => chatter.username)).toEqual(["kolya"]);
+    expect(one.chatters[0]!.week.revenueMills).toBe(40_000);
+    const offScope = await readTeamChatterNumbers(app, lead, { ...window, userId: kolya, pageScope: [pageId] });
+    expect(offScope.chatters).toEqual([]);
+    const someoneElse = await readTeamChatterNumbers(app, lead, { ...window, userId: vanya, pageScope: [a] });
+    expect(someoneElse.chatters).toEqual([]);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 });

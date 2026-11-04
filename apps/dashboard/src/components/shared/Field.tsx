@@ -7,10 +7,12 @@ export function Field({
   children,
   label,
   hint,
+  error,
 }: {
   children: ReactNode;
   label: string;
   hint?: ReactNode | undefined;
+  error?: ReactNode | undefined;
 }) {
   return (
     <div className="min-w-0">
@@ -19,6 +21,7 @@ export function Field({
         {children}
       </label>
       {hint && <p className="field-hint">{hint}</p>}
+      {error && <p className="field-error" role="alert">{error}</p>}
     </div>
   );
 }

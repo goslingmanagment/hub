@@ -8,12 +8,13 @@ import { useAdminCreatePage, useAdminVerifyCredentials } from "@/api/queries";
 import { ModalShell } from "@/components/shared/ModalShell";
 import { Field } from "@/components/shared/Field";
 import { toast } from "sonner";
+import { isConflict, rawError, toastWriteError } from "./settingsFeedback.js";
 
 type VerifyState = "idle" | "verifying" | "verified" | "verify-failed";
 
 /** A new OnlyFans page: its account found in OnlyFans API by its username. A
  *  Fansly page is connected through its own server browser instead
- *  (`BrowserProfilesSection`). */
+ *  (`/settings/pages/connect`). Opened only while the API is on. */
 export function CreatePageModal({
   models,
   onClose,
@@ -34,6 +35,7 @@ export function CreatePageModal({
   const [verifyState, setVerifyState] = useState<VerifyState>("idle");
   const [verifyResult, setVerifyResult] = useState<VerifyCredentialsResponse | null>(null);
   const [verifyError, setVerifyError] = useState("");
+  const [verifyRaw, setVerifyRaw] = useState<string | undefined>(undefined);
   const verificationRevision = useRef(0);
 
   useEffect(() => () => { verificationRevision.current += 1; }, []);
@@ -58,7 +60,8 @@ export function CreatePageModal({
       setVerifyState("verified");
     } catch (error) {
       if (revision !== verificationRevision.current) return;
-      setVerifyError(error instanceof Error ? error.message : "Проверка не удалась");
+      setVerifyError("Проверка не удалась");
+      setVerifyRaw(rawError(error));
       setVerifyState("verify-failed");
     }
   }
@@ -73,13 +76,13 @@ export function CreatePageModal({
       };
       const result = await createPage.mutateAsync(body);
       if (result.syncQueued) {
-        toast.success("Страница добавлена — первый сбор данных уже в очереди");
+        toast.success("Страница добавлена: первый сбор данных уже в очереди");
       } else {
         toast.warning(result.syncWarning?.message ?? "Страница добавлена, но первый сбор данных не запустился");
       }
       onClose();
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Не удалось добавить страницу");
+      toastWriteError(error, isConflict(error) ? "Страница с таким названием уже есть." : "Не удалось добавить страницу");
     }
   }
 
@@ -89,8 +92,8 @@ export function CreatePageModal({
     modelSlug.length > 0;
 
   return (
-    <ModalShell title="Добавить страницу OnlyFans" onClose={onClose}>
-      <div className="space-y-5">
+    <ModalShell title="Добавить страницу OnlyFans" onClose={onClose} size="short">
+      <div className="space-y-6">
         <Field label="Модель">
           <select
             value={modelSlug}
@@ -110,18 +113,18 @@ export function CreatePageModal({
           <input
             value={label}
             onChange={(event) => setLabel(event.target.value)}
-            placeholder="например, lora-of"
+            placeholder="например, mia-of"
             autoComplete="off"
             spellCheck={false}
             className="input"
           />
         </Field>
 
-        <section className="space-y-4 border-t border-border-light pt-5" aria-label="Аккаунт">
+        <section className="space-y-4 border-t border-border-light pt-6" aria-label="Аккаунт">
           <h3 className="card-title">Аккаунт</h3>
           <Field
             label="Имя пользователя на OnlyFans"
-            hint="Сначала подключите этот аккаунт в OnlyFans API — Hub читает страницу через него, прокси и пароль здесь не нужны."
+            hint="Сначала подключите этот аккаунт в OnlyFans API: Hub читает страницу через него, прокси и пароль здесь не нужны."
           >
             <input
               value={username}
@@ -148,7 +151,7 @@ export function CreatePageModal({
               {verifyState === "verifying" ? "Проверяем…" : "Проверить аккаунт"}
             </button>
             {verifyState !== "verified" && verifyState !== "verify-failed" && (
-              <span className="text-xs text-text-secondary">Hub найдёт этот аккаунт в OnlyFans API.</span>
+              <span className="text-sm text-text-secondary">Hub найдёт этот аккаунт в OnlyFans API.</span>
             )}
           </div>
           {verifyState === "verified" && verifyResult && (
@@ -158,16 +161,16 @@ export function CreatePageModal({
             </div>
           )}
           {verifyState === "verify-failed" && verifyError && (
-            <div role="alert" className="notice notice-danger">
+            <div role="alert" className="notice notice-danger" title={verifyRaw}>
               {verifyError}
             </div>
           )}
         </div>
       </div>
 
-      <div className="mt-6 flex flex-wrap items-center justify-end gap-2">
+      <div className="dialog-actions items-center">
         {verifyState !== "verified" && (
-          <span className="mr-auto text-xs text-text-secondary">Создать можно после проверки аккаунта.</span>
+          <span className="mr-auto text-sm text-text-secondary">Создать можно после проверки аккаунта.</span>
         )}
         <button type="button" onClick={onClose} className="btn">
           Отмена
@@ -178,7 +181,7 @@ export function CreatePageModal({
           onClick={handleCreate}
           className="btn btn-primary"
         >
-          Создать страницу
+          {createPage.isPending ? "Создаём…" : "Создать страницу"}
         </button>
       </div>
     </ModalShell>
