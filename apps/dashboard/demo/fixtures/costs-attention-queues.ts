@@ -39,7 +39,6 @@ const OLYA = DEMO_USERS.find((user) => user.username === "olya.m")!;
 const MARTA = DEMO_USERS.find((user) => user.username === "lead.marta")!;
 const OWNER = DEMO_USERS.find((user) => user.role === "owner")!;
 const INSTALL_OLYA = uuid("install:olya");
-const INSTALL_OLYA_LAPTOP = uuid("install:olya-laptop");
 const INSTALL_MARTA = uuid("install:marta");
 
 function fanOf(label: string, index: number): string {
@@ -60,10 +59,10 @@ interface HeldSeed {
   greeting?: { source: string; minutesAfter: number; thisAttempt: boolean };
 }
 
+// One held send, as calm as production (build-rules R0а): its greeting already
+// confirmed shows the hint the resolve window carries.
 const HELD: readonly HeldSeed[] = [
   { page: "mia-of", fan: 7, user: MARTA, install: INSTALL_MARTA, purpose: "greeting", partIndex: 0, partCount: 1, variant: 0, minutesAgo: 28 * 60 + 14, greeting: { source: "native-register", minutesAfter: 3, thisAttempt: true } },
-  { page: "mia-vip-of", fan: 3, user: OLYA, install: INSTALL_OLYA, purpose: "preview-reply", partIndex: 0, partCount: 1, variant: 0, minutesAgo: 3 * 60 + 12 },
-  { page: "mia-of", fan: 41, user: OLYA, install: INSTALL_OLYA_LAPTOP, purpose: "greeting", partIndex: 1, partCount: 2, variant: 2, minutesAgo: 47 },
 ];
 
 const NOTES_SENT = [
