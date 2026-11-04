@@ -14,6 +14,7 @@ import { Stat, StatGrid } from "@/components/ui/StatGrid";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { formatAiUsd, formatCount, formatDate, formatDateTime } from "@/lib/format";
 import { AI_ACCOUNT_STATUS, VOICE_STATUS } from "@/lib/statusWords";
+import { isUnknownOutcome, UNKNOWN_OUTCOME } from "@/pages/settings/settingsFeedback";
 import { callsWord, daysLeftLabel } from "./aiShared.js";
 
 const working = (account: AdminAiAccount) => account.enabled && account.configured && account.status === "active";
@@ -24,6 +25,11 @@ function accountStatus(account: AdminAiAccount) {
   if (account.status === "exhausted") return AI_ACCOUNT_STATUS.exhausted!;
   if (account.status === "invalid") return AI_ACCOUNT_STATUS.invalid!;
   return account.serving ? AI_ACCOUNT_STATUS.serving! : AI_ACCOUNT_STATUS.queued!;
+}
+
+/** A refusal leaves the value as it was; without an answer nobody knows, and the screen says so. */
+function SaveFailure({ cause }: { cause: unknown }) {
+  return <>{isUnknownOutcome(cause) ? `${UNKNOWN_OUTCOME} Обновите экран и проверьте.` : "Не удалось сохранить: Hub отказал. Значение прежнее."}</>;
 }
 
 function errorText(cause: unknown): string {
@@ -153,18 +159,18 @@ function VoiceLine() {
 export function AiMoneyBlock() {
   const { data, isLoading, refetch } = useAdminAiAccounts();
   const update = useAdminUpdateAiAccount();
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<unknown>(null);
   const [editing, setEditing] = useState<number | null>(null);
   const [open, setOpen] = useState<number | null>(null);
   const [disabling, setDisabling] = useState<AdminAiAccount | null>(null);
-  const [disableError, setDisableError] = useState<string | null>(null);
+  const [disableError, setDisableError] = useState<unknown>(null);
 
   // The write as it was: the target is the row's account, the body unchanged.
   const change = (accountId: number, body: Parameters<typeof update.mutate>[0]["body"], after?: () => void) => {
     setError(null);
     update.mutate({ accountId, body }, {
       onSuccess: () => after?.(),
-      onError: (cause) => setError(errorText(cause)),
+      onError: setError,
     });
   };
 
@@ -210,10 +216,10 @@ export function AiMoneyBlock() {
             <Stat label="Уходит в день" value={formatAiUsd(burn)} meta="Среднее за 3 дня, все счета" />
           </StatGrid>
         </div>
-        {error && (
+        {error !== null && (
           <div className="card-body pb-0">
-            <Notice tone="warning" role="alert" detail={<Disclosure label="Подробнее"><p>{error}</p></Disclosure>}>
-              Не удалось сохранить: Hub вернул ошибку. Значение прежнее.
+            <Notice tone="warning" role="alert" detail={<Disclosure label="Подробнее"><p>{errorText(error)}</p></Disclosure>}>
+              <SaveFailure cause={error} />
             </Notice>
           </div>
         )}
@@ -359,11 +365,11 @@ export function AiMoneyBlock() {
           pendingLabel="Выключаем…"
           tone={others.length === 0 ? "danger" : "primary"}
           initialFocus={others.length === 0 ? "cancel" : "first"}
-          error={disableError ? <>Не удалось сохранить: Hub вернул ошибку. Значение прежнее. <span className="text-text-secondary">{disableError}</span></> : undefined}
+          error={disableError !== null ? <><SaveFailure cause={disableError} /><Disclosure label="Подробнее"><p>{errorText(disableError)}</p></Disclosure></> : undefined}
           isPending={update.isPending}
           onConfirm={() => update.mutate({ accountId: disabling.id, body: { enabled: false } }, {
             onSuccess: () => setDisabling(null),
-            onError: (cause) => setDisableError(errorText(cause)),
+            onError: setDisableError,
           })}
           onClose={() => setDisabling(null)}
         />

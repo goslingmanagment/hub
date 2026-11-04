@@ -16,7 +16,7 @@ export function ToolsPage() {
   const pages = collection.data?.pages ?? [];
   return (
     <div className="space-y-6 sys-screen">
-      <PageHeader fresh={freshOf(collection)} />
+      <PageHeader fresh={freshOf(collection, [], ofapi.status === "off")} />
       <OfapiOffBar ofapi={ofapi} />
       <DisclosureCard title="События и восстановление" description="История доставок и повтор пропущенных.">
         <div className="card-body"><OfapiWebhookRecovery blocked={ofapi.block} /></div>

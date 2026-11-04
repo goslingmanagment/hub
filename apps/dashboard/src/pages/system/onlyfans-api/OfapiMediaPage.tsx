@@ -8,6 +8,7 @@ import { StatusPanel } from "@/components/shared/StatusPanel";
 import { Disclosure } from "@/components/ui/Disclosure";
 import { Notice } from "@/components/ui/Notice";
 import { PageHeader } from "@/components/ui/PageHeader";
+import { RowMenu } from "@/components/ui/RowMenu";
 import { OFAPI_OFF_WORD } from "@/lib/statusWords";
 import { useOfapi } from "../shared.js";
 import { OfapiOffBar } from "./OfapiOffBar.js";
@@ -43,6 +44,14 @@ const reasonLabels: Record<string, string> = {
 const inventoryLabels: Record<string, string> = { never: "Ещё не собиралась", partial: "Собрана частично", complete: "Собрана полностью" };
 const providerTypeLabels: Record<string, string> = { photo: "фото", video: "видео", audio: "аудио", gif: "GIF" };
 const releaseFormStatusLabels: Record<string, string> = { approved: "одобрено", pending: "на проверке", rejected: "отклонено", expired: "истекло" };
+
+/** What a row says about its consents; the names open under it. */
+function consentShort(forms: ReadonlyArray<{ status?: string | null | undefined }>): string {
+  if (forms.length > 1) return `${forms.length} ${ruPlural(forms.length, "согласие", "согласия", "согласий")}`;
+  const status = forms[0]?.status;
+  const word = status ? releaseFormStatusLabels[status] ?? status : "есть";
+  return `${word.charAt(0).toUpperCase()}${word.slice(1)}`;
+}
 
 /** One numbered step of the upload: the number, its title, its controls. */
 function Step({ number, title, state, children }: { number: number; title: string; state: "done" | "current" | "todo"; children: ReactNode }) {
@@ -230,7 +239,7 @@ export function OfapiMediaPage() {
   );
   return (
     <div className={`space-y-6 sys-screen${ofapi.status === "off" ? " sys-off-tone" : ""}`}>
-      <PageHeader fresh={saved.dataUpdatedAt ? { at: saved.dataUpdatedAt, refreshing: busy, onRefresh: () => void run(async () => {}, "Данные обновлены.") } : undefined} />
+      <PageHeader fresh={saved.dataUpdatedAt ? { at: saved.dataUpdatedAt, frozen: ofapi.status === "off", refreshing: busy, onRefresh: () => void run(async () => {}, "Данные обновлены.") } : undefined} />
       {owner && <OfapiOffBar ofapi={ofapi} />}
       <label className="sys-inline-field">
         <span className="text-text-secondary">Страница</span>
@@ -347,42 +356,48 @@ export function OfapiMediaPage() {
                         ? <span className="badge badge-danger">Ошибка у OnlyFans</span>
                         : <span className={readyBadge(media.isReady)}>{ready(media.isReady)}</span>}
                     </td>
-                    <td className="muted">
+                    <td className="muted whitespace-nowrap">
                       {media.width !== null && media.height !== null ? `${media.width}×${media.height} · ` : ""}
                       {media.bytes === null ? "размер неизвестен" : formatSize(media.bytes)}
                     </td>
                     <td className="muted">
                       {media.releaseForms.length
-                        ? media.releaseForms
-                            .map(
-                              (form) =>
-                                `${form.name ?? form.id}${form.status ? ` (${releaseFormStatusLabels[form.status] ?? form.status})` : ""}`,
-                            )
-                            .join(", ")
+                        ? (
+                          <details className="help sys-consent">
+                            <summary>{consentShort(media.releaseForms)}</summary>
+                            <p>
+                              {media.releaseForms
+                                .map(
+                                  (form) =>
+                                    `${form.name ?? form.id}${form.status ? ` (${releaseFormStatusLabels[form.status] ?? form.status})` : ""}`,
+                                )
+                                .join(", ")}
+                            </p>
+                          </details>
+                        )
                         : "Нет"}
                     </td>
                     <td className="text-right">
                       {owner && media.materialKind === "vault" && (
-                        <button
-                          type="button"
-                          className="btn btn-sm"
-                          disabled={
-                            writeOff !== null || busy ||
-                            media.isReady !== true ||
-                            media.hasError === true ||
-                            media.canView === false
-                          }
-                          onClick={() =>
-                            void copyMaterial({
-                              pageId,
-                              mediaRef: media.mediaRef,
-                              expectedObservationId: media.observationId,
-                              reason: "Owner reviewed vault material handoff",
-                            })
-                          }
-                        >
-                          Скопировать ID
-                        </button>
+                        <RowMenu
+                          label={`Действия файла ${media.filename ?? media.mediaRef}`}
+                          items={[{
+                            label: "Скопировать ID",
+                            disabled:
+                              writeOff !== null || busy ||
+                              media.isReady !== true ||
+                              media.hasError === true ||
+                              media.canView === false,
+                            hint: writeOff ?? undefined,
+                            onSelect: () =>
+                              void copyMaterial({
+                                pageId,
+                                mediaRef: media.mediaRef,
+                                expectedObservationId: media.observationId,
+                                reason: "Owner reviewed vault material handoff",
+                              }),
+                          }]}
+                        />
                       )}
                     </td>
                   </tr>
@@ -458,7 +473,7 @@ export function OfapiMediaPage() {
                         {canResume && (
                           <button
                             type="button"
-                            className="btn btn-sm btn-primary"
+                            className="btn btn-sm"
                             disabled={writeOff !== null || busy || !pages.data || pages.data.backgroundPaused}
                             onClick={() =>
                               void run(async () => {
@@ -479,7 +494,7 @@ export function OfapiMediaPage() {
                           <>
                             <button
                               type="button"
-                              className="btn btn-sm btn-primary"
+                              className="btn btn-sm"
                               disabled={writeOff !== null || busy}
                               onClick={() =>
                                 void copyMaterial({

@@ -21,7 +21,7 @@ export function personaRoute(key: string, tab?: "openers"): string {
 function OpenersCell({ persona }: { persona: AdminAiPersona }) {
   const { data, isLoading, isError } = useAdminAiPersonaOpeners(persona.key);
   if (isLoading && !data) return <Skeleton width={110} />;
-  if (isError && !data) return <span className="muted">—</span>;
+  if (isError && !data) return <span className="muted">Hub не ответил</span>;
   const openers = data?.openers ?? [];
   const to = personaRoute(persona.key, "openers");
   if (openers.length === 0) return <Link to={to} className="settings-link text-text-secondary">Текстов нет: Hi пишет сам</Link>;

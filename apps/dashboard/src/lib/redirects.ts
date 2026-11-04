@@ -7,6 +7,7 @@
  * rights are checked by the route it lands on.
  */
 import { matchPath } from "react-router";
+import { ALL_PAGES_PARAM } from "./pageParam.js";
 import { decodedPath, pathSegment } from "./path.js";
 
 export type RouteParams = Readonly<Record<string, string | undefined>>;
@@ -69,11 +70,13 @@ export const LEGACY_ROUTES: ReadonlyArray<LegacyRule & { path: string }> = [
   {
     path: "transactions", // 2
     rename: { pageLabel: "page" },
-    // An old link without dates meant the whole history and every operation: the
-    // sum it opens must stay the sum it promised (design/ia.md §8.2).
+    // An old link without dates meant the whole history and every operation, and one
+    // without a page meant every page: the sum it opens must stay the sum it promised,
+    // whatever filter is remembered (design/ia.md §8.2).
     to: (_, query) => {
       if (!query.has("from") && !query.has("to")) query.set("period", "all");
       if (!query.has("reportableOnly")) query.set("reportableOnly", "false");
+      if (!query.has("page")) query.set("page", ALL_PAGES_PARAM);
       return "/money/transactions";
     },
   },
@@ -217,8 +220,8 @@ export function resolveLegacyUrl(url: string): string | null {
   const { search, hash } = parsed;
   const pathname = decodedPath(parsed.pathname);
   const query = new URLSearchParams(search);
-  const live = pathname === "/stats" ? statsLegacyRule(query)
-    : pathname === "/settings" ? SETTINGS_INDEX_RULE
+  const live = matchPath({ path: "/stats", end: true }, pathname) ? statsLegacyRule(query)
+    : matchPath({ path: "/settings", end: true }, pathname) ? SETTINGS_INDEX_RULE
       : null;
   if (live) return printTarget(legacyTarget(live, {}, search, hash));
   const card = matchPath({ path: "/pages/:pageLabel", end: true }, pathname);

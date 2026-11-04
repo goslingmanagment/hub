@@ -1045,7 +1045,19 @@ export function approvalOutcome(
   return { approved: results.length - refused.length, refused };
 }
 
-/** A refused action (cancel, resolve, settings) in words; the hub's English is never shown. */
+/** The hub's own reason for a refused value (400): folded on a form, the second line of a toast. */
+export function actionFailureReason(error: unknown): string | null {
+  const { status, message } = (typeof error === "object" && error !== null ? error : {}) as { status?: unknown; message?: unknown };
+  return status === 400 && typeof message === "string" && message !== "" ? message : null;
+}
+
+/** The second line of a toast about a refused action. */
+export function actionFailureToast(error: unknown): { description: string } | undefined {
+  const reason = actionFailureReason(error);
+  return reason === null ? undefined : { description: reason };
+}
+
+/** A refused action (cancel, resolve, settings) in words; the hub's reason goes beside it (`actionFailureReason`). */
 export function actionFailure(error: unknown): string {
   const { status, code } = (typeof error === "object" && error !== null ? error : {}) as { status?: unknown; code?: unknown };
   if (status === 409 && code === "publication_version_conflict") return "Публикацию только что изменили. Список обновлён: посмотрите ещё раз.";
@@ -1054,6 +1066,7 @@ export function actionFailure(error: unknown): string {
   if (status === 404) return "Hub не нашёл эту публикацию или страницу. Список обновлён.";
   if (status === 400) return "Hub не принял данные.";
   if (status === 403) return "Это может только владелец.";
+  if (typeof status === "number" && status < 500) return "Hub отказал. Проверьте список и попробуйте ещё раз.";
   return "Hub не ответил. Проверьте список и попробуйте ещё раз.";
 }
 

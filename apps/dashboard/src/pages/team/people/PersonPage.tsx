@@ -101,15 +101,7 @@ function EndAccess({ user, onAsk, deleteDisabled, canDelete }: {
   canDelete: boolean;
 }) {
   const disabled = Boolean(user.disabledAt);
-  if (ownerIsProtected(user)) {
-    return (
-      <Block title="Отключить доступ">
-        <p className="team-muted">
-          Владельца нельзя деактивировать и нельзя завершить все его входы — иначе консоль осталась бы без хозяина. Пароль владелец меняет сам.
-        </p>
-      </Block>
-    );
-  }
+  const owner = ownerIsProtected(user);
   const rows = [
     !disabled && {
       key: "revokeAll",
@@ -119,7 +111,7 @@ function EndAccess({ user, onAsk, deleteDisabled, canDelete }: {
       danger: false,
       off: false,
     },
-    !disabled && {
+    !disabled && !owner && {
       key: "terminate",
       text: "Завершатся входы на всех устройствах, в консоли и все ссылки. Пароль продолжит работать.",
       label: REVOCATION_LABEL.allAccess,
@@ -138,13 +130,18 @@ function EndAccess({ user, onAsk, deleteDisabled, canDelete }: {
   ].filter((row) => row !== false);
   return (
     <Block title="Отключить доступ">
-      {!disabled && (
+      {owner && (
+        <p className="team-muted">
+          Владельца нельзя деактивировать и нельзя завершить все его входы — иначе консоль осталась бы без хозяина. Пароль владелец меняет сам.
+        </p>
+      )}
+      {!owner && !disabled && (
         <div className="person-action">
           <p>Все входы и ссылки перестанут работать. Логин, история, роль и страницы сохранятся, доступ можно будет восстановить.</p>
           <button type="button" onClick={() => onAsk("deactivate")} className="btn btn-danger-outline">Отключить доступ</button>
         </div>
       )}
-      {disabled && <p className="team-muted">Доступ уже отключён. Восстановить его можно в плашке вверху.</p>}
+      {!owner && disabled && <p className="team-muted">Доступ уже отключён. Восстановить его можно в плашке вверху.</p>}
       {rows.length > 0 && (
         <details className="help person-more">
           <summary>Другие способы завершить доступ</summary>

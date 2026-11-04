@@ -6,6 +6,7 @@ import { useCreateFanNote } from "@/api/queries";
 import { kernel } from "@/api/sdk";
 import { Spinner } from "@/components/ui/Skeleton";
 import { formatDateTime } from "@/lib/format";
+import { isUnknownOutcome, UNKNOWN_OUTCOME } from "@/pages/settings/settingsFeedback";
 import { fanNoteDraftsReducer } from "./fanNoteDrafts.js";
 
 type Note = PageFanDetailResponse["page"]["notes"][number];
@@ -51,8 +52,10 @@ export function FanNotes({ pageLabel, platformUserId, routeKey, principalId, not
       await createNote.mutateAsync({ pageLabel, platformUserId, body });
       dispatchNoteDraft({ type: "saved", principalId: submittedPrincipalId, routeKey: submittedRoute, submittedText });
       toast.success(`Заметка добавлена на ${pageLabel}`);
-    } catch {
-      toast.error("Не удалось добавить заметку: Hub не ответил. Текст остался в поле.");
+    } catch (error) {
+      toast.error(isUnknownOutcome(error)
+        ? `${UNKNOWN_OUTCOME} Обновите экран и проверьте заметки. Текст остался в поле.`
+        : "Не удалось добавить заметку: Hub отказал. Текст остался в поле.");
     }
   }
 

@@ -61,6 +61,10 @@ export function buildRevenueTransactionsRoute(input: {
   if (input.from && input.to) {
     params.set("from", input.from);
     params.set("to", input.to);
+  } else {
+    // A window without dates is the whole history: the address says so, or the
+    // screen would open on the remembered period and show another sum.
+    params.set("period", "all");
   }
   if (input.type) params.set("type", input.type);
   return `/money/transactions?${params}`;

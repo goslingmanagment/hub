@@ -5,7 +5,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import type { Platform } from "@agency_hub_core/shared";
 import { useAuthMe } from "@/api/queries";
 import { PLATFORM_WORD } from "@/components/shared/PlatformBadge";
-import { StatusPanel } from "@/components/shared/StatusPanel";
+import { NoAnswerPanel, StatusPanel } from "@/components/shared/StatusPanel";
 import { Notice } from "@/components/ui/Notice";
 import { PageFresh } from "@/components/ui/PageHeader";
 import { SectionTabs } from "@/components/ui/SectionTabs";
@@ -88,9 +88,11 @@ function CollectionNotice({ page, collection, owner }: { page: CardPage; collect
 export function PageCardLayout() {
   const { pageLabel: rawLabel } = useParams<{ pageLabel: string }>();
   const pageLabel = rawLabel === undefined ? undefined : decodeRouteSegment(rawLabel);
-  const { findPageByLabel, pageCatalogState } = useDashboardShell();
+  const { findPageByLabel, pageCatalogState, retryPageCatalog } = useDashboardShell();
   const page = findPageByLabel(pageLabel);
   if (pageCatalogState === "loading") return <ScreenFallback />;
+  // Without the catalog nothing is known about the page: not «there is no such page».
+  if (pageCatalogState === "error") return <NoAnswerPanel retry={retryPageCatalog} />;
   if (!page) {
     return (
       <StatusPanel

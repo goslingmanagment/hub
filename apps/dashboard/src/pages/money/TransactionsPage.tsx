@@ -2,7 +2,9 @@ import { Link, useLocation, useSearchParams } from "react-router";
 import { ArrowDown, ArrowUp } from "lucide-react";
 import type { CrossPageTransactionItem, CrossPageTransactionListQuery } from "@agency_hub_core/contracts";
 import { reportableTransactionTypes } from "@agency_hub_core/shared";
+import { useAuthMe } from "@/api/queries";
 import { useRevenueTransactions } from "@/api/transactions";
+import { useOfapiStatus } from "@/api/waiting";
 import { useDashboardShell } from "@/components/layout/DashboardShellContext";
 import { usePageFilter } from "@/components/layout/usePageFilter";
 import { useScreenPeriod } from "@/components/layout/useScreenPeriod";
@@ -20,7 +22,7 @@ import { buildFanProfileNavigation, buildPageRoute } from "@/lib/navigation";
 import { safeBackTo } from "@/lib/overviewNavigation";
 import { PERIOD_LABELS } from "@/lib/period";
 import { SOURCE_LABELS } from "@/lib/revenueDisplay";
-import { TRANSACTION_STATUS } from "@/lib/statusWords";
+import { OFAPI_FEED_NOTE, TRANSACTION_STATUS } from "@/lib/statusWords";
 import { matchesTransactionScope, parseTransactionUrl } from "@/lib/transactionNavigation";
 import { usePeriodStore, type PeriodOption } from "@/stores/periodStore";
 
@@ -93,6 +95,10 @@ export function TransactionsPage() {
   const location = useLocation();
   const filter = usePageFilter();
   const { pages } = useDashboardShell();
+  const { data: auth } = useAuthMe();
+  const ofapi = useOfapiStatus(auth?.user.role ?? "team_lead");
+  // The operations of OnlyFans go on from the feed: said once under them (build-rules R8).
+  const feed = ofapi === "off" && (filter.item ? filter.item.platform === "onlyfans" : pages.some((page) => page.platform === "onlyfans"));
   const screenPeriod = useScreenPeriod();
   const setStored = usePeriodStore((state) => state.setPeriod);
   const period = screenPeriod.key as PeriodOption;
@@ -270,6 +276,7 @@ export function TransactionsPage() {
         fresh={data?.summary ? { at: data.summary.readAt, refreshing: query.isFetching, onRefresh: () => void query.refetch() } : undefined}
       />
       {body}
+      {feed && <p className="home-footnote">{OFAPI_FEED_NOTE}</p>}
       <Disclosure>
         <p>
           Операции, которые сохранил Hub, после комиссии площадок. Сутки считаются по UTC, поэтому операция в 02:40 по

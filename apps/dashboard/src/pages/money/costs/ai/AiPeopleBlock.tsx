@@ -220,6 +220,12 @@ export function AiPeopleBlock({ data, range }: { data: Spend; range: { from: str
           </tbody>
         </table>
       </div>
+      {usage.isError && (
+        <div className="card-footer justify-start">
+          Перегенерации и подробности по людям не пришли: Hub не ответил.{" "}
+          <button type="button" className="link" onClick={() => void usage.refetch()}>Повторить</button>
+        </div>
+      )}
       {data.shifts.shifts > 0 && (
         <div className="card-footer justify-start">
           Часы и «за час» — смены с {formatDateTime(data.shifts.from)} по {formatDateTime(data.shifts.to)}: {formatCount(data.shifts.shifts)} {ruPlural(data.shifts.shifts, "смена", "смены", "смен")},

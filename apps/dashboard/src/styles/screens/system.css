@@ -436,3 +436,28 @@
     .sys-screen .sys-clamp, .sys-screen .sys-truncate { max-width: 320px; }
   }
 }
+
+@layer components {
+  /* «Правила сбора»: the row is the name and the mode; what a category is opens with the row. */
+  .data-table.sys-rules td.sys-rules-cat { min-width: 140px; max-width: none; }
+  .data-table.sys-rules td.sys-rules-mode { min-width: 180px; max-width: none; }
+  .sys-rules-why { margin-bottom: 16px; font-size: 14px; line-height: 20px; color: var(--color-text-secondary); }
+  @media (min-width: 768px) {
+    .stat-grid.sys-usage-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  }
+}
+@layer components {
+  /* «Медиа»: one short word in the row, the consent's full text when opened. */
+  .sys-consent summary { cursor: pointer; white-space: nowrap; }
+  .sys-consent p { margin-top: 4px; max-width: 240px; white-space: normal; font-size: 13px; line-height: 18px; }
+}
+@layer components {
+  /* On a phone a long button wraps inside the card instead of leaving it. */
+  @media (max-width: 767px) {
+    .sys-screen .btn { max-width: 100%; height: auto; white-space: normal; }
+  }
+}
+@layer components {
+  /* Four narrow tiles beside the section menu: the unit always on its own line, or «22 634 кредита» breaks and «0 кредитов» does not. */
+  .sys-usage-grid .sys-unit { display: block; }
+}

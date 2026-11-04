@@ -98,7 +98,7 @@ export function StatePage() {
   const webhook = useAdminOfapiWebhookStatus();
   return (
     <div className="space-y-6 sys-screen">
-      <PageHeader fresh={freshOf(webhook)} />
+      <PageHeader fresh={freshOf(webhook, [], ofapi.status === "off")} />
       {ofapi.status === "off" && (
         <Notice tone="off" detail="Включается ключом в настройках сервера: это делает разработчик.">
           <b className="font-medium">OnlyFans API выключен с 1 ноября.</b> Hub ничего не покупает и не отправляет через него. Настройки и собранные данные сохранены.

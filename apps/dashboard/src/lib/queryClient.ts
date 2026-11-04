@@ -1,6 +1,5 @@
 import {
   MutationCache,
-  QueryCache,
   QueryClient,
 } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -18,11 +17,16 @@ declare module "@tanstack/react-query" {
   }
 }
 
-function isApiErrorLike(error: unknown): error is { status: number; message: string } {
+function isApiErrorLike(error: unknown): error is { status: number | null; message: string } {
   return typeof error === "object" && error !== null && "status" in error && "message" in error;
 }
 
-function handleGlobalError(
+/**
+ * A write's fallback, when its screen says nothing itself. A read has none: the
+ * screen shows «Hub не ответил» in its place, and the raw English of the API is
+ * never put over it (design-language.md §5.19, §7.2).
+ */
+function handleMutationError(
   error: unknown,
   meta?: { suppressGlobalError?: boolean },
 ) {
@@ -30,20 +34,20 @@ function handleGlobalError(
     return;
   }
 
-  if (isApiErrorLike(error) && error.status === 401) {
+  const status = isApiErrorLike(error) ? error.status : null;
+  if (status === 401) {
     return;
   }
 
-  toast.error(error instanceof Error ? error.message : "Request failed");
+  toast.error(status === null || status >= 500
+    ? "Hub не ответил: неизвестно, сохранилось ли."
+    : "Не получилось. Hub вернул ошибку.");
 }
 
 export const queryClient = new QueryClient({
-  queryCache: new QueryCache({
-    onError: (error, query) => handleGlobalError(error, query.meta),
-  }),
   mutationCache: new MutationCache({
     onError: (error, _variables, _context, mutation) =>
-      handleGlobalError(error, mutation.meta),
+      handleMutationError(error, mutation.meta),
   }),
   defaultOptions: {
     queries: {

@@ -59,11 +59,12 @@ export function OfapiOffBanner({ children, link = true }: { children?: ReactNode
 }
 
 /** The freshness of a screen's main read: «Обновлено в 23:41, 5 мин назад», the refresh button. */
-export function freshOf(query: { dataUpdatedAt: number; isFetching: boolean; refetch: () => unknown }, more: Array<{ refetch: () => unknown }> = []): PageFreshness | undefined {
+export function freshOf(query: { dataUpdatedAt: number; isFetching: boolean; refetch: () => unknown }, more: Array<{ refetch: () => unknown }> = [], frozen = false): PageFreshness | undefined {
   if (query.dataUpdatedAt === 0) return undefined;
   return {
     at: query.dataUpdatedAt,
     refreshing: query.isFetching,
+    frozen,
     onRefresh: () => {
       void query.refetch();
       for (const other of more) void other.refetch();

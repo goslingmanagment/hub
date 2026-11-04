@@ -149,7 +149,7 @@ export function AuthorlessCard({ days, page }: { days: number; page: string | nu
         defaultOpen={anchored}
         title={data ? headline(sumCounts(pages)) : "Сообщения без автора"}
         description="Сколько личных сообщений страницы ушло без автора. Цель: не больше 5 % из тех, что ушли, пока расширение было открыто."
-        meta={dates}
+        meta={dates ?? (isError ? "Hub не ответил" : undefined)}
       >
         {data && isError && <div className="team-card-inner team-card-top"><QueryNotice error stale retry={refetch} at={dataUpdatedAt} /></div>}
         {!data

@@ -400,6 +400,11 @@ export function formatUpdated(at: string | number | Date, now: number = Date.now
   return `Обновлено в ${CLOCK.format(new Date(at))}, ${formatAgo(at, now)}`;
 }
 
+/** «Проверено в 23:41, 5 мин назад»: when Hub was read, on data that no longer changes. */
+export function formatChecked(at: string | number | Date, now: number = Date.now()): string {
+  return `Проверено в ${CLOCK.format(new Date(at))}, ${formatAgo(at, now)}`;
+}
+
 /** «3 нояб., 14:05, 2 ч назад»; a moment of today: «14:05, 5 мин назад». */
 export function formatMomentAgo(at: string | number | Date, now: number = Date.now()): string {
   const instant = new Date(at);

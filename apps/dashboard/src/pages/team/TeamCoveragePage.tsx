@@ -159,7 +159,13 @@ function EmptyHours({ days, page, onAllPages }: { days: number; page: string | n
   );
 }
 
+/** Everyone of the period is too new for «купили за 7 дней»: said once, over the table, not in every row. */
+function everyoneRecent(pages: readonly GreetingsPage[]): boolean {
+  return pages.some((page) => page.newSubscribers > 0) && pages.every((page) => page.recent === page.newSubscribers);
+}
+
 function GreetingsTable({ pages }: { pages: readonly GreetingsPage[] }) {
+  const allRecent = everyoneRecent(pages);
   return (
     <div className="table-wrap">
       <table className="data-table team-wrap-head">
@@ -170,7 +176,8 @@ function GreetingsTable({ pages }: { pages: readonly GreetingsPage[] }) {
             <th scope="col" className="num">Автоприветствие</th>
             <th scope="col" className="num">Лично за 24 ч</th>
             <th scope="col" className="num">Ответили за час</th>
-            <th scope="col" className="num">Купили за 7 дней</th>
+            <th scope="col" className="num">Купили за 7 дней, с личным</th>
+            <th scope="col" className="num">Купили за 7 дней, без личного</th>
           </tr>
         </thead>
         <tbody>
@@ -178,23 +185,29 @@ function GreetingsTable({ pages }: { pages: readonly GreetingsPage[] }) {
             const notGreeted = page.newSubscribers - page.greeted;
             return (
               <tr key={page.pageLabel} className="align-top">
-                <td>
+                <td className="whitespace-nowrap">
                   <PageLink label={page.pageLabel} />
-                  {page.recent > 0 && <span className="team-sub whitespace-nowrap">у {formatCount(page.recent)} из них 7 дней ещё не прошли</span>}
                 </td>
-                <td className="num font-medium">{formatCount(page.newSubscribers)}</td>
+                <td className="num font-medium">
+                  {formatCount(page.newSubscribers)}
+                  {!allRecent && page.recent > 0 && <span className="team-sub whitespace-nowrap font-normal">7 дней не прошли: {formatCount(page.recent)}</span>}
+                </td>
                 <td className="num">{page.newSubscribers === 0 ? "—" : share(page.autoWelcomed, page.newSubscribers)}</td>
-                <td className="num num-wrap">
+                <td className="num">
                   {formatCount(page.greeted)}
-                  {page.greeted > 0 && <span className="team-sub">{share(page.greeted, page.newSubscribers)}, медиана {delayOf(page.greetingMedianSeconds)}</span>}
+                  {page.greeted > 0 && <span className="team-sub whitespace-nowrap">{share(page.greeted, page.newSubscribers)}, медиана {delayOf(page.greetingMedianSeconds)}</span>}
                 </td>
                 <td className="num">
                   {formatCount(page.repliedWithinHour)}
                   {page.greeted > 0 && <span className="team-sub">{share(page.repliedWithinHour, page.greeted)}</span>}
                 </td>
-                <td className="num num-wrap">
-                  <span className="team-line">{page.greeted > 0 ? `с личным ${share(page.boughtGreeted, page.greeted)}: ${page.boughtGreeted} из ${page.greeted}` : "с личным —"}</span>
-                  <span className="team-sub">{notGreeted > 0 ? `без личного ${share(page.boughtNotGreeted, notGreeted)}: ${page.boughtNotGreeted} из ${notGreeted}` : "без личного —"}</span>
+                <td className="num">
+                  {page.greeted > 0 ? share(page.boughtGreeted, page.greeted) : "—"}
+                  {page.greeted > 0 && <span className="team-sub whitespace-nowrap">{page.boughtGreeted} из {page.greeted}</span>}
+                </td>
+                <td className="num">
+                  {notGreeted > 0 ? share(page.boughtNotGreeted, notGreeted) : "—"}
+                  {notGreeted > 0 && <span className="team-sub whitespace-nowrap">{page.boughtNotGreeted} из {notGreeted}</span>}
                 </td>
               </tr>
             );
@@ -302,7 +315,10 @@ function Greetings({ days, page, owner }: { days: number; page: string | null; o
         <header className="card-header">
           <div>
             <h2 id="coverage-greetings" className="card-title">Приветствия новых подписчиков</h2>
-            <p className="card-description">Кого поприветствовали лично, как быстро, и купили ли после этого.</p>
+            <p className="card-description">
+              Кого поприветствовали лично, как быстро, и купили ли после этого.
+              {everyoneRecent(pages) ? " У всех новых подписчиков этого периода 7 дней ещё не прошли: покупки могут добавиться." : ""}
+            </p>
           </div>
         </header>
         {data && <div className="team-card-inner"><QueryNotice error={isError} stale retry={refetch} at={dataUpdatedAt} /></div>}

@@ -88,6 +88,22 @@
 
   /* ── Расходы → ИИ ────────────────────────────────────────────────────── */
   .ai-strip { grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }
+  /* Inside a card a strip of numbers is a row with lines between, not a card of its own (DL §5.8). */
+  .stat-grid.ai-strip { border: 0; border-radius: 0; background: transparent; overflow: visible; }
+  .stat-grid.ai-strip > .stat { padding: 0 20px; box-shadow: -1px 0 0 var(--color-border); }
+  .stat-grid.ai-strip > .stat:first-child { padding-left: 0; box-shadow: none; }
+  @media (max-width: 767px) {
+    .stat-grid.ai-strip { gap: 16px; }
+    .stat-grid.ai-strip > .stat { padding: 0; box-shadow: none; }
+  }
+  /* The keys of an organization: one set of columns for every organization, a line, no frame. */
+  .table-wrap.rc-keys { margin-inline: -24px; border: 0; border-radius: 0; background: transparent; box-shadow: none; }
+  .rc-keys .data-table { table-layout: fixed; min-width: 640px; }
+  .rc-keys .data-table :is(th, td):nth-child(1) { width: 18%; }
+  .rc-keys .data-table :is(th, td):nth-child(2) { width: 30%; }
+  .rc-keys .data-table :is(th, td):nth-child(3) { width: 12%; }
+  .rc-keys .data-table :is(th, td):nth-child(4) { width: 16%; }
+  .rc-keys .data-table td { overflow-wrap: anywhere; white-space: normal; }
   .ai-sub { font-size: 14px; line-height: 20px; color: var(--color-text-secondary); white-space: nowrap; }
   .ai-sub-inline { font-size: 14px; color: var(--color-text-muted); }
   .ai-warn { color: var(--color-warning-text); }

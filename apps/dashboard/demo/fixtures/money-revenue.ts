@@ -6,6 +6,7 @@
 import type { KernelOperationResponse } from "@agency_hub_core/contracts";
 import { daysAgo, demoError, hoursAgo, iso, isoDay, queryNumber, queryString, rng, intBetween, type DemoHandlers, type DemoRequest } from "../core.ts";
 import { DEMO_MODELS, DEMO_OFAPI_OFF_AT, DEMO_PAGES, demoFans, type DemoPage } from "../world.ts";
+import { pagePopulation } from "./page-world.ts";
 import {
   DAY_MS,
   HISTORY_DAYS,
@@ -269,8 +270,8 @@ function overview(request: DemoRequest): KernelOperationResponse<"overview"> {
     pages: pages.map((page) => {
       const random = rng(`overview:${page.label}:${isoDay(now)}`);
       const off = page.health === "off";
-      const paidShare = page.platform === "fansly" ? 0.64 : 0.41;
-      const paid = Math.round(page.subscribers * paidShare);
+      // One count with the card and «Подписчики»: as the server, a subscription with a price.
+      const paid = pagePopulation(page).filter((item) => item.subscription?.paid === true).length;
       const today = pageTotals(page, startOfDayMs(now), now.getTime() + 1, now);
       const week = platformWindow(page.platform, "7d", now);
       const month = platformWindow(page.platform, "30d", now);

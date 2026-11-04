@@ -101,7 +101,7 @@ export function PublicationsPagesStrip({ pages, picked, loading, failed, onRetry
           items.push({
             label: "Убрать из расписания всё, что поставил Hub",
             danger: true,
-            disabled: busy || block !== null,
+            disabled: busy || refreshing || block !== null,
             hint: block ?? undefined,
             onSelect: () => onWithdrawAll(page),
           });

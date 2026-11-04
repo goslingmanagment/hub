@@ -1,9 +1,11 @@
 import type { ReactNode } from "react";
 import { Link, useSearchParams } from "react-router";
-import { useOverview } from "@/api/queries";
+import { useAuthMe, useOverview } from "@/api/queries";
+import { useOfapiStatus } from "@/api/waiting";
 import { PLATFORM_WORD, PlatformBadge } from "@/components/shared/PlatformBadge";
 import { NoAnswerPanel, StatusPanel } from "@/components/shared/StatusPanel";
 import { TableSkeleton } from "@/components/shared/TableSkeleton";
+import { OFAPI_FROZEN_NOTE } from "@/lib/statusWords";
 import { useDashboardShell } from "./DashboardShellContext.js";
 import { usePageFilter } from "./usePageFilter.js";
 
@@ -32,12 +34,15 @@ function PagePicker() {
   const filter = usePageFilter();
   const { pages } = useDashboardShell();
   const overview = useOverview();
+  const { data: auth } = useAuthMe();
+  const ofapi = useOfapiStatus(auth?.user.role ?? "team_lead");
   const offered = pages.filter((page) => !filter.screen?.platforms || filter.screen.platforms.includes(page.platform));
 
   if (offered.length === 0) return <StatusPanel title="Нет подходящих страниц" description={filter.screen?.platformsNote} />;
   if (overview.isLoading) return <TableSkeleton rows={Math.min(offered.length, 8)} columns={5} />;
 
   const numbers = new Map((overview.data?.pages ?? []).map((page) => [page.label, page]));
+  const frozen = (page: { platform: string }) => page.platform === "onlyfans" && ofapi === "off";
   return (
     <section className="card" aria-labelledby="page-picker-title">
       <div className="card-header">
@@ -68,8 +73,8 @@ function PagePicker() {
                   </td>
                   <td className="muted">{page.modelName}</td>
                   <td><PlatformBadge platform={page.platform} /></td>
-                  <td className="num">{count(row?.paidSubscriberCount)}</td>
-                  <td className="num">{freeSubscriptions(row)}</td>
+                  <td className="num">{count(row?.paidSubscriberCount)}{frozen(page) && <span className="audience-note block">{OFAPI_FROZEN_NOTE}</span>}</td>
+                  <td className="num">{freeSubscriptions(row)}{frozen(page) && <span className="audience-note block">{OFAPI_FROZEN_NOTE}</span>}</td>
                   <td className="num">{page.platform === "fansly" ? count(row?.followerCount) : "—"}</td>
                 </tr>
               );

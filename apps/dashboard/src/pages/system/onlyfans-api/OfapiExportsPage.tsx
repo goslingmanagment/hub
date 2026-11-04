@@ -203,7 +203,7 @@ export function OfapiExportsPage() {
   }
   const loadError = error || ((pages.error ?? jobs.error ?? visitors.error) ? "Hub не ответил: данные выгрузок не загрузились." : "");
   return <div className={`space-y-6 sys-screen${ofapi.status === "off" ? " sys-off-tone" : ""}`}>
-    <PageHeader fresh={visitors.dataUpdatedAt || jobs.dataUpdatedAt ? { at: Math.max(visitors.dataUpdatedAt, jobs.dataUpdatedAt), refreshing: busy, onRefresh: () => void run(async () => {}, "Данные обновлены.") } : undefined} />
+    <PageHeader fresh={visitors.dataUpdatedAt || jobs.dataUpdatedAt ? { at: Math.max(visitors.dataUpdatedAt, jobs.dataUpdatedAt), frozen: ofapi.status === "off", refreshing: busy, onRefresh: () => void run(async () => {}, "Данные обновлены.") } : undefined} />
     {owner && <OfapiOffBar ofapi={ofapi} />}
     <div className="sys-export-row">
       <label className="w-full sm:w-64"><span className="field-label">Страница</span><select disabled={busy || !pages.data} className="select" value={pageId} onChange={e => { setSelectedPage(Number(e.target.value)); setSelectedJob(""); clearPreview(); }}>{pages.data?.pages.map(page => <option key={page.id} value={page.id}>{page.label}</option>)}</select></label>

@@ -4,6 +4,7 @@ import type { PublicationQueueSnapshotWire, PublicationWire, PublicationWithdraw
 import { useResolvePublication } from "@/api/publications";
 import { ConfirmModal, type ConfirmFact } from "@/components/shared/ConfirmModal";
 import { ModalShell } from "@/components/shared/ModalShell";
+import { Disclosure } from "@/components/ui/Disclosure";
 import { Notice } from "@/components/ui/Notice";
 import { Spinner } from "@/components/ui/Skeleton";
 import { buildProfileUrl } from "@/lib/platformUrls";
@@ -13,6 +14,7 @@ import {
   KIND_LABELS,
   WITHDRAW_MIN_LEAD_MINUTES,
   actionFailure,
+  actionFailureReason,
   audienceLabel,
   cancelLabel,
   mediaSummary,
@@ -285,6 +287,7 @@ export function ResolveDialog({ publication, username, todayKey, onClose }: {
   const resolve = useResolvePublication();
   const [draft, setDraft] = useState<ResolveDraft>(EMPTY_RESOLVE_DRAFT);
   const [failure, setFailure] = useState<string | null>(null);
+  const [failureReason, setFailureReason] = useState<string | null>(null);
   const outcomeName = useId();
   const stateName = useId();
   const refId = useId();
@@ -302,7 +305,7 @@ export function ResolveDialog({ publication, username, todayKey, onClose }: {
           : "Записано: пост не ушёл. Новый черновик ждёт утверждения");
         onClose();
       },
-      onError: (error) => setFailure(actionFailure(error)),
+      onError: (error) => { setFailure(actionFailure(error)); setFailureReason(actionFailureReason(error)); },
     });
   }
 
@@ -388,7 +391,7 @@ export function ResolveDialog({ publication, username, todayKey, onClose }: {
           </Notice>
         )}
 
-        {failure !== null && <Notice tone="danger" role="alert" className="pub-form-block">{failure}</Notice>}
+        {failure !== null && <Notice tone="danger" role="alert" className="pub-form-block" detail={failureReason !== null ? <Disclosure label="Подробнее"><p>{failureReason}</p></Disclosure> : undefined}>{failure}</Notice>}
 
         <div className="dialog-actions pub-dialog-actions">
           {form.missing !== null && <span className="pub-dialog-missing">{form.missing}</span>}

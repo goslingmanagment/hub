@@ -3,7 +3,7 @@ import { Link, useLocation, useSearchParams } from "react-router";
 import { X } from "lucide-react";
 import { useAuthMe } from "@/api/queries";
 import { downloadOfapiCreditsLedgerCsv, useAdminOfapiCreditsDaily, useAdminOfapiCreditsLedger, useAdminOfapiCreditsSummary } from "@/api/adminOfapiCredits";
-import { useOfapiStatus } from "@/api/waiting";
+import { useOfapiStatusQuery } from "@/api/waiting";
 import { Pagination } from "@/components/shared/Pagination";
 import { QueryNotice } from "@/components/shared/QueryNotice";
 import { StackedBarChart } from "@/components/shared/StackedBarChart";
@@ -49,7 +49,7 @@ export function OfapiCostsPage() {
   const [search, setSearch] = useSearchParams();
   const location = useLocation();
   const user = useAuthMe();
-  const ofapi = useOfapiStatus(user.data?.user.role ?? "team_lead");
+  const { status: ofapi, isLoading: ofapiLoading, refetch: refetchOfapi } = useOfapiStatusQuery(user.data?.user.role ?? "team_lead");
   const off = ofapi === "off";
   const on = ofapi === "on";
   const rawDays = Number(search.get("days"));
@@ -177,9 +177,16 @@ export function OfapiCostsPage() {
       <b>OnlyFans API выключен с 1 ноября.</b> Баланс и траты ниже — по 1 ноября.
     </Notice>
   );
+  // No answer about the key: the forecast below is not a claim that the API is on.
+  const unknownNote = ofapi === "unknown" && !ofapiLoading && (
+    <p className="ofc-note">
+      Не удалось проверить, включён ли OnlyFans API.{" "}
+      <button type="button" className="link" onClick={refetchOfapi}>Повторить</button>
+    </p>
+  );
   const header = (
     <PageHeader
-      fresh={summaryQuery.dataUpdatedAt ? { at: summaryQuery.dataUpdatedAt, refreshing: summaryQuery.isFetching, onRefresh: () => void Promise.all([summaryQuery.refetch(), chartsQuery.refetch(), breakdownQuery.refetch(), ledgerQuery.refetch()]) } : undefined}
+      fresh={summaryQuery.dataUpdatedAt ? { at: summaryQuery.dataUpdatedAt, frozen: off, refreshing: summaryQuery.isFetching, onRefresh: () => void Promise.all([summaryQuery.refetch(), chartsQuery.refetch(), breakdownQuery.refetch(), ledgerQuery.refetch()]) } : undefined}
     />
   );
   const howCounted = (
@@ -204,6 +211,7 @@ export function OfapiCostsPage() {
       <div className="space-y-6">
         {header}
         {offNotice}
+        {unknownNote}
         {summaryQuery.isError ? <NoAnswerPanel retry={summaryQuery.refetch} /> : <StatCardSkeleton count={3} />}
         {howCounted}
       </div>
@@ -228,6 +236,7 @@ export function OfapiCostsPage() {
     <div className="space-y-6">
       {header}
       {offNotice}
+      {unknownNote}
       <QueryNotice error={summaryQuery.isError} stale retry={summaryQuery.refetch} at={summaryQuery.dataUpdatedAt} />
       {showAlarm && (
         <Notice tone="danger" role="alert" detail={summary.incidents.length > 0 ? <Link className="link" to="/system/failures">Все сбои</Link> : undefined}>
@@ -263,7 +272,7 @@ export function OfapiCostsPage() {
               label={recorded ? "Прогноз по операциям" : "Хватит на"}
               value={forecast.daysLeft !== null ? <span className={runwayTone}>≈ {fmtCredits(forecast.daysLeft)} <span className="ofc-unit">{daysWord(forecast.daysLeft)}</span></span> : "—"}
               meta={forecast.daysLeft !== null
-                ? <>{forecast.runOutDate && <span className="block">закончатся ≈ {humanDay(forecast.runOutDate)}</span>}~{credits(Math.round(forecast.avgDailySpend7d))} в день{priceKnown ? ` (≈ ${usd(Math.round(forecast.avgDailySpend7d))})` : ""}, среднее за 7 дней</>
+                ? <>{forecast.runOutDate && <span className="block">закончатся ≈ {humanDay(forecast.runOutDate)}</span>}≈ {credits(Math.round(forecast.avgDailySpend7d))} в день{priceKnown ? ` (≈ ${usd(Math.round(forecast.avgDailySpend7d))})` : ""}, среднее за 7 дней</>
                 : forecast.avgDailySpend7d <= 0 ? "за последние 7 дней нет учтённых трат для прогноза" : "ждём показание баланса"}
             />
           )}

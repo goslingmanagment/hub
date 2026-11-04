@@ -223,9 +223,9 @@
 
   .promo-chart { display: flex; flex-direction: column; gap: 8px; padding-top: 0; border-bottom: 1px solid var(--color-border-light); }
   .promo-badge { margin-left: 8px; vertical-align: 1px; }
-  .promo-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: 24px; }
-  .promo-tiers { display: flex; flex-direction: column; gap: 24px; }
-  .promo-tier + .promo-tier { padding-top: 24px; border-top: 1px solid var(--color-border-light); }
+  /* Two cards of very different height leave a hole under the short one: a column, and the tiers side by side. */
+  .promo-grid { display: flex; flex-direction: column; gap: 24px; }
+  .promo-tiers { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(360px, 100%), 1fr)); gap: 24px 48px; }
   .promo-tier-name { font-weight: 600; }
   .promo-plans { margin-top: 8px; border-collapse: collapse; font-size: 15px; line-height: 22px; }
   .promo-plans td { padding: 4px 24px 4px 0; vertical-align: top; }

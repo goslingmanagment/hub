@@ -55,6 +55,7 @@ import {
   PUBLICATION_WINDOWS,
   STATUS_FILTER_LABELS,
   actionFailure,
+  actionFailureToast,
   approvalItems,
   approvalOutcome,
   approvalSummary,
@@ -276,7 +277,7 @@ export function PublicationsPage() {
     onDeletePost: setDeleting,
     onReplace: (publication) => replace.mutate(publication.id, {
       onSuccess: () => toast.success("Замена создана черновиком: утвердите её"),
-      onError: (error) => toast.error(actionFailure(error)),
+      onError: (error) => toast.error(actionFailure(error), actionFailureToast(error)),
     }),
   };
 
@@ -293,7 +294,7 @@ export function PublicationsPage() {
         if (outcome.refused.length === 0) toast.success(summary.toast);
         else setApprovalReport(outcome);
       },
-      onError: (error) => toast.error(`Не удалось утвердить: ${actionFailure(error)}`),
+      onError: (error) => toast.error(`Не удалось утвердить: ${actionFailure(error)}`, actionFailureToast(error)),
       onSettled: () => setApproving(null),
     });
   }
@@ -301,7 +302,7 @@ export function PublicationsPage() {
   function refresh(page: StripPage) {
     refreshQueue.mutate(page.pageLabel, {
       onSuccess: () => toast.success(page.platform === "fansly" ? "Hub прочитает расписание в течение пары минут" : "Hub прочитает расписание в течение минуты"),
-      onError: (error) => toast.error(actionFailure(error)),
+      onError: (error) => toast.error(actionFailure(error), actionFailureToast(error)),
       onSettled: () => setRefreshingOf(null),
     });
   }
@@ -609,7 +610,7 @@ export function PublicationsPage() {
           onClose={() => { if (!cancel.isPending) setCancelling(null); }}
           onConfirm={() => cancel.mutate(cancelling.id, {
             onSuccess: () => toast.success("Публикация отменена"),
-            onError: (error) => toast.error(actionFailure(error)),
+            onError: (error) => toast.error(actionFailure(error), actionFailureToast(error)),
             onSettled: () => setCancelling(null),
           })}
         />
@@ -628,7 +629,7 @@ export function PublicationsPage() {
               if (result !== undefined && (result.outcome === "accepted" || result.outcome === "withdrawn")) toast.success(text);
               else toast.error(text, { duration: Infinity });
             },
-            onError: (error) => toast.error(actionFailure(error)),
+            onError: (error) => toast.error(actionFailure(error), actionFailureToast(error)),
             onSettled: () => setWithdrawing(null),
           })}
         />
@@ -646,7 +647,7 @@ export function PublicationsPage() {
               if (result?.outcome === "accepted") toast.success(deletePostResultText(result));
               else toast.error(result === undefined ? "Hub не прислал исход команды" : deletePostResultText(result), { duration: Infinity });
             },
-            onError: (error) => toast.error(actionFailure(error)),
+            onError: (error) => toast.error(actionFailure(error), actionFailureToast(error)),
             onSettled: () => setDeleting(null),
           })}
         />
@@ -661,7 +662,7 @@ export function PublicationsPage() {
           onClose={() => { if (!withdrawPage.isPending) setWithdrawingPage(null); }}
           onConfirm={() => withdrawPage.mutate(withdrawingPage.pageLabel, {
             onSuccess: (response) => setWithdrawReport({ pageLabel: withdrawingPage.pageLabel, platform: withdrawingPage.platform, results: response.results }),
-            onError: (error) => toast.error(actionFailure(error)),
+            onError: (error) => toast.error(actionFailure(error), actionFailureToast(error)),
             onSettled: () => setWithdrawingPage(null),
           })}
         />

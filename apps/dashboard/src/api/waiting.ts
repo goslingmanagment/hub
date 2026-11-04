@@ -178,12 +178,14 @@ export function useWaitingCounts(role: string): WaitingCounts {
   push({ id: "customs", label: "Кастомы оплачены, не отданы", count: customsCount, capped: customsCount === CUSTOMS_LIMIT, to: "/team/customs?page=all" });
   push({ id: "held", label: "Проверить отправки", count: failedOr(held, (data) => data.total), to: "/team/held-sends?page=all" });
   if (owner) {
-    const loginFailed = overview.isError || enginePages.isError;
+    // Either read missing leaves the login state unknown: a page that was found is
+    // shown, and finding none is «could not check», never a quiet zero.
+    const loginUnchecked = (overview.isError && overview.data === undefined) || (enginePages.isError && enginePages.data === undefined);
     const onlyPage = loginPages.length === 1 ? loginPages[0] : undefined;
     push({
       id: "login",
       label: onlyPage === undefined ? "Нужен вход в Fansly" : `Нужен вход в Fansly: ${onlyPage}`,
-      count: loginFailed && overview.data === undefined ? null : loginPages.length,
+      count: loginPages.length === 0 && loginUnchecked ? null : loginPages.length,
       page: onlyPage,
       to: onlyPage === undefined ? "/system/collection?page=all" : buildPageSectionRoute(onlyPage, "browser-login"),
     });

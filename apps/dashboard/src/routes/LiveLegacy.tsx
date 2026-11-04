@@ -10,7 +10,7 @@ import { Legacy } from "./legacy.js";
 export function LiveLegacy() {
   const { pathname, search } = useLocation();
   const query = new URLSearchParams(search);
-  const rule = pathname === "/stats" ? statsLegacyRule(query)
+  const rule = matchPath({ path: "/stats", end: true }, pathname) ? statsLegacyRule(query)
       : matchPath({ path: "/pages/:pageLabel", end: true }, pathname) ? pageCardLegacyRule(query)
         : null;
   return rule ? <Legacy rule={rule} /> : <Outlet />;

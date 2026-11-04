@@ -95,6 +95,12 @@ function OnShiftNow({ shifts, filtered }: { shifts: readonly TeamShift[]; filter
           </tbody>
         </table>
       </div>
+      {sales.some((query) => query.isError) && (
+        <div className="card-footer justify-start">
+          Продажи не пришли: Hub не ответил.{" "}
+          <button type="button" className="link" onClick={() => { for (const query of sales) if (query.isError) void query.refetch(); }}>Повторить</button>
+        </div>
+      )}
     </section>
   );
 }

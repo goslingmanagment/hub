@@ -14,7 +14,7 @@ export function OfapiBannedWords({ blocked }: { blocked: string | null }) {
   const [maxPages, setMaxPages] = useState(1); const qc = useQueryClient();
   const [confirming, setConfirming] = useState(false);
   const query = useQuery({ queryKey: ["ofapi", "banned-words"], queryFn: () => kernel.ofapiBannedWordsAdminGet(), meta: { suppressGlobalError: true } });
-  const refresh = useMutation({ mutationFn: () => kernel.ofapiBannedWordsRefresh({ body: { maxPages } }), onSuccess: () => qc.invalidateQueries({ queryKey: ["ofapi", "banned-words"] }) });
+  const refresh = useMutation({ meta: { suppressGlobalError: true }, mutationFn: () => kernel.ofapiBannedWordsRefresh({ body: { maxPages } }), onSuccess: () => qc.invalidateQueries({ queryKey: ["ofapi", "banned-words"] }) });
   return (
     <div className="sys-stack-16">
       <p className="font-medium">

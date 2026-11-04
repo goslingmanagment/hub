@@ -75,6 +75,7 @@ export function useTeamWinBackApproaches(enabled: boolean) {
 export function useSaveWinBackApproach() {
   const qc = useQueryClient();
   return useMutation({
+    meta: { suppressGlobalError: true },
     mutationFn: (body: TeamWinBackApproachSaveBody) => kernel.teamWinBackApproachSave({ body }),
     onSuccess: (data) => {
       qc.setQueryData(WIN_BACK_APPROACHES_KEY, data);
@@ -119,6 +120,7 @@ export function useTeamShiftDisputes(days: number = TEAM_SHIFT_DISPUTE_DAYS) {
 export function useResolveShiftDispute() {
   const qc = useQueryClient();
   return useMutation({
+    meta: { suppressGlobalError: true },
     mutationFn: (input: { saleRef: string; body: TeamShiftResolveBody }) =>
       kernel.teamShiftResolve({ params: { saleRef: input.saleRef }, body: input.body }),
     onSettled: () => Promise.all([

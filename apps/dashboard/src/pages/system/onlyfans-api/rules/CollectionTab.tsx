@@ -98,7 +98,7 @@ import {
 import { DisclosureCard } from "@/components/ui/DisclosureCard";
 import { ConfirmModal } from "@/components/shared/ConfirmModal";
 import { PageHeader } from "@/components/ui/PageHeader";
-import { OFAPI_OFF_REASON, OFAPI_OFF_WORD } from "@/lib/statusWords";
+import { OFAPI_OFF_REASON } from "@/lib/statusWords";
 import { freshOf, useOfapi } from "../../shared.js";
 import { OfapiOffBar } from "../OfapiOffBar.js";
 
@@ -399,7 +399,7 @@ function RulesScreen() {
 
   return (
     <div className="space-y-6 pb-24 sys-screen">
-      <PageHeader fresh={freshOf(snapshotQuery)} />
+      <PageHeader fresh={freshOf(snapshotQuery, [], off)} />
       <OfapiOffBar
         ofapi={ofapi}
         detail={off && pausedAudit ? `Фоновый сбор на паузе с ${localDateTime(pausedAudit.createdAt)} · ${actorName(pausedAudit.actorUserId)}.` : undefined}
@@ -488,14 +488,15 @@ function RulesScreen() {
                     <th>Последние данные</th>
                     <th className="num">Сегодня, кредитов</th>
                     <th className="num">30 дней, кредитов</th>
-                    <th>Состояние</th>
+                    {/* While the API is off every row would repeat the banner above: the column goes. */}
+                    {!off && <th>Состояние</th>}
                   </tr>
                 </thead>
                 <tbody>
                   {CATEGORY_GROUP_ORDER.filter((group) => group !== "unavailable").map((group) => (
                     groups[group].length === 0 ? null : (
                       <Fragment key={group}>
-                        <GroupRow group={group} paused={snapshot.backgroundPaused} />
+                        <GroupRow group={group} paused={snapshot.backgroundPaused} columns={off ? 5 : 6} />
                         {groups[group].map((view) => (
                           <CategoryRow
                             key={view.entry.id}
@@ -744,7 +745,7 @@ function UsageSummary(props: {
   return (
     <section aria-labelledby="collection-usage-heading" className="space-y-2">
       <h3 id="collection-usage-heading" className="sr-only">Расход кредитов на фоновый сбор</h3>
-      <div className="stat-grid">
+      <div className="stat-grid sys-usage-grid">
         <div className="stat">
           <div className="stat-label">Заблокировано под задачи сегодня</div>
           <div className="stat-value">{fmtCredits(totals.reservedCreditsToday)} <span className="sys-unit">{creditsWord(totals.reservedCreditsToday)}</span></div>
@@ -800,11 +801,11 @@ const GROUP_COPY: Record<CategoryGroup, { title: string; hint: string; pausedHin
   },
 };
 
-function GroupRow(props: { group: CategoryGroup; paused: boolean }) {
+function GroupRow(props: { group: CategoryGroup; paused: boolean; columns: number }) {
   const copyEntry = GROUP_COPY[props.group];
   return (
     <tr>
-      <td colSpan={6} className="sys-rowgroup-cell">
+      <td colSpan={props.columns} className="sys-rowgroup-cell">
         <span className="font-medium text-text-primary">{copyEntry.title}</span>
         <span className="ml-2 text-text-secondary">
           {props.paused && copyEntry.pausedHint ? copyEntry.pausedHint : copyEntry.hint}
@@ -848,6 +849,32 @@ function CategoryRow(props: {
   const why = categoryWhy(view.entry.id);
   const jobs = jobsFor(snapshot, props.scope, view.entry.id);
   const latestJob = jobs[0];
+  const off = blocked === OFAPI_OFF_REASON;
+  const oneOffAction = view.group === "one_off" && (
+    <div>
+      {view.entry.id === "vault_files"
+        ? <Link className="btn btn-sm" to="/system/onlyfans-api/media" onClick={(event) => event.stopPropagation()}>Загрузить свой файл…</Link>
+        : (
+          <button
+            type="button"
+            className="btn btn-sm"
+            disabled={snapshot.backgroundPaused || blocked !== null}
+            title={blocked ?? undefined}
+            onClick={(event) => {
+              event.stopPropagation();
+              props.onCreateJob();
+            }}
+          >
+            Создать задачу…
+          </button>
+        )}
+      <div className="cell-second">
+        {latestJob
+          ? `последняя: ${jobStateLabel(latestJob.state)} · ${localDateTime(latestJob.createdAt)}`
+          : "задач не было"}
+      </div>
+    </div>
+  );
 
   return (
     <Fragment>
@@ -876,7 +903,7 @@ function CategoryRow(props: {
               : <span className="h-5 w-5 shrink-0" aria-hidden="true" />}
             <div className="min-w-0">
               <div className="font-medium" title={consumers.length > 0 ? `Кто использует: ${consumers.join(", ")}` : undefined}>{label}</div>
-              {why && <div className="mt-0.5 text-xs leading-snug text-text-secondary">{why}</div>}
+              {why && !expandable && <div className="mt-0.5 text-xs leading-snug text-text-secondary">{why}</div>}
             </div>
           </div>
         </td>
@@ -889,6 +916,7 @@ function CategoryRow(props: {
                 ? <span className="text-sm text-text-secondary" title={sourceTitle}>Прежние настройки</span>
                 : <ModeBadge mode={modeForBadge} draft={draftEntry !== null} title={sourceTitle} />}
           {subline && <div className="mt-1 text-xs leading-snug text-text-muted">{subline}</div>}
+          {off && oneOffAction && <div className="mt-2">{oneOffAction}</div>}
         </td>
         <td className="whitespace-nowrap align-top">
           <div title={view.lastCapturedAt ? localDateTime(view.lastCapturedAt) : undefined}>{relativeAge(view.lastCapturedAt)}</div>
@@ -900,49 +928,22 @@ function CategoryRow(props: {
           {fmtCredits(view.usage.reservedCreditsToday)}
         </td>
         <td className="num align-top">{fmtCredits(view.usage.credits30d)}</td>
-        <td className="sys-rules-state whitespace-normal align-top">
-          {view.group === "one_off"
-            ? (
-              <div>
-                {view.entry.id === "vault_files"
-                  ? <Link className="btn btn-sm" to="/system/onlyfans-api/media" onClick={(event) => event.stopPropagation()}>Загрузить свой файл…</Link>
-                  : (
-                    <button
-                      type="button"
-                      className="btn btn-sm"
-                      disabled={snapshot.backgroundPaused || blocked !== null}
-                      title={blocked ?? undefined}
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        props.onCreateJob();
-                      }}
-                    >
-                      Создать задачу…
-                    </button>
-                  )}
-                <div className="cell-second">
-                  {latestJob
-                    ? `последняя: ${jobStateLabel(latestJob.state)} · ${localDateTime(latestJob.createdAt)}`
-                    : "задач не было"}
-                </div>
-              </div>
-            )
-            : (
+        {!off && (
+          <td className="sys-rules-state whitespace-normal align-top">
+            {oneOffAction || (
               // A legacy row already says "Прежние настройки" in its mode cell;
               // the explanation of the state moves to a tooltip.
-              blocked === OFAPI_OFF_REASON
-                ? <span className="badge badge-off">{view.policies.some((policy) => policy.mode !== "off") ? OFAPI_OFF_WORD : "выключено"}</span>
-                : (
-                  <div title={legacy && state.label === "прежняя конфигурация" ? state.detail ?? undefined : undefined}>
-                    <StateLabel tone={state.tone} label={state.label} detail={legacy && state.label === "прежняя конфигурация" ? null : state.detail} />
-                  </div>
-                )
+              <div title={legacy && state.label === "прежняя конфигурация" ? state.detail ?? undefined : undefined}>
+                <StateLabel tone={state.tone} label={state.label} detail={legacy && state.label === "прежняя конфигурация" ? null : state.detail} />
+              </div>
             )}
-        </td>
+          </td>
+        )}
       </tr>
       {props.expanded && expandable && (
         <tr id={detailId}>
-          <td colSpan={6} className="sys-editor-cell">
+          <td colSpan={off ? 5 : 6} className="sys-editor-cell">
+            {why && <p className="sys-rules-why">{why}</p>}
             <CategoryEditor
               snapshot={snapshot}
               scope={props.scope}

@@ -2,9 +2,11 @@ import { useEffect, useState } from "react";
 import type { ConfigItem, ConfigUpdateBody, ConfigUpdateResponse } from "@agency_hub_core/contracts";
 import { useAdminConfig, useClearConfig, useUpdateConfig } from "@/api/adminConfig";
 import { KernelApiError } from "@/api/sdk";
+import { Disclosure } from "@/components/ui/Disclosure";
 import { CONFIG_COPY_RU } from "./configCopyRu.js";
 import { ConfigChoiceField } from "./ConfigChoiceField.js";
 import { CONFIG_MODE_CHOICES, configPageScope } from "./configurationChoices.js";
+import { errorStatus, isUnknownOutcome, rawError, UNKNOWN_OUTCOME } from "./settingsFeedback.js";
 
 type Scalar = string | number | boolean;
 
@@ -266,9 +268,10 @@ function MutationStatus({ pending, pendingApply, error, success, conflict }: {
     <>
       {message && <p role="status" aria-live="polite" className="text-xs text-text-muted">{message}</p>}
       {visibleError && (
-        <p role="alert" className="text-xs text-danger">
-          {saveFailureWords(error)}
-        </p>
+        <div role="alert" className="text-xs text-danger">
+          <p>{saveFailureWords(error)}</p>
+          {saveFailureReason(error) !== null && <Disclosure label="Подробнее"><p>{saveFailureReason(error)}</p></Disclosure>}
+        </div>
       )}
     </>
   );
@@ -489,12 +492,18 @@ export function useBooleanConfigToggle(item: ConfigItem, options: { alwaysConfir
   return { mutations, receipt, confirm, setConfirm, current, needsConfirm, conflict, staleConfirmation, needsReview, pending, reset, toggle, revert };
 }
 
-/** Words by the answer, never the server's own text; a real conflict has its own panel. */
+/** Words by the answer; a real conflict has its own panel. */
 function saveFailureWords(error: unknown): string {
-  const status = (typeof error === "object" && error !== null ? error as { status?: unknown } : {}).status;
+  const status = errorStatus(error);
   if (status === 400) return "Hub не принял это значение: проверьте его и сохраните ещё раз.";
   if (status === 403) return "Менять параметры может только владелец.";
-  return "Не удалось сохранить: Hub не ответил. Повторите попытку.";
+  if (isUnknownOutcome(error)) return `${UNKNOWN_OUTCOME} Обновите экран и проверьте значение.`;
+  return "Не удалось сохранить: Hub отказал. Значение прежнее.";
+}
+
+/** A refused value: the server names the allowed range, the screen keeps it folded. */
+function saveFailureReason(error: unknown): string | null {
+  return errorStatus(error) === 400 ? rawError(error) ?? null : null;
 }
 
 export function BooleanConfigEditor({ item, alwaysConfirm = false }: { item: ConfigItem; alwaysConfirm?: boolean }) {

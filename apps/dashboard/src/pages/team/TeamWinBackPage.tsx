@@ -149,7 +149,7 @@ function ApproachesEditor() {
     <DisclosureCard
       title="Список подходов"
       description="Чаттеры видят включённые, по порядку. Выключенный подход пропадает из расширения, его итоги остаются."
-      meta={data ? `${data.approaches.filter((approach) => approach.active).length} включено` : undefined}
+      meta={data ? `${data.approaches.filter((approach) => approach.active).length} включено` : isLoading ? undefined : "Hub не ответил"}
     >
       {!data ? (isLoading ? <TableSkeleton rows={3} columns={2} /> : <NoAnswerPanel retry={refetch} />) : (
         <ul className="team-list">

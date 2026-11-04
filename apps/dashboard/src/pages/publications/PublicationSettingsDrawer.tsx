@@ -16,8 +16,10 @@ import { formatCount, formatDayRange } from "@/lib/format";
 import { buildPageSectionRoute } from "@/lib/navigation";
 import { OFAPI_OFF_REASON, OFAPI_OFF_WORD } from "@/lib/statusWords";
 import { captureConfigSnapshot, seedValue, useBooleanConfigToggle } from "@/pages/settings/ConfigurationEditors";
+import { isUnknownOutcome, UNKNOWN_OUTCOME } from "@/pages/settings/settingsFeedback";
 import {
   actionFailure,
+  actionFailureReason,
   autostopReasonLabel,
   dayKeyOf,
   isStopped,
@@ -87,7 +89,11 @@ function ConfigSwitchRow({ item, title, hint, words, off, question }: {
     toggle.reset();
   }
 
-  const shownError = status === "error" && !conflict ? "Не удалось сохранить: Hub не ответил или отказал. Настройка осталась прежней." : undefined;
+  const shownError = status === "error" && !conflict
+    ? isUnknownOutcome(toggle.mutations.error)
+      ? `${UNKNOWN_OUTCOME} Обновите экран и проверьте выключатель.`
+      : "Не удалось сохранить: Hub отказал. Настройка осталась прежней."
+    : undefined;
   const ask = asking === null ? null : question(asking);
   const word = off ? off.word : toggle.current ? words[0] : words[1];
 
@@ -156,6 +162,7 @@ export function SettingsDialog({ settings, globalEnabled, modelName, ofapiOff, o
   const update = useUpdatePublicationSettings();
   const [draft, setDraft] = useState<SettingsDraft>(() => settingsDraftFrom(settings));
   const [failure, setFailure] = useState<string | null>(null);
+  const [failureReason, setFailureReason] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
   const enabledId = useId();
   const minId = useId();
@@ -172,7 +179,7 @@ export function SettingsDialog({ settings, globalEnabled, modelName, ofapiOff, o
     setFailure(null);
     update.mutate({ pageLabel: settings.pageLabel, body: form.body }, {
       onSuccess: () => { toast.success(`Сохранено: ${settings.pageLabel}`); onClose(); },
-      onError: (error) => { setFailure(actionFailure(error)); setConfirming(false); },
+      onError: (error) => { setFailure(actionFailure(error)); setFailureReason(actionFailureReason(error)); setConfirming(false); },
     });
   }
 
@@ -323,7 +330,7 @@ export function SettingsDialog({ settings, globalEnabled, modelName, ofapiOff, o
           <p className="field-hint">Предел: пусто — без предела. Hub и так предупредит, когда за день набирается вдвое больше постов, чем обычно.</p>
         </div>
 
-        {failure !== null && <Notice tone="danger" role="alert">{failure}</Notice>}
+        {failure !== null && <Notice tone="danger" role="alert" detail={failureReason !== null ? <Disclosure label="Подробнее"><p>{failureReason}</p></Disclosure> : undefined}>{failure}</Notice>}
 
         <div className="dialog-actions">
           <button type="button" className="btn" disabled={update.isPending} onClick={closeUnlessPending}>Отмена</button>

@@ -371,11 +371,11 @@ function DaysTable({ data, days }: { data: Data; days: number }) {
                               {row.split && (
                                 <span className="ai-sub-inline ml-2" title="В организации в этот день тратили несколько ключей: счёт Anthropic поделён между ними по токенам, оценённым ценами Hub">доля счёта</span>
                               )}
+                              {row.unmappedMicroUsd !== 0 && <div className="ai-sub ai-warn">и ещё ? {formatAiUsd(row.unmappedMicroUsd)} ключа без решения</div>}
                             </td>
                             <td className="num">{formatAiUsd(row.hubMicroUsd)}</td>
                             <td className="num" title={row.source === "csv" ? "из CSV консоли" : row.source === "admin_api" ? "из отчёта Anthropic" : undefined}>
                               {row.providerMicroUsd === null ? "—" : formatAiUsd(row.providerMicroUsd)}
-                              {row.unmappedMicroUsd !== 0 && <div className="ai-sub ai-warn whitespace-normal">+ ? {formatAiUsd(row.unmappedMicroUsd)} ключа без решения</div>}
                             </td>
                             <td className={`num${mismatch ? " ai-warn" : ""}`}>{row.diffMicroUsd === null ? "—" : signedUsd(row.diffMicroUsd)}</td>
                             <td className={`num${mismatch ? " ai-warn" : ""}`}>{row.diffPct === null ? "—" : percent(row.diffPct)}</td>
@@ -464,7 +464,7 @@ function Sources({ data }: { data: Data }) {
                 <span className="block text-sm text-text-secondary">{sourceText(org)}</span>
               </p>
               {org.keys.length > 0 && (
-                <div className="ai-cut">
+                <div className="table-wrap rc-keys">
                   <table className="data-table data-table-dense" aria-label={`Ключи ${labelsOf(data, org)}`}>
                     <thead>
                       <tr><th scope="col">Ключ</th><th scope="col">Номер</th><th scope="col" className="num">За окно</th><th scope="col">Чей ключ</th><th scope="col">Отметка</th></tr>

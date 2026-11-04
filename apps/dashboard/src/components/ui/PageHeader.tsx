@@ -1,18 +1,20 @@
 import { useEffect, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { RefreshCw } from "lucide-react";
-import { formatUpdated } from "@/lib/format";
+import { formatChecked, formatUpdated } from "@/lib/format";
 import { useScreenFrame } from "./screenFrame.js";
 
 export interface PageFreshness {
   at: string | number | Date;
   onRefresh?: (() => void) | undefined;
   refreshing?: boolean | undefined;
+  /** The data is frozen (OnlyFans API off): the moment is of the check, not of the data. */
+  frozen?: boolean | undefined;
 }
 
 /** «Обновлено в 23:41, 5 мин назад»: quiet, and it is the refresh button. */
-export function PageFresh({ at, onRefresh, refreshing = false }: PageFreshness) {
-  const text = refreshing ? "Обновляем…" : formatUpdated(at);
+export function PageFresh({ at, onRefresh, refreshing = false, frozen = false }: PageFreshness) {
+  const text = refreshing ? "Обновляем…" : frozen ? formatChecked(at) : formatUpdated(at);
   if (!onRefresh) return <span>{text}</span>;
   return (
     <button type="button" className="page-fresh" disabled={refreshing} onClick={onRefresh} title="Обновить">

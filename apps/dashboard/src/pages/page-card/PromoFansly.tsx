@@ -27,7 +27,7 @@ function day(iso: string | null): string {
 }
 
 function topPercent(value: number): string {
-  return `топ ${value.toLocaleString("ru-RU", { maximumFractionDigits: 2 })} %`;
+  return `топ\u00A0${value.toLocaleString("ru-RU", { maximumFractionDigits: 2 })}\u00A0%`;
 }
 
 function duration(days: number | null): string {
@@ -47,12 +47,13 @@ function plus(value: number | null, one: string, few: string, many: string): str
 
 function Growth({ growth }: { growth: Promo["trackingLinks"][number]["last7"] }) {
   if (growth === null) return <span className="text-text-muted">—</span>;
-  const parts = [
-    plus(growth.follows, "фоллов", "фоллова", "фолловов"),
+  const first = plus(growth.follows, "фоллов", "фоллова", "фолловов");
+  const more = [
     plus(growth.subscriptions, "подписка", "подписки", "подписок"),
     growth.grossMills ? `+${formatMills(growth.grossMills)}` : null,
   ].filter(Boolean);
-  return parts.length === 0 ? <span className="text-text-muted">без изменений</span> : <>{parts.map((part, index) => <div key={index} className={index === 0 ? undefined : "fan-cell-sub"}>{part}</div>)}</>;
+  const parts = first ? [first, more.join(", ")] : more;
+  return parts.every((part) => !part) ? <span className="text-text-muted">без изменений</span> : <>{parts.filter(Boolean).map((part, index) => <div key={index} className={index === 0 ? "whitespace-nowrap" : "fan-cell-sub whitespace-nowrap"}>{part}</div>)}</>;
 }
 
 /** Subscriptions a day over the last 90 days: the five links that brought the most, the rest together. */
@@ -263,8 +264,8 @@ function Rank({ months, current }: { months: Promo["months"]; current: Promo["cu
               <tbody>
                 {ranked.map((row) => (
                   <tr key={`${row.year}-${row.month}`}>
-                    <td>{formatMonth(row.year, row.month)}</td>
-                    <td>{topPercent(row.topPercent!)}</td>
+                    <td className="whitespace-nowrap">{formatMonth(row.year, row.month)}</td>
+                    <td className="whitespace-nowrap">{topPercent(row.topPercent!)}</td>
                     <td className="num">{money(row.netMills)}</td>
                     <td className="num muted">{money(row.grossMills)}</td>
                   </tr>

@@ -479,7 +479,7 @@ function settingChanges(now: Date, from: string, to: string): Spend["settingChan
     },
     {
       at: new Date(moscowDayStart(shiftDay(today, -CONTEXT_CHANGE_DAYS_AGO)).getTime() + 11.25 * HOUR_MS),
-      key: "aiFeatureContextMessages",
+      key: "aiFeatureWindows",
       username: "owner",
       oldValue: { "coach-chat": 80 },
       newValue: { "coach-chat": 50 },

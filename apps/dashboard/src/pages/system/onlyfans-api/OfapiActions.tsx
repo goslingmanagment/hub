@@ -152,7 +152,7 @@ export function OfapiActions() {
   const showWorkspace = pages.length > 0 || intent !== null;
   const errorNotice = error && <Notice tone="danger" role="alert">{error}</Notice>;
   return <div className={`space-y-6 sys-screen${ofapi.status === "off" ? " sys-off-tone" : ""}`}>
-    <PageHeader fresh={freshOf(history, [collection])} />
+    <PageHeader fresh={freshOf(history, [collection], ofapi.status === "off")} />
     <OfapiOffBar ofapi={ofapi} />
     {pages.length > 0 && <div>
       <label className="sys-inline-field"><span className="text-text-secondary">Страница</span><select className="select sys-select" value={pageId ?? ""} disabled={busy} onChange={event => { setSelectedPage(Number(event.target.value)); reset(action); }}>{pages.map(page => <option key={page.id} value={page.id}>{page.label}</option>)}</select></label>

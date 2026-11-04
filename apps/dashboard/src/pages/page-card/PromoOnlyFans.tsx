@@ -62,6 +62,7 @@ export function PromoOnlyFans() {
       <PageHeader
         fresh={{
           at: data.generatedAt,
+          frozen: ofapi === "off",
           refreshing,
           onRefresh: () => {
             setRefreshing(true);
