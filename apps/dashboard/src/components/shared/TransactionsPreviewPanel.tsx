@@ -53,7 +53,7 @@ export function TransactionsPreviewPanel({ pageLabel, platform, platformUserId, 
     return <TableSkeleton rows={6} columns={pageLabel ? 5 : 6} />;
   }
   if (data.items.length === 0) {
-    return <div className="empty"><p className="empty-title">Операций пока нет.</p></div>;
+    return <div className="empty"><p className="empty-title">Операций пока нет</p></div>;
   }
   return (
     <div className="table-wrap">

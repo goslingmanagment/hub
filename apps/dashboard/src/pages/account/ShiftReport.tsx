@@ -270,7 +270,8 @@ export function ShiftReport() {
       <div className="sr-page">
         {head}
         <div className="status-panel empty" role="alert">
-          <p className="empty-title">Не удалось загрузить смены.</p>
+          <p className="empty-title">Hub не ответил</p>
+          <p className="empty-text">Смены не пришли: они могут быть, просто экран их не получил.</p>
           <div className="empty-actions">
             <button type="button" className="btn btn-sm" disabled={report.isFetching} onClick={() => void report.refetch()}>Повторить</button>
           </div>

@@ -42,7 +42,7 @@ function PagesCard({ off }: { off: boolean }) {
           action={<button type="button" className="btn btn-sm" onClick={() => void query.refetch()}>Повторить</button>}
         />
       ) : pages.length === 0 ? (
-        <StatusPanel title="Страниц OnlyFans нет." />
+        <StatusPanel title="Страниц OnlyFans нет" />
       ) : (
         <>
           <div className="table-wrap">

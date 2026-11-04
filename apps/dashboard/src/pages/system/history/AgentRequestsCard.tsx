@@ -341,7 +341,7 @@ export function AgentRequestsCard({ state, pageLabel, ofapi, onShowAllPages }: {
       ) : items.length === 0 ? (
         pageLabel ? (
           <StatusPanel
-            title={`На ${pageLabel} заявок в этом состоянии нет.`}
+            title={`На ${pageLabel} заявок в этом состоянии нет`}
             action={<button type="button" className="btn btn-sm" onClick={onShowAllPages}>Показать все страницы</button>}
           />
         ) : state === "requested" ? (

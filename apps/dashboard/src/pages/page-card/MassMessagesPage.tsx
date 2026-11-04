@@ -153,7 +153,7 @@ export function MassMessagesPage() {
                 </thead>
                 <tbody>
                   {data.rows.length === 0 && (
-                    <tr><td colSpan={7} className="fan-empty-row"><div className="empty"><p className="empty-title">Рассылок в этом списке нет.</p></div></td></tr>
+                    <tr><td colSpan={7} className="fan-empty-row"><div className="empty"><p className="empty-title">Рассылок в этом списке нет</p></div></td></tr>
                   )}
                   {data.rows.map((row) => {
                     const at = row.scheduledFor ?? row.createdAt;

@@ -103,6 +103,11 @@
   .pub-col-price { width: 104px; }
   .pub-col-status { width: 188px; }
   .pub-col-actions { width: 156px; }
+  @media (max-width: 1360px) {
+    .pub-col-price { width: 88px; }
+    .pub-col-status { width: 168px; }
+    .pub-col-actions { width: 156px; }
+  }
   .pub-table th:first-child,
   .pub-table td:first-child { padding-right: 0; }
   .pub-table td { vertical-align: top; }

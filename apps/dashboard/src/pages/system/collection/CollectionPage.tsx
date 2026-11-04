@@ -213,7 +213,7 @@ export function CollectionPage() {
               />
             ) : rows.length === 0 ? (
               <StatusPanel
-                title={`Для ${pageLabel} данных сбора нет.`}
+                title={`Для ${pageLabel} данных сбора нет`}
                 action={<button type="button" className="btn btn-sm" onClick={() => filter.select(null)}>Показать все страницы</button>}
               />
             ) : (

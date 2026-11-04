@@ -1104,6 +1104,7 @@
   .help-row > .help[open] { flex: 1 1 100%; }
   .help-body {
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
     gap: 8px;
     margin-top: 4px;
     max-width: 640px;

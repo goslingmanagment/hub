@@ -76,7 +76,7 @@ export function SpenderTrendPanel({ pageLabel, platform, platformUserId, period,
         <p className="fan-trend-note">Самый крупный день: <span className="tabular-nums">{formatMills(largest.metrics.creatorNetAmountMills)}</span>, {formatBusinessDateShort(largest.fromBusinessDate)}</p>
       )}
       {!spent ? (
-        <div className="empty"><p className="empty-title">За этот период трат нет.</p></div>
+        <div className="empty"><p className="empty-title">За этот период трат нет</p></div>
       ) : period === "today" || points.length < 2 ? null : (
         <>
           <div className="fan-trend-chart">

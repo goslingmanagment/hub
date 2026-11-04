@@ -168,7 +168,7 @@ function Body({ pageLabel }: { pageLabel: string }) {
       ) : notFound ? (
         <div className="card">
           <StatusPanel
-            title={`Страницы ${pageLabel} нет в списке сбора.`}
+            title={`Страницы ${pageLabel} нет в списке сбора`}
             action={<Link to="/system/collection" className="btn btn-sm">К сбору данных</Link>}
           />
         </div>

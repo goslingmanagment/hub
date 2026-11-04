@@ -29,7 +29,7 @@ export function FailureDrawer({ id, item, off, closing, onCloseFailure, onShowAl
     return (
       <Drawer title="Сбой" onClose={onDismiss}>
         <StatusPanel
-          title={`Сбоя №${id} нет в этом списке.`}
+          title={`Сбоя №${id} нет в этом списке`}
           action={<button type="button" className="btn btn-sm" onClick={onShowAll}>Показать все</button>}
         />
       </Drawer>

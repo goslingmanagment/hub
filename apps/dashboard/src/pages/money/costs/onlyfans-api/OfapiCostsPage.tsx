@@ -345,7 +345,7 @@ export function OfapiCostsPage() {
       ) : !charts ? (
         <NoAnswerPanel retry={chartsQuery.refetch} />
       ) : chartsEmpty && off ? (
-        <StatusPanel title={`За последние ${CHART_DAYS} дней движений нет: OnlyFans API выключен с 1 ноября.`} />
+        <StatusPanel title={`За последние ${CHART_DAYS} дней движений нет: OnlyFans API выключен с 1 ноября`} />
       ) : (
         <div className="ofc-charts">
           <BalanceChart days={chartDays} balanceByDay={balanceByDay} refills={refillsByDay} usd={priceKnown ? usd : undefined} frozen={off} />
@@ -438,8 +438,8 @@ export function OfapiCostsPage() {
                         <th scope="col">Страница</th>
                         <th scope="col" className="num">Кредиты</th>
                         {priceKnown && <th scope="col" className="num">Стоимость</th>}
-                        <th scope="col" className="num" title="Доход страницы за период">Выручка</th>
-                        {priceKnown && <th scope="col" className="num" title="Вся выручка страницы ÷ оценка стоимости кредитов. Не доказывает влияние запросов на выручку.">Выручка / стоимость</th>}
+                        <th scope="col" className="num" title="Доход страницы за период">Доход</th>
+                        {priceKnown && <th scope="col" className="num" title="Весь доход страницы ÷ оценка стоимости кредитов. Не доказывает влияние запросов на доход.">Доход / стоимость</th>}
                       </tr>
                     </thead>
                     <tbody>

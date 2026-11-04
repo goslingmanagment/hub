@@ -81,7 +81,7 @@ export function MoneyBlock({ page, period, onShowThirty, onShowWeek }: { page: S
         {empty ? (
           <div className="card-body">
             <StatusPanel
-              title={`На ${page.label} ${periodWords(period)} операций нет.`}
+              title={`На ${page.label} ${periodWords(period)} операций нет`}
               action={period !== "30d" && period !== "all" ? <button type="button" className="btn btn-sm" onClick={onShowThirty}>Показать 30 дней</button> : undefined}
             />
           </div>

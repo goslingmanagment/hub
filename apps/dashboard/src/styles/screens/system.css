@@ -323,6 +323,7 @@
   .sys-keys td:nth-child(2) { min-width: 200px; }
   .sys-keys td:nth-child(3) { min-width: 120px; }
   .sys-keys td.sys-key-name { min-width: 180px; }
+  @media (min-width: 1361px) { .sys-key-until { white-space: nowrap; } }
   .sys-blocks td:first-child { min-width: 220px; max-width: 300px; }
   .sys-blocks td.status-col { min-width: 200px; }
   .sys-requests td:nth-child(2) { min-width: 150px; }

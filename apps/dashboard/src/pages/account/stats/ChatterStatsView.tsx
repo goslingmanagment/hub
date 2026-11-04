@@ -61,7 +61,7 @@ export interface StatsViewProps {
   refreshing?: boolean;
 }
 
-const SHORT_DATE = new Intl.DateTimeFormat("ru-RU", { day: "numeric", month: "long", timeZone: "Europe/Moscow" });
+const SHORT_DATE = new Intl.DateTimeFormat("ru-RU", { day: "numeric", month: "short", timeZone: "Europe/Moscow" });
 /** What makes a shift, in words: `2 ч работы и 50 сообщений`. */
 const SHIFT_RULE = `${duration(CHATTER_SHIFT_MIN_WORKED_MINUTES)} работы и ${CHATTER_SHIFT_MIN_MESSAGES} сообщений`;
 const DAY_MS = 86_400_000;

@@ -238,7 +238,7 @@ export function FailuresPage() {
             />
           ) : status === "open" && !kind && pageLabel ? (
             <StatusPanel
-              title={`На ${pageLabel} открытых сбоев нет.`}
+              title={`На ${pageLabel} открытых сбоев нет`}
               action={<button type="button" className="btn btn-sm" onClick={() => filter.select(null)}>Показать все страницы</button>}
             />
           ) : status === "open" && !kind ? (

@@ -267,7 +267,7 @@ function MutationStatus({ pending, pendingApply, error, success, conflict }: {
       {message && <p role="status" aria-live="polite" className="text-xs text-text-muted">{message}</p>}
       {visibleError && (
         <p role="alert" className="text-xs text-danger">
-          {error instanceof Error ? error.message : "Не удалось сохранить. Повторите попытку."}
+          {saveFailureWords(error)}
         </p>
       )}
     </>
@@ -487,6 +487,14 @@ export function useBooleanConfigToggle(item: ConfigItem, options: { alwaysConfir
   }
 
   return { mutations, receipt, confirm, setConfirm, current, needsConfirm, conflict, staleConfirmation, needsReview, pending, reset, toggle, revert };
+}
+
+/** Words by the answer, never the server's own text; a real conflict has its own panel. */
+function saveFailureWords(error: unknown): string {
+  const status = (typeof error === "object" && error !== null ? error as { status?: unknown } : {}).status;
+  if (status === 400) return "Hub не принял это значение: проверьте его и сохраните ещё раз.";
+  if (status === 403) return "Менять параметры может только владелец.";
+  return "Не удалось сохранить: Hub не ответил. Повторите попытку.";
 }
 
 export function BooleanConfigEditor({ item, alwaysConfirm = false }: { item: ConfigItem; alwaysConfirm?: boolean }) {

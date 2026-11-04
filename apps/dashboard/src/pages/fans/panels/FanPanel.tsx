@@ -51,7 +51,7 @@ export function FanPanel({ kind, fan, period, owner, onClose }: {
       <p className="drawer-what">{PANEL_WHAT[kind]}{where}</p>
       {kind === "chat" && (fan.pageLabel && fan.conversationId
         ? <ChatPreviewPanel pageLabel={fan.pageLabel} platformConversationId={fan.conversationId} platform={fan.platform} owner={owner} />
-        : <div className="empty"><p className="empty-title">Переписки с этим фаном в Hub нет.</p></div>)}
+        : <div className="empty"><p className="empty-title">Переписки с этим фаном в Hub нет</p></div>)}
       {kind === "operations" && (
         <>
           <Breakdown period={period} rows={fan.breakdown} />

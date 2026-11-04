@@ -104,7 +104,7 @@ export function SyncStatusPage() {
       <section className="card" aria-labelledby="run-events-title">
         <div className="card-header"><h2 id="run-events-title" className="card-title">События</h2></div>
         {data.events.length === 0 ? (
-          <StatusPanel title="У этого запуска нет событий." />
+          <StatusPanel title="У этого запуска нет событий" />
         ) : (
           <div className="table-wrap">
             <table className="data-table data-table-dense">
@@ -140,7 +140,7 @@ export function SyncStatusPage() {
       <section className="card" aria-labelledby="run-attempts-title">
         <div className="card-header"><h2 id="run-attempts-title" className="card-title">Запросы запуска</h2></div>
         {data.attempts.length === 0 ? (
-          <StatusPanel title="У этого запуска нет попыток запросов." />
+          <StatusPanel title="У этого запуска нет попыток запросов" />
         ) : (
           <div className="card-body sys-stack">
             {[...attemptsByStream.entries()].map(([stream, attempts]) => (

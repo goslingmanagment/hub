@@ -43,7 +43,7 @@ export function BySpendPage() {
       {header}
       <QueryNotice error={lists.isError} stale retry={lists.refetch} at={lists.dataUpdatedAt} />
       {data.totalEntries === 0 ? (
-        <StatusPanel title={`На ${pageLabel} ${periodPhrase(key)} покупок нет.`} />
+        <StatusPanel title={`На ${pageLabel} ${periodPhrase(key)} покупок нет`} />
       ) : (
         <section className="card" aria-labelledby="by-spend-title">
           <div className="card-header">

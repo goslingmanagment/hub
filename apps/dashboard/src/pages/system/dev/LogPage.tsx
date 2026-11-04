@@ -182,7 +182,7 @@ function ProblemsMode({ code, onCode, off }: { code: string | null; onCode: (cod
               )}
             </div>
             {summary.length === 0 ? (
-              <StatusPanel title="За 7 дней кодов нет." description="Журнал застыл 1 ноября: ниже последние записи." />
+              <StatusPanel title="За 7 дней кодов нет" description="Журнал застыл 1 ноября: ниже последние записи." />
             ) : (
               <div className="table-wrap">
                 <table className="data-table data-table-dense">

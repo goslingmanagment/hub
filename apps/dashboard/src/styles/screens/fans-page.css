@@ -51,11 +51,13 @@
   .fan-link { font-weight: 500; color: var(--color-text-primary); text-decoration: none; }
   .fan-link:hover { text-decoration: underline; text-underline-offset: 3px; text-decoration-color: var(--color-border-strong); }
   .fan-link-plain { font-weight: 500; color: var(--color-text-primary); }
-  .fan-cell-sub { display: flex; flex-wrap: wrap; column-gap: 8px; font-size: 14px; line-height: 20px; color: var(--color-text-secondary); font-variant-numeric: tabular-nums; }
+  .fan-cell-sub { font-size: 14px; line-height: 20px; color: var(--color-text-secondary); font-variant-numeric: tabular-nums; }
   .fan-cell-sub .delta { font-size: 14px; }
   .fan-table td.num .fan-cell-sub { white-space: nowrap; }
   .fan-table .fan-cell-sub.fan-preview,
   .fan-table[data-of-links] .fan-cell-sub { white-space: normal; }
+  /* The nick and «Ждёт ответа»: side by side when they fit, one under the other when not. */
+  .fan-cell-pair { display: flex; flex-wrap: wrap; column-gap: 8px; }
   .fan-awaiting { display: inline-flex; align-items: center; gap: 8px; color: var(--color-text-secondary); white-space: nowrap; }
   .fan-awaiting .status-dot { background: var(--color-text-muted); }
   .fan-online { display: inline-flex; align-items: center; gap: 8px; }
@@ -100,7 +102,7 @@
     color: var(--color-text-primary);
   }
   .chat-bubble-model { border-color: transparent; background: var(--color-hover); }
-  .chat-meta { display: flex; flex-wrap: wrap; gap: 2px 8px; margin-top: 4px; font-size: 13px; line-height: 18px; color: var(--color-text-secondary); font-variant-numeric: tabular-nums; }
+  .chat-meta { display: flex; flex-wrap: wrap; gap: 2px 8px; margin-top: 4px; font-size: 14px; line-height: 20px; color: var(--color-text-secondary); font-variant-numeric: tabular-nums; }
   .chat-tip { font-weight: 500; color: var(--color-text-primary); }
   .chat-mark { color: var(--color-warning-text); }
   .chat-foot { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; padding-top: 12px; border-top: 1px solid var(--color-border-light); font-size: 14px; line-height: 20px; }

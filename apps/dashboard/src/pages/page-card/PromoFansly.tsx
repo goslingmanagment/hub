@@ -8,11 +8,10 @@ import { TableSkeleton } from "@/components/shared/TableSkeleton";
 import { formatBusinessDateShort, formatCount, formatDate, formatDayRange, formatMills } from "@/lib/format";
 import { decodeRouteSegment } from "@/lib/navigation";
 import { ruPlural } from "@/lib/plural";
+import { formatMonth } from "@/components/creator-stats/creator-stats-model";
 
 type Promo = PagePromoResponse;
 
-const MONTHS = ["янв.", "февр.", "мар.", "апр.", "мая", "июн.", "июл.", "авг.", "сент.", "окт.", "нояб.", "дек."];
-const MONTH_NOMINATIVE = ["янв.", "февр.", "март", "апр.", "май", "июнь", "июль", "авг.", "сент.", "окт.", "нояб.", "дек."];
 const LINK_COLORS = ["var(--color-chart-blue)", "var(--color-chart-orange)", "var(--color-chart-aqua)", "var(--color-chart-violet)", "var(--color-chart-magenta)"];
 
 function money(value: number | null): string {
@@ -264,7 +263,7 @@ function Rank({ months, current }: { months: Promo["months"]; current: Promo["cu
               <tbody>
                 {ranked.map((row) => (
                   <tr key={`${row.year}-${row.month}`}>
-                    <td>{MONTH_NOMINATIVE[row.month - 1] ?? MONTHS[row.month - 1] ?? row.month} {row.year}</td>
+                    <td>{formatMonth(row.year, row.month)}</td>
                     <td>{topPercent(row.topPercent!)}</td>
                     <td className="num">{money(row.netMills)}</td>
                     <td className="num muted">{money(row.grossMills)}</td>

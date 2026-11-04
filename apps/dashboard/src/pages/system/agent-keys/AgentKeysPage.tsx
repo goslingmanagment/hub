@@ -203,7 +203,7 @@ function AgentKeysSection({ creating, onCreating }: { creating: boolean; onCreat
                       <td>{firstTwo(key.capabilities.map((capability) => CAPABILITY_SHORT[capability] ?? capability))}</td>
                       <td>{firstTwo(key.pageLabels)}</td>
                       <td>
-                        <span className="whitespace-nowrap">до {formatDateTime(key.expiresAt, { yearUnlessCurrent: true })}</span>
+                        <span className="sys-key-until">до {formatDateTime(key.expiresAt, { yearUnlessCurrent: true })}</span>
                         <span className="cell-second">{key.lastUsedAt ? `использован ${formatAgo(key.lastUsedAt)}` : "ещё не использовался"}</span>
                       </td>
                       <td className="status-col"><StatusBadge status={keyStatus(key)} /></td>
