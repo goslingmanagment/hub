@@ -27,7 +27,7 @@ for at password sign-in (`client: "chat-extension"`): it reaches only the
 61 routes marked "yes", and every route marked "no" refuses it with 403.
 A full device token is not affected.
 
-## Routes (424)
+## Routes (425)
 
 | Method | Path | Route key | Kind | Roles | Page scope | chat-extension token |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -329,6 +329,7 @@ A full device token is not affected.
 | GET | `/api/v1/health` | `health` | `public` | — | — | — |
 | GET | `/api/v1/health/sync` | `healthSync` | `monitoring` | — | — | no |
 | POST | `/api/v1/ingest/observations` | `ingestObservations` | `apiKey` | — | — | yes |
+| POST | `/api/v1/model-applications` | `modelApplicationSubmit` | `public` | — | — | — |
 | GET | `/api/v1/models` | `models` | `session` | — | — | no |
 | GET | `/api/v1/models/:modelSlug/revenue` | `modelRevenue` | `session` | — | — | no |
 | GET | `/api/v1/models/:modelSlug/revenue/daily` | `modelRevenueDaily` | `session` | — | — | no |

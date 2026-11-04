@@ -19,6 +19,8 @@ export * from "./repositories/client-note-attributions.ts";
 // Chat Memory: a chatter's activity in the chat extension, for the shift (0306).
 export * from "./repositories/chatter-activity.ts";
 export * from "./repositories/chatspace-tab-reports.ts";
+// Model questionnaires from the agency site (0353).
+export * from "./repositories/model-applications.ts";
 // Chat Memory: how many of a page's outgoing messages have an author.
 export * from "./repositories/message-authorship.ts";
 // Chat Memory week 2: the fan's card across pages and «same person» links (0307).

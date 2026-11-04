@@ -1317,6 +1317,44 @@ export function buildProgram() {
       }
     });
 
+  // Model questionnaires from the agency site (POST /api/v1/model-applications).
+  // Sensitive personal data: read on the server, never copied anywhere else.
+  program
+    .command("model-applications:list")
+    .description("Model questionnaires from the agency site, newest first")
+    .option("--limit <n>", "how many", parsePositiveInt, 20)
+    .action(async (options) => {
+      const app = await createAppContext();
+      try {
+        const { listModelApplications } = await import("@agency_hub_core/db");
+        const { formatModelApplicationList } = await import("./services/model-applications.ts");
+        const rows = await listModelApplications(app.db, { limit: options.limit as number });
+        console.log(formatModelApplicationList(rows));
+      } finally {
+        await app.close();
+      }
+    });
+
+  program
+    .command("model-applications:show")
+    .description("One model questionnaire: every answer by section")
+    .argument("<id>", "questionnaire id (№ in the Telegram notice)", parsePositiveInt)
+    .option("--json", "the stored row as JSON")
+    .action(async (id: number, options) => {
+      const app = await createAppContext();
+      try {
+        const { getModelApplication } = await import("@agency_hub_core/db");
+        const { formatModelApplication } = await import("./services/model-applications.ts");
+        const row = await getModelApplication(app.db, id);
+        if (!row) {
+          throw new Error(`no model application ${id}`);
+        }
+        console.log(options.json ? JSON.stringify(row, null, 2) : formatModelApplication(row));
+      } finally {
+        await app.close();
+      }
+    });
+
   program
     .command("ai:openers-add")
     .description("Add a Hi opener to a persona")

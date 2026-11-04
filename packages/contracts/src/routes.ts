@@ -3,6 +3,7 @@ import { ofapiMediaImageRouteSchemas } from "./routes-ofapi-media-images.ts";
 import { ofapiMarketingRouteSchemas } from "./routes-ofapi-marketing.ts";
 import { ofapiActionRouteSchemas } from "./routes-ofapi-actions.ts";
 import { ofapiBannedWordRouteSchemas } from "./routes-ofapi-banned-words.ts";
+import { modelApplicationRouteSchemas } from "./routes-model-applications.ts";
 import { OFAPI_EXTENDED_COMMAND_KINDS } from "@agency_hub_core/shared";
 import { ofapiExtendedCommandOptions } from "./ofapi-extended-commands.ts";
 import { ofapiVendorRouteSchemas } from "./routes-ofapi-vendor.ts";
@@ -6743,6 +6744,7 @@ const baseRouteSchemas = {
   ...outreachRouteSchemas,
   ...chatterStatsRouteSchemas,
   ...publicationFileRouteSchemas,
+  ...modelApplicationRouteSchemas,
   health: {
     auth: { kind: "public" },
     tags: ["system"],

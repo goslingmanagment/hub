@@ -1,4 +1,5 @@
 import { registerOfapiVendorRoutes } from "../modules/ofapi-vendor/index.ts";
+import { registerModelApplicationRoutes } from "../modules/model-applications/index.ts";
 import { existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -57,7 +58,7 @@ import {
   type RoutePolicyTableRow,
 } from "./auth-policy.ts";
 import { FanslySyncWorkQueuedError } from "../services/sync-engine-account.ts";
-import { formatRequestValidationMessage } from "./error-boundary.ts";
+import { formatRequestValidationMessage, requestBodyErrorStatus } from "./error-boundary.ts";
 import { createRequestAuth, unauthorizedFor } from "./request-auth.ts";
 import type { ApiModuleContext } from "../modules/context.ts";
 import { registerAgentReadRoutes } from "../modules/agent-read/index.ts";
@@ -607,6 +608,19 @@ export async function buildApiServer(appContext: AppContext) {
       return;
     }
 
+    const bodyError = requestBodyErrorStatus(error);
+    if (bodyError !== null) {
+      // Fastify's own refusal of the request body (malformed or empty JSON,
+      // over the route's body limit, an unsupported content type) is the
+      // client's mistake: its 4xx, not a 500.
+      reply.code(bodyError.statusCode).send({
+        error: bodyError.code,
+        message: bodyError.message,
+        statusCode: bodyError.statusCode,
+      });
+      return;
+    }
+
     request.log.error(error);
     reply.code(500).send({
       error: "internal_error",
@@ -674,6 +688,9 @@ export async function buildApiServer(appContext: AppContext) {
   // --- Events (stream + snapshot) --- (module: apps/runtime/src/modules/events)
   registerEventsRoutes(server, moduleContext);
   registerOfapiVendorRoutes(server, moduleContext);
+
+  // --- The agency site's model questionnaire (public) --- (module: apps/runtime/src/modules/model-applications)
+  registerModelApplicationRoutes(server, moduleContext);
 
   // OpenAPI JSON
   server.get("/api/v1/openapi.json", {

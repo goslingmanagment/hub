@@ -187330,6 +187330,228 @@
         }
       }
     },
+    "/api/v1/model-applications": {
+      "post": {
+        "summary": "Submit a model questionnaire from the agency site",
+        "tags": [
+          "site"
+        ],
+        "description": "Stores the answers, then forwards `google` (if given) to the agency's Google Form once and tells the owner in Telegram; neither can fail the request. A filled `website` (honeypot) answers like a success and stores nothing. At most 5 stored per client address an hour (429 after). Body cap 128 KiB.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "form": {
+                    "type": "string",
+                    "maxLength": 40
+                  },
+                  "answers": {
+                    "minItems": 1,
+                    "maxItems": 200,
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "section": {
+                          "type": "string",
+                          "maxLength": 120
+                        },
+                        "key": {
+                          "type": "string",
+                          "pattern": "^[a-z][A-Za-z0-9]{0,39}$"
+                        },
+                        "label": {
+                          "type": "string",
+                          "maxLength": 300
+                        },
+                        "value": {
+                          "type": "string",
+                          "maxLength": 5000
+                        }
+                      },
+                      "required": [
+                        "section",
+                        "key",
+                        "label",
+                        "value"
+                      ]
+                    }
+                  },
+                  "google": {
+                    "type": "object",
+                    "propertyNames": {
+                      "type": "string",
+                      "pattern": "^entry\\.\\d+$"
+                    },
+                    "additionalProperties": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "maxLength": 5000
+                        },
+                        {
+                          "maxItems": 40,
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "maxLength": 300
+                          }
+                        }
+                      ]
+                    }
+                  },
+                  "website": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "form",
+                  "answers"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    },
+                    "id": {
+                      "type": "integer",
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "id"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/models": {
       "get": {
         "summary": "List visible models",

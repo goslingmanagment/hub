@@ -13,7 +13,8 @@ export type TelegramDeliveryKind =
   | "incident_opened"
   | "incident_resolved"
   | "incident_manually_resolved"
-  | "alert_digest_scheduled";
+  | "alert_digest_scheduled"
+  | "model_application";
 export type TelegramDeliveryStatus = "sent" | "failed" | "skipped";
 
 export async function getTelegramSettings(

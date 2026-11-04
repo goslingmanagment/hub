@@ -58,6 +58,9 @@ chatters' AI features, the owner's dashboard. Production is `agency-de` (`root@1
 - What AI money went to (Hub's ledger, by feature/model/effort/window/chatter/page/key/branch, unit costs, dearest calls,
   setting changes): `ssh root@152.53.191.242 'docker exec agency-hub-api-1 node /app/apps/runtime/dist/cli.js ai:spend --from YYYY-MM-DD [--to …] [--json]'`
   (default: yesterday, Moscow). The owner's page: Деньги → Расходы → ИИ.
+- Model questionnaires from gosling-agency.ru (public `POST /api/v1/model-applications`; sensitive personal data:
+  read them on the server, copy them nowhere): `ssh root@152.53.191.242 'docker exec agency-hub-api-1 node
+  /app/apps/runtime/dist/cli.js model-applications:list'`, then `model-applications:show <id> [--json]`.
 - Don't babysit long rollouts and update windows (`page-browser-update.sh`, an hour of watching): start it,
   then end the turn or do one background check later. No foreground SSH polling loops.
 - `docs/` is in `.gitignore`: a new file there needs `git add -f`.
