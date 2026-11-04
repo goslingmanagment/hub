@@ -506,6 +506,7 @@
 
   /* Shifts. */
   .cs-shifts { margin: -4px -20px -18px; border: 0; border-radius: 0; }
+  .cs-shifts .data-table th, .cs-shifts .data-table td { padding-left: 8px; padding-right: 8px; }
   .cs-shifts .data-table th:first-child, .cs-shifts .data-table td:first-child { padding-left: 20px; }
   .cs-shifts .data-table th:last-child, .cs-shifts .data-table td:last-child { padding-right: 20px; }
   .cs-num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }

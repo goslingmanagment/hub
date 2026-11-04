@@ -97,6 +97,9 @@ function SideMenu({ section, role, screen, search, children }: {
     : [{ to: linkTo(tabRow(item, role)[0]!, search), label: item.label, tab: item, screen: tabRow(item, role)[0]! }]));
   const currentEntry = entries.find((entry) => entry.screen.id === screen.id) ?? entries.find((entry) => entry.tab.id === currentTab?.id);
 
+  // A section closed to this role: its refusal stands alone, beside no empty column.
+  if (entries.length === 0) return <>{children}</>;
+
   return (
     <div className="side-nav-layout">
       <nav aria-label={`Разделы: ${section.label}`} className="side-nav">

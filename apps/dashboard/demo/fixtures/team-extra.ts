@@ -190,7 +190,7 @@ export function teamGreetings(request: DemoRequest, scope: readonly string[], da
 const APPROACHES = [
   { id: 1, label: "Напомнить, о чём говорили", sortOrder: 1, active: true, popularity: 0.32, reply: 0.41, buy: 0.13 },
   { id: 2, label: "Личное голосовое с именем", sortOrder: 2, active: true, popularity: 0.18, reply: 0.49, buy: 0.17 },
-  { id: 3, label: "Скидка на PPV, который он открывал", sortOrder: 3, active: true, popularity: 0.2, reply: 0.31, buy: 0.21 },
+  { id: 3, label: "Скидка на платное сообщение, которое он открывал", sortOrder: 3, active: true, popularity: 0.2, reply: 0.31, buy: 0.21 },
   { id: 4, label: "Фото «скучаю»", sortOrder: 4, active: true, popularity: 0.16, reply: 0.43, buy: 0.1 },
   { id: 5, label: "Спросить про его день", sortOrder: 5, active: true, popularity: 0.14, reply: 0.36, buy: 0.07 },
   { id: 6, label: "Бесплатный тизер", sortOrder: 6, active: false, popularity: 0.24, reply: 0.27, buy: 0.08 },
