@@ -580,7 +580,8 @@ export const teamHandlers: DemoHandlers = {
     if (from >= to || to - from > 31 * DAY) return demoError(400, "Bad Request", "Окно — не больше 31 дня.");
     const disputed = new Set(teamDisputes(request.now).filter((dispute) => dispute.resolution === null).map((dispute) => dispute.sale.ref));
     const shifts = scopedShifts(teamWorld(request.now).shifts, scope).filter((shift) => shift.startedAt >= from && shift.startedAt < to);
-    const chatters = DEMO_CHATTERS.map((user) => {
+    const onlyUser = queryNumber(request, "userId", Number.NaN);
+    const chatters = DEMO_CHATTERS.filter((user) => Number.isNaN(onlyUser) || user.id === onlyUser).map((user) => {
       const rows = shifts.filter((shift) => shift.user.id === user.id).map((shift) => ({
         startedAt: isoAt(shift.startedAt),
         endedAt: isoAt(shift.endedAt),

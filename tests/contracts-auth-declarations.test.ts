@@ -140,6 +140,7 @@ describe("route auth declarations", () => {
       "pageConversationPreview",
       "pageConversationProfile",
       "pageDeletedFans",
+      "pageFanCard",
       "pageFanDetail",
       "pageFanProfile",
       "pageFanProfileVersion",

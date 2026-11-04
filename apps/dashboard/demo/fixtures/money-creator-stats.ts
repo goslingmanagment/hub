@@ -407,6 +407,57 @@ export function demoMedia(page: DemoPage): DemoMedia[] {
   return list;
 }
 
+/** The catalog's price and all-time sales of a media: one answer for the list of what sells and the media's card. */
+export function mediaSales(page: DemoPage, media: DemoMedia) {
+  const random = rng(`catalog:${media.mediaOfferId}`);
+  const priced = random() < 0.62;
+  const price = priced ? pick(random, [7.99, 9.99, 12.99, 14.99, 19.99, 24.99]) : null;
+  // Sales follow the page's money: ivy pages sell next to nothing.
+  const salesScale = Math.min(1.5, Math.max(0.03, page.dailyNet / 150));
+  const salesCount = priced ? Math.max(0, Math.round((media.peak / 120) * salesScale * between(random, 0.3, 1.6))) : null;
+  const netMills = price !== null && salesCount !== null ? Math.round(salesCount * price * 800) : null;
+  return {
+    /** The same stream goes on, for the rest of the media's card. */
+    random,
+    priceMills: price === null ? null : Math.round(price * 1000),
+    sales: {
+      count: salesCount,
+      netMills,
+      pendingMills: netMills === null ? null : Math.round(netMills * between(random, 0, 0.12)),
+      grossMills: netMills === null ? null : { value: Math.round(netMills / 0.8), derived: true as const, basis: "netMills / 0.8 — комиссия Fansly 20 %" },
+    },
+  };
+}
+
+/** What sold in messages on the pages that sell most: no post, no caption and no views, as on production. */
+function soldInMessages(page: DemoPage) {
+  if (!["mia-1", "mia-2", "nova-1"].includes(page.label)) return [];
+  return Array.from({ length: 30 }, (_, index) => {
+    const random = rng(`sold-in-messages:${page.label}:${index}`);
+    const video = random() < 0.7;
+    const price = pick(random, [14.99, 19.99, 24.99, 29.99, 39.99, 49.99]);
+    const count = intBetween(random, 2, 60);
+    const netMills = Math.round(count * price * 800);
+    return {
+      mediaOfferId: `${6_100_000_000 + (hashString(`sold:${page.label}:${index}`) % 800_000_000)}${String(index).padStart(6, "0")}`,
+      mediaType: video ? 2 : 1,
+      durationMs: video ? Math.round(between(random, 40, 900) * 1000) : null,
+      postId: null,
+      postedDaysAgo: intBetween(random, 3, 240),
+      deletedDaysAgo: null,
+      caption: null,
+      priceMills: Math.round(price * 1000),
+      sales: {
+        count,
+        netMills,
+        pendingMills: Math.round(netMills * between(random, 0, 0.08)),
+        grossMills: { value: Math.round(netMills / 0.8), derived: true as const, basis: "netMills / 0.8 — комиссия Fansly 20 %" },
+      },
+      windowViews: null,
+    };
+  });
+}
+
 /** One media's views on a day `ageDays` after it was posted, per source. */
 export function mediaDay(media: DemoMedia, ageDays: number, day: string): { fyp: number; timeline: number; other: number } {
   if (ageDays < 0) return { fyp: 0, timeline: 0, other: 0 };
@@ -428,7 +479,7 @@ function creatorStatsContent(request: DemoRequest): KernelOperationResponse<"cre
   const window = windowOf(request);
   if (isReply(window)) return window;
   const base = { page: { label: page.label, platform: page.platform }, window };
-  if (page.platform !== "fansly") return { ...base, walk: { visited: 0, queued: 0 }, media: [] };
+  if (page.platform !== "fansly") return { ...base, walk: { visited: 0, queued: 0 }, media: [], topSales: [], topSalesTotal: 0 };
   const today = isoDay(request.now);
   const days = dayList(window.fromDay, window.toDay).filter((day) => day <= today);
   const all = demoMedia(page);
@@ -476,7 +527,27 @@ function creatorStatsContent(request: DemoRequest): KernelOperationResponse<"cre
   media.sort((left, right) => (right.views ?? 0) - (left.views ?? 0));
   // ivy-1 joined the media walk late: the first pass is still running.
   const walk = page.label === "ivy-1" ? { visited: Math.round(all.length * 0.68), queued: all.length } : { visited: all.length, queued: all.length };
-  return { ...base, walk, media };
+  const viewsInWindow = new Map(media.map((row) => [row.mediaOfferId, row.views]));
+  const sold = [
+    ...all.flatMap((item) => {
+      const { priceMills, sales } = mediaSales(page, item);
+      return (sales.netMills ?? 0) > 0 ? [{ ...item, priceMills, sales, windowViews: viewsInWindow.get(item.mediaOfferId) ?? null }] : [];
+    }),
+    ...soldInMessages(page),
+  ].sort((left, right) => (right.sales.netMills ?? 0) - (left.sales.netMills ?? 0) || left.mediaOfferId.localeCompare(right.mediaOfferId));
+  const topSales = sold.slice(0, 50).map((item) => ({
+    mediaOfferId: item.mediaOfferId,
+    mediaType: item.mediaType,
+    durationMs: item.durationMs,
+    postId: item.postId,
+    postedAt: new Date(Date.parse(`${shiftDay(today, -item.postedDaysAgo)}T00:00:00Z`) + 17 * 3_600_000).toISOString(),
+    deletedAt: item.deletedDaysAgo === null ? null : new Date(Date.parse(`${shiftDay(today, -item.deletedDaysAgo)}T00:00:00Z`) + 9 * 3_600_000).toISOString(),
+    caption: item.caption,
+    priceMills: item.priceMills,
+    sales: item.sales,
+    windowViews: item.windowViews,
+  }));
+  return { ...base, walk, media, topSales, topSalesTotal: sold.length };
 }
 
 function creatorStatsMedia(request: DemoRequest): KernelOperationResponse<"creatorStatsMedia"> | DemoReply {
@@ -485,6 +556,10 @@ function creatorStatsMedia(request: DemoRequest): KernelOperationResponse<"creat
   const window = windowOf(request);
   if (isReply(window)) return window;
   const item = demoMedia(page).find((entry) => entry.mediaOfferId === request.params.mediaOfferId);
+  // Sold in messages: Fansly serves it no days, and the server answers with empty lists.
+  if (!item && soldInMessages(page).some((entry) => entry.mediaOfferId === request.params.mediaOfferId)) {
+    return { mediaOfferId: request.params.mediaOfferId!, window, daily: [], hourly: [], retention: [], tags: [] };
+  }
   if (!item) return demoError(404, "not_found", "Медиа не найдено");
   const today = isoDay(request.now);
   const postedDay = shiftDay(today, -item.postedDaysAgo);

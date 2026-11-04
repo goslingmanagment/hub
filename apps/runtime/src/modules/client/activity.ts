@@ -69,6 +69,8 @@ export function registerClientActivityRoutes(server: ApiServer, ctx: ApiModuleCo
     schema: routeSchemas.teamChatterNumbers,
   }, async (request): Promise<TeamChatterNumbersResponse> => {
     const principal = await requirePrincipal(request);
-    return readTeamChatterNumbers(appContext, principal, { from: request.query.from, to: request.query.to, pageScope: pageScopeFor(principal) });
+    return readTeamChatterNumbers(appContext, principal, {
+      from: request.query.from, to: request.query.to, userId: request.query.userId, pageScope: pageScopeFor(principal),
+    });
   });
 }

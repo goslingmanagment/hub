@@ -243,4 +243,111 @@ describe("the fan's card across pages", () => {
       await trap.restore();
     }
   }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  describe("in the owner's console", () => {
+    const login = async (username: string, password: string) => {
+      const response = await server!.inject({ method: "POST", url: "/api/v1/auth/login", payload: { username, password } });
+      expect(response.statusCode, response.body).toBe(200);
+      const header = response.headers["set-cookie"];
+      return String(Array.isArray(header) ? header[0] : header).split(";")[0]!;
+    };
+    const card = (pageLabel: string, fanRef: string, cookie: string) =>
+      server!.inject({ method: "GET", url: `/api/v1/pages/${pageLabel}/fans/${fanRef}/card`, headers: { cookie } });
+    const batch = (cookie: string, payload: Record<string, unknown>) =>
+      server!.inject({ method: "POST", url: "/api/v2/spenders:batch", headers: { cookie }, payload });
+    let owner = "";
+    let lead = "";
+
+    beforeAll(async () => {
+      if (!testDb || !server) return;
+      await createUserAccount(app, { username: "boss", role: "owner", password: "boss-secret" }, { source: "cli" });
+      await createUserAccount(app, { username: "leadari", role: "team_lead", password: "lead-secret" }, { source: "cli" });
+      await assignPageToUser(app, { userId: await fixtureUserId(app, "leadari"), pageLabel: "ari-1" }, { source: "cli" });
+      owner = await login("boss", "boss-secret");
+      lead = await login("leadari", "lead-secret");
+      await fan("zed", "fansly", "7000000011", "zedhead");
+      await fan("zedNew", "fansly", "7000000012", "zed_new");
+      await onPage("zed", "lora-1", "Zed/USA/30", 70_000);
+      await onPage("zed", "ari-1", null, 3_000);
+      await onPage("zedNew", "lora-2", "Zed/USA/30", 9_000);
+      await testDb.pool.query(
+        `insert into fan_facts (fan_id, page_id, platform, conversation_ref, kind, text, message_ref, message_at, source)
+         values ($1, $2, 'fansly', '8100000011', 'about', 'С lora-1', '9200000011', now(), 'ai'),
+                ($1, $3, 'fansly', '8100000012', 'about', 'С ari-1', '9200000012', now(), 'ai')`,
+        [fans.zed, pages["lora-1"], pages["ari-1"]],
+      );
+    }, 60_000);
+
+    it("reads the whole card for the owner, and for a lead only what the lead's pages show", async (context) => {
+      if (!testDb || !server) return context.skip();
+      const trap = await armNoOutboundTrap(testDb);
+      try {
+        const full = clientFanCardResponseSchema.parse((await card("ari-1", "7000000011", owner)).json());
+        expect(full.pages.map((page) => [page.pageLabel, page.spentMills])).toEqual([["lora-1", 70_000], ["ari-1", 3_000]]);
+        expect(full.suggestions.map((one) => [one.fanRef, one.sharedOn])).toEqual([["7000000012", "lora-2"]]);
+        expect(full.facts.map((fact) => fact.text).sort()).toEqual(["С ari-1", "С lora-1"]);
+
+        const cut = clientFanCardResponseSchema.parse((await card("ari-1", "7000000011", lead)).json());
+        // No money or alias of lora-1, no account seen only on lora-2, no fact of lora-1.
+        expect(cut.pages.map((page) => [page.pageLabel, page.spentMills])).toEqual([["ari-1", 3_000]]);
+        expect(cut.suggestions).toEqual([]);
+        expect(cut.facts.map((fact) => fact.text)).toEqual(["С ari-1"]);
+        expect(JSON.stringify(cut)).not.toContain("lora-");
+        await trap.assertNoOutbound();
+      } finally {
+        await trap.restore();
+      }
+    }, INTEGRATION_TEST_TIMEOUT_MS);
+
+    it("refuses a page the lead does not reach, a chatter's session and a device token", async (context) => {
+      if (!testDb || !server) return context.skip();
+      expect((await card("lora-1", "7000000011", lead)).statusCode).toBe(403);
+      expect((await card("nosuchpage", "7000000011", owner)).statusCode).toBe(404);
+      expect((await card("ari-1", "7000000011", await login("vanya", "vanya-secret"))).statusCode).toBe(403);
+      const device = await server.inject({
+        method: "GET",
+        url: "/api/v1/pages/ari-1/fans/7000000011/card",
+        headers: { authorization: `Bearer ${token}`, "x-client-version": VERSION },
+      });
+      expect(device.statusCode).toBe(403);
+      expect((await server.inject({ method: "GET", url: "/api/v1/pages/ari-1/fans/7000000011/card" })).statusCode).toBe(401);
+    }, INTEGRATION_TEST_TIMEOUT_MS);
+
+    it("names a fan's pages and money in a wide batch, inside the viewer's pages only", async (context) => {
+      if (!testDb || !server) return context.skip();
+      const fansAsked = [{ platform: "fansly", platformUserId: "7000000011" }, { platform: "fansly", platformUserId: "7999999999" }];
+      const wide = await batch(owner, { scope: "agency", platform: "fansly", period: "30d", fans: fansAsked });
+      expect(wide.statusCode, wide.body).toBe(200);
+      const [found, missing] = wide.json().items;
+      expect(found.pages).toEqual([
+        { pageLabel: "lora-1", creatorNetAmountMills: 70_000 },
+        { pageLabel: "ari-1", creatorNetAmountMills: 3_000 },
+      ]);
+      expect(found.subscription).toBeNull();
+      expect(missing).not.toHaveProperty("pages");
+
+      const onePage = await batch(owner, { scope: "page", pageLabel: "ari-1", period: "30d", fans: fansAsked });
+      expect(onePage.json().items[0]).not.toHaveProperty("pages");
+      expect(onePage.json().items[0].subscription).not.toBeNull();
+
+      // The lead's whole scope is one page: lora-1's money is not there in any shape.
+      const leads = await batch(lead, { scope: "agency", platform: "fansly", period: "30d", fans: fansAsked });
+      expect(leads.statusCode, leads.body).toBe(200);
+      expect(leads.json().items[0]).not.toHaveProperty("pages");
+      expect(leads.body).not.toContain("lora-1");
+    }, INTEGRATION_TEST_TIMEOUT_MS);
+
+    it("says what a deleted fan spent on this page", async (context) => {
+      if (!testDb || !server) return context.skip();
+      await fan("gone", "fansly", "7000000021", "goneguy");
+      await fan("goneBroke", "fansly", "7000000022", "brokeguy");
+      await onPage("gone", "ari-1", null, 41_000);
+      await onPage("goneBroke", "ari-1", null, 0);
+      await testDb.pool.query("update fans set deleted_detected_at = now() where id = any($1::bigint[])", [[fans.gone, fans.goneBroke]]);
+      const response = await server.inject({ method: "GET", url: "/api/v1/pages/ari-1/deleted-fans?limit=50&offset=0", headers: { cookie: lead } });
+      expect(response.statusCode, response.body).toBe(200);
+      const spent = Object.fromEntries(response.json().items.map((item: { platformUserId: string; totalCreatorNetMills: number }) => [item.platformUserId, item.totalCreatorNetMills]));
+      expect(spent).toEqual({ "7000000021": 41_000, "7000000022": 0 });
+    }, INTEGRATION_TEST_TIMEOUT_MS);
+  });
 });

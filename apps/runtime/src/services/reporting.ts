@@ -935,6 +935,7 @@ export async function getPageDeletedFansReport(
       deletedDetectedAt: serializeTimestamp(row.deletedDetectedAt)!,
       deletedLastDetectedAt: serializeTimestamp(row.deletedLastDetectedAt),
       lastSeenAt: serializeTimestamp(row.lastSeenAt)!,
+      totalCreatorNetMills: millsToNumber(row.totalCreatorNetMills),
     })),
     limit: input.limit,
     offset: input.offset,

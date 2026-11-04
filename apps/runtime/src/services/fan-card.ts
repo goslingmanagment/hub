@@ -40,7 +40,7 @@ import {
 import type { AppContext } from "../bootstrap.ts";
 import { canAccessPage, requireApiKeyUser, type HumanAuthPrincipal } from "./auth.ts";
 import { requireClientGrantedPage } from "./client-switches.ts";
-import { ClientFeatureDisabledError, ConflictError, NotFoundError } from "./errors.ts";
+import { ClientFeatureDisabledError, ConflictError, ForbiddenError, NotFoundError } from "./errors.ts";
 
 /**
  * Chat Memory week 2 (docs/plans/2026-10-24-chat-memory/week-2.md §1–2): the
@@ -213,6 +213,49 @@ export async function readClientFanCard(
   const page = await requireClientGrantedPage(app, principal, await findPageSummaryByLabel(app.db, input.pageLabel), FAN_CARD_FEATURE);
   const fan = await findCardFan(app.db, page.platform, input.fanRef);
   return cardOf(app, principal, { pageLabel: page.label, fanRef: input.fanRef, fan, pageId: page.id });
+}
+
+/**
+ * The card as the owner's console shows it. The console's reads never name
+ * anything of a page the viewer does not reach, so what a chatter's client may
+ * see of such a page (its alias, marks and money, week-2.md §2) stays out, and
+ * so does an account known only there. An account on no page at all stays: it
+ * shows nothing of another page. Pure; the owner reaches every page.
+ */
+export function cardForDashboard(card: ClientFanCardResponse): ClientFanCardResponse {
+  const unreachable = new Set(card.pages.concat(card.suggestions.flatMap((one) => one.pages))
+    .filter((page) => !page.granted)
+    .map((page) => page.pageLabel));
+  const onlyThere = (account: { platform: string; fanRef: string }, pages: readonly ClientFanCardPage[]) => {
+    const own = pages.filter((page) => page.platform === account.platform && page.fanRef === account.fanRef);
+    return own.length > 0 && own.every((page) => !page.granted);
+  };
+  return {
+    ...card,
+    // The asked fan is on the asked page: the first account always stays.
+    accounts: card.accounts.filter((account, index) => index === 0 || !onlyThere(account, card.pages)),
+    pages: card.pages.filter((page) => page.granted),
+    suggestions: card.suggestions
+      .filter((suggestion) => !onlyThere(suggestion, suggestion.pages))
+      .map((suggestion) => ({
+        ...suggestion,
+        sharedOn: suggestion.sharedOn !== null && unreachable.has(suggestion.sharedOn) ? null : suggestion.sharedOn,
+        pages: suggestion.pages.filter((page) => page.granted),
+      })),
+  };
+}
+
+/** The console's read of the card: a dashboard session, on a page it reaches (the route's declared auth). No client switch: that one is for the extension. */
+export async function readPageFanCard(
+  app: AppContext,
+  principal: HumanAuthPrincipal,
+  input: { pageLabel: string; platformUserId: string },
+): Promise<ClientFanCardResponse> {
+  const page = await findPageSummaryByLabel(app.db, input.pageLabel);
+  if (!page) throw new NotFoundError(`Page "${input.pageLabel}" was not found`);
+  if (!canAccessPage(principal, page.id)) throw new ForbiddenError("Page access denied");
+  const fan = await findCardFan(app.db, page.platform, input.platformUserId);
+  return cardForDashboard(await cardOf(app, principal, { pageLabel: page.label, fanRef: input.platformUserId, fan, pageId: page.id }));
 }
 
 export async function decideClientFanLink(

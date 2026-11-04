@@ -186,8 +186,83 @@ function deletedFans(page: DemoPage, now: Date) {
       deletedDetectedAt: iso(hoursAgo(now, detected)),
       deletedLastDetectedAt: random() < 0.8 ? iso(hoursAgo(now, Math.min(detected, between(random, 1, 30)))) : null,
       lastSeenAt: iso(hoursAgo(now, detected + between(random, 12, 24 * 20))),
+      // Two in three of them paid before they left.
+      totalCreatorNetMills: random() < 0.68 ? intBetween(random, 4, 900) * 1000 : 0,
     };
   }).sort((left, right) => right.deletedDetectedAt.localeCompare(left.deletedDetectedAt));
+}
+
+// --- The fan's memory ---
+
+const FACTS = [
+  ["about", "Работает дальнобойщиком, пишет по вечерам", "yeah im on the road most of the week, usually free after 9"],
+  ["about", "Есть собака, зовут Бадди", "buddy says hi lol he never leaves me alone"],
+  ["about", "День рождения в марте", "my birthday is coming in march btw"],
+  ["promise", "Обещали видео в красном к выходным", "ill have the red set for you by the weekend, promise"],
+  ["promise", "Обещали ответить на вопрос про поездку", "let me think about it and ill tell you tomorrow"],
+  ["agreement", "Договорились: персональное видео за $60", "ok deal, 60 for the custom one"],
+  ["agreement", "Договорились о скидке на следующий набор", "ok next set is cheaper for you then"],
+] as const;
+
+const CUSTOMS = [
+  ["ordered", "Видео в красном платье, 5 минут", 60_000],
+  ["paid", "Набор из 12 фото у окна", 45_000],
+  ["delivered", "Поздравление с днём рождения", 30_000],
+  ["cancelled", "Видео на улице: передумал", 80_000],
+] as const;
+
+/** The fan's card as the console reads it: full for the world's spenders, known but empty for the quiet crowd. */
+function fanCard(page: DemoPage, fanRef: string, now: Date): KernelOperationResponse<"pageFanCard"> {
+  const empty = { pageLabel: page.label, fanRef, accounts: [], pages: [], suggestions: [], facts: [], customs: [], customPayments: [], serverNow: iso(now) };
+  const item = findPageFan(page, fanRef);
+  if (!item) return { ...empty, known: false };
+  const account = { platform: page.platform, fanRef, username: item.fan.username, displayName: item.fan.displayName === item.fan.username ? null : item.fan.displayName, gone: false };
+  const own = metricsOf(fanTransactions(page, item.fan), now);
+  const row = (ref: string, spentMills: number) => ({
+    pageLabel: page.label, platform: page.platform, modelName: page.modelName, fanRef: ref, granted: true, alias: null,
+    subscribed: item.subscription !== null, subscribedSince: null, subscriptionEndsAt: null, spentMills, last30Mills: {}, lastPurchaseAt: own.lastTransactionAt,
+  });
+  const base = { ...empty, known: true, accounts: [{ ...account, linkedBy: null }], pages: [row(fanRef, own.grossAmountMills)] };
+  if (!item.core) return base;
+
+  const random = rng(`card:${page.label}:${fanRef}`);
+  const chatter = pick(random, DEMO_USERS.filter((user) => user.role === "chatter")).username;
+  const numeric = (salt: string) => `${5_200_000_000 + (hashString(`${fanRef}:${salt}`) % 700_000_000)}000000`;
+  const conversationRef = item.dm?.conversationId ?? numeric("chat");
+  const facts = FACTS.filter((_, index) => [0, 3, 5].includes(index) || random() < 0.5).map(([kind, text, quote], index) => {
+    const at = iso(hoursAgo(now, 30 + index * 70));
+    return {
+      id: hashString(`${fanRef}:fact:${index}`) % 1_000_000 + 1,
+      kind, text, pageLabel: page.label, granted: true, conversationRef, messageRef: numeric(`fact:${index}`), messageAt: at,
+      source: index === 0 ? "chatter" : "ai", author: index === 0 ? chatter : null, createdAt: at,
+      quote: { text: quote, from: kind === "about" ? "fan" : "model", at, media: false },
+    };
+  });
+  const customs = CUSTOMS.map(([state, description, priceMills], index) => {
+    const created = hoursAgo(now, 40 + index * 90);
+    const paid = state === "paid" || state === "delivered";
+    return {
+      id: hashString(`${fanRef}:custom:${index}`) % 1_000_000 + 1,
+      pageLabel: page.label, granted: true, description, priceMills, state,
+      paymentMills: paid ? priceMills : null,
+      paidAt: paid ? iso(created) : null,
+      deliveredMessageRef: state === "delivered" ? numeric("delivered") : null,
+      deliveredAt: state === "delivered" ? iso(hoursAgo(now, 30)) : null,
+      createdBy: chatter, createdAt: iso(created), deliveryCandidates: [],
+    };
+  });
+  const other = (salt: string, username: string) => ({
+    platform: page.platform, fanRef: `7${String(hashString(`${fanRef}:${salt}`)).padStart(10, "3")}`, username, displayName: null, gone: salt === "linked",
+  });
+  const linked = other("linked", `${item.fan.username ?? "fan"}_old`);
+  const suggested = other("suggested", `${item.fan.username ?? "fan"}_two`);
+  return {
+    ...base,
+    accounts: [{ ...account, linkedBy: null }, { ...linked, linkedBy: chatter }],
+    suggestions: [{ ...suggested, reason: "same_alias", shared: `${item.fan.username ?? "fan"}/USA/34`, sharedOn: page.label, pages: [row(suggested.fanRef, 12_000)] }],
+    facts,
+    customs,
+  };
 }
 
 // --- Spender lists ---
@@ -525,6 +600,12 @@ export const pageFanHandlers: DemoHandlers = {
         return { businessDate: day, newFollowers: news.get(day) ?? 0, knownTotalFollowers: (page.followers ?? 0) - later + unfollowed };
       }),
     };
+  },
+
+  pageFanCard: (request) => {
+    const page = resolvePage(request);
+    if (isReply(page)) return page;
+    return fanCard(page, request.params.platformUserId ?? "", request.now);
   },
 
   pageDeletedFans: (request) => {
@@ -881,6 +962,15 @@ export const pageFanHandlers: DemoHandlers = {
         const current = metricsOf(inside, request.now);
         const lifetime = metricsOf(fanTransactions(page, item.fan), request.now);
         const sub = item.subscription;
+        // Wider than one page: no one subscription, the fan's pages instead (as the server).
+        const wide = scope.pages.length > 1;
+        const wideFields = !wide ? {} : {
+          subscription: null,
+          pages: scope.pages.flatMap((one) => {
+            const there = findPageFan(one, requestedFan.platformUserId);
+            return there ? [{ pageLabel: one.label, creatorNetAmountMills: metricsOf(fanTransactions(one, there.fan), request.now).creatorNetAmountMills }] : [];
+          }).sort((left, right) => right.creatorNetAmountMills - left.creatorNetAmountMills),
+        };
         return {
           requestedFan,
           found: true,
@@ -905,6 +995,7 @@ export const pageFanHandlers: DemoHandlers = {
                 autoRenewOffDetectedAt: sub.autoRenewOffDaysAgo != null ? iso(daysAgo(request.now, sub.autoRenewOffDaysAgo, 9)) : null,
               }
             : { status: "never" as const, expiresAt: null, autoRenew: null, autoRenewOffDetectedAt: null },
+          ...wideFields,
         };
       }),
     };

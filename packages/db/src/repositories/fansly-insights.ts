@@ -1116,6 +1116,8 @@ export interface InsightsCommentPerPostRow {
   missingCount: number;
   oldestAt: Date | null;
   newestAt: Date | null;
+  caption: string | null;
+  publishedAt: Date | null;
 }
 
 /** Per-post rollup over the SAME window the rows came from. `possiblyTruncated`
@@ -1140,17 +1142,23 @@ export async function listInsightsCommentsPerPost(
     clauses.push(sql`c.parent_post_ref = ${input.postRef}`);
   }
   const result = await db.execute<Record<string, unknown>>(sql`
-    select c.parent_post_ref as post_ref,
-           count(*)::int as comment_count,
-           count(*) filter (where c.possibly_truncated)::int as truncated_count,
-           count(*) filter (where c.missing_since is not null)::int as missing_count,
-           min(c.occurred_at) as oldest_at,
-           max(c.occurred_at) as newest_at
-    from post_comments c
-    where ${sql.join(clauses, sql` and `)}
-    group by c.parent_post_ref
-    order by max(c.occurred_at) desc, c.parent_post_ref desc
-    limit ${input.limit}
+    with rollup as (
+      select c.parent_post_ref as post_ref,
+             count(*)::int as comment_count,
+             count(*) filter (where c.possibly_truncated)::int as truncated_count,
+             count(*) filter (where c.missing_since is not null)::int as missing_count,
+             min(c.occurred_at) as oldest_at,
+             max(c.occurred_at) as newest_at
+      from post_comments c
+      where ${sql.join(clauses, sql` and `)}
+      group by c.parent_post_ref
+      order by max(c.occurred_at) desc, c.parent_post_ref desc
+      limit ${input.limit}
+    )
+    select r.*, left(p.text_plain, 200) as caption, p.published_at
+    from rollup r
+    left join creator_posts p on p.account_id = ${input.pageId} and p.platform_post_id = r.post_ref
+    order by r.newest_at desc, r.post_ref desc
   `);
   return result.rows.map((row) => ({
     postRef: String(row.post_ref),
@@ -1159,6 +1167,8 @@ export async function listInsightsCommentsPerPost(
     missingCount: requiredInt(row.missing_count),
     oldestAt: date(row.oldest_at),
     newestAt: date(row.newest_at),
+    caption: text(row.caption),
+    publishedAt: date(row.published_at),
   }));
 }
 

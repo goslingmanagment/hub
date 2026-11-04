@@ -7,7 +7,7 @@
 import type { KernelOperationResponse } from "@agency_hub_core/contracts";
 import { between, demoError, hashString, intBetween, isoDay, pick, queryNumber, queryString, rng, type DemoHandlers, type DemoReply, type DemoRequest } from "../core.ts";
 import { demoFans, type DemoPage } from "../world.ts";
-import { dayStats, demoMedia, mediaDay, reachOf, type DemoMedia } from "./money-creator-stats.ts";
+import { dayStats, demoMedia, mediaDay, mediaSales, reachOf, type DemoMedia } from "./money-creator-stats.ts";
 import { DAY_MS, ledgerDay, ownerOnly, pageOr404, startOfDayMs, type LedgerType } from "./money-ledger.ts";
 
 type CoverageRow = KernelOperationResponse<"statsCoverage">["planes"][number];
@@ -273,14 +273,8 @@ function statsMedia(request: DemoRequest): KernelOperationResponse<"statsMedia">
     .sort((left, right) => right.total - left.total);
   let bucketBudget = bucketLimit;
   const media = chosen.map(({ media, points, total }) => {
-    const random = rng(`catalog:${media.mediaOfferId}`);
+    const { random, priceMills, sales } = mediaSales(page, media);
     const video = media.mediaType === 2;
-    const priced = random() < 0.62;
-    const price = priced ? pick(random, [7.99, 9.99, 12.99, 14.99, 19.99, 24.99]) : null;
-    // Sales follow the page's money: ivy pages sell next to nothing.
-    const salesScale = Math.min(1.5, Math.max(0.03, page.dailyNet / 150));
-    const salesCount = priced ? Math.max(0, Math.round((media.peak / 120) * salesScale * between(random, 0.3, 1.6))) : null;
-    const salesNet = price !== null && salesCount !== null ? Math.round(salesCount * price * 800) : null;
     const posted = startOfDayMs(now) - media.postedDaysAgo * DAY_MS + 17 * 3_600_000;
     const rawBuckets = (bucketBudget > 0 ? points.filter((point) => point.views > 0).slice(-bucketBudget) : []).map((point) =>
       trafficRow("media_offer", media.mediaOfferId, point.bucket, now, { sourceCode: "1", sourceLabel: "direct", views: point.views - point.fyp, previewViews: point.preview }));
@@ -294,14 +288,9 @@ function statsMedia(request: DemoRequest): KernelOperationResponse<"statsMedia">
       width: video ? 1080 : pick(random, [1080, 1440]),
       height: video ? 1920 : pick(random, [1350, 1920]),
       durationMs: media.durationMs,
-      priceMills: price === null ? null : Math.round(price * 1000),
+      priceMills,
       likeCount: Math.round(total * media.likeRate),
-      sales: {
-        count: salesCount,
-        netMills: salesNet,
-        pendingMills: salesNet === null ? null : Math.round(salesNet * between(random, 0, 0.12)),
-        grossMills: salesNet === null ? null : { value: Math.round(salesNet / 0.8), derived: true as const, basis: "netMills / 0.8 — комиссия Fansly 20 %" },
-      },
+      sales,
       createdAtPlatform: iso(posted),
       deletedAtPlatform: media.deletedDaysAgo === null ? null : iso(startOfDayMs(now) - media.deletedDaysAgo * DAY_MS),
       firstObservedAt: iso(posted + 40 * 60_000),
@@ -476,6 +465,8 @@ function contentComments(request: DemoRequest): KernelOperationResponse<"content
       missingCount: own.filter((comment) => comment.missingSince !== null).length,
       oldestAt: times[0] ?? null,
       newestAt: times.at(-1) ?? null,
+      caption: media.caption,
+      publishedAt: iso(startOfDayMs(now) - media.postedDaysAgo * DAY_MS + 17 * 3_600_000),
     };
   }).filter((post) => post.commentCount > 0).sort((left, right) => right.commentCount - left.commentCount);
   const sliced = paged(comments, request, 200);

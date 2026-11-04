@@ -47,6 +47,7 @@ import { agentKeyAdminRouteSchemas } from "./routes-agent-keys.ts";
 import { syncRouteSchemas } from "./routes-sync.ts";
 // The chat extension's routes (client bootstrap and what follows); same spread.
 import {
+  clientFanCardResponseSchema,
   clientNumericIdSchema,
   clientOpenToken,
   clientRouteSchemas,
@@ -1116,6 +1117,8 @@ const deletedFanItemSchema = z.object({
   deletedDetectedAt: isoTimestamp,
   deletedLastDetectedAt: isoTimestamp.nullable(),
   lastSeenAt: isoTimestamp,
+  /** What the fan spent on this page over all time, after the platform's cut. */
+  totalCreatorNetMills: mills,
 });
 
 export const pageDeletedFansResponseSchema = z.object({
@@ -1424,6 +1427,9 @@ export const spenderBatchItemSchema = z.object({
   typeBreakdown: z.array(spenderTypeBreakdownItemSchema).nullable(),
   lifetimeLastTransactionAt: isoTimestamp.nullable(),
   subscription: spenderSubscriptionSchema.nullable(),
+  /** The fan's pages inside the scope, the most money first. Only when the scope
+   *  is wider than one page, and only for a fan found. */
+  pages: z.array(z.object({ pageLabel: z.string(), creatorNetAmountMills: mills })).optional(),
 });
 
 export const spenderBatchResponseSchema = z.object({
@@ -6133,6 +6139,17 @@ export const creatorStatsOverviewResponseSchema = z.object({
   })),
 });
 
+const insightsMediaSalesSchema = z.object({
+  count: z.number().int().nullable(),
+  /** A12: `saleStats.total` is the creator's NET share. Stored verbatim. */
+  netMills: mills.nullable(),
+  pendingMills: mills.nullable(),
+  /** DERIVED from `netMills`. Fansly's cut is 20 %, so gross = net / 0.8 — a
+   *  factor that can change, which is exactly why net is what is stored and
+   *  gross is what is computed here and labelled. Never summed with net. */
+  grossMills: insightsDerived(mills).nullable(),
+});
+
 /** The media plane (0293) over the last `days` UTC days: the page's media by
  *  views in the window, each tied to the post that carries it. */
 export const creatorStatsContentResponseSchema = z.object({
@@ -6161,6 +6178,24 @@ export const creatorStatsContentResponseSchema = z.object({
     likes: creatorStatsCount,
     allTimeViews: creatorStatsCount,
   })),
+  /** What sells: the page's 50 top media by net sales, whatever their views.
+   *  Fansly serves sales only as an all-time total, so this list has no window;
+   *  most were sold in messages and carry no post. */
+  topSales: z.array(z.object({
+    mediaOfferId: z.string(),
+    mediaType: z.number().int().nullable(),
+    durationMs: z.number().int().nullable(),
+    postId: z.string().nullable(),
+    postedAt: isoTimestamp.nullable(),
+    deletedAt: isoTimestamp.nullable(),
+    caption: z.string().nullable(),
+    priceMills: mills.nullable(),
+    sales: insightsMediaSalesSchema,
+    /** Views summed over the window; null when the window holds none. */
+    windowViews: creatorStatsCount,
+  })),
+  /** How many media of the page have sales at all. */
+  topSalesTotal: z.number().int(),
 });
 
 export const creatorStatsMediaParamsSchema = pageParamsSchema.extend({ mediaOfferId: z.string().regex(/^\d{1,30}$/) });
@@ -6233,17 +6268,6 @@ export const statsTrafficResponseSchema = z.object({
   rows: z.array(insightsTrafficRowSchema),
   coverage: z.array(insightsCoverageRowSchema),
   nextCursor: z.string().nullable(),
-});
-
-const insightsMediaSalesSchema = z.object({
-  count: z.number().int().nullable(),
-  /** A12: `saleStats.total` is the creator's NET share. Stored verbatim. */
-  netMills: mills.nullable(),
-  pendingMills: mills.nullable(),
-  /** DERIVED from `netMills`. Fansly's cut is 20 %, so gross = net / 0.8 — a
-   *  factor that can change, which is exactly why net is what is stored and
-   *  gross is what is computed here and labelled. Never summed with net. */
-  grossMills: insightsDerived(mills).nullable(),
 });
 
 const insightsMediaRowSchema = z.object({
@@ -6571,6 +6595,9 @@ export const contentCommentsResponseSchema = z.object({
     missingCount: z.number().int(),
     oldestAt: isoTimestamp.nullable(),
     newestAt: isoTimestamp.nullable(),
+    /** The post's text, cut to 200; null when Hub holds no such post or it has none. */
+    caption: z.string().nullable(),
+    publishedAt: isoTimestamp.nullable(),
   })),
   /** WP-F2 ships `post_likes` EMPTY on Fansly: no like code is live-confirmed
    *  ([E4]), so layer 2 writes nothing. Declared, not omitted — an omitted
@@ -7777,6 +7804,21 @@ const baseRouteSchemas = {
     params: pageFanParamsSchema,
     response: {
       200: pageFanDetailResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+    },
+  },
+  pageFanCard: {
+    auth: { kind: "session", scope: "page" },
+    tags: ["fans"],
+    summary: "The fan's card for the owner's console: the person's accounts, facts and customs",
+    description: "Read-only and database-only. The card a chatter's client reads, for a dashboard session on a page it "
+      + "reaches, cut to the pages the viewer reaches: nothing of another page, neither its money nor an account seen "
+      + "only there. An unknown fan answers `known: false`.",
+    params: pageFanParamsSchema,
+    response: {
+      200: clientFanCardResponseSchema,
       401: errorResponseSchema,
       403: errorResponseSchema,
       404: errorResponseSchema,
