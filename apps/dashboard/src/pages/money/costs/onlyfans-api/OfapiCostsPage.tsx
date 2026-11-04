@@ -261,9 +261,9 @@ export function OfapiCostsPage() {
           ) : (
             <Stat
               label={recorded ? "Прогноз по операциям" : "Хватит на"}
-              value={forecast.daysLeft !== null ? <span className={runwayTone}>~{fmtCredits(forecast.daysLeft)} <span className="ofc-unit">{daysWord(forecast.daysLeft)}</span></span> : "—"}
+              value={forecast.daysLeft !== null ? <span className={runwayTone}>≈ {fmtCredits(forecast.daysLeft)} <span className="ofc-unit">{daysWord(forecast.daysLeft)}</span></span> : "—"}
               meta={forecast.daysLeft !== null
-                ? <>{forecast.runOutDate && <span className="block">закончатся ~{humanDay(forecast.runOutDate)}</span>}~{credits(Math.round(forecast.avgDailySpend7d))} в день{priceKnown ? ` (≈ ${usd(Math.round(forecast.avgDailySpend7d))})` : ""}, среднее за 7 дней</>
+                ? <>{forecast.runOutDate && <span className="block">закончатся ≈ {humanDay(forecast.runOutDate)}</span>}~{credits(Math.round(forecast.avgDailySpend7d))} в день{priceKnown ? ` (≈ ${usd(Math.round(forecast.avgDailySpend7d))})` : ""}, среднее за 7 дней</>
                 : forecast.avgDailySpend7d <= 0 ? "за последние 7 дней нет учтённых трат для прогноза" : "ждём показание баланса"}
             />
           )}
@@ -297,7 +297,7 @@ export function OfapiCostsPage() {
           <p className="ofc-note">
             {forecast.monthToDateSpend !== undefined && <>{recorded ? "По операциям за месяц: " : "Потрачено за месяц: "}{credits(forecast.monthToDateSpend)}{priceKnown ? ` (≈ ${usd(forecast.monthToDateSpend)})` : ""}</>}
             {forecast.monthUnverifiedResidualCredits !== undefined && forecast.monthUnverifiedResidualCredits !== 0 && <>, разница баланса за месяц: {credits(forecast.monthUnverifiedResidualCredits)}</>}
-            {!off && forecast.monthEndProjection !== undefined && <>{forecast.monthToDateSpend !== undefined ? ", " : ""}к концу месяца выйдет ~{credits(forecast.monthEndProjection)}{priceKnown ? ` (≈ ${usd(forecast.monthEndProjection)})` : ""}</>}
+            {!off && forecast.monthEndProjection !== undefined && <>{forecast.monthToDateSpend !== undefined ? ", " : ""}к концу месяца выйдет ≈ {credits(forecast.monthEndProjection)}{priceKnown ? ` (≈ ${usd(forecast.monthEndProjection)})` : ""}</>}
             .
           </p>
         )}
@@ -320,7 +320,7 @@ export function OfapiCostsPage() {
             ) : <p className="ofc-note">Сегодня пока ничего не потрачено.</p>}
             {pendingToday && pendingToday.eventCount > 0 && (
               <p className="ofc-note">
-                Ещё ~{credits(pendingToday.estimatedCredits)} за {fmtCredits(pendingToday.eventCount)} событий ещё не проведены: оценка добавится в журнал после завершения дня.
+                Ещё ≈ {credits(pendingToday.estimatedCredits)} за {fmtCredits(pendingToday.eventCount)} событий ещё не проведены: оценка добавится в журнал после завершения дня.
               </p>
             )}
           </div>

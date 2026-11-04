@@ -158,7 +158,7 @@ export function CreditsHealthCard({ ofapi }: { ofapi: OfapiStatus }) {
                     <>
                       {summary.accrual.lastPostedDay ? `Проведены по ${formatDay(summary.accrual.lastPostedDay)}.` : "Ещё ничего не проведено."}
                       {pending && pending.eventCount > 0 && (
-                        ` Сегодня: ~${credits(pending.estimatedCredits)} за ${fmtCredits(pending.eventCount)} ${ruPlural(pending.eventCount, "событие", "события", "событий")}: спишутся в полночь UTC, в 03:00 по Москве.`
+                        ` Сегодня: ≈ ${credits(pending.estimatedCredits)} за ${fmtCredits(pending.eventCount)} ${ruPlural(pending.eventCount, "событие", "события", "событий")}: спишутся в полночь UTC, в 03:00 по Москве.`
                       )}
                     </>
                   ),

@@ -194,7 +194,7 @@ export function AiDetails({ data, usage }: { data: Spend; usage: AdminChatterUsa
                   <tr key={lane.feature}>
                     <td>{anyFeatureLabel(lane.feature)}</td>
                     <td className="num">{formatCount(lane.requestCount)}</td>
-                    <td className="num">{lane.costApproximate ? "~" : ""}{formatAiUsd(lane.costMicroUsd)}</td>
+                    <td className="num">{lane.costApproximate ? "≈ " : ""}{formatAiUsd(lane.costMicroUsd)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -251,7 +251,7 @@ export function AiDetails({ data, usage }: { data: Spend; usage: AdminChatterUsa
                     <td>{call.username ?? "Сам Hub"}{call.pageLabel && <div className="ai-sub">{call.pageLabel}</div>}</td>
                     <td className="num muted">{compact(call.inputTokens)} / {compact(call.cacheReadTokens)} / {compact(call.cacheWriteTokens)} / {compact(call.outputTokens)}</td>
                     <td className="num">{call.contextMessages ?? "—"}</td>
-                    <td className="num font-medium">{call.costApproximate ? "~" : ""}{formatAiUsd(call.costMicroUsd)}</td>
+                    <td className="num font-medium">{call.costApproximate ? "≈ " : ""}{formatAiUsd(call.costMicroUsd)}</td>
                   </tr>
                 ))}
               </tbody>

@@ -67,7 +67,7 @@ function PersonDetail({ person, total, usageFailed, retry }: { person: Person; t
                 <span className="font-medium">{anyFeatureLabel(feature.feature)}</span>
                 <span>
                   {callsWord(feature.requestCount)}
-                  {feature.costMicroUsd > 0 && `, ${feature.costApproximate ? "~" : ""}${formatAiUsd(feature.costMicroUsd)}`}
+                  {feature.costMicroUsd > 0 && `, ${feature.costApproximate ? "≈ " : ""}${formatAiUsd(feature.costMicroUsd)}`}
                   {feature.regenerateRatePct > 0 && `, перегенерации ${Math.round(feature.regenerateRatePct)} %`}
                 </span>
                 <span className="text-text-secondary">
@@ -185,7 +185,7 @@ export function AiPeopleBlock({ data, range }: { data: Spend; range: { from: str
                         </div>
                       </div>
                     </td>
-                    <td className="num">{entry.approximate ? "~" : ""}{formatAiUsd(entry.cost)}</td>
+                    <td className="num">{entry.approximate ? "≈ " : ""}{formatAiUsd(entry.cost)}</td>
                     <td className="num">{formatCount(entry.calls)}</td>
                     <td className="num"><TodayCell limit={entry.limit} /></td>
                     <td className="num">{entry.shift ? formatDuration(entry.shift.workedMinutes) : "—"}</td>
@@ -212,7 +212,7 @@ export function AiPeopleBlock({ data, range }: { data: Spend; range: { from: str
             {hub && (
               <tr>
                 <td><span className="ai-hub-name">Сам Hub</span></td>
-                <td className="num">{hub.approximateMicroUsd > 0 ? "~" : ""}{formatAiUsd(hub.costMicroUsd)}</td>
+                <td className="num">{hub.approximateMicroUsd > 0 ? "≈ " : ""}{formatAiUsd(hub.costMicroUsd)}</td>
                 <td className="num">{formatCount(hub.calls)}</td>
                 <td className="num" colSpan={4} />
               </tr>

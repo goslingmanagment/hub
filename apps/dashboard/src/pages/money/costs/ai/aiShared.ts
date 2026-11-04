@@ -49,8 +49,8 @@ export function callsWord(value: number): string {
 export function daysLeftLabel(value: number): string {
   if (value >= 2) {
     const days = Math.round(value);
-    return `~${days} ${ruPlural(days, "день", "дня", "дней")}`;
+    return `≈ ${days} ${ruPlural(days, "день", "дня", "дней")}`;
   }
   const rounded = Math.round(value * 10) / 10;
-  return Number.isInteger(rounded) ? `~${rounded} ${ruPlural(rounded, "день", "дня", "дней")}` : `~${String(rounded).replace(".", ",")} дня`;
+  return Number.isInteger(rounded) ? `≈ ${rounded} ${ruPlural(rounded, "день", "дня", "дней")}` : `≈ ${String(rounded).replace(".", ",")} дня`;
 }

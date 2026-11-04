@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { kernel } from "@/api/sdk";
 import { ConfirmModal } from "@/components/shared/ConfirmModal";
 import { formatDateTime } from "@/lib/format";
+import { ruPlural } from "@/lib/plural";
 
 /**
  * The OnlyFans API's banned-words dictionary: a bounded, explicit download. The
@@ -30,14 +31,14 @@ export function OfapiBannedWords({ blocked }: { blocked: string | null }) {
           {refresh.isPending ? "Загружаем…" : "Загрузить ограниченный словарь"}
         </button>
       </div>
-      <p className="field-hint">До {maxPages} запросов по 100 строк. Цена не подтверждена; фактические кредиты записываются в журнал. Фонового обновления нет.</p>
+      <p className="field-hint">До {maxPages} {ruPlural(maxPages, "запроса", "запросов", "запросов")} по 100 строк. Цена не подтверждена; фактические кредиты записываются в журнал. Фонового обновления нет.</p>
       {refresh.isError && <p role="alert" className="sys-error">Не удалось загрузить словарь.</p>}
       {confirming && (
         <ConfirmModal
           title="Загрузить словарь запрещённых слов?"
           message="Hub запросит словарь у OnlyFans API."
           facts={[
-            { label: "Что именно", value: `до ${maxPages} запросов по 100 строк` },
+            { label: "Что именно", value: `до ${maxPages} ${ruPlural(maxPages, "запроса", "запросов", "запросов")} по 100 строк` },
             { label: "Сколько стоит", value: "цена не подтверждена, фактические кредиты попадут в журнал" },
             { label: "Отменить", value: "нельзя, запросы уйдут сразу" },
           ]}
