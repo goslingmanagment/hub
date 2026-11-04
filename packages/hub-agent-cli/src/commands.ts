@@ -818,7 +818,7 @@ const PUBLICATION_CONTENT_KEYS = new Set([
 const PUBLICATION_READ_ONLY_KEYS = new Set([
   "id", "version", "pageLabel", "platform", "status", "findings", "blocked", "author", "approvedRevisionId",
   "platformPostRef", "statusReason", "previousPublicationId", "createdAt", "updatedAt", "statusChangedAt",
-  "events", "revision",
+  "events", "revision", "vaultAlbumRef", "withdrawal", "deletion",
 ]);
 
 type HubPublicationMediaInput = { source: "vault"; mediaRef: string } | { source: "file"; fileId: number };
