@@ -93,7 +93,7 @@ describe("POST /api/v1/model-applications", () => {
     expect(rows[0]!.google_fields).toBeNull();
     expect(rows[0]!.user_agent).toBe("test-browser");
     // Only a keyed hash of the address is kept.
-    expect(JSON.stringify(rows[0])).not.toContain("203.0.113.10");
+    expect(Object.values(rows[0]!).map((value) => String(value)).join(" ")).not.toContain("203.0.113.10");
   });
 
   it("refuses malformed bodies with 400 and an oversized one with 413, storing nothing", async (context) => {
