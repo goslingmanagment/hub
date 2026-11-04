@@ -52,7 +52,7 @@ const PROFILES: readonly DemoProfile[] = [
   {
     profileId: "e7d1b3a9-4c25-4f80-9a6e-1b2c3d4e5f60",
     name: "ivy-3",
-    proxy: { scheme: "socks5", host: "us-pdx.residential.demo.invalid", port: 9050, username: "agency-ivy3" },
+    proxy: { scheme: "socks5", host: "us-pdx.residential.demo.invalid", port: 9050, username: "agency-ivy4" },
     pinnedExitIp: "71.59.204.18",
     env: ENV_CHICAGO,
     createdDaysAgo: 0,
@@ -146,14 +146,14 @@ export const pageBrowserHandlers: DemoHandlers = {
   pageBrowserDrafts: (request) => ({
     drafts: [
       {
-        name: "ivy-3",
+        name: "ivy-4",
         page: null,
-        proxy: { scheme: "socks5" as const, host: "us-pdx.residential.demo.invalid", port: 9050, username: "agency-ivy3", passwordSet: true },
+        proxy: { scheme: "socks5" as const, host: "us-pdx.residential.demo.invalid", port: 9050, username: "agency-ivy4", passwordSet: true },
         env: { timeZone: "America/Los_Angeles", languages: ["en-US", "en"], geolocation: { latitude: 45.5152, longitude: -122.6784, accuracyM: 3000 } },
         revision: 2,
         createdAt: iso(hoursAgo(request.now, 30)),
         updatedAt: iso(hoursAgo(request.now, 5)),
-        command: "scripts/deploy-page-browser.sh add-profile <host> --page ivy-3 --image <образ>",
+        command: "scripts/deploy-page-browser.sh add-profile <host> --page ivy-4 --image <образ>",
       },
       {
         name: "mia-5",

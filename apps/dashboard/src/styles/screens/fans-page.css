@@ -167,7 +167,6 @@
   /* ── A page's card ───────────────────────────────────────────────── */
   .page-card-notice { margin-bottom: 24px; }
   .page-card-window:empty { display: none; }
-  .page-card-window:not(:empty):not(:has(.page-fresh)):has(+ :not(:empty))::after { content: "."; }
   .page-card-window:not(:empty) + * { margin-left: 8px; }
   .pc-summary, .pc-account, .pc-promo, .pc-mass { display: flex; flex-direction: column; gap: 24px; min-width: 0; }
   .summary-grid-3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: start; gap: 24px; }
@@ -182,6 +181,7 @@
   .summary-row-label { min-width: 0; }
   .summary-row-value { display: flex; flex-direction: column; align-items: flex-end; font-weight: 500; font-variant-numeric: tabular-nums; text-align: right; }
   .summary-row-note { display: block; font-size: 14px; font-weight: 400; line-height: 20px; color: var(--color-text-secondary); }
+  .fan-subtitle .summary-row-note { display: inline; font-weight: 400; }
   .summary-row-failed { font-size: 14px; font-weight: 400; color: var(--color-text-secondary); }
   .summary-zero { color: var(--color-text-muted); font-weight: 400; }
   .summary-chart { padding: 16px 24px 24px; border-top: 1px solid var(--color-border-light); }

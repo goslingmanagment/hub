@@ -282,7 +282,7 @@ function ChangesBlock({ profile, settings, changes, loading, failed, retry }: {
       <div className="card-header">
         <div>
           <h2 id="account-changes-title" className="card-title">Что менялось</h2>
-          {since && <p className="card-description">Что менялось {since}.</p>}
+          {since && <p className="card-description">Что менялось {since}</p>}
         </div>
       </div>
       <div className="card-body">

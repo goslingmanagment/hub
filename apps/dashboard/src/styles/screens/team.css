@@ -112,7 +112,8 @@
 
   .team-toolbar { margin-bottom: 0; }
   /* Long headers of many number columns wrap instead of pushing the table out. */
-  .team-wrap-head th { white-space: normal; vertical-align: bottom; }
+  .data-table.team-wrap-head th, .data-table.team-wrap-head th.num { white-space: normal; vertical-align: bottom; }
+  .team-wrap-head .team-sort { white-space: normal; text-align: right; }
   .team-wrap-head th.num { min-width: 96px; }
   .team-picker { width: auto; min-width: 180px; }
   @media (max-width: 767px) {

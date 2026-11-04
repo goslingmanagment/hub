@@ -162,7 +162,7 @@ function EmptyHours({ days, page, onAllPages }: { days: number; page: string | n
 function GreetingsTable({ pages }: { pages: readonly GreetingsPage[] }) {
   return (
     <div className="table-wrap">
-      <table className="data-table">
+      <table className="data-table team-wrap-head">
         <thead>
           <tr>
             <th scope="col">Страница</th>
