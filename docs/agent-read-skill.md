@@ -637,17 +637,25 @@ The path of one post:
    `not_sent:album_title_ambiguous:<n>:<ids>`) when there are several. Up to 300 files; no walls,
    tiers, price, previews or expiry; `--publish-at` now. A file not yet on the
    platform is uploaded to Hub first: `hub publication-file-upload --page-label
-   <page> <file…>` streams each file whole from disk (any size up to Hub's
-   limit, `--parallel` at a time, default 2, each retried: the same bytes
-   answer the same file) and answers per file `media: "file:<id>"`, what
-   `--media` takes; the file's name is the card's name in the vault, so name
-   files as ContentOps does (`PPV-016_slug_pic01.jpg`). A whole pack's folder
-   in one call: `hub vault-album-draft --page-label <page> --title <title>
-   <folder>` takes its photos and videos (not subfolders, not hidden files) in
-   name order, `IMG_2` before `IMG_10`, the first on top of the album, uploads
-   them and drafts the album; `--dry-run` lists the order, sizes and totals and
-   uploads nothing — show that to the owner first. Both refuse, before any
-   upload, a file Hub would refuse (HEIC, not a photo or video, empty).
+   <page> <file…>` reads each file's SHA-256, asks Hub which of those bytes the
+   page's model holds (`POST /api/v1/agent/pages/<page>/publication-files/lookup`,
+   `{files: [{sha256, byteSize}], keep}`: only that model's files answer, and
+   `keep: true` restarts their 7 days as an upload of the same bytes would) and
+   sends only the others, each streamed whole from disk (any size up to Hub's
+   limit, `--parallel` at a time, default 2; a lost network or a restarting Hub
+   is waited for up to 15 minutes per file, and the same bytes answer the same
+   file); it answers per file `media: "file:<id>"`, what `--media` takes, and
+   `notSent: true` for a file Hub held. The file's name is the card's name in
+   the vault, so name files as ContentOps does (`PPV-016_slug_pic01.jpg`). A
+   whole pack's folder in one call: `hub vault-album-draft --page-label <page>
+   --title <title> <folder>` takes its photos and videos (not subfolders, not
+   hidden files) in name order, `IMG_2` before `IMG_10`, the first on top of the
+   album, uploads them and drafts the album; the same command again after a
+   break sends only what Hub lacks. `--dry-run` lists the order, sizes, totals
+   and the files Hub holds already (`inHub`) and uploads nothing — show that to
+   the owner first. Both refuse, before any upload, a file Hub would refuse
+   (HEIC, not a photo or video, empty); the album also a folder holding the same
+   file twice (`duplicates`).
 3. **Follow it.** `hub publication-list --page-label lilly-1 [--status draft]
    [--from … --to …]` (by publish time) and `hub publication-get --id <id>`
    (a draft's findings re-checked now, the status journal). To poll your own:
@@ -830,9 +838,12 @@ hour; `HUB_CLI_PROD_KEEP` (default 2) keeps more. The running revision is the
 A content manager's own Claude has no checkout. Every release builds the CLI into
 one file that needs only Node 22 or newer: `/hub-cli/hub.mjs`, with its SHA-256 in
 `/hub-cli/hub.mjs.sha256`, public like the dashboard's own bundle and holding no
-key. Download it to `~/.hub/hub.mjs` and run
-`node "$HOME/.hub/hub.mjs" setup --key <key>`: that writes the credentials and the
-skill `hub-vault` for Claude, then checks the key against Hub. Before every other
+key. Download it to `~/.hub/hub.mjs`, copy the key and run
+`pbpaste | node "$HOME/.hub/hub.mjs" setup` (Windows: `powershell -NoProfile
+-Command Get-Clipboard | node "$HOME/.hub/hub.mjs" setup`; in a terminal, `setup`
+alone asks for it without showing it): that checks the key against Hub, then
+writes the credentials and the skill `hub-vault` for Claude. The key stays out of
+the command line, the shell's history and the chat; `--key <key>` still works. Before every other
 command this file compares itself with the release, replaces itself and runs again
 when they differ, so it follows the contract; offline it runs as it is. Give such
 a key `write:publication_drafts` and `approve:vault_albums` only:
@@ -842,7 +853,9 @@ a key `write:publication_drafts` and `approve:vault_albums` only:
 
 Auth comes from `HUB_AGENT_KEY`, or from `HUB_AGENT_KEY=...` in
 `~/.config/hub/credentials`. The base URL comes from `HUB_BASE_URL` and defaults
-to production. The CLI stores nothing and creates nothing.
+to production. The CLI run from a checkout stores nothing and creates nothing;
+the one-file CLI writes the credentials and its skill only on `setup`, and
+replaces itself with the release's copy before a command.
 
 If you use the credentials file, `chmod 600` it. The CLI refuses to run when that
 file is readable by anyone else, and tells you the command to fix it: the file
@@ -916,8 +929,8 @@ Global flags: `--base-url`, `--fail-on-partial`, `--pretty`, `--help`.
 | `hub publication-targets` | The page's Fansly walls and tiers by name, no prices: what a draft's `--wall` and `--tier` name. |
 | `hub publication-changes` | Your key's publications changed at or after `--since`, oldest change first: status, its reason, the platform's post or album. |
 | `hub publication-cancel` | Cancel a publication your key drafted, before Hub hands it to the platform (draft or approved). |
-| `hub publication-file-upload` | COMPOSITE: files from disk (bare paths) into Hub for a page's model, streamed whole, retried; per file `media: "file:<id>"` for a draft. Progress on stderr. |
-| `hub vault-album-draft` | COMPOSITE: a Fansly vault album draft from a pack's folder (a bare path), its files in name order, the first on top; `--dry-run` lists it and uploads nothing. |
+| `hub publication-file-upload` | COMPOSITE: files from disk (bare paths) into Hub for a page's model: those Hub holds (by SHA-256) are not sent again, the others streamed whole, a lost network waited for; per file `media: "file:<id>"` for a draft. Progress on stderr. |
+| `hub vault-album-draft` | COMPOSITE: a Fansly vault album draft from a pack's folder (a bare path), its files in name order, the first on top; again after a break it sends only what Hub lacks; `--dry-run` lists it and uploads nothing. |
 | `hub queue-preview` | How many fans a rule or a list puts in a fan queue, what it leaves out, the rule in Hub's words and a few fans. Nothing is written. Needs `write:fan_queues`. |
 | `hub queue-create` | Create a fan queue, only after the «да» of the person who asked; `--requested-by` and `--idempotency-key` required. |
 | `hub queue-list` | Your pages' fan queues: today's sends by person, what is left. |

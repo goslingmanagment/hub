@@ -10,10 +10,11 @@ import { ConflictError } from "../../services/errors.ts";
 import {
   getPublicationFileWire,
   listPublicationFilesWire,
+  lookupPublicationFiles,
   uploadPublicationFile,
   type PublicationFileModelSelector,
 } from "../../services/publication-files.ts";
-import { beginAgentRequest, staticNotFound, writeAgentAudit } from "../agent-read/index.ts";
+import { AGENT_TIMEOUT_MS, beginAgentRequest, staticNotFound, withAgentTimeout, writeAgentAudit } from "../agent-read/index.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
 
 /** The owner's upload of a file of publications in the audit log. */
@@ -105,7 +106,9 @@ export async function registerPublicationFileRoutes(server: ApiServer, ctx: ApiM
           requestSummary: { fileId: result.file.id, fileSha256: result.file.sha256, byteSize: result.file.byteSize, created: result.created },
         });
         delivered = 1;
-        return result;
+        // A file is the model's, and its other pages may be outside the grant: only the key's own pages' uses answer.
+        const granted = new Set(scope.pages.map((candidate) => candidate.pageLabel));
+        return { ...result, file: { ...result.file, uses: result.file.uses.filter((use) => granted.has(use.pageLabel)) } };
       } catch (error) {
         reply.header("connection", "close");
         throw error;
@@ -113,6 +116,39 @@ export async function registerPublicationFileRoutes(server: ApiServer, ctx: ApiM
         await scope.finish(delivered);
       }
     });
+  });
+
+  // Before an upload, an agent asks which of its files the page's model holds
+  // (write:publication_drafts, as the upload): a pack sent again after a break
+  // sends only what is missing. The page's model's files answer and nothing
+  // else, without their uses; `keep` holds them as a new upload of the same
+  // bytes would, so they outlive the rest of the pack's upload.
+  server.post("/api/v1/agent/pages/:pageLabel/publication-files/lookup", { schema: routeSchemas.agentPublicationFileLookup }, async (request) => {
+    const principal = await requireAgentKeyPrincipal(request);
+    const scope = await beginAgentRequest(appContext, principal, {
+      operation: "agentPublicationFileLookup", requiredCapabilities: ["write:publication_drafts"],
+    });
+    let delivered = 0;
+    try {
+      const page = scope.pages.find((candidate) => candidate.pageLabel === request.params.pageLabel);
+      if (!page) throw staticNotFound();
+      const { files, keep } = request.body;
+      const answered = await withAgentTimeout(appContext.db, AGENT_TIMEOUT_MS.short, (tx) => lookupPublicationFiles(tx, appContext.config, {
+        model: { pageLabel: page.pageLabel }, files, keep,
+      }), "agent_publication_file_lookup");
+      const heldIds = [...new Set(answered.flatMap((entry) => (entry.file === null ? [] : [entry.file.id])))];
+      await writeAgentAudit(appContext.db, {
+        agentKeyId: principal.agentKeyId,
+        operation: "agentPublicationFileLookup",
+        pageIds: [page.id],
+        verbatimText: false,
+        requestSummary: { asked: files.length, held: heldIds.length, keep, fileIds: heldIds },
+      });
+      delivered = heldIds.length;
+      return { files: answered };
+    } finally {
+      await scope.finish(delivered);
+    }
   });
 
   server.get("/api/v1/admin/publications/files", { schema: routeSchemas.adminPublicationFileList }, async (request) => {

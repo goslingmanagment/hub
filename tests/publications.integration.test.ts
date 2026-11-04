@@ -456,6 +456,83 @@ describe("publications: approve:vault_albums approves an album and nothing else"
   });
 });
 
+describe("publication files: an agent asks which of its files Hub holds before it uploads", () => {
+  it("answers its page's model's bytes by SHA-256 and size, nothing of another model, and keeps them when asked", async () => {
+    const lookup = (body: Record<string, unknown>, token = ALBUMS_ONLY, page = "lilly-1") =>
+      agent("POST", `/api/v1/agent/pages/${page}/publication-files/lookup`, body, token);
+    const uploaded = await server!.inject({
+      method: "POST",
+      url: "/api/v1/agent/pages/lilly-1/publication-files?name=pack-001.jpg",
+      headers: { authorization: `Bearer ${ALBUMS_ONLY}`, "content-type": "application/octet-stream" },
+      payload: JPEG,
+    });
+    expect(uploaded.statusCode, uploaded.body).toBe(200);
+    const fileId = (uploaded.json() as { file: { id: number } }).file.id;
+    const sha = createHash("sha256").update(JPEG).digest("hex");
+    const files = [
+      { sha256: sha, byteSize: JPEG.length },
+      // The same hash with another size is not these bytes.
+      { sha256: sha, byteSize: JPEG.length + 1 },
+      // Lilly's row without bytes on disk, Lora's file (another model, a page outside the grant), bytes never uploaded.
+      { sha256: "1".repeat(64), byteSize: 100 },
+      { sha256: "2".repeat(64), byteSize: 100 },
+      { sha256: "f".repeat(64), byteSize: 5 },
+    ];
+    const answered = await lookup({ files });
+    expect(answered.statusCode, answered.body).toBe(200);
+    expect(answered.json()).toEqual({
+      files: [
+        { ...files[0], file: { id: fileId, sha256: sha, byteSize: JPEG.length, mimeType: "image/jpeg", originalName: "pack-001.jpg" } },
+        ...files.slice(1).map((file) => ({ ...file, file: null })),
+      ],
+    });
+
+    // keep: its 7 days start again, as a new upload of the same bytes starts them; without it nothing changes.
+    const age = async () => Number((await sql(
+      "select extract(epoch from now() - stored_at) as age from publication_files where id = $1", [fileId],
+    )).rows[0].age);
+    await sql("update publication_files set stored_at = now() - interval '6 days' where id = $1", [fileId]);
+    expect((await lookup({ files: [files[0]] })).statusCode).toBe(200);
+    expect(await age()).toBeGreaterThan(5 * 86_400);
+    expect((await lookup({ files: [files[0]], keep: true })).json().files[0].file.id).toBe(fileId);
+    expect(await age()).toBeLessThan(600);
+
+    // Bytes retention deleted are not held: the file goes up again.
+    await sql("update publication_files set bytes_deleted_at = now() where id = $1", [fileId]);
+    expect((await lookup({ files: [files[0]], keep: true })).json().files[0].file).toBeNull();
+
+    // A page outside the key's grant, and a key without write:publication_drafts.
+    expect((await lookup({ files }, ALBUMS_ONLY, "lora-of")).statusCode).toBe(404);
+    expect((await lookup({ files }, READER)).statusCode).toBe(403);
+  });
+
+  it("an agent's upload names only its own pages' publications among the file's uses", async () => {
+    const upload = async () => {
+      const response = await server!.inject({
+        method: "POST",
+        url: "/api/v1/agent/pages/lilly-1/publication-files?name=pack.jpg",
+        headers: { authorization: `Bearer ${ALBUMS_ONLY}`, "content-type": "application/octet-stream" },
+        payload: JPEG,
+      });
+      expect(response.statusCode, response.body).toBe(200);
+      return response.json() as { file: { id: number; uses: Array<{ pageLabel: string }> } };
+    };
+    const fileId = (await upload()).file.id;
+    // The same model's second page, outside the key's grant: the owner drafts both albums with the file.
+    const lillyModelId = Number((await sql("select model_id from pages where id = $1", [lillyPageId])).rows[0].model_id);
+    await createFanslyPage(db(), { modelId: lillyModelId, label: "lilly-2" });
+    for (const pageLabel of ["lilly-1", "lilly-2"]) {
+      const drafted = await owner("POST", "/api/v1/admin/publications", {
+        pageLabel, kind: "vault_album", text: "Pack", media: [{ source: "file", fileId }], publishAt: tomorrow(),
+      });
+      expect(drafted.statusCode, drafted.body).toBe(200);
+    }
+    const ownerView = await owner("GET", `/api/v1/admin/publications/files/${fileId}`);
+    expect((ownerView.json() as { uses: Array<{ pageLabel: string }> }).uses.map((use) => use.pageLabel).sort()).toEqual(["lilly-1", "lilly-2"]);
+    expect((await upload()).file.uses.map((use) => use.pageLabel)).toEqual(["lilly-1"]);
+  });
+});
+
 describe("publications: the ContentOps key with exactly its scopes", () => {
   it("reads the page's posts, uploads a file once by its SHA-256, drafts with Hub's checks, approves, follows and cancels", async () => {
     // read:content alone reads the page's own material.
