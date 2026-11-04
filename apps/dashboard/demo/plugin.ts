@@ -102,10 +102,11 @@ export function demoApi(): Plugin {
 
         if (url.pathname === "/__demo/role") {
           const as = url.searchParams.get("as");
-          const role = ROLES.find((item) => item === as) ?? "owner";
+          // `anon`: nobody signed in, so /login and /join can be shown (`me` answers 401).
+          const role = as === "anon" ? "anon" : ROLES.find((item) => item === as) ?? "owner";
           response.statusCode = 302;
           response.setHeader("set-cookie", `${ROLE_COOKIE}=${role}; Path=/; SameSite=Lax`);
-          response.setHeader("location", role === "chatter" ? "/account" : "/");
+          response.setHeader("location", role === "anon" ? "/login" : role === "chatter" ? "/account" : "/");
           response.end();
           return;
         }
@@ -134,6 +135,10 @@ export function demoApi(): Plugin {
             else query[key] = Array.isArray(existing) ? [...existing, value] : [existing, value];
           }
           const roleCookie = readCookie(request, ROLE_COOKIE);
+          if (roleCookie === "anon" && route.key === "me") {
+            send(response, 401, { error: "unauthorized", message: "Демо: вход не выполнен", statusCode: 401 });
+            return;
+          }
           const role = ROLES.find((item) => item === roleCookie) ?? "owner";
           const demoRequest: DemoRequest = { params, query, body: await readBody(request), now: new Date(), role };
 
