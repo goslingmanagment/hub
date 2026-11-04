@@ -362,7 +362,7 @@ export function ConfigEditor({ item, friendly = false }: { item: ConfigItem; fri
         <div className="settings-editor-field flex min-w-0 items-center gap-2">
           {useChoices ? <ConfigChoiceField configKey={item.key} label={label} value={input} disabled={pending} invalid={draft !== null && !parsed.valid} isDraft={draft !== null} onChange={changeInput} /> : <input
             type={item.kind === "string" ? "text" : "number"}
-            aria-label={`${label}${unit ? `, ${unit}` : ""} value`}
+            aria-label={`${label}${unit ? `, ${unit}` : ""} значение`}
             aria-describedby={copy?.short ? `config-description-${item.key}` : undefined}
             aria-invalid={draft !== null && !parsed.valid}
             value={input}
@@ -498,7 +498,7 @@ export function BooleanConfigEditor({ item }: { item: ConfigItem }) {
             type="button"
             role="switch"
             aria-checked={current}
-            aria-label={`${label} value`}
+            aria-label={`${label} значение`}
             aria-describedby={CONFIG_COPY_RU[item.key]?.short ? `config-description-${item.key}` : undefined}
             onClick={toggle}
             disabled={pending || needsReview}

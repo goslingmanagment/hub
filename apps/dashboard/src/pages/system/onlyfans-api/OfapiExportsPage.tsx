@@ -6,14 +6,19 @@ import { OFAPI_TYPED_EXPORT_PROFILES, type OfapiTypedExportProfile } from "@agen
 import { useAuthMe } from "@/api/queries";
 import { ofapiExportActions, ofapiExportJobsQueryOptions, readOfapiExportJobsForRecovery, useOfapiExportPages, useOfapiExportInventory, useOfapiExportRows, useOfapiExports, useOfapiVisitors } from "@/api/ofapiExports";
 import { Field } from "@/components/shared/Field";
+import { Notice } from "@/components/ui/Notice";
+import { PageHeader } from "@/components/ui/PageHeader";
+import { OFAPI_FROZEN_NOTE, OFAPI_OFF_WORD } from "@/lib/statusWords";
+import { useOfapi } from "../shared.js";
+import { OfapiOffBar } from "./OfapiOffBar.js";
 import { StatusPanel } from "@/components/shared/StatusPanel";
 import { formatBusinessDateShort, formatDateTime } from "@/lib/format";
 import { ruPlural } from "@/lib/plural";
 import { isUncertainActionFailure } from "./ofapi-actions/form-values.ts";
-const labels: Record<OfapiTypedExportProfile, string> = { profile_visitors: "Посетители профиля", fans: "Фаны", tracking_links: "Tracking-ссылки", trial_links: "Trial-ссылки", smart_links: "Smart Links" };
+const labels: Record<OfapiTypedExportProfile, string> = { profile_visitors: "Посетители профиля", fans: "Фаны", tracking_links: "Трекинг-ссылки", trial_links: "Пробные ссылки", smart_links: "Смарт-ссылки" };
 const fanTypeLabels: Record<string, string> = { all: "Все", active: "Активные", expired: "Бывшие", latest: "Новые" };
 const daysAgo = (days: number) => new Date(Date.now() - days * 86400000).toISOString().slice(0, 10);
-const metric = (value: number | string | null) => value === null ? "—" : String(value);
+const metric = (value: number | string | null) => value === null ? "—" : typeof value === "number" ? value.toLocaleString("ru-RU") : /^-?\d+(\.\d+)?$/.test(value) ? Number(value).toLocaleString("ru-RU") : value;
 const credits = (count: number) => `${count} ${ruPlural(count, "кредит", "кредита", "кредитов")}`;
 /** "2026-09-01…" → "01.09.2026": the export window is a run of UTC days. */
 const day = (iso: string) => { const [year, month, date] = iso.slice(0, 10).split("-"); return `${date}.${month}.${year}`; };
@@ -108,6 +113,9 @@ export function UnconfirmedExportQuoteNotice({ quote, onReadJobs, onStartNew, re
 export function OfapiExportsPage() {
   const queryClient = useQueryClient();
   const auth = useAuthMe(); const owner = auth.data?.user.role === "owner";
+  const ofapi = useOfapi();
+  // A team lead has no buttons here and does not know the switch.
+  const writeOff = owner ? ofapi.block : null;
   const pages = useOfapiExportPages(); const [selectedPage, setSelectedPage] = useState(0);
   const pageId = selectedPage || pages.data?.pages[0]?.id || 0;
   const [profile, setProfile] = useState<OfapiTypedExportProfile>("profile_visitors");
@@ -171,7 +179,7 @@ export function OfapiExportsPage() {
       const results = await Promise.all([jobs.refetch(), pages.refetch(), ...(!windowError ? [visitors.refetch()] : []), ...(owner ? [inventory.refetch()] : [])]);
       if (results.some(result => result.isError)) setError("Не удалось обновить сохранённые данные. Результат действия сохранён; нажмите «Обновить», чтобы проверить.");
       else if (refreshedNotice) setNotice(refreshedNotice);
-    } catch (err) { if (!actionCompleted) onActionError?.(err); setError(err instanceof Error ? err.message : String(err)); } finally { inFlight.current = false; setBusy(false); }
+    } catch (err) { if (!actionCompleted) onActionError?.(err); setError("Не получилось. Hub вернул ошибку."); } finally { inFlight.current = false; setBusy(false); }
   }
   const pageInfo = pages.data?.pages.find(page => page.id === pageId);
   const pageLabel = pageInfo?.label ?? String(pageId);
@@ -193,23 +201,24 @@ export function OfapiExportsPage() {
       }
     });
   }
-  const loadError = error || (pages.error ?? jobs.error ?? visitors.error)?.message;
-  return <div className="space-y-5">
-    <div className="flex flex-wrap items-end gap-x-3 gap-y-2">
+  const loadError = error || ((pages.error ?? jobs.error ?? visitors.error) ? "Hub не ответил: данные выгрузок не загрузились." : "");
+  return <div className={`space-y-6${ofapi.status === "off" ? " sys-off-tone" : ""}`}>
+    <PageHeader fresh={visitors.dataUpdatedAt || jobs.dataUpdatedAt ? { at: Math.max(visitors.dataUpdatedAt, jobs.dataUpdatedAt), refreshing: busy, onRefresh: () => void run(async () => {}, "Данные обновлены.") } : undefined} />
+    {owner && <OfapiOffBar ofapi={ofapi} />}
+    <div className="sys-export-row">
       <label className="w-full sm:w-64"><span className="field-label">Страница</span><select disabled={busy || !pages.data} className="select" value={pageId} onChange={e => { setSelectedPage(Number(e.target.value)); setSelectedJob(""); clearPreview(); }}>{pages.data?.pages.map(page => <option key={page.id} value={page.id}>{page.label}</option>)}</select></label>
       <label className="w-[calc(50%-6px)] sm:w-40"><span className="field-label">С</span><input disabled={busy} className="input" type="date" value={from} onChange={e => { setFrom(e.target.value); clearPreview(); }} /></label>
       <label className="w-[calc(50%-6px)] sm:w-40"><span className="field-label">По</span><input disabled={busy} className="input" type="date" max={daysAgo(1)} value={to} onChange={e => { setTo(e.target.value); clearPreview(); }} /></label>
-      <button type="button" className="btn" disabled={busy || !pageId} onClick={() => void run(async () => {}, "Данные обновлены.")}>Обновить</button>
-      {owner && <Link className="link ml-auto pb-2 text-sm" to="/system/onlyfans-api/collection">Настройки сбора</Link>}
+      <span className="cell-second sys-export-utc">дни по UTC</span>
     </div>
-    {loadError && <p role="alert" className="notice notice-danger">{loadError}</p>}
+    {loadError && <Notice tone="danger" role="alert">{loadError}</Notice>}
     {pages.isError && !pages.data && <button type="button" className="btn" disabled={pages.isFetching} onClick={() => void pages.refetch()}>Повторить загрузку страниц</button>}
-    {((jobs.isError && jobs.data) || (visitors.isError && visitors.data)) && <p className="notice notice-warning">Показаны прежние данные. Нажмите «Обновить», чтобы проверить текущее состояние.</p>}
-    {notice && <p role="status" className="notice">{notice}</p>}
-    {pages.isPending && <p role="status" className="text-sm text-text-muted">Загружаем страницы…</p>}
-    {pages.data && !pages.isError && pages.data.pages.length === 0 && <StatusPanel title="Нет страниц OnlyFans" description={owner ? "Добавьте или привяжите страницу в настройках сбора." : "Страницы OnlyFans пока не добавлены."} />}
-    {windowError && <p role="alert" className="notice notice-danger">{windowError}</p>}
-    {unbound && <p className="notice notice-warning">Страница не привязана к OnlyFans API: новые выгрузки для неё недоступны.</p>}
+    {((jobs.isError && jobs.data) || (visitors.isError && visitors.data)) && <Notice tone="warning">Показаны прежние данные. Нажмите на время обновления, чтобы проверить текущее состояние.</Notice>}
+    {notice && <Notice role="status">{notice}</Notice>}
+    {pages.isPending && <p role="status" className="text-text-secondary">Загружаем страницы…</p>}
+    {pages.data && !pages.isError && pages.data.pages.length === 0 && <div className="card"><StatusPanel title="Нет страниц OnlyFans" description={owner ? "Добавьте или привяжите страницу в правилах сбора." : "Страницы OnlyFans пока не добавлены."} action={owner ? <Link className="btn btn-sm" to="/system/onlyfans-api/collection">Правила сбора</Link> : undefined} /></div>}
+    {windowError && <Notice tone="danger" role="alert">{windowError}</Notice>}
+    {unbound && <Notice tone="warning">Страница не привязана к OnlyFans API: новые выгрузки для неё недоступны.</Notice>}
     {unconfirmedQuote && <UnconfirmedExportQuoteNotice
       quote={unconfirmedQuote}
       busy={busy}
@@ -229,34 +238,21 @@ export function OfapiExportsPage() {
         setError("");
       }}
     />}
-    {owner && !unbound && <section className="card" aria-labelledby="export-new-title">
-      <div className="card-header"><div className="min-w-0"><h2 id="export-new-title" className="card-title">Новая выгрузка</h2><p className="card-description">Сначала Hub покажет оценку, затем OnlyFans API рассчитает цену. Выгрузка начнётся только после отдельного запуска.</p></div></div>
-      <div className="card-body space-y-4">
-        <div className="flex flex-wrap items-end gap-3">
-          <div className="w-full sm:w-56"><Field label="Что выгрузить"><select disabled={busy} className="select" value={profile} onChange={e => { setProfile(e.target.value as OfapiTypedExportProfile); clearPreview(); }}>{OFAPI_TYPED_EXPORT_PROFILES.map(value => <option value={value} key={value}>{labels[value]}</option>)}</select></Field></div>
-          {profile === "fans" && <div className="w-full sm:w-44"><Field label="Аудитория"><select disabled={busy} className="select" value={fanType} onChange={e => { setFanType(e.target.value as typeof fanType); clearPreview(); }}>{(["all", "active", "expired", "latest"] as const).map(value => <option key={value} value={value}>{fanTypeLabels[value]}</option>)}</select></Field></div>}
-          <div className="w-full sm:w-48"><Field label="Лимит на задачу, кредитов"><input disabled={busy} className="input" type="number" min={2} max={50} value={maxCredits} onChange={e => { setMaxCredits(Number(e.target.value)); clearPreview(); }} /></Field></div>
-          <button type="button" className="btn" disabled={busy || Boolean(unconfirmedQuote) || !pageId || Boolean(windowError) || !validMaxCredits || !pages.data || pages.isError} onClick={() => void create(true)}>Показать оценку</button>
-        </div>
-        <p className="field-hint">Период — прошедшие дни по UTC, не больше 366. Одна задача — не больше 1 000 строк, 100 запросов и 4 МБ. Фаны выгружаются такими, какие они на момент выгрузки.</p>
-        {!validMaxCredits && <p role="alert" className="notice notice-danger">Лимит на задачу — целое число от 2 до 50.</p>}
-        {preview && <div className="space-y-3 rounded-lg border border-border bg-hover-alt p-4 text-sm">
-          <dl className="grid gap-x-6 gap-y-2 sm:grid-cols-2 lg:grid-cols-3">
-            <div><dt className="text-xs text-text-muted">Страница</dt><dd>{preview.pageLabel}</dd></div>
-            <div><dt className="text-xs text-text-muted">Что выгрузить</dt><dd>{labels[preview.body.profile]}{preview.body.profile === "fans" ? ` · ${fanTypeLabels[preview.body.fanType ?? "all"] ?? preview.body.fanType}` : ""}</dd></div>
-            <div><dt className="text-xs text-text-muted">Период</dt><dd>{day(preview.body.startDate)} — {day(preview.body.endDate)}</dd></div>
-            <div><dt className="text-xs text-text-muted">Строк</dt><dd>не больше {preview.receipt.maxRows.toLocaleString("ru-RU")}</dd></div>
-            <div><dt className="text-xs text-text-muted">Оценка выгрузки</dt><dd>{preview.receipt.estimatedCredits === null ? "неизвестна — дождитесь цены от OnlyFans API" : credits(preview.receipt.estimatedCredits)}</dd></div>
-            <div><dt className="text-xs text-text-muted">Лимит задачи</dt><dd>{credits(preview.receipt.maximumCredits)}</dd></div>
-          </dl>
-          <button type="button" className="btn btn-primary" disabled={busy} onClick={() => void create(false)}>Запросить цену</button>
-        </div>}
+    <section className="card" aria-labelledby="export-visitors-title">
+      <div className="card-header">
+        <div className="min-w-0"><h2 id="export-visitors-title" className="card-title">Посетители профиля по дням{ofapi.status === "off" ? ` · ${OFAPI_FROZEN_NOTE}` : ""}</h2><p className="card-description">Пропущенные дни остаются неизвестными; категории посетителей могут пересекаться.</p></div>
+        <label className="flex items-center gap-2 text-sm text-text-secondary"><span>Источник</span><select disabled={busy} className="select w-auto min-h-[32px] py-1" value={source} onChange={e => setSource(e.target.value as typeof source)}><option value="export">Выгрузка CSV</option><option value="rest">Дневной график</option></select></label>
       </div>
-    </section>}
+      {!windowError && pageId > 0 && visitors.isPending && <p role="status" className="px-6 py-4 text-text-secondary">Загружаем посетителей…</p>}
+      <div className="table-wrap"><table className="data-table"><thead><tr><th>День</th><th className="num">Всего</th><th className="num">Гости</th><th className="num">Пользователи</th><th className="num">Подписчики</th><th className="num">Длительность</th><th>Полнота</th></tr></thead><tbody>
+        {visitors.data?.days.map(row => <tr key={row.date}><td>{formatBusinessDateShort(row.date)}</td><td className="num">{metric(row.totalVisitors)}</td><td className="num">{metric(row.guestVisitors)}</td><td className="num">{metric(row.userVisitors)}</td><td className="num">{metric(row.subscriberVisitors)}</td><td className="num">{metric(source === "export" ? row.avgViewDuration : row.chartDuration)}</td><td className={row.availability === "complete" ? "" : "muted"} title={`${row.availability} · ${row.source}${row.observationId ? ` · наблюдение ${row.observationId} · ${row.observedAt}` : ""}`}>{availabilityLabels[row.availability] ?? row.availability}</td></tr>)}
+      </tbody></table></div>
+      {visitors.data?.note && <div className="border-t border-border-light px-5 py-3"><details className="help"><summary>Подробнее</summary><div className="help-body"><p>{visitors.data.note}</p><p>Единицы длительности задаёт OnlyFans API.</p></div></details></div>}
+    </section>
     <section className="card" aria-labelledby="export-jobs-title">
       <div className="card-header">
         <h2 id="export-jobs-title" className="card-title">Выгрузки</h2>
-        {owner && Boolean(jobs.data?.jobs.length) && <label className="flex flex-wrap items-center gap-2 text-sm text-text-secondary"><span>Запуск или повтор — не больше</span><input disabled={busy} className="input min-h-[32px] w-20 py-1" type="number" min={1} max={50} value={startCredits} onChange={e => { setStartCredits(Number(e.target.value)); setApprovedPreview(null); setControlPreview(null); }} /><span>кредитов</span></label>}
+        {owner && Boolean(jobs.data?.jobs.length) && <label className="flex flex-wrap items-center gap-2 text-sm text-text-secondary"><span>Запуск или повтор: не больше</span><input disabled={writeOff !== null || busy} className="input min-h-[32px] w-20 py-1" type="number" min={1} max={50} value={startCredits} onChange={e => { setStartCredits(Number(e.target.value)); setApprovedPreview(null); setControlPreview(null); }} /><span>кредитов</span></label>}
       </div>
       {!validStartCredits && <div className="px-5 pt-4"><p role="alert" className="notice notice-danger">Лимит на запуск — целое число от 1 до 50.</p></div>}
       {pageId > 0 && jobs.isPending && <p role="status" className="px-5 py-4 text-sm text-text-muted">Загружаем выгрузки…</p>}
@@ -284,10 +280,10 @@ export function OfapiExportsPage() {
             {job.reason && job.reason !== "indeterminate" && <p className="text-xs text-text-muted" title={job.reason}>{reasonLabels[job.reason] ?? job.reason.replaceAll("_", " ")}</p>}
             {job.reason === "indeterminate" && <p className="text-xs text-warning-dark">{reasonLabels.indeterminate}</p>}
             {(canResume || canPreviewStart || canImport || canControl) && <div className="flex flex-wrap gap-2">
-              {canResume && <button type="button" className="btn btn-sm btn-primary" disabled={busy || !pages.data || pages.data.backgroundPaused} onClick={() => void run(async () => { await ofapiExportActions.resume(job.jobId, { expectedRowVersion: job.rowVersion, expectedPolicyRevision: pages.data!.revision, reason: "Owner resumed original bounded export" }); setNotice("Выгрузка продолжена с прежним лимитом. Уже запущенная выгрузка проверяется без повторного запуска."); })}>Продолжить выгрузку</button>}
-              {canPreviewStart && <button type="button" className={startShown ? "btn btn-sm" : "btn btn-sm btn-primary"} disabled={busy || !validStartCredits} onClick={() => void run(async () => { await ofapiExportActions.approve(job.jobId, { expectedRowVersion: job.rowVersion, approvedMaxCredits: startCredits, reason: "Owner reviewed bounded export", dryRun: true }); setApprovedPreview({ jobId: job.jobId, rowVersion: job.rowVersion, credits: startCredits, pageId, pageLabel, profile: job.profile }); })}>Проверить запуск</button>}
-              {canImport && <button type="button" className="btn btn-sm btn-primary" disabled={busy} onClick={() => void run(async () => { await ofapiExportActions.artifact(job.jobId, { expectedRowVersion: job.rowVersion, reason: "Owner captured completed export" }); setNotice("Файл выгрузки проверен и импортирован. Сохранённые отчёты уже включают его строки."); })}>Скачать и импортировать</button>}
-              {canImport && <label className={`btn btn-sm ${busy ? "pointer-events-none opacity-45" : "cursor-pointer"}`}>Импортировать CSV вручную<input type="file" accept=".csv,text/csv" className="sr-only" disabled={busy} onChange={event => {
+              {canResume && <button type="button" className="btn btn-sm btn-primary" disabled={writeOff !== null || busy || !pages.data || pages.data.backgroundPaused} onClick={() => void run(async () => { await ofapiExportActions.resume(job.jobId, { expectedRowVersion: job.rowVersion, expectedPolicyRevision: pages.data!.revision, reason: "Owner resumed original bounded export" }); setNotice("Выгрузка продолжена с прежним лимитом. Уже запущенная выгрузка проверяется без повторного запуска."); })}>Продолжить выгрузку</button>}
+              {canPreviewStart && <button type="button" className={startShown ? "btn btn-sm" : "btn btn-sm btn-primary"} disabled={writeOff !== null || busy || !validStartCredits} onClick={() => void run(async () => { await ofapiExportActions.approve(job.jobId, { expectedRowVersion: job.rowVersion, approvedMaxCredits: startCredits, reason: "Owner reviewed bounded export", dryRun: true }); setApprovedPreview({ jobId: job.jobId, rowVersion: job.rowVersion, credits: startCredits, pageId, pageLabel, profile: job.profile }); })}>Проверить запуск</button>}
+              {canImport && <button type="button" className="btn btn-sm btn-primary" disabled={writeOff !== null || busy} onClick={() => void run(async () => { await ofapiExportActions.artifact(job.jobId, { expectedRowVersion: job.rowVersion, reason: "Owner captured completed export" }); setNotice("Файл выгрузки проверен и импортирован. Сохранённые отчёты уже включают его строки."); })}>Скачать и импортировать</button>}
+              {canImport && <label className={`btn btn-sm ${busy || writeOff !== null ? "pointer-events-none opacity-45" : "cursor-pointer"}`}>Импортировать CSV вручную<input type="file" accept=".csv,text/csv" className="sr-only" disabled={writeOff !== null || busy} onChange={event => {
                 const file = event.target.files?.[0]; event.target.value = ""; if (!file) return;
                 void run(async () => {
                   if (file.size > 4 * 1024 * 1024) throw new Error("CSV больше 4 МБ — это предел этого экрана.");
@@ -299,7 +295,7 @@ export function OfapiExportsPage() {
                   setNotice("Контрольная сумма CSV совпала, строки импортированы.");
                 });
               }} /></label>}
-              {canControl && <button type="button" className={isRetry && !controlShown ? "btn btn-sm btn-primary" : "btn btn-sm"} disabled={busy || !pages.data || pages.isError || (job.reason === "export_failed" && !validStartCredits)} onClick={() => void run(async () => {
+              {canControl && <button type="button" className={isRetry && !controlShown ? "btn btn-sm btn-primary" : "btn btn-sm"} disabled={writeOff !== null || busy || !pages.data || pages.isError || (job.reason === "export_failed" && !validStartCredits)} onClick={() => void run(async () => {
                 const action = job.reason === "export_failed" ? "retry" as const : "cancel" as const;
                 const snapshot = { sourceJobId: job.jobId, action, expectedRowVersion: job.rowVersion, expectedPolicyRevision: pages.data!.revision, approvedMaxCredits: action === "cancel" ? 1 : startCredits };
                 const { sourceJobId: _sourceJobId, ...body } = snapshot;
@@ -307,13 +303,13 @@ export function OfapiExportsPage() {
                 setControlPreview({ ...snapshot, pageId, pageLabel, profile: job.profile });
               })}>{isRetry ? "Проверить платный повтор" : "Проверить отмену"}</button>}
             </div>}
-            {startShown && <div className="space-y-2 rounded-lg border border-border bg-hover-alt p-3 text-text-secondary" title={`Задача ${startShown.jobId}`}><p>{startShown.pageLabel} · {labels[startShown.profile]}. Запуск спишет не больше {credits(startShown.credits)}.</p><button type="button" className="btn btn-sm btn-primary" disabled={busy} onClick={() => void run(async () => { await ofapiExportActions.approve(job.jobId, { expectedRowVersion: startShown.rowVersion, approvedMaxCredits: startShown.credits, reason: "Owner approved bounded export", dryRun: false }); setApprovedPreview(null); setNotice("Запуск выгрузки подтверждён в пределах лимита задачи."); })}>Запустить · до {credits(startShown.credits)}</button></div>}
-            {controlShown && <div className="space-y-2 rounded-lg border border-border bg-hover-alt p-3 text-text-secondary" title={`Задача ${controlShown.sourceJobId}`}><p>{controlShown.pageLabel} · {labels[controlShown.profile]}. {controlShown.action === "retry" ? `Создаст новую выгрузку и сразу запустит её, не больше ${credits(controlShown.approvedMaxCredits)}. Прежние списания остаются учтёнными.` : "Отменит выгрузку, которая сейчас идёт у OnlyFans API. Прежние списания остаются учтёнными."}</p><button type="button" className={controlShown.action === "retry" ? "btn btn-sm btn-primary" : "btn btn-sm btn-danger"} disabled={busy} onClick={() => void run(async () => {
+            {startShown && <div className="space-y-2 rounded-lg border border-border bg-hover-alt p-3 text-text-secondary" title={`Задача ${startShown.jobId}`}><p>{startShown.pageLabel} · {labels[startShown.profile]}. Запуск спишет не больше {credits(startShown.credits)}.</p><button type="button" className="btn btn-sm btn-primary" disabled={writeOff !== null || busy} onClick={() => void run(async () => { await ofapiExportActions.approve(job.jobId, { expectedRowVersion: startShown.rowVersion, approvedMaxCredits: startShown.credits, reason: "Owner approved bounded export", dryRun: false }); setApprovedPreview(null); setNotice("Запуск выгрузки подтверждён в пределах лимита задачи."); })}>Запустить · до {credits(startShown.credits)}</button></div>}
+            {controlShown && <div className="space-y-2 rounded-lg border border-border bg-hover-alt p-3 text-text-secondary" title={`Задача ${controlShown.sourceJobId}`}><p>{controlShown.pageLabel} · {labels[controlShown.profile]}. {controlShown.action === "retry" ? `Создаст новую выгрузку и сразу запустит её, не больше ${credits(controlShown.approvedMaxCredits)}. Прежние списания остаются учтёнными.` : "Отменит выгрузку, которая сейчас идёт у OnlyFans API. Прежние списания остаются учтёнными."}</p><button type="button" className={controlShown.action === "retry" ? "btn btn-sm btn-primary" : "btn btn-sm btn-danger"} disabled={writeOff !== null || busy} onClick={() => void run(async () => {
               const { sourceJobId, pageId: _pageId, pageLabel: _pageLabel, profile: _profile, ...snapshot } = controlShown;
               await ofapiExportActions.control(sourceJobId, { ...snapshot, reason: "Owner approved provider export action", dryRun: false }); setControlPreview(null); setNotice("Действие отправлено в OnlyFans API один раз. Его результат появится здесь.");
             })}>{controlShown.action === "retry" ? "Запустить новую платную выгрузку" : "Отменить выгрузку"}</button></div>}
-            <details className="help"><summary>Технические детали</summary><div className="help-body break-all text-xs">
-              <p>Задача {job.jobId}{job.vendorExportId ? ` · выгрузка у провайдера ${job.vendorExportId}` : ""}</p>
+            <details className="help"><summary>Подробнее</summary><div className="help-body break-all text-xs">
+              <p>Задача {job.jobId}{job.vendorExportId ? ` · выгрузка у OnlyFans API ${job.vendorExportId}` : ""}</p>
               <p>Состояние: {rawStatus}{job.reason ? ` · причина: ${job.reason}` : ""}</p>
               {job.sha256 && <p>SHA256 {job.sha256}{job.artifactBytes === null ? "" : ` · ${job.artifactBytes} байт`}</p>}
               {job.imported && <div><button type="button" className="btn btn-sm" disabled={busy} onClick={() => setSelectedJob(job.jobId)}>Показать сохранённые строки</button></div>}
@@ -324,33 +320,48 @@ export function OfapiExportsPage() {
     </section>
     {selectedJob && <section className="card" aria-labelledby="export-rows-title">
       <div className="card-header"><div className="min-w-0"><h2 id="export-rows-title" className="card-title">Сохранённые строки</h2><p className="card-description">Первые 100 строк. Денежные значения — в единицах и смысле OnlyFans API.</p></div><button type="button" className="btn btn-sm" onClick={() => setSelectedJob("")}>Скрыть строки</button></div>
-      <div className="card-body overflow-auto text-xs text-text-secondary">{rows.isPending ? <p role="status">Загружаем строки…</p> : rows.error ? <p role="alert" className="notice notice-danger">{rows.error.message}</p> : <pre>{JSON.stringify(rows.data?.rows ?? [], null, 2)}</pre>}</div>
+      <div className="card-body overflow-auto text-xs text-text-secondary">{rows.isPending ? <p role="status">Загружаем строки…</p> : rows.error ? <p role="alert" className="sys-error">Строки не загрузились.</p> : <pre>{JSON.stringify(rows.data?.rows ?? [], null, 2)}</pre>}</div>
     </section>}
     {owner && <details className="card group">
       <summary className="card-header flex-nowrap cursor-pointer list-none border-b-0 group-open:border-b [&::-webkit-details-marker]:hidden">
-        <div className="min-w-0"><h2 className="card-title">Выгрузки у провайдера</h2><p className="card-description">Список выгрузок в OnlyFans API · {inventory.data?.observedAt ? formatDateTime(inventory.data.observedAt) : inventory.isPending ? "загружаем…" : inventory.isError ? "недоступен" : "ещё не получен"}</p></div>
+        <div className="min-w-0"><h2 className="card-title">Выгрузки у OnlyFans API</h2><p className="card-description">Список выгрузок в OnlyFans API · {inventory.data?.observedAt ? formatDateTime(inventory.data.observedAt) : inventory.isPending ? "загружаем…" : inventory.isError ? "недоступен" : "ещё не получен"}</p></div>
         <ChevronDown size={18} className="shrink-0 text-text-muted transition-transform group-open:rotate-180" aria-hidden="true" />
       </summary>
       <div className="card-body space-y-3">
-        <div className="flex flex-wrap items-center justify-between gap-3"><p className="text-sm text-text-secondary">Этот список не запускает и не импортирует выгрузки.</p><button type="button" className="btn btn-sm" disabled={busy} onClick={() => void run(async () => { await ofapiExportActions.refreshInventory({ page: 1, perPage: 25, type: profile }); setNotice("Получена одна бесплатная страница списка выгрузок."); })}>Обновить список · {labels[profile]}</button></div>
-        {inventory.error && <p role="alert" className="notice notice-danger">{inventory.error.message}</p>}
+        <div className="flex flex-wrap items-center justify-between gap-3"><p className="text-sm text-text-secondary">Этот список не запускает и не импортирует выгрузки.</p><button type="button" className="btn btn-sm" disabled={writeOff !== null || busy} onClick={() => void run(async () => { await ofapiExportActions.refreshInventory({ page: 1, perPage: 25, type: profile }); setNotice("Получена одна бесплатная страница списка выгрузок."); })}>Обновить список · {labels[profile]}</button></div>
+        {inventory.error && <Notice tone="danger" role="alert">Список выгрузок не загрузился.</Notice>}
         <div className="table-wrap"><table className="data-table"><thead><tr><th>Выгрузка</th><th>Тип</th><th>Статус</th><th className="num">Строк</th><th className="num">Цена, кредитов</th></tr></thead><tbody>
           {inventory.data && !inventory.data.rows.length && <tr><td colSpan={5} className="muted">Список пуст.</td></tr>}
           {inventory.data?.rows.map(row => <tr key={row.id}><td className="muted">{row.id}</td><td>{labels[row.type as OfapiTypedExportProfile] ?? row.type}</td><td title={row.status}>{statusLabels[row.status] ?? row.status}</td><td className="num">{metric(row.deliveredRows)} из {metric(row.totalRows)}</td><td className="num">{metric(row.creditCost)}</td></tr>)}
         </tbody></table></div>
-        {inventory.data && inventory.data.currentPage < inventory.data.lastPage && <button type="button" className="btn btn-sm" disabled={busy} onClick={() => void run(async () => { await ofapiExportActions.refreshInventory({ page: inventory.data!.currentPage + 1, perPage: 25, type: profile }); })}>Загрузить следующую страницу списка</button>}
+        {inventory.data && inventory.data.currentPage < inventory.data.lastPage && <button type="button" className="btn btn-sm" disabled={writeOff !== null || busy} onClick={() => void run(async () => { await ofapiExportActions.refreshInventory({ page: inventory.data!.currentPage + 1, perPage: 25, type: profile }); })}>Загрузить следующую страницу списка</button>}
       </div>
     </details>}
-    <section className="card" aria-labelledby="export-visitors-title">
-      <div className="card-header">
-        <div className="min-w-0"><h2 id="export-visitors-title" className="card-title">Посетители профиля по дням</h2><p className="card-description">Пропущенные дни остаются неизвестными; категории посетителей могут пересекаться.</p></div>
-        <label className="flex items-center gap-2 text-sm text-text-secondary"><span>Источник</span><select disabled={busy} className="select w-auto min-h-[32px] py-1" value={source} onChange={e => setSource(e.target.value as typeof source)}><option value="export">Выгрузка CSV</option><option value="rest">Дневной график</option></select></label>
+    {owner && !unbound && <details className="card sys-fold" aria-labelledby="export-new-title">
+      <summary className="sys-fold-summary"><span className="min-w-0 flex-1"><span className="sys-fold-head"><span id="export-new-title" className="card-title">Новая выгрузка</span>{ofapi.status === "off" && <span className="badge badge-off">{OFAPI_OFF_WORD.toLowerCase()}</span>}</span><span className="card-description block">Сначала Hub покажет оценку, затем OnlyFans API рассчитает цену. Выгрузка начнётся только после отдельного запуска.</span></span><ChevronDown size={18} aria-hidden="true" className="sys-fold-chevron" /></summary>
+      <fieldset disabled={writeOff !== null} className="min-w-0">
+      <div className="sys-fold-body space-y-4">
+        <div className="flex flex-wrap items-end gap-3">
+          <div className="w-full sm:w-56"><Field label="Что выгрузить"><select disabled={busy} className="select" value={profile} onChange={e => { setProfile(e.target.value as OfapiTypedExportProfile); clearPreview(); }}>{OFAPI_TYPED_EXPORT_PROFILES.map(value => <option value={value} key={value}>{labels[value]}</option>)}</select></Field></div>
+          {profile === "fans" && <div className="w-full sm:w-44"><Field label="Аудитория"><select disabled={busy} className="select" value={fanType} onChange={e => { setFanType(e.target.value as typeof fanType); clearPreview(); }}>{(["all", "active", "expired", "latest"] as const).map(value => <option key={value} value={value}>{fanTypeLabels[value]}</option>)}</select></Field></div>}
+          <div className="w-full sm:w-48"><Field label="Лимит на задачу, кредитов"><input disabled={busy} className="input" type="number" min={2} max={50} value={maxCredits} onChange={e => { setMaxCredits(Number(e.target.value)); clearPreview(); }} /></Field></div>
+          <button type="button" className="btn" disabled={busy || Boolean(unconfirmedQuote) || !pageId || Boolean(windowError) || !validMaxCredits || !pages.data || pages.isError} onClick={() => void create(true)}>Показать оценку</button>
+        </div>
+        <p className="field-hint">Период — прошедшие дни по UTC, не больше 366. Одна задача — не больше 1 000 строк, 100 запросов и 4 МБ. Фаны выгружаются такими, какие они на момент выгрузки.</p>
+        {!validMaxCredits && <p role="alert" className="notice notice-danger">Лимит на задачу — целое число от 2 до 50.</p>}
+        {preview && <div className="space-y-3 rounded-lg border border-border bg-hover-alt p-4 text-sm">
+          <dl className="grid gap-x-6 gap-y-2 sm:grid-cols-2 lg:grid-cols-3">
+            <div><dt className="text-xs text-text-muted">Страница</dt><dd>{preview.pageLabel}</dd></div>
+            <div><dt className="text-xs text-text-muted">Что выгрузить</dt><dd>{labels[preview.body.profile]}{preview.body.profile === "fans" ? ` · ${fanTypeLabels[preview.body.fanType ?? "all"] ?? preview.body.fanType}` : ""}</dd></div>
+            <div><dt className="text-xs text-text-muted">Период</dt><dd>{day(preview.body.startDate)} — {day(preview.body.endDate)}</dd></div>
+            <div><dt className="text-xs text-text-muted">Строк</dt><dd>не больше {preview.receipt.maxRows.toLocaleString("ru-RU")}</dd></div>
+            <div><dt className="text-xs text-text-muted">Оценка выгрузки</dt><dd>{preview.receipt.estimatedCredits === null ? "неизвестна — дождитесь цены от OnlyFans API" : credits(preview.receipt.estimatedCredits)}</dd></div>
+            <div><dt className="text-xs text-text-muted">Лимит задачи</dt><dd>{credits(preview.receipt.maximumCredits)}</dd></div>
+          </dl>
+          <button type="button" className="btn btn-primary" disabled={busy} onClick={() => void create(false)}>Запросить цену</button>
+        </div>}
       </div>
-      {!windowError && pageId > 0 && visitors.isPending && <p role="status" className="px-5 py-4 text-sm text-text-muted">Загружаем посетителей…</p>}
-      <div className="overflow-x-auto"><table className="data-table"><thead><tr><th>День</th><th className="num">Всего</th><th className="num">Гости</th><th className="num">Пользователи</th><th className="num">Подписчики</th><th className="num" title="Единицы задаёт OnlyFans API">Длительность</th><th>Полнота</th></tr></thead><tbody>
-        {visitors.data?.days.map(row => <tr key={row.date}><td>{formatBusinessDateShort(row.date)}</td><td className="num">{metric(row.totalVisitors)}</td><td className="num">{metric(row.guestVisitors)}</td><td className="num">{metric(row.userVisitors)}</td><td className="num">{metric(row.subscriberVisitors)}</td><td className="num">{metric(source === "export" ? row.avgViewDuration : row.chartDuration)}</td><td className={row.availability === "complete" ? "" : "muted"} title={`${row.availability} · ${row.source}${row.observationId ? ` · наблюдение ${row.observationId} · ${row.observedAt}` : ""}`}>{availabilityLabels[row.availability] ?? row.availability}</td></tr>)}
-      </tbody></table></div>
-      {visitors.data?.note && <div className="border-t border-border-light px-5 py-3"><details className="help"><summary>Технические детали</summary><div className="help-body text-xs"><p>{visitors.data.note}</p></div></details></div>}
-    </section>
+      </fieldset>
+    </details>}
   </div>;
 }

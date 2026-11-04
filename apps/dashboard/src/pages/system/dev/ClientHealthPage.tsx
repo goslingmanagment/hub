@@ -1,25 +1,30 @@
-import { Fragment, useState, type ReactNode } from "react";
+import { Fragment, type ReactNode } from "react";
+import { Link } from "react-router";
 import { MOSCOW_TIME_ZONE, toBusinessDate } from "@agency_hub_core/shared";
 import { useAdminClientHealth } from "@/api/queries";
-import { FilterButtons } from "@/components/shared/FilterButtons";
+import { useScreenPeriod } from "@/components/layout/useScreenPeriod";
+import { staleDataText } from "@/components/shared/QueryNotice";
 import { StatusPanel } from "@/components/shared/StatusPanel";
-import { DevHeader } from "./DevHeader.js";
+import { StatCardSkeleton, TableSkeleton } from "@/components/shared/TableSkeleton";
+import { Disclosure } from "@/components/ui/Disclosure";
+import { Notice } from "@/components/ui/Notice";
+import { PageHeader } from "@/components/ui/PageHeader";
+import { formatDayRange } from "@/lib/format";
 import {
-  CLIENT_HEALTH_PERIODS,
   clientHealthPageModel,
   clientHealthRange,
-  clientHealthRangeLabel,
   formatCount,
   type ClientHealthPeriod,
 } from "@/pages/dev/clientHealthView";
+import { freshOf } from "../shared.js";
+import { CRITICAL_COUNTERS, ExtensionCriticalTiles } from "./ExtensionCriticalTiles.js";
 
 const CELL = "muted";
 /** A version, a build or a code: never broken across lines; the section scrolls sideways instead. */
-const CELL_CODE = "muted whitespace-nowrap";
+const CELL_CODE = "muted whitespace-nowrap sys-code-cell";
 const CELL_NUMBER = "num";
 
-/** A section of the page: what it shows in a sentence, how to read it under
- *  «Как читать», and its table. */
+/** A section of the page: what it shows in a sentence, how it is counted folded, and its table. */
 function Section({ title, description, help, children }: {
   title: string;
   description: ReactNode;
@@ -29,18 +34,13 @@ function Section({ title, description, help, children }: {
   return (
     <section className="card">
       <div className="card-header">
-        <div className="min-w-0 max-w-3xl">
-          <h3 className="card-title">{title}</h3>
+        <div className="min-w-0 sys-measure">
+          <h2 className="card-title">{title}</h2>
           <p className="card-description">{description}</p>
-          {help && (
-            <details className="help mt-2">
-              <summary>Как читать</summary>
-              <div className="help-body">{help}</div>
-            </details>
-          )}
+          {help && <Disclosure label="Как это считается" className="mt-2">{help}</Disclosure>}
         </div>
       </div>
-      <div className="overflow-x-auto">{children}</div>
+      <div className="table-wrap">{children}</div>
     </section>
   );
 }
@@ -48,7 +48,7 @@ function Section({ title, description, help, children }: {
 function EmptyRow({ columns, children }: { columns: number; children: ReactNode }) {
   return (
     <tr>
-      <td colSpan={columns} className="py-8 text-center text-text-muted">{children}</td>
+      <td colSpan={columns} className="text-center text-text-secondary">{children}</td>
     </tr>
   );
 }
@@ -59,62 +59,62 @@ function EmptyRow({ columns, children }: { columns: number; children: ReactNode 
  * person in them, so the page has none to show.
  */
 export function ClientHealthPage() {
-  const [period, setPeriod] = useState<ClientHealthPeriod>("7d");
+  const { key } = useScreenPeriod("7d");
+  const period: ClientHealthPeriod = key === "today" || key === "30d" ? key : "7d";
   const range = clientHealthRange(period, toBusinessDate(new Date(), MOSCOW_TIME_ZONE));
-  const { data, isLoading, isError, isFetching, refetch } = useAdminClientHealth(range);
+  // The same key as the row of «Ждут вас» at 7 days: one number on both.
+  const query = useAdminClientHealth({ ...range, clientName: "chat-extension" });
+  const { data, isLoading, isError } = query;
 
-  const header = (
-    <>
-      <DevHeader
-        title="Расширение для чата: отчёты о работе"
-        description="Пока открыт ChatSpace, расширение раз в 15 минут присылает технический отчёт; Hub хранит только суммы по версиям — без имён сотрудников, страниц и фанов."
-      />
-      <div className="mb-5 flex flex-wrap items-center gap-x-3 gap-y-2">
-        <FilterButtons
-          filters={CLIENT_HEALTH_PERIODS.map(({ key, label }) => ({ key, label }))}
-          active={period}
-          onChange={(key) => setPeriod(key as ClientHealthPeriod)}
-        />
-        <p className="text-sm text-text-muted">{clientHealthRangeLabel(range)}, дни по московскому времени</p>
-      </div>
-    </>
-  );
-  const retry = (
-    <button type="button" onClick={() => void refetch()} disabled={isFetching} className="btn">
-      Повторить
-    </button>
-  );
+  const header = <PageHeader window={`${formatDayRange(range.from, range.to)}, дни по Москве`} fresh={freshOf(query)} />;
+  const retry = <button type="button" onClick={() => void query.refetch()} className="btn btn-sm">Повторить</button>;
 
   if (!data) {
     return (
-      <div>
+      <div className="space-y-6">
         {header}
-        {isLoading
-          ? <StatusPanel title="Загружаем отчёты" />
-          : <StatusPanel title="Отчёты не загрузились" description="Hub не ответил. Данные не потеряны: попробуйте ещё раз." tone="error" action={retry} />}
+        {isLoading ? (
+          <>
+            <StatCardSkeleton count={4} />
+            <div className="card"><TableSkeleton rows={4} columns={5} /></div>
+          </>
+        ) : (
+          <>
+            <ExtensionCriticalTiles data={undefined} />
+            <div className="card">
+              <StatusPanel tone="error" title="Hub не ответил" description="Числа не пришли. Это не ноль. Данные не потеряны: попробуйте ещё раз." action={retry} />
+            </div>
+          </>
+        )}
       </div>
     );
   }
 
   const model = clientHealthPageModel(data);
 
+  const critical = new Set(CRITICAL_COUNTERS.map(([code]) => code));
+  const counters = model.counters.filter((row) => !critical.has(row.code));
+
   return (
-    <div>
+    <div className="space-y-6">
       {header}
-      {isError && (
-        <div role="alert" className="notice notice-warning mb-4 flex-wrap items-center justify-between">
-          <span>Обновить не получилось. Показаны данные прошлой загрузки.</span>
-          {retry}
-        </div>
-      )}
+      {isError && <Notice tone="warning" role="alert" action={retry}>{staleDataText(query.dataUpdatedAt)}</Notice>}
+      <ExtensionCriticalTiles data={data} />
 
       {model.empty ? (
-        <StatusPanel
-          title="За этот период отчётов нет"
-          description="Отчёты приходят, когда в настройках включены «Расширение для чата: общий выключатель» и «Расширение для чата: отчёты о работе», а сотрудник в расширении согласился отправлять технические замеры."
-        />
+        <div className="card">
+          <div className="empty">
+            <p className="empty-title">За этот период отчётов нет</p>
+            <p className="empty-text">
+              Отчёты приходят, когда в настройках включены{" "}
+              <Link className="link" to="/system/dev/config#config-chatExtensionEnabled">«Расширение для чата: общий выключатель»</Link> и{" "}
+              <Link className="link" to="/system/dev/config#config-chatExtensionHealthIngestEnabled">«Расширение для чата: отчёты о работе»</Link>,
+              а сотрудник в расширении согласился отправлять технические замеры.
+            </p>
+          </div>
+        </div>
       ) : (
-        <div className="space-y-5">
+        <div className="space-y-6">
           <Section
             title="Проверка страницы ChatSpace"
             description={<>Всего отчётов: {formatCount(model.reports)}, с ошибкой: {formatCount(model.failedReports)}.</>}
@@ -129,7 +129,7 @@ export function ClientHealthPage() {
               <thead>
                 <tr>
                   <th>Версия расширения</th>
-                  <th>Сборка ChatSpace</th>
+                  <th>Версия ChatSpace</th>
                   <th className="num">Отчётов</th>
                   <th className="num">С ошибкой</th>
                   <th>Что не найдено и в скольких отчётах</th>
@@ -140,10 +140,10 @@ export function ClientHealthPage() {
                 {model.contract.map((row) => (
                   <tr key={row.key}>
                     <td className="whitespace-nowrap font-medium">{row.version}</td>
-                    <td className={`${CELL_CODE} font-mono text-xs`}>{row.build}</td>
+                    <td className={CELL_CODE}>{row.build}</td>
                     <td className={CELL_NUMBER}>{row.reports}</td>
                     <td className={CELL_NUMBER}>{row.failedReports}</td>
-                    <td className={`${CELL} font-mono text-xs`}>{row.missing || "—"}</td>
+                    <td className={`${CELL} sys-code-cell`}>{row.missing || "—"}</td>
                   </tr>
                 ))}
               </tbody>
@@ -164,7 +164,7 @@ export function ClientHealthPage() {
               <thead>
                 <tr>
                   <th>Версия расширения</th>
-                  <th>Сборка ChatSpace</th>
+                  <th>Версия ChatSpace</th>
                   <th className="num">Замеров</th>
                   <th className="num">Среднее</th>
                   <th className="num">Медиана</th>
@@ -177,15 +177,15 @@ export function ClientHealthPage() {
                 {model.perf.map((block) => (
                   <Fragment key={block.key}>
                     <tr>
-                      <th colSpan={7} scope="rowgroup" className="bg-hover-alt text-sm font-semibold text-text-primary">
+                      <th colSpan={7} scope="rowgroup" className="sys-rowgroup">
                         {block.label ?? block.metric}
-                        {block.label !== null && <span className="ml-2 font-mono text-xs font-normal text-text-muted">{block.metric}</span>}
+                        {block.label !== null && <span className="sys-code sys-rowgroup-code">{block.metric}</span>}
                       </th>
                     </tr>
                     {block.rows.map((row) => (
                       <tr key={row.key}>
                         <td className="whitespace-nowrap font-medium">{row.version}</td>
-                        <td className={`${CELL_CODE} font-mono text-xs`}>{row.build}</td>
+                        <td className={CELL_CODE}>{row.build}</td>
                         <td className={CELL_NUMBER}>{row.count}</td>
                         {row.suppressed ? (
                           <td colSpan={4} className={`${CELL_CODE} text-right`}>мало замеров</td>
@@ -210,9 +210,8 @@ export function ClientHealthPage() {
             description="Сколько раз за период случилось событие, по всем версиям вместе."
             help={(
               <p>
-                Счётчики вставки, отправки и чтения расширение присылает всегда, даже без событий. Строки без
-                названия — прочие коды; те, что начинаются с CG-, — ошибки. Внизу служебные счётчики: что
-                расширение не включило в отчёты. Это не ошибки.
+                Четыре критичных счётчика стоят наверху экрана и здесь не повторяются. Строки без названия — прочие коды;
+                те, что начинаются с CG-, — ошибки. Внизу служебные счётчики: что расширение не включило в отчёты. Это не ошибки.
               </p>
             )}
           >
@@ -225,11 +224,11 @@ export function ClientHealthPage() {
                 </tr>
               </thead>
               <tbody>
-                {model.counters.length === 0 && <EmptyRow columns={3}>Счётчиков нет.</EmptyRow>}
-                {model.counters.map((row) => (
+                {counters.length === 0 && <EmptyRow columns={3}>Счётчиков нет.</EmptyRow>}
+                {counters.map((row) => (
                   <tr key={row.code}>
                     <td>{row.label ?? "—"}</td>
-                    <td className={`${CELL_CODE} font-mono text-xs`}>{row.code}</td>
+                    <td className={CELL_CODE}>{row.code}</td>
                     <td className={CELL_NUMBER}>{row.total}</td>
                   </tr>
                 ))}

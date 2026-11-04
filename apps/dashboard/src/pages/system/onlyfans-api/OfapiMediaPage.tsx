@@ -5,6 +5,12 @@ import { useAuthMe } from "@/api/queries";
 import { useOfapiExportPages } from "@/api/ofapiExports";
 import { ofapiMediaActions, useOfapiMedia } from "@/api/ofapiMedia";
 import { StatusPanel } from "@/components/shared/StatusPanel";
+import { Disclosure } from "@/components/ui/Disclosure";
+import { Notice } from "@/components/ui/Notice";
+import { PageHeader } from "@/components/ui/PageHeader";
+import { OFAPI_OFF_WORD } from "@/lib/statusWords";
+import { useOfapi } from "../shared.js";
+import { OfapiOffBar } from "./OfapiOffBar.js";
 import { formatDateTime } from "@/lib/format";
 import { ruPlural } from "@/lib/plural";
 
@@ -54,6 +60,9 @@ export function OfapiMediaPage() {
   const auth = useAuthMe(),
     owner = auth.data?.user.role === "owner",
     pages = useOfapiExportPages();
+  const ofapi = useOfapi();
+  // A team lead has no buttons here and does not know the switch.
+  const writeOff = owner ? ofapi.block : null;
   const [selectedPage, setSelectedPage] = useState(0),
     [offset, setOffset] = useState(0);
   const pageId = selectedPage || pages.data?.pages[0]?.id || 0;
@@ -91,10 +100,10 @@ export function OfapiMediaPage() {
       await action();
       const results = await Promise.all([saved.refetch(), pages.refetch()]);
       if (results.some((result) => result.isError)) {
-        setError("Не удалось обновить сохранённые данные. Результат действия сохранён; нажмите «Обновить», чтобы проверить.");
+        setError("Не удалось обновить сохранённые данные. Результат действия сохранён; нажмите на время обновления, чтобы проверить.");
       } else if (refreshedNotice) setNotice(refreshedNotice);
     } catch (error) {
-      setError(error instanceof Error ? error.message : String(error));
+      setError("Не получилось. Hub вернул ошибку.");
     } finally {
       inFlight.current = false;
       setBusy(false);
@@ -182,7 +191,7 @@ export function OfapiMediaPage() {
   const creditsValid = Number.isInteger(maxCredits) && maxCredits >= 1 && maxCredits <= 300;
   const readError = unbound ? null : saved.error;
   const collectionConfirm = collectionPreview && (
-    <div className="space-y-3 rounded-lg border border-border bg-hover-alt p-3 text-sm text-text-secondary">
+    <div className="sys-summary-box">
       <p>
         {collectionPreview.pageLabel} · прочитать{" "}
         {collectionPreview.selection.length === 1
@@ -194,7 +203,7 @@ export function OfapiMediaPage() {
         <button
           type="button"
           className="btn btn-sm btn-primary"
-          disabled={busy}
+          disabled={busy || writeOff !== null}
           onClick={() =>
             void run(async () => {
               await ofapiMediaActions.collect({
@@ -209,7 +218,7 @@ export function OfapiMediaPage() {
                 selection: collectionPreview.selection,
               });
               setCollectionPreview(null);
-              setNotice("Сбор сведений поставлен в очередь. Для большой медиатеки может понадобиться отдельный сбор в «Настройки сбора».");
+              setNotice("Сбор сведений поставлен в очередь. Для большой медиатеки может понадобиться отдельный сбор в «Правилах сбора».");
             })
           }
         >
@@ -220,76 +229,344 @@ export function OfapiMediaPage() {
     </div>
   );
   return (
-    <div className="space-y-5">
-      <div className="flex flex-wrap items-end gap-x-3 gap-y-2">
-        <label className="w-full sm:w-64">
-          <span className="field-label">Страница</span>
-          <select
-            disabled={busy || !pages.data}
-            className="select"
-            value={pageId}
-            onChange={(event) => {
-              setSelectedPage(Number(event.target.value));
-              setSourceId("");
-              setFile(null);
-              setOffset(0);
-              reset();
-            }}
-          >
-            {pages.data?.pages.map((page) => (
-              <option key={page.id} value={page.id}>
-                {page.label}
-              </option>
-            ))}
-          </select>
-        </label>
-        <button
-          type="button"
-          className="btn"
-          disabled={busy || !pageId}
-          onClick={() =>
-            void run(async () => {}, "Данные обновлены.")
-          }
+    <div className={`space-y-6${ofapi.status === "off" ? " sys-off-tone" : ""}`}>
+      <PageHeader fresh={saved.dataUpdatedAt ? { at: saved.dataUpdatedAt, refreshing: busy, onRefresh: () => void run(async () => {}, "Данные обновлены.") } : undefined} />
+      {owner && <OfapiOffBar ofapi={ofapi} />}
+      <label className="sys-inline-field">
+        <span className="text-text-secondary">Страница</span>
+        <select
+          disabled={busy || !pages.data}
+          className="select sys-select"
+          value={pageId}
+          onChange={(event) => {
+            setSelectedPage(Number(event.target.value));
+            setSourceId("");
+            setFile(null);
+            setOffset(0);
+            reset();
+          }}
         >
-          Обновить
-        </button>
-        {owner && !unbound && <Link className="link ml-auto pb-2 text-sm" to="/system/onlyfans-api/collection">Настройки сбора</Link>}
-      </div>
+          {pages.data?.pages.map((page) => (
+            <option key={page.id} value={page.id}>
+              {page.label}
+            </option>
+          ))}
+        </select>
+      </label>
       {(error || readError || pages.error) && (
-        <p role="alert" className="notice notice-danger">
-          {error || (readError ?? pages.error)?.message}
-        </p>
+        <Notice
+          tone="danger"
+          role="alert"
+          action={pages.isError && !pages.data ? <button type="button" className="btn btn-sm" disabled={pages.isFetching} onClick={() => void pages.refetch()}>Повторить загрузку страниц</button> : undefined}
+        >
+          {error || "Hub не ответил: данные медиатеки не загрузились."}
+        </Notice>
       )}
-      {pages.isError && !pages.data && <button type="button" className="btn" disabled={pages.isFetching} onClick={() => void pages.refetch()}>Повторить загрузку страниц</button>}
-      {saved.isError && saved.data && !unbound && <p className="notice notice-warning">Показаны прежние данные: текущее состояние проверить не удалось.</p>}
-      {notice && (
-        <p role="status" className="notice">
-          {notice}
-        </p>
-      )}
-      {(pages.isPending || (pageId > 0 && saved.isPending && !unbound)) && <p role="status" className="text-sm text-text-muted">Загружаем медиа…</p>}
-      {pages.data && !pages.isError && pages.data.pages.length === 0 && <StatusPanel title="Нет страниц OnlyFans" description={owner ? "Добавьте или привяжите страницу в настройках сбора." : "Страницы OnlyFans пока не добавлены."} />}
-      {busy && (
-        <p role="status" className="text-sm text-text-muted">
-          Ждём ответа сервера…
-        </p>
+      {saved.isError && saved.data && !unbound && <Notice tone="warning">Показаны прежние данные: текущее состояние проверить не удалось.</Notice>}
+      {notice && <Notice role="status">{notice}</Notice>}
+      {(pages.isPending || (pageId > 0 && saved.isPending && !unbound)) && <p role="status" className="text-text-secondary">Загружаем медиа…</p>}
+      {pages.data && !pages.isError && pages.data.pages.length === 0 && (
+        <div className="card">
+          <StatusPanel
+            title="Нет страниц OnlyFans"
+            description={owner ? "Добавьте или привяжите страницу в правилах сбора." : "Страницы OnlyFans пока не добавлены."}
+            action={owner ? <Link className="btn btn-sm" to="/system/onlyfans-api/collection">Правила сбора</Link> : undefined}
+          />
+        </div>
       )}
       {unbound && (
-        <StatusPanel
-          title="Страница не привязана к OnlyFans API"
-          description="Загрузка файлов и медиатека доступны только для страницы с привязанным аккаунтом OnlyFans API."
-          action={owner ? <Link to="/system/onlyfans-api/collection">Настройки сбора</Link> : undefined}
-        />
+        <div className="card">
+          <StatusPanel
+            title="Страница не привязана к OnlyFans API"
+            description="Загрузка файлов и медиатека доступны только для страницы с привязанным аккаунтом OnlyFans API."
+            action={owner ? <Link className="btn btn-sm" to="/system/onlyfans-api/collection">Правила сбора</Link> : undefined}
+          />
+        </div>
       )}
-      {owner && !unbound && (
-        <section className="card" aria-labelledby="media-upload-title">
+      {!unbound && (
+        <section className="card" aria-labelledby="media-catalog-title">
           <div className="card-header">
             <div className="min-w-0">
-              <h2 id="media-upload-title" className="card-title">Загрузить файл в OnlyFans</h2>
-              <p className="card-description">Фото, видео или аудио до 100 МБ. Загрузка стоит 3 кредита за каждый МБ, минимум 1 кредит.</p>
+              <h2 id="media-catalog-title" className="card-title">Медиатека</h2>
+              <p className="card-description">
+                {saved.data
+                  ? `${inventoryLabels[saved.data.inventory.state] ?? "Полнота неизвестна"}${saved.data.inventory.completedAt ? ` · ${formatDateTime(saved.data.inventory.completedAt)}` : ""}`
+                  : saved.isError ? "Недоступна" : pageId ? "Загружаем…" : "Выберите страницу"}
+              </p>
+            </div>
+            {owner && (
+              <button
+                type="button"
+                className="btn btn-sm"
+                disabled={writeOff !== null || busy || !pageId || !pages.data}
+                onClick={() =>
+                  setCollectionPreview({
+                    selection: [
+                      "vault_inventory",
+                      "vault_lists",
+                      "release_forms",
+                      "taggable_users",
+                    ],
+                    revision: pages.data!.revision,
+                    pageId,
+                    pageLabel,
+                  })
+                }
+              >
+                Обновить каталог
+              </button>
+            )}
+          </div>
+          {collectionPreview && collectionPreview.selection.length > 1 && <div className="px-5 pt-4">{collectionConfirm}</div>}
+          <div className="overflow-x-auto">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Файл</th>
+                  <th>Готовность</th>
+                  <th>Размер</th>
+                  <th>Согласия</th>
+                  <th><span className="sr-only">Действие</span></th>
+                </tr>
+              </thead>
+              <tbody>
+                {saved.data && !saved.isError && saved.data.media.length === 0 && <tr><td colSpan={5} className="muted">{offset > 0 ? "На этой позиции файлов нет. Вернитесь на предыдущую страницу." : "В сохранённом каталоге нет файлов. Это не значит, что медиатека в OnlyFans пуста."}</td></tr>}
+                {saved.data?.media.map((media) => (
+                  <tr key={`${media.materialKind}:${media.mediaRef}`}>
+                    <td title={`ID ${media.mediaRef}`}>
+                      <span className="block text-text-primary">
+                        {media.filename ?? (media.materialKind === "cdn" ? "Вложение для сообщения" : `Файл ${media.mediaRef}`)}
+                      </span>
+                      <span className="block text-xs text-text-muted">
+                        {media.materialKind === "cdn" ? "Для одного сообщения" : "Медиатека"}
+                        {media.providerType ? ` · ${providerTypeLabels[media.providerType] ?? media.providerType}` : ""}
+                      </span>
+                    </td>
+                    <td>
+                      {media.hasError
+                        ? <span className="badge badge-danger">Ошибка у OnlyFans</span>
+                        : <span className={readyBadge(media.isReady)}>{ready(media.isReady)}</span>}
+                    </td>
+                    <td className="muted">
+                      {media.width !== null && media.height !== null ? `${media.width}×${media.height} · ` : ""}
+                      {media.bytes === null ? "размер неизвестен" : formatSize(media.bytes)}
+                    </td>
+                    <td className="muted">
+                      {media.releaseForms.length
+                        ? media.releaseForms
+                            .map(
+                              (form) =>
+                                `${form.name ?? form.id}${form.status ? ` (${releaseFormStatusLabels[form.status] ?? form.status})` : ""}`,
+                            )
+                            .join(", ")
+                        : "Нет"}
+                    </td>
+                    <td className="text-right">
+                      {owner && media.materialKind === "vault" && (
+                        <button
+                          type="button"
+                          className="btn btn-sm"
+                          disabled={
+                            writeOff !== null || busy ||
+                            media.isReady !== true ||
+                            media.hasError === true ||
+                            media.canView === false
+                          }
+                          onClick={() =>
+                            void copyMaterial({
+                              pageId,
+                              mediaRef: media.mediaRef,
+                              expectedObservationId: media.observationId,
+                              reason: "Owner reviewed vault material handoff",
+                            })
+                          }
+                        >
+                          Скопировать ID
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div className="card-footer flex-wrap">
+            <span>
+              {saved.data ? saved.data.totalMedia === 0 ? "0 файлов" : offset >= saved.data.totalMedia ? `На этой позиции файлов нет · всего ${saved.data.totalMedia}` : `${offset + 1}–${Math.min(offset + 50, saved.data.totalMedia)} из ${saved.data.totalMedia}` : "Количество неизвестно"}
+            </span>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                className="btn btn-sm"
+                disabled={busy || offset === 0}
+                onClick={() => setOffset(Math.max(0, offset - 50))}
+              >
+                Назад
+              </button>
+              <button
+                type="button"
+                className="btn btn-sm"
+                disabled={busy || offset + 50 >= (saved.data?.totalMedia ?? 0)}
+                onClick={() => setOffset(offset + 50)}
+              >
+                Далее
+              </button>
             </div>
           </div>
-          <ol className="card-body space-y-6">
+          {saved.data?.inventory.note && (
+            <div className="border-t border-border-light px-5 py-3">
+              <details className="help">
+                <summary>Подробнее</summary>
+                <div className="help-body text-xs">
+                  <p>{saved.data.inventory.note}</p>
+                </div>
+              </details>
+            </div>
+          )}
+        </section>
+      )}
+      {!unbound && (
+        <section className="card" aria-labelledby="media-uploads-title">
+          <div className="card-header">
+            <h2 id="media-uploads-title" className="card-title">Загрузки</h2>
+          </div>
+          {saved.data && !saved.isError && !saved.data.uploads.length && (
+            <div className="empty">
+              <p className="empty-title">Загрузок для этой страницы пока нет</p>
+            </div>
+          )}
+          {saved.data && saved.data.uploads.length > 0 && <ul className="divide-y divide-border-light">
+            {saved.data.uploads.map((job) => {
+              const status = job.reason === "indeterminate" ? "indeterminate" : job.uploadStatus ?? job.state;
+              const filename = saved.data?.sources.find((row) => row.id === job.sourceId)?.filename;
+              const canResume = owner && job.state === "blocked" && ["background_paused", "job_unavailable", "collection_off", "on_demand_only"].includes(job.reason ?? "");
+              const readiness = collectionPreview?.selection.length === 1 && collectionPreview.selection[0] === `vault_item:${job.mediaRef}`;
+              return (
+                <li key={job.id} className="space-y-2 px-5 py-4 text-sm">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="font-medium text-text-primary">{filename ?? destinationLabels[job.destination]}</span>
+                        <span className={status === "indeterminate" ? "badge badge-warning" : uploadStatusBadges[status] ?? "badge"} title={status}>
+                          {status === "indeterminate" ? "Результат неизвестен — нужна проверка" : uploadStatusLabels[status] ?? status}
+                        </span>
+                      </div>
+                      <p className="text-xs text-text-muted">{filename ? `${destinationLabels[job.destination]} · ` : ""}{formatDateTime(job.createdAt)}</p>
+                    </div>
+                    {(canResume || (owner && job.state === "complete")) && (
+                      <div className="flex flex-wrap gap-2">
+                        {canResume && (
+                          <button
+                            type="button"
+                            className="btn btn-sm btn-primary"
+                            disabled={writeOff !== null || busy || !pages.data || pages.data.backgroundPaused}
+                            onClick={() =>
+                              void run(async () => {
+                                await ofapiMediaActions.resume(job.id, {
+                                  expectedRowVersion: job.rowVersion,
+                                  expectedPolicyRevision: pages.data!.revision,
+                                  reason:
+                                    "Resume reviewed upload with original allowance",
+                                });
+                                setNotice("Загрузка продолжена с тем же файлом и лимитом.");
+                              })
+                            }
+                          >
+                            Продолжить загрузку
+                          </button>
+                        )}
+                        {owner && job.state === "complete" && (
+                          <>
+                            <button
+                              type="button"
+                              className="btn btn-sm btn-primary"
+                              disabled={writeOff !== null || busy}
+                              onClick={() =>
+                                void copyMaterial({
+                                  pageId,
+                                  jobId: job.id,
+                                  expectedRowVersion: job.rowVersion,
+                                  reason: "Owner reviewed upload handoff",
+                                })
+                              }
+                            >
+                              Скопировать ID
+                            </button>
+                            {job.destination === "vault" && job.mediaRef && (
+                              <button
+                                type="button"
+                                className="btn btn-sm"
+                                disabled={writeOff !== null || busy || !pages.data}
+                                onClick={() =>
+                                  setCollectionPreview({
+                                    selection: [`vault_item:${job.mediaRef}`],
+                                    revision: pages.data!.revision,
+                                    pageId,
+                                    pageLabel,
+                                  })
+                                }
+                              >
+                                Проверить готовность
+                              </button>
+                            )}
+                          </>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                  <p className="text-text-secondary">
+                    Обработка: {ready(job.isReady)} · Списано OnlyFans API:{" "}
+                    {job.actualCredits === null ? "ещё неизвестно" : credits(job.actualCredits)}
+                    {" "}· Учтено: {credits(job.spentCredits)}
+                  </p>
+                  {job.reason && job.reason !== "upload_processing" && job.reason !== "indeterminate" && (
+                    <p className="text-xs text-text-muted" title={job.reason}>
+                      {reasonLabels[job.reason] ?? job.reason.replaceAll("_", " ")}
+                    </p>
+                  )}
+                  {readiness && collectionConfirm}
+                </li>
+              );
+            })}
+          </ul>}
+        </section>
+      )}
+      {handoff && (
+        <section className="card" aria-label="ID для ChatGoose">
+          <div className="card-body space-y-3">
+            <p className="text-sm text-text-secondary" title={handoff.note}>
+              {handoff.materialKind === "vault"
+                ? "Файл медиатеки: этот ID можно использовать повторно — файл заново не загружается."
+                : "Вложение для одного сообщения: используйте ID один раз. Готовность превью может остаться неизвестной; если отправка закончится неизвестным результатом, ID останется заблокированным."}
+            </p>
+            <label className="block">
+              <span className="field-label">ID для ChatGoose</span>
+              <input
+                disabled={busy}
+                className="input font-mono"
+                readOnly
+                value={handoff.materialId}
+              />
+            </label>
+            <button type="button" className="btn btn-sm" onClick={() => setHandoff(null)}>
+              Скрыть ID
+            </button>
+          </div>
+        </section>
+      )}
+      {owner && !unbound && (
+        <details className="card sys-fold" aria-labelledby="media-upload-title">
+          <summary className="sys-fold-summary">
+            <span className="min-w-0 flex-1">
+              <span className="sys-fold-head">
+                <span id="media-upload-title" className="card-title">Загрузить файл в OnlyFans</span>
+                {ofapi.status === "off" && <span className="badge badge-off">{OFAPI_OFF_WORD.toLowerCase()}</span>}
+              </span>
+              <span className="card-description block">Фото, видео или аудио до 100 МБ. Загрузка стоит 3 кредита за каждый МБ, минимум 1 кредит.</span>
+            </span>
+          </summary>
+          <fieldset disabled={writeOff !== null} className="min-w-0">
+          <ol className="sys-fold-body space-y-6">
             <Step number={1} title="Файл" state={source ? "done" : "current"}>
               <div className="flex flex-wrap items-end gap-3">
                 <label className="w-full min-w-0 sm:w-auto sm:max-w-sm sm:flex-1">
@@ -428,7 +705,7 @@ export function OfapiMediaPage() {
           {(source || preview) && (
             <div className="border-t border-border-light px-5 py-3">
               <details className="help">
-                <summary>Технические детали</summary>
+                <summary>Подробнее</summary>
                 <div className="help-body break-all text-xs">
                   {source && <p>Файл: {source.mimeType} · {source.bytes} байт · SHA256 {source.sha256}</p>}
                   {source && <p>ID сохранённого файла: {source.id}</p>}
@@ -437,278 +714,8 @@ export function OfapiMediaPage() {
               </details>
             </div>
           )}
-        </section>
-      )}
-      {!unbound && (
-        <section className="card" aria-labelledby="media-uploads-title">
-          <div className="card-header">
-            <h2 id="media-uploads-title" className="card-title">Загрузки</h2>
-          </div>
-          {saved.data && !saved.isError && !saved.data.uploads.length && (
-            <div className="empty">
-              <p className="empty-title">Загрузок для этой страницы пока нет</p>
-            </div>
-          )}
-          {saved.data && saved.data.uploads.length > 0 && <ul className="divide-y divide-border-light">
-            {saved.data.uploads.map((job) => {
-              const status = job.reason === "indeterminate" ? "indeterminate" : job.uploadStatus ?? job.state;
-              const filename = saved.data?.sources.find((row) => row.id === job.sourceId)?.filename;
-              const canResume = owner && job.state === "blocked" && ["background_paused", "job_unavailable", "collection_off", "on_demand_only"].includes(job.reason ?? "");
-              const readiness = collectionPreview?.selection.length === 1 && collectionPreview.selection[0] === `vault_item:${job.mediaRef}`;
-              return (
-                <li key={job.id} className="space-y-2 px-5 py-4 text-sm">
-                  <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span className="font-medium text-text-primary">{filename ?? destinationLabels[job.destination]}</span>
-                        <span className={status === "indeterminate" ? "badge badge-warning" : uploadStatusBadges[status] ?? "badge"} title={status}>
-                          {status === "indeterminate" ? "Результат неизвестен — нужна проверка" : uploadStatusLabels[status] ?? status}
-                        </span>
-                      </div>
-                      <p className="text-xs text-text-muted">{filename ? `${destinationLabels[job.destination]} · ` : ""}{formatDateTime(job.createdAt)}</p>
-                    </div>
-                    {(canResume || (owner && job.state === "complete")) && (
-                      <div className="flex flex-wrap gap-2">
-                        {canResume && (
-                          <button
-                            type="button"
-                            className="btn btn-sm btn-primary"
-                            disabled={busy || !pages.data || pages.data.backgroundPaused}
-                            onClick={() =>
-                              void run(async () => {
-                                await ofapiMediaActions.resume(job.id, {
-                                  expectedRowVersion: job.rowVersion,
-                                  expectedPolicyRevision: pages.data!.revision,
-                                  reason:
-                                    "Resume reviewed upload with original allowance",
-                                });
-                                setNotice("Загрузка продолжена с тем же файлом и лимитом.");
-                              })
-                            }
-                          >
-                            Продолжить загрузку
-                          </button>
-                        )}
-                        {owner && job.state === "complete" && (
-                          <>
-                            <button
-                              type="button"
-                              className="btn btn-sm btn-primary"
-                              disabled={busy}
-                              onClick={() =>
-                                void copyMaterial({
-                                  pageId,
-                                  jobId: job.id,
-                                  expectedRowVersion: job.rowVersion,
-                                  reason: "Owner reviewed upload handoff",
-                                })
-                              }
-                            >
-                              Скопировать ID
-                            </button>
-                            {job.destination === "vault" && job.mediaRef && (
-                              <button
-                                type="button"
-                                className="btn btn-sm"
-                                disabled={busy || !pages.data}
-                                onClick={() =>
-                                  setCollectionPreview({
-                                    selection: [`vault_item:${job.mediaRef}`],
-                                    revision: pages.data!.revision,
-                                    pageId,
-                                    pageLabel,
-                                  })
-                                }
-                              >
-                                Проверить готовность
-                              </button>
-                            )}
-                          </>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                  <p className="text-text-secondary">
-                    Обработка: {ready(job.isReady)} · Списано OnlyFans API:{" "}
-                    {job.actualCredits === null ? "ещё неизвестно" : credits(job.actualCredits)}
-                    {" "}· Учтено: {credits(job.spentCredits)}
-                  </p>
-                  {job.reason && job.reason !== "upload_processing" && job.reason !== "indeterminate" && (
-                    <p className="text-xs text-text-muted" title={job.reason}>
-                      {reasonLabels[job.reason] ?? job.reason.replaceAll("_", " ")}
-                    </p>
-                  )}
-                  {readiness && collectionConfirm}
-                </li>
-              );
-            })}
-          </ul>}
-        </section>
-      )}
-      {handoff && (
-        <section className="card" aria-label="ID для ChatGoose">
-          <div className="card-body space-y-3">
-            <p className="text-sm text-text-secondary" title={handoff.note}>
-              {handoff.materialKind === "vault"
-                ? "Файл медиатеки: этот ID можно использовать повторно — файл заново не загружается."
-                : "Вложение для одного сообщения: используйте ID один раз. Готовность превью может остаться неизвестной; если отправка закончится неизвестным результатом, ID останется заблокированным."}
-            </p>
-            <label className="block">
-              <span className="field-label">ID для ChatGoose</span>
-              <input
-                disabled={busy}
-                className="input font-mono"
-                readOnly
-                value={handoff.materialId}
-              />
-            </label>
-            <button type="button" className="btn btn-sm" onClick={() => setHandoff(null)}>
-              Скрыть ID
-            </button>
-          </div>
-        </section>
-      )}
-      {!unbound && (
-        <section className="card" aria-labelledby="media-catalog-title">
-          <div className="card-header">
-            <div className="min-w-0">
-              <h2 id="media-catalog-title" className="card-title">Медиатека</h2>
-              <p className="card-description">
-                {saved.data
-                  ? `${inventoryLabels[saved.data.inventory.state] ?? "Полнота неизвестна"}${saved.data.inventory.completedAt ? ` · ${formatDateTime(saved.data.inventory.completedAt)}` : ""}`
-                  : saved.isError ? "Недоступна" : pageId ? "Загружаем…" : "Выберите страницу"}
-              </p>
-            </div>
-            {owner && (
-              <button
-                type="button"
-                className="btn btn-sm"
-                disabled={busy || !pageId || !pages.data}
-                onClick={() =>
-                  setCollectionPreview({
-                    selection: [
-                      "vault_inventory",
-                      "vault_lists",
-                      "release_forms",
-                      "taggable_users",
-                    ],
-                    revision: pages.data!.revision,
-                    pageId,
-                    pageLabel,
-                  })
-                }
-              >
-                Обновить каталог
-              </button>
-            )}
-          </div>
-          {collectionPreview && collectionPreview.selection.length > 1 && <div className="px-5 pt-4">{collectionConfirm}</div>}
-          <div className="overflow-x-auto">
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th>Файл</th>
-                  <th>Готовность</th>
-                  <th>Размер</th>
-                  <th>Согласия</th>
-                  <th><span className="sr-only">Действие</span></th>
-                </tr>
-              </thead>
-              <tbody>
-                {saved.data && !saved.isError && saved.data.media.length === 0 && <tr><td colSpan={5} className="muted">{offset > 0 ? "На этой позиции файлов нет. Вернитесь на предыдущую страницу." : "В сохранённом каталоге нет файлов. Это не значит, что медиатека в OnlyFans пуста."}</td></tr>}
-                {saved.data?.media.map((media) => (
-                  <tr key={`${media.materialKind}:${media.mediaRef}`}>
-                    <td title={`ID ${media.mediaRef}`}>
-                      <span className="block text-text-primary">
-                        {media.filename ?? (media.materialKind === "cdn" ? "Вложение для сообщения" : `Файл ${media.mediaRef}`)}
-                      </span>
-                      <span className="block text-xs text-text-muted">
-                        {media.materialKind === "cdn" ? "Для одного сообщения" : "Медиатека"}
-                        {media.providerType ? ` · ${providerTypeLabels[media.providerType] ?? media.providerType}` : ""}
-                      </span>
-                    </td>
-                    <td>
-                      {media.hasError
-                        ? <span className="badge badge-danger">Ошибка у OnlyFans</span>
-                        : <span className={readyBadge(media.isReady)}>{ready(media.isReady)}</span>}
-                    </td>
-                    <td className="muted">
-                      {media.width !== null && media.height !== null ? `${media.width}×${media.height} · ` : ""}
-                      {media.bytes === null ? "размер неизвестен" : formatSize(media.bytes)}
-                    </td>
-                    <td className="muted">
-                      {media.releaseForms.length
-                        ? media.releaseForms
-                            .map(
-                              (form) =>
-                                `${form.name ?? form.id}${form.status ? ` (${releaseFormStatusLabels[form.status] ?? form.status})` : ""}`,
-                            )
-                            .join(", ")
-                        : "Нет"}
-                    </td>
-                    <td className="text-right">
-                      {owner && media.materialKind === "vault" && (
-                        <button
-                          type="button"
-                          className="btn btn-sm"
-                          disabled={
-                            busy ||
-                            media.isReady !== true ||
-                            media.hasError === true ||
-                            media.canView === false
-                          }
-                          onClick={() =>
-                            void copyMaterial({
-                              pageId,
-                              mediaRef: media.mediaRef,
-                              expectedObservationId: media.observationId,
-                              reason: "Owner reviewed vault material handoff",
-                            })
-                          }
-                        >
-                          Скопировать ID
-                        </button>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          <div className="card-footer flex-wrap">
-            <span>
-              {saved.data ? saved.data.totalMedia === 0 ? "0 файлов" : offset >= saved.data.totalMedia ? `На этой позиции файлов нет · всего ${saved.data.totalMedia}` : `${offset + 1}–${Math.min(offset + 50, saved.data.totalMedia)} из ${saved.data.totalMedia}` : "Количество неизвестно"}
-            </span>
-            <div className="flex gap-2">
-              <button
-                type="button"
-                className="btn btn-sm"
-                disabled={busy || offset === 0}
-                onClick={() => setOffset(Math.max(0, offset - 50))}
-              >
-                Назад
-              </button>
-              <button
-                type="button"
-                className="btn btn-sm"
-                disabled={busy || offset + 50 >= (saved.data?.totalMedia ?? 0)}
-                onClick={() => setOffset(offset + 50)}
-              >
-                Далее
-              </button>
-            </div>
-          </div>
-          {saved.data?.inventory.note && (
-            <div className="border-t border-border-light px-5 py-3">
-              <details className="help">
-                <summary>Технические детали</summary>
-                <div className="help-body text-xs">
-                  <p>{saved.data.inventory.note}</p>
-                </div>
-              </details>
-            </div>
-          )}
-        </section>
+          </fieldset>
+        </details>
       )}
     </div>
   );

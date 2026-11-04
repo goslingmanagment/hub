@@ -1,20 +1,25 @@
 import { useMemo } from "react";
 import { Link, useParams } from "react-router";
-import { useAdminSyncRunDetail } from "@/api/queries";
-import { getEventDisplaySeverity, SeverityBadge } from "./EventDetailPanel.js";
-import { PlatformBadge } from "@/components/shared/PlatformBadge";
-import { StatusPanel } from "@/components/shared/StatusPanel";
-import { StaleDataNotice } from "@/components/shared/StaleDataNotice";
-import { formatDateTime, formatRelativeTime } from "@/lib/format";
 import type { SyncRunDetailResponse } from "@agency_hub_core/contracts";
+import { useAdminSyncRunDetail } from "@/api/queries";
+import { staleDataText } from "@/components/shared/QueryNotice";
+import { StatusPanel } from "@/components/shared/StatusPanel";
+import { TableSkeleton } from "@/components/shared/TableSkeleton";
+import { Notice } from "@/components/ui/Notice";
+import { PageHeader } from "@/components/ui/PageHeader";
+import { formatDateTime, formatMomentAgo } from "@/lib/format";
+import { buildPageRoute } from "@/lib/navigation";
+import { syncStreamLabel } from "@/pages/settings/sync/syncVocabulary";
+import { freshOf, platformName, useOfapi } from "../shared.js";
+import { getEventDisplaySeverity, SeverityBadge } from "./EventDetailPanel.js";
 
 const RUN_STATES: Record<string, { label: string; badge: string }> = {
-  running: { label: "Идёт", badge: "badge badge-info" },
-  success: { label: "Успешно", badge: "badge badge-success" },
-  completed: { label: "Завершён", badge: "badge badge-success" },
+  running: { label: "Идёт", badge: "badge badge-bare badge-info" },
+  success: { label: "Успешно", badge: "badge badge-bare badge-success" },
+  completed: { label: "Завершён", badge: "badge badge-bare badge-success" },
   partial: { label: "Частично", badge: "badge badge-warning" },
   failed: { label: "Ошибка", badge: "badge badge-danger" },
-  skipped: { label: "Пропущен", badge: "badge" },
+  skipped: { label: "Пропущен", badge: "badge badge-off" },
 };
 
 const ATTEMPT_STATES: Record<string, string> = {
@@ -25,126 +30,103 @@ const ATTEMPT_STATES: Record<string, string> = {
   failed: "ошибка",
 };
 
-function runState(state: string) {
-  return RUN_STATES[state] ?? { label: state.replaceAll("_", " "), badge: "badge" };
-}
-
 function resolveEventCode(details: Record<string, unknown> | null, fallback: string | null) {
   return typeof details?.code === "string" ? details.code : fallback;
 }
 
-function BackToLog() {
-  return (
-    <Link to="/system/dev/log" className="btn btn-ghost btn-sm -ml-2.5 mb-3">
-      &larr; Журнал
-    </Link>
-  );
-}
+const TO_LOG = <Link to="/system/dev/log" className="btn btn-sm">К журналу</Link>;
 
-/** System → a sync run, opened from a row of «Журнал»: its events and the
- *  HTTP attempts of each stream. */
+/** «Запуск сбора №N»: one run of the old collection, its events and its requests by stream (§15). */
 export function SyncStatusPage() {
   const { runId: rawRunId } = useParams<{ runId: string }>();
   const runId = Number(rawRunId ?? "0");
   const isValidRunId = Number.isInteger(runId) && runId > 0;
-  const { data, isLoading, isError, error } = useAdminSyncRunDetail(isValidRunId ? runId : 0);
+  const query = useAdminSyncRunDetail(isValidRunId ? runId : 0);
+  const { data, isLoading } = query;
+  const ofapi = useOfapi();
+  const off = ofapi.status === "off" && data?.run.platform === "onlyfans";
 
   const attemptsByStream = useMemo<Map<string, SyncRunDetailResponse["attempts"]>>(() => {
     const grouped = new Map<string, SyncRunDetailResponse["attempts"]>();
-    if (!data) {
-      return grouped;
-    }
-    for (const attempt of data.attempts) {
+    for (const attempt of data?.attempts ?? []) {
       const existing = grouped.get(attempt.stream);
-      if (existing) {
-        existing.push(attempt);
-      } else {
-        grouped.set(attempt.stream, [attempt]);
-      }
+      if (existing) existing.push(attempt);
+      else grouped.set(attempt.stream, [attempt]);
     }
     return grouped;
   }, [data]);
 
   if (!isValidRunId) {
     return (
-      <div>
-        <BackToLog />
-        <StatusPanel
-          title="Запуск не выбран"
-          description="Откройте запуск из журнала: строка события → «Открыть запуск синка»."
-          tone="error"
-        />
+      <div className="space-y-6">
+        <PageHeader title="Запуск сбора" />
+        <div className="card"><StatusPanel title="Такого запуска нет" action={TO_LOG} /></div>
       </div>
     );
   }
-
   if (isLoading && !data) {
     return (
-      <div>
-        <BackToLog />
-        <StatusPanel title="Загружаем запуск" />
+      <div className="space-y-6">
+        <PageHeader title={`Запуск сбора №${runId}`} />
+        <div className="card"><TableSkeleton rows={5} columns={5} /></div>
       </div>
     );
   }
-
   if (!data) {
     return (
-      <div>
-        <BackToLog />
-        <StatusPanel title="Запуск не загрузился" description="Hub не вернул данные этого запуска." tone="error" />
+      <div className="space-y-6">
+        <PageHeader title={`Запуск сбора №${runId}`} />
+        <div className="card"><StatusPanel title="Запуск не загрузился" description="Hub не вернул данные этого запуска." action={TO_LOG} /></div>
       </div>
     );
   }
 
-  const state = runState(data.run.status);
+  const state = RUN_STATES[data.run.status] ?? { label: data.run.status.replaceAll("_", " "), badge: "badge badge-off" };
+  const description = (
+    <span className="sys-run-line">
+      <Link to={buildPageRoute(data.run.pageLabel)} className="link">{data.run.pageLabel}</Link>
+      <span>· {platformName(data.run.platform)} ·</span>
+      <span className={off ? "badge badge-off" : state.badge} data-run-state={data.run.status}>{state.label}</span>
+      <span>· Начат {formatDateTime(data.run.startedAt, { yearUnlessCurrent: true })}</span>
+      {data.run.finishedAt && <span>· Завершён {formatDateTime(data.run.finishedAt, { yearUnlessCurrent: true })}</span>}
+    </span>
+  );
 
   return (
-    <div>
-      <BackToLog />
-      <div className="mb-5">
-        <h2 className="section-title">Запуск синка #{data.run.runId}</h2>
-        <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-sm text-text-secondary">
-          <span className="font-medium text-text-primary">{data.run.pageLabel}</span>
-          <PlatformBadge platform={data.run.platform} />
-          <span className={state.badge} data-run-state={data.run.status}>{state.label}</span>
-          <span>Начат {formatDateTime(data.run.startedAt)}</span>
-          {data.run.finishedAt && <span>Завершён {formatDateTime(data.run.finishedAt)}</span>}
-        </div>
-      </div>
+    <div className="space-y-6">
+      <PageHeader title={`Запуск сбора №${data.run.runId}`} description={description} fresh={freshOf(query)} />
+      {query.isError && (
+        <Notice tone="warning" role="alert" action={<button type="button" className="btn btn-sm" onClick={() => void query.refetch()}>Повторить</button>}>
+          {staleDataText(query.dataUpdatedAt)}
+        </Notice>
+      )}
 
-      <div className="space-y-5">
-        {isError && <StaleDataNotice error={error} />}
-
-        <section className="card" aria-labelledby="run-events-title">
-          <div className="card-header">
-            <h3 id="run-events-title" className="card-title">События</h3>
-          </div>
-          <div className="overflow-x-auto">
-            <table className="data-table">
+      <section className="card" aria-labelledby="run-events-title">
+        <div className="card-header"><h2 id="run-events-title" className="card-title">События</h2></div>
+        {data.events.length === 0 ? (
+          <StatusPanel title="У этого запуска нет событий." />
+        ) : (
+          <div className="table-wrap">
+            <table className="data-table data-table-dense">
               <thead>
                 <tr>
-                  {["Когда", "Поток", "Важность", "Тип", "Сообщение"].map((label) => <th key={label}>{label}</th>)}
+                  <th>Когда</th>
+                  <th>Поток</th>
+                  <th>Важность</th>
+                  <th>Тип</th>
+                  <th>Сообщение</th>
                 </tr>
               </thead>
               <tbody>
-                {data.events.length === 0 && (
-                  <tr>
-                    <td colSpan={5} className="py-8 text-center text-text-muted">У этого запуска нет событий.</td>
-                  </tr>
-                )}
                 {data.events.map((event) => {
                   const eventCode = resolveEventCode(event.details, event.eventType);
-                  const displaySeverity = getEventDisplaySeverity({
-                    eventCode,
-                    severity: event.severity,
-                    details: event.details,
-                  });
+                  const displaySeverity = getEventDisplaySeverity({ eventCode, severity: event.severity, details: event.details });
                   return (
                     <tr key={event.id}>
-                      <td className="muted whitespace-nowrap">{formatRelativeTime(event.emittedAt)}</td>
-                      <td>{event.stream}</td>
-                      <td><SeverityBadge severity={displaySeverity} /></td>
-                      <td className="muted font-mono text-xs">{event.eventType}</td>
+                      <td className="muted whitespace-nowrap">{formatMomentAgo(event.emittedAt)}</td>
+                      <td className="whitespace-nowrap">{syncStreamLabel(event.stream)}</td>
+                      <td className="status-col"><SeverityBadge severity={displaySeverity} off={off} /></td>
+                      <td><span className="sys-code">{event.eventType}</span></td>
                       <td className="muted">{event.message}</td>
                     </tr>
                   );
@@ -152,53 +134,49 @@ export function SyncStatusPage() {
               </tbody>
             </table>
           </div>
-        </section>
+        )}
+      </section>
 
-        <section className="card" aria-labelledby="run-attempts-title">
-          <div className="card-header">
-            <div>
-              <h3 id="run-attempts-title" className="card-title">Попытки запросов</h3>
-              <p className="card-description">HTTP-запросы запуска по потокам.</p>
-            </div>
-          </div>
-          {data.attempts.length === 0 ? (
-            <p className="card-body text-sm text-text-muted">У этого запуска нет попыток запросов.</p>
-          ) : (
-            <div className="space-y-4 p-4 sm:p-5">
-              {[...attemptsByStream.entries()].map(([stream, attempts]) => (
-                <div key={stream} className="overflow-hidden rounded-lg border border-border">
-                  <p className="border-b border-border bg-hover-alt px-4 py-2 text-sm font-semibold text-text-primary">{stream}</p>
-                  <div className="overflow-x-auto">
-                    <table className="data-table">
-                      <thead>
-                        <tr>
-                          {["Попытка", "Состояние", "HTTP", "Начата", "Длительность", "Ошибка"].map((label) => (
-                            <th key={label} className={label === "Длительность" ? "num" : undefined}>{label}</th>
-                          ))}
+      <section className="card" aria-labelledby="run-attempts-title">
+        <div className="card-header"><h2 id="run-attempts-title" className="card-title">Запросы запуска</h2></div>
+        {data.attempts.length === 0 ? (
+          <StatusPanel title="У этого запуска нет попыток запросов." />
+        ) : (
+          <div className="card-body sys-stack">
+            {[...attemptsByStream.entries()].map(([stream, attempts]) => (
+              <div key={stream}>
+                <h3 className="sys-subtitle">{syncStreamLabel(stream)}</h3>
+                <div className="table-wrap mt-2">
+                  <table className="data-table data-table-dense">
+                    <thead>
+                      <tr>
+                        <th>Попытка</th>
+                        <th>Состояние</th>
+                        <th className="num">HTTP</th>
+                        <th>Начата</th>
+                        <th className="num">Длительность</th>
+                        <th>Ошибка</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {attempts.map((attempt) => (
+                        <tr key={attempt.attemptId}>
+                          <td className="tabular-nums">№ {attempt.attemptNumber}</td>
+                          <td className="muted">{ATTEMPT_STATES[attempt.state] ?? attempt.state}</td>
+                          <td className="num muted">{attempt.httpStatus ?? "—"}</td>
+                          <td className="muted whitespace-nowrap">{formatDateTime(attempt.startedAt, { yearUnlessCurrent: true })}</td>
+                          <td className="num">{attempt.durationMs != null ? `${attempt.durationMs.toLocaleString("ru-RU")} мс` : "—"}</td>
+                          <td className="muted">{attempt.errorMessage ?? "—"}</td>
                         </tr>
-                      </thead>
-                      <tbody>
-                        {attempts.map((attempt) => (
-                          <tr key={attempt.attemptId}>
-                            <td>#{attempt.attemptNumber}</td>
-                            <td className="muted">{ATTEMPT_STATES[attempt.state] ?? attempt.state}</td>
-                            <td className="muted tabular-nums">{attempt.httpStatus ?? "—"}</td>
-                            <td className="muted whitespace-nowrap">{formatDateTime(attempt.startedAt)}</td>
-                            <td className="num">
-                              {attempt.durationMs != null ? `${attempt.durationMs.toLocaleString("ru-RU")} мс` : "—"}
-                            </td>
-                            <td className="muted">{attempt.errorMessage ?? "—"}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
-              ))}
-            </div>
-          )}
-        </section>
-      </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
     </div>
   );
 }

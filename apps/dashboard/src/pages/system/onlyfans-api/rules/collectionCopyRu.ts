@@ -39,12 +39,12 @@ export const CATEGORY_COPY_RU: Record<string, CategoryCopy> = {
     why: "Переходы и конверсия смарт-ссылок",
   },
   vault_catalog: {
-    label: "Хранилище: каталог",
+    label: "Медиатека: каталог",
     why: "Поиск медиа и связи с постами, без скачивания файлов",
   },
   vault_files: {
     label: "Загрузка своих медиа",
-    why: "Загрузка своего файла в хранилище OnlyFans с отдельным подтверждением",
+    why: "Загрузка своего файла в медиатеку OnlyFans с отдельным подтверждением",
   },
   balances: {
     label: "Балансы и выплаты",
@@ -60,7 +60,7 @@ export const CATEGORY_COPY_RU: Record<string, CategoryCopy> = {
   },
   media_previews: {
     label: "Картинки в десктопе",
-    why: "Превью и фото в чате, галерее и хранилище ChatGoose Desktop; бесплатные ссылки работают и без включения",
+    why: "Превью и фото в чате, галерее и медиатеке ChatGoose Desktop; бесплатные ссылки работают и без включения",
   },
   account_settings: {
     label: "Приветственное сообщение",
@@ -149,7 +149,7 @@ export const PRICE_UNIT_LABELS_RU: Record<string, string> = {
 export const WEBHOOK_STATE_LABELS_RU: Record<string, string> = {
   stable: "работает",
   create_prepared: "создание подготовлено",
-  create_dispatching: "создаётся у провайдера",
+  create_dispatching: "создаётся у OnlyFans API",
   create_indeterminate: "создание не подтверждено",
   create_failed: "ошибка создания",
   update_prepared: "обновление подготовлено",

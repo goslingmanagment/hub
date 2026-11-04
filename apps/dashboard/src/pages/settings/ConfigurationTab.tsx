@@ -4,14 +4,15 @@ import { Search, RefreshCw, X } from "lucide-react";
 import { Link, useInRouterContext, useLocation, useParams } from "react-router";
 import type { ConfigItem, ConfigViewResponse } from "@agency_hub_core/contracts";
 import { useAdminConfig } from "@/api/adminConfig";
-import { FilterButtons } from "@/components/shared/FilterButtons";
+import { PageHeader } from "@/components/ui/PageHeader";
+import { Segmented } from "@/components/ui/Segmented";
 import { formatDateTime } from "@/lib/format";
 import { CONFIG_COPY_RU, SUBSYSTEM_COPY_RU } from "@/pages/settings/configCopyRu";
 import { findHubFeature, featureReturnHref, type HubFeature } from "./featureCatalog.js";
 import { CONFIG_MODE_CHOICES, humanConfigValue } from "./configurationChoices.js";
 
 import { ConfigEditor, BooleanConfigEditor, liveEditorKind } from "./ConfigurationEditors.js";
-import { CONFIG_FILTERS, CONFIG_SUBSYSTEM_LABELS, configSubsystemOrder, matchesConfigFilter, matchesConfigSearch, runningDiffersFromDefault, type ConfigFilter } from "./configurationView.js";
+import { CONFIG_FILTERS, CONFIG_SUBSYSTEM_LABELS, configRiskBadges, configSubsystemOrder, matchesConfigFilter, matchesConfigSearch, runningDiffersFromDefault, type ConfigFilter } from "./configurationView.js";
 export { booleanPatchBody, liveEditorKind, resolveBooleanToggle } from "./ConfigurationEditors.js";
 
 function formatScalar(value: string | number | boolean | null): string {
@@ -63,7 +64,7 @@ function rowRank(item: ConfigItem): number {
   return 1;
 }
 
-function RunningCell({ item, friendly = false }: { item: ConfigItem; friendly?: boolean }) {
+export function RunningCell({ item, friendly = false }: { item: ConfigItem; friendly?: boolean }) {
   // Mode keys read as words everywhere; page lists only in a feature's view
   // (the full list keeps the raw CSV the expert editor writes).
   const human = friendly || Boolean(CONFIG_MODE_CHOICES[item.key]);
@@ -126,29 +127,16 @@ function SettingLabel({ item }: { item: ConfigItem }) {
       <div className="break-words text-sm font-semibold leading-6 text-text-primary">{settingTitle(item)}</div>
       {copy?.short && <p id={`config-description-${item.key}`} className="mt-1 text-xs leading-relaxed text-text-secondary">{copy.short}</p>}
       <div className="mt-2 flex flex-wrap items-center gap-1.5 empty:hidden">
-        {item.drift && (
-          <Badge tone="badge-danger" title="Запущенные процессы сообщают разные значения">
-            значения различаются
-          </Badge>
-        )}
-        {item.costWarning && (
-          <Badge tone="badge-warning" title={CONFIG_COPY_RU[item.key]?.warning ?? item.costWarning}>
-            влияет на расходы
-          </Badge>
-        )}
-        {item.destructive && (
-          <Badge tone="badge-danger" title="Снижение или очистка безвозвратно удаляет данные">
-            может удалить данные
-          </Badge>
-        )}
+        {configRiskBadges(item).map((badge) => <Badge key={badge.text} tone={badge.tone}>{badge.text}</Badge>)}
       </div>
+      {item.destructive && <p className="mt-1 text-xs text-text-secondary">Снижение или очистка безвозвратно удаляет данные.</p>}
       <details className="help mt-2">
         <summary aria-label={`Подробнее: ${settingTitle(item)}`}>Подробнее</summary>
         <div className="help-body">
           {copy?.long && <p>{copy.long}</p>}
           {item.costWarning && <p className="text-warning-dark">{copy?.warning ?? item.costWarning}</p>}
           <details className="help">
-            <summary>Технические детали</summary>
+            <summary>Подробнее</summary>
             <div className="help-body text-xs">
               <p>{item.label}</p>
               {item.note && <p>{item.note}</p>}
@@ -171,7 +159,7 @@ function SettingRow({ item, friendly = false }: { item: ConfigItem; friendly?: b
     <div
       id={`config-${item.key}`}
       tabIndex={-1}
-      className="config-setting"
+      className={`config-setting${item.runtimeApply === "none" ? " config-setting-server" : ""}`}
     >
       <div className="config-setting-main">
         <SettingLabel item={item} />
@@ -218,7 +206,7 @@ function RestartPendingBanner({ data, onReveal }: { data: ConfigViewResponse; on
       {pendingRestart.length > 0 && (
         <div className="notice notice-warning">
           <div className="min-w-0">
-            <div className="font-medium">Сохранено — нужен перезапуск Hub: {pendingRestart.length}</div>
+            <div className="font-medium">Сохранено: нужен перезапуск Hub: {pendingRestart.length}</div>
             <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1">
               {pendingRestart.map((item) => <a key={item.key} href={`#config-${item.key}`} onClick={() => onReveal(item.key)} className="underline underline-offset-2">{settingTitle(item)}</a>)}
             </div>
@@ -240,7 +228,7 @@ function RestartPendingBanner({ data, onReveal }: { data: ConfigViewResponse; on
               })}
             </ul>
             <details className="help mt-2">
-              <summary>Технические детали</summary>
+              <summary>Подробнее</summary>
               <ul className="help-body break-all font-mono text-xs">
                 {skipped.map((s) => <li key={`${s.role}:${s.key}`}>{s.role}: {s.key} — {s.reason}</li>)}
               </ul>
@@ -287,8 +275,9 @@ function ConfigurationView({ hash, feature = null, featureBackTo, allSettingsHre
   const featureBackRef = useRef<HTMLAnchorElement>(null);
   const [query, setQuery] = useState("");
   const [subsystem, setSubsystem] = useState("");
-  // The full list opens on every setting; "Без перезапуска" is one filter among others.
-  const [filter, setFilter] = useState<ConfigFilter>("all");
+  // The full list opens on what can be changed here; one feature's view on all of its settings.
+  const defaultFilter: ConfigFilter = feature ? "all" : "editable";
+  const [filter, setFilter] = useState<ConfigFilter>(defaultFilter);
   const [scopeExpanded, setScopeExpanded] = useState(false);
   const [pendingAnchor, setPendingAnchor] = useState<string | null>(null);
   const groups = useMemo(() => [...(data?.subsystems ?? [])].sort((a, b) => configSubsystemOrder(a.subsystem) - configSubsystemOrder(b.subsystem)), [data]);
@@ -298,14 +287,14 @@ function ConfigurationView({ hash, feature = null, featureBackTo, allSettingsHre
     && (!subsystem || item.subsystem === subsystem) && matchesConfigSearch(item, query)), [allItems, query, subsystem, feature, scopeExpanded]);
   const visibleKeys = useMemo(() => new Set(searchMatches.filter((item) => matchesConfigFilter(item, filter)).map((item) => item.key)), [searchMatches, filter]);
 
-  function resetFilters() { setQuery(""); setSubsystem(""); setFilter("all"); setScopeExpanded(false); }
+  function resetFilters() { setQuery(""); setSubsystem(""); setFilter(defaultFilter); setScopeExpanded(false); }
   function reveal(key: string) {
     setQuery(""); setSubsystem(""); setFilter("all"); setPendingAnchor(key);
     if (feature && !feature.keys.includes(key)) setScopeExpanded(true);
   }
 
   useEffect(() => {
-    setQuery(""); setSubsystem(""); setFilter("all");
+    setQuery(""); setSubsystem(""); setFilter(feature ? "all" : "editable");
     setScopeExpanded(false); setPendingAnchor(null);
   }, [feature]);
 
@@ -327,7 +316,8 @@ function ConfigurationView({ hash, feature = null, featureBackTo, allSettingsHre
 
   if (!data) {
     return <div role={isError ? "alert" : "status"} className="card empty">
-      <p className="empty-title">{isLoading ? "Загружаем настройки…" : "Не удалось загрузить настройки."}</p>
+      <p className="empty-title">{isLoading ? "Загружаем настройки…" : "Hub не ответил"}</p>
+      {!isLoading && <p className="empty-text">Настройки не пришли. Это не ноль: значения есть, просто экран их не получил.</p>}
       {isError && <div className="empty-actions"><button type="button" onClick={() => void refetch()} className="btn">Повторить</button></div>}
     </div>;
   }
@@ -336,7 +326,8 @@ function ConfigurationView({ hash, feature = null, featureBackTo, allSettingsHre
   const offline = data.roleStatuses.filter((role) => role.status !== "active");
 
   return (
-    <div className="config-screen space-y-5">
+    <div className="config-screen space-y-6">
+      {!feature && <PageHeader fresh={{ at: data.generatedAt, refreshing: isFetching, onRefresh: () => void refetch() }} />}
       {feature && (
         <div className="card card-body">
           <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-sm">
@@ -367,8 +358,8 @@ function ConfigurationView({ hash, feature = null, featureBackTo, allSettingsHre
         </div>
       )}
       {isError && (
-        <div role="alert" className="notice notice-danger flex-wrap items-center justify-between">
-          <span>Не удалось обновить настройки. Показаны значения на {formatSeen(data.generatedAt)}.</span>
+        <div role="alert" className="notice notice-warning flex-wrap items-center justify-between">
+          <span>Не удалось обновить. Показаны значения на {formatSeen(data.generatedAt)}.</span>
           <button type="button" className="btn btn-sm" disabled={isFetching} onClick={() => void refetch()}>Повторить</button>
         </div>
       )}
@@ -405,21 +396,24 @@ function ConfigurationView({ hash, feature = null, featureBackTo, allSettingsHre
           </label>
         </div>
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <FilterButtons
-            filters={CONFIG_FILTERS.map((entry) => ({ key: entry.key, label: entry.label, count: filterCounts[entry.key] }))}
-            active={filter}
-            onChange={(key) => setFilter(key as ConfigFilter)}
+          <Segmented
+            label="Какие настройки"
+            value={filter}
+            options={CONFIG_FILTERS.map((entry) => ({ value: entry.key, label: entry.label, count: filterCounts[entry.key] }))}
+            onChange={(key) => setFilter(key)}
           />
           <div className="flex flex-wrap items-center gap-2 text-xs text-text-secondary">
             <span className="shrink-0" role="status" aria-live="polite">Показано {visibleKeys.size} из {allItems.length}</span>
-            {(query || subsystem || filter !== "all") && <button type="button" onClick={resetFilters} className="btn btn-ghost btn-sm"><X size={14} aria-hidden="true" />Сбросить фильтры</button>}
-            <button type="button" onClick={() => void refetch()} disabled={isFetching} className="btn btn-ghost btn-sm">
-              <RefreshCw size={14} className={isFetching ? "animate-spin" : ""} aria-hidden="true" />
-              {isFetching ? "Обновляем…" : "Обновить"}
-            </button>
+            {(query || subsystem || filter !== defaultFilter) && <button type="button" onClick={resetFilters} className="btn btn-ghost btn-sm"><X size={14} aria-hidden="true" />Сбросить фильтры</button>}
+            {feature && (
+              <button type="button" onClick={() => void refetch()} disabled={isFetching} className="btn btn-ghost btn-sm">
+                <RefreshCw size={14} className={isFetching ? "animate-spin" : ""} aria-hidden="true" />
+                {isFetching ? "Обновляем…" : "Обновить"}
+              </button>
+            )}
           </div>
         </div>
-        {!query && filter === "live" && <p className="text-xs text-text-muted">Изменения в этом списке начнут работать без перезапуска — обычно в течение минуты.</p>}
+        {!query && filter === "editable" && <p className="text-xs text-text-secondary">Изменения в этом списке начнут работать без перезапуска, обычно в течение минуты.</p>}
       </div>
 
       <RestartPendingBanner data={data} onReveal={reveal} />
@@ -427,7 +421,7 @@ function ConfigurationView({ hash, feature = null, featureBackTo, allSettingsHre
       {visibleKeys.size === 0 && (
         <div className="card empty">
           <p className="empty-title">{query ? "По этому запросу ничего не нашлось" : filter === "attention" ? "Всё в порядке" : "Здесь пока нет таких настроек"}</p>
-          <p className="empty-text">{query ? "Попробуйте более короткое название или ключ настройки." : filter === "attention" ? "Среди выбранных настроек нет ожидающих применения или требующих проверки." : filter === "live" ? "Посмотрите настройки, для которых нужен перезапуск или доступ к серверу." : "Выберите другой раздел или откройте полный список."}</p>
+          <p className="empty-text">{query ? "Попробуйте более короткое название или ключ настройки." : filter === "attention" ? "Среди выбранных настроек нет ожидающих применения или требующих проверки." : filter === "editable" ? "Посмотрите настройки, которые меняются только на сервере." : "Выберите другой раздел или откройте полный список."}</p>
           <div className="empty-actions empty:hidden">
             {query && subsystem ? <button type="button" onClick={() => { setSubsystem(""); setFilter("all"); }} className="btn btn-sm">Искать во всех разделах</button>
               : filter !== "all" && <button type="button" onClick={() => setFilter("all")} className="btn btn-sm">Показать все настройки</button>}
@@ -481,7 +475,7 @@ function ConfigurationView({ hash, feature = null, featureBackTo, allSettingsHre
           )}
           {data.instances.length > 0 && (
             <details className="help">
-              <summary>Технические детали</summary>
+              <summary>Подробнее</summary>
               <ul className="help-body break-all font-mono text-xs">
                 {data.instances.map((instance) => (
                   <li key={`${instance.role}:${instance.instanceId}`}>{instance.role} · {instance.instanceId}{instance.imageTag ? ` · ${instance.imageTag}` : ""}</li>

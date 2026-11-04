@@ -328,7 +328,7 @@ export function rowState(view: CategoryView, backgroundPaused: boolean): RowStat
     return {
       tone: "accent",
       label: "в работе",
-      detail: `${view.usage.inFlight} ${ruPlural(view.usage.inFlight, "запрос", "запроса", "запросов")} в полёте`,
+      detail: `${view.usage.inFlight} ${ruPlural(view.usage.inFlight, "запрос", "запроса", "запросов")} ещё выполняются`,
     };
   }
   const budgeted = view.policies.filter((policy) => policy.source !== "legacy_baseline");
@@ -340,7 +340,7 @@ export function rowState(view: CategoryView, backgroundPaused: boolean): RowStat
     return {
       tone: "warning",
       label: "лимит дня достигнут",
-      detail: `${fmtCredits(worst.usage.reservedCreditsToday)} из ${fmtCredits(worst.dailyCreditLimit)} кр · продолжит 00:00 UTC`,
+      detail: `${fmtCredits(worst.usage.reservedCreditsToday)} из ${fmtCredits(worst.dailyCreditLimit)} кредитов · продолжит в 03:00 по Москве`,
     };
   }
   // The schedule has nothing to read (traffic plan §2.9): "сбор разрешён"
@@ -426,7 +426,7 @@ export function describeSettings(settings: OfapiCollectionSettings) {
     parts.push(`до ${settings.maxCallsPerRun} ${ruPlural(settings.maxCallsPerRun, "вызова", "вызовов", "вызовов")} за запуск`);
   }
   if (settings.mode !== "off") {
-    parts.push(`лимит ${fmtCredits(settings.dailyCreditLimit)} кр/сутки`);
+    parts.push(`лимит ${fmtCredits(settings.dailyCreditLimit)} кредитов в сутки`);
     if (settings.includeDetails) parts.push("с подробными запросами");
   }
   return parts.join(" · ");
@@ -586,7 +586,7 @@ const SCHEDULED_RUN_EXHAUSTED_PREFIX = "scheduled_run_exhausted:";
 export type CapLever = "calls" | "credits";
 export const CAP_LEVER_FIELD_RU: Record<CapLever, string> = {
   calls: "«Запросов за запуск, не более»",
-  credits: "«Дневной лимит категории, кр»",
+  credits: "«Дневной лимит категории, кредитов»",
 };
 
 /** The runner's reason in the owner's words when a cap ended a scheduled run;
@@ -601,15 +601,15 @@ export function exhaustedRunText(run: RunFacts): string | null {
       ? ` · остановился на шаге ${run.stepsDone + 1} из ${run.stepsTotal}`
       : "";
     switch (run.exhaustedCap) {
-      case "calls": return `проход не успевает за лимит вызовов: ${run.usedCalls} из ${run.maxCalls}${step}`;
-      case "credits": return `проход не успевает за лимит кредитов: ${fmtCredits(run.usedCredits)} из ${fmtCredits(run.maxCredits)} кр${step}`;
-      case "bytes": return `проход не успевает за лимит объёма: ${formatBytes(run.usedBytes)} из ${formatBytes(run.maxBytes)}${step}`;
-      default: return `проход упирается в лимит задачи: вызовы ${run.usedCalls} из ${run.maxCalls} · ${fmtCredits(run.usedCredits)} из ${fmtCredits(run.maxCredits)} кр · ${formatBytes(run.usedBytes)} из ${formatBytes(run.maxBytes)}${step}`;
+      case "calls": return `запуск не успевает за лимит вызовов: ${run.usedCalls} из ${run.maxCalls}${step}`;
+      case "credits": return `запуск не успевает за лимит кредитов: ${fmtCredits(run.usedCredits)} из ${fmtCredits(run.maxCredits)} кредитов${step}`;
+      case "bytes": return `запуск не успевает за лимит объёма: ${formatBytes(run.usedBytes)} из ${formatBytes(run.maxBytes)}${step}`;
+      default: return `запуск упирается в лимит задачи: вызовы ${run.usedCalls} из ${run.maxCalls} · ${fmtCredits(run.usedCredits)} из ${fmtCredits(run.maxCredits)} кредитов · ${formatBytes(run.usedBytes)} из ${formatBytes(run.maxBytes)}${step}`;
     }
   }
-  if (limit === "daily_limit") return "проход упирается в дневной лимит кредитов";
-  if (limit === "interval_limit") return "проход упирается в лимит интервала";
-  return `проход упирается в лимит: ${limit}`;
+  if (limit === "daily_limit") return "запуск упирается в дневной лимит кредитов";
+  if (limit === "interval_limit") return "запуск упирается в лимит интервала";
+  return `запуск упирается в лимит: ${limit}`;
 }
 
 export function jobReasonText(job: RunFacts): string | null {
@@ -618,15 +618,15 @@ export function jobReasonText(job: RunFacts): string | null {
 
 /** Why a stale category's newest scheduled run did not complete. */
 export function staleCauseText(run: OfapiCollectionRun | null): string {
-  if (run === null) return "проходов по расписанию ещё не было";
+  if (run === null) return "запусков по расписанию ещё не было";
   const exhausted = exhaustedRunText(run);
   if (exhausted) return exhausted;
   switch (run.state) {
-    case "paused": return "проход на паузе — нужен человек";
+    case "paused": return "запуск на паузе — нужен человек";
     case "queued":
-    case "running": return "проход идёт";
-    case "completed": return "после последнего успешного прохода новых не было";
-    default: return run.reason ? `последний проход завершился ошибкой: ${run.reason}` : "последний проход завершился ошибкой";
+    case "running": return "запуск идёт";
+    case "completed": return "после последнего успешного запуска новых не было";
+    default: return run.reason ? `последний запуск завершился ошибкой: ${run.reason}` : "последний запуск завершился ошибкой";
   }
 }
 
@@ -665,7 +665,7 @@ export function staleEntries(snapshot: OfapiCollectionSnapshot): StaleEntry[] {
 }
 
 export function jobProgress(job: OfapiCollectionJob) {
-  return `${fmtCredits(job.usedCredits)} из ${fmtCredits(job.maxCredits)} кр · ${job.usedCalls} из ${job.maxCalls} вызовов · ${formatBytes(job.usedBytes)} из ${formatBytes(job.maxBytes)}`;
+  return `${fmtCredits(job.usedCredits)} из ${fmtCredits(job.maxCredits)} кредитов · ${job.usedCalls} из ${job.maxCalls} вызовов · ${formatBytes(job.usedBytes)} из ${formatBytes(job.maxBytes)}`;
 }
 
 export function jobsFor(

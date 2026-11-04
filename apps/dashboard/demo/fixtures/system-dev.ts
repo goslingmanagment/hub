@@ -216,7 +216,8 @@ function buildRun(page: DemoPage, streamIdx: number, startedAt: number, now: num
 /** Every run that started in [from, to), newest first. */
 function runsBetween(from: number, to: number, now: number): DemoRun[] {
   const runs: DemoRun[] = [];
-  for (const page of DEMO_DATA_PAGES) {
+  // The log of the old collection holds only the OnlyFans pages, frozen with the API (as on production).
+  for (const page of DEMO_DATA_PAGES.filter((item) => item.platform === "onlyfans")) {
     const plans = streamsOf(page);
     plans.forEach((plan, streamIdx) => {
       const cadence = plan.cadenceMin * MINUTE;
@@ -375,7 +376,7 @@ export function demoSyncRunDetail(request: DemoRequest): RunDetail | DemoReply {
 
 /** The newest run of the log, for a link that opens a run. */
 export function demoLatestRunId(now: Date): number {
-  const run = runsBetween(now.getTime() - 2 * HOUR, now.getTime(), now.getTime()).find((item) => item.page.label === "nova-1" && item.plan.stream === "subscribers");
+  const run = runsBetween(now.getTime() - 2 * HOUR, now.getTime(), now.getTime()).find((item) => item.page.label === "mia-of");
   return run?.runId ?? 0;
 }
 
@@ -662,6 +663,7 @@ const PERF_METRICS: ReadonlyArray<[metric: string, p50: number, perReport: numbe
 const REPORTS_PER_DAY = 310;
 
 export function demoClientHealth(request: DemoRequest): ClientHealth | DemoReply {
+  const clientName = queryString(request, "clientName");
   const from = queryString(request, "from");
   const to = queryString(request, "to");
   if (!from || !to || !/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to) || from > to) {
@@ -745,6 +747,8 @@ export function demoClientHealth(request: DemoRequest): ClientHealth | DemoReply
     { code: "p1.insert-misplaced", total: 0 },
     { code: "p1.send-without-human", total: 0 },
     { code: "p1.read-without-human", total: 0 },
+    // One error of the gravest class, a week ago: the tile and the row of «Ждут вас» show it.
+    ...(days >= 7 ? [{ code: "p1.other", total: 1 }] : []),
     { code: "insert.prevented", total: scale(1.4) },
     { code: "send.held", total: scale(2.2) },
     { code: "send.uncertain", total: days >= 7 ? 1 : 0 },
@@ -765,13 +769,15 @@ export function demoClientHealth(request: DemoRequest): ClientHealth | DemoReply
     };
   });
 
+  // Only the chat extension reports; another client's name has no rows.
+  const other = clientName !== undefined && clientName !== "chat-extension";
   return {
     range: { from, to, timeZone: "Europe/Moscow" },
     minGroupSize,
-    perf,
-    contract,
-    counters,
-    footprint,
+    perf: other ? [] : perf,
+    contract: other ? [] : contract,
+    counters: other ? [] : counters,
+    footprint: other ? [] : footprint,
     asOf: iso(new Date(request.now.getTime() - 40_000)),
   };
 }

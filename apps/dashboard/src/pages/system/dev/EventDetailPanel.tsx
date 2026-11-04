@@ -1,11 +1,12 @@
 import { Link } from "react-router";
+import { Notice } from "@/components/ui/Notice";
 
 // A sync event as the System screens show it (the log, the sync anomalies):
 // its severity as a badge, and the row's detail — the message, the run it
 // belongs to, what to do about it, and its raw data.
 
 const SEVERITY_BADGES: Record<string, string> = {
-  info: "badge",
+  info: "badge badge-bare badge-info",
   warn: "badge badge-warning",
   error: "badge badge-danger",
 };
@@ -20,9 +21,10 @@ export function severityLabel(severity: string): string {
   return SEVERITY_LABELS[severity] ?? severity;
 }
 
-export function SeverityBadge({ severity }: { severity: string }) {
+/** `off`: the log froze with the OnlyFans API; nothing in it is red any more. */
+export function SeverityBadge({ severity, off = false }: { severity: string; off?: boolean }) {
   return (
-    <span className={SEVERITY_BADGES[severity] ?? SEVERITY_BADGES.info} data-severity={severity}>
+    <span className={off ? "badge badge-off" : SEVERITY_BADGES[severity] ?? SEVERITY_BADGES.info} data-severity={severity}>
       {severityLabel(severity)}
     </span>
   );
@@ -58,7 +60,7 @@ const RECOMMENDATION_MAP: Record<string, { text: string; tone: RecommendationTon
     tone: "warning",
   },
   auth_blocked: {
-    text: "Сессия истекла или недействительна. Обновите данные входа в настройках страницы.",
+    text: "Сессия истекла или недействительна.",
     tone: "danger",
   },
   anomaly: {
@@ -84,10 +86,10 @@ const DEFAULT_RECOMMENDATION = {
   tone: "neutral" as RecommendationTone,
 };
 
-const RECOMMENDATION_NOTICE: Record<RecommendationTone, string> = {
-  neutral: "notice",
-  warning: "notice notice-warning",
-  danger: "notice notice-danger",
+const RECOMMENDATION_NOTICE: Record<RecommendationTone, "info" | "warning" | "danger"> = {
+  neutral: "info",
+  warning: "warning",
+  danger: "danger",
 };
 
 export function getEventRecommendation(eventCode?: string | null) {
@@ -107,38 +109,27 @@ export function EventDetailPanel({
   syncRunId,
   eventCode,
   details,
-}: EventDetailPanelProps) {
+  off = false,
+}: EventDetailPanelProps & { off?: boolean }) {
   const rec = getEventRecommendation(eventCode);
 
   return (
-    // Sticky at the table's left edge and no wider than the phone's screen:
-    // the table scrolls sideways, its detail stays in view.
-    <div className="sticky left-0 max-w-[calc(100vw-50px)] space-y-3 bg-hover-alt px-4 py-4 sm:px-6 lg:max-w-none">
-      {message && (
-        <p className="whitespace-pre-wrap break-words text-sm text-text-primary">{message}</p>
-      )}
-
-      <p className={`${RECOMMENDATION_NOTICE[rec.tone]} block whitespace-normal`}>{rec.text}</p>
-
+    // Sticky at the table's left edge: the table scrolls sideways, its detail stays in view.
+    <div className="sys-event-detail">
+      {message && <p className="sys-event-message">{message}</p>}
+      <Notice tone={off ? "info" : RECOMMENDATION_NOTICE[rec.tone]}>{rec.text}</Notice>
       {syncRunId != null && (
-        <Link
-          to={`/system/dev/log/${syncRunId}`}
-          className="link inline-block text-sm"
-          onClick={(e) => e.stopPropagation()}
-        >
-          Открыть запуск синка &rarr;
+        <Link to={`/system/dev/log/${syncRunId}`} className="link sys-align-start" onClick={(e) => e.stopPropagation()}>
+          Открыть запуск сбора
         </Link>
       )}
-
       {details && Object.keys(details).length > 0 ? (
         <div>
-          <p className="mb-1 text-xs font-medium text-text-secondary">Данные события</p>
-          <pre className="overflow-x-auto rounded-lg border border-border-light bg-card p-3 font-mono text-xs text-text-secondary">
-            {JSON.stringify(details, null, 2)}
-          </pre>
+          <p className="sys-label">Данные события</p>
+          <pre className="sys-json">{JSON.stringify(details, null, 2)}</pre>
         </div>
       ) : (
-        <p className="text-xs text-text-muted">Других данных нет.</p>
+        <p className="cell-second">Других данных нет.</p>
       )}
     </div>
   );

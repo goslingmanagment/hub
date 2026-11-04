@@ -111,7 +111,7 @@ export function OfapiStoredReads({
       </div>
       {pages.length === 0 && <p className="text-text-secondary">Добавьте страницу OnlyFans, чтобы просматривать её сохранённые ответы.</p>}
       {query.isError && (
-        <p role="alert" className="notice notice-warning">Не удалось обновить данные. Повторите чтение; ниже остаётся предыдущий срез, если он был загружен.</p>
+        <p role="alert" className="notice notice-warning">Не удалось обновить данные. Повторите чтение; ниже остаётся предыдущий снимок, если он был загружен.</p>
       )}
       {query.isLoading && <p className="text-text-secondary">Читаем сохранённые данные…</p>}
       {query.data && !query.data.snapshots.length && (
@@ -148,7 +148,7 @@ export function OfapiStoredReads({
           </p>
           {listPreview && (
             <p className="text-text-secondary">
-              Вложенные пользователи — превью, не полный состав. Число пользователей — отдельное число провайдера. Полный
+              Вложенные пользователи — превью, не полный состав. Число пользователей — отдельное число OnlyFans API. Полный
               состав читается отдельным ограниченным заданием участников.
             </p>
           )}
@@ -161,7 +161,7 @@ export function OfapiStoredReads({
             </p>
           )}
           <details className="help">
-            <summary>Технические детали</summary>
+            <summary>Подробнее</summary>
             <div className="help-body max-w-none text-xs">
               <p>
                 OnlyFansAPI · источник #{snapshot.observationId} · возраст {snapshot.ageSeconds} с · полнота{" "}

@@ -10,7 +10,6 @@ import {
 } from "./system-dev.ts";
 import {
   demoBannedWords,
-  demoContentEvents,
   demoStoredReads,
   demoWebhookCatalog,
   demoWebhookDeliveries,
@@ -74,7 +73,6 @@ export const systemHandlers: DemoHandlers = {
   adminOfapiWebhookEventCatalog: () => demoWebhookCatalog(),
   adminOfapiWebhookDeliveries: (request) => demoWebhookDeliveries(request),
   ofapiBannedWordsAdminGet: () => demoBannedWords(),
-  ofapiContentEventsGet: (request) => demoContentEvents(request),
   ofapiReadCollectionsGet: (request) => demoStoredReads(request),
 
   // System → «Конфигурация», «Функции», «Ключи агентов»

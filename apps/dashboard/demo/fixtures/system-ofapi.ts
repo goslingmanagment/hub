@@ -259,69 +259,6 @@ function onlyFansPage(pageId: number): DemoPage | undefined {
   return DEMO_PAGES.find((page) => page.id === pageId && page.platform === "onlyfans");
 }
 
-export function demoContentEvents(request: DemoRequest): KernelOperationResponse<"ofapiContentEventsGet"> | DemoReply {
-  const pageId = queryNumber(request, "pageId", 0);
-  const page = onlyFansPage(pageId);
-  if (!page) return demoError(400, "Bad Request", "pageId must name an OnlyFans page");
-  const limit = Math.min(100, Math.max(1, queryNumber(request, "limit", 50)));
-  const random = rng(`content-events:${page.label}`);
-  const fans = demoFans(page.label);
-
-  const queues: KernelOperationResponse<"ofapiContentEventsGet">["queues"] = [];
-  // Mass messages of the last week before the stop: each sends to the page's subscribers over an hour or two.
-  for (let index = 0; index < 6; index += 1) {
-    const started = index === 0 ? OF_STOP - 70 * MINUTE : OF_STOP - (index * 26 + intBetween(random, 2, 20)) * HOUR;
-    const total = Math.round(page.subscribers * between(random, 0.55, 0.9));
-    const queueId = String(30_211_870 + hashString(page.label) % 9000 - index * 137);
-    const cancelled = index === 3;
-    const steps: Array<[phase: "updated" | "finished", pending: number, minutes: number]> = cancelled
-      ? [["updated", Math.round(total * 0.7), 14], ["finished", Math.round(total * 0.55), 22]]
-      : [["updated", Math.round(total * 0.62), 12], ["updated", Math.round(total * 0.18), 48], ["finished", 0, 96]];
-    // One row a queue: its latest event. The newest queue's finish never came: the vendor stopped first.
-    for (const [phase, pending, minutes] of index === 0 && !cancelled ? steps.slice(1, 2) : steps.slice(-1)) {
-      queues.push({
-        queueId,
-        phase,
-        queueDate: at(started),
-        state: { total, pending, isCanceled: cancelled && phase === "finished", hasError: false, sentCount: total - pending },
-        observedAt: at(started + minutes * MINUTE),
-        sourceEventId: `evt_${(started / 1000 + minutes).toString(36)}`,
-        sourceObservationId: String(8_100_000 + Math.round((started + minutes * MINUTE - Date.UTC(2026, 9, 1)) / MINUTE)),
-        timeBasis: "receipt",
-      });
-    }
-  }
-  queues.sort((left, right) => Date.parse(right.observedAt) - Date.parse(left.observedAt));
-
-  const likes: KernelOperationResponse<"ofapiContentEventsGet">["likes"] = [];
-  for (let index = 0; index < 70; index += 1) {
-    const fan = pick(random, fans.slice(0, 120));
-    const post = 1_840_000_000 + (hashString(`${page.label}:post:${index % 9}`) % 9_000_000);
-    const sourceAt = OF_STOP - Math.round(between(random, 0.1, 6.5) * DAY);
-    likes.push({
-      postRef: `post:${post}`,
-      fanRef: `fan:${fan.platformUserId}`,
-      state: random() < 0.04 ? "undone" : "active",
-      sourceAt: at(sourceAt),
-      observedAt: at(sourceAt + intBetween(random, 2, 40) * 1000),
-      sourceEventId: `evt_${(sourceAt / 1000).toString(36)}`,
-      sourceObservationId: String(8_000_000 + index * 7 + hashString(page.label) % 1000),
-      timeBasis: "provider",
-    });
-  }
-  const unique = new Map(likes.map((like) => [`${like.postRef}:${like.fanRef}`, like]));
-  const sortedLikes = [...unique.values()].sort((left, right) => Date.parse(right.sourceAt) - Date.parse(left.sourceAt));
-  return {
-    pageId: page.id,
-    source: "onlyfansapi",
-    coverage: "observed_events_only",
-    queues: queues.slice(0, limit),
-    likes: sortedLikes.slice(0, limit),
-    unattributedLikes: intBetween(random, 2, 9),
-    queuesHasMore: queues.length > limit,
-    likesHasMore: sortedLikes.length > limit,
-  };
-}
 
 
 type Snapshot = KernelOperationResponse<"ofapiReadCollectionsGet">["snapshots"][number];

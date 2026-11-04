@@ -4,6 +4,11 @@ import type { OfapiAction, OfapiActionIntent } from "@agency_hub_core/contracts"
 import { useAdminOfapiCollection } from "@/api/adminOfapiCollection";
 import { accountActions, useOfapiActions } from "@/api/ofapiActions";
 import { StatusPanel } from "@/components/shared/StatusPanel";
+import { Notice } from "@/components/ui/Notice";
+import { PageHeader } from "@/components/ui/PageHeader";
+import { OFAPI_OFF_WORD } from "@/lib/statusWords";
+import { freshOf, useOfapi } from "../shared.js";
+import { OfapiOffBar } from "./OfapiOffBar.js";
 import { formatDateTime } from "@/lib/format";
 import { ruPlural } from "@/lib/plural";
 import { ofapiAccountForms } from "./ofapi-actions/account-forms.ts";
@@ -26,8 +31,11 @@ const sectionGroups = [
   ...sectionGroupNames.map(group => ({ label: group.label, sections: group.sections.filter(section => sections.includes(section)) })),
   { label: "Другое", sections: sections.filter(section => !sectionGroupNames.some(group => group.sections.includes(section))) },
 ].filter(group => group.sections.length > 0);
-const stateLabels: Record<OfapiActionIntent["state"], string> = { prepared: "Готово к выполнению", dispatching: "Запрос отправляется", confirmed: "Запрос подтверждён", partial: "Выполнено частично", rejected: "Отклонено провайдером", indeterminate: "Результат неизвестен", cancelled: "Отменено до отправки" };
+const stateLabels: Record<OfapiActionIntent["state"], string> = { prepared: "Готово к выполнению", dispatching: "Запрос отправляется", confirmed: "Запрос подтверждён", partial: "Выполнено частично", rejected: "Отклонено OnlyFans API", indeterminate: "Результат неизвестен", cancelled: "Отменено до отправки" };
 const stateBadges: Record<OfapiActionIntent["state"], string> = { prepared: "badge badge-accent", dispatching: "badge badge-info", confirmed: "badge badge-success", partial: "badge badge-warning", rejected: "badge badge-danger", indeterminate: "badge badge-warning", cancelled: "badge" };
+/** A section's name on screen: the vendor's own names in Russian. */
+const SECTION_NAMES: Readonly<Record<string, string>> = { Stories: "Сториз", Highlights: "Хайлайты" };
+const sectionName = (section: string) => SECTION_NAMES[section] ?? section;
 const credits = (count: number) => `${count} ${ruPlural(count, "кредит", "кредита", "кредитов")}`;
 export function OfapiActionFields({ fields, values, update, disabled }: { fields: OfapiActionField[]; values: FormValues; update: (value: FormValues) => void; disabled: boolean }) {
   const put = (name: string, value: unknown) => update({ ...values, [name]: value });
@@ -75,6 +83,8 @@ export function OfapiActionCommandReview({ command, fields }: { command: FormVal
 }
 
 export function OfapiActions() {
+  const ofapi = useOfapi();
+  const writeOff = ofapi.block;
   const collection = useAdminOfapiCollection();
   const pages = collection.data?.pages.filter(page => page.accountId) ?? [];
   const [selectedPage, setSelectedPage] = useState<number | null>(null);
@@ -115,7 +125,7 @@ export function OfapiActions() {
       void history.refetch().catch(() => undefined);
     } catch (reason) {
       if (recovery && isUncertainActionFailure(reason)) setPending(recovery);
-      setError(reason instanceof Error ? reason.message : "Не удалось получить результат");
+      setError("Не удалось получить результат. Hub вернул ошибку.");
     } finally { inFlight.current = false; setBusy(false); }
   }
   async function prepare() {
@@ -140,23 +150,34 @@ export function OfapiActions() {
   const canStartNew = intent !== null && matches && !pending && !["prepared", "dispatching"].includes(intent.state);
   // The workspace stays while a result is on screen, even if the page lost its binding.
   const showWorkspace = pages.length > 0 || intent !== null;
-  const errorNotice = error && <p role="alert" className="notice notice-danger">{error}</p>;
-  return <div className="space-y-5">
-    {pages.length > 0 && <div className="flex flex-wrap items-end gap-x-3 gap-y-2">
-      <label className="w-full sm:w-64"><span className="field-label">Страница</span><select className="select" value={pageId ?? ""} disabled={busy} onChange={event => { setSelectedPage(Number(event.target.value)); reset(action); }}>{pages.map(page => <option key={page.id} value={page.id}>{page.label}</option>)}</select></label>
+  const errorNotice = error && <Notice tone="danger" role="alert">{error}</Notice>;
+  return <div className={`space-y-6${ofapi.status === "off" ? " sys-off-tone" : ""}`}>
+    <PageHeader fresh={freshOf(history, [collection])} />
+    <OfapiOffBar ofapi={ofapi} />
+    {pages.length > 0 && <div>
+      <label className="sys-inline-field"><span className="text-text-secondary">Страница</span><select className="select sys-select" value={pageId ?? ""} disabled={busy} onChange={event => { setSelectedPage(Number(event.target.value)); reset(action); }}>{pages.map(page => <option key={page.id} value={page.id}>{page.label}</option>)}</select></label>
     </div>}
     {(collection.error || history.error) && <div role="alert" className="notice notice-danger flex-wrap items-center"><p className="min-w-0 flex-1">Не удалось обновить локальные данные. Черновик и полученный результат действия сохранены.</p><button type="button" className="btn btn-sm" disabled={busy || collection.isFetching || history.isFetching} onClick={() => { if (collection.error) void collection.refetch(); if (history.error) void history.refetch(); }}>Повторить загрузку</button></div>}
     {collection.isPending && <p role="status" className="text-sm text-text-muted">Загружаем привязанные аккаунты…</p>}
-    {collection.data && !collection.isError && !pages.length && <StatusPanel title="Нет страниц с привязанным OnlyFans API" description="Действия с аккаунтом доступны для страниц, к которым привязан аккаунт OnlyFans API." action={<Link to="/system/onlyfans-api/collection">Настройки сбора</Link>} />}
+    {collection.data && !collection.isError && !pages.length && <StatusPanel title="Нет страниц с привязанным OnlyFans API" description="Действия с аккаунтом доступны для страниц, к которым привязан аккаунт OnlyFans API." action={<Link className="btn btn-sm" to="/system/onlyfans-api/collection">Правила сбора</Link>} />}
     {pending && <section role="alert" className="notice notice-warning flex-col items-stretch gap-3">
       <p className="font-medium">Не получен ответ: {pending.label}. Проверьте сохранённое состояние этого запроса перед следующим действием.</p>
       <div className="flex flex-wrap gap-2"><button type="button" className="btn btn-sm" disabled={busy} onClick={() => void run(() => accountActions.get(pending.id))}>Найти сохранённый запрос</button>{pending.operation === "prepare" && <button type="button" className="btn btn-sm" disabled={busy} onClick={() => void run(() => accountActions.prepare(pending.id, pending.command), pending)}>Повторить сохранение с тем же ID</button>}</div>
       <p className="text-xs">Проверка и сохранение черновика не выполняют действие в OnlyFans.</p>
-      <details className="help"><summary>Технические детали</summary><div className="help-body break-all text-xs"><p>ID запроса: {pending.id}</p></div></details>
+      <details className="help"><summary>Подробнее</summary><div className="help-body break-all text-xs"><p>ID запроса: {pending.id}</p></div></details>
+    </section>}
+    {showWorkspace && <section className="card" aria-labelledby="ofapi-actions-history-title">
+      <div className="card-header"><h2 id="ofapi-actions-history-title" className="card-title">Последние действия</h2></div>
+      {pageId !== null && history.isPending && <p role="status" className="px-5 py-4 text-sm text-text-muted">Загружаем историю действий…</p>}
+      {history.data && !history.isError && history.data.intents.length === 0 && <div className="empty py-8"><p className="empty-text">У этой страницы пока нет сохранённых действий.</p></div>}
+      {history.data && history.data.intents.length > 0 && <ul className="divide-y divide-border-light">{history.data.intents.map(item => <li key={item.id}><button type="button" disabled={busy} className="flex w-full flex-wrap items-center justify-between gap-2 px-5 py-3 text-left text-sm transition-colors hover:bg-hover-alt disabled:cursor-not-allowed disabled:opacity-45" onClick={() => { setAllowNewAfterUnknown(false); void run(() => accountActions.get(item.id)); }}><span className="font-medium text-text-primary">{forms.find(form => form.action === item.action)?.label ?? item.action}</span><span className="flex items-center gap-3"><span className={stateBadges[item.state]}>{stateLabels[item.state]}</span><span className="text-xs text-text-muted">{formatDateTime(item.createdAt)}</span></span></button></li>)}</ul>}
     </section>}
     {showWorkspace && <div className="grid min-w-0 items-start gap-5 lg:grid-cols-2">
       <form className="card min-w-0" aria-labelledby="ofapi-action-form-title" onSubmit={event => { event.preventDefault(); void prepare(); }}>
-        <div className="card-header"><div className="min-w-0"><h2 id="ofapi-action-form-title" className="card-title">Новое действие</h2><p className="card-description">Сначала Hub проверит действие и покажет оценку, выполнение — отдельной кнопкой.</p></div></div>
+        <details open={writeOff === null} className="sys-plain-details">
+        <summary className="sys-fold-summary"><span className="sys-fold-head"><span className="card-title">Новое действие</span>{ofapi.status === "off" && <span className="badge badge-off">{OFAPI_OFF_WORD.toLowerCase()}</span>}</span></summary>
+        <fieldset disabled={writeOff !== null} className="min-w-0">
+        <div className="card-header sys-card-header-tight"><div className="min-w-0"><p id="ofapi-action-form-title" className="card-description">Сначала Hub проверит действие и покажет оценку, выполнение — отдельной кнопкой.</p></div></div>
         <div className="card-body space-y-4">
           <div className="grid gap-3 sm:grid-cols-2">
             <label className="block min-w-0"><span className="field-label">Раздел</span><select className="select" value={section} disabled={busy} onChange={event => { const item = event.target.value; setSection(item); reset(forms.find(entry => entry.section === item)!.action); }}>{sectionGroups.map(group => <optgroup key={group.label} label={group.label}>{group.sections.map(item => <option key={item} value={item}>{item}</option>)}</optgroup>)}</select></label>
@@ -166,12 +187,14 @@ export function OfapiActions() {
           <OfapiActionFields fields={mainFields} values={values} disabled={busy} update={next => { setValues(next); setAllowNewAfterUnknown(false); }} />
           {advancedFields.length > 0 && <details key={action} className="help"><summary>Дополнительные параметры ({advancedFields.length})</summary><div className="mt-4 space-y-4"><OfapiActionFields fields={advancedFields} values={values} disabled={busy} update={next => { setValues(next); setAllowNewAfterUnknown(false); }} /></div></details>}
         </div>
-        <div className="card-footer"><button type="submit" disabled={busy || !pageId || pending !== null || collection.isError} className="btn btn-primary">{busy ? "Обрабатываем…" : "Проверить действие"}</button></div>
+        <div className="card-footer"><button type="submit" disabled={busy || !pageId || pending !== null || collection.isError || writeOff !== null} title={writeOff ?? undefined} className="btn btn-primary">{busy ? "Обрабатываем…" : "Проверить действие"}</button></div>
+      </fieldset>
+        </details>
       </form>
       <section className="card min-w-0" aria-label="Результат действия">
         {intent ? <>
           <div className="card-header">
-            <div className="min-w-0"><h2 className="card-title">{reviewedForm?.label ?? intent.action}</h2><p className="card-description break-all">{intent.pageLabel} · {intent.accountId}</p></div>
+            <div className="min-w-0"><h2 className="card-title">{reviewedForm?.label ?? intent.action}</h2><p className="card-description">{intent.pageLabel}</p></div>
             <span role="status" className={stateBadges[intent.state]}>{stateLabels[intent.state]}</span>
           </div>
           <div className="card-body space-y-4">
@@ -181,17 +204,18 @@ export function OfapiActions() {
             {!bindingMatches && <p role="alert" className="notice notice-danger">Привязка аккаунта изменилась. Выполнение этого запроса недоступно.</p>}
             <p className="text-sm text-text-primary">Резерв запроса: {credits(intent.estimatedCredits)}. Фактический расход: {intent.actualCredits === null ? "ещё не сообщён" : credits(intent.actualCredits)}.</p>
             <OfapiActionCommandReview command={intent.command as unknown as FormValues} fields={reviewedForm?.fields ?? []} />
-            {intent.state === "prepared" && !pending && <div className="flex flex-wrap gap-2"><button type="button" disabled={busy || !bindingMatches || collection.isError} className="btn btn-primary" onClick={() => mutateIntent("dispatch")}>Выполнить сохранённый запрос</button><button type="button" disabled={busy} className="btn" onClick={() => mutateIntent("cancel")}>Отменить до отправки</button></div>}
+            {intent.state === "prepared" && !pending && <div className="flex flex-wrap gap-2"><button type="button" disabled={busy || !bindingMatches || collection.isError || writeOff !== null} title={writeOff ?? undefined} className="btn btn-primary" onClick={() => mutateIntent("dispatch")}>Выполнить сохранённый запрос</button><button type="button" disabled={busy || writeOff !== null} title={writeOff ?? undefined} className="btn" onClick={() => mutateIntent("cancel")}>Отменить до отправки</button></div>}
             {intent.state === "indeterminate" && <p className="notice notice-warning">Проверьте состояние в OnlyFans перед созданием нового действия. Этот запрос повторно не отправляется.</p>}
-            {intent.state === "confirmed" && (intent.action.startsWith("campaign_") || intent.action.startsWith("queue_") || intent.action === "payout_withdrawal_request" || "scheduledDate" in intent.command) && <p className="text-xs text-text-muted">Провайдер подтвердил запрос. Доставка рассылки, публикация по расписанию и перевод выплаты могут завершиться позже.</p>}
+            {intent.state === "confirmed" && (intent.action.startsWith("campaign_") || intent.action.startsWith("queue_") || intent.action === "payout_withdrawal_request" || "scheduledDate" in intent.command) && <p className="cell-second">OnlyFans API подтвердил запрос. Доставка рассылки, публикация по расписанию и перевод выплаты могут завершиться позже.</p>}
             {intent.errorCode && <p className="text-sm text-text-primary">Причина: {intent.errorCode}</p>}
-            <div className="flex flex-wrap gap-2"><button type="button" disabled={busy} className="btn btn-sm" onClick={() => void run(() => accountActions.get(intent.id))}>Обновить сохранённый результат</button>{intent.responseObservationId !== null && (intent.state === "indeterminate" || intent.accountingState === "pending") && <button type="button" disabled={busy || pending !== null} className="btn btn-sm" onClick={() => mutateIntent("repair")}>Обработать сохранённый ответ ещё раз</button>}</div>
-            <details className="help"><summary>{intent.responseData !== null ? "Технические детали · ответ OnlyFans" : "Технические детали"}</summary><div className="help-body max-w-none">
+            <div className="flex flex-wrap gap-2"><button type="button" disabled={busy} className="btn btn-sm" onClick={() => void run(() => accountActions.get(intent.id))}>Обновить сохранённый результат</button>{intent.responseObservationId !== null && (intent.state === "indeterminate" || intent.accountingState === "pending") && <button type="button" disabled={busy || pending !== null || writeOff !== null} title={writeOff ?? undefined} className="btn btn-sm" onClick={() => mutateIntent("repair")}>Обработать сохранённый ответ ещё раз</button>}</div>
+            <details className="help"><summary>{intent.responseData !== null ? "Подробнее · ответ OnlyFans" : "Подробнее"}</summary><div className="help-body max-w-none">
               {intent.responseData !== null && <div className="max-h-96 overflow-auto text-sm text-text-primary"><Value value={intent.responseData} /></div>}
               {intent.responseMeta !== null && <div className="text-xs"><p>Продолжение списка</p><Value value={intent.responseMeta} /></div>}
-              <p className="break-all text-xs">ID запроса: {intent.id}{intent.remoteId ? ` · ID у провайдера: ${intent.remoteId}` : ""}</p>
+              <p className="break-all">Аккаунт OnlyFans API: {intent.accountId}</p>
+              <p className="break-all">ID запроса: {intent.id}{intent.remoteId ? ` · ID у OnlyFans API: ${intent.remoteId}` : ""}</p>
             </div></details>
-            {canStartNew && <div className="space-y-2 border-t border-border-light pt-4">{intent.state === "indeterminate" && <label className="flex items-start gap-2 text-sm text-text-primary"><input type="checkbox" className="mt-1" checked={allowNewAfterUnknown} disabled={busy} onChange={event => setAllowNewAfterUnknown(event.target.checked)} />Я проверил результат в OnlyFans и хочу подготовить отдельное новое действие.</label>}<button type="button" className="btn btn-sm" disabled={busy || (intent.state === "indeterminate" && !allowNewAfterUnknown)} onClick={() => { admission.current.startNew(intent.command); setIntent(null); setAllowNewAfterUnknown(false); }}>Подготовить ещё одно такое действие</button></div>}
+            {canStartNew && <div className="space-y-2 border-t border-border-light pt-4">{intent.state === "indeterminate" && <label className="flex items-start gap-2 text-sm text-text-primary"><input type="checkbox" className="mt-1" checked={allowNewAfterUnknown} disabled={busy} onChange={event => setAllowNewAfterUnknown(event.target.checked)} />Я проверил результат в OnlyFans и хочу подготовить отдельное новое действие.</label>}<button type="button" className="btn btn-sm" disabled={busy || writeOff !== null || (intent.state === "indeterminate" && !allowNewAfterUnknown)} onClick={() => { admission.current.startNew(intent.command); setIntent(null); setAllowNewAfterUnknown(false); }}>Подготовить ещё одно такое действие</button></div>}
           </div>
         </> : <div className="card-body space-y-4">
           {errorNotice}
@@ -199,11 +223,5 @@ export function OfapiActions() {
         </div>}
       </section>
     </div>}
-    {showWorkspace && <section className="card" aria-labelledby="ofapi-actions-history-title">
-      <div className="card-header"><h2 id="ofapi-actions-history-title" className="card-title">Последние действия</h2></div>
-      {pageId !== null && history.isPending && <p role="status" className="px-5 py-4 text-sm text-text-muted">Загружаем историю действий…</p>}
-      {history.data && !history.isError && history.data.intents.length === 0 && <div className="empty py-8"><p className="empty-text">У этой страницы пока нет сохранённых действий.</p></div>}
-      {history.data && history.data.intents.length > 0 && <ul className="divide-y divide-border-light">{history.data.intents.map(item => <li key={item.id}><button type="button" disabled={busy} className="flex w-full flex-wrap items-center justify-between gap-2 px-5 py-3 text-left text-sm transition-colors hover:bg-hover-alt disabled:cursor-not-allowed disabled:opacity-45" onClick={() => { setAllowNewAfterUnknown(false); void run(() => accountActions.get(item.id)); }}><span className="font-medium text-text-primary">{forms.find(form => form.action === item.action)?.label ?? item.action}</span><span className="flex items-center gap-3"><span className={stateBadges[item.state]}>{stateLabels[item.state]}</span><span className="text-xs text-text-muted">{formatDateTime(item.createdAt)}</span></span></button></li>)}</ul>}
-    </section>}
   </div>;
 }

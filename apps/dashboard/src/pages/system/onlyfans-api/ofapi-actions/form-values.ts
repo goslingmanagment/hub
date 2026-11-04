@@ -1,3 +1,4 @@
+import { formatUsdFromCents } from "@/lib/format";
 import { ofapiActionSchema } from "@agency_hub_core/contracts";
 import { KernelApiError } from "@kernel/sdk";
 import type { OfapiActionField, OfapiActionFormDefinition } from "./form-types.ts";
@@ -74,8 +75,8 @@ export function reviewActionFieldValue(field: OfapiActionField, value: unknown):
   if (field.allowEmptyText && value === "") return "Текст будет очищен";
   const usd = (amount: unknown) => {
     if (typeof amount !== "number" || !Number.isSafeInteger(amount)) return "Некорректная сумма";
-    const cents = BigInt(amount);
-    return `${(cents / 100n).toLocaleString("ru-RU")},${String(cents % 100n).padStart(2, "0")} USD`;
+    // Display only: the console's one money format, «$5.00».
+    return formatUsdFromCents(amount);
   };
   if (field.type === "money") return usd(value);
   if (field.type === "money-list" && Array.isArray(value)) return value.map(usd);

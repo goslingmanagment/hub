@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import { toast } from "sonner";
 
 import { AGENT_CAPABILITIES, type AgentCapability, type AgentKeyItem } from "@agency_hub_core/contracts";
@@ -15,20 +15,24 @@ import {
 import { ConfirmModal } from "@/components/shared/ConfirmModal";
 import { Field } from "@/components/shared/Field";
 import { ModalShell } from "@/components/shared/ModalShell";
-import { PlatformBadge } from "@/components/shared/PlatformBadge";
-import { StatusPanel } from "@/components/shared/StatusPanel";
-import { StaleDataNotice } from "@/components/shared/StaleDataNotice";
-import { formatDateTime, formatRelativeTime } from "@/lib/format";
+import { staleDataText } from "@/components/shared/QueryNotice";
+import { NoAnswerPanel, StatusPanel } from "@/components/shared/StatusPanel";
+import { TableSkeleton } from "@/components/shared/TableSkeleton";
+import { Disclosure } from "@/components/ui/Disclosure";
+import { KeyValue } from "@/components/ui/KeyValue";
+import { Notice } from "@/components/ui/Notice";
+import { PageHeader } from "@/components/ui/PageHeader";
+import { RowMenu } from "@/components/ui/RowMenu";
+import { StatusBadge } from "@/components/ui/StatusBadge";
+import { formatDateTime, formatAgo } from "@/lib/format";
+import { AGENT_KEY_STATUS } from "@/lib/statusWords";
+import { freshOf, platformName, RowChevron } from "../shared.js";
 
 /**
- * System → «Ключи агентов»: the ONE place in the console where
- * the machinery is named out loud.
- *
- * Everywhere else the owner deals in people, logins, devices and links (§2
- * vocabulary, pinned by tests/dashboard-copy-vocabulary.test.ts, which
- * excludes this file by name). Here live the two surfaces that are genuinely
- * about machines: agent read-plane keys, and the Desktop harvest binding that
- * ties one preserved machine identity to one sign-in.
+ * «Доступ ИИ-агентов»: agent read keys, their rights, and the binding of a desktop
+ * install to one sign-in. The writes are the old tab's (`TechnicalTab`) with their
+ * calls unchanged; «Снять привязку» now asks first, and the key's one showing can
+ * only be closed by its button (design/screens/system.md §6).
  */
 
 const CAPABILITY_HELP: Readonly<Record<AgentCapability, string>> = {
@@ -36,11 +40,23 @@ const CAPABILITY_HELP: Readonly<Record<AgentCapability, string>> = {
   "read:money": "Операции, суммы трат, цены подписок",
   "read:observations_envelope": "Записи журнала сбора: только описание, без содержимого",
   "read:datasets": "Зарегистрированные запросы к наборам данных",
-  "request:hydration": "Заявки на дозагрузку истории (выполнять ли — решает владелец)",
+  "request:hydration": "Заявки на историю переписки (выполнять ли — решает владелец)",
   "approve:publications": "Утверждать черновики постов и альбомов на своих страницах — после «да» владельца в чате",
   "write:publication_drafts": "Черновики постов на своих страницах (утверждает человек)",
   "write:fan_queues": "Очереди фанов для чаттеров на своих страницах: по слову того, кто попросил",
-  "read:content": "Посты, вложения, файлы и vault своих страниц с их просмотрами и лайками — без переписки, фанов и денег",
+  "read:content": "Посты, вложения, файлы и медиатека своих страниц с их просмотрами и лайками — без переписки, фанов и денег",
+};
+
+const CAPABILITY_SHORT: Readonly<Record<AgentCapability, string>> = {
+  "read:messages": "Читать переписку",
+  "read:money": "Читать деньги",
+  "read:observations_envelope": "Журнал сбора: описание",
+  "read:datasets": "Наборы данных",
+  "request:hydration": "Подавать заявки на историю",
+  "approve:publications": "Утверждать посты",
+  "write:publication_drafts": "Писать черновики постов",
+  "write:fan_queues": "Вести очереди фанов",
+  "read:content": "Читать контент",
 };
 
 const INPUT = "input";
@@ -49,7 +65,12 @@ function toggle<T>(list: T[], value: T): T[] {
   return list.includes(value) ? list.filter((item) => item !== value) : [...list, value];
 }
 
-/** The capability checkboxes, shared by issuance and by «Изменить права». */
+/** «Читать контент, Писать черновики постов +1». */
+function firstTwo(list: readonly string[]): string {
+  return list.length <= 2 ? list.join(", ") : `${list.slice(0, 2).join(", ")} +${list.length - 2}`;
+}
+
+/** The capability checkboxes, shared by issuance and by «Изменить права»; the codes under «Подробнее». */
 function CapabilityCheckboxes({
   value,
   onChange,
@@ -58,79 +79,56 @@ function CapabilityCheckboxes({
   onChange: (next: AgentCapability[]) => void;
 }) {
   return (
-    <div className="space-y-2">
+    <div className="sys-checks">
       {AGENT_CAPABILITIES.map((capability) => (
-        <label key={capability} className="flex items-start gap-2 text-sm text-text-primary">
-          <input
-            type="checkbox"
-            checked={value.includes(capability)}
-            onChange={() => onChange(toggle(value, capability))}
-            className="mt-1"
-          />
-          <span>
-            <span className="block">{CAPABILITY_HELP[capability]}</span>
-            <span className="font-mono text-xs text-text-muted">{capability}</span>
-          </span>
+        <label key={capability} className="sys-check">
+          <input type="checkbox" checked={value.includes(capability)} onChange={() => onChange(toggle(value, capability))} />
+          <span>{CAPABILITY_HELP[capability]}</span>
         </label>
       ))}
+      <Disclosure label="Подробнее">
+        <ul>
+          {AGENT_CAPABILITIES.map((capability) => (
+            <li key={capability}><span className="sys-code">{capability}</span> — {CAPABILITY_SHORT[capability]}</li>
+          ))}
+        </ul>
+      </Disclosure>
     </div>
   );
 }
 
-/** The section's heading and description are SettingsPage's: the tab opens
- *  with its two cards. */
-export function TechnicalTab() {
+function keyStatus(key: AgentKeyItem) {
+  return key.isActive ? AGENT_KEY_STATUS.active! : key.revokedAt ? AGENT_KEY_STATUS.revoked! : AGENT_KEY_STATUS.expired!;
+}
+
+export function AgentKeysPage() {
+  const keys = useAgentKeys();
+  const [creating, setCreating] = useState(false);
   return (
     <div className="space-y-6">
-      <AgentKeysSection />
-      <section className="card" aria-labelledby="harvest-binding-title">
-        <div className="card-header">
-          <div>
-            <h3 id="harvest-binding-title" className="card-title">Привязка сбора данных к устройству</h3>
-            <p className="card-description">
-              Какой компьютер с настольным приложением может передавать в Hub собранные на нём данные — и от
-              имени какого входа сотрудника.
-            </p>
-          </div>
-        </div>
-        <div className="card-body">
-          <HarvestBindingSection />
-        </div>
-      </section>
+      <PageHeader
+        actions={<button type="button" className="btn btn-primary" onClick={() => setCreating(true)}>Выпустить ключ</button>}
+        fresh={freshOf(keys)}
+      />
+      <AgentKeysSection creating={creating} onCreating={setCreating} />
+      <HarvestBindingCard />
     </div>
   );
 }
 
-function AgentKeysSection() {
-  const { data: keys, isLoading, isError, error } = useAgentKeys();
-  const [creating, setCreating] = useState(false);
+function AgentKeysSection({ creating, onCreating }: { creating: boolean; onCreating: (value: boolean) => void }) {
+  const query = useAgentKeys();
+  const { data: keys, isLoading, isError } = query;
   const [issuedToken, setIssuedToken] = useState<{ token: string; name: string } | null>(null);
   const [revoking, setRevoking] = useState<AgentKeyItem | null>(null);
   const [editing, setEditing] = useState<AgentKeyItem | null>(null);
+  const [open, setOpen] = useState<number | null>(null);
   const revoke = useRevokeAgentKey();
-  // OWNED BY THE TAB, NOT THE MODAL (review round 2). TanStack runs a per-call
-  // `mutate` callback only while the observer that issued it is mounted, so a
-  // modal that owned this mutation would DISCARD the token handoff if the owner
-  // dismissed it mid-flight: the server commits the key, nobody ever sees the
-  // only copy of its token, and re-issuing under the same name hits a 409. The
-  // tab outlives the modal, so the handoff cannot be dropped.
+  // OWNED BY THE SCREEN, NOT THE MODAL. TanStack runs a per-call `mutate` callback
+  // only while the observer that issued it is mounted, so a modal that owned this
+  // mutation would DISCARD the token handoff if the owner dismissed it mid-flight:
+  // the server commits the key, nobody ever sees the only copy of its token.
   const create = useCreateAgentKey();
-
-  if (isLoading && !keys) {
-    return <StatusPanel title="Загружаем ключи агентов" />;
-  }
-
-  if (isError && !keys) {
-    return (
-      <StatusPanel
-        title="Ключи агентов не загрузились"
-        description={error instanceof Error ? error.message : "Список ключей получить не удалось."}
-        tone="error"
-      />
-    );
-  }
-
-  const items = keys ?? [];
 
   function handleRevoke() {
     if (!revoking) return;
@@ -142,112 +140,142 @@ function AgentKeysSection() {
           : `Ключ «${target.name}» уже был отозван`);
         setRevoking(null);
       },
-      onError: (mutationError) => {
-        toast.error(mutationError instanceof Error ? mutationError.message : "Не удалось отозвать ключ");
+      onError: () => {
+        toast.error("Не удалось отозвать ключ");
       },
     });
   }
 
+  const items = keys ?? [];
+
   return (
     <section className="card" aria-labelledby="agent-keys-title">
       <div className="card-header">
-        <div className="min-w-0 max-w-2xl">
-          <h3 id="agent-keys-title" className="card-title">Ключи доступа</h3>
-          <p className="card-description">
-            Ключ даёт AI-агенту чтение только перечисленных страниц и только выбранных данных; роли человека у
-            ключа нет. Пока ключом пользуются, срок продлевается, но не дальше 365 дней с выпуска.
+        <div className="min-w-0">
+          <h2 id="agent-keys-title" className="card-title">Ключи доступа</h2>
+          <p className="card-description sys-measure">
+            Ключ даёт ИИ-агенту только отмеченные страницы и только отмеченные права; роли человека у ключа нет. Пока ключом
+            пользуются, срок продлевается, но не дальше 365 дней с выпуска.
           </p>
         </div>
-        <button type="button" onClick={() => setCreating(true)} className="btn btn-primary btn-sm">
-          Выпустить ключ
-        </button>
       </div>
-
-      <div className="card-body space-y-3">
-        {isError && keys && <StaleDataNotice error={error} />}
-        {items.length === 0 && (
-          <p className="text-sm text-text-muted">Ключей пока нет.</p>
-        )}
-        {items.map((key) => (
-          <div
-            key={key.id}
-            className={`rounded-xl border border-border p-4 ${key.isActive ? "" : "opacity-60"}`}
-            data-agent-key={key.name}
-          >
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <div className="min-w-0 flex-1">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="card-title">{key.name}</span>
-                  {key.isActive
-                    ? <span className="badge badge-success">Активен</span>
-                    : <span className={key.revokedAt ? "badge badge-danger" : "badge"}>{key.revokedAt ? "Отозван" : "Истёк"}</span>}
-                  <span className="font-mono text-xs text-text-muted">{key.keyPrefix}…</span>
-                </div>
-                <div className="mt-2 flex flex-wrap gap-1">
-                  {key.capabilities.map((capability) => (
-                    <span
-                      key={capability}
-                      title={CAPABILITY_HELP[capability]}
-                      className="rounded-md border border-border bg-hover-alt px-1.5 py-0.5 font-mono text-xs text-text-secondary"
-                    >
-                      {capability}
-                    </span>
-                  ))}
-                </div>
-                <p className="mt-2 text-sm text-text-secondary">
-                  Страницы: {key.pageLabels.join(", ")}
-                </p>
-                <p className="mt-1 text-xs text-text-muted">
-                  Истекает{" "}
-                  {formatDateTime(key.expiresAt)} &middot;{" "}
-                  {key.lastUsedAt ? `использован ${formatRelativeTime(key.lastUsedAt)}` : "ещё не использовался"}
-                </p>
-              </div>
-              <div className="flex flex-wrap items-center gap-2">
-                {key.isActive && (
-                  <button type="button" onClick={() => setEditing(key)} className="btn btn-sm">
-                    Изменить права
-                  </button>
-                )}
-                {key.revokedAt === null && (
-                  <button type="button" onClick={() => setRevoking(key)} className="btn btn-sm text-danger">
-                    Отозвать
-                  </button>
-                )}
-              </div>
-            </div>
-          </div>
-        ))}
-      </div>
+      {isError && keys && (
+        <div className="card-body sys-card-notice">
+          <Notice tone="warning" role="alert" action={<button type="button" className="btn btn-sm" onClick={() => void query.refetch()}>Повторить</button>}>
+            {staleDataText(query.dataUpdatedAt)}
+          </Notice>
+        </div>
+      )}
+      {isLoading && !keys ? (
+        <TableSkeleton rows={3} columns={5} />
+      ) : !keys ? (
+        <NoAnswerPanel retry={query.refetch} />
+      ) : items.length === 0 ? (
+        <StatusPanel title="Ключей пока нет" description="Выпустите ключ, когда агенту понадобится доступ к данным." />
+      ) : (
+        <div className="table-wrap">
+          <table className="data-table sys-keys">
+            <thead>
+              <tr>
+                <th>Название</th>
+                <th>Что может</th>
+                <th>Страницы</th>
+                <th>Срок</th>
+                <th>Состояние</th>
+                <th><span className="sr-only">Действия</span></th>
+              </tr>
+            </thead>
+            <tbody>
+              {items.map((key) => {
+                const isOpen = open === key.id;
+                const toggleRow = () => setOpen(isOpen ? null : key.id);
+                const menu = [
+                  ...(key.isActive ? [{ label: "Изменить права", onSelect: () => setEditing(key) }] : []),
+                  ...(key.revokedAt === null ? [{ label: "Отозвать", onSelect: () => setRevoking(key), danger: true }] : []),
+                ];
+                return (
+                  <Fragment key={key.id}>
+                    <tr className={`sys-click-row${key.isActive ? "" : " sys-mute"}`} data-agent-key={key.name} onClick={toggleRow}>
+                      <td className="whitespace-nowrap">
+                        <RowChevron open={isOpen} label={isOpen ? `Свернуть: ${key.name}` : `Раскрыть: ${key.name}`} onToggle={toggleRow} />
+                        <span className="font-medium">{key.name}</span>
+                      </td>
+                      <td>{firstTwo(key.capabilities.map((capability) => CAPABILITY_SHORT[capability] ?? capability))}</td>
+                      <td>{firstTwo(key.pageLabels)}</td>
+                      <td className="whitespace-nowrap">
+                        до {formatDateTime(key.expiresAt, { yearUnlessCurrent: true })}
+                        <span className="cell-second">{key.lastUsedAt ? `использован ${formatAgo(key.lastUsedAt)}` : "ещё не использовался"}</span>
+                      </td>
+                      <td className="status-col"><StatusBadge status={keyStatus(key)} /></td>
+                      <td className="sys-actions" onClick={(event) => event.stopPropagation()}>
+                        {menu.length > 0 && <RowMenu label={`Ещё: ${key.name}`} items={menu} />}
+                      </td>
+                    </tr>
+                    {isOpen && (
+                      <tr className="sys-detail-row">
+                        <td colSpan={6}>
+                          <div className="sys-detail">
+                            <div>
+                              <p className="sys-label">Что может</p>
+                              <ul className="sys-lines">
+                                {key.capabilities.length === 0
+                                  ? <li>Ничего: без отметок ключ ничего не может прочитать.</li>
+                                  : key.capabilities.map((capability) => <li key={capability}>{CAPABILITY_HELP[capability] ?? capability}</li>)}
+                              </ul>
+                            </div>
+                            <div>
+                              <p className="sys-label">Страницы</p>
+                              <p>{key.pageLabels.join(", ")}</p>
+                            </div>
+                            <Disclosure label="Подробнее">
+                              <KeyValue
+                                rows={[
+                                  { label: "Начало ключа", value: <span className="sys-code">{key.keyPrefix}…</span> },
+                                  { label: "Права", value: <span className="sys-code">{key.capabilities.join(", ") || "—"}</span> },
+                                  { label: "Выпущен", value: formatDateTime(key.createdAt, { yearUnlessCurrent: true }) },
+                                ]}
+                              />
+                            </Disclosure>
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
 
       {creating && (
         <CreateAgentKeyModal
           create={create}
-          onClose={() => setCreating(false)}
+          onClose={() => onCreating(false)}
           onIssued={(token, name) => {
-            setCreating(false);
+            onCreating(false);
             setIssuedToken({ token, name });
           }}
         />
       )}
 
       {issuedToken && (
-        <TokenRevealModal
-          token={issuedToken.token}
-          name={issuedToken.name}
-          onClose={() => setIssuedToken(null)}
-        />
+        <TokenRevealModal token={issuedToken.token} name={issuedToken.name} onClose={() => setIssuedToken(null)} />
       )}
 
-      {editing && (
-        <EditAgentKeyCapabilitiesModal agentKey={editing} onClose={() => setEditing(null)} />
-      )}
+      {editing && <EditAgentKeyCapabilitiesModal agentKey={editing} onClose={() => setEditing(null)} />}
 
       {revoking && (
         <ConfirmModal
           title={`Отозвать ключ «${revoking.name}»?`}
-          message="Ключ перестанет работать сразу. Отзыв нельзя отменить — при необходимости выпустите новый ключ."
+          message="Ключ перестанет работать сразу. Отзыв нельзя отменить: при необходимости выпустите новый ключ."
+          facts={[
+            { label: "Что именно", value: `ключ «${revoking.name}», страницы ${revoking.pageLabels.join(", ")}` },
+            { label: "Отменить", value: "нельзя" },
+          ]}
           confirmLabel="Отозвать"
+          pendingLabel="Отзываем…"
+          initialFocus="cancel"
           isPending={revoke.isPending}
           onConfirm={handleRevoke}
           onClose={() => setRevoking(null)}
@@ -266,7 +294,7 @@ function CreateAgentKeyModal({
   onClose: () => void;
   onIssued: (token: string, name: string) => void;
 }) {
-  const { data: pages, isLoading: pagesLoading, isError: pagesError, error: pagesErrorValue, refetch: refetchPages, isFetching: pagesFetching } = useAdminPages();
+  const { data: pages, isLoading: pagesLoading, isError: pagesError, refetch: refetchPages, isFetching: pagesFetching } = useAdminPages();
   const [name, setName] = useState("");
   const [capabilities, setCapabilities] = useState<AgentCapability[]>([]);
   const [pageLabels, setPageLabels] = useState<string[]>([]);
@@ -282,8 +310,8 @@ function CreateAgentKeyModal({
       expiresInDays,
     }, {
       onSuccess: (result) => onIssued(result.token, result.key.name),
-      onError: (error) => {
-        toast.error(error instanceof Error ? error.message : "Не удалось выпустить ключ");
+      onError: () => {
+        toast.error("Не удалось выпустить ключ");
       },
     });
   }
@@ -313,7 +341,7 @@ function CreateAgentKeyModal({
             value={name}
             maxLength={200}
             onChange={(event) => setName(event.target.value)}
-            placeholder="customs-audit"
+            placeholder="Например, аудит кастомов"
             className={INPUT}
           />
         </Field>
@@ -329,7 +357,7 @@ function CreateAgentKeyModal({
           {pagesLoading && !pages && <p className="text-sm text-text-muted">Загружаем страницы…</p>}
           {pagesError && <div role="alert" className="notice notice-danger mb-2">
             <span>
-              {pagesErrorValue instanceof Error ? pagesErrorValue.message : "Страницы не загрузились."} Выбор сохранён; обновите список перед выпуском ключа.
+              Страницы не загрузились. Выбор сохранён; обновите список перед выпуском ключа.
               <button type="button" disabled={pagesFetching} onClick={() => void refetchPages()} className="link ml-2">Повторить</button>
             </span>
           </div>}
@@ -343,7 +371,7 @@ function CreateAgentKeyModal({
                   onChange={() => setPageLabels((current) => toggle(current, page.label))}
                 />
                 <span>{page.label}</span>
-                <PlatformBadge platform={page.platform} />
+                <span className="text-text-secondary">{platformName(page.platform)}</span>
               </label>
             ))}
           </div>
@@ -402,8 +430,8 @@ function EditAgentKeyCapabilitiesModal({
         toast.success(`Права ключа «${agentKey.name}» изменены`);
         onClose();
       },
-      onError: (error) => {
-        toast.error(error instanceof Error ? error.message : "Не удалось изменить права ключа");
+      onError: () => {
+        toast.error("Не удалось изменить права ключа");
       },
     });
   }
@@ -418,7 +446,7 @@ function EditAgentKeyCapabilitiesModal({
     <ModalShell title={`Права ключа «${agentKey.name}»`} onClose={closeUnlessPending} closeLabel="Закрыть">
       <form className="space-y-5" onSubmit={handleSubmit}>
         <p className="text-sm text-text-secondary">
-          Новые права действуют со следующего запроса агента — выпускать ключ заново не нужно. Страницы
+          Новые права действуют со следующего запроса агента: выпускать ключ заново не нужно. Страницы
           остаются прежними: {agentKey.pageLabels.join(", ")}. Чтобы добавить страницу, выпустите новый ключ.
         </p>
 
@@ -428,11 +456,11 @@ function EditAgentKeyCapabilitiesModal({
         </fieldset>
 
         {!unchanged && (
-          <div className="rounded-lg border border-border bg-hover-alt p-3 text-sm text-text-secondary">
+          <div className="sys-summary-box">
             {added.length > 0 && <p>Добавится: {added.map((capability) => CAPABILITY_HELP[capability]).join("; ")}</p>}
             {removed.length > 0 && <p>Уберётся: {removed.map((capability) => CAPABILITY_HELP[capability]).join("; ")}</p>}
             {capabilities.length === 0 && (
-              <p className="mt-1 text-warning-dark">Без отметок ключ останется рабочим, но ничего не сможет прочитать.</p>
+              <p>Без отметок ключ останется рабочим, но ничего не сможет прочитать.</p>
             )}
           </div>
         )}
@@ -473,29 +501,26 @@ function TokenRevealModal({
   }
 
   return (
-    <ModalShell title={`Ключ «${name}»`} onClose={onClose} closeLabel="Закрыть">
+    <ModalShell title={`Ключ «${name}»`} onClose={onClose} closeLabel="Закрыть" explicitCloseOnly>
       <div className="space-y-4">
-        <p className="notice notice-warning font-medium">
+        <Notice tone="warning">
           Ключ показывается один раз. Hub хранит только его отпечаток: потерянный ключ выпускают заново,
           восстановить его нельзя.
-        </p>
+        </Notice>
         <div className="flex flex-wrap items-center gap-2">
-          <code className="min-w-0 flex-1 select-all break-all rounded-lg border border-border bg-hover-alt px-3 py-2.5 font-mono text-sm text-text-primary">
+          <code className="sys-token">
             {token}
           </code>
           <button type="button" onClick={handleCopy} className="btn btn-primary">
             {copied ? "Скопировано" : "Скопировать"}
           </button>
         </div>
-        <details className="help">
-          <summary>Для разработчика</summary>
-          <div className="help-body">
-            <p>
-              Сохраните ключ в переменной <code className="font-mono">HUB_AGENT_KEY</code> или в файле{" "}
-              <code className="font-mono">~/.config/hub/credentials</code> — консоль Hub найдёт его сама.
-            </p>
-          </div>
-        </details>
+        <Disclosure label="Подробнее">
+          <p>
+            Сохраните ключ в переменной <code className="sys-code">HUB_AGENT_KEY</code> или в файле{" "}
+            <code className="sys-code">~/.config/hub/credentials</code> — консоль Hub найдёт его сама.
+          </p>
+        </Disclosure>
       </div>
 
       <div className="mt-6 flex items-center justify-end">
@@ -529,11 +554,36 @@ export function isMachineId(value: string): boolean {
  * The machineId is technical by nature and lives only here and in the Desktop
  * app's own Diagnostics screen — never in the Team tab.
  */
+function HarvestBindingCard() {
+  const [shown, setShown] = useState(false);
+  return (
+    <section className="card" aria-labelledby="harvest-binding-title">
+      <div className="card-header">
+        <div className="min-w-0">
+          <h2 id="harvest-binding-title" className="card-title">Привязка сбора данных к устройству</h2>
+          <p className="card-description sys-measure">
+            Какой компьютер с настольным приложением может передавать в Hub собранные на нём данные и от имени какого входа сотрудника.
+          </p>
+        </div>
+        {!shown && <button type="button" className="btn" onClick={() => setShown(true)}>Привязать компьютер</button>}
+      </div>
+      {shown && <div className="card-body"><HarvestBindingSection /></div>}
+    </section>
+  );
+}
+
+/**
+ * Binds one Desktop install's preserved machineId to one of a person's device
+ * tokens, so harvested captures are attributable to a machine the owner chose.
+ * Rebinding the same machineId transfers the authority atomically server-side.
+ * The machine number lives only here and in the Desktop app's own Diagnostics.
+ */
 export function HarvestBindingSection() {
-  const { data: users, isLoading: usersLoading, isError: usersError, error: usersErrorValue } = useAdminUsers();
+  const { data: users, isLoading: usersLoading, isError: usersError, refetch: refetchUsers } = useAdminUsers();
   const [userId, setUserId] = useState<number | null>(null);
   const [tokenId, setTokenId] = useState<number | null>(null);
   const [machineId, setMachineId] = useState("");
+  const [unbinding, setUnbinding] = useState(false);
 
   const candidates = (users ?? []).filter((user) => !user.disabledAt && !user.deletedAt);
   const selectedUser = candidates.find((user) => user.id === userId) ?? null;
@@ -549,24 +599,29 @@ export function HarvestBindingSection() {
       onSuccess: () => {
         toast.success(nextMachineId ? "Устройство привязано к этому входу" : "Привязка снята");
         if (!nextMachineId) setMachineId("");
+        setUnbinding(false);
       },
-      onError: (error) => {
-        toast.error(error instanceof Error ? error.message : "Не удалось сохранить привязку");
+      onError: () => {
+        toast.error("Не удалось сохранить привязку");
+        setUnbinding(false);
       },
     });
   }
 
   return (
-    <div className="space-y-4">
-      <p className="max-w-2xl text-sm text-text-secondary">
-        Один идентификатор устройства привязывается ровно к одному входу. Идентификатор показывает
-        настольное приложение на экране «Диагностика приложения».
+    <div className="sys-stack sys-harvest">
+      <p className="text-text-secondary sys-measure">
+        Один номер устройства привязывается ровно к одному входу. Номер показывает настольное приложение на экране «Диагностика приложения».
       </p>
 
-      {usersError && <StaleDataNotice title="Список команды недоступен" error={usersErrorValue} />}
-      {usersLoading && !users && <p className="text-sm text-text-muted">Загружаем…</p>}
+      {usersError && (
+        <Notice tone="warning" role="alert" action={<button type="button" className="btn btn-sm" onClick={() => void refetchUsers()}>Повторить</button>}>
+          Список команды недоступен.
+        </Notice>
+      )}
+      {usersLoading && !users && <p className="text-text-secondary">Загружаем…</p>}
 
-      <div className="grid gap-3 sm:grid-cols-2">
+      <div className="sys-harvest-fields">
         <Field label="Сотрудник">
           <select
             value={selectedUser ? String(selectedUser.id) : ""}
@@ -603,26 +658,26 @@ export function HarvestBindingSection() {
       </div>
 
       {devices.isError && (
-        <StaleDataNotice title="Входы сотрудника недоступны" error={devices.error} />
+        <Notice tone="warning" role="alert" action={<button type="button" className="btn btn-sm" onClick={() => void devices.refetch()}>Повторить</button>}>
+          Входы сотрудника недоступны.
+        </Notice>
       )}
       {selectedUser && devices.data && activeDevices.length === 0 && (
-        <p className="text-sm text-text-muted">У сотрудника нет действующих входов.</p>
+        <p className="text-text-secondary">У сотрудника нет действующих входов.</p>
       )}
 
       {selected && (
-        <div className="rounded-lg border border-border bg-hover-alt p-3">
-          <p className="text-sm text-text-secondary">
-            Сейчас привязано: {selected.harvestMachineId
-              ? <code className="font-mono text-xs">{selected.harvestMachineId}</code>
-              : "ничего"}
+        <div className="sys-harvest-bind">
+          <p className="text-text-secondary">
+            Сейчас привязано: {selected.harvestMachineId ? <code className="sys-code">{selected.harvestMachineId}</code> : "ничего"}
           </p>
-          <div className="mt-2 flex flex-wrap items-center gap-2">
+          <div className="sys-harvest-row">
             <input
               value={machineId}
-              aria-label="Идентификатор устройства"
+              aria-label="Номер устройства"
               placeholder="00000000-0000-0000-0000-000000000000"
               onChange={(event) => setMachineId(event.target.value)}
-              className="input min-w-0 flex-1 basis-64 font-mono"
+              className={`input sys-machine-input${machineId.trim() !== "" && !machineIdValid ? " input-invalid" : ""}`}
             />
             <button
               type="button"
@@ -630,25 +685,37 @@ export function HarvestBindingSection() {
               onClick={() => apply(machineId.trim())}
               className="btn btn-primary"
             >
-              {setCapability.isPending ? "Сохраняем…" : "Привязать"}
+              {setCapability.isPending && !unbinding ? "Сохраняем…" : "Привязать"}
             </button>
             {selected.harvestMachineId && (
               <button
                 type="button"
                 disabled={usersError || devices.isError || setCapability.isPending}
-                onClick={() => apply(null)}
-                className="btn text-danger"
+                onClick={() => setUnbinding(true)}
+                className="btn btn-danger-outline"
               >
                 Снять привязку
               </button>
             )}
           </div>
           {machineId.trim() !== "" && !machineIdValid && (
-            <p role="alert" className="mt-1.5 text-xs text-danger">
-              Идентификатор устройства — это UUID, например 3f2504e0-4f89-11d3-9a0c-0305e82c3301.
-            </p>
+            <p role="alert" className="sys-error">Номер устройства — это UUID, например 3f2504e0-4f89-11d3-9a0c-0305e82c3301.</p>
           )}
         </div>
+      )}
+
+      {unbinding && selected && selectedUser && (
+        <ConfirmModal
+          title="Снять привязку компьютера?"
+          message={`Компьютер ${selected.harvestMachineId ?? ""} перестанет передавать собранные данные от имени входа «${selected.label}» сотрудника ${selectedUser.username}.`}
+          facts={[{ label: "Отменить", value: "можно, привяжите компьютер снова." }]}
+          confirmLabel="Снять привязку"
+          pendingLabel="Снимаем…"
+          tone="primary"
+          isPending={setCapability.isPending}
+          onConfirm={() => apply(null)}
+          onClose={() => setUnbinding(false)}
+        />
       )}
     </div>
   );
