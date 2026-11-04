@@ -47,13 +47,20 @@ export interface PageTrackingLinkRef {
   createdAt: Date | null;
 }
 
-/** The page's live tracking links (the latest daily snapshot of `/trackinglinks`). */
+/** The page's live tracking links: the ones its latest daily snapshot of
+ *  `/trackinglinks` names (one answer, the whole list). A link deleted on
+ *  Fansly drops out of the list — its rows of earlier days stay — and its stats
+ *  answer `invalid tracking link id`, so a link absent from the latest day is
+ *  not live. */
 export async function listPageTrackingLinkRefs(db: Database, pageId: number): Promise<PageTrackingLinkRef[]> {
   const result = await db.execute<{ link_ref: string; created_at_platform: Date | string | null; missing_since: Date | string | null }>(sql`
     select distinct on (link_ref) link_ref, created_at_platform, missing_since
       from page_promo_links
      where page_id = ${pageId} and link_kind = 'tracking'
-     order by link_ref, business_date desc
+       and business_date = (
+         select max(business_date) from page_promo_links where page_id = ${pageId} and link_kind = 'tracking'
+       )
+     order by link_ref
   `);
   return result.rows
     .filter((row) => row.missing_since === null)

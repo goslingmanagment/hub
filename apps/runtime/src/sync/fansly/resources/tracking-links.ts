@@ -1,14 +1,17 @@
 import {
+  getSyncAttempt,
   listPageTrackingLinkRefs,
   upsertTrackingLinkDays,
   upsertTrackingLinkRevenueDays,
+  type Database,
+  type SyncWorkRow,
   type TrackingLinkDayRow,
   type TrackingLinkRevenueDayRow,
 } from "@agency_hub_core/db";
 import { millsFromInteger } from "@agency_hub_core/shared";
 
 import { ApplyQuarantine } from "../../engine/commit.ts";
-import type { ApplyInput, ApplyResult, RequestPlan, ResourceModule, StepPlan } from "../../engine/resource.ts";
+import type { ApplyInput, ApplyResult, LocalApplyInput, RequestPlan, ResourceModule, StepPlan } from "../../engine/resource.ts";
 
 // `tracking-links.daily` (0339): each live tracking link's days, as its stats
 // screen shows them — `/trackinglinks/stats` (clicks, claims, follows,
@@ -20,6 +23,12 @@ import type { ApplyInput, ApplyResult, RequestPlan, ResourceModule, StepPlan } f
 // ends with its oldest day. The links are the ones the latest `/trackinglinks`
 // snapshot names (stats.daily, `page_promo_links`). Each answer is journaled
 // first; the apply writes the typed rows.
+//
+// One link never holds the sweep. A link Fansly refuses (a link deleted there
+// answers 500 `invalid tracking link id`) is passed for this sweep and read
+// again by the next one; a link the latest snapshot no longer names is passed
+// too, also in a sweep already under way. A pass is a `local` step: no
+// request, the cursor moves on.
 
 const DAY_MS = 86_400_000;
 /** The daily re-read: Fansly corrects recent days for a while. */
@@ -82,6 +91,39 @@ function parseCursor(value: unknown): Cursor {
   };
 }
 
+/** The answers that refuse one link: Fansly's own error (any non-2xx it does
+ *  not mark as its pace or the session's), or a 2xx without success. */
+const LINK_REFUSALS: ReadonlySet<string> = new Set(["subject_failure", "envelope_unsuccessful"]);
+
+/** The sweep of the work's last step when Fansly refused it, else null. Only
+ *  an apply or a pass moves the cursor, and both clear `last_error_class`, so
+ *  a refusal still recorded is the newest step of the sweep under way. */
+async function refusedSweep(db: Database, work: SyncWorkRow): Promise<Sweep | null> {
+  if (work.lastAttemptId === null || work.lastErrorClass === null || !LINK_REFUSALS.has(work.lastErrorClass)) return null;
+  const attempt = await getSyncAttempt(db, work.lastAttemptId);
+  if (attempt === null || attempt.workId !== work.id) return null;
+  return parseSweep(recordOf(recordOf(attempt.request).step).sweep);
+}
+
+/** The sweep at its first live link from `index` on (the counters first), or
+ *  null: no live link is left. */
+function atLiveLink(sweep: Sweep, index: number, live: ReadonlySet<string>): Sweep | null {
+  for (let at = index; at < sweep.links.length; at += 1) {
+    if (!live.has(sweep.links[at]!.ref)) continue;
+    return at === sweep.index ? sweep : { ...sweep, index: at, half: 0, untilMs: null };
+  }
+  return null;
+}
+
+/** A pass (`local`): the sweep goes on from `sweep`, or ends (null). */
+interface PassDetail {
+  sweep: Sweep | null;
+  historyRead: string[];
+  links: number;
+  /** The link Fansly refused, when the pass is for a refusal. */
+  refused: string | null;
+}
+
 function requestOf(sweep: Sweep, historyRead: readonly string[]): RequestPlan {
   const link = sweep.links[sweep.index]!;
   return {
@@ -136,12 +178,43 @@ function revenueRows(served: readonly Record<string, unknown>[]): TrackingLinkRe
   });
 }
 
+/** The sweep's end: every link read or passed. */
+function sweepRead(links: number, historyRead: string[], now: Date): ApplyResult {
+  return {
+    work: {
+      satisfiesRevision: true,
+      close: "done",
+      closeReason: "tracking_links_read",
+      cursor: { sweep: null, historyRead } satisfies Cursor,
+      result: { links, completedAt: now.toISOString() },
+    },
+    followups: [],
+    counters: { tracking_link_sweeps: 1 },
+  };
+}
+
 export const trackingLinksModule: ResourceModule = {
   async plan(work, ctx): Promise<StepPlan> {
     const cursor = parseCursor(work.cursor);
-    if (cursor.sweep !== null) return { kind: "request", request: requestOf(cursor.sweep, cursor.historyRead) };
     const now = ctx.now.getTime();
     const links = await listPageTrackingLinkRefs(ctx.db, ctx.pageId);
+    const live = new Set(links.map((link) => link.linkRef));
+    const refused = await refusedSweep(ctx.db, work);
+    if (refused !== null) {
+      const detail: PassDetail = {
+        sweep: atLiveLink(refused, refused.index + 1, live),
+        historyRead: cursor.historyRead,
+        links: refused.links.length,
+        refused: refused.links[refused.index]!.ref,
+      };
+      return { kind: "local", reason: "tracking_link_refused", detail };
+    }
+    if (cursor.sweep !== null) {
+      const sweep = atLiveLink(cursor.sweep, cursor.sweep.index, live);
+      if (sweep === cursor.sweep) return { kind: "request", request: requestOf(sweep, cursor.historyRead) };
+      const detail: PassDetail = { sweep, historyRead: cursor.historyRead, links: cursor.sweep.links.length, refused: null };
+      return { kind: "local", reason: "tracking_link_gone", detail };
+    }
     if (links.length === 0) return { kind: "done", reason: "no_tracking_links", cursor: cursor satisfies Cursor };
     const read = new Set(cursor.historyRead);
     const sweep: Sweep = {
@@ -157,6 +230,21 @@ export const trackingLinksModule: ResourceModule = {
       untilMs: null,
     };
     return { kind: "request", request: requestOf(sweep, cursor.historyRead) };
+  },
+
+  /** A pass (no request): the cursor moves past a refused or gone link. */
+  async applyLocal(_tx, input: LocalApplyInput): Promise<ApplyResult> {
+    const detail = recordOf(input.plan?.detail);
+    const historyRead = parseCursor({ historyRead: detail.historyRead }).historyRead;
+    const links = int(detail.links) ?? 0;
+    const counters = { [detail.refused === null ? "tracking_link_gone" : "tracking_link_refused"]: 1 };
+    if (detail.sweep === null) {
+      const read = sweepRead(links, historyRead, input.now);
+      return { ...read, counters: { ...read.counters, ...counters } };
+    }
+    const sweep = parseSweep(detail.sweep);
+    if (sweep === null) throw new ApplyQuarantine("tracking_links_step_missing", { plan: input.plan?.reason ?? null });
+    return { work: { satisfiesRevision: false, nextDueAt: input.now, cursor: { sweep, historyRead } satisfies Cursor }, followups: [], counters };
   },
 
   async apply(tx, input: ApplyInput): Promise<ApplyResult> {
@@ -184,16 +272,6 @@ export const trackingLinksModule: ResourceModule = {
     if (next < sweep.links.length) {
       return { work: { satisfiesRevision: false, nextDueAt: input.now, cursor: { sweep: { ...sweep, index: next, half: 0, untilMs: null }, historyRead: nowRead } }, followups: [] };
     }
-    return {
-      work: {
-        satisfiesRevision: true,
-        close: "done",
-        closeReason: "tracking_links_read",
-        cursor: { sweep: null, historyRead: nowRead },
-        result: { links: sweep.links.length, completedAt: input.now.toISOString() },
-      },
-      followups: [],
-      counters: { tracking_link_sweeps: 1 },
-    };
+    return sweepRead(sweep.links.length, nowRead, input.now);
   },
 };
