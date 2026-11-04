@@ -519,6 +519,11 @@ export function notificationsReportHistory(request: DemoRequest): KernelOperatio
     sentAt.setUTCMinutes(0, 4 + (ago % 5), 0);
     if (sentAt.getTime() > now.getTime()) continue;
     const reportDate = new Date(sentAt.getTime() - DAY_MS).toISOString().slice(0, 10);
+    // That night the messages were off: the scheduled report was skipped («Пропущен», settings §9.4).
+    if (ago === 5) {
+      items.push({ id: 3_100 - ago * 2, kind: "daily_report_scheduled", status: "skipped", reportDate, error: "disabled", createdAt: iso(sentAt) });
+      continue;
+    }
     const failed = ago === 9;
     items.push({
       id: 3_100 - ago * 2,

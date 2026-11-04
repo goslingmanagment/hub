@@ -751,6 +751,24 @@ export function adminAiChatterLimits(request: DemoRequest): KernelOperationRespo
     };
   });
   const usedClamped = Math.min(used, pool);
+  // Yesterday olya.m went past her limit, took the rest of the reserve and her AI stopped
+  // («ИИ выключался», «Запас кончился»; settings §9.4).
+  if (day === shiftDay(today, -1)) {
+    const olya = chatters.find((row) => row.userId === 7);
+    if (olya && olya.dayLimitMicroUsd !== null) {
+      const others = used - (olya.fromPoolMicroUsd ?? 0);
+      olya.fromPoolMicroUsd = Math.max(0, pool - others);
+      olya.spentMicroUsd = olya.dayLimitMicroUsd + olya.fromPoolMicroUsd;
+      olya.blocked = true;
+    }
+    return {
+      generatedAt: iso(request.now),
+      day,
+      resetsAt: iso(moscowDayStart(shiftDay(day, 1))),
+      pool: { microUsd: pool, usedMicroUsd: pool, remainingMicroUsd: 0 },
+      chatters: chatters.sort((left, right) => right.spentMicroUsd - left.spentMicroUsd),
+    };
+  }
   return {
     generatedAt: iso(request.now),
     day,
