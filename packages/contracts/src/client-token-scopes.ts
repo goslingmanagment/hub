@@ -59,6 +59,8 @@ export const CLIENT_TOKEN_PROFILES = {
       "clientMessageAuthors",
       // deleted-messages-v1: the fan's deleted messages of a page, with their text.
       "clientDeletedMessages",
+      // fansly-proxies-v1: the proxies of the caller's Fansly pages, with their logins.
+      "clientFanslyProxies",
       // note-attribution-v1: who wrote each fan note (the extension's confirmed writes).
       "clientNoteAttributions",
       // note-attribution-read-v1: who created each note of a fan and who edited it last.
