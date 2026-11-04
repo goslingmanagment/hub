@@ -13,7 +13,7 @@ import {
 import { isFanslyWriteSendable, type FanslyWireId } from "@agency_hub_core/fansly";
 import type { AppConfig } from "@agency_hub_core/shared";
 
-import { FANSLY_WRITE_STEP_ROUTES } from "./commands.ts";
+import { fanslyStepSendable } from "./commands.ts";
 import { writeGuard } from "./guard.ts";
 
 // The only way a Fansly write command comes to be (wall posts PR 6): its
@@ -82,7 +82,7 @@ export async function enqueueFanslyWriteCommand(db: Database, input: EnqueueFans
     page: { enabled: page.enabled, autostopReason: page.autostopReason },
     // Whether the browser takes writes is the actor's to see at the plan.
     transportWrites: true,
-    contractVerified: (input.isSendable ?? isFanslyWriteSendable)(FANSLY_WRITE_STEP_ROUTES[input.step]),
+    contractVerified: fanslyStepSendable(input.step, input.isSendable ?? isFanslyWriteSendable),
   });
   if (verdict.kind === "refuse") throw new FanslyWriteRefusedError(verdict.reason);
   return db.transaction(async (raw) => {

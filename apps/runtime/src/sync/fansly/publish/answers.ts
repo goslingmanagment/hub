@@ -191,24 +191,50 @@ export function readWriteAnswer(step: FanslyWriteStep, response: unknown, params
     }
     case "album_media": {
       // The contract §13: one album entry per media asked, `{id, mediaId,
-      // albumId, …}`, in the order asked. Every media asked must be there.
+      // albumId, …}`, in the order asked. Every media asked must be there,
+      // each in the album asked, in that order (audit, 2026-11-04): anything
+      // else is no proof the album holds them so.
       const asked = isRecord(params) && Array.isArray(params.mediaIds) ? params.mediaIds.map(String) : null;
+      const albumId = isRecord(params) && typeof params.albumId === "string" ? params.albumId : null;
       if (!Array.isArray(response)) return { ok: false, reason: "answer_not_a_list" };
       const added = response.map((item) => (isRecord(item) ? idOf(item.mediaId) : null));
       if (added.some((id) => id === null)) return { ok: false, reason: "answer_without_media_id" };
       if (asked !== null && (added.length !== asked.length || asked.some((id) => !added.includes(id)))) return { ok: false, reason: "answer_media_differ" };
-      const albumId = isRecord(params) && typeof params.albumId === "string" ? params.albumId : null;
+      if (albumId !== null && response.some((item) => !isRecord(item) || idOf(item.albumId) !== albumId)) return { ok: false, reason: "answer_album_differs" };
+      if (asked !== null && added.some((id, index) => id !== asked[index])) return { ok: false, reason: "answer_order_differs" };
       return { ok: true, result: { albumId, added: added.length } };
     }
     case "album_rename": {
       // The album's entry of the media with its new name (the contract §13).
-      // An entry that shows another name than asked did not rename the card
-      // (audit, 2026-11-03): the album keeps the old one, the reason says so.
+      // An entry that shows another name than asked, or none, of another
+      // media or album, did not rename the card (audits 2026-11-03, -04): the
+      // album keeps the old one, the publication says so.
       if (!isRecord(response)) return { ok: false, reason: "answer_not_an_object" };
       const asked = isRecord(params) && typeof params.customFilename === "string" ? params.customFilename : null;
       const shown = typeof response.customFilename === "string" ? response.customFilename : null;
-      if (asked !== null && shown !== null && !sameCardName(shown, asked)) return { ok: false, reason: "answer_name_differs" };
-      return { ok: true, result: { renamed: true, customFilename: shown ?? asked } };
+      if (shown === null) return { ok: false, reason: "answer_without_name" };
+      if (asked !== null && !sameCardName(shown, asked)) return { ok: false, reason: "answer_name_differs" };
+      for (const key of ["mediaId", "albumId"] as const) {
+        const want = isRecord(params) ? idOf(params[key]) : null;
+        if (want !== null && idOf(response[key]) !== want) return { ok: false, reason: key === "mediaId" ? "answer_media_differs" : "answer_album_differs" };
+      }
+      return { ok: true, result: { renamed: true, customFilename: shown } };
+    }
+    case "album_read": {
+      // One page of a vault album read back (0352, the contract §13):
+      // `{albumMedia: [{id, mediaId, albumId, createdAt, customFilename}],
+      // media: […]}`, the last added first — each card of the album asked.
+      if (!isRecord(response) || !Array.isArray(response.albumMedia)) return { ok: false, reason: "answer_without_album_media" };
+      const albumId = isRecord(params) && typeof params.albumId === "string" ? params.albumId : null;
+      const cards: Array<{ id: string; mediaId: string; customFilename: string | null }> = [];
+      for (const row of response.albumMedia) {
+        const id = isRecord(row) ? idOf(row.id) : null;
+        const mediaId = isRecord(row) ? idOf(row.mediaId) : null;
+        if (!isRecord(row) || id === null || mediaId === null) return { ok: false, reason: "answer_card_without_id" };
+        if (albumId !== null && row.albumId !== undefined && idOf(row.albumId) !== albumId) return { ok: false, reason: "answer_album_differs" };
+        cards.push({ id, mediaId, customFilename: typeof row.customFilename === "string" ? row.customFilename : null });
+      }
+      return { ok: true, result: { albumId, before: isRecord(params) && typeof params.before === "string" ? params.before : null, cards } };
     }
   }
 }

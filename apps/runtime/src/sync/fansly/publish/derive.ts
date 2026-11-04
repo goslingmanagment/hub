@@ -5,6 +5,7 @@ import {
   FANSLY_PUBLISH_FACTS_VERIFIED,
   FANSLY_WIRE_BASE_PATH,
   fanslyWriteFingerprint,
+  VAULT_MEDIA_HEAD_CURSOR,
   type FanslyPublishAttachment,
   type FanslyPublishAudience,
   type FanslyPublishMedia,
@@ -15,7 +16,7 @@ import {
 
 import type { RequestPlan } from "../../engine/resource.ts";
 import { fanslyDispatchKindOfStep, FANSLY_WRITE_STEP_ROUTES } from "./commands.ts";
-import { answeredPart, fanslyCardName, fanslyUploadFailed, subItemOf } from "./uploads.ts";
+import { answeredPart, fanslyAlbumCardsOf, fanslyCardName, fanslyReadIndexOf, fanslyUploadFailed, subItemOf } from "./uploads.ts";
 
 export { subItemOf } from "./uploads.ts";
 
@@ -306,10 +307,13 @@ export interface WriteDeriveInput {
  *  an upload's status read (wall posts PR 8), a command too, its GET's
  *  request line with an empty body and the fingerprint of that. */
 export function describeFanslyCommandRequest(spec: FanslyWireId, params: unknown): { method: string; host: string; pathAndQuery: string; body: string; fingerprint: string } {
-  if (spec === "publish.upload_status") {
+  // A read as a command: an upload's status on the upload API, a vault
+  // album's page (0352) on the API.
+  if (spec === "publish.upload_status" || spec === "vault.media") {
+    const host = spec === "vault.media" ? "api" : "upload";
     const { pathname, search } = buildFanslyWireTarget(spec, params as never);
     const pathAndQuery = `${FANSLY_WIRE_BASE_PATH}${pathname}${search}`;
-    return { method: "GET", host: "upload", pathAndQuery, body: "", fingerprint: fanslyWriteFingerprint({ method: "GET", host: "upload", pathAndQuery, body: "" }) };
+    return { method: "GET", host, pathAndQuery, body: "", fingerprint: fanslyWriteFingerprint({ method: "GET", host, pathAndQuery, body: "" }) };
   }
   return describeFanslyWrite(spec, params as never);
 }
@@ -741,6 +745,42 @@ function build(input: WriteDeriveInput): Built<FanslyWireId> {
       from.push(added.id);
       return { spec: "publish.vault_album_rename", params: { albumId, mediaId, customFilename }, from };
     }
+    case "album_read": {
+      // The album read back once its media are added (0352, audit
+      // 2026-11-04): its top, a page a read, each from the last card of the
+      // latest page before it that answered — a read whose answer was lost
+      // is read again from the same card.
+      if (form.kind !== "vault_album") refuse("not_a_vault_album");
+      const index = fanslyReadIndexOf(command.item) ?? refuse("item_not_a_read");
+      const added = answered(commands, "album_media") ?? refuse("album_media_not_answered");
+      const albumId = resultString(added, "albumId") ?? refuse("album_media_incomplete");
+      if ((input.publication.vaultAlbumRef ?? albumId) !== albumId) refuse("album_not_the_publications");
+      from.push(added.id);
+      const before = commands
+        .filter((read) => read.step === "album_read" && read.state === "answered" && (fanslyReadIndexOf(read.item) ?? index) < index)
+        .sort((a, b) => (fanslyReadIndexOf(a.item) ?? 0) - (fanslyReadIndexOf(b.item) ?? 0))
+        .at(-1);
+      if (before === undefined) return { spec: "vault.media", params: { albumId, before: VAULT_MEDIA_HEAD_CURSOR }, from };
+      // A page that showed no card was the album's end: nothing after it.
+      const cursor = fanslyAlbumCardsOf(before).at(-1)?.id ?? refuse("album_read_ended");
+      from.push(before.id);
+      return { spec: "vault.media", params: { albumId, before: cursor }, from };
+    }
+  }
+}
+
+/** The Fansly media id of one file of the form, as the album's request takes
+ *  it (`mediaIdOf`); null: not known yet, or not of the approved bytes. */
+export function fanslyMediaIdOf(
+  media: ApprovedFormMedia,
+  commands: readonly FanslyWriteCommandRecord[],
+  uploadedMedia?: ReadonlyMap<string, { mediaId: string; commandId: number }>,
+): string | null {
+  try {
+    return mediaIdOf(media, commands, [], uploadedMedia);
+  } catch (error) {
+    if (error instanceof Refused) return null;
+    throw error;
   }
 }
 

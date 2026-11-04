@@ -546,6 +546,33 @@ describe("a request derived from the approval and the dispatch's results (spec �
     expect(() => form({ albumRef: "al9" })).toThrow("test form does not parse");
   });
 
+  it("reads a vault album back once its media are added (0352): the catalog's own read of a page, each from the last card of the page before", () => {
+    const vault = { kind: "create" as const, mode: "vault", revisionId: 33 };
+    const album = form({
+      kind: "vault_album", text: "Пак", wallRefs: [], tierRefs: [], albumRef: "al1",
+      media: [{ role: "media", position: 0, source: "vault", mediaRef: "m-master", fileId: null, fileSha256: null }],
+    });
+    const read = (item: string) => command({ step: "album_read", item });
+    expect(deriveFanslyWrite(deriveInput({ command: read("read:0"), dispatch: vault, form: album }))).toEqual({ ok: false, reason: "album_media_not_answered" });
+    const added = done("album_media", "", { albumId: "al1", added: 1 }, {}, 84);
+    const first = deriveFanslyWrite(deriveInput({ command: read("read:0"), dispatch: vault, form: album, commands: [added] }));
+    expect(first).toMatchObject({ ok: true, request: { spec: "vault.media", params: { albumId: "al1", before: "0" } } });
+    if (!first.ok) throw new Error("derived");
+    // A GET as the catalog sends it, no body: no write fingerprint goes with it.
+    expect(first.write).toMatchObject({ method: "GET", host: "api", body: "", pathAndQuery: "/api/v1/media/vaultnew?albumId=al1&mediaType=&search=&before=0&after=0&ngsw-bypass=true" });
+    // The next page from the last card of the latest page that answered; a lost read is read again from the same card.
+    const page = done("album_read", "read:0", { albumId: "al1", cards: [{ id: "e9", mediaId: "m1" }, { id: "e8", mediaId: "m2" }] }, {}, 85);
+    const lost = command({ id: 86, step: "album_read", item: "read:1", state: "unknown" });
+    expect(deriveFanslyWrite(deriveInput({ command: read("read:2"), dispatch: vault, form: album, commands: [added, page, lost] })))
+      .toMatchObject({ ok: true, request: { params: { albumId: "al1", before: "e8" } }, facts: { from: [84, 85] } });
+    // After a page that showed none — the album's end — nothing; not a read's item, another album: never.
+    const end = done("album_read", "read:0", { albumId: "al1", cards: [] }, {}, 85);
+    expect(deriveFanslyWrite(deriveInput({ command: read("read:1"), dispatch: vault, form: album, commands: [added, end] }))).toEqual({ ok: false, reason: "album_read_ended" });
+    expect(deriveFanslyWrite(deriveInput({ command: read(""), dispatch: vault, form: album, commands: [added] }))).toEqual({ ok: false, reason: "item_not_a_read" });
+    expect(deriveFanslyWrite(deriveInput({ command: read("read:0"), dispatch: vault, form: album, commands: [added], publication: { status: "submitting", platformPostRef: null, vaultAlbumRef: "al7" } })))
+      .toEqual({ ok: false, reason: "album_not_the_publications" });
+  });
+
   it("a vault album's album is one (audit, 2026-11-04): the one its send recorded on the publication, never a second create", () => {
     const vault = { kind: "create" as const, mode: "vault", revisionId: 33 };
     const album = form({
@@ -656,6 +683,23 @@ describe("the answer the apply reads (journaled first)", () => {
     expect(readWriteAnswer("album_media", [{ id: "e1", mediaId: "m2", albumId: "al1" }, { id: "e2", mediaId: "m1", albumId: "al1" }], asked)).toEqual({ ok: true, result: { albumId: "al1", added: 2 } });
     expect(readWriteAnswer("album_media", [{ id: "e1", mediaId: "m2", albumId: "al1" }], asked)).toEqual({ ok: false, reason: "answer_media_differ" });
     expect(readWriteAnswer("album_media", { id: "e1" }, asked)).toEqual({ ok: false, reason: "answer_not_a_list" });
+    // Another album's entries, or the media in another order, are no proof the album holds them so (audit, 2026-11-04).
+    expect(readWriteAnswer("album_media", [{ id: "e1", mediaId: "m2", albumId: "al9" }, { id: "e2", mediaId: "m1", albumId: "al9" }], asked)).toEqual({ ok: false, reason: "answer_album_differs" });
+    expect(readWriteAnswer("album_media", [{ id: "e1", mediaId: "m2" }, { id: "e2", mediaId: "m1" }], asked)).toEqual({ ok: false, reason: "answer_album_differs" });
+    expect(readWriteAnswer("album_media", [{ id: "e1", mediaId: "m1", albumId: "al1" }, { id: "e2", mediaId: "m2", albumId: "al1" }], asked)).toEqual({ ok: false, reason: "answer_order_differs" });
+    // A rename answered with no name, or for another card, renamed nothing it can show.
+    const rename = { albumId: "al1", mediaId: "m2", customFilename: "SXT-003_02.jpg" };
+    expect(readWriteAnswer("album_rename", {}, rename)).toEqual({ ok: false, reason: "answer_without_name" });
+    expect(readWriteAnswer("album_rename", { id: "e1", albumId: "al1", mediaId: "m9", customFilename: "SXT-003_02.jpg" }, rename)).toEqual({ ok: false, reason: "answer_media_differs" });
+    expect(readWriteAnswer("album_rename", { id: "e1", albumId: "al9", mediaId: "m2", customFilename: "SXT-003_02.jpg" }, rename)).toEqual({ ok: false, reason: "answer_album_differs" });
+    expect(readWriteAnswer("album_rename", { id: "e1", albumId: "al1", mediaId: "m2", customFilename: "SXT-003_02.jpg" }, rename)).toEqual({ ok: true, result: { renamed: true, customFilename: "SXT-003_02.jpg" } });
+    // A page of the album read back (0352): its cards top first, each its entry, media and name.
+    const page = { albumMedia: [{ id: "e2", mediaId: "m1", albumId: "al1", createdAt: 1, customFilename: "A.jpg" }, { id: "e1", mediaId: "m2", albumId: "al1", createdAt: 1 }], media: [] };
+    expect(readWriteAnswer("album_read", page, { albumId: "al1", before: "0" })).toEqual({
+      ok: true, result: { albumId: "al1", before: "0", cards: [{ id: "e2", mediaId: "m1", customFilename: "A.jpg" }, { id: "e1", mediaId: "m2", customFilename: null }] },
+    });
+    expect(readWriteAnswer("album_read", { albumMedia: [{ id: "e1", mediaId: "m1", albumId: "al9" }] }, { albumId: "al1", before: "0" })).toEqual({ ok: false, reason: "answer_album_differs" });
+    expect(readWriteAnswer("album_read", { media: [] }, { albumId: "al1", before: "0" })).toEqual({ ok: false, reason: "answer_without_album_media" });
     expect(readWriteAnswer("account_media", [{ id: "a" }], { media: [{ mediaId: "m1", previewId: null }] })).toEqual({ ok: true, result: { accountMediaIds: ["a"] } });
     expect(readWriteAnswer("account_media", [{ id: "a" }], { media: [{ mediaId: "m1", previewId: null }, { mediaId: "m2", previewId: null }] })).toEqual({ ok: false, reason: "answer_count_differs" });
     // An upload's create (the contract §2): its parts' host and path in the

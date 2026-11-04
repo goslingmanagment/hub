@@ -45,7 +45,7 @@ import type {
   StepPlan,
 } from "../../engine/resource.ts";
 import { journalWriteAnswer, readWriteAnswer } from "./answers.ts";
-import { FANSLY_WITHDRAW_STEP_STATUS, FANSLY_WITHDRAW_STEPS, FANSLY_WRITE_STEP_ROUTES, nextWriteStep, writeAnswerVerdict, writeOutcomeDecision } from "./commands.ts";
+import { FANSLY_WITHDRAW_STEP_STATUS, FANSLY_WITHDRAW_STEPS, FANSLY_WRITE_STEP_ROUTES, fanslyStepSendable, nextWriteStep, writeAnswerVerdict, writeOutcomeDecision } from "./commands.ts";
 import {
   deriveFanslyWrite,
   describeFanslyCommandRequest,
@@ -313,7 +313,7 @@ export function fanslyWriteModule(store: WriteModuleStore = databaseWriteStore):
         publishingEnabled: config?.publishingEnabled === true,
         page: pageSettings,
         transportWrites: ctx.transportWrites?.(fanslyWritePermission(spec), spec) === true,
-        contractVerified: store.isSendable(spec),
+        contractVerified: fanslyStepSendable(command.step, (route) => store.isSendable(route)),
       });
       if (verdict.kind === "refuse") return local({ action: "refuse", commandId: command.id, reason: verdict.reason });
       if (verdict.kind === "wait") return { kind: "wait", reason: verdict.reason === "not_before" ? "not_due" : "dependency", until: verdict.until };
@@ -370,11 +370,12 @@ export function fanslyWriteModule(store: WriteModuleStore = databaseWriteStore):
       const command = await store.getCommand(tx, id, true);
       if (command === null || command.state !== "queued") throw new WriteAdmissionRefusedError(id, `state_${command?.state ?? "missing"}`);
       if (FANSLY_WRITE_STEP_ROUTES[command.step] !== request.spec) refuseAdmission(id, "route_not_of_step");
-      if (!store.isSendable(request.spec)) refuseAdmission(id, "route_unverified");
+      if (!fanslyStepSendable(command.step, (route) => store.isSendable(route))) refuseAdmission(id, "route_unverified");
       // The request that will go is the one derived: same method, path, body.
       // An upload's status read is a GET: its transport names no fingerprint.
       const write = describeFanslyCommandRequest(request.spec, request.params);
-      const read = request.spec === "publish.upload_status";
+      // A read — an upload's status, a vault album's page — goes with no write fingerprint.
+      const read = request.spec === "publish.upload_status" || command.step === "album_read";
       if (write.fingerprint !== facts.fingerprint || (read ? admission.writeFingerprint !== null : admission.writeFingerprint !== facts.fingerprint)) {
         refuseAdmission(id, "fingerprint_mismatch");
       }
