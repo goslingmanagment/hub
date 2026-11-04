@@ -11,13 +11,13 @@ import type { KernelOperationResponse } from "@agency_hub_core/contracts";
 import { OFAPI_READ_CATALOG } from "@agency_hub_core/shared";
 
 import { between, demoError, hashString, intBetween, mills, pick, queryNumber, queryString, rng, type DemoReply, type DemoRequest } from "../core.ts";
-import { DEMO_PAGES, demoFans, type DemoPage } from "../world.ts";
+import { DEMO_OFAPI_OFF_AT, DEMO_PAGES, demoFans, type DemoPage } from "../world.ts";
 
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
 const DAY = 24 * HOUR;
 /** Collection of the OnlyFans pages through the vendor stopped here. */
-const OF_STOP = Date.UTC(2026, 10, 1, 0, 0);
+const OF_STOP = DEMO_OFAPI_OFF_AT;
 const at = (ms: number) => new Date(ms).toISOString();
 
 function uuidOf(seed: string): string {

@@ -21,7 +21,7 @@ import {
   type DemoReply,
   type DemoRequest,
 } from "../core.ts";
-import { DEMO_PAGES, DEMO_USERS, demoPage, type DemoPage } from "../world.ts";
+import { DEMO_OFAPI_OFF_DAY, DEMO_PAGES, DEMO_USERS, demoPage, type DemoPage } from "../world.ts";
 import {
   DAY_MS,
   FAN_LINES,
@@ -481,7 +481,10 @@ export const pageFanHandlers: DemoHandlers = {
     }
     return {
       page: assignedPage(page, request.now),
-      items: days.map((day) => ({ businessDate: day, newSubscribers: news.get(day) ?? 0, activeSubscribers: activeByDay.get(day) ?? page.subscribers })),
+      // The full walk of an OnlyFans list went through its API: no day's row after it.
+      items: days
+        .filter((day) => page.platform !== "onlyfans" || day <= DEMO_OFAPI_OFF_DAY)
+        .map((day) => ({ businessDate: day, newSubscribers: news.get(day) ?? 0, activeSubscribers: activeByDay.get(day) ?? page.subscribers })),
     };
   },
 

@@ -1,5 +1,5 @@
-import { daysAgo, hoursAgo, iso, type DemoHandlers, type DemoRequest } from "../core.ts";
-import { DEMO_PAGES, demoUserByRole, type DemoPage } from "../world.ts";
+import { hoursAgo, iso, type DemoHandlers, type DemoRequest } from "../core.ts";
+import { DEMO_OFAPI_OFF_AT, DEMO_PAGES, demoUserByRole, type DemoPage } from "../world.ts";
 
 function principal(request: DemoRequest) {
   const user = demoUserByRole(request.role);
@@ -19,7 +19,24 @@ function pageRef(page: DemoPage) {
   return { id: page.id, label: page.label, platform: page.platform, modelSlug: page.modelSlug, modelName: page.modelName };
 }
 
+/** On production it is empty on an OnlyFans page and on a Telegram one. */
+function lastLightSync(page: DemoPage, now: Date): string | null {
+  return page.platform === "fansly" ? iso(hoursAgo(now, page.health === "attention" ? 5.2 : 0.3)) : null;
+}
+
 function syncUx(page: DemoPage, now: Date) {
+  if (page.platform === "telegram") {
+    return {
+      state: "off" as const,
+      label: "Сбор не нужен",
+      headline: "Hub не собирает данные Telegram",
+      detail: null,
+      progressLabel: null,
+      nextRetryAt: null,
+      updatedAt: null,
+      requiresAction: false,
+    };
+  }
   if (page.health === "off") {
     return {
       state: "off" as const,
@@ -28,19 +45,19 @@ function syncUx(page: DemoPage, now: Date) {
       detail: "Доступ к OnlyFans через сервис выключен с 1 ноября.",
       progressLabel: null,
       nextRetryAt: null,
-      updatedAt: iso(daysAgo(now, 2)),
+      updatedAt: iso(new Date(DEMO_OFAPI_OFF_AT)),
       requiresAction: false,
     };
   }
   if (page.health === "attention") {
     return {
       state: "attention" as const,
-      label: "Нужна проверка",
-      headline: "Подписчики давно не обновлялись",
-      detail: "Последнее обновление списка подписчиков было 9 часов назад.",
+      label: "Нужен вход",
+      headline: "Fansly вышел из аккаунта",
+      detail: "Fansly signed the page's browser out; a new login is needed.",
       progressLabel: null,
-      nextRetryAt: iso(hoursAgo(now, -1)),
-      updatedAt: iso(hoursAgo(now, 9)),
+      nextRetryAt: null,
+      updatedAt: iso(hoursAgo(now, 5.2)),
       requiresAction: true,
     };
   }
@@ -69,8 +86,8 @@ export const shellHandlers: DemoHandlers = {
       displayName: page.displayName,
       followerCount: { value: page.followers, available: page.followers !== null },
       subscriberCount: { value: page.subscribers, available: true },
-      lastLightSyncAt: page.health === "off" ? iso(daysAgo(request.now, 2)) : iso(hoursAgo(request.now, 0.3)),
-      lastFollowerSyncAt: page.platform === "fansly" ? iso(hoursAgo(request.now, page.health === "attention" ? 9 : 1)) : null,
+      lastLightSyncAt: lastLightSync(page, request.now),
+      lastFollowerSyncAt: page.platform === "fansly" ? iso(hoursAgo(request.now, page.health === "attention" ? 5.2 : 1)) : null,
     }));
   },
 
@@ -79,8 +96,8 @@ export const shellHandlers: DemoHandlers = {
     username: page.username,
     displayName: page.displayName,
     connectionStatus: page.health === "off" ? "expired" as const : page.health === "attention" ? "stale" as const : "active" as const,
-    lastLightSyncAt: page.health === "off" ? iso(daysAgo(request.now, 2)) : iso(hoursAgo(request.now, 0.3)),
-    lastFollowerSyncAt: page.platform === "fansly" ? iso(hoursAgo(request.now, page.health === "attention" ? 9 : 1)) : null,
+    lastLightSyncAt: lastLightSync(page, request.now),
+    lastFollowerSyncAt: page.platform === "fansly" ? iso(hoursAgo(request.now, page.health === "attention" ? 5.2 : 1)) : null,
     lastSyncError: page.health === "off" ? "Сбор OnlyFans выключен" : null,
     subscriberCount: { value: page.subscribers, available: true },
     followerCount: { value: page.followers, available: page.followers !== null },

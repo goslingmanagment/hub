@@ -23,7 +23,7 @@ import {
   type DemoReply,
   type DemoRequest,
 } from "../core.ts";
-import { DEMO_PAGES, type DemoPage } from "../world.ts";
+import { DEMO_DATA_PAGES, DEMO_OFAPI_OFF_AT, DEMO_PAGES, type DemoPage } from "../world.ts";
 import { DEMO_MIGRATIONS } from "./system-migrations.ts";
 
 type LogItem = KernelOperationResponse<"adminLogs">[number];
@@ -36,7 +36,7 @@ const DAY = 24 * HOUR;
 /** Run ids count minutes from here (2026-01-01T00:00Z). */
 const ID_EPOCH = Date.UTC(2026, 0, 1);
 /** Collection of the OnlyFans pages through the vendor stopped here. */
-const OF_STOP = Date.UTC(2026, 10, 1, 0, 0);
+const OF_STOP = DEMO_OFAPI_OFF_AT;
 
 // ── the runs ─────────────────────────────────────────────────────────────────
 
@@ -216,7 +216,7 @@ function buildRun(page: DemoPage, streamIdx: number, startedAt: number, now: num
 /** Every run that started in [from, to), newest first. */
 function runsBetween(from: number, to: number, now: number): DemoRun[] {
   const runs: DemoRun[] = [];
-  for (const page of DEMO_PAGES) {
+  for (const page of DEMO_DATA_PAGES) {
     const plans = streamsOf(page);
     plans.forEach((plan, streamIdx) => {
       const cadence = plan.cadenceMin * MINUTE;

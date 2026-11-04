@@ -1,20 +1,20 @@
 /**
  * OnlyFans API credits of the demo agency: the balance, every day's spend by
- * source, the per-request ledger, and the projection check. Collection of the
- * OnlyFans pages through the vendor stopped on 2026-11-01, so the days after
- * it spend almost nothing (a balance ping and the account check), the days
- * before it the usual few thousand credits. Days are UTC, as on the screen.
+ * source, the per-request ledger, and the projection check. The key went on
+ * 2026-11-01, so the days after it spend nothing and the numbers stand as of then;
+ * the days before it the usual few thousand credits. Days are UTC, as on the screen.
  */
 import type { KernelOperationResponse } from "@agency_hub_core/contracts";
 
 import { between, demoError, hashString, intBetween, iso, isoDay, mills, queryNumber, queryString, rng, type DemoReply, type DemoRequest } from "../core.ts";
-import { demoDailyNet, demoFans, demoPage } from "../world.ts";
+import { DEMO_OFAPI_OFF_AT, DEMO_OFAPI_OFF_DAY, demoDailyNet, demoFans, demoPage } from "../world.ts";
 
 const HOUR_MS = 3_600_000;
 const DAY_MS = 24 * HOUR_MS;
 
 /** The day collection of the OnlyFans pages through the vendor stopped. */
-const OFF_DAY = "2026-11-01";
+const OFF_DAY = DEMO_OFAPI_OFF_DAY;
+const OFF_AT = new Date(DEMO_OFAPI_OFF_AT);
 const BALANCE_NOW = 184_260;
 const FLOOR = 20_000;
 const MICRO_USD_PER_CREDIT = 1_000;
@@ -51,9 +51,8 @@ function fractionOf(day: string, now: Date): number {
 /** A whole UTC day's credit movement by source (refills apart). */
 function fullDaySources(day: string): Sources {
   const random = rng(`ofapi-day:${day}`);
-  if (day >= OFF_DAY) {
-    return { rest: intBetween(random, 6, 10), webhookAccrual: 0, external: 0, adjustment: 0 };
-  }
+  // Nothing is spent after the key went: the last line of the journal is the switch-off's morning.
+  if (day > OFF_DAY) return { rest: 0, webhookAccrual: 0, external: 0, adjustment: 0 };
   const weekday = new Date(`${day}T12:00:00Z`).getUTCDay();
   const weekend = weekday === 0 || weekday === 6 ? 1.15 : 1;
   const rest = Math.round(1_650 * weekend * between(random, 0.8, 1.22));
@@ -106,13 +105,6 @@ const OPERATION_MIX: ReadonlyArray<{ operation: string; share: number; perReques
 
 function operationsOf(day: string, rest: number): Array<{ operation: string; credits: number; perRequest: number; page: boolean }> {
   if (rest <= 0) return [];
-  if (day >= OFF_DAY) {
-    const pings = Math.min(rest, 4);
-    return [
-      { operation: "ofapi_balance_ping", credits: pings, perRequest: 1, page: false },
-      { operation: "ofapi_admin_accounts", credits: rest - pings, perRequest: 1, page: false },
-    ].filter((item) => item.credits > 0);
-  }
   const items = OPERATION_MIX.map((mix) => ({ operation: mix.operation, credits: Math.floor(rest * mix.share), perRequest: mix.perRequest, page: mix.page }));
   const placed = items.reduce((sum, item) => sum + item.credits, 0);
   items[0]!.credits += rest - placed;
@@ -141,7 +133,7 @@ export function adminOfapiCreditsSummary(request: DemoRequest): KernelOperationR
   const dmShare = Math.round(todaySources.rest * 0.55);
   return {
     enabled: true,
-    balance: { value: BALANCE_NOW, observedAt: iso(new Date(now.getTime() - 7 * 60_000)) },
+    balance: { value: BALANCE_NOW, observedAt: iso(OFF_AT) },
     today: {
       day: today,
       total: todayTotal,
@@ -166,21 +158,21 @@ export function adminOfapiCreditsSummary(request: DemoRequest): KernelOperationR
     incidents: [
       {
         kind: "ofapi_webhook_silence",
-        openedAt: `${OFF_DAY}T06:12:00.000Z`,
-        errorSummary: "No OnlyFans webhook events for 6 h (last at 2026-11-01 00:07 UTC)",
+        openedAt: iso(new Date(DEMO_OFAPI_OFF_AT + 6 * HOUR_MS)),
+        errorSummary: "No OnlyFans webhook events for 6 h (last at 2026-11-01 10:20 UTC)",
       },
     ],
-    reconciliation: { lastRunAt: iso(new Date(now.getTime() - 38 * 60_000)), lastDriftCredits: 0 },
+    reconciliation: { lastRunAt: iso(OFF_AT), lastDriftCredits: 0 },
     accrual: {
       lastPostedDay: shiftUtcDay(OFF_DAY, -1),
       pendingToday: { day: today, eventCount: 0, estimatedCredits: 0 },
     },
     recentBurn: {
       windowMinutes: 60,
-      total: 1,
+      total: 0,
       threshold: 1_500,
       alerting: false,
-      topOperations: [{ operation: "ofapi_balance_ping", requests: 1, credits: 1 }],
+      topOperations: [],
       topPages: [],
     },
     pricing: { microUsdPerCredit: MICRO_USD_PER_CREDIT },

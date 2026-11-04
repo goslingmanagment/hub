@@ -3,7 +3,7 @@
  * the moment OnlyFans collection through the vendor stopped.
  */
 import { hashString } from "../core.ts";
-import { DEMO_PAGES, type DemoPage } from "../world.ts";
+import { DEMO_OFAPI_OFF_AT, DEMO_PAGES, type DemoPage } from "../world.ts";
 
 export const DAY_MS = 24 * 60 * 60 * 1000;
 export const HOUR_MS = 60 * 60 * 1000;
@@ -54,10 +54,8 @@ export function mskDayKey(at: Date | number): string {
  * the start of the UTC day two days before the request, so the OnlyFans data
  * on screen is always "a few days old".
  */
-export function ofStop(now: Date): Date {
-  const date = new Date(now.getTime() - 2 * DAY_MS);
-  date.setUTCHours(0, 0, 0, 0);
-  return date;
+export function ofStop(_now: Date): Date {
+  return new Date(DEMO_OFAPI_OFF_AT);
 }
 
 export const OF_PAGES: readonly DemoPage[] = DEMO_PAGES.filter((page) => page.platform === "onlyfans");

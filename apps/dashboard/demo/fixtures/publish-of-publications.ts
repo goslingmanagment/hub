@@ -9,7 +9,7 @@
 import type { KernelOperationResponse } from "@agency_hub_core/contracts";
 
 import { iso, pick, rng, intBetween, mills } from "../core.ts";
-import { DEMO_PAGES, type DemoPage } from "../world.ts";
+import { DEMO_DATA_PAGES, DEMO_PAGES, type DemoPage } from "../world.ts";
 import { DAY_MS, HOUR_MS, demoDigits, demoSha, mskAt, mskDayKey, ofStop } from "./publish-of-common.ts";
 
 type Publication = KernelOperationResponse<"adminPublicationList">["publications"][number];
@@ -316,7 +316,7 @@ function buildOne(now: Date, page: DemoPage, day: number, slot: number, hour: nu
 export function demoPublications(now: Date): Built[] {
   const built: Built[] = [];
   for (let day = FIRST_DAY; day <= LAST_DAY; day += 1) {
-    for (const page of DEMO_PAGES) {
+    for (const page of DEMO_DATA_PAGES) {
       const slots = SLOTS[page.label] ?? (page.label === "ivy-1" && day === -7 ? [16] : []);
       slots.forEach((hour, slot) => {
         const item = buildOne(now, page, day, slot, hour);
@@ -375,7 +375,7 @@ export function publicationQueues(now: Date, publications: readonly Publication[
   const nowMs = now.getTime();
   const stop = ofStop(now).getTime();
   const pages: Queue[] = [];
-  for (const page of DEMO_PAGES) {
+  for (const page of DEMO_DATA_PAGES) {
     if (page.label === "ivy-1") continue;
     const off = page.platform === "onlyfans";
     const readAt = off ? stop - 35 * 60_000 : nowMs - (12 + (page.id % 7) * 4) * 60_000;

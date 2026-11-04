@@ -30,7 +30,6 @@ export const DAY_MS = 24 * HOUR_MS;
 /** Fansly and OnlyFans both keep 20 %: net = gross × 0.8. */
 export const CREATOR_SHARE = 0.8;
 /** OnlyFans collection through the vendor stopped this many days ago (2026-11-01). */
-export const OFF_SHIFT_DAYS = 2;
 
 export type AssignedPage = KernelOperationResponse<"pageSubscribers">["page"];
 export type CanonicalType = KernelOperationResponse<"pageTransactions">["items"][number]["canonicalType"];
@@ -59,7 +58,7 @@ export function assignedPage(page: DemoPage, now: Date): AssignedPage {
     displayName: page.displayName,
     followerCount: { value: page.followers, available: page.followers !== null },
     subscriberCount: { value: page.subscribers, available: true },
-    lastLightSyncAt: page.health === "off" ? iso(daysAgo(now, OFF_SHIFT_DAYS)) : iso(hoursAgo(now, 0.3)),
+    lastLightSyncAt: page.platform === "fansly" ? iso(hoursAgo(now, page.health === "attention" ? 5.2 : 0.3)) : null,
     lastFollowerSyncAt: page.platform === "fansly" ? iso(hoursAgo(now, page.health === "attention" ? 9 : 1)) : null,
     capabilities: { voiceNotes: page.platform === "fansly" },
   };
@@ -67,11 +66,6 @@ export function assignedPage(page: DemoPage, now: Date): AssignedPage {
 
 export function pageRefShort(page: DemoPage) {
   return { id: page.id, label: page.label, platform: page.platform, modelSlug: page.modelSlug, modelName: page.modelName };
-}
-
-/** How far back a page's data reaches: an OnlyFans page stopped two days ago. */
-export function shiftHours(page: DemoPage): number {
-  return page.health === "off" ? OFF_SHIFT_DAYS * 24 : 0;
 }
 
 // --- The page's people: the rich fans of world.ts and the quiet crowd ---
@@ -224,26 +218,7 @@ function makePageFan(page: DemoPage, fan: DemoFan, core: boolean, random: () => 
         ? { status: "offline", lastSeenHoursAgo: Math.min(knownHours * 0.9, 2 + -Math.log(Math.max(random(), 1e-6)) * 90) }
         : { status: "offline", lastSeenHoursAgo: null };
   const created = (fan.firstSeenDaysAgo + intBetween(random, 3, 900)) * 24;
-  // An OnlyFans page stopped being read on 2026-11-01: what Hub knows of it is two days old.
-  const shift = shiftHours(page);
-  if (shift === 0) return { fan, core, followedHoursAgo, subscription, createdHoursAgo: created, dm, presence };
-  return {
-    fan,
-    core,
-    followedHoursAgo: followedHoursAgo === null ? null : followedHoursAgo + shift,
-    subscription: subscription ? { ...subscription, startedHoursAgo: subscription.startedHoursAgo + shift } : null,
-    createdHoursAgo: created + shift,
-    dm: dm
-      ? {
-        ...dm,
-        lastMessageHoursAgo: dm.lastMessageHoursAgo + shift,
-        lastFanMessageHoursAgo: dm.lastFanMessageHoursAgo === null ? null : dm.lastFanMessageHoursAgo + shift,
-        lastModelMessageHoursAgo: dm.lastModelMessageHoursAgo === null ? null : dm.lastModelMessageHoursAgo + shift,
-        unreadCount: 0,
-      }
-      : null,
-    presence: { status: "offline", lastSeenHoursAgo: presence.lastSeenHoursAgo === null ? null : presence.lastSeenHoursAgo + shift },
-  };
+  return { fan, core, followedHoursAgo, subscription, createdHoursAgo: created, dm, presence };
 }
 
 const populationCache = new Map<string, PageFan[]>();
@@ -390,7 +365,6 @@ export function fanTransactions(page: DemoPage, fan: DemoFan): DemoTx[] {
     const random = rng(`tx:${key}`);
     const last = fan.lastPurchaseDaysAgo;
     const first = Math.max(fan.firstSeenDaysAgo, last);
-    const shift = shiftHours(page);
     let remaining = fan.totalSpent;
     let index = 0;
     while (remaining > 0.5 && index < 400) {
@@ -406,7 +380,7 @@ export function fanTransactions(page: DemoPage, fan: DemoFan): DemoTx[] {
       }
       remaining -= net;
       const day = index === 0 ? last : last + (first - last) * random() ** 0.8;
-      const hours = day * 24 + between(random, 0.1, 22) + shift;
+      const hours = day * 24 + between(random, 0.1, 22);
       out.push({
         id: page.platform === "fansly"
           ? `9${String(hashString(`${key}:${index}`)).padStart(10, "4")}${String(index).padStart(6, "0")}`
@@ -427,7 +401,7 @@ export function fanTransactions(page: DemoPage, fan: DemoFan): DemoTx[] {
         id: `${victim.id}-cb`,
         rawType: page.platform === "fansly" ? FANSLY_RAW.chargeback : OF_RAW.chargeback,
         type: "chargeback",
-        hoursAgo: Math.max(shift + 1, victim.hoursAgo - between(random, 24, 24 * 20)),
+        hoursAgo: Math.max(1, victim.hoursAgo - between(random, 24, 24 * 20)),
         netMills: -victim.netMills,
         grossMills: -victim.grossMills,
         pending: false,

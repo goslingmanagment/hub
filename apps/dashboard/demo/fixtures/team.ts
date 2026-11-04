@@ -1,14 +1,13 @@
 import type { KernelOperationResponse } from "@agency_hub_core/contracts";
 
 import { demoError, queryNumber, queryString, type DemoHandlers, type DemoRequest } from "../core.ts";
-import { DEMO_CHATTERS, DEMO_PAGES, DEMO_USERS, demoFans, demoPage, type DemoUser } from "../world.ts";
+import { DEMO_CHATTERS, DEMO_DATA_PAGES, DEMO_PAGES, DEMO_USERS, demoFans, demoPage, type DemoUser } from "../world.ts";
 import { teamCustoms, teamGreetings, teamWinBackApproaches, teamWinBackResults } from "./team-extra.ts";
 import { teamChatterStats } from "./team-stats.ts";
 import {
   DAY,
   HOUR,
   MIN,
-  OF_STOP,
   addDays,
   between,
   clamp,
@@ -115,13 +114,12 @@ function authorshipOf(request: DemoRequest, scope: readonly string[], days: numb
   const shifts = teamWorld(now).shifts;
   const dayList = windowDays(now, days);
   const pages: AuthorshipPage[] = [];
-  for (const page of DEMO_PAGES) {
+  for (const page of DEMO_DATA_PAGES) {
     if (!scope.includes(page.label)) continue;
     const onPage = shifts.filter((shift) => shift.pages.some((item) => item.pageLabel === page.label && item.messages > 0));
     const authors = new Map<number, { userId: number; username: string; messages: number }>();
     const rows: AuthorshipPage["days"] = [];
     for (const day of dayList) {
-      if (page.platform === "onlyfans" && mskMidnight(day) >= OF_STOP) continue;
       const random = rng(`authorship:${page.label}:${day}`);
       let authored = 0;
       for (const shift of onPage) {
@@ -181,7 +179,7 @@ function emptyHoursOf(request: DemoRequest, scope: readonly string[], days: numb
   const world = teamWorld(request.now);
   const from = windowStart(request.now, days);
   const result: KernelOperationResponse<"teamEmptyHours">["pages"] = [];
-  for (const page of DEMO_PAGES) {
+  for (const page of DEMO_DATA_PAGES) {
     if (!scope.includes(page.label)) continue;
     const onPage = world.shifts.filter((shift) => shift.pages.some((item) => item.pageLabel === page.label && item.messages > 0));
     const firstMinute = onPage.reduce((min, shift) => Math.min(min, shift.startedAt), Number.POSITIVE_INFINITY);
@@ -190,7 +188,7 @@ function emptyHoursOf(request: DemoRequest, scope: readonly string[], days: numb
       continue;
     }
     const start = Math.ceil(Math.max(from, firstMinute) / HOUR) * HOUR;
-    const end = page.platform === "onlyfans" ? Math.min(now, OF_STOP) : now;
+    const end = now;
     const byHour = Array.from({ length: 24 }, () => 0);
     let hoursWithFans = 0;
     let emptyHours = 0;
@@ -250,7 +248,7 @@ function totalOf(cells: ReadonlyArray<{ sent: number; bought: number; netMills: 
 function salesPpv(request: DemoRequest, scope: readonly string[], days: number): KernelOperationResponse<"teamSalesPpv"> {
   const { from, shifts } = salesWindow(request, days, scope);
   const pages: KernelOperationResponse<"teamSalesPpv">["pages"] = [];
-  for (const page of DEMO_PAGES) {
+  for (const page of DEMO_DATA_PAGES) {
     if (!scope.includes(page.label)) continue;
     const onPage = shifts.filter((shift) => workedPages(shift).includes(page.label));
     const authoredSent = onPage.reduce((sum, shift) => sum + ppvOnPage(shift, page.label), 0);
@@ -259,7 +257,7 @@ function salesPpv(request: DemoRequest, scope: readonly string[], days: number):
     let withoutAuthor = Math.round(authoredSent * between(random, 0.06, 0.14));
     if (onPage.length === 0) {
       // Nobody works the page in the extension: every PPV went out from a phone.
-      const liveDays = page.platform === "onlyfans" ? Math.max(0, Math.min(days, Math.floor((OF_STOP - from) / DAY))) : days;
+      const liveDays = days;
       withoutAuthor = page.dailyNet < 20 ? Math.round(liveDays * between(random, 0.3, 0.7)) : 0;
     }
     if (authoredSent + withoutAuthor === 0) continue;
@@ -309,7 +307,7 @@ function salesReplies(request: DemoRequest, scope: readonly string[], days: numb
   const { from, shifts } = salesWindow(request, days, scope);
   const settled = shifts.filter((shift) => shift.endedAt <= to);
   const pages: KernelOperationResponse<"teamSalesReplies">["pages"] = [];
-  for (const page of DEMO_PAGES) {
+  for (const page of DEMO_DATA_PAGES) {
     if (!scope.includes(page.label)) continue;
     const tables = settled.flatMap((shift) => {
       const onPage = shift.pages.find((item) => item.pageLabel === page.label);
@@ -320,7 +318,7 @@ function salesReplies(request: DemoRequest, scope: readonly string[], days: numb
     // Replies with no author: from a phone, slower.
     const random = rng(`replies-phone:${page.label}:${days}`);
     const authored = tables.reduce((sum, table) => sum + replyTotal(table).replies, 0);
-    const liveDays = page.platform === "onlyfans" ? Math.max(0, Math.min(days - 1, Math.floor((OF_STOP - from) / DAY))) : days - 1;
+    const liveDays = days - 1;
     const phone = authored > 0 ? Math.round(authored * between(random, 0.05, 0.12)) : Math.round(liveDays * (page.dailyNet < 20 ? between(random, 3, 7) : 0));
     if (phone > 0) tables.push(replyCells(phone, 1800, pageBuyFactor(page.label), `phone:${page.label}:${days}`));
     if (tables.length === 0) continue;

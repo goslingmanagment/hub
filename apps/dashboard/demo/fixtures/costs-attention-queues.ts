@@ -6,14 +6,14 @@
 import { AGENT_PLANE_NAMES, type KernelOperationResponse } from "@agency_hub_core/contracts";
 
 import { between, daysAgo, demoError, hashString, hoursAgo, intBetween, iso, queryNumber, queryString, rng, type DemoReply, type DemoRequest } from "../core.ts";
-import { DEMO_MODELS, DEMO_PAGES, DEMO_USERS, demoDailyNet, demoFans, demoPage, demoUserByRole } from "../world.ts";
+import { DEMO_DATA_PAGES, DEMO_MODELS, DEMO_OFAPI_OFF_AT, DEMO_PAGES, DEMO_USERS, demoDailyNet, demoFans, demoPage, demoUserByRole } from "../world.ts";
 
 const MINUTE_MS = 60_000;
 const HOUR_MS = 60 * MINUTE_MS;
 const DAY_MS = 24 * HOUR_MS;
 
-/** The day collection of the OnlyFans pages through the vendor stopped. */
-const OF_OFF_AT = "2026-11-01T00:07:00.000Z";
+/** Collection of the OnlyFans pages through the vendor stopped here. */
+const OF_OFF_AT = new Date(DEMO_OFAPI_OFF_AT).toISOString();
 
 function uuid(seed: string): string {
   const hex = Array.from({ length: 4 }, (_, index) => hashString(`${seed}:${index}`).toString(16).padStart(8, "0")).join("");
@@ -303,13 +303,17 @@ interface IncidentSeed {
   code: string | null;
   outbox?: Pick<Incident, "outboxState" | "outboxAttemptCount" | "outboxLastError" | "outboxSuppressionReason">;
   manual?: boolean;
+  /** The end of the failure's key, as the hub writes it. */
+  tail?: string;
 }
 
 function incidentSeeds(now: Date): IncidentSeed[] {
   const sinceOff = Math.max(1, (now.getTime() - Date.parse(OF_OFF_AT)) / HOUR_MS);
   const seeds: IncidentSeed[] = [
-    { kind: "stream_failed_threshold", page: "nova-1", stream: "followers", openedHoursAgo: 8.7, durationHours: null, error: "followers: HTTP 429 from apiv3.fansly.com, 3 failed runs in a row", code: "rate_limited" },
-    { kind: "ofapi_webhook_silence", page: null, stream: null, openedHoursAgo: sinceOff - 6.1, durationHours: null, error: "No OnlyFans webhook events for 6 h (last at 2026-11-01 00:07 UTC)", code: "webhook_silence" },
+    { kind: "stream_failed_threshold", page: "ivy-1", stream: "followers", openedHoursAgo: 8.7, durationHours: null, error: "followers: HTTP 429 from apiv3.fansly.com, 3 failed runs in a row", code: "rate_limited" },
+    { kind: "auth_blocked", page: "nova-1", stream: null, openedHoursAgo: 5.2, durationHours: null, error: "Fansly signed the page's browser out", code: "login_required" },
+    { kind: "ofapi_webhook_silence", page: null, stream: null, openedHoursAgo: sinceOff - 6.1, durationHours: null, error: "No OnlyFans webhook events for 6 h (last at 2026-11-01 10:20 UTC)", code: "webhook_silence" },
+    { kind: "golden_signal_lag", page: null, stream: null, tail: "ofapi_delivery_history_age", openedHoursAgo: sinceOff - 0.5, durationHours: null, error: "ofapi delivery history age is over its threshold", code: "lag" },
     { kind: "ofapi_platform_notice", page: "mia-vip-of", stream: null, openedHoursAgo: sinceOff - 2.5, durationHours: null, error: "OnlyFans notice: «Updated Terms of Service» — effective 1 November 2026", code: "platform_notice" },
     { kind: "ai_provider_billing", page: null, stream: null, openedHoursAgo: 12 * 24 + 3.2, durationHours: 0.2, error: "Anthropic 400: Your credit balance is too low to access the Anthropic API (account main)", code: "credit_balance_too_low" },
     { kind: "proxy_failed", page: "ivy-2", stream: null, openedHoursAgo: 4 * 24 + 7, durationHours: 1.6, error: "SOCKS5 handshake timed out after 15 s", code: "proxy_timeout" },
@@ -362,7 +366,7 @@ function incident(seed: IncidentSeed, index: number, now: Date): Incident {
   const global = seed.kind === "ofapi_webhook_silence" || seed.kind === "ai_provider_billing" || seed.kind === "ofapi_low_credit";
   return {
     id: 9_400 + index,
-    incidentKey: `${seed.kind}:${seed.page ?? "global"}${seed.stream ? `:${seed.stream}` : ""}`,
+    incidentKey: `${seed.kind}:${page?.id ?? "global"}${seed.stream ? `:${seed.stream}` : ""}${seed.tail ? `:${seed.tail}` : ""}`,
     kind: seed.kind,
     pageLabel: seed.page,
     platform: page?.platform ?? (seed.kind.startsWith("ofapi_") && global ? "onlyfans" : null),
@@ -381,13 +385,13 @@ function incident(seed: IncidentSeed, index: number, now: Date): Incident {
 export function notificationsIncidents(request: DemoRequest): Incidents {
   const status = queryString(request, "status");
   const kind = queryString(request, "kind");
-  const pageLabel = queryString(request, "pageLabel")?.trim().toLowerCase();
+  const pageLabel = queryString(request, "pageLabel");
   const all = incidentSeeds(request.now)
     .map((seed, index) => incident(seed, index, request.now))
     .filter((item) =>
       (status === undefined || item.status === status)
       && (kind === undefined || item.kind === kind)
-      && (pageLabel === undefined || pageLabel === "" || (item.pageLabel ?? "").toLowerCase().includes(pageLabel)))
+      && (pageLabel === undefined || item.pageLabel === pageLabel))
     .sort((left, right) => right.openedAt.localeCompare(left.openedAt));
   const { page } = paginate(all, request, 50, 200);
   return { items: page, total: all.length };
@@ -465,7 +469,7 @@ export function notificationsReportPreview(request: DemoRequest): KernelOperatio
   const now = request.now;
   const reportDay = new Date(now.getTime() + 3 * HOUR_MS - 2 * HOUR_MS - DAY_MS);
   const reportDate = reportDay.toISOString().slice(0, 10);
-  const pages = DEMO_PAGES.map((page) => ({
+  const pages = DEMO_DATA_PAGES.map((page) => ({
     page,
     yesterday: net(page.label, now, 1, 1),
     dayBefore: net(page.label, now, 1, 2),

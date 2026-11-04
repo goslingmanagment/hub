@@ -13,9 +13,6 @@ export const HOUR = 60 * MIN;
 export const DAY = 24 * HOUR;
 const MSK = 3 * HOUR;
 
-/** Collection of the OnlyFans pages through the vendor stopped here: nothing of theirs is known after it. */
-export const OF_STOP = Date.parse("2026-11-01T00:00:00+03:00");
-
 // --- Moscow days ---
 
 export function mskDay(at: number): string {
@@ -93,7 +90,7 @@ const SCHEDULES: readonly Schedule[] = [
   { username: "alex.k", startHour: 10, hours: [6.5, 8.8], pages: [["mia-1", 0.6], ["mia-2", 0.4]], peek: "mia-3", rate: 40, dayOff: 0.2, sinceDays: 44, ppvShare: 0.05, replyMedian: [95, 240] },
   { username: "kate.v", startHour: 18, hours: [6, 8], pages: [["mia-3", 0.55], ["mia-1", 0.45]], peek: "mia-2", rate: 36, dayOff: 0.22, sinceDays: 44, ppvShare: 0.045, replyMedian: [150, 420] },
   { username: "den.s", startHour: 21, hours: [7, 9.5], pages: [["nova-1", 1]], peek: null, rate: 46, dayOff: 0.15, sinceDays: 41, ppvShare: 0.055, replyMedian: [70, 180] },
-  { username: "olya.m", startHour: 12, hours: [6, 8], pages: [["mia-vip-of", 0.55], ["mia-of", 0.45]], peek: null, rate: 31, dayOff: 0.25, sinceDays: 44, until: () => OF_STOP, ppvShare: 0.05, replyMedian: [220, 600] },
+  { username: "olya.m", startHour: 12, hours: [6, 8], pages: [["mia-vip-of", 0.55], ["mia-of", 0.45]], peek: null, rate: 31, dayOff: 0.25, sinceDays: 44, ppvShare: 0.05, replyMedian: [220, 600] },
   { username: "ivan.p", startHour: 15, hours: [2.3, 4.4], pages: [["ivy-2", 1]], peek: null, rate: 28, dayOff: 0.35, sinceDays: 23, ppvShare: 0.04, replyMedian: [420, 1500] },
   { username: "lena.r", startHour: 13, hours: [5, 7], pages: [["mia-2", 0.5], ["nova-1", 0.5]], peek: null, rate: 33, dayOff: 0.3, sinceDays: 44, until: (now) => now.getTime() - 12 * DAY, ppvShare: 0.05, replyMedian: [180, 500] },
 ];
@@ -202,7 +199,6 @@ function saleOf(random: () => number, label: string): { kind: SaleKind; price: n
 
 /** Net revenue of a page on a Moscow day, dollars — the world's daily figure. */
 function pageDayNet(label: string, day: string): number {
-  if (demoPage(label)?.platform === "onlyfans" && mskMidnight(day) >= OF_STOP) return 0;
   return demoDailyNet(label, new Date(mskMidnight(day) + 12 * HOUR), 1)[0]?.net ?? 0;
 }
 
@@ -242,7 +238,7 @@ function makeSales(
     sales.push({
       ref: numericRef(`${seed}:${label}:${sales.length}`),
       pageLabel: label,
-      platform: page.platform,
+      platform: page.platform as DemoSale["platform"],
       kind,
       fan,
       netMills: Math.round(net * 1000),
@@ -309,8 +305,8 @@ function simulateChatter(schedule: Schedule, now: Date): { shifts: DemoShift[]; 
     const pausedMinutes = shiftPauses.reduce((sum, pause) => sum + Math.round((pause.to - pause.from) / MIN), 0);
     const workedMinutes = Math.round((end - start) / MIN) - pausedMinutes;
     const messages = Math.max(50, Math.round((workedMinutes / 60) * schedule.rate * between(random, 0.8, 1.2)));
-    // An ongoing shift under the rule is a visit so far: the screens do not show it yet.
-    if (workedMinutes < 120) continue;
+    // A finished shift under the rule was a visit; an ongoing one shows from its start, as on the hub.
+    if (!ongoing && workedMinutes < 120) continue;
 
     const weights = schedule.pages.map(([label, weight]) => [label, Math.max(0.05, weight * between(random, 0.75, 1.25))] as const);
     const weightSum = weights.reduce((sum, [, weight]) => sum + weight, 0);

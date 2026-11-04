@@ -15,7 +15,7 @@
 import type { KernelOperationResponse } from "@agency_hub_core/contracts";
 
 import { between, demoError, hashString, intBetween, iso, queryNumber, queryString, rng, type DemoReply, type DemoRequest } from "../core.ts";
-import { DEMO_PAGES, demoPage, type DemoPage } from "../world.ts";
+import { DEMO_OFAPI_OFF_AT, DEMO_PAGES, demoPage, type DemoPage } from "../world.ts";
 
 type BlocksPage = KernelOperationResponse<"syncOverview">["pages"][number];
 type Block = BlocksPage["blocks"]["connection"];
@@ -31,7 +31,7 @@ const MINUTE = 60 * SECOND;
 const HOUR = 60 * MINUTE;
 const DAY = 24 * HOUR;
 /** Collection of the OnlyFans pages through the vendor stopped here. */
-const OF_STOP = Date.UTC(2026, 10, 1, 0, 0);
+const OF_STOP = DEMO_OFAPI_OFF_AT;
 /** The owner's pause between two requests of a page (S). */
 const PAUSE_MS = 2500;
 
@@ -150,6 +150,21 @@ function pageFacts(page: DemoPage, now: number): PageFacts {
   const facts: PageFacts = { page, streams, pausedKeys: [], holds: [], chatsUnavailable: 0, load };
 
   if (page.label === "nova-1") {
+    // Fansly signed the page's browser out five hours ago: nothing is read since, a login waits for the owner.
+    const lost = now - 5 * HOUR - 12 * MINUTE;
+    const allKeys = Object.values(STREAM_KEYS).flat();
+    facts.holds.push({ reason: "page_hold", by: ["auth"], resources: [...new Set(allKeys)], until: null });
+    for (const [name, stream] of Object.entries(streams)) {
+      streams[name] = {
+        ...stream,
+        succeededAt: stream.succeededAt === null ? null : Math.min(stream.succeededAt, lost - between(random, 1, 40) * MINUTE),
+        nextDueAt: null,
+        activeWork: 0,
+        waiting: null,
+      };
+    }
+  }
+  if (page.label === "ivy-1") {
     // Fansly answers 429 on the subscriptions route: the route is held, and one history row of the list is in quarantine.
     const until = now + (38 - (Math.floor(now / MINUTE) % 30)) * MINUTE;
     facts.holds.push({ reason: "route_hold", by: ["/api/v1/subscriptions"], resources: ["subscribers.poll", "subscribers.history"], until: at(until) });
@@ -329,12 +344,30 @@ function legacyBlock(
   };
 }
 
-function onlyFansBlocks(page: DemoPage): BlocksPage["blocks"] {
+/** A Telegram page: the hub collects nothing of it, in every block. */
+function telegramBlocks(): BlocksPage["blocks"] {
+  const nothing = (block: BlockKey) => legacyBlock(block, "not_available", {
+    succeededAt: null,
+    substreams: [],
+    intervals: [],
+    statusReason: { code: "sync_not_needed", summary: "Hub does not collect this platform.", waitingFor: null },
+  });
+  return {
+    connection: nothing("connection"),
+    financials: nothing("financials"),
+    audience: nothing("audience"),
+    messages_live: nothing("messages_live"),
+    messages_history: nothing("messages_history"),
+  };
+}
+
+function onlyFansBlocks(page: DemoPage, now: number): BlocksPage["blocks"] {
   const random = rng(`of-blocks:${page.label}`);
   const lastLight = OF_STOP - between(random, 8, 40) * MINUTE;
-  const lastTransaction = OF_STOP - between(random, 2, 25) * MINUTE;
+  // The ChatSpace feed goes on writing operations after the API.
+  const lastTransaction = now - between(random, 2, 25) * MINUTE;
   const lastSubscribers = OF_STOP - between(random, 30, 200) * MINUTE;
-  const lastWebhook = OF_STOP + between(random, 1, 14) * MINUTE;
+  const lastWebhook = OF_STOP - between(random, 1, 14) * MINUTE;
   const transactionCount = Math.round(page.dailyNet * between(random, 410, 470));
   return {
     connection: legacyBlock("connection", "paused", {
@@ -346,7 +379,7 @@ function onlyFansBlocks(page: DemoPage): BlocksPage["blocks"] {
     financials: legacyBlock("financials", "up_to_date", {
       succeededAt: at(lastTransaction),
       primaryFresh: true,
-      statusReason: { code: "ofapi_financials_live", summary: "Financials are fed by OFAPI transactions.", waitingFor: null },
+      statusReason: { code: "chatspace_financials_live", summary: "Financials are fed by the ChatSpace feed.", waitingFor: null },
       substreams: [
         legacySubstream("transactions", "primary", "paused", lastTransaction, 3600),
         legacySubstream("fan_identities", "supporting", "paused", lastTransaction - 2 * HOUR, 21_600),
@@ -384,8 +417,10 @@ function blocksPage(page: DemoPage, now: number): BlocksPage {
       messages_live: engineBlock("messages_live", facts),
       messages_history: engineBlock("messages_history", facts),
     };
+  } else if (page.platform === "telegram") {
+    blocks = telegramBlocks();
   } else {
-    blocks = onlyFansBlocks(page);
+    blocks = onlyFansBlocks(page, now);
   }
   return {
     pageId: page.id,
@@ -431,7 +466,7 @@ function sendsByResource(facts: PageFacts, total: number, random: () => number):
     ["transactions.head", 0.05],
     ["fan-profiles.probe", 0.05],
     ["followers.head", 0.03],
-    ["subscribers.poll", facts.page.label === "nova-1" ? 0 : 0.03],
+    ["subscribers.poll", facts.page.label === "ivy-1" ? 0 : 0.03],
     ["posts.engagement", 0.03],
     ["stats.hourly", 0.02],
     ["account.poll", 0.01],
@@ -483,7 +518,7 @@ function pageStatus(page: DemoPage, now: number, open: HistoryRequest[]): PageSt
     queue: {
       urgent: {
         runnable: intBetween(random, 0, Math.round(4 * facts.load)),
-        waitingByReason: page.label === "nova-1" ? { pacer: 2, route_hold: 1 } : { pacer: intBetween(random, 0, 3) },
+        waitingByReason: page.label === "ivy-1" ? { pacer: 2, route_hold: 1 } : { pacer: intBetween(random, 0, 3) },
       },
       requests: {
         runnable: open.length > 0 ? intBetween(random, 1, 6) : 0,
@@ -494,11 +529,11 @@ function pageStatus(page: DemoPage, now: number, open: HistoryRequest[]): PageSt
         waitingByReason: {
           not_due: intBetween(random, 26, 34),
           class_share: intBetween(random, 0, 6),
-          ...(page.label === "nova-1" ? { route_hold: 1, quarantined: 1 } : {}),
+          ...(page.label === "ivy-1" ? { route_hold: 1, quarantined: 1 } : {}),
         },
       },
     },
-    holds: { page: null, resources: [] },
+    holds: { page: page.label === "nova-1" ? { kind: "auth", until: "infinity", since: at(now - 5 * HOUR - 12 * MINUTE) } : null, resources: [] },
     breakers: { open: 0, blockedByVendor: 0 },
     quarantined,
     requests: open.map((request) => ({
@@ -533,8 +568,10 @@ function pageStatus(page: DemoPage, now: number, open: HistoryRequest[]): PageSt
       },
       ownerStop: null,
       halt: null,
-      login: { needed: false, why: null },
-      session: { present: true, accountId: `3${String(hashString(page.username)).padStart(10, "0")}${String(page.id).padStart(7, "0")}` },
+      login: page.label === "nova-1" ? { needed: true, why: "login_required" } : { needed: false, why: null },
+      session: page.label === "nova-1"
+        ? { present: false, accountId: null }
+        : { present: true, accountId: `3${String(hashString(page.username)).padStart(10, "0")}${String(page.id).padStart(7, "0")}` },
       proxy: { pinnedExitIp: ip, pinnedAt: at(now - 11 * DAY), exitIp: ip, matches: true, problem: null },
       buffer: {
         bytes: intBetween(random, 8_000, 260_000),
@@ -555,7 +592,9 @@ function pageStatus(page: DemoPage, now: number, open: HistoryRequest[]): PageSt
       },
       versions: { chrome: CHROME_VERSION, operator: OPERATOR_VERSION },
       selfTest: { ok: true, at: at(started + 3 * MINUTE), failed: null },
-      hubSend: { allowed: true, reason: null, since: at(started + 4 * MINUTE), forMs: null },
+      hubSend: page.label === "nova-1"
+        ? { allowed: false, reason: "login_required", since: at(now - 5 * HOUR - 12 * MINUTE), forMs: 5 * HOUR + 12 * MINUTE }
+        : { allowed: true, reason: null, since: at(started + 4 * MINUTE), forMs: null },
       crashDumps: {
         completed: { count: page.label === "mia-1" ? 1 : 0, newestAt: page.label === "mia-1" ? at(now - 6 * DAY) : null },
         pending: { count: 0, newestAt: null },

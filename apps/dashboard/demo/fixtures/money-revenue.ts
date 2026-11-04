@@ -5,7 +5,7 @@
  */
 import type { KernelOperationResponse } from "@agency_hub_core/contracts";
 import { daysAgo, demoError, hoursAgo, iso, isoDay, queryNumber, queryString, rng, intBetween, type DemoHandlers, type DemoRequest } from "../core.ts";
-import { DEMO_MODELS, DEMO_PAGES, demoFans, type DemoPage } from "../world.ts";
+import { DEMO_MODELS, DEMO_OFAPI_OFF_AT, DEMO_PAGES, demoFans, type DemoPage } from "../world.ts";
 import {
   DAY_MS,
   HISTORY_DAYS,
@@ -31,19 +31,19 @@ import {
 
 type Period = "today" | "7d" | "30d" | "all" | "custom";
 
-function periodOf(request: DemoRequest, fallback: Period = "30d"): Period {
+export function periodOf(request: DemoRequest, fallback: Period = "30d"): Period {
   const value = queryString(request, "period");
   return value === "today" || value === "7d" || value === "30d" || value === "all" || value === "custom" ? value : fallback;
 }
 
 /** The clock a report resolves its window with: `windowAt` when the screen pins it. */
-function clockOf(request: DemoRequest): Date {
+export function clockOf(request: DemoRequest): Date {
   const windowAt = queryString(request, "windowAt");
   const parsed = windowAt ? new Date(windowAt) : null;
   return parsed && Number.isFinite(parsed.getTime()) ? parsed : request.now;
 }
 
-function customOf(request: DemoRequest): { from: string; to: string } | undefined {
+export function customOf(request: DemoRequest): { from: string; to: string } | undefined {
   const from = queryString(request, "from");
   const to = queryString(request, "to");
   return from && to ? { from, to } : undefined;
@@ -61,7 +61,7 @@ function windowOf(windows: readonly PlatformWindow[], platform: DemoPage["platfo
   return windows.find((item) => item.platform === platform)!;
 }
 
-function breakdownOf(totals: Totals) {
+export function breakdownOf(totals: Totals) {
   return LEDGER_TYPES.filter((type) => totals.byType.has(type)).map((type) => ({
     canonicalType: type,
     bucket: LEDGER_BUCKET[type],
@@ -69,7 +69,7 @@ function breakdownOf(totals: Totals) {
   }));
 }
 
-function sourcesOf(current: Totals, previous: Totals) {
+export function sourcesOf(current: Totals, previous: Totals) {
   return LEDGER_TYPES.filter((type) => current.byType.has(type) || previous.byType.has(type)).map((type) => {
     const now = current.byType.get(type) ?? 0;
     const before = previous.byType.get(type) ?? 0;
@@ -203,19 +203,19 @@ function syncUxOf(page: DemoPage, now: Date) {
       detail: "Доступ к OnlyFans через сервис выключен с 1 ноября.",
       progressLabel: null,
       nextRetryAt: null,
-      updatedAt: iso(daysAgo(now, 2)),
+      updatedAt: iso(new Date(DEMO_OFAPI_OFF_AT)),
       requiresAction: false,
     };
   }
   if (page.health === "attention") {
     return {
       state: "attention" as const,
-      label: "Нужна проверка",
-      headline: "Подписчики давно не обновлялись",
-      detail: "Последнее обновление списка подписчиков было 9 часов назад.",
+      label: "Нужен вход",
+      headline: "Fansly вышел из аккаунта",
+      detail: "Fansly signed the page's browser out; a new login is needed.",
       progressLabel: null,
-      nextRetryAt: iso(hoursAgo(now, -1)),
-      updatedAt: iso(hoursAgo(now, 9)),
+      nextRetryAt: null,
+      updatedAt: iso(hoursAgo(now, 5.2)),
       requiresAction: true,
     };
   }
@@ -262,7 +262,7 @@ function overview(request: DemoRequest): KernelOperationResponse<"overview"> {
       syncUx: worst
         ? {
             ...syncUxOf(worst, now),
-            headline: `${worst.label}: подписчики давно не обновлялись`,
+            headline: `${worst.label}: нужен вход`,
           }
         : syncUxOf(pages[0] ?? DEMO_PAGES[0]!, now),
     },
@@ -293,7 +293,7 @@ function overview(request: DemoRequest): KernelOperationResponse<"overview"> {
         newSubscribersToday: off ? 0 : intBetween(random, 0, Math.max(1, Math.round(page.subscribers / 120))),
         newFollowersToday: page.followers === null ? 0 : intBetween(random, 2, Math.max(4, Math.round(page.followers / 220))),
         connectionStatus: off ? "expired" as const : page.health === "attention" ? "stale" as const : "active" as const,
-        lastLightSyncAt: off ? iso(daysAgo(now, 2)) : iso(hoursAgo(now, 0.3)),
+        lastLightSyncAt: page.platform === "fansly" ? iso(hoursAgo(now, page.health === "attention" ? 5.2 : 0.3)) : null,
         lastFollowerSyncAt: page.platform === "fansly" ? iso(hoursAgo(now, page.health === "attention" ? 9 : 1)) : null,
         lastSyncError: off ? "Сбор OnlyFans выключен" : null,
         syncUx: syncUxOf(page, now),

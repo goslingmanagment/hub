@@ -5,7 +5,7 @@ import {
   type OfapiCollectionCategory,
 } from "@agency_hub_core/shared";
 import { between, daysAgo, hoursAgo, intBetween, iso, queryNumber, queryString, rng, type DemoHandlers, type DemoRequest } from "../core.ts";
-import { DEMO_PAGES, demoUserByRole, type DemoPage } from "../world.ts";
+import { DEMO_OFAPI_OFF_AT, DEMO_PAGES, demoUserByRole, type DemoPage } from "../world.ts";
 import { ownerOnly, prefixFrom, uuidFrom } from "./settings-common.ts";
 
 /**
@@ -25,8 +25,11 @@ interface Settings {
   includeDetails: boolean;
 }
 
-/** The days since the pause. */
-const PAUSED_DAYS_AGO = 2;
+/** The background collection was paused with the key's end. */
+const PAUSED_AT = new Date(DEMO_OFAPI_OFF_AT);
+function daysSincePause(now: Date): number {
+  return Math.max(0, Math.floor((now.getTime() - DEMO_OFAPI_OFF_AT) / 86_400_000));
+}
 
 const OF_PAGES = DEMO_PAGES.filter((page) => page.platform === "onlyfans").sort((a, b) => a.label.localeCompare(b.label));
 
@@ -110,7 +113,7 @@ const PLAN_STEPS: Partial<Record<OfapiCollectionCategory, number>> = {
 };
 
 function buildJobs(now: Date): Job[] {
-  const pausedAt = daysAgo(now, PAUSED_DAYS_AGO, 9).getTime();
+  const pausedAt = PAUSED_AT.getTime();
   const jobs: Job[] = [];
   for (const page of OF_PAGES) {
     const size = page.label === "mia-of" ? 1 : 0.55;
@@ -236,7 +239,7 @@ const BASELINE_CREDITS_PER_DAY: Partial<Record<OfapiCollectionCategory, number>>
 };
 
 function policies(pages: DemoPage[], jobs: Job[], now: Date, revision: number) {
-  const pausedAt = daysAgo(now, PAUSED_DAYS_AGO, 9);
+  const pausedAt = PAUSED_AT;
   const since30d = now.getTime() - 30 * 86_400_000;
   return pages.flatMap((page) => OFAPI_COLLECTION_REGISTRY.map((row) => {
     const { settings, source, state } = effective(page, row.id);
@@ -246,7 +249,7 @@ function policies(pages: DemoPage[], jobs: Job[], now: Date, revision: number) {
     const lastCompleted = completed.reduce<Job | null>((best, job) => (!best || job.updatedAt > best.updatedAt ? job : best), null);
     const lastRun = background.reduce<Job | null>((best, job) => (!best || job.createdAt > best.createdAt ? job : best), null);
     const size = page.label === "mia-of" ? 1 : 0.5;
-    const daysCollected = 30 - PAUSED_DAYS_AGO;
+    const daysCollected = Math.max(0, 30 - daysSincePause(now));
     const jobCredits = own.filter((job) => job.createdAt.getTime() > since30d).reduce((sum, job) => sum + job.usedCredits, 0);
     const baselineCredits = Math.round((BASELINE_CREDITS_PER_DAY[row.id] ?? 0) * size * daysCollected);
     const collected = jobCredits + baselineCredits > 0;
@@ -281,7 +284,7 @@ function audit(now: Date, owner: number) {
   const page = (label: string) => OF_PAGES.find((item) => item.label === label)!.id;
   const change = (pageId: number | null, category: OfapiCollectionCategory, settings: Settings) => ({ pageId, category, ...settings });
   const rows: { revision: number; days: number; hour: number; changes: unknown }[] = [
-    { revision: 14, days: PAUSED_DAYS_AGO, hour: 9, changes: { changes: [], backgroundPaused: true } },
+    { revision: 14, days: daysSincePause(now), hour: 10, changes: { changes: [], backgroundPaused: true } },
     { revision: 13, days: 9, hour: 14, changes: { changes: [change(page("mia-of"), "tracking_links", OVERRIDES["mia-of"]!.tracking_links!)] } },
     { revision: 12, days: 12, hour: 10, changes: { changes: [change(null, "visitors", DEFAULTS.visitors!)] } },
     { revision: 11, days: 15, hour: 16, changes: { changes: [change(null, "balances", DEFAULTS.balances!)] } },
@@ -375,8 +378,8 @@ export const collectionHandlers: DemoHandlers = {
   adminOfapiWebhookStatus: (request) => {
     const refused = ownerOnly(request);
     if (refused) return refused;
-    const pausedAt = daysAgo(request.now, PAUSED_DAYS_AGO, 9);
-    const lastEvent = hoursAgo(pausedAt, -0.6);
+    const pausedAt = PAUSED_AT;
+    const lastEvent = hoursAgo(pausedAt, 0.02);
     return {
       configured: true,
       registrationState: "stable" as const,

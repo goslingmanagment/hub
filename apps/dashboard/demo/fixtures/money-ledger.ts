@@ -5,7 +5,7 @@
  * sum of the rows on the next — the drill-down reconciles, as in the hub.
  */
 import { between, daysAgo, demoError, hashString, isoDay, pick, rng, type DemoReply, type DemoRequest } from "../core.ts";
-import { DEMO_PAGES, demoDailyNet, demoFans, demoPage, demoUserByRole, type DemoFan, type DemoPage } from "../world.ts";
+import { DEMO_DATA_PAGES, demoDailyNet, demoFans, demoPage, demoUserByRole, type DemoFan, type DemoPage } from "../world.ts";
 
 export type LedgerType =
   | "subscription"
@@ -110,11 +110,6 @@ function ticket(random: () => number, type: LedgerType): number {
   }
 }
 
-/** The day OnlyFans collection stopped: two days ago, as the shell says. */
-export function onlyFansCutoffDay(now: Date): string {
-  return isoDay(daysAgo(now, 2));
-}
-
 function dayNetMills(label: string, day: string): number {
   const point = demoDailyNet(label, new Date(`${day}T12:00:00Z`), 1)[0];
   return Math.round((point?.net ?? 0) * 1000);
@@ -185,9 +180,8 @@ function generateDay(page: DemoPage, day: string): LedgerTx[] {
 }
 
 /** A page's operations on one day as of `now`: nothing after now, the last
- *  day and a half partly pending, OnlyFans silent since the cutoff. */
+ *  day and a half partly pending. OnlyFans goes on, thinner, from the ChatSpace feed. */
 export function ledgerDay(page: DemoPage, day: string, now: Date): LedgerTx[] {
-  if (page.platform === "onlyfans" && day >= onlyFansCutoffDay(now)) return [];
   const nowMs = now.getTime();
   return generateDay(page, day)
     .filter((tx) => tx.occurredMs <= nowMs)
@@ -253,8 +247,9 @@ export function platformWindow(
   let fromMs: number;
   let toMs = tomorrow;
   if (period === "custom" && custom) {
+    // The end is exclusive, as `resolveCustomPeriodBounds`; one day when they are equal.
     fromMs = Date.parse(`${custom.from}T00:00:00Z`);
-    toMs = Date.parse(`${custom.to}T00:00:00Z`) + DAY_MS;
+    toMs = Date.parse(`${custom.to}T00:00:00Z`) + (custom.from === custom.to ? DAY_MS : 0);
   } else if (period === "all") {
     return { platform, fromMs: null, toMs: null, comparisonFromMs: null, comparisonToMs: null };
   } else {
@@ -315,7 +310,8 @@ export function deltaPct(current: number, previous: number): number | null {
 /** The pages the demo's current person may see. */
 export function visiblePages(request: DemoRequest): DemoPage[] {
   const user = demoUserByRole(request.role);
-  return DEMO_PAGES.filter((page) => user.pages.includes(page.label));
+  // The revenue reads list the pages the hub syncs: a Telegram page has no money.
+  return DEMO_DATA_PAGES.filter((page) => user.pages.includes(page.label));
 }
 
 /** A page by its label, or the route's 404. */

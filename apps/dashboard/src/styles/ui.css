@@ -444,6 +444,7 @@
   .section-subtab {
     display: inline-flex;
     align-items: center;
+    gap: 8px;
     flex-shrink: 0;
     min-height: 32px;
     padding: 0 12px;

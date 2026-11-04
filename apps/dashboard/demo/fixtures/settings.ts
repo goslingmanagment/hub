@@ -31,7 +31,7 @@ function adminPage(page: DemoPage, now: Date) {
     displayName: page.displayName,
     followerCount: { value: page.followers, available: page.followers !== null },
     subscriberCount: { value: page.subscribers, available: true },
-    lastLightSyncAt: page.health === "off" ? iso(daysAgo(now, 2)) : iso(hoursAgo(now, 0.3)),
+    lastLightSyncAt: page.platform === "fansly" ? iso(hoursAgo(now, page.health === "attention" ? 5.2 : 0.3)) : null,
     lastFollowerSyncAt: page.platform === "fansly" ? iso(hoursAgo(now, page.health === "attention" ? 9 : 1)) : null,
     // Voice notes are allowlisted for the two biggest Fansly pages only.
     ...(page.label === "mia-1" || page.label === "nova-1" ? { capabilities: { voiceNotes: true } } : {}),

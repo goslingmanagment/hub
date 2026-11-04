@@ -7,7 +7,7 @@ import type { KernelOperationResponse } from "@agency_hub_core/contracts";
 
 import { type DemoRequest } from "../core.ts";
 import { DEMO_CHATTERS, DEMO_PAGES, demoFans, type DemoUser } from "../world.ts";
-import { DAY, HOUR, MIN, OF_STOP, between, intBetween, isoAt, mskDay, mskMidnight, pick, rng, windowDays, windowStart } from "./team-world.ts";
+import { DAY, HOUR, MIN, between, intBetween, isoAt, mskDay, mskMidnight, pick, rng, windowDays, windowStart } from "./team-world.ts";
 
 // --- Customs ---
 
@@ -119,7 +119,6 @@ function broadcastsOf(request: DemoRequest, label: string, platform: string, sub
     if (random() > profile.broadcasts) continue;
     const at = mskMidnight(day) + pick(random, [3, 4, 5, 20, 22]) * HOUR + intBetween(random, 0, 59) * MIN;
     if (at > now - 30 * MIN) continue;
-    if (platform === "onlyfans" && at >= OF_STOP) continue;
     const priced = random() < 0.45;
     const deliveries = Math.round(subscribers * between(random, 0.55, 0.9));
     const ageDays = (now - at) / DAY;
@@ -152,7 +151,7 @@ export function teamGreetings(request: DemoRequest, scope: readonly string[], da
     const profile = GREETING_PROFILES[page.label];
     if (!profile) continue;
     const random = rng(`greetings:${page.label}:${days}:${mskDay(now)}`);
-    const end = page.platform === "onlyfans" ? Math.min(now, OF_STOP) : now;
+    const end = now;
     const liveDays = Math.max(0, (end - from) / DAY);
     const recentDays = Math.max(0, Math.min(7, (end - Math.max(from, now - 7 * DAY)) / DAY));
     const newSubscribers = Math.round(profile.perDay * liveDays * between(random, 0.85, 1.15));
@@ -208,7 +207,6 @@ export function teamWinBackApproaches(): KernelOperationResponse<"teamWinBackApp
 }
 
 function chatterUntil(user: DemoUser, now: number): number {
-  if (user.username === "olya.m") return Math.min(now, OF_STOP);
   if (!user.active) return now - 12 * DAY;
   return now;
 }

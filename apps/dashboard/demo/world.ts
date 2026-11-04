@@ -6,7 +6,17 @@
  */
 import { between, daysAgo, hashString, intBetween, isoDay, pick, rng, spendTail } from "./core.ts";
 
-export type DemoPlatform = "fansly" | "onlyfans";
+export type DemoPlatform = "fansly" | "onlyfans" | "telegram";
+
+/**
+ * The moment the owner switched the OnlyFans API off, as on production. One fixed
+ * instant: «по 1 ноября» stays true on whatever day the demo is opened. What went
+ * only through the API stops here; money, chats and shifts go on through ChatSpace.
+ */
+export const DEMO_OFAPI_OFF_AT = Date.parse("2026-11-01T10:21:00Z");
+export const DEMO_OFAPI_OFF_DAY = "2026-11-01";
+/** What the ChatSpace feed writes after it, of what the API did: as on production. */
+const CHATSPACE_FEED_SHARE = 0.15;
 
 export interface DemoModel {
   id: number;
@@ -22,7 +32,7 @@ export interface DemoPage {
   modelName: string;
   username: string;
   displayName: string;
-  /** Fansly only; null on OnlyFans. */
+  /** Fansly only; null on OnlyFans and Telegram. */
   followers: number | null;
   subscribers: number;
   /** A typical day's net revenue in dollars, before the daily noise. */
@@ -79,7 +89,12 @@ export const DEMO_PAGES: readonly DemoPage[] = [
   page(21, "nova-1", "fansly", "nova-lane", "novalane", 5610, 820, 690, "attention"),
   page(31, "ivy-1", "fansly", "ivy-rose", "ivyrose", 3350, 140, 4),
   page(32, "ivy-2", "fansly", "ivy-rose", "ivyrosexo", 18320, 290, 9),
+  // The last of the list: the run ids of the old journal count the pages in this order.
+  page(16, "mia-tg", "telegram", "mia-hart", "miahart_tg", null, 0, 0),
 ];
+
+/** The pages the hub has data of: a Telegram page is in the catalog and nowhere else. */
+export const DEMO_DATA_PAGES = DEMO_PAGES.filter((item): item is DemoPage & { platform: "fansly" | "onlyfans" } => item.platform !== "telegram");
 
 export function demoPage(label: string): DemoPage | undefined {
   return DEMO_PAGES.find((item) => item.label === label);
@@ -171,7 +186,8 @@ export function demoFans(label: string): DemoFan[] {
   if (cached) return cached;
   const source = demoPage(label);
   const random = rng(`fans:${label}`);
-  const count = source ? Math.min(420, Math.max(60, Math.round((source.subscribers + (source.followers ?? 0) / 4) / 12))) : 0;
+  // The hub keeps no fans of a Telegram page.
+  const count = source?.platform === "telegram" ? 0 : source ? Math.min(420, Math.max(60, Math.round((source.subscribers + (source.followers ?? 0) / 4) / 12))) : 0;
   // A real agency's top fans spend thousands over their lifetime; most spend under $50.
   const median = source ? Math.max(3, source.dailyNet / 5) : 10;
   const fans: DemoFan[] = [];
@@ -212,6 +228,15 @@ export function demoFan(label: string, platformUserId: string): DemoFan | undefi
 
 // --- Money over time ---
 
+/** What of a day's usual money an OnlyFans page still has: all of it through the
+ *  API, a part of the switch-off's day, then what the ChatSpace feed writes. */
+function feedShareOf(source: DemoPage | undefined, day: string): number {
+  if (source?.platform !== "onlyfans" || day < DEMO_OFAPI_OFF_DAY) return 1;
+  if (day > DEMO_OFAPI_OFF_DAY) return CHATSPACE_FEED_SHARE;
+  const before = (DEMO_OFAPI_OFF_AT - Date.parse(`${DEMO_OFAPI_OFF_DAY}T00:00:00Z`)) / 86_400_000;
+  return before + (1 - before) * CHATSPACE_FEED_SHARE;
+}
+
 /**
  * A page's net revenue by day, dollars, for the `days` days ending today
  * (oldest first). Weekends are stronger, and every page has its own rhythm.
@@ -226,7 +251,7 @@ export function demoDailyNet(label: string, now: Date, days: number): { day: str
     const weekday = date.getUTCDay();
     const weekend = weekday === 0 || weekday === 6 ? 1.25 : 1;
     const spike = random() < 0.06 ? between(random, 1.8, 3.2) : 1;
-    const net = base === 0 ? 0 : Math.max(0, base * weekend * spike * between(random, 0.55, 1.45));
+    const net = base === 0 ? 0 : Math.max(0, base * weekend * spike * between(random, 0.55, 1.45) * feedShareOf(source, day));
     return { day, net: Math.round(net * 100) / 100 };
   });
 }
