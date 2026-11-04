@@ -125,9 +125,28 @@ const PRODUCT: Partial<Record<LedgerType, { type: number; label: string }>> = {
   message_purchase: { type: 2110, label: "media" },
   post_purchase: { type: 2116, label: "media_sets" },
   stream_tip: { type: 45101, label: "stream_tickets" },
+  other: { type: 24101, label: "leaderboard_prize_money" },
 };
 
-function revenueRows(page: DemoPage, day: string, txs: readonly LedgerTx[]) {
+/** What Fansly has of a day's operations: all of them, but for the two pages that show the
+ *  reconciliation's other states. ivy-2: the last hour of today not read yet. */
+function fanslyTxs(page: DemoPage, day: string, txs: readonly LedgerTx[], now: Date): LedgerTx[] {
+  if (page.label === "ivy-2" && day === isoDay(now)) {
+    const today = [...txs].sort((left, right) => left.occurredMs - right.occurredMs);
+    const lastHour = today.filter((tx) => tx.occurredMs > now.getTime() - 3_600_000 && tx.netMills > 0);
+    // Not a quiet hour: the newest purchase of today is what Fansly has not read yet.
+    const unread = lastHour.length > 0 ? lastHour : today.filter((tx) => tx.netMills > 0).slice(-1);
+    return txs.filter((tx) => !unread.includes(tx));
+  }
+  return [...txs];
+}
+
+/** ivy-1: three days ago Fansly counted a purchase $3.99 short of Hub's. */
+function fanslyShortfall(page: DemoPage, day: string, now: Date): number {
+  return page.label === "ivy-1" && day === shiftDay(isoDay(now), -3) ? 3_990 : 0;
+}
+
+function revenueRows(page: DemoPage, day: string, txs: readonly LedgerTx[], now: Date) {
   const groups = new Map<number, { label: string; transactions: number; net: number; refunds: number; refunded: number }>();
   for (const tx of txs) {
     const product = PRODUCT[tx.type] ?? (tx.type === "refund" || tx.type === "chargeback" ? PRODUCT.message_purchase! : null);
@@ -142,13 +161,14 @@ function revenueRows(page: DemoPage, day: string, txs: readonly LedgerTx[]) {
     }
     groups.set(product.type, group);
   }
-  return [...groups.entries()].map(([productType, group]) => ({
+  const short = fanslyShortfall(page, day, now);
+  return [...groups.entries()].map(([productType, group], index) => ({
     day,
     productType,
     productLabel: group.label,
     transactions: group.transactions,
     grossMills: Math.round(group.net / 0.8),
-    netMills: group.net - group.refunded,
+    netMills: group.net - group.refunded - (index === 0 ? short : 0),
     refunds: group.refunds,
     refundedNetMills: group.refunded,
   }));
@@ -221,7 +241,7 @@ function creatorStatsOverview(request: DemoRequest): KernelOperationResponse<"cr
     }
     out.follows.push({ day, follows: stats.follows, unfollows: stats.unfollows });
     const txs = ledgerDay(page, day, now);
-    out.revenue.push(...revenueRows(page, day, txs));
+    out.revenue.push(...revenueRows(page, day, fanslyTxs(page, day, txs, now), now));
     const subs = txs.filter((tx) => tx.type === "subscription").length;
     const random = rng(`tiers:${page.label}:${day}`);
     tiers.forEach((tier, index) => {
@@ -283,11 +303,12 @@ function creatorStatsOverview(request: DemoRequest): KernelOperationResponse<"cr
     }
     const visits = (list: readonly string[]) => list.reduce((sum, day) => sum + dayStats(page, day).profile.reduce((acc, row) => acc + row.visits, 0), 0);
     const netFollows = (list: readonly string[]) => list.reduce((sum, day) => { const stats = dayStats(page, day); return sum + stats.follows - stats.unfollows; }, 0);
-    const money = (list: readonly string[]) => list.flatMap((day) => ledgerDay(page, day, now));
+    const money = (list: readonly string[]) => list.flatMap((day) => fanslyTxs(page, day, ledgerDay(page, day, now), now));
     const current = money(days);
     const previous = money(previousDays);
     const payers = (txs: readonly LedgerTx[]) => new Set(txs.filter((tx) => tx.fan && tx.netMills > 0).map((tx) => tx.fan!.platformUserId)).size;
-    const net = (txs: readonly LedgerTx[]) => txs.reduce((sum, tx) => sum + (tx.type === "other" ? 0 : tx.netMills), 0);
+    const net = (txs: readonly LedgerTx[]) => txs.reduce((sum, tx) => sum + tx.netMills, 0);
+    const shortfall = (list: readonly string[]) => list.reduce((sum, day) => sum + fanslyShortfall(page, day, now), 0);
     const startLevel = levelByDay.get(shiftDay(window.fromDay, -1)) ?? levelByDay.get(window.fromDay);
     const endLevel = levelByDay.get(window.toDay <= today ? window.toDay : today);
     out.totals.push(
@@ -295,14 +316,14 @@ function creatorStatsOverview(request: DemoRequest): KernelOperationResponse<"cr
       { scope: "follows", ref: "", metric: "netFollows", value: netFollows(days), previous: prevValue(netFollows(previousDays)) },
       { scope: "account", ref: "", metric: "followerCount", value: endLevel?.followers ?? null, previous: startLevel?.followers ?? null },
       { scope: "account", ref: "", metric: "subscriberCount", value: endLevel?.subscribers ?? null, previous: startLevel?.subscribers ?? null },
-      { scope: "revenue", ref: "", metric: "netMills", value: net(current), previous: prevValue(net(previous)) },
+      { scope: "revenue", ref: "", metric: "netMills", value: net(current) - shortfall(days), previous: prevValue(net(previous) - shortfall(previousDays)) },
       { scope: "revenue", ref: "", metric: "payingFans", value: payers(current), previous: prevValue(payers(previous)) },
       { scope: "revenue", ref: "", metric: "newPayingFans", value: Math.round(payers(current) * 0.27), previous: prevValue(Math.round(payers(previous) * 0.3)) },
     );
   }
 
   const oldest = `${firstDay}T00:00:00.000Z`;
-  const fresh = hoursAgo(now, 0.4).toISOString();
+  const fresh = hoursAgo(now, page.label === "nova-1" ? 9 : 0.4).toISOString();
   out.coverage = ["series:views:day", "series:profile:day", "series:follows:day", "series:subscriptions:day", "series:revenue:day", "series:views:hour", "summary"].map((scopeRef) => ({
     scopeRef,
     oldestCapturedAt: scopeRef === "series:views:hour" ? hoursAgo(now, 72).toISOString() : oldest,
@@ -351,7 +372,7 @@ const CAPTIONS = [
   "",
 ] as const;
 
-const TAGS = [
+export const TAGS = [
   "lingerie", "cosplay", "fitness", "petite", "blonde", "brunette", "redhead", "tattoos", "bikini", "yoga",
   "goth", "asmr", "outdoor", "curvy", "teasing", "girlnextdoor", "dance", "shower", "stockings", "smile",
 ] as const;
@@ -430,7 +451,7 @@ export function mediaSales(page: DemoPage, media: DemoMedia) {
 }
 
 /** What sold in messages on the pages that sell most: no post, no caption and no views, as on production. */
-function soldInMessages(page: DemoPage) {
+export function soldInMessages(page: DemoPage) {
   if (!["mia-1", "mia-2", "nova-1"].includes(page.label)) return [];
   return Array.from({ length: 30 }, (_, index) => {
     const random = rng(`sold-in-messages:${page.label}:${index}`);

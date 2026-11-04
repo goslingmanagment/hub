@@ -1,285 +1,169 @@
-import { useMemo, useState } from "react";
-import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { useMemo, useState, type KeyboardEvent, type MouseEvent } from "react";
 
-import type { CreatorStatsContentResponse, CreatorStatsMediaResponse } from "@agency_hub_core/contracts";
+import type { CreatorStatsContentResponse } from "@agency_hub_core/contracts";
+import { Pagination } from "@/components/shared/Pagination";
+import { Segmented } from "@/components/ui/Segmented";
+import { formatCount, formatPercent } from "@/lib/format";
 
-import { useCreatorStatsMedia, type CreatorStatsDays } from "@/api/creator-stats";
-import {
-  CHART_ANIMATION,
-  CHART_MARGIN,
-  ChartLegend,
-  chartGridProps,
-  lineCursor,
-  xAxisProps,
-  yAxisProps,
-  type ChartSeries,
-} from "@/components/charts/ChartKit";
-import {
-  ANALYTICS_TABLE_WRAP,
-  AnalyticsEmpty,
-  AnalyticsError,
-  AnalyticsLoading,
-  AnalyticsPanel,
-} from "@/components/analytics/AnalyticsPanel";
-import { formatBucketDay, formatCount, formatDurationMs, formatPercent } from "@/components/analytics/analytics-words";
-import { ModalShell } from "@/components/shared/ModalShell";
-import { businessDateRange } from "@/components/charts/scale";
+import { SortHeader, type SortDir } from "./SortHeader.js";
+import { StatsEmpty } from "./StatsCard.js";
+import { averageWatchPercent, share } from "./creator-stats-model.js";
+import { mediaLine, mediaTitle } from "./media-words.js";
 
-import { DayChart } from "./DayChart.js";
-import { pivotDays, sourceColor, sourceLabel, type DayPoint } from "./creator-stats-model.js";
+export type MediaRow = CreatorStatsContentResponse["media"][number];
 
-type MediaRow = CreatorStatsContentResponse["media"][number];
+/** The server sends at most this many media of a window, the most viewed. */
+const SERVER_LIMIT = 200;
+const PAGE_SIZE = 50;
 
-/** Fewer viewers than this make a retention curve noise. */
-const RETENTION_MIN_SAMPLE = 5;
+type SortKey = "postedAt" | "views" | "forYouViews" | "timelineViews" | "watch" | "completion" | "likes";
+type Kind = "all" | "video" | "image";
 
-/** Average share of the video watched, 0–100: the sum of watched shares in
- *  hundredths of a percent over the video views (map §4). */
-export function averageWatchPercent(watchPctSum: number | null, videoViews: number | null): number | null {
-  if (watchPctSum === null || videoViews === null || videoViews === 0) return null;
-  return watchPctSum / videoViews / 100;
-}
-
-function share(part: number | null, whole: number | null): number | null {
-  return part === null || whole === null || whole === 0 ? null : (part / whole) * 100;
-}
-
-function mediaTitle(row: MediaRow): string {
-  const caption = row.caption?.replace(/\s+/g, " ").trim();
-  if (caption) return caption.length > 70 ? `${caption.slice(0, 70)}…` : caption;
-  return row.mediaType === 2 ? "Видео без подписи" : row.mediaType === 1 ? "Фото без подписи" : `Медиа ${row.mediaOfferId}`;
-}
-
-function mediaKind(row: MediaRow): string {
-  if (row.mediaType === 2) return row.durationMs ? `видео · ${formatDurationMs(row.durationMs)}` : "видео";
-  if (row.mediaType === 1) return "фото";
-  return "медиа";
-}
-
-type SortKey = "views" | "forYouViews" | "timelineViews" | "watch" | "completion" | "likes" | "postedAt";
-
-const SORTS: readonly { key: SortKey; label: string }[] = [
-  { key: "views", label: "Просмотры" },
-  { key: "forYouViews", label: "FYP" },
-  { key: "watch", label: "Досмотр" },
-  { key: "likes", label: "Лайки" },
-  { key: "postedAt", label: "Новые" },
-];
-
-function sortValue(row: MediaRow, key: SortKey): number {
+/** The value a row sorts by; null sorts last whatever the direction. */
+function sortValue(row: MediaRow, key: SortKey): number | null {
   switch (key) {
-    case "watch": return averageWatchPercent(row.watchPctSum, row.videoViews) ?? -1;
-    case "completion": return share(row.completedViews, row.videoViews) ?? -1;
-    case "postedAt": return row.postedAt ? Date.parse(row.postedAt) : 0;
-    default: return row[key] ?? -1;
+    case "watch": return averageWatchPercent(row.watchPctSum, row.videoViews);
+    case "completion": return share(row.completedViews, row.videoViews);
+    case "postedAt": return row.postedAt ? Date.parse(row.postedAt) : null;
+    default: return row[key];
   }
 }
 
-/** The page's media of the window, most viewed first; a row opens its card. */
-export function ContentPanel({ data, pageLabel, days }: { data: CreatorStatsContentResponse; pageLabel: string; days: CreatorStatsDays }) {
+function count(value: number | null): string {
+  return value === null ? "—" : formatCount(value);
+}
+
+/** Opens a media's card from its row: a click, Enter or Space. */
+export function rowOpener(open: () => void) {
+  return {
+    tabIndex: 0,
+    role: "button",
+    onClick: (event: MouseEvent<HTMLElement>) => {
+      // The row itself is focusable: only a plain click on it, not on a link inside.
+      if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+      if ((event.target as Element).closest("a, button") !== null) return;
+      open();
+    },
+    onKeyDown: (event: KeyboardEvent<HTMLElement>) => {
+      if (event.target !== event.currentTarget) return;
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        open();
+      }
+    },
+  } as const;
+}
+
+/** «Медиа за период»: the page's media by views of the window; a row opens its card. */
+export function MediaTable({ data, pageLabel, periodText, onOpen }: {
+  data: CreatorStatsContentResponse;
+  pageLabel: string;
+  periodText: string;
+  onOpen: (mediaOfferId: string) => void;
+}) {
   const [sort, setSort] = useState<SortKey>("views");
-  const [open, setOpen] = useState<MediaRow | null>(null);
-  const [kind, setKind] = useState<"all" | "video" | "image">("all");
-  const rows = useMemo(
-    () => data.media
-      .filter((row) => kind === "all" || (kind === "video" ? row.mediaType === 2 : row.mediaType === 1))
-      .sort((a, b) => sortValue(b, sort) - sortValue(a, sort)),
-    [data.media, sort, kind],
-  );
-  return (
-    <AnalyticsPanel
-      wide
-      title="Медиа за период"
-      description={data.walk.queued > 0 && data.walk.visited < data.walk.queued
-        ? `Первый проход ещё идёт: прочитано ${formatCount(data.walk.visited)} из ${formatCount(data.walk.queued)} медиа — суммы пока неполные. Нажмите на строку — откроется карточка медиа.`
-        : "Что смотрели: просмотры по источникам, досмотр и лайки. Нажмите на строку — откроется карточка медиа."}
-      headerExtra={(
-        <>
-          <div className="segmented" role="group" aria-label="Тип">
-            {([["all", "Все"], ["video", "Видео"], ["image", "Фото"]] as const).map(([value, label]) => (
-              <button key={value} type="button" className="segment" aria-pressed={kind === value} onClick={() => setKind(value)}>{label}</button>
-            ))}
-          </div>
-          <label className="flex items-center gap-2 text-xs text-text-secondary">
-            Сортировка
-            <select className="select w-auto" value={sort} onChange={(event) => setSort(event.target.value as SortKey)}>
-              {SORTS.map((option) => <option key={option.key} value={option.key}>{option.label}</option>)}
-            </select>
-          </label>
-        </>
-      )}
-      help={(
-        <>
-          <p>Строки — дневные ряды Fansly по каждому медиа (`/account/stats/media`), сложенные за период. Хаб обходит медиа само: новые — каждые 6 часов, до 30 дней — ежедневно, старше — реже.</p>
-          <p>FYP показывает только видео и только первые 90 дней после публикации — у фото и старых видео там прочерк.</p>
-          <p>Досмотр — средняя доля видео, которую посмотрели. «Всего за всё время» — итог Fansly по прочитанным источникам.</p>
-        </>
-      )}
-    >
-      {rows.length === 0 ? (
-        <AnalyticsEmpty reason="Просмотров медиа за этот период ещё нет: обход только начался или медиа не смотрели." />
-      ) : (
-        <div className={ANALYTICS_TABLE_WRAP}>
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th>Медиа</th>
-                <th className="num">FYP</th>
-                <th className="num">Лента</th>
-                <th className="num">Другое</th>
-                <th className="num">Всего</th>
-                <th className="num">Досмотр</th>
-                <th className="num">До конца</th>
-                <th className="num">Лайки</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.slice(0, 100).map((row) => {
-                const watch = averageWatchPercent(row.watchPctSum, row.videoViews);
-                const completion = share(row.completedViews, row.videoViews);
-                return (
-                  <tr key={row.mediaOfferId} className="cursor-pointer" onClick={() => setOpen(row)} tabIndex={0} onKeyDown={(event) => { if (event.key === "Enter") setOpen(row); }}>
-                    <td>
-                      <div className="font-medium text-text-primary">{mediaTitle(row)}</div>
-                      <div className="text-xs text-text-muted">
-                        {mediaKind(row)}{row.postedAt ? ` · ${formatBucketDay(row.postedAt)}` : ""}
-                        {row.deletedAt ? ` · удалено ${formatBucketDay(row.deletedAt)}` : ""}
-                      </div>
-                    </td>
-                    <td className="num">{row.forYouViews === null ? "—" : formatCount(row.forYouViews)}</td>
-                    <td className="num">{row.timelineViews === null ? "—" : formatCount(row.timelineViews)}</td>
-                    <td className="num">{row.otherViews === null ? "—" : formatCount(row.otherViews)}</td>
-                    <td className="num font-medium">{row.views === null ? "—" : formatCount(row.views)}</td>
-                    <td className="num">{watch === null ? "—" : formatPercent(watch)}</td>
-                    <td className="num">{completion === null ? "—" : formatPercent(completion)}</td>
-                    <td className="num">{row.likes === null ? "—" : formatCount(row.likes)}</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      )}
-      {open ? <MediaCard pageLabel={pageLabel} days={days} media={open} onClose={() => setOpen(null)} /> : null}
-    </AnalyticsPanel>
-  );
-}
+  const [dir, setDir] = useState<SortDir>("desc");
+  const [kind, setKind] = useState<Kind>("all");
+  const [offset, setOffset] = useState(0);
 
-function RetentionChart({ curves }: { curves: CreatorStatsMediaResponse["retention"] }) {
-  const series: ChartSeries[] = curves.map((curve) => ({
-    key: String(curve.source),
-    label: curve.sampleSize === null ? sourceLabel(curve.source) : `${sourceLabel(curve.source)} · ${formatCount(curve.sampleSize)} зрит.`,
-    color: sourceColor(curve.source),
-  }));
   const rows = useMemo(() => {
-    const percents = [...new Set(curves.flatMap((curve) => curve.points.map((point) => point.percent)))].sort((a, b) => a - b);
-    return percents.map((percent) => {
-      const row: Record<string, number | null> = { percent };
-      for (const curve of curves) {
-        const point = curve.points.find((entry) => entry.percent === percent);
-        row[String(curve.source)] = point === undefined ? null : Math.round(point.stillWatching * 1000) / 10;
-      }
-      return row;
+    const shown = data.media.filter((row) => kind === "all" || (kind === "video" ? row.mediaType === 2 : row.mediaType === 1));
+    return [...shown].sort((left, right) => {
+      const a = sortValue(left, sort);
+      const b = sortValue(right, sort);
+      if (a === null && b === null) return 0;
+      if (a === null) return 1;
+      if (b === null) return -1;
+      return dir === "desc" ? b - a : a - b;
     });
-  }, [curves]);
-  return (
-    <>
-      <ChartLegend series={series} />
-      <ResponsiveContainer width="100%" height={220}>
-        <LineChart data={rows} margin={CHART_MARGIN}>
-          <CartesianGrid {...chartGridProps} />
-          <XAxis {...xAxisProps} dataKey="percent" type="number" domain={[0, 100]} ticks={[0, 25, 50, 75, 100]} tickFormatter={(value) => `${value}%`} />
-          <YAxis {...yAxisProps} domain={[0, 100]} ticks={[0, 25, 50, 75, 100]} tickFormatter={(value) => `${value}%`} />
-          <Tooltip
-            cursor={lineCursor}
-            isAnimationActive={false}
-            formatter={(value, name) => [`${String(value)}% ещё смотрят`, String(name)]}
-            labelFormatter={(label) => `${label}% видео`}
-          />
-          {series.map((entry) => (
-            <Line key={entry.key} type="linear" dataKey={entry.key} name={entry.label} stroke={entry.color} strokeWidth={2} dot={false} connectNulls {...CHART_ANIMATION} />
-          ))}
-        </LineChart>
-      </ResponsiveContainer>
-    </>
+  }, [data.media, dir, kind, sort]);
+
+  const onSort = (key: SortKey) => {
+    setOffset(0);
+    if (key === sort) setDir(dir === "desc" ? "asc" : "desc");
+    else {
+      setSort(key);
+      setDir("desc");
+    }
+  };
+  const header = (label: string, key: SortKey, num = true) => (
+    <SortHeader label={label} sortKey={key} current={sort} dir={dir} onSort={onSort} num={num} />
   );
-}
-
-function MediaCard({ pageLabel, days, media, onClose }: { pageLabel: string; days: CreatorStatsDays; media: MediaRow; onClose: () => void }) {
-  const detail = useCreatorStatsMedia(pageLabel, media.mediaOfferId, days);
-  const data = detail.data;
-  const daily = useMemo(() => {
-    if (!data) return { rows: [] as DayPoint[], series: [] as ChartSeries[] };
-    const sources = [...new Set(data.daily.map((row) => row.source))].sort((a, b) => a - b);
-    const keys = sources.map(String);
-    const from = data.daily[0]?.day ?? null;
-    const daysOf = businessDateRange(data.window.fromDay, data.window.toDay).filter((day) => from === null || day >= from);
-    return {
-      rows: pivotDays(daysOf, data.daily, (row) => String(row.source), (row) => row.views, keys, from),
-      series: sources.map((source) => ({ key: String(source), label: sourceLabel(source), color: sourceColor(source) })),
-    };
-  }, [data]);
-  const hourly = useMemo(() => {
-    if (!data || data.hourly.length === 0) return { rows: [] as DayPoint[], series: [] as ChartSeries[] };
-    const sources = [...new Set(data.hourly.map((row) => row.source))].sort((a, b) => a - b);
-    const hours = [...new Set(data.hourly.map((row) => row.hour))].sort();
-    const rows = hours.map((hour) => {
-      const point: DayPoint = { bucketStart: hour };
-      for (const source of sources) {
-        point[String(source)] = data.hourly.filter((row) => row.hour === hour && row.source === source).reduce((sum, row) => sum + (row.views ?? 0), 0);
-      }
-      return point;
-    });
-    return { rows, series: sources.map((source) => ({ key: String(source), label: sourceLabel(source), color: sourceColor(source) })) };
-  }, [data]);
-  const watch = averageWatchPercent(media.watchPctSum, media.videoViews);
-  const postUrl = media.postId ? `https://fansly.com/post/${media.postId}` : null;
+  const page = rows.slice(offset, offset + PAGE_SIZE);
+  const kindWord = kind === "video" ? "видео" : "фото";
 
   return (
-    <ModalShell title={mediaTitle(media)} onClose={onClose} wide>
-      <div className="space-y-5">
-        <div className="stat-grid">
-          <div className="stat"><p className="stat-label">Просмотры за период</p><p className="stat-value">{media.views === null ? "—" : formatCount(media.views)}</p><p className="stat-meta">{mediaKind(media)}{media.postedAt ? ` · опубликовано ${formatBucketDay(media.postedAt)}` : ""}</p></div>
-          <div className="stat"><p className="stat-label">FYP</p><p className="stat-value">{media.forYouViews === null ? "—" : formatCount(media.forYouViews)}</p><p className="stat-meta">лента — {media.timelineViews === null ? "—" : formatCount(media.timelineViews)}</p></div>
-          <div className="stat"><p className="stat-label">Досмотр</p><p className="stat-value">{watch === null ? "—" : formatPercent(watch)}</p><p className="stat-meta">до конца — {formatPercent(share(media.completedViews, media.videoViews) ?? 0)}</p></div>
-          <div className="stat"><p className="stat-label">За всё время</p><p className="stat-value">{media.allTimeViews === null ? "—" : formatCount(media.allTimeViews)}</p><p className="stat-meta">{media.deletedAt ? `удалено ${formatBucketDay(media.deletedAt)}` : postUrl ? <a className="link" href={postUrl} target="_blank" rel="noreferrer">открыть пост на Fansly</a> : "пост не найден"}</p></div>
-        </div>
-        {detail.isPending ? <AnalyticsLoading /> : detail.isError || !data ? (
-          <AnalyticsError message="Не удалось загрузить карточку медиа." onRetry={() => void detail.refetch()} />
+    <section aria-labelledby="stats-media-title" className="stats-block">
+      <h2 className="section-title stats-block-title" id="stats-media-title">Медиа за период</h2>
+      <div className="table-toolbar">
+        <Segmented
+          label="Вид медиа"
+          value={kind}
+          onChange={(next) => {
+            setKind(next);
+            setOffset(0);
+          }}
+          options={[{ value: "all", label: "Все" }, { value: "video", label: "Видео" }, { value: "image", label: "Фото" }]}
+        />
+        {data.media.length >= SERVER_LIMIT && <span className="table-toolbar-note">Показаны 200 самых просматриваемых за период</span>}
+      </div>
+      <div className="card">
+        {rows.length === 0 ? (
+          kind === "all" ? (
+            <StatsEmpty>На {pageLabel} за {periodText} просмотров медиа нет: обход только начался или медиа не смотрели.</StatsEmpty>
+          ) : (
+            <StatsEmpty action={<button type="button" className="btn btn-sm" onClick={() => setKind("all")}>Показать все</button>}>
+              На {pageLabel} за {periodText} просмотренных {kindWord} нет.
+            </StatsEmpty>
+          )
         ) : (
-          <div className="grid gap-5 lg:grid-cols-2">
-            <section>
-              <h3 className="mb-2 text-xs font-semibold text-text-primary">Просмотры по дням</h3>
-              {daily.rows.length === 0 ? <p className="text-text-muted">Нет дневных данных за период.</p> : <DayChart rows={daily.rows} series={daily.series} height={220} />}
-            </section>
-            <section>
-              <h3 className="mb-2 text-xs font-semibold text-text-primary">Удержание</h3>
-              {/* A curve over a handful of viewers is noise: shown from five. */}
-              {data.retention.every((curve) => curve.points.length === 0 || (curve.sampleSize ?? 0) < RETENTION_MIN_SAMPLE)
-                ? <p className="text-text-muted">Кривой удержания нет (фото или меньше {RETENTION_MIN_SAMPLE} зрителей).</p>
-                : <RetentionChart curves={data.retention.filter((curve) => curve.points.length > 0 && (curve.sampleSize ?? 0) >= RETENTION_MIN_SAMPLE)} />}
-            </section>
-            {hourly.rows.length > 0 ? (
-              <section>
-                <h3 className="mb-2 text-xs font-semibold text-text-primary">Первые часы</h3>
-                <DayChart hours rows={hourly.rows} series={hourly.series} height={200} />
-              </section>
-            ) : null}
-            {data.tags.length > 0 ? (
-              <section>
-                <h3 className="mb-2 text-xs font-semibold text-text-primary">По каким тегам находили</h3>
-                <ul className="flex flex-wrap gap-2">
-                  {data.tags.slice(0, 20).map((tag) => (
-                    <li key={`${tag.tag}-${tag.source}`} className="rounded-full border border-border px-2.5 py-1 text-xs">
-                      #{tag.tag} <span className="text-text-muted">{tag.views === null ? "" : formatCount(tag.views)}</span>
-                    </li>
-                  ))}
-                </ul>
-              </section>
-            ) : null}
-          </div>
+          <>
+            <div className="table-wrap">
+              <table className="data-table data-table-sticky data-table-page stats-media-table">
+                <thead>
+                  <tr>
+                    {header("Медиа и дата выхода", "postedAt", false)}
+                    {header("Просмотры", "views")}
+                    {header("For You", "forYouViews")}
+                    {header("Лента подписок", "timelineViews")}
+                    {header("Досмотр", "watch")}
+                    {header("До конца", "completion")}
+                    {header("Лайки", "likes")}
+                  </tr>
+                </thead>
+                <tbody>
+                  {page.map((row) => {
+                    const watch = averageWatchPercent(row.watchPctSum, row.videoViews);
+                    const completion = share(row.completedViews, row.videoViews);
+                    return (
+                      <tr key={row.mediaOfferId} className="stats-row-open" aria-label={`Открыть карточку: ${mediaTitle(row)}`} {...rowOpener(() => onOpen(row.mediaOfferId))}>
+                        <td className="stats-media-cell">
+                          <div className="stats-media-title">{mediaTitle(row)}</div>
+                          <div className="stats-media-line">{mediaLine(row)}</div>
+                        </td>
+                        <td className="num">{count(row.views)}</td>
+                        <td className="num">{count(row.forYouViews)}</td>
+                        <td className="num">{count(row.timelineViews)}</td>
+                        <td className="num">{watch === null ? "—" : formatPercent(watch)}</td>
+                        <td className="num">{completion === null ? "—" : formatPercent(completion)}</td>
+                        <td className="num">{count(row.likes)}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+            {rows.length > PAGE_SIZE && <Pagination offset={offset} limit={PAGE_SIZE} total={rows.length} onPageChange={setOffset} />}
+          </>
         )}
       </div>
-    </ModalShell>
+    </section>
   );
+}
+
+/** «Первый проход ещё идёт: прочитано 26 из 38 медиа. Суммы пока неполные.» */
+export function walkIncomplete(data: CreatorStatsContentResponse): string | null {
+  return data.walk.queued > 0 && data.walk.visited < data.walk.queued
+    ? `Первый проход ещё идёт: прочитано ${formatCount(data.walk.visited)} из ${formatCount(data.walk.queued)} медиа. Суммы пока неполные.`
+    : null;
 }
