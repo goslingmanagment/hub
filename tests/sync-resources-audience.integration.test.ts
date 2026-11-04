@@ -459,7 +459,7 @@ describe("followers", () => {
       throw new Error(`unexpected ${req.spec}`);
     }, async () => (await workRow(pageId, "followers.reconcile"))?.state === "done");
 
-    expect(hits).toEqual(["account.me", "followers.page", "account.me"]);
+    expect(hits).toEqual(["account.me", "followers.page", "followers.page", "account.me"]);
     const follows = await testDb.pool.query(
       "select platform_follow_id as id, is_active, last_seen_generation::int as gen from page_follows where platform_account_id = $1 order by is_active, 1",
       [pageId],
@@ -470,6 +470,44 @@ describe("followers", () => {
     expect(work!.proof).toMatchObject({ outcome: "complete", membershipProof: "exact_generation", deactivatedCount: 1, generationObservedCount: 2 });
     expect(work!.cursor).toMatchObject({ generation: 1, walk: null });
     expect(typeof (work!.cursor as { lastFullSweepStartedAt?: unknown }).lastFullSweepStartedAt).toBe("string");
+  });
+
+  it("reconcile: a follow during the walk is read on the first page again before the count, and the count matches", async (context) => {
+    if (!testDb) return context.skip();
+    const pageId = await seedPage({ followerCount: 2 });
+    await makeDue(pageId, "followers.reconcile", { reason: "owner" });
+    const now = Date.now();
+    const older = [
+      { id: followId(new Date(now - 120_000), 2), followerId: "660000000000000002" },
+      { id: followId(new Date(now - 180_000), 3), followerId: "660000000000000003" },
+    ];
+    const newcomer = { id: followId(new Date(now - 1_000), 1), followerId: "660000000000000001" };
+    let pageReads = 0;
+    let countReads = 0;
+    const { hits } = await runLive(pageId, (req) => {
+      if (req.spec === "account.me") {
+        countReads += 1;
+        return okResponse(accountMe(OWN_ID, { followCount: countReads === 1 ? 2 : 3 }));
+      }
+      if (req.spec === "followers.page") {
+        pageReads += 1;
+        // The newest follow first: it arrived after the walk read the first page.
+        const followers = pageReads === 1 ? older : [newcomer, ...older];
+        return okResponse({ followers, aggregationData: { accounts: followers.map((row) => fanAccount(row.followerId)) } });
+      }
+      throw new Error(`unexpected ${req.spec}`);
+    }, async () => (await workRow(pageId, "followers.reconcile"))?.state === "done");
+
+    expect(hits).toEqual(["account.me", "followers.page", "followers.page", "account.me"]);
+    const work = await workRow(pageId, "followers.reconcile");
+    expect(work!.proof).toMatchObject({
+      outcome: "complete",
+      membershipProof: "exact_generation",
+      sourceFollowerCount: 3,
+      generationObservedCount: 3,
+      pageCount: 1,
+      observedCount: 2,
+    });
   });
 
   it("reconcile: a deactivation past the safety ceiling is quarantined, nothing retired", async (context) => {
