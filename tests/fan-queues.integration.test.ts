@@ -1,3 +1,4 @@
+import { setTimeout as sleep } from "node:timers/promises";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import {
@@ -377,6 +378,8 @@ describe("fan queues", () => {
 
     // A fan who came back by himself before the send: an answer to him, not the queue's work.
     await fanWrote("8306", 0);
+    // The rule compares milliseconds: a send within the fan's own millisecond is not after him.
+    await sleep(2);
     await sentFromChat("max", "8306", "reply");
     const last = await take("max", queueId, { count: 10, more: true });
     expect(last.left).toEqual([expect.objectContaining({ fanRef: "8306", reason: "fan_wrote" })]);

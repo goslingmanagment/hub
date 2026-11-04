@@ -508,6 +508,9 @@ describe("variant Б: the site's own traffic, observed", () => {
   it("an account other than the page's proves nothing; the site's 429 holds the route for the engine's own requests", async () => {
     const r = await rig();
     await testDb!.pool.query("update sync_pages set credentials_generation = null, identity_account_id = null, identity_checked_at = null where page_id = $1", [r.page.pageId]);
+    // The engine's own verify names the page's account and proves the page by right: it stays
+    // in flight here, so what the assertions read is what the site's reads did.
+    r.operator.beforeRelease = () => new Promise<void>(() => {});
     await actorOn(r);
     await until(async () => r.operator.links.includes(true), 5_000, "the link");
     const foreign = r.operator.siteSent({ path: "/api/v1/account/me", route: "account.me" });
