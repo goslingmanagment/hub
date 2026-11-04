@@ -363,6 +363,12 @@ interface ReconcileWalk {
   observedCount: number;
   pageCount: number;
   sourceFollowerCount: number;
+  /** The last page is read: the first page is read once more before the
+   *  terminal count. Fansly lists the newest follows first, so whoever
+   *  followed during the walk is there, behind the walk's back; read now,
+   *  they join the generation and the count can match. Neither the page count
+   *  nor the observed count takes this read (the shape check stays). */
+  headRereadPending: boolean;
   verificationPending: boolean;
 }
 
@@ -388,6 +394,7 @@ export function parseFollowersReconcileCursor(value: unknown): FollowersReconcil
     observedCount: count(walkRecord.observedCount) ?? 0,
     pageCount: count(walkRecord.pageCount) ?? 0,
     sourceFollowerCount: count(walkRecord.sourceFollowerCount) ?? 0,
+    headRereadPending: walkRecord.headRereadPending === true,
     verificationPending: walkRecord.verificationPending === true,
   };
   return {
@@ -448,7 +455,8 @@ async function reconcileAnchor(
 /** Which request the reconcile's next step is, by its walk. */
 function reconcilePhase(cursor: FollowersReconcileCursor): { kind: "start" | "verify" } | { kind: "page"; offset: number } {
   if (cursor.walk === null) return { kind: "start" };
-  return cursor.walk.verificationPending ? { kind: "verify" } : { kind: "page", offset: cursor.walk.offset };
+  if (cursor.walk.verificationPending) return { kind: "verify" };
+  return { kind: "page", offset: cursor.walk.headRereadPending ? 0 : cursor.walk.offset };
 }
 
 function restartedCursor(cursor: FollowersReconcileCursor, walk: ReconcileWalk): FollowersReconcileCursor {
@@ -499,6 +507,7 @@ async function applyReconcileStart(
     observedCount: 0,
     pageCount: 0,
     sourceFollowerCount: facts.followCount ?? 0,
+    headRereadPending: false,
     verificationPending: false,
   };
   return {
@@ -516,10 +525,11 @@ async function applyReconcilePage(
 ): Promise<ApplyResult> {
   const pageId = input.pageId;
   const page = input.parsed as FanslyFollowersPage;
-  if (requestedOffset(input.request) !== walk.offset || walk.verificationPending) {
-    throw new ApplyQuarantine("followers_reconcile_cursor_mismatch", { requestedOffset: requestedOffset(input.request), walkOffset: walk.offset });
+  const expectedOffset = walk.headRereadPending ? 0 : walk.offset;
+  if (requestedOffset(input.request) !== expectedOffset || walk.verificationPending) {
+    throw new ApplyQuarantine("followers_reconcile_cursor_mismatch", { requestedOffset: requestedOffset(input.request), walkOffset: expectedOffset });
   }
-  if (walk.offset === 0 && page.followers.length === 0 && walk.sourceFollowerCount > 0) {
+  if (!walk.headRereadPending && walk.offset === 0 && page.followers.length === 0 && walk.sourceFollowerCount > 0) {
     const existingActiveFollowers = Number(await countActivePageFollows(tx, pageId));
     if (existingActiveFollowers > 0) {
       throw new ApplyQuarantine("followers_reconcile_empty_first_page", {
@@ -547,8 +557,10 @@ async function applyReconcilePage(
   }
   await writeFollowRows(tx, { follows, fanPages, presence: hydrated.presence });
   const pageDone = page.followers.length < FANSLY_FOLLOWERS_PAGE_LIMIT;
-  const next: ReconcileWalk = pageDone
-    ? { ...walk, pageCount: walk.pageCount + 1, observedCount: walk.observedCount + page.followers.length, verificationPending: true }
+  const next: ReconcileWalk = walk.headRereadPending
+    ? { ...walk, headRereadPending: false, verificationPending: true }
+    : pageDone
+    ? { ...walk, pageCount: walk.pageCount + 1, observedCount: walk.observedCount + page.followers.length, headRereadPending: true }
     : {
       ...walk,
       pageCount: walk.pageCount + 1,
