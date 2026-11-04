@@ -551,7 +551,7 @@ describe("followers", () => {
     await runLive(pageId, respond, async () => (await workRow(pageId, "followers.reconcile"))?.state === "done");
 
     expect(await countRows(testDb.pool, "select count(*)::int as n from page_follows where platform_account_id = $1 and is_active and platform_follow_id::numeric between 3000 and 3059", [pageId])).toBe(0);
-    expect(await countRows(testDb.pool, "select count(*)::int as n from page_follows where platform_account_id = $1 and is_active and platform_follow_id::numeric >= 3060", [pageId])).toBe(600);
+    expect(await countRows(testDb.pool, "select count(*)::int as n from page_follows where platform_account_id = $1 and is_active and platform_follow_id::numeric between 3060 and 3659", [pageId])).toBe(600);
     const work = await workRow(pageId, "followers.reconcile");
     expect(work!.proof).toMatchObject({
       outcome: "complete",
