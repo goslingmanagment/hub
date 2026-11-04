@@ -591,8 +591,11 @@ jobs:
 
       # A full-tree proof needs integration evidence: a PR that skipped the
       # shards as out of scope publishes none, so main runs them for its tree.
+      # Both proofs only save work: without one a later identical tree runs again. A green
+      # gate is not red over them (under a billing lock GitHub refuses every new artifact).
       - name: Publish the proof for later identical trees
         if: env.METADATA_ONLY != 'true' && needs.fingerprint.outputs.proven_by == '' && needs.fingerprint.outputs.gate_invisible != 'true' && (needs.integration.result == 'success' || needs.fingerprint.outputs.integration_proven_by != '')
+        continue-on-error: true
         uses: actions/upload-artifact@v7
         with:
           name: quality-gate-${{ needs.fingerprint.outputs.hash }}
@@ -603,6 +606,7 @@ jobs:
 
       - name: Publish fresh integration proof
         if: needs.integration.result == 'success'
+        continue-on-error: true
         uses: actions/upload-artifact@v7
         with:
           name: integration-gate-${{ needs.fingerprint.outputs.integration_hash }}
