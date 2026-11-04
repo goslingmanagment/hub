@@ -3,7 +3,6 @@ import { Link, useLocation, useNavigationType, useSearchParams } from "react-rou
 import { ArrowUpDown, ChevronRight, TrendingDown, TrendingUp } from "lucide-react";
 import { CHATTER_SHIFT_END_IDLE_MINUTES, type OverviewRevenueResponse } from "@agency_hub_core/contracts";
 import { useAuthMe, useOverview, useOverviewRevenue } from "@/api/queries";
-import { useRevenueMidnightRefetch } from "@/api/overview";
 import { useOfapiStatus } from "@/api/waiting";
 import { usePeriodStore, type PeriodOption } from "@/stores/periodStore";
 import { usePageFilter } from "@/components/layout/usePageFilter";
@@ -24,11 +23,10 @@ import { buildPageRoute } from "@/lib/navigation";
 import { overviewSearch, parseOverviewState, PERIOD_LABELS, type OverviewState, type PageSort } from "@/lib/overviewNavigation";
 import { revenueComparisonRange, revenuePreviousLabel, revenueWindowLabel, mainRevenueWindow } from "@/lib/revenueWindow";
 import { OFAPI_FEED_NOTE, type OfapiStatus } from "@/lib/statusWords";
-import { biggestMovers, describeMixedRevenueWindows, groupRevenue, plural, type PageRow } from "./overview/presentation.js";
+import { biggestMovers, groupRevenue, plural, type PageRow } from "./overview/presentation.js";
 import { AudienceNow, FreeAudienceLink, PageKinds, PageSources, PaidSubscribersLink, pageTransactionsLink, pageWindowOf } from "./overview/PageSources.js";
 import { HomeStrip } from "./overview/HomeStrip.js";
 
-export { describeMixedRevenueWindows } from "./overview/presentation.js";
 
 // Contains only UI position, never API data or account information. Kept per
 // exact URL so Back, reload, and another tab's period cannot overwrite it.
@@ -133,8 +131,7 @@ function LoadingReport() {
 }
 
 /** «О данных»: the old words, plus the strip above the money. */
-function AboutData({ report, period, frozen }: { report: Report; period: PeriodOption; frozen: boolean }) {
-  const mixed = describeMixedRevenueWindows(report.platformWindows, PERIOD_LABELS[period]);
+function AboutData({ frozen }: { frozen: boolean }) {
   return (
     <Disclosure label="О данных">
       <p>
@@ -143,9 +140,9 @@ function AboutData({ report, period, frozen }: { report: Report; period: PeriodO
       </p>
       <p>
         Суммы считаются по операциям, которые сохранил Hub. Полноту сбора с площадки это не подтверждает. Сутки
-        считаются по UTC, то есть с 03:00 по Москве, текущие сутки ещё идут.
+        считаются по Москве, с полуночи до полуночи, текущие сутки ещё идут. Страница обновляется сама раз в минуту.
       </p>
-      <p>Прошлый период — столько же дней прямо перед выбранными.{mixed ? ` ${mixed}` : ""}</p>
+      <p>Прошлый период — столько же дней прямо перед выбранными.</p>
       <p>
         Платные — подписчики, оплатившие текущий период. Бесплатные — на Fansly фолловеры, на OnlyFans бесплатные и
         пробные подписки. От выбранного периода эти числа не зависят, аудитория разных страниц не складывается,
@@ -256,8 +253,6 @@ export function OverviewPage() {
   const refreshing = Boolean(revenue.isFetching || catalog.isFetching);
   const mode = compareMode(period);
   const columns = mode === "full" ? 6 : mode === "yesterday" ? 5 : 4;
-
-  useRevenueMidnightRefetch(report?.windowAt, period, revenue.refetch);
 
   // The period goes into the address, so a link opens what its sender saw.
   useEffect(() => {
@@ -376,7 +371,7 @@ export function OverviewPage() {
         </section>
         <div className="space-y-3">
           <Footnote report={{ ...report, pages: [onePage!] }} ofapi={ofapi} />
-          <AboutData report={report} period={period} frozen={frozen && onePage?.platform === "onlyfans"} />
+          <AboutData frozen={frozen && onePage?.platform === "onlyfans"} />
         </div>
         <RevenueDailyCard
           scope={`page:${pageLabel}`}
@@ -516,7 +511,7 @@ export function OverviewPage() {
             </div>
           </section>
           <Footnote report={report} ofapi={ofapi} />
-          <AboutData report={report} period={period} frozen={frozen} />
+          <AboutData frozen={frozen} />
         </div>
         <AgencyChart
           report={report}

@@ -61,18 +61,6 @@ const DEFAULT_SPENDER_TRAILING_PERIOD_OFFSETS: SpenderTrailingPeriodOffsets = {
   "180d": 179,
 };
 
-// OnlyFans trailing revenue windows deliberately run one calendar day longer
-// than the defaults above (7d spans 8 days, 30d spans 31). Introduced by
-// 153bc96 ("Fix OnlyFans revenue rollups and resync recovery", 2026-03-09)
-// without a recorded rationale — presumably to absorb vendor data lag. The
-// numbers are intentionally left as-is: mixed-platform reports
-// disclose the per-platform windows via `platformWindows` instead of aligning
-// them (audit B2).
-const ONLYFANS_REVENUE_TRAILING_PERIOD_OFFSETS: TrailingPeriodOffsets = {
-  "7d": 7,
-  "30d": 30,
-};
-
 export function isPeriod(value: string): value is Period {
   return (PERIOD_OPTIONS as readonly string[]).includes(value);
 }
@@ -233,13 +221,14 @@ function daysInMonth(year: number, month: number) {
   return new Date(Date.UTC(year, month, 0)).getUTCDate();
 }
 
-export function resolveBusinessTimeZone(platform: Platform): string {
-  switch (platform) {
-    case "fansly":
-    case "onlyfans":
-    case "telegram":
-      return UTC_TIME_ZONE;
-  }
+/** The agency's day: Moscow midnight to midnight, the same day the shifts and the
+ *  payout sheet use. Every money-by-day number in Hub (the revenue and spender
+ *  rollups, their periods, the Telegram report) is cut on it. Platforms' own
+ *  per-day statistics (Fansly's creator stats) stay in the platform's UTC days. */
+export const BUSINESS_TIME_ZONE = MOSCOW_TIME_ZONE;
+
+export function resolveBusinessTimeZone(_platform: Platform): string {
+  return BUSINESS_TIME_ZONE;
 }
 
 export function businessDateToUtcStart(value: string, timeZone = MOSCOW_TIME_ZONE) {
@@ -348,9 +337,7 @@ export function resolveRevenuePeriodBoundsForPlatform(
     now,
     custom,
     resolveBusinessTimeZone(platform),
-    platform === "onlyfans"
-      ? ONLYFANS_REVENUE_TRAILING_PERIOD_OFFSETS
-      : DEFAULT_TRAILING_PERIOD_OFFSETS,
+    DEFAULT_TRAILING_PERIOD_OFFSETS,
   );
 }
 

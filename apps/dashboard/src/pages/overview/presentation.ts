@@ -3,7 +3,7 @@ import type {
   OverviewRevenueResponse,
   PlatformRevenueWindow,
 } from "@agency_hub_core/contracts";
-import { PLATFORM_DISPLAY_NAME } from "@/lib/platformUrls";
+import { BUSINESS_TIME_ZONE, toBusinessDate } from "@agency_hub_core/shared";
 import type { PageSort } from "@/lib/overviewNavigation";
 
 export type CatalogPage = OverviewResponse["pages"][number];
@@ -32,17 +32,16 @@ export function calendarSeries(
   windows: PlatformRevenueWindow[],
 ) {
   const bounded = windows.filter((window) => window.from && window.to);
-  const from =
-    bounded
-      .map((window) => window.from!)
-      .sort()[0]
-      ?.slice(0, 10) ?? series[0]?.businessDate;
+  const earliest = bounded.map((window) => window.from!).sort()[0];
+  const from = earliest
+    ? toBusinessDate(new Date(earliest), BUSINESS_TIME_ZONE)
+    : series[0]?.businessDate;
   const exclusiveTo = bounded
     .map((window) => window.to!)
     .sort()
     .at(-1);
   const to = exclusiveTo
-    ? new Date(Date.parse(exclusiveTo) - 1).toISOString().slice(0, 10)
+    ? toBusinessDate(new Date(Date.parse(exclusiveTo) - 1), BUSINESS_TIME_ZONE)
     : series.at(-1)?.businessDate;
   if (!from || !to) return [];
   const values = new Map(
@@ -108,60 +107,3 @@ export function biggestMovers(pages: RevenuePage[]) {
   };
 }
 
-const dayMonth = new Intl.DateTimeFormat("ru-RU", {
-  day: "numeric",
-  month: "short",
-  timeZone: "UTC",
-});
-const withYear = (date: Date) =>
-  `${dayMonth.format(date)} ${date.getUTCFullYear()}`;
-
-/** "8 окт. — 15 окт. 2026" for a window whose end is exclusive. */
-export function windowLabel(from: string | null, to: string | null): string {
-  if (!from || !to) return "Вся сохранённая история";
-  const start = new Date(from);
-  const end = new Date(Date.parse(to) - 1);
-  if (start.toISOString().slice(0, 10) === end.toISOString().slice(0, 10))
-    return withYear(start);
-  return `${start.getUTCFullYear() === end.getUTCFullYear() ? dayMonth.format(start) : withYear(start)} — ${withYear(end)}`;
-}
-
-/** One range when every platform shares it; each platform's range otherwise
- * (OnlyFans windows run a day longer, see describeMixedRevenueWindows). */
-export function describeWindows(
-  windows: PlatformRevenueWindow[],
-  previous = false,
-) {
-  const labels = windows.map((window) => ({
-    platform: PLATFORM_DISPLAY_NAME[window.platform],
-    text: windowLabel(
-      previous ? window.comparisonFrom : window.from,
-      previous ? window.comparisonTo : window.to,
-    ),
-  }));
-  if (new Set(labels.map((label) => label.text)).size <= 1)
-    return labels[0]?.text ?? windowLabel(null, null);
-  return labels.map((label) => `${label.platform}: ${label.text}`).join(" · ");
-}
-
-export function describeMixedRevenueWindows(
-  windows: PlatformRevenueWindow[] | undefined,
-  periodLabel: string,
-): string | null {
-  if (!windows || windows.length < 2) return null;
-  const spans = windows
-    .filter((window) => window.from && window.to)
-    .map((window) => ({
-      platform: PLATFORM_DISPLAY_NAME[window.platform],
-      days: Math.round(
-        (Date.parse(window.to!) - Date.parse(window.from!)) / 86_400_000,
-      ),
-    }));
-  if (spans.length < 2 || new Set(spans.map((span) => span.days)).size < 2)
-    return null;
-  const parts = spans.map(
-    (span) =>
-      `${span.days} ${plural(span.days, "день", "дня", "дней")} у ${span.platform}`,
-  );
-  return `Период «${periodLabel}» охватывает ${parts.slice(0, -1).join(", ")} и ${parts.at(-1)}; каждая страница сравнивается с предыдущим окном своей длины.`;
-}

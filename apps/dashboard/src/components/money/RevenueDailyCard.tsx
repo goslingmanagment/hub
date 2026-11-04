@@ -1,5 +1,5 @@
 import { useMemo, useState, type ReactNode } from "react";
-import { sumMills } from "@agency_hub_core/shared";
+import { BUSINESS_TIME_ZONE, sumMills, toBusinessDate } from "@agency_hub_core/shared";
 import { useRevenueChart, useRevenueChartComparison } from "@/api/overview";
 import { ChartTable } from "@/components/charts/ChartTable";
 import { RevenueLineChart, dayChange, type RevenueLinePoint } from "@/components/charts/RevenueLineChart";
@@ -7,24 +7,24 @@ import { businessDateRange } from "@/components/charts/scale";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { QueryNotice } from "@/components/shared/QueryNotice";
 import { Segmented } from "@/components/ui/Segmented";
-import { formatBusinessDateMonth, formatBusinessDateShort, formatMills, formatUtcWindowRange } from "@/lib/format";
-import { mainRevenueWindow, revenueComparisonRange, type RevenueWindow } from "@/lib/revenueWindow";
+import { formatBusinessDateMonth, formatBusinessDateShort, formatMills, formatWindowRange } from "@/lib/format";
+import { businessDayOf, lastBusinessDayOf, mainRevenueWindow, revenueComparisonRange, type RevenueWindow } from "@/lib/revenueWindow";
 
 type Series = ReadonlyArray<{ businessDate: string; netAmountMills: number }>;
 
-const today = () => new Date().toISOString().slice(0, 10);
-const lastDayOf = (toExclusive: string) => new Date(Date.parse(toExclusive) - 1).toISOString().slice(0, 10);
+/** Today in Hub's days: Moscow. */
+const today = () => toBusinessDate(new Date(), BUSINESS_TIME_ZONE);
 
 /** The days of the axis, the window's: inside it a day without operations is a zero. */
 function dailyPoints(current: Series, previous: Series | undefined, window: RevenueWindow | null): RevenueLinePoint[] {
   const known = current.map((point) => point.businessDate).sort();
-  const from = window?.from?.slice(0, 10) ?? known[0];
-  const to = window?.to ? lastDayOf(window.to) : known.at(-1);
+  const from = window?.from ? businessDayOf(window.from) : known[0];
+  const to = window?.to ? lastBusinessDayOf(window.to) : known.at(-1);
   if (!from || !to) return [];
   const values = new Map(current.map((point) => [point.businessDate, point.netAmountMills]));
   const before = new Map((previous ?? []).map((point) => [point.businessDate, point.netAmountMills]));
   const comparisonDays = window?.comparisonFrom && window.comparisonTo
-    ? businessDateRange(window.comparisonFrom.slice(0, 10), lastDayOf(window.comparisonTo))
+    ? businessDateRange(businessDayOf(window.comparisonFrom), lastBusinessDayOf(window.comparisonTo))
     : [];
   const now = today();
   return businessDateRange(from, to).map((date, index) => {
@@ -85,11 +85,8 @@ export function RevenueDailyCard({ scope, period, windowAt, windows, totalMills,
     [main, monthly, period, previousSeries, series],
   );
   const formatDate = monthly ? formatBusinessDateMonth : formatBusinessDateShort;
-  const currentLabel = main?.from && main.to && compared ? formatUtcWindowRange(main.from, main.to) : "Доход";
+  const currentLabel = main?.from && main.to && compared ? formatWindowRange(main.from, main.to) : "Доход";
   const previousLabel = compared && previousSeries ? revenueComparisonRange(main) ?? undefined : undefined;
-  // OnlyFans' window starts a day earlier: its first day is in the total, not on the axis.
-  const other = windows.find((window) => window !== main && window.from && main?.from && window.from < main.from);
-  const onlyOther = other?.from ? formatBusinessDateShort(other.from.slice(0, 10)) : null;
 
   return (
     <section className="card" aria-label="Доход по дням">
@@ -126,7 +123,6 @@ export function RevenueDailyCard({ scope, period, windowAt, windows, totalMills,
                     Прошлый период не пришёл. <button type="button" className="link" onClick={() => void previous.refetch()}>Повторить</button>
                   </p>
                 )}
-                {onlyOther && compared && <p className="mt-2 text-xs text-text-secondary">{onlyOther} есть только у OnlyFans: в итоге учтён, на графике нет.</p>}
                 <ChartTable
                   caption="Доход по дням"
                   rows={points}

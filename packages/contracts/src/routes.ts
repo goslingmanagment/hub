@@ -526,6 +526,30 @@ export const revenueQuerySchema = z.union([
   customRevenueQuerySchema,
 ]);
 
+/** Hub counts its days in Moscow. `utcDays` counts a page's custom window in UTC
+ *  days instead — Fansly's own days, to set Hub's money beside Fansly's
+ *  statistics (the stats screen's reconciliation). Read from the transactions;
+ *  the answer has no comparison. */
+const utcDaysQueryField = queryBooleanSchema.optional().describe(
+  "Count the days in UTC (Fansly's days) instead of Hub's Moscow days.",
+);
+
+const customPageRevenueQuerySchema = z.object({
+  period: z.literal("custom"),
+  windowAt: revenueInstantSchema.optional(),
+  from: businessDate,
+  to: businessDate,
+  utcDays: utcDaysQueryField,
+}).refine((value) => value.from <= value.to, {
+  message: "`from` must be on or before `to`",
+  path: ["to"],
+});
+
+export const pageRevenueQuerySchema = z.union([
+  standardRevenueQuerySchema,
+  customPageRevenueQuerySchema,
+]);
+
 export const transactionListQuerySchema = paginationQuerySchema.extend({
   type: transactionTypeEnum.optional(),
   state: transactionStateEnum.optional(),
@@ -856,12 +880,9 @@ export const revenueBreakdownItemSchema = z.object({
   netAmountMills: mills,
 });
 
-// Audit B2: OnlyFans trailing windows deliberately run one calendar day longer
-// than other platforms (7d spans 8 days, 30d spans 31 — see
-// ONLYFANS_REVENUE_TRAILING_PERIOD_OFFSETS in packages/shared/src/time.ts), so
-// mixed-platform totals and their comparisons combine different per-platform
-// widths. These entries disclose the exact window each platform contributed;
-// the top-level from/to stays the union.
+// The exact window each platform contributed to a report. Every platform now
+// counts the same Moscow days, so the entries agree; the top-level from/to is
+// their union.
 export const platformRevenueWindowSchema = z.object({
   platform: platformEnum,
   from: isoTimestamp.nullable(),
@@ -1683,6 +1704,10 @@ export const revenueDailyQuerySchema = z.object({
   from: businessDate.optional(),
   to: businessDate.optional(),
   groupByType: queryBooleanSchema.default(false),
+});
+
+export const pageRevenueDailyQuerySchema = revenueDailyQuerySchema.extend({
+  utcDays: utcDaysQueryField,
 });
 
 export const revenueDailyItemSchema = z.object({
@@ -7618,7 +7643,7 @@ const baseRouteSchemas = {
     tags: ["revenue"],
     summary: "Get revenue for one page",
     params: pageParamsSchema,
-    querystring: revenueQuerySchema,
+    querystring: pageRevenueQuerySchema,
     response: {
       200: pageRevenueResponseSchema,
       401: errorResponseSchema,
@@ -8104,7 +8129,7 @@ const baseRouteSchemas = {
     tags: ["dashboard"],
     summary: "Get daily revenue series for one page",
     params: pageParamsSchema,
-    querystring: revenueDailyQuerySchema,
+    querystring: pageRevenueDailyQuerySchema,
     response: {
       200: revenueDailyResponseSchema,
       401: errorResponseSchema,
@@ -9620,6 +9645,8 @@ export type PlatformRevenueWindow = z.infer<typeof platformRevenueWindowSchema>;
 export type PaginationQuery = z.infer<typeof paginationQuerySchema>;
 export type RevenueQuery = z.infer<typeof revenueQuerySchema>;
 export type RevenueDailyQuery = z.infer<typeof revenueDailyQuerySchema>;
+export type PageRevenueQuery = z.infer<typeof pageRevenueQuerySchema>;
+export type PageRevenueDailyQuery = z.infer<typeof pageRevenueDailyQuerySchema>;
 export type RevenueDailyItem = z.infer<typeof revenueDailyItemSchema>;
 export type RevenueDailyTypedItem = z.infer<typeof revenueDailyTypedItemSchema>;
 export type RevenueDailyResponse = z.infer<typeof revenueDailyResponseSchema>;

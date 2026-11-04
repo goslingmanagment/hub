@@ -952,7 +952,7 @@ describe("db write safety", () => {
     ]);
   });
 
-  it("rebuilds Fansly revenue rollups from the first affected UTC business day", async (context) => {
+  it("rebuilds Fansly revenue rollups from the first affected Moscow business day", async (context) => {
     if (!testDb) {
       context.skip();
       return;
@@ -978,7 +978,7 @@ describe("db write safety", () => {
       grossAmountMills: 1000n,
       sourceDestinationAmountMills: 1000n,
       creatorNetAmountMills: 1000n,
-      occurredAt: new Date("2025-11-30T21:30:00.000Z"),
+      occurredAt: new Date("2025-11-30T20:30:00.000Z"), // 23:30 MSK, 30 Nov
     });
     await upsertTransaction(testDb.db, {
       platformAccountId: page.id,
@@ -991,7 +991,7 @@ describe("db write safety", () => {
       grossAmountMills: 2000n,
       sourceDestinationAmountMills: 2000n,
       creatorNetAmountMills: 2000n,
-      occurredAt: new Date("2025-12-01T00:10:00.000Z"),
+      occurredAt: new Date("2025-11-30T21:10:00.000Z"), // 00:10 MSK, 1 Dec
     });
     await upsertTransaction(testDb.db, {
       platformAccountId: page.id,
@@ -1004,7 +1004,7 @@ describe("db write safety", () => {
       grossAmountMills: 3000n,
       sourceDestinationAmountMills: 3000n,
       creatorNetAmountMills: 3000n,
-      occurredAt: new Date("2025-12-01T20:00:00.000Z"),
+      occurredAt: new Date("2025-12-01T20:00:00.000Z"), // 23:00 MSK, 1 Dec
     });
 
     await rebuildRevenueRollups(testDb.db, page.id);

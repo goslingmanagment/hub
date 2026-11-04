@@ -316,7 +316,6 @@ export function usageDateLabel(anchor: string, mode: UsagePeriod): string {
 // ---------------------------------------------------------------------------
 
 const DAY_AND_MONTH = new Intl.DateTimeFormat("ru-RU", { day: "numeric", month: "short", timeZone: MOSCOW_ZONE });
-const UTC_DAY_AND_MONTH = new Intl.DateTimeFormat("ru-RU", { day: "numeric", month: "short", timeZone: "UTC" });
 const WEEKDAY = new Intl.DateTimeFormat("ru-RU", { weekday: "short", timeZone: MOSCOW_ZONE });
 const CLOCK = new Intl.DateTimeFormat("ru-RU", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: MOSCOW_ZONE });
 
@@ -359,14 +358,6 @@ export function formatDayRange(from: string | number | Date, to: string | number
 /** The same for a window whose end is exclusive: a report's `[from, to)`, Moscow days. */
 export function formatWindowRange(from: string, toExclusive: string): string {
   return formatDayRange(from, new Date(Date.parse(toExclusive) - 1));
-}
-
-/**
- * A revenue report's window: the hub counts its days in UTC, so they are written
- * in UTC. In Moscow the end of «28 окт. – 3 нояб.» would read 4 нояб.
- */
-export function formatUtcWindowRange(from: string, toExclusive: string): string {
-  return rangeOf(UTC_DAY_AND_MONTH, new Date(from), new Date(Date.parse(toExclusive) - 1));
 }
 
 /**

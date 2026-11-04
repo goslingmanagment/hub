@@ -7,7 +7,7 @@ import {
 import { millsToRoundedDollars,
   addUtcDays,
   formatUsdFromMills,
-  MOSCOW_TIME_ZONE,
+  BUSINESS_TIME_ZONE,
   startOfBusinessDay,
   toBusinessDate,
   millsFromInteger,
@@ -20,9 +20,7 @@ import { loadTeamBlockFacts, renderTeamBlock } from "./telegram-team-block.ts";
 
 export const TOP_PAGE_LIMIT = 10;
 export const TOP_MODEL_LIMIT = 10;
-const REPORT_BUSINESS_TIME_ZONE = MOSCOW_TIME_ZONE;
-const REPORT_BUSINESS_DAY_START_HOUR = 2;
-const HOUR_MS = 60 * 60 * 1000;
+const REPORT_BUSINESS_TIME_ZONE = BUSINESS_TIME_ZONE;
 
 type WindowKey = "yesterday" | "days7" | "days30";
 
@@ -150,11 +148,7 @@ async function loadPageTotalsForBounds(
 }
 
 function startOfReportBusinessDay(date: Date) {
-  const shifted = new Date(date.getTime() - REPORT_BUSINESS_DAY_START_HOUR * HOUR_MS);
-  return new Date(
-    startOfBusinessDay(shifted, REPORT_BUSINESS_TIME_ZONE).getTime()
-      + REPORT_BUSINESS_DAY_START_HOUR * HOUR_MS,
-  );
+  return startOfBusinessDay(date, REPORT_BUSINESS_TIME_ZONE);
 }
 
 function buildMetric(
@@ -338,9 +332,9 @@ export function renderDailyRevenueTelegramReport(report: Omit<DailyRevenueTelegr
     lines.push(...report.team);
   }
 
-  // Windows are business-day windows aligned to the agency shift boundary.
+  // Windows are Hub's business days: Moscow midnight to midnight, as on the dashboard.
   lines.push("");
-  lines.push("<i>Windows: 02:00-02:00 MSK · excl. current day</i>");
+  lines.push("<i>Windows: 00:00-00:00 MSK · excl. current day</i>");
 
   return lines.join("\n");
 }
@@ -365,10 +359,9 @@ export async function buildDailyRevenueTelegramReport(
   const pageRows = await listRevenuePages(app.db);
   const pageIds = pageRows.map((page) => page.id);
 
-  // The daily Telegram report closes the agency business day at 02:00 Moscow
-  // time, matching chatter shift accounting. Use exact transactions instead of
-  // the UTC-day revenue_daily rollup so boundary-hour sales land on the right
-  // report date.
+  // The report's day is Hub's business day (Moscow midnight to midnight), the
+  // day the dashboard and the revenue_daily rollup use; it reads the exact
+  // transactions of each window.
   const windows = {
     yesterday: {
       current: { from: previousBusinessDayStart, to: currentBusinessDayStart },
