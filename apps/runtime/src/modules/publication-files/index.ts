@@ -142,7 +142,7 @@ export async function registerPublicationFileRoutes(server: ApiServer, ctx: ApiM
         operation: "agentPublicationFileLookup",
         pageIds: [page.id],
         verbatimText: false,
-        requestSummary: { asked: files.length, held: heldIds.length, keep, fileIds: heldIds },
+        requestSummary: { asked: files.length, held: heldIds.length, keep },
       });
       delivered = heldIds.length;
       return { files: answered };
