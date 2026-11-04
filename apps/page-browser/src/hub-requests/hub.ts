@@ -97,8 +97,9 @@
 // Anything else ends `aborted_before_send` / `write_refused`: the write did
 // not leave (its preflight, an OPTIONS, may have).
 // The operator's own stop (spec §8.3, PR 7 part 2): a 401, 403 or 429 to one
-// of Hub's writes (its preflight's too), a Fansly check (`cf-mitigated:
-// challenge`) on an answer of Hub's, and what the operator tells it (the
+// of Hub's writes (its preflight's too) — not to an upload's part, which is
+// the storage's answer, not Fansly's (audit, 2026-11-04) — a Fansly check
+// (`cf-mitigated: challenge`) on an answer of Hub's, and what the operator tells it (the
 // login lost, a check on the site's answers: `stopPublishing`) stop both
 // permissions at once and hold them off until the engine names the stop
 // (`setPublishing.clearStop`) — which it does once the stop is the page's
@@ -1519,10 +1520,14 @@ export class HubRequests {
 
   /** What an answer to a Hub request says of the page's publishing (spec
    *  §8.3): a Fansly check stops it whatever the request; a 401, 403 or 429
-   *  to a write — or to its preflight — stops it. */
+   *  to a write — or to its preflight — stops it. An upload's part is not
+   *  Fansly's write: its PUT goes to the storage's signed URL, so a 403 (a
+   *  signature the storage no longer takes) or a 429 there is that file's own
+   *  failure — the runtime retries the part, then the album goes without the
+   *  file — never the page's stop (audit, 2026-11-04; runtime: publish/module.ts). */
   #judgeAnswer(attempt: Attempt, status: number, headers: Array<{ name: string; value: string }>): void {
     if (isChallenge(headers)) this.stopPublishing("challenge", `a Fansly check answered Hub attempt ${attempt.id} (${attempt.send.route})`);
-    else if (attempt.write !== null && (status === 401 || status === 403 || status === 429)) this.stopPublishing(`http_${status}`, `Fansly answered ${status} to Hub's write ${attempt.id} (${attempt.send.route})`);
+    else if (attempt.write !== null && attempt.cls !== "part" && (status === 401 || status === 403 || status === 429)) this.stopPublishing(`http_${status}`, `Fansly answered ${status} to Hub's write ${attempt.id} (${attempt.send.route})`);
   }
 
   /** A write's facts, or why it may not even start (PR 7): one of Hub's open

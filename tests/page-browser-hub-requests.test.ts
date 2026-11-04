@@ -910,6 +910,34 @@ describe("an upload's part and its status read (wall posts PR 8; minor 9)", () =
     expect(w.hub.holdsUpload()).toBe(false);
   });
 
+  it("a 401, 403 or 429 from the storage — to the part or its preflight — is that part's answer, never the page's stop; a Fansly check there still stops it (audit, 2026-11-04)", async () => {
+    for (const status of [401, 403, 429] as const) {
+      for (const where of ["main", "preflight"] as const) {
+        const w = await world();
+        w.hub.setPublishing({ create: true, withdraw: true });
+        let named: string | undefined = undefined;
+        admitAs(w, () => named);
+        const script: HubScript = where === "main" ? { status, chunks: [Buffer.from("<Error><Code>AccessDenied</Code></Error>")] } : { preflight: status };
+        const refused = partSend(w, bytesOf(1000), {}, script);
+        named = refused.writeFingerprint;
+        await outcomeOf(w, refused.attemptId);
+        expect(w.hub.publishing, `${status} ${where}`).toEqual({ create: true, withdraw: true, stop: null });
+        // The next part goes as before.
+        const next = partSend(w, bytesOf(1000, 3));
+        named = next.writeFingerprint;
+        expect(await outcomeOf(w, next.attemptId), `${status} ${where}`).toMatchObject({ kind: "response", status: 200 });
+      }
+    }
+    const w = await world();
+    w.hub.setPublishing({ create: true, withdraw: true });
+    let named: string | undefined = undefined;
+    admitAs(w, () => named);
+    const checked = partSend(w, bytesOf(1000), {}, { status: 403, headers: [{ name: "content-type", value: "text/html" }, { name: "cf-mitigated", value: "challenge" }] });
+    named = checked.writeFingerprint;
+    await outcomeOf(w, checked.attemptId);
+    expect(w.hub.publishing).toMatchObject({ create: false, withdraw: false, stop: { reason: "challenge" } });
+  });
+
   it("is refused before it starts without create, its bytes whole, as many and of the sha256 named, on a storage host, of the part's route, as fingerprinted", async () => {
     const w = await world();
     const bytes = bytesOf(1000);
