@@ -796,7 +796,7 @@ const HISTORY_FILING_OPTIONS: Record<string, HubOption> = {
 // --- publications (wall posts, docs/plans/2026-10-23-wall-posts) -----------------
 
 const PUBLICATION_CAPABILITY_HINT =
-  "This key lacks write:publication_drafts (to draft) or approve:publications (to approve): the owner grants it to the key"
+  "This key lacks write:publication_drafts (to draft) or approve:publications / approve:vault_albums (to approve): the owner grants it to the key"
   + " (dashboard, Settings, agent keys).";
 
 function publicationHint(error: { status: number | null; code: string | null }): string | null {
@@ -2062,7 +2062,8 @@ export const HUB_COMMANDS: readonly HubCommand[] = [
     summary:
       "Approve drafts of your pages in order — only on the owner's «да» in the chat for exactly these drafts."
       + " Each is checked again and refused on a blocking finding, a newer version or a status that is not a draft."
-      + " Needs approve:publications.",
+      + " Needs approve:publications, or approve:vault_albums for a vault album (any other kind is refused:"
+      + " kind_not_allowed).",
     options: {
       id: { kind: "number", describe: "The publication id (required)" },
       version: { kind: "number", describe: "The version the owner saw (required)" },

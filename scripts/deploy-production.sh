@@ -2098,7 +2098,8 @@ build_local_artifacts() (
   node scripts/build-production.mjs &
   runtime_build=$!
   status=0
-  pnpm --dir apps/dashboard exec vite build || status=$?
+  # The hub CLI goes into the dashboard's dist after vite, which empties it.
+  pnpm --dir apps/dashboard exec vite build && node scripts/build-hub-cli.mjs || status=$?
   wait "$runtime_build" || status=$?
   exit "$status"
 )

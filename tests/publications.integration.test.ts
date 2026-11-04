@@ -44,6 +44,7 @@ const READER = `${AGENT_KEY_TOKEN_PREFIX}publications-reader`;
 const OTHER_AGENT = `${AGENT_KEY_TOKEN_PREFIX}publications-other`;
 /** ContentOps' key: exactly its scopes (owner 2026-10-29). */
 const CONTENTOPS = `${AGENT_KEY_TOKEN_PREFIX}publications-contentops`;
+const ALBUMS_ONLY = `${AGENT_KEY_TOKEN_PREFIX}publications-albums`;
 const JPEG = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.from("a small picture, not a real one")]);
 const HASH = "a".repeat(64);
 
@@ -128,6 +129,7 @@ beforeEach(async (context) => {
     [READER, "publications-reader", ["read:datasets"]],
     [OTHER_AGENT, "publications-other", ["write:publication_drafts"]],
     [CONTENTOPS, "publications-contentops", ["read:content", "write:publication_drafts", "approve:publications"]],
+    [ALBUMS_ONLY, "publications-albums", ["write:publication_drafts", "approve:vault_albums"]],
   ] as const) {
     await insertAgentKey(testDb.db, {
       name,
@@ -420,6 +422,37 @@ describe("publications: the agent cancels its own before Hub hands it to the pla
     expect(onLora.statusCode, onLora.body).toBe(200);
     expect((await agent("POST", `/api/v1/agent/publications/${onLora.json().id}/cancel`)).statusCode).toBe(404);
     expect((await agent("POST", `/api/v1/agent/publications/${drafted.id}/cancel`, undefined, READER)).statusCode).toBe(403);
+  });
+});
+
+describe("publications: approve:vault_albums approves an album and nothing else", () => {
+  it("approves its album, refuses its paid post, and a key with neither right is a 403", async () => {
+    const approve = (one: { id: number; version: number }, token: string) =>
+      agent("POST", "/api/v1/agent/publications/approve", { items: [{ id: one.id, version: one.version }] }, token);
+    const uploaded = await server!.inject({
+      method: "POST",
+      url: "/api/v1/agent/pages/lilly-1/publication-files?name=pack-001.jpg",
+      headers: { authorization: `Bearer ${ALBUMS_ONLY}`, "content-type": "application/octet-stream" },
+      payload: JPEG,
+    });
+    expect(uploaded.statusCode, uploaded.body).toBe(200);
+    const fileId = (uploaded.json() as { file: { id: number } }).file.id;
+
+    const album = await agent("POST", "/api/v1/agent/pages/lilly-1/publications", {
+      kind: "vault_album", text: "Pack", media: [{ source: "file", fileId }], publishAt: tomorrow(), idempotencyKey: "albums-only-album",
+    }, ALBUMS_ONLY);
+    expect(album.statusCode, album.body).toBe(200);
+    const post = await agent("POST", "/api/v1/agent/pages/lilly-1/publications", {
+      ...draft({ kind: "paid_post", priceMills: 9990, media: [{ source: "file", fileId }] }), idempotencyKey: "albums-only-post",
+    }, ALBUMS_ONLY);
+    expect(post.statusCode, post.body).toBe(200);
+
+    const refused = await approve(post.json(), ALBUMS_ONLY);
+    expect(refused.json().results[0]).toMatchObject({ outcome: "refused", reason: "kind_not_allowed" });
+    expect((await approve(album.json(), AGENT)).statusCode).toBe(403);
+
+    const approved = await approve(album.json(), ALBUMS_ONLY);
+    expect(approved.json().results[0]).toMatchObject({ outcome: "approved", publication: { status: "approved" } });
   });
 });
 

@@ -5755,6 +5755,7 @@ export const agentKeys = pgTable(
         'request:hydration',
         'write:publication_drafts',
         'approve:publications',
+        'approve:vault_albums',
         'write:fan_queues',
         'read:content'
       ]::text[]
