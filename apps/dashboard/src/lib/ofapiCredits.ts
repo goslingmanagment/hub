@@ -1,4 +1,4 @@
-import { formatUsdFromMills } from "@agency_hub_core/shared";
+import { formatUsdFromMills, microUsdFromDbInt, microUsdToMills } from "@agency_hub_core/shared";
 import { ruPlural } from "@/lib/plural";
 
 // OnlyFans API credits in words: one version for Деньги → Расходы → OnlyFans API
@@ -47,7 +47,8 @@ export const creditsWord = (value: number) => ruPlural(value, "кредит", "�
 /** «1 500 кредитов»: the amount with its unit, for prose. */
 export const credits = (value: number) => `${fmtCredits(value)} ${creditsWord(value)}`;
 
-/** Micro-USD per credit → dollars, through the shared mills formatter. */
-export function creditsToUsd(amount: number, microUsdPerCredit: number) {
-  return formatUsdFromMills(Math.round((amount * microUsdPerCredit) / 1000));
+/** Credits at micro-USD per credit → dollars: micro-USD to mills through the
+ *  money codec, then the shared mills formatter. */
+export function creditsToUsd(credits: number, microUsdPerCredit: number) {
+  return formatUsdFromMills(microUsdToMills(microUsdFromDbInt(credits * microUsdPerCredit)));
 }

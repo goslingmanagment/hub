@@ -53,12 +53,18 @@ export function usePublicationSettings() {
 /** The reads behind «Ждут вас»: the same keys as the home's rows (api/waiting.ts), so the counts agree. */
 const WAITING_LIMIT = 1000;
 
+/** A count is never the previous filter's rows: the same read without the dimmed placeholder. */
+function waitingQueryOptions(params: PublicationListParams) {
+  const { placeholderData: _previousRows, ...options } = publicationsQueryOptions(params);
+  return options;
+}
+
 /** Every draft and every «Исход неизвестен», over all dates and pages; a page is counted in the browser. */
 export function usePublicationsWaiting() {
   const [drafts, unknown] = useQueries({
     queries: [
-      { ...publicationsQueryOptions({ status: "draft", limit: WAITING_LIMIT }), placeholderData: undefined },
-      { ...publicationsQueryOptions({ status: "unknown", limit: WAITING_LIMIT }), placeholderData: undefined },
+      waitingQueryOptions({ status: "draft", limit: WAITING_LIMIT }),
+      waitingQueryOptions({ status: "unknown", limit: WAITING_LIMIT }),
     ],
   });
   return { drafts, unknown };
