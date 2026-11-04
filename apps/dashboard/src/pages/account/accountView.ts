@@ -5,6 +5,7 @@ import {
   checkNewPassword,
   previousBusinessDate,
 } from "@agency_hub_core/shared";
+import { ruPlural } from "@/lib/plural";
 import { CHATTER_SITE_ORIGIN } from "@/lib/sites";
 
 // Everything a person reads on /join and /account is written in terms of
@@ -76,12 +77,12 @@ export function groupPagesByPlatform<T extends { platform: Platform }>(
 }
 
 const ROLE_LABELS: Record<string, string> = {
-  owner: "владелец",
-  team_lead: "старший",
-  chatter: "чаттер",
+  owner: "Владелец",
+  team_lead: "Тимлид",
+  chatter: "Чаттер",
   // The role is retired from the wire enum; the label survives for a
   // historical row that only raw SQL can still show.
-  content_manager: "контент-менеджер",
+  content_manager: "Контент-менеджер",
 };
 
 export function roleLabel(role: string): string {
@@ -250,5 +251,5 @@ export function lastSeenLabel(lastUsedAt: string | null, now: Date = new Date())
   if (hours < 24) return `вход ${hours} ч назад`;
   const days = Math.floor(hours / 24);
   if (days === 1) return "вход вчера";
-  return `вход ${days} дн назад`;
+  return `вход ${days} ${ruPlural(days, "день", "дня", "дней")} назад`;
 }

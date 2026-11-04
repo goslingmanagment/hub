@@ -11,8 +11,8 @@ import { CHATTER_SITE_ORIGIN, isChatterSite, isConsoleSite } from "@/lib/sites";
 // ChatterLayout and /join show — and not the name of a console they never see.
 function Wordmark() {
   return isChatterSite()
-    ? <><span className="text-text-muted">Chat</span><span>Goose</span></>
-    : <><span className="text-text-muted">Agency</span><span>Hub</span></>;
+    ? <><span>Chat</span>Goose</>
+    : <><span>Agency</span>Hub</>;
 }
 
 export function LoginPage() {
@@ -44,8 +44,8 @@ export function LoginPage() {
 
   if (authLoading) {
     return (
-      <div className="flex items-center justify-center min-h-screen bg-bg">
-        <div role="status" className="text-text-muted text-sm">Проверяем вход…</div>
+      <div className="entry-screen">
+        <div role="status" className="text-sm text-text-secondary">Проверяем вход…</div>
       </div>
     );
   }
@@ -73,21 +73,20 @@ export function LoginPage() {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-bg p-4">
-      <div className="w-full max-w-[380px] rounded-xl border border-border bg-card p-6 sm:p-8 shadow-sm">
-        <h1 className="mb-6 text-center text-2xl font-bold tracking-[-0.03em]">
-          <Wordmark />
-        </h1>
-
-        {authQuery.isError && !(authQuery.error instanceof KernelApiError && authQuery.error.status === 401) && <p role="alert" className="mb-4 text-sm text-text-secondary">Не удалось проверить текущую сессию. Можно повторить вход.</p>}
+    <div className="entry-screen">
+      <h1 className="entry-logo">
+        <Wordmark />
+      </h1>
+      <div className="entry-card">
+        {authQuery.isError && !(authQuery.error instanceof KernelApiError && authQuery.error.status === 401) && <p role="alert" className="notice notice-warning mb-4">Не удалось проверить текущую сессию. Можно повторить вход.</p>}
         {(turnedAway || wasTurnedAway) && (
-          <p role="alert" className="mb-4 text-sm text-text-secondary">
-            Это вход в админку. Аккаунт ChatGoose — на{" "}
-            <a href={`${CHATTER_SITE_ORIGIN}/account`} className="underline">chatgoose.gosling-agency.ru</a>.
+          <p role="alert" className="notice mb-4">
+            Это вход в консоль. Аккаунт ChatGoose — на{" "}
+            <a href={`${CHATTER_SITE_ORIGIN}/account`} className="link">chatgoose.gosling-agency.ru</a>.
           </p>
         )}
         <form onSubmit={handleSubmit} className="flex flex-col gap-4" aria-busy={login.isPending}>
-          <div className="flex flex-col gap-1.5">
+          <div className="flex flex-col gap-2">
             <label htmlFor="username" className="field-label mb-0">
               Логин
             </label>
@@ -100,13 +99,12 @@ export function LoginPage() {
               disabled={login.isPending}
               value={username}
               onChange={(e) => { setUsername(e.target.value); login.reset(); }}
-              placeholder="Введите логин"
               required
               className="input"
             />
           </div>
 
-          <div className="flex flex-col gap-1.5">
+          <div className="flex flex-col gap-2">
             <label htmlFor="password" className="field-label mb-0">
               Пароль
             </label>
@@ -117,17 +115,16 @@ export function LoginPage() {
               disabled={login.isPending}
               value={password}
               onChange={(e) => { setPassword(e.target.value); login.reset(); }}
-              placeholder="Введите пароль"
               required
               className="input"
             />
           </div>
 
-          {login.isError && <p role="alert" className="text-sm text-danger">{login.error instanceof KernelApiError && login.error.status === 401 ? "Неверный логин или пароль." : "Не удалось войти. Повторите попытку."}</p>}
+          {login.isError && <p role="alert" className="field-error">{login.error instanceof KernelApiError && login.error.status === 401 ? "Неверный логин или пароль." : "Не удалось войти. Повторите попытку."}</p>}
           <button
             type="submit"
             disabled={login.isPending || !username.trim() || !password}
-            className="btn btn-primary w-full min-h-10"
+            className="btn btn-primary entry-submit"
           >
             {login.isPending ? "Входим…" : "Войти"}
           </button>

@@ -37,7 +37,7 @@ export function ChatterLayout() {
       <div className="flex min-h-screen items-center justify-center bg-bg p-6">
         <div role="alert" className="card card-body max-w-md">
           <h1 className="card-title">Не удалось проверить вход</h1>
-          <p className="mt-2 text-sm text-text-secondary">Повторите запрос, когда связь восстановится.</p>
+          <p className="mt-2 text-sm text-text-secondary">Повтори, когда связь восстановится.</p>
           <button
             type="button"
             disabled={isFetching}
@@ -66,8 +66,8 @@ export function ChatterLayout() {
 
   return (
     <div className="min-h-screen bg-bg">
-      <header className="flex h-[56px] items-center justify-between gap-3 border-b border-border bg-card px-4 sm:px-6">
-        <span className="logo !px-0"><span>Chat</span>Goose</span>
+      <header className="cabinet-bar">
+        <span className="cabinet-logo"><span>Chat</span>Goose</span>
         <div className="flex min-w-0 items-center gap-3">
           <span className="truncate text-sm text-text-secondary">{data.user.username}</span>
           <button
@@ -80,7 +80,7 @@ export function ChatterLayout() {
           </button>
         </div>
       </header>
-      <main className="mx-auto w-full max-w-[1200px] px-4 py-6 sm:px-6 sm:py-8">
+      <main className="cabinet-main">
         <Outlet />
       </main>
     </div>

@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type { AccountShiftReportMarkBody, ChangePasswordBody } from "@agency_hub_core/contracts";
+import { SHIFT_REPORT_MAX_DAYS, type AccountShiftReportMarkBody, type ChangePasswordBody } from "@agency_hub_core/contracts";
 
 import { kernel } from "./sdk.js";
 
@@ -68,8 +68,8 @@ export function useMyUsage(params: { from?: string; to?: string } = {}) {
   });
 }
 
-/** The caller's draft shift reports (`accountShiftReport`, Chat Memory week 4). */
-export function useMyShiftReport(days = 7) {
+/** The caller's draft shift reports (`accountShiftReport`): every shift that can still be confirmed. */
+export function useMyShiftReport(days: number = SHIFT_REPORT_MAX_DAYS) {
   return useQuery({
     queryKey: ["account", "shift-report", days],
     queryFn: () => kernel.accountShiftReport({ query: { days } }),

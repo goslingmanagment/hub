@@ -7,7 +7,7 @@ import type {
 import { platforms, type Platform, type UserRole } from "@agency_hub_core/shared";
 import { CHATTER_SITE_ORIGIN, chatterSiteOriginFor } from "@/lib/sites";
 
-// The Team tab's pure view logic: statuses, sorting, platform
+// The people screens' pure view logic: statuses, sorting, platform
 // grouping, the join link and the Telegram template. Every user-facing word
 // here obeys the §2 vocabulary (login, password, devices, links — nothing
 // about the credential machinery underneath); tests/dashboard-team-copy-
@@ -26,9 +26,9 @@ export const TEAM_STATUS_LABEL: Readonly<Record<TeamStatus, string>> = {
 };
 
 export const ROLE_LABEL: Readonly<Record<UserRole, string>> = {
-  owner: "владелец",
-  team_lead: "тимлид",
-  chatter: "чаттер",
+  owner: "Владелец",
+  team_lead: "Тимлид",
+  chatter: "Чаттер",
 };
 
 /** Deactivation wins over everything; an account that has not set its

@@ -128,12 +128,17 @@ export function useResolveShiftDispute() {
   });
 }
 
-/** The payout export of confirmed shift reports (`teamShiftExport`); Moscow days, both included. */
-export function useTeamShiftExport(params: { from: string; to: string }) {
+/**
+ * The payout export of confirmed shift reports (`teamShiftExport`); Moscow days,
+ * both included. No placeholder, on purpose: the columns of a new window must
+ * never carry the sums of the old one.
+ */
+export function useTeamShiftExport(params: { from: string; to: string }, options: { enabled?: boolean } = {}) {
   return useQuery(queryOptions({
     queryKey: ["team-shift-export", params] as const,
     queryFn: () => kernel.teamShiftExport({ query: params }),
     meta: { suppressGlobalError: true },
+    enabled: options.enabled ?? true,
   }));
 }
 
@@ -157,12 +162,32 @@ export function useTeamGreetings(days: number) {
   }));
 }
 
-/** The eight numbers of each chatter's shifts and week (`teamChatterNumbers`). */
-export function useTeamChatterNumbers(params: { from?: string; to?: string } = {}) {
+/**
+ * One chatter's numbers shift by shift (`teamChatterNumbers` with `userId`):
+ * read only when «Подробно по сменам» is opened. `from` is the Moscow midnight
+ * the window starts at and `to` is left out, so the key lives the whole day.
+ */
+export function useTeamChatterNumbers(params: { from: string; userId: number }, options: { enabled: boolean }) {
   return useQuery(queryOptions({
     queryKey: ["team-chatter-numbers", params] as const,
     queryFn: () => kernel.teamChatterNumbers({ query: params }),
     meta: { suppressGlobalError: true },
+    enabled: options.enabled,
+    staleTime: 5 * 60_000,
+  }));
+}
+
+/**
+ * Who worked in the extension on the viewer's pages in the last month: the
+ * `people` of `teamChatterStats` for one day, the cheapest read that has them.
+ */
+export function useTeamChatterPeople() {
+  return useQuery(queryOptions({
+    queryKey: ["team-chatter-people"] as const,
+    queryFn: () => kernel.teamChatterStats({ query: { days: 1 } }),
+    select: (data) => ({ people: data.people, anyone: data.stats !== null }),
+    meta: { suppressGlobalError: true },
+    staleTime: 5 * 60_000,
   }));
 }
 
@@ -186,6 +211,16 @@ export function teamChatterStatsQueryOptions(params: TeamChatterStatsParams) {
   });
 }
 
+/**
+ * The previous numbers stay on screen while a new period loads, but only the
+ * same person's: under a new name, never a moment of someone else's money.
+ */
 export function useTeamChatterStats(params: TeamChatterStatsParams) {
-  return useQuery({ ...teamChatterStatsQueryOptions(params), placeholderData: (previous) => previous });
+  return useQuery({
+    ...teamChatterStatsQueryOptions(params),
+    placeholderData: (previous, previousQuery) => {
+      const before = previousQuery?.queryKey[1] as TeamChatterStatsParams | undefined;
+      return before?.userId === params.userId ? previous : undefined;
+    },
+  });
 }

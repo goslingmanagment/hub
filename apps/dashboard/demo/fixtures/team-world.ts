@@ -343,7 +343,9 @@ function simulateChatter(schedule: Schedule, now: Date): { shifts: DemoShift[]; 
     const greet = Math.round(totalMessages * between(random, 0.02, 0.04));
     const fansWritten = Math.round(totalMessages / between(random, 4.5, 7));
     const ageHours = (nowMs - end) / HOUR;
-    const confirmed = !ongoing && (schedule.until !== undefined ? true : ageHours > 96 || (ageHours > 14 && random() < 0.85));
+    // One shift of alex.k some 15 days back was never confirmed: past the 14 days, it cannot be any more.
+    const lapsed = schedule.username === "alex.k" && ageHours > 15 * 24 && ageHours < 17 * 24;
+    const confirmed = !ongoing && !lapsed && (schedule.until !== undefined ? true : ageHours > 96 || (ageHours > 14 && random() < 0.85));
     shifts.push({
       user,
       startedAt: start,

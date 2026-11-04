@@ -226,7 +226,25 @@ function usage(request: DemoRequest): MyUsage | DemoReply {
   };
 }
 
+// --- «/join»: the invitation and the new password ---
+
+/** The links /join understands in the demo: an invitation of nika.t, a reset, a spent one. */
+function inspectLink(request: DemoRequest) {
+  const token = (request.body as { token?: string } | null)?.token ?? "";
+  const expiresAt = iso(new Date(request.now.getTime() + 6 * DAY_MS));
+  if (token === "demo-invite-link-not-real") return { state: "active" as const, kind: "invite" as const, username: "nika.t", expiresAt, platforms: ["fansly" as const] };
+  if (token === "demo-reset-link-not-real") return { state: "active" as const, kind: "password_reset" as const, username: "alex.k", expiresAt, platforms: ["fansly" as const] };
+  if (token === "used") return { state: "used" as const };
+  return demoError(404, "Not Found", "Ссылка не найдена");
+}
+
 export const accountHandlers: DemoHandlers = {
+  authInspectAccountLink: inspectLink,
+  authRedeemAccountLink: (request) => {
+    const answer = inspectLink(request);
+    if ("state" in answer && answer.state === "active") return { username: answer.username };
+    return demoError(409, "Conflict", "Ссылка уже не действует");
+  },
   accountChatterStats: (request) => {
     const days = daysOf(request, 31, 7);
     if (days === null) return demoError(400, "Bad Request", "querystring/days must be an integer from 1 to 31");
