@@ -89,6 +89,12 @@ export const publicationContentSchema = z.strictObject({
   subscribersOnly: z.boolean().default(false),
   /** Fansly: attachments after the post's own, each with its own audience. */
   extraAttachments: z.array(publicationExtraAttachmentInputSchema).max(PUBLICATION_EXTRA_ATTACHMENTS_MAX).default([]),
+  /**
+   * A vault album's album by its id, as `publication-get` printed it: the page's
+   * album Hub knows (its album listing, or a publication of the page), whatever
+   * its title now. Absent or null: the page's album titled `text`, else a new one.
+   */
+  vaultAlbumRef: z.string().regex(/^[0-9A-Za-z_-]{1,64}$/).nullable().optional(),
 });
 export type PublicationContentBody = z.infer<typeof publicationContentSchema>;
 
@@ -173,8 +179,10 @@ export const publicationSchema = z.object({
   }),
   approvedRevisionId: z.number().int().nullable(),
   platformPostRef: z.string().nullable(),
-  /** A vault album's album on Fansly: the one its title found when it was
-   *  drafted, or the one Hub made when it went (null: to be made). */
+  /** A vault album's album on Fansly: the one its draft named, or its title
+   *  found, when it was drafted; else the one its send found or made, recorded
+   *  as soon as it is known (null: none yet). A draft sent again with it goes
+   *  into that album. */
   vaultAlbumRef: z.string().nullable(),
   statusReason: z.string().nullable(),
   previousPublicationId: z.number().int().nullable(),

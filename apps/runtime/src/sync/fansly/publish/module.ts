@@ -109,7 +109,7 @@ export type WriteDeriveContext =
     ok: true;
     dispatch: { kind: "create" | "withdraw" | "delete"; mode: string; revisionId: number };
     form: ApprovedForm;
-    publication: { status: string; platformPostRef: string | null };
+    publication: { status: string; platformPostRef: string | null; vaultAlbumRef?: string | null };
     files: ReadonlyMap<number, FanslyWriteFileFacts>;
     /** The page's walls and tiers (the contract §3–§4). */
     page: FanslyPageFacts;
@@ -195,7 +195,7 @@ async function readDeriveContext(db: Database, command: FanslyWriteCommandRecord
     ok: true,
     dispatch: { kind: dispatch.kind, mode: dispatch.mode, revisionId: dispatch.revisionId },
     form,
-    publication: { status: publication.status, platformPostRef: publication.platformPostRef },
+    publication: { status: publication.status, platformPostRef: publication.platformPostRef, vaultAlbumRef: publication.vaultAlbumRef },
     files: new Map(files.map((file) => [file.id, file])),
     page,
     commands,

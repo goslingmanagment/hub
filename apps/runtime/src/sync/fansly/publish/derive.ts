@@ -279,8 +279,9 @@ export interface WriteDeriveInput {
   dispatch: { kind: "create" | "withdraw" | "delete"; mode: string; revisionId: number };
   /** The approved form of the dispatch's revision. */
   form: ApprovedForm;
-  /** The publication now: a withdraw and a delete take its post. */
-  publication: { status: string; platformPostRef: string | null };
+  /** The publication now: a withdraw and a delete take its post; a vault
+   *  album's steps its album as its send recorded it (audit, 2026-11-04). */
+  publication: { status: string; platformPostRef: string | null; vaultAlbumRef?: string | null };
   /** The uploaded files the form names, as they are now. */
   files: ReadonlyMap<number, FanslyWriteFileFacts>;
   /** The page's walls and tiers as Hub holds them now. */
@@ -675,10 +676,13 @@ function build(input: WriteDeriveInput): Built<FanslyWireId> {
       return { spec: "publish.post_delete", params: { postId }, from };
     }
     case "album_create": {
-      // The album the approval names none of (0323): made with its title.
+      // The album the approval names none of (0323): made with its title —
+      // never once the publication holds one (audit, 2026-11-04: its send
+      // found the page's, or made it already).
       if (command.item !== "") refuse("item_not_of_step");
       if (form.kind !== "vault_album") refuse("not_a_vault_album");
       if (form.albumRef !== null) refuse("album_in_approval");
+      if ((input.publication.vaultAlbumRef ?? null) !== null) refuse("album_on_publication");
       return { spec: "publish.vault_album_create", params: { title: form.text.trim() }, from };
     }
     case "album_media": {
@@ -687,12 +691,22 @@ function build(input: WriteDeriveInput): Built<FanslyWireId> {
       // approval's order; a file it holds already moves, never twice.
       if (command.item !== "") refuse("item_not_of_step");
       if (form.kind !== "vault_album") refuse("not_a_vault_album");
+      // Its album: the approval's; else the one its create made; else the
+      // page's one with its title its send found and recorded on the
+      // publication (audit, 2026-11-04).
+      const recorded = input.publication.vaultAlbumRef ?? null;
       let albumId = form.albumRef;
       if (albumId === null) {
-        const created = answered(commands, "album_create") ?? refuse("album_not_created");
-        albumId = resultString(created, "albumId") ?? refuse("album_create_incomplete");
-        from.push(created.id);
+        const created = answered(commands, "album_create");
+        if (created === null) {
+          albumId = recorded ?? refuse("album_not_created");
+        } else {
+          albumId = resultString(created, "albumId") ?? refuse("album_create_incomplete");
+          from.push(created.id);
+        }
       }
+      // Once recorded, the publication's album is the one every step fills.
+      if (recorded !== null && recorded !== albumId) refuse("album_not_the_publications");
       // A file that failed for itself goes without (0347): the album gets
       // the rest, the publication names it. A media named twice (two files
       // of the same bytes) is added once, where it first is.

@@ -16,6 +16,7 @@ import {
   getPublicationRevision,
   insertPublication,
   insertPublicationRevision,
+  isPageVaultAlbum,
   listPagePublishingSettings,
   listPublicationChanges,
   listPublicationPageTiers,
@@ -105,6 +106,9 @@ export interface PublicationDraftContext {
   /** A vault album's: the page's albums with its title (0323) — the ones
    *  Hub collected and the ones Hub made. */
   vaultAlbumRefs?: readonly string[];
+  /** A vault album that names its album by id: whether that is one of the
+   *  page's albums Hub knows (`isPageVaultAlbum`). */
+  vaultAlbumKnown?: boolean;
 }
 
 /** The bytes of a Fansly post's text: the rest of its request (attachments,
@@ -171,6 +175,7 @@ export function normalizePublicationDraft(body: PublicationContentBody, context:
     throw new BadRequestError(`${page.platform} pages cannot publish ${body.kind}`);
   }
   if (body.kind === "vault_album") return normalizeVaultAlbum(body, context);
+  if ((body.vaultAlbumRef ?? null) !== null) throw new BadRequestError("only a vault album names an album");
   const publishAt = new Date(body.publishAt);
   const expiresAt = body.expiresAt === null ? null : new Date(body.expiresAt);
   if (expiresAt !== null && expiresAt.getTime() <= publishAt.getTime()) {
@@ -295,8 +300,11 @@ export function normalizePublicationDraft(body: PublicationContentBody, context:
 
 /**
  * A vault album (0323): its title in `text`, its files in order — the album as
- * it should be, nothing else. The album is the page's one with this title
- * (found now, so the approval freezes it), or a new one its create makes.
+ * it should be, nothing else. The album is the one the draft names by id — an
+ * album of the page Hub knows, whatever its title now (a draft sent again from
+ * a publication keeps its album, audit 2026-11-04) — else the page's one with
+ * this title (found now, so the approval freezes it), else a new one its send
+ * makes.
  */
 function normalizeVaultAlbum(body: PublicationContentBody, context: PublicationDraftContext): PublicationContent {
   const title = body.text.trim();
@@ -315,7 +323,11 @@ function normalizeVaultAlbum(body: PublicationContentBody, context: PublicationD
     if (!file) throw new BadRequestError(`file ${item.fileId} does not exist`);
     if (file.bytesDeletedAt !== null) throw new BadRequestError(`file ${item.fileId} was deleted after its 7 days; upload it again`);
   }
-  const albums = [...new Set(context.vaultAlbumRefs ?? [])];
+  const named = body.vaultAlbumRef ?? null;
+  if (named !== null && context.vaultAlbumKnown !== true) {
+    throw new BadRequestError(`vault album ${named} is not an album of this page Hub knows (its album listing, or a publication of the page)`);
+  }
+  const albums = named !== null ? [named] : [...new Set(context.vaultAlbumRefs ?? [])];
   if (albums.length > 1) throw new BadRequestError(`the page has ${albums.length} vault albums titled "${title}": rename all but one first`);
   return {
     kind: "vault_album",
@@ -495,12 +507,15 @@ async function readDraftContext(db: Database, pageId: number, body: PublicationC
   const fileIds = [...body.media, ...body.previews, ...body.extraAttachments.flatMap((extra) => [...extra.media, ...extra.previews])]
     .flatMap((item) => item.source === "file" ? [item.fileId] : []);
   const album = body.kind === "vault_album" && page.platform === "fansly";
-  const [walls, files, vaultAlbumRefs] = await Promise.all([
+  // An album named by id is looked up by it; its title finds one only without.
+  const named = album ? body.vaultAlbumRef ?? null : null;
+  const [walls, files, vaultAlbumRefs, vaultAlbumKnown] = await Promise.all([
     page.platform === "fansly" ? listPublicationPageWalls(db, pageId) : Promise.resolve([]),
     getPublicationFiles(db, fileIds),
-    album ? findPageVaultAlbumRefs(db, pageId, body.text.trim()) : Promise.resolve([]),
+    album && named === null ? findPageVaultAlbumRefs(db, pageId, body.text.trim()) : Promise.resolve([]),
+    named === null ? Promise.resolve(false) : isPageVaultAlbum(db, pageId, named),
   ]);
-  return { page, walls, files: new Map(files.map((file) => [file.id, file])), vaultAlbumRefs };
+  return { page, walls, files: new Map(files.map((file) => [file.id, file])), vaultAlbumRefs, vaultAlbumKnown };
 }
 
 /** Read the facts and run the checks for `content` on `page`, in the caller's transaction. */
@@ -1101,6 +1116,10 @@ export async function checkApprovedPublication(db: Database, id: number, options
   ]);
   if (!revision || !page) return { ok: false, reason: "not_approved" };
   const content = contentOf(record);
+  // A vault album approved with no album of its own: the album its send found
+  // or made, which Hub records on it while it goes (setPublicationVaultAlbumRef),
+  // is where it goes, not a change to what the person approved.
+  if (record.kind === "vault_album" && record.status === "submitting" && approvedAlbumRef(revision.form) === null) content.vaultAlbumRef = null;
   const { fingerprint } = publicationApprovalForm({ publicationId: record.id, content, page, files: await filesOf(db, content) });
   if (fingerprint === revision.fingerprint) return { ok: true, record, fingerprint };
   const accountChanged = page.id !== revision.pageId
@@ -1110,6 +1129,12 @@ export async function checkApprovedPublication(db: Database, id: number, options
     || page.modelId !== revision.modelId
     || page.status !== "active";
   return { ok: false, reason: accountChanged ? "account_changed" : "content_changed" };
+}
+
+/** The album an approved form names (0323); null: none, its send finds or makes one. */
+function approvedAlbumRef(form: unknown): string | null {
+  const albumRef = typeof form === "object" && form !== null ? (form as { albumRef?: unknown }).albumRef : undefined;
+  return typeof albumRef === "string" && albumRef !== "" ? albumRef : null;
 }
 
 /**

@@ -117,7 +117,8 @@ export interface PublicationContent {
   replyLock: readonly PublicationReplyLock[];
   subscribersOnly: boolean;
   extraAttachments: readonly PublicationExtraAttachment[];
-  /** A vault album's album found by its title when it was drafted (0323); null or absent: to be made. */
+  /** A vault album's album (0323): the one its draft named or its title found;
+   *  null or absent: its send finds or makes one, recorded here once known. */
   vaultAlbumRef?: string | null;
   media: readonly PublicationMediaItem[];
 }
@@ -602,7 +603,7 @@ export interface TransitionPublicationInput {
    *  claims what it checked, never a newer approval made in between. */
   onlyIfRevisionId?: number;
   platformPostRef?: string | null;
-  /** A vault album's album its create made (0323). */
+  /** A vault album's album its send filled (0323). */
   vaultAlbumRef?: string;
   findings?: unknown[];
 }
@@ -861,6 +862,44 @@ export async function findPageVaultAlbumRefs(db: Database, pageId: number, title
                         where seen.page_id = p.page_id and seen.vault_kind = 'creator' and seen.album_ref = p.vault_album_ref)
   `);
   return result.rows.map((row) => String(row.album_ref)).sort();
+}
+
+/**
+ * Whether `albumRef` is one of the page's vault albums as Hub knows them, by
+ * the same two sources as `findPageVaultAlbumRefs` but by id, whatever its
+ * title: a creator album of the listing (not gone from the last full one), or
+ * an album a vault-album publication of the page holds that no listing has
+ * collected yet (once collected, the listing's row speaks for it).
+ */
+export async function isPageVaultAlbum(db: Database, pageId: number, albumRef: string): Promise<boolean> {
+  const result = await db.execute<Row>(sql`
+    select 1 from creator_vault_albums a
+     where a.page_id = ${pageId} and a.vault_kind = 'creator' and a.album_type is null
+       and a.missing_since is null and a.album_ref = ${albumRef}
+    union all
+    select 1 from publications p
+     where p.page_id = ${pageId} and p.kind = 'vault_album' and p.vault_album_ref = ${albumRef}
+       and not exists (select 1 from creator_vault_albums seen
+                        where seen.page_id = p.page_id and seen.vault_kind = 'creator' and seen.album_ref = p.vault_album_ref)
+    limit 1
+  `);
+  return result.rows.length > 0;
+}
+
+/**
+ * A vault album's album, recorded on it the moment its send knows it (audit,
+ * 2026-11-04): the album its create made, or the page's album with its title
+ * found right before a create. Only while it is being sent and holds none, so
+ * every later step, and a draft sent again from it, goes to that one album.
+ * False: it is not submitting, or already holds an album.
+ */
+export async function setPublicationVaultAlbumRef(db: Database, input: { id: number; albumRef: string }): Promise<boolean> {
+  const updated = await db.execute<Row>(sql`
+    update publications set vault_album_ref = ${input.albumRef}, updated_at = now()
+     where id = ${input.id} and kind = 'vault_album' and status = 'submitting' and vault_album_ref is null
+    returning id
+  `);
+  return updated.rows.length > 0;
 }
 
 export async function findPageMediaRefs(db: Database, pageId: number, refs: readonly string[]): Promise<Set<string>> {

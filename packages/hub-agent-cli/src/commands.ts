@@ -803,10 +803,11 @@ function publicationHint(error: { status: number | null; code: string | null }):
   return error.code === "agent_capability_missing" ? PUBLICATION_CAPABILITY_HINT : null;
 }
 
-/** What a draft body says (publicationContentSchema), besides its media. */
+/** What a draft body says (publicationContentSchema), besides its media. A vault
+ *  album's `vaultAlbumRef` stays with it: sent again, its files go into that album. */
 const PUBLICATION_CONTENT_KEYS = new Set([
   "kind", "text", "media", "previews", "publishAt", "expiresAt", "wallRefs", "tierRefs", "priceMills", "repost",
-  "pinWallRefs", "replyLock", "subscribersOnly", "extraAttachments",
+  "pinWallRefs", "replyLock", "subscribersOnly", "extraAttachments", "vaultAlbumRef",
 ]);
 
 /**
@@ -818,7 +819,7 @@ const PUBLICATION_CONTENT_KEYS = new Set([
 const PUBLICATION_READ_ONLY_KEYS = new Set([
   "id", "version", "pageLabel", "platform", "status", "findings", "blocked", "author", "approvedRevisionId",
   "platformPostRef", "statusReason", "previousPublicationId", "createdAt", "updatedAt", "statusChangedAt",
-  "events", "revision", "vaultAlbumRef", "withdrawal", "deletion",
+  "events", "revision", "withdrawal", "deletion",
 ]);
 
 type HubPublicationMediaInput = { source: "vault"; mediaRef: string } | { source: "file"; fileId: number };
@@ -1253,8 +1254,9 @@ async function draftVaultAlbum(client: KernelClient, values: HubOptionValues, de
     folder, totals: plan.totals, album, skipped: plan.skipped, uploads,
     next: `Drafted publication ${publication.id}, version ${publication.version}.`
       + (publication.vaultAlbumRef === null
-        ? " Hub makes a new album with this title once it is approved: say so to the owner — an album of this title made"
-          + " by hand within the last day Hub may not know yet, and it would get a twin."
+        ? " Hub makes a new album with this title once it is approved, unless by then the page has one with it (then"
+          + " that one gets the files): say so to the owner — an album of this title made by hand within the last day"
+          + " Hub may not know yet, and it would get a twin."
         : ` Its files go into the page's album ${publication.vaultAlbumRef}, the one with this title.`)
       + (blocking.length > 0 ? ` It cannot be approved as it is (${[...new Set(blocking)].join(", ")}).` : "")
       + " A person approves it: the owner in Hub, or hub publication-approve --id"

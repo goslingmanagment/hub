@@ -30,11 +30,11 @@ describe("a draft file from `publication-get`'s answer", () => {
     });
   });
 
-  it("keeps the name a vault album's draft gave each file (0349): the album sent again names its cards the same", () => {
+  it("keeps the name a vault album's draft gave each file (0349) and its album's id: the album sent again is the same one, its cards named the same", () => {
     const answer = {
       ok: true,
       data: {
-        id: 8, kind: "vault_album", text: "SXT-003",
+        id: 8, kind: "vault_album", text: "SXT-003", vaultAlbumRef: "974124343242018816",
         media: [
           { role: "media", position: 1, source: "file", mediaRef: null, fileId: 12, attachment: 0, name: "SXT-003_02.jpg" },
           { role: "media", position: 0, source: "file", mediaRef: null, fileId: 11, attachment: 0, name: "SXT-003_01.jpg" },
@@ -43,7 +43,7 @@ describe("a draft file from `publication-get`'s answer", () => {
       },
     };
     expect(parseHubDraftFile(JSON.stringify(answer), [])).toEqual({
-      kind: "vault_album", text: "SXT-003",
+      kind: "vault_album", text: "SXT-003", vaultAlbumRef: "974124343242018816",
       media: [{ source: "file", fileId: 11, name: "SXT-003_01.jpg" }, { source: "file", fileId: 12, name: "SXT-003_02.jpg" }, { source: "file", fileId: 13 }],
       previews: [],
     });

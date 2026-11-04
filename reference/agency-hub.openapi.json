@@ -71706,6 +71706,17 @@
                       "additionalProperties": false
                     }
                   },
+                  "vaultAlbumRef": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "pattern": "^[0-9A-Za-z_-]{1,64}$"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
                   "pageLabel": {
                     "type": "string",
                     "minLength": 1
@@ -77687,6 +77698,17 @@
                       ],
                       "additionalProperties": false
                     }
+                  },
+                  "vaultAlbumRef": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "pattern": "^[0-9A-Za-z_-]{1,64}$"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
                   },
                   "version": {
                     "type": "integer",
@@ -124222,6 +124244,17 @@
                       "additionalProperties": false
                     }
                   },
+                  "vaultAlbumRef": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "pattern": "^[0-9A-Za-z_-]{1,64}$"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
                   "idempotencyKey": {
                     "type": "string",
                     "minLength": 1,
@@ -143636,6 +143669,17 @@
                       ],
                       "additionalProperties": false
                     }
+                  },
+                  "vaultAlbumRef": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "pattern": "^[0-9A-Za-z_-]{1,64}$"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
                   },
                   "version": {
                     "type": "integer",
