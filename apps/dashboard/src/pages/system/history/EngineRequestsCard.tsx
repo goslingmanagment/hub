@@ -14,7 +14,7 @@ import {
   historyWaitingText,
   openHistoryRequests,
   type EngineHistoryRequest,
-} from "./engineDisplay.js";
+} from "@/pages/settings/engine/engineDisplay";
 
 // History requests of a Fansly page (plan §4.3): how many fans are ready, the reads
 // made and still needed, and the time left — always the lower bound and the

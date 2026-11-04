@@ -11,7 +11,7 @@ import {
   clientHealthRangeLabel,
   formatCount,
   type ClientHealthPeriod,
-} from "./clientHealthView.js";
+} from "@/pages/dev/clientHealthView";
 
 const CELL = "muted";
 /** A version, a build or a code: never broken across lines; the section scrolls sideways instead. */

@@ -8,7 +8,7 @@ import { EngineBlockRow, EnginePageAttention } from "./EngineBlocks.js";
 import { EngineBrowserBlock } from "./EngineBrowser.js";
 import { EngineModeChip, EngineQueueTable, EngineStatusGrid } from "./EngineStatus.js";
 import { engineBlockOrder } from "./engineBlockDisplay.js";
-import { HistoryRequestsBlock, type HistoryRequestsState } from "./HistoryRequests.js";
+import { HistoryRequestsBlock, type HistoryRequestsState } from "@/pages/system/history/EngineRequestsCard";
 import type { EngineStatusState } from "./engineDisplay.js";
 import { engineHasBrowser, enginePageStatus } from "./enginePageSummary.js";
 

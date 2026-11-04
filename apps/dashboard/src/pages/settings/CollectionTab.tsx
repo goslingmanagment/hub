@@ -1,1 +1,1 @@
-export { CollectionTab } from "./collection/CollectionTab.js";
+export { CollectionTab } from "@/pages/system/onlyfans-api/rules/CollectionTab";

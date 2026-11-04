@@ -10,7 +10,7 @@ import { EngineBrowserBlock } from "./EngineBrowser.js";
 import { EngineDevCommands } from "./EngineDevCommands.js";
 import { EnginePageStatusBody } from "./EnginePageCard.js";
 import { EngineSendsByResource } from "./EngineStatus.js";
-import { HistoryRequestsBlock } from "./HistoryRequests.js";
+import { HistoryRequestsBlock } from "@/pages/system/history/EngineRequestsCard";
 import { engineBlockOrder } from "./engineBlockDisplay.js";
 import { engineDevCommands, engineHasBrowser, enginePageStatus } from "./enginePageSummary.js";
 import { useEngineStatusOf } from "./useEngineStatusOf.js";

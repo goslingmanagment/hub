@@ -7,7 +7,7 @@ import { Pagination } from "@/components/shared/Pagination";
 import { StatusPanel } from "@/components/shared/StatusPanel";
 import { StaleDataNotice } from "@/components/shared/StaleDataNotice";
 import { formatDateTime, formatRelativeTime } from "@/lib/format";
-import { syncStreamLabel } from "../settings/sync/syncVocabulary.js";
+import { syncStreamLabel } from "@/pages/settings/sync/syncVocabulary";
 
 const LIMIT = 50;
 

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { kernel } from "../../api/sdk.js";
+import { kernel } from "@/api/sdk";
 import { formatDateTime } from "@/lib/format";
 
 /** The provider's banned-words dictionary: a bounded, explicit download. The

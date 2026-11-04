@@ -1,10 +1,10 @@
 import { Fragment, useState } from "react";
 import { useAdminIncidents } from "@/api/queries";
-import { EventDetailPanel, getEventDisplaySeverity, SeverityBadge } from "@/components/shared/EventDetailPanel";
+import { EventDetailPanel, getEventDisplaySeverity, SeverityBadge } from "@/pages/system/dev/EventDetailPanel";
 import { StatusPanel } from "@/components/shared/StatusPanel";
 import { StaleDataNotice } from "@/components/shared/StaleDataNotice";
 import { formatRelativeTime } from "@/lib/format";
-import { DevHeader } from "./DevHeader.js";
+import { DevHeader } from "@/pages/system/dev/DevHeader";
 
 const COLUMNS = ["Время", "Страница", "Поток", "Код", "Важность", "Сообщение"];
 

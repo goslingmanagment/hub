@@ -1,4 +1,4 @@
-import { ofapiSocialButtonTypes } from "../../../../../packages/contracts/src/ofapi-actions-account.ts";
+import { ofapiSocialButtonTypes } from "../../../../../../../packages/contracts/src/ofapi-actions-account.ts";
 import type { OfapiActionField, OfapiActionFormDefinition } from "./form-types.ts";
 
 const pagination: OfapiActionField[] = [

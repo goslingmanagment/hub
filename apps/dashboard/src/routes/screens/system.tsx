@@ -12,25 +12,25 @@ import { Segmented } from "@/components/ui/Segmented";
 import { decodeRouteSegment, syncSettingsTab } from "@/lib/navigation";
 import { named, OfapiOffNotice, Owner } from "./shared.js";
 
-const AgentHydrationPage = named(() => import("@/pages/AgentHydrationPage"), "AgentHydrationPage");
-const FailuresPage = named(() => import("@/pages/notifications/NotificationsIncidentsTab"), "NotificationsIncidentsTab");
-const LogPage = named(() => import("@/pages/dev/LogPage"), "LogPage");
-const QueuePage = named(() => import("@/pages/dev/QueuePage"), "QueuePage");
-const DbStatsPage = named(() => import("@/pages/dev/DbStatsPage"), "DbStatsPage");
+const AgentHydrationPage = named(() => import("@/pages/system/history/AgentRequestsCard"), "AgentHydrationPage");
+const FailuresPage = named(() => import("@/pages/system/failures/FailuresPage"), "NotificationsIncidentsTab");
+const LogPage = named(() => import("@/pages/system/dev/LogPage"), "LogPage");
+const QueuePage = named(() => import("@/pages/system/dev/QueuePage"), "QueuePage");
+const DbStatsPage = named(() => import("@/pages/system/dev/DbStatsPage"), "DbStatsPage");
 const SyncAnomaliesPage = named(() => import("@/pages/dev/IncidentsPage"), "IncidentsPage");
-const SyncStatusPage = named(() => import("@/pages/dev/SyncStatusPage"), "SyncStatusPage");
-const ClientHealthPage = named(() => import("@/pages/dev/ClientHealthPage"), "ClientHealthPage");
+const SyncStatusPage = named(() => import("@/pages/system/dev/SyncStatusPage"), "SyncStatusPage");
+const ClientHealthPage = named(() => import("@/pages/system/dev/ClientHealthPage"), "ClientHealthPage");
 const ConfigurationTab = named(() => import("@/pages/settings/ConfigurationTab"), "ConfigurationTab");
 const EngineTab = named(() => import("@/pages/settings/engine/EngineTab"), "EngineTab");
 const EnginePageDetail = lazy(() => import("@/pages/settings/engine/EnginePageDetail").then((module) => ({ default: module.EnginePageDetail })));
 const SyncTab = named(() => import("@/pages/settings/SyncTab"), "SyncTab");
-const TechnicalTab = named(() => import("@/pages/settings/team/TechnicalTab"), "TechnicalTab");
+const TechnicalTab = named(() => import("@/pages/system/agent-keys/AgentKeysPage"), "TechnicalTab");
 const CollectionTab = named(() => import("@/pages/settings/CollectionTab"), "CollectionTab");
 const OfapiApiTab = named(() => import("@/pages/settings/OfapiApiTab"), "OfapiApiTab");
-const WebhookCard = lazy(() => import("@/pages/settings/collection/CollectionTab").then((module) => ({ default: module.WebhookCard })));
-const OfapiMediaPage = named(() => import("@/pages/OfapiMediaPage"), "OfapiMediaPage");
-const OfapiActions = named(() => import("@/pages/OfapiActions"), "OfapiActions");
-const OfapiExportsPage = named(() => import("@/pages/OfapiExportsPage"), "OfapiExportsPage");
+const WebhookCard = lazy(() => import("@/pages/system/onlyfans-api/rules/CollectionTab").then((module) => ({ default: module.WebhookCard })));
+const OfapiMediaPage = named(() => import("@/pages/system/onlyfans-api/OfapiMediaPage"), "OfapiMediaPage");
+const OfapiActions = named(() => import("@/pages/system/onlyfans-api/OfapiActions"), "OfapiActions");
+const OfapiExportsPage = named(() => import("@/pages/system/onlyfans-api/OfapiExportsPage"), "OfapiExportsPage");
 
 /** «Состояние»: says it plainly and leads to where everything lies. */
 function OnlyFansApiStatusScreen() {

@@ -1,7 +1,7 @@
 import { Fragment, useState } from "react";
 import { useAdminLogs } from "@/api/queries";
 import { FilterButtons } from "@/components/shared/FilterButtons";
-import { EventDetailPanel, getEventDisplaySeverity, SeverityBadge } from "@/components/shared/EventDetailPanel";
+import { EventDetailPanel, getEventDisplaySeverity, SeverityBadge } from "./EventDetailPanel.js";
 import { StatusPanel } from "@/components/shared/StatusPanel";
 import { StaleDataNotice } from "@/components/shared/StaleDataNotice";
 import { formatRelativeTime } from "@/lib/format";

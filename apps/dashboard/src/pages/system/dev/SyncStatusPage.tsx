@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import { Link, useParams } from "react-router";
 import { useAdminSyncRunDetail } from "@/api/queries";
-import { getEventDisplaySeverity, SeverityBadge } from "@/components/shared/EventDetailPanel";
+import { getEventDisplaySeverity, SeverityBadge } from "./EventDetailPanel.js";
 import { PlatformBadge } from "@/components/shared/PlatformBadge";
 import { StatusPanel } from "@/components/shared/StatusPanel";
 import { StaleDataNotice } from "@/components/shared/StaleDataNotice";
