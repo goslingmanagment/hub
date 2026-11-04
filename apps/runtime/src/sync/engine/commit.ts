@@ -15,6 +15,7 @@ import {
   insertAdmission,
   insertAuditEvent,
   insertObservation,
+  isFanslySend,
   listUnfinishedAttempts,
   listWorksWithUnknownAttemptStreak,
   lockAttemptForApply,
@@ -1348,13 +1349,17 @@ export async function capture(
   // independent test: closer than the setting whatever the pacer measured,
   // short of the pause when no monotonic gap vouches for the pair. A
   // violation opens alert 1 (the evaluator's send audit re-reads the journal
-  // by the same rule, and reports the pairs whose clocks disagree).
-  const pace = judgePaceGap({
-    monoGapMs: armed.gapPrevMs,
-    wallGapMs: committed.paceGapMs,
-    pauseMs: armed.pauseMs,
-    settingMs: armed.settingMs,
-  });
+  // by the same rule, and reports the pairs whose clocks disagree). An
+  // upload's part is no send to Fansly: it goes outside the pause, and no
+  // pace check judges it (`isFanslySend`, as the send audit).
+  const pace = isFanslySend({ operation: admission.request.spec })
+    ? judgePaceGap({
+      monoGapMs: armed.gapPrevMs,
+      wallGapMs: committed.paceGapMs,
+      pauseMs: armed.pauseMs,
+      settingMs: armed.settingMs,
+    })
+    : null;
   if (pace?.verdict === "fail") {
     alerts.push({ subKey: "page_stopped", detail: "pace_violation" });
     d.metrics.increment("sync_pace_violations", { pageId: d.pageId });

@@ -500,8 +500,9 @@ export interface CaptureAttemptResult {
    *  recorded send of the page at or before it (any owner) — but not a site
    *  request the page's browser sent on its own after this attempt's
    *  admission (plan-b Б12: nobody could know of it when this one was let
-   *  go). Null: none within `PACE_GAP_LOOKBACK_MS` (`sync_pages.last_send_at`
-   *  then, when it is older than that). */
+   *  go), and never an upload's part (`isFanslySend`). Null: none within
+   *  `PACE_GAP_LOOKBACK_MS` (`sync_pages.last_send_at` then, when it is older
+   *  than that); always null for a part, which no pace check judges. */
   previousSendAt: Date | null;
   /** This send minus `previousSendAt`, ms; the caller compares it with the
    *  attempt's pause (alert 1 `pace_violation`). */
@@ -515,8 +516,9 @@ export const PACE_GAP_LOOKBACK_MS = 120_000;
 /**
  * Capture (tx 2, live, after `lockOwnedPage`): the attempt's outcome, its
  * actual send instant and the observation of its raw response; when it was
- * sent, the page's `last_send_at` (never moved backwards),
- * `last_send_attempt_id` and `last_completed_at`. Idempotent: only an
+ * sent to Fansly (not an upload's part, `isFanslySend`), the page's
+ * `last_send_at` (never moved backwards), `last_send_attempt_id` and
+ * `last_completed_at`. Idempotent: only an
  * `admitted`/`sent` attempt is settled. An already recorded browser send
  * keeps its transport-reported instant and mark when its outcome arrives.
  */
@@ -551,12 +553,13 @@ export async function captureAttempt(db: Database, input: CaptureAttemptInput): 
          and page_id = ${input.pageId}
          and not shadow
          and outcome in ('admitted', 'sent')
-      returning id, sent_at, admitted_at, granted_at, released_at
+      returning id, sent_at, admitted_at, granted_at, released_at, operation
     ), known as (
       -- The previous send as this attempt's release could know it: the
       -- site's own observed sends that left after its release (plan-b Б12,
       -- accepted; before 0290, or not reported: after its grant, else its
-      -- admission) are never this send's predecessor.
+      -- admission) are never this send's predecessor, nor is an upload's
+      -- part: a PUT to S3, outside the pause (owner 2026-11-03).
       select max(a.sent_at) as sent_at
         from sync_attempts a, att
        where a.page_id = ${input.pageId}
@@ -565,6 +568,7 @@ export async function captureAttempt(db: Database, input: CaptureAttemptInput): 
          and a.admitted_at >= att.sent_at - ${PACE_GAP_LOOKBACK_MS}::double precision * interval '1 millisecond'
          and a.sent_at is not null
          and a.sent_at <= att.sent_at
+         and a.operation <> ${FANSLY_STORAGE_OPERATION}
          and not (a.origin = 'site' and coalesce((a.request->>'observed')::boolean, false)
                   and a.sent_at > coalesce(att.released_at, att.granted_at, att.admitted_at))
     ), page as (
@@ -577,14 +581,15 @@ export async function captureAttempt(db: Database, input: CaptureAttemptInput): 
        where sp.page_id = ${input.pageId}
          and ${input.sent}::boolean
          and att.sent_at is not null
+         and att.operation <> ${FANSLY_STORAGE_OPERATION}
       returning sp.page_id
     )
     select (select count(*) from att)::int as captured,
-           coalesce(
+           case when (select operation from att) = ${FANSLY_STORAGE_OPERATION} then null else coalesce(
              (select sent_at from known),
              (select prev.last_send_at from prev, att
                where prev.last_send_at < att.sent_at - ${PACE_GAP_LOOKBACK_MS}::double precision * interval '1 millisecond')
-           ) as "previousSendAt",
+           ) end as "previousSendAt",
            (select sent_at from att) as "sentAt"
   `);
   const row = result.rows[0];
@@ -1062,6 +1067,17 @@ export interface FanslySendAuditRow {
    *  route for every admission after it). */
   httpStatus: number | null;
   completedAt: Date | null;
+}
+
+/** An upload's part: a PUT to the storage (S3), not a send to Fansly — the
+ *  page's storage lane sends a few at once outside the pause (vault packs,
+ *  0347, engine/part-lane.ts; owner 2026-11-03). No pace check judges one,
+ *  none counts one as the send a later one's gap runs from, and it is not the
+ *  page's last send (`captureAttempt`, the send audit). */
+export const FANSLY_STORAGE_OPERATION = "publish.upload_part";
+
+export function isFanslySend(row: Pick<FanslySendAuditRow, "operation">): boolean {
+  return row.operation !== FANSLY_STORAGE_OPERATION;
 }
 
 /**

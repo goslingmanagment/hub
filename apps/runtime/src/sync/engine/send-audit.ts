@@ -1,4 +1,4 @@
-import type { FanslySendAuditRow } from "@agency_hub_core/db";
+import { isFanslySend, type FanslySendAuditRow } from "@agency_hub_core/db";
 
 import {
   FAMILY_BUDGETS,
@@ -281,18 +281,9 @@ function siteSendClose(site: Placed, prev: Placed | undefined, window: SendAudit
  * and is judged at its admission. An old observed site's admission is only
  * an upper bound on its send. The latest such admission makes Hub pairs
  * inconclusive through that admission + their own pause; a proven violation
- * on a recorded predecessor stays a violation.
+ * on a recorded predecessor stays a violation. An upload's part is no send
+ * to Fansly (`isFanslySend`): neither judged nor anyone's predecessor.
  */
-/** An upload's part: a PUT to the storage (S3), not a send to Fansly — the
- *  page's storage lane sends a few at once outside the pause (vault packs,
- *  0347, engine/part-lane.ts). Neither audit judges one, nor counts one as
- *  the send a later one's gap runs from. */
-export const STORAGE_OPERATION = "publish.upload_part";
-
-export function isFanslySend(row: Pick<FanslySendAuditRow, "operation">): boolean {
-  return row.operation !== STORAGE_OPERATION;
-}
-
 export function auditPagePace(rows: readonly FanslySendAuditRow[], window: SendAuditWindow): PaceAudit {
   const sends: Placed[] = rows
     .filter(isFanslySend)
