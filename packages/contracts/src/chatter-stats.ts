@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { businessDate, intId, isoTimestamp, mills } from "./primitives.ts";
+import { teamShiftSchema } from "./routes-client.ts";
 
 // A chatter's own statistics (the cabinet's «Статистика»): the money of their
 // actual shifts, how they write and sell, their records. One read, database
@@ -173,3 +174,70 @@ export type AccountChatterStatsQuery = z.infer<typeof accountChatterStatsQuerySc
 export type TeamChatterStatsQuery = z.infer<typeof teamChatterStatsQuerySchema>;
 export type ChatterStats = z.infer<typeof chatterStatsSchema>;
 export type TeamChatterStatsResponse = z.infer<typeof teamChatterStatsResponseSchema>;
+
+// ── The team's shifts and their money (teamShiftSales) ──────────────────────
+//
+// «Команда → Смены»: every chatter's shifts of the window with their sales, by
+// the rules above, in one read for the whole team — who earned what and when,
+// against the window of the same length before. A chatter's sale another
+// chatter's shift holds too and neither wrote to its fan counts for both of
+// them (`overlapNetMills`); the team's own totals count every sale once.
+
+export const teamShiftSalesQuerySchema = z.object({
+  /** Whole Moscow days back from today, today included. */
+  days: z.coerce.number().int().min(1).max(CHATTER_STATS_MAX_DAYS).default(7),
+  /**
+   * The window's last Moscow day; default today. A past one shows that window
+   * (a calendar week); a later one keeps today inside the window and lists the
+   * days to come empty.
+   */
+  until: businessDate.optional(),
+  /** One page only: the shifts made of the work on it, its sales. */
+  pageLabel: z.string().min(1).max(120).optional(),
+});
+
+const dayMoneySchema = z.object({
+  date: businessDate,
+  salesNetMills: mills,
+  shifts: count,
+  workedMinutes: count,
+});
+
+export const teamShiftSalesResponseSchema = z.object({
+  /** The start of the window's first Moscow day. */
+  from: isoTimestamp,
+  /** The end of its last day, or now while it goes on. */
+  to: isoTimestamp,
+  /** The first minute of anyone's activity Hub has; null — none. Before it shifts are unknown, never zero. */
+  knownSince: isoTimestamp.nullable(),
+  /** The whole team: every sale once, though two shifts hold it; a day per Moscow day of the window, the oldest first. */
+  team: periodTotalsSchema.extend({ daily: z.array(dayMoneySchema) }),
+  /**
+   * The same for the window of the same length just before, cut at the same point
+   * (this week so far against last week up to the same hour); null — Hub does not
+   * have the activity for all of it.
+   */
+  previous: periodTotalsSchema.nullable(),
+  /** Everyone with a shift in the window or the one before, the most money first. */
+  chatters: z.array(periodTotalsSchema.extend({
+    userId: intId,
+    username: z.string(),
+    /** Of `salesNetMills`: sales that count for another chatter too. */
+    overlapNetMills: mills,
+    /** Their window before; null — Hub did not have their activity for all of it (a newcomer, or before Hub counted). */
+    previous: periodTotalsSchema.nullable(),
+    daily: z.array(dayMoneySchema),
+  })),
+  /** The window's shifts, the newest first, with their money. */
+  shifts: z.array(teamShiftSchema.extend({
+    /** The Moscow day holding most of the shift. */
+    date: businessDate,
+    salesNetMills: mills,
+    overlapNetMills: mills,
+    sales: count,
+  })),
+  serverNow: isoTimestamp,
+});
+
+export type TeamShiftSalesQuery = z.infer<typeof teamShiftSalesQuerySchema>;
+export type TeamShiftSalesResponse = z.infer<typeof teamShiftSalesResponseSchema>;

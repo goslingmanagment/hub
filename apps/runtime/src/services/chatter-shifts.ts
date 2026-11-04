@@ -370,6 +370,36 @@ export function teamShiftsWindow(query: Pick<TeamShiftsQuery, "from" | "to">, no
   return { from, to };
 }
 
+/** A shift as `teamShifts` sends it. Pure. */
+export function teamShiftOf(userId: number, username: string, shift: ComputedWork): TeamShift {
+  return {
+    userId,
+    username,
+    startedAt: new Date(shift.startedAt).toISOString(),
+    endedAt: new Date(shift.endedAt).toISOString(),
+    ongoing: shift.ongoing,
+    workedMinutes: shift.workedMinutes,
+    pauses: shift.pauses.map((pause) => ({ from: new Date(pause.from).toISOString(), to: new Date(pause.to).toISOString() })),
+    pages: [...new Set([...shift.pages.keys(), ...shift.messages.keys()])]
+      .map((pageLabel) => ({ pageLabel, activeMinutes: shift.pages.get(pageLabel) ?? 0, messages: shift.messages.get(pageLabel) ?? 0 }))
+      .sort((a, b) => b.messages - a.messages || b.activeMinutes - a.activeMinutes),
+    authoredMessages: [...shift.messages.values()].reduce((sum, count) => sum + count, 0),
+  };
+}
+
+/** The pages a read is about: the viewer's, or the one asked (404 / 403 as every team read). */
+export async function teamReadPages(
+  app: AppContext,
+  principal: AuthPrincipal,
+  input: { pageLabel: string | undefined; pageScope: readonly number[] | undefined },
+): Promise<"all" | readonly number[]> {
+  if (input.pageLabel === undefined) return input.pageScope ?? "all";
+  const page = await findPageSummaryByLabel(app.db, input.pageLabel);
+  if (!page) throw new NotFoundError(`Page "${input.pageLabel}" was not found`);
+  if (!canAccessPage(principal, page.id)) throw new ForbiddenError("Page access denied");
+  return [page.id];
+}
+
 export async function listTeamShifts(
   app: AppContext,
   principal: AuthPrincipal,
@@ -380,13 +410,7 @@ export async function listTeamShifts(
   const now = new Date();
   const { from, to } = teamShiftsWindow(input.query, now);
 
-  let pages: "all" | readonly number[] = input.pageScope ?? "all";
-  if (input.query.pageLabel !== undefined) {
-    const page = await findPageSummaryByLabel(app.db, input.query.pageLabel);
-    if (!page) throw new NotFoundError(`Page "${input.query.pageLabel}" was not found`);
-    if (!canAccessPage(principal, page.id)) throw new ForbiddenError("Page access denied");
-    pages = [page.id];
-  }
+  const pages = await teamReadPages(app, principal, { pageLabel: input.query.pageLabel, pageScope: input.pageScope });
 
   // A day more on each side, so a shift the window only touches is whole.
   const people = await readPeopleWork(app.db, {
@@ -397,19 +421,7 @@ export async function listTeamShifts(
   for (const [userId, person] of people) {
     for (const shift of person.work) {
       if (shift.kind !== "shift" || shift.startedAt >= to.getTime() || shift.endedAt <= from.getTime()) continue;
-      shifts.push({
-        userId,
-        username: person.username,
-        startedAt: new Date(shift.startedAt).toISOString(),
-        endedAt: new Date(shift.endedAt).toISOString(),
-        ongoing: shift.ongoing,
-        workedMinutes: shift.workedMinutes,
-        pauses: shift.pauses.map((pause) => ({ from: new Date(pause.from).toISOString(), to: new Date(pause.to).toISOString() })),
-        pages: [...new Set([...shift.pages.keys(), ...shift.messages.keys()])]
-          .map((pageLabel) => ({ pageLabel, activeMinutes: shift.pages.get(pageLabel) ?? 0, messages: shift.messages.get(pageLabel) ?? 0 }))
-          .sort((a, b) => b.messages - a.messages || b.activeMinutes - a.activeMinutes),
-        authoredMessages: [...shift.messages.values()].reduce((sum, count) => sum + count, 0),
-      });
+      shifts.push(teamShiftOf(userId, person.username, shift));
     }
   }
   shifts.sort((a, b) => b.startedAt.localeCompare(a.startedAt));

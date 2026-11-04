@@ -114,7 +114,8 @@ function emptyByKind(): Record<ChatterSaleKind, number> {
   return { ppv: 0, tip: 0, subscription: 0, post: 0 };
 }
 
-function perHour(netMills: number, minutes: number): number | null {
+/** Money per worked hour; null without worked time. Pure. */
+export function perHour(netMills: number, minutes: number): number | null {
   return minutes === 0 ? null : Number((BigInt(netMills) * 60n) / BigInt(minutes));
 }
 

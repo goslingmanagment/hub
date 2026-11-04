@@ -32,6 +32,17 @@
   }
   .team-link:hover { text-decoration: underline; text-decoration-color: currentColor; }
   .team-row-link { cursor: pointer; }
+  /* A chatter's days as small bars (DayBars): one scale for every row. */
+  .team-daybars { display: block; overflow: visible; }
+  .team-daybars rect:hover { fill-opacity: 0.75; }
+  /* A tile's change against the period before may wrap on a narrow screen. */
+  .team-screen .stat-meta .delta { white-space: normal; }
+  /* The week's grid: a column a day; today marked, days to come quiet. */
+  .team-week th.team-week-today { color: var(--color-text-primary); }
+  .team-week .team-week-future { color: var(--color-text-muted); }
+  .team-week td.team-week-cell { font-variant-numeric: tabular-nums; }
+  /* A chart tooltip's line «who — how much». */
+  .team-tip-row { display: flex; justify-content: space-between; gap: 16px; font-variant-numeric: tabular-nums; }
   /* A row of several lines reads from its top. */
   .data-table tr.align-top > td { vertical-align: top; }
 

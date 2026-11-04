@@ -304,3 +304,100 @@ export function teamChatterStats(request: DemoRequest, scope: readonly string[],
     serverNow: request.now.toISOString(),
   };
 }
+
+type ShiftSalesResponse = KernelOperationResponse<"teamShiftSales">;
+type ShiftMoneyTotals = NonNullable<ShiftSalesResponse["previous"]>;
+
+/** «Команда → Смены»: everyone's shifts of the window with their money, and the window before (`teamShiftSales`). */
+export function teamShiftSales(request: DemoRequest, scope: readonly string[], days: number, until: string | undefined): ShiftSalesResponse {
+  const now = request.now;
+  const world = teamWorld(now);
+  // As the server: the window ends on `until` (today by default, never leaving today out), the one before is cut at the same point.
+  const today = mskDay(now.getTime());
+  const latest = addDays(today, days - 1);
+  const asked = until ?? today;
+  const lastDay = asked > latest ? latest : asked;
+  const dayList = Array.from({ length: days }, (_, index) => addDays(lastDay, index - (days - 1)));
+  const firstDay = dayList[0]!;
+  const prevFirstDay = addDays(firstDay, -days);
+  const previousFrom = mskMidnightOf(prevFirstDay);
+  const to = Math.min(now.getTime(), mskMidnightOf(addDays(lastDay, 1)));
+  const middle = (shift: DemoShift) => shift.startedAt + (shift.endedAt - shift.startedAt) / 2;
+  const touches = (shift: DemoShift) => shift.pages.some((page) => page.messages > 0 && scope.includes(page.pageLabel));
+  const current = world.shifts.filter((shift) => touches(shift) && dateOf(shift) >= firstDay && dateOf(shift) <= lastDay);
+  const before = world.shifts.filter((shift) => touches(shift) && dateOf(shift) >= prevFirstDay && dateOf(shift) < firstDay && middle(shift) < to - days * DAY);
+  const shifts = [...current, ...before];
+  const totals = (list: readonly DemoShift[]): ShiftMoneyTotals => periodTotals(list, scope);
+  // The team counts a sale once, though two shifts hold it.
+  const teamOf = (list: readonly DemoShift[]) => {
+    const seen = new Map<string, { netMills: number; date: string }>();
+    for (const shift of [...list].sort((left, right) => left.startedAt - right.startedAt)) {
+      for (const sale of salesIn(shift, scope)) if (!seen.has(sale.ref)) seen.set(sale.ref, { netMills: sale.netMills, date: dateOf(shift) });
+    }
+    const workedMinutes = list.reduce((sum, shift) => sum + shift.workedMinutes, 0);
+    const salesNetMills = [...seen.values()].reduce((sum, sale) => sum + sale.netMills, 0);
+    return {
+      totals: { shifts: list.length, workedMinutes, salesNetMills, sales: seen.size, perHourMills: workedMinutes === 0 ? null : Math.round(salesNetMills / (workedMinutes / 60)) },
+      byDay: (date: string) => [...seen.values()].filter((sale) => sale.date === date).reduce((sum, sale) => sum + sale.netMills, 0),
+    };
+  };
+  const dailyOf = (list: readonly DemoShift[], salesOfDay: (date: string, ofDay: readonly DemoShift[]) => number) => dayList.map((date) => {
+    const ofDay = list.filter((shift) => dateOf(shift) === date);
+    return { date, salesNetMills: salesOfDay(date, ofDay), shifts: ofDay.length, workedMinutes: ofDay.reduce((sum, shift) => sum + shift.workedMinutes, 0) };
+  });
+  const firsts = [...world.activitySince.values()].filter(Number.isFinite);
+  const knownSince = firsts.length === 0 ? null : Math.min(...firsts);
+  const covered = (first: number | null | undefined) => first !== null && first !== undefined && Number.isFinite(first) && first <= previousFrom;
+  const team = teamOf(current);
+
+  const chatters = DEMO_CHATTERS
+    .filter((user) => shifts.some((shift) => shift.user.id === user.id))
+    .map((user) => {
+      const mine = current.filter((shift) => shift.user.id === user.id);
+      return {
+        userId: user.id,
+        username: user.username,
+        ...totals(mine),
+        overlapNetMills: mine.reduce((sum, shift) => sum + net(salesIn(shift, scope).filter((sale) => sale.overlap)), 0),
+        previous: covered(world.activitySince.get(user.id)) ? totals(before.filter((shift) => shift.user.id === user.id)) : null,
+        daily: dailyOf(mine, (_, ofDay) => ofDay.reduce((sum, shift) => sum + net(salesIn(shift, scope)), 0)),
+      };
+    })
+    .sort((left, right) => right.salesNetMills - left.salesNetMills || left.username.localeCompare(right.username));
+
+  return {
+    from: isoAt(mskMidnightOf(firstDay)),
+    to: isoAt(to),
+    knownSince: knownSince === null ? null : isoAt(knownSince),
+    team: { ...team.totals, daily: dailyOf(current, (date) => team.byDay(date)) },
+    previous: covered(knownSince) ? teamOf(before).totals : null,
+    chatters,
+    shifts: [...current].sort((left, right) => right.startedAt - left.startedAt).map((shift) => {
+      const sales = salesIn(shift, scope);
+      const pages = shift.pages
+        .filter((page) => scope.includes(page.pageLabel))
+        .map((page) => ({ pageLabel: page.pageLabel, activeMinutes: page.activeMinutes, messages: page.messages }))
+        .sort((left, right) => right.messages - left.messages);
+      return {
+        userId: shift.user.id,
+        username: shift.user.username,
+        startedAt: isoAt(shift.startedAt),
+        endedAt: isoAt(shift.endedAt),
+        ongoing: shift.ongoing,
+        workedMinutes: shift.workedMinutes,
+        pauses: shift.pauses.map((pause) => ({ from: isoAt(pause.from), to: isoAt(pause.to) })),
+        pages,
+        authoredMessages: pages.reduce((sum, page) => sum + page.messages, 0),
+        date: dateOf(shift),
+        salesNetMills: net(sales),
+        overlapNetMills: net(sales.filter((sale) => sale.overlap)),
+        sales: sales.length,
+      };
+    }),
+    serverNow: now.toISOString(),
+  };
+}
+
+function mskMidnightOf(day: string): number {
+  return Date.parse(`${day}T00:00:00Z`) - 3 * 3_600_000;
+}
