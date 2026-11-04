@@ -86,6 +86,10 @@ export const AGENT_READ_AUDIT_SUMMARY_SHAPES = {
   /** An agent's approval on the owner's word (0323): how many it asked, how many went. */
   asked: "count",
   approved: "count",
+  /** An agent's lookup before an upload: of the files it asked about (`asked`), how many Hub
+   *  holds, and whether it asked Hub to keep them (their 7 days start again). */
+  held: "count",
+  keep: "flag",
   /** Fan queues (0333): which queue, the digest of its rule or list (never the list), its new status. */
   queueId: "count",
   ruleSha256: "sha256",

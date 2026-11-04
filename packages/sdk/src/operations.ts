@@ -152,6 +152,7 @@ export const kernelOperations = {
   agentPublicationCancel: { method: "POST", path: "/api/v1/agent/publications/:id/cancel" },
   agentPublicationChanges: { method: "GET", path: "/api/v1/agent/publications/changes" },
   agentPublicationCreate: { method: "POST", path: "/api/v1/agent/pages/:pageLabel/publications" },
+  agentPublicationFileLookup: { method: "POST", path: "/api/v1/agent/pages/:pageLabel/publication-files/lookup" },
   agentPublicationFileUpload: { method: "POST", path: "/api/v1/agent/pages/:pageLabel/publication-files" },
   agentPublicationGet: { method: "GET", path: "/api/v1/agent/publications/:id" },
   agentPublicationList: { method: "GET", path: "/api/v1/agent/pages/:pageLabel/publications" },

@@ -155,6 +155,38 @@ export async function lockPublicationFileByContent(
   return row ? fileRecord(row) : null;
 }
 
+/**
+ * The model's files with any of these bytes, by id; with `lock`, FOR UPDATE in
+ * that order (two lookups of the same files cannot deadlock), so retention
+ * cannot delete their bytes until the caller's transaction ends.
+ */
+export async function listPublicationFilesByContent(
+  db: Database,
+  input: { modelId: number; contentSha256s: readonly string[]; lock: boolean },
+): Promise<PublicationFileRecord[]> {
+  if (input.contentSha256s.length === 0) return [];
+  const result = await db.execute<Row>(sql`
+    select ${FILE_COLUMNS} from publication_files f join models m on m.id = f.model_id
+     where f.model_id = ${input.modelId} and f.content_sha256 = any(${sql.param([...input.contentSha256s])}::text[])
+     order by f.id
+     ${input.lock ? sql`for update of f` : sql``}
+  `);
+  return result.rows.map(fileRecord);
+}
+
+/**
+ * Bytes an agent will name in a draft without sending them again: kept as a
+ * new upload of the same bytes keeps them, their 7 days start again. Call with
+ * the rows locked (listPublicationFilesByContent with `lock`).
+ */
+export async function markPublicationFilesKept(db: Database, ids: readonly number[]): Promise<void> {
+  if (ids.length === 0) return;
+  await db.execute(sql`
+    update publication_files set stored_at = now()
+     where id = any(${sql.param([...ids])}::bigint[]) and bytes_deleted_at is null
+  `);
+}
+
 /** The file by id, locked FOR UPDATE (the retention job's re-check before it deletes). */
 export async function lockPublicationFile(db: Database, id: number): Promise<PublicationFileRecord | null> {
   const result = await db.execute<Row>(sql`

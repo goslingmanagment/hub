@@ -1,10 +1,11 @@
+import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { open, readdir, stat } from "node:fs/promises";
 import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
 import { basename, extname, join } from "node:path";
 
-import { publicationFileUploadResponseSchema } from "@agency_hub_core/contracts";
+import { PUBLICATION_FILE_LOOKUP_MAX, publicationFileUploadResponseSchema } from "@agency_hub_core/contracts";
 import {
   detectPublicationFileMime,
   PUBLICATION_FILE_SNIFF_BYTES,
@@ -25,6 +26,16 @@ import { KernelApiError, kernelOperations, type KernelErrorCategory, type Kernel
  * same model answer the same file row (services/publication-files.ts). A
  * resend after a cut-off upload can never make a second file.
  *
+ * WHAT HUB HAS IS NOT SENT AGAIN. Every file's SHA-256 is read from disk
+ * first, and Hub is asked which of those bytes the page's model holds
+ * (`agentPublicationFileLookup`): a pack sent again after a break — a lost
+ * network, a closed window — sends only what is missing (audit 2026-11-04).
+ * The same reading finds a folder's twins before anything goes up.
+ *
+ * A LOST NETWORK IS WAITED FOR, minutes per file (HUB_UPLOAD_NETWORK_WAIT_MS),
+ * not seconds: a Wi-Fi gone for a minute or two, or Hub restarting for a
+ * deploy, costs a wait, not the pack.
+ *
  * A FILE HUB WOULD REFUSE IS REFUSED HERE FIRST, by the same first-bytes check
  * Hub runs (`detectPublicationFileMime`), so a pack with a HEIC photo stops
  * before its first gigabyte goes up rather than after.
@@ -38,6 +49,8 @@ export interface HubLocalFiles {
   head(path: string, bytes: number): Promise<Uint8Array>;
   /** A folder's entry names, not recursive. */
   list(folder: string): Promise<string[]>;
+  /** The SHA-256 of its first `byteSize` bytes (what an upload sends), streamed; `onBytes` gets the bytes read so far. */
+  sha256(path: string, byteSize: number, onBytes: (read: number) => void): Promise<string>;
 }
 
 export const nodeHubLocalFiles: HubLocalFiles = {
@@ -60,6 +73,21 @@ export const nodeHubLocalFiles: HubLocalFiles = {
     }
   },
   list: (folder) => readdir(folder),
+  sha256: (path, byteSize, onBytes) => new Promise<string>((resolve, reject) => {
+    const hash = createHash("sha256");
+    let read = 0;
+    const stream = createReadStream(path, { start: 0, end: byteSize - 1, highWaterMark: 1 << 20 });
+    stream.on("data", (chunk) => {
+      hash.update(chunk);
+      read += chunk.length;
+      onBytes(read);
+    });
+    stream.on("error", reject);
+    stream.on("end", () => {
+      if (read === byteSize) resolve(hash.digest("hex"));
+      else reject(new Error(`${path} is shorter than when the folder was read: it is changing, wait until it is whole`));
+    });
+  }),
 };
 
 /** One file ready to go up: what Hub will call it and what it is. */
@@ -69,7 +97,11 @@ export interface HubUploadItem {
   name: string;
   byteSize: number;
   mimeType: PublicationFileMimeType;
+  /** The SHA-256 of its bytes, once read (hashHubFiles): what Hub is asked about, and what its answer must name. */
+  sha256?: string;
 }
+
+export type HubHashedItem = HubUploadItem & { sha256: string };
 
 export type HubFileCheck =
   | { ok: true; item: HubUploadItem }
@@ -165,6 +197,94 @@ export function formatHubBytes(bytes: number): string {
   if (bytes >= 1e9) return `${(bytes / 1e9).toFixed(2)} GB`;
   if (bytes >= 1e6) return `${(bytes / 1e6).toFixed(1)} MB`;
   return `${Math.max(1, Math.round(bytes / 1e3))} KB`;
+}
+
+const bytesOf = (items: readonly HubUploadItem[]) => items.reduce((sum, item) => sum + item.byteSize, 0);
+
+/** At most one progress line this often, besides a line per finished file. */
+const PROGRESS_EVERY_MS = 15_000;
+
+/**
+ * Every file's SHA-256, one file at a time (a disk reads best in order),
+ * before anything goes up: the folder's twins and the files Hub holds are
+ * known first. About a minute for 5 GB on a slow disk, seconds on an SSD.
+ */
+export async function hashHubFiles(input: {
+  files: HubLocalFiles;
+  items: readonly HubUploadItem[];
+  now(): number;
+  progress(line: string): void;
+}): Promise<HubHashedItem[]> {
+  const total = bytesOf(input.items);
+  input.progress(`hub: reading ${input.items.length} ${input.items.length === 1 ? "file" : "files"} (${formatHubBytes(total)})`
+    + " to compare them with what Hub holds");
+  const out: HubHashedItem[] = [];
+  let done = 0;
+  let lastLine = input.now();
+  for (const item of input.items) {
+    const sha256 = await input.files.sha256(item.path, item.byteSize, (read) => {
+      const at = input.now();
+      if (at - lastLine < PROGRESS_EVERY_MS) return;
+      lastLine = at;
+      input.progress(`hub: read ${formatHubBytes(done + read)} of ${formatHubBytes(total)}`);
+    });
+    done += item.byteSize;
+    out.push({ ...item, sha256 });
+  }
+  return out;
+}
+
+/** The files whose bytes an earlier one of the list has, each with that one's name. */
+export function hubFileTwins(items: readonly HubHashedItem[]): Array<{ name: string; sameAs: string }> {
+  const first = new Map<string, string>();
+  const twins: Array<{ name: string; sameAs: string }> = [];
+  for (const item of items) {
+    const seen = first.get(item.sha256);
+    if (seen === undefined) first.set(item.sha256, item.name);
+    else twins.push({ name: item.name, sameAs: seen });
+  }
+  return twins;
+}
+
+// --- what Hub holds already ----------------------------------------------------
+
+/** A file in Hub as a draft names it: what an upload answers, or what the lookup found. */
+export interface HubFileRef {
+  id: number;
+  sha256: string;
+  byteSize: number | null;
+  mimeType: string | null;
+  /** The name Hub first kept these bytes under. */
+  originalName: string | null;
+}
+
+/**
+ * One question to Hub (`agentPublicationFileLookup`): which of these bytes the
+ * page's model holds, an answer per file in order (null: not held). `keep`
+ * holds them as an upload of the same bytes would: their 7 days start again.
+ */
+export type HubFileLookup = (
+  files: ReadonlyArray<{ sha256: string; byteSize: number }>,
+  keep: boolean,
+) => Promise<ReadonlyArray<HubFileRef | null>>;
+
+/** The files Hub holds, by SHA-256, asked in batches; a held file must be the bytes asked, size included. */
+export async function hubFilesHeld(
+  lookup: HubFileLookup,
+  items: readonly HubHashedItem[],
+  keep: boolean,
+): Promise<Map<string, HubFileRef>> {
+  const asked = [...new Map(items.map((item) => [item.sha256, { sha256: item.sha256, byteSize: item.byteSize }])).values()];
+  const held = new Map<string, HubFileRef>();
+  for (let from = 0; from < asked.length; from += PUBLICATION_FILE_LOOKUP_MAX) {
+    const batch = asked.slice(from, from + PUBLICATION_FILE_LOOKUP_MAX);
+    const answers = await lookup(batch, keep);
+    batch.forEach((one, index) => {
+      const file = answers[index];
+      if (file != null && file.sha256 === one.sha256 && file.byteSize === one.byteSize) held.set(one.sha256, file);
+    });
+  }
+  return held;
 }
 
 // --- one upload -------------------------------------------------------------
@@ -298,19 +418,33 @@ export function createHubFileUpload(target: { baseUrl: string; token: string }):
 
 // --- many uploads -----------------------------------------------------------
 
-/** Tries per file: the first and three more. */
+/** Tries per file after an answer that may change by itself (Hub's own 500, the same bytes landing twice at once):
+ *  the first and three more, seconds apart. */
 export const HUB_UPLOAD_ATTEMPTS = 4;
 const RETRY_DELAYS_MS = [2_000, 10_000, 30_000];
-/** At most one progress line this often, besides a line per finished file. */
-const PROGRESS_EVERY_MS = 15_000;
+/** How long one file waits for the network, in all, before it fails: then the same command again sends only what Hub lacks. */
+export const HUB_UPLOAD_NETWORK_WAIT_MS = 15 * 60_000;
+/** The waits for the network, the last one repeated. */
+const NETWORK_DELAYS_MS = [5_000, 10_000, 20_000, 30_000, 60_000];
 
-/** A cut-off upload (400 "send it again"), the same bytes landing twice at once (409), a busy or broken hub, the network.
- *  Hub's room for files full (507) stays full: the body is not sent again. */
-function retryable(error: unknown): boolean {
-  if (!(error instanceof KernelApiError)) return false;
-  if (error.category === "network") return error.code !== "file_unreadable";
+/**
+ * What a failed attempt calls for.
+ * - `network`: the request or its answer did not get through — a connection
+ *   reset or refused, a name that did not resolve, a timeout, a gateway's
+ *   502/503/504 (Hub restarting for a deploy), 408, 429: wait for it, minutes.
+ * - `again`: Hub's own 500, or the same bytes landing twice at once (409): a few
+ *   tries, seconds apart.
+ * - `final`: any other answer — the key, the page, the size, the type, Hub's
+ *   room for files (507), a 400 — and a file that cannot be read: sending it
+ *   again changes nothing.
+ */
+function retryKind(error: unknown): "network" | "again" | "final" {
+  if (!(error instanceof KernelApiError)) return "final";
+  if (error.category === "network") return error.code === "file_unreadable" ? "final" : "network";
   const status = error.status ?? 0;
-  return status === 400 || status === 409 || status === 429 || (status >= 500 && status !== 507);
+  if ([408, 429, 502, 503, 504].includes(status)) return "network";
+  if (status === 409 || status === 500) return "again";
+  return "final";
 }
 
 /** A refusal every other file would get too: the key, the page, Hub's room for files. */
@@ -319,7 +453,8 @@ function stopsTheRest(error: unknown): boolean {
 }
 
 export type HubUploadOutcome =
-  | { ok: true; item: HubUploadItem; answer: HubFileUploadAnswer; attempts: number }
+  /** In Hub. `created` false: Hub had these bytes already; `notSent`: it said so when asked, and nothing went up. */
+  | { ok: true; item: HubUploadItem; file: HubFileRef; created: boolean; notSent: boolean; attempts: number }
   | { ok: false; item: HubUploadItem; error: unknown; attempts: number }
   | { ok: false; item: HubUploadItem; notTried: string; attempts: 0 };
 
@@ -331,11 +466,14 @@ function short(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+const minutes = (ms: number) => `${Math.round(ms / 6_000) / 10} min`;
+
 /**
  * Every item up, `parallel` at a time, each retried; outcomes in the items'
- * order. A refusal every file would get (no capability, no page, Hub full)
- * stops new uploads; the files not started are listed as not tried.
- * Progress goes to `progress`, one line at a time.
+ * order. A lost network is waited for, up to HUB_UPLOAD_NETWORK_WAIT_MS per
+ * file, with a line each time. A refusal every file would get (no capability,
+ * no page, Hub full) stops new uploads; the files not started are listed as
+ * not tried. Progress goes to `progress`, one line at a time.
  */
 export async function uploadHubFiles(input: {
   pageLabel: string;
@@ -347,7 +485,7 @@ export async function uploadHubFiles(input: {
   progress(line: string): void;
 }): Promise<{ outcomes: HubUploadOutcome[]; attempts: number }> {
   const { items, progress } = input;
-  const total = items.reduce((sum, item) => sum + item.byteSize, 0);
+  const total = bytesOf(items);
   const sentOf = items.map(() => 0);
   const started = input.now();
   let sent = 0;
@@ -374,25 +512,51 @@ export async function uploadHubFiles(input: {
 
   const uploadOne = async (index: number): Promise<HubUploadOutcome> => {
     const item = items[index]!;
+    let again = 0;
+    let waits = 0;
+    let waited = 0;
     for (let attempt = 1; ; attempt += 1) {
       track(index, 0);
       attempts += 1;
       try {
         const answer = await input.upload({ pageLabel: input.pageLabel, item, onBytes: (bytes) => track(index, bytes) });
+        if (item.sha256 !== undefined && answer.file.sha256 !== item.sha256) {
+          throw new KernelApiError(
+            `Hub got other bytes than were read from ${item.name} (file:${answer.file.id}): it changed on disk while it was`
+              + " sent; let it settle and run again",
+            "conflict", null, "file_changed", null,
+          );
+        }
         track(index, item.byteSize);
         finished += 1;
         progress(`hub: [${finished}/${items.length}] ${item.name} ${formatHubBytes(item.byteSize)}: `
           + `${answer.created ? "uploaded" : "already in Hub"}, file:${answer.file.id}`);
-        return { ok: true, item, answer, attempts: attempt };
+        return { ok: true, item, file: answer.file, created: answer.created, notSent: false, attempts: attempt };
       } catch (error) {
-        const delay = RETRY_DELAYS_MS[attempt - 1];
-        if (delay === undefined || attempt >= HUB_UPLOAD_ATTEMPTS || !retryable(error) || stopped !== null) {
+        const kind = stopped === null ? retryKind(error) : "final";
+        let delay: number | undefined;
+        if (kind === "network") {
+          const next = Math.min(NETWORK_DELAYS_MS[Math.min(waits, NETWORK_DELAYS_MS.length - 1)]!, HUB_UPLOAD_NETWORK_WAIT_MS - waited);
+          delay = next > 0 ? next : undefined;
+        } else if (kind === "again" && again < HUB_UPLOAD_ATTEMPTS - 1) {
+          delay = RETRY_DELAYS_MS[again];
+        }
+        if (delay === undefined) {
           track(index, 0);
           finished += 1;
-          progress(`hub: [${finished}/${items.length}] ${item.name}: FAILED (${short(error)})`);
+          progress(`hub: [${finished}/${items.length}] ${item.name}: FAILED (${short(error)})`
+            + (kind === "network" ? `, after ${minutes(waited)} of waiting for the network` : ""));
           return { ok: false, item, error, attempts: attempt };
         }
-        progress(`hub: ${item.name}: ${short(error)}; try ${attempt + 1} of ${HUB_UPLOAD_ATTEMPTS} in ${delay / 1000} s`);
+        if (kind === "network") {
+          progress(`hub: ${item.name}: no answer from Hub (${short(error)}); waiting for the network: try ${attempt + 1} in`
+            + ` ${delay / 1000} s, ${minutes(waited)} of ${minutes(HUB_UPLOAD_NETWORK_WAIT_MS)} waited`);
+          waits += 1;
+          waited += delay;
+        } else {
+          progress(`hub: ${item.name}: ${short(error)}; try ${again + 2} of ${HUB_UPLOAD_ATTEMPTS} in ${delay / 1000} s`);
+          again += 1;
+        }
         await input.sleep(delay);
       }
     }
@@ -417,4 +581,64 @@ export async function uploadHubFiles(input: {
   };
   await Promise.all(Array.from({ length: Math.max(1, Math.min(input.parallel, items.length)) }, worker));
   return { outcomes, attempts };
+}
+
+/**
+ * The files into Hub, sending only what it lacks. Hub is asked which of these
+ * bytes the page's model holds, and holds them (their 7 days start again, so
+ * they outlast the rest of the upload); those answer at once, the rest go up
+ * as uploadHubFiles sends them, twins of the list once. When Hub cannot be
+ * asked, every file goes up, as before, and a line says so.
+ */
+export async function sendHubFiles(input: {
+  pageLabel: string;
+  items: readonly HubHashedItem[];
+  parallel: number;
+  upload: HubFileUpload;
+  lookup: HubFileLookup;
+  sleep(ms: number): Promise<void>;
+  now(): number;
+  progress(line: string): void;
+}): Promise<{ outcomes: HubUploadOutcome[]; attempts: number; lookups: number }> {
+  const { items, progress } = input;
+  let lookups = 0;
+  let held = new Map<string, HubFileRef>();
+  try {
+    held = await hubFilesHeld((files, keep) => {
+      lookups += 1;
+      return input.lookup(files, keep);
+    }, items, true);
+  } catch (error) {
+    progress(`hub: could not ask Hub which files it holds (${short(error)}): sending every file`);
+  }
+  const toSend: HubHashedItem[] = [];
+  const first = new Set<string>();
+  for (const item of items) {
+    if (held.has(item.sha256) || first.has(item.sha256)) continue;
+    first.add(item.sha256);
+    toSend.push(item);
+  }
+  const inHub = items.filter((item) => held.has(item.sha256));
+  if (inHub.length > 0) {
+    progress(toSend.length === 0
+      ? `hub: all ${items.length} files are in Hub already (${formatHubBytes(bytesOf(inHub))}): nothing to send`
+      : `hub: ${inHub.length} of ${items.length} files are in Hub already (${formatHubBytes(bytesOf(inHub))}) and are not`
+        + ` sent again; sending the other ${toSend.length} (${formatHubBytes(bytesOf(toSend))})`);
+  }
+  const sent = toSend.length === 0
+    ? { outcomes: [], attempts: 0 }
+    : await uploadHubFiles({
+      pageLabel: input.pageLabel, items: toSend, parallel: input.parallel, upload: input.upload,
+      sleep: input.sleep, now: input.now, progress,
+    });
+  const bySha = new Map(toSend.map((item, index) => [item.sha256, sent.outcomes[index]!]));
+  const outcomes = items.map((item): HubUploadOutcome => {
+    const file = held.get(item.sha256);
+    if (file !== undefined) return { ok: true, item, file, created: false, notSent: true, attempts: 0 };
+    const outcome = bySha.get(item.sha256)!;
+    if (outcome.item === item) return outcome;
+    // A twin of the list: its bytes went up once, with the first.
+    return outcome.ok ? { ...outcome, item, created: false, attempts: 0 } : { ...outcome, item };
+  });
+  return { outcomes, attempts: sent.attempts, lookups };
 }

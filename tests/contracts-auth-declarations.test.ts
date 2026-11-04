@@ -55,8 +55,10 @@ describe("route auth declarations", () => {
       "agentHistoryRequestCreate",
       "agentHydrationRequestCreate",
       // Publications: an agent's draft, its page's list and the page's media
-      // for drafts, and a file uploaded for the page's model (write:publication_drafts).
+      // for drafts, and a file uploaded for the page's model (write:publication_drafts),
+      // or found there by its bytes' SHA-256 before an upload.
       "agentPublicationCreate",
+      "agentPublicationFileLookup",
       "agentPublicationFileUpload",
       "agentPublicationList",
       "agentPublicationMedia",

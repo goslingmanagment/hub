@@ -46,7 +46,7 @@ export const publicationFileSchema = z.object({
   originalName: z.string().nullable(),
   createdByUserId: z.number().int().nullable(),
   createdAt: z.string(),
-  /** When the bytes last landed: the upload, or a new upload of the same bytes. */
+  /** When the bytes last landed: the upload, a new upload of the same bytes, or an agent's lookup that keeps them. */
   storedAt: z.string(),
   /** False once retention deleted the bytes; uploading the same bytes again brings them back. */
   stored: z.boolean(),
@@ -62,6 +62,44 @@ export const publicationFileUploadResponseSchema = z.object({
   file: publicationFileSchema,
   /** False when the model already had these bytes: the same file id answers. */
   created: z.boolean(),
+});
+
+/** Files in one lookup: a vault album's most. */
+export const PUBLICATION_FILE_LOOKUP_MAX = 300;
+
+/**
+ * An agent asks before it uploads (write:publication_drafts): which of these
+ * bytes the granted page's model holds already, so a file Hub has is named in
+ * a draft without being sent again. Only the page's model's files answer.
+ */
+export const agentPublicationFileLookupBodySchema = z.strictObject({
+  files: z.array(z.strictObject({
+    /** The SHA-256 of the file's bytes, lowercase hex. */
+    sha256: z.string().regex(/^[0-9a-f]{64}$/),
+    byteSize: z.number().int().positive(),
+  })).min(1).max(PUBLICATION_FILE_LOOKUP_MAX),
+  /** true: each file Hub holds is kept as a new upload of the same bytes would keep it — its 7 days start again. */
+  keep: z.boolean().default(false),
+});
+
+/** A file Hub holds, as a draft names it: no uses, no uploader. */
+export const publicationFileHeldSchema = z.object({
+  id: intId,
+  sha256: z.string(),
+  byteSize: z.number().int(),
+  mimeType: z.string(),
+  /** The name Hub first kept these bytes under. */
+  originalName: z.string().nullable(),
+});
+
+export const agentPublicationFileLookupResponseSchema = z.object({
+  /** One entry per file asked, in the order asked. */
+  files: z.array(z.object({
+    sha256: z.string(),
+    byteSize: z.number().int(),
+    /** null: the model has no such bytes on Hub's disk (never uploaded, or deleted after their 7 days) — upload the file. */
+    file: publicationFileHeldSchema.nullable(),
+  })),
 });
 
 export const publicationFileListQuerySchema = z.object({

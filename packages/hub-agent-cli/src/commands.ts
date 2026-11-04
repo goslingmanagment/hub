@@ -40,11 +40,18 @@ import { KernelApiError, type KernelClient, type KernelOperationResponse } from 
 import {
   checkHubFile,
   formatHubBytes,
+  hashHubFiles,
+  hubFilesHeld,
+  hubFileTwins,
   readHubAlbumFolder,
-  uploadHubFiles,
+  sendHubFiles,
   type HubAlbumFolder,
+  type HubFileLookup,
+  type HubFileRef,
   type HubFileUpload,
+  type HubHashedItem,
   type HubLocalFiles,
+  type HubUploadItem,
   type HubUploadOutcome,
 } from "./upload.ts";
 
@@ -73,8 +80,10 @@ import {
  * from disk into Hub, one upload per file (the one body the SDK cannot send,
  * see upload.ts), and `vault-album-draft` does that for a pack's folder and
  * then drafts the album. Both check the key and the page first with
- * `agentPublicationTargets`, so a wrong page costs no upload; the album also
- * makes one `agentPublicationCreate`. They take their paths as bare words.
+ * `agentPublicationTargets`, so a wrong page costs no upload, then ask
+ * `agentPublicationFileLookup` which of the files' bytes Hub holds, and send
+ * only the others; the album also makes one `agentPublicationCreate`. They
+ * take their paths as bare words.
  *
  * A NOTED ANSWER: `thread-availability` returns its validated response with a
  * one-line `note` beside it ({@link HubNotedResult}), because its null episode
@@ -1032,6 +1041,21 @@ function refusedFiles(refused: ReadonlyArray<{ name: string; why: string }>, rem
   );
 }
 
+/** Hub's answer to which of a page's files it holds (`agentPublicationFileLookup`), as upload.ts asks it. */
+function hubLookup(client: KernelClient, pageLabel: string): HubFileLookup {
+  return async (files, keep) => (await client.agentPublicationFileLookup({ params: { pageLabel }, body: { files: [...files], keep } }))
+    .files.map((entry) => entry.file);
+}
+
+/** Every file's SHA-256 from disk; a file that cannot be read whole stops the call before anything goes up. */
+async function hashedFiles(deps: HubRunDeps, items: readonly HubUploadItem[]): Promise<HubHashedItem[]> {
+  try {
+    return await hashHubFiles({ files: deps.files, items, now: deps.now, progress: deps.progress });
+  } catch (error) {
+    throw new HubUsageError(`a file could not be read whole, so nothing was uploaded: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
 type HubUploadDone = Extract<HubUploadOutcome, { ok: true }>;
 
 function uploadsOf(outcomes: readonly HubUploadOutcome[]) {
@@ -1039,8 +1063,10 @@ function uploadsOf(outcomes: readonly HubUploadOutcome[]) {
   const bytes = outcomes.reduce((sum, outcome) => sum + outcome.item.byteSize, 0);
   return {
     files: outcomes.length,
-    uploaded: done.filter((outcome) => outcome.answer.created).length,
-    alreadyThere: done.filter((outcome) => !outcome.answer.created).length,
+    uploaded: done.filter((outcome) => outcome.created).length,
+    alreadyThere: done.filter((outcome) => !outcome.created).length,
+    /** Of alreadyThere: Hub said it held them when asked, so their bytes did not go up again. */
+    notSent: done.filter((outcome) => outcome.notSent).length,
     failed: outcomes.length - done.length,
     bytes,
     size: formatHubBytes(bytes),
@@ -1055,11 +1081,12 @@ function uploadResult(outcome: HubUploadOutcome, full: boolean, hubName = true):
       ? { ok: false, notTried: outcome.notTried }
       : { ok: false, error: callErrorMeta(outcome.error), attempts: outcome.attempts };
   }
-  const { file, created } = outcome.answer;
+  const { file, created } = outcome;
   return {
     ok: true,
     media: `file:${file.id}`,
     alreadyThere: !created,
+    ...(outcome.notSent ? { notSent: true } : {}),
     // The same bytes uploaded before under another name keep that name in Hub.
     ...(hubName && file.originalName !== null && file.originalName !== outcome.item.name ? { nameInHub: file.originalName } : {}),
     ...(full ? { id: file.id, sha256: file.sha256, byteSize: file.byteSize, mimeType: file.mimeType, attempts: outcome.attempts } : {}),
@@ -1076,6 +1103,48 @@ function createRetryable(error: unknown): boolean {
   return error instanceof KernelApiError && (error.category === "network" || error.status === 429 || (error.status ?? 0) >= 500);
 }
 
+/**
+ * What a create that failed for good means for the draft, said as it is.
+ * Hub refused it (an error answer): nothing drafted. Hub answered 200 but this
+ * copy of the CLI could not read the answer (it is not the release Hub runs,
+ * most likely because its update check did not get through), or no answer
+ * came back, or Hub broke after it: the draft may well exist, and the message
+ * never says it does not.
+ */
+function createFailure(error: unknown, pageLabel: string): { drafted: false | "unknown"; next: string } {
+  const list = `hub publication-list --page-label ${pageLabel} --status draft`;
+  if (error instanceof KernelApiError && error.code === "idempotency_mismatch") {
+    return {
+      drafted: false,
+      next: `This command drafted this page, title and files before, at another time: find that publication with hub`
+        + ` publication-list --page-label ${pageLabel} and follow it there (a draft: edit or cancel it). To send the`
+        + " album again (its files that did not land, its order), draft its files anew as the hub skill says — no"
+        + " bytes go up again; a second draft of this folder needs --idempotency-key with a new uuid.",
+    };
+  }
+  if (error instanceof KernelApiError && error.category === "contract") {
+    return {
+      drafted: "unknown",
+      next: "Hub answered the draft with 200, so it is most likely drafted, but this copy of the CLI could not read the"
+        + " answer: it is not the release Hub runs (most likely its update check did not get through). Do not draft again: run"
+        + ` ${list} — the CLI updates itself first when it reaches Hub — and follow this album's draft there.`,
+    };
+  }
+  if (error instanceof KernelApiError && (error.category === "network" || (error.status ?? 0) >= 500)) {
+    return {
+      drafted: "unknown",
+      next: "Whether Hub drafted it is unknown: no answer came back. Every file is in Hub (album[].media). Run"
+        + ` ${list}: a draft of this title made just now is this one; if there is none, run the same command again —`
+        + " no bytes go up again.",
+    };
+  }
+  return {
+    drafted: false,
+    next: "Nothing drafted: Hub refused it (error). Every file is in Hub (album[].media); fix what the error says and"
+      + " run the same command again — no bytes go up again.",
+  };
+}
+
 function albumTitle(values: HubOptionValues): string {
   const title = requireString(values, "title").trim();
   if (title === "" || /[\r\n]/.test(title)) throw new HubUsageError("--title is the album's title: one line, not empty");
@@ -1086,9 +1155,11 @@ function albumTitle(values: HubOptionValues): string {
 }
 
 /**
- * `vault-album-draft`: the folder read and checked, the page checked, the
- * files uploaded, then one vault_album draft with them in the folder's order.
- * Nothing is drafted unless every file is in Hub, each once.
+ * `vault-album-draft`: the folder read and checked, the page checked, every
+ * file's SHA-256 read (twins stop it there, before any upload), Hub asked
+ * which of the files it holds, the others uploaded, then one vault_album
+ * draft with them in the folder's order. Nothing is drafted unless every file
+ * is in Hub, each once; the same command again sends only what Hub lacks.
  */
 async function draftVaultAlbum(client: KernelClient, values: HubOptionValues, deps: HubRunDeps, folderArgument: string) {
   const pageLabel = requireString(values, "page-label");
@@ -1136,51 +1207,72 @@ async function draftVaultAlbum(client: KernelClient, values: HubOptionValues, de
     })),
     skipped: listing.skipped,
   };
+
+  // Twins and the files Hub holds, from the bytes, before any upload.
+  const hashed = await hashedFiles(deps, items);
+  let calls = 1;
+  const duplicates = hubFileTwins(hashed);
+  if (duplicates.length > 0) {
+    return new HubCompositeResult({
+      ...(dryRun ? { dryRun: true } : {}), ...plan, duplicates, drafted: false,
+      next: "Nothing uploaded or drafted: the folder holds the same file twice (duplicates: a file and the one it"
+        + " repeats) and an album holds a file once. Ask the owner which copy stays, move the other out of the folder"
+        + ` and run ${dryRun ? "--dry-run " : ""}again.`,
+    }, duplicates.length, { calls, failed: duplicates.length });
+  }
+
   if (dryRun) {
+    // Asked without keeping anything: a dry run changes nothing in Hub.
+    const lookup = hubLookup(client, pageLabel);
+    let found: Map<string, HubFileRef> | null = null;
+    try {
+      found = await hubFilesHeld((files, keep) => {
+        calls += 1;
+        return lookup(files, keep);
+      }, hashed, false);
+    } catch {
+      // An older Hub, or no answer: the real run asks again, and uploads every file when it cannot.
+    }
+    const held = found;
+    const inHub = held === null ? [] : hashed.filter((item) => held.has(item.sha256));
+    const inHubBytes = inHub.reduce((sum, item) => sum + item.byteSize, 0);
     return new HubCompositeResult({
       dryRun: true,
       ...plan,
+      album: plan.album.map((entry, index) => (held?.has(hashed[index]!.sha256) ? { ...entry, inHub: true } : entry)),
+      /** null: Hub could not be asked which files it holds. */
+      inHub: held === null ? null : { files: inHub.length, bytes: inHubBytes, size: formatHubBytes(inHubBytes) },
       next: "Nothing uploaded or drafted. Show the owner the order (position 1 is the top of the album), the count and the"
-        + " size; on their word run the same command without --dry-run.",
-    }, 0, { calls: 1, failed: 0 });
+        + " size" + (inHub.length > 0 ? ` (${inHub.length} of the files are in Hub already, inHub: they do not go up again)` : "")
+        + "; on their word run the same command without --dry-run.",
+    }, 0, { calls, failed: 0 });
   }
 
-  const { outcomes, attempts } = await uploadHubFiles({
-    pageLabel, items, parallel, upload: deps.upload, sleep: deps.sleep, now: deps.now, progress: deps.progress,
+  const { outcomes, attempts, lookups } = await sendHubFiles({
+    pageLabel, items: hashed, parallel, upload: deps.upload, lookup: hubLookup(client, pageLabel),
+    sleep: deps.sleep, now: deps.now, progress: deps.progress,
   });
-  let calls = 1 + attempts;
+  calls += lookups + attempts;
   const uploads = uploadsOf(outcomes);
   const album = plan.album.map((entry, index) => ({ ...entry, ...uploadResult(outcomes[index]!, false, false) }));
   if (uploads.failed > 0) {
     // Too large, a type Hub refuses, Hub's room full: sending again changes nothing.
     const refusedByHub = outcomes.some((outcome) => !outcome.ok && "error" in outcome
       && outcome.error instanceof KernelApiError && [413, 415, 507].includes(outcome.error.status ?? 0));
+    const inHub = uploads.files - uploads.failed;
     return new HubCompositeResult({
       ...plan, album, uploads, drafted: false,
       next: refusedByHub
         ? "Nothing drafted: Hub refused some files (album[].error says why). Tell the owner; once that is dealt with, run"
-          + " the same command again."
-        : "Nothing drafted: some files did not reach Hub (album[].error). Run the same command again: every file goes up"
-          + " again, Hub keeps one copy of each, and the draft is made once all of them are in.",
+          + " the same command again: the files in Hub by then do not go up again."
+        : `Nothing drafted: ${uploads.failed} of ${uploads.files} files did not reach Hub (album[].error), ${inHub} did.`
+          + ` Run the same command again: the ${inHub} in Hub do not go up again (Hub keeps them 7 days), only the`
+          + " missing ones, and the draft is made once all of them are in.",
     }, uploads.failed, { calls, failed: uploads.failed });
   }
 
-  const fileIds = outcomes.map((outcome) => (outcome as HubUploadDone).answer.file.id);
-  const firstName = new Map<number, string>();
-  const duplicates: Array<{ name: string; sameAs: string; media: string }> = [];
-  fileIds.forEach((id, index) => {
-    const name = items[index]!.name;
-    const first = firstName.get(id);
-    if (first === undefined) firstName.set(id, name);
-    else duplicates.push({ name, sameAs: first, media: `file:${id}` });
-  });
-  if (duplicates.length > 0) {
-    return new HubCompositeResult({
-      ...plan, album, uploads, duplicates, drafted: false,
-      next: "Nothing drafted: the folder holds the same file twice (duplicates) and an album holds a file once. Ask the"
-        + " owner which copy stays, move the other out of the folder and run again.",
-    }, duplicates.length, { calls, failed: duplicates.length });
-  }
+  // No twins by now (their bytes were compared before any upload): each file id once, in the folder's order.
+  const fileIds = outcomes.map((outcome) => (outcome as HubUploadDone).file.id);
 
   // Each card is named as the pack names its file (0349), whatever name Hub first kept the same bytes under.
   const names = items.map((item) => item.name.trim().slice(0, 200));
@@ -1200,15 +1292,8 @@ async function draftVaultAlbum(client: KernelClient, values: HubOptionValues, de
     } catch (error) {
       const delay = CREATE_RETRY_DELAYS_MS[attempt - 1];
       if (delay === undefined || !createRetryable(error)) {
-        const before = error instanceof KernelApiError && error.code === "idempotency_mismatch";
         return new HubCompositeResult({
-          ...plan, album, uploads, drafted: false, error: callErrorMeta(error),
-          next: before
-            ? `This command drafted this page, title and files before, at another time: find that publication with hub`
-              + ` publication-list --page-label ${pageLabel} and follow it there (a draft: edit or cancel it). To send the`
-              + " album again (its files that did not land, its order), draft its files anew as the hub skill says — no"
-              + " bytes go up again; a second draft of this folder needs --idempotency-key with a new uuid."
-            : "Nothing drafted; every file is in Hub (album[].media). Fix what the error says and run the same command again.",
+          ...plan, album, uploads, ...createFailure(error, pageLabel), error: callErrorMeta(error),
         }, 1, { calls, failed: 1 });
       }
       deps.progress(`hub: drafting failed (${error instanceof KernelApiError ? error.status ?? error.code : "error"}), again in ${delay / 1000} s`);
@@ -2111,9 +2196,11 @@ export const HUB_COMMANDS: readonly HubCommand[] = [
     composite: true,
     summary:
       "COMPOSITE. Upload photos and videos from disk into Hub for a page's model, for a draft's --media file:<id>: each"
-      + " file streamed whole, --parallel at a time, each retried a few times (the same bytes answer the same file, so a"
-      + " retry never makes a second one). A file Hub would refuse (HEIC, not a photo or video, empty) stops the call"
-      + " before any upload. Progress goes to stderr. Needs write:publication_drafts.",
+      + " file's SHA-256 read first and Hub asked which of them it holds — those are not sent again (Hub keeps them 7"
+      + " more days); the others streamed whole, --parallel at a time, a lost network waited for up to 15 minutes per"
+      + " file (the same bytes answer the same file, so a retry never makes a second one). A file Hub would refuse"
+      + " (HEIC, not a photo or video, empty) stops the call before any upload. Progress goes to stderr. Needs"
+      + " write:publication_drafts.",
     arguments: { name: "<path…>", describe: "The files (a shell glob works); each keeps its own name in Hub", min: 1, max: null },
     options: {
       "page-label": { kind: "string", describe: "The page whose model the files are for (required)" },
@@ -2133,8 +2220,9 @@ export const HUB_COMMANDS: readonly HubCommand[] = [
       // The key's right and the page, before the first byte.
       await client.agentPublicationTargets({ params: { pageLabel } });
       const items = checks.flatMap((check) => (check.ok ? [check.item] : []));
-      const { outcomes, attempts } = await uploadHubFiles({
-        pageLabel, items, parallel, upload: deps.upload, sleep: deps.sleep, now: deps.now, progress: deps.progress,
+      const { outcomes, attempts, lookups } = await sendHubFiles({
+        pageLabel, items: await hashedFiles(deps, items), parallel, upload: deps.upload, lookup: hubLookup(client, pageLabel),
+        sleep: deps.sleep, now: deps.now, progress: deps.progress,
       });
       const totals = uploadsOf(outcomes);
       return new HubCompositeResult({
@@ -2143,7 +2231,7 @@ export const HUB_COMMANDS: readonly HubCommand[] = [
           path: outcome.item.path, name: outcome.item.name, size: formatHubBytes(outcome.item.byteSize), ...uploadResult(outcome, true),
         })),
         totals,
-      }, totals.failed, { calls: 1 + attempts, failed: totals.failed });
+      }, totals.failed, { calls: 1 + lookups + attempts, failed: totals.failed });
     },
   },
   {
@@ -2153,9 +2241,11 @@ export const HUB_COMMANDS: readonly HubCommand[] = [
     summary:
       "COMPOSITE. A Fansly vault album from a pack's folder: its photos and videos (not subfolders, not hidden files) in"
       + " name order, IMG_2 before IMG_10, the first on top of the album; uploaded into Hub as publication-file-upload"
-      + " does, then drafted as one vault_album. --dry-run lists the order, names, sizes and totals and uploads nothing:"
-      + " show that to the owner first. A person approves the draft: the owner in Hub, or publication-approve only on"
-      + " the owner's «да» in the chat. Needs write:publication_drafts.",
+      + " does, then drafted as one vault_album. A folder holding the same file twice stops before any upload; the"
+      + " same command again after a break sends only the files Hub lacks. --dry-run lists the order, names, sizes,"
+      + " totals and the files Hub holds already, and uploads nothing: show that to the owner first. A person approves"
+      + " the draft: the owner in Hub, or publication-approve only on the owner's «да» in the chat. Needs"
+      + " write:publication_drafts.",
     arguments: { name: "<folder>", describe: "The pack's folder", min: 1, max: 1 },
     options: {
       "page-label": { kind: "string", describe: "The Fansly page (required)" },
@@ -2169,7 +2259,11 @@ export const HUB_COMMANDS: readonly HubCommand[] = [
         describe: "When Hub sends it, RFC 3339 with an offset (default: when the draft is made); not sent within 12 hours"
           + " of it, it ends missed",
       },
-      "dry-run": { kind: "boolean", describe: "Only check the folder and the page and list the album; nothing is uploaded or drafted" },
+      "dry-run": {
+        kind: "boolean",
+        describe: "Only check the folder and the page, compare the files with what Hub holds and list the album; nothing is"
+          + " uploaded or drafted",
+      },
       ...UPLOAD_OPTIONS,
       "idempotency-key": {
         kind: "string",

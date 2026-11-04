@@ -14,12 +14,14 @@ import {
   insertPublicationFile,
   listPublicationFileUses,
   listPublicationFiles,
+  listPublicationFilesByContent,
   listStoredPublicationFiles,
   lockPublicationFile,
   lockPublicationFileByContent,
   publicationFileKeepsBytes,
   lockPublicationFileUploads,
   markPublicationFileBytesDeleted,
+  markPublicationFilesKept,
   markPublicationFileStored,
   sumStoredPublicationFileBytes,
   type Database,
@@ -379,6 +381,53 @@ export async function uploadPublicationFile(app: Pick<AppContext, "db" | "config
   }
   // Committed: the row keeps the bytes, whatever the answer's read does.
   return { file: await getPublicationFileWire(app.db, result.id), created: result.created };
+}
+
+// ---------------------------------------------------------------------------
+// Lookup before an upload (an agent's pack sent again sends only what is missing)
+// ---------------------------------------------------------------------------
+
+export interface PublicationFileHeld {
+  id: number;
+  sha256: string;
+  byteSize: number;
+  mimeType: string;
+  originalName: string | null;
+}
+
+/**
+ * Which of these bytes the model holds: a file whose bytes are on disk with
+ * the size asked. Scoped as an upload's reuse is: the model's own files and
+ * nothing else, and no uses (they may name pages outside a key's grant).
+ * `keep` starts their 7 days again under the row lock, as a new upload of the
+ * same bytes does, so retention cannot take them before a draft names them.
+ * Run it in a transaction: with `keep` the rows stay locked until it ends.
+ */
+export async function lookupPublicationFiles(db: Database, config: Pick<AppConfig, "publicationFilesDir">, input: {
+  model: PublicationFileModelSelector;
+  files: ReadonlyArray<{ sha256: string; byteSize: number }>;
+  keep: boolean;
+}): Promise<Array<{ sha256: string; byteSize: number; file: PublicationFileHeld | null }>> {
+  const model = await findPublicationFileModel(db, input.model);
+  if (!model) throw new NotFoundError("pageLabel" in input.model ? "Page not found" : "Model not found");
+  const root = publicationFilesRoot(config);
+  const asked = new Set(input.files.map((file) => `${file.sha256}:${file.byteSize}`));
+  const rows = await listPublicationFilesByContent(db, {
+    modelId: model.id, contentSha256s: [...new Set(input.files.map((file) => file.sha256))], lock: input.keep,
+  });
+  const held = new Map<string, PublicationFileHeld>();
+  for (const row of rows) {
+    const { byteSize, mimeType } = row;
+    if (row.bytesDeletedAt !== null || byteSize === null || mimeType === null) continue;
+    if (!asked.has(`${row.contentSha256}:${byteSize}`)) continue;
+    if (!await fileOnDisk(publicationFilePath(root, row), byteSize)) continue;
+    held.set(row.contentSha256, { id: row.id, sha256: row.contentSha256, byteSize, mimeType, originalName: row.originalName });
+  }
+  if (input.keep) await markPublicationFilesKept(db, [...held.values()].map((file) => file.id));
+  return input.files.map(({ sha256, byteSize }) => {
+    const file = held.get(sha256);
+    return { sha256, byteSize, file: file !== undefined && file.byteSize === byteSize ? file : null };
+  });
 }
 
 // ---------------------------------------------------------------------------

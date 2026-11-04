@@ -19,12 +19,20 @@ import { VAULT_SKILL_TEXT } from "./vault-skill.ts";
  * into it, and the contract moves with the releases. Nobody will reinstall on that
  * computer, so before a command this file compares itself with the running release.
  * Offline, slow or a release without the file: it runs as it is.
+ *
+ * THE KEY NEVER GOES IN THE COMMAND LINE. `setup` reads it from stdin (copied,
+ * then `pbpaste | node hub.mjs setup`) or asks for it in a terminal without
+ * showing it: in argv it would stay in the shell's history and in the chat of
+ * the Claude that ran it (audit 2026-11-04). `--key` still works.
  */
 
 const KEY_PREFIX = "agency_hub_agent_";
 const SKILL_PATH = join(homedir(), ".claude", "skills", "hub-vault", "SKILL.md");
-const CHECK_TIMEOUT_MS = 3_000;
+/** The release check before a command: a slow line gets this long, or an old copy runs (and may misread a new answer). */
+const CHECK_TIMEOUT_MS = 10_000;
 const DOWNLOAD_TIMEOUT_MS = 120_000;
+/** How long setup waits for a key piped on stdin. */
+const STDIN_WAIT_MS = 5_000;
 
 const self = fileURLToPath(import.meta.url);
 const argv = process.argv.slice(2);
@@ -85,10 +93,73 @@ function refreshSkill(): void {
   }
 }
 
+/** The first line that is not empty, piped on stdin; null when none comes within STDIN_WAIT_MS. */
+function pipedLine(): Promise<string | null> {
+  return new Promise((resolve) => {
+    const input = process.stdin;
+    let text = "";
+    const first = () => text.split(/\r?\n/).map((line) => line.trim()).find((line) => line !== "") ?? null;
+    const done = () => {
+      clearTimeout(timer);
+      input.off("data", onData);
+      input.pause();
+      resolve(first());
+    };
+    const onData = (chunk: string) => {
+      text += chunk;
+      if ((text.includes("\n") && first() !== null) || text.length > 4096) done();
+    };
+    const timer = setTimeout(done, STDIN_WAIT_MS);
+    input.setEncoding("utf8");
+    input.on("data", onData);
+    input.once("end", done);
+    input.once("error", done);
+  });
+}
+
+/** One line typed or pasted in a terminal, not echoed; null on Ctrl-C or Ctrl-D. */
+function hiddenLine(prompt: string): Promise<string | null> {
+  return new Promise((resolve) => {
+    const input = process.stdin;
+    let value = "";
+    const done = (result: string | null) => {
+      input.off("data", onData);
+      input.setRawMode(false);
+      input.pause();
+      process.stderr.write("\n");
+      // A terminal's bracketed paste marks, should one send them.
+      resolve(result === null ? null : result.replace(/\[20[01]~/g, "").trim());
+    };
+    const onData = (chunk: string) => {
+      for (const char of chunk) {
+        if (char === "\r" || char === "\n") return done(value);
+        if (char === "\u0003" || char === "\u0004") return done(null);
+        if (char === "\u007f" || char === "\b") value = value.slice(0, -1);
+        else if (char >= " ") value += char;
+      }
+    };
+    // Echo off before the prompt shows, so nothing typed at once is echoed.
+    input.setRawMode(true);
+    input.setEncoding("utf8");
+    input.on("data", onData);
+    input.resume();
+    process.stderr.write(prompt);
+  });
+}
+
+const KEY_HOW = `the key the owner issued for this computer (${KEY_PREFIX}…): copy it, then run`
+  + ` pbpaste | node "$HOME/.hub/hub.mjs" setup (Windows: powershell -NoProfile -Command Get-Clipboard | node`
+  + ` "$HOME/.hub/hub.mjs" setup), or run setup in a terminal and paste it when asked. --key <key> works too, but`
+  + " leaves the key in the shell's history and in the chat that ran it";
+
 async function setup(args: readonly string[]): Promise<never> {
   const at = args.indexOf("--key");
-  const key = at === -1 ? undefined : args[at + 1]?.trim();
-  if (key === undefined || !key.startsWith(KEY_PREFIX)) refuse("usage", `setup --key ${KEY_PREFIX}…: the key the owner issued for this computer`);
+  const inArgv = at !== -1;
+  const key = inArgv
+    ? args[at + 1]?.trim()
+    : (process.stdin.isTTY ? await hiddenLine("The key the owner issued for this computer (not shown as you paste it): ") : await pipedLine())
+      ?? undefined;
+  if (key === undefined || !key.startsWith(KEY_PREFIX)) refuse("usage", `setup needs ${KEY_HOW}`);
   const present = existsSync(HUB_CREDENTIALS_PATH)
     ? parseHubCredentialsFile(readFileSync(HUB_CREDENTIALS_PATH, "utf8")).HUB_AGENT_KEY
     : undefined;
@@ -119,6 +190,9 @@ async function setup(args: readonly string[]): Promise<never> {
       skill: SKILL_PATH,
       rights: data.key.capabilities.filter((one) => one.granted).map((one) => one.capability),
       pages: data.grant.pages.map((page) => page.pageLabel),
+      ...(inArgv
+        ? { note: "The key was given with --key: it stays in this shell's history and in the chat that ran the command. Next time pipe it on stdin." }
+        : {}),
       next: "Ready. A new Claude session has the skill hub-vault: «залей пак в волт».",
     },
   }, HUB_EXIT_OK);

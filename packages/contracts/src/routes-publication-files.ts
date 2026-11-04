@@ -1,6 +1,8 @@
 import { errorResponseSchema } from "./primitives.ts";
 import { publicationPageParamsSchema } from "./publications.ts";
 import {
+  agentPublicationFileLookupBodySchema,
+  agentPublicationFileLookupResponseSchema,
   agentPublicationFileUploadQuerySchema,
   publicationFileIdParamsSchema,
   publicationFileListQuerySchema,
@@ -56,6 +58,15 @@ export const publicationFileRouteSchemas = {
       503: errorResponseSchema,
       507: errorResponseSchema,
     },
+  },
+  agentPublicationFileLookup: {
+    auth: { kind: "agentKey", scope: "page" }, tags: ["agent"],
+    summary: "Which files the granted page's model holds already, by the SHA-256 and size of their bytes (needs"
+      + " write:publication_drafts): ask before an upload, and name a held file in a draft without sending it again."
+      + " keep: true keeps each held file as an upload of the same bytes would (its 7 days start again)",
+    params: publicationPageParamsSchema,
+    body: agentPublicationFileLookupBodySchema,
+    response: { 200: agentPublicationFileLookupResponseSchema, ...errors, 429: errorResponseSchema, 503: errorResponseSchema },
   },
   adminPublicationFileList: {
     auth: owner, tags: ["admin"],
