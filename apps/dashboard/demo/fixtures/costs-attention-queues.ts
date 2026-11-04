@@ -178,19 +178,23 @@ interface HydrationSeed {
   key: string;
   decidedAfterHours?: number;
   progress?: Partial<HydrationItem["progress"]>;
+  /** Hours before the OnlyFans API went off, instead of hours before now. */
+  beforeOffHours?: number;
+  /** Decided by the versioned policy, not the owner. */
+  auto?: boolean;
 }
 
 const HYDRATION: readonly HydrationSeed[] = [
-  { state: "requested", page: "mia-vip-of", fan: 2, hoursAgo: 1.4, beforeDays: 120, key: "ahk_live_3f9a" },
-  { state: "requested", page: "mia-of", fan: 11, hoursAgo: 5.2, beforeDays: null, key: "ahk_live_3f9a" },
+  { state: "requested", page: "mia-vip-of", fan: 2, hoursAgo: 0, beforeOffHours: 8 * 24 + 2, beforeDays: 120, key: "ahk_live_3f9a" },
+  { state: "requested", page: "mia-of", fan: 11, hoursAgo: 0, beforeOffHours: 8 * 24 + 6, beforeDays: null, key: "ahk_live_3f9a" },
   { state: "requested", page: "nova-1", fan: 4, hoursAgo: 20.5, beforeDays: 200, key: "ahk_live_b71c" },
-  { state: "dispatching", page: "mia-of", fan: 0, hoursAgo: 0.6, beforeDays: 90, key: "ahk_live_3f9a", decidedAfterHours: 0.3, progress: { dispatchCount: 1, executionRef: "ofcj_01K4PQ7R2M" } },
+  { state: "dispatching", page: "mia-of", fan: 0, hoursAgo: 0, beforeOffHours: 0.6, beforeDays: 90, key: "ahk_live_3f9a", decidedAfterHours: 0.3, progress: { dispatchCount: 1, executionRef: "ofcj_01K4PQ7R2M" } },
   { state: "failed", page: "mia-vip-of", fan: 9, hoursAgo: 52, beforeDays: 60, key: "ahk_live_3f9a", decidedAfterHours: 1.1, progress: { dispatchCount: 1, lastError: "vendor_unavailable", executionRef: "ofcj_01K48WZ3TD" } },
-  { state: "completed", page: "mia-of", fan: 5, hoursAgo: 66, beforeDays: 180, key: "ahk_live_3f9a", decidedAfterHours: 2.4, progress: { dispatchCount: 1, acceptedItems: 214, acceptedPages: 4, spentCredits: 4, executionRef: "ofcj_01K45HB9QX" } },
+  { state: "completed", page: "mia-of", fan: 5, hoursAgo: 66, beforeDays: 180, key: "ahk_live_3f9a", decidedAfterHours: 2.4, auto: true, progress: { dispatchCount: 1, acceptedItems: 214, acceptedPages: 4, spentCredits: 4, executionRef: "ofcj_01K45HB9QX" } },
   { state: "partially_completed", page: "mia-vip-of", fan: 0, hoursAgo: 90, beforeDays: 365, key: "ahk_live_b71c", decidedAfterHours: 0.8, progress: { dispatchCount: 1, acceptedItems: 250, acceptedPages: 5, spentCredits: 5, lastError: "budget_exhausted", executionRef: "ofcj_01K42M6E1A" } },
-  { state: "completed", page: "mia-vip-of", fan: 14, hoursAgo: 118, beforeDays: 45, key: "ahk_live_3f9a", decidedAfterHours: 5.5, progress: { dispatchCount: 1, acceptedItems: 87, acceptedPages: 2, spentCredits: 2, executionRef: "ofcj_01K3ZTN4V8" } },
+  { state: "completed", page: "mia-vip-of", fan: 14, hoursAgo: 118, beforeDays: 45, key: "ahk_live_3f9a", decidedAfterHours: 5.5, auto: true, progress: { dispatchCount: 1, acceptedItems: 87, acceptedPages: 2, spentCredits: 2, executionRef: "ofcj_01K3ZTN4V8" } },
   { state: "rejected", page: "mia-of", fan: 23, hoursAgo: 140, beforeDays: 700, key: "ahk_live_b71c", decidedAfterHours: 3 },
-  { state: "approved", page: "mia-of", fan: 31, hoursAgo: 3.1, beforeDays: 30, key: "ahk_live_3f9a", decidedAfterHours: 0.5 },
+  { state: "approved", page: "mia-of", fan: 31, hoursAgo: 0, beforeOffHours: 3.1, beforeDays: 30, key: "ahk_live_3f9a", decidedAfterHours: 0.5 },
   { state: "expired", page: "mia-vip-of", fan: 19, hoursAgo: 210, beforeDays: 150, key: "ahk_live_3f9a" },
   { state: "rejected", page: "ivy-2", fan: 1, hoursAgo: 260, beforeDays: 90, key: "ahk_live_b71c", decidedAfterHours: 9 },
 ];
@@ -199,7 +203,9 @@ function hydrationItem(seed: HydrationSeed, index: number, now: Date): Hydration
   const page = demoPage(seed.page)!;
   const fansly = page.platform === "fansly";
   const fan = demoFans(seed.page)[seed.fan]!;
-  const createdAt = new Date(now.getTime() - seed.hoursAgo * HOUR_MS);
+  const createdAt = seed.beforeOffHours === undefined
+    ? new Date(now.getTime() - seed.hoursAgo * HOUR_MS)
+    : new Date(DEMO_OFAPI_OFF_AT - seed.beforeOffHours * HOUR_MS);
   const decidedAt = seed.decidedAfterHours === undefined ? null : new Date(createdAt.getTime() + seed.decidedAfterHours * HOUR_MS);
   const approved = seed.state !== "rejected" && decidedAt !== null;
   const random = rng(`hydration:${index}`);
@@ -237,8 +243,8 @@ function hydrationItem(seed: HydrationSeed, index: number, now: Date): Hydration
       ? null
       : {
         decidedAt: iso(decidedAt),
-        decisionSource: "owner",
-        policyVersion: null,
+        decisionSource: seed.auto ? "auto_policy" : "owner",
+        policyVersion: seed.auto ? 1 : null,
         approved,
         allowMarkReadSideEffect: approved ? false : null,
         maxCalls: approved ? 5 : null,
@@ -310,12 +316,21 @@ interface IncidentSeed {
 function incidentSeeds(now: Date): IncidentSeed[] {
   const sinceOff = Math.max(1, (now.getTime() - Date.parse(OF_OFF_AT)) / HOUR_MS);
   const seeds: IncidentSeed[] = [
-    { kind: "stream_failed_threshold", page: "ivy-1", stream: "followers", openedHoursAgo: 8.7, durationHours: null, error: "followers: HTTP 429 from apiv3.fansly.com, 3 failed runs in a row", code: "rate_limited" },
+    { kind: "stream_failed_threshold", page: "ivy-1", stream: "followers", openedHoursAgo: 8.7, durationHours: 1.9, error: "followers: HTTP 429 from apiv3.fansly.com, 3 failed runs in a row", code: "rate_limited" },
     { kind: "auth_blocked", page: "nova-1", stream: null, openedHoursAgo: 5.2, durationHours: null, error: "Fansly signed the page's browser out", code: "login_required" },
     // Hub stopped nova-1's publishing when the browser lost its login (publications group).
     { kind: "publishing_stopped", page: "nova-1", stream: null, openedHoursAgo: 5, durationHours: null, error: "Publishing stopped: browser_login_lost", code: "browser_login_lost" },
     { kind: "ofapi_webhook_silence", page: null, stream: null, openedHoursAgo: sinceOff - 6.1, durationHours: null, error: "No OnlyFans webhook events for 6 h (last at 2026-11-01 10:20 UTC)", code: "webhook_silence" },
     { kind: "golden_signal_lag", page: null, stream: null, tail: "ofapi_delivery_history_age", openedHoursAgo: sinceOff - 0.5, durationHours: null, error: "ofapi delivery history age is over its threshold", code: "lag" },
+    { kind: "fansly_sync_engine", page: "nova-1", stream: null, tail: "browser:login_required", openedHoursAgo: 5.1, durationHours: null, error: "page browser: login_required (Fansly signed the session out)", code: "browser_alert" },
+    { kind: "fansly_sync_engine", page: "ivy-1", stream: null, tail: "route_limited:/api/v1/subscriptions", openedHoursAgo: 0.6, durationHours: null, error: "route /api/v1/subscriptions held after HTTP 429 until 00:12", code: "route_limited" },
+    { kind: "fansly_sync_engine", page: "ivy-1", stream: null, tail: "live_degraded", openedHoursAgo: 26.4, durationHours: 0.8, error: "live intake degraded: websocket reconnects 4 in 30 min, decode debt 3 frames", code: "live_degraded" },
+    { kind: "ai_provider_billing", page: null, stream: null, tail: "account:main", openedHoursAgo: 3 * 24 + 2.3, durationHours: 1.1, error: "Anthropic 400: Your credit balance is too low to access the Anthropic API (account main)", code: "credit_balance_too_low" },
+    { kind: "ai_provider_billing", page: null, stream: null, tail: "elevenlabs:subscription", openedHoursAgo: 5 * 24 + 6.5, durationHours: 9, error: "ElevenLabs 401: subscription is not active", code: "subscription_inactive", outbox: { outboxState: "exhausted", outboxAttemptCount: 5, outboxLastError: "Telegram 429: Too Many Requests: retry after 30", outboxSuppressionReason: null } },
+    { kind: "ofapi_auth", page: "mia-of", stream: null, openedHoursAgo: sinceOff - 0.3, durationHours: null, error: "OnlyFans API 401: Unauthorized (key removed)", code: "unauthorized" },
+    { kind: "ofapi_auth", page: "mia-vip-of", stream: null, openedHoursAgo: sinceOff - 0.3, durationHours: null, error: "OnlyFans API 401: Unauthorized (key removed)", code: "unauthorized" },
+    { kind: "read_gateway_capture", page: "mia-of", stream: null, tail: "collection_stale", openedHoursAgo: sinceOff - 1.2, durationHours: null, error: "No captured reads for the page for 60 min", code: "collection_stale" },
+    { kind: "read_gateway_capture", page: "mia-vip-of", stream: null, tail: "collection_stale", openedHoursAgo: sinceOff - 1.2, durationHours: null, error: "No captured reads for the page for 60 min", code: "collection_stale" },
     { kind: "ofapi_platform_notice", page: "mia-vip-of", stream: null, openedHoursAgo: sinceOff - 2.5, durationHours: null, error: "OnlyFans notice: «Updated Terms of Service» — effective 1 November 2026", code: "platform_notice" },
     { kind: "ai_provider_billing", page: null, stream: null, openedHoursAgo: 12 * 24 + 3.2, durationHours: 0.2, error: "Anthropic 400: Your credit balance is too low to access the Anthropic API (account main)", code: "credit_balance_too_low" },
     { kind: "proxy_failed", page: "ivy-2", stream: null, openedHoursAgo: 4 * 24 + 7, durationHours: 1.6, error: "SOCKS5 handshake timed out after 15 s", code: "proxy_timeout" },

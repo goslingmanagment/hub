@@ -1,6 +1,7 @@
 import type { AdminSyncBlockResponse, SyncBlockStatus } from "@agency_hub_core/contracts";
 
 import { ruPlural } from "@/lib/plural";
+import { COLLECTION_STATUS, type StatusWord } from "@/lib/statusWords";
 
 import { SYNC_BLOCK_LABELS, SYNC_LEVER_LABELS, syncStreamLabel } from "../sync/syncVocabulary.js";
 
@@ -133,6 +134,7 @@ export function engineBlockStopText(stop: EngineStop, now: number, keysOf?: numb
     language: "ru",
     until: (iso) => engineClockText(iso, now),
     listKeys: keysOf !== undefined && stop.resources.length < keysOf,
+    keysOf,
   });
 }
 
@@ -165,7 +167,7 @@ export function engineChatsUnavailableLine(block: EngineBlock): string | null {
 /** A block's quarantined and refused work: "в карантине 1, Fansly отказывает 2". */
 export function engineAttentionText(info: Pick<EngineBlockInfo, "quarantined" | "blockedByVendor">): string {
   return [
-    info.quarantined.count > 0 ? `в карантине ${engineCount(info.quarantined.count)}` : null,
+    info.quarantined.count > 0 ? `отложено на разбор ${engineCount(info.quarantined.count)}` : null,
     info.blockedByVendor.count > 0 ? `Fansly отказывает ${engineCount(info.blockedByVendor.count)}` : null,
   ].filter((part): part is string => part !== null).join(", ");
 }
@@ -228,9 +230,9 @@ export function engineAttentionLines(block: EngineBlock): string[] {
   const { quarantined, blockedByVendor } = block.engine;
   return [
     ...(quarantined.count > 0
-      ? [`В карантине: ${engineCount(quarantined.count)} (${quarantined.resources.join(", ")})`]
+      ? [`отложено на разбор ${engineCount(quarantined.count)}`]
       : []),
-    ...blockedByVendor.resources.map((resource) => `Fansly отказывает: ${resource}`),
+    ...(blockedByVendor.count > 0 ? [`Fansly отказывает ${engineCount(blockedByVendor.count)}`] : []),
   ];
 }
 
@@ -272,7 +274,7 @@ export function engineBlockButtons(block: EngineBlock): EngineBlockButtons {
       ? null
       : { label: partial ? `${SYNC_LEVER_LABELS.resume} (${paused} из ${keys.length})` : SYNC_LEVER_LABELS.resume },
     requeue: live && quarantined.count > 0
-      ? { label: `${SYNC_LEVER_LABELS.reset} карантин (${engineCount(quarantined.count)})` }
+      ? { label: `Вернуть в работу (${engineCount(quarantined.count)})` }
       : null,
   };
 }
@@ -281,7 +283,7 @@ export function engineBlockButtons(block: EngineBlock): EngineBlockButtons {
 export function engineRequeueConfirmText(block: EngineBlock, pageLabel: string): string {
   const { count, resources } = block.engine.quarantined;
   const rows = `${engineCount(count)} ${ruPlural(count, "строка", "строки", "строк")}`;
-  return `${rows} в карантине (${resources.join(", ")}) на ${pageLabel} ${ruPlural(count, "запустится", "запустятся", "запустятся")} снова: `
+  return `${rows} ${ruPlural(count, "отложена", "отложены", "отложено")} на разбор (${resources.join(", ")}) на ${pageLabel} и ${ruPlural(count, "запустится", "запустятся", "запустятся")} снова: `
     + "сохранённый ответ применяется из журнала без нового запроса. Ничего не удаляется.";
 }
 
@@ -307,7 +309,7 @@ function stopOfEveryKey(block: EngineBlock, after: "now" | "resume"): EngineStop
  *  stop takes every key. Null: something of it can be sent. */
 function nothingSentBecause(block: EngineBlock, after: "now" | "resume", now: number): string | null {
   if (!block.engine.ownerRunning) {
-    return block.engine.mode === "handover" ? "страница переключается на новый сбор" : "страницу не ведёт ни один обработчик сбора";
+    return block.engine.mode === "handover" ? "страница переключается на новый сбор" : "страницу не ведёт ни один сервер сбора";
   }
   const stop = stopOfEveryKey(block, after);
   return stop === null ? null : lowerFirst(engineBlockStopText(stop, now));
@@ -354,10 +356,10 @@ export function engineLeverNotice(
         );
     case "reset":
       return affected === 0
-        ? { kind: "message", text: `${label}: в карантине ничего не было — возвращать нечего` }
+        ? { kind: "message", text: `${label}: отложенного нет, возвращать нечего` }
         : {
           kind: "success",
-          text: `${label}: из карантина ${ruPlural(affected, "возвращена", "возвращены", "возвращено")} `
+          text: `${label}: в работу ${ruPlural(affected, "возвращена", "возвращены", "возвращено")} `
             + `${engineCount(affected)} ${ruPlural(affected, "строка", "строки", "строк")}`,
         };
   }
@@ -366,4 +368,34 @@ export function engineLeverNotice(
 /** A period as the screen writes it: "раз в 5 мин". */
 export function engineCadenceText(seconds: number): string {
   return `раз в ${engineDurationText(seconds)}`;
+}
+
+/**
+ * A block in the one vocabulary (design/screens/system.md §0.3): its word from the
+ * dictionary and the second line, or none. The facts stay `engineBlockState`'s.
+ */
+export function engineBlockWord(block: EngineBlock, now: number = Date.now()): { word: StatusWord; second: string | null } {
+  const state = engineBlockState(block);
+  const firstStop = block.engine.stops[0];
+  const stopText = firstStop === undefined ? null : engineBlockStopText(firstStop, now, block.engine.keys.length);
+  switch (state) {
+    case "reading": return { word: COLLECTION_STATUS.healthy, second: null };
+    case "idle": return { word: COLLECTION_STATUS.healthy, second: "сейчас читать нечего" };
+    case "never_read": return { word: COLLECTION_STATUS.setup, second: "ещё не читалось" };
+    case "paused": return { word: COLLECTION_STATUS.paused, second: null };
+    case "partly_paused": {
+      const stopped = block.engine.pausedKeys.length;
+      const all = block.engine.keys.length;
+      return { word: COLLECTION_STATUS.healthy, second: `на паузе ${engineCount(stopped)} из ${engineCount(all)} ${ruPlural(all, "задачи", "задач", "задач")}` };
+    }
+    case "held":
+    case "partly_held":
+    case "page_held":
+      return { word: COLLECTION_STATUS.delayed, second: stopText };
+    case "attention":
+      return { word: COLLECTION_STATUS.delayed, second: engineAttentionText(block.engine) || null };
+    case "no_owner":
+    case "switching":
+      return { word: COLLECTION_STATUS.attention, second: "сервер сбора не ведёт страницу" };
+  }
 }

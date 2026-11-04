@@ -1,136 +1,42 @@
 /**
- * Group system: Система (design/screens/system.md). The routes and what they render
- * until each screen is rebuilt. Every screen here is the owner's, but two.
+ * Group system: Система (design/screens/system.md). Every screen here is the
+ * owner's, but two: a team lead reads «Медиа» and «Выгрузки» of the OnlyFans API.
  */
-import { lazy } from "react";
-import { Link, Route, useNavigate, useParams, useSearchParams } from "react-router";
-import { useDashboardShell } from "@/components/layout/DashboardShellContext";
-import { ScreenFallback } from "@/components/layout/ScreenFrame";
-import { StatusPanel } from "@/components/shared/StatusPanel";
-import { PageHeader } from "@/components/ui/PageHeader";
-import { Segmented } from "@/components/ui/Segmented";
-import { decodeRouteSegment, syncSettingsTab } from "@/lib/navigation";
-import { named, OfapiOffNotice, Owner } from "./shared.js";
+import { Route } from "react-router";
+import { named, Owner } from "./shared.js";
 
-const AgentHydrationPage = named(() => import("@/pages/AgentHydrationPage"), "AgentHydrationPage");
-const FailuresPage = named(() => import("@/pages/notifications/NotificationsIncidentsTab"), "NotificationsIncidentsTab");
-const LogPage = named(() => import("@/pages/dev/LogPage"), "LogPage");
-const QueuePage = named(() => import("@/pages/dev/QueuePage"), "QueuePage");
-const DbStatsPage = named(() => import("@/pages/dev/DbStatsPage"), "DbStatsPage");
-const SyncAnomaliesPage = named(() => import("@/pages/dev/IncidentsPage"), "IncidentsPage");
-const SyncStatusPage = named(() => import("@/pages/dev/SyncStatusPage"), "SyncStatusPage");
-const ClientHealthPage = named(() => import("@/pages/dev/ClientHealthPage"), "ClientHealthPage");
+const CollectionPage = named(() => import("@/pages/system/collection/CollectionPage"), "CollectionPage");
+const CollectionPageDetail = named(() => import("@/pages/system/collection/CollectionPageDetail"), "CollectionPageDetail");
+const FailuresPage = named(() => import("@/pages/system/failures/FailuresPage"), "FailuresPage");
+const HistoryRequestsPage = named(() => import("@/pages/system/history/HistoryRequestsPage"), "HistoryRequestsPage");
+const AgentKeysPage = named(() => import("@/pages/system/agent-keys/AgentKeysPage"), "AgentKeysPage");
+const StatePage = named(() => import("@/pages/system/onlyfans-api/StatePage"), "StatePage");
+const RulesPage = named(() => import("@/pages/system/onlyfans-api/rules/CollectionTab"), "CollectionTab");
+const ToolsPage = named(() => import("@/pages/system/onlyfans-api/ToolsPage"), "ToolsPage");
+const OfapiMediaPage = named(() => import("@/pages/system/onlyfans-api/OfapiMediaPage"), "OfapiMediaPage");
+const OfapiExportsPage = named(() => import("@/pages/system/onlyfans-api/OfapiExportsPage"), "OfapiExportsPage");
+const OfapiActions = named(() => import("@/pages/system/onlyfans-api/OfapiActions"), "OfapiActions");
+const LogPage = named(() => import("@/pages/system/dev/LogPage"), "LogPage");
+const SyncStatusPage = named(() => import("@/pages/system/dev/SyncStatusPage"), "SyncStatusPage");
+const QueuePage = named(() => import("@/pages/system/dev/QueuePage"), "QueuePage");
+const DbStatsPage = named(() => import("@/pages/system/dev/DbStatsPage"), "DbStatsPage");
+const ClientHealthPage = named(() => import("@/pages/system/dev/ClientHealthPage"), "ClientHealthPage");
 const ConfigurationTab = named(() => import("@/pages/settings/ConfigurationTab"), "ConfigurationTab");
-const EngineTab = named(() => import("@/pages/settings/engine/EngineTab"), "EngineTab");
-const EnginePageDetail = lazy(() => import("@/pages/settings/engine/EnginePageDetail").then((module) => ({ default: module.EnginePageDetail })));
-const SyncTab = named(() => import("@/pages/settings/SyncTab"), "SyncTab");
-const TechnicalTab = named(() => import("@/pages/settings/team/TechnicalTab"), "TechnicalTab");
-const CollectionTab = named(() => import("@/pages/settings/CollectionTab"), "CollectionTab");
-const OfapiApiTab = named(() => import("@/pages/settings/OfapiApiTab"), "OfapiApiTab");
-const WebhookCard = lazy(() => import("@/pages/settings/collection/CollectionTab").then((module) => ({ default: module.WebhookCard })));
-const OfapiMediaPage = named(() => import("@/pages/OfapiMediaPage"), "OfapiMediaPage");
-const OfapiActions = named(() => import("@/pages/OfapiActions"), "OfapiActions");
-const OfapiExportsPage = named(() => import("@/pages/OfapiExportsPage"), "OfapiExportsPage");
-
-/** «Состояние»: says it plainly and leads to where everything lies. */
-function OnlyFansApiStatusScreen() {
-  return (
-    <div className="space-y-6">
-      <OfapiOffNotice>
-        Hub больше не собирает через него данные и не тратит кредиты. Переписка, деньги и фаны OnlyFans идут из ленты
-        ChatSpace, код остаётся на случай возврата.
-      </OfapiOffNotice>
-      <WebhookCard />
-      <p className="text-sm text-text-secondary">
-        Кредиты и журнал операций — в <Link className="link" to="/money/costs/onlyfans-api">Деньги → Расходы → OnlyFans API</Link>.
-      </p>
-    </div>
-  );
-}
-
-/** All the pages' collection, until the two old lists become one table. */
-function CollectionScreen() {
-  return (
-    <div className="space-y-8">
-      <section className="space-y-4" aria-labelledby="collection-fansly">
-        <h2 id="collection-fansly" className="section-title">Fansly</h2>
-        <EngineTab />
-      </section>
-      <section className="space-y-4" aria-labelledby="collection-onlyfans">
-        <h2 id="collection-onlyfans" className="section-title">OnlyFans</h2>
-        <SyncTab />
-      </section>
-    </div>
-  );
-}
-
-/** One page's collection. The page is in the path, so a lever here has no other
- *  target; its key: no open row, dialog or lever survives a change of the page. */
-function CollectionPageBody({ pageLabel }: { pageLabel: string }) {
-  const { findPageByLabel, pageCatalogState } = useDashboardShell();
-  const navigate = useNavigate();
-  const page = findPageByLabel(pageLabel);
-  if (pageCatalogState === "loading") return <ScreenFallback />;
-  const header = <PageHeader title={pageLabel} />;
-  if (!page) {
-    return (
-      <>
-        {header}
-        <StatusPanel title="Такой страницы нет" action={<Link to="/system/collection" className="btn btn-sm">Ко всем страницам</Link>} />
-      </>
-    );
-  }
-  if (syncSettingsTab(page.platform) === "engine") {
-    return <>{header}<EnginePageDetail pageLabel={pageLabel} onBack={() => navigate("/system/collection")} /></>;
-  }
-  return <>{header}<SyncTab /></>;
-}
-
-function CollectionPageScreen() {
-  const { pageLabel: raw = "" } = useParams<{ pageLabel: string }>();
-  const pageLabel = decodeRouteSegment(raw);
-  return <CollectionPageBody key={pageLabel} pageLabel={pageLabel} />;
-}
-
-/** The old log and its anomalies: one screen, `?problems=1` is only the problems. */
-function DevLogScreen() {
-  const [search, setSearch] = useSearchParams();
-  const problems = search.get("problems") === "1";
-  return (
-    <div className="space-y-6">
-      <Segmented
-        label="Что показать"
-        value={problems ? "problems" : "all"}
-        onChange={(next) => {
-          const query = new URLSearchParams(search);
-          if (next === "problems") query.set("problems", "1");
-          else query.delete("problems");
-          setSearch(query);
-        }}
-        options={[
-          { value: "all", label: "Все события" },
-          { value: "problems", label: "Только проблемы" },
-        ]}
-      />
-      {problems ? <SyncAnomaliesPage /> : <LogPage />}
-    </div>
-  );
-}
 
 export function systemRoutes() {
   return (
     <>
       <Route element={<Owner />}>
-        <Route path="system/collection" element={<CollectionScreen />} />
-        <Route path="system/collection/:pageLabel" element={<CollectionPageScreen />} />
+        <Route path="system/collection" element={<CollectionPage />} />
+        <Route path="system/collection/:pageLabel" element={<CollectionPageDetail />} />
         <Route path="system/failures" element={<FailuresPage />} />
-        <Route path="system/history-requests" element={<AgentHydrationPage />} />
-        <Route path="system/agent-keys" element={<TechnicalTab />} />
-        <Route path="system/onlyfans-api" element={<OnlyFansApiStatusScreen />} />
-        <Route path="system/onlyfans-api/collection" element={<CollectionTab />} />
-        <Route path="system/onlyfans-api/tools" element={<OfapiApiTab />} />
+        <Route path="system/history-requests" element={<HistoryRequestsPage />} />
+        <Route path="system/agent-keys" element={<AgentKeysPage />} />
+        <Route path="system/onlyfans-api" element={<StatePage />} />
+        <Route path="system/onlyfans-api/collection" element={<RulesPage />} />
+        <Route path="system/onlyfans-api/tools" element={<ToolsPage />} />
         <Route path="system/onlyfans-api/actions" element={<OfapiActions />} />
-        <Route path="system/dev/log" element={<DevLogScreen />} />
+        <Route path="system/dev/log" element={<LogPage />} />
         <Route path="system/dev/log/:runId" element={<SyncStatusPage />} />
         <Route path="system/dev/queue" element={<QueuePage />} />
         <Route path="system/dev/database" element={<DbStatsPage />} />

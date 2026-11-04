@@ -209,7 +209,7 @@ for (const def of catalog) {
     Object.keys(def.query),
     global || def.category === "tracking_links"
       ? "apps/dashboard/src/pages/OfapiMarketing.tsx"
-      : "apps/dashboard/src/pages/settings/OfapiStoredReads.tsx",
+      : "apps/dashboard/src/pages/system/onlyfans-api/OfapiStoredReads.tsx",
     global || def.category === "tracking_links"
       ? "tests/ofapi-smart-links.integration.test.ts"
       : "tests/ofapi-read-collections.integration.test.ts",
@@ -440,7 +440,7 @@ function context(row, matched) {
     /uploads.*status/.test(p)
   )
     return {
-      consumer: "apps/dashboard/src/pages/OfapiMediaPage.tsx",
+      consumer: "apps/dashboard/src/pages/system/onlyfans-api/OfapiMediaPage.tsx",
       regression: "tests/ofapi-media-uploads.integration.test.ts",
     };
   if (p.includes("webhooks"))
@@ -816,9 +816,9 @@ const eventRows = eventsOriginal.map((event) => {
                 : event === "transactions.new" ? "apps/runtime/src/services/projections/fan-earnings.ts"
                   : event === "fan_summary.completed" ? "No semantic projection: provider AI excluded"
                     : "apps/runtime/src/services/ofapi-dm-projection.ts | apps/runtime/src/services/projections/message-archive.ts",
-    consumerEvidence: event.startsWith("data_exports.") ? "apps/dashboard/src/pages/OfapiExportsPage.tsx"
-      : event.startsWith("media_uploads.") ? "apps/dashboard/src/pages/OfapiMediaPage.tsx"
-        : event === "posts.liked" || event.startsWith("chat_queue.") ? "apps/dashboard/src/pages/settings/OfapiContentEvidence.tsx"
+    consumerEvidence: event.startsWith("data_exports.") ? "apps/dashboard/src/pages/system/onlyfans-api/OfapiExportsPage.tsx"
+      : event.startsWith("media_uploads.") ? "apps/dashboard/src/pages/system/onlyfans-api/OfapiMediaPage.tsx"
+        : event === "posts.liked" || event.startsWith("chat_queue.") ? "No dashboard screen since the console rebuild: stored events without a consumer"
           : event.startsWith("accounts.") ? "apps/runtime/src/modules/ingest/index.ts"
             : event === "users.typing" || event === "fan_summary.completed" ? "No durable business UI claimed"
               : "apps/runtime/src/modules/agent-read/handlers-journal.ts | Desktop journal/CRM SDK",
