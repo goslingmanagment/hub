@@ -8,6 +8,7 @@ import {
 } from "@agency_hub_core/shared";
 import type { PublicationFinding, PublicationWire } from "@agency_hub_core/contracts";
 
+import { pageFromSearch } from "@/lib/pageParam";
 import { ruPlural } from "@/lib/plural";
 
 /**
@@ -271,11 +272,10 @@ const STATUS_KEYS: ReadonlySet<string> = new Set(PUBLICATION_STATUSES);
 
 /** A link edited by hand lands on the screen: anything unknown is the default. */
 export function parsePublicationsView(search: URLSearchParams): PublicationsView {
-  const page = search.get("page");
   const status = search.get("status");
   const window = search.get("window");
   return {
-    pageLabel: page !== null && page !== "" ? page : null,
+    pageLabel: pageFromSearch(search),
     status: status !== null && STATUS_KEYS.has(status) ? status as PublicationStatus : null,
     window: window !== null && WINDOW_KEYS.has(window) ? window as PublicationWindow : "next7",
   };

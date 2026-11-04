@@ -1,6 +1,6 @@
 import type { SyncUxSummary } from "@agency_hub_core/contracts";
 import { platformSyncKind, type Platform } from "@agency_hub_core/shared";
-import { COLLECTION_STATUS, type StatusWord } from "@/lib/statusWords";
+import { COLLECTION_STATUS, type OfapiStatus, type StatusWord } from "@/lib/statusWords";
 
 export type SyncUxDisplayMode = "hidden" | "exception" | "home";
 export type SyncUxDisplaySurface =
@@ -56,34 +56,32 @@ export const SYNC_STATE_LABELS: Readonly<Record<SyncUxSummary["state"], string>>
   retrying: COLLECTION_STATUS.retrying.word,
   attention: COLLECTION_STATUS.attention.word,
   setup: COLLECTION_STATUS.setup.word,
-  off: "Не читается",
+  off: COLLECTION_STATUS.attention.word,
 };
 
 /**
- * The collection state of a page as the dictionary says it (lib/statusWords.ts).
- * An OnlyFans page is reached through its API, switched off by the owner since
- * 1 November: what the server reports as "needs action" or "off" there is that,
- * grey, and never an alarm. A platform the hub does not collect has nothing to
- * show but that. When the API returns this is the one place to change.
+ * The collection state of a page by the server's summary, for who has only that
+ * (a team lead: `overview`). The words are the dictionary's (lib/statusWords.ts,
+ * `collectionWord`). An OnlyFans page is reached through its API: while that is off
+ * it is grey and never an alarm; while nobody can tell, nothing is claimed.
  */
-export function syncStatusWord(summary: SyncUxSummary, platform?: Platform): StatusWord {
+export function syncStatusWord(summary: SyncUxSummary, platform?: Platform, ofapi: OfapiStatus = "unknown"): StatusWord {
   if (platform !== undefined && platformSyncKind(platform) === "none") return COLLECTION_STATUS.notNeeded;
-  if (platform === "onlyfans" && (summary.requiresAction || summary.state === "off" || summary.state === "attention")) {
-    return COLLECTION_STATUS.ofapiOff;
-  }
+  if (platform === "onlyfans" && ofapi === "off") return COLLECTION_STATUS.ofapiOff;
+  if (platform === "onlyfans" && ofapi === "unknown") return COLLECTION_STATUS.unknown;
   if (summary.requiresAction) return COLLECTION_STATUS.requiresAction;
-  if (summary.state === "off") return { word: "Не читается", tone: "broken" };
+  if (summary.state === "off") return COLLECTION_STATUS.attention;
   return COLLECTION_STATUS[summary.state];
 }
 
-export function syncStateLabel(summary: SyncUxSummary, platform?: Platform): string {
-  return syncStatusWord(summary, platform).word;
+export function syncStateLabel(summary: SyncUxSummary, platform?: Platform, ofapi?: OfapiStatus): string {
+  return syncStatusWord(summary, platform, ofapi).word;
 }
 
 export type SyncTone = "ok" | "warn" | "error" | "muted";
 
-export function syncTone(summary: SyncUxSummary, platform?: Platform): SyncTone {
-  const { tone } = syncStatusWord(summary, platform);
+export function syncTone(summary: SyncUxSummary, platform?: Platform, ofapi?: OfapiStatus): SyncTone {
+  const { tone } = syncStatusWord(summary, platform, ofapi);
   if (tone === "good") return "ok";
   if (tone === "broken") return "error";
   if (tone === "attention") return "warn";

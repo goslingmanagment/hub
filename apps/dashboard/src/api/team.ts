@@ -95,19 +95,24 @@ export function useTeamCustoms() {
   return useQuery(teamCustomsQueryOptions);
 }
 
-/**
- * Chat Memory week 4: disputed sales of the shift reports (`teamShiftDisputes`),
- * the longest window the read takes: an old unresolved dispute still waits for
- * the owner, on «Выплаты» and in the menu's count alike.
- */
-export const teamShiftDisputesQueryOptions = queryOptions({
-  queryKey: ["team-shift-disputes"] as const,
-  queryFn: () => kernel.teamShiftDisputes({ query: { days: 31 } }),
-  meta: { suppressGlobalError: true },
-});
+/** The longest window `teamShiftDisputes` takes. The screens say «за 31 день». */
+export const TEAM_SHIFT_DISPUTE_DAYS = 31;
 
-export function useTeamShiftDisputes() {
-  return useQuery(teamShiftDisputesQueryOptions);
+/**
+ * Chat Memory week 4: disputed sales of the shift reports (`teamShiftDisputes`).
+ * One key and one window on «Выплаты» and in the menu's count: a resolve there
+ * moves the count at once, and neither can show a dispute the other does not.
+ */
+export function teamShiftDisputesQueryOptions(days: number = TEAM_SHIFT_DISPUTE_DAYS) {
+  return queryOptions({
+    queryKey: ["team-shift-disputes", days] as const,
+    queryFn: () => kernel.teamShiftDisputes({ query: { days } }),
+    meta: { suppressGlobalError: true },
+  });
+}
+
+export function useTeamShiftDisputes(days: number = TEAM_SHIFT_DISPUTE_DAYS) {
+  return useQuery(teamShiftDisputesQueryOptions(days));
 }
 
 /** The owner's split of a disputed sale (`teamShiftResolve`). */
@@ -161,13 +166,26 @@ export function useTeamChatterNumbers(params: { from?: string; to?: string } = {
   }));
 }
 
-/** A chatter's statistics as their cabinet shows them (`teamChatterStats`). */
-export function useTeamChatterStats(params: { userId?: number | undefined; days: number }) {
-  return useQuery(queryOptions({
+export interface TeamChatterStatsParams {
+  userId?: number | undefined;
+  days: number;
+}
+
+/**
+ * A chatter's statistics as their cabinet shows them (`teamChatterStats`). The
+ * server answers a `userId` it does not know with the FIRST person: whoever reads
+ * this checks `stats.user.userId` against what it asked for, and no placeholder
+ * here, so a row of `useQueries` cannot show a neighbour's money for a moment.
+ */
+export function teamChatterStatsQueryOptions(params: TeamChatterStatsParams) {
+  return queryOptions({
     queryKey: ["team-chatter-stats", params] as const,
     queryFn: () => kernel.teamChatterStats({ query: params.userId === undefined ? { days: params.days } : { days: params.days, userId: params.userId } }),
     meta: { suppressGlobalError: true },
-    placeholderData: (previous) => previous,
     staleTime: 60_000,
-  }));
+  });
+}
+
+export function useTeamChatterStats(params: TeamChatterStatsParams) {
+  return useQuery({ ...teamChatterStatsQueryOptions(params), placeholderData: (previous) => previous });
 }

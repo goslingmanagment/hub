@@ -2,7 +2,7 @@ import { createContext, useContext, type ReactNode } from "react";
 import type { AssignedPage } from "@agency_hub_core/contracts";
 
 // Navigation needs identity, not revenue or a successfully loaded overview.
-type PageItem = Pick<AssignedPage, "id" | "label" | "platform" | "modelSlug" | "modelName" | "username">;
+type PageItem = Pick<AssignedPage, "id" | "label" | "platform" | "modelSlug" | "modelName" | "username" | "displayName" | "followerCount" | "lastLightSyncAt">;
 type PageCatalogState = "loading" | "ready" | "error";
 
 interface DashboardShellValue {

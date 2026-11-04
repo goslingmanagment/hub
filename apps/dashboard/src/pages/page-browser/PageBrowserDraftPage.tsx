@@ -9,7 +9,8 @@ import { savePageBrowserDraft, usePageBrowserDrafts } from "@/api/queries";
 import { KernelApiError } from "@/api/sdk";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { buildSettingsRoute } from "@/lib/navigation";
-import { Card, ServerAdminCommand } from "./loginParts.js";
+import { ServerAdminCommand } from "@/components/shared/ServerAdminCommand";
+import { Card } from "./loginParts.js";
 import { EnvForm, ProxyCheckPanel, ProxyPasteField, useProxyCheck } from "./proxyEntryParts.js";
 import {
   asSocks5Text,

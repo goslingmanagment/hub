@@ -196,7 +196,7 @@ export async function showBrowserProfileDraft(
 ): Promise<{ name: string; existingPage: boolean; page: string | null; socks: string; env: PageBrowserEnv; draftId: string; revision: number }> {
   const draft = await findPageBrowserDraft(db, name);
   if (draft === null) {
-    throw new SyncOwnerLeverError(`Hub has no draft of the browser ${name}: start it in the dashboard (Настройки → Страницы → «Новые страницы через серверный браузер»), or give --socks and --env`);
+    throw new SyncOwnerLeverError(`Hub has no draft of the browser ${name}: start it in the dashboard (Настройки → Модели и страницы → Подключить страницу Fansly), or give --socks and --env`);
   }
   const env = pageBrowserEnvOf(draft.env);
   if (env === null) throw new SyncOwnerLeverError(`the draft of ${name} has no well-formed environment: save it again in the dashboard`);

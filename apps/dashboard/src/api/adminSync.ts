@@ -19,6 +19,7 @@ export function useSyncOverview() {
     queryKey: ["syncBlocks", "overview"],
     queryFn: () => kernel.syncOverview(),
     refetchInterval: 10_000,
+    meta: { suppressGlobalError: true },
   });
 }
 
@@ -93,6 +94,7 @@ export function useSyncEnginePages(options: { enabled?: boolean } = {}) {
     queryFn: () => kernel.syncPages(),
     refetchInterval: 10_000,
     enabled: options.enabled ?? true,
+    meta: { suppressGlobalError: true },
   });
 }
 

@@ -303,5 +303,15 @@ export function resolveFanProfileBackTarget(
     return state.backTo;
   }
 
-  return pageLabel ? buildPageRoute(pageLabel) : "/";
+  return pageLabel ? buildFansRoute("paying", pageLabel) : "/";
+}
+
+/** The second part of connecting a page: its browser, by its profile. */
+export function browserProfileRoute(profileId: string): string {
+  return `/settings/pages/connect/${pathSegment(profileId)}`;
+}
+
+/** The first part of connecting a page; `name` opens that draft. */
+export function browserDraftRoute(name?: string): string {
+  return name === undefined ? "/settings/pages/connect" : `/settings/pages/connect?name=${encodeURIComponent(name)}`;
 }

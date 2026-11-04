@@ -18,10 +18,11 @@ import { PlatformBadge } from "@/components/shared/PlatformBadge";
 import { StaleDataNotice } from "@/components/shared/StaleDataNotice";
 import { StatusPanel } from "@/components/shared/StatusPanel";
 import { syncStateLabel, syncTone } from "@/components/shared/syncUxDisplay";
+import { useOfapiStatus, type OfapiStatus } from "@/api/waiting";
 import { RowMenu } from "@/components/ui/RowMenu";
 import { formatRelativeTime } from "@/lib/format";
-import { buildPageRoute, buildPageSectionRoute, buildPageSyncRoute } from "@/lib/navigation";
-import { BrowserProfilesSection, browserDraftRoute } from "./BrowserProfilesSection.js";
+import { browserDraftRoute, buildPageRoute, buildPageSectionRoute, buildPageSyncRoute } from "@/lib/navigation";
+import { BrowserProfilesSection } from "./BrowserProfilesSection.js";
 import { CreateModelModal } from "./CreateModelModal.js";
 import { CreatePageModal } from "./CreatePageModal.js";
 import { EditModelModal } from "./EditModelModal.js";
@@ -38,7 +39,7 @@ function formatPageMetric(metric: AssignedPage["subscriberCount"]) {
 const TONE_DOT = { ok: "status-dot-ok", warn: "status-dot-warn", error: "status-dot-error", muted: "" } as const;
 
 /** What the owner needs to know about a page's access, in one cell. */
-export function pageAccess(page: AssignedPage, connection: Connection | undefined): {
+export function pageAccess(page: AssignedPage, connection: Connection | undefined, ofapi: OfapiStatus): {
   label: string;
   tone: keyof typeof TONE_DOT;
   hint?: string | undefined;
@@ -48,8 +49,8 @@ export function pageAccess(page: AssignedPage, connection: Connection | undefine
     return { label: "Нет прокси", tone: "error", hint: "Без прокси страница Fansly не читается." };
   }
   return {
-    label: syncStateLabel(connection.syncUx, page.platform),
-    tone: syncTone(connection.syncUx, page.platform),
+    label: syncStateLabel(connection.syncUx, page.platform, ofapi),
+    tone: syncTone(connection.syncUx, page.platform, ofapi),
     hint: connection.syncUx.detail ?? undefined,
   };
 }
@@ -303,7 +304,8 @@ function PageRow({
 }) {
   const verifyPage = useAdminVerifyPage(page.label);
   const navigate = useNavigate();
-  const access = pageAccess(page, connection);
+  const ofapi = useOfapiStatus("owner");
+  const access = pageAccess(page, connection, ofapi);
   const needsLogin = Boolean(connection?.syncUx.requiresAction) || access.label === "Нет прокси";
 
   async function handleVerify() {

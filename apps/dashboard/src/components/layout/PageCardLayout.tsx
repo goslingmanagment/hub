@@ -3,6 +3,7 @@ import { ChevronRight } from "lucide-react";
 import { Link, Outlet, useLocation, useMatch, useParams } from "react-router";
 import type { Platform } from "@agency_hub_core/shared";
 import { useAuthMe, useOverview } from "@/api/queries";
+import { useOfapiStatus } from "@/api/waiting";
 import { PLATFORM_WORD } from "@/components/shared/PlatformBadge";
 import { QueryNotice } from "@/components/shared/QueryNotice";
 import { StatusPanel } from "@/components/shared/StatusPanel";
@@ -24,6 +25,7 @@ type CardPage = { id: number; label: string; platform: Platform; username: strin
 /** How the page is collected: silent while it works, a word only when it does not. */
 function CollectionState({ page, owner }: { page: CardPage; owner: boolean }) {
   const syncQuery = useOverview();
+  const ofapi = useOfapiStatus(owner ? "owner" : "team_lead");
   const syncUx = syncQuery.data?.pages.find((item) => item.id === page.id)?.syncUx;
   if (!syncUx) return null;
   const exception = getSyncUxDisplayMode(syncUx, "page_detail") === "exception" ? getSyncUxExceptionKind(syncUx) : null;
@@ -32,7 +34,7 @@ function CollectionState({ page, owner }: { page: CardPage; owner: boolean }) {
   }
   // A team lead cannot tell «switched off» from «broken» on OnlyFans yet: no word at all.
   if (page.platform === "onlyfans" && !owner) return null;
-  return <StatusBadge status={syncStatusWord(syncUx, page.platform)} title={undefined} />;
+  return <StatusBadge status={syncStatusWord(syncUx, page.platform, ofapi)} title={undefined} />;
 }
 
 function CollectionNotice({ page, owner }: { page: CardPage; owner: boolean }) {

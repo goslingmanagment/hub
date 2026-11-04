@@ -28,6 +28,7 @@ export function useAdminAiChatterLimits(day: string, live: boolean) {
 export function useAdminUpdateAiChatterLimit() {
   const qc = useQueryClient();
   return useMutation({
+    meta: { suppressGlobalError: true },
     mutationFn: (input: { userId: number; body: AdminAiChatterLimitUpdateBody }) =>
       kernel.adminAiChatterLimitUpdate({ params: { userId: input.userId }, body: input.body }),
     onSuccess: (data) => {

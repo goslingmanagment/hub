@@ -18,6 +18,7 @@ import {
   useWithdrawPagePublications,
   useWithdrawPublication,
 } from "@/api/publications";
+import { keepAllPages } from "@/lib/pageParam";
 import { usePageFilterStore } from "@/stores/pageFilterStore";
 import { ConfirmModal } from "@/components/shared/ConfirmModal";
 import { ModalShell } from "@/components/shared/ModalShell";
@@ -722,7 +723,9 @@ export function PublicationsPage() {
   const stoppedPages = new Set((settings.data?.pages ?? []).filter((page) => page.autostoppedAt !== null).map((page) => page.pageLabel));
 
   function show(change: Partial<PublicationsView>) {
-    setSearch(publicationsSearch({ ...parsePublicationsView(new URLSearchParams(window.location.search)), ...change }));
+    const current = new URLSearchParams(window.location.search);
+    const next = publicationsSearch({ ...parsePublicationsView(current), ...change });
+    setSearch(change.pageLabel === undefined ? keepAllPages(current, next) : next);
   }
 
   function select(ids: number[], checked: boolean) {

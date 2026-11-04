@@ -3,6 +3,13 @@
 @import "./pages/overview.css";
 @import "./pages/settings/settings-ui.css";
 @import "./pages/account/stats/chatter-stats.css";
+@import "./styles/screens/home-money.css";
+@import "./styles/screens/fans-page.css";
+@import "./styles/screens/stats.css";
+@import "./styles/screens/publications.css";
+@import "./styles/screens/team.css";
+@import "./styles/screens/settings.css";
+@import "./styles/screens/system.css";
 
 /*
  * The console's tokens: a sheet of paper and ink. A warm grey ground, a white

@@ -5,6 +5,7 @@
  * team lead finds only what they can open. The search only navigates and changes
  * the theme: it writes nothing.
  */
+import { configHomeHref } from "@/pages/settings/featureCatalog";
 import { buildFanProfileNavigation, buildFansRoute, buildPageCollectionRoute, buildPageRoute, buildPageSectionRoute, type FanProfileNavigationState } from "./navigation.js";
 import { THEME_OPTIONS, type ThemePreference } from "./theme.js";
 import {
@@ -129,7 +130,8 @@ function pageCommands(pages: readonly CommandPage[], role: Role): Command[] {
   return commands;
 }
 
-/** A setting by its Russian name. Secrets are not searched. */
+/** A setting by its Russian name, leading to the screen it is worked with
+ *  (design/ia.md §6). Secrets are not searched. */
 export interface CommandSetting {
   key: string;
   title: string;
@@ -143,12 +145,13 @@ export function buildCommands({ role, pages, settings = [] }: {
 }): Command[] {
   const commands = [...sectionCommands(role), ...pageCommands(pages, role)];
   for (const setting of settings) {
+    const home = configHomeHref(setting.key);
     commands.push({
       id: `setting:${setting.key}`,
       label: setting.title,
       group: "Параметры",
-      to: `/system/dev/config#config-${setting.key}`,
-      hint: "Все параметры",
+      to: home.to,
+      hint: home.hint,
       keywords: setting.subsystem,
       searchOnly: true,
     });

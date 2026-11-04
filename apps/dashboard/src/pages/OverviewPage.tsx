@@ -13,6 +13,8 @@ import {
 } from "lucide-react";
 import type { OverviewRevenueResponse } from "@agency_hub_core/contracts";
 import { useAuthMe, useOverview, useOverviewRevenue } from "@/api/queries";
+import { useRevenueMidnightRefetch } from "@/api/overview";
+import { useOfapiStatus } from "@/api/waiting";
 import { usePeriodStore, type PeriodOption } from "@/stores/periodStore";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { PlatformBadge } from "@/components/shared/PlatformBadge";
@@ -210,6 +212,7 @@ export function OverviewPage() {
   const catalog = useOverview();
   const revenue = useOverviewRevenue(state.period);
   const user = useAuthMe();
+  const ofapi = useOfapiStatus(user.data?.user.role ?? "team_lead");
   const report = revenue.isPlaceholderData ? undefined : revenue.data;
   const groups = report
     ? groupRevenue(report, catalog.data?.pages ?? [], state.sort)
@@ -225,30 +228,7 @@ export function OverviewPage() {
   )?.pageId;
   const refreshing = Boolean(revenue.isFetching || catalog.isFetching);
 
-  useEffect(() => {
-    if (!report?.windowAt || state.period === "all") return;
-    const windowDay = report.windowAt.slice(0, 10);
-    function refreshIfNewDay() {
-      if (
-        document.visibilityState === "visible" &&
-        new Date().toISOString().slice(0, 10) !== windowDay
-      )
-        void revenue.refetch();
-    }
-    const nextDay = new Date();
-    nextDay.setUTCHours(24, 0, 1, 0);
-    const timer = window.setTimeout(
-      refreshIfNewDay,
-      windowDay === new Date().toISOString().slice(0, 10)
-        ? nextDay.getTime() - Date.now()
-        : 0,
-    );
-    document.addEventListener("visibilitychange", refreshIfNewDay);
-    return () => {
-      window.clearTimeout(timer);
-      document.removeEventListener("visibilitychange", refreshIfNewDay);
-    };
-  }, [report?.windowAt, state.period, revenue.refetch]);
+  useRevenueMidnightRefetch(report?.windowAt, state.period, revenue.refetch);
 
   useLayoutEffect(() => {
     function save() {
@@ -529,10 +509,10 @@ export function OverviewPage() {
                                     {platform && <PlatformBadge platform={platform} />}
                                     {sync && isAlertState(sync) && (
                                       <span
-                                        className={`badge ${syncTone(sync, platform) === "error" ? "badge-danger" : syncTone(sync, platform) === "warn" ? "badge-warning" : "badge-off"}`}
+                                        className={`badge ${syncTone(sync, platform, ofapi) === "error" ? "badge-danger" : syncTone(sync, platform, ofapi) === "warn" ? "badge-warning" : "badge-off"}`}
                                         title={sync.detail ?? undefined}
                                       >
-                                        {syncStateLabel(sync, platform)}
+                                        {syncStateLabel(sync, platform, ofapi)}
                                       </span>
                                     )}
                                   </div>

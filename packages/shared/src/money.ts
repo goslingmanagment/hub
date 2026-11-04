@@ -240,6 +240,15 @@ export function sumMills(values: Iterable<MillsLike>): Mills {
   return total;
 }
 
+/** The sum of micro-USD amounts (the AI plane), for display: whole numbers stay whole. */
+export function sumMicroUsd(values: Iterable<number>): MicroUsd {
+  let total = 0;
+  for (const value of values) {
+    total += microUsdFromDbInt(value);
+  }
+  return total as MicroUsd;
+}
+
 /**
  * Legacy name for the dollars constructor — same function, kept because the
  * name is honest (its ~80 call sites predate the codec). New code should

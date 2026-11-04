@@ -3,12 +3,13 @@ import {
   type CrossPageTransactionListQuery,
   type CrossPageTransactionListResponse,
 } from "@agency_hub_core/contracts";
+import { pageFromSearch } from "./pageParam.js";
 
 export function parseTransactionSearch(search: URLSearchParams) {
   const input = Object.fromEntries(
     [...search].filter(([key]) => key !== "backTo" && key !== "page" && key !== "period"),
   );
-  const page = search.get("page");
+  const page = pageFromSearch(search);
   return crossPageTransactionListQuerySchema.safeParse({ ...input, ...(page ? { pageLabel: page } : {}), limit: 50 });
 }
 

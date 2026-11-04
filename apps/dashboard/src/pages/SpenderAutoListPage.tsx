@@ -17,7 +17,7 @@ import { formatDate, formatDateTime } from "@/lib/format";
 import { ruPlural } from "@/lib/plural";
 import { useScreenPeriod } from "@/components/layout/useScreenPeriod";
 import { formatUsdFromMills, resolveFanLabelForScope } from "@agency_hub_core/shared";
-import { isPlainRowClick } from "./daily/rowClick.js";
+import { isPlainRowClick } from "@/lib/rowClick";
 
 const LIMIT = 50;
 

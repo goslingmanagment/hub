@@ -35,7 +35,7 @@ import { TransactionsPreviewPanel } from "@/components/shared/TransactionsPrevie
 import { SpenderTrendPanel } from "@/components/shared/SpenderTrendPanel";
 import { FanNotVisibleMark } from "@/components/shared/FanNotVisibleMark";
 import type { SpenderBatchBody, SpenderListResponse } from "@agency_hub_core/contracts";
-import { isPlainRowClick } from "./daily/rowClick.js";
+import { isPlainRowClick } from "@/lib/rowClick";
 
 const LIMIT = 50;
 

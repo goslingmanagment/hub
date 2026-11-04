@@ -110,7 +110,7 @@ function Hero({ stats, self, reportTo }: Pick<StatsViewProps, "stats" | "self" |
             {totals.unconfirmedShifts > 0 && (
               <p className="cs-confirm-wait">
                 {totals.unconfirmedShifts} {plural(totals.unconfirmedShifts, ["смена ждёт", "смены ждут", "смен ждут"])} подтверждения.{" "}
-                <Link to={reportTo} className="link">{self ? "Подтвердить" : "Отчёты смен"}</Link>
+                <Link to={reportTo} className="link">{self ? "Подтвердить" : "Выплаты"}</Link>
               </p>
             )}
           </div>

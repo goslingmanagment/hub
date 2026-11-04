@@ -8,6 +8,8 @@ export interface RowMenuItem {
   disabled?: boolean | undefined;
   danger?: boolean | undefined;
   title?: string | undefined;
+  /** A second line in the item itself: why it is off. Not hidden in a tooltip. */
+  hint?: string | undefined;
 }
 
 const MENU_WIDTH = 220;
@@ -85,7 +87,7 @@ export function RowMenu({ label, items }: { label: string; items: readonly RowMe
           id={menuId}
           role="menu"
           aria-label={label}
-          className="menu fixed z-40"
+          className="menu fixed z-20"
           style={{
             width: MENU_WIDTH,
             top: place?.top ?? -9999,
@@ -107,7 +109,12 @@ export function RowMenu({ label, items }: { label: string; items: readonly RowMe
               }}
               className={`menu-item ${item.danger ? "menu-item-danger" : ""}`}
             >
-              {item.label}
+              {item.hint ? (
+                <span className="min-w-0">
+                  {item.label}
+                  <span className="menu-item-hint">{item.hint}</span>
+                </span>
+              ) : item.label}
             </button>
           ))}
         </div>,

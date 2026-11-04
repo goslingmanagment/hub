@@ -17,7 +17,8 @@ export function Drawer({ title, onClose, children }: {
     const previous = document.activeElement as HTMLElement | null;
     panel.current?.focus();
     function onKey(event: KeyboardEvent) {
-      if (event.key === "Escape") onClose();
+      // A dialog or a menu over the panel takes Esc first.
+      if (event.key === "Escape" && !document.querySelector('[aria-modal="true"], [role="menu"]')) onClose();
     }
     document.addEventListener("keydown", onKey);
     return () => {

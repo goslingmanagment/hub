@@ -58,8 +58,8 @@ Usage:
             updates too. add-profile takes them as well.
   add-profile
             A new browser profile (Project Browser PR 16), made from the
-            browser the owner started in the dashboard (Настройки → Страницы
-            → «Новые страницы через серверный браузер»; owner decision
+            browser the owner started in the dashboard (Настройки → Модели и страницы
+            → Подключить страницу Fansly; owner decision
             2026-10-15): there he pasted the proxy, Hub checked it and
             proposed the environment from its exit, he confirmed it. Nothing
             of it is typed here: Hub's draft of <name> (`sync browser-profile
@@ -364,7 +364,7 @@ add_profile() {
     # the proxy is typed here, and its login and password never leave Hub.
     local draft draft_socks draft_id revision existing
     draft="$(run_remote "set -euo pipefail; cd $(printf '%q' "$HUB_DIR"); $(hub_cli_line sync browser-profile draft --name "$PAGE_NAME")")" \
-      || fail "Hub gave no draft of ${PAGE_NAME}: start its browser in the dashboard (Настройки → Страницы → «Новые страницы через серверный браузер»), or give --socks and --env"
+      || fail "Hub gave no draft of ${PAGE_NAME}: start its browser in the dashboard (Настройки → Модели и страницы → Подключить страницу Fansly), or give --socks and --env"
     draft_socks="$(json_field socks "$draft")" || fail "Hub's draft of ${PAGE_NAME} names no SOCKS5"
     draft_id="$(json_field draftId "$draft")" || fail "Hub's draft of ${PAGE_NAME} has no id"
     revision="$(json_field revision "$draft")" || fail "Hub's draft of ${PAGE_NAME} has no revision"
@@ -420,7 +420,7 @@ add_profile() {
     left_behind "$profile"
     fail "add-profile: whether Hub registered profile ${profile} is not known — nothing was removed"
   fi
-  log "profile ${profile} of ${PAGE_NAME}: container page-browser-${PAGE_NAME} up, registered in Hub$([[ "$EXISTING_PAGE" == "1" ]] && echo " and bound to ${PAGE_NAME}" || echo "; connect the page in the dashboard (Настройки → Страницы)")"
+  log "profile ${profile} of ${PAGE_NAME}: container page-browser-${PAGE_NAME} up, registered in Hub$([[ "$EXISTING_PAGE" == "1" ]] && echo " and bound to ${PAGE_NAME}" || echo "; connect the page in the dashboard (Настройки → Модели и страницы → Подключить страницу Fansly)")"
 }
 
 # A profile no page has, given up: Hub first (it refuses a bound one), then

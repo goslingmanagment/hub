@@ -1,6 +1,7 @@
 import { QueryClientProvider } from "@tanstack/react-query";
 import { createRoot } from "react-dom/client";
-import { BrowserRouter } from "react-router";
+import { createBrowserRouter } from "react-router";
+import { RouterProvider } from "react-router/dom";
 import { Toaster } from "sonner";
 import { App } from "./App.js";
 import { prefetchPages } from "./api/pages.js";
@@ -26,6 +27,7 @@ function ConsoleToaster() {
     <Toaster
       position="bottom-right"
       theme={theme}
+      style={{ zIndex: 40 }}
       toastOptions={{
         unstyled: true,
         classNames: { toast: "toast", success: "toast-success", error: "toast-error", warning: "toast-warning" },
@@ -34,11 +36,22 @@ function ConsoleToaster() {
   );
 }
 
+// A data router, for `useBlocker`: a long edit warns before it is left. The routes
+// themselves stay `<Routes>` inside <App>, under this one catch-all.
+const router = createBrowserRouter([
+  {
+    path: "*",
+    element: (
+      <>
+        <App />
+        <ConsoleToaster />
+      </>
+    ),
+  },
+]);
+
 createRoot(document.getElementById("root")!).render(
   <QueryClientProvider client={queryClient}>
-    <BrowserRouter>
-      <App />
-      <ConsoleToaster />
-    </BrowserRouter>
+    <RouterProvider router={router} />
   </QueryClientProvider>,
 );

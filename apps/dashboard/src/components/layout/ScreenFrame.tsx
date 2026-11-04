@@ -2,7 +2,7 @@ import { Suspense, useLayoutEffect, useMemo, useState, type ReactNode } from "re
 import { ChevronRight } from "lucide-react";
 import { Link, Outlet, useLocation, useNavigate, useSearchParams } from "react-router";
 import { useAuthMe } from "@/api/queries";
-import { useOfapiStatus } from "@/api/waiting";
+import { useOfapiStatus, useTeamTabCounts } from "@/api/waiting";
 import { Notice } from "@/components/ui/Notice";
 import { SectionTabs, type SectionTabItem } from "@/components/ui/SectionTabs";
 import { ScreenFrameContext, type ScreenFrame as ScreenFrameValue } from "@/components/ui/screenFrame";
@@ -55,9 +55,9 @@ function Crumbs({ crumbs }: { crumbs: readonly Crumb[] }) {
 }
 
 /** A small words-only row of the screens inside a tab. */
-function SubRow({ sectionTab, role, screen, search }: { sectionTab: SectionTab; role: Role; screen: Screen; search: URLSearchParams }) {
+function SubRow({ sectionTab, role, screen, search, counts = {} }: { sectionTab: SectionTab; role: Role; screen: Screen; search: URLSearchParams; counts?: Readonly<Record<string, number>> }) {
   const row = tabRow(sectionTab, role);
-  const items: SectionTabItem[] = row.map((item) => ({ to: linkTo(item, search), label: item.label }));
+  const items: SectionTabItem[] = row.map((item) => ({ to: linkTo(item, search), label: item.label, count: counts[item.id] || undefined }));
   const current = row.findIndex((item) => item.id === screen.id);
   return <SectionTabs sub label={sectionTab.label} items={items} current={current >= 0 ? items[current]?.to : undefined} />;
 }
@@ -65,12 +65,17 @@ function SubRow({ sectionTab, role, screen, search }: { sectionTab: SectionTab; 
 function SectionRow({ section, role, screen, search }: { section: Section; role: Role; screen: Screen; search: URLSearchParams }) {
   const tabs = visibleSectionTabs(section, role);
   const currentTab = tabOfScreen(section, screen.id);
-  const items: SectionTabItem[] = tabs.map((item) => ({ to: linkTo(tabRow(item, role)[0]!, search), label: item.label }));
+  // A queue's number stands on the tab that opens it, and only when it is that queue.
+  const counts = useTeamTabCounts(section.id === "team");
+  const items: SectionTabItem[] = tabs.map((item) => {
+    const row = tabRow(item, role);
+    return { to: linkTo(row[0]!, search), label: item.label, count: row.length === 1 ? counts[row[0]!.id] || undefined : undefined };
+  });
   const current = tabs.findIndex((item) => item.id === currentTab?.id);
   return (
     <>
       <SectionTabs label={section.title} items={items} current={current >= 0 ? items[current]?.to : undefined} />
-      {currentTab && <SubRow sectionTab={currentTab} role={role} screen={screen} search={search} />}
+      {currentTab && <SubRow sectionTab={currentTab} role={role} screen={screen} search={search} counts={counts} />}
     </>
   );
 }
@@ -103,7 +108,7 @@ function SideMenu({ section, role, screen, search, children }: {
               <li key={item.id}>
                 <Link to={linkTo(first, search)} className="side-nav-link" aria-current={isCurrent && !item.listedInSideMenu ? "page" : undefined}>
                   {item.label}
-                  {item.note && ofapi !== "on" && <span className="side-nav-note">{item.note}</span>}
+                  {item.note && ofapi === "off" && <span className="side-nav-note">{item.note}</span>}
                 </Link>
                 {item.listedInSideMenu && isCurrent && (
                   <ul className="side-nav-sub">

@@ -1,7 +1,7 @@
 import { useCallback } from "react";
 import { useLocation, useSearchParams } from "react-router";
 import { periodDays, periodParam, resolvePeriod, type PeriodKey, type ResolvedPeriod } from "@/lib/period";
-import { matchScreen, type ScreenPeriod } from "@/lib/sections";
+import { forcedPeriodOf, matchScreen, type ForcedPeriod, type ScreenPeriod } from "@/lib/sections";
 import { usePeriodStore, type Period } from "@/stores/periodStore";
 
 export interface ScreenPeriodView extends ResolvedPeriod {
@@ -10,6 +10,8 @@ export interface ScreenPeriodView extends ResolvedPeriod {
   days: number;
   /** The choice by hand: a shared period is remembered, an own one is not. */
   select: (key: PeriodKey) => void;
+  /** A filter of the screen looks at a period of its own: `key` is that one. */
+  forced: ForcedPeriod | null;
 }
 
 /**
@@ -22,9 +24,11 @@ export function useScreenPeriod(fallback: PeriodKey = "7d"): ScreenPeriodView {
   const [search, setSearch] = useSearchParams();
   const stored = usePeriodStore((state) => state.period);
   const setStored = usePeriodStore((state) => state.setPeriod);
-  const period = matchScreen(location.pathname)?.screen.period ?? null;
+  const screen = matchScreen(location.pathname)?.screen ?? null;
+  const period = screen?.period ?? null;
+  const forced = screen ? forcedPeriodOf(screen, search) : null;
 
-  const resolved = period
+  const chosen = period
     ? resolvePeriod({
         periodClass: period.class,
         options: period.options,
@@ -33,15 +37,19 @@ export function useScreenPeriod(fallback: PeriodKey = "7d"): ScreenPeriodView {
         stored,
       })
     : { key: fallback, missing: null };
+  // The address and the memory stay as they are: back to another filter, back to the choice.
+  const resolved = forced ? { key: forced.key, missing: null } : chosen;
 
+  const isForced = forced !== null;
   const select = useCallback((key: PeriodKey) => {
+    if (isForced) return;
     if (period?.class === "shared") setStored(key as Period);
     const next = new URLSearchParams(window.location.search);
     next.set("period", key);
     // The old names of the same choice, and what the change makes meaningless.
     for (const name of ["range", "days", "offset", "spendersOffset", "txOffset"]) next.delete(name);
     setSearch(next, { state: location.state });
-  }, [location.state, period?.class, setSearch, setStored]);
+  }, [isForced, location.state, period?.class, setSearch, setStored]);
 
-  return { ...resolved, period, days: periodDays(resolved.key), select };
+  return { ...resolved, period, days: periodDays(resolved.key), select, forced };
 }

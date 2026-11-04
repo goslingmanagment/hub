@@ -1,19 +1,21 @@
 import { useCallback, useEffect } from "react";
 import { useLocation, useNavigate, useParams, useSearchParams } from "react-router";
 import type { Platform } from "@agency_hub_core/shared";
+import { ALL_PAGES_PARAM, pageFromSearch } from "@/lib/pageParam";
 import { matchScreen, pageFilterOf, type OnePageWay, type PageFilterMode, type Screen } from "@/lib/sections";
 import { usePageFilterStore } from "@/stores/pageFilterStore";
 import { useDashboardShell } from "./DashboardShellContext.js";
 
 /** Address parameters a change of the page makes meaningless: a list position,
- *  an expanded row, an opened record. The period stays. */
-const RESET_WITH_PAGE = ["offset", "row", "chart", "txOffset", "spendersOffset", "publication"] as const;
+ *  an expanded row, an opened record or panel. The period stays. */
+const RESET_WITH_PAGE = ["offset", "row", "chart", "txOffset", "spendersOffset", "publication", "failure", "media", "fan", "show"] as const;
 
 export interface PageFilterView {
   screen: Screen | null;
   mode: PageFilterMode;
   onePageWay: OnePageWay | null;
-  /** The page this screen narrows to, known to the catalog; null is every page. */
+  /** The page this screen narrows to, known to the catalog; null is every page.
+   *  `?page=all` is here as null too: read this, never the address. */
   page: string | null;
   /** That page's identity. */
   item: { label: string; platform: Platform; modelName: string; username: string | null } | null;
@@ -31,6 +33,7 @@ export interface PageFilterView {
  * The page filter as a screen reads it. It only narrows what is shown: a write
  * never takes its page from here (design/ia.md §0). The address wins over the
  * memory, the memory over «Все страницы»; only a choice by hand is remembered.
+ * `?page=all` is every page by link, whatever the memory says (lib/pageParam.ts).
  */
 export function usePageFilter(): PageFilterView {
   const location = useLocation();
@@ -48,7 +51,7 @@ export function usePageFilter(): PageFilterView {
 
   const raw = search.get("page");
   const applies = mode === "any" || mode === "one";
-  const page = !applies ? null
+  const page = !applies || raw === ALL_PAGES_PARAM ? null
     : raw !== null && raw !== "" ? (known(raw) ? raw : null)
       : remembered !== null && known(remembered) ? remembered : null;
   const item = page === null ? null : pages.find((candidate) => candidate.label === page) ?? null;
@@ -88,6 +91,7 @@ export function usePageFilter(): PageFilterView {
  * - a screen that takes a page gets it in its address, so a link says what it shows;
  * - a label the catalog does not have leaves the address, and the screen says so;
  * - a screen that takes no page carries none;
+ * - `?page=all` stays in the address and leaves the memory alone;
  * - «Статистика» shows one page when the filter says all, without remembering it.
  * Only `replace`: it adds nothing to the history and never writes anything.
  */
@@ -111,17 +115,20 @@ export function usePageFilterSync(): void {
 
     const query = new URLSearchParams(location.search);
     const raw = query.get("page");
+    const substitutes = mode === "one" && onePageWay === "substitute";
     let changed = false;
     if (mode === "all" || mode === "none") {
       if (raw !== null) {
         query.delete("page");
         changed = true;
       }
-    } else if (raw !== null && raw !== "" && !known(raw)) {
+    } else if (raw === ALL_PAGES_PARAM && !substitutes) {
+      // Every page by link: nothing to check and nothing to remember.
+    } else if (raw !== null && raw !== "" && raw !== ALL_PAGES_PARAM && !known(raw)) {
       setRejected({ label: raw, pathname: location.pathname });
       query.delete("page");
       changed = true;
-    } else if (raw === null || raw === "") {
+    } else if (raw === null || raw === "" || raw === ALL_PAGES_PARAM) {
       const scoped = (label: string) => {
         const platform = pages.find((page) => page.label === label)?.platform;
         return platform !== undefined && (!screen.platforms || screen.platforms.includes(platform));
@@ -129,7 +136,7 @@ export function usePageFilterSync(): void {
       if (remembered !== null && known(remembered)) {
         query.set("page", remembered);
         changed = true;
-      } else if (mode === "one" && onePageWay === "substitute") {
+      } else if (substitutes) {
         const substitute = lastOnePage !== null && known(lastOnePage) && scoped(lastOnePage)
           ? lastOnePage
           : pages.find((page) => scoped(page.label))?.label ?? null;
@@ -154,5 +161,5 @@ export function usePageFilterSync(): void {
 export function useRoutePageLabel(): string | undefined {
   const { pageLabel } = useParams<{ pageLabel?: string }>();
   const [search] = useSearchParams();
-  return pageLabel ?? search.get("page") ?? undefined;
+  return pageLabel ?? pageFromSearch(search) ?? undefined;
 }

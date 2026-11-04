@@ -58,6 +58,10 @@ export function StackedBarChart(props: {
   /** Vertical marks at x values (an event on that date), labelled on hover
    *  of the line's title. */
   markers?: ReadonlyArray<{ x: string; label: string }>;
+  /** The summed row of the tooltip; `null`: no such row, the series do not add up. */
+  totalLabel?: string | null | undefined;
+  /** A line under the tooltip's values, for the row it is given. */
+  note?: ((row: Record<string, unknown>) => ReactNode) | undefined;
 }) {
   const height = props.height ?? 300;
   const { budget, onResize } = useTickBudget();
@@ -128,7 +132,8 @@ export function StackedBarChart(props: {
                 series={props.series}
                 formatValue={tooltipFormat}
                 formatLabel={(label) => xFormat(String(label))}
-                totalLabel="Итого"
+                totalLabel={props.totalLabel === null ? undefined : props.totalLabel ?? "Итого"}
+                note={props.note}
               />
             )}
           />

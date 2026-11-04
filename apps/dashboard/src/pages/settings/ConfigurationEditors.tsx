@@ -427,7 +427,13 @@ export function ConfigEditor({ item, friendly = false }: { item: ConfigItem; fri
   );
 }
 
-export function BooleanConfigEditor({ item }: { item: ConfigItem }) {
+/**
+ * What a yes-or-no parameter does, whichever screen shows it: the second press on
+ * what needs a confirmation, the version the write was armed with, a write that
+ * cannot go on a stale confirmation. «Все параметры» and a business screen's own
+ * switch run the same logic and send the same body.
+ */
+export function useBooleanConfigToggle(item: ConfigItem) {
   const mutations = useEditorMutations();
   const [confirm, setConfirm] = useState<(BooleanConfirm & { snapshot: ConfigSnapshot }) | null>(null);
   const receipt = useConfigReceipt(item);
@@ -438,7 +444,6 @@ export function BooleanConfigEditor({ item }: { item: ConfigItem }) {
   const staleConfirmation = confirm !== null && configSnapshotChanged(confirm.snapshot, item);
   const needsReview = conflict || staleConfirmation;
   const pending = mutations.pending || receipt.waiting;
-  const label = CONFIG_COPY_RU[item.key]?.title ?? item.label;
 
   function reset() {
     setConfirm(null);
@@ -477,6 +482,13 @@ export function BooleanConfigEditor({ item }: { item: ConfigItem }) {
     });
     setConfirm(null);
   }
+
+  return { mutations, receipt, confirm, setConfirm, current, needsConfirm, conflict, staleConfirmation, needsReview, pending, reset, toggle, revert };
+}
+
+export function BooleanConfigEditor({ item }: { item: ConfigItem }) {
+  const { mutations, receipt, confirm, setConfirm, current, needsConfirm, conflict, staleConfirmation, needsReview, pending, reset, toggle, revert } = useBooleanConfigToggle(item);
+  const label = CONFIG_COPY_RU[item.key]?.title ?? item.label;
 
   return (
     <div className="settings-editor space-y-2">

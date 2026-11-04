@@ -15,7 +15,7 @@ const SHORT_LABEL: Readonly<Record<WaitingRow["id"], string>> = {
   disputes: "Споры по продажам",
   customs: "Кастомы не отданы",
   held: "Проверить отправки",
-  login: "Вход в Fansly",
+  login: "Нужен вход",
   failures: "Сбои",
   extension: "Сбои расширения",
   history: "Заявки на историю",
@@ -35,18 +35,21 @@ function lastDay(now = Date.now()): { from: string; to: string } {
 }
 
 function WaitingLine({ role }: { role: string }) {
-  const { rows, loading } = useWaitingCounts(role);
+  const { rows, loading, failed, refetchAll } = useWaitingCounts(role);
+  // Nothing waits: no line at all rather than a line saying so (owner, 2026-11-04).
+  if (!loading && rows.length === 0) return null;
   return (
     <div className="home-strip-row">
       <span className="home-strip-label">Ждут вас</span>
       <div className="home-strip-items">
         {loading && rows.length === 0 && <span className="text-text-muted">Проверяем…</span>}
-        {!loading && rows.length === 0 && <span className="text-text-muted">Ничего, всё сделано</span>}
         {rows.map((row) => (
           <Link key={row.id} to={row.to} className="home-strip-item">
             {DOT[row.id] && <span className={`status-dot ${DOT[row.id]}`} aria-hidden="true" />}
             {row.count === null ? (
               <span>{SHORT_LABEL[row.id]}: <span className="text-text-muted">не удалось проверить</span></span>
+            ) : row.page !== undefined ? (
+              <span>{SHORT_LABEL[row.id]}: {row.page}</span>
             ) : (
               <>
                 <span>{SHORT_LABEL[row.id]}</span>
@@ -55,6 +58,7 @@ function WaitingLine({ role }: { role: string }) {
             )}
           </Link>
         ))}
+        {failed.length > 0 && <button type="button" className="link" onClick={refetchAll}>Повторить</button>}
       </div>
     </div>
   );
@@ -71,7 +75,7 @@ function ShiftsLine() {
 
   return (
     <div className="home-strip-row">
-      <Link to="/team/shifts" className="home-strip-label">На смене</Link>
+      <Link to="/team/shifts?page=all" className="home-strip-label">На смене</Link>
       <div className="home-strip-items">
         {!data && shifts.isError && (
           <span className="text-text-muted">

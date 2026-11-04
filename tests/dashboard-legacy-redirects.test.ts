@@ -9,8 +9,10 @@ import { matchScreen, SCREENS, SECTIONS, screenById } from "../apps/dashboard/sr
 const REDIRECTS: ReadonlyArray<readonly [number | string, string, string]> = [
   ["money/income", "/money/income?period=30d", "/?period=30d"],
   [2, "/transactions?pageLabel=mia-1&from=2026-10-01T00:00:00Z&to=2026-10-08T00:00:00Z&type=tip&state=posted&sortBy=occurredAt&sortDir=asc&reportableOnly=true&offset=50&backTo=%2F%3Fperiod%3D7d", "/money/transactions?from=2026-10-01T00%3A00%3A00Z&to=2026-10-08T00%3A00%3A00Z&type=tip&state=posted&sortBy=occurredAt&sortDir=asc&reportableOnly=true&offset=50&backTo=%2F%3Fperiod%3D7d&page=mia-1"],
+  ["2, no dates: the whole history, every operation", "/transactions?pageLabel=mia-1&type=tip", "/money/transactions?type=tip&page=mia-1&period=all&reportableOnly=false"],
   [3, "/pages", "/settings/pages"],
-  [4, "/pages/mia-1?type=tip&txOffset=25", "/money/transactions?type=tip&offset=25&page=mia-1"],
+  [4, "/pages/mia-1?type=tip&txOffset=25", "/money/transactions?type=tip&offset=25&page=mia-1&period=all&reportableOnly=false"],
+  ["4, its old period was another block's", "/pages/mia-1?period=30d&type=tip", "/money/transactions?period=all&type=tip&page=mia-1&reportableOnly=false"],
   [5, "/pages/mia-1/subscribers?filter=norenew&query=ann&offset=50&backTo=%2F", "/fans/subscribers?filter=norenew&query=ann&offset=50&backTo=%2F&page=mia-1"],
   [6, "/pages/mia-1/followers?filter=new24h", "/fans/followers?filter=new24h&page=mia-1"],
   [7, "/pages/mia-1/top-supporters?filter=cooling&q=ann&sortBy=username&dir=asc&period=90d&offset=50", "/fans?filter=cooling&q=ann&sortBy=username&dir=asc&period=90d&offset=50&page=mia-1"],

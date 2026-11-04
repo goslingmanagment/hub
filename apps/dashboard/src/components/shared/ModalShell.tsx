@@ -46,7 +46,8 @@ export function ModalShell({
   // (the trigger) on close, so keyboard users are moved into the dialog and back out again.
   useEffect(() => {
     const previouslyFocused = document.activeElement as HTMLElement | null;
-    const focusable = dialogRef.current?.querySelector<HTMLElement>(
+    // A dialog may name where the focus starts: «Отмена» when nothing can be undone.
+    const focusable = dialogRef.current?.querySelector<HTMLElement>("[data-autofocus]") ?? dialogRef.current?.querySelector<HTMLElement>(
       'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
     );
     focusable?.focus();

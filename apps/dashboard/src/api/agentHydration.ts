@@ -23,6 +23,7 @@ export function useAgentHydrationRequests(params: { state?: string; limit?: numb
       query: params as Parameters<typeof kernel.agentHydrationRequestList>[0]["query"],
     }),
     refetchInterval: 15_000,
+    meta: { suppressGlobalError: true },
   });
 }
 

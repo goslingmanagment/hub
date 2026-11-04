@@ -384,6 +384,7 @@
   .menu-item .platform-tag,
   .menu-item-note { margin-left: auto; }
   .menu-item-note { font-size: 14px; line-height: 20px; color: var(--color-text-muted); }
+  .menu-item-hint { display: block; font-size: 14px; line-height: 20px; color: var(--color-text-muted); }
   .menu-check { flex: 0 0 auto; width: 16px; height: 16px; }
   .menu-rule { height: 1px; margin: 4px 0; background: var(--color-border); }
   .menu-search { padding: 4px; }
@@ -619,50 +620,6 @@
   }
   .stack { display: grid; gap: 24px; }
 
-  /* The home screen: one sheet of three equal blocks, read as a sentence. */
-  .home-sheet {
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    border: 1px solid var(--color-border);
-    border-radius: var(--radius-card);
-    background: var(--color-card);
-  }
-  .home-block { display: flex; flex-direction: column; min-width: 0; padding-bottom: 12px; }
-  .home-block + .home-block { border-left: 1px solid var(--color-border); }
-  .home-head { padding: 16px 24px 24px; }
-  .home-title { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
-  .home-title h2 { font-size: 17px; line-height: 24px; font-weight: 600; letter-spacing: -0.005em; }
-  .home-title span { font-size: 14px; line-height: 20px; color: var(--color-text-muted); }
-  .hero {
-    margin-top: 16px;
-    font-size: 40px;
-    line-height: 48px;
-    font-weight: 600;
-    letter-spacing: -0.01em;
-    color: var(--color-text-primary);
-  }
-  .hero-wait { color: var(--color-accent); }
-  .hero-note { margin-top: 4px; color: var(--color-text-secondary); }
-  .home-rows { border-top: 1px solid var(--color-border); }
-  .home-row { display: grid; align-items: center; gap: 12px; min-height: 40px; padding: 8px 24px; }
-  .home-row + .home-row { border-top: 1px solid var(--color-border-light); }
-  a.home-row { transition: background-color 0.15s; }
-  a.home-row:hover { background: var(--color-hover-alt); }
-  .home-row-money { grid-template-columns: minmax(0, 1fr) auto 56px; }
-  .home-row-wait { grid-template-columns: minmax(0, 1fr) auto; }
-  .home-row-shift { grid-template-columns: minmax(0, 1fr) auto; row-gap: 0; padding-top: 12px; padding-bottom: 12px; }
-  .home-label { position: relative; display: flex; flex-wrap: wrap; align-items: center; gap: 0 8px; min-width: 0; }
-  .home-hang { position: absolute; left: -14px; top: 8px; }
-  .home-amount { text-align: right; font-variant-numeric: tabular-nums; }
-  .home-delta { font-size: 14px; line-height: 20px; text-align: right; font-variant-numeric: tabular-nums; }
-  .home-count { font-weight: 600; color: var(--color-accent); font-variant-numeric: tabular-nums; }
-  .home-sub { font-size: 14px; line-height: 20px; color: var(--color-text-secondary); }
-  .home-sub.right { text-align: right; font-variant-numeric: tabular-nums; }
-  @media (max-width: 1100px) {
-    .home-sheet { grid-template-columns: minmax(0, 1fr); }
-    .home-block + .home-block { border-left: 0; border-top: 1px solid var(--color-border); }
-  }
-
   /* ── KPI tiles: one strip with hairlines, not a row of frames ────────── */
   .stat-grid {
     display: grid;
@@ -722,6 +679,10 @@
   .delta { font-variant-numeric: tabular-nums; white-space: nowrap; }
   .delta-up { color: var(--color-up); }
   .delta-down { color: var(--color-down); }
+  .delta-pct { color: var(--color-text-secondary); }
+  /* A sum that opens its operations: a line on hover, not a wall of underlines. */
+  .money-link { color: inherit; text-underline-offset: 3px; }
+  .money-link:hover { text-decoration: underline; }
 
   /* ── Data tables ─────────────────────────────────────────────────────── */
   .table-wrap {
@@ -1234,7 +1195,7 @@
     top: 0;
     right: 0;
     bottom: 0;
-    z-index: 20;
+    z-index: 10;
     display: flex;
     flex-direction: column;
     width: min(560px, 100vw);
@@ -1460,6 +1421,7 @@
     color: var(--color-text-secondary);
   }
   .chart-legend-item { display: inline-flex; align-items: center; gap: 8px; }
+  .chart-legend-total { font-weight: 500; color: var(--color-text-primary); font-variant-numeric: tabular-nums; }
   .chart-legend-swatch {
     width: 12px;
     height: 12px;
@@ -1513,6 +1475,6 @@
 
   /* A phone: comfortable targets, nothing more. */
   @media (pointer: coarse) {
-    .btn, .chip, .segment, .nav-item, .home-row, .side-nav-link { min-height: 40px; }
+    .btn, .chip, .segment, .nav-item, .side-nav-link { min-height: 40px; }
   }
 }

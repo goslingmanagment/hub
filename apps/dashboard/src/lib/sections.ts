@@ -9,6 +9,14 @@ import { matchPath } from "react-router";
 import type { Platform } from "@agency_hub_core/shared";
 import { decodedPath, pathSegment } from "./path.js";
 import type { PeriodKey } from "./period.js";
+import { UNTIL_REBUILT_FANS_PAGE } from "./sections/untilRebuilt/fans-page.js";
+import { UNTIL_REBUILT_HOME_MONEY } from "./sections/untilRebuilt/home-money.js";
+import { UNTIL_REBUILT_PUBLICATIONS } from "./sections/untilRebuilt/publications.js";
+import { UNTIL_REBUILT_SETTINGS } from "./sections/untilRebuilt/settings.js";
+import { UNTIL_REBUILT_STATS } from "./sections/untilRebuilt/stats.js";
+import { UNTIL_REBUILT_SYSTEM } from "./sections/untilRebuilt/system.js";
+import { UNTIL_REBUILT_TEAM } from "./sections/untilRebuilt/team.js";
+import type { ScreenGap } from "./sections/untilRebuilt/types.js";
 
 export type Role = "owner" | "team_lead" | string;
 
@@ -23,6 +31,16 @@ export type PageFilterMode = "any" | "one" | "all" | "none";
 
 /** With `one` and no page chosen: a table to choose from, or the last page. */
 export type OnePageWay = "picker" | "substitute";
+
+/** A filter of the screen that looks at a period of its own, whatever is chosen:
+ *  the control shows it and offers nothing else, the memory is left alone. */
+export interface ForcedPeriod {
+  key: PeriodKey;
+  /** Why the other values are off, on each of them. */
+  title: string;
+  /** Beside the dates. */
+  note: string;
+}
 
 export interface ScreenPeriod {
   /** `shared` reads and writes the one remembered period; `own` lives in the
@@ -68,19 +86,25 @@ export interface Screen {
   crumbs?: (params: Readonly<Record<string, string | undefined>>) => Crumb[];
   /** Not offered by the search on its own (a parameter is in its path). */
   notSearched?: boolean;
-  /**
-   * Where a not-yet-rebuilt screen falls short of the table above. The table
-   * says where the screen is going; this says what the old component can do
-   * today, so the chip and the period never promise what it does not do.
-   * Delete the field when the screen is rebuilt.
-   */
-  untilRebuilt?: {
-    pageFilter?: PageFilterMode;
-    onePageWay?: OnePageWay;
-    /** The old screen draws its own period control in its body. */
-    periodInBody?: boolean;
-  };
+  /** The address's filters can make the period not the screen's to choose. */
+  forcedPeriod?: (search: URLSearchParams) => ForcedPeriod | null;
 }
+
+/**
+ * Where a not-yet-rebuilt screen falls short of the table below, by screen id. The
+ * table says where the screen is going; these say what the old component can do
+ * today, so the chip and the period never promise what it does not do. One file
+ * per group: a rebuild deletes its screen's row there and touches nothing else.
+ */
+const UNTIL_REBUILT: Readonly<Record<string, ScreenGap>> = {
+  ...UNTIL_REBUILT_HOME_MONEY,
+  ...UNTIL_REBUILT_FANS_PAGE,
+  ...UNTIL_REBUILT_STATS,
+  ...UNTIL_REBUILT_PUBLICATIONS,
+  ...UNTIL_REBUILT_TEAM,
+  ...UNTIL_REBUILT_SETTINGS,
+  ...UNTIL_REBUILT_SYSTEM,
+};
 
 const COMMON_PERIODS: readonly PeriodKey[] = ["today", "7d", "30d", "all"];
 const SPENDER_PERIODS: readonly PeriodKey[] = ["today", "7d", "30d", "90d", "180d", "all"];
@@ -92,15 +116,24 @@ const FANSLY: readonly Platform[] = ["fansly"];
 
 const fansCrumbs = (page?: string): Crumb[] => [
   { label: "Фаны", to: "/fans" },
-  ...(page ? [{ label: page, to: `/pages/${pathSegment(page)}` }] : []),
+  ...(page ? [{ label: page, to: `/fans?page=${encodeURIComponent(page)}` }] : []),
 ];
+
+/** Who stopped buying can only be seen over the whole history: a short window of
+ *  money has none of them (design/screens/fans-page.md §2). */
+const SILENT_FAN_FILTERS: ReadonlySet<string> = new Set(["cooling", "inactive", "needs_reactivation"]);
+function fansForcedPeriod(search: URLSearchParams): ForcedPeriod | null {
+  if (!SILENT_FAN_FILTERS.has(search.get("filter") ?? "") && search.get("awaiting") !== "1") return null;
+  return { key: "all", title: "Этот фильтр смотрит на всю историю", note: "За всё время: этот фильтр смотрит на всю историю" };
+}
 
 /** Every screen of the console. The order inside a section is the order of its tabs. */
 export const SCREENS: readonly Screen[] = [
   {
     id: "home", path: "/", label: "Главная", title: "Главная", section: "home",
     why: "Сколько заработали, что выросло и упало, что ждёт вас и кто на смене.",
-    pageFilter: "all",
+    pageFilter: "any", platforms: REPORTED,
+    platformsNote: "Hub не собирает данные Telegram.",
     period: { class: "shared", options: COMMON_PERIODS },
     keywords: "обзор старт сводка доход выручка деньги заработок тренды",
   },
@@ -113,7 +146,6 @@ export const SCREENS: readonly Screen[] = [
     platformsNote: "Hub не собирает данные Telegram.",
     period: { class: "shared", options: COMMON_PERIODS },
     keywords: "транзакции продажи платежи",
-    untilRebuilt: { periodInBody: true },
   },
   {
     id: "costs-ai", path: "/money/costs/ai", label: "ИИ", title: "Траты на ИИ", section: "money", ownerOnly: true,
@@ -141,8 +173,8 @@ export const SCREENS: readonly Screen[] = [
     pageFilter: "any", platforms: REPORTED,
     platformsNote: "Hub не собирает данные Telegram.",
     period: { class: "shared", options: SPENDER_PERIODS },
+    forcedPeriod: fansForcedPeriod,
     keywords: "топ фанов спендеры",
-    untilRebuilt: { pageFilter: "one", onePageWay: "picker" },
   },
   {
     id: "fans-subscribers", path: "/fans/subscribers", label: "Подписчики", title: "Подписчики", section: "fans",
@@ -248,7 +280,7 @@ export const SCREENS: readonly Screen[] = [
     pageFilter: "any", platforms: REPORTED,
     platformsNote: "Hub не собирает данные Telegram.",
     period: { class: "own", options: ["24h", "3d", "7d"], default: "24h" },
-    keywords: "команда смены авторы",
+    keywords: "команда смены авторы на смене без автора",
   },
   {
     id: "team-coverage", path: "/team/coverage", label: "Кто ждал", title: "Кто ждал", section: "team",
@@ -256,22 +288,20 @@ export const SCREENS: readonly Screen[] = [
     pageFilter: "any", platforms: REPORTED,
     period: { class: "shared", options: ["7d", "30d"] },
     keywords: "покрытие пустые часы приветствия рассылки",
-    untilRebuilt: { pageFilter: "all" },
   },
   {
     id: "team-held-sends", path: "/team/held-sends", label: "Проверить отправки", title: "Проверить отправки", section: "team",
     why: "Ушло ли сообщение, о котором расширение не отчиталось.",
     pageFilter: "any", platforms: ["onlyfans"],
     platformsNote: "Проверка отправок есть только у страниц OnlyFans.", platformsShort: "только OnlyFans",
-    keywords: "зависшие отправки",
+    keywords: "зависшие отправки разбор",
   },
   {
     id: "team-chatters", path: "/team/chatters", label: "Чаттеры", title: "Чаттеры", section: "team",
-    why: "Чаттеры рядом: смены, сообщения, продажи.",
+    why: "Сравнение чаттеров за период. Это ориентир, а не основание для оплаты.",
     pageFilter: "all",
     period: { class: "shared", options: CHATTER_PERIODS },
-    keywords: "числа кабинет чаттера",
-    untilRebuilt: { periodInBody: true },
+    keywords: "числа кабинет чаттера выручка",
   },
   {
     id: "team-chatter", path: "/team/chatters/:userId", label: "Чаттер", title: "Чаттер", section: "team",
@@ -285,35 +315,34 @@ export const SCREENS: readonly Screen[] = [
     id: "team-payouts", path: "/team/payouts", label: "Выплаты", title: "Выплаты", section: "team",
     why: "Споры, кто не подтвердил смену, выгрузка в таблицу выплат.",
     pageFilter: "all",
-    keywords: "отчёты смен споры выгрузка",
+    keywords: "отчёты смен споры выгрузка таблица выплат",
   },
   {
     id: "team-sales", path: "/team/sales", label: "Цена и скорость", title: "Цена и скорость", section: "team",
     why: "Какая цена платных сообщений и какая скорость ответа дают покупки.",
     pageFilter: "any", platforms: REPORTED,
     period: { class: "shared", options: ["7d", "30d"] },
-    keywords: "продажи ppv",
-    untilRebuilt: { pageFilter: "all" },
+    keywords: "продажи ppv платные сообщения конверсия скорость ответа",
   },
   {
     id: "team-win-back", path: "/team/win-back", label: "Возврат фанов", title: "Возврат фанов", section: "team",
     why: "Какие подходы возвращают фанов и у кого.",
     pageFilter: "all",
-    period: { class: "shared", options: ["7d", "30d", "90d"] },
-    keywords: "подходы продажи",
+    // Its results ripen over 72 h, 7 and 30 days: its own period, a month by default.
+    period: { class: "own", options: ["7d", "30d", "90d"], default: "30d" },
+    keywords: "подходы продажи вернуть",
   },
   {
     id: "team-customs", path: "/team/customs", label: "Кастомы", title: "Кастомы", section: "team",
     why: "Какие кастомы заказаны или оплачены и не отданы.",
     pageFilter: "any", platforms: REPORTED,
     keywords: "заказы продажи",
-    untilRebuilt: { pageFilter: "all" },
   },
   {
     id: "team-people", path: "/team/people", label: "Сотрудники", title: "Сотрудники и доступ", section: "team", ownerOnly: true,
     why: "Кто в команде, у кого какой доступ, кого пригласить.",
     pageFilter: "none",
-    keywords: "команда доступ приглашение пользователи",
+    keywords: "команда доступ приглашение пользователи устройства логины",
   },
   {
     id: "team-person", path: "/team/people/:userId", label: "Карточка сотрудника", title: "Карточка сотрудника", section: "team", ownerOnly: true,
@@ -326,9 +355,9 @@ export const SCREENS: readonly Screen[] = [
   // ── Настройки ──────────────────────────────────────────────────────────
   {
     id: "settings-pages", path: "/settings/pages", label: "Модели и страницы", title: "Модели и страницы", section: "settings", ownerOnly: true,
-    why: "Из чего состоит агентство: модели, их страницы, доступ Hub к каждой.",
+    why: "Из чего состоит агентство: модели, их страницы и кто на них работает.",
     pageFilter: "none",
-    keywords: "агентство каталог добавить страницу браузеры",
+    keywords: "агентство модели страницы каталог добавить страницу отключить браузеры страниц",
   },
   {
     id: "settings-connect", path: "/settings/pages/connect", label: "Подключить страницу Fansly", title: "Подключить страницу Fansly", section: "settings", ownerOnly: true,
@@ -347,22 +376,29 @@ export const SCREENS: readonly Screen[] = [
   },
   {
     id: "settings-personas", path: "/settings/ai/personas", label: "Персоны", title: "Персоны ИИ", section: "settings", ownerOnly: true,
-    why: "Образы и стиль общения ИИ; чаттеры выбирают их в своих приложениях.",
+    why: "Образы для ответов ИИ: их пишет владелец, выбирают чаттеры.",
     pageFilter: "none",
-    keywords: "ai персоны ии инструкция первые сообщения",
+    keywords: "ai персоны ии инструкция промпт образ первые сообщения hi",
   },
   {
     id: "settings-persona", path: "/settings/ai/personas/:key", label: "Персона", title: "Персона", section: "settings", ownerOnly: true,
-    why: "Инструкция персоны и её первые сообщения.",
+    why: "Образ для ответов ИИ: его выбирают чаттеры.",
+    pageFilter: "none",
+    deep: true, notSearched: true,
+    crumbs: () => [{ label: "Настройки", to: "/settings/pages" }, { label: "ИИ", to: "/settings/ai/personas" }, { label: "Персоны", to: "/settings/ai/personas" }],
+  },
+  {
+    id: "settings-new-persona", path: "/settings/ai/new-persona", label: "Новая персона", title: "Новая персона", section: "settings", ownerOnly: true,
+    why: "Новый образ для ответов ИИ.",
     pageFilter: "none",
     deep: true, notSearched: true,
     crumbs: () => [{ label: "Настройки", to: "/settings/pages" }, { label: "ИИ", to: "/settings/ai/personas" }, { label: "Персоны", to: "/settings/ai/personas" }],
   },
   {
     id: "settings-features", path: "/settings/ai/features", label: "Функции ИИ", title: "Функции ИИ", section: "settings", ownerOnly: true,
-    why: "Какие функции Hub включены и что из них стоит оставить.",
+    why: "Что из ИИ включено и какая модель, усилие и окно у каждой функции.",
     pageFilter: "none",
-    keywords: "возможности ai модель усилие",
+    keywords: "возможности функции ai модель усилие effort окно голосовые досье факты",
   },
   {
     id: "settings-feature", path: "/settings/ai/features/:featureId", label: "Параметры функции", title: "Параметры функции", section: "settings", ownerOnly: true,
@@ -373,15 +409,15 @@ export const SCREENS: readonly Screen[] = [
   },
   {
     id: "settings-limits", path: "/settings/ai/limits", label: "Лимиты", title: "Лимиты ИИ на день", section: "settings", ownerOnly: true,
-    why: "Личные лимиты ИИ на день и общий запас.",
+    why: "Сколько ИИ может стоить человеку за день по Москве.",
     pageFilter: "none",
-    keywords: "ai котёл запас",
+    keywords: "ai лимиты личный лимит котёл общий запас",
   },
   {
     id: "settings-notifications", path: "/settings/notifications", label: "Оповещения", title: "Оповещения в Telegram", section: "settings", ownerOnly: true,
-    why: "Куда и что присылает Hub; ежедневный отчёт о доходе.",
+    why: "Куда и что присылает Hub в Telegram, и ежедневный отчёт о доходе.",
     pageFilter: "none",
-    keywords: "уведомления telegram бот",
+    keywords: "уведомления telegram телеграм бот отчёт сбои оповещения",
   },
 
   // ── Система ────────────────────────────────────────────────────────────
@@ -390,7 +426,6 @@ export const SCREENS: readonly Screen[] = [
     why: "Все страницы: собирается ли и что нажать.",
     pageFilter: "any",
     keywords: "синк синхронизация fansly onlyfans",
-    untilRebuilt: { pageFilter: "all" },
   },
   {
     id: "system-collection-page", path: "/system/collection/:pageLabel", label: "Сбор данных страницы", title: "Сбор данных страницы", section: "system", ownerOnly: true,
@@ -410,7 +445,6 @@ export const SCREENS: readonly Screen[] = [
     why: "Заявки агентов на старую переписку: что ждёт решения и что уже было.",
     pageFilter: "any",
     keywords: "дозагрузка истории",
-    untilRebuilt: { pageFilter: "all" },
   },
   {
     id: "system-agent-keys", path: "/system/agent-keys", label: "Доступ ИИ-агентов", title: "Доступ ИИ-агентов", section: "system", ownerOnly: true,
@@ -444,13 +478,13 @@ export const SCREENS: readonly Screen[] = [
   },
   {
     id: "system-onlyfans-exports", path: "/system/onlyfans-api/exports", label: "Выгрузки", title: "Выгрузки", section: "system",
-    why: "Выгрузки поставщика; посетители профиля.",
+    why: "Выгрузки OnlyFans API и посетители профиля по дням.",
     pageFilter: "none",
     keywords: "ofapi посетители",
   },
   {
     id: "system-onlyfans-actions", path: "/system/onlyfans-api/actions", label: "Действия с аккаунтом", title: "Действия с аккаунтом", section: "system", ownerOnly: true,
-    why: "Сырые действия поставщика и их история.",
+    why: "Сырые действия OnlyFans API и их история. Без ключа не выполняются.",
     pageFilter: "none",
     keywords: "управление аккаунтом ofapi",
   },
@@ -469,7 +503,7 @@ export const SCREENS: readonly Screen[] = [
   },
   {
     id: "system-dev-queue", path: "/system/dev/queue", label: "Очередь задач", title: "Очередь задач", section: "system", ownerOnly: true,
-    why: "Фоновые задачи сервера.",
+    why: "Фоновые задачи сервера: последние 100 записей.",
     pageFilter: "none",
     keywords: "наблюдение",
   },
@@ -481,8 +515,9 @@ export const SCREENS: readonly Screen[] = [
   },
   {
     id: "system-dev-extension", path: "/system/dev/extension", label: "Расширение: замеры", title: "Расширение: замеры", section: "system", ownerOnly: true,
-    why: "Как работает расширение: скорость, версии, счётчики.",
+    why: "Как работает расширение: скорость, версии, счётчики. Без имён людей, страниц и фанов.",
     pageFilter: "none",
+    period: { class: "own", options: ["today", "7d", "30d"], default: "7d" },
     keywords: "client health наблюдение",
   },
   {
@@ -561,13 +596,19 @@ export function matchScreen(pathname: string): ScreenMatch | null {
 
 /** What the page filter does on this screen today. */
 export function pageFilterOf(screen: Screen): { mode: PageFilterMode; onePageWay: OnePageWay | null } {
-  const mode = screen.untilRebuilt?.pageFilter ?? screen.pageFilter;
-  return { mode, onePageWay: mode === "one" ? screen.untilRebuilt?.onePageWay ?? screen.onePageWay ?? "picker" : null };
+  const gap = UNTIL_REBUILT[screen.id];
+  const mode = gap?.pageFilter ?? screen.pageFilter;
+  return { mode, onePageWay: mode === "one" ? gap?.onePageWay ?? screen.onePageWay ?? "picker" : null };
 }
 
 /** The period the header draws today; null when there is none or the old screen draws its own. */
 export function headerPeriodOf(screen: Screen): ScreenPeriod | null {
-  return screen.period && !screen.untilRebuilt?.periodInBody ? screen.period : null;
+  return screen.period && !UNTIL_REBUILT[screen.id]?.periodInBody ? screen.period : null;
+}
+
+/** The period the address's filters force on this screen today, if any. */
+export function forcedPeriodOf(screen: Screen, search: URLSearchParams): ForcedPeriod | null {
+  return UNTIL_REBUILT[screen.id]?.noForcedPeriod ? null : screen.forcedPeriod?.(search) ?? null;
 }
 
 export function screenVisible(screen: Screen, role: Role): boolean {
@@ -652,7 +693,7 @@ export const SECTIONS: readonly Section[] = [
     id: "settings", label: "Настройки", title: "Настройки", icon: "Settings", ownerOnly: true, lower: true, nav: "side",
     tabs: [
       tab("pages", "Модели и страницы", "settings-pages", "settings-connect", "settings-connect-profile"),
-      tab("ai", "ИИ", "settings-personas", "settings-persona", "settings-features", "settings-feature", "settings-limits"),
+      tab("ai", "ИИ", "settings-personas", "settings-persona", "settings-new-persona", "settings-features", "settings-feature", "settings-limits"),
       tab("notifications", "Оповещения", "settings-notifications"),
     ],
   },

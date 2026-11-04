@@ -50,6 +50,7 @@ export function useNotificationIncidents(params: {
       query: params as Parameters<typeof kernel.notificationsIncidents>[0]["query"],
     }),
     refetchInterval: 30_000,
+    meta: { suppressGlobalError: true },
   });
 }
 

@@ -4,7 +4,9 @@ import { FilePenLine, MonitorSmartphone, Plus } from "lucide-react";
 import { useDeletePageBrowserDraft, usePageBrowserDrafts, usePageBrowserProfiles } from "@/api/queries";
 import { RowMenu } from "@/components/ui/RowMenu";
 import { formatDateTime } from "@/lib/format";
-import { ServerAdminCommand, ToneChip } from "../page-browser/loginParts.js";
+import { ServerAdminCommand } from "@/components/shared/ServerAdminCommand";
+import { browserDraftRoute, browserProfileRoute } from "@/lib/navigation";
+import { ToneChip } from "../page-browser/loginParts.js";
 import { browserStatusOf, onboardingChipOf } from "../page-browser/pageBrowserOnboardingView.js";
 import { draftChipOf } from "../page-browser/proxyEntryView.js";
 
@@ -14,14 +16,6 @@ import { draftChipOf } from "../page-browser/proxyEntryView.js";
 // administrator makes it from the draft (`scripts/deploy-page-browser.sh
 // add-profile`, the command kept in a collapsed disclosure), and the profiles
 // it made that no page has yet are listed with where their onboarding stands.
-
-export function browserProfileRoute(profileId: string): string {
-  return `/settings/pages/connect/${encodeURIComponent(profileId)}`;
-}
-
-export function browserDraftRoute(name?: string): string {
-  return name === undefined ? "/settings/pages/connect" : `/settings/pages/connect?name=${encodeURIComponent(name)}`;
-}
 
 export function BrowserProfilesSection() {
   const profiles = usePageBrowserProfiles();

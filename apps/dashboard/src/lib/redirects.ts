@@ -66,7 +66,17 @@ export function legacyTarget(rule: LegacyRule, params: RouteParams, search: stri
 
 /** Addresses that are only old now: a route of their own, numbers as in §8.2. */
 export const LEGACY_ROUTES: ReadonlyArray<LegacyRule & { path: string }> = [
-  { path: "transactions", to: "/money/transactions", rename: { pageLabel: "page" } }, // 2
+  {
+    path: "transactions", // 2
+    rename: { pageLabel: "page" },
+    // An old link without dates meant the whole history and every operation: the
+    // sum it opens must stay the sum it promised (design/ia.md §8.2).
+    to: (_, query) => {
+      if (!query.has("from") && !query.has("to")) query.set("period", "all");
+      if (!query.has("reportableOnly")) query.set("reportableOnly", "false");
+      return "/money/transactions";
+    },
+  },
   { path: "pages", to: "/settings/pages" }, // 3
   { path: "pages/:pageLabel/subscribers", to: "/fans/subscribers", pageFromPath: true }, // 5
   { path: "pages/:pageLabel/followers", to: "/fans/followers", pageFromPath: true }, // 6
@@ -150,7 +160,7 @@ export const LEGACY_ROUTES: ReadonlyArray<LegacyRule & { path: string }> = [
 /** `/pages/:pageLabel`: the old block of operations (4). */
 export function pageCardLegacyRule(query: URLSearchParams): LegacyRule | null {
   return query.has("type") || query.has("txOffset")
-    ? { to: "/money/transactions", pageFromPath: true, rename: { txOffset: "offset" } }
+    ? { to: "/money/transactions", pageFromPath: true, rename: { txOffset: "offset" }, set: { period: "all", reportableOnly: "false" } }
     : null;
 }
 

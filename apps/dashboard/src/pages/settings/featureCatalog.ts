@@ -77,6 +77,23 @@ export function findHubFeature(id: string | null | undefined): HubFeature | unde
   return HUB_FEATURES.find((feature) => feature.id === id);
 }
 
+/** The AI's own tables on «Функции ИИ»: a value per feature, not a feature's switch. */
+const FEATURE_TUNING_KEYS: ReadonlySet<string> = new Set(["aiFeatureModels", "aiFeatureEfforts", "aiFeatureWindows"]);
+
+/**
+ * Where a setting of the hub is worked with (design/ia.md §6): a setting that
+ * has a screen of its own opens there, the rest on «Все параметры». Only a
+ * navigation: the search writes nothing.
+ */
+export function configHomeHref(key: string): { to: string; hint: string } {
+  if (key === "fanslyDefaultDelayMs") return { to: `/system/collection#config-${key}`, hint: "Сбор данных" };
+  if (key === "publishingEnabled" || key === "publishingOnlyfansEnabled") return { to: "/publications?panel=settings", hint: "Настройки публикации" };
+  if (FEATURE_TUNING_KEYS.has(key)) return { to: "/settings/ai/features#tuning", hint: "Функции ИИ" };
+  const feature = HUB_FEATURES.find((candidate) => candidate.keys.includes(key));
+  if (feature) return { to: `/settings/ai/features/${encodeURIComponent(feature.id)}#config-${key}`, hint: "Функции ИИ" };
+  return { to: `/system/dev/config#config-${key}`, hint: "Все параметры" };
+}
+
 export function featureSettingsHref(feature: HubFeature, source?: URLSearchParams): string {
   const next = new URLSearchParams();
   if (source) {

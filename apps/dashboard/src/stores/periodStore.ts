@@ -24,7 +24,10 @@ interface PeriodState {
 const DEFAULT_PERIOD: Period = "7d";
 // v4: one period for the whole console (the spender screens had their own,
 // and Top fans a third that defaulted to all time).
-const PERIOD_STORE_VERSION = 4;
+// v5: 14d and 365d joined the values. A rollback must not hand them to the older
+// code, whose report answers them with an error: its store sees another version,
+// runs its own migrate and brings the value back to 7 days (design/ia.md §8.4).
+const PERIOD_STORE_VERSION = 5;
 const SUPPORTED_PERIODS = new Set<Period>(["today", "7d", "14d", "30d", "90d", "180d", "365d", "all"]);
 
 export function migratePeriodState(persistedState: unknown, persistedVersion: number) {

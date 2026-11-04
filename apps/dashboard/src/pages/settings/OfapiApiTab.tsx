@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { ofapiCollectionQueryOptions } from "@/api/ofapiCollection";
 import { WebhookCard } from "./collection/CollectionTab.js";
-import { DisclosureCard } from "./collection/DisclosureCard.js";
+import { DisclosureCard } from "@/components/ui/DisclosureCard";
 import { OfapiBannedWords } from "./OfapiBannedWords.js";
 import { OfapiContentEvidence } from "./OfapiContentEvidence.js";
 import { OfapiStoredReads } from "./OfapiStoredReads.js";

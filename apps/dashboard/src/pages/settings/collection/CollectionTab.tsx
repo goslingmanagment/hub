@@ -95,7 +95,7 @@ import {
   type StaleEntry,
   CAP_LEVER_FIELD_RU,
 } from "./collectionModel.js";
-import { DisclosureCard } from "./DisclosureCard.js";
+import { DisclosureCard } from "@/components/ui/DisclosureCard";
 
 // Settings › Collection (S-UI). One screen: what the
 // kernel asks OnlyFans API for in the background, how often, under which

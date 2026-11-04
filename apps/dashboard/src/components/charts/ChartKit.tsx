@@ -18,6 +18,8 @@ export interface ChartSeries {
   color: string;
   /** A lighter twin of another series' hue (e.g. the legacy code of a type). */
   fillOpacity?: number | undefined;
+  /** The series' sum over the chart, in the legend after its name. */
+  total?: string | undefined;
 }
 
 /** The right margin holds half of the last date label: it sits on the last
@@ -95,6 +97,7 @@ export function ChartLegend({ series }: { series: readonly ChartSeries[] }) {
             style={{ background: entry.color, opacity: entry.fillOpacity ?? 1 }}
           />
           {entry.label}
+          {entry.total && <span className="chart-legend-total">{entry.total}</span>}
         </li>
       ))}
     </ul>
