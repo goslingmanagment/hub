@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { ShiftSale } from "@agency_hub_core/db";
 import type { ComputedWork } from "../apps/runtime/src/services/chatter-shifts.ts";
-import { contestedSales, salesOfWork, teamShiftMoney, type HeldShift } from "../apps/runtime/src/services/team-shift-sales.ts";
+import { contestedSales, salesOfWork, shiftSalesWindow, teamShiftMoney, type HeldShift } from "../apps/runtime/src/services/team-shift-sales.ts";
 
 // The team's money by shift: a sale two shifts hold is the last writer's; neither
 // wrote — both have it, and the team still counts it once.
@@ -95,5 +95,28 @@ describe("teamShiftMoney", () => {
     expect(money.knownSince).toBe("2026-10-01T00:00:00.000Z");
     const late = teamShiftMoney({ days: 7, now: NOW, shifts, lastWriters: new Map(), firstActivity: new Map([[1, new Date("2026-10-25T00:00:00Z")]]) });
     expect(late.previous).toBeNull();
+  });
+
+  it("compares this week so far with last week up to the same hour, not all of it", () => {
+    // Wednesday 4 Nov 15:00 MSK; the week is Mon 2 – Sun 8 Nov.
+    const sales = [sale("2026-10-27T08:00:00Z", 4_000), sale("2026-10-31T08:00:00Z", 9_000), sale("2026-11-03T08:00:00Z", 6_000)];
+    const shifts = [
+      held(1, work("2026-10-27T06:00:00Z", "2026-10-27T10:00:00Z"), sales), // last Tuesday: before the same hour
+      held(1, work("2026-10-31T06:00:00Z", "2026-10-31T10:00:00Z"), sales), // last Saturday: after it
+      held(1, work("2026-11-03T06:00:00Z", "2026-11-03T10:00:00Z"), sales),
+    ];
+    const money = teamShiftMoney({ days: 7, now: NOW, until: "2026-11-08", shifts, lastWriters: new Map(), firstActivity: LONG_AGO });
+    expect(money.team.daily.map((day) => day.date)).toEqual(["2026-11-02", "2026-11-03", "2026-11-04", "2026-11-05", "2026-11-06", "2026-11-07", "2026-11-08"]);
+    expect(money.team.salesNetMills).toBe(6_000);
+    expect(money.previous).toMatchObject({ shifts: 1, salesNetMills: 4_000 });
+  });
+
+  it("shows a past week whole, against the week before it whole", () => {
+    const window = shiftSalesWindow({ days: 7, now: NOW, until: "2026-11-01" });
+    expect(new Date(window.from).toISOString()).toBe("2026-10-25T21:00:00.000Z");
+    expect(new Date(window.to).toISOString()).toBe("2026-11-01T21:00:00.000Z");
+    expect(window.previousTo).toBe(window.from);
+    // A day far ahead keeps today inside the window.
+    expect(shiftSalesWindow({ days: 7, now: NOW, until: "2026-12-31" }).dates.at(-1)).toBe("2026-11-10");
   });
 });

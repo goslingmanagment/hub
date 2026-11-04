@@ -186,6 +186,12 @@ export type TeamChatterStatsResponse = z.infer<typeof teamChatterStatsResponseSc
 export const teamShiftSalesQuerySchema = z.object({
   /** Whole Moscow days back from today, today included. */
   days: z.coerce.number().int().min(1).max(CHATTER_STATS_MAX_DAYS).default(7),
+  /**
+   * The window's last Moscow day; default today. A past one shows that window
+   * (a calendar week); a later one keeps today inside the window and lists the
+   * days to come empty.
+   */
+  until: businessDate.optional(),
   /** One page only: the shifts made of the work on it, its sales. */
   pageLabel: z.string().min(1).max(120).optional(),
 });
@@ -200,12 +206,17 @@ const dayMoneySchema = z.object({
 export const teamShiftSalesResponseSchema = z.object({
   /** The start of the window's first Moscow day. */
   from: isoTimestamp,
+  /** The end of its last day, or now while it goes on. */
   to: isoTimestamp,
   /** The first minute of anyone's activity Hub has; null — none. Before it shifts are unknown, never zero. */
   knownSince: isoTimestamp.nullable(),
   /** The whole team: every sale once, though two shifts hold it; a day per Moscow day of the window, the oldest first. */
   team: periodTotalsSchema.extend({ daily: z.array(dayMoneySchema) }),
-  /** The same for the window of the same length just before; null — Hub does not have the activity for all of it. */
+  /**
+   * The same for the window of the same length just before, cut at the same point
+   * (this week so far against last week up to the same hour); null — Hub does not
+   * have the activity for all of it.
+   */
   previous: periodTotalsSchema.nullable(),
   /** Everyone with a shift in the window or the one before, the most money first. */
   chatters: z.array(periodTotalsSchema.extend({

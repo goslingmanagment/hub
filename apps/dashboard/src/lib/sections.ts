@@ -279,11 +279,11 @@ export const SCREENS: readonly Screen[] = [
   // ── Команда ────────────────────────────────────────────────────────────
   {
     id: "team-shifts", path: "/team/shifts", label: "Заработок", title: "Смены", section: "team",
-    why: "Кто сколько заработал за смены и когда, рост и падение, кто на смене сейчас.",
+    why: "Кто сколько заработал за смены по дням недели, рост и падение, кто на смене сейчас.",
     pageFilter: "any", platforms: REPORTED,
     platformsNote: "Hub не собирает данные Telegram.",
-    period: { class: "shared", options: CHATTER_PERIODS },
-    keywords: "команда смены кто работал заработок продажи графики на смене без автора",
+    // Its own: a calendar week with arrows, or 14 / 30 days (the screen's header).
+    keywords: "команда смены кто работал заработок продажи графики неделя на смене без автора",
   },
   {
     id: "team-coverage", path: "/team/coverage", label: "Кто ждал", title: "Кто ждал", section: "team",

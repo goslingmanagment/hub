@@ -35,7 +35,7 @@ export function useTeamShifts(params: TeamShiftsParams) {
 const TEAM_SHIFT_SALES_KEY = ["team-shift-sales"] as const;
 
 /** The team's shifts of the window with their money, and the window before (`teamShiftSales`). */
-export function useTeamShiftSales(params: { days: number; pageLabel?: string }) {
+export function useTeamShiftSales(params: { days: number; until?: string; pageLabel?: string }) {
   return useQuery(queryOptions({
     queryKey: [...TEAM_SHIFT_SALES_KEY, params] as const,
     queryFn: () => kernel.teamShiftSales({ query: params }),

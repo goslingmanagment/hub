@@ -309,17 +309,24 @@ type ShiftSalesResponse = KernelOperationResponse<"teamShiftSales">;
 type ShiftMoneyTotals = NonNullable<ShiftSalesResponse["previous"]>;
 
 /** «Команда → Смены»: everyone's shifts of the window with their money, and the window before (`teamShiftSales`). */
-export function teamShiftSales(request: DemoRequest, scope: readonly string[], days: number): ShiftSalesResponse {
+export function teamShiftSales(request: DemoRequest, scope: readonly string[], days: number, until: string | undefined): ShiftSalesResponse {
   const now = request.now;
   const world = teamWorld(now);
-  const dayList = windowDays(now, days);
+  // As the server: the window ends on `until` (today by default, never leaving today out), the one before is cut at the same point.
+  const today = mskDay(now.getTime());
+  const latest = addDays(today, days - 1);
+  const asked = until ?? today;
+  const lastDay = asked > latest ? latest : asked;
+  const dayList = Array.from({ length: days }, (_, index) => addDays(lastDay, index - (days - 1)));
   const firstDay = dayList[0]!;
   const prevFirstDay = addDays(firstDay, -days);
   const previousFrom = mskMidnightOf(prevFirstDay);
+  const to = Math.min(now.getTime(), mskMidnightOf(addDays(lastDay, 1)));
+  const middle = (shift: DemoShift) => shift.startedAt + (shift.endedAt - shift.startedAt) / 2;
   const touches = (shift: DemoShift) => shift.pages.some((page) => page.messages > 0 && scope.includes(page.pageLabel));
-  const shifts = world.shifts.filter((shift) => touches(shift) && dateOf(shift) >= prevFirstDay);
-  const current = shifts.filter((shift) => dateOf(shift) >= firstDay);
-  const before = shifts.filter((shift) => dateOf(shift) < firstDay);
+  const current = world.shifts.filter((shift) => touches(shift) && dateOf(shift) >= firstDay && dateOf(shift) <= lastDay);
+  const before = world.shifts.filter((shift) => touches(shift) && dateOf(shift) >= prevFirstDay && dateOf(shift) < firstDay && middle(shift) < to - days * DAY);
+  const shifts = [...current, ...before];
   const totals = (list: readonly DemoShift[]): ShiftMoneyTotals => periodTotals(list, scope);
   // The team counts a sale once, though two shifts hold it.
   const teamOf = (list: readonly DemoShift[]) => {
@@ -359,8 +366,8 @@ export function teamShiftSales(request: DemoRequest, scope: readonly string[], d
     .sort((left, right) => right.salesNetMills - left.salesNetMills || left.username.localeCompare(right.username));
 
   return {
-    from: isoAt(windowStart(now, days)),
-    to: now.toISOString(),
+    from: isoAt(mskMidnightOf(firstDay)),
+    to: isoAt(to),
     knownSince: knownSince === null ? null : isoAt(knownSince),
     team: { ...team.totals, daily: dailyOf(current, (date) => team.byDay(date)) },
     previous: covered(knownSince) ? teamOf(before).totals : null,

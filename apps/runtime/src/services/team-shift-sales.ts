@@ -99,21 +99,44 @@ export function contestedSales(shifts: readonly HeldShift[]): ShiftSale[] {
 const netOf = (sales: readonly ShiftSale[]) => sales.reduce((sum, sale) => sum + sale.netMills, 0);
 
 /**
- * The team's money from its shifts: the window of `days` Moscow days up to
- * `now` and the one before. `shifts` — everyone's shifts read since a day before
- * the window before, any order; `lastWriters` — who last wrote to the fan of
- * each contested sale; `firstActivity` — everyone's first minute Hub has. Pure.
+ * The window of `days` Moscow days ending on `until` (default today; at most the
+ * days that keep today inside it), cut at `now`, and the one before it: the same
+ * days earlier, cut at the same point — this week so far against last week up to
+ * the same hour, never against all of it. Pure.
+ */
+export function shiftSalesWindow(input: { days: number; now: Date; until?: string | undefined }) {
+  const { days, now } = input;
+  const today = moscowDayOf(now.getTime());
+  const latest = moscowDayOf(addUtcDays(startOfBusinessDay(now), days - 1).getTime());
+  const asked = input.until ?? today;
+  const lastDay = asked > latest ? latest : asked;
+  const from = addUtcDays(new Date(Date.parse(`${lastDay}T00:00:00+03:00`)), -(days - 1)).getTime();
+  const to = Math.min(now.getTime(), from + days * DAY_MS);
+  return {
+    from,
+    to,
+    previousFrom: from - days * DAY_MS,
+    previousTo: to - days * DAY_MS,
+    dates: Array.from({ length: days }, (_, offset) => moscowDayOf(from + offset * DAY_MS)),
+  };
+}
+
+/**
+ * The team's money from its shifts in the window (`shiftSalesWindow`) and the one
+ * before. `shifts` — everyone's shifts read since a day before the window before,
+ * any order; `lastWriters` — who last wrote to the fan of each contested sale;
+ * `firstActivity` — everyone's first minute Hub has. Pure.
  */
 export function teamShiftMoney(input: {
   days: number;
   now: Date;
+  until?: string | undefined;
   shifts: readonly HeldShift[];
   lastWriters: ReadonlyMap<number, number>;
   firstActivity: ReadonlyMap<number, Date>;
 }): Omit<TeamShiftSalesResponse, "serverNow"> {
-  const { days, now } = input;
-  const from = addUtcDays(startOfBusinessDay(now), -(days - 1));
-  const previousFrom = addUtcDays(from, -days).getTime();
+  const window = shiftSalesWindow(input);
+  const { previousFrom, previousTo, dates } = window;
   const holders = holdersOf(input.shifts);
   const settled = (userId: number, sale: ShiftSale) => settleSale(
     userId,
@@ -126,14 +149,16 @@ export function teamShiftMoney(input: {
     return first !== undefined && work.startedAt - first.getTime() < HOUR_MS ? moscowDayOf(work.startedAt) : dayOfWork(work);
   };
 
+  const inWindow = (work: ComputedWork) => middleOfWork(work) >= window.from && middleOfWork(work) < window.to;
+  const inPrevious = (work: ComputedWork) => middleOfWork(work) >= previousFrom && middleOfWork(work) < previousTo;
   const money = input.shifts
-    .filter((shift) => middleOfWork(shift.work) >= previousFrom)
+    .filter((shift) => inWindow(shift.work) || inPrevious(shift.work))
     .sort((a, b) => a.work.startedAt - b.work.startedAt || a.userId - b.userId)
     .map((shift) => {
       const own = shift.held.filter((sale) => settled(shift.userId, sale) !== "theirs");
       return {
         ...shift,
-        current: middleOfWork(shift.work) >= from.getTime(),
+        current: inWindow(shift.work),
         date: dayOf(shift.userId, shift.work),
         own,
         salesNetMills: netOf(own),
@@ -165,7 +190,6 @@ export function teamShiftMoney(input: {
     const workedMinutes = list.reduce((sum, one) => sum + one.work.workedMinutes, 0);
     return { totals: { shifts: list.length, workedMinutes, salesNetMills, sales: seen.size, perHourMills: perHour(salesNetMills, workedMinutes) }, byDay };
   };
-  const dates = Array.from({ length: days }, (_, offset) => moscowDayOf(addUtcDays(from, offset).getTime()));
   const dailyOf = (list: readonly Money[], salesOfDay: (date: string, ofDay: readonly Money[]) => number) => dates.map((date) => {
     const ofDay = list.filter((one) => one.date === date);
     return { date, salesNetMills: salesOfDay(date, ofDay), shifts: ofDay.length, workedMinutes: ofDay.reduce((sum, one) => sum + one.work.workedMinutes, 0) };
@@ -191,8 +215,8 @@ export function teamShiftMoney(input: {
   }).sort((a, b) => b.salesNetMills - a.salesNetMills || b.workedMinutes - a.workedMinutes || a.username.localeCompare(b.username));
 
   return {
-    from: from.toISOString(),
-    to: now.toISOString(),
+    from: new Date(window.from).toISOString(),
+    to: new Date(window.to).toISOString(),
     knownSince: knownSince === null ? null : new Date(knownSince).toISOString(),
     team: { ...team.totals, daily: dailyOf(current, (date) => team.byDay.get(date) ?? 0) },
     previous: covered(knownSince) ? teamOf(before).totals : null,
@@ -214,21 +238,23 @@ export async function readTeamShiftSales(
 ): Promise<TeamShiftSalesResponse> {
   requireDashboardUser(principal);
   const now = new Date();
-  const { days } = input.query;
+  const { days, until } = input.query;
   const pages = await teamReadPages(app, principal, { pageLabel: input.query.pageLabel, pageScope: input.pageScope });
-  // A day before the window before, so a shift of its first day that began the evening before is whole.
-  const readFrom = new Date(addUtcDays(startOfBusinessDay(now), -(2 * days - 1)).getTime() - DAY_MS);
+  const window = shiftSalesWindow({ days, now, until });
+  // A day on each side, so a shift the window's edge cuts is whole.
+  const readFrom = new Date(window.previousFrom - DAY_MS);
+  const readTo = new Date(Math.min(now.getTime(), window.to + DAY_MS));
 
   const [people, firstActivity] = await Promise.all([
-    readPeopleWork(app.db, { from: readFrom, to: now, now, pages }),
+    readPeopleWork(app.db, { from: readFrom, to: readTo, now, pages }),
     listFirstChatterActivities(app.db),
   ]);
   const shifts = [...people].flatMap(([userId, person]) => person.work
     .filter((work) => work.kind === "shift")
     .map((work) => ({ userId, username: person.username, work })));
   const pageIds = pages === "all" ? [...new Set([...people.values()].flatMap((person) => [...person.pageIds.values()]))] : pages;
-  const sales = shifts.length === 0 ? [] : await listShiftSales(app.db, { pageIds, from: readFrom, to: now });
+  const sales = shifts.length === 0 ? [] : await listShiftSales(app.db, { pageIds, from: readFrom, to: readTo });
   const held = shifts.map((shift) => ({ ...shift, held: salesOfWork(shift.work, sales) }));
   const lastWriters = await listSaleLastWriters(app.db, { hours: SALE_LAST_WRITER_HOURS, sales: lastWriterQuery(contestedSales(held)) });
-  return { ...teamShiftMoney({ days, now, shifts: held, lastWriters, firstActivity }), serverNow: now.toISOString() };
+  return { ...teamShiftMoney({ days, now, until, shifts: held, lastWriters, firstActivity }), serverNow: now.toISOString() };
 }

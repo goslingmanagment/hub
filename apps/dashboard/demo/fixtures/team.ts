@@ -542,7 +542,9 @@ export const teamHandlers: DemoHandlers = {
     }
     const days = daysParam(request, 7, 31);
     if (days === null) return badDays(31);
-    return teamShiftSales(request, pageLabel === undefined ? scope : [pageLabel], days);
+    const until = queryString(request, "until");
+    if (until !== undefined && !BUSINESS_DATE.test(until)) return demoError(400, "Bad Request", "until — день в формате YYYY-MM-DD.");
+    return teamShiftSales(request, pageLabel === undefined ? scope : [pageLabel], days, until);
   },
 
   teamAuthorship: (request) => {

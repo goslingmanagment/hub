@@ -1,5 +1,5 @@
-import { useState, type ReactNode } from "react";
-import { useNavigate } from "react-router";
+import { useState, type CSSProperties, type ReactNode } from "react";
+import { useLocation, useNavigate, useSearchParams } from "react-router";
 import {
   CHATTER_SHIFT_MIN_MESSAGES,
   CHATTER_SHIFT_MIN_WORKED_MINUTES,
@@ -12,20 +12,21 @@ import { useTeamShiftSales } from "@/api/team";
 import { ChartTable } from "@/components/charts/ChartTable";
 import { usdAxisFormatter } from "@/components/charts/format";
 import { usePageFilter } from "@/components/layout/usePageFilter";
-import { useScreenPeriod } from "@/components/layout/useScreenPeriod";
 import { QueryNotice } from "@/components/shared/QueryNotice";
 import { StackedBarChart } from "@/components/shared/StackedBarChart";
 import { NoAnswerPanel, StatusPanel } from "@/components/shared/StatusPanel";
 import { TableSkeleton } from "@/components/shared/TableSkeleton";
 import { Disclosure } from "@/components/ui/Disclosure";
 import { PageHeader } from "@/components/ui/PageHeader";
+import { AnchorNav } from "@/components/ui/PeriodStepper";
+import { Segmented } from "@/components/ui/Segmented";
 import { Stat, StatGrid } from "@/components/ui/StatGrid";
 import { StatusBadge } from "@/components/ui/StatusBadge";
-import { formatCount, formatDateTime, formatDay, formatDayRange, formatDuration, formatMills, formatSignedPercent, formatTimeOfDay } from "@/lib/format";
+import { formatCount, formatDateTime, formatDay, formatDayRange, formatDuration, formatMills, formatSignedPercent, formatTimeOfDay, weekEnd, weekStart } from "@/lib/format";
 import { ruPlural } from "@/lib/plural";
 import { isPlainRowClick } from "@/lib/rowClick";
 import { TEAM_STATUS } from "@/lib/statusWords";
-import { change, moscowOf, shortDay } from "@/pages/account/stats/statsView";
+import { change, dayLabel, moscowOf, shortDay } from "@/pages/account/stats/statsView";
 import { AuthorlessCard } from "./AuthorlessCard.js";
 import { DayBars } from "./DayBars.js";
 import { ChatterLink, PageLink } from "./teamLinks.js";
@@ -33,9 +34,11 @@ import { ChatterLink, PageLink } from "./teamLinks.js";
 /**
  * Команда → Смены → Заработок: who earned what in their shifts and when, against
  * the window before; who is on a shift now; every shift with its money
- * (`teamShiftSales`). Read-only; the owner and team leads. The page filter goes
- * to the server: with a page, a shift is made of the work on that page alone,
- * and its money is that page's.
+ * (`teamShiftSales`). Read-only; the owner and team leads. The period is the
+ * screen's own (`?period=`, `?at=`): a calendar week, Monday to Sunday, as the
+ * payout sheet reads it (a grid of chatters by day), or the last 14 or 30 days.
+ * The page filter goes to the server: with a page, a shift is made of the work
+ * on that page alone, and its money is that page's.
  */
 
 type Data = KernelOperationResponse<"teamShiftSales">;
@@ -74,22 +77,26 @@ function Delta({ value, label }: { value: number | null; label?: string }) {
   return <span className={`delta ${tone}`}>{formatSignedPercent(value * 100)}{label ? ` ${label}` : ""}</span>;
 }
 
-/** The window before in words: «к 22–28 окт.», or why there is nothing to compare with yet. */
-function useVersus(data: Data) {
+/** The window before in words: «к 22–28 окт.», «к прошлой неделе», or why there is nothing to compare with yet. */
+function useVersus(data: Data, mode: Mode) {
   const today = moscowOf(Date.parse(data.serverNow)).day;
   const first = data.team.daily[0]?.date ?? today;
+  const last = data.team.daily.at(-1)?.date ?? today;
   const days = data.team.daily.length;
-  const versus = `к ${formatDayRange(addDays(first, -days), addDays(first, -1))}`;
+  const goingOn = last >= today;
+  const versus = mode === "week"
+    ? (goingOn ? "к прошлой неделе на это же время" : "к прошлой неделе")
+    : `к ${formatDayRange(addDays(first, -days), addDays(first, -1))}`;
   const knownDay = data.knownSince === null ? null : moscowOf(Date.parse(data.knownSince)).day;
-  // The first day the window before is all inside what Hub has watched.
-  const comparableFrom = knownDay === null ? null : addDays(knownDay, 2 * days);
   const waiting = data.previous === null && knownDay !== null
-    ? `Сравнение с прошлыми ${days} ${ruPlural(days, "днём", "днями", "днями")} — с ${shortDay(comparableFrom!)}: Hub считает смены с ${shortDay(knownDay)}`
+    ? `Сравнения нет: Hub считает смены с ${shortDay(knownDay)}, а прошлый период начался раньше`
     : null;
-  return { today, versus, waiting, knownDay };
+  // The tiles are narrow: the week's «на это же время» is said under the grid.
+  const versusShort = mode === "week" ? "к прошлой неделе" : versus;
+  return { today, versus, versusShort, waiting, knownDay };
 }
 
-function TeamStats({ data, failed }: { data: Data | undefined; failed: boolean }) {
+function TeamStats({ data, failed, mode }: { data: Data | undefined; failed: boolean; mode: Mode }) {
   if (!data) {
     const dash = failed ? "—" : "…";
     const meta = failed ? "Hub не ответил" : undefined;
@@ -102,12 +109,12 @@ function TeamStats({ data, failed }: { data: Data | undefined; failed: boolean }
       </StatGrid>
     );
   }
-  return <TeamStatsOf data={data} />;
+  return <TeamStatsOf data={data} mode={mode} />;
 }
 
-function TeamStatsOf({ data }: { data: Data }) {
+function TeamStatsOf({ data, mode }: { data: Data; mode: Mode }) {
   const { team, previous } = data;
-  const { versus, waiting } = useVersus(data);
+  const { versusShort: versus, waiting } = useVersus(data, mode);
   const ongoing = data.shifts.filter((shift) => shift.ongoing);
   const compare = (current: number | null, before: number | null | undefined): ReactNode =>
     previous === null ? (waiting ? "Сравнения пока нет" : undefined) : <Delta value={change(current ?? 0, before)} label={versus} />;
@@ -130,12 +137,13 @@ function TeamStatsOf({ data }: { data: Data }) {
 }
 
 /** Б: the team's money by day; on hover, whose it was. */
-function ByDay({ data }: { data: Data }) {
-  const { today, knownDay } = useVersus(data);
+function ByDay({ data, mode }: { data: Data; mode: Mode }) {
+  const { today, knownDay } = useVersus(data, mode);
+  const blank = (date: string) => (knownDay !== null && date < knownDay) || date > today;
   // A day before Hub counted shifts carries no value: «нет данных», never a zero.
   const rows = data.team.daily.map((day): Record<string, string | number> => {
     const row: Record<string, string | number> = { date: day.date };
-    if (knownDay === null || day.date >= knownDay) row.sales = day.salesNetMills;
+    if (!blank(day.date)) row.sales = day.salesNetMills;
     return row;
   });
   const whoOn = (date: string) => data.chatters
@@ -155,6 +163,7 @@ function ByDay({ data }: { data: Data }) {
         ))}
         {people.length === 0 && typeof row.sales === "number" && <div>Смен не было</div>}
         {date === today && <div>День ещё идёт, число вырастет.</div>}
+        {date > today && <div>День ещё впереди.</div>}
       </>
     );
   };
@@ -172,7 +181,7 @@ function ByDay({ data }: { data: Data }) {
           data={rows}
           xKey="date"
           series={[{ key: "sales", label: "Продажи", color: "var(--color-chart-blue)" }]}
-          xTickFormatter={shortDay}
+          xTickFormatter={mode === "week" ? dayLabel : shortDay}
           valueFormatter={(value) => formatMills(value)}
           axisFormatter={usdAxisFormatter}
           tickSpacing={{ spacing: 72, max: 8 }}
@@ -187,8 +196,8 @@ function ByDay({ data }: { data: Data }) {
           rows={[...data.team.daily].reverse()}
           rowKey={(day) => day.date}
           columns={[
-            { key: "date", label: "День", value: (day) => shortDay(day.date) },
-            { key: "sales", label: "Продажи", num: true, value: (day) => (knownDay !== null && day.date < knownDay ? "—" : formatMills(day.salesNetMills)) },
+            { key: "date", label: "День", value: (day) => dayLabel(day.date) },
+            { key: "sales", label: "Продажи", num: true, value: (day) => (blank(day.date) ? "—" : formatMills(day.salesNetMills)) },
             { key: "shifts", label: "Смен", num: true, value: (day) => formatCount(day.shifts) },
             { key: "worked", label: "Работы", num: true, value: (day) => (day.workedMinutes > 0 ? formatDuration(day.workedMinutes) : "—") },
             { key: "who", label: "Кто", value: (day) => whoOn(day.date).map(({ chatter, day: of }) => `${chatter.username} ${formatMills(of!.salesNetMills)}`).join(", ") || "—" },
@@ -202,15 +211,17 @@ function ByDay({ data }: { data: Data }) {
 function ChangeCell({ current, before, isNew }: { current: number | null; before: number | null | undefined; isNew: boolean }) {
   if (isNew) return <span className="team-sub team-faint">новый</span>;
   if (before === null || before === undefined) return null;
+  // No shifts now: what there was, not «−100 %».
+  if (current === null) return <span className="team-sub team-faint">было {formatMills(before)}</span>;
   const value = change(current ?? 0, before);
   if (value === null) return <span className="team-sub team-faint">было {formatMills(before)}</span>;
   return <span className="team-sub"><Delta value={value} /></span>;
 }
 
 /** В: one row a chatter: their days on the team's one scale, money, per hour, against the window before. */
-function ByChatter({ data, period }: { data: Data; period: string }) {
+function ByChatter({ data, period, mode }: { data: Data; period: string; mode: Mode }) {
   const navigate = useNavigate();
-  const { today, versus, waiting } = useVersus(data);
+  const { today, versus, waiting } = useVersus(data, mode);
   const working = data.chatters.filter((chatter) => chatter.shifts > 0);
   const gone = data.chatters.filter((chatter) => chatter.shifts === 0);
   const isNew = (chatter: Chatter) => data.previous !== null && chatter.previous === null;
@@ -291,6 +302,110 @@ function ByChatter({ data, period }: { data: Data; period: string }) {
           </span>
         </div>
       )}
+    </section>
+  );
+}
+
+const WEEKDAY = new Intl.DateTimeFormat("ru-RU", { weekday: "short", timeZone: "UTC" });
+const DAY_OF_MONTH = new Intl.DateTimeFormat("ru-RU", { day: "numeric", month: "short", timeZone: "UTC" });
+
+/** A cell's tint: one hue, the stronger the more money, on the week's one scale. */
+function tintOf(value: number, max: number): CSSProperties | undefined {
+  if (max <= 0 || value <= 0) return undefined;
+  return { background: `color-mix(in srgb, var(--color-chart-blue) ${Math.round(4 + (22 * value) / max)}%, transparent)` };
+}
+
+/** В (a week): a row a chatter, a column a day, the week's money at the end — as the payout sheet reads. */
+function WeekGrid({ data, period }: { data: Data; period: string }) {
+  const navigate = useNavigate();
+  const { today, versus, waiting } = useVersus(data, "week");
+  const dates = data.team.daily.map((day) => day.date);
+  const max = Math.max(0, ...data.chatters.flatMap((chatter) => chatter.daily.map((day) => day.salesNetMills)));
+  const isNew = (chatter: Chatter) => data.previous !== null && chatter.previous === null;
+  const dayCell = (day: { date: string; salesNetMills: number; shifts: number; workedMinutes: number }, strong = false) => {
+    if (day.date > today) return <td key={day.date} className="num team-week-future" />;
+    if (day.shifts === 0) return <td key={day.date} className="num team-faint">—</td>;
+    return (
+      <td
+        key={day.date}
+        className={`num team-week-cell ${strong ? "font-medium" : ""}`}
+        style={tintOf(day.salesNetMills, strong ? 0 : max)}
+        title={`${dayLabel(day.date)}: ${day.shifts} ${ruPlural(day.shifts, "смена", "смены", "смен")}, ${formatDuration(day.workedMinutes)}`}
+      >
+        {formatMills(day.salesNetMills)}
+      </td>
+    );
+  };
+  return (
+    <section className="card" aria-labelledby="shifts-week">
+      <header className="card-header">
+        <div>
+          <h2 id="shifts-week" className="card-title">Кто сколько заработал за неделю</h2>
+          <p className="card-description">
+            Продажи за смены по дням, после комиссии; чем ярче клетка, тем больше денег. Наведите на клетку — сколько смен и часов.
+            {data.previous !== null ? ` Проценты — ${versus}.` : waiting ? ` ${waiting}.` : ""}
+          </p>
+        </div>
+      </header>
+      <div className="table-wrap">
+        <table className="data-table team-sticky-first team-week">
+          <thead>
+            <tr>
+              <th scope="col">Чаттер</th>
+              {dates.map((date) => {
+                const at = new Date(`${date}T12:00:00Z`);
+                return (
+                  <th key={date} scope="col" className={`num ${date === today ? "team-week-today" : ""} ${date > today ? "team-week-future" : ""}`}>
+                    <span className="team-line">{WEEKDAY.format(at)}</span>
+                    <span className="team-sub">{date === today ? "сегодня" : DAY_OF_MONTH.format(at)}</span>
+                  </th>
+                );
+              })}
+              <th scope="col" className="num">За неделю</th>
+              <th scope="col" className="num">В час</th>
+            </tr>
+          </thead>
+          <tbody>
+            {data.chatters.map((chatter) => (
+              <tr
+                key={chatter.userId}
+                className={`team-row-link align-top ${chatter.shifts === 0 ? "team-off-row" : ""}`}
+                onClick={(event) => { if (isPlainRowClick(event)) navigate(`/team/chatters/${chatter.userId}?period=${period}`); }}
+              >
+                <td>
+                  <ChatterLink userId={chatter.userId} username={chatter.username} period={period} />
+                  <span className="team-sub whitespace-nowrap">
+                    {chatter.shifts === 0
+                      ? "смен не было"
+                      : `${formatCount(chatter.shifts)} ${ruPlural(chatter.shifts, "смена", "смены", "смен")}, ${formatDuration(chatter.workedMinutes)}`}
+                  </span>
+                </td>
+                {chatter.daily.map((day) => dayCell(day))}
+                <td className="num">
+                  <span className="font-semibold">{chatter.shifts === 0 ? "—" : formatMills(chatter.salesNetMills)}</span>
+                  <ChangeCell current={chatter.shifts === 0 ? null : chatter.salesNetMills} before={chatter.previous?.salesNetMills} isNew={isNew(chatter)} />
+                </td>
+                <td className="num">
+                  {chatter.perHourMills === null ? "—" : formatMills(chatter.perHourMills)}
+                  {chatter.shifts > 0 && <ChangeCell current={chatter.perHourMills} before={chatter.previous?.perHourMills} isNew={false} />}
+                </td>
+              </tr>
+            ))}
+            <tr className="row-total align-top">
+              <td>Вся команда</td>
+              {data.team.daily.map((day) => dayCell(day, true))}
+              <td className="num">
+                <span className="font-semibold">{formatMills(data.team.salesNetMills)}</span>
+                {data.previous && <span className="team-sub"><Delta value={change(data.team.salesNetMills, data.previous.salesNetMills)} /></span>}
+              </td>
+              <td className="num">
+                {data.team.perHourMills === null ? "—" : formatMills(data.team.perHourMills)}
+                {data.previous && <span className="team-sub"><Delta value={change(data.team.perHourMills ?? 0, data.previous.perHourMills)} /></span>}
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
     </section>
   );
 }
@@ -446,22 +561,61 @@ function HowItCounts({ page }: { page: string | null }) {
   );
 }
 
+type Mode = "week" | "14d" | "30d";
+
+const MODES: ReadonlyArray<{ value: Mode; label: string }> = [
+  { value: "week", label: "Неделя" },
+  { value: "14d", label: "14 дней" },
+  { value: "30d", label: "30 дней" },
+];
+
+/** `?period=` of the screen: a calendar week unless 14 or 30 days are asked (old 24h · 3d · 7d read as the week). */
+function modeOf(value: string | null): Mode {
+  return value === "14d" || value === "30d" ? value : "week";
+}
+
 export function TeamShiftsPage() {
-  const { key: period, days, select } = useScreenPeriod();
+  const [search, setSearch] = useSearchParams();
+  const location = useLocation();
   const filter = usePageFilter();
   const pageLabel = filter.page;
-  const query = useTeamShiftSales(pageLabel === null ? { days } : { days, pageLabel });
+  const today = moscowOf(Date.now()).day;
+  const mode = modeOf(search.get("period"));
+  const asked = search.get("at");
+  // The week is named by its Monday: the arrows step whole weeks and stop at this one.
+  const monday = weekStart(asked !== null && /^\d{4}-\d{2}-\d{2}$/.test(asked) && asked <= today ? asked : today);
+  const days = mode === "week" ? 7 : mode === "14d" ? 14 : 30;
+  const params = { days, ...(mode === "week" ? { until: weekEnd(monday) } : {}), ...(pageLabel === null ? {} : { pageLabel }) };
+  const query = useTeamShiftSales(params);
   const { data, isLoading, isFetching, isError, refetch, dataUpdatedAt } = query;
-  const today = data ? moscowOf(Date.parse(data.serverNow)).day : null;
+  // The chatter's screen knows 7, 14 and 30 days.
+  const chatterPeriod = mode === "week" ? "7d" : mode;
+
+  function go(next: { mode?: Mode; at?: string }) {
+    const query = new URLSearchParams(search);
+    const nextMode = next.mode ?? mode;
+    if (nextMode === "week") query.delete("period");
+    else query.set("period", nextMode);
+    const at = next.at ?? monday;
+    if (nextMode !== "week" || at === weekStart(today)) query.delete("at");
+    else query.set("at", at);
+    setSearch(query, { state: location.state });
+  }
 
   const header = (
     <PageHeader
-      window={data && today ? formatDayRange(data.team.daily[0]?.date ?? today, today) : undefined}
+      actions={(
+        <>
+          {mode === "week" && <AnchorNav anchor={monday} mode="week" today={today} onChange={(at) => go({ at: weekStart(at) })} />}
+          <Segmented label="Период" value={mode} onChange={(value) => go({ mode: value })} options={MODES} />
+        </>
+      )}
+      window={data ? formatDayRange(data.team.daily[0]?.date ?? today, data.team.daily.at(-1)?.date ?? today) : undefined}
       fresh={data ? { at: dataUpdatedAt, onRefresh: () => void refetch(), refreshing: isFetching } : undefined}
     />
   );
   const failed = !data && isError;
-  const periodWords = `за ${days} ${ruPlural(days, "день", "дня", "дней")}`;
+  const periodWords = mode === "week" ? "за эту неделю" : `за ${days} ${ruPlural(days, "день", "дня", "дней")}`;
 
   return (
     <div className="team-screen">
@@ -472,12 +626,12 @@ export function TeamShiftsPage() {
           {" "}{formatDuration(CHATTER_SHIFT_MIN_WORKED_MINUTES)} и {CHATTER_SHIFT_MIN_MESSAGES} сообщений, здесь не показан.
         </p>
       )}
-      <TeamStats data={data} failed={failed} />
+      <TeamStats data={data} failed={failed} mode={mode} />
 
       {data && <QueryNotice error={isError} stale retry={refetch} at={dataUpdatedAt} />}
       {!data ? (
-        isLoading ? <TableSkeleton rows={6} columns={5} /> : <NoAnswerPanel retry={refetch} />
-      ) : data.shifts.length === 0 ? (
+        isLoading ? <TableSkeleton rows={6} columns={9} /> : <NoAnswerPanel retry={refetch} />
+      ) : data.shifts.length === 0 && data.chatters.length === 0 ? (
         pageLabel !== null ? (
           <StatusPanel
             title={`На ${pageLabel} ${periodWords} смен нет`}
@@ -488,15 +642,16 @@ export function TeamShiftsPage() {
           <StatusPanel
             title={`${periodWords[0]!.toUpperCase()}${periodWords.slice(1)} смен нет`}
             description="На этих страницах никто не работал в расширении ChatGoose, или у чаттеров ещё старая версия расширения."
-            action={days >= 30 ? undefined : <button type="button" className="btn btn-sm" onClick={() => select("30d")}>Показать 30 дней</button>}
+            action={mode === "30d" ? undefined : <button type="button" className="btn btn-sm" onClick={() => go({ mode: "30d" })}>Показать 30 дней</button>}
           />
         )
       ) : (
         <div className={`team-stack ${isFetching && !isLoading && query.isPlaceholderData ? "is-refreshing" : ""}`}>
-          <ByDay data={data} />
-          <ByChatter data={data} period={period} />
+          {mode === "week" && <WeekGrid data={data} period={chatterPeriod} />}
+          <ByDay data={data} mode={mode} />
+          {mode !== "week" && <ByChatter data={data} period={chatterPeriod} mode={mode} />}
           <OnShiftNow shifts={data.shifts} />
-          <AllShifts shifts={data.shifts} />
+          {data.shifts.length > 0 && <AllShifts shifts={data.shifts} />}
         </div>
       )}
 
@@ -505,4 +660,3 @@ export function TeamShiftsPage() {
     </div>
   );
 }
-

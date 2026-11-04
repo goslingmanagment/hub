@@ -243892,6 +243892,15 @@
           {
             "schema": {
               "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            },
+            "in": "query",
+            "name": "until",
+            "required": false
+          },
+          {
+            "schema": {
+              "type": "string",
               "minLength": 1,
               "maxLength": 120
             },
