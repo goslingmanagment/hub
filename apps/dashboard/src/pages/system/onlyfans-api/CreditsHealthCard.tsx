@@ -7,38 +7,12 @@ import { Disclosure } from "@/components/ui/Disclosure";
 import { KeyValue } from "@/components/ui/KeyValue";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { formatDateTime, formatDay } from "@/lib/format";
+import { credits, creditsToUsd, fmtCredits, operationLabel } from "@/lib/ofapiCredits";
 import { ruPlural } from "@/lib/plural";
 import type { OfapiStatus } from "@/lib/statusWords";
 
 // The credit health of «Состояние»: the old «Состояние системы» and «Точность
 // проекций» of /ofapi-credits (design/screens/system.md §8, block 5).
-
-function fmt(value: number) {
-  return value.toLocaleString("ru-RU");
-}
-
-function credits(value: number) {
-  return `${fmt(value)} ${ruPlural(value, "кредит", "кредита", "кредитов")}`;
-}
-
-function creditsToUsd(amount: number, microUsdPerCredit: number) {
-  return formatUsdFromMills(Math.round((amount * microUsdPerCredit) / 1000));
-}
-
-const OPERATION_LABELS: Readonly<Record<string, string>> = {
-  ofapi_chats: "Сбор чатов",
-  ofapi_chat_messages: "Сбор сообщений",
-  ofapi_dm_conversations: "Сбор диалогов",
-  ofapi_transactions: "Сбор операций",
-  ofapi_fans_active: "Сбор активных фанов",
-  ofapi_fans_expired: "Сбор бывших фанов",
-  ofapi_audience: "Сбор аудитории",
-  ofapi_audience_sweep: "Обход аудитории",
-  ofapi_sync_events: "Сбор событий",
-  ofapi_balance_ping: "Проверка баланса",
-  ofapi_admin_accounts: "Проверка аккаунта",
-  ofapi_webhook_crud: "Настройка приёма событий",
-};
 
 const COMPARISON_LABELS: Readonly<Record<string, string>> = {
   matched: "совпало",
@@ -76,9 +50,9 @@ function SpendComparison() {
   return (
     <div className="sys-stack-16">
       <div className="sys-chips">
-        <span className="badge">{fmt(matched)} совпало · {fmt(drift)} {ruPlural(drift, "расхождение", "расхождения", "расхождений")}</span>
+        <span className="badge">{fmtCredits(matched)} совпало · {fmtCredits(drift)} {ruPlural(drift, "расхождение", "расхождения", "расхождений")}</span>
         {data.summary.filter((row) => row.status !== "matched").map((row) => (
-          <span key={row.status} className="badge">{COMPARISON_LABELS[row.status] ?? row.status.replace(/_/g, " ")} · {fmt(row.count)}</span>
+          <span key={row.status} className="badge">{COMPARISON_LABELS[row.status] ?? row.status.replace(/_/g, " ")} · {fmtCredits(row.count)}</span>
         ))}
       </div>
       {data.samples.length > 0 && (
@@ -184,7 +158,7 @@ export function CreditsHealthCard({ ofapi }: { ofapi: OfapiStatus }) {
                     <>
                       {summary.accrual.lastPostedDay ? `Проведены по ${formatDay(summary.accrual.lastPostedDay)}.` : "Ещё ничего не проведено."}
                       {pending && pending.eventCount > 0 && (
-                        ` Сегодня: ~${credits(pending.estimatedCredits)} за ${fmt(pending.eventCount)} ${ruPlural(pending.eventCount, "событие", "события", "событий")}: спишутся в полночь UTC, в 03:00 по Москве.`
+                        ` Сегодня: ~${credits(pending.estimatedCredits)} за ${fmtCredits(pending.eventCount)} ${ruPlural(pending.eventCount, "событие", "события", "событий")}: спишутся в полночь UTC, в 03:00 по Москве.`
                       )}
                     </>
                   ),
@@ -199,8 +173,8 @@ export function CreditsHealthCard({ ofapi }: { ofapi: OfapiStatus }) {
                       {(burn.topOperations.length > 0 || burn.topPages.length > 0) && (
                         <span className="block text-text-secondary">
                           больше всего тратят: {[
-                            ...burn.topOperations.map((op) => `${op.operation ? OPERATION_LABELS[op.operation] ?? op.operation : "без атрибуции"} · ${fmt(op.credits)}`),
-                            ...burn.topPages.map((page) => `${page.pageLabel} · ${fmt(page.credits)}`),
+                            ...burn.topOperations.map((op) => `${op.operation ? operationLabel(op.operation) : "без атрибуции"} · ${fmtCredits(op.credits)}`),
+                            ...burn.topPages.map((page) => `${page.pageLabel} · ${fmtCredits(page.credits)}`),
                           ].join(", ")}
                         </span>
                       )}

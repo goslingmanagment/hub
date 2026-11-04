@@ -8,7 +8,7 @@ import { Field } from "@/components/shared/Field";
 import { Spinner } from "@/components/ui/Skeleton";
 import { toast } from "sonner";
 import { pageLabelUses, PAGE_LABEL_KEYS } from "./pages/pageLabelUses.js";
-import { PLATFORM_NAMES } from "./pages/pagesView.js";
+import { platformName } from "@/lib/platformUrls";
 import { isConflict, toastWriteError } from "./settingsFeedback.js";
 
 /**
@@ -122,7 +122,7 @@ export function EditPageModal({
   return (
     <ModalShell title={`Изменить страницу ${page.label}`} onClose={close}>
       <div className="space-y-4">
-        <p className="text-sm text-text-secondary">{PLATFORM_NAMES[page.platform] ?? page.platform}. Площадку страницы изменить нельзя.</p>
+        <p className="text-sm text-text-secondary">{platformName(page.platform)}. Площадку страницы изменить нельзя.</p>
         <Field label="Название страницы" error={conflict ? "Страница с таким названием уже есть." : undefined}>
           <input
             value={label}

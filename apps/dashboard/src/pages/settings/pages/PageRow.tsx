@@ -6,7 +6,7 @@ import { RowMenu, type RowMenuItem } from "@/components/ui/RowMenu";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { buildPageCollectionRoute, buildPageRoute, buildPageSectionRoute } from "@/lib/navigation";
-import { PLATFORM_NAMES } from "./pagesView.js";
+import { platformName } from "@/lib/platformUrls";
 import { errorCode, errorStatus, toastError } from "../settingsFeedback.js";
 import type { PageCollection } from "./pageCollection.js";
 
@@ -108,7 +108,7 @@ export function PageRow({
     <tr id={`page-${page.label}`} className={highlighted ? "settings-row-flash" : undefined}>
       <td>
         <Link to={buildPageRoute(page.label)} className="settings-link font-medium">{page.label}</Link>
-        <div className="settings-second">{handle ? `@${handle} · ` : ""}{PLATFORM_NAMES[page.platform] ?? page.platform}</div>
+        <div className="settings-second">{handle ? `@${handle} · ` : ""}{platformName(page.platform)}</div>
       </td>
       <td className="status-col">
         {collection.word === null ? (

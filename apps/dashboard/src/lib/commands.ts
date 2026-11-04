@@ -20,6 +20,7 @@ import {
   type Screen,
   type Section,
 } from "./sections.js";
+import { platformName } from "./platformUrls.js";
 
 export type CommandGroup = "Разделы" | "Страницы" | "Фаны" | "Настройки" | "Система" | "Параметры" | "Оформление";
 
@@ -51,7 +52,6 @@ export interface CommandPage {
   username?: string | null | undefined;
 }
 
-const PLATFORM_NAMES: Record<string, string> = { fansly: "Fansly", onlyfans: "OnlyFans", telegram: "Telegram" };
 const THEME_WORDS: Record<ThemePreference, string> = { system: "системная авто", light: "дневная light", dark: "ночная dark" };
 
 function sectionGroup(section: Section): CommandGroup {
@@ -94,7 +94,7 @@ function pageCommands(pages: readonly CommandPage[], role: Role): Command[] {
   const owner = role === "owner";
   const commands: Command[] = [];
   for (const page of pages) {
-    const platform = PLATFORM_NAMES[page.platform] ?? page.platform;
+    const platform = platformName(page.platform);
     const words = [page.modelName, platform, page.username ?? ""].join(" ");
     const hint = `${page.modelName} · ${platform}`;
     commands.push({ id: `page:${page.label}`, label: page.label, group: "Страницы", to: buildPageRoute(page.label), hint, keywords: words });

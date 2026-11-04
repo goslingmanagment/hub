@@ -1,10 +1,7 @@
 import type { Platform } from "@agency_hub_core/shared";
+import { PLATFORM_DISPLAY_NAME } from "@/lib/platformUrls";
 
-export const PLATFORM_WORD: Readonly<Record<Platform, string>> = {
-  fansly: "Fansly",
-  onlyfans: "OnlyFans",
-  telegram: "Telegram",
-};
+export const PLATFORM_WORD: Readonly<Record<Platform, string>> = PLATFORM_DISPLAY_NAME;
 
 interface PlatformBadgeProps {
   platform: Platform;

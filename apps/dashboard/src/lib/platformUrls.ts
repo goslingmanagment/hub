@@ -3,11 +3,17 @@ import type { Platform } from "@agency_hub_core/shared";
 export type ExternalLinkPlatform = Platform;
 export type ExternalLinkKind = "chat" | "profile";
 
-export const PLATFORM_DISPLAY_NAME: Record<ExternalLinkPlatform, string> = {
+/** A platform's name, plain text: the one dictionary of the console. */
+export const PLATFORM_DISPLAY_NAME: Readonly<Record<ExternalLinkPlatform, string>> = {
   fansly: "Fansly",
   onlyfans: "OnlyFans",
   telegram: "Telegram",
 };
+
+/** A platform's name; a platform the console does not know stays as it came. */
+export function platformName(platform: string): string {
+  return (PLATFORM_DISPLAY_NAME as Readonly<Record<string, string>>)[platform] ?? platform;
+}
 
 function normalizeUsername(value: string | null | undefined) {
   if (typeof value !== "string") {

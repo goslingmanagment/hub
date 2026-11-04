@@ -6,6 +6,7 @@ import type {
 } from "@agency_hub_core/contracts";
 import { platforms, type Platform, type UserRole } from "@agency_hub_core/shared";
 import { CHATTER_SITE_ORIGIN, chatterSiteOriginFor } from "@/lib/sites";
+import { PLATFORM_DISPLAY_NAME } from "@/lib/platformUrls";
 
 // The people screens' pure view logic: statuses, sorting, platform
 // grouping, the join link and the Telegram template. Every user-facing word
@@ -18,12 +19,6 @@ import { CHATTER_SITE_ORIGIN, chatterSiteOriginFor } from "@/lib/sites";
 /* ------------------------------------------------------------------ */
 
 export type TeamStatus = "invited" | "active" | "disabled";
-
-export const TEAM_STATUS_LABEL: Readonly<Record<TeamStatus, string>> = {
-  invited: "ждёт регистрации",
-  active: "активен",
-  disabled: "доступ отключён",
-};
 
 export const ROLE_LABEL: Readonly<Record<UserRole, string>> = {
   owner: "Владелец",
@@ -86,11 +81,7 @@ export function sortTeamByActivity(users: readonly AdminUser[]): AdminUser[] {
 /*  Platforms — lookup tables, never a strict comparison    */
 /* ------------------------------------------------------------------ */
 
-export const PLATFORM_LABEL: Readonly<Record<Platform, string>> = {
-  fansly: "Fansly",
-  onlyfans: "OnlyFans",
-  telegram: "Telegram",
-};
+export const PLATFORM_LABEL: Readonly<Record<Platform, string>> = PLATFORM_DISPLAY_NAME;
 
 export const PLATFORM_DOT_CLASS: Readonly<Record<Platform, string>> = {
   fansly: "bg-fansly",

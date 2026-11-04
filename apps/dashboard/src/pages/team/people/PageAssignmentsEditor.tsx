@@ -1,6 +1,7 @@
 import { useId } from "react";
 import { Link } from "react-router";
 import type { Platform } from "@agency_hub_core/shared";
+import { platformName } from "@/lib/platformUrls";
 
 interface AssignedPageLike {
   id: number;
@@ -25,7 +26,6 @@ export interface PageAssignmentsLabels {
   assign: string;
 }
 
-const PLATFORM_NAME: Readonly<Record<Platform, string>> = { fansly: "Fansly", onlyfans: "OnlyFans", telegram: "Telegram" };
 
 const DEFAULT_LABELS: PageAssignmentsLabels = {
   assigned: "Страницы",
@@ -74,7 +74,7 @@ export function PageAssignmentsEditor({
             <li key={page.id} className="team-list-row">
               <div className="team-list-what">
                 <Link to={`/pages/${encodeURIComponent(page.label)}`} className="team-link font-medium">{page.label}</Link>
-                <span className="platform-tag">{PLATFORM_NAME[page.platform]}</span>
+                <span className="platform-tag">{platformName(page.platform)}</span>
                 <span className="team-muted">{page.modelName}</span>
               </div>
               <button
@@ -112,7 +112,7 @@ export function PageAssignmentsEditor({
               <option value="">{labels.select}</option>
               {availablePages.map((page) => (
                 <option key={page.id} value={page.label}>
-                  {page.label} · {PLATFORM_NAME[page.platform]} · {page.modelName}
+                  {page.label} · {platformName(page.platform)} · {page.modelName}
                 </option>
               ))}
             </select>

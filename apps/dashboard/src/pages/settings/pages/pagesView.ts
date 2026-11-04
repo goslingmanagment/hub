@@ -2,12 +2,6 @@ import type { AdminUser, AssignedPage, ModelListItem } from "@agency_hub_core/co
 import { ruPlural } from "@/lib/plural";
 import type { PageWorker } from "./PageRow.js";
 
-/** A platform's name, plain text (design-language.md §2.7). */
-export const PLATFORM_NAMES: Readonly<Record<string, string>> = {
-  fansly: "Fansly",
-  onlyfans: "OnlyFans",
-  telegram: "Telegram",
-};
 
 export function pagesCount(count: number): string {
   return count === 0 ? "Страниц нет" : `${count} ${ruPlural(count, "страница", "страницы", "страниц")}`;

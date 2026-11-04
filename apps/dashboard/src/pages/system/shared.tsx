@@ -11,6 +11,7 @@ import type { PageFreshness } from "@/components/ui/PageHeader";
 import { Notice } from "@/components/ui/Notice";
 import { formatDateTime, formatAgo, formatMomentAgo } from "@/lib/format";
 import { OFAPI_OFF_REASON, ofapiWriteBlock, type OfapiStatus } from "@/lib/statusWords";
+import { platformName } from "@/lib/platformUrls";
 
 /** The session's role; «» while it is unknown. */
 export function useRole(): string {
@@ -104,12 +105,8 @@ export function RowChevron({ open, label, onToggle }: { open: boolean; label: st
   );
 }
 
-const PLATFORM_NAMES: Readonly<Record<string, string>> = { fansly: "Fansly", onlyfans: "OnlyFans", telegram: "Telegram" };
-
 /** A platform as plain text. */
-export function platformName(platform: string): string {
-  return PLATFORM_NAMES[platform] ?? platform;
-}
+export { platformName };
 
 /** «23:41» over «5 мин назад»: a moment in a narrow cell. */
 export function MomentCell({ at, empty = "—" }: { at: string | null | undefined; empty?: string }) {

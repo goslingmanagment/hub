@@ -23,6 +23,7 @@ import { useScrollToAnchor } from "@/lib/useScrollToAnchor";
 import { daysOf, moscowDay, pivotOf, sheetCell, sheetText } from "./payoutSheet.js";
 import { shiftSpan } from "./TeamShiftsPage.js";
 import { FanLink, LoginName, PageLink, useLoginLink } from "./teamLinks.js";
+import { platformName } from "@/lib/platformUrls";
 
 /**
  * Команда → Выплаты: the disputes the owner settles, who has not confirmed a
@@ -40,7 +41,6 @@ const REASON_LABELS: Readonly<Record<string, string>> = {
   share_not_agreed: "«делим» без согласия",
   conflicting: "отметки не сходятся",
 };
-const PLATFORM_NAME: Readonly<Record<string, string>> = { fansly: "Fansly", onlyfans: "OnlyFans", telegram: "Telegram" };
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 const DAY_MS = 86_400_000;
 
@@ -105,7 +105,7 @@ function ResolveDialog({ asking, onClose }: { asking: Asking; onClose: () => voi
       title={whole ? `Отдать всю продажу ${shares[0]!.username}?` : "Разделить продажу пополам?"}
       message="Решение заменит прежние отметки по этой продаже в выплате."
       facts={[
-        { label: "Где", value: `${dispute.pageLabel}, ${PLATFORM_NAME[dispute.platform] ?? dispute.platform}` },
+        { label: "Где", value: `${dispute.pageLabel}, ${platformName(dispute.platform)}` },
         { label: "Что", value: `Продажа ${sum}, ${formatDateTime(dispute.occurredAt)}` },
         { label: "Кому", value: shares.map((share) => `${share.username} — ${share.percent} %`).join(", ") },
         { label: "Было", value: resolutionLine(dispute) ?? marksLine(dispute) },

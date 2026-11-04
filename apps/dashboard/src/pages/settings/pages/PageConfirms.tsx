@@ -3,7 +3,7 @@ import type { AssignedPage, ModelListItem } from "@agency_hub_core/contracts";
 import { useAdminDeleteModel, useAdminDeletePage, useDeletePageBrowserDraft } from "@/api/queries";
 import { ConfirmModal } from "@/components/shared/ConfirmModal";
 import { UNKNOWN_OUTCOME, isUnknownOutcome } from "../settingsFeedback.js";
-import { PLATFORM_NAMES } from "./pagesView.js";
+import { platformName } from "@/lib/platformUrls";
 
 /** A write's refusal in the window's words; no answer means the outcome is unknown. */
 function writeError(error: unknown, known: string): string | undefined {
@@ -60,7 +60,7 @@ export function DeletePageConfirm({ page, workers, onClose }: { page: AssignedPa
       title={`Отключить страницу ${page.label}?`}
       message="Страница пропадёт из активных, сбор данных остановится. Собранная история сохранится."
       facts={[
-        { label: "Откуда", value: `${page.label}, ${PLATFORM_NAMES[page.platform] ?? page.platform}, модель ${page.modelName}` },
+        { label: "Откуда", value: `${page.label}, ${platformName(page.platform)}, модель ${page.modelName}` },
         { label: "Кто работает", value: workers === null ? "Не удалось проверить" : workers.length === 0 ? "Никто" : workers.join(", ") },
         { label: "Отменить", value: "Нельзя: включить страницу обратно из консоли пока нельзя" },
       ]}

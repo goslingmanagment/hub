@@ -39,6 +39,7 @@ import {
   type Stats,
   type StatsShift,
 } from "./statsView.js";
+import { platformName } from "@/lib/platformUrls";
 
 // «Статистика»: a chatter's shifts and their money, how they sell and write,
 // their records. The cabinet shows the chatter's own (`self`, on «ты»); the
@@ -64,7 +65,6 @@ const SHORT_DATE = new Intl.DateTimeFormat("ru-RU", { day: "numeric", month: "lo
 /** What makes a shift, in words: `2 ч работы и 50 сообщений`. */
 const SHIFT_RULE = `${duration(CHATTER_SHIFT_MIN_WORKED_MINUTES)} работы и ${CHATTER_SHIFT_MIN_MESSAGES} сообщений`;
 const DAY_MS = 86_400_000;
-const PLATFORM_NAME: Readonly<Record<string, string>> = { fansly: "Fansly", onlyfans: "OnlyFans", telegram: "Telegram" };
 
 function addDays(day: string, days: number): string {
   return new Date(Date.parse(`${day}T00:00:00Z`) + days * DAY_MS).toISOString().slice(0, 10);
@@ -470,7 +470,7 @@ export function ChatterStatsView({ stats, self, reportTo, linkPages = false, ext
                 empty="Продаж за период нет."
                 rows={stats.pages.filter((page) => page.salesNetMills > 0 || page.activeMinutes >= 15).map((page) => ({
                   key: page.pageLabel,
-                  label: <><PageLabel label={page.pageLabel} link={linkPages} /> <span className="platform-tag">{PLATFORM_NAME[page.platform] ?? page.platform}</span></>,
+                  label: <><PageLabel label={page.pageLabel} link={linkPages} /> <span className="platform-tag">{platformName(page.platform)}</span></>,
                   value: page.salesNetMills,
                   valueText: money(page.salesNetMills),
                   detail: duration(page.activeMinutes),

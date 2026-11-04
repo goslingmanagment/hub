@@ -14,6 +14,7 @@ import { Notice } from "@/components/ui/Notice";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Segmented } from "@/components/ui/Segmented";
 import { Stat, StatGrid } from "@/components/ui/StatGrid";
+import { failureKindLabel } from "@/lib/failures";
 import { formatBusinessDateShort, formatDateTime, formatMills } from "@/lib/format";
 import {
   BREAKDOWN_DAYS,
@@ -31,7 +32,6 @@ import {
   daysWord,
   fmtCredits,
   humanDay,
-  incidentLabel,
   ledgerDateEndExclusive,
   ledgerDateStart,
   operationLabel,
@@ -241,7 +241,7 @@ export function OfapiCostsPage() {
           )}
           {summary.incidents.map((incident) => (
             <p key={`${incident.kind}-${incident.openedAt}`}>
-              {incidentLabel(incident.kind)}, открыт с {formatDateTime(incident.openedAt)}.{incident.errorSummary ? ` ${incident.errorSummary}.` : ""}
+              {failureKindLabel(incident.kind)}, открыт с {formatDateTime(incident.openedAt)}.{incident.errorSummary ? ` ${incident.errorSummary}.` : ""}
             </p>
           ))}
         </Notice>
