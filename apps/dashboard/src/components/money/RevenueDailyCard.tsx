@@ -2,7 +2,7 @@ import { useMemo, useState, type ReactNode } from "react";
 import { BUSINESS_TIME_ZONE, sumMills, toBusinessDate } from "@agency_hub_core/shared";
 import { useRevenueChart, useRevenueChartComparison } from "@/api/overview";
 import { ChartTable } from "@/components/charts/ChartTable";
-import { RevenueLineChart, dayChange, type RevenueLinePoint } from "@/components/charts/RevenueLineChart";
+import { RevenueLineChart, dayChange, type RevenueGoal, type RevenueLinePoint } from "@/components/charts/RevenueLineChart";
 import { businessDateRange } from "@/components/charts/scale";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { QueryNotice } from "@/components/shared/QueryNotice";
@@ -54,7 +54,7 @@ function monthlyPoints(current: Series): RevenueLinePoint[] {
  * total from the server, «Числа таблицей». `scope` is what `useRevenueChart` reads:
  * `agency`, `model:<slug>`, `page:<label>`. Reads only; the caller holds the choice.
  */
-export function RevenueDailyCard({ scope, period, windowAt, windows, totalMills, select, allowMonthly = false, onShowWeek, enabled = true }: {
+export function RevenueDailyCard({ scope, period, windowAt, windows, totalMills, select, allowMonthly = false, onShowWeek, goal, enabled = true }: {
   scope: string;
   period: string;
   /** The report's clock: the chart and the report cannot disagree about «today». */
@@ -69,6 +69,8 @@ export function RevenueDailyCard({ scope, period, windowAt, windows, totalMills,
   allowMonthly?: boolean;
   /** For «Сегодня»: «Показать 7 дней». */
   onShowWeek?: (() => void) | undefined;
+  /** A day's bar across the daily line; months are not compared with it. */
+  goal?: RevenueGoal | undefined;
   enabled?: boolean;
 }) {
   const main = mainRevenueWindow(windows);
@@ -117,7 +119,7 @@ export function RevenueDailyCard({ scope, period, windowAt, windows, totalMills,
               <p className="empty-text py-8 text-center">За этот период операций нет.</p>
             ) : series ? (
               <div className={daily.isFetching ? "is-refreshing" : undefined}>
-                <RevenueLineChart points={points} currentLabel={currentLabel} previousLabel={previousLabel} formatDate={formatDate} />
+                <RevenueLineChart points={points} currentLabel={currentLabel} previousLabel={previousLabel} formatDate={formatDate} goal={monthly ? undefined : goal} />
                 {compared && previous.isError && (
                   <p className="mt-2 text-xs text-text-secondary">
                     Прошлый период не пришёл. <button type="button" className="link" onClick={() => void previous.refetch()}>Повторить</button>
