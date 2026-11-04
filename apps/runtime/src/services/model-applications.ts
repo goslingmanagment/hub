@@ -4,6 +4,7 @@ import {
   getTelegramSettings,
   insertDeliveryAttempt,
   insertModelApplicationWithinLimit,
+  markModelApplicationSessionSubmitted,
   peekNextModelApplicationId,
   setModelApplicationGoogleResult,
   type ModelApplicationAnswer,
@@ -40,6 +41,8 @@ export interface ModelApplicationSubmission {
   form: string;
   answers: ModelApplicationAnswer[];
   google?: ModelApplicationGoogleFields | undefined;
+  /** The filling this questionnaire ends (its progress posts' session). */
+  session?: string | undefined;
   website?: string | undefined;
 }
 
@@ -108,7 +111,7 @@ export async function forwardModelApplicationToGoogle(
   }
 }
 
-function clip(text: string, max = NOTICE_PART_MAX_CHARS): string {
+export function clip(text: string, max = NOTICE_PART_MAX_CHARS): string {
   const flat = text.replace(/\s+/g, " ").trim();
   return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
 }
@@ -143,18 +146,23 @@ export function formatModelApplicationNotice(input: {
     + `Целиком: model-applications:show ${input.id} (CLI хаба)`;
 }
 
-async function notifyOwner(
+/** One plain-text notice to the owner's Telegram, recorded as a delivery attempt. */
+export async function notifyOwnerOfModelApplication(
   app: Pick<AppContext, "config" | "db" | "logger">,
-  input: { id: number; text: string },
+  input: {
+    kind: "model_application" | "model_application_started" | "model_application_abandoned";
+    idempotencyKey: string;
+    text: string;
+  },
 ): Promise<void> {
   const settings = await getTelegramSettings(app.db, {
     defaultReportHourUtc: app.config.telegramReportHourUtc,
   });
   const delivery: TelegramSendResult = settings.enabled
-    ? await sendTelegramMessage(app, { text: input.text, idempotencyKey: `model-application:${input.id}` })
+    ? await sendTelegramMessage(app, { text: input.text, idempotencyKey: input.idempotencyKey })
     : { status: "skipped", reason: "disabled" };
   await insertDeliveryAttempt(app.db, {
-    kind: "model_application",
+    kind: input.kind,
     status: delivery.status,
     messageId: delivery.status === "sent" ? delivery.messageId : null,
     error: delivery.status === "failed"
@@ -191,6 +199,7 @@ export async function submitModelApplication(
   const google = submission.google !== undefined && Object.keys(submission.google).length > 0
     ? submission.google
     : null;
+  const ipHash = modelApplicationAddressHash(app.config.encryptionKey, input.clientAddress);
   const stored = await insertModelApplicationWithinLimit(app.db, {
     form: submission.form,
     answers: submission.answers.map((answer) => ({
@@ -203,7 +212,7 @@ export async function submitModelApplication(
     // Until the forward settles; a crash in between leaves an honest failure.
     googleStatus: google === null ? "skipped" : "failed",
     googleError: google === null ? null : "not sent",
-    ipHash: modelApplicationAddressHash(app.config.encryptionKey, input.clientAddress),
+    ipHash,
     userAgent: input.userAgent === null ? null : input.userAgent.slice(0, USER_AGENT_MAX_CHARS),
     maxPerWindow: MODEL_APPLICATIONS_PER_ADDRESS_PER_HOUR,
     windowMs: RATE_WINDOW_MS,
@@ -212,6 +221,21 @@ export async function submitModelApplication(
     throw new TooManyRequestsError("Too many questionnaires from this address; try again in an hour");
   }
   const { id } = stored;
+
+  if (submission.session !== undefined) {
+    try {
+      const name = submission.answers.find((answer) => answer.key === "name")?.value.trim() ?? "";
+      await markModelApplicationSessionSubmitted(app.db, {
+        session: submission.session,
+        form: submission.form,
+        applicationId: id,
+        name: name === "" ? null : clip(name, 120),
+        ipHash,
+      });
+    } catch (error) {
+      app.logger.error({ err: error, modelApplicationId: id }, "model application: filling not marked sent");
+    }
+  }
 
   let googleStatus: ModelApplicationGoogleStatus = "skipped";
   let googleError: string | null = null;
@@ -232,7 +256,11 @@ export async function submitModelApplication(
   }
 
   const text = formatModelApplicationNotice({ id, answers: submission.answers, googleStatus, googleError });
-  void notifyOwner(app, { id, text }).catch((error: unknown) => {
+  void notifyOwnerOfModelApplication(app, {
+    kind: "model_application",
+    idempotencyKey: `model-application:${id}`,
+    text,
+  }).catch((error: unknown) => {
     app.logger.error({ err: error, modelApplicationId: id }, "model application: owner notice failed");
   });
 
@@ -250,6 +278,10 @@ const moscowMinute = new Intl.DateTimeFormat("sv-SE", {
   hour: "2-digit",
   minute: "2-digit",
 });
+
+export function formatMoscowMinute(date: Date): string {
+  return moscowMinute.format(date);
+}
 
 function answerOf(row: ModelApplicationRow, key: string): string {
   return clip(row.answers.find((answer) => answer.key === key)?.value ?? "", 40);
@@ -282,11 +314,16 @@ export function formatModelApplication(row: ModelApplicationRow): string {
   const google = row.googleStatus === "failed"
     ? `failed (${row.googleError ?? "?"})`
     : row.googleStatus;
-  const lines = [
+  return [
     `№${row.id} · ${moscowMinute.format(row.createdAt)} MSK · form ${row.form} · Google: ${google}`,
-  ];
+    ...formatAnswersBySection(row.answers),
+  ].join("\n");
+}
+
+/** Non-empty answers grouped by section in the order given: a blank line, the section, `  label: value`. */
+export function formatAnswersBySection(answers: readonly ModelApplicationAnswer[]): string[] {
   const sections = new Map<string, ModelApplicationAnswer[]>();
-  for (const answer of row.answers) {
+  for (const answer of answers) {
     if (answer.value.trim() === "") {
       continue;
     }
@@ -294,11 +331,12 @@ export function formatModelApplication(row: ModelApplicationRow): string {
     list.push(answer);
     sections.set(answer.section, list);
   }
-  for (const [section, answers] of sections) {
+  const lines: string[] = [];
+  for (const [section, list] of sections) {
     lines.push("", section);
-    for (const answer of answers) {
+    for (const answer of list) {
       lines.push(`  ${answer.label}: ${answer.value.trim().replace(/\n/g, "\n    ")}`);
     }
   }
-  return lines.join("\n");
+  return lines;
 }

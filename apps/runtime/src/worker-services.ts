@@ -30,6 +30,11 @@ import {
   runDbDiskUsageCheck,
 } from "./services/db-disk-alert.ts";
 import {
+  MODEL_APPLICATION_ABANDON_SWEEP_QUEUE,
+  ensureModelApplicationAbandonSweepQueue,
+  runModelApplicationAbandonSweep,
+} from "./services/model-application-sessions.ts";
+import {
   OBSERVATIONS_PARTITIONS_QUEUE,
   ensureObservationsPartitionQueue,
   runObservationsPartitionCheck,
@@ -258,6 +263,7 @@ export async function startWorkerServices(
   await ensureOfapiBindingReconcileQueue(boss, createdQueues);
   await ensureOfapiCollectionQueues(boss, createdQueues);
   await ensureDbDiskUsageQueue(boss, createdQueues);
+  await ensureModelApplicationAbandonSweepQueue(boss, createdQueues);
   await ensureObservationsPartitionQueue(boss, createdQueues);
   await ensureCapturePayloadParityQueue(boss, createdQueues);
   await ensureCanonicalizeQueues(boss, createdQueues);
@@ -439,6 +445,14 @@ export async function startWorkerServices(
     const summary = await runPublicationFileRetention(app);
     if (summary.deleted > 0 || summary.incomingRemoved > 0 || summary.failed > 0) {
       app.logger.info(summary, "Publication files retention pass complete");
+    }
+  });
+
+  // The agency site's questionnaire fillings left unsent: one notice each.
+  await boss.work(MODEL_APPLICATION_ABANDON_SWEEP_QUEUE, { batchSize: 1 }, async () => {
+    const result = await runModelApplicationAbandonSweep(app);
+    if (result.notified > 0) {
+      app.logger.info(result, "Model questionnaire abandon sweep complete");
     }
   });
 

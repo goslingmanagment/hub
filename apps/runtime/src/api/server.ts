@@ -690,7 +690,7 @@ export async function buildApiServer(appContext: AppContext) {
   registerOfapiVendorRoutes(server, moduleContext);
 
   // --- The agency site's model questionnaire (public) --- (module: apps/runtime/src/modules/model-applications)
-  registerModelApplicationRoutes(server, moduleContext);
+  await registerModelApplicationRoutes(server, moduleContext);
 
   // OpenAPI JSON
   server.get("/api/v1/openapi.json", {
