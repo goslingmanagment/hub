@@ -24,12 +24,12 @@ interface CustomSeed {
 
 const CUSTOMS: readonly CustomSeed[] = [
   { page: "mia-1", fan: 2, text: "Видео 6–7 мин в красном белье, медленный стриптиз, в конце зовёт его по имени (Джейк)", price: 180, paidDaysAgo: 9.4, createdDaysAgo: 9.6, by: "alex.k" },
-  { page: "mia-vip-of", fan: 0, text: "Разбор его фото голосом, 3–4 мин, честно и с юмором", price: 60, paidDaysAgo: 7.6, createdDaysAgo: 8.1, by: "olya.m" },
-  { page: "nova-1", fan: 0, text: "Фотосет 15 фото в его футболке (размер прислал), лицо можно", price: 120, paidDaysAgo: 6.2, createdDaysAgo: 6.3, by: "den.s" },
-  { page: "mia-3", fan: 4, text: "Голосовое 2 мин на английском: пожелание спокойной ночи, имя — Marcus", price: 45, paidDaysAgo: 4.1, createdDaysAgo: 4.2, by: "kate.v" },
-  { page: "mia-2", fan: 1, text: "Видео в душе 4 мин, без музыки, в конце воздушный поцелуй в камеру", price: 150, paidDaysAgo: 3, createdDaysAgo: 3.5, by: "alex.k" },
+  { page: "mia-vip-of", fan: 0, text: "Разбор его фото голосом, 3–4 мин, честно и с юмором", price: 60, paidDaysAgo: null, createdDaysAgo: 8.1, by: "olya.m" },
+  { page: "nova-1", fan: 0, text: "Фотосет 15 фото в его футболке (размер прислал), лицо можно", price: 120, paidDaysAgo: null, createdDaysAgo: 6.3, by: "den.s" },
+  { page: "mia-3", fan: 4, text: "Голосовое 2 мин на английском: пожелание спокойной ночи, имя — Marcus", price: 45, paidDaysAgo: null, createdDaysAgo: 4.2, by: "kate.v" },
+  { page: "mia-2", fan: 1, text: "Видео в душе 4 мин, без музыки, в конце воздушный поцелуй в камеру", price: 150, paidDaysAgo: null, createdDaysAgo: 3.5, by: "alex.k" },
   { page: "nova-1", fan: 3, text: "Распаковка его подарка (туфли на каблуке) и примерка, 3–5 мин", price: 220, paidDaysAgo: 1.6, createdDaysAgo: 2.4, by: "den.s" },
-  { page: "mia-1", fan: 7, text: "Видео 1 мин: «С днём рождения, Tom» в чёрном платье", price: 40, paidDaysAgo: 0.6, createdDaysAgo: 0.7, by: "kate.v" },
+  { page: "mia-1", fan: 7, text: "Видео 1 мин: «С днём рождения, Tom» в чёрном платье", price: 40, paidDaysAgo: null, createdDaysAgo: 0.7, by: "kate.v" },
   { page: "mia-3", fan: 11, text: "Тренировка в спортивном топе и джоггерах, 5 мин, вид сбоку", price: 90, paidDaysAgo: null, createdDaysAgo: 1.4, by: "kate.v" },
   { page: "ivy-2", fan: 0, text: "5 фото в очках и с косичками, домашний свет", price: 35, paidDaysAgo: null, createdDaysAgo: 2.2, by: "ivan.p" },
   { page: "nova-1", fan: 9, text: "Видео 10 мин по его сценарию «соседка зашла за солью» — ждём ответа модели, цену не назвали", price: null, paidDaysAgo: null, createdDaysAgo: 0.8, by: "den.s" },

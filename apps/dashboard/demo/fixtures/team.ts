@@ -70,7 +70,7 @@ export function teamDisputes(now: Date): DemoDispute[] {
       const others = DEMO_CHATTERS.filter((user) => user.id !== shift.user.id && user.pages.includes(sale.pageLabel) && workingAt(user, sale.at, now));
       if (others.length === 0 || sale.netMills < 12_000) continue;
       const random = rng(`dispute:${sale.ref}`);
-      if (random() > 0.055) continue;
+      if (random() > 0.03) continue;
       const together = others.find((user) => shift.together.includes(user.username));
       const other = together ?? others[Math.floor(random() * others.length)]!;
       const roll = random();
@@ -86,6 +86,13 @@ export function teamDisputes(now: Date): DemoDispute[] {
             : [{ user: shift.user, percent: 70 }, { user: other, percent: 30 }];
       disputes.push({ sale, shift, reason, other, resolution, resolvedAt: resolved ? sale.at + Math.round(between(random, 1.6, 3.5) * DAY) : null });
     }
+  }
+  // Calm, as on production: one dispute waits for the owner, the newest; the others were settled.
+  const newestOpen = disputes.filter((dispute) => dispute.resolution === null).sort((left, right) => right.sale.at - left.sale.at)[0];
+  for (const dispute of disputes) {
+    if (dispute.resolution !== null || dispute === newestOpen) continue;
+    dispute.resolution = [{ user: dispute.shift.user, percent: 50 }, { user: dispute.other, percent: 50 }];
+    dispute.resolvedAt = Math.min(now.getTime() - HOUR, dispute.sale.at + DAY);
   }
   return disputes;
 }
@@ -505,23 +512,19 @@ export const teamHandlers: DemoHandlers = {
     const shifts = scopedShifts(teamWorld(request.now).shifts, labels)
       .filter((shift) => shift.startedAt < to && shift.endedAt > from)
       .map((shift) => {
-        const start = Math.max(shift.startedAt, from);
-        const clipped = start > shift.startedAt;
-        const pauses = shift.pauses.filter((pause) => pause.to > start).map((pause) => ({ from: Math.max(pause.from, start), to: pause.to }));
-        const paused = pauses.reduce((sum, pause) => sum + Math.round((pause.to - pause.from) / MIN), 0);
-        const ratio = clipped ? (shift.endedAt - start) / (shift.endedAt - shift.startedAt) : 1;
+        // A shift that touched the window comes whole, as the server sends it.
         const pages = shift.pages
           .filter((page) => labels.includes(page.pageLabel))
-          .map((page) => ({ pageLabel: page.pageLabel, activeMinutes: Math.round(page.activeMinutes * ratio), messages: Math.round(page.messages * ratio) }))
+          .map((page) => ({ pageLabel: page.pageLabel, activeMinutes: page.activeMinutes, messages: page.messages }))
           .sort((left, right) => right.messages - left.messages);
         return {
           userId: shift.user.id,
           username: shift.user.username,
-          startedAt: isoAt(start),
+          startedAt: isoAt(shift.startedAt),
           endedAt: isoAt(shift.endedAt),
           ongoing: shift.ongoing,
-          workedMinutes: clipped ? Math.max(0, Math.round((shift.endedAt - start) / MIN) - paused) : shift.workedMinutes,
-          pauses: pauses.map((pause) => ({ from: isoAt(pause.from), to: isoAt(pause.to) })),
+          workedMinutes: shift.workedMinutes,
+          pauses: shift.pauses.map((pause) => ({ from: isoAt(pause.from), to: isoAt(pause.to) })),
           pages,
           authoredMessages: pages.reduce((sum, page) => sum + page.messages, 0),
         };
@@ -640,6 +643,12 @@ export const teamHandlers: DemoHandlers = {
     const span = (Date.parse(to) - Date.parse(from)) / DAY + 1;
     if (span < 1 || span > 31) return demoError(400, "Bad Request", "Окно — от 1 до 31 дня.");
     return exportOf(request, scope, from, to);
+  },
+
+  // The owner's split is accepted and changes nothing in the invented world.
+  teamShiftResolve: (request) => {
+    if (request.role !== "owner") return demoError(403, "Forbidden", "Споры решает владелец.");
+    return { changed: true, serverNow: request.now.toISOString() };
   },
 
   teamCustoms: (request) => {

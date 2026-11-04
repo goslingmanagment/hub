@@ -5,6 +5,7 @@ import type { AdminUser } from "@agency_hub_core/contracts";
 import { useAdminPages, useAdminUsers, type useCreateInvite } from "@/api/queries";
 import { Field } from "@/components/shared/Field";
 import { ModalShell } from "@/components/shared/ModalShell";
+import { Segmented } from "@/components/ui/Segmented";
 import {
   daysToHours,
   findTeamMemberByLogin,
@@ -22,7 +23,7 @@ import type { RevealedLink } from "./LinkRevealModal.js";
  * left half-made accounts behind whenever a later step failed, and made the
  * owner invent a password and dictate it over Telegram.
  *
- * The mutation is owned by the tab, not by this modal: TanStack drops a
+ * The mutation is owned by the people's layout, not by this modal: TanStack drops a
  * per-call `mutate` callback when the observer that issued it unmounts, so a
  * modal-owned mutation would silently discard the only copy of the link if the
  * owner dismissed the dialog mid-flight.
@@ -105,10 +106,21 @@ export function InviteModal({
       onClose();
     }
   };
+  // Something typed is not thrown away by Escape or a click beside the window: only its buttons close it.
+  const dirty = username.trim() !== "" || pageLabels.length > 0 || role !== "chatter" || days !== INVITE_DEFAULT_DAYS;
 
   return (
-    <ModalShell title="Пригласить в команду" onClose={closeUnlessPending} closeLabel="Закрыть">
+    <ModalShell title="Пригласить в команду" onClose={closeUnlessPending} closeLabel="Закрыть" explicitCloseOnly={dirty || create.isPending}>
       <form className="space-y-5" onSubmit={handleSubmit}>
+        <div>
+          <div className="field-label">Роль</div>
+          <Segmented
+            label="Роль"
+            value={role}
+            onChange={(value) => setRole(value)}
+            options={[{ value: "chatter", label: "Чаттер" }, { value: "team_lead", label: "Тимлид" }]}
+          />
+        </div>
         <Field
           label="Логин"
           hint="С этим логином человек будет входить в расширение и в приложение. Пароль он придумает сам, открыв ссылку."
@@ -128,7 +140,7 @@ export function InviteModal({
           />
         </Field>
         {nameLooksWrong && (
-          <p role="alert" className="-mt-3 text-xs text-danger">
+          <p role="alert" className="field-error -mt-3">
             Логин может состоять из латинских букв, цифр, точки, дефиса и подчёркивания
             и должен начинаться с буквы или цифры.
           </p>
@@ -142,7 +154,7 @@ export function InviteModal({
           />
         )}
         {(!users || usersError) && (
-          <div role="alert" className="flex flex-wrap items-center gap-2 text-sm text-text-secondary">
+          <div role="alert" className="flex flex-wrap items-center gap-2 text-sm text-text-secondary" aria-live="polite">
             {usersError ? "Не удалось проверить, свободен ли логин." : "Проверяем список участников…"}
             {usersError && (
               <button type="button" disabled={usersFetching} onClick={() => void refetchUsers()} className="btn btn-sm">
@@ -163,32 +175,33 @@ export function InviteModal({
               <div className="field-label">Страницы</div>
               {pagesLoading && !pages && <p className="text-sm text-text-secondary">Загружаем страницы…</p>}
               {pagesError && (
-                <div role="alert" className="notice notice-danger mb-2 flex-wrap items-center">
-                  <span className="min-w-0 flex-1">Список страниц не загрузился. Выбор сохранён — обновите его перед отправкой.</span>
-                  <button type="button" disabled={pagesFetching} onClick={() => void refetchPages()} className="btn btn-sm">
-                    Повторить
-                  </button>
+                <div role="alert" className="notice notice-warning mb-2">
+                  <div className="notice-body">Список страниц не загрузился. Выбор сохранён — обновите его перед отправкой.</div>
+                  <div className="notice-action">
+                    <button type="button" disabled={pagesFetching} onClick={() => void refetchPages()} className="btn btn-sm">
+                      Повторить
+                    </button>
+                  </div>
                 </div>
               )}
               {pages && pages.length === 0 && (
                 <p className="text-sm text-text-secondary">Страниц пока нет — их можно назначить позже.</p>
               )}
               {groups.length > 0 && (
-                <div className="max-h-56 space-y-3 overflow-y-auto rounded-lg border border-border px-3 py-2.5">
+                <div className="invite-pages">
                   {groups.map((group) => (
                     <div key={group.platform}>
-                      <div className="mb-1 text-xs font-medium text-text-secondary">{group.label}</div>
-                      <div className="space-y-1">
+                      <div className="invite-group">{group.label}</div>
+                      <div>
                         {group.pages.map((page) => (
-                          <label key={page.id} className="flex cursor-pointer items-center gap-2 py-0.5 text-sm text-text-primary">
+                          <label key={page.id} className="invite-page">
                             <input
                               type="checkbox"
                               checked={pageLabels.includes(page.label)}
                               onChange={() => togglePage(page.label)}
-                              className="accent-accent"
                             />
                             <span>{page.label}</span>
-                            <span className="text-xs text-text-secondary">{page.modelName}</span>
+                            <span className="team-muted">{page.modelName}</span>
                           </label>
                         ))}
                       </div>
@@ -203,23 +216,13 @@ export function InviteModal({
                 type="button"
                 aria-expanded={advancedOpen}
                 onClick={() => setAdvancedOpen((open) => !open)}
-                className="inline-flex items-center gap-1.5 text-sm font-medium text-text-secondary hover:text-text-primary"
+                className="inline-flex items-center gap-2 text-sm font-medium text-text-secondary hover:text-text-primary"
               >
                 <ChevronRight size={14} aria-hidden className={`transition-transform ${advancedOpen ? "rotate-90" : ""}`} />
                 Дополнительно
               </button>
               {advancedOpen && (
-                <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                  <Field label="Роль">
-                    <select
-                      value={role}
-                      onChange={(event) => setRole(event.target.value === "team_lead" ? "team_lead" : "chatter")}
-                      className="select"
-                    >
-                      <option value="chatter">чаттер</option>
-                      <option value="team_lead">тимлид</option>
-                    </select>
-                  </Field>
+                <div className="mt-3 max-w-[200px]">
                   <Field label="Срок ссылки, дней">
                     <input
                       type="number"
@@ -230,7 +233,7 @@ export function InviteModal({
                       className="input"
                     />
                     {!daysValid && (
-                      <span role="alert" className="field-hint block text-danger">
+                      <span role="alert" className="field-error block">
                         От 1 до {INVITE_MAX_DAYS} дней.
                       </span>
                     )}
@@ -241,7 +244,7 @@ export function InviteModal({
           </fieldset>
         )}
 
-        <div className="flex items-center justify-end gap-2 pt-1">
+        <div className="dialog-actions">
           <button type="button" onClick={closeUnlessPending} disabled={create.isPending} className="btn">
             Отмена
           </button>
@@ -258,18 +261,20 @@ export function InviteModal({
 
 export function ExistingMemberNotice({ user, onOpen, disabled = false }: { user: AdminUser; onOpen: () => void; disabled?: boolean | undefined }) {
   return (
-    <div role="status" className="notice notice-warning flex-col">
-      <p className="font-semibold">Логин «{user.username}» уже занят</p>
-      <p>
+    <div role="status" className="notice notice-warning">
+      <div className="notice-body">
+      <p className="font-medium">Логин «{user.username}» уже занят</p>
+      <p className="mt-1">
         {user.disabledAt
           ? "У этого участника отключён доступ, логин и история сохранены — если возвращается тот же человек, восстановите доступ. Чтобы создать новый аккаунт с этим логином, сначала удалите прежний в его карточке."
           : user.registrationState === "invited"
             ? "Участник уже приглашён, но ещё не задал пароль. Откройте его карточку, чтобы создать новую ссылку."
             : "Этот участник уже в команде. Откройте его карточку, чтобы проверить доступ или помочь со входом."}
       </p>
-      <button type="button" disabled={disabled} onClick={onOpen} className="btn btn-sm self-start">
+      <button type="button" disabled={disabled} onClick={onOpen} className="btn btn-sm mt-3">
         {user.disabledAt ? "Перейти к восстановлению" : "Открыть участника"}
       </button>
+      </div>
     </div>
   );
 }

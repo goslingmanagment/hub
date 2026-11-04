@@ -22,6 +22,10 @@ const queries = vi.hoisted(() => ({
   useAdminUnassignPage: vi.fn(),
 }));
 vi.mock("../apps/dashboard/src/api/queries.ts", () => queries);
+// The card reads the person's AI limit for today: not part of these lifecycle checks.
+vi.mock("../apps/dashboard/src/api/adminAiSpend.ts", () => ({
+  useAdminAiChatterLimits: () => ({ data: undefined, isLoading: false, isError: true, refetch: vi.fn() }),
+}));
 
 interface ConfirmationProps {
   title: string;
@@ -43,7 +47,8 @@ vi.mock("../apps/dashboard/src/components/shared/ConfirmModal.tsx", async () => 
 const toast = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
 vi.mock("../apps/dashboard/node_modules/sonner/dist/index.mjs", () => ({ toast }));
 
-import { ConfirmationDialog, UserDetailModal } from "../apps/dashboard/src/pages/settings/team/UserDetailModal.tsx";
+import { MemoryRouter } from "../apps/dashboard/node_modules/react-router/dist/development/index.js";
+import { ConfirmationDialog, PersonCard } from "../apps/dashboard/src/pages/team/people/PersonPage.tsx";
 
 function member(id: number, username = "Nikita"): AdminUser {
   return {
@@ -76,9 +81,9 @@ beforeEach(() => {
 });
 
 function renderCard(user: AdminUser) {
-  return renderToStaticMarkup(createElement(UserDetailModal, {
-    user, createLink: queries.useCreateAccountLink(), onClose: vi.fn(), onLinkCreated: vi.fn(),
-  }));
+  return renderToStaticMarkup(createElement(MemoryRouter, null, createElement(PersonCard, {
+    user, createLink: queries.useCreateAccountLink(), onDeleted: vi.fn(), onLinkCreated: vi.fn(),
+  })));
 }
 
 describe("permanent account deletion", () => {

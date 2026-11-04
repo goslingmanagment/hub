@@ -264,6 +264,27 @@ export const settingsHandlers: DemoHandlers = {
     return accountLinks(user, request.now);
   },
 
+  // The team's invitations: an invented link, so the one-time window can be shown. Nothing is created.
+  adminCreateInvite: (request) => {
+    const refused = ownerOnly(request);
+    if (refused) return refused;
+    const body = request.body as { username?: string; role?: "chatter" | "team_lead"; pageLabels?: string[]; expiresInHours?: number };
+    const username = body.username ?? "new.chatter";
+    const user: DemoUser = { id: 99, username, role: body.role ?? "chatter", name: username, pages: body.pageLabels ?? [], active: true };
+    return {
+      user: { ...adminUser(user, request.now), lastActiveAt: null, registrationState: "invited" as const },
+      link: { id: 990, kind: "invite" as const, keyPrefix: "dmoinv", token: "demo-invite-link-not-real", expiresAt: iso(hoursAgo(request.now, -(body.expiresInHours ?? 168))) },
+    };
+  },
+  adminCreateAccountLink: (request) => {
+    const refused = ownerOnly(request);
+    if (refused) return refused;
+    const user = findUser(request);
+    if (!user) return demoError(404, "Not Found", "Пользователь не найден");
+    const body = request.body as { kind?: "invite" | "password_reset"; expiresInHours?: number };
+    return { id: 991, kind: body.kind ?? "password_reset", keyPrefix: "dmolnk", token: "demo-reset-link-not-real", expiresAt: iso(hoursAgo(request.now, -(body.expiresInHours ?? 168))) };
+  },
+
   ...personaHandlers,
   ...collectionHandlers,
 };

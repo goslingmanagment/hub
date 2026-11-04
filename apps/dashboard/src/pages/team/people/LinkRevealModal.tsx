@@ -13,7 +13,7 @@ import { buildJoinLink, currentOrigin, telegramMessage } from "./teamView.js";
  * to a query cache, never re-fetched, never logged and never put in a URL path
  * (the person's browser carries it in the `#` fragment). It does live on in the
  * MUTATION result until that mutation is reset, so closing this dialog resets
- * it — `onClose` is wired in TeamTab to `.reset()` both link mutations, and the
+ * it — `onClose` is wired in the people layout to `.reset()` both link mutations, and the
  * secret leaves memory with the dialog rather than idling in the cache.
  *
  * Escape and backdrop clicks do NOT close it (`explicitCloseOnly`): this is the

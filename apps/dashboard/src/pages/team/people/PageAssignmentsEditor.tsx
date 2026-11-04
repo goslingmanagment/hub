@@ -1,6 +1,6 @@
 import { useId } from "react";
+import { Link } from "react-router";
 import type { Platform } from "@agency_hub_core/shared";
-import { PlatformBadge } from "@/components/shared/PlatformBadge";
 
 interface AssignedPageLike {
   id: number;
@@ -66,23 +66,22 @@ export function PageAssignmentsEditor({
   const selectId = useId();
   return (
     <div>
-      <h3 className="card-title mb-2">{labels.assigned}</h3>
       {assignedPages.length === 0 ? (
-        <p className="text-sm text-text-secondary">{labels.empty}</p>
+        <p className="team-muted">{labels.empty}</p>
       ) : (
-        <ul className="divide-y divide-border-light rounded-lg border border-border">
+        <ul className="team-list team-list-flush">
           {assignedPages.map((page) => (
-            <li key={page.id} className="flex flex-wrap items-center justify-between gap-2 px-3 py-2">
-              <div className="flex min-w-0 flex-wrap items-center gap-2 text-sm text-text-primary">
-                <span className="font-medium">{page.label}</span>
-                <PlatformBadge platform={page.platform} />
-                <span className="text-text-secondary">{page.modelName}</span>
+            <li key={page.id} className="team-list-row">
+              <div className="team-list-what">
+                <Link to={`/pages/${encodeURIComponent(page.label)}`} className="team-link font-medium">{page.label}</Link>
+                <span className="platform-tag">{PLATFORM_NAME[page.platform]}</span>
+                <span className="team-muted">{page.modelName}</span>
               </div>
               <button
                 type="button"
                 disabled={unassignPending || assignPending}
                 onClick={() => onUnassign(page.label)}
-                className="btn btn-ghost btn-sm"
+                className="btn btn-sm"
               >
                 {labels.unassign}
               </button>
@@ -91,24 +90,24 @@ export function PageAssignmentsEditor({
         </ul>
       )}
 
-      {pagesLoading && <p role="status" className="mt-3 text-sm text-text-secondary">Загружаем страницы…</p>}
+      {pagesLoading && <p role="status" className="team-muted mt-3">Загружаем страницы…</p>}
       {pagesError && (
-        <div role="alert" className="notice notice-danger mt-3 flex-wrap items-center">
-          <span className="min-w-0 flex-1">Список страниц не обновился. Выбор сохранён — обновите список перед назначением.</span>
-          {onRetryPages && <button type="button" onClick={onRetryPages} className="btn btn-sm">Повторить</button>}
+        <div role="alert" className="notice notice-warning mt-3">
+          <div className="notice-body">Список страниц не обновился. Выбор сохранён — обновите список перед назначением.</div>
+          {onRetryPages && <div className="notice-action"><button type="button" onClick={onRetryPages} className="btn btn-sm">Повторить</button></div>}
         </div>
       )}
 
       {availablePages.length > 0 && (
         <div className="mt-4">
           <label htmlFor={selectId} className="field-label">{labels.assignHeading}</label>
-          <div className="flex gap-2">
+          <div className="team-assign">
             <select
               id={selectId}
               value={selectedLabel}
               disabled={pagesLoading || pagesError || assignPending || unassignPending}
               onChange={(event) => onSelectedLabelChange(event.target.value)}
-              className="select flex-1"
+              className="select min-w-0 flex-1"
             >
               <option value="">{labels.select}</option>
               {availablePages.map((page) => (
