@@ -96,6 +96,9 @@ export const SERVED_CLIENT_CAPABILITIES: readonly ClientHubCapabilityName[] = [
   // /api/v1/client/pages/:pageLabel/fans/:fanRef/deleted-messages
   // (clientDeletedMessages). No owner switch.
   "deleted-messages-v1",
+  // The proxies of the caller's Fansly pages, with their logins: GET
+  // /api/v1/client/fansly-proxies (clientFanslyProxies). No owner switch.
+  "fansly-proxies-v1",
   // chat-extension X54: the AI feature stream takes `livePpvContext`, the PPV
   // state of the open OnlyFans chat read from the platform. Taking the field is
   // not using it: the fresh text's flag (the page's `freshText`) decides.

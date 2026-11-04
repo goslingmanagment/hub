@@ -213,6 +213,7 @@ export const kernelOperations = {
   clientFanQueueRelease: { method: "POST", path: "/api/v1/client/pages/:pageLabel/fan-queues/:queueId/release" },
   clientFanQueueTake: { method: "POST", path: "/api/v1/client/pages/:pageLabel/fan-queues/:queueId/take" },
   clientFanQueues: { method: "GET", path: "/api/v1/client/pages/:pageLabel/fan-queues" },
+  clientFanslyProxies: { method: "GET", path: "/api/v1/client/fansly-proxies" },
   clientHandoff: { method: "GET", path: "/api/v1/client/pages/:pageLabel/handoff" },
   clientInConversation: { method: "GET", path: "/api/v1/client/pages/:pageLabel/in-conversation" },
   clientMessageAuthors: { method: "GET", path: "/api/v1/client/pages/:pageLabel/fans/:fanRef/message-authors" },
