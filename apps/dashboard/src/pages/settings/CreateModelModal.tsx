@@ -4,6 +4,7 @@ import { useAdminCreateModel } from "@/api/queries";
 import { ModalShell } from "@/components/shared/ModalShell";
 import { Field } from "@/components/shared/Field";
 import { toast } from "sonner";
+import { isConflict, toastWriteError } from "./settingsFeedback.js";
 
 const CYRILLIC: Readonly<Record<string, string>> = {
   а: "a", б: "b", в: "v", г: "g", д: "d", е: "e", ё: "e", ж: "zh", з: "z", и: "i", й: "y", к: "k", л: "l",
@@ -28,6 +29,8 @@ export function CreateModelModal({ onClose }: { onClose: () => void }) {
   // null: the short name follows the name until the owner types one himself.
   const [typedSlug, setTypedSlug] = useState<string | null>(null);
   const slug = typedSlug ?? slugFromName(name);
+  // A 409: the short name is taken. Shown under its field until it changes.
+  const [conflict, setConflict] = useState(false);
 
   async function handleSubmit() {
     const body: CreateModelBody = {
@@ -40,7 +43,8 @@ export function CreateModelModal({ onClose }: { onClose: () => void }) {
       toast.success("Модель добавлена");
       onClose();
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Не удалось добавить модель");
+      if (isConflict(error)) setConflict(true);
+      else toastWriteError(error, "Не удалось добавить модель");
     }
   }
 
@@ -50,16 +54,21 @@ export function CreateModelModal({ onClose }: { onClose: () => void }) {
         <Field label="Имя модели">
           <input
             value={name}
-            onChange={(event) => setName(event.target.value)}
+            onChange={(event) => { setName(event.target.value); setConflict(false); }}
             placeholder="например, Лора"
             autoComplete="off"
             className="input"
           />
         </Field>
-        <Field label="Короткое имя" hint="Внутреннее имя модели в Hub. Подставляется из имени — менять не обязательно.">
+        <Field
+          label="Короткое имя"
+          hint="Внутреннее имя модели в Hub. Подставляется из имени, менять не обязательно."
+          error={conflict ? "Модель с таким коротким именем уже есть." : undefined}
+        >
           <input
             value={slug}
-            onChange={(event) => setTypedSlug(event.target.value)}
+            aria-invalid={conflict}
+            onChange={(event) => { setTypedSlug(event.target.value); setConflict(false); }}
             placeholder="lora"
             autoComplete="off"
             spellCheck={false}
@@ -68,8 +77,8 @@ export function CreateModelModal({ onClose }: { onClose: () => void }) {
         </Field>
       </div>
 
-      <div className="mt-6 flex items-center justify-end gap-2">
-        <button type="button" onClick={onClose} className="btn">
+      <div className="dialog-actions">
+        <button type="button" onClick={onClose} disabled={createModel.isPending} className="btn">
           Отмена
         </button>
         <button

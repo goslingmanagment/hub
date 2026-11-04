@@ -162,7 +162,7 @@ function SettingLabel({ item }: { item: ConfigItem }) {
   );
 }
 
-function SettingRow({ item, friendly = false }: { item: ConfigItem; friendly?: boolean }) {
+function SettingRow({ item, friendly = false, alwaysConfirm = false }: { item: ConfigItem; friendly?: boolean; alwaysConfirm?: boolean }) {
   // Number/string live keys get the scalar editor; boolean live keys get the
   // on/off switch. Other kinds stay read-only — see liveEditorKind.
   const editorKind = liveEditorKind(item);
@@ -189,7 +189,7 @@ function SettingRow({ item, friendly = false }: { item: ConfigItem; friendly?: b
           <ConfigEditor item={item} friendly={friendly} />
         )}
         {editorKind === "boolean" && (
-          <BooleanConfigEditor item={item} />
+          <BooleanConfigEditor item={item} alwaysConfirm={alwaysConfirm} />
         )}
         {!editorKind && <p className="text-xs leading-relaxed text-text-muted">Меняется в настройках сервера.</p>}
         {editorKind && item.runtimeApply === "boot" && (
@@ -275,12 +275,21 @@ function RoutedConfiguration() {
   );
 }
 
-function ConfigurationView({ hash, feature = null, featureBackTo, allSettingsHref, navigationState }: {
+/**
+ * The parameters of Hub: all of them, or one feature's. `featureHeader={false}`
+ * (a feature's own screen, «Функции ИИ → …»): the screen draws the feature's name
+ * and what switching it off does, the rows sit in one card «Параметры» and the
+ * scope line goes to the bottom. `alwaysConfirm`: every switch asks a second press,
+ * not only the costly ones. Requests and checks are the same.
+ */
+export function ConfigurationView({ hash, feature = null, featureBackTo, allSettingsHref, navigationState, featureHeader = true, alwaysConfirm = false }: {
   hash: string;
   feature?: HubFeature | null;
   featureBackTo?: string;
   allSettingsHref?: string;
   navigationState?: unknown;
+  featureHeader?: boolean;
+  alwaysConfirm?: boolean;
 }) {
   const { data, isLoading, isError, isFetching, refetch } = useAdminConfig();
   const searchRef = useRef<HTMLInputElement>(null);
@@ -337,7 +346,7 @@ function ConfigurationView({ hash, feature = null, featureBackTo, allSettingsHre
 
   return (
     <div className="config-screen space-y-5">
-      {feature && (
+      {feature && featureHeader && (
         <div className="card card-body">
           <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-sm">
             <Link
@@ -439,6 +448,11 @@ function ConfigurationView({ hash, feature = null, featureBackTo, allSettingsHre
       <div className="space-y-5">
         {groups.map((group) => (
           <section className="card overflow-clip" key={group.subsystem} hidden={!group.items.some((item) => visibleKeys.has(item.key))}>
+            {feature && !featureHeader && !scopeExpanded ? (
+              <div className="card-header">
+                <h2 className="card-title">Параметры</h2>
+              </div>
+            ) : (
             <div className="card-header bg-hover-alt">
               <div className="min-w-0">
                 <h3 className="card-title">
@@ -450,6 +464,7 @@ function ConfigurationView({ hash, feature = null, featureBackTo, allSettingsHre
                 {SUBSYSTEM_COPY_RU[group.subsystem] && <p className="card-description">{SUBSYSTEM_COPY_RU[group.subsystem]}</p>}
               </div>
             </div>
+            )}
             <div className="config-group-items">
               {[...group.items]
                 .sort((a, b) => feature && !scopeExpanded
@@ -457,13 +472,23 @@ function ConfigurationView({ hash, feature = null, featureBackTo, allSettingsHre
                   : rowRank(a) - rowRank(b))
                 .map((item) => (
                   <div key={item.key} hidden={!visibleKeys.has(item.key)}>
-                    <SettingRow item={item} friendly={feature !== null && feature.keys.includes(item.key)} />
+                    <SettingRow item={item} friendly={feature !== null && feature.keys.includes(item.key)} alwaysConfirm={alwaysConfirm && feature !== null && feature.keys.includes(item.key)} />
                   </div>
                 ))}
             </div>
           </section>
         ))}
       </div>
+      {feature && !featureHeader && (
+        <div className="settings-bottom">
+          <p className="text-sm text-text-secondary">
+            {scopeExpanded
+              ? "Показаны также связанные настройки, необходимые для проверки зависимостей."
+              : "Здесь собраны только настройки этой функции. Сохраняйте изменения по одному."}
+          </p>
+          <Link className="link settings-bottom-link" to={allSettingsHref ?? "/system/dev/config"} state={navigationState}>Все параметры</Link>
+        </div>
+      )}
       <details className="help">
         <summary>
           Связь с сервером · {data.roleStatuses.length > 0 && data.roleStatuses.every((role) => role.status === "active") ? "все части Hub на связи" : "требует проверки"}

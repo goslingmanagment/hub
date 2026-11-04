@@ -38,8 +38,10 @@ export function resolveBooleanToggle(opts: {
   item: Pick<ConfigItem, "key" | "overrideVersion" | "costWarning" | "destructive">;
   target: boolean;
   confirm: BooleanConfirm | null;
+  /** A switch that changes AI answers asks a second press even without a cost warning. */
+  alwaysConfirm?: boolean;
 }): { kind: "arm" } | { kind: "save"; body: ConfigUpdateBody } {
-  const needsConfirm = Boolean(opts.item.costWarning) || opts.item.destructive;
+  const needsConfirm = Boolean(opts.alwaysConfirm) || Boolean(opts.item.costWarning) || opts.item.destructive;
   const armed = opts.confirm?.action === "save" && opts.confirm.target === opts.target;
   if (needsConfirm && !armed) return { kind: "arm" };
   return { kind: "save", body: booleanPatchBody(opts.item, opts.target) };
@@ -433,13 +435,14 @@ export function ConfigEditor({ item, friendly = false }: { item: ConfigItem; fri
  * cannot go on a stale confirmation. «Все параметры» and a business screen's own
  * switch run the same logic and send the same body.
  */
-export function useBooleanConfigToggle(item: ConfigItem) {
+export function useBooleanConfigToggle(item: ConfigItem, options: { alwaysConfirm?: boolean } = {}) {
+  const alwaysConfirm = options.alwaysConfirm === true;
   const mutations = useEditorMutations();
   const [confirm, setConfirm] = useState<(BooleanConfirm & { snapshot: ConfigSnapshot }) | null>(null);
   const receipt = useConfigReceipt(item);
   const current = receipt.waiting && receipt.receipt?.action === "save"
     ? receipt.receipt.value === true : seedValue(item) === "true";
-  const needsConfirm = Boolean(item.costWarning) || item.destructive;
+  const needsConfirm = alwaysConfirm || Boolean(item.costWarning) || item.destructive;
   const conflict = isConflict(mutations.error);
   const staleConfirmation = confirm !== null && configSnapshotChanged(confirm.snapshot, item);
   const needsReview = conflict || staleConfirmation;
@@ -454,7 +457,7 @@ export function useBooleanConfigToggle(item: ConfigItem) {
   function toggle() {
     if (pending || needsReview) return;
     const target = !current;
-    const action = resolveBooleanToggle({ item, target, confirm });
+    const action = resolveBooleanToggle({ item, target, confirm, alwaysConfirm });
     if (action.kind === "arm") {
       setConfirm({ action: "save", target, snapshot: captureConfigSnapshot(item) });
       return;
@@ -486,8 +489,8 @@ export function useBooleanConfigToggle(item: ConfigItem) {
   return { mutations, receipt, confirm, setConfirm, current, needsConfirm, conflict, staleConfirmation, needsReview, pending, reset, toggle, revert };
 }
 
-export function BooleanConfigEditor({ item }: { item: ConfigItem }) {
-  const { mutations, receipt, confirm, setConfirm, current, needsConfirm, conflict, staleConfirmation, needsReview, pending, reset, toggle, revert } = useBooleanConfigToggle(item);
+export function BooleanConfigEditor({ item, alwaysConfirm = false }: { item: ConfigItem; alwaysConfirm?: boolean }) {
+  const { mutations, receipt, confirm, setConfirm, current, needsConfirm, conflict, staleConfirmation, needsReview, pending, reset, toggle, revert } = useBooleanConfigToggle(item, { alwaysConfirm });
   const label = CONFIG_COPY_RU[item.key]?.title ?? item.label;
 
   return (

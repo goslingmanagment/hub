@@ -3,8 +3,15 @@ import type { ModelListItem, UpdateModelBody } from "@agency_hub_core/contracts"
 import { useAdminUpdateModel } from "@/api/queries";
 import { ModalShell } from "@/components/shared/ModalShell";
 import { Field } from "@/components/shared/Field";
+import { Disclosure } from "@/components/ui/Disclosure";
 import { toast } from "sonner";
+import { isConflict, toastWriteError } from "./settingsFeedback.js";
 
+/**
+ * «Переименовать модель»: the name in front, the short name folded under
+ * «Подробнее», away from the harmless field. The body holds only what changed;
+ * nothing changed, nothing is sent. The target is the row's model.
+ */
 export function EditModelModal({
   model,
   onClose,
@@ -15,6 +22,7 @@ export function EditModelModal({
   const updateModel = useAdminUpdateModel(model.slug);
   const [slug, setSlug] = useState(model.slug);
   const [name, setName] = useState(model.name);
+  const [conflict, setConflict] = useState(false);
 
   async function handleSubmit() {
     const body: UpdateModelBody = {};
@@ -31,12 +39,13 @@ export function EditModelModal({
       toast.success("Модель сохранена");
       onClose();
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Не удалось сохранить модель");
+      if (isConflict(error)) setConflict(true);
+      else toastWriteError(error, "Не удалось сохранить модель");
     }
   }
 
   return (
-    <ModalShell title={`Изменить модель «${model.name}»`} onClose={onClose}>
+    <ModalShell title={`Переименовать модель «${model.name}»`} onClose={() => { if (!updateModel.isPending) onClose(); }}>
       <div className="space-y-4">
         <Field label="Имя модели">
           <input
@@ -46,25 +55,32 @@ export function EditModelModal({
             className="input"
           />
         </Field>
-        <Field label="Короткое имя" hint="Внутреннее имя модели в Hub. Обычно его не меняют.">
-          <input
-            value={slug}
-            onChange={(event) => setSlug(event.target.value)}
-            autoComplete="off"
-            spellCheck={false}
-            className="input"
-          />
-        </Field>
+        <Disclosure label="Подробнее" open={conflict || slug !== model.slug ? true : undefined}>
+          <Field
+            label="Короткое имя"
+            hint="Внутреннее имя модели в Hub. Обычно его не меняют."
+            error={conflict ? "Модель с таким коротким именем уже есть." : undefined}
+          >
+            <input
+              value={slug}
+              aria-invalid={conflict}
+              onChange={(event) => { setSlug(event.target.value); setConflict(false); }}
+              autoComplete="off"
+              spellCheck={false}
+              className="input"
+            />
+          </Field>
+        </Disclosure>
       </div>
 
-      <div className="mt-6 flex items-center justify-end gap-2">
-        <button type="button" onClick={onClose} className="btn">
+      <div className="dialog-actions">
+        <button type="button" onClick={onClose} disabled={updateModel.isPending} className="btn">
           Отмена
         </button>
         <button
           type="button"
           disabled={updateModel.isPending || !slug.trim() || !name.trim()}
-          onClick={handleSubmit}
+          onClick={() => void handleSubmit()}
           className="btn btn-primary"
         >
           {updateModel.isPending ? "Сохраняем…" : "Сохранить"}
