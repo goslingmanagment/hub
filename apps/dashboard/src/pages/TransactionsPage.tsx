@@ -133,8 +133,8 @@ export function TransactionsPage() {
         <StatusPanel
           tone="error"
           title="Некорректная ссылка на операции"
-          description="В ссылке нет периода или он задан неверно. Откройте операции из дохода ещё раз."
-          action={<Link to="/money/income">К доходу</Link>}
+          description="В ссылке нет периода или он задан неверно. Откройте операции с Главной ещё раз."
+          action={<Link to="/">На Главную</Link>}
         />
       ) : (
         <>

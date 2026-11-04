@@ -98,22 +98,14 @@ const fansCrumbs = (page?: string): Crumb[] => [
 /** Every screen of the console. The order inside a section is the order of its tabs. */
 export const SCREENS: readonly Screen[] = [
   {
-    id: "home", path: "/", label: "Главная", title: "Сводка дня", section: "home",
-    why: "Сколько заработали, что ждёт вас и кто сейчас работает.",
+    id: "home", path: "/", label: "Главная", title: "Главная", section: "home",
+    why: "Сколько заработали, что выросло и упало, что ждёт вас и кто на смене.",
     pageFilter: "all",
     period: { class: "shared", options: COMMON_PERIODS },
-    keywords: "обзор старт сводка",
+    keywords: "обзор старт сводка доход выручка деньги заработок тренды",
   },
 
   // ── Деньги ─────────────────────────────────────────────────────────────
-  {
-    id: "income", path: "/money/income", label: "Доход", title: "Доход", section: "money",
-    why: "Сколько заработали страницы, после комиссии площадок.",
-    pageFilter: "any", platforms: REPORTED,
-    period: { class: "shared", options: COMMON_PERIODS },
-    keywords: "обзор выручка деньги заработок",
-    untilRebuilt: { pageFilter: "all" },
-  },
   {
     id: "transactions", path: "/money/transactions", label: "Операции", title: "Операции", section: "money",
     why: "Какие именно операции дали сумму.",
@@ -613,15 +605,14 @@ const tab = (id: string, label: string, ...screens: string[]): SectionTab => ({ 
 
 export const SECTIONS: readonly Section[] = [
   {
-    id: "home", label: "Главная", title: "Сводка дня", icon: "House", nav: "none",
+    id: "home", label: "Главная", title: "Главная", icon: "House", nav: "none",
     tabs: [tab("home", "Главная", "home")],
   },
   {
     id: "money", label: "Деньги", title: "Деньги", icon: "Wallet", nav: "tabs",
     tabs: [
-      tab("income", "Доход", "income"),
-      tab("transactions", "Операции", "transactions"),
       tab("costs", "Расходы", "costs-ai", "costs-anthropic", "costs-onlyfans-api"),
+      tab("transactions", "Операции", "transactions"),
     ],
   },
   {

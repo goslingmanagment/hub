@@ -67,7 +67,7 @@ function counted(incident: NotificationsIncidentItem, loginPages: ReadonlySet<st
   return true;
 }
 
-export function useWaitingCounts(role: string): { rows: WaitingRow[]; total: number } {
+export function useWaitingCounts(role: string): { rows: WaitingRow[]; total: number; loading: boolean } {
   const owner = role === "owner";
   const ofapi = useOfapiStatus(role);
   const today = toBusinessDate(new Date(), MOSCOW_TIME_ZONE);
@@ -157,7 +157,8 @@ export function useWaitingCounts(role: string): { rows: WaitingRow[]; total: num
     }
   }
 
-  return { rows, total: rows.reduce((sum, row) => sum + (row.count ?? 0), 0) };
+  const loading = [drafts, unknown, disputes, customs, held, overview, enginePages, incidents, extension, history].some((query) => query.isLoading);
+  return { rows, total: rows.reduce((sum, row) => sum + (row.count ?? 0), 0), loading };
 }
 
 /** The Fansly pages whose browser was signed out or whose login Fansly refuses. */

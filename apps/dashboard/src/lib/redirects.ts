@@ -136,7 +136,8 @@ export const LEGACY_ROUTES: ReadonlyArray<LegacyRule & { path: string }> = [
   },
   { path: "dev/client-health", to: "/system/dev/extension" }, // §7.1, row 50
   // The roots of the new sections (65–69).
-  { path: "money", to: "/money/income" },
+  { path: "money", to: "/money/costs/ai" },
+  { path: "money/income", to: "/" },
   { path: "money/costs", to: "/money/costs/ai" },
   { path: "settings/ai", to: "/settings/ai/personas" },
   { path: "system", to: "/system/collection" },
@@ -145,11 +146,6 @@ export const LEGACY_ROUTES: ReadonlyArray<LegacyRule & { path: string }> = [
 
 // Four addresses are alive: the same path is a new screen, some of its old
 // parameters are not. Each answers with a rule or stays where it is.
-
-/** `/`: row, chart and sort belong to Income; a bare `/` and `/?period=` stay Home (1). */
-export function homeLegacyRule(query: URLSearchParams): LegacyRule | null {
-  return query.has("row") || query.has("chart") || query.has("sort") ? { to: "/money/income" } : null;
-}
 
 /** `/pages/:pageLabel`: the old block of operations (4). */
 export function pageCardLegacyRule(query: URLSearchParams): LegacyRule | null {
@@ -211,10 +207,9 @@ export function resolveLegacyUrl(url: string): string | null {
   const { search, hash } = parsed;
   const pathname = decodedPath(parsed.pathname);
   const query = new URLSearchParams(search);
-  const live = pathname === "/" ? homeLegacyRule(query)
-    : pathname === "/stats" ? statsLegacyRule(query)
-      : pathname === "/settings" ? SETTINGS_INDEX_RULE
-        : null;
+  const live = pathname === "/stats" ? statsLegacyRule(query)
+    : pathname === "/settings" ? SETTINGS_INDEX_RULE
+      : null;
   if (live) return printTarget(legacyTarget(live, {}, search, hash));
   const card = matchPath({ path: "/pages/:pageLabel", end: true }, pathname);
   if (card && pathname !== "/pages/") {

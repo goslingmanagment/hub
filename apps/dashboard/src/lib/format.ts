@@ -261,6 +261,19 @@ export function formatWindowRange(from: string, toExclusive: string): string {
   return formatDayRange(from, new Date(Date.parse(toExclusive) - 1));
 }
 
+/** «5 ч 7 мин», «3 ч», «40 мин». */
+export function formatDuration(minutes: number): string {
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  if (hours === 0) return `${rest} мин`;
+  return rest === 0 ? `${hours} ч` : `${hours} ч ${rest} мин`;
+}
+
+/** «23:41» по Москве. */
+export function formatTimeOfDay(at: string | number | Date): string {
+  return CLOCK.format(new Date(at));
+}
+
 /** «Обновлено в 23:41, 5 мин назад». */
 export function formatUpdated(at: string | number | Date, now: number = Date.now()): string {
   const instant = new Date(at);

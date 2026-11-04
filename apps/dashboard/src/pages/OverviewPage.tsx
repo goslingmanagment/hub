@@ -47,6 +47,7 @@ import { FreeAudienceLink, PaidSubscribersLink, PageSources } from "./overview/P
 import { QueryNotice } from "@/components/shared/QueryNotice";
 import { RevenueDelta } from "./overview/RevenueValue.js";
 import { RevenueCharts } from "./overview/RevenueCharts.js";
+import { HomeStrip } from "./overview/HomeStrip.js";
 import "./overview.css";
 
 export { describeMixedRevenueWindows } from "./overview/presentation.js";
@@ -353,6 +354,7 @@ export function OverviewPage() {
           onRefresh: () => void Promise.all([revenue.refetch(), catalog.refetch()]),
         } : undefined}
       />
+      <HomeStrip />
       {catalog.isError && (
         <div>
           <p className="mb-1 text-xs font-medium text-text-secondary">

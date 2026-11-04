@@ -48,7 +48,6 @@ export function App() {
               <Route element={<ScreenFrame />}>
                 <Route index element={<Screens.OverviewPage />} />
 
-                <Route path="money/income" element={<Screens.OverviewPage />} />
                 <Route path="money/transactions" element={<Screens.TransactionsPage />} />
                 <Route element={<Owner />}>
                   <Route path="money/costs/ai" element={<Screens.AiCostsScreen />} />

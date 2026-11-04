@@ -7,7 +7,7 @@ import { matchScreen, SCREENS, SECTIONS, screenById } from "../apps/dashboard/sr
 // and lands where it always did, with its parameters and its anchor. One row per
 // line of that table, in its order.
 const REDIRECTS: ReadonlyArray<readonly [number | string, string, string]> = [
-  [1, "/?row=mia-1&chart=page:mia-1&sort=decline&period=30d", "/money/income?row=mia-1&chart=page%3Amia-1&sort=decline&period=30d"],
+  ["money/income", "/money/income?period=30d", "/?period=30d"],
   [2, "/transactions?pageLabel=mia-1&from=2026-10-01T00:00:00Z&to=2026-10-08T00:00:00Z&type=tip&state=posted&sortBy=occurredAt&sortDir=asc&reportableOnly=true&offset=50&backTo=%2F%3Fperiod%3D7d", "/money/transactions?from=2026-10-01T00%3A00%3A00Z&to=2026-10-08T00%3A00%3A00Z&type=tip&state=posted&sortBy=occurredAt&sortDir=asc&reportableOnly=true&offset=50&backTo=%2F%3Fperiod%3D7d&page=mia-1"],
   [3, "/pages", "/settings/pages"],
   [4, "/pages/mia-1?type=tip&txOffset=25", "/money/transactions?type=tip&offset=25&page=mia-1"],
@@ -75,7 +75,7 @@ const REDIRECTS: ReadonlyArray<readonly [number | string, string, string]> = [
   [63, "/dev/sync-status?runId=42", "/system/dev/log/42"],
   [64, "/dev/sync-status", "/system/dev/log"],
   ["7.1, row 50", "/dev/client-health", "/system/dev/extension"],
-  [65, "/money", "/money/income"],
+  [65, "/money", "/money/costs/ai"],
   [66, "/money/costs", "/money/costs/ai"],
   [67, "/settings/ai", "/settings/ai/personas"],
   [68, "/system", "/system/collection"],
@@ -96,7 +96,7 @@ describe("old addresses (design/ia.md §8.2)", () => {
     expect(resolveLegacyUrl("/settings?tab=engine&page=a%2Fb")).toBe("/system/collection/a%2Fb");
   });
 
-  it.each(["/", "/?period=30d", "/stats", "/stats?period=30d&page=mia-1", "/pages/mia-1", "/pages/mia-1?period=7d", "/pages/mia-1/promo", "/publications?page=mia-1&status=draft&window=all", "/team/customs", "/account", "/join", "/login"])(
+  it.each(["/", "/?period=30d", "/?row=mia-1&chart=page:mia-1&sort=decline&period=30d", "/stats", "/stats?period=30d&page=mia-1", "/pages/mia-1", "/pages/mia-1?period=7d", "/pages/mia-1/promo", "/publications?page=mia-1&status=draft&window=all", "/team/customs", "/account", "/join", "/login"])(
     "leaves %s where it is",
     (url) => {
       expect(resolveLegacyUrl(url)).toBeNull();
