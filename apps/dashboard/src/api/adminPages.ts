@@ -2,7 +2,6 @@ import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tansta
 import type {
   CreateModelBody,
   CreatePageBody,
-  TestProxyBody,
   UpdateModelBody,
   UpdatePageBody,
   VerifyCredentialsBody,
@@ -119,14 +118,6 @@ export function useAdminVerifyCredentials() {
     meta: { suppressGlobalError: true },
     mutationFn: (body: VerifyCredentialsBody) =>
       kernel.adminVerifyCredentials({ body }),
-  });
-}
-
-export function useAdminTestProxy() {
-  return useMutation({
-    meta: { suppressGlobalError: true },
-    mutationFn: (body: TestProxyBody) =>
-      kernel.adminTestProxy({ body }),
   });
 }
 

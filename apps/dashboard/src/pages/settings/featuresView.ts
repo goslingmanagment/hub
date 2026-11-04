@@ -1,4 +1,5 @@
 import type { ConfigItem, ConfigViewResponse } from "@agency_hub_core/contracts";
+import { FEATURE_STATUS, type StatusWord } from "@/lib/statusWords";
 import type { HubFeature } from "./featureCatalog.js";
 
 export type FeatureState = { kind: "on" | "off" | "limited" | "unknown" | "pending" | "unavailable"; label: string; detail: string };
@@ -14,13 +15,13 @@ export function featureState(feature: HubFeature, data: ConfigViewResponse): Fea
   const fleetKnown = ["api", "worker", "sync"].every((role) => data.roleStatuses.some((entry) => entry.role === role && entry.status === "active"))
     && data.roleStatuses.every((entry) => entry.status === "active");
   if (!fleetKnown || keys.some((key) => valueOf(items.get(key)!) === undefined)) {
-    return { kind: "unknown", label: "Нужно проверить", detail: "Нет согласованного актуального значения от всех частей Hub." };
+    return { kind: "unknown", label: "Нет единого значения", detail: "Нет согласованного актуального значения от всех частей Hub." };
   }
   for (const entry of feature.gates) {
     const item = items.get(entry.key)!;
     const value = valueOf(item)!;
     // Server-computed boolean state remains authoritative for switches.
-    if (item.kind === "boolean" && item.runningState === "unknown") return { kind: "unknown", label: "Нужно проверить", detail: "Применение переключателя не подтверждено сервером." };
+    if (item.kind === "boolean" && item.runningState === "unknown") return { kind: "unknown", label: "Нет единого значения", detail: "Применение переключателя не подтверждено сервером." };
     if ((item.kind === "boolean" && item.runningState === "off") || (entry.off ?? [false]).includes(value as string | boolean)) return { kind: "off", label: "Выключено", detail: "Один из необходимых переключателей выключен." };
   }
   let scopeDetail = "Разрешено настройками. Выполнение проверяется отдельно.";
@@ -49,35 +50,35 @@ function reportedValue(item: ConfigItem, expectedRoles: string[]): string | numb
 }
 
 /** The one status a feature row shows: the applied state, unless it disagrees
- *  with the catalog's advice — then the advice speaks and the state becomes
- *  the muted note. Never a claim about usage or business effect. */
-export type FeatureStatusTone = "success" | "warning" | "info" | "neutral";
-export interface FeatureStatus { label: string; tone: FeatureStatusTone; note: string }
+ *  with the catalog's advice — then the advice speaks and the state becomes the
+ *  second line. Never a claim about usage or business effect. The words are the
+ *  dictionary's (lib/statusWords.ts, `FEATURE_STATUS`). */
+export interface FeatureStatus { word: StatusWord; note: string | null }
 
-export const FEATURE_ADVICE_NOTE: Record<HubFeature["advice"], string> = {
-  keep: "Совет: оставить",
-  optional: "Совет: по потребности",
-  diagnostic: "Совет: на время проверки",
-  off: "Совет: держать выключенным",
+/** The advice in short, at the head of the opened row. */
+export const FEATURE_ADVICE_SHORT: Record<HubFeature["advice"], string> = {
+  keep: "Основа работы",
+  optional: "Проверить пользу",
+  diagnostic: "Завершить проверку",
+  off: "Убрать лишнее",
 };
 
 export function featureStatus(feature: HubFeature, state: FeatureState): FeatureStatus {
-  const advice = FEATURE_ADVICE_NOTE[feature.advice];
   switch (state.kind) {
     case "pending":
+      return { word: FEATURE_STATUS.pendingApply, note: null };
     case "unknown":
-      return { label: state.label, tone: "warning", note: advice };
+      return { word: FEATURE_STATUS.mixed, note: null };
     case "unavailable":
-      return { label: state.label, tone: "neutral", note: advice };
+      return { word: FEATURE_STATUS.notInBuild, note: null };
     case "limited":
-      return { label: state.label, tone: feature.advice === "off" ? "warning" : "info", note: advice };
+      return { word: { word: state.label, tone: feature.advice === "off" ? "attention" : "moving" }, note: null };
     case "off":
-      return feature.advice === "keep"
-        ? { label: "Стоит включить", tone: "warning", note: `Сейчас: ${state.label.toLocaleLowerCase("ru-RU")}` }
-        : { label: state.label, tone: "neutral", note: advice };
+      if (feature.advice === "keep") return { word: FEATURE_STATUS.adviceOn, note: "Сейчас: выключено" };
+      return { word: state.label === FEATURE_STATUS.noPages.word ? FEATURE_STATUS.noPages : FEATURE_STATUS.off, note: null };
     case "on":
-      return feature.advice === "off" || feature.advice === "diagnostic"
-        ? { label: feature.advice === "off" ? "Стоит выключить" : "Завершить проверку", tone: "warning", note: "Сейчас: включено" }
-        : { label: state.label, tone: "success", note: advice };
+      if (feature.advice === "off") return { word: FEATURE_STATUS.adviceOff, note: "Сейчас: включено" };
+      if (feature.advice === "diagnostic") return { word: { word: "Завершить проверку", tone: "attention" }, note: "Сейчас: включено" };
+      return { word: FEATURE_STATUS.on, note: feature.scope ? state.detail.replace(/\.$/, "") : null };
   }
 }
