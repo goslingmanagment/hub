@@ -3,6 +3,7 @@ import type { KernelOperationResponse } from "@agency_hub_core/contracts";
 import { demoError, queryNumber, queryString, type DemoHandlers, type DemoRequest } from "../core.ts";
 import { DEMO_CHATTERS, DEMO_DATA_PAGES, DEMO_PAGES, DEMO_USERS, demoFans, demoPage, type DemoUser } from "../world.ts";
 import { teamCustoms, teamGreetings, teamWinBackApproaches, teamWinBackResults } from "./team-extra.ts";
+import { adminModelApplication, adminModelApplications } from "./team-applications.ts";
 import { teamChatterStats, teamShiftSales } from "./team-stats.ts";
 import {
   DAY,
@@ -665,6 +666,9 @@ export const teamHandlers: DemoHandlers = {
     if (request.role !== "owner") return demoError(403, "Forbidden", "Споры решает владелец.");
     return { changed: true, serverNow: request.now.toISOString() };
   },
+
+  adminModelApplications,
+  adminModelApplication,
 
   teamCustoms: (request) => {
     const scope = viewerPages(request);

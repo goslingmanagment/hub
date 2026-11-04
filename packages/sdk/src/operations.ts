@@ -47,6 +47,8 @@ export const kernelOperations = {
   adminListDeviceTokens: { method: "GET", path: "/api/v1/admin/users/by-id/:userId/device-tokens" },
   adminListUsers: { method: "GET", path: "/api/v1/admin/users" },
   adminLogs: { method: "GET", path: "/api/v1/admin/logs" },
+  adminModelApplication: { method: "GET", path: "/api/v1/admin/model-applications/:ref" },
+  adminModelApplications: { method: "GET", path: "/api/v1/admin/model-applications" },
   adminModels: { method: "GET", path: "/api/v1/admin/models" },
   adminOfapiBindingRefresh: { method: "POST", path: "/api/v1/admin/ofapi/webhook/bindings" },
   adminOfapiCaptureAttemptResolve: { method: "POST", path: "/api/v1/admin/ofapi/capture/attempts/:attemptId/resolve" },

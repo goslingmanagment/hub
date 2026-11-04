@@ -2,6 +2,10 @@ import { routeSchemas } from "@agency_hub_core/contracts";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
 
 import { BadRequestError } from "../../services/errors.ts";
+import {
+  getModelApplicationConsoleEntry,
+  listModelApplicationConsole,
+} from "../../services/model-application-console.ts";
 import { recordModelApplicationProgressPost } from "../../services/model-application-sessions.ts";
 import { submitModelApplication } from "../../services/model-applications.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
@@ -34,6 +38,15 @@ export async function registerModelApplicationRoutes(server: ApiServer, ctx: Api
     reply.code(201);
     return { ok: true as const, id: result.id };
   });
+
+  // The owner's console (Команда → Анкеты): read-only, polled while open.
+  server.get("/api/v1/admin/model-applications", {
+    schema: routeSchemas.adminModelApplications,
+  }, async () => listModelApplicationConsole(appContext));
+
+  server.get("/api/v1/admin/model-applications/:ref", {
+    schema: routeSchemas.adminModelApplication,
+  }, async (request) => getModelApplicationConsoleEntry(appContext, request.params.ref));
 
   // The progress post has its own body-parser scope: navigator.sendBeacon with
   // a string sends the same JSON as text/plain, so text/plain is read as JSON.

@@ -433,3 +433,14 @@
   /* A fan's long number breaks before the table scrolls. */
   .team-fan-ref { overflow-wrap: anywhere; }
 }
+
+@layer components {
+  /* Команда → Анкеты: one answer a row, the question beside its answer. */
+  .application-answers { display: grid; gap: 12px; margin: 0; }
+  .application-answer { display: grid; grid-template-columns: minmax(160px, 2fr) 3fr; gap: 16px; }
+  .application-answer dt { font-size: 14px; line-height: 20px; }
+  .application-answer dd { margin: 0; overflow-wrap: anywhere; }
+  @media (max-width: 639px) {
+    .application-answer { grid-template-columns: 1fr; gap: 2px; }
+  }
+}

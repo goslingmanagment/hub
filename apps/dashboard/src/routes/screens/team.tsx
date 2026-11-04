@@ -18,11 +18,13 @@ const TeamCustomsPage = named(() => import("@/pages/team/TeamCustomsPage"), "Tea
 const PeopleLayout = named(() => import("@/pages/team/people/PeopleLayout"), "PeopleLayout");
 const PeoplePage = named(() => import("@/pages/team/people/PeoplePage"), "PeoplePage");
 const PersonPage = named(() => import("@/pages/team/people/PersonPage"), "PersonPage");
+const ModelApplicationsPage = named(() => import("@/pages/team/applications/ModelApplicationsPage"), "ModelApplicationsPage");
+const ModelApplicationPage = named(() => import("@/pages/team/applications/ModelApplicationPage"), "ModelApplicationPage");
 
 export function teamRoutes() {
   return (
     <>
-      {/* Owner and team leads (`session`), except the people. */}
+      {/* Owner and team leads (`session`), except the people and the questionnaires. */}
       <Route path="team/shifts" element={<TeamShiftsPage />} />
       <Route path="team/coverage" element={<TeamCoveragePage />} />
       <Route path="team/held-sends" element={<ClientHeldSendsPage />} />
@@ -38,6 +40,9 @@ export function teamRoutes() {
           <Route path="team/people" element={<PeoplePage />} />
           <Route path="team/people/:userId" element={<PersonPage />} />
         </Route>
+        {/* The site's model questionnaires, live. */}
+        <Route path="team/applications" element={<ModelApplicationsPage />} />
+        <Route path="team/applications/:ref" element={<ModelApplicationPage />} />
       </Route>
     </>
   );

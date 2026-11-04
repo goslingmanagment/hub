@@ -354,3 +354,58 @@ export async function getModelApplicationSession(
     answers: Array.isArray(row.answers) ? (row.answers as ModelApplicationAnswer[]) : null,
   };
 }
+
+// --- The owner's console: light lists, answers only for the one opened ---
+
+export interface ModelApplicationEntry {
+  id: number;
+  createdAt: Date;
+  form: string;
+  name: string | null;
+  /** Answers with a value. */
+  filled: number;
+  total: number;
+  googleStatus: ModelApplicationGoogleStatus;
+  googleError: string | null;
+  /** A filling (model_application_sessions) names it. */
+  sessionLinked: boolean;
+}
+
+/** The newest sent questionnaires, without their answers. */
+export async function listModelApplicationEntries(
+  db: Database,
+  input: { limit: number },
+): Promise<ModelApplicationEntry[]> {
+  const result = await db.execute<{
+    id: string | number;
+    created_at: Date | string;
+    form: string;
+    name: string | null;
+    filled: string | number;
+    total: string | number;
+    google_status: ModelApplicationGoogleStatus;
+    google_error: string | null;
+    session_linked: boolean;
+  }>(sql`
+    select a.id, a.created_at, a.form, a.google_status, a.google_error,
+      (select nullif(btrim(e->>'value'), '') from jsonb_array_elements(a.answers) e
+        where e->>'key' = 'name' limit 1) as name,
+      (select count(*) from jsonb_array_elements(a.answers) e
+        where btrim(coalesce(e->>'value', '')) <> '') as filled,
+      jsonb_array_length(a.answers) as total,
+      exists (select 1 from model_application_sessions s where s.application_id = a.id) as session_linked
+    from model_applications a
+    order by a.id desc
+    limit ${input.limit}`);
+  return result.rows.map((row) => ({
+    id: Number(row.id),
+    createdAt: new Date(row.created_at),
+    form: row.form,
+    name: row.name,
+    filled: Number(row.filled),
+    total: Number(row.total),
+    googleStatus: row.google_status,
+    googleError: row.google_error,
+    sessionLinked: row.session_linked,
+  }));
+}

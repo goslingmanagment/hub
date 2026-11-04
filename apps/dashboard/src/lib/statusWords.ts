@@ -233,3 +233,10 @@ export const FEATURE_STATUS = {
   mixed: status("Нет единого значения", "attention"),
   pendingApply: status("Ждёт применения", "moving"),
 } as const satisfies Record<string, StatusWord>;
+
+/** Команда → Анкеты: a filling of the site's model questionnaire. */
+export const MODEL_APPLICATION_STATUS: Readonly<Record<"filling" | "abandoned" | "sent", StatusWord>> = {
+  filling: status("Заполняет", "moving"),
+  abandoned: status("Бросила", "attention"),
+  sent: status("Отправлена", "good"),
+};
