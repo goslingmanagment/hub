@@ -514,8 +514,8 @@ export const AGENT_DATASETS = {
     disclosesPurchase: false,
     fields: {
       platform: "string",
-      /** The UTC day the follows fell on (the rollup buckets `followed_at`
-       *  by UTC date) — not a Europe/Moscow business day. */
+      /** The Europe/Moscow business day the follows fell on (the rollup
+       *  buckets `followed_at` by Moscow date, as all of Hub's daily rollups). */
       businessDate: "date",
       /** The page's total follower count Hub knew for that day; null = not
        *  known (only today's value comes from the live sync). */

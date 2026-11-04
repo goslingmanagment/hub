@@ -12,9 +12,10 @@ describe("parseTransactionUrl", () => {
   it("turns the period into the platform's window, as the server counts it", () => {
     const fansly = query("", { pageLabel: "mia-1" });
     const onlyfans = query("", { pageLabel: "mia-of", platform: "onlyfans" });
-    expect(fansly.success && fansly.data).toMatchObject({ pageLabel: "mia-1", from: "2026-10-29T00:00:00.000Z", to: "2026-11-05T00:00:00.000Z", reportableOnly: true, limit: 50 });
-    // OnlyFans' window runs a day longer.
-    expect(onlyfans.success && onlyfans.data).toMatchObject({ from: "2026-10-28T00:00:00.000Z", to: "2026-11-05T00:00:00.000Z" });
+    // 7 Moscow days: 29 Oct 00:00 MSK to 5 Nov 00:00 MSK.
+    expect(fansly.success && fansly.data).toMatchObject({ pageLabel: "mia-1", from: "2026-10-28T21:00:00.000Z", to: "2026-11-04T21:00:00.000Z", reportableOnly: true, limit: 50 });
+    // OnlyFans counts the same days.
+    expect(onlyfans.success && onlyfans.data).toMatchObject({ from: "2026-10-28T21:00:00.000Z", to: "2026-11-04T21:00:00.000Z" });
   });
 
   it("keeps the exact window of a clicked sum over the period", () => {

@@ -5,6 +5,7 @@ import {
   SPENDER_RETENTION_ACTIVE_DAYS,
   SPENDER_RETENTION_INACTIVE_DAYS,
   SPENDER_RETENTION_NEEDS_REACTIVATION_LIFETIME_NET_MILLS,
+  BUSINESS_TIME_ZONE,
   businessDateToUtcStart,
   spenderAnalyticsTransactionTypes,
   toBusinessDate,
@@ -12,8 +13,8 @@ import {
   type SpenderRetentionStatus,
   type TransactionState,
   type TransactionType,
-  UTC_TIME_ZONE,
 } from "@agency_hub_core/shared";
+import { BUSINESS_TZ } from "../business-day.ts";
 import type { Database } from "../client.ts";
 import {
   dailyRevenue,
@@ -66,13 +67,13 @@ export async function rebuildSpenderDailyFacts(
   from?: Date | null,
 ) {
   const affectedFrom = from
-    ? businessDateToUtcStart(toBusinessDate(from, UTC_TIME_ZONE), UTC_TIME_ZONE)
+    ? businessDateToUtcStart(toBusinessDate(from, BUSINESS_TIME_ZONE), BUSINESS_TIME_ZONE)
     : null;
   const fromClause = affectedFrom
     ? sql`and t.occurred_at >= ${affectedFrom}`
     : sql``;
   const staleWindowClause = affectedFrom
-    ? sql`and d.business_date >= ${toBusinessDate(affectedFrom, UTC_TIME_ZONE)}::date`
+    ? sql`and d.business_date >= ${toBusinessDate(affectedFrom, BUSINESS_TIME_ZONE)}::date`
     : sql``;
 
   // One statement: `fresh` is referenced twice, so it is computed once, and
@@ -81,7 +82,7 @@ export async function rebuildSpenderDailyFacts(
     with fresh as (
       select t.platform_account_id,
              t.fan_id,
-             (timezone('UTC', t.occurred_at)::date) as business_date,
+             (timezone(${BUSINESS_TZ}, t.occurred_at)::date) as business_date,
              t.canonical_type,
              t.transaction_state,
              count(*)::int as transaction_count,
@@ -253,7 +254,7 @@ async function rebuildSpenderLifetimePage(
     return;
   }
 
-  const affectedFrom = businessDateToUtcStart(toBusinessDate(from, UTC_TIME_ZONE), UTC_TIME_ZONE);
+  const affectedFrom = businessDateToUtcStart(toBusinessDate(from, BUSINESS_TIME_ZONE), BUSINESS_TIME_ZONE);
   const affectedFanRows = await db.selectDistinct({
     fanId: transactions.fanId,
   }).from(transactions)

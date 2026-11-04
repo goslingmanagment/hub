@@ -1169,6 +1169,80 @@ export async function listRevenueDailyForPages(
     .orderBy(dailyRevenue.businessDate);
 }
 
+/**
+ * A scope's money by type over exact instants, read from the transactions — for
+ * a window whose days are not Hub's business days (Fansly's UTC days, set beside
+ * Fansly's statistics), which the Moscow-dated rollup cannot answer.
+ */
+export async function getRevenueBreakdownForExactPeriod(
+  db: Database,
+  input: { pageIds?: number[]; period: PeriodBounds },
+) {
+  const clauses = buildTransactionScopeClauses({
+    ...(input.pageIds === undefined ? {} : { pageIds: input.pageIds }),
+    period: input.period,
+    excludeExcludedTypes: true,
+  });
+
+  if (!clauses) {
+    return [];
+  }
+
+  const rows = await db.select({
+    canonicalType: transactions.canonicalType,
+    netAmountMills: sql<bigint>`coalesce(sum(${transactions.creatorNetAmountMills}), 0)::bigint`,
+  }).from(transactions)
+    .where(and(...clauses))
+    .groupBy(transactions.canonicalType)
+    .orderBy(transactions.canonicalType);
+
+  return rows.map((row) => ({
+    ...row,
+    bucket: getTransactionClassification(row.canonicalType).bucket,
+  }));
+}
+
+/** The same exact window's money per UTC day (and type), as `listRevenueDailyForPages` answers. */
+export async function listRevenueUtcDailyForExactPeriod(
+  db: Database,
+  input: { pageIds?: number[]; period: PeriodBounds; groupByType?: boolean },
+) {
+  const clauses = buildTransactionScopeClauses({
+    ...(input.pageIds === undefined ? {} : { pageIds: input.pageIds }),
+    period: input.period,
+    excludeExcludedTypes: true,
+  });
+
+  if (!clauses) {
+    return [];
+  }
+
+  const day = sql<string>`(timezone('UTC', ${transactions.occurredAt})::date)::text`;
+  const netAmountMills = sql<bigint>`coalesce(sum(${transactions.creatorNetAmountMills}), 0)::bigint`;
+  const transactionCount = sql<number>`count(*)::int`;
+
+  if (input.groupByType) {
+    return db.select({
+      businessDate: day,
+      canonicalType: transactions.canonicalType,
+      netAmountMills,
+      transactionCount,
+    }).from(transactions)
+      .where(and(...clauses))
+      .groupBy(day, transactions.canonicalType)
+      .orderBy(day, transactions.canonicalType);
+  }
+
+  return db.select({
+    businessDate: day,
+    netAmountMills,
+    transactionCount,
+  }).from(transactions)
+    .where(and(...clauses))
+    .groupBy(day)
+    .orderBy(day);
+}
+
 export async function listTransactionsForScope(
   db: Database,
   input: {

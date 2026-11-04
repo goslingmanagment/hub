@@ -1015,8 +1015,8 @@ a total.
 `followers_daily` is the page's follower rollup, one row per day:
 `newFollowers` counts the follow relationships Hub stores whose `followed_at`
 falls on that day (a later unfollow still counts), and `followersCount` is the
-total Hub knew for the day (null = not known). `businessDate` is a UTC day here,
-not a Moscow one. The rollup is rebuilt from the stored follows, so a past day
+total Hub knew for the day (null = not known). `businessDate` is a Moscow day,
+as in every daily rollup of Hub (`fan_spend_daily` too). The rollup is rebuilt from the stored follows, so a past day
 can still move: re-read the recent days rather than trusting a value you read
 once. A day with no row has no stored follow, which is not a capture proof:
 

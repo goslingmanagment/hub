@@ -12,6 +12,7 @@ import {
   listFanTransactionsOnPage,
   listFollowerTotalsForPages,
   listRevenueDailyForPages,
+  listRevenueUtcDailyForExactPeriod,
   listCurrentSubscriptionCountsForPages,
   listSubscriberTotalsForPages,
   listTransactionsForScope,
@@ -24,7 +25,9 @@ import {
   resolveRevenueBusinessDateRangeForPlatform,
   resolveRevenueComparisonPeriodBoundsForPlatform,
   resolveRevenuePeriodBoundsForPlatform,
+  resolvePeriodBounds,
   millsFromInteger,
+  UTC_TIME_ZONE,
   type Period,
   type Platform,
 } from "@agency_hub_core/shared";
@@ -133,7 +136,7 @@ export function registerFinanceRoutes(server: ApiServer, ctx: ApiModuleContext) 
     return getPageRevenueReport(appContext, request.params.pageLabel, {
       now,
       period: query.period,
-      ...(query.period === "custom" ? { custom: { from: query.from, to: query.to } } : {}),
+      ...(query.period === "custom" ? { custom: { from: query.from, to: query.to }, utcDays: query.utcDays === true } : {}),
     });
   });
 
@@ -404,10 +407,31 @@ export function registerFinanceRoutes(server: ApiServer, ctx: ApiModuleContext) 
   // Revenue daily endpoints
   async function getRevenueDailySeries(
     pages: Array<{ id: number; platform: Platform }>,
-    query: { period: string; from?: string | undefined; to?: string | undefined; groupByType: boolean },
+    query: { period: string; from?: string | undefined; to?: string | undefined; groupByType: boolean; utcDays?: boolean | undefined },
     now: Date,
   ) {
     type RevenueDailyCanonicalType = RevenueDailyTypedItem["canonicalType"];
+    const custom = query.period === "custom" && query.from && query.to
+      ? { from: query.from, to: query.to }
+      : undefined;
+
+    // Fansly's UTC days, set beside its statistics: read from the transactions,
+    // since the rollup is dated in Moscow days.
+    if (query.utcDays) {
+      const rows = await listRevenueUtcDailyForExactPeriod(appContext.db, {
+        pageIds: pages.map((page) => page.id),
+        period: resolvePeriodBounds(query.period as Period, now, custom, UTC_TIME_ZONE),
+        groupByType: query.groupByType,
+      }) as Array<{ businessDate: string; canonicalType?: RevenueDailyCanonicalType; netAmountMills: bigint; transactionCount: number }>;
+      return {
+        series: rows.map((row) => ({
+          businessDate: row.businessDate,
+          ...(row.canonicalType ? { canonicalType: row.canonicalType } : {}),
+          netAmountMills: millsToNumber(row.netAmountMills),
+          transactionCount: row.transactionCount,
+        })),
+      };
+    }
     const groupedPageIds = new Map<Platform, number[]>();
     for (const page of pages) {
       const ids = groupedPageIds.get(page.platform) ?? [];
@@ -427,9 +451,7 @@ export function registerFinanceRoutes(server: ApiServer, ctx: ApiModuleContext) 
         platform,
         query.period as Period,
         now,
-        query.period === "custom" && query.from && query.to
-          ? { from: query.from, to: query.to }
-          : undefined,
+        custom,
       );
       if (query.groupByType) {
         const rows = await listRevenueDailyForPages(appContext.db, {

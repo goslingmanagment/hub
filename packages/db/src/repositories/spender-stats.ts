@@ -5,7 +5,7 @@
 // - Window money is aggregated from raw `transactions` over
 //   transactions_account_active_occurred_idx and bucketed by the local date in
 //   the caller's zone. The rollups (revenue_daily, fan_spend_daily) are dated
-//   in UTC and cannot be re-bucketed into another zone. The SQL never reads
+//   in Moscow days and cannot be re-bucketed into another zone. The SQL never reads
 //   the zone's name: it buckets by the instants each local date starts at,
 //   which Intl computes (resolveSpenderStatsWindows), and stops at `asOf`.
 // - Lifetime membership (tiers, payers, silence, the queue) reads the spender

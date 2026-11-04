@@ -1,7 +1,7 @@
 import { Link, useLocation, useSearchParams } from "react-router";
 import { ArrowDown, ArrowUp } from "lucide-react";
 import type { CrossPageTransactionItem, CrossPageTransactionListQuery } from "@agency_hub_core/contracts";
-import { reportableTransactionTypes } from "@agency_hub_core/shared";
+import { BUSINESS_TIME_ZONE, reportableTransactionTypes, startOfBusinessDay } from "@agency_hub_core/shared";
 import { useAuthMe } from "@/api/queries";
 import { useRevenueTransactions } from "@/api/transactions";
 import { useOfapiStatus } from "@/api/waiting";
@@ -17,7 +17,7 @@ import { Pagination } from "@/components/shared/Pagination";
 import { QueryNotice } from "@/components/shared/QueryNotice";
 import { NoAnswerPanel, StatusPanel } from "@/components/shared/StatusPanel";
 import { TableSkeleton } from "@/components/shared/TableSkeleton";
-import { formatCount, formatDateTime, formatMills, formatUtcWindowRange } from "@/lib/format";
+import { formatCount, formatDateTime, formatMills, formatWindowRange } from "@/lib/format";
 import { buildFanProfileNavigation, buildPageRoute } from "@/lib/navigation";
 import { safeBackTo } from "@/lib/overviewNavigation";
 import { PERIOD_LABELS } from "@/lib/period";
@@ -34,12 +34,12 @@ const STATES = ["posted", "pending", "unknown"] as const;
 const STATE_WORD: Record<(typeof STATES)[number], string> = { posted: "Проведена", pending: "Ожидает", unknown: "Неизвестно" };
 
 const UTC_TIME = new Intl.DateTimeFormat("ru-RU", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", hourCycle: "h23", timeZone: "UTC" });
-const isUtcMidnight = (iso: string) => new Date(iso).toISOString().endsWith("T00:00:00.000Z");
+const isBusinessMidnight = (iso: string) => startOfBusinessDay(new Date(iso), BUSINESS_TIME_ZONE).getTime() === Date.parse(iso);
 
-/** The window in words: whole UTC days as dates, anything else as its two instants in Moscow. */
+/** The window in words: whole Moscow days as dates, anything else as its two instants in Moscow. */
 function windowWords(query: Query): string {
   if (!query.from || !query.to) return "вся сохранённая история";
-  if (isUtcMidnight(query.from) && isUtcMidnight(query.to)) return `${formatUtcWindowRange(query.from, query.to)}, сутки с 03:00 по Москве`;
+  if (isBusinessMidnight(query.from) && isBusinessMidnight(query.to)) return formatWindowRange(query.from, query.to);
   return `с ${formatDateTime(query.from)} до ${formatDateTime(query.to)}`;
 }
 
@@ -279,9 +279,8 @@ export function TransactionsPage() {
       {feed && <p className="home-footnote">{OFAPI_FEED_NOTE}</p>}
       <Disclosure>
         <p>
-          Операции, которые сохранил Hub, после комиссии площадок. Сутки считаются по UTC, поэтому операция в 02:40 по
-          Москве относится к предыдущим суткам. Сумма совпадает со строкой страницы на Главной за тот же период. У всех
-          страниц вместе может быть разница: у OnlyFans окно на день длиннее.
+          Операции, которые сохранил Hub, после комиссии площадок. Сутки считаются по Москве, с полуночи до полуночи.
+          Сумма совпадает со строкой страницы на Главной за тот же период.
         </p>
       </Disclosure>
     </div>

@@ -9,6 +9,7 @@ import {
   type Platform,
   type TransactionType,
 } from "@agency_hub_core/shared";
+import { BUSINESS_TZ } from "../business-day.ts";
 import type { Database } from "../client.ts";
 import {
   dailyRevenue,
@@ -407,7 +408,7 @@ export async function rebuildRevenueRollups(
       with fresh as (
         select t.platform_account_id,
                (
-                 timezone('UTC', t.occurred_at)::date
+                 timezone(${BUSINESS_TZ}, t.occurred_at)::date
                ) as business_date,
                t.canonical_type,
                t.transaction_state,
@@ -507,10 +508,10 @@ export async function rebuildFollowerRollups(
   // the days whose numbers moved are.
   await db.execute(sql`
     with today as (
-      select (now() at time zone 'UTC')::date as business_date
+      select (now() at time zone ${BUSINESS_TZ})::date as business_date
     ),
     derived as (
-      select ((pf.followed_at at time zone 'UTC')::date) as business_date,
+      select ((pf.followed_at at time zone ${BUSINESS_TZ})::date) as business_date,
              count(*)::int as new_followers
       from page_follows pf
       where pf.platform_account_id = ${platformAccountId}
@@ -572,17 +573,17 @@ export async function rebuildSubscriberRollups(db: Database, platformAccountId: 
     with date_series as (
       select generate_series(
         coalesce(
-          (select min((source_created_at at time zone 'UTC')::date)
+          (select min((source_created_at at time zone ${BUSINESS_TZ})::date)
            from page_subscriptions
            where platform_account_id = ${platformAccountId}),
-          (now() at time zone 'UTC')::date
+          (now() at time zone ${BUSINESS_TZ})::date
         ),
-        (now() at time zone 'UTC')::date,
+        (now() at time zone ${BUSINESS_TZ})::date,
         interval '1 day'
       )::date as business_date
     ),
     new_subscribers as (
-      select ((source_created_at at time zone 'UTC')::date) as business_date,
+      select ((source_created_at at time zone ${BUSINESS_TZ})::date) as business_date,
              count(*)::int as new_subscribers
       from page_subscriptions
       where platform_account_id = ${platformAccountId}
@@ -602,11 +603,11 @@ export async function rebuildSubscriberRollups(db: Database, platformAccountId: 
       from date_series ds
       left join page_subscriptions ps
         on ps.platform_account_id = ${platformAccountId}
-       and coalesce((ps.source_created_at at time zone 'UTC')::date, ds.business_date) <= ds.business_date
+       and coalesce((ps.source_created_at at time zone ${BUSINESS_TZ})::date, ds.business_date) <= ds.business_date
        and (case
               when ps.is_current
-                then coalesce((ps.ends_at at time zone 'UTC')::date, ds.business_date)
-              else (least(ps.ends_at, ps.last_seen_at) at time zone 'UTC')::date
+                then coalesce((ps.ends_at at time zone ${BUSINESS_TZ})::date, ds.business_date)
+              else (least(ps.ends_at, ps.last_seen_at) at time zone ${BUSINESS_TZ})::date
             end) >= ds.business_date
       group by ds.business_date
     ),

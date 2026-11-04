@@ -60,40 +60,41 @@ describe("money helpers", () => {
     expect(comparison?.to?.toISOString()).toBe("2026-02-28T21:00:00.000Z");
   });
 
-  it("builds OnlyFans revenue windows on UTC calendar days", () => {
+  it("builds OnlyFans revenue windows on the same Moscow days as Fansly", () => {
     const now = new Date("2026-03-09T12:00:00.000Z");
     const thirtyDay = resolveRevenuePeriodBoundsForPlatform("onlyfans", "30d", now);
     const thirtyDayRange = resolveRevenueBusinessDateRangeForPlatform("onlyfans", "30d", now);
     const comparison = resolveRevenueComparisonPeriodBoundsForPlatform("onlyfans", "30d", now);
 
-    expect(thirtyDay.from?.toISOString()).toBe("2026-02-07T00:00:00.000Z");
-    expect(thirtyDay.to?.toISOString()).toBe("2026-03-10T00:00:00.000Z");
+    expect(thirtyDay).toEqual(resolveRevenuePeriodBoundsForPlatform("fansly", "30d", now));
+    expect(thirtyDay.from?.toISOString()).toBe("2026-02-07T21:00:00.000Z");
+    expect(thirtyDay.to?.toISOString()).toBe("2026-03-09T21:00:00.000Z");
     expect(thirtyDayRange).toEqual({
-      from: "2026-02-07",
+      from: "2026-02-08",
       toExclusive: "2026-03-10",
     });
-    expect(comparison?.from?.toISOString()).toBe("2026-01-07T00:00:00.000Z");
-    expect(comparison?.to?.toISOString()).toBe("2026-02-07T00:00:00.000Z");
+    expect(comparison?.from?.toISOString()).toBe("2026-01-08T21:00:00.000Z");
+    expect(comparison?.to?.toISOString()).toBe("2026-02-07T21:00:00.000Z");
   });
 
-  it("builds Fansly revenue and spender windows on UTC calendar days", () => {
+  it("builds Fansly revenue and spender windows on Moscow calendar days", () => {
     const now = new Date("2026-03-09T12:00:00.000Z");
     const thirtyDay = resolveRevenuePeriodBoundsForPlatform("fansly", "30d", now);
     const comparison = resolveRevenueComparisonPeriodBoundsForPlatform("fansly", "30d", now);
     const spenderRange = resolveSpenderBusinessDateRangeForPlatform("fansly", "30d", now);
 
-    expect(thirtyDay.from?.toISOString()).toBe("2026-02-08T00:00:00.000Z");
-    expect(thirtyDay.to?.toISOString()).toBe("2026-03-10T00:00:00.000Z");
-    expect(comparison?.from?.toISOString()).toBe("2026-01-09T00:00:00.000Z");
-    expect(comparison?.to?.toISOString()).toBe("2026-02-08T00:00:00.000Z");
+    expect(thirtyDay.from?.toISOString()).toBe("2026-02-07T21:00:00.000Z");
+    expect(thirtyDay.to?.toISOString()).toBe("2026-03-09T21:00:00.000Z");
+    expect(comparison?.from?.toISOString()).toBe("2026-01-08T21:00:00.000Z");
+    expect(comparison?.to?.toISOString()).toBe("2026-02-07T21:00:00.000Z");
     expect(spenderRange).toMatchObject({
-      timeZone: "UTC",
+      timeZone: "Europe/Moscow",
       fromBusinessDate: "2026-02-08",
       toBusinessDateInclusive: "2026-03-09",
     });
   });
 
-  it("treats custom upper bounds as exclusive on UTC day ranges", () => {
+  it("treats custom upper bounds as exclusive on Moscow day ranges", () => {
     const now = new Date("2026-01-15T12:00:00.000Z");
     const bounds = resolveRevenuePeriodBoundsForPlatform("fansly", "custom", now, {
       from: "2025-12-01",
@@ -108,8 +109,8 @@ describe("money helpers", () => {
       to: "2025-12-02",
     });
 
-    expect(bounds.from?.toISOString()).toBe("2025-12-01T00:00:00.000Z");
-    expect(bounds.to?.toISOString()).toBe("2026-01-01T00:00:00.000Z");
+    expect(bounds.from?.toISOString()).toBe("2025-11-30T21:00:00.000Z");
+    expect(bounds.to?.toISOString()).toBe("2025-12-31T21:00:00.000Z");
     expect(businessRange).toEqual({
       from: "2025-12-01",
       toExclusive: "2026-01-01",
@@ -131,20 +132,23 @@ describe("money helpers", () => {
       to: "2026-03-09",
     });
 
-    expect(bounds.from?.toISOString()).toBe("2026-03-09T00:00:00.000Z");
-    expect(bounds.to?.toISOString()).toBe("2026-03-10T00:00:00.000Z");
+    expect(bounds.from?.toISOString()).toBe("2026-03-08T21:00:00.000Z");
+    expect(bounds.to?.toISOString()).toBe("2026-03-09T21:00:00.000Z");
     expect(businessRange).toEqual({
       from: "2026-03-09",
       toExclusive: "2026-03-10",
     });
   });
 
-  it("keeps UTC today revenue windows unchanged", () => {
-    const now = new Date("2026-03-09T12:00:00.000Z");
-    const today = resolveRevenuePeriodBoundsForPlatform("fansly", "today", now);
+  it("starts today at Moscow midnight, so a night shift after it is one day", () => {
+    const afternoon = resolveRevenuePeriodBoundsForPlatform("fansly", "today", new Date("2026-03-09T12:00:00.000Z"));
+    // 01:30 in Moscow: already the next day, three hours before UTC turns.
+    const night = resolveRevenuePeriodBoundsForPlatform("onlyfans", "today", new Date("2026-03-09T22:30:00.000Z"));
 
-    expect(today.from?.toISOString()).toBe("2026-03-09T00:00:00.000Z");
-    expect(today.to?.toISOString()).toBe("2026-03-10T00:00:00.000Z");
+    expect(afternoon.from?.toISOString()).toBe("2026-03-08T21:00:00.000Z");
+    expect(afternoon.to?.toISOString()).toBe("2026-03-09T21:00:00.000Z");
+    expect(night.from?.toISOString()).toBe("2026-03-09T21:00:00.000Z");
+    expect(night.to?.toISOString()).toBe("2026-03-10T21:00:00.000Z");
   });
 
   it("rejects unsupported periods with the canonical option list", () => {

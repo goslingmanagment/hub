@@ -5,7 +5,7 @@ import { IncomeKinds, incomeKindRows, type IncomeKindRow } from "@/components/mo
 import { Skeleton } from "@/components/ui/Skeleton";
 import { buildFansRoute, buildPageCollectionRoute, buildPageRoute } from "@/lib/navigation";
 import { buildRevenueTransactionsRoute, buildSubscriberRoute } from "@/lib/overviewNavigation";
-import { formatCount, formatUtcWindowRange } from "@/lib/format";
+import { formatCount, formatWindowRange } from "@/lib/format";
 import { OFAPI_FROZEN_NOTE, type OfapiStatus } from "@/lib/statusWords";
 import type { PeriodOption } from "@/stores/periodStore";
 import { isAlertState } from "@/components/shared/syncUxDisplay";
@@ -192,9 +192,9 @@ export function PageSources({ page, period, windowAt, windows, backTo, isOwner, 
             <h3 className="row-detail-title">Виды дохода</h3>
             {window && (
               <p className="row-detail-dates">
-                {window.from && window.to ? formatUtcWindowRange(window.from, window.to) : "Вся сохранённая история"}
+                {window.from && window.to ? formatWindowRange(window.from, window.to) : "Вся сохранённая история"}
                 {(period === "7d" || period === "30d") && window.comparisonFrom && window.comparisonTo &&
-                  `, прошлый период: ${formatUtcWindowRange(window.comparisonFrom, window.comparisonTo)}`}
+                  `, прошлый период: ${formatWindowRange(window.comparisonFrom, window.comparisonTo)}`}
               </p>
             )}
           </div>

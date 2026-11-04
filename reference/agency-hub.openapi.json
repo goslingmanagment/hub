@@ -213526,6 +213526,15 @@
           },
           {
             "schema": {
+              "type": "boolean"
+            },
+            "in": "query",
+            "name": "utcDays",
+            "required": false,
+            "description": "Count the days in UTC (Fansly's days) instead of Hub's Moscow days."
+          },
+          {
+            "schema": {
               "type": "string",
               "minLength": 1
             },
@@ -214123,6 +214132,15 @@
             "in": "query",
             "name": "groupByType",
             "required": false
+          },
+          {
+            "schema": {
+              "type": "boolean"
+            },
+            "in": "query",
+            "name": "utcDays",
+            "required": false,
+            "description": "Count the days in UTC (Fansly's days) instead of Hub's Moscow days."
           },
           {
             "schema": {

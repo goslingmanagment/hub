@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import { Link, useLocation } from "react-router";
-import type { Platform } from "@agency_hub_core/shared";
+import { BUSINESS_TIME_ZONE, toBusinessDate, type Platform } from "@agency_hub_core/shared";
 import {
   usePageFollowersDaily,
   usePageRevenue,
@@ -191,7 +191,7 @@ export function AudienceBlock({ page, period, ofapi }: { page: SummaryPage; peri
         {!daily.data ? (
           daily.isError ? <NoAnswerPanel retry={daily.refetch} /> : <Skeleton width="100%" className="!h-[160px]" />
         ) : period === "today" ? (
-          <p className="summary-today">Новых сегодня: <span className="tabular-nums">{formatCount(today?.bucketStart === new Date().toISOString().slice(0, 10) ? Number(today.value) : 0)}</span></p>
+          <p className="summary-today">Новых сегодня: <span className="tabular-nums">{formatCount(today?.bucketStart === toBusinessDate(new Date(), BUSINESS_TIME_ZONE) ? Number(today.value) : 0)}</span></p>
         ) : rows.length === 0 ? (
           <p className="fan-muted-line">Данных по дням пока нет.</p>
         ) : (

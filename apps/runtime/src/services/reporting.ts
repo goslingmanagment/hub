@@ -47,13 +47,16 @@ import {
   listFanFlags,
   listFanNotesForPages,
   listFanSummariesForPages,
+  getRevenueBreakdownForExactPeriod,
 } from "@agency_hub_core/db";
 import {
   millsToNumber,
   resolveBusinessDateRangeForPlatform,
   resolveRevenueComparisonPeriodBoundsForPlatform,
   resolveRevenuePeriodBoundsForPlatform,
+  resolvePeriodBounds,
   millsFromInteger,
+  UTC_TIME_ZONE,
   type PeriodBounds,
   type Period,
   type Platform,
@@ -66,6 +69,11 @@ type PeriodInput = {
   period: Period;
   custom?: { from: string; to: string };
   now?: Date;
+};
+
+type PageRevenueInput = PeriodInput & {
+  /** A custom window counted in UTC days — Fansly's — instead of Hub's Moscow ones. */
+  utcDays?: boolean;
 };
 
 type RevenueWindowBase = Omit<PageRevenueResponse, "page" | "comparison">;
@@ -491,11 +499,14 @@ export async function listModelSummaries(
 export async function getPageRevenueReport(
   app: AppContext,
   pageLabel: string,
-  input: PeriodInput,
+  input: PageRevenueInput,
 ): Promise<PageRevenueResponse> {
   input = { ...input, now: input.now ?? new Date() };
   const page = await getPageSummary(app, pageLabel);
   const now = input.now ?? new Date();
+  if (input.utcDays && input.period === "custom" && input.custom) {
+    return getPageRevenueReportInUtcDays(app, page, input);
+  }
   const bounds = resolveRevenuePeriodBoundsForPlatform(
     page.platform,
     input.period,
@@ -537,6 +548,34 @@ export async function getPageRevenueReport(
       currentTotal,
       comparisonBounds,
       comparisonRows,
+    ),
+    page: serializePage(page),
+  };
+}
+
+/** A page's custom window over UTC days, from the transactions: Hub's money set
+ *  beside Fansly's statistics, whose days are UTC. No comparison. */
+async function getPageRevenueReportInUtcDays(
+  app: AppContext,
+  page: Awaited<ReturnType<typeof getPageSummary>>,
+  input: PageRevenueInput,
+): Promise<PageRevenueResponse> {
+  const bounds = resolvePeriodBounds(input.period, input.now, input.custom, UTC_TIME_ZONE);
+  const rows = await getRevenueBreakdownForExactPeriod(app.db, { pageIds: [page.id], period: bounds });
+  const window = {
+    platform: page.platform,
+    from: bounds.from?.toISOString() ?? null,
+    to: bounds.to?.toISOString() ?? null,
+    comparisonFrom: null,
+    comparisonTo: null,
+  };
+
+  return {
+    ...addComparison(
+      serializeRevenueWindow(input, bounds, rows, [window]),
+      summarizeRevenueRows(rows).netEarningsMills,
+      null,
+      [],
     ),
     page: serializePage(page),
   };

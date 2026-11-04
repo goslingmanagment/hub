@@ -127,13 +127,14 @@ describe("getPageSpenderStats", () => {
     expect(stats.queueSummary).toEqual({ total: 3, unknown: 1 });
   });
 
-  it("reconciles with /api/v2/spenders, the shelves and pageRevenueDaily (custom, net, UTC)", async () => {
+  it("reconciles with /api/v2/spenders, the shelves and pageRevenueDaily (30d, net, Moscow)", async () => {
     const { page } = await seedMainPage();
     await rebuildAll(page.id);
 
-    const stats = await getPageSpenderStats(db().db, { pageId: page.id, timeZone: "UTC", asOf: AS_OF });
+    // Hub's days are Moscow ones: the stats asked in Moscow meet its rollups.
+    const stats = await getPageSpenderStats(db().db, { pageId: page.id, timeZone: "Europe/Moscow", asOf: AS_OF });
 
-    // /api/v2/spenders?period=30d: same 30 UTC dates, diagnostics total gross.
+    // /api/v2/spenders?period=30d: same 30 Moscow dates, diagnostics total gross.
     const spenders = resolveSpenderBusinessDateRangeForPlatform("onlyfans", "30d", AS_OF);
     expect({ from: stats.from, to: stats.to }).toEqual({
       from: spenders.fromBusinessDate,
@@ -156,18 +157,14 @@ describe("getPageSpenderStats", () => {
       expect(stats.tiers.find((tier) => tier.key === shelf.key)?.members).toBe(shelf.entryCount);
     }
 
-    // pageRevenueDaily serves net, and only `custom` covers these 30 dates:
-    // on OnlyFans `30d` is 31 dates, and a custom `to` is exclusive.
+    // pageRevenueDaily serves net over the same 30 dates: OnlyFans' `30d` is no
+    // longer a day longer than the others.
     const ofThirtyDays = resolveRevenueBusinessDateRangeForPlatform("onlyfans", "30d", AS_OF);
-    expect(ofThirtyDays.from).not.toBe(stats.from);
-    const custom = resolveRevenueBusinessDateRangeForPlatform("onlyfans", "custom", AS_OF, {
-      from: stats.from,
-      to: nextBusinessDate(stats.to),
-    });
+    expect(ofThirtyDays).toEqual({ from: stats.from, toExclusive: nextBusinessDate(stats.to) });
     const revenue = await listRevenueDailyForPages(db().db, {
       pageIds: [page.id],
-      fromBusinessDate: custom.from,
-      toBusinessDate: custom.toExclusive,
+      fromBusinessDate: ofThirtyDays.from,
+      toBusinessDate: ofThirtyDays.toExclusive,
     }) as Array<{ businessDate: string; netAmountMills: bigint }>;
     const revenueNet = revenue.reduce((sum, row) => sum + BigInt(row.netAmountMills), 0n);
     const daysNet = stats.days.reduce((sum, entry) => sum + entry.creatorNetMills, 0n);

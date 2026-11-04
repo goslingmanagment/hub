@@ -1,5 +1,6 @@
 import { sql } from "drizzle-orm";
 
+import { BUSINESS_TZ } from "../business-day.ts";
 import type { Database } from "../client.ts";
 
 // The fan's card across pages (Chat Memory week 2,
@@ -110,7 +111,7 @@ export async function listCardPages(db: Database, fanIds: readonly number[], now
           from fan_spend_daily d
           where d.fan_id = pf.fan_id and d.platform_account_id = pf.platform_account_id
             -- 30 dates, today among them (review 2026-10-25: «>= - 30» took 31).
-            and d.business_date > (${now.toISOString()}::timestamptz at time zone 'UTC')::date - 30
+            and d.business_date > (${now.toISOString()}::timestamptz at time zone ${BUSINESS_TZ})::date - 30
           group by 1
         ) x
       ) as last30

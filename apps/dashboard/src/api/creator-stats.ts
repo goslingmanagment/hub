@@ -86,7 +86,8 @@ function dayAfter(day: string): string {
 
 /**
  * The page's money by Hub's operations over exactly Fansly's days `fromDay`…`toDay`
- * (`pageRevenue`, custom window). Not `usePageRevenue`: that one is keyed by its
+ * (`pageRevenue`, custom window). Fansly's days are UTC and Hub's are Moscow, so it
+ * asks for UTC days (`utcDays`). Not `usePageRevenue`: that one is keyed by its
  * clock and cannot ask for a custom window.
  */
 export function useHubRevenueWindow(pageLabel: string, window: { fromDay: string; toDay: string } | null) {
@@ -95,21 +96,21 @@ export function useHubRevenueWindow(pageLabel: string, window: { fromDay: string
     queryKey: ["statsHubRevenue", pageLabel, window?.fromDay, window?.toDay],
     queryFn: () => kernel.pageRevenue({
       params: { pageLabel },
-      query: { period: "custom", from: window!.fromDay, to: dayAfter(window!.toDay) },
+      query: { period: "custom", from: window!.fromDay, to: dayAfter(window!.toDay), utcDays: true },
     }),
     enabled: pageLabel.length > 0 && window !== null,
     staleTime: STALE,
   });
 }
 
-/** The same window by day (`pageRevenueDaily`): asked only when the sums disagree. */
+/** The same window by UTC day (`pageRevenueDaily`): asked only when the sums disagree. */
 export function useHubRevenueDays(pageLabel: string, window: { fromDay: string; toDay: string } | null, enabled: boolean) {
   return useQuery({
     meta: STATS_META,
     queryKey: ["statsHubRevenueDays", pageLabel, window?.fromDay, window?.toDay],
     queryFn: () => kernel.pageRevenueDaily({
       params: { pageLabel },
-      query: { period: "custom", from: window!.fromDay, to: dayAfter(window!.toDay), groupByType: false },
+      query: { period: "custom", from: window!.fromDay, to: dayAfter(window!.toDay), groupByType: false, utcDays: true },
     }),
     enabled: enabled && pageLabel.length > 0 && window !== null,
     staleTime: STALE,

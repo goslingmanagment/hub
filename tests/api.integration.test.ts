@@ -1815,7 +1815,7 @@ describe("api integration", () => {
     });
   });
 
-  it("uses UTC day boundaries for OnlyFans 30d revenue and rollups", async (context) => {
+  it("uses Moscow day boundaries for OnlyFans 30d revenue and rollups", async (context) => {
     if (!testDb || !server) {
       context.skip();
       return;
@@ -1923,29 +1923,31 @@ describe("api integration", () => {
       order by business_date asc
     `);
 
-    expect(report.from).toBe("2026-02-07T00:00:00.000Z");
-    expect(report.to).toBe("2026-03-10T00:00:00.000Z");
-    expect(report.revenueMills).toBe(6000);
+    // 30 Moscow days: 8 Feb 00:00 MSK (7 Feb 21:00 UTC) to 10 Mar 00:00 MSK.
+    expect(report.from).toBe("2026-02-07T21:00:00.000Z");
+    expect(report.to).toBe("2026-03-09T21:00:00.000Z");
+    expect(report.revenueMills).toBe(3000);
     expect(report.adjustmentMills).toBe(0);
     expect(report.unclassifiedMills).toBe(0);
-    expect(report.netEarningsMills).toBe(6000);
-    expect(report.totalNetMills).toBe(6000);
+    expect(report.netEarningsMills).toBe(3000);
+    expect(report.totalNetMills).toBe(3000);
     expect(report.totalNetMills).toBe(report.netEarningsMills);
     expect(report.breakdown).toEqual([
       {
         canonicalType: "tip",
         bucket: "revenue",
-        netAmountMills: 6000,
+        netAmountMills: 3000,
       },
     ]);
+    // Each operation on its Moscow date: 23:59:59 UTC is 02:59 MSK of the next day.
     expect(rollupRows.rows).toEqual([
       {
-        business_date: "2026-02-06",
-        net_amount_mills: 500n,
+        business_date: "2026-02-07",
+        net_amount_mills: 3500n,
       },
       {
-        business_date: "2026-02-07",
-        net_amount_mills: 6000n,
+        business_date: "2026-02-08",
+        net_amount_mills: 3000n,
       },
       {
         business_date: "2026-03-10",
@@ -1975,11 +1977,35 @@ describe("api integration", () => {
     expect(dailyResponse.statusCode).toBe(200);
     expect(dailyResponse.json().series).toEqual([
       {
-        businessDate: "2026-02-07",
-        netAmountMills: 6000,
-        transactionCount: 3,
+        businessDate: "2026-02-08",
+        netAmountMills: 3000,
+        transactionCount: 1,
       },
     ]);
+
+    // Fansly's days for the stats reconciliation: the same operations on UTC dates.
+    const utcDailyResponse = await server.inject({
+      method: "GET",
+      url: `/api/v1/pages/${onlyFansPage.label}/revenue/daily?period=custom&from=2026-02-06&to=2026-02-08&utcDays=true`,
+      headers: { cookie },
+    });
+    expect(utcDailyResponse.statusCode).toBe(200);
+    expect(utcDailyResponse.json().series).toEqual([
+      { businessDate: "2026-02-06", netAmountMills: 500, transactionCount: 1 },
+      { businessDate: "2026-02-07", netAmountMills: 6000, transactionCount: 3 },
+    ]);
+    const utcTotalResponse = await server.inject({
+      method: "GET",
+      url: `/api/v1/pages/${onlyFansPage.label}/revenue?period=custom&from=2026-02-07&to=2026-02-08&utcDays=true`,
+      headers: { cookie },
+    });
+    expect(utcTotalResponse.statusCode).toBe(200);
+    expect(utcTotalResponse.json()).toMatchObject({
+      from: "2026-02-07T00:00:00.000Z",
+      to: "2026-02-08T00:00:00.000Z",
+      netEarningsMills: 6000,
+      comparison: null,
+    });
   });
 
   it("uses occurred_at instead of transactions.created_at in revenue and page transaction reporting", async (context) => {
@@ -2282,7 +2308,7 @@ describe("api integration", () => {
       ],
       total: 1,
     });
-    expect(response.json().period.timeZone).toBe("UTC");
+    expect(response.json().period.timeZone).toBe("Europe/Moscow");
     expect(response.json().period.asOf).toBeTruthy();
     expect(response.json().items[0].fan.fanId).toBeUndefined();
   });
