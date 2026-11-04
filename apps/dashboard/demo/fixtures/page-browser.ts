@@ -26,6 +26,8 @@ interface DemoProfile {
   env: typeof ENV_CHICAGO | null;
   createdDaysAgo: number;
   started: boolean;
+  /** Logged in, the login still open: the account's step is next. */
+  loggedIn?: boolean;
 }
 
 const PROFILES: readonly DemoProfile[] = [
@@ -47,6 +49,16 @@ const PROFILES: readonly DemoProfile[] = [
     createdDaysAgo: 0,
     started: false,
   },
+  {
+    profileId: "e7d1b3a9-4c25-4f80-9a6e-1b2c3d4e5f60",
+    name: "ivy-3",
+    proxy: { scheme: "socks5", host: "us-pdx.residential.demo.invalid", port: 9050, username: "agency-ivy3" },
+    pinnedExitIp: "71.59.204.18",
+    env: ENV_CHICAGO,
+    createdDaysAgo: 0,
+    started: true,
+    loggedIn: true,
+  },
 ];
 
 function summaryOf(profile: DemoProfile, now: Date): Summary {
@@ -54,7 +66,7 @@ function summaryOf(profile: DemoProfile, now: Date): Summary {
     profileId: profile.profileId,
     name: profile.name,
     container: `pb-${profile.name}`,
-    onboarding: "off",
+    onboarding: profile.loggedIn ? "open" : "off",
     createdAt: iso(hoursAgo(now, profile.createdDaysAgo * 24 + 3)),
     proxySet: profile.proxy !== null,
     pinnedExitIp: profile.pinnedExitIp,
@@ -118,14 +130,16 @@ export const pageBrowserHandlers: DemoHandlers = {
         ? { url: `socks5://${profile.proxy.host}:${profile.proxy.port}`, username: profile.proxy.username, masked }
         : null,
       env: profile.env,
-      login: { state: "off" as const, changedAt: null },
+      login: profile.loggedIn ? { state: "open" as const, changedAt: iso(hoursAgo(request.now, 0.2)) } : { state: "off" as const, changedAt: null },
       browser: profile.pinnedExitIp === null
         ? { ready: false, problem: "its exit IP is not pinned", reachable: null }
         : { ready: true, problem: null, reachable: true },
       screen: null,
       refused: null,
       screenUrl: `/api/v1/page-browser/profiles/${profile.profileId}/screen/`,
-      identity: { requestedAt: null, pending: false, ok: null, accountId: null, username: null, displayName: null, checkedAt: null, error: null },
+      identity: profile.loggedIn
+        ? { requestedAt: iso(hoursAgo(request.now, 0.1)), pending: false, ok: true, accountId: "804119203377000194", username: "ivyrose.three", displayName: "Ivy Rose", checkedAt: iso(hoursAgo(request.now, 0.1)), error: null }
+        : { requestedAt: null, pending: false, ok: null, accountId: null, username: null, displayName: null, checkedAt: null, error: null },
     };
   },
 
@@ -154,5 +168,20 @@ export const pageBrowserHandlers: DemoHandlers = {
     ],
     // Every Fansly page already has its browser: none waits to move.
     pages: [],
+  }),
+
+  // A check reads nothing of the platform: the demo answers that the proxy works.
+  pageBrowserProxyCheck: (request) => ({
+    ok: true,
+    problem: null,
+    spoken: "socks5" as const,
+    proxy: { scheme: "socks5" as const, host: "us-pdx.residential.demo.invalid", port: 9050, username: "agency-new", passwordSet: true },
+    socksEndpoint: "203.0.113.24:9050",
+    latencyMs: 182,
+    exit: { ip: "71.59.204.18", country: "United States", countryCode: "US", region: "Oregon", city: "Portland", isp: "Demo Residential", asn: "AS64500", timeZone: "America/Los_Angeles", latitude: 45.5152, longitude: -122.6784 },
+    ipInfoService: "ipinfo",
+    env: { timeZone: "America/Los_Angeles", languages: ["en-US", "en"], geolocation: { latitude: 45.5152, longitude: -122.6784, accuracyM: 3000 } },
+    checkId: "4f1c2b8e-9a3d-4e6f-8b1a-2c3d4e5f6a7b",
+    checkedAt: iso(request.now),
   }),
 };

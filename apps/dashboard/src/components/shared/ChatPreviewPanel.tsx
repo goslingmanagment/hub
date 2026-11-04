@@ -3,12 +3,20 @@ import { Link } from "react-router";
 import type { PageConversationPreviewResponse } from "@agency_hub_core/contracts";
 import { normalizeDmMessageText } from "@agency_hub_core/shared";
 import { usePageConversationPreview } from "@/api/queries";
-import { formatDateTime, formatRelativeTime, formatUsdFromCents } from "@/lib/format";
+import { NoAnswerPanel } from "@/components/shared/StatusPanel";
+import { Skeleton } from "@/components/ui/Skeleton";
+import { buildPageSectionRoute } from "@/lib/navigation";
+import { formatDateTime, formatUsdFromCents } from "@/lib/format";
 
 interface ChatPreviewPanelProps {
   pageLabel: string;
   platformConversationId: string;
-  profileHref: string;
+  /** «Открыть карточку», in the list's panel only. */
+  profileHref?: string | undefined;
+  /** An OnlyFans chat comes from the ChatSpace feed: the login, pause and reading branches speak of the API, not of it. */
+  platform?: string | undefined;
+  /** The owner gets «Войти в Fansly» beside «войдите». */
+  owner?: boolean | undefined;
   limit?: number;
 }
 
@@ -34,20 +42,14 @@ function ChatAccessNotice({ chatAccess, showsSocketMessages }: { chatAccess: Cha
 
   return (
     <div role="note" className="notice notice-warning">
-      <div className="min-w-0 flex-1">
-        <div className="font-semibold">Fansly больше не отдаёт этот чат странице.</div>
-        <div className="mt-0.5">
+      <div className="notice-body">
+        Fansly больше не отдаёт этот чат странице.
+        <small>
           {CHAT_ACCESS_CAUSE_COPY[chatAccess.cause]}
           {showsSocketMessages && " Новые сообщения ещё приходят в реальном времени, но Fansly их не подтверждает."}
-        </div>
-        <div className="mt-1 text-xs">
-          С {formatDateTime(chatAccess.openedAt, { yearUnlessCurrent: true })}
-        </div>
-        {chatAccess.ownerNote && (
-          <div className="mt-1 whitespace-pre-wrap break-words text-xs">
-            <span className="font-medium">Заметка владельца:</span> {chatAccess.ownerNote}
-          </div>
-        )}
+        </small>
+        <small>С {formatDateTime(chatAccess.openedAt, { yearUnlessCurrent: true })}</small>
+        {chatAccess.ownerNote && <small className="whitespace-pre-wrap break-words">Заметка владельца: {chatAccess.ownerNote}</small>}
       </div>
     </div>
   );
@@ -62,7 +64,7 @@ function SocketMessageMark({ message }: { message: PreviewMessage }) {
 
   return (
     <span
-      className="text-xs text-warning-dark"
+      className="chat-mark"
       title={message.apiUnavailable
         ? "Этот чат исключён из сбора сообщений, поэтому Fansly никогда не подтвердит это сообщение."
         : "Сообщение пришло в реальном времени; Fansly его ещё не подтвердил."}
@@ -72,31 +74,43 @@ function SocketMessageMark({ message }: { message: PreviewMessage }) {
   );
 }
 
-function getEmptyPreviewCopy(data: PageConversationPreviewResponse) {
+/** On OnlyFans the login, pause and reading signs speak of the switched-off API, not of the feed. */
+function syncSigns(data: PageConversationPreviewResponse, platform: string | undefined) {
+  const api = platform !== "onlyfans";
+  return {
+    login: api && data.messageSyncUx.requiresAction,
+    paused: api && data.messageSyncUx.state === "off",
+    attention: api && data.messageSyncUx.state === "attention",
+  };
+}
+
+function getEmptyPreviewCopy(data: PageConversationPreviewResponse, platform: string | undefined) {
   const previewLoading = data.conversation.messageCoverageStatus === "pending_backfill" ||
     PREVIEW_LOADING_STATES.has(data.messageSyncUx.state);
   const previewCapped = data.conversation.messageCoverageStatus === "partial_window";
   const previewExcluded = data.conversation.messageSyncEligibility === "excluded";
   const unresolvedIdentity = data.conversation.messageSyncEligibility === "unresolved_identity";
 
-  if (data.messageSyncUx.requiresAction) {
+  const signs = syncSigns(data, platform);
+  if (signs.login) {
     return {
-      headline: "Обновите данные входа, чтобы загрузить переписку.",
-      detail: "Новые сообщения появятся после обновления данных входа.",
+      headline: "Войдите в Fansly, чтобы загрузить переписку.",
+      detail: "Новые сообщения появятся после входа.",
+      login: true,
     };
   }
 
-  if (data.messageSyncUx.state === "off") {
+  if (signs.paused) {
     return {
-      headline: "Обновление переписки приостановлено.",
-      detail: "Превью останется неполным, пока сбор данных страницы не возобновится.",
+      headline: "Сбор переписки этой страницы на паузе.",
+      detail: "Превью останется неполным, пока сбор не возобновится.",
     };
   }
 
-  if (data.messageSyncUx.state === "attention") {
+  if (signs.attention) {
     return {
       headline: "Переписка сейчас может быть неполной.",
-      detail: "Сбор сообщений требует внимания — после этого превью обновится.",
+      detail: "Сбор сообщений не читается: после починки превью обновится.",
     };
   }
 
@@ -134,19 +148,22 @@ function getEmptyPreviewCopy(data: PageConversationPreviewResponse) {
   };
 }
 
-function getPreviewFooterText(data: PageConversationPreviewResponse) {
+type EmptyCopy = { headline: string; detail: string | null; login?: boolean };
+
+function getPreviewFooterText(data: PageConversationPreviewResponse, platform: string | undefined) {
   const previewLoading = data.conversation.messageCoverageStatus === "pending_backfill" ||
     PREVIEW_LOADING_STATES.has(data.messageSyncUx.state);
+  const signs = syncSigns(data, platform);
 
-  if (data.messageSyncUx.requiresAction) {
-    return "Обновите данные входа, чтобы переписка не отставала.";
+  if (signs.login) {
+    return "Войдите в Fansly, чтобы переписка не отставала.";
   }
 
-  if (data.messageSyncUx.state === "off") {
-    return "Обновление переписки на этой странице приостановлено.";
+  if (signs.paused) {
+    return "Сбор переписки этой страницы на паузе.";
   }
 
-  if (data.messageSyncUx.state === "attention") {
+  if (signs.attention) {
     return "Превью может отставать, пока сбор сообщений не восстановится.";
   }
 
@@ -169,11 +186,12 @@ function getPreviewFooterText(data: PageConversationPreviewResponse) {
   return null;
 }
 
-export function ChatPreviewPanel({ pageLabel, platformConversationId, profileHref, limit = 10 }: ChatPreviewPanelProps) {
+export function ChatPreviewPanel({ pageLabel, platformConversationId, profileHref, platform, owner = false, limit = 25 }: ChatPreviewPanelProps) {
   const {
     data,
     isError,
     isLoading,
+    refetch,
   } = usePageConversationPreview(pageLabel, platformConversationId, { limit });
   const messagesContainerRef = useRef<HTMLDivElement | null>(null);
   const hasAutoScrolledRef = useRef(false);
@@ -196,68 +214,61 @@ export function ChatPreviewPanel({ pageLabel, platformConversationId, profileHre
     hasAutoScrolledRef.current = true;
   }, [platformConversationId, data?.messages.length]);
 
+  const loginLink = owner && platform !== "onlyfans"
+    ? <Link to={buildPageSectionRoute(pageLabel, "browser-login")} className="btn btn-sm">Войти в Fansly</Link>
+    : null;
+  const cardLink = profileHref ? <Link to={profileHref} className="link">Открыть карточку</Link> : null;
+
   if (isLoading) {
     return (
-      <div className="bg-hover-alt px-5 py-4 sm:px-6">
-        <span className="text-sm text-text-secondary">Загружаем переписку…</span>
+      <div className="chat-preview" aria-busy="true">
+        {[62, 48, 70, 40].map((width, index) => (
+          <div key={index} className={`chat-row ${index % 2 ? "chat-row-model" : ""}`}><Skeleton width={`${width}%`} className="!h-10" /></div>
+        ))}
       </div>
     );
   }
 
-  if (isError) {
-    return (
-      <div className="bg-hover-alt px-5 py-4 sm:px-6">
-        <span className="text-sm text-danger">Не удалось загрузить переписку.</span>
-      </div>
-    );
+  if (isError && !data) {
+    return <NoAnswerPanel retry={refetch} />;
   }
 
   if (!data || data.messages.length === 0) {
-    const emptyState = data ? getEmptyPreviewCopy(data) : { headline: "Сообщений нет.", detail: null };
+    const emptyState: EmptyCopy = data ? getEmptyPreviewCopy(data, platform) : { headline: "Сообщений нет.", detail: null };
 
     return (
-      <div className="space-y-3 bg-hover-alt px-5 py-4 sm:px-6">
+      <div className="chat-preview">
         <ChatAccessNotice chatAccess={data?.conversation.chatAccess} showsSocketMessages={false} />
-        <div>
-          <div className="text-sm font-medium text-text-primary">{emptyState.headline}</div>
-          {emptyState.detail && <div className="mt-1 text-sm text-text-secondary">{emptyState.detail}</div>}
+        <div className="empty">
+          <p className="empty-title">{emptyState.headline}</p>
+          {emptyState.detail && <p className="empty-text">{emptyState.detail}</p>}
+          {emptyState.login && loginLink && <div className="empty-actions">{loginLink}</div>}
         </div>
+        {cardLink && <div className="chat-foot"><span />{cardLink}</div>}
       </div>
     );
   }
 
-  const footerText = getPreviewFooterText(data);
+  const footerText = getPreviewFooterText(data, platform);
+  const footerLogin = syncSigns(data, platform).login ? loginLink : null;
 
   return (
-    <div className="space-y-3 bg-hover-alt px-5 py-4 sm:px-6">
+    <div className="chat-preview">
       <ChatAccessNotice
         chatAccess={data.conversation.chatAccess}
         showsSocketMessages={data.messages.some((msg) => msg.source === "live")}
       />
-      <div ref={messagesContainerRef} className="flex max-h-[360px] flex-col gap-2 overflow-y-auto">
+      <div ref={messagesContainerRef} className="chat-messages">
         {data.messages.map((msg: PreviewMessage) => {
           const isModel = msg.senderRole === "model";
           return (
-            <div
-              key={msg.platformMessageId}
-              className={`flex ${isModel ? "justify-end" : "justify-start"}`}
-            >
-              <div
-                className={`max-w-[80%] rounded-xl px-3 py-2 text-sm text-text-primary ${
-                  isModel
-                    ? "bg-accent-soft"
-                    : "border border-border bg-card"
-                }`}
-              >
+            <div key={msg.platformMessageId} className={`chat-row ${isModel ? "chat-row-model" : ""}`}>
+              <div className={`chat-bubble ${isModel ? "chat-bubble-model" : ""}`}>
                 <p className="whitespace-pre-wrap break-words">{normalizeDmMessageText(msg.content)}</p>
-                <div className="mt-1 flex flex-wrap items-center gap-x-2">
-                  <span className="text-xs text-text-secondary">
-                    {formatRelativeTime(msg.createdAt)}
-                  </span>
+                <div className="chat-meta">
+                  <span>{formatDateTime(msg.createdAt, { yearUnlessCurrent: true })}</span>
                   {msg.totalTipAmountCents > 0 && (
-                    <span className="text-xs font-semibold text-green">
-                      Чаевые {formatUsdFromCents(msg.totalTipAmountCents)}
-                    </span>
+                    <span className="chat-tip">Чаевые {formatUsdFromCents(msg.totalTipAmountCents)}</span>
                   )}
                   <SocketMessageMark message={msg} />
                 </div>
@@ -266,20 +277,12 @@ export function ChatPreviewPanel({ pageLabel, platformConversationId, profileHre
           );
         })}
       </div>
-      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-t border-border-light pt-3">
-        {footerText ? (
-          <span className="text-xs text-text-secondary">{footerText}</span>
-        ) : (
-          <span />
-        )}
-        <Link
-          to={profileHref}
-          onClick={(e) => e.stopPropagation()}
-          className="link text-sm"
-        >
-          Открыть профиль
-        </Link>
-      </div>
+      {(footerText || cardLink) && (
+        <div className="chat-foot">
+          <span className="chat-foot-text">{footerText}{footerLogin && <> {footerLogin}</>}</span>
+          {cardLink}
+        </div>
+      )}
     </div>
   );
 }

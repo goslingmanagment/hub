@@ -1,7 +1,7 @@
 import { useState, type FormEvent, type ReactNode } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import { useQueryClient } from "@tanstack/react-query";
-import { CheckCircle2, Circle, ExternalLink, Lock, RefreshCw } from "lucide-react";
+import { CheckCircle2, Circle, ExternalLink, Lock } from "lucide-react";
 import type { PageBrowserProfileResponse } from "@agency_hub_core/contracts";
 import type { PastedProxyOrder } from "@agency_hub_core/shared";
 
@@ -19,12 +19,18 @@ import {
   useVerifyPageBrowserProfile,
 } from "@/api/queries";
 import { KernelApiError } from "@/api/sdk";
-import { StatusPanel } from "@/components/shared/StatusPanel";
+import { ConfirmModal } from "@/components/shared/ConfirmModal";
+import { NoAnswerPanel, StatusPanel } from "@/components/shared/StatusPanel";
+import { Disclosure } from "@/components/ui/Disclosure";
 import { PageHeader } from "@/components/ui/PageHeader";
+import { Skeleton, Spinner } from "@/components/ui/Skeleton";
 import { buildPageRoute, buildSettingsRoute } from "@/lib/navigation";
 import { ServerAdminCommand } from "@/components/shared/ServerAdminCommand";
 import { Card, Chip, LiveScreenshot, LoginForm, OpenLoginDialog, ToneChip } from "./loginParts.js";
-import { browserHalted, browserStatusOf, onboardingStepsOf, profileLoginViewOf, type StepState } from "./pageBrowserOnboardingView.js";
+import { browserHalted, browserStatusOf, onboardingStepsOf, profileLoginViewOf, stopReasonCode, type StepState } from "./pageBrowserOnboardingView.js";
+import { ConnectSteps } from "./ConnectSteps.js";
+import { pageBrowserErrorText } from "./pageBrowserErrors.js";
+import { LoginProblem } from "./PageBrowserLoginPage.js";
 import { ProxyCheckPanel, ProxyPasteField, useProxyCheck } from "./proxyEntryParts.js";
 import { asSocks5Text, envLine, maskedLine, proxyPreviewOf } from "./proxyEntryView.js";
 import { stepProblemText, type LoginView } from "./pageBrowserLoginView.js";
@@ -38,16 +44,17 @@ import { stepProblemText, type LoginView } from "./pageBrowserLoginView.js";
 // proxy's password, the login, the password, the code — goes straight to
 // the API and is kept nowhere here.
 
-const errorText = (error: unknown) => (error instanceof KernelApiError ? error.message : "Не удалось. Повторите попытку.");
+const errorText = (error: unknown) => pageBrowserErrorText(error);
 
-function StepTitle({ n, title, state }: { n: number; title: string; state: StepState }) {
+/** A step's card title: a check, a ring or a lock, then the words; the number is on the strip. */
+function StepTitle({ title, state }: { n?: number; title: string; state: StepState }) {
   const icon = state === "done"
-    ? <CheckCircle2 size={16} className="text-green" aria-hidden />
-    : state === "locked" ? <Lock size={14} className="text-text-secondary" aria-hidden /> : <Circle size={16} className="text-accent" aria-hidden />;
+    ? <CheckCircle2 size={18} aria-hidden />
+    : state === "locked" ? <Lock size={16} aria-hidden /> : <Circle size={18} aria-hidden />;
   return (
-    <span className="inline-flex items-center gap-2" data-step-state={state}>
+    <span className={`step-title step-title-${state}`} data-step-state={state}>
       {icon}
-      <span>{n}. {title}</span>
+      <span>{title}</span>
     </span>
   );
 }
@@ -104,34 +111,34 @@ function ProxyStep({ data, state, onExitIp }: { data: PageBrowserProfileResponse
     />
   );
   return (
-    <Card title={<StepTitle n={1} title="Прокси страницы" state={state} />}>
+    <Card title={<StepTitle n={1} title="Прокси" state={state} />} muted={state === "locked"}>
       {data.proxy !== null && (
-        <p className="mb-1 text-sm text-text-secondary" data-proxy-saved>
-          {data.proxy.masked !== null ? <span className="font-mono text-text-primary">{maskedLine(data.proxy.masked)}</span> : <span className="font-mono text-text-primary">{data.proxy.url}</span>}
+        <p className="connect-env" data-proxy-saved>
+          <span className="font-mono">{data.proxy.masked !== null ? maskedLine(data.proxy.masked) : data.proxy.url}</span>
         </p>
       )}
       {data.socksEndpoint !== null && (
-        <p className="mb-3 text-xs text-text-secondary">Браузер создан для SOCKS5 <span className="font-mono">{data.socksEndpoint}</span>: другую прокси он не пропустит.</p>
+        <p className="field-hint">Браузер создан для SOCKS5 <span className="font-mono">{data.socksEndpoint}</span>: другую прокси он не пропустит.</p>
       )}
       {data.env !== null && (
-        <p className="mb-3 text-xs text-text-secondary">Окружение браузера: <span className="text-text-primary">{envLine(data.env)}</span></p>
+        <p className="field-hint">Окружение браузера: {envLine(data.env)}</p>
       )}
       {pasting && (
-        <form onSubmit={submit} className="mb-3 flex flex-col gap-2" autoComplete="off">
-          <ProxyPasteField id="pb-proxy" label={data.proxy === null ? "Прокси этой страницы" : "Новая прокси — тот же SOCKS5, другой логин или пароль"} text={text} onText={(value) => { setText(value); check.reset(); }} order={order} onOrder={setOrder} disabled={pending} />
+        <form onSubmit={submit} className="connect-fields connect-step-body" autoComplete="off">
+          <ProxyPasteField id="pb-proxy" label={data.proxy === null ? "Прокси этой страницы" : "Новая прокси: тот же SOCKS5, другой логин или пароль"} text={text} onText={(value) => { setText(value); check.reset(); }} order={order} onOrder={setOrder} disabled={pending} />
           {checkPanel}
-          <div className="flex flex-wrap items-center gap-2">
-            <button type="submit" className="btn btn-primary" disabled={!ready || pending}>{pending ? "Сохраняем…" : "Сохранить"}</button>
+          <div className="connect-actions">
+            <button type="submit" className="btn btn-primary" disabled={!ready || pending}>{pending ? <><Spinner /> Сохраняем…</> : "Сохранить"}</button>
             {data.proxy !== null && <button type="button" className="btn" onClick={() => { setReplacing(false); setText(""); check.reset(); }}>Отмена</button>}
-            {checkId === null && preview.kind === "parsed" && <span className="text-xs text-text-secondary">Сохранить — после успешной проверки этой прокси</span>}
+            {checkId === null && preview.kind === "parsed" && <span className="field-hint">Сохранить можно после успешной проверки этой прокси</span>}
           </div>
         </form>
       )}
-      {!pasting && checkPanel}
+      {!pasting && <div className="connect-step-body">{checkPanel}</div>}
       {editable && data.proxy !== null && !replacing && (
-        <button type="button" className="btn btn-sm mt-3" onClick={() => { setReplacing(true); check.reset(); }}>Заменить прокси</button>
+        <div className="connect-step-body"><button type="button" className="btn btn-sm" onClick={() => { setReplacing(true); check.reset(); }}>Заменить прокси</button></div>
       )}
-      {problem !== null && <p role="alert" className="mt-2 text-sm text-danger">{problem}</p>}
+      {problem !== null && <p role="alert" className="field-error">{problem}</p>}
     </Card>
   );
 }
@@ -147,30 +154,36 @@ function PinStep({ data, state, suggested }: { data: PageBrowserProfileResponse;
   const editable = state !== "locked" && data.login.state !== "closing";
   const halted = data.profile.operator.stopReason === "exit_ip_changed";
   return (
-    <Card title={<StepTitle n={2} title="Выходной IP" state={state} />} aside={<ToneChip label={status.label} tone={status.tone} />}>
-      <p className="mb-3 text-sm text-text-secondary" data-browser-status>{status.detail}</p>
+    <Card title={<StepTitle n={3} title="Выходной IP" state={state} />} aside={<ToneChip label={status.label} tone={status.tone} />} muted={state === "locked"}>
+      <p className="login-text" data-browser-status>{status.detail}</p>
+      {(stopReasonCode(data.profile) || (data.profile.operator.selfTest && !data.profile.operator.selfTest.ok)) && (
+        <Disclosure label="Подробнее">
+          {stopReasonCode(data.profile) && <p>Код остановки: <span className="font-mono">{stopReasonCode(data.profile)}</span></p>}
+          {data.profile.operator.selfTest && !data.profile.operator.selfTest.ok && <p>Проверка при запуске: <span className="font-mono">{data.profile.operator.selfTest.failed ?? "без кода"}</span></p>}
+        </Disclosure>
+      )}
       {data.profile.pinnedExitIp !== null && (
-        <p className="mb-3 text-sm text-text-secondary">Закреплён: <span className="font-mono text-text-primary">{data.profile.pinnedExitIp}</span></p>
+        <p className="login-text">Закреплён: <span className="font-mono text-text-primary">{data.profile.pinnedExitIp}</span></p>
       )}
       {editable && (
         <form
-          className="flex gap-2"
+          className="connect-pin"
           onSubmit={(event) => {
             event.preventDefault();
             setProblem(null);
             pin.mutate(value.trim(), { onError: (error) => setProblem(errorText(error)), onSuccess: () => setIp("") });
           }}
         >
-          <input value={value} onChange={(event) => setIp(event.target.value)} placeholder="203.0.113.7" className="input flex-1 font-mono" aria-label="Выходной IP" />
+          <input value={value} onChange={(event) => setIp(event.target.value)} placeholder="203.0.113.7" className="input font-mono" aria-label="Выходной IP" />
           <button type="submit" className="btn" disabled={value.trim() === "" || pin.isPending}>
-            {pin.isPending ? "Закрепляем…" : data.profile.pinnedExitIp === null ? "Закрепить" : halted ? "Закрепить и перезапустить" : "Закрепить другой"}
+            {pin.isPending ? <><Spinner /> Закрепляем…</> : data.profile.pinnedExitIp === null ? "Закрепить" : halted ? "Закрепить и перезапустить" : "Закрепить другой"}
           </button>
         </form>
       )}
       <p className="field-hint">
-        Браузер выйдет в сеть, только если сам увидит через прокси этот IP; иначе он остановится и ничего не отправит в Fansly.
+        Браузер выйдет в сеть, только если сам увидит через прокси этот IP. Иначе он остановится и ничего не отправит в Fansly.
       </p>
-      {problem !== null && <p role="alert" className="mt-2 text-sm text-danger">{problem}</p>}
+      {problem !== null && <p role="alert" className="field-error">{problem}</p>}
     </Card>
   );
 }
@@ -185,17 +198,17 @@ function LoginStep({ data, state, view }: { data: PageBrowserProfileResponse; st
   const halted = browserHalted(data.profile);
   const screenLink = (
     <a href={data.screenUrl} target="_blank" rel="noreferrer" className="btn">
-      <ExternalLink size={14} aria-hidden /> Открыть экран браузера
+      <ExternalLink size={16} aria-hidden /> Открыть экран браузера
     </a>
   );
   let main: ReactNode;
   if (state === "locked") {
-    main = <p className="text-sm text-text-secondary">Сначала прокси и выходной IP.</p>;
+    main = <p className="login-text">Сначала прокси и выходной IP.</p>;
   } else if (state === "done") {
     main = (
-      <div className="flex flex-col gap-3">
-        <p className="text-sm text-text-secondary">Вход выполнен, браузер вернулся в автоматику. Если Fansly разлогинил браузер — откройте вход снова.</p>
-        <button type="button" className="btn self-start" disabled={start.isPending} onClick={() => start.mutate(undefined, { onError: failure })}>
+      <div className="login-form">
+        <p className="login-text">Вход выполнен, браузер вернулся к работе. Если Fansly вышел из аккаунта, откройте вход снова.</p>
+        <button type="button" className="btn connect-self-start" disabled={start.isPending} onClick={() => start.mutate(undefined, { onError: failure })}>
           Открыть вход снова
         </button>
       </div>
@@ -204,27 +217,24 @@ function LoginStep({ data, state, view }: { data: PageBrowserProfileResponse; st
     switch (view.kind) {
       case "closed":
         main = (
-          <div className="flex flex-col gap-3">
-            <p className="text-sm text-text-secondary">Браузер запустится, сам проверит выходной IP и откроет экран входа Fansly. Войдите в аккаунт новой страницы.</p>
-            {view.problem !== null && <p role="alert" className="text-sm text-danger">Браузер не готов: {view.problem}.</p>}
-            <button type="button" className="btn btn-primary w-full" disabled={view.problem !== null || start.isPending} onClick={() => start.mutate(undefined, { onError: failure })}>
-              {start.isPending ? "Открываем…" : "Начать вход"}
+          <div className="login-form">
+            <p className="login-text">Браузер запустится, сам проверит выходной IP и откроет экран входа Fansly. Войдите в аккаунт новой страницы.</p>
+            {view.problem !== null && <LoginProblem problem={view.problem ? `Браузер не готов: ${view.problem}.` : "Браузер не готов."} />}
+            <button type="button" className="btn btn-primary login-wide" disabled={view.problem !== null || start.isPending} onClick={() => start.mutate(undefined, { onError: failure })}>
+              {start.isPending ? <><Spinner /> Открываем…</> : "Начать вход"}
             </button>
           </div>
         );
         break;
       case "preparing":
         main = (
-          <p role="status" className="flex items-start gap-2 text-sm text-text-secondary">
-            <RefreshCw size={14} className="mt-0.5 shrink-0 animate-spin" aria-hidden />
-            Браузер запускается: проверяет выходной IP и открывает экран входа Fansly…
-          </p>
+          <p role="status" className="login-status"><Spinner /> Браузер запускается: проверяет выходной IP и открывает экран входа Fansly…</p>
         );
         break;
       case "unreachable":
         main = halted
-          ? <p role="alert" className="text-sm text-danger">Браузер стоит и экран входа не открыл: причина и что сделать — в шаге «Выходной IP».</p>
-          : <p role="alert" className="text-sm text-danger">Hub не достучался до браузера. Подождите несколько секунд.</p>;
+          ? <LoginProblem problem="Браузер стоит и экран входа не открыл: причина и что сделать в шаге «Выходной IP»." />
+          : <LoginProblem problem="Hub не достучался до браузера. Подождите несколько секунд." />;
         break;
       case "landing":
         main = <OpenLoginDialog step={step} onAnswer={(answer) => setProblem(stepProblemText(answer))} />;
@@ -234,29 +244,26 @@ function LoginStep({ data, state, view }: { data: PageBrowserProfileResponse; st
         break;
       case "success":
         main = (
-          <div className="flex flex-col gap-3">
-            <p className="text-sm text-text-secondary">Fansly принял вход. Завершите его: браузер вернётся в автоматику, и Hub проверит аккаунт через него.</p>
-            <button type="button" className="btn btn-primary w-full" disabled={finish.isPending} onClick={() => finish.mutate(undefined, { onError: failure })}>
-              {finish.isPending ? "Завершаем…" : "Завершить вход"}
+          <div className="login-form">
+            <p className="login-text">Fansly принял вход. Завершите его: браузер вернётся к работе, и Hub проверит аккаунт через него.</p>
+            <button type="button" className="btn btn-primary login-wide" disabled={finish.isPending} onClick={() => finish.mutate(undefined, { onError: failure })}>
+              {finish.isPending ? <><Spinner /> Завершаем…</> : "Завершить вход"}
             </button>
           </div>
         );
         break;
       case "unknown":
         main = (
-          <div className="flex flex-col gap-3">
-            <p className="text-sm text-text-secondary">Браузер показывает экран, которого форма не знает: капча, проверка Fansly, новое соглашение. Ничего не нажато.</p>
-            <p className="text-sm text-text-secondary">Откройте экран браузера и пройдите его сами — пароль экрана Hub подставит сам.</p>
+          <div className="login-form">
+            <p className="login-text">Браузер показывает экран, которого форма не знает: капча, проверка Fansly, новое соглашение или изменённая форма. Ничего не нажато.</p>
+            <p className="login-text">Откройте экран браузера и пройдите его сами: пароль экрана Hub подставит сам. Потом вернитесь сюда.</p>
             {screenLink}
           </div>
         );
         break;
       case "closing":
         main = (
-          <p role="status" className="flex items-start gap-2 text-sm text-text-secondary">
-            <RefreshCw size={14} className="mt-0.5 shrink-0 animate-spin" aria-hidden />
-            Останавливаем браузер: профиль остаётся, страница не создаётся.
-          </p>
+          <p role="status" className="login-status"><Spinner /> Останавливаем браузер: профиль остаётся, страница не создаётся.</p>
         );
         break;
     }
@@ -264,10 +271,10 @@ function LoginStep({ data, state, view }: { data: PageBrowserProfileResponse; st
   const open = data.login.state === "login";
   const chip = state !== "current" ? undefined : halted ? <ToneChip label="Браузер стоит" tone="danger" /> : <Chip view={view} />;
   return (
-    <Card title={<StepTitle n={3} title="Вход в Fansly" state={state} />} aside={chip}>
+    <Card title={<StepTitle n={4} title="Вход в Fansly" state={state} />} aside={chip} muted={state === "locked"}>
       {main}
       {open && (
-        <div className="mt-4 flex flex-wrap gap-2 border-t border-border-light pt-4">
+        <div className="login-actions connect-step-foot">
           {view.kind !== "unknown" && screenLink}
           {view.kind !== "success" && (
             <button type="button" className="btn" disabled={finish.isPending} onClick={() => finish.mutate(undefined, { onError: failure })}>
@@ -276,7 +283,7 @@ function LoginStep({ data, state, view }: { data: PageBrowserProfileResponse; st
           )}
         </div>
       )}
-      {problem !== null && <p role="alert" className="mt-3 text-sm text-danger">{problem}</p>}
+      <LoginProblem problem={problem} />
     </Card>
   );
 }
@@ -289,49 +296,52 @@ function AccountStep({ data, state }: { data: PageBrowserProfileResponse; state:
   const navigate = useNavigate();
   const [modelSlug, setModelSlug] = useState("");
   const [problem, setProblem] = useState<string | null>(null);
+  const [asking, setAsking] = useState(false);
+  const [askError, setAskError] = useState<string | null>(null);
   const identity = data.identity;
   const label = data.profile.name;
   const chosen = modelSlug || models.data?.[0]?.slug || "";
+  const modelName = models.data?.find((model) => model.slug === chosen)?.name ?? chosen;
   if (state === "locked") {
     return (
-      <Card title={<StepTitle n={4} title="Аккаунт и страница" state={state} />} muted>
-        <p className="text-sm text-text-secondary">После входа Hub прочитает аккаунт через браузер и создаст страницу.</p>
+      <Card title={<StepTitle n={5} title="Аккаунт и страница" state={state} />} muted>
+        <p className="login-text">После входа Hub прочитает аккаунт через браузер и создаст страницу.</p>
       </Card>
     );
   }
+  const account = identity.ok === true ? `@${identity.username ?? "?"}${identity.displayName !== null ? ` (${identity.displayName})` : ""}` : null;
   return (
-    <Card title={<StepTitle n={4} title="Аккаунт и страница" state={state} />}>
-      <div className="flex flex-col gap-3">
+    <Card title={<StepTitle n={5} title="Аккаунт и страница" state={state} />}>
+      <div className="login-form">
         {identity.pending ? (
-          <p role="status" className="flex items-start gap-2 text-sm text-text-secondary">
-            <RefreshCw size={14} className="mt-0.5 shrink-0 animate-spin" aria-hidden />
-            Hub читает аккаунт через браузер…
-          </p>
+          <p role="status" className="login-status"><Spinner /> Hub читает аккаунт через браузер…</p>
         ) : identity.ok === true ? (
-          <div className="notice notice-success block" data-identity="ok">
-            Аккаунт: @{identity.username ?? "?"}{identity.displayName !== null && ` (${identity.displayName})`} · id <span className="font-mono">{identity.accountId}</span>
+          <div className="notice notice-success" data-identity="ok">
+            <CheckCircle2 size={18} aria-hidden />
+            <div className="notice-body">
+              Аккаунт: {account}
+              <Disclosure label="Подробнее"><p>Номер аккаунта: <span className="font-mono">{identity.accountId}</span></p></Disclosure>
+            </div>
           </div>
         ) : identity.ok === false ? (
-          <p role="alert" className="notice notice-danger">Проверка не прошла: {identity.error}</p>
+          <LoginProblem problem={`Проверка не прошла: ${identity.error}`} />
         ) : (
-          <p className="text-sm text-text-secondary">Hub отправит через браузер один запрос — какой это аккаунт — и запишет ответ.</p>
+          <p className="login-text">Hub отправит через браузер один запрос: какой это аккаунт, и запишет ответ.</p>
         )}
-        <button type="button" className="btn self-start" disabled={verify.isPending || identity.pending}
+        <button type="button" className="btn connect-self-start" disabled={verify.isPending || identity.pending}
           onClick={() => { setProblem(null); verify.mutate(undefined, { onError: (error) => setProblem(errorText(error)) }); }}>
-          {verify.isPending ? "Проверяем…" : identity.ok === true ? "Проверить ещё раз" : "Проверить аккаунт"}
+          {verify.isPending ? <><Spinner /> Проверяем…</> : identity.ok === true ? "Проверить ещё раз" : "Проверить аккаунт"}
         </button>
         <form
-          className="flex flex-col gap-3 border-t border-border-light pt-4"
+          className="login-form connect-step-foot"
           onSubmit={(event) => {
             event.preventDefault();
             setProblem(null);
-            create.mutate({ modelSlug: chosen, label }, {
-              onError: (error) => setProblem(errorText(error)),
-              onSuccess: () => navigate(buildPageRoute(label)),
-            });
+            setAskError(null);
+            setAsking(true);
           }}
         >
-          <div className="grid gap-3 sm:grid-cols-2">
+          <div className="connect-env-grid">
             <div>
               <label htmlFor="pb-model" className="field-label">Модель</label>
               <select id="pb-model" value={chosen} onChange={(event) => setModelSlug(event.target.value)} className="select">
@@ -340,18 +350,83 @@ function AccountStep({ data, state }: { data: PageBrowserProfileResponse; state:
             </div>
             <div>
               <span className="field-label">Название страницы</span>
-              <span className="block rounded-lg border border-border bg-hover-alt px-3 py-2 font-mono text-sm text-text-primary">{label}</span>
+              <span className="connect-readonly">{label}</span>
             </div>
           </div>
-          <button type="submit" className="btn btn-primary w-full" disabled={create.isPending || chosen === "" || identity.ok !== true}>
-            {create.isPending ? "Создаём страницу…" : "Создать страницу"}
+          <button type="submit" className="btn btn-primary login-wide" disabled={create.isPending || chosen === "" || identity.ok !== true}>
+            {create.isPending ? <><Spinner /> Создаём страницу…</> : "Создать страницу"}
           </button>
-          <p className="text-xs text-text-secondary">
-            Hub ещё раз прочитает аккаунт через браузер, создаст страницу, привяжет к ней этот браузер и включит сбор данных через него — всё одним шагом. Сессия Fansly остаётся только в профиле браузера.
+          <p className="field-hint">
+            Hub ещё раз прочитает аккаунт через браузер, создаст страницу, привяжет к ней этот браузер и включит сбор данных: всё одним шагом. Сессия Fansly остаётся только в профиле браузера.
           </p>
         </form>
-        {problem !== null && <p role="alert" className="text-sm text-danger">{problem}</p>}
+        {problem !== null && <LoginProblem problem={problem} />}
       </div>
+      {asking && (
+        <ConfirmModal
+          title={`Создать страницу ${label}?`}
+          message="Hub создаст страницу, привяжет к ней этот браузер и включит сбор данных."
+          facts={[
+            { label: "Куда", value: `модель ${modelName}, страница ${label}, Fansly` },
+            { label: "Что именно", value: account ? `аккаунт ${account}` : "аккаунт этого браузера" },
+            { label: "Отменить", value: "Отключить страницу можно в «Модели и страницы», вернуть её из консоли нельзя" },
+          ]}
+          confirmLabel={`Создать страницу ${label}`}
+          pendingLabel="Создаём страницу…"
+          tone="primary"
+          error={askError}
+          isPending={create.isPending}
+          // The request as before: the profile from the path, the model from the field, one attempt.
+          onConfirm={() => create.mutate({ modelSlug: chosen, label }, {
+            onError: (error) => setAskError(errorText(error)),
+            onSuccess: () => navigate(buildPageRoute(label)),
+          })}
+          onClose={() => setAsking(false)}
+        />
+      )}
+    </Card>
+  );
+}
+
+function GiveUp({ data, profileId }: { data: PageBrowserProfileResponse; profileId: string }) {
+  const close = useClosePageBrowserProfile(profileId);
+  const [asking, setAsking] = useState(false);
+  const [askError, setAskError] = useState<string | null>(null);
+  const givingUp = data.login.state === "closing";
+  const name = data.profile.name;
+  return (
+    <Card title="Если передумали">
+      <div className="login-form">
+        <p className="login-text">Hub остановит браузер. Профиль останется на сервере непривязанным.</p>
+        <button type="button" className="btn btn-danger-outline connect-self-start" disabled={givingUp || close.isPending || data.login.state === "off"} onClick={() => { setAskError(null); setAsking(true); }}>
+          {givingUp || close.isPending ? <><Spinner /> Останавливаем…</> : "Отказаться от подключения"}
+        </button>
+        <ServerAdminCommand
+          text="Чтобы удалить профиль с сервера, выполните на рабочей машине:"
+          command={`scripts/deploy-page-browser.sh remove-profile <host> --page ${name}`}
+        />
+      </div>
+      {asking && (
+        <ConfirmModal
+          title={`Отказаться от подключения ${name}?`}
+          message="Hub остановит браузер. Страница не создаётся, профиль останется на сервере непривязанным."
+          facts={[
+            { label: "Куда", value: `браузер ${name}, Fansly` },
+            { label: "Отменить", value: "Можно: вход можно начать снова" },
+          ]}
+          confirmLabel="Отказаться от подключения"
+          pendingLabel="Останавливаем…"
+          tone="primary"
+          error={askError}
+          isPending={close.isPending}
+          // The request as before: the profile from the path, one attempt.
+          onConfirm={() => close.mutate(undefined, {
+            onSuccess: () => setAsking(false),
+            onError: (error) => setAskError(errorText(error)),
+          })}
+          onClose={() => setAsking(false)}
+        />
+      )}
     </Card>
   );
 }
@@ -359,25 +434,28 @@ function AccountStep({ data, state }: { data: PageBrowserProfileResponse; state:
 export function PageBrowserOnboardingPage() {
   const { profileId = "" } = useParams<{ profileId: string }>();
   const onboarding = usePageBrowserProfile(profileId);
-  const close = useClosePageBrowserProfile(profileId);
   // The exit IP the owner's check saw through the proxy: offered for the pin
   // (a preview — the browser checks its own before it opens its exit).
   const [exitIp, setExitIp] = useState<string | null>(null);
   if (onboarding.isPending) {
-    return <div className="min-w-0"><PageHeader title="Подключить страницу Fansly" /><p role="status" className="text-sm text-text-secondary">Загружаем…</p></div>;
+    return (
+      <div className="connect-page">
+        <PageHeader title="Подключить страницу Fansly" />
+        <Skeleton width="60%" />
+      </div>
+    );
   }
   if (onboarding.isError || onboarding.data === undefined) {
     const status = onboarding.error instanceof KernelApiError ? onboarding.error.status : null;
     return (
-      <div className="min-w-0">
+      <div className="connect-page">
         <PageHeader title="Подключить страницу Fansly" />
         {status === 404
-          ? <StatusPanel tone="error" title="Такого браузера нет" description="Профиль удалён или не создавался." />
+          ? <StatusPanel title="Такого браузера нет" description="Профиль удалён или не создавался." />
           : status === 409
-            ? <StatusPanel title="Браузер уже привязан к странице" description="Вход в него теперь открывается со страницы: «Система → Сбор данных → Fansly» → страница → «Вход в браузер»."
-                action={<Link to={buildSettingsRoute("engine")} className="btn btn-sm">Открыть сбор данных Fansly</Link>} />
-            : <StatusPanel tone="error" title="Не удалось загрузить подключение" description="Повторите попытку через несколько секунд."
-                action={<button type="button" className="btn btn-sm" onClick={() => void onboarding.refetch()}>Повторить</button>} />}
+            ? <StatusPanel title="Браузер уже привязан к странице" description="Вход в него открывается с карточки страницы."
+                action={<Link to={buildSettingsRoute("pages")} className="btn btn-sm">К моделям и страницам</Link>} />
+            : <NoAnswerPanel retry={onboarding.refetch} />}
       </div>
     );
   }
@@ -385,38 +463,25 @@ export function PageBrowserOnboardingPage() {
   const steps = onboardingStepsOf(data);
   const view = profileLoginViewOf(data);
   const live = data.login.state === "login" && view.kind !== "unreachable";
-  const givingUp = data.login.state === "closing";
   return (
-    <div className="min-w-0">
+    <div className="connect-page">
       <PageHeader
         title={`Подключить страницу Fansly · ${data.profile.name}`}
-        description="Страница входит в Fansly из своего серверного браузера; пароль и код проходят через Hub и нигде не сохраняются."
+        description="Страница входит в Fansly из своего серверного браузера. Пароль и код проходят через Hub и нигде не сохраняются."
       />
-      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_400px]">
-        <div className="flex flex-col gap-4">
-          <Card title="Экран браузера" aside={<span className="text-xs text-text-secondary">{live ? "обновляется раз в секунду" : "показывается, пока открыт вход"}</span>}>
+      <ConnectSteps states={[steps.proxy, "done", steps.pin, steps.login, steps.account]} />
+      <div className="connect-grid">
+        <div className="connect-screen">
+          <Card title="Экран браузера" aside={<span className="login-card-note">{live ? "обновляется раз в секунду" : "показывается, пока открыт вход"}</span>}>
             <LiveScreenshot urlFor={(tick) => pageBrowserProfileScreenshotUrl(profileId, tick)} live={live} />
           </Card>
         </div>
-        <div className="flex flex-col gap-4">
+        <div className="connect-steps-column">
           <ProxyStep data={data} state={steps.proxy} onExitIp={setExitIp} />
           <PinStep data={data} state={steps.pin} suggested={exitIp} />
           <LoginStep data={data} state={steps.login} view={view} />
           <AccountStep data={data} state={steps.account} />
-          <Card title="Если передумали">
-            <div className="flex flex-col gap-3">
-              <p className="text-sm text-text-secondary">
-                Hub остановит браузер; профиль останется на сервере непривязанным.
-              </p>
-              <button type="button" className="btn self-start" disabled={givingUp || close.isPending || data.login.state === "off"} onClick={() => close.mutate(undefined)}>
-                {givingUp ? "Останавливаем…" : "Отказаться от подключения"}
-              </button>
-              <ServerAdminCommand
-                text="Чтобы удалить профиль с сервера, выполните на рабочей машине:"
-                command={`scripts/deploy-page-browser.sh remove-profile <host> --page ${data.profile.name}`}
-              />
-            </div>
-          </Card>
+          <GiveUp data={data} profileId={profileId} />
         </div>
       </div>
     </div>

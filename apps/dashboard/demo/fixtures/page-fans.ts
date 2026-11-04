@@ -300,6 +300,25 @@ function spenderRows(pages: readonly DemoPage[], window: Window, now: Date): Spe
   return out;
 }
 
+/** Over several pages one row a fan: his money summed over the pages, his newest page's chat. */
+function onePerFan(rows: SpenderRow[], window: Window, now: Date): SpenderRow[] {
+  const byFan = new Map<string, SpenderRow[]>();
+  for (const row of rows) byFan.set(row.item.fan.platformUserId, [...(byFan.get(row.item.fan.platformUserId) ?? []), row]);
+  return [...byFan.values()].map((group) => {
+    if (group.length === 1) return group[0]!;
+    const all = group.flatMap((row) => fanTransactions(row.page, row.item.fan));
+    const inside = window.fromDay === null ? all : all.filter((tx) => inWindow(window, now, tx.hoursAgo));
+    const first = [...group].sort((left, right) => right.lifetime.creatorNetAmountMills - left.lifetime.creatorNetAmountMills)[0]!;
+    return { page: first.page, item: { ...first.item, fan: { ...first.item.fan, totalSpent: group.reduce((sum, row) => sum + row.item.fan.totalSpent, 0) } }, window: metricsOf(inside, now), lifetime: metricsOf(all, now) };
+  });
+}
+
+/** A few payers of every page the page no longer sees, some of them with money. */
+function pageMisses(page: DemoPage, item: PageFan): boolean {
+  if (!item.core || item.fan.totalSpent <= 0) return false;
+  return hashString(`miss:${page.label}:${item.fan.platformUserId}`) % 23 === 0;
+}
+
 function bucketOf(row: SpenderRow, window: Window): Bucket | undefined {
   const amount = window.fromDay === null ? row.lifetime.grossAmountMills : row.window.grossAmountMills;
   return BUCKETS.find((bucket) => amount >= bucket.min && (bucket.max === null || amount < bucket.max));
@@ -526,10 +545,8 @@ export const pageFanHandlers: DemoHandlers = {
       .filter((item) => started === undefined || item.subscription!.startedHoursAgo <= Number(started))
       .filter((item) => autoRenew === undefined || item.subscription!.autoRenew === autoRenew)
       .filter((item) => paid === undefined || item.subscription!.paid === paid)
-      .map((item) => ({ item, spent: lifetimeNet(page, item) }))
-      // The ones who pay most first; among the rest, the newest.
-      .sort((left, right) => right.spent - left.spent || left.item.subscription!.startedHoursAgo - right.item.subscription!.startedHoursAgo)
-      .map((row) => row.item);
+      // As the server: the subscription that ends first comes first.
+      .sort((left, right) => left.subscription!.endsInHours - right.subscription!.endsInHours);
     const slice = paginate(request, rows, SUBSCRIBERS_LIMIT_FALLBACK);
     return { page: assignedPage(page, request.now), ...slice, items: slice.items.map((item) => subscriberItem(page, item, request.now)) };
   },
@@ -796,7 +813,7 @@ export const pageFanHandlers: DemoHandlers = {
     const retention = queryString(request, "retentionStatus") ?? "all";
     const sortBy = queryString(request, "sortBy") ?? "creatorNetAmountMills";
     const sortDir = queryString(request, "sortDir") === "asc" ? 1 : -1;
-    const all = spenderRows(scope.pages, window, request.now);
+    const all = scope.kind === "page" ? spenderRows(scope.pages, window, request.now) : onePerFan(spenderRows(scope.pages, window, request.now), window, request.now);
     const totals = all.reduce((sum, row) => ({ gross: sum.gross + row.window.grossAmountMills, net: sum.net + row.window.creatorNetAmountMills }), { gross: 0, net: 0 });
     const rows = all
       .filter((row) => fanMatches(row.item.fan, query))
@@ -837,7 +854,6 @@ export const pageFanHandlers: DemoHandlers = {
         const newest = txs[0];
         const prev = previous ? metricsOf(windowTxs(row.page, row.item.fan, previous, request.now), request.now) : null;
         const dm = row.item.dm;
-        const random = rng(`miss:${row.page.label}:${row.item.fan.platformUserId}`);
         return {
           fan: fanIdentity(row.page, row.item, request.now),
           metrics: {
@@ -873,7 +889,8 @@ export const pageFanHandlers: DemoHandlers = {
             }
             : null,
           retentionStatus: row.retention,
-          accountLookupMissAt: random() < 0.02 ? iso(daysAgo(request.now, 3, 8)) : null,
+          // A page answers for itself: over several pages the server says nothing.
+          accountLookupMissAt: scope.kind === "page" && pageMisses(row.page, row.item) ? iso(daysAgo(request.now, 2 + (hashString(row.item.fan.platformUserId) % 9), 8)) : null,
         };
       }),
     };
@@ -891,7 +908,30 @@ export const pageFanHandlers: DemoHandlers = {
     const inside = windowTxs(page, item.fan, window, request.now);
     const current = metricsOf(inside, request.now);
     const lifetime = metricsOf(all, request.now);
-    const sub = item.subscription;
+    // Every page of the platform the fan is on, as the server: the scope's marked, all time each.
+    const pages = DEMO_PAGES.filter((one) => one.platform === page.platform).flatMap((one) => {
+      const there = findPageFan(one, item.fan.platformUserId);
+      if (!there) return [];
+      const money = metricsOf(fanTransactions(one, there.fan), request.now);
+      const sub = there.subscription;
+      return [{
+        pageId: one.id,
+        pageLabel: one.label,
+        modelSlug: one.modelSlug,
+        modelName: one.modelName,
+        inScope: scope.pages.some((inside) => inside.label === one.label),
+        grossAmountMills: money.grossAmountMills,
+        creatorNetAmountMills: money.creatorNetAmountMills,
+        lastTransactionAt: money.lastTransactionAt,
+        isFollower: there.followedHoursAgo !== null,
+        followerSince: at(request.now, there.followedHoursAgo),
+        isSubscriber: sub !== null,
+        subscriberSince: sub ? iso(hoursAgo(request.now, sub.startedHoursAgo)) : null,
+        subscriptionExpiresAt: sub ? iso(new Date(request.now.getTime() + sub.endsInHours * 3_600_000)) : null,
+        autoRenew: sub ? sub.autoRenew : null,
+        autoRenewOffDetectedAt: sub?.autoRenewOffDaysAgo != null ? iso(daysAgo(request.now, sub.autoRenewOffDaysAgo, 9)) : null,
+      }];
+    });
     return {
       scope: scopeShape(scope),
       fan: fanIdentity(page, item, request.now),
@@ -901,29 +941,40 @@ export const pageFanHandlers: DemoHandlers = {
         lifetime: {
           scopeGrossAmountMills: lifetime.grossAmountMills,
           scopeCreatorNetAmountMills: lifetime.creatorNetAmountMills,
-          platformGrossAmountMills: lifetime.grossAmountMills,
-          platformCreatorNetAmountMills: lifetime.creatorNetAmountMills,
+          platformGrossAmountMills: pages.reduce((sum, one) => sum + one.grossAmountMills, 0),
+          platformCreatorNetAmountMills: pages.reduce((sum, one) => sum + one.creatorNetAmountMills, 0),
         },
         comparison: comparisonOf(current, previous ? metricsOf(windowTxs(page, item.fan, previous, request.now), request.now) : null),
       },
       typeBreakdown: typeBreakdown(inside),
-      pages: [{
-        pageId: page.id,
+      pages,
+    };
+  },
+
+  crossPageFanTransactions: (request) => {
+    const platformUserId = request.params.platformUserId ?? "";
+    const rows = DEMO_PAGES.filter((page) => page.platform === request.params.platform).flatMap((page) => {
+      const item = findPageFan(page, platformUserId);
+      return item ? fanTransactions(page, item.fan).map((tx) => ({ page, item, tx })) : [];
+    }).sort((left, right) => left.tx.hoursAgo - right.tx.hoursAgo);
+    if (rows.length === 0 && !DEMO_PAGES.some((page) => findPageFan(page, platformUserId))) return demoError(404, "not_found", "Фан не найден");
+    const slice = paginate(request, rows, 25);
+    return {
+      ...slice,
+      items: slice.items.map(({ page, item, tx }) => ({
+        transactionId: tx.id,
+        rawType: tx.rawType,
+        canonicalType: tx.type,
+        transactionState: tx.pending ? "pending" as const : "posted" as const,
+        amountMills: tx.grossMills,
+        destinationAmountMills: tx.netMills,
+        netAmountMills: tx.netMills,
+        occurredAt: iso(hoursAgo(request.now, tx.hoursAgo)),
+        sourceUpdatedAt: null,
+        fan: { platformUserId: item.fan.platformUserId, username: item.fan.username, displayName: item.fan.displayName },
         pageLabel: page.label,
-        modelSlug: page.modelSlug,
-        modelName: page.modelName,
-        inScope: true,
-        grossAmountMills: current.grossAmountMills,
-        creatorNetAmountMills: current.creatorNetAmountMills,
-        lastTransactionAt: lifetime.lastTransactionAt,
-        isFollower: item.followedHoursAgo !== null,
-        followerSince: at(request.now, item.followedHoursAgo),
-        isSubscriber: sub !== null,
-        subscriberSince: sub ? iso(hoursAgo(request.now, sub.startedHoursAgo)) : null,
-        subscriptionExpiresAt: sub ? iso(new Date(request.now.getTime() + sub.endsInHours * 3_600_000)) : null,
-        autoRenew: sub ? sub.autoRenew : null,
-        autoRenewOffDetectedAt: sub?.autoRenewOffDaysAgo != null ? iso(daysAgo(request.now, sub.autoRenewOffDaysAgo, 9)) : null,
-      }],
+        platform: page.platform as "fansly" | "onlyfans",
+      })),
     };
   },
 

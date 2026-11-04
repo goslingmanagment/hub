@@ -463,7 +463,7 @@ function settingsOf(page: DemoPage, now: Date): SettingsRoute[] {
     ),
     row("settings.watermark", version("settings.watermark", `вотермарка: «fansly.com/${page.username}»`, { text: `fansly.com/${page.username}`, position: 3 }, 260)),
     row("settings.alerts", version("settings.alerts", "каналов алертов: 2 (тип 1, по умолчанию; тип 3, свои настройки)", [{ type: 1 }, { type: 3, metadata: "{\"minTip\":20}" }], 90)),
-    row("earnings.overview", version("earnings.overview", `в холде $${(balance / 1000).toFixed(2)}`, { pendingBalance: balance / 10 }, 0)),
+    row("earnings.overview", version("earnings.overview", `в холде $${(balance / 1000).toFixed(2)}`, { pendingBalance: balance }, 0)),
     row("referrals.stats", version("referrals.stats", "реферальных кодов: 1", { codes: [{ code: page.username.toUpperCase(), uses: intBetween(random, 0, 6) }] }, 180)),
     row(
       "tipgoals.account",
