@@ -1,5 +1,6 @@
 import {
   bumpPagePolls,
+  closeQuarantinedWork,
   confirmSyncOwnersStopped,
   countSendsSince,
   getSyncAttemptSummaries,
@@ -10,6 +11,7 @@ import {
   listBrowserPageHandovers,
   listUnavailableChatGroups,
   listSyncPages,
+  lockWorkRows,
   readFanslySendAudit,
   readRouteJournal,
   readSyncPageWsStatus,
@@ -563,6 +565,58 @@ export async function requeueSyncWork(
       },
     });
     return requeued;
+  });
+}
+
+/** The owner's close of quarantined work in the audit log. */
+export const SYNC_WORK_CLOSE_AUDIT_EVENT = "admin.sync_work_close";
+
+export interface ClosedSyncWork {
+  id: number;
+  resource: string;
+  subject: string;
+}
+
+/**
+ * `sync work close`: close quarantined work of a page that needs nothing more —
+ * its goal reached another way (a chat's history proven complete by a later
+ * read while an earlier answer waits for review). The row ends `cancelled`
+ * with the owner's reason; its journaled answer stays. Nothing is sent and
+ * nothing re-applied. All-or-nothing: a row that is not a quarantined row of
+ * the page refuses the whole close. The close and its audit row commit
+ * together.
+ */
+export async function closeQuarantinedSyncWork(
+  db: Database,
+  input: { pageLabel: string; workIds: readonly number[]; actor: string; note: string },
+): Promise<ClosedSyncWork[]> {
+  if (input.workIds.length === 0) throw new SyncOwnerLeverError("say what to close: --work <id>");
+  if (input.note.trim().length === 0) throw new SyncOwnerLeverError("say why: --note <text>");
+  const page = await findSyncPageByLabel(db, input.pageLabel);
+  const workIds = [...new Set(input.workIds)];
+  return db.transaction(async (tx) => {
+    const txDb = tx as unknown as Database;
+    const rows = await lockWorkRows(txDb, workIds);
+    const held = new Map(rows.filter((row) => row.pageId === page.pageId && row.state === "quarantined").map((row) => [row.id, row]));
+    const refused = workIds.filter((id) => !held.has(id));
+    if (refused.length > 0) {
+      throw new SyncOwnerLeverError(`not a quarantined row of ${input.pageLabel}: work ${refused.join(", ")}; nothing closed`);
+    }
+    const closed: ClosedSyncWork[] = [];
+    for (const row of held.values()) {
+      if (!await closeQuarantinedWork(txDb, { workId: row.id, to: "cancelled", closeReason: "owner_closed" })) {
+        // Rolls the transaction back: nothing closed, nothing audited.
+        throw new SyncOwnerLeverError(`work ${row.id} left quarantine meanwhile; nothing closed`);
+      }
+      closed.push({ id: row.id, resource: row.resource, subject: row.subject });
+    }
+    await insertAuditEvent(txDb, {
+      platformAccountId: page.pageId,
+      source: "cli",
+      eventType: SYNC_WORK_CLOSE_AUDIT_EVENT,
+      metadata: { actor: input.actor, pageLabel: input.pageLabel, closed, note: input.note },
+    });
+    return closed;
   });
 }
 

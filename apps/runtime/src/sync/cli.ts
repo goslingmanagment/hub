@@ -30,6 +30,7 @@ import {
   readSyncPageStatuses,
   requestSyncProbe,
   requeueSyncWork,
+  closeQuarantinedSyncWork,
 } from "./inspect.ts";
 import { registerSyncBrowserProfileCommands } from "./browser-profile-cli.ts";
 import {
@@ -412,6 +413,27 @@ export function registerSyncEngineCommands(sync: Command, deps: SyncCliDeps = de
             via: row.reapplyAttemptId === null ? "run_again" : `reapply_attempt_${row.reapplyAttemptId}`,
           })),
         }));
+      });
+    });
+
+  work
+    .command("close")
+    .description(
+      "close quarantined work that needs nothing more (its goal reached another way): the row ends cancelled, "
+      + "its journaled answer stays, nothing is sent or re-applied; --work <id> (repeatable) and --note <why>",
+    )
+    .requiredOption("--page <label>", "the Fansly page")
+    .requiredOption("--work <id>", "a quarantined work row (repeatable)", parseWorkId, [])
+    .requiredOption("--note <text>", "why it needs nothing more (stored with the audit row)")
+    .action(async (options: { page: string; work: number[]; note: string }) => {
+      await withContext(deps, async ({ db }) => {
+        const closed = await closeQuarantinedSyncWork(db, {
+          pageLabel: options.page,
+          workIds: options.work,
+          actor: cliActor(),
+          note: options.note,
+        });
+        deps.print(json({ page: options.page, closed }));
       });
     });
 

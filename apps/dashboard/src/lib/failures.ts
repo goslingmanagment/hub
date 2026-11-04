@@ -125,13 +125,60 @@ const BROWSER_WORDS: Readonly<Record<string, readonly [string, string]>> = {
   browser_degraded: ["У браузера своя неполадка. Страница работает.", PASS_ON],
 };
 
+/** What a collection key is, for a person: the keys a live-path failure names. */
+const ENGINE_RESOURCE_WORDS: Record<string, string> = {
+  "dm-messages.history": "история чата",
+  "dm-messages.head": "новые сообщения чата",
+  "followers.reconcile": "сверка подписчиков",
+  "followers.head": "новые подписчики",
+};
+
+/** The server's summary of an engine alert: `<detail> · [since …] · {context}`.
+ *  Its reasons and the keys they name, when the context says them. */
+function engineSummaryFacts(summary: string | null): { reasons: string[]; resources: string[] } {
+  if (summary === null) return { reasons: [], resources: [] };
+  const parts = summary.split(" · ");
+  const lead = parts[0]?.trim() ?? "";
+  const json = parts.slice(1).find((part) => part.trimStart().startsWith("{"));
+  let context: Record<string, unknown> = {};
+  try {
+    const parsed: unknown = json === undefined ? {} : JSON.parse(json);
+    if (parsed !== null && typeof parsed === "object") context = parsed as Record<string, unknown>;
+  } catch {
+    // An older or cut summary: its lead word still says the reason.
+  }
+  const strings = (value: unknown) => (Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : []);
+  const reasons = strings(context.reasons);
+  return { reasons: reasons.length > 0 ? reasons : lead.length > 0 ? [lead] : [], resources: strings(context.resources) };
+}
+
+/** Alert 2 (`live_degraded`) by its reasons: only a down socket, frames Hub
+ *  cannot read or a halted browser buffer delay new messages; work held for
+ *  review stops only the keys it names. */
+function liveDegradedWhat(summary: string | null): string {
+  const { reasons, resources } = engineSummaryFacts(summary);
+  const live: string[] = [];
+  if (reasons.includes("socket_down")) live.push("сокет страницы не на связи");
+  if (reasons.includes("protocol_changed")) live.push("Hub не разбирает часть кадров сокета");
+  if (reasons.includes("browser_buffer_halted")) live.push("браузер страницы держит кадры и ответы сайта");
+  const held = reasons.includes("quarantined")
+    ? `Отложено на разбор: ${resources.length > 0 ? resources.map((key) => ENGINE_RESOURCE_WORDS[key] ?? key).join(", ") : "часть сбора"}.`
+    : null;
+  if (live.length > 0) {
+    const first = live.join(", ");
+    return `Новые сообщения приходят с задержкой: ${first}.${held === null ? "" : ` ${held}`}`;
+  }
+  if (held !== null) return `${held} Новые сообщения приходят.`;
+  return "Новые сообщения приходят с задержкой: связь, неразобранные кадры или отложенная работа.";
+}
+
 /** The tails of a Fansly collection failure (`fansly_sync_engine:<page>:<tail>`). */
-function engineWords(tail: string, page: string | null): Omit<FailureWords, "title"> {
+function engineWords(tail: string, page: string | null, summary: string | null): Omit<FailureWords, "title"> {
   const at = pageCollection(page);
   const says = (what: string, todo: string, fix: FailureFix = at) => ({ what, todo, fix });
   if (tail.startsWith("page_stopped:pace_violation")) return says("Два запроса ушли ближе паузы. Такого быть не должно.", "Передайте разработчику, потом закройте сбой.");
   if (tail.startsWith("page_stopped")) return says("Сбор остановил страницу: 429, вход, сеть или сервер сбора.", "Посмотрите, что держит страницу.");
-  if (tail.startsWith("live_degraded")) return says("Новые сообщения приходят с задержкой: связь, неразобранные кадры или отложенная работа.", "Посмотрите, что отложено.");
+  if (tail.startsWith("live_degraded")) return says(liveDegradedWhat(summary), "Посмотрите, что отложено.");
   if (tail.startsWith("freshness")) return says("Сообщения, деньги или срочная работа опаздывают.", "Посмотрите сбор страницы.");
   if (tail.startsWith("stuck")) return says("Запрос или плановый сбор не двигается.", "Посмотрите сбор страницы.");
   if (tail.startsWith("process")) return says("Сервер сбора молчит больше 2 минут.", PASS_ON, COLLECTION);
@@ -178,7 +225,7 @@ export function failureWords(item: Pick<NotificationsIncidentItem, "kind" | "inc
       if (tail.startsWith("pace_violation")) return says("Два запроса страницы ушли ближе паузы. Такого быть не должно.", PASS_ON, pageCollection(page));
       return says("Сбор Fansly не отчитывается дольше обычного.", "Посмотрите сбор данных.", pageCollection(page));
     case "fansly_sync_engine":
-      return { title, ...engineWords(tail, page) };
+      return { title, ...engineWords(tail, page, item.errorSummary) };
     case "publishing_stopped":
       return says("Hub сам выключил публикацию страницы.", "Посмотрите причину и включите снова.", {
         label: "Настройки публикации",
