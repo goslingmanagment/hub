@@ -7,8 +7,8 @@ import { TableSkeleton } from "@/components/shared/TableSkeleton";
 import { Notice } from "@/components/ui/Notice";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Segmented } from "@/components/ui/Segmented";
-import { formatMomentAgo } from "@/lib/format";
-import { freshOf } from "../shared.js";
+
+import { freshOf, MomentCell } from "../shared.js";
 
 const STATE_FILTERS = [
   { value: "all", label: "Все" },
@@ -66,7 +66,7 @@ export function QueuePage() {
   const header = (
     <>
       <PageHeader fresh={freshOf(query)} />
-      <Segmented
+      <div className="sys-seg-scroll"><Segmented
         label="Состояние задачи"
         value={stateFilter}
         options={STATE_FILTERS}
@@ -76,13 +76,13 @@ export function QueuePage() {
           else query.set("state", next);
           setSearch(query);
         }}
-      />
+      /></div>
     </>
   );
 
   if (isLoading || !data) {
     return (
-      <div className="space-y-6">
+      <div className="space-y-6 sys-screen">
         {header}
         <div className="card">{isLoading ? <TableSkeleton rows={8} columns={6} /> : <NoAnswerPanel retry={query.refetch} />}</div>
       </div>
@@ -92,7 +92,7 @@ export function QueuePage() {
   const jobs = data;
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 sys-screen">
       {header}
       {isError && (
         <Notice tone="warning" role="alert" action={<button type="button" className="btn btn-sm" onClick={() => void query.refetch()}>Повторить</button>}>
@@ -101,7 +101,7 @@ export function QueuePage() {
       )}
       <section className="card" aria-label="Задачи">
         <div className="table-wrap">
-        <table className="data-table data-table-dense">
+        <table className="data-table data-table-dense sys-queue">
           <thead>
             <tr>
               {COLUMNS.map((col) => <th key={col} className={col === "Повторов" ? "num" : undefined}>{col}</th>)}
@@ -136,9 +136,9 @@ export function QueuePage() {
                   >
                     <td><span className="sys-code sys-code-strong">{job.name ?? "—"}</span></td>
                     <td className="status-col"><JobState state={job.state} /></td>
-                    <td className="muted whitespace-nowrap">{job.createdOn ? formatMomentAgo(job.createdOn) : "—"}</td>
-                    <td className="muted whitespace-nowrap">{job.startedOn ? formatMomentAgo(job.startedOn) : "—"}</td>
-                    <td className="muted whitespace-nowrap">{job.completedOn ? formatMomentAgo(job.completedOn) : "—"}</td>
+                    <td className="muted"><MomentCell at={job.createdOn} /></td>
+                    <td className="muted"><MomentCell at={job.startedOn} /></td>
+                    <td className="muted"><MomentCell at={job.completedOn} /></td>
                     <td className="num">{job.retryCount ?? 0}</td>
                   </tr>
                   {isExpanded && (

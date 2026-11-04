@@ -7,9 +7,9 @@ import { TableSkeleton } from "@/components/shared/TableSkeleton";
 import { Notice } from "@/components/ui/Notice";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Segmented } from "@/components/ui/Segmented";
-import { formatMomentAgo } from "@/lib/format";
+
 import { syncStreamLabel } from "@/pages/settings/sync/syncVocabulary";
-import { freshOf, OfapiOffBanner, useOfapi } from "../shared.js";
+import { freshOf, MomentCell, OfapiOffBanner, useOfapi } from "../shared.js";
 import { EventDetailPanel, getEventDisplaySeverity, SeverityBadge, severityLabel } from "./EventDetailPanel.js";
 
 type Mode = "all" | "info" | "warn" | "error" | "problems";
@@ -68,9 +68,9 @@ function EventsTable({ rows, problems, off }: { rows: readonly Row[]; problems: 
                     }
                   }}
                 >
-                  <td className="muted whitespace-nowrap">{row.emittedAt ? formatMomentAgo(row.emittedAt) : "—"}</td>
+                  <td className="muted"><MomentCell at={row.emittedAt} /></td>
                   <td className="whitespace-nowrap">{row.pageLabel ?? "—"}</td>
-                  <td className="muted whitespace-nowrap">{row.stream ? syncStreamLabel(row.stream) : "—"}</td>
+                  <td className="muted">{row.stream ? syncStreamLabel(row.stream) : "—"}</td>
                   <td className="status-col"><SeverityBadge severity={row.displaySeverity} off={off} /></td>
                   <td><span className="sys-code">{(problems ? row.code : row.type) ?? "—"}</span></td>
                   <td className="muted"><span className="sys-truncate">{row.message ?? "—"}</span></td>
@@ -246,9 +246,9 @@ export function LogPage() {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 sys-screen">
       {off && <OfapiOffBanner link={false}>Журнал застыл 1 ноября вместе с OnlyFans API.</OfapiOffBanner>}
-      <Segmented
+      <div className="sys-seg-scroll"><Segmented
         label="Какие записи"
         value={mode}
         onChange={choose}
@@ -259,7 +259,7 @@ export function LogPage() {
           { value: "error", label: "Ошибки" },
           { value: "problems", label: "Только проблемы" },
         ]}
-      />
+      /></div>
       {problems ? (
         <ProblemsMode
           code={code}

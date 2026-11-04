@@ -15,7 +15,7 @@ export function ToolsPage() {
   const collection = useQuery(ofapiCollectionQueryOptions());
   const pages = collection.data?.pages ?? [];
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 sys-screen">
       <PageHeader fresh={freshOf(collection)} />
       <OfapiOffBar ofapi={ofapi} />
       <DisclosureCard title="События и восстановление" description="История доставок и повтор пропущенных.">

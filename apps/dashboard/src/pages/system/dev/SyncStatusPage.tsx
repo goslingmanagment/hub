@@ -58,7 +58,7 @@ export function SyncStatusPage() {
 
   if (!isValidRunId) {
     return (
-      <div className="space-y-6">
+      <div className="space-y-6 sys-screen">
         <PageHeader title="Запуск сбора" />
         <div className="card"><StatusPanel title="Такого запуска нет" action={TO_LOG} /></div>
       </div>
@@ -66,7 +66,7 @@ export function SyncStatusPage() {
   }
   if (isLoading && !data) {
     return (
-      <div className="space-y-6">
+      <div className="space-y-6 sys-screen">
         <PageHeader title={`Запуск сбора №${runId}`} />
         <div className="card"><TableSkeleton rows={5} columns={5} /></div>
       </div>
@@ -74,7 +74,7 @@ export function SyncStatusPage() {
   }
   if (!data) {
     return (
-      <div className="space-y-6">
+      <div className="space-y-6 sys-screen">
         <PageHeader title={`Запуск сбора №${runId}`} />
         <div className="card"><StatusPanel title="Запуск не загрузился" description="Hub не вернул данные этого запуска." action={TO_LOG} /></div>
       </div>
@@ -93,7 +93,7 @@ export function SyncStatusPage() {
   );
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 sys-screen">
       <PageHeader title={`Запуск сбора №${data.run.runId}`} description={description} fresh={freshOf(query)} />
       {query.isError && (
         <Notice tone="warning" role="alert" action={<button type="button" className="btn btn-sm" onClick={() => void query.refetch()}>Повторить</button>}>

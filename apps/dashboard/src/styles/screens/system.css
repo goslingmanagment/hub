@@ -13,7 +13,7 @@
     -webkit-line-clamp: 2;
     -webkit-box-orient: vertical;
     overflow: hidden;
-    max-width: 560px;
+    max-width: 360px;
   }
   .sys-click-row { cursor: pointer; }
   .sys-row-link {
@@ -77,7 +77,7 @@
   .sys-toolbar { margin-bottom: 0; }
 
   /* ── «Сбои» ──────────────────────────────────────────────────────────── */
-  .sys-failure-cell { min-width: 280px; }
+  .sys-failure-cell { min-width: 240px; }
   .sys-failure-title { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
   .sys-failure-title .status-dot { margin-right: 2px; }
   .sys-off-group > summary { list-style: none; }
@@ -123,8 +123,8 @@
   .sys-badge-link:hover .badge { text-decoration: underline; text-underline-offset: 3px; }
   .sys-badge-link:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
   .sys-platform-inline { display: none; }
-  .sys-collection td:first-child .cell-second { white-space: nowrap; }
-  .sys-collection td.status-col { min-width: 260px; }
+  .sys-collection td.status-col { min-width: 220px; }
+  .sys-collection td:nth-child(4) { white-space: nowrap; }
   .sys-pause { display: grid; gap: 16px; }
   .sys-pause-grid { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 32px; align-items: start; }
   .sys-pause-now { display: grid; gap: 4px; max-width: 520px; }
@@ -308,19 +308,20 @@
   .sys-rules th, .sys-rules td { padding-left: 12px; padding-right: 12px; }
   .sys-rules th:first-child, .sys-rules td:first-child { padding-left: 24px; }
   .sys-rules th:last-child, .sys-rules td:last-child { padding-right: 24px; }
-  .sys-rules td.sys-rules-cat { min-width: 200px; }
-  .sys-rules td.sys-rules-mode { min-width: 150px; max-width: 200px; }
-  .sys-rules td.sys-rules-state { min-width: 150px; }
+  .sys-rules td.sys-rules-cat { min-width: 170px; }
+  .sys-rules td.sys-rules-mode { min-width: 130px; max-width: 180px; }
+  .sys-rules td.sys-rules-state { min-width: 120px; }
   .data-table td.sys-rowgroup-cell { padding-top: 12px; padding-bottom: 12px; background: var(--color-hover-alt); white-space: normal; }
   .data-table td.sys-editor-cell { padding: 24px; background: var(--color-hover-alt); white-space: normal; }
   .sys-table-top { border-top: 1px solid var(--color-border); }
   .sys-head { flex: 1 1 360px; min-width: 0; }
-  .sys-keys td:nth-child(2) { min-width: 220px; }
-  .sys-keys td:nth-child(3) { min-width: 140px; }
-  .sys-blocks td:first-child { max-width: 300px; }
-  .sys-blocks td.status-col { min-width: 220px; }
-  .sys-requests td:nth-child(2) { min-width: 180px; }
-  .sys-requests td:nth-child(4) { min-width: 180px; }
+  .sys-keys td:nth-child(2) { min-width: 200px; }
+  .sys-keys td:nth-child(3) { min-width: 120px; }
+  .sys-keys td.sys-key-name { min-width: 180px; }
+  .sys-blocks td:first-child { min-width: 220px; max-width: 300px; }
+  .sys-blocks td.status-col { min-width: 200px; }
+  .sys-requests td:nth-child(2) { min-width: 150px; }
+  .sys-requests td:nth-child(4) { min-width: 140px; }
 }
 @layer components {
   /* Inside the switched-off OnlyFans API every word stays, its tone goes grey. */
@@ -350,4 +351,78 @@
 @layer components {
   /* «Все параметры»: a setting only the server changes is a quieter, tighter row. */
   .config-setting.config-setting-server { padding-top: 12px; padding-bottom: 12px; }
+}
+@layer components {
+  .data-table-dense td > .sys-code { overflow-wrap: normal; white-space: nowrap; }
+}
+@layer components {
+  .sys-hydration td:nth-child(1) { width: 1%; }
+  .sys-hydration td:nth-child(3) { min-width: 240px; }
+}
+@layer components {
+  /* The group's tables: 12 between cells, 24 at the sheet's edges, so they fit at 1280. */
+  .sys-screen .data-table :is(th, td) { padding-left: 12px; padding-right: 12px; }
+  .sys-screen .data-table :is(th, td):first-child { padding-left: 24px; }
+  .sys-screen .data-table :is(th, td):last-child { padding-right: 24px; }
+  .sys-screen .data-table td.sys-event-cell { padding: 0; }
+  .sys-screen .data-table td.sys-editor-cell { padding: 24px; }
+  .sys-truncate { max-width: 280px; }
+}
+@layer components {
+  /* Up to 1360 the content column is narrow: what also lives in a row's panel or opening steps aside. */
+  @media (max-width: 1359px) {
+    .sys-col-telegram, .sys-col-cadence, .sys-col-platform { display: none; }
+    .sys-platform-inline { display: inline; }
+    .sys-hydration .sys-col-opened, .sys-requests .sys-col-opened { display: none; }
+    .sys-keys td.sys-key-name { min-width: 150px; }
+    .sys-keys td:nth-child(2) { min-width: 170px; }
+  }
+}
+@layer components {
+  .sys-screen .data-table th { white-space: normal; vertical-align: bottom; }
+  .data-table.sys-rules td.sys-rules-state { max-width: 200px; }
+  .sys-truncate { max-width: 240px; }
+  .data-table.sys-queue td > .sys-code { white-space: normal; overflow-wrap: anywhere; }
+  .sys-queue td:first-child { max-width: 260px; }
+}
+@layer components {
+  @media (max-width: 1499px) { .sys-failures .sys-col-telegram { display: none; } }
+  @media (max-width: 1359px) {
+    .sys-rules td.sys-rules-cat { min-width: 150px; }
+    .sys-rules td.sys-rules-mode { min-width: 110px; }
+    .data-table.sys-rules td.sys-rules-state { max-width: 160px; }
+    .sys-log .sys-truncate { max-width: 180px; }
+    .sys-log :is(th, td):nth-child(3) { display: none; }
+  }
+}
+@layer components {
+  .sys-seg-scroll { max-width: 100%; overflow-x: auto; }
+  .sys-stack > *, .sys-stack-16 > *, .sys-detail > * { min-width: 0; }
+  .sys-log .sys-truncate { max-width: 200px; }
+  @media (max-width: 1359px) {
+    .sys-fix-btn { display: none; }
+    .sys-rules :is(th, td):nth-child(4) { display: none; }
+  }
+}
+@layer components {
+  .sys-log .sys-truncate { max-width: 170px; }
+  @media (max-width: 1359px) {
+    .sys-rules td.sys-rules-cat { min-width: 130px; }
+    .sys-rules td.sys-rules-mode { max-width: 150px; }
+    .sys-table-top .data-table td:first-child { max-width: 150px; }
+    .sys-log :is(th, td):nth-child(2) { white-space: normal; }
+  }
+}
+@layer components {
+  @media (max-width: 1359px) {
+    .sys-rules td.sys-rules-cat { max-width: 180px; }
+    .sys-log td > .sys-code { display: inline-block; max-width: 130px; overflow: hidden; text-overflow: ellipsis; vertical-align: bottom; }
+  }
+}
+@layer components {
+  /* On a phone the cells do not wrap and the table scrolls in its frame: no cell caps its width there. */
+  @media (max-width: 767px) {
+    .sys-screen .data-table td { max-width: none !important; }
+    .sys-screen .sys-clamp, .sys-screen .sys-truncate { max-width: 320px; }
+  }
 }

@@ -21,7 +21,7 @@ import { CRITICAL_COUNTERS, ExtensionCriticalTiles } from "./ExtensionCriticalTi
 
 const CELL = "muted";
 /** A version, a build or a code: never broken across lines; the section scrolls sideways instead. */
-const CELL_CODE = "muted whitespace-nowrap sys-code-cell";
+const CELL_CODE = "muted sys-code-cell";
 const CELL_NUMBER = "num";
 
 /** A section of the page: what it shows in a sentence, how it is counted folded, and its table. */
@@ -71,7 +71,7 @@ export function ClientHealthPage() {
 
   if (!data) {
     return (
-      <div className="space-y-6">
+      <div className="space-y-6 sys-screen">
         {header}
         {isLoading ? (
           <>
@@ -96,7 +96,7 @@ export function ClientHealthPage() {
   const counters = model.counters.filter((row) => !critical.has(row.code));
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 sys-screen">
       {header}
       {isError && <Notice tone="warning" role="alert" action={retry}>{staleDataText(query.dataUpdatedAt)}</Notice>}
       <ExtensionCriticalTiles data={data} />
@@ -114,7 +114,7 @@ export function ClientHealthPage() {
           </div>
         </div>
       ) : (
-        <div className="space-y-6">
+        <div className="space-y-6 sys-screen">
           <Section
             title="Проверка страницы ChatSpace"
             description={<>Всего отчётов: {formatCount(model.reports)}, с ошибкой: {formatCount(model.failedReports)}.</>}

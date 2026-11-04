@@ -18,7 +18,7 @@ export function HistoryRequestsPage() {
   const list = useAgentHydrationRequests({ ...(state === "all" ? {} : { state }), limit: filter.page ? 200 : 50 });
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 sys-screen">
       <PageHeader fresh={freshOf(list)} />
       {ofapi.status === "off" && (
         <OfapiOffBanner>Заявки OnlyFans одобрить нельзя: чтение идёт через него. Отклонить можно.</OfapiOffBanner>

@@ -97,7 +97,7 @@ export function StatePage() {
   const ofapi = useOfapi();
   const webhook = useAdminOfapiWebhookStatus();
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 sys-screen">
       <PageHeader fresh={freshOf(webhook)} />
       {ofapi.status === "off" && (
         <Notice tone="off" detail="Включается ключом в настройках сервера: это делает разработчик.">

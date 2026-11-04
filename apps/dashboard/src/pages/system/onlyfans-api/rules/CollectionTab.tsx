@@ -166,10 +166,6 @@ function creditsWord(value: number) {
   return ruPlural(value, "кредит", "кредита", "кредитов");
 }
 
-function errorMessage(error: unknown, fallback: string) {
-  return error instanceof Error && error.message ? error.message : fallback;
-}
-
 function isConflictError(error: unknown) {
   return error instanceof KernelApiError && error.status === 409;
 }
@@ -305,11 +301,11 @@ function RulesScreen() {
 
   const handleMutationError = useCallback((error: unknown, phase: "preview" | "apply" | "job") => {
     if (isConflictError(error)) {
-      setConflictMessage(errorMessage(error, "Настройки изменены в другом окне."));
+      setConflictMessage("Настройки изменены в другом окне.");
       setModal(null);
       return;
     }
-    const message = errorMessage(error, "Запрос не выполнен.");
+    const message = "Запрос не выполнен: Hub вернул ошибку.";
     if (phase === "apply") {
       setApplyPhase({ kind: "error", message });
     }
@@ -411,7 +407,7 @@ function RulesScreen() {
   const off = ofapi.status === "off";
 
   return (
-    <div className="space-y-6 pb-24">
+    <div className="space-y-6 pb-24 sys-screen">
       <PageHeader fresh={freshOf(snapshotQuery)} />
       <OfapiOffBar
         ofapi={ofapi}
@@ -1285,7 +1281,7 @@ export function JobsCard(props: { snapshot: OfapiCollectionSnapshot; scope: Coll
               <tr key={job.id}>
                 <td className="align-top">{categoryLabel(job.category)}</td>
                 <td className="muted align-top">{scopeLabel(job.pageId, props.snapshot.pages)}</td>
-                <td className="min-w-[220px] whitespace-normal align-top">
+                <td className="min-w-[160px] whitespace-normal align-top">
                   <span className="font-medium">{jobStateLabel(job.state)}</span>
                   {jobReasonText(job) && <div className="cell-second">{jobReasonText(job)}</div>}
                   <div className="mt-1.5 flex flex-wrap gap-2 empty:hidden">
@@ -1318,7 +1314,7 @@ export function JobsCard(props: { snapshot: OfapiCollectionSnapshot; scope: Coll
                     )}
                   </div>
                 </td>
-                <td className="muted min-w-[200px] whitespace-normal align-top tabular-nums">{jobProgress(job)}</td>
+                <td className="muted min-w-[130px] whitespace-normal align-top tabular-nums">{jobProgress(job)}</td>
                 <td className="muted align-top whitespace-nowrap tabular-nums">{localDateTime(job.createdAt)}</td>
               </tr>
             ))}

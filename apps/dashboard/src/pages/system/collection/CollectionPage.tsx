@@ -15,7 +15,7 @@ import { buildPageRoute, buildPageSectionRoute } from "@/lib/navigation";
 import { isPlainRowClick } from "@/lib/rowClick";
 import { COLLECTION_STATUS, type StatusWord } from "@/lib/statusWords";
 import { useEngineStatusOf } from "@/pages/settings/engine/useEngineStatusOf";
-import { freshOf, momentOr, OfapiOffBanner, OfapiUnknownNotice, platformName, useOfapi } from "../shared.js";
+import { freshOf, MomentCell, OfapiOffBanner, OfapiUnknownNotice, platformName, useOfapi } from "../shared.js";
 import { collectionRow, sortRows, type CollectionRow } from "./collectionRows.js";
 import { FanslyPauseCard } from "./FanslyPauseCard.js";
 
@@ -136,7 +136,7 @@ function PagesTable({ rows }: { rows: readonly CollectionRow[] }) {
                   )}
                   {row.second && <span className="cell-second sys-clamp">{row.second}</span>}
                 </td>
-                <td className="whitespace-nowrap text-text-secondary">{telegram ? "—" : momentOr(row.lastAt)}</td>
+                <td className="text-text-secondary">{telegram ? "—" : <MomentCell at={row.lastAt} />}</td>
                 <td className="sys-actions"><RowActions row={row} /></td>
               </tr>
             );
@@ -169,7 +169,7 @@ export function CollectionPage() {
   const stale = overview.isError && overview.data !== undefined;
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 sys-screen">
       <PageHeader fresh={freshOf(overview, [engines])} />
 
       {overview.isLoading && !overview.data ? (

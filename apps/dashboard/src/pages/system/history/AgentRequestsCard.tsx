@@ -374,7 +374,7 @@ export function AgentRequestsCard({ state, pageLabel, ofapi, onShowAllPages }: {
                         <RowChevron open={isOpen} label={isOpen ? "Свернуть заявку" : "Раскрыть заявку"} onToggle={toggle} />
                         {word ? <StatusBadge status={word} /> : request.state}
                       </td>
-                      <td className="whitespace-nowrap">
+                      <td>
                         <Link to={buildPageRoute(request.pageLabel)} className="sys-row-link">{request.pageLabel}</Link>
                         <span className="text-text-secondary"> {platformName(request.platform)}</span>
                         <span className="cell-second">чат {request.conversationRef}</span>

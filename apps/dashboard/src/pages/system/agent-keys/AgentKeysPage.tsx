@@ -105,7 +105,7 @@ export function AgentKeysPage() {
   const keys = useAgentKeys();
   const [creating, setCreating] = useState(false);
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 sys-screen">
       <PageHeader
         actions={<button type="button" className="btn btn-primary" onClick={() => setCreating(true)}>Выпустить ключ</button>}
         fresh={freshOf(keys)}
@@ -196,13 +196,13 @@ function AgentKeysSection({ creating, onCreating }: { creating: boolean; onCreat
                 return (
                   <Fragment key={key.id}>
                     <tr className={`sys-click-row${key.isActive ? "" : " sys-mute"}`} data-agent-key={key.name} onClick={toggleRow}>
-                      <td className="whitespace-nowrap">
+                      <td className="sys-key-name">
                         <RowChevron open={isOpen} label={isOpen ? `Свернуть: ${key.name}` : `Раскрыть: ${key.name}`} onToggle={toggleRow} />
                         <span className="font-medium">{key.name}</span>
                       </td>
                       <td>{firstTwo(key.capabilities.map((capability) => CAPABILITY_SHORT[capability] ?? capability))}</td>
                       <td>{firstTwo(key.pageLabels)}</td>
-                      <td className="whitespace-nowrap">
+                      <td>
                         до {formatDateTime(key.expiresAt, { yearUnlessCurrent: true })}
                         <span className="cell-second">{key.lastUsedAt ? `использован ${formatAgo(key.lastUsedAt)}` : "ещё не использовался"}</span>
                       </td>

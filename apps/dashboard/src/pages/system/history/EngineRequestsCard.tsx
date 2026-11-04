@@ -71,7 +71,7 @@ export function EngineRequestsTable({ requests, showPage = true, now = Date.now(
             <th>Что читаем</th>
             <th>Готово</th>
             <th>Осталось</th>
-            <th>Подана</th>
+            <th className="sys-col-opened">Подана</th>
           </tr>
         </thead>
         <tbody>
@@ -112,7 +112,7 @@ export function EngineRequestsTable({ requests, showPage = true, now = Date.now(
                     {counts && <span className="cell-second">{counts}</span>}
                   </td>
                   <td className="muted">{live ? historyEtaText(request) : historyClosedText(request)}</td>
-                  <td>
+                  <td className="sys-col-opened">
                     <WhenCell at={request.createdAt} />
                     {live && (
                       <span className="cell-second whitespace-nowrap">

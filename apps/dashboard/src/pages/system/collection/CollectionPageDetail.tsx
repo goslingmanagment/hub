@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import type { SyncBlocksPage } from "@agency_hub_core/contracts";
 import { Link, useParams } from "react-router";
 import { usePageSyncBlocks, useSyncEnginePages, useSyncHistoryRequests } from "@/api/queries";
+import { useDashboardShell } from "@/components/layout/DashboardShellContext";
 import { OtherPageChip } from "@/components/layout/PageFilterChip";
 import { staleDataText } from "@/components/shared/QueryNotice";
 import { StatusPanel } from "@/components/shared/StatusPanel";
@@ -134,12 +135,15 @@ function OnlyFansBody({ page }: { page: SyncBlocksPage }) {
 }
 
 function Body({ pageLabel }: { pageLabel: string }) {
-  const query = usePageSyncBlocks(pageLabel);
+  // A page the catalog does not know is not asked for: the screen says so at once.
+  const { findPageByLabel, pageCatalogState } = useDashboardShell();
+  const unknown = pageCatalogState === "ready" && findPageByLabel(pageLabel) === null;
+  const query = usePageSyncBlocks(pageLabel, { enabled: !unknown });
   const engines = useSyncEnginePages();
   const statusOf = useEngineStatusOf();
   const ofapi = useOfapi();
   const page = query.data?.page;
-  const notFound = query.error instanceof KernelApiError && query.error.status === 404;
+  const notFound = unknown || (query.error instanceof KernelApiError && query.error.status === 404);
   const row = page ? collectionRow(page, statusOf(page.pageLabel), ofapi.status) : null;
   const isFansly = page?.platform === "fansly";
 
@@ -157,9 +161,9 @@ function Body({ pageLabel }: { pageLabel: string }) {
   );
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 sys-screen">
       <PageHeader title={pageLabel} description={description} actions={actions} fresh={freshOf(query, [engines])} />
-      {query.isLoading && !query.data ? (
+      {query.isLoading && !query.data && !notFound ? (
         <div className="card"><TableSkeleton rows={5} columns={5} /></div>
       ) : notFound ? (
         <div className="card">

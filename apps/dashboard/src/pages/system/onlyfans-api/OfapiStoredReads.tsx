@@ -177,7 +177,7 @@ export function OfapiStoredReads({
             </div>
           </details>
           <div className="table-wrap">
-            <table className="data-table min-w-[720px]">
+            <table className="data-table">
               <thead>
                 <tr>
                   <th>ID / имя</th>

@@ -818,7 +818,7 @@ const eventRows = eventsOriginal.map((event) => {
                     : "apps/runtime/src/services/ofapi-dm-projection.ts | apps/runtime/src/services/projections/message-archive.ts",
     consumerEvidence: event.startsWith("data_exports.") ? "apps/dashboard/src/pages/system/onlyfans-api/OfapiExportsPage.tsx"
       : event.startsWith("media_uploads.") ? "apps/dashboard/src/pages/system/onlyfans-api/OfapiMediaPage.tsx"
-        : event === "posts.liked" || event.startsWith("chat_queue.") ? "apps/dashboard/src/pages/settings/OfapiContentEvidence.tsx"
+        : event === "posts.liked" || event.startsWith("chat_queue.") ? "No dashboard screen since the console rebuild: stored events without a consumer"
           : event.startsWith("accounts.") ? "apps/runtime/src/modules/ingest/index.ts"
             : event === "users.typing" || event === "fan_summary.completed" ? "No durable business UI claimed"
               : "apps/runtime/src/modules/agent-read/handlers-journal.ts | Desktop journal/CRM SDK",

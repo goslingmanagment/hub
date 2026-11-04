@@ -110,3 +110,16 @@ const PLATFORM_NAMES: Readonly<Record<string, string>> = { fansly: "Fansly", onl
 export function platformName(platform: string): string {
   return PLATFORM_NAMES[platform] ?? platform;
 }
+
+/** «23:41» over «5 мин назад»: a moment in a narrow cell. */
+export function MomentCell({ at, empty = "—" }: { at: string | null | undefined; empty?: string }) {
+  if (!at) return <span className="text-text-secondary">{empty}</span>;
+  const text = formatMomentAgo(at);
+  const cut = text.lastIndexOf(", ");
+  return (
+    <>
+      <span className="block whitespace-nowrap">{text.slice(0, cut)}</span>
+      <span className="cell-second whitespace-nowrap">{text.slice(cut + 2)}</span>
+    </>
+  );
+}

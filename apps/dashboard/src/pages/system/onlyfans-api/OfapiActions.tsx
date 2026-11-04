@@ -151,7 +151,7 @@ export function OfapiActions() {
   // The workspace stays while a result is on screen, even if the page lost its binding.
   const showWorkspace = pages.length > 0 || intent !== null;
   const errorNotice = error && <Notice tone="danger" role="alert">{error}</Notice>;
-  return <div className={`space-y-6${ofapi.status === "off" ? " sys-off-tone" : ""}`}>
+  return <div className={`space-y-6 sys-screen${ofapi.status === "off" ? " sys-off-tone" : ""}`}>
     <PageHeader fresh={freshOf(history, [collection])} />
     <OfapiOffBar ofapi={ofapi} />
     {pages.length > 0 && <div>

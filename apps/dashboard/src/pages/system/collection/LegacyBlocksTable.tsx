@@ -30,7 +30,7 @@ import {
   type SyncBlockKey,
 } from "@/pages/settings/sync/syncBlockDisplay";
 import { SYNC_LEVER_LABELS, syncStreamLabel } from "@/pages/settings/sync/syncVocabulary";
-import { momentOr, RowChevron } from "../shared.js";
+import { MomentCell, momentOr, RowChevron } from "../shared.js";
 
 /** An OnlyFans block in the one vocabulary (design/screens/system.md §3.2). Null: «Недоступно», plain text. */
 function legacyWord(block: SyncBlockStatus, ofapi: OfapiStatus): StatusWord | null {
@@ -252,7 +252,7 @@ export function LegacyBlocksTable({ page, ofapi, blocked }: { page: SyncBlocksPa
                         </>
                       )}
                     </td>
-                    <td className="muted whitespace-nowrap">{momentOr(block.succeededAt, "ещё не было")}</td>
+                    <td className="muted"><MomentCell at={block.succeededAt} empty="ещё не было" /></td>
                     <td className="sys-col-next muted whitespace-nowrap">{off ? "—" : formatNextTime(block.nextDueAt) ?? "—"}</td>
                     <td className="sys-col-cadence muted whitespace-nowrap">{off || !first ? "—" : formatCadence(first.cadenceSeconds)}</td>
                     <td className="sys-actions" onClick={(event) => event.stopPropagation()}>

@@ -229,7 +229,7 @@ export function OfapiMediaPage() {
     </div>
   );
   return (
-    <div className={`space-y-6${ofapi.status === "off" ? " sys-off-tone" : ""}`}>
+    <div className={`space-y-6 sys-screen${ofapi.status === "off" ? " sys-off-tone" : ""}`}>
       <PageHeader fresh={saved.dataUpdatedAt ? { at: saved.dataUpdatedAt, refreshing: busy, onRefresh: () => void run(async () => {}, "Данные обновлены.") } : undefined} />
       {owner && <OfapiOffBar ofapi={ofapi} />}
       <label className="sys-inline-field">

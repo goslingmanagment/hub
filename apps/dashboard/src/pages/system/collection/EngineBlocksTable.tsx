@@ -36,7 +36,7 @@ import {
   type EngineLeverAction,
 } from "@/pages/settings/engine/engineBlockDisplay";
 import { engineReadingWords, type EngineReadingState } from "@/pages/settings/engine/engineDisplay";
-import { momentOr, RowChevron } from "../shared.js";
+import { MomentCell, momentOr, RowChevron } from "../shared.js";
 
 /** The states in which nothing of a block is due: no host runs the page, or every key of it is stopped. */
 const NOTHING_DUE: ReadonlySet<EngineReadingState> = new Set(["no_owner", "switching", "paused", "page_held", "held"]);
@@ -272,8 +272,8 @@ export function EngineBlocksTable({ page, now = Date.now() }: { page: SyncBlocks
                       <StatusBadge status={word.word} bare />
                       {word.second && <span className="cell-second sys-clamp">{word.second}</span>}
                     </td>
-                    <td className="muted whitespace-nowrap">{momentOr(block.succeededAt, "ещё не было")}</td>
-                    <td className="sys-col-next muted whitespace-nowrap">
+                    <td className="muted"><MomentCell at={block.succeededAt} empty="ещё не было" /></td>
+                    <td className="sys-col-next muted">
                       {NOTHING_DUE.has(state) || block.nextDueAt === null ? "—" : engineDueText(block.nextDueAt, now)}
                     </td>
                     <td className="sys-col-cadence muted whitespace-nowrap">{first ? engineCadenceText(first.cadenceSeconds) : "—"}</td>

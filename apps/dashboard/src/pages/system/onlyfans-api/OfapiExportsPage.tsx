@@ -202,7 +202,7 @@ export function OfapiExportsPage() {
     });
   }
   const loadError = error || ((pages.error ?? jobs.error ?? visitors.error) ? "Hub не ответил: данные выгрузок не загрузились." : "");
-  return <div className={`space-y-6${ofapi.status === "off" ? " sys-off-tone" : ""}`}>
+  return <div className={`space-y-6 sys-screen${ofapi.status === "off" ? " sys-off-tone" : ""}`}>
     <PageHeader fresh={visitors.dataUpdatedAt || jobs.dataUpdatedAt ? { at: Math.max(visitors.dataUpdatedAt, jobs.dataUpdatedAt), refreshing: busy, onRefresh: () => void run(async () => {}, "Данные обновлены.") } : undefined} />
     {owner && <OfapiOffBar ofapi={ofapi} />}
     <div className="sys-export-row">

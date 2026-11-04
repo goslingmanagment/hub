@@ -23,12 +23,12 @@ export function useSyncOverview() {
   });
 }
 
-export function usePageSyncBlocks(pageLabel: string) {
+export function usePageSyncBlocks(pageLabel: string, options: { enabled?: boolean } = {}) {
   return useQuery({
     queryKey: ["syncBlocks", "page", pageLabel],
     queryFn: () => kernel.pageSyncBlocks({ params: { pageLabel } }),
     refetchInterval: 10_000,
-    enabled: !!pageLabel,
+    enabled: !!pageLabel && (options.enabled ?? true),
   });
 }
 

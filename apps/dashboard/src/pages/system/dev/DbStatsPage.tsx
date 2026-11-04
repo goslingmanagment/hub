@@ -45,7 +45,7 @@ export function DbStatsPage() {
 
   if (isLoading || !data) {
     return (
-      <div className="space-y-6">
+      <div className="space-y-6 sys-screen">
         {isLoading ? (
           <>
             <StatCardSkeleton count={3} />
@@ -71,7 +71,7 @@ export function DbStatsPage() {
   const lastMigration = latestFirst[0];
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 sys-screen">
       <PageHeader fresh={freshOf(query)} />
       {isError && (
         <Notice tone="warning" role="alert" action={<button type="button" className="btn btn-sm" onClick={() => void query.refetch()}>Повторить</button>}>

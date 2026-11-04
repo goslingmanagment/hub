@@ -396,12 +396,12 @@ function ConfigurationView({ hash, feature = null, featureBackTo, allSettingsHre
           </label>
         </div>
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <Segmented
+          <div className="sys-seg-scroll"><Segmented
             label="Какие настройки"
             value={filter}
             options={CONFIG_FILTERS.map((entry) => ({ value: entry.key, label: entry.label, count: filterCounts[entry.key] }))}
             onChange={(key) => setFilter(key)}
-          />
+          /></div>
           <div className="flex flex-wrap items-center gap-2 text-xs text-text-secondary">
             <span className="shrink-0" role="status" aria-live="polite">Показано {visibleKeys.size} из {allItems.length}</span>
             {(query || subsystem || filter !== defaultFilter) && <button type="button" onClick={resetFilters} className="btn btn-ghost btn-sm"><X size={14} aria-hidden="true" />Сбросить фильтры</button>}

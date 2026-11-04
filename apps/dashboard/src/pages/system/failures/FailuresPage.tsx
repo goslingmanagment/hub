@@ -1,7 +1,7 @@
 import { useCallback, useMemo, useState } from "react";
 import type { NotificationsIncidentItem } from "@agency_hub_core/contracts";
 import { Power } from "lucide-react";
-import { Link, useSearchParams } from "react-router";
+import { Link, useNavigate, useSearchParams } from "react-router";
 import { useNotificationIncidents } from "@/api/queries";
 import { usePageFilter } from "@/components/layout/usePageFilter";
 import { Pagination } from "@/components/shared/Pagination";
@@ -55,6 +55,7 @@ function FailureRows({ items, off, onOpen, onClose, closing }: {
   onClose: (item: NotificationsIncidentItem) => void;
   closing: boolean;
 }) {
+  const navigate = useNavigate();
   return (
     <div className="table-wrap">
       <table className="data-table sys-failures">
@@ -72,7 +73,8 @@ function FailureRows({ items, off, onOpen, onClose, closing }: {
             const words = failureWords(item);
             const open = item.status === "open";
             const second = off ? "Сбор через OnlyFans API не идёт." : `${words.what} ${words.todo}`;
-            const fix = off ? null : words.fix;
+            // A closed failure has nothing to repair: no button of where.
+            const fix = off || !open ? null : words.fix;
             return (
               <tr
                 key={item.id}
@@ -106,7 +108,7 @@ function FailureRows({ items, off, onOpen, onClose, closing }: {
                 <td className="sys-actions">
                   <div className="sys-actions-inner">
                     {fix
-                      ? <Link to={fix.to} className="btn btn-sm">{fix.label}</Link>
+                      ? <Link to={fix.to} className="btn btn-sm sys-fix-btn">{fix.label}</Link>
                       : open && !off && (
                         <button type="button" className="btn btn-sm" disabled={closing} onClick={() => onClose(item)}>Закрыть сбой</button>
                       )}
@@ -114,6 +116,7 @@ function FailureRows({ items, off, onOpen, onClose, closing }: {
                       label={`Ещё: ${words.title}`}
                       items={[
                         { label: "Подробнее", onSelect: () => onOpen(item) },
+                        ...(fix ? [{ label: fix.label, onSelect: () => navigate(fix.to) }] : []),
                         ...(open ? [{ label: "Закрыть сбой", onSelect: () => onClose(item), disabled: closing }] : []),
                       ]}
                     />
@@ -175,7 +178,7 @@ export function FailuresPage() {
   const open = (item: NotificationsIncidentItem) => change({ failure: String(item.id) });
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 sys-screen">
       <PageHeader fresh={freshOf(list, [everyOpen])} />
       <OfapiUnknownNotice ofapi={ofapi} />
 
