@@ -4,7 +4,8 @@
  */
 import { Navigate, Route, useLocation } from "react-router";
 import { useAuthMe } from "@/api/queries";
-import { OwnerRoute } from "@/components/layout/OwnerRoute";
+import type { LegacyRule } from "@/lib/redirects";
+import { Legacy } from "../legacy.js";
 import { named, Owner } from "./shared.js";
 
 const OverviewPage = named(() => import("@/pages/OverviewPage"), "OverviewPage");
@@ -14,16 +15,20 @@ const ReconciliationPage = named(() => import("@/pages/money/costs/anthropic/Rec
 const OfapiCostsPage = named(() => import("@/pages/money/costs/onlyfans-api/OfapiCostsPage"), "OfapiCostsPage");
 
 /**
- * «Деньги» opens on «Расходы → ИИ», which is the owner's. A team lead who comes
- * there (by `/money`, or the address itself) lands on his section's home,
- * «Операции», not on a refusal (design/build-rules.md, R0б). The owner's check
- * stays: nothing of the costs is asked for before the role is known.
+ * `/money`, the section's address, by role (design/build-rules.md, R0б). The
+ * owner goes where the redirect table says («Расходы → ИИ»); a team lead, who
+ * has no «Расходы», lands on his section's home, «Операции», not on a refusal.
+ * The screens themselves keep their checks: a team lead who types
+ * `/money/costs/…` is told «Нет доступа», and nothing of the costs is asked for.
+ * ProtectedLayout renders this only once the role is known.
  */
-function CostsHome() {
+export function MoneyIndex({ rule }: { rule: LegacyRule }) {
   const { data } = useAuthMe();
   const location = useLocation();
-  if (data && data.user.role !== "owner") return <Navigate to="/money/transactions" replace state={location.state} />;
-  return <OwnerRoute><AiCostsPage /></OwnerRoute>;
+  if (data && data.user.role !== "owner") {
+    return <Navigate to={{ pathname: "/money/transactions", search: location.search, hash: location.hash }} state={location.state} replace />;
+  }
+  return <Legacy rule={rule} />;
 }
 
 export function homeMoneyRoutes() {
@@ -31,8 +36,8 @@ export function homeMoneyRoutes() {
     <>
       <Route index element={<OverviewPage />} />
       <Route path="money/transactions" element={<TransactionsPage />} />
-      <Route path="money/costs/ai" element={<CostsHome />} />
       <Route element={<Owner />}>
+        <Route path="money/costs/ai" element={<AiCostsPage />} />
         <Route path="money/costs/anthropic" element={<ReconciliationPage />} />
         <Route path="money/costs/onlyfans-api" element={<OfapiCostsPage />} />
       </Route>
