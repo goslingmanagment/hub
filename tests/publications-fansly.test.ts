@@ -20,7 +20,6 @@ import {
   FANSLY_VAULT_FILES_IN_FLIGHT,
   type FanslyPack,
 } from "../apps/runtime/src/services/publications-fansly.ts";
-import { fanslyVaultRenames } from "../apps/runtime/src/sync/fansly/publish/uploads.ts";
 import type { ApprovedFormMedia } from "../apps/runtime/src/sync/fansly/publish/derive.ts";
 
 // Wall posts on Fansly (plan PR 9): which requests a publication's create is,
@@ -100,9 +99,15 @@ describe("a vault album (0323, the contract §13)", () => {
     expect(fanslyCommandWindow("vault", NOW)).toEqual({ notAfter: at(12 * 60), priority: "background" });
   });
 
-  it("its media answered is the album as approved: published, with the album", () => {
+  it("its media answered, then read back as approved (audit, 2026-11-04): published, with the album", () => {
     const created = command("album_create", "answered", { result: { albumId: "al1" } });
-    expect(next(["album_create", "album_media"], [created, command("album_media", "answered", { result: { albumId: "al1", added: 3 } })]))
+    const added = command("album_media", "answered", {
+      result: { albumId: "al1", added: 2 },
+      request: { spec: "publish.vault_album_media", method: "POST", host: "api", pathAndQuery: "/api/v1/vault/albums/media", fingerprint: "f", body: JSON.stringify({ albumId: "al1", mediaIds: ["m1", "m0"] }) },
+    });
+    expect(next(["album_create", "album_media"], [created, added])).toEqual({ kind: "enqueue_uploads", items: [{ step: "album_read", item: "read:0", notBefore: null }] });
+    const read = command("album_read", "answered", { item: "read:0", result: { albumId: "al1", cards: [{ id: "e2", mediaId: "m0", customFilename: null }, { id: "e1", mediaId: "m1", customFilename: null }] } });
+    expect(next(["album_create", "album_media"], [created, added, read]))
       .toEqual({ kind: "settle", to: "published", reason: null, platformPostRef: null, vaultAlbumRef: "al1" });
     // Its answer lost: a person decides.
     expect(next(["album_create", "album_media"], [created, command("album_media", "unknown", { stateReason: "no_answer:timeout" })]))
@@ -360,8 +365,10 @@ describe("a vault pack (0347): many files into one album, unattended", () => {
   const chain = own(["album_create", "album_media"]);
   const at = (step: FanslyWriteStep, item: string, state: FanslyWriteState, extra: Partial<FanslyWriteCommandRecord> = {}) => command(step, state, { item, ...extra });
   const items = (count: number) => Array.from({ length: count }, (_, index) => `media:${index}`);
+  const name = (item: string) => `IMG_${item.slice("media:".length)}.jpeg`;
   const pack = (overrides: Partial<FanslyPack> = {}): FanslyPack => ({
-    filesInFlight: FANSLY_VAULT_FILES_IN_FLIGHT, members: 5, names: new Map(items(5).map((item, index) => [item, `IMG_${index}.jpeg`])), renames: [], ...overrides,
+    filesInFlight: FANSLY_VAULT_FILES_IN_FLIGHT, members: 5, names: new Map(items(5).map((item) => [item, name(item)])),
+    cards: items(5).map((item) => ({ item, mediaId: `m-${item}`, name: name(item) })), ...overrides,
   });
   /** A vault album's create (`post`: a post's, without its pack). */
   const go = (commands: FanslyWriteCommandRecord[], { post = false, ...extra }: Partial<Parameters<typeof fanslyCreateNext>[0]> & { post?: boolean } = {}) =>
@@ -377,6 +384,25 @@ describe("a vault pack (0347): many files into one album, unattended", () => {
     at("upload_complete", item, "answered", { settledAt: NOW }),
     at("upload_status", `${item}/poll:0`, "answered", { result: { status: 6, done: true, mediaId, ...shown } }),
   ];
+  /** The album made, and these files' media added to it in one request, last first. */
+  const album = (added: string[]) => [
+    at("album_create", "", "answered", { result: { albumId: "al1" } }),
+    at("album_media", "", "answered", {
+      result: { albumId: "al1", added: added.length },
+      request: { spec: "publish.vault_album_media", method: "POST", host: "api", pathAndQuery: "/api/v1/vault/albums/media", fingerprint: "f", body: JSON.stringify({ albumId: "al1", mediaIds: added.map((item) => `m-${item}`).reverse() }) },
+    }),
+  ];
+  /** A page of the album as its read back showed it: these files' cards, top first, each named as given (default: its file). */
+  const page = (index: number, cards: Array<string | [string, string]>, state: FanslyWriteState = "answered") => at("album_read", `read:${index}`, state, {
+    result: state !== "answered" ? null : {
+      albumId: "al1",
+      cards: cards.map((card, position) => {
+        const [item, shown] = typeof card === "string" ? [card, name(card)] : card;
+        return { id: `e${index}-${position}`, mediaId: `m-${item}`, customFilename: shown };
+      }),
+    },
+    ...(state === "unknown" ? { stateReason: "no_answer:timeout" } : {}),
+  });
 
   it("its files go up a few at once, as the site's own Upload to Vault — a post's one after another", () => {
     expect(steps(go([]))).toEqual(["upload_create:media:0", "upload_create:media:1", "upload_create:media:2"]);
@@ -401,9 +427,12 @@ describe("a vault pack (0347): many files into one album, unattended", () => {
     const done = [...uploaded("media:0"), failedCreate, ...uploaded("media:2"), ...lostComplete, ...uploaded("media:4")];
     // Its uploads over (two failed), the album is made…
     expect(go(done)).toEqual({ kind: "enqueue", step: "album_create", item: "" });
-    // …and when its media were added, it is published with the files that failed named.
-    const album = [at("album_create", "", "answered", { result: { albumId: "al1" } }), at("album_media", "", "answered", { result: { albumId: "al1", added: 3 } })];
-    expect(go([...done, ...album])).toEqual({
+    // …its media added, then read back (audit, 2026-11-04)…
+    const added = album(["media:0", "media:2", "media:4"]);
+    const failedPack = { pack: pack({ cards: pack().cards.map((card) => (card.item === "media:1" || card.item === "media:3" ? { ...card, mediaId: null } : card)) }) };
+    expect(steps(go([...done, ...added], failedPack))).toEqual(["album_read:read:0"]);
+    // …and holding the rest as approved, it is published with the files that failed named.
+    expect(go([...done, ...added, page(0, ["media:0", "media:2", "media:4"])], failedPack)).toEqual({
       kind: "settle", to: "published", platformPostRef: null, vaultAlbumRef: "al1",
       reason: "files_failed:2/5:IMG_1.jpeg=upload_create:fansly_http_400,IMG_3.jpeg=upload_complete_500",
     });
@@ -418,48 +447,59 @@ describe("a vault pack (0347): many files into one album, unattended", () => {
       .toEqual({ kind: "settle", to: "missed", reason: "window_passed", platformPostRef: null });
   });
 
-  it("once the album holds its media, every card not named as its file is renamed — each once — and then it is published", () => {
+  it("renames by the name each card shows now (audit, 2026-11-04): one named right already is left — the album sent again renames nothing", () => {
     const done = items(5).flatMap((item) => uploaded(item));
-    const album = [at("album_create", "", "answered", { result: { albumId: "al1" } }), at("album_media", "", "answered", { result: { albumId: "al1", added: 5 } })];
-    const renames = ["media:1", "media:3"];
-    expect(steps(go([...done, ...album], { pack: pack({ renames }) }))).toEqual(["album_rename:media:1", "album_rename:media:3"]);
-    const sending = [at("album_rename", "media:1", "answered"), at("album_rename", "media:3", "sending")];
-    expect(go([...done, ...album, ...sending], { pack: pack({ renames }) })).toEqual({ kind: "in_flight" });
-    expect(go([...done, ...album, at("album_rename", "media:1", "answered"), at("album_rename", "media:3", "answered")], { pack: pack({ renames }) }))
+    const added = album(items(5));
+    // Two cards came back with old names: those two are renamed, each once.
+    const read = page(0, ["media:0", ["media:1", "PRE.jpeg"], "media:2", ["media:3", "IMG_3.jpg"], ["media:4", "OLD.jpeg"]]);
+    expect(steps(go([...done, ...added, read]))).toEqual(["album_rename:media:1", "album_rename:media:4"]);
+    expect(go([...done, ...added, read, at("album_rename", "media:1", "answered"), at("album_rename", "media:4", "sending")])).toEqual({ kind: "in_flight" });
+    expect(go([...done, ...added, read, at("album_rename", "media:1", "answered"), at("album_rename", "media:4", "answered")]))
       .toEqual({ kind: "settle", to: "published", reason: null, platformPostRef: null, vaultAlbumRef: "al1" });
-    // A rename lost or refused leaves the old name: the album stands, the reason says so.
-    expect(go([...done, ...album, at("album_rename", "media:1", "answered"), at("album_rename", "media:3", "unknown", { stateReason: "no_answer:timeout" })], { pack: pack({ renames }) }))
-      .toEqual({ kind: "settle", to: "published", reason: "cards_not_renamed:1:IMG_3.jpeg", platformPostRef: null, vaultAlbumRef: "al1" });
+    // Sent again (№9 of 2026-11-04): every card already named as its file — no rename at all.
+    expect(go([...done, ...added, page(0, items(5))])).toEqual({ kind: "settle", to: "published", reason: null, platformPostRef: null, vaultAlbumRef: "al1" });
+    // A rename lost or refused leaves another name: not what was approved — a person looks.
+    expect(go([...done, ...added, read, at("album_rename", "media:1", "answered"), at("album_rename", "media:4", "unknown", { stateReason: "no_answer:timeout" })]))
+      .toEqual({ kind: "settle", to: "unknown", reason: "cards_not_renamed:1:IMG_4.jpeg", platformPostRef: null, vaultAlbumRef: "al1" });
   });
 
-  it("renames the cards of bytes Fansly already had — by the name or the age of the media its read showed — never a vault media's or a failed file's", () => {
-    const file = (position: number, fileId: number) => ({ role: "media" as const, position, source: "file" as const, fileId, fileSha256: `${position}`.repeat(64).slice(0, 64) });
-    const created = (item: string) => at("upload_create", item, "answered", { createdAt: NOW, result: { uploadId: "u", partSize: 1, partCount: 1 } });
-    const read = (item: string, result: Record<string, unknown>) => at("upload_status", `${item}/poll:0`, "answered", { result: { status: 6, done: true, mediaId: "m", ...result } });
-    const commands = [
-      // Fansly made a new media of it: the card has the file's name (its extension as Fansly gives it).
-      created("media:0"), read("media:0", { filename: "IMG_0190.jpeg" }),
-      // The old media of the same bytes, under its old name.
-      created("media:1"), read("media:1", { filename: "PRE.jpeg" }),
-      // No name shown: a media made long before the upload is an old one; one made now is new.
-      created("media:2"), read("media:2", { mediaCreatedAtMs: NOW.getTime() - 3 * 24 * 60 * MIN }),
-      created("media:3"), read("media:3", { mediaCreatedAtMs: NOW.getTime() + 2_000 }),
-    ];
-    const names = new Map<number, string | null>([[10, "IMG_0190.JPG"], [11, "IMG_0191.jpeg"], [12, "IMG_0192.jpeg"], [13, "IMG_0193.jpeg"], [14, "IMG_0194.jpeg"], [15, null], [16, "IMG_0196.jpeg"]]);
-    const media = [file(0, 10), file(1, 11), file(2, 12), file(3, 13), file(4, 14), file(5, 15), { ...vault("media", 6), fileSha256: null }, file(7, 16)];
-    const onAccount = new Map([[media[4]!.fileSha256!, { filename: "IMG_0194.jpeg" }], [media[7]!.fileSha256!, { filename: null }]]);
-    expect(fanslyVaultRenames({ media, commands, names, onAccount, failed: new Set() }))
-      // 4: bytes the account had, under the same name; 5: no name to give; 6: a vault media; 7: bytes it had, name unknown.
-      .toEqual(["media:1", "media:2", "media:7"]);
-    expect(fanslyVaultRenames({ media, commands, names, onAccount, failed: new Set(["media:1"]) })).toEqual(["media:2", "media:7"]);
+  it("is published only as approved: a file the album does not hold, or a card out of its place, says so instead", () => {
+    const done = items(5).flatMap((item) => uploaded(item));
+    const added = album(items(5));
+    // The read shows four of the five, and then an older card of the album.
+    expect(go([...done, ...added, page(0, ["media:0", "media:1", "media:3", "media:4", "old"])]))
+      .toEqual({ kind: "settle", to: "unknown", reason: "files_missing:1:IMG_2.jpeg", platformPostRef: null, vaultAlbumRef: "al1" });
+    // All five, two of them swapped.
+    expect(go([...done, ...added, page(0, ["media:0", "media:2", "media:1", "media:3", "media:4"])]))
+      .toEqual({ kind: "settle", to: "unknown", reason: "order_differs:2:IMG_1.jpeg", platformPostRef: null, vaultAlbumRef: "al1" });
   });
 
-  it("names every file that failed and every card left with its old name", () => {
+  it("reads the album page by page until it shows every card added; a lost read is read again, then given up", () => {
+    const many = Array.from({ length: 60 }, (_, index) => `media:${index}`);
+    const big = pack({ members: 60, names: new Map(many.map((item) => [item, name(item)])), cards: many.map((item) => ({ item, mediaId: `m-${item}`, name: name(item) })) });
+    const done = many.flatMap((item) => uploaded(item));
+    const added = album(many);
+    const first = page(0, many.slice(0, 50));
+    expect(steps(go([...done, ...added, first], { uploads: many, pack: big }))).toEqual(["album_read:read:1"]);
+    expect(go([...done, ...added, first, page(1, many.slice(50))], { uploads: many, pack: big }))
+      .toEqual({ kind: "settle", to: "published", reason: null, platformPostRef: null, vaultAlbumRef: "al1" });
+    // A page that shows nothing is the album's end: what it does not hold is missing.
+    expect(go([...done, ...added, first, page(1, [])], { uploads: many, pack: big }))
+      .toMatchObject({ kind: "settle", to: "unknown", reason: expect.stringMatching(/^files_missing:10:IMG_50\.jpeg,/) });
+    // A lost read goes again (a read changes nothing); lost again, Hub cannot say what the album holds.
+    const five = items(5).flatMap((item) => uploaded(item));
+    expect(steps(go([...five, ...album(items(5)), page(0, [], "unknown")]))).toEqual(["album_read:read:1"]);
+    expect(go([...five, ...album(items(5)), page(0, [], "unknown"), page(1, [], "unknown")]))
+      .toEqual({ kind: "settle", to: "unknown", reason: "album_not_read:album_read_unknown:no_answer:timeout", platformPostRef: null, vaultAlbumRef: "al1" });
+  });
+
+  it("names every file that failed, is missing, is out of its place or is left with another name", () => {
     const failures = Array.from({ length: 40 }, (_, index) => ({ item: `media:${index}`, settle: { to: "missed" as const, reason: "not_sent:upload_part_unknown:no_answer:transport_error" } }));
-    const names = new Map([...failures.map((failure, index) => [failure.item, `SXT-003_${String(index + 1).padStart(2, "0")}_long_pack_file_name.jpeg`] as const), ["media:41", "SXT-003_42.jpeg"] as const]);
-    const reason = fanslyPackReason({ failures, names, members: 85, notRenamed: ["media:41"] })!;
+    const names = new Map([...failures.map((failure, index) => [failure.item, `SXT-003_${String(index + 1).padStart(2, "0")}_long_pack_file_name.jpeg`] as const), ["media:41", "SXT-003_42.jpeg"] as const, ["media:42", "SXT-003_43.jpeg"] as const]);
+    const reason = fanslyPackReason({ failures, names, members: 85, notRenamed: ["media:41"], missing: ["media:42"], misplaced: { position: 3, item: "media:41" } })!;
     expect(reason.startsWith("files_failed:40/85:SXT-003_01_long_pack_file_name.jpeg=upload_part_unknown:no_answer,SXT-003_02_")).toBe(true);
-    expect(reason).toContain("SXT-003_40_long_pack_file_name.jpeg=upload_part_unknown:no_answer;cards_not_renamed:1:SXT-003_42.jpeg");
+    expect(reason).toContain("SXT-003_40_long_pack_file_name.jpeg=upload_part_unknown:no_answer;files_missing:1:SXT-003_43.jpeg;order_differs:3:SXT-003_42.jpeg;cards_not_renamed:1:SXT-003_42.jpeg");
+    expect(fanslyPackReason({ failures: [], names, members: 85, notRenamed: [], unread: "window_passed" })).toBe("album_not_read:window_passed");
     expect(fanslyPackReason({ failures: [], names, members: 85, notRenamed: [] })).toBeNull();
   });
 });

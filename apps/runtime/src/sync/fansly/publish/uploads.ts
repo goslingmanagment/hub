@@ -345,62 +345,80 @@ export function sameCardName(shown: string, wanted: string): boolean {
   return stem(shown) === stem(wanted);
 }
 
-/** What a done read of an upload showed of its media (0347): its name and
- *  when Fansly made it (ms). */
-function shownMedia(commands: readonly FanslyWriteCommandRecord[], item: string): { filename: string | null; createdAtMs: number | null } | null {
-  const done = commands.find((command) => command.step === "upload_status" && subItemOf(command.item, "poll")?.base === item
-    && command.state === "answered" && command.result?.done === true);
-  if (done === undefined) return null;
-  const filename = typeof done.result?.filename === "string" && done.result.filename !== "" ? done.result.filename : null;
-  const createdAtMs = typeof done.result?.mediaCreatedAtMs === "number" ? done.result.mediaCreatedAtMs : null;
-  return { filename, createdAtMs };
+/** One card of a vault album as a read of it showed it (0352): the album's
+ *  own entry (its id, the next page's cursor), its media, its name. */
+export interface FanslyAlbumCard {
+  id: string;
+  mediaId: string;
+  customFilename: string | null;
 }
 
-/** A media made this long before its upload's create is one Fansly had. */
-const OLD_MEDIA_MARGIN_MS = 10 * 60_000;
+/** The number of an album read's item, `read:N`; null: not one. */
+export function fanslyReadIndexOf(item: string): number | null {
+  const match = /^read:([0-9]+)$/.exec(item);
+  return match === null ? null : Number(match[1]);
+}
+
+/** The cards an answered read of the album showed, in its order. */
+export function fanslyAlbumCardsOf(command: Pick<FanslyWriteCommandRecord, "result">): FanslyAlbumCard[] {
+  const cards = command.result?.cards;
+  if (!Array.isArray(cards)) return [];
+  return cards.flatMap((card) => {
+    if (typeof card !== "object" || card === null) return [];
+    const { id, mediaId, customFilename } = card as Record<string, unknown>;
+    return typeof id === "string" && typeof mediaId === "string"
+      ? [{ id, mediaId, customFilename: typeof customFilename === "string" ? customFilename : null }]
+      : [];
+  });
+}
+
+/** Reads of the album whose answer was lost or that Fansly refused, before
+ *  Hub gives the read back up (a read goes again: it changes nothing). */
+export const FANSLY_ALBUM_READ_MAX_LOST = 2;
+
+export type FanslyAlbumRead =
+  | { kind: "enqueue"; item: string; notBefore: Date | null }
+  | { kind: "in_flight" }
+  /** Read: the cards from the top, at least `wanted` of them unless the album
+   *  holds fewer. */
+  | { kind: "done"; cards: FanslyAlbumCard[] }
+  | { kind: "failed"; reason: string };
 
 /**
- * The files of a vault album whose card is not named as the file (the
- * old-media case, owner 2026-11-03): bytes Fansly had already come back as
- * their old media under the old name, and the album shows that name. A file
- * of this dispatch's upload is judged by its done read (the name it showed;
- * without one, a media older than the upload); a file whose bytes the account
- * had before (`onAccount`, not uploaded again) by what the earlier read
- * showed — not known, renamed. A vault media (no file) and a file that failed
- * are never renamed.
+ * A vault album read back once its media are added (0352, audit 2026-11-04):
+ * its top, one page a read (`read:0`, `read:1`, …, each from the last card of
+ * the page before), until it shows `wanted` cards or a page shows none — the
+ * album's end. A read whose answer was lost, or that Fansly refused, is read
+ * again, a few times in all; one held back by a switch is queued again while
+ * its window lasts, as any step.
  */
-export function fanslyVaultRenames(input: {
-  /** `name`: the name the draft gave the file (0349); null — its own name in Hub (`names`). */
-  media: ReadonlyArray<{ role: "media" | "preview"; position: number; source: "vault" | "file"; fileId: number | null; fileSha256: string | null; name?: string | null }>;
-  commands: readonly FanslyWriteCommandRecord[];
-  /** The file's own name in Hub by its id. */
-  names: ReadonlyMap<number, string | null>;
-  /** The earlier media of bytes the account had, by sha256. */
-  onAccount: ReadonlyMap<string, { filename: string | null }>;
-  /** The files that failed. */
-  failed: ReadonlySet<string>;
-}): string[] {
-  const renames: string[] = [];
-  for (const media of input.media) {
-    if (media.role !== "media" || media.source !== "file" || media.fileId === null) continue;
-    const item = `media:${media.position}`;
-    if (input.failed.has(item)) continue;
-    const wanted = fanslyCardName(media.name ?? input.names.get(media.fileId) ?? null);
-    if (wanted === null) continue;
-    const created = input.commands.find((command) => command.step === "upload_create" && command.item === item && command.state === "answered");
-    if (created !== undefined) {
-      const shown = shownMedia(input.commands, item);
-      if (shown === null) continue;
-      if (shown.filename !== null) {
-        if (!sameCardName(shown.filename, wanted)) renames.push(item);
+export function fanslyAlbumRead(commands: readonly FanslyWriteCommandRecord[], wanted: number, now: Date, notAfter: Date): FanslyAlbumRead {
+  const cards: FanslyAlbumCard[] = [];
+  let lost = 0;
+  for (let index = 0; ; index += 1) {
+    const state = fanslyStepState("album_read", `read:${index}`, commands, now, notAfter);
+    switch (state.kind) {
+      case "in_flight":
+        return { kind: "in_flight" };
+      case "enqueue":
+        return { kind: "enqueue", item: state.item, notBefore: state.notBefore };
+      case "window_passed":
+        return { kind: "failed", reason: "window_passed" };
+      case "answered": {
+        const page = fanslyAlbumCardsOf(state.row);
+        cards.push(...page);
+        if (page.length === 0 || cards.length >= wanted) return { kind: "done", cards };
         continue;
       }
-      if (shown.createdAtMs === null || shown.createdAtMs < created.createdAt.getTime() - OLD_MEDIA_MARGIN_MS) renames.push(item);
-      continue;
+      case "unknown":
+        lost += 1;
+        if (lost >= FANSLY_ALBUM_READ_MAX_LOST) return { kind: "failed", reason: `album_read_unknown:${state.row.stateReason ?? "unknown"}` };
+        continue;
+      case "failed":
+        // Refused for itself too often: it never went, and would not now.
+        lost += 1;
+        if (lost >= FANSLY_ALBUM_READ_MAX_LOST || state.settle.to === "missed") return { kind: "failed", reason: state.settle.reason };
+        continue;
     }
-    const before = media.fileSha256 === null ? undefined : input.onAccount.get(media.fileSha256);
-    if (before === undefined) continue;
-    if (before.filename === null || !sameCardName(before.filename, wanted)) renames.push(item);
   }
-  return renames;
 }

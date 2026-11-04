@@ -32,16 +32,19 @@ import {
 
 import type { AppContext } from "../bootstrap.ts";
 import { FANSLY_WRITE_STEP_ROUTES } from "../sync/fansly/publish/commands.ts";
-import { FANSLY_SCHEDULE_LEAD_MS, fanslyAttachmentItem, parseApprovedForm, type ApprovedForm } from "../sync/fansly/publish/derive.ts";
+import { FANSLY_SCHEDULE_LEAD_MS, fanslyAttachmentItem, fanslyMediaIdOf, parseApprovedForm, type ApprovedForm } from "../sync/fansly/publish/derive.ts";
 import { enqueueFanslyWriteCommand, FanslyWriteRefusedError } from "../sync/fansly/publish/enqueue.ts";
 import {
   FANSLY_STEP_MAX_REFUSALS,
+  fanslyAlbumRead,
+  fanslyCardName,
   fanslyRetryNotBefore,
   fanslyStepState,
   fanslyUploadFailed,
   fanslyUploadNext,
-  fanslyVaultRenames,
+  sameCardName,
   SWITCH_REFUSAL,
+  type FanslyAlbumCard,
   type FanslyUploadEnqueue,
   type FanslyUploadFile,
   type FanslyUploadSettle,
@@ -114,13 +117,18 @@ import { ensureQueueCreated, type QueueCreationClient } from "./sync-queue.ts";
 // from it, fills that one album — never a second one made for it. A create
 // whose answer was lost may have made one: "unknown", like a post's. Every
 // file is added in one request, last first. A file that failed for itself
-// goes without: the album gets the rest. Then each card not named as its
-// file — bytes Fansly had come back as their old media, under the old name —
-// is renamed. That done, the
-// album is as approved: "published", its reason naming the files that failed
-// (`files_failed:<n>/<all>:<name>=<why>,…`) and the cards left unrenamed —
-// nobody's wall shows it, and no read of the wall checks it. Every file
-// failed: as a post's.
+// goes without: the album gets the rest. Then the album is read back (0352,
+// audit 2026-11-04) — its top, as many cards as were added, through the
+// page's browser as every read — and each card that read shows named
+// otherwise than its file (bytes Fansly had come back as their old media,
+// under the old name) is renamed; one named right already is left. That
+// done, it is compared with the approval: every file it was asked to hold,
+// from the top in the approval's order, each card named as its file. As
+// approved: "published", its reason naming the files that failed
+// (`files_failed:<n>/<all>:<name>=<why>,…`). Anything else — a file it does
+// not hold, a card out of its place, one left with another name, no read
+// back — is "unknown", the reason saying what differs: a person looks at
+// the album. Every file failed: as a post's.
 
 export const PUBLICATIONS_FANSLY_QUEUE = "publications.fansly";
 
@@ -321,6 +329,15 @@ type Settle = Extract<FanslyCreateNext, { kind: "settle" }>;
 const missed = (reason: string): Settle => ({ kind: "settle", to: "missed", reason: reason.slice(0, 300), platformPostRef: null });
 const settleOf = (settle: FanslyUploadSettle): Settle => ({ kind: "settle", to: settle.to, reason: settle.reason, platformPostRef: null });
 
+/** A card of a vault album as its approval has it (0352): its file's item,
+ *  the media it is (null: not known — its file failed), and the name it
+ *  should show (null: none to give — a vault media, a file without a name). */
+export interface FanslyPackCard {
+  item: string;
+  mediaId: string | null;
+  name: string | null;
+}
+
 /** A vault album's pack (0347): what its create goes by besides its chain. */
 export interface FanslyPack {
   /** Files whose bytes go up at once (`FANSLY_VAULT_FILES_IN_FLIGHT`). */
@@ -328,11 +345,12 @@ export interface FanslyPack {
   /** The album's files, those already on the page's account and in its vault
    *  included: when every one failed, nothing is added. */
   members: number;
-  /** A file's name by its item: the reason names the files that failed. */
+  /** A file's name by its item: the reason names the files by them. */
   names: ReadonlyMap<string, string>;
-  /** The files whose card is renamed once the album holds them
-   *  (`fanslyVaultRenames`). */
-  renames: readonly string[];
+  /** The album's cards in the approval's order: the album read back is
+   *  compared with them, and a card the read shows named otherwise than its
+   *  file is renamed. */
+  cards: readonly FanslyPackCard[];
 }
 
 /** What a failure's reason says, short: `upload_part_unknown`,
@@ -345,22 +363,35 @@ function shortWhy(reason: string): string {
  *  fits (audit, 2026-11-03: the agent reports from it what did not land). */
 const PACK_REASON_MAX = 20_000;
 
-/** The reason a vault album ends "published" with: the files that failed by
- *  their names, and the cards left with their old names, by their files'
- *  names (`notRenamed`: items); null: none. */
+/** The reason a vault album ends with, by its files' names: those that
+ *  failed for themselves; then, as its read back showed it (0352), the files
+ *  the album does not hold, the first card not where the approval puts it
+ *  (its place from the top, 1 first, and the file due there), the cards left
+ *  with another name — or why it could not be read back. Null: none. */
 export function fanslyPackReason(input: {
   failures: ReadonlyArray<{ item: string; settle: FanslyUploadSettle }>;
   names: ReadonlyMap<string, string>;
   members: number;
+  /** Items. */
   notRenamed: readonly string[];
+  /** Items (or media ids) the album does not hold. */
+  missing?: readonly string[];
+  misplaced?: { position: number; item: string } | null;
+  /** Why the album was not read back. */
+  unread?: string | null;
 }): string | null {
+  const name = (item: string) => input.names.get(item) ?? item;
   const parts: string[] = [];
   if (input.failures.length > 0) {
-    const named = input.failures.map((failure) => `${input.names.get(failure.item) ?? failure.item}=${shortWhy(failure.settle.reason)}`);
+    const named = input.failures.map((failure) => `${name(failure.item)}=${shortWhy(failure.settle.reason)}`);
     parts.push(`files_failed:${input.failures.length}/${input.members}:${named.join(",")}`);
   }
+  if (input.unread != null) parts.push(`album_not_read:${input.unread}`);
+  const missing = input.missing ?? [];
+  if (missing.length > 0) parts.push(`files_missing:${missing.length}:${missing.map(name).join(",")}`);
+  if (input.misplaced != null) parts.push(`order_differs:${input.misplaced.position}:${name(input.misplaced.item)}`);
   if (input.notRenamed.length > 0) {
-    parts.push(`cards_not_renamed:${input.notRenamed.length}:${input.notRenamed.map((item) => input.names.get(item) ?? item).join(",")}`);
+    parts.push(`cards_not_renamed:${input.notRenamed.length}:${input.notRenamed.map(name).join(",")}`);
   }
   if (parts.length === 0) return null;
   const reason = parts.join(";");
@@ -434,7 +465,7 @@ export function fanslyCreateNext(input: {
             const albumId = typeof live.result?.albumId === "string" && live.result.albumId !== "" ? live.result.albumId : null;
             return albumId === null
               ? { kind: "settle", to: "unknown", reason: `${step}:answer_without_album`, platformPostRef: null }
-              : vaultAlbumDone(albumId, input, failures);
+              : vaultAlbumDone(albumId, live, input, failures);
           }
           const ref = answeredId(live);
           // The apply answers a post or story only with its id: anything else
@@ -472,22 +503,71 @@ export function fanslyCreateNext(input: {
   return { kind: "in_flight" };
 }
 
+/** The media an album request asked the album to hold, as it sent them
+ *  (last first); null: its request does not read. */
+function mediaIdsAsked(added: FanslyWriteCommandRecord): string[] | null {
+  try {
+    const sent = JSON.parse(added.request?.body ?? "") as { mediaIds?: unknown };
+    return Array.isArray(sent.mediaIds) && sent.mediaIds.every((id) => typeof id === "string") ? sent.mediaIds as string[] : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
- * A vault album whose media were added (0347): every card not named as its
- * file renamed — each once, all queued at once, a rename that did not go or
- * was refused leaves the old name (the album stands) —, then "published",
- * the reason naming the files that failed and the cards left unrenamed.
+ * A vault album whose media were added (0347): read back (0352, audit
+ * 2026-11-04) — its top, as many cards as were added —, every card the read
+ * shows named otherwise than its file renamed (each once, all queued at once;
+ * one named right already is left as it is), then compared with the
+ * approval: every file it was asked to hold, from the top in the approval's
+ * order, each card named as its file. As approved: "published", the reason
+ * naming the files that failed for themselves. Anything else — a file it does
+ * not hold, a card out of its place, one left with another name, or no read
+ * back at all — is not what the person approved: "unknown", the reason saying
+ * what differs; a person looks at the album.
  */
 function vaultAlbumDone(
   albumId: string,
+  added: FanslyWriteCommandRecord,
   input: Pick<Parameters<typeof fanslyCreateNext>[0], "commands" | "now" | "notAfter" | "pack">,
   failures: ReadonlyArray<{ item: string; settle: FanslyUploadSettle }>,
 ): FanslyCreateNext {
+  const names = input.pack?.names ?? new Map<string, string>();
+  const members = input.pack?.members ?? 0;
+  const cards = input.pack?.cards ?? [];
+  const asked = mediaIdsAsked(added);
+  if (asked === null) return { kind: "settle", to: "unknown", reason: "album_media:request_unreadable", platformPostRef: null, vaultAlbumRef: albumId };
+  // The album shows the last added first: top first, the approval's order.
+  const expected = [...asked].reverse();
+  const read = fanslyAlbumRead(input.commands, expected.length, input.now, input.notAfter);
+  switch (read.kind) {
+    case "enqueue":
+      return { kind: "enqueue_uploads", items: [{ step: "album_read", item: read.item, notBefore: read.notBefore }] };
+    case "in_flight":
+      return { kind: "in_flight" };
+    case "failed":
+      return {
+        kind: "settle", to: "unknown", platformPostRef: null, vaultAlbumRef: albumId,
+        reason: fanslyPackReason({ failures, names, members, notRenamed: [], unread: read.reason }),
+      };
+    case "done":
+      break;
+  }
+  const shown = new Map<string, FanslyAlbumCard>();
+  for (const card of read.cards) if (!shown.has(card.mediaId)) shown.set(card.mediaId, card);
+  // The file's item of each media: the first of the approval's (a media
+  // named twice is added once, where it first is).
+  const itemOf = new Map<string, string>();
+  for (const card of cards) if (card.mediaId !== null && !itemOf.has(card.mediaId)) itemOf.set(card.mediaId, card.item);
   const queue: FanslyUploadEnqueue[] = [];
   let pending = false;
   const notRenamed: string[] = [];
-  for (const item of input.pack?.renames ?? []) {
-    const state = fanslyStepState("album_rename", item, input.commands, input.now, input.notAfter);
+  for (const card of cards) {
+    if (card.mediaId === null || card.name === null || itemOf.get(card.mediaId) !== card.item) continue;
+    const now = shown.get(card.mediaId);
+    // Not in the album: said below. Named right already: left as it is.
+    if (now === undefined || (now.customFilename !== null && sameCardName(now.customFilename, card.name))) continue;
+    const state = fanslyStepState("album_rename", card.item, input.commands, input.now, input.notAfter);
     switch (state.kind) {
       case "answered":
         continue;
@@ -495,21 +575,23 @@ function vaultAlbumDone(
         pending = true;
         continue;
       case "enqueue":
-        queue.push({ step: "album_rename", item, notBefore: state.notBefore });
+        queue.push({ step: "album_rename", item: card.item, notBefore: state.notBefore });
         continue;
       case "unknown":
       case "failed":
       case "window_passed":
-        notRenamed.push(item);
+        notRenamed.push(card.item);
         continue;
     }
   }
   if (queue.length > 0) return { kind: "enqueue_uploads", items: queue };
   if (pending) return { kind: "in_flight" };
-  const reason = input.pack === undefined
-    ? null
-    : fanslyPackReason({ failures, names: input.pack.names, members: input.pack.members, notRenamed });
-  return { kind: "settle", to: "published", reason, platformPostRef: null, vaultAlbumRef: albumId };
+  const missing = expected.filter((mediaId) => !shown.has(mediaId)).map((mediaId) => itemOf.get(mediaId) ?? mediaId);
+  const at = missing.length > 0 ? -1 : expected.findIndex((mediaId, index) => read.cards[index]?.mediaId !== mediaId);
+  const misplaced = at < 0 ? null : { position: at + 1, item: itemOf.get(expected[at]!) ?? expected[at]! };
+  const reason = fanslyPackReason({ failures, names, members, notRenamed, missing, misplaced });
+  const asApproved = missing.length === 0 && misplaced === null && notRenamed.length === 0;
+  return { kind: "settle", to: asApproved ? "published" : "unknown", reason, platformPostRef: null, vaultAlbumRef: albumId };
 }
 
 /** A create whose every live request waits for a later time (queued with a
@@ -963,7 +1045,7 @@ async function packFacts(
   app: AppContext,
   form: ApprovedForm,
   commands: readonly FanslyWriteCommandRecord[],
-  uploaded: ReadonlyArray<{ sha256: string; filename: string | null }>,
+  uploaded: ReadonlyArray<{ sha256: string; mediaId: string; commandId: number }>,
   uploads: readonly string[],
   now: Date,
 ): Promise<{ files: Map<string, FanslyUploadFile>; pack: FanslyPack | null }> {
@@ -972,24 +1054,33 @@ async function packFacts(
   const files = new Map<string, FanslyUploadFile>();
   const names = new Map<string, string>();
   for (const media of form.media) {
+    const item = `${media.role}:${media.position}`;
+    // A vault media goes by its media id in a reason (0352: the album may not hold it).
+    if (media.source === "vault" && media.mediaRef !== null) names.set(item, media.mediaRef);
     const file = media.fileId === null ? undefined : facts.get(media.fileId);
     if (file === undefined) continue;
-    const item = `${media.role}:${media.position}`;
     files.set(item, { mimeType: file.mimeType, byteSize: file.byteSize });
     const named = media.name ?? file.originalName;
     if (named !== null && named.trim() !== "") names.set(item, named.trim());
   }
   if (form.kind !== "vault_album") return { files, pack: null };
   const failed = new Set(uploads.filter((item) => fanslyUploadFailed(item, commands, now)));
-  const renames = fanslyVaultRenames({
-    media: form.media,
-    commands,
-    names: new Map([...facts.values()].map((file) => [file.id, file.originalName])),
-    onAccount: new Map(uploaded.map((media) => [media.sha256, { filename: media.filename }])),
-    failed,
-  });
-  const members = form.media.filter((media) => media.role === "media").length;
-  return { files, pack: { filesInFlight: FANSLY_VAULT_FILES_IN_FLIGHT, members, names, renames } };
+  const uploadedMedia = new Map(uploaded.map((media) => [media.sha256, { mediaId: media.mediaId, commandId: media.commandId }]));
+  // Each card as the approval has it: its media (as the album's request takes
+  // it) and the name it should show — a file's, as the draft named it.
+  const cards = form.media
+    .filter((media) => media.role === "media")
+    .sort((a, b) => a.position - b.position)
+    .map((media): FanslyPackCard => {
+      const item = `media:${media.position}`;
+      const file = media.fileId === null ? undefined : facts.get(media.fileId);
+      return {
+        item,
+        mediaId: failed.has(item) ? null : fanslyMediaIdOf(media, commands, uploadedMedia),
+        name: media.source === "file" ? fanslyCardName(media.name ?? file?.originalName ?? null) : null,
+      };
+    });
+  return { files, pack: { filesInFlight: FANSLY_VAULT_FILES_IN_FLIGHT, members: cards.length, names, cards } };
 }
 
 async function settle(

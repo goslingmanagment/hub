@@ -259,6 +259,22 @@ describe("a Fansly story (spec §3.5)", () => {
   });
 });
 
+/** The engine's answer to a vault album's media request, its body as the plan derived it (last first). */
+async function settleAlbumMedia(id: string | number, albumId: string, mediaIds: string[]) {
+  attemptId += 1;
+  const body = JSON.stringify({ albumId, mediaIds: [...mediaIds].reverse() });
+  expect(await admitFanslyWriteCommand(app.db, {
+    id: Number(id), attemptId, workId: 1,
+    request: { spec: "publish.vault_album_media", method: "POST", host: "api", pathAndQuery: "/api/v1/vault/albums/media", body, fingerprint: "e".repeat(64) },
+  })).toBe(true);
+  expect(await settleFanslyWriteCommand(app.db, { id: Number(id), attemptId, to: "answered", reason: null, result: { albumId, added: mediaIds.length } })).toBe(true);
+}
+
+/** The album's page as its read back showed it: these media, top first. */
+const albumPage = (albumId: string, mediaIds: string[]) => ({
+  albumId, before: "0", cards: mediaIds.map((mediaId, index) => ({ id: `e${index}`, mediaId, customFilename: null })),
+});
+
 describe("a vault album's album is one (audit, 2026-11-04)", () => {
   const album = (overrides: Partial<PublicationContentBody> = {}) => body({
     kind: "vault_album", text: "Pack", media: [{ source: "vault", mediaRef: "m1" }], publishAt: new Date(Date.now() - MIN).toISOString(), ...overrides,
@@ -293,13 +309,19 @@ describe("a vault album's album is one (audit, 2026-11-04)", () => {
     // Its next step still stands on its approval: the album its create made is no change to it.
     const { approved_revision_id: revisionId } = (await sql<{ approved_revision_id: string }>("select approved_revision_id::text from publications where id = $1", [first]))[0]!;
     expect(await checkApprovedPublication(app.db, first, { statuses: ["approved", "submitting"], revisionId: Number(revisionId) })).toMatchObject({ ok: true });
-    await settleCommand((await commandsOf(first))[1]!.id, "answered", { albumId: "al1", added: 1 });
+    await settleAlbumMedia((await commandsOf(first))[1]!.id, "al1", ["m1"]);
+    await tick();
+    // Read back before it is called published (0352).
+    expect(await steps(first)).toEqual(["album_create:answered", "album_media:answered", "album_read:queued"]);
+    await settleCommand((await commandsOf(first))[2]!.id, "answered", albumPage("al1", ["m1"]));
     await tick();
     expect(await publication(first)).toMatchObject({ status: "published" });
     // The second: right before it would make an album, it finds the first one's and fills it.
     expect(await albumOf(second)).toBe("al1");
     expect(await steps(second)).toEqual(["album_media:queued"]);
-    await settleCommand((await commandsOf(second))[0]!.id, "answered", { albumId: "al1", added: 1 });
+    await settleAlbumMedia((await commandsOf(second))[0]!.id, "al1", ["m2"]);
+    await tick();
+    await settleCommand((await commandsOf(second))[1]!.id, "answered", albumPage("al1", ["m2", "m1"]));
     await tick();
     expect(await publication(second)).toMatchObject({ status: "published" });
     expect(await albumOf(second)).toBe("al1");
@@ -316,7 +338,9 @@ describe("a vault album's album is one (audit, 2026-11-04)", () => {
     expect(await albumOf(later)).toBe("al3");
     await tick();
     expect(await steps(later)).toEqual(["album_create:refused", "album_media:queued"]);
-    await settleCommand((await commandsOf(later))[1]!.id, "answered", { albumId: "al3", added: 1 });
+    await settleAlbumMedia((await commandsOf(later))[1]!.id, "al3", ["m1"]);
+    await tick();
+    await settleCommand((await commandsOf(later))[2]!.id, "answered", albumPage("al3", ["m1"]));
     await tick();
     expect(await publication(later)).toMatchObject({ status: "published" });
 
@@ -326,6 +350,22 @@ describe("a vault album's album is one (audit, 2026-11-04)", () => {
     await tick();
     expect(await publication(twin)).toMatchObject({ status: "missed", status_reason: "not_sent:album_title_ambiguous:2:al8,al9" });
     expect(await commandsOf(twin)).toEqual([]);
+  });
+
+  it("is published only once read back as approved; a file the album does not hold: unknown, named (0352)", async () => {
+    const pack = await approved(album({ text: "Read", media: [{ source: "vault", mediaRef: "m4" }, { source: "vault", mediaRef: "m5" }] }));
+    await tick();
+    await settleCommand((await commandsOf(pack))[0]!.id, "answered", { albumId: "al4" });
+    await tick();
+    await settleAlbumMedia((await commandsOf(pack))[1]!.id, "al4", ["m4", "m5"]);
+    await tick();
+    const [read] = (await commandsOf(pack)).filter((row) => row.step === "album_read");
+    expect(read).toMatchObject({ state: "queued" });
+    // The album shows the first file and then an older card, not the second.
+    await settleCommand(read!.id, "answered", albumPage("al4", ["m4", "m-old"]));
+    await tick();
+    expect(await publication(pack)).toMatchObject({ status: "unknown", status_reason: "files_missing:1:m5" });
+    expect(await albumOf(pack)).toBe("al4");
   });
 
   it("a create whose answer was lost may have made the album: unknown, never a second create", async () => {

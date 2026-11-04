@@ -634,7 +634,14 @@ The path of one post:
    records the album on the publication as soon as its send knows it; right
    before it would make one it looks for the page's album with that title
    again, uses it when there is one, and stops (`missed`,
-   `not_sent:album_title_ambiguous:<n>:<ids>`) when there are several. Up to 300 files; no walls,
+   `not_sent:album_title_ambiguous:<n>:<ids>`) when there are several. Once
+   the files are in, Hub reads the album back (its top, as many cards as it
+   added), renames each card that read shows named otherwise than its file,
+   and calls it `published` only when the album holds every file in your
+   order, each card named as its file (a file that failed for itself is
+   named in `files_failed`); anything else is `unknown` with what differs:
+   `files_missing:<n>:<names>`, `order_differs:<place from the top>:<name>`,
+   `cards_not_renamed:<n>:<names>`, `album_not_read:<why>`. Up to 300 files; no walls,
    tiers, price, previews or expiry; `--publish-at` now. A file not yet on the
    platform is uploaded to Hub first: `hub publication-file-upload --page-label
    <page> <file…>` reads each file's SHA-256, asks Hub which of those bytes the

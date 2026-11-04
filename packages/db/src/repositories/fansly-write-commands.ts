@@ -29,6 +29,9 @@ export const FANSLY_WRITE_STEPS = [
   "album_media",
   // 0347: a card of the album renamed to its file's name.
   "album_rename",
+  // 0352: one page of the album read back once its media are added (a GET,
+  // the catalog's own `vault.media`).
+  "album_read",
 ] as const;
 export type FanslyWriteStep = (typeof FANSLY_WRITE_STEPS)[number];
 

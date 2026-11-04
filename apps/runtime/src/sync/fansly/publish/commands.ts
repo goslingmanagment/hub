@@ -35,10 +35,21 @@ export const FANSLY_WRITE_STEP_ROUTES: Readonly<Record<FanslyWriteStep, FanslyWi
   album_create: "publish.vault_album_create",
   album_media: "publish.vault_album_media",
   album_rename: "publish.vault_album_rename",
+  // A vault album read back once its media are added (0352, audit
+  // 2026-11-04): the catalog's own read of an album's page, through the
+  // page's browser as every read — no write, no new route.
+  album_read: "vault.media",
 };
 
 /** Every route a write command sends: the registry entries' operations. */
 export const FANSLY_WRITE_OPERATIONS: readonly FanslyWireId[] = Object.values(FANSLY_WRITE_STEP_ROUTES);
+
+/** Whether a command's route may go at all: a write's once the stand verified
+ *  its contract (`isSendable`); a vault album's read back is a read the
+ *  engine already sends. */
+export function fanslyStepSendable(step: FanslyWriteStep, isSendable: (spec: FanslyWireId) => boolean): boolean {
+  return step === "album_read" || isSendable(FANSLY_WRITE_STEP_ROUTES[step]);
+}
 
 /** The steps that take back what Hub put on Fansly — a scheduled post off
  *  the schedule, a published post off the wall (0305): allowed while
