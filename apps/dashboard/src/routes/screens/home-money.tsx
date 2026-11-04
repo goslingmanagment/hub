@@ -1,50 +1,29 @@
 /**
  * Group home-money: Главная and Деньги (design/screens/home-money.md). The routes
- * and what they render until each screen is rebuilt.
+ * and what they render.
  */
-import { Route, useSearchParams } from "react-router";
-import { Segmented } from "@/components/ui/Segmented";
-import { named, OfapiOffNotice, Owner } from "./shared.js";
+import { Navigate, Route, useLocation } from "react-router";
+import { useAuthMe } from "@/api/queries";
+import { OwnerRoute } from "@/components/layout/OwnerRoute";
+import { named, Owner } from "./shared.js";
 
 const OverviewPage = named(() => import("@/pages/OverviewPage"), "OverviewPage");
-const TransactionsPage = named(() => import("@/pages/TransactionsPage"), "TransactionsPage");
-const UsagePage = named(() => import("@/pages/UsagePage"), "UsagePage");
-const AiSpendPage = named(() => import("@/pages/AiSpendPage"), "AiSpendPage");
-const AiReconciliationSection = named(() => import("@/pages/AiReconciliationSection"), "AiReconciliationSection");
-const OfapiCreditsPage = named(() => import("@/pages/OfapiCreditsPage"), "OfapiCreditsPage");
+const TransactionsPage = named(() => import("@/pages/money/TransactionsPage"), "TransactionsPage");
+const AiCostsPage = named(() => import("@/pages/money/costs/ai/AiCostsPage"), "AiCostsPage");
+const ReconciliationPage = named(() => import("@/pages/money/costs/anthropic/ReconciliationPage"), "ReconciliationPage");
+const OfapiCostsPage = named(() => import("@/pages/money/costs/onlyfans-api/OfapiCostsPage"), "OfapiCostsPage");
 
-/** «ИИ» of the costs, until its two old screens become one: both, a click apart. */
-function AiCostsScreen() {
-  const [search, setSearch] = useSearchParams();
-  const view = search.get("view") === "people" ? "people" : "spend";
-  return (
-    <div className="space-y-6">
-      <Segmented
-        label="Что показать"
-        value={view}
-        onChange={(next) => {
-          const query = new URLSearchParams(search);
-          if (next === "people") query.set("view", next);
-          else query.delete("view");
-          setSearch(query);
-        }}
-        options={[
-          { value: "spend", label: "На что ушло" },
-          { value: "people", label: "Счета и сотрудники" },
-        ]}
-      />
-      {view === "spend" ? <AiSpendPage /> : <UsagePage />}
-    </div>
-  );
-}
-
-function OnlyFansApiCostsScreen() {
-  return (
-    <div className="space-y-6">
-      <OfapiOffNotice>Суммы и кредиты здесь — по 1 ноября.</OfapiOffNotice>
-      <OfapiCreditsPage />
-    </div>
-  );
+/**
+ * «Деньги» opens on «Расходы → ИИ», which is the owner's. A team lead who comes
+ * there (by `/money`, or the address itself) lands on his section's home,
+ * «Операции», not on a refusal (design/build-rules.md, R0б). The owner's check
+ * stays: nothing of the costs is asked for before the role is known.
+ */
+function CostsHome() {
+  const { data } = useAuthMe();
+  const location = useLocation();
+  if (data && data.user.role !== "owner") return <Navigate to="/money/transactions" replace state={location.state} />;
+  return <OwnerRoute><AiCostsPage /></OwnerRoute>;
 }
 
 export function homeMoneyRoutes() {
@@ -52,10 +31,10 @@ export function homeMoneyRoutes() {
     <>
       <Route index element={<OverviewPage />} />
       <Route path="money/transactions" element={<TransactionsPage />} />
+      <Route path="money/costs/ai" element={<CostsHome />} />
       <Route element={<Owner />}>
-        <Route path="money/costs/ai" element={<AiCostsScreen />} />
-        <Route path="money/costs/anthropic" element={<AiReconciliationSection />} />
-        <Route path="money/costs/onlyfans-api" element={<OnlyFansApiCostsScreen />} />
+        <Route path="money/costs/anthropic" element={<ReconciliationPage />} />
+        <Route path="money/costs/onlyfans-api" element={<OfapiCostsPage />} />
       </Route>
     </>
   );

@@ -2,6 +2,7 @@ import { useEffect, type ReactNode } from "react";
 import { Link } from "react-router";
 import { useAuthMe } from "@/api/queries";
 import { StatusPanel } from "@/components/shared/StatusPanel";
+import { TableSkeleton } from "@/components/shared/TableSkeleton";
 
 /**
  * A screen of the owner. A team lead does not see its menu item and, reaching it
@@ -12,10 +13,12 @@ import { StatusPanel } from "@/components/shared/StatusPanel";
 export function OwnerRoute({ children }: { children: ReactNode }) {
   const { data, isLoading } = useAuthMe();
 
+  // The rights are not known yet: the screen's shape, not a sentence (DL §5.13).
   if (isLoading) {
     return (
-      <div className="flex items-center justify-center py-24">
-        <span role="status" className="text-sm text-text-muted">Проверяем доступ…</span>
+      <div role="status" className="space-y-6">
+        <span className="sr-only">Загружаем экран…</span>
+        <div aria-hidden="true"><TableSkeleton rows={6} columns={5} /></div>
       </div>
     );
   }

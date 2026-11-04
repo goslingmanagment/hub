@@ -3,14 +3,33 @@ import {
   type CrossPageTransactionListQuery,
   type CrossPageTransactionListResponse,
 } from "@agency_hub_core/contracts";
-import { pageFromSearch } from "./pageParam.js";
+import { resolveRevenuePeriodBoundsForPlatform, type Platform } from "@agency_hub_core/shared";
+import type { PeriodOption } from "@/stores/periodStore";
 
-export function parseTransactionSearch(search: URLSearchParams) {
-  const input = Object.fromEntries(
-    [...search].filter(([key]) => key !== "backTo" && key !== "page" && key !== "period"),
-  );
-  const page = pageFromSearch(search);
-  return crossPageTransactionListQuerySchema.safeParse({ ...input, ...(page ? { pageLabel: page } : {}), limit: 50 });
+/** The parameters of the address a request may take as they are. */
+const PASSED = ["type", "state", "sortBy", "sortDir", "from", "to", "offset"] as const;
+
+/**
+ * The one piece of «Операции» a sum depends on: the address and the screen's
+ * period and page make the request. An exact window from a clicked sum (`from`,
+ * `to`) wins over the period; otherwise the period becomes the window of the
+ * platform, by the server's own function, so the sum equals Главная's row. All
+ * time has no window. `reportableOnly` is on unless the address says otherwise.
+ */
+export function parseTransactionUrl(
+  search: URLSearchParams,
+  ctx: { pageLabel: string | null; platform: Platform; period: PeriodOption; now?: Date },
+) {
+  const raw = Object.fromEntries(PASSED.flatMap((key) => (search.has(key) ? [[key, search.get(key)!]] : [])));
+  const exact = "from" in raw || "to" in raw;
+  const bounds = exact || ctx.period === "all" ? null : resolveRevenuePeriodBoundsForPlatform(ctx.platform, ctx.period, ctx.now ?? new Date());
+  return crossPageTransactionListQuerySchema.safeParse({
+    ...raw,
+    ...(bounds?.from && bounds.to ? { from: bounds.from.toISOString(), to: bounds.to.toISOString() } : {}),
+    ...(ctx.pageLabel ? { pageLabel: ctx.pageLabel } : {}),
+    reportableOnly: search.get("reportableOnly") ?? "true",
+    limit: 50,
+  });
 }
 
 /** An older server can ignore additive query parameters. Never display its

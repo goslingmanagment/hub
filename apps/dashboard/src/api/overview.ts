@@ -21,15 +21,6 @@ export function useOverviewRevenue(period: string) {
   });
 }
 
-export function useOverviewRevenueByModel(period = "30d", windowAt?: string) {
-  return useQuery({
-    queryKey: ["overviewRevenueByModel", period, windowAt],
-    queryFn: () =>
-      kernel.overviewRevenueByModel({ query: { period, windowAt } as RevenueDailyQuery }),
-    meta: { suppressGlobalError: true },
-  });
-}
-
 export function useRevenueChart(scope: string, period: string, windowAt: string | undefined, enabled: boolean) {
   const query = { period, windowAt } as RevenueDailyQuery;
   return useQuery({

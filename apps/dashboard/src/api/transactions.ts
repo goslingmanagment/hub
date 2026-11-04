@@ -9,6 +9,8 @@ export function useRevenueTransactions(
     queryKey: ["revenueTransactions", query],
     queryFn: () => kernel.crossPageTransactions({ query: query! }),
     enabled: query !== undefined,
+    // Another filter or page of the list: the rows on screen stay, dimmed, until the answer.
+    placeholderData: (previous) => previous,
     meta: { suppressGlobalError: true },
   });
 }

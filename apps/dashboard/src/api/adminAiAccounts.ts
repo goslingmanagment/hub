@@ -14,6 +14,7 @@ export function useAdminAiAccounts() {
     queryKey: AI_ACCOUNTS_QUERY_KEY,
     queryFn: () => kernel.adminAiAccountsList(),
     refetchInterval: 60_000,
+    meta: { suppressGlobalError: true },
   });
 }
 
@@ -24,6 +25,7 @@ export function useAdminAiReconciliation(days: number) {
     queryKey: ["admin", "ai-reconciliation", days] as const,
     queryFn: () => kernel.adminAiReconciliation({ query: { days } }),
     refetchInterval: 5 * 60_000,
+    meta: { suppressGlobalError: true },
   });
 }
 
@@ -39,6 +41,7 @@ function useRefreshReconciliation() {
 export function useAdminAiReconciliationImport() {
   const refresh = useRefreshReconciliation();
   return useMutation({
+    meta: { suppressGlobalError: true },
     mutationFn: (body: AdminAiReconciliationImportBody) => kernel.adminAiReconciliationImport({ body }),
     onSuccess: () => refresh(),
   });
@@ -48,6 +51,7 @@ export function useAdminAiReconciliationImport() {
 export function useAdminAiReconciliationKey() {
   const refresh = useRefreshReconciliation();
   return useMutation({
+    meta: { suppressGlobalError: true },
     mutationFn: (body: AdminAiReconciliationKeyBody) => kernel.adminAiReconciliationKeyUpdate({ body }),
     onSuccess: () => refresh(),
   });
@@ -59,12 +63,14 @@ export function useAdminVoiceAccount() {
     queryKey: ["admin", "voice-account"] as const,
     queryFn: () => kernel.adminVoiceAccount(),
     refetchInterval: 60_000,
+    meta: { suppressGlobalError: true },
   });
 }
 
 export function useAdminUpdateAiAccount() {
   const qc = useQueryClient();
   return useMutation({
+    meta: { suppressGlobalError: true },
     mutationFn: (input: { accountId: number; body: AdminAiAccountUpdateBody }) =>
       kernel.adminAiAccountUpdate({ params: { accountId: input.accountId }, body: input.body }),
     onSuccess: (data) => {

@@ -6,5 +6,6 @@ export function useAdminChatterUsage(params: { from?: string; to?: string } = {}
   return useQuery({
     queryKey: ["admin", "usage", "chatters", params],
     queryFn: () => kernel.adminChatterUsage({ query: params }),
+    meta: { suppressGlobalError: true },
   });
 }
