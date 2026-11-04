@@ -7,7 +7,7 @@
 import type { KernelOperationResponse } from "@agency_hub_core/contracts";
 import { between, demoError, hashString, intBetween, isoDay, pick, queryNumber, queryString, rng, type DemoHandlers, type DemoReply, type DemoRequest } from "../core.ts";
 import { demoFans, type DemoPage } from "../world.ts";
-import { dayStats, demoMedia, mediaDay, mediaSales, reachOf, type DemoMedia } from "./money-creator-stats.ts";
+import { TAGS, dayStats, demoMedia, mediaDay, mediaSales, reachOf, soldInMessages, type DemoMedia } from "./money-creator-stats.ts";
 import { DAY_MS, ledgerDay, ownerOnly, pageOr404, startOfDayMs, type LedgerType } from "./money-ledger.ts";
 
 type CoverageRow = KernelOperationResponse<"statsCoverage">["planes"][number];
@@ -112,6 +112,21 @@ function coverageRows(page: DemoPage, now: Date): CoverageRow[] {
     row("notifications", "", "window_captured", "terminal_response", t - 90 * DAY_MS, t - 0.4 * 3_600_000),
     row("payouts", "", "provider_exhausted", "terminal_response", t - 400 * DAY_MS, t - 26 * 3_600_000),
     row("post_likes", "", "not_started", "none", null, null, { reasonCode: "no_confirmed_like_code_e4", updatedAt: iso(t - 30 * DAY_MS) }),
+    // The new collection of Fansly's statistics: the media walk and the audience lanes.
+    // nova-1's collection needs attention: nothing read for nine hours.
+    ...(() => {
+      const lag = page.label === "nova-1" ? 9 * 3_600_000 : 0;
+      const walked = page.label === "ivy-1" ? Math.round(mediaCount * 0.68) : mediaCount;
+      return [
+        row("creator_stats_media", "walk", walked < mediaCount ? "in_progress" : "window_captured", walked < mediaCount ? "none" : "complete_count_matched", history, t - lag - 1.2 * 3_600_000, { expectedCount: mediaCount, observedUniqueCount: walked }),
+        row("creator_stats_media", "top:0:7d", "window_captured", "complete_count_matched", t - 7 * DAY_MS, t - lag - 0.6 * 3_600_000),
+        row("creator_stats_audience", "steady:geo:0", "window_captured", "complete_count_matched", t - 30 * DAY_MS, t - lag - 0.9 * 3_600_000),
+        row("creator_stats_audience", "steady:tags:1:0", "window_captured", "complete_count_matched", t - 30 * DAY_MS, t - lag - 0.9 * 3_600_000),
+        row("creator_stats_audience", "steady:active_hours:0", "window_captured", "complete_count_matched", t - 90 * DAY_MS, t - lag - 2.5 * 3_600_000),
+        row("creator_stats_audience", "steady:benchmarks:0", "window_captured", "complete_count_matched", t - 30 * DAY_MS, t - lag - 2.5 * 3_600_000),
+        row("creator_stats_audience", "steady:media_shown", "window_captured", "complete_count_matched", t - 72 * 3_600_000, t - lag - 0.5 * 3_600_000),
+      ];
+    })(),
   ];
 }
 
@@ -256,7 +271,7 @@ function statsMedia(request: DemoRequest): KernelOperationResponse<"statsMedia">
     .filter((media) => !only || media.mediaOfferId === only)
     .map((media) => ({ media, points: mediaWindowViews(media, buckets, now) }))
     .map((entry) => ({ ...entry, total: entry.points.reduce((sum, point) => sum + point.views, 0) }))
-    .filter((entry) => entry.total > 0)
+    .filter((entry) => entry.total > 0 || Boolean(only))
     .sort((left, right) => right.total - left.total);
   // Fansly's own ranking of its freshest week; one entry Hub's catalog lacks.
   const weekEnd = startOfDayMs(now);
@@ -301,6 +316,34 @@ function statsMedia(request: DemoRequest): KernelOperationResponse<"statsMedia">
       daily: points.filter((point) => point.views > 0).map((point) => ({ bucketStart: iso(point.bucket), views: point.views, previewViews: point.preview })),
     };
   });
+  // Sold in messages: no post and no views, but the catalog knows its price and sales.
+  if (only && media.length === 0) {
+    const sold = soldInMessages(page).find((entry) => entry.mediaOfferId === only);
+    if (sold) {
+      const posted = startOfDayMs(now) - sold.postedDaysAgo * DAY_MS + 17 * 3_600_000;
+      media.push({
+        mediaOfferRef: sold.mediaOfferId,
+        mediaRef: sold.mediaOfferId,
+        bundleRefs: [],
+        mediaType: sold.mediaType as 1 | 2,
+        mimeType: sold.mediaType === 2 ? "video/mp4" : "image/jpeg",
+        width: 1080,
+        height: 1920,
+        durationMs: sold.durationMs,
+        priceMills: sold.priceMills,
+        likeCount: 0,
+        sales: sold.sales,
+        createdAtPlatform: iso(posted),
+        deletedAtPlatform: null,
+        firstObservedAt: iso(posted + 40 * 60_000),
+        lastObservedAt: iso(now.getTime() - 3 * 3_600_000),
+        buckets: [],
+        windowViews: 0,
+        windowPreviewViews: 0,
+        daily: [],
+      });
+    }
+  }
 
   const top = ranked.map((entry, rank) => ({
     plane: "fyp",
@@ -376,14 +419,18 @@ function statsTags(request: DemoRequest): KernelOperationResponse<"statsTags"> |
       observedAt: iso(now.getTime() - 5 * 3_600_000),
     };
   });
-  const platformTags = topTags.filter((tag) => tag.tagName !== null && random() < 0.9).map((tag) => {
-    const size = 10 ** between(random, 6.3, 8.9);
+  // The tags' numbers across all of Fansly, one row per tag of the page's lists, as of
+  // yesterday. The same on every page (they are Fansly's); a tenth came without numbers.
+  const names = [...new Set([...TAGS, ...FYP_TAGS.map(([name]) => name).filter((name) => name !== "")])];
+  const platformTags = page.platform !== "fansly" ? [] : names.filter((name) => hashString(`platform-tag:${name}`) % 10 !== 3).map((name) => {
+    const tagRandom = rng(`platform-tag:${name}`);
+    const size = 10 ** between(tagRandom, 6.3, 8.9);
     return {
-      tagRef: tag.tagRef,
-      tagName: tag.tagName,
+      tagRef: String(3_000_000 + (hashString(`tag:${name}`) % 900_000)),
+      tagName: name,
       businessDate: isoDay(new Date(weekEnd - DAY_MS)),
       viewCount: Math.round(size),
-      postCount: Math.round(size / between(random, 900, 4_000)),
+      postCount: Math.round(size / between(tagRandom, 900, 4_000)),
       source: "tag_stats",
       capturedAt: iso(now.getTime() - 9 * 3_600_000),
     };
@@ -394,7 +441,7 @@ function statsTags(request: DemoRequest): KernelOperationResponse<"statsTags"> |
     window: { from: window.from, to: window.to },
     topTags: sliced.rows,
     platformTags,
-    coverage: coverageFor(page, now, ["stats_account_daily"]),
+    coverage: coverageRows(page, now),
     nextCursor: sliced.nextCursor,
   };
 }
@@ -476,7 +523,7 @@ function contentComments(request: DemoRequest): KernelOperationResponse<"content
     comments: sliced.rows,
     perPost,
     likers: { state: "not_started", reason: "no_confirmed_like_code_e4", rows: [] },
-    coverage: coverageFor(page, now, ["post_replies"]),
+    coverage: coverageRows(page, now),
     nextCursor: sliced.nextCursor,
   };
 }

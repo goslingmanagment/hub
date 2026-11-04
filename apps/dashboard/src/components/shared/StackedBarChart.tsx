@@ -23,7 +23,7 @@ import {
   type ChartSeries,
   type ChartTooltipRenderProps,
 } from "@/components/charts/ChartKit";
-import { evenTickIndices, linearTicks, stackedExtent } from "@/components/charts/scale";
+import { evenTickIndices, linearTicks, stackedExtent, type LinearTicks } from "@/components/charts/scale";
 
 export type StackedBarChartSeries = ChartSeries;
 
@@ -62,15 +62,19 @@ export function StackedBarChart(props: {
   totalLabel?: string | null | undefined;
   /** A line under the tooltip's values, for the row it is given. */
   note?: ((row: Record<string, unknown>) => ReactNode) | undefined;
+  /** The value axis from the stack's extent, when whole numbers are not its unit (durations). */
+  scale?: ((min: number, max: number) => LinearTicks) | undefined;
+  /** Room per date label and how many at most (wide labels such as «3 нояб., 15:00»). */
+  tickSpacing?: { spacing: number; max: number } | undefined;
 }) {
   const height = props.height ?? 300;
-  const { budget, onResize } = useTickBudget();
+  const { budget, onResize } = useTickBudget(props.tickSpacing?.spacing, props.tickSpacing?.max);
   const format = props.valueFormatter ?? ((value: number) => String(value));
   const tooltipFormat = props.tooltipValueFormatter ?? format;
   const xFormat = props.xTickFormatter ?? ((value: string) => value);
 
   const extent = stackedExtent(props.data, props.series.map((series) => series.key));
-  const yScale = linearTicks(extent.min, extent.max, { integer: true });
+  const yScale = props.scale?.(extent.min, extent.max) ?? linearTicks(extent.min, extent.max, { integer: true });
   const step = (yScale.ticks[1] ?? 1) - (yScale.ticks[0] ?? 0);
   const axisFormat = props.axisFormatter?.(step) ?? format;
   const xTicks = evenTickIndices(props.data.length, budget)
