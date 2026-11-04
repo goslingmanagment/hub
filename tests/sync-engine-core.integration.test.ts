@@ -16,6 +16,7 @@ import {
   ensureFanslyPageSendGuard,
   ensurePollRows,
   ensureSyncPage,
+  FANSLY_STORAGE_OPERATION,
   getSyncAttempt,
   getSyncPage,
   getWorkForStatus,
@@ -60,6 +61,7 @@ import {
   type UpsertDemandInput,
 } from "@agency_hub_core/db";
 
+import { judgePaceGap } from "../apps/runtime/src/sync/engine/send-audit.ts";
 import {
   resetIntegrationDatabase,
   startIntegrationTestDatabase,
@@ -147,7 +149,7 @@ async function admit(
   pageId: number,
   generation: bigint,
   work: { id: number; resource: string; subject: string; class: SyncEngineWorkClass },
-  options: { evidence?: boolean; slot?: number; nextCyclePos?: number } = {},
+  options: { evidence?: boolean; slot?: number; nextCyclePos?: number; operation?: string } = {},
 ): Promise<{ attemptId: number; demandRevision: number }> {
   return inTx(async (tx) => {
     await lockOwnedPage(tx, { pageId, generation, lock: "no_key_update" });
@@ -166,7 +168,7 @@ async function admit(
       settingMs: 2_000,
       jitterU: 0.1,
       pauseMs: 2_200,
-      operation: "messages.page",
+      operation: options.operation ?? "messages.page",
       request: { path: "/api/v1/message", query: { groupId: work.subject, limit: "25" } },
       evidence: options.evidence ?? true,
     });
@@ -1044,6 +1046,38 @@ describe("sync_attempts", () => {
     const row = await db().execute<{ grantedAt: Date | string; releasedAt: Date | string }>(sql`select granted_at as "grantedAt", released_at as "releasedAt" from sync_attempts where id = ${released.attemptId}`);
     expect(new Date(row.rows[0]!.grantedAt).getTime()).toBe(grantedAt.getTime());
     expect(new Date(row.rows[0]!.releasedAt).getTime()).toBe(releasedAt.getTime());
+  });
+
+  it("never takes an upload's part to S3 for a send to Fansly: no predecessor, no gap of its own, not the page's last send", async (context) => {
+    if (!testDb) return context.skip();
+    // A vault pack's upload as it went on a live page: the create to Fansly,
+    // a part to S3 2.2 s later (outside the pause), the completion to Fansly
+    // 3.2 s after the create — 0.99 s after the part.
+    const pageId = await seedPage("capture-part");
+    const generation = await own(pageId);
+    const send = async (subject: string, operation: string, sentAt: Date) => {
+      const work = await upsertDemand(db(), demand(pageId, { subject }));
+      const { attemptId } = await admit(pageId, generation, { ...work, resource: "dm-messages.head", subject, class: "urgent" }, { operation });
+      const captured = await captureAttempt(db(), {
+        attemptId, pageId, outcome: "response", sent: true, sentAt, sendMark: "transport_reported", httpStatus: 200, applyState: "none",
+      });
+      return { attemptId, captured };
+    };
+    const createSent = new Date(Date.now() - 60_000);
+    const create = await send("create", "publish.upload_create", createSent);
+
+    const part = await send("part", FANSLY_STORAGE_OPERATION, new Date(createSent.getTime() + 2_192));
+    expect(part.captured).toEqual({ captured: true, previousSendAt: null, paceGapMs: null });
+    // The lane's part records no monotonic gap and no pause: nothing to judge.
+    expect(judgePaceGap({ monoGapMs: null, wallGapMs: part.captured.paceGapMs, pauseMs: 0, settingMs: 2_000 })).toBeNull();
+    expect(await getSyncPage(db(), pageId)).toMatchObject({ lastSendAt: createSent, lastSendAttemptId: create.attemptId });
+
+    const completeSent = new Date(createSent.getTime() + 3_182);
+    const complete = await send("complete", "publish.upload_complete", completeSent);
+    expect(complete.captured).toEqual({ captured: true, previousSendAt: createSent, paceGapMs: 3_182 });
+    expect(judgePaceGap({ monoGapMs: 3_183, wallGapMs: complete.captured.paceGapMs, pauseMs: 2_674, settingMs: 2_500 }))
+      .toMatchObject({ verdict: "pass" });
+    expect(await getSyncPage(db(), pageId)).toMatchObject({ lastSendAt: completeSent, lastSendAttemptId: complete.attemptId });
   });
 
   it("settles a refused attempt without the send facts", async (context) => {
