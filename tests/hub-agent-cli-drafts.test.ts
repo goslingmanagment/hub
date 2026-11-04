@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { publicationSchema } from "../packages/contracts/src/publications.ts";
 import { parseHubDraftFile } from "../packages/hub-agent-cli/src/commands.ts";
 
 describe("a draft file from `publication-get`'s answer", () => {
@@ -46,5 +47,11 @@ describe("a draft file from `publication-get`'s answer", () => {
       media: [{ source: "file", fileId: 11, name: "SXT-003_01.jpg" }, { source: "file", fileId: 12, name: "SXT-003_02.jpg" }, { source: "file", fileId: 13 }],
       previews: [],
     });
+  });
+
+  it("takes every field publication-get prints: a new one fails here, not on an agent's computer", () => {
+    // 2026-11-04: vaultAlbumRef, withdrawal and deletion were printed but refused, so no album could be sent again.
+    const data = Object.fromEntries(Object.keys(publicationSchema.shape).map((key) => [key, null]));
+    expect(() => parseHubDraftFile(JSON.stringify({ ok: true, data: { ...data, media: [] } }), [])).not.toThrow();
   });
 });

@@ -561,7 +561,10 @@ needs `write:publication_drafts` (the owner grants it per key); without it every
 that hint. With `approve:publications` as well, you approve drafts yourself —
 `hub publication-approve --id <id> --version <v>`, and only after the owner
 said «да» in the chat to exactly those drafts (show the draft first: page,
-kind, text or title, files in order, time). You cancel only what your key
+kind, text or title, files in order, time). With `approve:vault_albums` instead,
+you approve vault albums on the word of the person who asked and nothing else:
+fans do not see an album, and any other kind is refused with `kind_not_allowed`.
+You cancel only what your key
 drafted, and only before Hub hands it to the platform (below); you never take a
 post off a schedule or switch publishing on, and nothing you draft reaches a
 platform before it is approved. Drafts are writes, not reads: the conclusion envelope above is not
@@ -812,6 +815,19 @@ keeping the new one, the previous one (the rollback) and any touched in the last
 hour; `HUB_CLI_PROD_KEEP` (default 2) keeps more. The running revision is the
 `agency-hub.source-revision` label on the production image.
 
+### A computer without the checkout
+
+A content manager's own Claude has no checkout. Every release builds the CLI into
+one file that needs only Node 22 or newer: `/hub-cli/hub.mjs`, with its SHA-256 in
+`/hub-cli/hub.mjs.sha256`, public like the dashboard's own bundle and holding no
+key. Download it to `~/.hub/hub.mjs` and run
+`node "$HOME/.hub/hub.mjs" setup --key <key>`: that writes the credentials and the
+skill `hub-vault` for Claude, then checks the key against Hub. Before every other
+command this file compares itself with the release, replaces itself and runs again
+when they differ, so it follows the contract; offline it runs as it is. Give such
+a key `write:publication_drafts` and `approve:vault_albums` only:
+`agent-keys:issue` on the server, or the dashboard.
+
 ### Configuration
 
 Auth comes from `HUB_AGENT_KEY`, or from `HUB_AGENT_KEY=...` in
@@ -883,7 +899,7 @@ Global flags: `--base-url`, `--fail-on-partial`, `--pretty`, `--help`.
 | `hub sync-why` | Why a page's engine work of one resource (and subject) is waiting. |
 | `hub publication-media` | The page's files a draft can use, newest first: when each last went out on the page, the live publication that uses it, whether it would be a repeat. Needs `write:publication_drafts`. |
 | `hub publication-create` | Draft a wall post or a vault album (a person approves it, or you with `approve:publications`). Body from `--file` and/or flags; `--idempotency-key` required. |
-| `hub publication-approve` | Approve one draft of yours, only on the owner's «да» in the chat. Needs `approve:publications`. |
+| `hub publication-approve` | Approve one draft of yours, only on the owner's «да» in the chat. Needs `approve:publications`, or `approve:vault_albums` for a vault album. |
 | `hub publication-list` | The page's publications by publish time: status, findings, author. |
 | `hub publication-get` | One publication: a draft's findings re-checked, the status journal. |
 | `hub publication-edit` | Replace a draft your key wrote with a whole new body; an approved one returns to draft. |

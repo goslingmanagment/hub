@@ -58,7 +58,7 @@ import {
 } from "@agency_hub_core/shared";
 
 import { createAppContext } from "./bootstrap.ts";
-import { canonicalCapabilities, updateAgentKeyCapabilities } from "./services/agent-keys.ts";
+import { canonicalCapabilities, issueAgentKey, updateAgentKeyCapabilities } from "./services/agent-keys.ts";
 import { registerSyncEngineCommands } from "./sync/cli.ts";
 import { AiGatewayTerminalStreamConsumer, buildAiGatewayTerminalRecord } from "./services/ai-gateway.ts";
 import {
@@ -4073,6 +4073,47 @@ export function buildProgram() {
           after: updated.capabilities,
           pageLabels: updated.pageLabels,
           expiresAt: updated.expiresAt,
+        }));
+      } finally {
+        await app.close();
+      }
+    });
+
+  // A new key, for the owner's word given in chat. The same service as the
+  // dashboard: audited as agent_key.issued, source cli, under the owner who
+  // asked. The token goes to stdout this once and is stored nowhere.
+  program
+    .command("agent-keys:issue")
+    .description("Issue an agent key and print its token once; audited")
+    .argument("<keyName>", "the key's name, as the dashboard will list it")
+    .requiredOption("--capability <capability...>", `capabilities to grant: ${AGENT_CAPABILITIES.join(", ")}`)
+    .requiredOption("--page <label...>", "the pages it reaches")
+    .requiredOption("--days <days>", "days until it expires, at most 365", parsePositiveInt)
+    .requiredOption("--owner-user-id <id>", "the active owner who asked for it", parsePositiveInt)
+    .action(async (keyName: string, options: { capability: string[]; page: string[]; days: number; ownerUserId: number }) => {
+      const capabilities = options.capability.map((value) => {
+        if (!isAgentCapability(value)) {
+          throw new Error(`Unknown capability ${value}. Expected one of ${AGENT_CAPABILITIES.join(", ")}`);
+        }
+        return value;
+      });
+      const app = await createAppContext();
+      try {
+        const owner = await findUserById(app.db, options.ownerUserId);
+        if (!owner || owner.role !== "owner" || owner.disabledAt !== null || owner.deletedAt !== null) {
+          throw new Error(`Active owner required: user ID ${options.ownerUserId}`);
+        }
+        const issued = await issueAgentKey(
+          app,
+          { name: keyName, capabilities, pageLabels: options.page, expiresInDays: options.days },
+          { source: "cli", actorUserId: owner.id },
+        );
+        console.log(JSON.stringify({
+          token: issued.token,
+          name: issued.key.name,
+          capabilities: issued.key.capabilities,
+          pageLabels: issued.key.pageLabels,
+          expiresAt: issued.key.expiresAt,
         }));
       } finally {
         await app.close();
