@@ -12,6 +12,7 @@ import {
   clip,
   formatAnswersBySection,
   formatMoscowMinute,
+  MODEL_APPLICATIONS_SCREEN_URL,
   modelApplicationAddressHash,
   notifyOwnerOfModelApplication,
 } from "./model-applications.ts";
@@ -44,21 +45,22 @@ function present(text: string | undefined): string | null {
   return trimmed === "" ? null : trimmed;
 }
 
-export function formatModelApplicationStartNotice(name: string | null): string {
-  return name === null
+export function formatModelApplicationStartNotice(name: string | null, session: string): string {
+  const head = name === null
     ? "Начали заполнять полную анкету."
     : `Начали заполнять полную анкету: ${clip(name)}.`;
+  return `${head}\nСмотреть: ${MODEL_APPLICATIONS_SCREEN_URL}/${session}`;
 }
 
 export function formatModelApplicationAbandonNotice(
-  session: Pick<ModelApplicationSessionRow, "name" | "filled" | "total" | "section">,
+  session: Pick<ModelApplicationSessionRow, "session" | "name" | "filled" | "total" | "section">,
 ): string {
   const parts = [
     ...(session.name === null ? [] : [clip(session.name)]),
     `${session.filled} из ${session.total}`,
     ...(session.section === null ? [] : [`остановилась на разделе «${clip(session.section)}»`]),
   ];
-  return `Полную анкету не дозаполнили: ${parts.join(", ")}.`;
+  return `Полную анкету не дозаполнили: ${parts.join(", ")}.\nСмотреть: ${MODEL_APPLICATIONS_SCREEN_URL}/${session.session}`;
 }
 
 /**
@@ -100,7 +102,7 @@ export async function recordModelApplicationProgressPost(
     void notifyOwnerOfModelApplication(app, {
       kind: "model_application_started",
       idempotencyKey: `model-application-start:${progress.session}`,
-      text: formatModelApplicationStartNotice(recorded.name),
+      text: formatModelApplicationStartNotice(recorded.name, progress.session.toLowerCase()),
     }).catch((error: unknown) => {
       app.logger.error({ err: error }, "model application: start notice failed");
     });

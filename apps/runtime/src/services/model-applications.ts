@@ -30,6 +30,8 @@ import { sendTelegramMessage, type TelegramSendResult } from "./telegram.ts";
 /** The agency's own Google Form. Never taken from the client. */
 export const MODEL_APPLICATION_GOOGLE_FORM_URL =
   "https://docs.google.com/forms/d/e/1FAIpQLSfw4qBbIbYzKIFv5V2vp9laahHueGnxAu0B13eOmnQq6Mf4yw/formResponse";
+/** The owner's screen of the questionnaires (Команда → Анкеты); a notice links one of them. */
+export const MODEL_APPLICATIONS_SCREEN_URL = "https://hub.gosling-agency.ru/team/applications";
 export const MODEL_APPLICATIONS_PER_ADDRESS_PER_HOUR = 5;
 const RATE_WINDOW_MS = 60 * 60_000;
 const GOOGLE_FORWARD_TIMEOUT_MS = 15_000;
@@ -143,7 +145,7 @@ export function formatModelApplicationNotice(input: {
     ? `Новая анкета модели №${input.id}: ${parts.join(", ")}.`
     : `Новая анкета модели №${input.id}.`;
   return `${head} Google-форма: ${google}.\n`
-    + `Целиком: model-applications:show ${input.id} (CLI хаба)`;
+    + `Целиком: ${MODEL_APPLICATIONS_SCREEN_URL}/${input.id}`;
 }
 
 /** One plain-text notice to the owner's Telegram, recorded as a delivery attempt. */
