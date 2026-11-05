@@ -27,6 +27,11 @@ import {
 } from "../apps/runtime/src/sync/fansly/resources/notifications.ts";
 import { discoverPagination, parsePostRepliesCursor } from "../apps/runtime/src/sync/fansly/resources/post-replies.ts";
 import {
+  parsePostsCoverageChain,
+  postsCoverageAfterFailure,
+  postsCoverageAfterWalk,
+} from "../apps/runtime/src/sync/fansly/lib/posts-coverage.ts";
+import {
   parsePostsWalkCursor,
   refreshCutoffAt,
   wholePageOlderThan,
@@ -130,8 +135,71 @@ describe("the posts walk", () => {
     expect(parsePostsWalkCursor({ headPostId: "7", shadow: { steps: 5, done: 2 } }))
       .toEqual({ headPostId: "7", tipsBackfilledAt: null, walk: null, last: null });
     expect(parsePostsWalkCursor({ walk: { before: "9", pendingTips: ["1", 2], end: "nope" } }).walk).toMatchObject({
-      before: "9", pendingTips: ["1"], end: null, pageIndex: 0,
+      before: "9", pendingTips: ["1"], end: null, pageIndex: 0, headReadAt: null, oldestPublishedAt: null,
     });
+  });
+});
+
+describe("the timeline's coverage (plane `posts`, ContentOps E7)", () => {
+  const at = (hoursBeforeNow: number) => new Date(NOW.getTime() - hoursBeforeNow * HOUR).toISOString();
+  const floor = { observationId: 41, oldestAt: "2025-01-19T16:08:07.000Z", provenAt: at(30) };
+  const refresh = (headHoursAgo: number) => ({
+    end: "cutoff_reached" as const,
+    cutoffAt: at(headHoursAgo + 14 * 24),
+    headReadAt: at(headHoursAgo),
+    oldestPublishedAt: at(headHoursAgo + 15 * 24),
+    endObservationId: 99,
+  });
+
+  it("a full walk's empty page proves the floor; the head is its head page's admission", () => {
+    const claim = postsCoverageAfterWalk(
+      { end: "timeline_exhausted", cutoffAt: null, headReadAt: at(2), oldestPublishedAt: floor.oldestAt, endObservationId: 77 },
+      { floor: null, headAt: null },
+      NOW,
+    );
+    expect(claim).toMatchObject({
+      status: "provider_exhausted", proof: "empty_window", proofObservationId: 77, reasonCode: "timeline_exhausted", needsBackfill: false,
+      oldestCapturedAt: new Date(floor.oldestAt), newestCapturedAt: new Date(at(2)), nextProbeAt: new Date(NOW.getTime() + 16 * HOUR),
+    });
+    expect(claim.chain).toEqual({ floor: { observationId: 77, oldestAt: floor.oldestAt, provenAt: NOW.toISOString() }, headAt: at(2) });
+    // A head the held chain proved later than this walk's stays.
+    const held = postsCoverageAfterWalk({ ...refresh(5), end: "timeline_exhausted", cutoffAt: null }, { floor, headAt: at(1) }, NOW);
+    expect(held.newestCapturedAt).toEqual(new Date(at(1)));
+  });
+
+  it("a refresh that reaches the held head moves it; one that does not is a gap, and no floor asks for a backfill", () => {
+    const moved = postsCoverageAfterWalk(refresh(1), { floor, headAt: at(7) }, NOW);
+    expect(moved).toMatchObject({ status: "provider_exhausted", proof: "empty_window", proofObservationId: 41, needsBackfill: false });
+    expect(moved.newestCapturedAt).toEqual(new Date(at(1)));
+    expect(moved.oldestCapturedAt).toEqual(new Date(floor.oldestAt));
+    expect(moved.chain).toEqual({ floor, headAt: at(1) });
+
+    // Fifteen days without a round: its 14-day window misses the held head.
+    const gap = postsCoverageAfterWalk(refresh(1), { floor, headAt: at(15 * 24 + 1) }, NOW);
+    expect(gap).toMatchObject({ status: "window_captured", proof: "none", proofObservationId: null, reasonCode: "head_gap", needsBackfill: true });
+    expect(gap.chain).toEqual({ floor: null, headAt: null });
+    expect(gap.oldestCapturedAt).toEqual(new Date(refresh(1).cutoffAt));
+
+    expect(postsCoverageAfterWalk(refresh(1), { floor: null, headAt: null }, NOW))
+      .toMatchObject({ status: "window_captured", reasonCode: "floor_unproven", needsBackfill: true });
+  });
+
+  it("a failed step says why a current claim is not current; a fresh head survives a passing failure", () => {
+    const fail = (errorClass: Parameters<typeof postsCoverageAfterFailure>[0]["errorClass"], headHoursAgo: number) =>
+      postsCoverageAfterFailure({ errorClass, status: "provider_exhausted", newestCapturedAt: new Date(at(headHoursAgo)), now: NOW });
+    expect(fail("auth", 1)).toEqual({ status: "auth_blocked", reasonCode: "session_refused" });
+    expect(fail("contract", 1)).toEqual({ status: "contract_drift", reasonCode: "timeline_contract" });
+    expect(fail("network", 1)).toBeNull();
+    expect(fail("network", 19)).toEqual({ status: "window_captured", reasonCode: "head_stale" });
+    expect(fail("ok", 19)).toBeNull();
+    expect(fail("not_sent", 19)).toBeNull();
+    expect(postsCoverageAfterFailure({ errorClass: "auth", status: "window_captured", newestCapturedAt: null, now: NOW })).toBeNull();
+  });
+
+  it("the chain survives whatever a cursor holds", () => {
+    expect(parsePostsCoverageChain(null)).toEqual({ floor: null, headAt: null });
+    expect(parsePostsCoverageChain({ floor: { observationId: "41", provenAt: at(1) }, headAt: "nope" })).toEqual({ floor: null, headAt: null });
+    expect(parsePostsCoverageChain({ floor: { ...floor, oldestAt: 5 }, headAt: at(1) })).toEqual({ floor: { ...floor, oldestAt: null }, headAt: at(1) });
   });
 });
 

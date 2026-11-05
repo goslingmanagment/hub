@@ -1049,6 +1049,33 @@ export async function upsertCaptureCoverage(
   return { applied: (result.rowCount ?? 0) > 0 };
 }
 
+/**
+ * A claim in `from` that is no longer current (its read failed, its head
+ * aged): the status and reason change and the proof drops to `none`. The
+ * proving observation, the window, the counts and the cursor stay, so the
+ * read that connects again can restore the claim from them.
+ */
+export async function markCaptureCoverageNotCurrent(
+  db: Database,
+  input: {
+    pageId: number;
+    platform: FanslyStatsPlatform;
+    plane: string;
+    scopeRef: string;
+    from: CaptureCoverageStatus;
+    status: CaptureCoverageStatus;
+    reasonCode: string;
+  },
+): Promise<{ applied: boolean }> {
+  const result = await db.execute(sql`
+    update capture_coverage
+       set status = ${input.status}, proof = 'none', reason_code = ${input.reasonCode}, updated_at = now()
+     where page_id = ${input.pageId} and platform = ${input.platform} and plane = ${input.plane}
+       and scope_ref = ${input.scopeRef} and status = ${input.from}
+  `);
+  return { applied: (result.rowCount ?? 0) > 0 };
+}
+
 export interface CaptureCoverageRow {
   pageId: number;
   platform: string;

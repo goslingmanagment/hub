@@ -1,11 +1,14 @@
 import { sql } from "drizzle-orm";
 
 import {
+  listCaptureCoverage,
   listPostEngagementRefreshChunk,
+  markCaptureCoverageNotCurrent,
   postEngagementIntervalDays,
   postEngagementTier,
   recordPostEngagementRefreshFailures,
   recordPostEngagementRefreshVisits,
+  type CaptureCoverageRow,
   type Database,
   type PostEngagementRefreshCandidate,
 } from "@agency_hub_core/db";
@@ -17,10 +20,22 @@ import {
   fanslyPublishedAt,
   inspectFanslyPostTipsScope,
 } from "../lib/posts-rules.ts";
+import {
+  parsePostsCoverageChain,
+  POSTS_COVERAGE_PLANE,
+  postsCoverageAfterFailure,
+  postsCoverageAfterWalk,
+  type PostsWalkSummary,
+} from "../lib/posts-coverage.ts";
+import { writeFanslyLaneCoverage } from "../lib/lane.ts";
 import { ApplyQuarantine } from "../../engine/commit.ts";
+import type { OutcomeDecision } from "../../engine/errors.ts";
 import type {
   ApplyInput,
   ApplyResult,
+  CaptureOutcomeInput,
+  CaptureOutcomeResult,
+  DemandSignal,
   RequestPlan,
   ResourceModule,
   StepPlan,
@@ -45,9 +60,16 @@ import {
 // refresh (poll, 6 h): timeline page → the tips of that page → the next page
 // (`before` = the page's last id), down to an empty page or a page wholly
 // older than now − 14 d (whose tips are read too, then the walk completes).
-// backfill (goal, owner or legacy import): the same walk without the cutoff.
+// backfill (goal, owner, a new page, or a refresh that finds no floor): the
+// same walk without the cutoff.
 // A page that does not advance its cursor, or an item outside the contract,
 // quarantines the walk (raw kept, alert 2).
+//
+// A completed walk writes the timeline's coverage (`capture_coverage`, plane
+// `posts`, `lib/posts-coverage.ts`): a full walk's empty page proves the
+// floor, every refresh that reaches the head the claim holds moves it, one
+// that does not — or finds no floor — writes `window_captured` and asks for a
+// backfill; a failed step of either walk says why the claim is not current.
 //
 // engagement (standing walk over the `post_engagement` queue, design §4.3):
 // up to 100 due posts per `GET /post?ids=` (never-read → dirty → by decay
@@ -104,6 +126,11 @@ interface PostsWalk {
   tipsScopeDrifts: number;
   /** Tips answers that were not an array (journaled, counted, walked past). */
   tipsContractDrifts: number;
+  /** ISO: the admission of the head page — every post published by then is
+   *  on the timeline the walk reads (the coverage head). */
+  headReadAt: string | null;
+  /** ISO: the publication of the oldest post the walk saw (a full walk's floor). */
+  oldestPublishedAt: string | null;
 }
 
 export interface PostsWalkCursor {
@@ -132,6 +159,8 @@ export function parsePostsWalkCursor(value: unknown): PostsWalkCursor {
     end,
     tipsScopeDrifts: count(walkRecord.tipsScopeDrifts) ?? 0,
     tipsContractDrifts: count(walkRecord.tipsContractDrifts) ?? 0,
+    headReadAt: text(walkRecord.headReadAt),
+    oldestPublishedAt: text(walkRecord.oldestPublishedAt),
   };
   return {
     headPostId: text(record.headPostId),
@@ -154,6 +183,8 @@ function freshWalk(anchorPostId: string | null, cutoffAt: string | null): PostsW
     end: null,
     tipsScopeDrifts: 0,
     tipsContractDrifts: 0,
+    headReadAt: null,
+    oldestPublishedAt: null,
   };
 }
 
@@ -190,6 +221,114 @@ function sameIds(left: readonly string[], right: readonly string[]): boolean {
   return left.length === right.length && left.every((id, index) => id === right[index]);
 }
 
+function earlierIso(left: string | null, right: string | null): string | null {
+  if (left === null) return right;
+  if (right === null) return left;
+  return Date.parse(right) < Date.parse(left) ? right : left;
+}
+
+// ── the coverage of the timeline (`capture_coverage`, plane `posts`) ─────────
+
+const BACKFILL_KEY = "posts.backfill";
+
+async function postsCoverageRow(db: Database, pageId: number): Promise<CaptureCoverageRow | null> {
+  const rows = await listCaptureCoverage(db, { pageId, plane: POSTS_COVERAGE_PLANE });
+  return rows.find((row) => row.scopeRef === "") ?? null;
+}
+
+/** The page's posts Hub holds, published inside the claim's window. */
+async function countPostsWithin(tx: Database, pageId: number, from: Date | null, to: Date): Promise<number> {
+  const result = await tx.execute<{ n: number }>(sql`
+    select count(*)::int as n from creator_posts
+     where account_id = ${pageId} and published_at <= ${to}
+       ${from === null ? sql`` : sql`and published_at >= ${from}`}
+  `);
+  return Number(result.rows[0]?.n ?? 0);
+}
+
+/** An open, running or quarantined backfill already answers for the floor. */
+async function openBackfillExists(tx: Database, pageId: number): Promise<boolean> {
+  const result = await tx.execute<{ n: number }>(sql`
+    select count(*)::int as n from sync_work
+     where page_id = ${pageId} and not shadow and resource = ${BACKFILL_KEY} and subject = ''
+       and state in ('open', 'running', 'quarantined')
+  `);
+  return Number(result.rows[0]?.n ?? 0) > 0;
+}
+
+/** The claim a completed walk leaves (`lib/posts-coverage.ts`), and the
+ *  backfill a refresh asks for when no floor holds. */
+async function settleWalkCoverage(tx: Database, input: {
+  pageId: number;
+  now: Date;
+  resource: string;
+  bounded: boolean;
+  walk: PostsWalkSummary;
+  pages: number;
+  served: number;
+}): Promise<DemandSignal[]> {
+  const row = await postsCoverageRow(tx, input.pageId);
+  const claim = postsCoverageAfterWalk(input.walk, parsePostsCoverageChain(row?.cursor), input.now);
+  await writeFanslyLaneCoverage({
+    db: tx,
+    pageId: input.pageId,
+    plane: POSTS_COVERAGE_PLANE,
+    scopeRef: "",
+    status: claim.status,
+    acquisitionMode: "retroactive",
+    proof: claim.proof,
+    proofObservationId: claim.proofObservationId,
+    oldestCapturedAt: claim.oldestCapturedAt,
+    newestCapturedAt: claim.newestCapturedAt,
+    replaceWindowBounds: true,
+    // Fansly states no number of posts.
+    expectedCount: null,
+    observedUniqueCount: await countPostsWithin(tx, input.pageId, claim.oldestCapturedAt, claim.newestCapturedAt),
+    reasonCode: claim.reasonCode,
+    nextProbeAt: claim.nextProbeAt,
+    cursor: {
+      ...claim.chain,
+      lastWalk: {
+        resource: input.resource,
+        end: input.walk.end,
+        cutoffAt: input.walk.cutoffAt,
+        headReadAt: input.walk.headReadAt,
+        pages: input.pages,
+        served: input.served,
+        completedAt: input.now.toISOString(),
+      },
+    },
+  });
+  if (!claim.needsBackfill || !input.bounded || await openBackfillExists(tx, input.pageId)) return [];
+  return [{ resource: BACKFILL_KEY, demand: { reason: `posts_coverage:${claim.reasonCode}` } }];
+}
+
+/** A failed step of a walk that went out: a current claim says why it is not
+ *  current any more (the chain stays for the next round to restore). */
+async function walkFailureInCapture(tx: Database, decision: OutcomeDecision, input: CaptureOutcomeInput): Promise<CaptureOutcomeResult> {
+  const unchanged: CaptureOutcomeResult = { decision };
+  if (!input.sent || decision.errorClass === "ok") return unchanged;
+  const row = await postsCoverageRow(tx, input.pageId);
+  if (row === null) return unchanged;
+  const failure = postsCoverageAfterFailure({
+    errorClass: decision.errorClass,
+    status: row.status,
+    newestCapturedAt: row.newestCapturedAt,
+    now: input.now,
+  });
+  if (failure === null) return unchanged;
+  await markCaptureCoverageNotCurrent(tx, {
+    pageId: input.pageId,
+    platform: "fansly",
+    plane: POSTS_COVERAGE_PLANE,
+    scopeRef: "",
+    from: row.status,
+    status: failure.status,
+    reasonCode: failure.reasonCode,
+  });
+  return unchanged;
+}
+
 function walkModule(variant: "refresh" | "backfill"): ResourceModule {
   const bounded = variant === "refresh";
   return {
@@ -214,9 +353,25 @@ function walkModule(variant: "refresh" | "backfill"): ResourceModule {
       let walk = cursor.walk ?? freshWalk(cursor.headPostId, bounded ? refreshCutoffAt(input.attempt.admittedAt) : null);
       const counters: Record<string, number> = {};
 
-      const complete = (end: PostsWalkEnd, finished: PostsWalk): ApplyResult => {
+      const complete = async (end: PostsWalkEnd, finished: PostsWalk): Promise<ApplyResult> => {
         const completedAt = now.toISOString();
         const headPostId = finished.capturedHeadPostId ?? cursor.headPostId;
+        // The head page's admission. A walk an older image began has none: a
+        // bounded one was first admitted its lookback after its cutoff.
+        const headReadAt = finished.headReadAt ?? (finished.cutoffAt === null
+          ? null
+          : new Date(Date.parse(finished.cutoffAt) + FANSLY_RECENT_POST_REFRESH_LOOKBACK_DAYS * DAY_MS).toISOString());
+        // A full walk completes on its empty page, in this apply: that page
+        // is the observation that proves the floor.
+        const followups = headReadAt === null ? [] : await settleWalkCoverage(tx, {
+          pageId: input.pageId,
+          now,
+          resource: input.work.resource,
+          bounded,
+          walk: { end, cutoffAt: finished.cutoffAt, headReadAt, oldestPublishedAt: finished.oldestPublishedAt, endObservationId: input.observation.id },
+          pages: finished.pageIndex,
+          served: finished.captured,
+        });
         const receipt = {
           completedAt,
           end,
@@ -235,7 +390,7 @@ function walkModule(variant: "refresh" | "backfill"): ResourceModule {
           walk: null,
           last: receipt,
         };
-        return { work: { satisfiesRevision: true, close: "done", closeReason: `walk_${end}`, cursor: next, proof: receipt }, followups: [], counters };
+        return { work: { satisfiesRevision: true, close: "done", closeReason: `walk_${end}`, cursor: next, proof: receipt }, followups, counters };
       };
       const goOn = (nextWalk: PostsWalk): ApplyResult => ({
         work: { satisfiesRevision: false, nextDueAt: now, cursor: { ...cursor, walk: nextWalk } },
@@ -254,12 +409,12 @@ function walkModule(variant: "refresh" | "backfill"): ResourceModule {
         if (!Array.isArray(input.response)) {
           counters.post_tips_contract_drift = 1;
           walk = { ...walk, pendingTips: null, tipsContractDrifts: walk.tipsContractDrifts + 1 };
-          return walk.end === null ? goOn(walk) : complete(walk.end, walk);
+          return walk.end === null ? goOn(walk) : await complete(walk.end, walk);
         }
         const scope = inspectFanslyPostTipsScope(input.response, { requestedTargetIds: targetIds, receiverId: input.ownRef ?? "" });
         if (!scope.accepted) counters.post_tips_scope_drift = 1;
         walk = { ...walk, pendingTips: null, tipsScopeDrifts: walk.tipsScopeDrifts + (scope.accepted ? 0 : 1) };
-        return walk.end === null ? goOn(walk) : complete(walk.end, walk);
+        return walk.end === null ? goOn(walk) : await complete(walk.end, walk);
       }
 
       const requestedBefore = text(recordOf(input.request.params).before) ?? FANSLY_HEAD_CURSOR;
@@ -279,13 +434,20 @@ function walkModule(variant: "refresh" | "backfill"): ResourceModule {
         captured: walk.captured + posts.length,
         capturedHeadPostId: walk.capturedHeadPostId ?? ids[0] ?? null,
         anchorReached: walk.anchorReached || (walk.anchorPostId !== null && ids.includes(walk.anchorPostId)),
+        // Admission, not receipt: a post published before the head page was
+        // asked for is on it, a later one may not be.
+        headReadAt: walk.headReadAt ?? (requestedBefore === FANSLY_HEAD_CURSOR ? input.attempt.admittedAt.toISOString() : null),
+        oldestPublishedAt: posts.reduce(
+          (oldest, post) => earlierIso(oldest, fanslyPublishedAt(post.createdAt)?.toISOString() ?? null),
+          walk.oldestPublishedAt,
+        ),
       };
       const end: PostsWalkEnd | null = posts.length === 0
         ? "timeline_exhausted"
         : wholePageOlderThan(posts, walk.cutoffAt) ? "cutoff_reached" : null;
       if (end !== null) {
         // The closing page's tips are read too, then the walk completes.
-        return ids.length > 0 ? goOn({ ...walk, pendingTips: ids, end }) : complete(end, walk);
+        return ids.length > 0 ? goOn({ ...walk, pendingTips: ids, end }) : await complete(end, walk);
       }
       const nextBefore = ids.at(-1) ?? null;
       if (nextBefore === null || nextBefore === requestedBefore) {
@@ -293,6 +455,8 @@ function walkModule(variant: "refresh" | "backfill"): ResourceModule {
       }
       return goOn({ ...walk, before: nextBefore, pendingTips: ids });
     },
+
+    outcomeInCapture: (tx, decision, input) => walkFailureInCapture(tx, decision, input),
   };
 }
 

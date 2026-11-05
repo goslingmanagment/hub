@@ -5,6 +5,8 @@ export const CAPTURE_COVERAGE_PLANES = Object.freeze({
   statsEarnings: "stats_earnings",
   notifications: "notifications",
   postLikes: "post_likes",
+  /** The page's timeline: every post published up to the head instant is captured (ContentOps entry E7). */
+  posts: "posts",
   catalog: "catalog",
   catalogVaultMedia: "catalog_vault_media",
   catalogMediaHydration: "catalog_media_hydration",
@@ -44,6 +46,8 @@ export const CAPTURE_COVERAGE_HEAD_TOLERANCE_MS: Readonly<
   [CAPTURE_COVERAGE_PLANES.statsAccountDaily]: 48 * 60 * 60 * 1_000,
   [CAPTURE_COVERAGE_PLANES.statsEarnings]: 48 * 60 * 60 * 1_000,
   [CAPTURE_COVERAGE_PLANES.notifications]: 48 * 60 * 60 * 1_000,
+  // The `posts.refresh` SLO: three of its 6-hour rounds.
+  [CAPTURE_COVERAGE_PLANES.posts]: 18 * 60 * 60 * 1_000,
   [CAPTURE_COVERAGE_PLANES.catalog]: 8 * 24 * 60 * 60 * 1_000,
   [CAPTURE_COVERAGE_PLANES.catalogVaultMedia]: 8 * 24 * 60 * 60 * 1_000,
   [CAPTURE_COVERAGE_PLANES.catalogMediaHydration]: 8 * 24 * 60 * 60 * 1_000,

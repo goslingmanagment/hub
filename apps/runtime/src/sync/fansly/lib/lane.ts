@@ -54,6 +54,7 @@ export async function writeFanslyLaneCoverage(input: {
   observedUniqueCount?: number | null;
   expectedCount?: number | null;
   reasonCode?: string | null;
+  nextProbeAt?: Date | null;
   cursor?: Record<string, unknown>;
 }) {
   const { db, ...coverage } = input;
