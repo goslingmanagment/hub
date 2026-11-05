@@ -17,12 +17,11 @@ import { ANTHROPIC_RECONCILIATION_STATUS } from "@/lib/statusWords";
 
 import { StatsCard, StatsEmpty } from "./StatsCard.js";
 import {
-  DAY_MS,
   IN_PROGRESS_NOTE,
   OTHER_TYPE_COLOR,
   barRows,
-  bucketInProgress,
   coveredFrom,
+  dayUnfinished,
   formatMonth,
   formatStatsDay,
   keysByTotal,
@@ -221,8 +220,7 @@ export function RevenueByDayPanel({ stats, pageLabel, periodText }: { stats: Cre
     return { series: chartSeries, rows: points, table: totals };
   }, [days, from, stats.revenue]);
 
-  const note = (row: Record<string, unknown>) =>
-    typeof row.bucketStart === "string" && bucketInProgress(row.bucketStart, DAY_MS) ? IN_PROGRESS_NOTE : null;
+  const note = (row: Record<string, unknown>) => (dayUnfinished(row) ? IN_PROGRESS_NOTE : null);
   const sum = {
     transactions: table.reduce((acc, row) => acc + row.transactions, 0),
     gross: sumMills(table.map((row) => row.gross)),
@@ -248,6 +246,7 @@ export function RevenueByDayPanel({ stats, pageLabel, periodText }: { stats: Cre
               tickSpacing={{ spacing: 80, max: 7 }}
               totalLabel="Всего"
               note={note}
+              unfinished={dayUnfinished}
               height={280}
             />
           </div>
