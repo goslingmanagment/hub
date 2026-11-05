@@ -185,6 +185,7 @@ describe("every trigger an entry declares has its producer", () => {
     { key: "purchases.targets", trigger: "apply:transactions.*", ...transactions("purchaseTargetFollowups(") },
     { key: "purchases.targets", trigger: "apply:dm-messages.*", file: `${SRC}/sync/fansly/resources/dm-messages.ts`, marker: "purchaseTargetFollowups(" },
     { key: "payouts.walk", trigger: "apply:payouts.daily", file: `${SRC}/sync/fansly/resources/payouts.ts`, marker: "resource: PAYOUTS_WALK_KEY" },
+    { key: "posts.backfill", trigger: "apply:posts.refresh", file: `${SRC}/sync/fansly/resources/posts.ts`, marker: "resource: BACKFILL_KEY" },
     { key: "followers.reconcile", trigger: "apply:followers.head", file: `${SRC}/sync/fansly/resources/followers.ts`, marker: "resource: RECONCILE_KEY" },
     { key: "fan-profiles.lookup", trigger: "apply:subscribers.*", ...lookup(`${SRC}/sync/fansly/resources/subscribers.ts`) },
     { key: "fan-profiles.lookup", trigger: "apply:followers.*", ...lookup(`${SRC}/sync/fansly/resources/followers.ts`) },

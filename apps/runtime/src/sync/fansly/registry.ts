@@ -529,8 +529,9 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     module: postsModule("refresh"),
   },
   {
+    // A refresh asks for one when the timeline's coverage holds no floor.
     key: "posts.backfill", file: "posts", subject: "page", kind: "goal", class: "planned",
-    triggers: ["owner", "new_page"], slo: {},
+    triggers: ["owner", "new_page", "apply:posts.refresh"], slo: {},
     proof: "empty_page", walk: "cursor-walk", http: true, evidence: false, fence: "none",
     operations: ["posts.timeline", "posts.tips"],
     legacy: [stream("posts")],

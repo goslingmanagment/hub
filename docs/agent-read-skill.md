@@ -1246,6 +1246,18 @@ window was captured and the surface beyond it is unproven. `not_started` and a
 missing row are different again — the first is a lane that has never run, the
 second is nobody having claimed anything at all.
 
+**The `posts` plane (Fansly, one row per page, scope `''`)** answers "was a
+post published then?". `provider_exhausted` / `empty_window`: a full walk
+reached the timeline's empty page (`proofObservationId`) and every 6-hourly
+refresh since connected to it — every post published up to `newestCapturedAt`
+(when the latest walk asked for the timeline's head) is captured;
+`oldestCapturedAt` is the oldest post. The claim is current while `nextProbeAt`
+(head + 18 h) is ahead. `window_captured` with `floor_unproven` or `head_gap`:
+only the refresh's 14 days are held, a backfill was asked for;
+`auth_blocked`, `contract_drift` and `window_captured` / `head_stale`: the
+walk failed and the head stopped. Only a current `provider_exhausted` row lets
+you say "no post was published at that time".
+
 **`likes` is empty on Fansly, on purpose.** No Fansly like code is
 live-confirmed, so the liker lane writes nothing and the catalog reports
 `captureState: not_captured`. The dataset exists so the hole has a name: an
