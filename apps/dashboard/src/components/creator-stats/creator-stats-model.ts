@@ -145,6 +145,16 @@ export const HOUR_MS = 3_600_000;
 export const IN_PROGRESS_NOTE = "День ещё идёт, число вырастет.";
 export const HOUR_IN_PROGRESS_NOTE = "Час ещё идёт, число вырастет.";
 
+/** A chart row of a day (UTC) that is still counting: its bar is drawn pale. */
+export function dayUnfinished(row: Record<string, unknown>): boolean {
+  return typeof row.bucketStart === "string" && bucketInProgress(row.bucketStart, DAY_MS);
+}
+
+/** A chart row of an hour that is still counting. */
+export function hourUnfinished(row: Record<string, unknown>): boolean {
+  return typeof row.bucketStart === "string" && bucketInProgress(row.bucketStart, HOUR_MS);
+}
+
 /** Every UTC day of the answer's window. */
 export function windowDays(stats: { window: { fromDay: string; toDay: string } }): string[] {
   return businessDateRange(stats.window.fromDay, stats.window.toDay);

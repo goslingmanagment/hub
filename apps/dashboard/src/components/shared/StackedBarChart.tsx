@@ -3,11 +3,13 @@ import {
   Bar,
   BarChart,
   CartesianGrid,
+  Rectangle,
   ReferenceLine,
   ResponsiveContainer,
   Tooltip,
   XAxis,
   YAxis,
+  type BarShapeProps,
 } from "recharts";
 
 import {
@@ -27,6 +29,9 @@ import {
 import { evenTickIndices, linearTicks, stackedExtent, type LinearTicks } from "@/components/charts/scale";
 
 export type StackedBarChartSeries = ChartSeries;
+
+/** How much of its colour a bar still counting keeps. */
+const UNFINISHED_OPACITY = 0.35;
 
 /**
  * Generic stacked-bars time chart: rows keyed by `xKey`, one stacked Bar per
@@ -63,6 +68,9 @@ export function StackedBarChart(props: {
   totalLabel?: string | null | undefined;
   /** A line under the tooltip's values, for the row it is given. */
   note?: ((row: Record<string, unknown>) => ReactNode) | undefined;
+  /** A row whose date is still counting (today, this hour): its bar is drawn pale,
+   *  so a short bar does not read as a fall. */
+  unfinished?: ((row: Record<string, unknown>) => boolean) | undefined;
   /** The value axis from the stack's extent, when whole numbers are not its unit (durations). */
   scale?: ((min: number, max: number) => LinearTicks) | undefined;
   /** Room per date label and how many at most (wide labels such as «3 нояб., 15:00»). */
@@ -73,6 +81,7 @@ export function StackedBarChart(props: {
   const format = props.valueFormatter ?? ((value: number) => String(value));
   const tooltipFormat = props.tooltipValueFormatter ?? format;
   const xFormat = props.xTickFormatter ?? ((value: string) => value);
+  const unfinished = props.unfinished;
 
   const extent = stackedExtent(props.data, props.series.map((series) => series.key));
   const yScale = props.scale?.(extent.min, extent.max) ?? linearTicks(extent.min, extent.max, { integer: true });
@@ -122,6 +131,14 @@ export function StackedBarChart(props: {
               stackId="stack"
               fill={series.color}
               fillOpacity={series.fillOpacity ?? 1}
+              {...(unfinished ? {
+                shape: (shape: BarShapeProps) => (
+                  <Rectangle
+                    {...shape}
+                    fillOpacity={(series.fillOpacity ?? 1) * (unfinished(shape.payload ?? {}) ? UNFINISHED_OPACITY : 1)}
+                  />
+                ),
+              } : {})}
               // The card-coloured hairline is the gap between segments.
               stroke="var(--color-card)"
               strokeWidth={1}

@@ -28,9 +28,11 @@ import { formatCount, formatMills, formatPercent } from "@/lib/format";
 import {
   averageWatchPercent,
   barRows,
+  dayUnfinished,
   formatStatsDay,
   formatStatsHour,
   formatStatsRange,
+  hourUnfinished,
   pivotDays,
   share,
   sourceColor,
@@ -238,6 +240,7 @@ export function MediaDrawer({ mediaOfferId, pageLabel, days, window, row, sold, 
                     valueFormatter={(value) => formatCount(value)}
                     tickSpacing={{ spacing: 72, max: 6 }}
                     totalLabel="Всего"
+                    unfinished={dayUnfinished}
                     height={200}
                   />
                 )}
@@ -260,6 +263,7 @@ export function MediaDrawer({ mediaOfferId, pageLabel, days, window, row, sold, 
                     valueFormatter={(value) => formatCount(value)}
                     tickSpacing={{ spacing: 120, max: 4 }}
                     totalLabel="Всего"
+                    unfinished={hourUnfinished}
                     height={180}
                   />
                 </section>

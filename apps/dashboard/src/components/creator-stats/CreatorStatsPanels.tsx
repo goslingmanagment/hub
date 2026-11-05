@@ -17,20 +17,20 @@ import { buildRevenueTransactionsRoute } from "@/lib/overviewNavigation";
 import { DayChart } from "./DayChart.js";
 import { ChartBody, KpiDelta, StatsCard, StatsEmpty, StripHeading, formatSignedCount } from "./StatsCard.js";
 import {
-  DAY_MS,
   HOUR_IN_PROGRESS_NOTE,
   HOUR_MS,
   IN_PROGRESS_NOTE,
   averageWatch,
   barRows,
-  bucketInProgress,
   changePercent,
   coveredFrom,
+  dayUnfinished,
   formatStatsDay,
   formatStatsHour,
   formatWatchTime,
   forYouShare,
   headline,
+  hourUnfinished,
   pivotDays,
   seriesTotal,
   sourceColor,
@@ -58,10 +58,8 @@ function withTotals(series: readonly ChartSeries[], rows: readonly DayPoint[], u
   });
 }
 
-const dayNote = (row: Record<string, unknown>) =>
-  typeof row.bucketStart === "string" && bucketInProgress(row.bucketStart, DAY_MS) ? IN_PROGRESS_NOTE : null;
-const hourNote = (row: Record<string, unknown>) =>
-  typeof row.bucketStart === "string" && bucketInProgress(row.bucketStart, HOUR_MS) ? HOUR_IN_PROGRESS_NOTE : null;
+const dayNote = (row: Record<string, unknown>) => (dayUnfinished(row) ? IN_PROGRESS_NOTE : null);
+const hourNote = (row: Record<string, unknown>) => (hourUnfinished(row) ? HOUR_IN_PROGRESS_NOTE : null);
 
 /** The table twin of a chart by day: the date, every series, and the sum where it means something. */
 function dayColumns(series: readonly ChartSeries[], unit: Unit, options: { total?: string | null; hours?: boolean; abs?: boolean } = {}): ChartTableColumn<DayPoint>[] {
@@ -106,6 +104,7 @@ function PartsBars({ rows, series, unit = "count", totalLabel = "Всего", ho
       tickSpacing={hours ? { spacing: 120, max: 7 } : { spacing: 80, max: 7 }}
       totalLabel={totalLabel}
       note={hours ? hourNote : dayNote}
+      unfinished={hours ? hourUnfinished : dayUnfinished}
       height={height}
     />
   );
@@ -416,6 +415,7 @@ export function FollowersPanel({ stats, pageLabel, periodText }: { stats: Creato
               tickSpacing={{ spacing: 80, max: 7 }}
               totalLabel={null}
               note={followNote}
+              unfinished={dayUnfinished}
               height={260}
             />
             <div className="stats-chart-table">
