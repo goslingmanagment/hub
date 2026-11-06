@@ -17,8 +17,12 @@ export interface EarningsWindowWalk {
 }
 
 export function startEarningsWindow(afterMs: number, beforeMs: number): EarningsWindowWalk {
-  // Ask from midnight, not an intraday instant: Fansly returns whole business-
-  // day buckets even when the caller's lower timestamp falls inside that day.
+  // Ask from UTC midnight, never an intraday instant: Fansly sums a day's
+  // bucket over only the part of that day inside the window, so a lower bound
+  // inside a day serves the day TRUNCATED, and as the newer look it would win
+  // the day's head (the walks before 2026-09-18 left such rows on prod). The
+  // split seams below are midnights too; only the open day at `beforeMs` is
+  // partial, and the next capture replaces it.
   const window = { afterMs: Math.floor(afterMs / DAY_MS) * DAY_MS, beforeMs };
   return { ...window, pending: [window], hasRows: false };
 }
