@@ -482,6 +482,9 @@ export const OFAPI_DELIVERY_HISTORY_CATCH_UP_LAG_MS = 30 * 60_000;
 const HISTORY_CATCH_UP_PAGES = 5;
 
 export async function sweepOfapiWebhookDeliveryHistory(app: AppContext) {
+  // OFAPI switched off on purpose (no key, so no client, as since 2026-11-01):
+  // there is no history to read, so a minutely "could not advance" is not news.
+  if (!app.ofapi) return;
   try {
   const policy = await getWebhookCollectionPolicy(app.db);
   if (!policy.history_enabled) return;

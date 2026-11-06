@@ -40,6 +40,15 @@ describe("redactSensitiveText", () => {
     expect(redacted).toContain("[REDACTED]");
   });
 
+  it("keeps Hub's own ofapi_ names while still redacting OFAPI keys", () => {
+    // An incident text once read "Golden-signal [REDACTED] p95 …".
+    expect(redactSensitiveText("Golden-signal ofapi_delivery_history_age p95 over threshold"))
+      .toBe("Golden-signal ofapi_delivery_history_age p95 over threshold");
+    for (const key of ["ofapi_3f9a0c7d2b1e4f5a6b7c", "OFAPI_AbCdEfGhIjKl", "ofapi_abcdefghij1", "ofapi_abc_def-ghij"]) {
+      expect(redactSensitiveText(`key ${key} end`)).toBe("key [REDACTED] end");
+    }
+  });
+
   it("preserves ordinary non-secret text", () => {
     const text = "The token budget is 1200 and the proxy check completed normally.";
     expect(redactSensitiveText(text)).toBe(text);

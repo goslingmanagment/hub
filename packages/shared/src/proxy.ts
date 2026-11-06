@@ -8,7 +8,10 @@ const SECRET_TOKEN_PATTERNS: ReadonlyArray<readonly [RegExp, string]> = [
   [/\bsk-or-[A-Za-z0-9_-]{8,}/g, "[REDACTED]"],
   [/\bsk_[A-Za-z0-9_-]{16,}/g, "[REDACTED]"],
   [/\bsk-[A-Za-z0-9_-]{20,}/g, "[REDACTED]"],
-  [/\bofapi_[A-Za-z0-9_-]{8,}/gi, "[REDACTED]"],
+  // A tail of only lowercase letters and underscores is one of Hub's own names
+  // (a metric, an operation, an incident kind), not a key: a random key carries
+  // digits or capitals. The prefix stays case-insensitive.
+  [/\b[oO][fF][aA][pP][iI]_(?![a-z_]+(?![A-Za-z0-9_-]))[A-Za-z0-9_-]{8,}/g, "[REDACTED]"],
   [/\bagency_hub_core_[A-Za-z0-9_-]{6,}/gi, "[REDACTED]"],
   [/\b\d{6,12}:[A-Za-z0-9_-]{20,}\b/g, "[REDACTED]"],
   [/\bBearer\s+[A-Za-z0-9._~+/=-]{8,}/gi, "Bearer [REDACTED]"],
