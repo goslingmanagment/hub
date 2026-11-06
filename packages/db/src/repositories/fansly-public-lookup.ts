@@ -416,7 +416,6 @@ function demandSql(input: { recheckBefore: Date }) {
         from demand d
         join fans f on f.id = d.fan_id
        where f.platform = 'fansly'
-         and f.platform_user_id ~ ${FANSLY_ID}
          and (
            d.priority = 0
            or f.public_checked_at is null
@@ -428,6 +427,11 @@ function demandSql(input: { recheckBefore: Date }) {
            due.demands, f.public_checked_at as "publicCheckedAt", due.priority, due.since
       from due
       join fans f on f.id = due.fan_id
+     -- The digits check is here, on the grouped candidates, not in due: there
+     -- the planner hash-joins every Fansly fan, so the regex ran on all ~47k
+     -- of them (~300 ms a poll, prod 2026-11-06). It is a property of the fan
+     -- alone, so dropping a fan before or after grouping keeps the same rows.
+     where f.platform_user_id ~ ${FANSLY_ID}
   `;
 }
 
