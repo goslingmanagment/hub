@@ -1581,13 +1581,16 @@ const VAULT_MEDIA = `
     on va.page_id = vm.page_id and va.vault_kind = vm.vault_kind and va.album_ref = vm.album_ref
   left join creator_raw_media rm on rm.page_id = vm.page_id and rm.media_ref = vm.media_ref
   -- seen_media_refs is a toasted array of up to ~100 KB per album: count it once
-  -- per scan row here, not once per member row above the join. "offset 0" keeps
-  -- the planner from flattening the subquery and doing exactly that again.
+  -- per scan row, not once per member row above the join. A plain subquery gets
+  -- flattened, and "offset 0" only stops that: a nested loop still re-runs it per
+  -- member row. The materialized CTE counts once per statement for any join plan.
   left join (
-    select s.page_id, s.vault_kind, s.album_ref, s.walk_ref, s.completed_at, s.updated_at,
-           cardinality(s.seen_media_refs) as seen_media_count
-      from creator_vault_album_scans s
-    offset 0
+    with s as materialized (
+      select s.page_id, s.vault_kind, s.album_ref, s.walk_ref, s.completed_at, s.updated_at,
+             cardinality(s.seen_media_refs) as seen_media_count
+        from creator_vault_album_scans s
+    )
+    select * from s
   ) scan
     on scan.page_id = vm.page_id and scan.vault_kind = vm.vault_kind and scan.album_ref = vm.album_ref
   union all
