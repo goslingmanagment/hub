@@ -96,7 +96,11 @@ export async function listKnownPendingTransactionIds(
  * Distinct chats in which an own message of the page became visible within
  * the last `windowMs` (the overlay, design §6.2 broadcast fallback; served by
  * `dm_live_messages_first_visible`). Inside the post-ack hook the frame's own
- * overlay rows are already written, so they count.
+ * overlay rows are already written, so they count: their first_visible_at is
+ * an earlier statement's clock_timestamp(), never after this statement's
+ * start. The bound is the stable `statement_timestamp()` because a volatile
+ * clock_timestamp() cannot be an index range: the page's whole overlay was
+ * read instead.
  */
 export async function countRecentOwnLiveChats(
   db: Database,
@@ -107,7 +111,7 @@ export async function countRecentOwnLiveChats(
       from dm_live_messages
      where page_id = ${input.pageId}
        and is_sent_by_page
-       and first_visible_at > clock_timestamp() - ${input.windowMs}::double precision * interval '1 millisecond'
+       and first_visible_at > statement_timestamp() - ${input.windowMs}::double precision * interval '1 millisecond'
   `);
   return Number(result.rows[0]?.n ?? 0);
 }
