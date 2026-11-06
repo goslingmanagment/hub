@@ -1,6 +1,7 @@
 import type { StatsCoverageResponse } from "@agency_hub_core/contracts";
 import { ChevronDown } from "lucide-react";
-import { useStatsCoverage } from "@/api/insights";
+import { useState } from "react";
+import { useStatsCoverage, useStatsHoldings } from "@/api/insights";
 import { captureProofWords, captureStatusWords, planeLabel, projectionLabel } from "@/components/analytics/analytics-words";
 import { coverageSummary, engineStreamBadge } from "./coverageWords.js";
 import { Disclosure } from "@/components/ui/Disclosure";
@@ -59,8 +60,13 @@ export function CoverageBlock({ pageLabel, pageId }: { pageLabel: string; pageId
     .replace("Сбор данных Fansly не ведёт эту страницу — новые данные не поступают.", "Сбор данных Fansly не ведёт эту страницу: новые данные не поступают.")
     .replace("на паузе, удержаны или требуют внимания", "на паузе, ждут или требуют внимания");
   const data = state.status === "ready" ? state.data : null;
+  // «Хранится в Hub» counts every table of the page (seconds): asked only while the fold is open.
+  const [open, setOpen] = useState(false);
+  const holdingsQuery = useStatsHoldings(pageLabel, { enabled: open });
+  const holdingsState = analyticsPanelState(holdingsQuery);
+  const holdings = holdingsState.status === "ready" ? holdingsState.data.holdings : null;
   return (
-    <details className="card sys-fold" data-coverage>
+    <details className="card sys-fold" data-coverage onToggle={(event) => setOpen(event.currentTarget.open)}>
       <summary className="sys-fold-summary">
         <span className="min-w-0 flex-1">
           <span className="card-title block">Полнота данных</span>
@@ -114,20 +120,29 @@ export function CoverageBlock({ pageLabel, pageId }: { pageLabel: string; pageId
 
             <div>
               <h3 className="sys-subtitle">Хранится в Hub</h3>
-              {data.holdings.filter((row) => row.rowCount > 0).length === 0 ? (
+              {holdings === null ? (
+                holdingsState.status === "error" ? (
+                  <div className="sys-pause-missing mt-2">
+                    <span>Сведения о хранимых данных не загрузились.</span>
+                    <button type="button" className="btn btn-sm" onClick={() => void holdingsQuery.refetch()}>Повторить</button>
+                  </div>
+                ) : (
+                  <div className="mt-3"><Skeleton width={360} /></div>
+                )
+              ) : holdings.filter((row) => row.rowCount > 0).length === 0 ? (
                 <p className="cell-second mt-2">Для этой страницы пока ничего не сохранено.</p>
               ) : (
                 <div className="sys-chips mt-3">
-                  {data.holdings.filter((row) => row.rowCount > 0).map((row) => (
+                  {holdings.filter((row) => row.rowCount > 0).map((row) => (
                     <span key={row.projection} className="badge">
                       {projectionLabel(row.projection)} · {formatCount(row.rowCount)}
                     </span>
                   ))}
                 </div>
               )}
-              {data.holdings.some((row) => row.rowCount === 0) && (
+              {holdings !== null && holdings.some((row) => row.rowCount === 0) && (
                 <p className="cell-second mt-3">
-                  Пока пусто: {data.holdings.filter((row) => row.rowCount === 0).map((row) => projectionLabel(row.projection)).join(", ")}.
+                  Пока пусто: {holdings.filter((row) => row.rowCount === 0).map((row) => projectionLabel(row.projection)).join(", ")}.
                   Ноль записей — это факт о Hub, а не о Fansly.
                 </p>
               )}

@@ -6482,6 +6482,13 @@ export const statsCoverageResponseSchema = z.object({
     ownerRunning: z.boolean(),
     streams: z.array(insightsEngineStreamSchema),
   }).nullable(),
+});
+
+/** Its own route, not a field of the coverage: counting every projection's rows
+ *  of a page reads hundreds of MB of tables (seconds), and the panel that shows
+ *  it opens on demand, while the coverage's summary line is always on screen. */
+export const statsHoldingsResponseSchema = z.object({
+  page: insightsPageSchema,
   /** What we actually hold, per projection: row count and the range it spans.
    *  A zero count next to an open floor is a real answer; a zero count with no
    *  coverage row is "never started" and reads that way. */
@@ -9453,6 +9460,18 @@ const baseRouteSchemas = {
       404: errorResponseSchema,
     },
   },
+  statsHoldings: {
+    auth: { kind: "owner-session", scope: "page" },
+    tags: ["insights"],
+    summary: "What Hub holds of one page, per projection: row count and the range it spans",
+    params: pageParamsSchema,
+    response: {
+      200: statsHoldingsResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+    },
+  },
   contentMedia: {
     auth: { kind: "owner-session", scope: "page" },
     tags: ["insights"],
@@ -9803,6 +9822,7 @@ export type StatsMediaResponse = z.infer<typeof statsMediaResponseSchema>;
 export type StatsTagsQuery = z.infer<typeof statsTagsQuerySchema>;
 export type StatsTagsResponse = z.infer<typeof statsTagsResponseSchema>;
 export type StatsCoverageResponse = z.infer<typeof statsCoverageResponseSchema>;
+export type StatsHoldingsResponse = z.infer<typeof statsHoldingsResponseSchema>;
 export type ContentMediaQuery = z.infer<typeof contentMediaQuerySchema>;
 export type ContentMediaResponse = z.infer<typeof contentMediaResponseSchema>;
 export type ContentCommentsQuery = z.infer<typeof contentCommentsQuerySchema>;

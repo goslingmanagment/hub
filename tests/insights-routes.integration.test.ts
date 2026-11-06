@@ -803,6 +803,7 @@ describe("WP-S1 serving routes: money", () => {
       `/api/v1/pages/${PAGE}/stats/media?from=${WINDOW_FROM}&to=${WINDOW_TO}`,
       `/api/v1/pages/${PAGE}/stats/tags?from=${WINDOW_FROM}&to=${WINDOW_TO}`,
       `/api/v1/pages/${PAGE}/stats/coverage`,
+      `/api/v1/pages/${PAGE}/stats/holdings`,
       `/api/v1/pages/${PAGE}/content/media`,
       `/api/v1/pages/${PAGE}/content/comments?from=${WINDOW_FROM}&to=${WINDOW_TO}`,
     ]) {
@@ -823,6 +824,7 @@ describe("WP-S1 serving routes: no delivery address leaves the kernel", () => {
       `/api/v1/pages/${PAGE}/stats/media?from=${WINDOW_FROM}&to=${WINDOW_TO}`,
       `/api/v1/pages/${PAGE}/stats/tags?from=${WINDOW_FROM}&to=${WINDOW_TO}`,
       `/api/v1/pages/${PAGE}/stats/coverage`,
+      `/api/v1/pages/${PAGE}/stats/holdings`,
       `/api/v1/pages/${PAGE}/content/media`,
       `/api/v1/pages/${PAGE}/content/comments?from=${WINDOW_FROM}&to=${WINDOW_TO}`,
       `/api/v1/pages/${PAGE}/money/revenue-mix?from=2026-08-01&to=2026-08-31`,

@@ -12,6 +12,7 @@ import {
   type MoneyPayoutsResponse,
   type MoneyRevenueMixResponse,
   type StatsCoverageResponse,
+  type StatsHoldingsResponse,
   type StatsMediaResponse,
   type StatsTagsResponse,
   type StatsTrafficResponse,
@@ -741,10 +742,9 @@ export function registerInsightsRoutes(server: ApiServer, ctx: ApiModuleContext)
   }, async (request): Promise<StatsCoverageResponse> => {
     const page = await resolveOwnerPage(request);
     const effective = await loadEffectiveConfig(appContext.db, appContext.config);
-    const [planes, engineFacts, holdings] = await Promise.all([
+    const [planes, engineFacts] = await Promise.all([
       listInsightsCoverage(appContext.db, { pageId: page.id }),
       readEngineStatusFacts(appContext.db, { pageIds: [page.id], settingMs: effective.fanslyDefaultDelayMs }),
-      listInsightsHoldings(appContext.db, { pageId: page.id }),
     ]);
     const facts = engineFacts.get(page.id);
 
@@ -792,6 +792,18 @@ export function registerInsightsRoutes(server: ApiServer, ctx: ApiModuleContext)
             };
           }),
         },
+    };
+  });
+
+  // Apart from the coverage: an exact count over every projection is seconds of
+  // reads, so only the open «Хранится в Hub» panel asks for it.
+  server.get("/api/v1/pages/:pageLabel/stats/holdings", {
+    schema: routeSchemas.statsHoldings,
+  }, async (request): Promise<StatsHoldingsResponse> => {
+    const page = await resolveOwnerPage(request);
+    const holdings = await listInsightsHoldings(appContext.db, { pageId: page.id });
+    return {
+      page: { label: page.label, platform: page.platform },
       holdings: holdings.map((row) => ({
         projection: row.projection,
         rowCount: row.rowCount,
