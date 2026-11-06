@@ -1731,6 +1731,21 @@ wait_for_sync_health() {
   return 1
 }
 
+# The bare code says little: with OFAPI off both OnlyFans pages stay degraded, so
+# every deploy reads 503 and a Fansly page broken by the deploy would look the
+# same. The summary names the degraded pages instead. Labels are reduced to
+# [A-Za-z0-9._-] so deploy.sh's "(status …)" parse holds; output is written only
+# at the end, so a body that cannot be read prints nothing.
+sync_health_degraded_suffix() {
+  node -e '
+    const body = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+    const labels = body.pages
+      .filter((page) => page.status === "degraded")
+      .map((page) => String(page.pageLabel).replace(/[^A-Za-z0-9._-]/g, "_"));
+    if (labels.length > 0) process.stdout.write(`; degraded: ${labels.join(", ")}`);
+  ' "$1"
+}
+
 verify_service_image_labels() {
   local service="$1"
   local service_escaped
@@ -2630,9 +2645,11 @@ wait "$send_guard_confirmation_pid" || true
 finish_phase service-health
 start_phase sync-health
 
+SYNC_STATUS_DETAIL=""
 if [[ -n "$SYNC_MONITORING_TOKEN" ]]; then
   log "Verifying sync health endpoint"
   wait_for_sync_health "$SYNC_FILE" || fail "Unexpected /api/v1/health/sync status: ${SYNC_STATUS_CODE}"
+  SYNC_STATUS_DETAIL="$(sync_health_degraded_suffix "$SYNC_FILE" 2>/dev/null || true)"
 else
   SYNC_STATUS_CODE="skipped"
   log "Skipping protected sync health verification because HEALTH_SYNC_MONITORING_TOKEN is not set"
@@ -2669,4 +2686,4 @@ wait "$local_cli_rebuild_pid" || true
 finish_phase local-cli
 log "Deployment verified successfully; elapsed_seconds=$((SECONDS - DEPLOY_STARTED_SECONDS))"
 log "API health: ${VERIFY_URL%/}/api/v1/health"
-log "Sync health: ${VERIFY_URL%/}/api/v1/health/sync (status ${SYNC_STATUS_CODE})"
+log "Sync health: ${VERIFY_URL%/}/api/v1/health/sync (status ${SYNC_STATUS_CODE}${SYNC_STATUS_DETAIL})"
