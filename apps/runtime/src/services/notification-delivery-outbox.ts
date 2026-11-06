@@ -10,6 +10,7 @@ import type { PgBoss, Queue } from "pg-boss";
 
 import type { AppContext } from "../bootstrap.ts";
 import {
+  CRON_SWEEP_WORK_OPTIONS,
   ensureQueueCreated,
   type QueueCreationClient,
   type SyncQueueLifecycleClient,
@@ -293,7 +294,7 @@ export function startNotificationDeliveryOutboxWorker(
   app: Pick<AppContext, "config" | "db" | "logger">,
   boss: Pick<PgBoss, "work">,
 ): Promise<string> {
-  return boss.work(NOTIFICATION_DELIVERY_OUTBOX_QUEUE, { batchSize: 1 }, async () => {
+  return boss.work(NOTIFICATION_DELIVERY_OUTBOX_QUEUE, CRON_SWEEP_WORK_OPTIONS, async () => {
     const result = await runNotificationDeliveryOutbox(app);
     if (result.stoppedOnFailure) {
       app.logger.warn(result, result.exhausted > 0

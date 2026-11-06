@@ -2,7 +2,7 @@ import { rebuildDmMessageDailyAggregates } from "@agency_hub_core/db";
 import type { PgBoss } from "pg-boss";
 
 import type { AppContext } from "../bootstrap.ts";
-import { ensureQueueCreated, type QueueCreationClient } from "./sync-queue.ts";
+import { CRON_SWEEP_WORK_OPTIONS, ensureQueueCreated, type QueueCreationClient } from "./sync-queue.ts";
 
 export const OFAPI_DM_ANALYTICS_REBUILD_QUEUE = "ofapi.dm-analytics.rebuild";
 export const OFAPI_DM_ANALYTICS_ROLLING_DAYS = 32;
@@ -53,7 +53,7 @@ export async function startOfapiDmAnalyticsWorker(
   app: AppContext,
   boss: Pick<PgBoss, "work">,
 ) {
-  await boss.work(OFAPI_DM_ANALYTICS_REBUILD_QUEUE, { batchSize: 1 }, async () => {
+  await boss.work(OFAPI_DM_ANALYTICS_REBUILD_QUEUE, CRON_SWEEP_WORK_OPTIONS, async () => {
     const result = await rebuildRecentDmAnalytics(app);
     app.logger.info({
       fromBusinessDate: result.fromBusinessDate,

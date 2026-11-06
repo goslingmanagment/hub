@@ -32,7 +32,7 @@ import {
   runOfapiTransactionsBackfill,
   type OfapiTransactionsBackfillPageResult,
 } from "./ofapi-transactions-backfill.ts";
-import { ensureQueueCreated, type QueueCreationClient } from "./sync-queue.ts";
+import { CRON_SWEEP_WORK_OPTIONS, ensureQueueCreated, type QueueCreationClient } from "./sync-queue.ts";
 
 export const OFAPI_PENDING_RECONCILE_QUEUE = "ofapi.pending.reconcile";
 
@@ -217,7 +217,7 @@ export async function startOfapiPendingReconcileWorker(
     ) => Promise<unknown>;
   },
 ) {
-  await boss.work(OFAPI_PENDING_RECONCILE_QUEUE, { batchSize: 1 }, async () => {
+  await boss.work(OFAPI_PENDING_RECONCILE_QUEUE, CRON_SWEEP_WORK_OPTIONS, async () => {
     await runOfapiPendingReconcile(app);
   });
 }

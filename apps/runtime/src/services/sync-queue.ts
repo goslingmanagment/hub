@@ -1,4 +1,4 @@
-import type { Db as PgBossDb, PgBoss, Queue } from "pg-boss";
+import type { Db as PgBossDb, PgBoss, Queue, WorkOptions } from "pg-boss";
 import { buildSyncPageExecuteGroupId, type Platform } from "@agency_hub_core/shared";
 
 import {
@@ -33,6 +33,18 @@ export const TELEGRAM_DAILY_REPORT_QUEUE = "telegram.daily-report";
 // retention-tiering: the scheduled tiering run, removed 2026-10-21 (it was off).
 export const RETIRED_SCHEDULES = ["projections.debt.sweep", "retention-tiering"] as const;
 export const RETIRED_QUEUES = ["projections.debt.sweep", "retention-tiering"] as const;
+
+// work() options of a queue only its cron fills, once a minute or rarer.
+// pg-boss polls every worker each 2 s by default: ~19 fetches a second on prod,
+// 97 % of them empty (2026-11-06). Cron itself sends a job up to ~57 s into its
+// minute, so a pickup within 15 s instead of 2 s changes nothing for a sweep.
+// The default stays for a queue something also sends on demand, and for one
+// whose handler reads the minute it starts in or answers a person (the ops
+// metrics sample, the publishing ticks).
+export const CRON_SWEEP_WORK_OPTIONS = {
+  batchSize: 1,
+  pollingIntervalSeconds: 15,
+} as const satisfies WorkOptions;
 
 export type SyncTriggerScope = "light" | "followers" | "all" | "data" | "messages" | "posts";
 

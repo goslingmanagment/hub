@@ -53,7 +53,7 @@ import {
   parseEpochMs,
   type OfapiWebhookEnvelope,
 } from "./ofapi-payloads.ts";
-import { ensureQueueCreated, type QueueCreationClient } from "./sync-queue.ts";
+import { CRON_SWEEP_WORK_OPTIONS, ensureQueueCreated, type QueueCreationClient } from "./sync-queue.ts";
 import { OFAPI_EPHEMERAL_EVENT_TYPES, finalizeOfapiWebhookRaw } from "./ofapi-webhook-capture.ts";
 import { runCanonicalization } from "./canonicalize-driver.ts";
 import { OFAPI_WEBHOOK_CANONICALIZED_KINDS } from "./canonicalize/ofapi-webhook.ts";
@@ -504,7 +504,7 @@ export async function startOfapiEventWorker(app: AppContext, boss: OfapiWorkerBo
       },
     );
 
-    await boss.work(OFAPI_EVENT_SWEEP_QUEUE, { batchSize: 1 }, async () => {
+    await boss.work(OFAPI_EVENT_SWEEP_QUEUE, CRON_SWEEP_WORK_OPTIONS, async () => {
       const requeued = await sweepPendingOfapiEvents(app, boss);
       if (requeued > 0) {
         app.logger.warn({ requeued }, "OFAPI event sweep re-enqueued pending webhook events");
@@ -548,7 +548,7 @@ export async function startOfapiEventWorker(app: AppContext, boss: OfapiWorkerBo
       await runOfapiCreditBurnMonitor(app);
     });
 
-    await boss.work(OFAPI_EVENT_CLEANUP_QUEUE, { batchSize: 1 }, async () => {
+    await boss.work(OFAPI_EVENT_CLEANUP_QUEUE, CRON_SWEEP_WORK_OPTIONS, async () => {
       // Expired media URLs older than 7 days lose the URL only; linkage stays.
       // Journal rows and the DM archive are never purged.
       await cleanupOfapiMediaLocators(app);

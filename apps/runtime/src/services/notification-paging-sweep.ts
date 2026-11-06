@@ -32,6 +32,7 @@ import {
   type NotificationPagingPolicy,
 } from "./notification-paging-policy.ts";
 import {
+  CRON_SWEEP_WORK_OPTIONS,
   ensureQueueCreated,
   type QueueCreationClient,
   type SyncQueueLifecycleClient,
@@ -520,7 +521,7 @@ export function startNotificationPagingSweepWorker(
   app: Pick<AppContext, "db" | "logger" | "pool">,
   boss: Pick<PgBoss, "work">,
 ): Promise<string> {
-  return boss.work(NOTIFICATION_PAGING_SWEEP_QUEUE, { batchSize: 1 }, async () => {
+  return boss.work(NOTIFICATION_PAGING_SWEEP_QUEUE, CRON_SWEEP_WORK_OPTIONS, async () => {
     const result = await runNotificationPagingSweepExclusive(app);
     if (result === null) {
       // The api watchdog's fallback holds this minute's pass.

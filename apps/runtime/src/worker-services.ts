@@ -144,6 +144,7 @@ import {
 import { startSyncPageExecutor } from "./services/sync/executor.ts";
 import { runSyncPlannerCycle } from "./services/sync/planner.ts";
 import {
+  CRON_SWEEP_WORK_OPTIONS,
   ensureSyncQueues,
   reconcileQueueRetention,
   RAW_PAYLOAD_CLEANUP_QUEUE,
@@ -285,9 +286,9 @@ export async function startWorkerServices(
   // Cron registration moved to the scheduler role (leader-elected;
   // services/schedules.ts) — workers only create queues and consume.
 
-  await boss.work(OFAPI_MEDIA_SWEEP_QUEUE, { batchSize: 1 }, async () => { await runOfapiMediaUploadSweep(app); });
-  await boss.work(OFAPI_TYPED_EXPORT_SWEEP_QUEUE, { batchSize: 1 }, async () => { await runOfapiTypedExportSweep(app); });
-  await boss.work(OFAPI_BINDING_RECONCILE_QUEUE, { batchSize: 1 }, async () => {
+  await boss.work(OFAPI_MEDIA_SWEEP_QUEUE, CRON_SWEEP_WORK_OPTIONS, async () => { await runOfapiMediaUploadSweep(app); });
+  await boss.work(OFAPI_TYPED_EXPORT_SWEEP_QUEUE, CRON_SWEEP_WORK_OPTIONS, async () => { await runOfapiTypedExportSweep(app); });
+  await boss.work(OFAPI_BINDING_RECONCILE_QUEUE, CRON_SWEEP_WORK_OPTIONS, async () => {
     // Custody continuity by creator identity. A silent run
     // (nothing seeded, rebound, attached or waiting) logs nothing.
     const result = await runOfapiBindingReconcile(app);
@@ -314,7 +315,7 @@ export async function startWorkerServices(
   // the owner's OnlyFans approvals to an ofapi capture job; it settles the
   // Fansly rows the Fansly Sync Engine served as history requests. It never
   // calls a vendor itself.
-  await boss.work(AGENT_HYDRATION_QUEUE, { batchSize: 1 }, async () => {
+  await boss.work(AGENT_HYDRATION_QUEUE, CRON_SWEEP_WORK_OPTIONS, async () => {
     const cycle = await runAgentHydrationCycle(app);
     if (
       cycle.dispatched > 0 || cycle.swept > 0 || cycle.expired > 0 || cycle.reconciled > 0
@@ -324,7 +325,7 @@ export async function startWorkerServices(
     }
   });
 
-  await boss.work(RAW_PAYLOAD_CLEANUP_QUEUE, { batchSize: 1 }, async () => {
+  await boss.work(RAW_PAYLOAD_CLEANUP_QUEUE, CRON_SWEEP_WORK_OPTIONS, async () => {
     // THIS HANDLER IS TIMED, SUBSTEP BY SUBSTEP, because it failed four
     // consecutive nights (2026-08-22..25) with `handler execution exceeded
     // 900s` and nothing in the log said WHICH of its five acts was the cost.
@@ -407,14 +408,14 @@ export async function startWorkerServices(
   // Chat Memory: once a day, a history request for each Fansly page's chats
   // where the fan wrote in the last day and the history is not proven full.
   await ensureChatHistoryTopUpQueue(boss, createdQueues);
-  await boss.work(CHAT_HISTORY_TOP_UP_QUEUE, { batchSize: 1 }, async () => {
+  await boss.work(CHAT_HISTORY_TOP_UP_QUEUE, CRON_SWEEP_WORK_OPTIONS, async () => {
     await runChatHistoryTopUp(app);
   });
 
   // Fan marks: every 10 minutes the FANSLY BLOCKLIST group, read-only, with
   // the agency's own Telegram account; off while TG_READER_SESSION is empty.
   await ensureFanslyBlocklistQueue(boss, createdQueues);
-  await boss.work(FANSLY_BLOCKLIST_QUEUE, { batchSize: 1 }, async () => {
+  await boss.work(FANSLY_BLOCKLIST_QUEUE, CRON_SWEEP_WORK_OPTIONS, async () => {
     try {
       await runFanslyBlocklistRead(app);
     } catch (error) {
@@ -428,20 +429,20 @@ export async function startWorkerServices(
   // pages, behind fanFactsEnabled (off by default) and its daily cap.
   await ensureFanFactsQueue(boss, createdQueues);
   const fanFactsClientFactory = resolveFanFactsClientFactory(app);
-  await boss.work(FAN_FACTS_QUEUE, { batchSize: 1 }, async () => {
+  await boss.work(FAN_FACTS_QUEUE, CRON_SWEEP_WORK_OPTIONS, async () => {
     await runFanFactsSweep(app, { clientFactory: fanFactsClientFactory });
   });
 
   // Anthropic's own reports (Admin API) for the reconciliation on the usage
   // screen: hourly, the last 8 UTC days; idle without ANTHROPIC_ADMIN_KEYS.
   await ensureAiProviderReportsQueue(boss, createdQueues);
-  await boss.work(AI_PROVIDER_REPORTS_QUEUE, { batchSize: 1 }, async () => {
+  await boss.work(AI_PROVIDER_REPORTS_QUEUE, CRON_SWEEP_WORK_OPTIONS, async () => {
     if ((app.config.anthropicAdminKeys ?? []).length === 0) return;
     const results = await syncAiProviderReports(app);
     app.logger.info({ orgs: results }, "Anthropic reports sync complete");
   });
 
-  await boss.work(PUBLICATION_FILES_RETENTION_QUEUE, { batchSize: 1 }, async () => {
+  await boss.work(PUBLICATION_FILES_RETENTION_QUEUE, CRON_SWEEP_WORK_OPTIONS, async () => {
     const summary = await runPublicationFileRetention(app);
     if (summary.deleted > 0 || summary.incomingRemoved > 0 || summary.failed > 0) {
       app.logger.info(summary, "Publication files retention pass complete");
@@ -449,32 +450,32 @@ export async function startWorkerServices(
   });
 
   // The agency site's questionnaire fillings left unsent: one notice each.
-  await boss.work(MODEL_APPLICATION_ABANDON_SWEEP_QUEUE, { batchSize: 1 }, async () => {
+  await boss.work(MODEL_APPLICATION_ABANDON_SWEEP_QUEUE, CRON_SWEEP_WORK_OPTIONS, async () => {
     const result = await runModelApplicationAbandonSweep(app);
     if (result.notified > 0) {
       app.logger.info(result, "Model questionnaire abandon sweep complete");
     }
   });
 
-  await boss.work(DB_DISK_USAGE_CHECK_QUEUE, { batchSize: 1 }, async () => {
+  await boss.work(DB_DISK_USAGE_CHECK_QUEUE, CRON_SWEEP_WORK_OPTIONS, async () => {
     const result = await runDbDiskUsageCheck(app);
     if (result) {
       app.logger.info(result, "Disk usage check complete");
     }
   });
 
-  await boss.work(OBSERVATIONS_PARTITIONS_QUEUE, { batchSize: 1 }, async () => {
+  await boss.work(OBSERVATIONS_PARTITIONS_QUEUE, CRON_SWEEP_WORK_OPTIONS, async () => {
     const result = await runObservationsPartitionCheck(app);
     app.logger.info(result, "Observations partition check complete");
   });
 
   // G5 slice 1: the CAS dual-write parity proof. Logs its own telemetry line
   // (and skips entirely when the canary is off), so nothing is logged here.
-  await boss.work(CAPTURE_PAYLOAD_PARITY_QUEUE, { batchSize: 1 }, async () => {
+  await boss.work(CAPTURE_PAYLOAD_PARITY_QUEUE, CRON_SWEEP_WORK_OPTIONS, async () => {
     await runCapturePayloadParityCheck(app);
   });
 
-  await boss.work(CANONICALIZE_SWEEP_QUEUE, { batchSize: 1 }, async () => {
+  await boss.work(CANONICALIZE_SWEEP_QUEUE, CRON_SWEEP_WORK_OPTIONS, async () => {
     const startedAt = Date.now();
     // W5.3 (B3): the minutely sweep is the ONLY caller that resumes from the
     // per-family cursor; CLI/replay runs stay cursor-free.
@@ -517,7 +518,7 @@ export async function startWorkerServices(
   // sweep's handler, which meant a sweep killed at the queue's expiration
   // never reached them at all. Same minutely cadence, its own job — the ONLY
   // thing they ever shared with the sweep was the tick.
-  await boss.work(DM_RECONCILE_SWEEP_QUEUE, { batchSize: 1 }, async () => {
+  await boss.work(DM_RECONCILE_SWEEP_QUEUE, CRON_SWEEP_WORK_OPTIONS, async () => {
     // PR4: the readthrough reconcile projector (it is NOT a canonicalizer
     // family — see ofapi-dm-readthrough).
     const readthrough = await runOfapiDmReadthroughReconcile(app);
@@ -536,7 +537,7 @@ export async function startWorkerServices(
     }
   });
 
-  await boss.work(MESSAGE_ARCHIVE_SWEEP_QUEUE, { batchSize: 1 }, async () => {
+  await boss.work(MESSAGE_ARCHIVE_SWEEP_QUEUE, CRON_SWEEP_WORK_OPTIONS, async () => {
     // WP-F1(0): table-driven. The registry is the list of projections, their
     // event types, their tables and their state class — six hand-written
     // try/catch blocks used to be that list, and a projector registered in
@@ -613,7 +614,7 @@ export async function startWorkerServices(
     }
   });
 
-  await boss.work(VOICE_NOTES_SWEEP_QUEUE, { batchSize: 1 }, async () => {
+  await boss.work(VOICE_NOTES_SWEEP_QUEUE, CRON_SWEEP_WORK_OPTIONS, async () => {
     // Minutely: reclaim abandoned queued + lease-expired dispatched voice-note
     // renders to indeterminate, refunding certainly-unbilled reservations.
     const result = await runVoiceNotesSweep(app);
@@ -625,10 +626,13 @@ export async function startWorkerServices(
   // Every 30 min: the ElevenLabs account behind voice notes (one free
   // subscription read; pages the owner on a rejected key, a lapsed plan or
   // characters running out). Logs its own counts-only line.
-  await boss.work(VOICE_PROVIDER_HEALTH_QUEUE, { batchSize: 1 }, async () => {
+  await boss.work(VOICE_PROVIDER_HEALTH_QUEUE, CRON_SWEEP_WORK_OPTIONS, async () => {
     await runVoiceProviderHealthCheck(app);
   });
 
+  // The three publishing ticks below keep pg-boss's 2 s poll: the owner waits
+  // on them (a post for now, "Обновить"), and the Fansly one times its follow
+  // loop by the minute it starts in.
   // Every minute: approved OnlyFans wall posts and stories go out through
   // OnlyFansAPI (docs/plans/2026-10-23-wall-posts, PR 4b). Sends nothing while
   // publishingEnabled or publishingOnlyfansEnabled is off; counts only in the log.
@@ -683,7 +687,7 @@ export async function startWorkerServices(
     }
   });
 
-  await boss.work(AI_MEDIA_DESCRIBE_SWEEP_QUEUE, { batchSize: 1 }, async () => {
+  await boss.work(AI_MEDIA_DESCRIBE_SWEEP_QUEUE, CRON_SWEEP_WORK_OPTIONS, async () => {
     // Minutely AI media describer (docs/runbooks/ai-media-describe.md). Ids,
     // statuses and counts only — never a URL or a description in the log.
     const result = await runAiMediaDescribeSweepJob(app);
@@ -718,7 +722,7 @@ export async function startWorkerServices(
   await startOfapiDmAnalyticsWorker(app, boss);
   await startOfapiCollectionWorker(app, boss, ofapiCollectionHandlers);
 
-  await boss.work(TELEGRAM_DAILY_REPORT_QUEUE, { batchSize: 1 }, async () => {
+  await boss.work(TELEGRAM_DAILY_REPORT_QUEUE, CRON_SWEEP_WORK_OPTIONS, async () => {
     const now = new Date();
 
     const settings = await getTelegramSettings(app.db, {

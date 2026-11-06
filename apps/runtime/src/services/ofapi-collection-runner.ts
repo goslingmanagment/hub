@@ -1,7 +1,7 @@
 import { runCanonicalization } from "./canonicalize-driver.ts";
 import { projectOfapiReadSnapshotObservation } from "./projections/ofapi-read-snapshots.ts";
 import { sql } from "drizzle-orm";
-import { ensureQueueCreated, type QueueCreationClient } from "./sync-queue.ts";
+import { CRON_SWEEP_WORK_OPTIONS, ensureQueueCreated, type QueueCreationClient } from "./sync-queue.ts";
 import {
   checkOfapiCollectionLease,
   checkpointOfapiCollectionJob,
@@ -489,7 +489,7 @@ export async function startOfapiCollectionWorker(
         await runOfapiCollectionJob(app, job.data.jobId, handlers);
     },
   );
-  await boss.work(OFAPI_COLLECTION_SWEEP_QUEUE, { batchSize: 1 }, async () => {
+  await boss.work(OFAPI_COLLECTION_SWEEP_QUEUE, CRON_SWEEP_WORK_OPTIONS, async () => {
     await sweepOfapiMarketingMinute(app);
     await sweepOfapiCollections(app, boss, handlers);
   });

@@ -575,6 +575,8 @@ export function startGoldenSignalWorker(
   app: Pick<AppContext, "db" | "config" | "logger">,
   boss: Pick<PgBoss, "work">,
 ): Promise<string> {
+  // pg-boss's 2 s poll, not the cron sweeps' 15 s: syncMetricsDue reads the
+  // minute the job starts in, and a late pickup would cross into the next one.
   return boss.work(OPS_METRICS_SAMPLE_QUEUE, { batchSize: 1 }, async () => {
     const result = await runGoldenSignalSample(app, { syncEngine: syncMetricsDue(new Date()) });
     if (result.breaches.length > 0) {

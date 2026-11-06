@@ -34,6 +34,7 @@ import {
   resolveOfapiGlobalIncident,
 } from "./notification-incidents.ts";
 import {
+  CRON_SWEEP_WORK_OPTIONS,
   ensureQueueCreated,
   type QueueCreationClient,
   type SyncQueueLifecycleClient,
@@ -620,7 +621,7 @@ export async function startOfapiChargebacksWorker(
     ) => Promise<unknown>;
   },
 ) {
-  await boss.work(OFAPI_CHARGEBACKS_RECONCILE_QUEUE, { batchSize: 1 }, async () => {
+  await boss.work(OFAPI_CHARGEBACKS_RECONCILE_QUEUE, CRON_SWEEP_WORK_OPTIONS, async () => {
     const result = await runOfapiChargebacksReconcile(app);
     const failed = result.pages.filter((page) => page.status === "failed");
     if (failed.length > 0) {
