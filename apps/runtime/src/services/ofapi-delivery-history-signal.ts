@@ -11,13 +11,15 @@ export const OFAPI_DELIVERY_HISTORY_AGE_THRESHOLD_MS = 45 * 60_000;
 
 /** Gauge samples for the golden-signal sampler, `null` when the probe itself
  * failed (a blind spot the sampler latches like a breach). While collection is
- * off or no webhook is registered there is no coverage to age: the gauge reads
- * a neutral 0, so a latch opened before switching collection off resolves
- * instead of staying open with no series behind it. */
+ * off, no webhook is registered or OFAPI itself is switched off (no key, so no
+ * client) there is no coverage to age: the gauge reads a neutral 0, so a latch
+ * opened before switching collection off resolves instead of staying open with
+ * no series behind it. */
 export async function sampleOfapiDeliveryHistoryAge(
-  app: Pick<AppContext, "db">,
+  app: Pick<AppContext, "db" | "ofapi">,
   now = Date.now(),
 ): Promise<OpsMetricSampleInput[] | null> {
+  if (!app.ofapi) return gaugeSample(OFAPI_DELIVERY_HISTORY_AGE_METRIC, 0);
   try {
     const coverage = await getWebhookDeliveryHistoryCoverage(app.db);
     const valueMs = coverage ? Math.max(0, now - coverage.since.getTime()) : 0;

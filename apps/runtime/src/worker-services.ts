@@ -290,6 +290,9 @@ export async function startWorkerServices(
   await boss.work(OFAPI_BINDING_RECONCILE_QUEUE, { batchSize: 1 }, async () => {
     // Custody continuity by creator identity. A silent run
     // (nothing seeded, rebound, attached or waiting) logs nothing.
+    // OFAPI switched off on purpose (no key, so no client): there is no roster
+    // to reconcile against, so the "client_unavailable" skip is not a warning.
+    if (!app.ofapi) return;
     const result = await runOfapiBindingReconcile(app);
     if (result.skipped !== null) {
       if (result.skipped !== "disabled") app.logger.warn({ skipped: result.skipped }, "OFAPI binding reconcile skipped");

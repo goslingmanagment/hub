@@ -179,7 +179,7 @@ export interface GoldenSignalsComputation {
 /** Compute the five signals over the trailing window. No-traffic metrics
  * emit no rows (absence is visible on the endpoint as a stale series). */
 export async function computeGoldenSignals(
-  app: Pick<AppContext, "db">,
+  app: Pick<AppContext, "db" | "ofapi">,
 ): Promise<GoldenSignalsComputation> {
   const windowSql = sql`now() - make_interval(mins => ${SAMPLE_WINDOW_MINUTES})`;
 
@@ -400,7 +400,7 @@ export function resetGoldenSignalPruneTick() {
  *   successor series of the same family measures a superset of the old
  *   backlog, so it carries the breach from here on. */
 export async function runGoldenSignalSample(
-  app: Pick<AppContext, "db" | "config" | "logger">,
+  app: Pick<AppContext, "db" | "config" | "logger" | "ofapi">,
   /** `syncEngine`: also record the Fansly Sync Engine's families (the worker
    *  passes it every `SYNC_METRICS_SAMPLE_EVERY_MINUTES`). */
   options: { syncEngine?: boolean } = {},
@@ -572,7 +572,7 @@ export async function getGoldenSignalsReport(
 }
 
 export function startGoldenSignalWorker(
-  app: Pick<AppContext, "db" | "config" | "logger">,
+  app: Pick<AppContext, "db" | "config" | "logger" | "ofapi">,
   boss: Pick<PgBoss, "work">,
 ): Promise<string> {
   return boss.work(OPS_METRICS_SAMPLE_QUEUE, { batchSize: 1 }, async () => {
