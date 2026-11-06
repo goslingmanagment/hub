@@ -554,23 +554,31 @@ export async function captureAttempt(db: Database, input: CaptureAttemptInput): 
          and not shadow
          and outcome in ('admitted', 'sent')
       returning id, sent_at, admitted_at, granted_at, released_at, operation
+    ), recent as materialized (
+      -- The page's attempts admitted within the lookback. MATERIALIZED keeps
+      -- the sent_at conditions of known out of this scan: the planner cannot
+      -- see att.sent_at, and given "sent_at <= att.sent_at" it walks
+      -- sync_attempts_page_sent from the page's first send, i.e. the page's
+      -- whole journal on every capture (0.1-0.5 s each on prod, 2026-11).
+      select a.sent_at, a.origin, a.request, a.operation
+        from sync_attempts a, att
+       where a.page_id = ${input.pageId}
+         and not a.shadow
+         and a.id <> att.id
+         and a.admitted_at >= att.sent_at - ${PACE_GAP_LOOKBACK_MS}::double precision * interval '1 millisecond'
     ), known as (
       -- The previous send as this attempt's release could know it: the
       -- site's own observed sends that left after its release (plan-b Б12,
       -- accepted; before 0290, or not reported: after its grant, else its
       -- admission) are never this send's predecessor, nor is an upload's
       -- part: a PUT to S3, outside the pause (owner 2026-11-03).
-      select max(a.sent_at) as sent_at
-        from sync_attempts a, att
-       where a.page_id = ${input.pageId}
-         and not a.shadow
-         and a.id <> att.id
-         and a.admitted_at >= att.sent_at - ${PACE_GAP_LOOKBACK_MS}::double precision * interval '1 millisecond'
-         and a.sent_at is not null
-         and a.sent_at <= att.sent_at
-         and a.operation <> ${FANSLY_STORAGE_OPERATION}
-         and not (a.origin = 'site' and coalesce((a.request->>'observed')::boolean, false)
-                  and a.sent_at > coalesce(att.released_at, att.granted_at, att.admitted_at))
+      select max(r.sent_at) as sent_at
+        from recent r, att
+       where r.sent_at is not null
+         and r.sent_at <= att.sent_at
+         and r.operation <> ${FANSLY_STORAGE_OPERATION}
+         and not (r.origin = 'site' and coalesce((r.request->>'observed')::boolean, false)
+                  and r.sent_at > coalesce(att.released_at, att.granted_at, att.admitted_at))
     ), page as (
       update sync_pages sp
          set last_send_at = greatest(coalesce(sp.last_send_at, '-infinity'::timestamptz), att.sent_at),
@@ -930,7 +938,11 @@ export async function paceFloorFromDb(
                    from sync_attempts a
                   where a.page_id = sp.page_id
                     and not a.shadow
-                    and a.admitted_at > clock_timestamp()
+                    -- statement_timestamp(), not clock_timestamp(): only a
+                    -- stable bound makes an index range (a volatile one reads
+                    -- the page's whole journal). It is earlier only by this
+                    -- statement's own run, so the window may only take more.
+                    and a.admitted_at > statement_timestamp()
                       - ${SYNC_FLOOR_LOOKBACK_MS}::double precision * interval '1 millisecond'
                     and a.outcome in ('admitted', 'sent', 'unknown')
                ), '-infinity'::timestamptz),
