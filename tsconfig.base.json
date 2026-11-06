@@ -15,8 +15,7 @@
       "@kernel/sdk": ["./packages/sdk/src/index.ts"],
       "@agency_hub_core/shared": ["./packages/shared/src/index.ts"],
       "@agency_hub_core/db": ["./packages/db/src/index.ts"],
-      "@agency_hub_core/fansly": ["./packages/fansly/src/index.ts"],
-      "@agency_hub_core/onlyfans": ["./packages/onlyfans/src/index.ts"]
+      "@agency_hub_core/fansly": ["./packages/fansly/src/index.ts"]
     },
     "resolveJsonModule": true,
     "allowSyntheticDefaultImports": true,
