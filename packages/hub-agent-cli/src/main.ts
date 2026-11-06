@@ -14,6 +14,7 @@ import {
   type HubOptionValues,
   type HubRunDeps,
 } from "./commands.ts";
+import { hubCheckedClient, hubOptionHelp } from "./contract.ts";
 import {
   HUB_CREDENTIALS_PATH,
   HUB_DEFAULT_BASE_URL,
@@ -121,12 +122,7 @@ function usageDocument(
           ...(command.arguments === undefined
             ? {}
             : { arguments: `${command.arguments.name}: ${command.arguments.describe} (bare words after the command; -- before one that starts with -)` }),
-          options: Object.fromEntries(
-            Object.entries(command.options).map(([name, option]) => [
-              name,
-              `${option.kind}: ${option.describe}`,
-            ]),
-          ),
+          options: hubOptionHelp(command),
         }
         : {
           commands: Object.fromEntries(
@@ -345,7 +341,7 @@ export async function runHubCli(deps: HubCliDeps): Promise<HubCliResult> {
   };
   let data: unknown;
   try {
-    data = await command.run(client, values, runDeps, args);
+    data = await command.run(hubCheckedClient(client, command), values, runDeps, args);
   } catch (error) {
     if (error instanceof HubUsageError) {
       return {
