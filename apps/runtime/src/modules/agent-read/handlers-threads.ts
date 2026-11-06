@@ -240,6 +240,8 @@ export async function handleAgentPersonTimeline(
         listAgentTimeline(tx, {
           pageIds,
           fanId: identity.row!.fanId,
+          fanPlatform: identity.row!.platform,
+          fanPlatformUserId: identity.row!.platformUserId,
           from: new Date(from),
           to: new Date(to),
           lanes: lanesServed,
