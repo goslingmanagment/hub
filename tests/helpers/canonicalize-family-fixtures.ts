@@ -152,7 +152,8 @@ export function canonicalFamilyFixtures(): CanonicalFamilyFixture[] {
     {
       name: "fansly_ws:signals",
       lane: "signals",
-      expect: "drafts",
+      // Stamped with no events: the frame stays journaled, nothing reads hints.
+      expect: "empty",
       observation: {
         id: 9_500,
         source: "fansly_ws",

@@ -1,5 +1,5 @@
 import { OFAPI_CONTENT_KINDS, canonicalizeOfapiContentObservation } from "./ofapi-content-events.ts";
-import { canonicalizeFanslyWsObservation, canParseFanslyWsObservation } from "./fansly-ws.ts";
+import { canParseFanslyWsObservation } from "./fansly-ws.ts";
 import { FANSLY_WS_CAPTURE_KIND } from "@agency_hub_core/shared";
 import { canonicalizeOfapiReadObservation, canParseOfapiReadObservation } from "./ofapi-read-collections.ts";
 // Canonicalizer registry. The driver job and the parse_version
@@ -170,9 +170,15 @@ export type CanonicalizerFamily = CanonicalizerFamilyBase & (
 );
 
 export const CANONICALIZER_FAMILIES: readonly CanonicalizerFamily[] = [
+  // Registration + validation only — zero domain events. Nothing has read
+  // `fansly.ws_signal_observed` since step 4 (#441, #447): the live path and
+  // the recovery manifest decode the journaled frame itself. With no drafts
+  // the sweep only stamps the frame, so no event and no checkpoint per frame.
+  // A future reader registers canonicalizeFanslyWsObservation with a version
+  // bump, and the sweep replays the journaled frames.
   {
     source: "fansly_ws", lane: "signals", kinds: [FANSLY_WS_CAPTURE_KIND], version: 1,
-    canonicalize: canonicalizeFanslyWsObservation, canParse: canParseFanslyWsObservation,
+    canonicalize: () => [], canParse: canParseFanslyWsObservation,
     projectionOnly: true,
   },
   { source:"ofapi_capture", lane:"read_collections", kinds:["ofapi.collection_read_response.v1"], version:1, canonicalize:canonicalizeOfapiReadObservation, canParse:canParseOfapiReadObservation, projectionOnly:true },
