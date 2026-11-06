@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, isNotNull, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNotNull, isNull, sql } from "drizzle-orm";
 
 import {
   aiUsageFeatures,
@@ -379,10 +379,13 @@ export async function finalizeAiGatewayUsageEvent(
       ...(input.event.reasoningEffort !== undefined ? { reasoningEffort: input.event.reasoningEffort } : {}),
       ...(input.event.contextMessages !== undefined ? { contextMessages: input.event.contextMessages } : {}),
     })
-    .where(sql`
-      ${aiUsageEvents.userId} is not distinct from ${input.userId}
-      and ${aiUsageEvents.clientEventId} = ${input.event.clientEventId}
-    `)
+    // `= $id` / `is null` match the same rows as `is not distinct from $id`,
+    // but only these two reach both columns of the (user_id, client_event_id)
+    // unique index; `is not distinct from` walked the whole index.
+    .where(and(
+      input.userId === null ? isNull(aiUsageEvents.userId) : eq(aiUsageEvents.userId, input.userId),
+      eq(aiUsageEvents.clientEventId, input.event.clientEventId),
+    ))
     .returning({ id: aiUsageEvents.id });
 
   // The row id feeds the restricted-content FK; null = no such
