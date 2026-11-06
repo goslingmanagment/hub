@@ -12,11 +12,27 @@
 // partition the files: each file lands in exactly one shard. A file without a
 // recorded weight (a new test) gets the median weight and still runs. Inside
 // a shard the files start heaviest first (orderShardFiles).
+//
+// The unit parts (`pnpm test:unit --shard=k/2`) pack their files by the same
+// weights. Those list only the slow unit files, in seconds of worker time
+// (vitest's time for the file plus its share of the job's import time, not
+// divided by the 4 workers): a typical unit file then costs about the median
+// an unweighted one gets (1.3 s against 1.5 s, measured 2026-11-06), so the
+// weighted and the unweighted unit files are on one scale.
 
 export const SHARD_WEIGHTS_PATH = "tests/ci/shard-weights.json";
 export const SHARD_WEIGHTS_VERSION = 1;
 
 const TEST_FILE = /^tests\/[^\s]+\.test\.ts$/;
+
+// The files the integration shards run (package.json test:sync-critical:db):
+// the *.integration.test.ts files and these two.
+const INTEGRATION_SHARD_EXTRAS = new Set(["tests/schema-guard.test.ts", "tests/http-client.test.ts"]);
+
+/** Whether a weights key is an integration shard's file rather than a unit part's. */
+export function isIntegrationShardFile(file) {
+  return file.endsWith(".integration.test.ts") || INTEGRATION_SHARD_EXTRAS.has(file);
+}
 
 function positiveSeconds(value, what) {
   if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
@@ -60,9 +76,15 @@ function medianMs(values) {
   return sorted.length % 2 === 1 ? sorted[middle] : Math.round((sorted[middle - 1] + sorted[middle]) / 2);
 }
 
-/** The weight a file without a recorded duration gets: the median, in seconds. */
+/**
+ * The weight a file without a recorded duration gets: the median of the
+ * integration weights, in seconds. The unit weights are only the slow unit
+ * files, so counting them would raise it for every unweighted file.
+ */
 export function defaultShardWeight(weights) {
-  return medianMs(Object.values(weights.files).map(toMs)) / 1000;
+  const all = Object.entries(weights.files);
+  const integration = all.filter(([file]) => isIntegrationShardFile(file));
+  return medianMs((integration.length > 0 ? integration : all).map(([, seconds]) => toMs(seconds))) / 1000;
 }
 
 const byCodeUnit = (a, b) => (a < b ? -1 : a > b ? 1 : 0);

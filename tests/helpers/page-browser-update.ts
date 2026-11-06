@@ -265,6 +265,23 @@ export function op(call: Call): string | null {
   return null;
 }
 
+/** The page's browser container, as the fake docker holds it. */
+export const containerOf = (h: Host) => h.state().containers[`page-browser-${PAGE}`];
+
+// The window after an update (tests/page-browser-update-window-*.test.ts,
+// one file per group so that CI's unit shards can run them side by side) —
+// it judges the browser, never the engine's service of the page. `sync check
+// live-hour` (the engine's first-hour acceptance) failed all six of lilly-1's
+// windows and rolled a healthy browser back twice — 2026-10-17 07:48 onto
+// Chrome .39, the one that crashed, for five hours: it runs at the window's
+// end for the record only. What fails the window: a stop of the browser in it
+// (by the operator's own record of every transition), an alarm of the
+// browser's, another account or session than before the update, and Hub's
+// requests through it refused as unlike the site's or held past their bound —
+// a page can stay ready with them so.
+export const updateWithWindow = (h: Host, env: Record<string, string> = {}) =>
+  h.run(["update", "--page", PAGE, "--image", TO, "--any-hour", "--window", "2s"], { env });
+
 export function writeExecutable(file: string, text: string): void {
   writeFileSync(file, text);
   chmodSync(file, 0o755);

@@ -19,14 +19,15 @@
 // tests" step shard 1 runs afterwards.
 //
 // Files the given runs did not measure keep their earlier weight while they
-// still exist; deleted files drop out. The summary on stderr shows the
-// predicted per-shard seconds for 3 and 6 shards.
+// still exist; deleted files drop out. So do the unit parts' weights (see
+// ci-shard-plan.mjs), which these logs never measure. The summary on stderr
+// shows the predicted integration seconds per shard for 3 and 6 shards.
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { SHARD_WEIGHTS_PATH, SHARD_WEIGHTS_VERSION, parseShardWeights, planWeightedShards, validateShardWeights } from "./ci-shard-plan.mjs";
+import { SHARD_WEIGHTS_PATH, SHARD_WEIGHTS_VERSION, isIntegrationShardFile, parseShardWeights, planWeightedShards, validateShardWeights } from "./ci-shard-plan.mjs";
 
 const DB_STEP = "##[group]Run pnpm test:sync-critical:db";
 const API_STEP = "##[group]Run pnpm test:sync-critical:api";
@@ -177,8 +178,9 @@ function main(argv) {
   const previous = existsSync(weightsFile) ? parseShardWeights(readFileSync(weightsFile, "utf8")) : undefined;
   const weights = buildShardWeights(texts.map(parseJobLog), previous, file => existsSync(path.join(root, file)));
   const all = Object.keys(weights.files);
+  const integration = all.filter(isIntegrationShardFile);
   for (const count of [3, 6]) {
-    const plan = planWeightedShards(all, weights, count);
+    const plan = planWeightedShards(integration, weights, count);
     console.error(`${count} shards: ${plan.seconds.map(value => `${Math.round(value)}s`).join(" ")} (shard 1 includes ${weights.firstShardExtraSeconds}s API)`);
   }
   if (write) {

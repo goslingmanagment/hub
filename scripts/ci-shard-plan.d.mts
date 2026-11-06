@@ -2,6 +2,7 @@ export type ShardWeights = { version: number; firstShardExtraSeconds: number; fi
 export type WeightedShardPlan = { shards: string[][]; seconds: number[]; unweighted: string[] };
 export const SHARD_WEIGHTS_PATH: string;
 export const SHARD_WEIGHTS_VERSION: number;
+export function isIntegrationShardFile(file: string): boolean;
 export function validateShardWeights(document: unknown): ShardWeights;
 export function parseShardWeights(text: string): ShardWeights;
 export function defaultShardWeight(weights: ShardWeights): number;
