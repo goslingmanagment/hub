@@ -308,18 +308,30 @@ export async function readAgentJournalFloor(
     };
   }
 
-  const clauses: SQL[] = [sql`o.account_id in ${pageIdList(scope.pageIds)}`];
-  if (scope.platform !== undefined) {
-    clauses.push(sql`o.platform = ${scope.platform}`);
-  }
-  if (scope.pageLabel !== undefined) {
-    clauses.push(sql`p.label = ${scope.pageLabel}`);
-  }
+  // One minimum PER PAGE, so each is the first entry of that page's
+  // (account_id, received_at) index. A single min() over `account_id in (…)`
+  // with `pages` joined in cannot use it and walked every row the page ever
+  // journaled (the largest page: ~968k rows, 6 s cold, past the 5 s timeout).
+  // The least of the per-page minimums is the same value; `pageLabel` keeps
+  // only the granted page that carries it, exactly as `p.label = …` did.
+  const platformFilter = scope.platform === undefined
+    ? sql``
+    : sql`and o.platform = ${scope.platform}`;
+  const pageLabelFilter = scope.pageLabel === undefined
+    ? sql``
+    : sql`where exists (
+        select 1 from pages p where p.id = scoped.account_id and p.label = ${scope.pageLabel}
+      )`;
   const floor = await db.execute<{ first_received_at: Date | null }>(sql`
-    select min(o.received_at) as first_received_at
-    from observations o
-    left join pages p on p.id = o.account_id
-    where ${sql.join(clauses, sql` and `)}
+    select min(page_floor.first_received_at) as first_received_at
+    from unnest(${sql.param([...scope.pageIds])}::bigint[]) as scoped(account_id)
+    cross join lateral (
+      select min(o.received_at) as first_received_at
+      from observations o
+      where o.account_id = scoped.account_id
+        ${platformFilter}
+    ) page_floor
+    ${pageLabelFilter}
   `);
 
   return {
@@ -641,8 +653,9 @@ export async function loadAgentPersonIdentityExtras(
   input: { pageIds: readonly number[]; fanId: number },
 ): Promise<{ data: AgentPersonIdentityExtras; witnesses: PlaneReadWitness[] }> {
   const pages = pageIdList(input.pageIds);
-  const [aliases, flags, memberships] = await Promise.all([
-    db.execute<Record<string, unknown>>(sql`
+  // In turn, not Promise.all: `db` is the caller's transaction, one connection.
+  const [aliases, flags, memberships] = [
+    await db.execute<Record<string, unknown>>(sql`
       select 'username'::text as kind, u.username as value, u.first_seen_at, u.last_seen_at
       from fan_username_aliases u where u.fan_id = ${input.fanId}
       union all
@@ -652,7 +665,7 @@ export async function loadAgentPersonIdentityExtras(
       order by 4 desc nulls last
       limit 200
     `),
-    db.execute<Record<string, unknown>>(sql`
+    await db.execute<Record<string, unknown>>(sql`
       select p.label, fg.flag::text as flag, fg.created_at
       from fan_flags fg
       cross join lateral (
@@ -665,7 +678,7 @@ export async function loadAgentPersonIdentityExtras(
       order by fg.created_at desc
       limit 100
     `),
-    db.execute<Record<string, unknown>>(sql`
+    await db.execute<Record<string, unknown>>(sql`
       select p.label, p.platform::text as platform, pf.is_follower, pf.follower_since,
              pf.is_subscriber, pf.subscriber_since, pf.subscription_expires_at,
              pf.auto_renew, pf.auto_renew_off_detected_at,
@@ -676,7 +689,7 @@ export async function loadAgentPersonIdentityExtras(
       where pf.fan_id = ${input.fanId} and pf.platform_account_id in ${pages}
       order by p.label asc
     `),
-  ]);
+  ];
 
   return {
     data: {
@@ -756,8 +769,9 @@ export async function loadAgentPersonMoney(
   input: { pageIds: readonly number[]; fanId: number },
 ): Promise<{ data: AgentPersonMoney; witnesses: PlaneReadWitness[] }> {
   const pages = pageIdList(input.pageIds);
-  const [lifetime, byType] = await Promise.all([
-    db.execute<Record<string, unknown>>(sql`
+  // In turn, not Promise.all: `db` is the caller's transaction, one connection.
+  const [lifetime, byType] = [
+    await db.execute<Record<string, unknown>>(sql`
       select coalesce(sum(tr.gross_amount_mills), 0)::text as gross_mills,
              coalesce(sum(tr.creator_net_amount_mills), 0)::text as net_mills,
              count(*)::text as transaction_count,
@@ -766,7 +780,7 @@ export async function loadAgentPersonMoney(
       from transactions tr
       where tr.fan_id = ${input.fanId} and tr.platform_account_id in ${pages} and tr.is_active
     `),
-    db.execute<Record<string, unknown>>(sql`
+    await db.execute<Record<string, unknown>>(sql`
       select tr.canonical_type::text as transaction_type,
              tr.transaction_state::text as transaction_state,
              coalesce(sum(tr.gross_amount_mills), 0)::text as gross_mills,
@@ -777,7 +791,7 @@ export async function loadAgentPersonMoney(
       group by 1, 2
       order by 1, 2
     `),
-  ]);
+  ];
   const row = lifetime.rows[0];
   return {
     data: {
@@ -923,8 +937,9 @@ export async function loadAgentPersonCrm(
   input: { pageIds: readonly number[]; fanId: number },
 ): Promise<{ data: AgentPersonCrm; witnesses: PlaneReadWitness[] }> {
   const pages = pageIdList(input.pageIds);
-  const [notes, summaries] = await Promise.all([
-    db.execute<Record<string, unknown>>(sql`
+  // In turn, not Promise.all: `db` is the caller's transaction, one connection.
+  const [notes, summaries] = [
+    await db.execute<Record<string, unknown>>(sql`
       select p.label, 'internal:' || n.id::text as note_ref, 'internal'::text as origin,
              n.body as note_text, n.created_at, n.created_at as updated_at
       from fan_notes n
@@ -940,7 +955,7 @@ export async function loadAgentPersonCrm(
       order by 5 desc nulls last
       limit 200
     `),
-    db.execute<Record<string, unknown>>(sql`
+    await db.execute<Record<string, unknown>>(sql`
       select p.label, 'summary:' || s.id::text as summary_ref, s.body as summary_text, s.created_at
       from fan_summaries s
       join pages p on p.id = s.platform_account_id
@@ -948,7 +963,7 @@ export async function loadAgentPersonCrm(
       order by s.created_at desc
       limit 200
     `),
-  ]);
+  ];
   return {
     data: {
       notes: notes.rows.map((row) => ({
@@ -1749,34 +1764,41 @@ export async function listAgentCoverageScopes(
     clauses.push(sql`t.platform_conversation_id = ${input.conversationRef}`);
   }
 
+  // The page of threads is picked FIRST and the floors are computed for those
+  // rows only: the sort key does not depend on them. Computed in `keyed`, the
+  // lateral ran for every thread of the page before the limit (the largest
+  // page: 8,832 threads, ~320k buffers, 7 s cold for 5 rows).
   const result = await db.execute<Record<string, unknown>>(sql`
     with keyed as (
       select t.platform_account_id, p.label, p.platform::text as platform,
              t.platform_conversation_id,
              coalesce(f.platform_user_id, t.partner_platform_user_id) as fan_platform_user_id,
              t.last_message_sync_at, h.quarantine_until, t.stored_message_count,
-             floor.observed_row_floor, floor.archive_floor,
              ${renderText(sql`p.label`)} as k_sort,
              t.platform_conversation_id as k_key
       from page_dm_threads t
       join pages p on p.id = t.platform_account_id
       left join page_dm_message_sync_health h on h.conversation_id = t.id
       left join fans f on f.id = t.fan_id
-      left join lateral (
-        select min(ma.occurred_at) filter (
-                 where ma.occurred_at >= ${input.from} and ma.occurred_at < ${input.to}
-               ) as observed_row_floor,
-               min(ma.occurred_at) as archive_floor
-        from message_archive ma
-        where ma.account_id = t.platform_account_id
-          and ma.conversation_ref = t.platform_conversation_id
-      ) floor on true
       where ${sql.join(clauses, sql` and `)}
+    ), picked as (
+      select * from keyed
+      where ${keysetPredicate("asc", input.after)}
+      ${keysetOrderBy("asc")}
+      limit ${input.limit}
     )
-    select * from keyed
-    where ${keysetPredicate("asc", input.after)}
+    select picked.*, floor.observed_row_floor, floor.archive_floor
+    from picked
+    left join lateral (
+      select min(ma.occurred_at) filter (
+               where ma.occurred_at >= ${input.from} and ma.occurred_at < ${input.to}
+             ) as observed_row_floor,
+             min(ma.occurred_at) as archive_floor
+      from message_archive ma
+      where ma.account_id = picked.platform_account_id
+        and ma.conversation_ref = picked.platform_conversation_id
+    ) floor on true
     ${keysetOrderBy("asc")}
-    limit ${input.limit}
   `);
 
   return {
