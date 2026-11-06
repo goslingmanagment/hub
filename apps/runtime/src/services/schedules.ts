@@ -25,7 +25,6 @@ import { ensureOfapiLinkStatsQueue, ensureOfapiLinkStatsSchedule } from "./ofapi
 import { ensureOfapiCommandQueues, ensureOfapiCommandSchedules } from "./ofapi-command-executor.ts";
 import { ensureOfapiPendingReconcileQueue, ensureOfapiPendingReconcileSchedule } from "./ofapi-pending-reconcile.ts";
 import { ensureOfapiCreditQueues, ensureOfapiCreditSchedules } from "./ofapi-credits.ts";
-import { ensureOfapiDmAnalyticsQueues, ensureOfapiDmAnalyticsSchedules } from "./ofapi-dm-analytics.ts";
 import { ensureOfapiQueues, ensureOfapiSchedules } from "./ofapi-events.ts";
 import { ensureMessageArchiveQueues, ensureMessageArchiveSchedule } from "./projections/message-archive.ts";
 import { ensureVoiceNotesSweepQueue, ensureVoiceNotesSweepSchedule } from "./voice-notes-sweep.ts";
@@ -81,7 +80,6 @@ export async function registerAllSchedules(
   await ensureOfapiLinkStatsQueue(boss, createdQueues);
   await ensureOfapiPendingReconcileQueue(boss, createdQueues);
   await ensureOfapiCommandQueues(boss, createdQueues);
-  await ensureOfapiDmAnalyticsQueues(boss, createdQueues);
   await ensureOfapiTypedExportQueue(boss, createdQueues);
   await ensureOfapiMediaQueue(boss, createdQueues);
   await ensureOfapiBindingReconcileQueue(boss, createdQueues);
@@ -129,7 +127,6 @@ export async function registerAllSchedules(
     ensureOfapiLinkStatsSchedule(boss),
     ensureOfapiPendingReconcileSchedule(boss),
     ensureOfapiCommandSchedules(boss),
-    ensureOfapiDmAnalyticsSchedules(boss),
     ensureOfapiTypedExportSchedule(boss),
     ensureOfapiMediaSchedule(boss),
     ensureOfapiBindingReconcileSchedule(boss),

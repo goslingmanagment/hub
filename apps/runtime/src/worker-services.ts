@@ -128,10 +128,6 @@ import {
   startOfapiCommandWorker,
 } from "./services/ofapi-command-executor.ts";
 import {
-  ensureOfapiDmAnalyticsQueues,
-  startOfapiDmAnalyticsWorker,
-} from "./services/ofapi-dm-analytics.ts";
-import {
   ensureOfapiQueues,
   startOfapiEventWorker,
 } from "./services/ofapi-events.ts";
@@ -258,7 +254,6 @@ export async function startWorkerServices(
   await ensureOfapiLinkStatsQueue(boss, createdQueues);
   await ensureOfapiPendingReconcileQueue(boss, createdQueues);
   await ensureOfapiCommandQueues(boss, createdQueues);
-  await ensureOfapiDmAnalyticsQueues(boss, createdQueues);
   await ensureOfapiTypedExportQueue(boss, createdQueues);
   await ensureOfapiMediaQueue(boss, createdQueues);
   await ensureOfapiBindingReconcileQueue(boss, createdQueues);
@@ -722,7 +717,6 @@ export async function startWorkerServices(
   await startOfapiLinkStatsWorker(app, boss);
   await startOfapiPendingReconcileWorker(app, boss);
   await startOfapiCommandWorker(app, boss);
-  await startOfapiDmAnalyticsWorker(app, boss);
   await startOfapiCollectionWorker(app, boss, ofapiCollectionHandlers);
 
   await boss.work(TELEGRAM_DAILY_REPORT_QUEUE, CRON_SWEEP_WORK_OPTIONS, async () => {
