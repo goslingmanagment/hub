@@ -1,0 +1,181 @@
+import type { KernelOperationResponse, ShiftReviewChat, ShiftReviewMessage } from "@agency_hub_core/contracts";
+
+import { demoError, intBetween, pick, queryNumber, queryString, rng, type DemoReply, type DemoRequest } from "../core.ts";
+import { demoFans, demoPage } from "../world.ts";
+import { MIN, teamWorld, type DemoShift } from "./team-world.ts";
+
+/**
+ * Команда → «Разбор смены» in the demo: one shift of the simulated team, opened
+ * up. Its chats are invented around the shift's real numbers (pages, minutes,
+ * pauses, messages), with a share of texts from the AI, some copied past the
+ * button, waits that grow when the chatter slows down, and a pause or two.
+ */
+
+type Response = KernelOperationResponse<"teamShiftReview">;
+
+const FAN_LINES = [
+  "hey beautiful", "how was your day?", "what are you up to rn", "you look amazing in that last pic", "i just got home from work",
+  "do you have anything new?", "how much for the video?", "lol you're so cute", "i was thinking about you", "send me something special",
+  "are you real?", "good morning babe", "what are you wearing", "i'm bored, entertain me", "that's hot", "maybe later, payday is friday",
+] as const;
+const OWN_LINES = [
+  "hiii how was it", "omg haha", "just got out of the shower", "aww thank u", "what do u want to see", "im so bored too",
+  "u always make me smile", "tell me more", "haha stop", "i was waiting for u",
+] as const;
+const AI_LINES = [
+  "aww that's so sweet of you, honestly you just made my whole day brighter ♡ what are you up to tonight?",
+  "mmm i love that you're thinking about me... i just finished something i think you'd really enjoy, want a peek?",
+  "haha you're trouble, i like it :3 tell me what kind of things you're into and i'll see what i can do",
+  "i get it, no rush at all ♡ it'll be right here waiting for you whenever you feel like it",
+  "you're too sweet, seriously. i'm just chilling in bed scrolling, kinda wishing someone fun would keep me company",
+] as const;
+const FIX_PAIRS = [
+  ["скажи что я только проснулась и думала о нём", "just woke up and you were the first thing on my mind hehe"],
+  ["спроси откуда он", "where are you from btw? :3"],
+  ["ответь что видео дома и я его скину позже", "the video is at home rn, i'll send it to you a bit later ok?"],
+] as const;
+
+function reviewOf(shift: DemoShift, now: number): Response {
+  const random = rng(`review:${shift.user.id}:${shift.startedAt}`);
+  const start = shift.startedAt;
+  const end = shift.ongoing ? now : shift.endedAt;
+  const minutes = Math.max(1, Math.round((end - start) / MIN));
+  const inPause = (at: number) => shift.pauses.some((pause) => at >= pause.from && at < pause.to);
+  // A slow hour in the middle: the chatter writes less and the fans wait longer.
+  const slowFrom = start + Math.round(minutes * 0.55) * MIN;
+  const slowTo = slowFrom + 50 * MIN;
+
+  const chats: ShiftReviewChat[] = [];
+  const waits: Response["waits"] = [];
+  const pages = shift.pages.filter((page) => page.messages > 0);
+  for (const page of pages) {
+    const platform = demoPage(page.pageLabel)?.platform ?? "fansly";
+    const fans = demoFans(page.pageLabel);
+    const chatCount = Math.min(fans.length, Math.max(3, Math.round(page.messages / 4)));
+    let left = page.messages;
+    for (let index = 0; index < chatCount && left > 0; index += 1) {
+      const fan = fans[(index * 7) % fans.length]!;
+      const key = `${page.pageLabel}:${fan.platformUserId}`;
+      const mineCount = index === chatCount - 1 ? left : Math.min(left, intBetween(random, 1, 8));
+      left -= mineCount;
+      const messages: ShiftReviewMessage[] = [];
+      let at = start + intBetween(random, 0, Math.max(1, minutes - 40)) * MIN;
+      for (let before = 0; before < 3; before += 1) {
+        messages.push(fanMessage(`${key}:b${before}`, start - (3 - before) * 47 * MIN, pick(random, FAN_LINES), false));
+      }
+      for (let turn = 0; turn < mineCount && at < end; turn += 1) {
+        while (inPause(at)) at += 5 * MIN;
+        const fanAt = at;
+        messages.push(fanMessage(`${key}:f${turn}`, fanAt, pick(random, FAN_LINES), true));
+        const slow = fanAt >= slowFrom && fanAt < slowTo;
+        const delay = Math.round((slow ? intBetween(random, 8, 35) : intBetween(random, 0, 6)) * MIN + intBetween(random, 10, 59) * 1000);
+        const replyAt = Math.min(end, fanAt + delay);
+        if (replyAt >= end) {
+          waits.push({ chat: key, since: new Date(fanAt).toISOString(), from: new Date(fanAt).toISOString(), to: new Date(end).toISOString(), by: null });
+          break;
+        }
+        waits.push({ chat: key, since: new Date(fanAt).toISOString(), from: new Date(fanAt).toISOString(), to: new Date(replyAt).toISOString(), by: "me" });
+        messages.push(myMessage(random, `${key}:m${turn}`, replyAt, Math.round((replyAt - fanAt) / 1000)));
+        at = replyAt + intBetween(random, 2, 25) * MIN;
+      }
+      chats.push({
+        key,
+        pageLabel: page.pageLabel,
+        platform,
+        conversationRef: fan.platformUserId,
+        fanRef: fan.platformUserId,
+        fanUsername: fan.username,
+        fanDisplayName: fan.displayName,
+        fanLifetimeNetMills: Math.round(fan.totalSpent * 1000),
+        shiftNetMills: 0,
+        earlierHidden: intBetween(random, 0, 40),
+        messages,
+      });
+    }
+  }
+  // The same template to several fans.
+  const template = "heyy just got back, did you miss me? ♡";
+  let repeated = 0;
+  for (const chat of chats) {
+    const mine = chat.messages.find((message) => message.mine !== null);
+    if (mine && repeated < 4 && random() < 0.3) {
+      mine.text = template;
+      repeated += 1;
+    }
+  }
+  for (const chat of chats) {
+    for (const message of chat.messages) if (message.mine !== null && message.text === template) message.mine.repeats = repeated - 1;
+  }
+  chats.sort((a, b) => Date.parse(a.messages.find((m) => m.inShift)?.at ?? "") - Date.parse(b.messages.find((m) => m.inShift)?.at ?? ""));
+
+  const activity: Response["activity"] = [];
+  for (let minute = 0; minute < minutes; minute += 1) {
+    const at = start + minute * MIN;
+    if (inPause(at)) continue;
+    activity.push({ at: new Date(at).toISOString(), input: !(at >= slowFrom && at < slowTo) || random() < 0.4 });
+  }
+
+  const others = teamWorld(new Date(now)).shifts.filter((one) => one.user.id === shift.user.id).sort((a, b) => a.startedAt - b.startedAt);
+  const position = others.findIndex((one) => one.startedAt === shift.startedAt);
+  return {
+    shift: {
+      userId: shift.user.id,
+      username: shift.user.username,
+      kind: "shift",
+      startedAt: new Date(start).toISOString(),
+      endedAt: new Date(end).toISOString(),
+      ongoing: shift.ongoing,
+      workedMinutes: shift.workedMinutes,
+      pauses: shift.pauses.map((pause) => ({ from: new Date(pause.from).toISOString(), to: new Date(pause.to).toISOString() })),
+      pages: pages.map((page) => ({ pageLabel: page.pageLabel, platform: demoPage(page.pageLabel)?.platform ?? "fansly" })),
+    },
+    previousAt: position > 0 ? new Date(others[position - 1]!.startedAt).toISOString() : null,
+    nextAt: position >= 0 && position < others.length - 1 ? new Date(others[position + 1]!.startedAt).toISOString() : null,
+    activity,
+    chats,
+    waits: waits.sort((a, b) => Date.parse(a.from) - Date.parse(b.from)),
+    unarchived: 0,
+    serverNow: new Date(now).toISOString(),
+  };
+}
+
+function fanMessage(ref: string, at: number, text: string, inShift: boolean): ShiftReviewMessage {
+  return { ref, at: new Date(at).toISOString(), side: "fan", text, priceMills: null, bought: null, tipMills: null, media: 0, inShift, by: null, byName: null, mass: false, mine: null };
+}
+
+function myMessage(random: () => number, ref: string, at: number, replySeconds: number): ShiftReviewMessage {
+  const roll = random();
+  let text: string;
+  let mine: NonNullable<ShiftReviewMessage["mine"]>;
+  const base = { replySeconds, repeats: 0, marks: [] as NonNullable<ShiftReviewMessage["mine"]>["marks"] };
+  if (roll < 0.3) {
+    text = pick(random, AI_LINES);
+    mine = { ...base, composedWith: "reply", edited: false, origin: "ai", aiShare: 1, aiFeature: "fast-reply", aiText: text, draft: null };
+  } else if (roll < 0.45) {
+    text = pick(random, AI_LINES);
+    mine = { ...base, composedWith: "hand", edited: null, origin: "ai", aiShare: 0.92, aiFeature: "coach-chat", aiText: `${text} (or tease him a little first)`, draft: null };
+  } else if (roll < 0.7) {
+    const [draft, polished] = pick(random, FIX_PAIRS);
+    text = polished;
+    mine = { ...base, composedWith: "fix", edited: false, origin: "fix", aiShare: 1, aiFeature: "improve-draft", aiText: polished, draft };
+  } else {
+    text = pick(random, OWN_LINES);
+    mine = { ...base, composedWith: "hand", edited: null, origin: "own", aiShare: null, aiFeature: null, aiText: null, draft: null };
+  }
+  const priced = random() < 0.06;
+  return {
+    ref, at: new Date(at).toISOString(), side: "page", text,
+    priceMills: priced ? intBetween(random, 8, 25) * 1000 : null, bought: priced ? random() < 0.4 : null,
+    tipMills: null, media: priced ? 1 : 0, inShift: true, by: "me", byName: null, mass: false, mine,
+  };
+}
+
+export function teamShiftReview(request: DemoRequest): Response | DemoReply {
+  if (request.role !== "owner") return demoError(403, "Forbidden", "Разбор смены — только для владельца.");
+  const userId = queryNumber(request, "userId", Number.NaN);
+  const at = Date.parse(queryString(request, "at") ?? "");
+  if (!Number.isInteger(userId) || Number.isNaN(at)) return demoError(400, "Bad Request", "userId и at обязательны.");
+  const shift = teamWorld(request.now).shifts.find((one) => one.user.id === userId && one.startedAt <= at && at <= (one.ongoing ? request.now.getTime() : one.endedAt));
+  if (!shift) return demoError(404, "Not Found", "В это время у этого человека не было смены.");
+  return reviewOf(shift, request.now.getTime());
+}

@@ -421,6 +421,7 @@ export const kernelOperations = {
   teamShiftDisputes: { method: "GET", path: "/api/v1/team/shift-reports/disputes" },
   teamShiftExport: { method: "GET", path: "/api/v1/team/shift-reports/export" },
   teamShiftResolve: { method: "POST", path: "/api/v1/team/shift-reports/disputes/:saleRef" },
+  teamShiftReview: { method: "GET", path: "/api/v1/team/shift-review" },
   teamShiftSales: { method: "GET", path: "/api/v1/team/shift-sales" },
   teamShifts: { method: "GET", path: "/api/v1/team/shifts" },
   teamWinBackApproachSave: { method: "POST", path: "/api/v1/team/win-back/approaches" },

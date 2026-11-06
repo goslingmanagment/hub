@@ -59,6 +59,8 @@ export * from "./routes-ops-live.ts";
 export * from "./routes-ai-accounts.ts";
 export * from "./routes-ai-spend.ts";
 export * from "./routes-ai-openers.ts";
+// Команда → «Разбор смены» (`GET /api/v1/team/shift-review`), spread by routes.ts.
+export * from "./routes-shift-review.ts";
 
 export * from "./ofapi-extended-commands.ts";
 export * from "./routes-ofapi-banned-words.ts";

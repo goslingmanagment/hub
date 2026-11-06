@@ -240,3 +240,19 @@ export function useTeamChatterStats(params: TeamChatterStatsParams) {
     },
   });
 }
+
+/**
+ * Команда → «Разбор смены»: one shift opened up (`teamShiftReview`, the owner
+ * only). A finished shift does not change; one going on is read again every
+ * two minutes.
+ */
+export function useTeamShiftReview(params: { userId: number; at: string } | null) {
+  return useQuery(queryOptions({
+    queryKey: ["team-shift-review", params] as const,
+    queryFn: () => kernel.teamShiftReview({ query: params! }),
+    meta: { suppressGlobalError: true },
+    enabled: params !== null,
+    staleTime: 60_000,
+    refetchInterval: (query) => (query.state.data?.shift.ongoing ? 120_000 : false),
+  }));
+}

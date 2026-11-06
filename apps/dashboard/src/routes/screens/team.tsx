@@ -8,6 +8,7 @@ import { named, Owner } from "./shared.js";
 
 const ClientHeldSendsPage = named(() => import("@/pages/ClientHeldSendsPage"), "ClientHeldSendsPage");
 const TeamShiftsPage = named(() => import("@/pages/team/TeamShiftsPage"), "TeamShiftsPage");
+const ShiftReviewPage = named(() => import("@/pages/team/review/ShiftReviewPage"), "ShiftReviewPage");
 const TeamCoveragePage = named(() => import("@/pages/team/TeamCoveragePage"), "TeamCoveragePage");
 const ChattersPage = named(() => import("@/pages/team/ChattersPage"), "ChattersPage");
 const ChatterPage = named(() => import("@/pages/team/ChatterPage"), "ChatterPage");
@@ -35,6 +36,8 @@ export function teamRoutes() {
       <Route path="team/win-back" element={<TeamWinBackPage />} />
       <Route path="team/customs" element={<TeamCustomsPage />} />
       <Route element={<Owner />}>
+        {/* One shift opened up: it carries the AI's own texts. */}
+        <Route path="team/review" element={<ShiftReviewPage />} />
         {/* One frame over the list and the card: it holds the only copy of a fresh link. */}
         <Route element={<PeopleLayout />}>
           <Route path="team/people" element={<PeoplePage />} />

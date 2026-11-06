@@ -286,6 +286,12 @@ export const SCREENS: readonly Screen[] = [
     keywords: "команда смены кто работал заработок продажи графики неделя на смене без автора",
   },
   {
+    id: "team-review", path: "/team/review", label: "Разбор смены", title: "Разбор смены", section: "team", ownerOnly: true,
+    why: "Как шла смена по минутам, с кем и о чём чаттер писал, откуда взят текст.",
+    pageFilter: "none",
+    keywords: "аудит контроль чаттера переписка диалоги темп скорость ответа нейрослоп ии текст пульс",
+  },
+  {
     id: "team-coverage", path: "/team/coverage", label: "Кто ждал", title: "Кто ждал", section: "team",
     why: "Когда фаны писали, а никого не было; кого не поприветствовали.",
     pageFilter: "any", platforms: REPORTED,
@@ -698,7 +704,7 @@ export const SECTIONS: readonly Section[] = [
   {
     id: "team", label: "Команда", title: "Команда", icon: "Users", nav: "tabs",
     tabs: [
-      tab("shifts", "Смены", "team-shifts", "team-coverage", "team-held-sends"),
+      tab("shifts", "Смены", "team-shifts", "team-review", "team-coverage", "team-held-sends"),
       tab("chatters", "Чаттеры", "team-chatters", "team-chatter"),
       tab("payouts", "Выплаты", "team-payouts"),
       tab("sales", "Продажи", "team-sales", "team-win-back", "team-customs"),
