@@ -11,6 +11,7 @@ import {
   getAiMediaDescribeDay,
   getFirstAiMediaDescriptionLink,
   getNotificationIncidentByKey,
+  hasWaitingAiMediaDescription,
   incrementAiMediaDescribeRefusals,
   insertAiGenerationContent,
   isFanslyPageEngineOwned,
@@ -77,6 +78,8 @@ export const AI_MEDIA_DESCRIBE_FRESH_MS = 15 * 60 * 1000;
 export const AI_MEDIA_AWAITING_SOURCE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const MAX_TRANSIENT_ATTEMPTS = 4;
 const TRANSIENT_RETRY_MS = 10 * 60 * 1000;
+/** The row error code of a credit refusal by every account. */
+const CREDIT_WAIT_ERROR_CODE: Extract<MediaDescribeOutcome, { kind: "account_unavailable" }>["errorCode"] = "provider_billing";
 
 /** What a platform source adapter can say about one claimed row. */
 export type AiMediaSourceResolution =
@@ -112,7 +115,7 @@ export interface AiMediaDescribeDeps {
 }
 
 export interface AiMediaDescribeSweepResult extends Record<string, unknown> {
-  skipped?: "disabled" | "no_pages" | "no_client" | "account_stopped";
+  skipped?: "disabled" | "no_pages" | "no_client" | "account_stopped" | "account_unavailable";
   /** Rows whose claim was taken over by another worker before a settle. */
   leaseLost?: number;
   claimed: number;
@@ -274,6 +277,12 @@ export async function runAiMediaDescribeSweep(
   }
   if (await isAccountStopped(app)) {
     return { ...result, skipped: "account_stopped" };
+  }
+  // Out of credit everywhere: one row probes per retry interval for the whole
+  // lane, not one download and one refused send per due row (the seconds loop
+  // would otherwise walk the whole backlog every interval).
+  if (await hasWaitingAiMediaDescription(app.db, { errorCode: CREDIT_WAIT_ERROR_CODE, now: startedAt })) {
+    return { ...result, skipped: "account_unavailable" };
   }
   await resolveRetiredIncidents(app, startedAt);
 
@@ -745,7 +754,8 @@ async function processRow(
     }
     case "retryable":
     case "failed":
-    case "account_stop": {
+    case "account_stop":
+    case "account_unavailable": {
       // Proven not processed: nothing billed, the reservation goes back.
       const usageEventId = await settleLedger({
         outcome: "failed",
@@ -777,6 +787,16 @@ async function processRow(
           nextAttemptAt: new Date(completedAt.getTime() + TRANSIENT_RETRY_MS),
         });
         return { status: "account_stop", sent: true, stop: true };
+      }
+      if (outcome.kind === "account_unavailable") {
+        // Nothing is wrong with the file: it waits for a top-up or renewal,
+        // and the lane waits with it (the check at the top of the sweep).
+        await finish("pending", {
+          errorCode: outcome.errorCode,
+          usageEventId,
+          nextAttemptAt: new Date(completedAt.getTime() + TRANSIENT_RETRY_MS),
+        });
+        return { status: "account_unavailable", sent: true, stop: true };
       }
       // Plan §6: at most 2 retries, all inside describeMedia; an exhausted
       // transient failure is final (nothing was processed or billed).
