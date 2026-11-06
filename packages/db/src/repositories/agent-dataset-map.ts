@@ -1554,7 +1554,7 @@ const VAULT_MEDIA = `
          va.title             as f_album_title,
          scan.completed_at    as f_last_full_walk_at,
          scan.walk_ref        as f_full_walk_ref,
-         cardinality(scan.seen_media_refs) as f_full_walk_observed_count,
+         scan.seen_media_count as f_full_walk_observed_count,
          vm.custom_filename   as f_custom_filename,
          rm.filename          as f_filename,
          rm.mime_type         as f_mime_type,
@@ -1580,7 +1580,18 @@ const VAULT_MEDIA = `
   left join creator_vault_albums va
     on va.page_id = vm.page_id and va.vault_kind = vm.vault_kind and va.album_ref = vm.album_ref
   left join creator_raw_media rm on rm.page_id = vm.page_id and rm.media_ref = vm.media_ref
-  left join creator_vault_album_scans scan
+  -- seen_media_refs is a toasted array of up to ~100 KB per album: count it once
+  -- per scan row, not once per member row above the join. A plain subquery gets
+  -- flattened, and "offset 0" only stops that: a nested loop still re-runs it per
+  -- member row. The materialized CTE counts once per statement for any join plan.
+  left join (
+    with s as materialized (
+      select s.page_id, s.vault_kind, s.album_ref, s.walk_ref, s.completed_at, s.updated_at,
+             cardinality(s.seen_media_refs) as seen_media_count
+        from creator_vault_album_scans s
+    )
+    select * from s
+  ) scan
     on scan.page_id = vm.page_id and scan.vault_kind = vm.vault_kind and scan.album_ref = vm.album_ref
   union all
   select c.page_id            as k_page_id,
