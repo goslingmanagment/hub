@@ -1,5 +1,5 @@
 import { useState, type CSSProperties, type ReactNode } from "react";
-import { useLocation, useNavigate, useSearchParams } from "react-router";
+import { Link, useLocation, useNavigate, useSearchParams } from "react-router";
 import {
   CHATTER_SHIFT_MIN_MESSAGES,
   CHATTER_SHIFT_MIN_WORKED_MINUTES,
@@ -8,6 +8,7 @@ import {
   type KernelOperationResponse,
   type TeamShift,
 } from "@agency_hub_core/contracts";
+import { useAuthMe } from "@/api/queries";
 import { useTeamShiftSales } from "@/api/team";
 import { ChartTable } from "@/components/charts/ChartTable";
 import { usdAxisFormatter } from "@/components/charts/format";
@@ -451,6 +452,8 @@ function OnShiftNow({ shifts }: { shifts: readonly MoneyShift[] }) {
 /** Д: every shift, the newest first, with its money. */
 function AllShifts({ shifts }: { shifts: readonly MoneyShift[] }) {
   const [all, setAll] = useState(false);
+  const { data: me } = useAuthMe();
+  const owner = me?.user.role === "owner";
   const shown = all ? shifts : shifts.slice(0, SHIFTS_AT_FIRST);
   return (
     <section className="card" aria-labelledby="shifts-all">
@@ -477,6 +480,7 @@ function AllShifts({ shifts }: { shifts: readonly MoneyShift[] }) {
                   <td>
                     <span className="whitespace-nowrap">{shiftSpan(shift)}</span>
                     {shift.ongoing && <span className="team-sub"><StatusBadge status={TEAM_STATUS.onShift} bare /></span>}
+                    {owner && <span className="team-sub"><Link to={`/team/review?${new URLSearchParams({ user: String(shift.userId), at: shift.startedAt }).toString()}`} className="link">Разбор смены</Link></span>}
                   </td>
                   <td className="num">
                     <span className="font-medium">{formatMills(shift.salesNetMills)}</span>

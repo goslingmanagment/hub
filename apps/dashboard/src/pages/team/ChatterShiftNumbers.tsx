@@ -1,4 +1,6 @@
+import { Link } from "react-router";
 import type { ChatterNumbers } from "@agency_hub_core/contracts";
+import { useAuthMe } from "@/api/queries";
 import { useTeamChatterNumbers } from "@/api/team";
 import { NoAnswerPanel } from "@/components/shared/StatusPanel";
 import { TableSkeleton } from "@/components/shared/TableSkeleton";
@@ -46,6 +48,8 @@ function Cells({ numbers, average }: { numbers: ChatterNumbers; average?: boolea
 
 function Numbers({ userId, from }: { userId: number; from: string }) {
   const { data, isLoading, refetch } = useTeamChatterNumbers({ from, userId }, { enabled: true });
+  const { data: me } = useAuthMe();
+  const owner = me?.user.role === "owner";
   if (!data) {
     return isLoading ? (
       <div className="team-card-inner team-card-top">
@@ -82,6 +86,7 @@ function Numbers({ userId, from }: { userId: number; from: string }) {
               <td className="whitespace-nowrap">
                 {formatDateTime(shift.startedAt)}{shift.ongoing && ", сейчас"}
                 <span className="team-sub">{shift.pages.map((page, index) => <span key={page}>{index > 0 && ", "}<PageLink label={page} /></span>)}</span>
+                {owner && <span className="team-sub"><Link to={`/team/review?${new URLSearchParams({ user: String(userId), at: shift.startedAt }).toString()}`} className="link">Разбор смены</Link></span>}
               </td>
               <Cells numbers={shift.numbers} />
             </tr>

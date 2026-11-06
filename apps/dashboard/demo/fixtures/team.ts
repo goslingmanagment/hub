@@ -5,6 +5,7 @@ import { DEMO_CHATTERS, DEMO_DATA_PAGES, DEMO_PAGES, DEMO_USERS, demoFans, demoP
 import { teamCustoms, teamGreetings, teamWinBackApproaches, teamWinBackResults } from "./team-extra.ts";
 import { adminModelApplication, adminModelApplications } from "./team-applications.ts";
 import { teamChatterStats, teamShiftSales } from "./team-stats.ts";
+import { teamShiftReview } from "./team-review.ts";
 import {
   DAY,
   HOUR,
@@ -495,6 +496,7 @@ function exportOf(request: DemoRequest, scope: readonly string[], fromDay: strin
 const BUSINESS_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
 export const teamHandlers: DemoHandlers = {
+  teamShiftReview,
   teamShifts: (request) => {
     const scope = viewerPages(request);
     if (!scope) return FORBIDDEN();

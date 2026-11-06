@@ -44,6 +44,7 @@ export * from "./repositories/shift-reports.ts";
 export * from "./repositories/onlyfans-unlocks.ts";
 // Chat Memory week 5: the numbers of a chatter's shift.
 export * from "./repositories/chatter-numbers.ts";
+export * from "./repositories/shift-review.ts";
 export * from "./repositories/chatter-stats.ts";
 // Chat Memory week 5: the morning report's team block.
 export * from "./repositories/team-morning.ts";

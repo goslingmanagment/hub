@@ -5,6 +5,7 @@ import {
   type TeamAuthorshipResponse,
   type TeamChatterNumbersResponse,
   type TeamCustomsResponse,
+  type TeamShiftReviewResponse,
   type TeamShiftsResponse,
 } from "@agency_hub_core/contracts";
 
@@ -14,6 +15,7 @@ import { listTeamShifts, recordClientActivity } from "../../services/chatter-shi
 import { readTeamChatterNumbers } from "../../services/chatter-numbers.ts";
 import { readTeamAuthorship } from "../../services/team-authorship.ts";
 import { readTeamCustoms } from "../../services/team-customs.ts";
+import { readTeamShiftReview } from "../../services/shift-review.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
 
 /**
@@ -49,6 +51,14 @@ export function registerClientActivityRoutes(server: ApiServer, ctx: ApiModuleCo
   }, async (request): Promise<TeamShiftsResponse> => {
     const principal = await requirePrincipal(request);
     return listTeamShifts(appContext, principal, { query: request.query, pageScope: pageScopeFor(principal) });
+  });
+
+  // Команда → «Разбор смены»: one shift opened up (the owner only).
+  server.get("/api/v1/team/shift-review", {
+    schema: routeSchemas.teamShiftReview,
+  }, async (request): Promise<TeamShiftReviewResponse> => {
+    const principal = await requirePrincipal(request);
+    return readTeamShiftReview(appContext, principal, request.query);
   });
 
   server.get("/api/v1/team/authorship", {
