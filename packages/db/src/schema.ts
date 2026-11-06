@@ -6094,6 +6094,10 @@ export const capturePayloadObjects = pgTable(
         table.collisionOrdinal,
       )
       .nullsNotDistinct(),
+    // The hourly collision count (0356): only rows with a non-zero ordinal — none so far.
+    collisionIdx: index("capture_payload_objects_collision_idx")
+      .on(table.bucketMonth)
+      .where(sql`${table.collisionOrdinal} > 0`),
     bucketMonthCheck: check("capture_payload_objects_bucket_month_check", sql`
       extract(day from ${table.bucketMonth}) = 1
     `),
