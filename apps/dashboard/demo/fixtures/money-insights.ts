@@ -669,7 +669,7 @@ function statsCoverage(request: DemoRequest): KernelOperationResponse<"statsCove
   const t = now.getTime();
   const hour = 3_600_000;
   if (page.platform !== "fansly") {
-    return { page: { label: page.label, platform: page.platform }, generatedAt: iso(t), planes: [], engine: null, holdings: [] };
+    return { page: { label: page.label, platform: page.platform }, generatedAt: iso(t), planes: [], engine: null };
   }
   const streams = STREAMS.map((item) => {
     const random = rng(`stream:${page.label}:${item.stream}`);
@@ -705,6 +705,20 @@ function statsCoverage(request: DemoRequest): KernelOperationResponse<"statsCove
     }
     return stream;
   });
+  return {
+    page: { label: page.label, platform: page.platform },
+    generatedAt: iso(t),
+    planes: coverageRows(page, now),
+    engine: { mode: "live", ownerRunning: true, streams },
+  };
+}
+
+function statsHoldings(request: DemoRequest): KernelOperationResponse<"statsHoldings"> | DemoReply {
+  const page = ownerPage(request);
+  if (isReply(page)) return page;
+  const t = request.now.getTime();
+  const hour = 3_600_000;
+  if (page.platform !== "fansly") return { page: { label: page.label, platform: page.platform }, holdings: [] };
   const days = reachOf(page).historyDays;
   const mediaCount = demoMedia(page).length;
   const holdings = [
@@ -731,9 +745,6 @@ function statsCoverage(request: DemoRequest): KernelOperationResponse<"statsCove
   ] as const;
   return {
     page: { label: page.label, platform: page.platform },
-    generatedAt: iso(t),
-    planes: coverageRows(page, now),
-    engine: { mode: "live", ownerRunning: true, streams },
     holdings: holdings.map(([projection, rowCount]) => ({
       projection,
       rowCount,
@@ -748,6 +759,7 @@ export const insightsHandlers: DemoHandlers = {
   statsMedia,
   statsTags,
   statsCoverage,
+  statsHoldings,
   contentComments,
   moneyRevenueMix,
 };

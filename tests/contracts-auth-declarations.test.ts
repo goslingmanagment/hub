@@ -166,6 +166,7 @@ describe("route auth declarations", () => {
       "pageTopSpenders",
       "pageTransactions",
       "statsCoverage",
+      "statsHoldings",
       "statsMedia",
       "statsTags",
       "statsTraffic",
@@ -177,7 +178,7 @@ describe("route auth declarations", () => {
     ]);
   });
 
-  it("WP-S1's eight serving routes are owner-session, page-scoped, and read-only", () => {
+  it("WP-S1's nine serving routes are owner-session, page-scoped, and read-only", () => {
     // The three halves of the S1 access story, pinned together because each one
     // alone is insufficient: `owner-session` (not `session`, not `any`) is what
     // makes `/money/*` money-gated on the REST surface; `scope: "page"` is what
@@ -189,6 +190,7 @@ describe("route auth declarations", () => {
       "statsMedia",
       "statsTags",
       "statsCoverage",
+      "statsHoldings",
       "contentMedia",
       "contentComments",
       "moneyRevenueMix",

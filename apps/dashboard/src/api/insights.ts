@@ -25,6 +25,21 @@ export function useStatsCoverage(pageLabel: string, options: QueryOptions = {}) 
   });
 }
 
+/**
+ * What Hub holds of the page, per projection («Хранится в Hub»). An exact count
+ * over every table of the page takes seconds, so the screen asks only once the
+ * fold is open, and an answer stays fresh for a while.
+ */
+export function useStatsHoldings(pageLabel: string, options: QueryOptions = {}) {
+  return useQuery({
+    meta: STATS_META,
+    queryKey: ["statsHoldings", pageLabel],
+    queryFn: () => kernel.statsHoldings({ params: { pageLabel } }),
+    enabled: (options.enabled ?? true) && pageLabel.length > 0,
+    staleTime: 5 * 60_000,
+  });
+}
+
 /** The comments of the posts, over the screen's UTC days (`from` 00:00Z … `to` exclusive). */
 export function useContentComments(
   pageLabel: string,

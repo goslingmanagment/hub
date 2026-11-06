@@ -355,7 +355,7 @@ Coverage planes для прежних данных:
 [capture coverage](../../packages/shared/src/capture-coverage.ts#L1).
 
 Hub endpoints `/stats/traffic`, `/stats/media`, `/stats/tags`, `/stats/coverage`,
-`/content/media`, `/money/revenue-mix` читают projections. Они не стартуют
+`/stats/holdings`, `/content/media`, `/money/revenue-mix` читают projections. Они не стартуют
 capture и не устраняют недостающий backfill при чтении:
 [insights serving contract](../../apps/runtime/src/modules/insights/index.ts#L70).
 
