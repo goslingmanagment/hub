@@ -848,21 +848,16 @@ interface ExtensionClaim {
   greeting: { state: string; messageRef: string | null };
 }
 
+/** Operations some registry rows still list but this hub no longer serves.
+ *  Their rows stay as the register script wrote them; each key is retired only
+ *  after proof that no client in the field calls it:
+ *  - aiUsageBatch (POST /api/v1/ai-usage/batch): the gateway writes the AI
+ *    ledger; no client has posted usage since 2026-07-08 (fansly-chat dropped
+ *    its last caller in 1.7.0, the desktop has no producer). */
+export const COMPAT_RETIRED_OPERATIONS: ReadonlySet<string> = new Set(["aiUsageBatch"]);
+
 /** One exerciser per operation a registry row lists beyond the shared core. */
 export const COMPAT_OPERATION_EXERCISERS: Record<string, (ctx: CompatContext) => Promise<void>> = {
-  async aiUsageBatch(ctx) {
-    const result = await call(ctx.sdk, ctx.client, "aiUsageBatch", {
-      body: {
-        events: [{
-          clientEventId: randomUUID(), feature: "fast-reply", model: "anthropic:claude-sonnet-4-6",
-          inputTokens: 10, outputTokens: 2, cacheWriteTokens: 0, cacheReadTokens: 0,
-          conversationId: null, durationMs: 5, isCacheHit: false, isRegeneration: false,
-          completedAt: new Date().toISOString(),
-        }],
-      },
-    });
-    expect(result).toMatchObject({ receivedCount: 1, insertedCount: 1 });
-  },
   async authActivateDeviceToken(ctx) {
     const token = await signIn(ctx.sdk, ctx.clientFor(null), ctx.lane, "pending");
     await call(ctx.sdk, ctx.clientFor(token), "authActivateDeviceToken");
