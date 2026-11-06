@@ -612,22 +612,23 @@ export async function handleAgentPerson(
         }), "agent_person_identity");
 
     const fanId = identity.row?.fanId ?? null;
+    // In turn, not Promise.all: `tx` is one connection.
     const [extras, money, postTips, subscriptions, crm, threads] = fanId === null
       ? [null, null, null, null, null, null]
-      : await withAgentTimeout(scope.db, AGENT_TIMEOUT_MS.long, async (tx) => Promise.all([
-        loadAgentPersonIdentityExtras(tx, { pageIds, fanId }),
-        mayReadMoney ? loadAgentPersonMoney(tx, { pageIds, fanId }) : null,
+      : await withAgentTimeout(scope.db, AGENT_TIMEOUT_MS.long, async (tx) => [
+        await loadAgentPersonIdentityExtras(tx, { pageIds, fanId }),
+        mayReadMoney ? await loadAgentPersonMoney(tx, { pageIds, fanId }) : null,
         mayReadMoney
-          ? loadAgentPersonPostTips(tx, {
+          ? await loadAgentPersonPostTips(tx, {
             pageIds,
             fanId,
             limit: AGENT_PERSON_POST_TIP_LIMIT + 1,
           })
           : null,
-        mayReadMoney ? loadAgentPersonSubscriptions(tx, { pageIds, fanId }) : null,
-        mayReadMessages ? loadAgentPersonCrm(tx, { pageIds, fanId }) : null,
-        mayReadMessages ? listAgentFanThreads(tx, { pageIds, fanIds: [fanId] }) : null,
-      ]), "agent_person_bundle");
+        mayReadMoney ? await loadAgentPersonSubscriptions(tx, { pageIds, fanId }) : null,
+        mayReadMessages ? await loadAgentPersonCrm(tx, { pageIds, fanId }) : null,
+        mayReadMessages ? await listAgentFanThreads(tx, { pageIds, fanIds: [fanId] }) : null,
+      ] as const, "agent_person_bundle");
     const postTipParseDebt = mayReadMoney
       ? await withAgentTimeout(scope.db, AGENT_TIMEOUT_MS.short, (tx) =>
         readAgentPostTipParseDebt(tx, {

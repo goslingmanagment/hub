@@ -543,13 +543,14 @@ export async function handleAgentThreads(
         },
     };
 
+    // In turn, not Promise.all: `tx` is one connection.
     const [result, matched] = await withAgentTimeout(
       scope.db,
       AGENT_TIMEOUT_MS.short,
-      async (tx) => Promise.all([
-        listAgentThreads(tx, dbQuery),
-        countAgentThreads(tx, dbQuery, AGENT_COUNT_PROBE_MAX),
-      ]),
+      async (tx) => [
+        await listAgentThreads(tx, dbQuery),
+        await countAgentThreads(tx, dbQuery, AGENT_COUNT_PROBE_MAX),
+      ] as const,
       "agent_threads",
     );
 
@@ -850,13 +851,14 @@ export async function handleAgentThreadMessages(
         },
     };
 
+    // In turn, not Promise.all: `tx` is one connection.
     const [result, matched] = await withAgentTimeout(
       scope.db,
       AGENT_TIMEOUT_MS.long,
-      async (tx) => Promise.all([
-        listAgentTranscript(tx, transcriptInput),
-        countAgentTranscript(tx, transcriptInput, AGENT_COUNT_PROBE_MAX),
-      ]),
+      async (tx) => [
+        await listAgentTranscript(tx, transcriptInput),
+        await countAgentTranscript(tx, transcriptInput, AGENT_COUNT_PROBE_MAX),
+      ] as const,
       "agent_transcript",
     );
 

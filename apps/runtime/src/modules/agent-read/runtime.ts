@@ -476,14 +476,18 @@ export async function beginAgentRequest(
   // Even the scaffolding runs under a timeout: `listAgentGrantPages` and the
   // journal floor are ordinary queries and a stall in one of them used to hang
   // outside every ceiling the operation had declared.
+  //
+  // In turn, not Promise.all: `tx` is ONE connection, so pg ran them in turn
+  // anyway, and overlapping queries on one client are what pg 8 warns about at
+  // every API start (DeprecationWarning) and pg 9 removes.
   const [pages, totalPages, archiveGeneration] = await withAgentTimeout(
     db,
     AGENT_TIMEOUT_MS.short,
-    (tx) => Promise.all([
-      listAgentGrantPages(tx, pageIds),
-      countAgentVisiblePages(tx),
-      readArchiveGeneration(tx),
-    ]),
+    async (tx) => [
+      await listAgentGrantPages(tx, pageIds),
+      await countAgentVisiblePages(tx),
+      await readArchiveGeneration(tx),
+    ] as const,
     "agent_scope",
   );
 
