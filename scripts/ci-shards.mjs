@@ -2,7 +2,7 @@ import { appendFileSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { SHARD_WEIGHTS_PATH, parseShardWeights } from "./ci-shard-plan.mjs";
+import { SHARD_WEIGHTS_PATH, isIntegrationShardFile, parseShardWeights } from "./ci-shard-plan.mjs";
 
 // How many integration shards one CI run splits the sync-critical suite into,
 // planned once by the fingerprint job. CI runs on GitHub-hosted runners only
@@ -19,9 +19,12 @@ export const MAX_SHARD_TOTAL = 8;
 // (Measured 20.10 at six shards: 58-81 s of DB tests a shard, ~1.5 min a job.)
 export const TARGET_SHARD_SECONDS = 60;
 
-/** Shards the measured weights need at TARGET_SHARD_SECONDS each. */
+/** Shards the measured integration weights need at TARGET_SHARD_SECONDS each. */
 export function neededShards(weights) {
-  const seconds = Object.values(weights.files).reduce((sum, value) => sum + value, weights.firstShardExtraSeconds);
+  // The unit parts' weights share the file but never run in these shards.
+  const seconds = Object.entries(weights.files)
+    .filter(([file]) => isIntegrationShardFile(file))
+    .reduce((sum, [, value]) => sum + value, weights.firstShardExtraSeconds);
   return Math.max(1, Math.ceil(seconds / TARGET_SHARD_SECONDS));
 }
 

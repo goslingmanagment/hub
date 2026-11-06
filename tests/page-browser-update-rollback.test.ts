@@ -35,7 +35,7 @@ describe("failures after the new image ran: a rollback — its previous image WI
 
     it("the window fails: back on the previous image, the profile as the page left it — an hour of its session kept (lilly-1, 2026-10-17 19:47)", () => {
       host = sameChrome();
-      // The window's contract: page-browser-update-window.test.ts.
+      // The window's contract: page-browser-update-window-*.test.ts.
       host.edit((state) => {
         state.behaviour.crashBetweenLooks = { reason: "cdp_lost" };
       });
