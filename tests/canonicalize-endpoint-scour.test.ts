@@ -138,7 +138,21 @@ describe("earnings", () => {
     expect(tips.data.grossMills).toBe("250000");
     expect(tips.data.netMills).toBe("200000");
     expect(tips.data.businessDate).toBe("2026-08-19");
-    expect(tips.dedupKey).toMatch(/^earnbreak:v1:11:2026-08-19:7101:[0-9a-f]{64}$/);
+    expect(tips.dedupKey).toMatch(/^earnbreak:v2:11:2026-08-19:7101:[0-9a-f]{64}:obs:4242$/);
+    // A later look serving the same bucket is its OWN event: under a hash-only
+    // key a full value seen again after a truncated one was dropped, and the
+    // truncated head stayed (revenue_mix_daily short on prod, 2026-11).
+    const again = ofType(
+      canonicalizeFanslyStatsObservation(
+        observation("earnings_stats_snapshot", rows, { id: 4343 }),
+        { nativeAccountRefByAccountId: new Map() },
+      ),
+      "earnings.breakdown_observed",
+    ).find((draft) => draft.data.typeCode === 7101)!;
+    expect(again.data).toEqual(tips.data);
+    expect(again.dedupKey).not.toBe(tips.dedupKey);
+    expect(collect("earnings_stats_snapshot", rows).map((draft) => draft.dedupKey))
+      .toContain(tips.dedupKey);
     // A22-2: the legacy twin keeps its OWN code. Folding 2010 into 2110 at
     // storage time would erase every legacy row's provenance, and the ledger
     // reaches back to 2025-03.

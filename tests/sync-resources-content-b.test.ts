@@ -22,6 +22,7 @@ import { probeRequestOf } from "../apps/runtime/src/sync/fansly/resources/probe.
 import {
   advanceStatsBackfill,
   foldStatsBackfill,
+  freshStatsBackfill,
   nextHourlyCaptureAt,
   type StatsBackfillState,
 } from "../apps/runtime/src/sync/fansly/resources/stats.ts";
@@ -446,6 +447,30 @@ describe("stats: the history walks, one request a step", () => {
       response: monthBody(NOW.getTime() + 2 * DAY, NOW.getTime() + 3 * DAY, 4), observationId: 3, now: NOW, accountCreatedAt: null,
     });
     expect(refused.state.daily).toMatchObject({ done: false, trailingCaptured: false, guard: { spanDays: 15, narrowed: true } });
+  });
+
+  it("the owner's earnings-only walk asks UTC-midnight windows to the creation floor and nothing of the daily lanes", () => {
+    expect(freshStatsBackfill(NOW, { only: "daily" })).toBeNull();
+    expect(freshStatsBackfill(NOW, {})).toEqual(fresh());
+    let state = freshStatsBackfill(NOW, { only: "earnings" })!;
+    const windows: Array<{ afterMs: number; beforeMs: number }> = [];
+    const planes = new Set<string>();
+    for (let step = 0; step < 10; step += 1) {
+      const advanced = advanceStatsBackfill({ state, now: NOW, accountCreatedAt: created });
+      advanced.claims.forEach((claim) => planes.add(claim.plane));
+      if (advanced.next === null) break;
+      expect(advanced.next.lane).toEqual({ lane: "earnings" });
+      const p = advanced.next.request.params as { afterMs: number; beforeMs: number };
+      windows.push(p);
+      const folded = foldStatsBackfill({ state: advanced.state, lane: advanced.next.lane, request: advanced.next.request, response: [], observationId: step + 1, now: NOW, accountCreatedAt: created });
+      folded.claims.forEach((claim) => planes.add(claim.plane));
+      state = folded.state;
+    }
+    expect(windows.length).toBeGreaterThan(1);
+    expect(windows.every((window) => window.afterMs % DAY === 0)).toBe(true);
+    expect(windows.slice(1).every((window) => (window.beforeMs + 1) % DAY === 0)).toBe(true);
+    expect(windows.at(-1)!.afterMs).toBeLessThanOrEqual(created.getTime());
+    expect([...planes]).toEqual(["stats_earnings"]);
   });
 });
 

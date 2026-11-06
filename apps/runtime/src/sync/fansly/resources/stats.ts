@@ -79,6 +79,7 @@ import { fanslyResourceSpec } from "../registry.ts";
 // year further back where the creation is unknown), and the earnings in
 // 31-day windows to the same floor; the hourly plane has no history and says
 // so. One request a step; every rule and coverage claim is the legacy lane's.
+// The params `{"only":"earnings"}` walk the earnings windows alone.
 
 const HOURLY_KEY = "stats.hourly";
 const DAY_MS = 86_400_000;
@@ -479,8 +480,22 @@ interface BackfillStep {
   claims: CoverageClaim[];
 }
 
-function freshBackfill(now: Date): StatsBackfillState {
-  return { daily: emptyDailyBackfill(now), hourlyDone: false, earnings: emptyEarningsBackfill(now.getTime(), false) };
+/**
+ * A new walk, from the work's params. `{"only":"earnings"}` (the owner's
+ * `sync work enqueue --resource stats.backfill --params …`) walks the earnings
+ * windows alone: the daily and hourly lanes start done and claim nothing. It is
+ * the one-off re-read that lets full-day buckets replace heads a truncated look
+ * left short. Any other `only` is null — refused, never read as the whole walk.
+ */
+export function freshStatsBackfill(now: Date, params?: unknown): StatsBackfillState | null {
+  const only = recordOf(params).only;
+  if (only !== undefined && only !== "earnings") return null;
+  const earningsOnly = only === "earnings";
+  return {
+    daily: { ...emptyDailyBackfill(now), done: earningsOnly },
+    hourlyDone: earningsOnly,
+    earnings: emptyEarningsBackfill(now.getTime(), false),
+  };
 }
 
 function parseBackfillState(value: unknown, now: Date): StatsBackfillState | null {
@@ -925,8 +940,10 @@ function backfillDone(state: StatsBackfillState): boolean {
 const backfillModule: ResourceModule = {
   async plan(work, ctx): Promise<StepPlan> {
     const cursor = parseBackfillCursor(work.cursor, ctx.now);
+    const state = cursor.state ?? freshStatsBackfill(ctx.now, work.params);
+    if (state === null) return { kind: "done", reason: "backfill_params_invalid", cursor: { state: null } satisfies StatsBackfillCursor };
     const created = await accountCreatedAtOf(ctx.db, ctx.pageId, ctx.now);
-    const advanced = advanceStatsBackfill({ state: cursor.state ?? freshBackfill(ctx.now), now: ctx.now, accountCreatedAt: created });
+    const advanced = advanceStatsBackfill({ state, now: ctx.now, accountCreatedAt: created });
     if (advanced.next === null) {
       return { kind: "done", reason: "backfill_complete", cursor: { state: advanced.state } satisfies StatsBackfillCursor };
     }

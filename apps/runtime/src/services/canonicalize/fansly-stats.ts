@@ -609,7 +609,19 @@ function mediaOfferStatsDrafts(
 
 /** Flat `{type, totalGross, totalNet, accountId, timestamp}` rows, one per
  *  revenue type per business day. Gross AND net are stored: the 0.8 factor is
- *  Fansly's cut and could change, so neither is derived from the other. */
+ *  Fansly's cut and could change, so neither is derived from the other.
+ *
+ *  ONE EVENT PER LOOK (`earnbreak:v2:…:obs:<id>`). The v1 key was the content
+ *  hash alone, and a day's bucket can go A→B→A: a window whose lower bound fell
+ *  inside a day (the history walks of 2026-08, the trailing window until
+ *  2026-09-18) served that day's bucket TRUNCATED, the head took the newer,
+ *  smaller value, and every later look that served the full value again hashed
+ *  to the old full-value event and was dropped — the head stayed short for
+ *  good. Keyed per look, every look reaches the projector, which already keeps
+ *  the newest observation per (page, date, type): an unchanged look moves only
+ *  the head's lineage, never a value, and replaying one observation mints the
+ *  same key. v1 events stay as they are; the canonicalizer version is not
+ *  bumped (nothing to replay). */
 function earningsBreakdownDrafts(
   observation: CanonicalizableObservation,
 ): CanonicalEventDraft[] {
@@ -636,7 +648,7 @@ function earningsBreakdownDrafts(
       occurredAt: observation.receivedAt,
       data: { ...material, contentHash: hash },
       schemaVersion: SCHEMA_VERSION,
-      dedupKey: `earnbreak:v1:${pageRef}:${date}:${typeCode}:${hash}`,
+      dedupKey: `earnbreak:v2:${pageRef}:${date}:${typeCode}:${hash}:obs:${observation.id}`,
     });
   }
   return drafts;
