@@ -668,13 +668,6 @@ async function reconcilePage(
   if (ofapiAccountId === null) {
     return skip("page_unmapped", null);
   }
-  // Auth-dead pause: a page whose OFAPI session needs owner action
-  // (authentication_failed / otp / face-otp) gets no scheduled request — the
-  // account-health incident already covers it.
-  if (ofapiAuthStatusNeedsAction(stored.page.ofapiAuthStatus)) {
-    return skip("page_auth_dead", ofapiAccountId);
-  }
-
   // The STORED variants: identical item shape, `_credits.used: 0`, limit
   // 1000, and the cache includes finished links the live list hides
   // (live-verified 2026-07-22). The guard reserves nothing for them; the
@@ -686,10 +679,19 @@ async function reconcilePage(
   // "no vendor refresh in between", which daily-delta reports must treat as
   // zero-change, not data loss. The cold-cache guard in reconcileKind keeps
   // an unpopulated cache from minting a false absence proof.
+  // Checked before the session: with OFAPI switched off (no key) every
+  // session reads dead (disconnected), and the row must say why nothing was
+  // read — a reason the window's retries do not read again.
   const listTrackingLinks = app.ofapi?.listStoredTrackingLinks?.bind(app.ofapi);
   const listTrialLinks = app.ofapi?.listStoredTrialLinks?.bind(app.ofapi);
   if (!listTrackingLinks || !listTrialLinks) {
     return skip("ofapi_client_not_configured", ofapiAccountId);
+  }
+  // Auth-dead pause: a page whose OFAPI session needs owner action
+  // (authentication_failed / otp / face-otp) gets no scheduled request — the
+  // account-health incident already covers it.
+  if (ofapiAuthStatusNeedsAction(stored.page.ofapiAuthStatus)) {
+    return skip("page_auth_dead", ofapiAccountId);
   }
 
   // No proxy/dispatcher resolution here on purpose: the OFAPI list transport
@@ -866,7 +868,9 @@ async function queueNextRetry(
 ): Promise<OfapiLinkStatsReconcileResult["queuedRetry"]> {
   const retry = input.retriesDone + 1;
   const delayMs = OFAPI_LINK_STATS_RETRY_DELAYS_MS[retry - 1];
-  if (!input.boss || delayMs === undefined) {
+  // OFAPI switched off on purpose (no key, so no client): a retry could read
+  // nothing either; once the key is back, the next window's pass reads them.
+  if (!input.boss || delayMs === undefined || !app.ofapi) {
     return null;
   }
   // A retry that would start after the window closed has nothing to fill:
@@ -1127,8 +1131,11 @@ export async function runOfapiLinkStatsReconcile(
     });
   }
 
+  // A page skipped for want of a client is OFAPI switched off on purpose, not
+  // news; its row and the pass's info line below still say so.
   const degraded = allPages.filter((page) =>
-    page.status === "partial" || page.status === "truncated" || page.status === "skipped",
+    page.status === "partial" || page.status === "truncated" ||
+    (page.status === "skipped" && page.reason !== "ofapi_client_not_configured"),
   );
   if (degraded.length > 0) {
     app.logger.warn({

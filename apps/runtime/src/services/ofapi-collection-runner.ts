@@ -38,7 +38,7 @@ import {
   ofapiReadCoverage,
 } from "./ofapi-read-normalization.ts";
 import { OfapiGovernedRequestError } from "./ofapi.ts";
-import { checkOfapiCollectionStaleness } from "./ofapi-collection-stale.ts";
+import { checkOfapiCollectionStaleness, resolveOfapiCollectionStaleWhileOff } from "./ofapi-collection-stale.ts";
 import { sweepOfapiMarketingIntents } from "./ofapi-smart-links.ts";
 export type OfapiCollectionJob = NonNullable<
   Awaited<ReturnType<typeof getOfapiCollectionJob>>
@@ -440,8 +440,12 @@ export async function sweepOfapiCollections(
   handlers: OfapiCollectionHandlers = {},
 ) {
   // OFAPI switched off on purpose (no key, so no client): no collection can run,
-  // so none is scheduled and none is reported stale.
-  if (!app.ofapi) return;
+  // so none is scheduled and none is reported stale; a stale latch opened
+  // before resolves, digest-only (it never pages).
+  if (!app.ofapi) {
+    await resolveOfapiCollectionStaleWhileOff(app);
+    return;
+  }
   const closed = await closeAdmissionRefusedOfapiCollectionRuns(app.db);
   if (closed.length > 0)
     app.logger.warn(

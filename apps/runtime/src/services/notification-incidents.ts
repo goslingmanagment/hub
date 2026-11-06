@@ -282,6 +282,9 @@ export const INCIDENT_RESOLUTION_REASONS = {
    *  legacy executor no longer runs the stream, so its own recovery — the only
    *  thing that resolved it — never comes. */
   engine_owned: "the page is owned by the Fansly Sync Engine; the legacy stream no longer runs",
+  /** An OFAPI latch whose check stops while OFAPI is switched off on purpose
+   *  (no key, so no client): nothing would ever resolve it. */
+  ofapi_off: "OFAPI is switched off (no key); the check no longer runs",
 } as const;
 export type IncidentResolution = keyof typeof INCIDENT_RESOLUTION_REASONS;
 
@@ -381,6 +384,19 @@ function openTitleForIncident(
   }
   if (input.kind === "read_gateway_capture" && input.subKey === OFAPI_COLLECTION_STALE_SUBKEY) {
     return "🚨 OnlyFans scheduled collection is stale";
+  }
+  // One latch per metric (golden_signal_lag:global:<metric>): the title names
+  // it, since the digest and the missed-alerts summary show the title alone.
+  if (input.kind === "golden_signal_lag" && input.subKey) {
+    return `🚨 Golden-signal lag over threshold: ${input.subKey}`;
+  }
+  // The runway latches share the kind with the 80% usage latch, not its
+  // condition: a disk half full that fills too fast is not "usage high".
+  if (input.kind === "db_disk_usage" && input.subKey === "runway_warning") {
+    return "🚨 Server disk fills in under 30 days";
+  }
+  if (input.kind === "db_disk_usage" && input.subKey === "runway_critical") {
+    return "🚨 Server disk fills in under 7 days";
   }
   // The engine's alerts: one kind, a title per alert — the owner acts on the
   // first line.
@@ -563,11 +579,17 @@ function resolveDetailForIncident(
       return "Transactions writer conflict cleared";
     case "read_gateway_capture":
       if (input.subKey === OFAPI_COLLECTION_STALE_SUBKEY) {
-        return "OnlyFans scheduled collection completing on schedule again";
+        // Closed, not recovered, when the check stopped (its reason is the
+        // message's own line).
+        return incidentResolutionReason(input.resolution) === null
+          ? "OnlyFans scheduled collection completing on schedule again"
+          : "OnlyFans scheduled collection check closed";
       }
       return "Read-gateway capture tee healthy again";
     case "golden_signal_lag":
-      return "Golden-signal lag back under threshold";
+      return input.subKey
+        ? `Golden-signal lag back under threshold: ${input.subKey}`
+        : "Golden-signal lag back under threshold";
     case "scheduler_silent":
       return "Scheduler heartbeat back; cron firing again";
     case "ops_sampler_silent":
@@ -1370,7 +1392,7 @@ export async function notifyOfapiCollectionStaleIncident(
 
 export async function resolveOfapiCollectionStaleIncident(
   app: IncidentApp,
-  input: { pageId: number; pageLabel: string | null; recoveredAt: Date },
+  input: { pageId: number; pageLabel: string | null; recoveredAt: Date; resolution?: IncidentResolution },
 ): Promise<boolean> {
   return resolveIncidentAndNotify(app, {
     kind: "read_gateway_capture",
@@ -1379,6 +1401,7 @@ export async function resolveOfapiCollectionStaleIncident(
     platform: "onlyfans",
     subKey: OFAPI_COLLECTION_STALE_SUBKEY,
     recoveredAt: input.recoveredAt,
+    ...(input.resolution === undefined ? {} : { resolution: input.resolution }),
   });
 }
 

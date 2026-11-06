@@ -7,6 +7,7 @@ import type { OfapiCollectionCategory } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
 import {
+  type IncidentResolution,
   notifyOfapiCollectionStaleIncident,
   ofapiCollectionStaleIncidentKey,
   OFAPI_COLLECTION_STALE_SUBKEY,
@@ -81,22 +82,50 @@ export async function checkOfapiCollectionStaleness(
       });
       result.stalePages.push(pageId);
     }
-    // Resolve only latches that are open: a healthy fleet costs no write. A
-    // latch of a page that left the list (deleted, no longer stale) resolves too.
-    const open = (await listNotificationIncidents(app.db, { status: "open" }))
-      .filter(incident => incident.kind === "read_gateway_capture" && incident.platformAccountId !== null
-        && incident.incidentKey === ofapiCollectionStaleIncidentKey(incident.platformAccountId));
-    for (const incident of open) {
-      const pageId = incident.platformAccountId!;
-      if (stale.has(pageId)) continue;
-      const metadata = incident.metadata as { pageLabel?: unknown } | null;
-      await resolveOfapiCollectionStaleIncident(app, {
-        pageId, pageLabel: typeof metadata?.pageLabel === "string" ? metadata.pageLabel : null, recoveredAt: now,
-      });
-      result.resolvedPages.push(pageId);
-    }
+    // A latch of a page that left the list (deleted, no longer stale) resolves too.
+    result.resolvedPages = await resolveOpenCollectionStaleLatches(app, { keepOpen: new Set(stale.keys()), now });
   } catch (err) {
     app.logger.error({ err, subKey: OFAPI_COLLECTION_STALE_SUBKEY }, "Collection stale check failed");
   }
   return result;
+}
+
+/** OFAPI switched off on purpose (no key, so no client): the sweep runs no
+ * check, so a latch opened before would stay open in the digest for good. It
+ * resolves here instead (digest-only: no message), its reason recorded. Never
+ * throws. */
+export async function resolveOfapiCollectionStaleWhileOff(
+  app: Pick<AppContext, "db" | "logger">,
+  now = new Date(),
+): Promise<number[]> {
+  try {
+    return await resolveOpenCollectionStaleLatches(app, { keepOpen: new Set(), now, resolution: "ofapi_off" });
+  } catch (err) {
+    app.logger.error({ err, subKey: OFAPI_COLLECTION_STALE_SUBKEY }, "Collection stale latches could not be resolved");
+    return [];
+  }
+}
+
+// Resolve only latches that are open: a healthy fleet costs no write.
+async function resolveOpenCollectionStaleLatches(
+  app: Pick<AppContext, "db" | "logger">,
+  input: { keepOpen: ReadonlySet<number>; now: Date; resolution?: IncidentResolution },
+): Promise<number[]> {
+  const resolvedPages: number[] = [];
+  const open = (await listNotificationIncidents(app.db, { status: "open" }))
+    .filter(incident => incident.kind === "read_gateway_capture" && incident.platformAccountId !== null
+      && incident.incidentKey === ofapiCollectionStaleIncidentKey(incident.platformAccountId));
+  for (const incident of open) {
+    const pageId = incident.platformAccountId!;
+    if (input.keepOpen.has(pageId)) continue;
+    const metadata = incident.metadata as { pageLabel?: unknown } | null;
+    await resolveOfapiCollectionStaleIncident(app, {
+      pageId,
+      pageLabel: typeof metadata?.pageLabel === "string" ? metadata.pageLabel : null,
+      recoveredAt: input.now,
+      ...(input.resolution === undefined ? {} : { resolution: input.resolution }),
+    });
+    resolvedPages.push(pageId);
+  }
+  return resolvedPages;
 }
