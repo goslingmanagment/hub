@@ -177,7 +177,6 @@ export const kernelOperations = {
   aiRecapStatus: { method: "GET", path: "/api/v1/ai/recap-status" },
   aiRestrictedGenerationDetail: { method: "GET", path: "/api/v1/ai/restricted/generations/:generationRef" },
   aiRestrictedGenerations: { method: "GET", path: "/api/v1/ai/restricted/generations" },
-  aiUsageBatch: { method: "POST", path: "/api/v1/ai-usage/batch" },
   archiveConversationMessages: { method: "GET", path: "/api/v1/archive/conversations/:ref/messages" },
   archiveSearch: { method: "GET", path: "/api/v1/archive/search" },
   authActivateDeviceToken: { method: "POST", path: "/api/v1/auth/device-tokens/activate" },

@@ -6,7 +6,6 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { KERNEL_CONTRACT_HASH } from "@agency_hub_core/contracts";
 import {
   createOnlyFansPage,
-  createUser,
   createFanslyPage,
   createModel,
   ensurePageSyncStates,
@@ -1430,113 +1429,6 @@ describe("api integration", () => {
     } finally {
       await proxyServer.close();
     }
-  });
-
-  it("dedupes repeated client event ids per chatter but keeps the same id separate across chatters", async (context) => {
-    if (!testDb || !server) {
-      context.skip();
-      return;
-    }
-
-    vi.useFakeTimers({ toFake: ["Date"] });
-    vi.setSystemTime(new Date("2026-04-04T12:00:00.000Z"));
-
-    const appContext = createTestAppContext(testDb);
-    await createUser(appContext.db, {
-      username: "boris",
-      role: "chatter",
-      passwordHash: null,
-    });
-    const antonKey = await issueChatterDeviceToken(appContext, {
-      username: "anton",
-      pageLabel: "lana",
-    }, { source: "cli" });
-    const borisKey = await issueChatterDeviceToken(appContext, {
-      username: "boris",
-      pageLabel: "lana",
-    }, { source: "cli" });
-
-    const payload = {
-      events: [{
-        clientEventId: "evt-shared",
-        feature: "help-me",
-        model: "gpt-4o",
-        inputTokens: 10,
-        outputTokens: 5,
-        cacheWriteTokens: 0,
-        cacheReadTokens: 0,
-        conversationId: "conversation-007",
-        durationMs: 250,
-        isCacheHit: false,
-        isRegeneration: false,
-        completedAt: "2026-04-04T10:00:00.000Z",
-      }],
-    };
-
-    const firstAnton = await server.inject({
-      method: "POST",
-      url: "/api/v1/ai-usage/batch",
-      headers: {
-        authorization: `Bearer ${antonKey.key}`,
-      },
-      payload,
-    });
-    expect(firstAnton.statusCode).toBe(200);
-    expect(firstAnton.json()).toEqual({
-      receivedCount: 1,
-      insertedCount: 1,
-      invalidCount: 0,
-      dedupedCount: 0,
-    });
-
-    const secondAnton = await server.inject({
-      method: "POST",
-      url: "/api/v1/ai-usage/batch",
-      headers: {
-        authorization: `Bearer ${antonKey.key}`,
-      },
-      payload,
-    });
-    expect(secondAnton.statusCode).toBe(200);
-    expect(secondAnton.json()).toEqual({
-      receivedCount: 1,
-      insertedCount: 0,
-      invalidCount: 0,
-      dedupedCount: 1,
-    });
-
-    const boris = await server.inject({
-      method: "POST",
-      url: "/api/v1/ai-usage/batch",
-      headers: {
-        authorization: `Bearer ${borisKey.key}`,
-      },
-      payload,
-    });
-    expect(boris.statusCode).toBe(200);
-    expect(boris.json()).toEqual({
-      receivedCount: 1,
-      insertedCount: 1,
-      invalidCount: 0,
-      dedupedCount: 0,
-    });
-
-    const grouped = await testDb.pool.query<{
-      username: string;
-      event_count: string;
-    }>(`
-      select u.username,
-             count(*)::text as event_count
-      from ai_usage_events e
-      inner join users u on u.id = e.user_id
-      group by u.id, u.username
-      order by u.username asc, u.id asc
-    `);
-
-    expect(grouped.rows).toEqual([
-      { username: "anton", event_count: "1" },
-      { username: "boris", event_count: "1" },
-    ]);
   });
 
   it("dual-writes operator observations at the audit choke point (Stage 7 producer 6) [sync-critical]", async (context) => {

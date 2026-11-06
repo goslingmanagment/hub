@@ -1869,34 +1869,6 @@ export const fanFlagsResponseSchema = z.object({
   flags: z.array(fanFlagSchema),
 });
 
-export const aiUsageEventInputSchema = z.object({
-  clientEventId: z.string().min(1).max(255),
-  feature: aiUsageFeatureEnum,
-  model: z.string().min(1).max(100),
-  inputTokens: z.number().int().nonnegative().max(100_000_000),
-  outputTokens: z.number().int().nonnegative().max(100_000_000),
-  cacheWriteTokens: z.number().int().nonnegative().max(100_000_000),
-  cacheReadTokens: z.number().int().nonnegative().max(100_000_000),
-  conversationId: z.string().min(1).max(255).nullable().optional(),
-  durationMs: z.number().int().nonnegative().nullable().optional(),
-  isCacheHit: z.boolean(),
-  isRegeneration: z.boolean(),
-  completedAt: z.string().min(1),
-});
-
-export const aiUsageBatchBodySchema = z.object({
-  events: z.array(aiUsageEventInputSchema).min(1).max(100),
-});
-
-export const aiUsageBatchResponseSchema = z.object({
-  receivedCount: z.number().int().nonnegative(),
-  insertedCount: z.number().int().nonnegative(),
-  // Events dropped for an unparseable or >5min-future completedAt; the rest of
-  // the batch is still ingested instead of failing wholesale.
-  invalidCount: z.number().int().nonnegative(),
-  dedupedCount: z.number().int().nonnegative(),
-});
-
 // Client-capture lane. The desktop uploads spool-backed batches of
 // device-held facts; each event becomes one observation (source
 // 'client_capture', dedup on <principal>:<clientEventId> via the key
@@ -6813,23 +6785,6 @@ const baseRouteSchemas = {
       401: errorResponseSchema,
     },
   },
-  aiUsageBatch: {
-    auth: { kind: "apiKey" },
-    tags: ["usage"],
-    // The gateway ledger is authoritative — this client-reported lane is
-    // deprecated; successor = the gateway's own finalize write
-    // (POST /api/v1/ai/gateway/stream). Removal only after the fleet cutover
-    // is confirmed. It keeps serving until then.
-    deprecated: true,
-    summary: "Ingest a batch of chatter AI usage events (deprecated: gateway ledger is authoritative)",
-    body: aiUsageBatchBodySchema,
-    response: {
-      200: aiUsageBatchResponseSchema,
-      400: errorResponseSchema,
-      401: errorResponseSchema,
-      403: errorResponseSchema,
-    },
-  },
   ingestObservations: {
     auth: { kind: "apiKey" },
     tags: ["usage"],
@@ -9553,9 +9508,6 @@ export type AuthUser = z.infer<typeof authUserSchema>;
 export type AdminUser = z.infer<typeof adminUserSchema>;
 export type AssignedPage = z.infer<typeof assignedPageSchema>;
 export type SyncUxSummary = z.infer<typeof syncUxSummarySchema>;
-export type AiUsageEventInput = z.infer<typeof aiUsageEventInputSchema>;
-export type AiUsageBatchBody = z.infer<typeof aiUsageBatchBodySchema>;
-export type AiUsageBatchResponse = z.infer<typeof aiUsageBatchResponseSchema>;
 export type IngestObservationsBody = z.infer<typeof ingestObservationsBodySchema>;
 export type IngestObservationsResponse = z.infer<typeof ingestObservationsResponseSchema>;
 export type AiGatewayPromptCacheTtl = z.infer<typeof aiGatewayPromptCacheTtlSchema>;

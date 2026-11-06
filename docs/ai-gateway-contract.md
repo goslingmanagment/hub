@@ -1051,9 +1051,8 @@ columns for this record:
 - quota decision (`quota_accepted`) and regeneration marker;
 - completed timestamp, duration, and terminal outcome (`gateway_outcome`).
 
-The existing `/api/v1/ai-usage/batch` endpoint remains during migration for direct desktop mode.
-When gateway mode is active for a request, desktop must not also submit a duplicate usage event for
-that same generation.
+The client-reported `/api/v1/ai-usage/batch` endpoint is retired (2026-11): no client has posted to
+it since 2026-07-08, so only Hub itself (the gateway) writes `ai_usage_events`.
 
 ### The caller's own spend for the chat extension (chat-extension H-15)
 

@@ -27,7 +27,7 @@ import {
   serializeAiGatewaySseFrame,
 } from "../../services/ai-gateway.ts";
 import { prepareAiFeatureStream } from "./features/index.ts";
-import { getAdminChatterUsageReport, ingestAiUsageBatch } from "../../services/ai-usage.ts";
+import { getAdminChatterUsageReport } from "../../services/ai-usage.ts";
 import { getAdminAiAccountsReport, updateAdminAiAccount } from "../../services/ai-provider-accounts-report.ts";
 import { getAdminAiSpendReport } from "../../services/ai-spend-report.ts";
 import { getAdminAiChatterLimits, updateAdminAiChatterLimit } from "../../services/ai-chatter-limits.ts";
@@ -95,19 +95,13 @@ function serializeAdminPersona(persona: PersonaRecord) {
   };
 }
 
-// AI module (target §6.1): gateway stream, usage ledger intake, usage
-// reporting. Handlers relocated verbatim from server.ts.
+// AI module (target §6.1): gateway stream and usage reporting. Handlers
+// relocated verbatim from server.ts. The client-reported usage intake
+// (POST /api/v1/ai-usage/batch) is retired: the gateway writes the ledger.
 
 export function registerAiRoutes(server: ApiServer, ctx: ApiModuleContext) {
   const { appContext } = ctx;
   const { requirePrincipal } = ctx.auth;
-
-  server.post("/api/v1/ai-usage/batch", {
-    schema: routeSchemas.aiUsageBatch,
-  }, async (request) => {
-    const principal = await requirePrincipal(request);
-    return ingestAiUsageBatch(appContext, principal, request.body);
-  });
 
   // Raw prompt lane: owner cookie session only. A raw prompt on the agency's
   // provider keys is owner content; clients stream through the feature route
