@@ -1273,6 +1273,9 @@ export async function prepareAiFeatureStream(
       // as the client's recaps read selects them for the same pair. Every other
       // request attaches what it did before.
       const pairFanRef = conversationPair !== null ? body.fanRef ?? undefined : undefined;
+      // The definition narrows only the recaps written while the Recap prompt
+      // carried the persona (RECAP_PERSONA_FREE_SINCE): a persona edit no
+      // longer hides a later recap from Coach.
       const found = await getFreshestUsableRecaps(app.db, {
         pageId,
         conversationRefs,
@@ -1652,9 +1655,10 @@ export async function prepareAiFeatureStream(
       ? {
         featureParams: {
           summaryMode: body.summaryMode ?? "full",
-          // Recaps are persona-scoped inputs. Persist the exact resolved
-          // definition (not merely the caller-supplied key) so a later coach
-          // turn cannot attach a recap generated under another revision.
+          // Provenance: the exact resolved definition (not merely the
+          // caller-supplied key). The recap readers scope by it only the
+          // recaps written before RECAP_PERSONA_FREE_SINCE (ai-restricted.ts),
+          // while the Recap prompt still carried the persona.
           personaDefinitionId: persona.definitionId,
           // R20 HF-7д: on the Fansly lane without clientContext, the hub's own.
           transcriptCoverage: body.clientContext?.transcriptCoverage ?? hubTranscriptCoverage ?? null,
