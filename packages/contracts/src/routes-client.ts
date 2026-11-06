@@ -366,8 +366,9 @@ export type ClientRecapTranscriptCoverage = (typeof CLIENT_RECAP_TRANSCRIPT_COVE
 
 export const clientConversationRecapsQuerySchema = z.object({
   /** The persona's opaque catalog identity (`aiPersonaCatalog.definitionId`).
-   *  With it, only that persona's recaps are selected; without it, the freshest
-   *  of any persona, as `aiRecapStatus` does. */
+   *  With it, a recap written before 2026-10-16 13:41 UTC is selected only for
+   *  that persona (a later one reads no persona and is selected under any);
+   *  without it, the freshest of any persona, as `aiRecapStatus` does. */
   personaDefinitionId: z.string().min(16).max(100).optional(),
   /**
    * R20 HF-10 (`conversation-recaps-v1`): the conversation, apart from the fan
@@ -3559,7 +3560,8 @@ export const clientRouteSchemas = {
       + "freshest usable full and short `fan-summary` recap of the fan (`fanRef` is the OnlyFans fan id, "
       + "which is the chat id), the same two rows `aiRecapStatus` describes, to every chatter granted the "
       + "page, whoever generated them. A recap generated from context only its caller saw is never "
-      + "selected. `personaDefinitionId` narrows both slots to one persona. `fullSavedToProfile` tells "
+      + "selected. `personaDefinitionId` narrows both slots to one persona for recaps written before "
+      + "2026-10-16 13:41 UTC; a later recap reads no persona and is selected under any. `fullSavedToProfile` tells "
       + "whether the fan's latest dossier on this page has exactly the full recap's text. With "
       + "`conversation-recaps-v1`, `conversationRef` names the conversation apart from the fan (on Fansly "
       + "the group id): the pair is checked before anything is read (409 `conversation_fan_mismatch` for "

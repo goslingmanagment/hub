@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, isNull, or, sql, type SQL } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNull, or, sql, type SQL } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
 import { aiAcceptanceEvents, aiGenerationContent } from "../schema.ts";
@@ -98,8 +98,11 @@ export type AiGenerationContentRow = typeof aiGenerationContent.$inferSelect;
 export interface FreshestRecapsInput {
   pageId: number;
   conversationRefs: string[]; // canonical groupId first, legacy fanAccountId second
-  /** Opaque identity of the resolved persona. Omitted only for rollout
-   * compatibility with callers predating persona-scoped recap status. */
+  /** Opaque identity of the caller's resolved persona. It scopes only the
+   * recaps written while the Recap prompt still carried the persona
+   * (RECAP_PERSONA_FREE_SINCE); a recap written since serves every
+   * definition. Omitted only by callers predating persona-scoped recap status:
+   * then every definition is selected, as before. */
   personaDefinitionId?: string;
   /**
    * chat-extension R20 HF-10: only the recaps stored about this fan. A row is
@@ -161,10 +164,25 @@ export function usableFanSummaryPredicate(mode: "full" | "short"): SQL {
   ], sql` and `)})`;
 }
 
+/**
+ * Since when a Recap depends on no persona. The Lora persona audit (#643) gave
+ * fan-summary `persona: 'none'` (prompts/builder.ts): its system prompt is the
+ * preamble alone. On production the last fan-summary row whose system prompt
+ * carried the persona block was written 2026-10-15 19:58 UTC and the first one
+ * without it 2026-10-16 13:41:54 UTC. A recap written before this instant was
+ * shaped by the persona of its time and stays scoped to that exact definition;
+ * one written at or after it serves every definition, so an edit of the
+ * persona no longer hides the page's recaps. Giving fan-summary a persona
+ * again would need a new instant here.
+ */
+export const RECAP_PERSONA_FREE_SINCE = new Date("2026-10-16T13:41:00.000Z");
+
 /** One slot of the two-slot selection: the usable recaps of one mode for one
- * conversation, plus the caller's persona definition when it supplies one
- * (legacy rows without one are then excluded by design). Newest first. Served
- * by ai_generation_content_page_conversation_idx (pageId, conversationRef). */
+ * conversation, newest first. With the caller's persona definition, a recap
+ * written before RECAP_PERSONA_FREE_SINCE is selected only under that exact
+ * definition (legacy rows without one are then excluded by design); a later
+ * recap is selected under any. Served by
+ * ai_generation_content_page_conversation_idx (pageId, conversationRef). */
 function recapSlotWhere(input: FreshestRecapsInput, mode: "full" | "short") {
   return and(
     eq(aiGenerationContent.pageId, input.pageId),
@@ -172,7 +190,10 @@ function recapSlotWhere(input: FreshestRecapsInput, mode: "full" | "short") {
     usableFanSummaryPredicate(mode),
     ...(input.fanRef !== undefined ? [generationOfFanPredicate(input.fanRef)] : []),
     ...(input.personaDefinitionId
-      ? [sql`${aiGenerationContent.params} ->> 'personaDefinitionId' = ${input.personaDefinitionId}`]
+      ? [or(
+        sql`${aiGenerationContent.params} ->> 'personaDefinitionId' = ${input.personaDefinitionId}`,
+        gte(aiGenerationContent.createdAt, RECAP_PERSONA_FREE_SINCE),
+      )!]
       : []),
   );
 }

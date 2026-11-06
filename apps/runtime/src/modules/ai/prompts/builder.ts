@@ -310,8 +310,12 @@ interface PromptFeaturePolicy {
    * as a voice reference and the assistant stays the coach. 'none': fan-summary
    * and fan-notes-fill describe the fan and never write as the model; their
    * templates read no persona, so the system prompt is the preamble alone. The
-   * feature service still resolves the persona for every feature (recaps stay
-   * persona-scoped through personaDefinitionId). */
+   * feature service still resolves the persona for every feature, and a recap
+   * records it as personaDefinitionId (provenance). Because fan-summary reads
+   * no persona, the recap readers select a recap written since this policy
+   * under any persona definition (RECAP_PERSONA_FREE_SINCE in
+   * packages/db/src/repositories/ai-restricted.ts): giving fan-summary a
+   * persona again needs a new instant there. */
   persona: 'self' | 'reference' | 'none';
   /** How the fan's names reach the model (shared/name-spelling.ts, owner
    * 2026-11-01). 'plain': the feature writes to the fan, or drafts what the
