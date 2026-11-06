@@ -59,7 +59,7 @@ beforeEach(async () => {
   if (testDb) await resetIntegrationDatabase(testDb.pool);
 });
 
-/** Families the engine journals: the Fansly page's pull captures and WS frames. */
+/** Families the engine journals that mint events: the Fansly page's pull captures. */
 const ENGINE_FIXTURES = canonicalFamilyFixtures()
   .filter((fixture) => fixture.observation.accountId === FIXTURE_FANSLY_PAGE_ID && fixture.expect === "drafts");
 

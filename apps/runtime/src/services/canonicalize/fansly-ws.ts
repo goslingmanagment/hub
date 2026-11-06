@@ -10,7 +10,9 @@ export function canParseFanslyWsObservation(observation: CanonicalizableObservat
     && typeof observation.payload.frame === "string";
 }
 
-/** Parsing retains addresses and explicit debt only. A candidate type is not
+/** Not registered: the `signals` family mints nothing until a reader exists
+ * (see CANONICALIZER_FAMILIES). Kept for that reader.
+ * Parsing retains addresses and explicit debt only. A candidate type is not
  * permission to dispatch: a consumer keeps its own live gates.
  * Old B0 envelopes without a captured generation remain unattributable debt. */
 export function canonicalizeFanslyWsObservation(observation: CanonicalizableObservation): CanonicalEventDraft[] {
