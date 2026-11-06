@@ -276,6 +276,23 @@ export async function hasDueAiMediaDescriptions(
   return result.rows[0]?.due === true;
 }
 
+/** Whether a row put back as `pending` with this error code is still before
+ * its retry time (the describer's lane-wide wait after a credit refusal). */
+export async function hasWaitingAiMediaDescription(
+  db: Database,
+  input: { errorCode: string; now: Date },
+): Promise<boolean> {
+  const result = await db.execute<{ waiting: boolean }>(sql`
+    select exists (
+      select 1 from ai_media_descriptions
+      where status = 'pending'
+        and error_code = ${input.errorCode}
+        and next_attempt_at > ${input.now}
+    ) as waiting
+  `);
+  return result.rows[0]?.waiting === true;
+}
+
 export interface FinishAiMediaDescriptionInput {
   id: number;
   /** The token of the claim being settled (compare-and-set). */

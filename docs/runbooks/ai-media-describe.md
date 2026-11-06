@@ -73,6 +73,7 @@ described; caps $1 and 150 images per UTC day for the agency.
 | Timeout, drop after send | `outcome_unknown` | never | reservation kept |
 | 429 / 5xx / 529 / connect failure before send | `failed` after ≤2 retries in the call | never after that | released |
 | 401 / 403 | `pending` | lane stops (incident) | released |
+| Credit refusal by every account (400 "credit balance is too low", 402) | `pending` (`provider_billing`) | after 10 min; the lane waits with it | released |
 | Other 4xx | `failed` | never | released |
 
 Response handling remains independent of the prompt: both v2 markers
@@ -225,6 +226,11 @@ first generation or a replayed projection never starts a historical pass.
 - **Account stop:** Anthropic 401/403 → incident `ai_provider_failed` /
   `media_describe_account_stop`; nothing is sent until the owner resolves the
   incident in the console (Notifications → Incidents → Resolve).
+- **Out of credit:** when every Anthropic account refuses for credit, the row
+  goes back to `pending` with `error_code = provider_billing` for 10 minutes,
+  and while it waits the sweep claims nothing (`skipped: account_unavailable`):
+  one file probes per 10 minutes, not every due file. A top-up or renewal is
+  picked up by the next probe; nothing to resolve by hand.
 - **Caps:** an exhausted day defers rows (`budget_deferred`) to the next UTC
   midnight. Ready descriptions keep working.
 - **Rollback:** switch off. The tables stay; nothing else reads them.

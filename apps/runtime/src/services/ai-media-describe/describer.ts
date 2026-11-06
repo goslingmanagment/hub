@@ -142,6 +142,9 @@ export type MediaDescribeOutcome =
   | { kind: "outcome_unknown"; errorCode: string }
   /** 401/403: account-level stop until the owner re-enables. */
   | { kind: "account_stop"; errorCode: string; httpStatus: number }
+  /** Every account refused for credit before the model ran (nothing billed,
+   * nothing wrong with the image): the row waits for a top-up or renewal. */
+  | { kind: "account_unavailable"; errorCode: "provider_billing"; httpStatus: number | null }
   /** Any other definitive provider rejection (400, 404, 413, …). */
   | { kind: "failed"; errorCode: string; httpStatus: number | null };
 
@@ -238,6 +241,11 @@ export function classifyMediaDescribeFailure(error: unknown): Exclude<
       : { kind: "outcome_unknown", errorCode: sdk.kind === null ? "provider_unknown_failure" : "provider_connection_lost" };
   }
   const status = sdk.httpStatus;
+  // A credit refusal is a 400 (or 402) the pool already failed over on: it
+  // says nothing about this image, so it must not end as provider_rejected.
+  if (classifyAnthropicAccountFailure(error) === "credit_exhausted") {
+    return { kind: "account_unavailable", errorCode: "provider_billing", httpStatus: status };
+  }
   if (status === 401 || status === 403) {
     return { kind: "account_stop", errorCode: status === 401 ? "provider_auth" : "provider_permission", httpStatus: status };
   }

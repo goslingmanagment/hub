@@ -52,8 +52,11 @@ const Anthropic = (await import(
 ) as {
   default: {
     APIConnectionTimeoutError: new () => Error;
+    APIError: { generate(status: number, body: unknown, message: string, headers: Headers): Error };
   };
 }).default;
+
+const LOW_CREDIT = "Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.";
 
 const SINCE = new Date("2026-09-28T10:00:00Z");
 const NOW = new Date("2026-09-28T12:00:00Z");
@@ -293,6 +296,41 @@ describe("AI media describer sweep", () => {
     const day = await testDb!.pool.query(`select images_reserved, micro_usd_reserved from ai_media_describe_days`);
     expect(day.rows[0].images_reserved).toBe(1);
     expect(Number(day.rows[0].micro_usd_reserved)).toBeGreaterThan(0);
+  });
+
+  it("puts a file back when every account is out of credit; the lane waits, then describes it", async () => {
+    const first = await candidate({ mediaRef: "k1" });
+    const second = await candidate({ mediaRef: "k2" });
+    const refusal = Anthropic.APIError.generate(
+      400,
+      { type: "error", error: { type: "invalid_request_error", message: LOW_CREDIT } },
+      LOW_CREDIT,
+      new Headers(),
+    );
+    const { calls, deps } = harness({ responses: [refusal], bytesByRef: { k1: imageA, k2: imageB } });
+    const result = await runAiMediaDescribeSweep(app, deps);
+    // The sweep stops at the refusal instead of burning the next row.
+    expect(result).toMatchObject({ claimed: 1, sent: 1, outcomes: { account_unavailable: 1 } });
+    expect(await row(first)).toMatchObject({ status: "pending", error_code: "provider_billing", description: null });
+    expect(await row(second)).toMatchObject({ status: "pending", attempts: 0 });
+    const usage = await testDb!.pool.query(`select gateway_outcome, error_code, provider_http_status, cost_micro_usd from ai_usage_events`);
+    expect(usage.rows).toHaveLength(1);
+    expect(usage.rows[0]).toMatchObject({ gateway_outcome: "failed", error_code: "provider_billing", provider_http_status: 400 });
+    expect(Number(usage.rows[0].cost_micro_usd)).toBe(0);
+    const day = await testDb!.pool.query(`select images_reserved, micro_usd_reserved from ai_media_describe_days`);
+    expect(day.rows[0]).toMatchObject({ images_reserved: 0 });
+    expect(Number(day.rows[0].micro_usd_reserved)).toBe(0);
+
+    // Before the retry time nothing is downloaded or sent, though k2 is due.
+    expect(await runAiMediaDescribeSweep(app, deps)).toMatchObject({ skipped: "account_unavailable", claimed: 0 });
+    expect(calls).toMatchObject({ download: 1, provider: 1 });
+
+    // After it (an account topped up): both are described.
+    const later = new Date(NOW.getTime() + 11 * 60 * 1000);
+    await runAiMediaDescribeSweep(app, { ...deps, now: () => later });
+    expect(await row(first)).toMatchObject({ status: "described", error_code: null });
+    expect(await row(second)).toMatchObject({ status: "described" });
+    expect(calls.provider).toBe(3);
   });
 
   it("never resends after the request may have left, even when the settle fails", async () => {

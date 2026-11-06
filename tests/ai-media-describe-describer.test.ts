@@ -66,6 +66,17 @@ function apiError(status: number) {
   return Anthropic.APIError.generate(status, { error: { type: "x", message: "m" } }, "m", new Headers());
 }
 
+// What Anthropic answers an account out of credit (seen on 2026-10-30 and 11-01).
+const LOW_CREDIT = "Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.";
+function creditRefusal() {
+  return Anthropic.APIError.generate(
+    400,
+    { type: "error", error: { type: "invalid_request_error", message: LOW_CREDIT } },
+    LOW_CREDIT,
+    new Headers(),
+  );
+}
+
 describe("media describer request", () => {
   it("sends one base64 JPEG, no URL, thinking disabled, no sampling params", () => {
     const request = buildMediaDescribeRequest(MODEL, "QUJD");
@@ -176,6 +187,14 @@ describe("media describer failure classification", () => {
     expect(classifyMediaDescribeFailure(apiError(403))).toMatchObject({ kind: "account_stop", httpStatus: 403 });
     expect(classifyMediaDescribeFailure(apiError(400))).toMatchObject({ kind: "failed", httpStatus: 400 });
   });
+
+  it("waits out a credit refusal instead of failing the image", () => {
+    expect(classifyMediaDescribeFailure(creditRefusal())).toEqual({
+      kind: "account_unavailable",
+      errorCode: "provider_billing",
+      httpStatus: 400,
+    });
+  });
 });
 
 describe("describeMedia retry policy", () => {
@@ -206,6 +225,8 @@ describe("describeMedia retry policy", () => {
       message({ content: [{ type: "text", text: "UNAVAILABLE: unclear_image" }] }),
       message({ content: [{ type: "text", text: "UNAVAILABLE: content_restricted" }] }),
       new Anthropic.APIConnectionTimeoutError(),
+      // The pool has already asked every account.
+      creditRefusal(),
     ]) {
       const { client, requests } = scriptedClient([step]);
       await describeMedia({ model: MODEL, jpegBase64: "QUJD", proxy: PROXY, clientFactory: () => client, sleep: async () => undefined });
