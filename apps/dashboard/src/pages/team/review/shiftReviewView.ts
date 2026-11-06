@@ -11,7 +11,12 @@ const MINUTE_MS = 60_000;
 export const PACE_WINDOW_MINUTES = 10;
 /** The reply time is the median of the replies of the last this many minutes. */
 export const REPLY_WINDOW_MINUTES = 30;
-/** The norm of the job description: «Ответ в активном диалоге — до 10 минут». */
+/**
+ * The reply norm is a band, not a line: the owner put it at «5-10 минут»
+ * (2026-11-07); the job description says «до 10 минут». Past the upper end a
+ * wait counts as long.
+ */
+export const REPLY_FAST_SECONDS = 5 * 60;
 export const REPLY_NORM_SECONDS = 10 * 60;
 /** A click on the pulse picks this many minutes on each side. */
 export const PICK_MINUTES = 10;
@@ -175,14 +180,21 @@ export interface ShiftTotals {
   fanMessages: number;
   replies: number;
   replyMedianSeconds: number | null;
+  repliesWithinFast: number;
   repliesWithinNorm: number;
+  /** Replies to fans who had been waiting since before the shift; their wait counts from its start. */
+  repliesToInherited: number;
   longestReplySeconds: number | null;
   /** Fans who wrote within the shift and got no answer before its end. */
   unanswered: number;
   /** Fans waiting since before the shift: how many, how many got an answer in it. */
   inherited: number;
   inheritedAnswered: number;
-  origin: { ai: number; copied: number; fix: number; own: number; none: number };
+  /** Of the personal messages: Hi greetings apart from the other AI texts; copied — an AI text the extension saw typed or pasted by hand. */
+  origin: { ai: number; hi: number; copied: number; fix: number; own: number; none: number };
+  /** Chats by kind: the fan wrote in the shift, or only the chatter did. */
+  dialogs: number;
+  touches: number;
   repeated: number;
   marked: number;
   ppvSent: number;
@@ -191,17 +203,19 @@ export interface ShiftTotals {
   perHour: number | null;
 }
 
-export function totalsOf(data: TeamShiftReviewResponse, mine: readonly MyMessage[]): ShiftTotals {
+export function totalsOf(data: TeamShiftReviewResponse, mine: readonly MyMessage[], summaries: readonly ChatSummary[]): ShiftTotals {
   const personal = mine.filter((one) => !one.message.mass);
   const delays = personal.flatMap((one) => (one.message.mine.replySeconds === null ? [] : [one.message.mine.replySeconds]));
   const shiftStart = Date.parse(data.shift.startedAt);
   const inherited = data.waits.filter((wait) => Date.parse(wait.since) < shiftStart);
-  const origin = { ai: 0, copied: 0, fix: 0, own: 0, none: 0 };
-  for (const one of mine) {
+  const inheritedAnswers = new Set(inherited.filter((wait) => wait.by !== null).map((wait) => `${wait.chat}|${Date.parse(wait.to)}`));
+  const origin = { ai: 0, hi: 0, copied: 0, fix: 0, own: 0, none: 0 };
+  for (const one of personal) {
     const facts = one.message.mine;
     if (facts.origin === null) origin.none += 1;
+    else if (facts.origin === "ai" && isHi(facts)) origin.hi += 1;
     else origin[facts.origin] += 1;
-    if (facts.origin === "ai" && !aiButton(facts.composedWith)) origin.copied += 1;
+    if (facts.origin === "ai" && !isHi(facts) && facts.composedWith === "hand") origin.copied += 1;
   }
   const fanMessages = data.chats.flatMap((chat) => chat.messages.filter((message) => message.inShift && message.side === "fan"));
   const minutes = data.shift.workedMinutes;
@@ -213,12 +227,16 @@ export function totalsOf(data: TeamShiftReviewResponse, mine: readonly MyMessage
     fanMessages: fanMessages.length,
     replies: delays.length,
     replyMedianSeconds: median(delays),
+    repliesWithinFast: delays.filter((delay) => delay <= REPLY_FAST_SECONDS).length,
     repliesWithinNorm: delays.filter((delay) => delay <= REPLY_NORM_SECONDS).length,
+    repliesToInherited: personal.filter((one) => one.message.mine.replySeconds !== null && inheritedAnswers.has(`${one.chat.key}|${one.at}`)).length,
     longestReplySeconds: delays.length === 0 ? null : Math.max(...delays),
     unanswered: data.waits.filter((wait) => wait.by === null && Date.parse(wait.since) >= shiftStart).length,
     inherited: inherited.length,
     inheritedAnswered: inherited.filter((wait) => wait.by !== null).length,
     origin,
+    dialogs: summaries.filter((summary) => summary.kind === "dialog").length,
+    touches: summaries.filter((summary) => summary.kind === "touch").length,
     repeated: mine.filter((one) => one.message.mine.repeats > 0).length,
     marked: mine.filter((one) => one.message.mine.marks.length > 0).length,
     ppvSent: mine.filter((one) => one.message.priceMills !== null).length,
@@ -233,25 +251,44 @@ export function aiButton(composedWith: string | null): boolean {
   return composedWith !== null && AI_BUTTONS.has(composedWith);
 }
 
+type MineFacts = NonNullable<ShiftReviewMessage["mine"]>;
+
+/** A greeting to a new follower by the Hi button: an AI text, but not a reply in a conversation. */
+export function isHi(mine: Pick<MineFacts, "composedWith" | "aiFeature">): boolean {
+  return mine.composedWith === "hi" || mine.aiFeature === "hi-greeting";
+}
+
+/** dialog — the fan wrote within the shift; touch — only the chatter did; other — neither (a wait from before, a colleague). */
+export type ChatKind = "dialog" | "touch" | "other";
+
 export interface ChatSummary {
   chat: ShiftReviewChat;
+  kind: ChatKind;
   mine: number;
   fan: number;
   others: number;
   ai: number;
+  hi: number;
   copied: number;
   fix: number;
   first: number | null;
   last: number | null;
   /** The longest the fan waited within the shift before an answer came, seconds. */
   longestWaitSeconds: number | null;
-  waitingAtEnd: boolean;
+  /** How long a fan who wrote within the shift had waited by its end with no answer, seconds. */
+  openWaitSeconds: number | null;
+  /** A fan who wrote within the shift got no answer before its end. */
+  unansweredInShift: boolean;
+  /** A fan waiting since before the shift got no answer in it. */
   waitingSinceBefore: boolean;
   repeated: number;
   marked: number;
   ppv: number;
   bought: number;
+  firstFanText: string | null;
   lastFanText: string | null;
+  /** The chatter's first text in the shift: what a first touch said. */
+  firstMineText: string | null;
 }
 
 export function summariesOf(data: TeamShiftReviewResponse): ChatSummary[] {
@@ -261,43 +298,76 @@ export function summariesOf(data: TeamShiftReviewResponse): ChatSummary[] {
   return data.chats.map((chat) => {
     const inShift = chat.messages.filter((message) => message.inShift);
     const mine = inShift.filter((message) => message.mine !== null);
+    const fan = inShift.filter((message) => message.side === "fan");
     const waits = waitsByChat.get(chat.key) ?? [];
     const waitSeconds = waits.filter((wait) => wait.by !== null).map((wait) => (Date.parse(wait.to) - Math.max(Date.parse(wait.since), shiftStart)) / 1000);
+    const openSeconds = waits.filter((wait) => wait.by === null && Date.parse(wait.since) >= shiftStart).map((wait) => (Date.parse(wait.to) - Date.parse(wait.since)) / 1000);
     const times = inShift.map((message) => Date.parse(message.at));
-    const lastFan = [...inShift].reverse().find((message) => message.side === "fan");
+    const textOf = (message: ShiftReviewMessage | undefined) => (message === undefined || message.text.trim() === "" ? null : message.text);
+    const firstFan = fan.find((message) => message.text.trim() !== "");
+    const lastFan = [...fan].reverse().find((message) => message.text.trim() !== "");
+    const isAi = (message: ShiftReviewMessage) => message.mine!.origin === "ai";
     return {
       chat,
+      kind: fan.length > 0 ? "dialog" : mine.length > 0 ? "touch" : "other",
       mine: mine.length,
-      fan: inShift.filter((message) => message.side === "fan").length,
+      fan: fan.length,
       others: inShift.filter((message) => message.side === "page" && message.mine === null).length,
-      ai: mine.filter((message) => message.mine!.origin === "ai").length,
-      copied: mine.filter((message) => message.mine!.origin === "ai" && !aiButton(message.mine!.composedWith)).length,
+      ai: mine.filter((message) => isAi(message) && !isHi(message.mine!)).length,
+      hi: mine.filter((message) => isAi(message) && isHi(message.mine!)).length,
+      copied: mine.filter((message) => isAi(message) && !isHi(message.mine!) && message.mine!.composedWith === "hand").length,
       fix: mine.filter((message) => message.mine!.origin === "fix").length,
       first: times.length === 0 ? null : Math.min(...times),
       last: times.length === 0 ? null : Math.max(...times),
       longestWaitSeconds: waitSeconds.length === 0 ? null : Math.max(...waitSeconds),
-      waitingAtEnd: waits.some((wait) => wait.by === null),
+      openWaitSeconds: openSeconds.length === 0 ? null : Math.max(...openSeconds),
+      unansweredInShift: waits.some((wait) => wait.by === null && Date.parse(wait.since) >= shiftStart),
       waitingSinceBefore: waits.some((wait) => wait.by === null && Date.parse(wait.since) < shiftStart),
       repeated: mine.filter((message) => message.mine!.repeats > 0).length,
       marked: mine.filter((message) => message.mine!.marks.length > 0).length,
       ppv: mine.filter((message) => message.priceMills !== null).length,
       bought: mine.filter((message) => message.bought === true).length,
-      lastFanText: lastFan?.text ?? null,
+      firstFanText: textOf(firstFan),
+      lastFanText: lastFan === firstFan ? null : textOf(lastFan),
+      firstMineText: textOf(mine.find((message) => message.text.trim() !== "")),
     };
   });
 }
 
-export const CHAT_FILTERS = ["mine", "ai", "waited", "unanswered", "money"] as const;
-export type ChatFilter = (typeof CHAT_FILTERS)[number];
+export const CHAT_KINDS = ["dialog", "touch", "all"] as const;
+export type ChatKindFilter = (typeof CHAT_KINDS)[number];
+export const CHAT_SHOWS = ["all", "waited", "unanswered", "inherited", "money"] as const;
+export type ChatShow = (typeof CHAT_SHOWS)[number];
+export const CHAT_SORTS = ["messages", "time", "wait", "money"] as const;
+export type ChatSort = (typeof CHAT_SORTS)[number];
 
-export function chatPasses(summary: ChatSummary, filter: ChatFilter): boolean {
-  switch (filter) {
-    case "mine": return summary.mine > 0;
-    case "ai": return summary.ai > 0;
+export function kindPasses(summary: ChatSummary, kind: ChatKindFilter): boolean {
+  return kind === "all" || summary.kind === kind;
+}
+
+export function showPasses(summary: ChatSummary, show: ChatShow): boolean {
+  switch (show) {
+    case "all": return true;
     case "waited": return summary.longestWaitSeconds !== null && summary.longestWaitSeconds > REPLY_NORM_SECONDS;
-    case "unanswered": return summary.waitingAtEnd;
+    case "unanswered": return summary.unansweredInShift;
+    case "inherited": return summary.waitingSinceBefore;
     case "money": return summary.ppv > 0 || summary.chat.shiftNetMills > 0;
   }
+}
+
+/** The list in the chosen order; ties keep the server's order (by the first message in the shift). */
+export function sortSummaries(list: readonly ChatSummary[], sort: ChatSort): ChatSummary[] {
+  const key = (summary: ChatSummary): number => {
+    switch (sort) {
+      case "messages": return -(summary.mine + summary.fan);
+      case "time": return summary.first ?? Number.MAX_SAFE_INTEGER;
+      case "wait": return -Math.max(summary.longestWaitSeconds ?? -1, summary.openWaitSeconds ?? -1);
+      case "money": return -(summary.chat.shiftNetMills + summary.ppv);
+    }
+  };
+  return list.map((summary, index) => ({ summary, index, key: key(summary) }))
+    .sort((a, b) => a.key - b.key || a.index - b.index)
+    .map((one) => one.summary);
 }
 
 /**

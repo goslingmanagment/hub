@@ -7,6 +7,7 @@ import { ruPlural } from "@/lib/plural";
 import {
   PACE_WINDOW_MINUTES,
   PICK_MINUTES,
+  REPLY_FAST_SECONDS,
   REPLY_NORM_SECONDS,
   REPLY_WINDOW_MINUTES,
   activityRuns,
@@ -20,14 +21,13 @@ import {
  * of the last half hour, and how many fans waited — over the strip of the
  * extension's minutes. The crosshair runs through all three; the line above
  * says every value at the hovered minute. A click picks ±10 minutes: the chats
- * below narrow to them.
+ * below narrow to them. The reply band carries the norm as a band, 5–10 minutes.
  */
 
 const PACE = "var(--color-chart-blue)";
 const REPLY = "var(--color-chart-violet)";
 const WAIT = "var(--color-chart-orange)";
 const SYNC = "shift-pulse";
-const MINUTE_MS = 60_000;
 /** One width for every band's value axis, so the three plots line up with the strip. */
 const AXIS_WIDTH = 44;
 const MARGIN = { top: 6, right: 12, left: 0, bottom: 0 } as const;
@@ -62,8 +62,8 @@ function Readout({ minute, average }: { minute: PulseMinute | null; average: num
   if (minute === null) {
     return (
       <p className="sr-readout sr-readout-hint">
-        Наведите на график: темп, ответ и кто ждал в каждую минуту. Клик выбирает ±{PICK_MINUTES} минут — чаты ниже покажут только их.
-        {" "}В среднем за смену — {average.toLocaleString("ru-RU", { maximumFractionDigits: 1 })} сообщ. за {PACE_WINDOW_MINUTES} мин.
+        Наведите — цифры минуты; клик — чаты ±{PICK_MINUTES} минут вокруг.
+        {" "}В среднем за смену {average.toLocaleString("ru-RU", { maximumFractionDigits: 1 })} сообщ. за {PACE_WINDOW_MINUTES} мин.
       </p>
     );
   }
@@ -113,7 +113,7 @@ interface BandProps {
   start: number;
   end: number;
   pauses: ReadonlyArray<{ from: number; to: number }>;
-  picked: number | null;
+  picked: { from: number; to: number } | null;
   onHover: (index: number | null) => void;
   onPick: (at: number) => void;
 }
@@ -170,8 +170,8 @@ function Band({ height, label, legend, axis, children, pulse, start, end, pauses
           ))}
           {picked !== null && (
             <ReferenceArea
-              x1={Math.max(start, picked - PICK_MINUTES * MINUTE_MS)}
-              x2={Math.min(end, picked + PICK_MINUTES * MINUTE_MS)}
+              x1={Math.max(start, picked.from)}
+              x2={Math.min(end, picked.to)}
               fill="var(--color-accent-soft)"
               fillOpacity={0.9}
               stroke="var(--color-accent-border)"
@@ -191,7 +191,7 @@ export function ShiftPulse({ pulse, start, end, pauses, picked, onPick }: {
   start: number;
   end: number;
   pauses: ReadonlyArray<{ from: number; to: number }>;
-  picked: number | null;
+  picked: { from: number; to: number } | null;
   onPick: (at: number) => void;
 }) {
   const [hovered, setHovered] = useState<number | null>(null);
@@ -212,18 +212,18 @@ export function ShiftPulse({ pulse, start, end, pauses, picked, onPick }: {
   return (
     <div className="sr-pulse">
       <Readout minute={dataMinute} average={average} />
-      <Band {...shared} height={132} label={`Темп: сообщений за последние ${PACE_WINDOW_MINUTES} минут`} axis={paceAxis}>
+      <Band {...shared} height={108} label={`Темп: сообщений за последние ${PACE_WINDOW_MINUTES} минут`} axis={paceAxis}>
         <ReferenceLine y={average} stroke="var(--color-chart-compare)" strokeDasharray="4 4" ifOverflow="extendDomain" />
         <Area type="monotone" dataKey="pace" stroke={PACE} strokeWidth={2} fill={PACE} fillOpacity={0.14} dot={false} activeDot={false} {...CHART_ANIMATION} />
       </Band>
       <ActivityStrip pulse={pulse} start={start} end={end} />
-      <Band {...shared} height={96} label={`Ответ фану: медиана за последние ${REPLY_WINDOW_MINUTES} минут, мин`} axis={replyAxis}>
-        <ReferenceLine y={REPLY_NORM_SECONDS / 60} stroke="var(--color-chart-compare)" strokeDasharray="4 4" />
+      <Band {...shared} height={84} label={`Ответ фану: медиана за последние ${REPLY_WINDOW_MINUTES} минут, мин`} axis={replyAxis}>
+        <ReferenceArea y1={REPLY_FAST_SECONDS / 60} y2={REPLY_NORM_SECONDS / 60} fill="var(--color-chart-compare)" fillOpacity={0.12} stroke="none" ifOverflow="hidden" />
         <Line type="monotone" dataKey="replyMedian" stroke={REPLY} strokeWidth={2} dot={false} activeDot={false} connectNulls={false} {...CHART_ANIMATION} />
       </Band>
       <Band
         {...shared}
-        height={112}
+        height={92}
         label="Ждут ответа, фанов"
         axis={waitAxis}
         last
@@ -236,8 +236,8 @@ export function ShiftPulse({ pulse, start, end, pauses, picked, onPick }: {
         <Area type="stepAfter" dataKey="waitingOpen" stackId="wait" stroke="none" fill={WAIT} fillOpacity={0.16} dot={false} activeDot={false} {...CHART_ANIMATION} />
       </Band>
       <p className="sr-foot">
-        Пунктир на темпе — среднее за смену, на ответе — норма {REPLY_NORM_SECONDS / 60} минут. Серые полосы — паузы смены.
-        {" "}Полоса «актив.»: тёмная — действия в расширении, светлая — открыто без действий, пусто — закрыто.
+        Пунктир на темпе — среднее за смену; полоса на ответе — норма {REPLY_FAST_SECONDS / 60}–{REPLY_NORM_SECONDS / 60} минут; серое — паузы.
+        {" "}«актив.»: тёмное — действия в расширении, светлое — открыто без действий.
       </p>
     </div>
   );

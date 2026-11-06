@@ -29,10 +29,17 @@ const AI_LINES = [
   "i get it, no rush at all ♡ it'll be right here waiting for you whenever you feel like it",
   "you're too sweet, seriously. i'm just chilling in bed scrolling, kinda wishing someone fun would keep me company",
 ] as const;
+// The chatter's own Russian draft and what Fix made of it. A draft that starts like
+// a command («скажи…», «спроси…») is a Fix by command, which the screen tells apart.
 const FIX_PAIRS = [
-  ["скажи что я только проснулась и думала о нём", "just woke up and you were the first thing on my mind hehe"],
-  ["спроси откуда он", "where are you from btw? :3"],
-  ["ответь что видео дома и я его скину позже", "the video is at home rn, i'll send it to you a bit later ok?"],
+  ["только проснулась и сразу подумала о тебе хах", "just woke up and you were the first thing on my mind hehe"],
+  ["а ты откуда кстати", "where are you from btw? :3"],
+  ["видео дома, скину чуть позже ок?", "the video is at home rn, i'll send it to you a bit later ok?"],
+] as const;
+const HI_LINES = [
+  "heyyy thanks for the follow ♡ i'm so happy you found me, how's your day going?",
+  "hiii welcome! i just posted something new and i'm curious what you think :3",
+  "omg hi! thank you for following, tell me a little about yourself?",
 ] as const;
 
 function reviewOf(shift: DemoShift, now: number): Response {
@@ -93,11 +100,36 @@ function reviewOf(shift: DemoShift, now: number): Response {
       });
     }
   }
+  // New followers greeted with the Hi button: the chatter's one message, no word from the fan yet.
+  for (const page of pages) {
+    const platform = demoPage(page.pageLabel)?.platform ?? "fansly";
+    const fans = demoFans(page.pageLabel);
+    const used = new Set(chats.map((chat) => chat.key));
+    let added = 0;
+    for (let index = 0; index < fans.length && added < 4; index += 1) {
+      const fan = fans[(index * 5 + 3) % fans.length]!;
+      const key = `${page.pageLabel}:${fan.platformUserId}`;
+      if (used.has(key)) continue;
+      used.add(key);
+      added += 1;
+      const at = start + intBetween(random, 5, Math.max(6, minutes - 5)) * MIN;
+      const text = pick(random, HI_LINES);
+      const hi: ShiftReviewMessage = {
+        ref: `${key}:hi`, at: new Date(at).toISOString(), side: "page", text, priceMills: null, bought: null, tipMills: null, media: 0,
+        inShift: true, by: "me", byName: null, mass: false,
+        mine: { composedWith: "hi", edited: false, origin: "ai", aiShare: 1, aiFeature: "hi-greeting", aiText: text, draft: null, replySeconds: null, repeats: 0, marks: [] },
+      };
+      chats.push({
+        key, pageLabel: page.pageLabel, platform, conversationRef: fan.platformUserId, fanRef: fan.platformUserId,
+        fanUsername: fan.username, fanDisplayName: fan.displayName, fanLifetimeNetMills: null, shiftNetMills: 0, earlierHidden: 0, messages: [hi],
+      });
+    }
+  }
   // The same template to several fans.
   const template = "heyy just got back, did you miss me? ♡";
   let repeated = 0;
   for (const chat of chats) {
-    const mine = chat.messages.find((message) => message.mine !== null);
+    const mine = chat.messages.find((message) => message.mine !== null && message.mine.composedWith !== "hi");
     if (mine && repeated < 4 && random() < 0.3) {
       mine.text = template;
       repeated += 1;
