@@ -1020,6 +1020,62 @@ const TIMELINE_LANE_PLANES: Readonly<Record<string, readonly string[]>> = {
   presence: ["page_fans"],
 };
 
+interface FanThreadRef {
+  pageId: number;
+  conversationRef: string;
+}
+
+/**
+ * The fan's own threads on the given pages, by `fan_id` (or by the platform pair,
+ * through `fans`): `page_dm_threads_account_fan_idx`.
+ */
+async function listFanThreadRefs(
+  db: Database,
+  input: { pageIds: readonly number[] } & (
+    | { fanId: number }
+    | { platform: string; platformUserId: string }
+  ),
+): Promise<FanThreadRef[]> {
+  const result = "fanId" in input
+    ? await db.execute<Record<string, unknown>>(sql`
+      select t.platform_account_id, t.platform_conversation_id
+      from page_dm_threads t
+      where t.platform_account_id in ${pageIdList(input.pageIds)} and t.fan_id = ${input.fanId}
+    `)
+    : await db.execute<Record<string, unknown>>(sql`
+      select t.platform_account_id, t.platform_conversation_id
+      from fans f
+      join page_dm_threads t on t.fan_id = f.id
+      where f.platform = ${input.platform} and f.platform_user_id = ${input.platformUserId}
+        and t.platform_account_id in ${pageIdList(input.pageIds)}
+    `);
+  return result.rows.map((row) => ({
+    pageId: Number(row.platform_account_id),
+    conversationRef: String(row.platform_conversation_id),
+  }));
+}
+
+/**
+ * "This fan's messages" in `message_archive`, both directions.
+ *
+ * `fan_native_id` alone is not enough: on Fansly it is the SENDER's id, so the
+ * model's own messages carry NULL there and a filter on it drops every outbound
+ * message. The fan's threads name the conversations those live in. The pairs go
+ * in as values, not a subquery: a hashed subplan made the planner seq-scan the
+ * archive, values let it OR the fan index with `message_archive_account_conv_idx`.
+ */
+function fanArchiveMessagesSql(
+  person: { platform: string; platformUserId: string },
+  threads: readonly FanThreadRef[],
+): SQL {
+  const arms = [
+    sql`ma.fan_native_id = ${person.platformUserId}`,
+    ...threads.map((thread) =>
+      sql`(ma.account_id = ${thread.pageId} and ma.conversation_ref = ${thread.conversationRef})`),
+  ];
+  return sql`ma.platform = ${person.platform} and (${sql.join(arms, sql` or `)})`;
+}
+
 /**
  * The merged per-fan timeline.
  *
@@ -1032,6 +1088,9 @@ export async function listAgentTimeline(
   input: {
     pageIds: readonly number[];
     fanId: number;
+    /** The fan's platform pair, as `fans` holds it for `fanId`. */
+    fanPlatform: string;
+    fanPlatformUserId: string;
     from: Date;
     to: Date;
     lanes: readonly string[];
@@ -1048,6 +1107,11 @@ export async function listAgentTimeline(
   const arms: SQL[] = [];
 
   if (wants("messages")) {
+    const threads = await listFanThreadRefs(db, { pageIds: input.pageIds, fanId: input.fanId });
+    const fanMessages = fanArchiveMessagesSql(
+      { platform: input.fanPlatform, platformUserId: input.fanPlatformUserId },
+      threads,
+    );
     arms.push(sql`
       select 'messages'::text as lane,
              case when ma.deleted_at is not null then 'message.deleted'
@@ -1075,8 +1139,7 @@ export async function listAgentTimeline(
              null::text as post_tip_goal_ref
       from message_archive ma
       join pages p on p.id = ma.account_id
-      join fans f on f.platform_user_id = ma.fan_native_id and f.platform::text = ma.platform
-      where ma.account_id in ${pages} and f.id = ${input.fanId}
+      where ma.account_id in ${pages} and ${fanMessages}
         and ma.occurred_at >= ${input.from} and ma.occurred_at < ${input.to}
     `);
   }
@@ -1572,8 +1635,12 @@ export async function searchAgentArchive(
     clauses.push(sql`ma.conversation_ref in ${textList(input.conversationRefs)}`);
   }
   if (input.person !== undefined) {
-    clauses.push(sql`ma.platform = ${input.person.platform}`);
-    clauses.push(sql`ma.fan_native_id = ${input.person.platformUserId}`);
+    const threads = await listFanThreadRefs(db, {
+      pageIds: input.pageIds,
+      platform: input.person.platform,
+      platformUserId: input.person.platformUserId,
+    });
+    clauses.push(fanArchiveMessagesSql(input.person, threads));
   }
   if (input.senderRole !== undefined) {
     clauses.push(sql`ma.sender_role = ${input.senderRole}`);

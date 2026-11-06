@@ -160,6 +160,8 @@ async function seedFixture() {
 
   // The archive begins in MARCH: January is simply not there, and the whole
   // point is that the answer says so rather than returning a bare empty list.
+  // The model's row has NO fan_native_id, as on Fansly in production: there the
+  // column is the sender's id and the model's own messages carry NULL.
   await pool.query(
     `insert into message_archive (account_id, platform, conversation_ref, message_ref,
        fan_native_id, sender_role, is_sent_by_me, occurred_at, text_plain, price_mills,
@@ -167,7 +169,7 @@ async function seedFixture() {
      values
        ($1, 'fansly', $2, 'm-1', $3, 'fan', false, '2026-03-01T10:00:00Z',
         'did you send the custom video yet', null, 0, '[]'::jsonb),
-       ($1, 'fansly', $2, 'm-2', $3, 'model', true, '2026-03-01T11:00:00Z',
+       ($1, 'fansly', $2, 'm-2', null, 'model', true, '2026-03-01T11:00:00Z',
         'yes baby, sending the custom now', null, 0,
         '[{"id":"med-1","mimetype":"video/mp4","width":1920,"height":1080},
           {"id":"med-zero","mimetype":"image/jpeg","width":0,"height":0,
@@ -289,6 +291,30 @@ describe("[sync-critical] agent read plane operations", () => {
     });
     expect(withMedia.tipAmountMills).toBe(0);
     expect(body.delivery.caveats).toContain("mutable_sort_key");
+  });
+
+  // Prod, 2026-11: on Fansly the timeline and the person search returned no
+  // model message at all (12.6k a week), because both matched on fan_native_id.
+  it("#4 and #7 keep the model's half of a Fansly conversation", async () => {
+    const timeline = await agentGet(
+      `/api/v1/agent/people/fansly/${FAN_PLATFORM_USER_ID}/timeline?${MARCH}&lanes=messages`,
+    );
+    expect(timeline.statusCode).toBe(200);
+    const kinds = timeline.json().items.map(
+      (item: { messageRef: string; kind: string }) => [item.messageRef, item.kind],
+    );
+    expect(kinds).toContainEqual(["m-2", "message.sent"]);
+    expect(kinds).toContainEqual(["m-1", "message.received"]);
+
+    const search = await agentPost("/api/v1/agent/search/messages", {
+      q: "custom",
+      from: "2026-03-01T00:00:00Z",
+      to: "2026-03-10T00:00:00Z",
+      person: { platform: "fansly", platformUserId: FAN_PLATFORM_USER_ID },
+    });
+    expect(search.statusCode).toBe(200);
+    const refs = search.json().items.map((item: { messageRef: string }) => item.messageRef);
+    expect([...refs].sort()).toEqual(["m-1", "m-2"]);
   });
 
   it("#6 writes an audit row on every transcript read", async () => {
