@@ -13,6 +13,7 @@ import {
   FANSLY_SCHEDULED_STATUS,
   type FanslyPublishFacts,
 } from "@agency_hub_core/fansly";
+import { truncateUtf16Safe } from "@agency_hub_core/shared";
 
 import type { ApplyInput, ApplyResult, LocalApplyInput, PlanContext, ResourceModule, StepPlan } from "../../engine/resource.ts";
 import { readFanslyPageFacts } from "../lib/page-facts.ts";
@@ -48,7 +49,10 @@ const MINUTE_MS = 60_000;
  *  for gives up (its reads keep failing, or the page is held): the job counts
  *  it as a failed read and asks again later. */
 export const FANSLY_VERIFY_GIVE_UP_MS = 2 * 60 * MINUTE_MS;
-/** The text kept of a post or a schedule entry: enough to know it again. */
+/** The text kept of a post or a schedule entry: enough to know it again.
+ *  Cut with `truncateUtf16Safe`, never `.slice`: half an emoji's surrogate
+ *  pair makes jsonb refuse the snapshot or the work's cursor (2026-10-25..31,
+ *  the OnlyFans twin: 2,502 snapshots refused). */
 const TEXT_HEAD = 500;
 const CAPTION_HEAD = 300;
 
@@ -172,7 +176,7 @@ export function readFanslySchedule(response: unknown, facts: FanslyPublishFacts 
       postId,
       scheduledForMs: fanslyInstantMs(raw.scheduledFor),
       status,
-      text: typeof template.content === "string" ? template.content.slice(0, TEXT_HEAD) : "",
+      text: typeof template.content === "string" ? truncateUtf16Safe(template.content, TEXT_HEAD) : "",
       attachmentIds: attachmentIdsOf(template.attachments),
       mediaRefs: mediaRefsOf(template.attachments),
     });
@@ -185,7 +189,7 @@ export function readFanslySchedule(response: unknown, facts: FanslyPublishFacts 
 
 /** The screen's words of a caption: whitespace folded. */
 function captionHead(text: string): string {
-  return text.replace(/\s+/g, " ").trim().slice(0, CAPTION_HEAD);
+  return truncateUtf16Safe(text.replace(/\s+/g, " ").trim(), CAPTION_HEAD);
 }
 
 /** The page's snapshot of one read (0302's columns): the entries by their post, the posts per UTC day. */
@@ -312,7 +316,7 @@ export function readPostOf(raw: unknown): FanslyReadPost | null {
   return {
     id,
     atMs: fanslyInstantMs(raw.createdAt),
-    text: typeof raw.content === "string" ? raw.content.slice(0, TEXT_HEAD) : "",
+    text: typeof raw.content === "string" ? truncateUtf16Safe(raw.content, TEXT_HEAD) : "",
     attachmentIds: attachmentIdsOf(raw.attachments),
   };
 }

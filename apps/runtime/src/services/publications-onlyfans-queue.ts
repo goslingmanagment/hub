@@ -20,6 +20,7 @@ import {
   PUBLICATION_QUEUE_READ_IDLE_MINUTES,
   PUBLICATION_QUEUE_READ_IN_FLIGHT_MINUTES,
   PUBLICATION_WITHDRAW_MIN_LEAD_MINUTES,
+  truncateUtf16Safe,
 } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
@@ -63,7 +64,9 @@ export function entryFacts(entry: OnlyfansPlatformItem): PublicationQueueEntryFa
     queueId: entry.id,
     postRef: entry.entityId,
     publishAt: entry.at?.toISOString() ?? null,
-    text: normalizePostText(entry.text ?? "").slice(0, CAPTION_HEAD),
+    // Never cut through an emoji: half a surrogate pair makes jsonb refuse the
+    // whole snapshot, and the page is read again every minute (2026-10-25..31).
+    text: truncateUtf16Safe(normalizePostText(entry.text ?? ""), CAPTION_HEAD),
     mediaCount: entry.mediaIds?.length ?? entry.mediaCount,
     // The vault media ids: what the repeat check matches a file by (spec §8.1).
     mediaRefs: entry.mediaIds === null ? [] : [...entry.mediaIds],

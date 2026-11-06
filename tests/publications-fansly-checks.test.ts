@@ -85,6 +85,20 @@ describe("the schedule read (GET /post/scheduled)", () => {
     expect(fanslyScheduleSnapshot(read).entries[0]).toMatchObject({ mediaRefs: ["m1", "m2", "m3"], attachmentRefs: ["am1", "b1"] });
   });
 
+  it("cuts texts without splitting an emoji: half a surrogate pair makes jsonb refuse the snapshot", () => {
+    const read = schedule([
+      // The caption's 300th code unit is an emoji's first half; the template's 500 are not.
+      { postId: "p1", text: `${"a".repeat(299)}💦${"b".repeat(300)}` },
+      // The template's 500th code unit is an emoji's first half.
+      { postId: "p2", text: `${"a".repeat(499)}💦` },
+    ]);
+    if (!read.ok) throw new Error("unreachable");
+    expect(read.active.map((entry) => entry.text.length)).toEqual([500, 499]);
+    const { entries } = fanslyScheduleSnapshot(read);
+    expect(entries.map((entry) => entry.text)).toEqual(["a".repeat(299), "a".repeat(300)]);
+    expect(JSON.stringify(entries)).not.toMatch(/\\ud8/);
+  });
+
   it("is whole only once the stand confirmed the list is the whole schedule", () => {
     expect(schedule([], UNVERIFIED)).toMatchObject({ complete: false });
     expect(schedule([], VERIFIED)).toMatchObject({ complete: true, incompleteReasons: [] });

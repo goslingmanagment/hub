@@ -8,7 +8,7 @@ import {
   onlyfansCheckPlan,
   type PublicationMatchTarget,
 } from "../apps/runtime/src/services/publications-onlyfans-checks.ts";
-import { queueReadDue } from "../apps/runtime/src/services/publications-onlyfans-queue.ts";
+import { entryFacts, queueReadDue } from "../apps/runtime/src/services/publications-onlyfans-queue.ts";
 import {
   parseOnlyfansQueueEntry,
   planQueueWindows,
@@ -142,5 +142,16 @@ describe("when an OnlyFans page's schedule is read", () => {
     expect(due({ publishingEnabled: true, lastAttemptAt: at(-25 * HOUR) })).toBe(true);
     expect(due({ lastAttemptAt: null })).toBe(false);
     expect(due({ lastAttemptAt: at(-MIN), refreshRequestedAt: at(-MIN) })).toBe(true);
+  });
+});
+
+describe("an OnlyFans schedule entry as the snapshot keeps it", () => {
+  // Production 2026-10-25..31: a caption cut by .slice(0, 300) through an
+  // emoji left a lone high surrogate, jsonb refused the snapshot 2,502 times
+  // and the page's schedule was read again every minute.
+  it("cuts the caption at 300 code units without splitting an emoji", () => {
+    const facts = entryFacts(item({ text: `<p>${"a".repeat(299)}💦💦</p>` }));
+    expect(facts.text).toBe("a".repeat(299));
+    expect(JSON.stringify(facts)).not.toMatch(/\\ud8/);
   });
 });
