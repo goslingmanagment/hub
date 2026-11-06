@@ -34,7 +34,12 @@ async function check(): Promise<void> {
   if (checking) return;
   checking = true;
   try {
+    // A fresh heartbeat never kills whatever s6 says (shouldKill), so the
+    // s6-svstat fork, twice a second, is spent only on a missing or stale one.
+    const firstAge = heartbeatAgeMs();
+    if (firstAge !== null && firstAge <= THRESHOLD_MS) return;
     const status = parseStatus(await run("/command/s6-svstat", ["-o", "up,pid,updownfor", SERVICE]));
+    // Read again after the status, as before: a beat during the fork spares the operator.
     const age = heartbeatAgeMs();
     if (status.pid === killed || !shouldKill({ status, heartbeatAgeMs: age, thresholdMs: THRESHOLD_MS })) return;
     killed = status.pid;
