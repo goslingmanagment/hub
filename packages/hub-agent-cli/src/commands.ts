@@ -371,6 +371,8 @@ const CLAIM_OPTION: Record<string, HubOption> = {
   },
 };
 
+// The help adds each operation's own `limit` bounds and window rule to these
+// texts (contract.ts, hubOptionHelp): the numbers stay in the contract.
 const WINDOW_OPTIONS: Record<string, HubOption> = {
   from: { kind: "string", describe: "Window start, RFC 3339 with an explicit offset" },
   to: { kind: "string", describe: "Window end, RFC 3339 with an explicit offset" },
@@ -1663,7 +1665,8 @@ export const HUB_COMMANDS: readonly HubCommand[] = [
         kind: "boolean",
         describe: "Return match snippets. Verbatim text: needs read:messages and is audited.",
       },
-      limit: { kind: "number", describe: "Maximum matches (max 100)" },
+      // Its bounds come from the contract (contract.ts, hubOptionHelp).
+      limit: { kind: "number", describe: "Maximum matches" },
       ...WINDOW_OPTIONS,
       ...CLAIM_OPTION,
     },
@@ -2075,7 +2078,8 @@ export const HUB_COMMANDS: readonly HubCommand[] = [
       "page-label": { kind: "string", describe: "The page (required)" },
       status: { kind: "string", describe: `Only this status (${publicationStatusSchema.options.join(" | ")})` },
       ...WINDOW_OPTIONS,
-      limit: { kind: "number", describe: "Maximum publications (default 500)" },
+      // Its bounds come from the contract (contract.ts, hubOptionHelp).
+      limit: { kind: "number", describe: "Maximum publications" },
     },
     hint: publicationHint,
     run: (client, values) => client.agentPublicationList({
