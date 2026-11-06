@@ -289,15 +289,15 @@ async function compareEnvelope(
  * its own ordinal and its own body row. The capture is intact; the fact that a
  * digest stopped being unique is an integrity event the owner must see.
  *
- * COST, and why there is no index. This is a count over the CATALOG, not over a
- * body table: one row per distinct body per month per scope, small by
- * construction and kept small on purpose (0123 gives it the PK and the identity
- * UNIQUE, nothing else). An hourly sequential scan of it is cheaper than the
- * partial index that would have to be created on every monthly partition and
- * then justified forever after. If the catalog ever grows to where this shows
- * up in the hourly job's timing, the index is a one-line migration — and by
- * then there will be a query plan to earn it, which is the same rule 0124
- * applied to the envelope reference columns.
+ * COST. 0123 left the catalog with only the PK and the identity UNIQUE, so this
+ * count was a sequential scan of every partition. By 2026-11 the catalog held
+ * 1.5 M rows (235 MB): each hourly run read all of it, mostly from outside
+ * shared_buffers, to find 0 rows — 427 ms and 11.5 % of all Postgres block
+ * reads. 0356 adds the partial index `capture_payload_objects_collision_idx`
+ * (`where collision_ordinal > 0`), which holds only the rows this count looks
+ * for. The planner uses it only when the query's WHERE implies the index
+ * predicate, so keep the literal `> 0` here: a bound parameter would not match
+ * it in a generic plan.
  */
 export async function countCapturePayloadCollisions(db: Database): Promise<number> {
   const rows = await db.execute<{ n: string }>(sql`
