@@ -71,8 +71,14 @@ export function fanslyDispatchKindOfStep(step: FanslyWriteStep): "create" | "wit
 }
 
 /** The error class of an attempt refused as a write before it left
- *  (`not_sent:<refusal>`, engine/commit.ts). */
+ *  (`not_sent:<refusal>`, engine/commit.ts) — with the write's confirmation's
+ *  reason after it when Hub refused it at the check
+ *  (`not_sent:write_refused:publishing_off`). */
 export const WRITE_REFUSED_CLASS = "not_sent:write_refused";
+
+function isWriteRefusedClass(errorClass: string | null): boolean {
+  return errorClass === WRITE_REFUSED_CLASS || errorClass?.startsWith(`${WRITE_REFUSED_CLASS}:`) === true;
+}
 
 /** What comes next for a command, by its state and its one attempt. */
 export type WriteCommandNext =
@@ -120,7 +126,7 @@ export function nextWriteStep(
     case "sent":
       return { kind: "await_attempt" };
     case "aborted_before_send":
-      if (attempt.errorClass === WRITE_REFUSED_CLASS) return { kind: "refuse_not_sent", reason: `not_sent:${attempt.errorClass}` };
+      if (isWriteRefusedClass(attempt.errorClass)) return { kind: "refuse_not_sent", reason: `not_sent:${attempt.errorClass}` };
       return { kind: "requeue", reason: `not_sent:${attempt.errorClass ?? "aborted_before_send"}` };
     case "response":
       if (attempt.applyState === "captured" || attempt.applyState === "deferred") return { kind: "await_apply" };

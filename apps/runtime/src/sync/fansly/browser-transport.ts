@@ -692,6 +692,9 @@ export async function createBrowserPageTransport(
     let granted = false;
     /** Refused at the check: what it was prepared under moved since. */
     let credentialsChanged = false;
+    /** Refused at the check by the write's confirmation: its reason, kept
+     *  for the attempt (the protocol's refusal says only `write_refused`). */
+    let writeRefusedWhy: string | null = null;
     let reported: number | null = null;
     let settle!: (outcome: TransportOutcome) => void;
     const done = new Promise<TransportOutcome>((resolve) => (settle = resolve));
@@ -727,7 +730,10 @@ export async function createBrowserPageTransport(
         // stand, read fresh right before the grant (PR 7).
         const why = hooks.confirmWrite === undefined ? "nothing confirms a write here" : await hooks.confirmWrite().catch(() => "the write's confirmation does not read");
         if (finished) return { admit: false, reason: "lease_inactive" };
-        if (why !== null) return { admit: false, reason: "write_refused" };
+        if (why !== null) {
+          writeRefusedWhy = why;
+          return { admit: false, reason: "write_refused" };
+        }
       }
       const refusal = hooks.grant();
       if (refusal !== null) return { admit: false, reason: PROTOCOL_REFUSALS.has(refusal.reason) ? (refusal.reason as Refusal) : "lease_inactive" };
@@ -769,7 +775,8 @@ export async function createBrowserPageTransport(
         else if (delivered.bodyProblem === null) keepLate(heldRequest(delivered));
         else askAgain(attemptId);
         if (outcome.kind === "aborted_before_send" && outcome.refusal === "transport_unavailable") unavailableUntil = monoNow() + unavailableRetryMs;
-        finish(outcome);
+        // The operator's refusal of a write this check refused: with why.
+        finish(outcome.kind === "aborted_before_send" && outcome.refusal === "write_refused" && writeRefusedWhy !== null ? { ...outcome, detail: writeRefusedWhy } : outcome);
       },
     });
     const stopLink = client.onLink((status) => {

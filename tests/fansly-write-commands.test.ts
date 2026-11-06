@@ -129,6 +129,11 @@ describe("one attempt: what comes next for a command (spec §8.2)", () => {
     expect(nextWriteStep(sending, attempt("response", "captured"))).toEqual({ kind: "await_apply" });
     expect(nextWriteStep(sending, attempt("response", "deferred"))).toEqual({ kind: "await_apply" });
   });
+
+  it("a write Hub refused at its check, with why after the refusal, is refused all the same, never queued again", () => {
+    expect(nextWriteStep(sending, { ...attempt("aborted_before_send"), errorClass: "not_sent:write_refused:publishing_off" }))
+      .toEqual({ kind: "refuse_not_sent", reason: "not_sent:not_sent:write_refused:publishing_off" });
+  });
 });
 
 describe("the answer of a write that is not one to apply", () => {
