@@ -1,5 +1,6 @@
 import { sql } from "drizzle-orm";
 
+import { inLast30BusinessDates } from "../business-day.ts";
 import type { Database } from "../client.ts";
 import { AWAITING_MASS_MIN_CHATS } from "./spender-stats.ts";
 
@@ -143,7 +144,7 @@ export async function listOnlineCandidates(db: Database, input: OnlineCandidateQ
       select d.fan_id, coalesce(sum(d.gross_amount_mills), 0)::bigint as gross30
       from fan_spend_daily d
       join seen s on s.fan_id = d.fan_id
-      where d.platform_account_id = ${page} and d.business_date >= (${now})::date - 30
+      where d.platform_account_id = ${page} and ${inLast30BusinessDates(sql`d.business_date`, input.now)}
       group by d.fan_id
     ),
     attributed as (

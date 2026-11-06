@@ -1,5 +1,6 @@
 import { sql, type SQL } from "drizzle-orm";
 
+import { inLast30BusinessDates } from "../business-day.ts";
 import type { Database } from "../client.ts";
 import { AWAITING_MASS_MIN_CHATS } from "./spender-stats.ts";
 
@@ -228,7 +229,7 @@ export async function selectFanQueueFans(
     spend30 as (
       select d.fan_id, coalesce(sum(d.gross_amount_mills), 0)::bigint as gross30
       from fan_spend_daily d
-      where d.platform_account_id = ${page} and d.business_date >= (${ts(input.now)})::date - 30
+      where d.platform_account_id = ${page} and ${inLast30BusinessDates(sql`d.business_date`, input.now)}
       group by d.fan_id
     ),` : sql``}
     ${needsOther ? sql`
@@ -938,7 +939,7 @@ export async function listFanQueueAnswered(
       s.done_at, s.act, s.template_id, ans.occurred_at as answered_at, ans.text_plain as answer_text,
       coalesce(l.gross_amount_mills, 0)::bigint as lifetime_gross,
       (select coalesce(sum(d.gross_amount_mills), 0)::bigint from fan_spend_daily d
-        where d.platform_account_id = ${input.pageId} and d.fan_id = s.fan_id and d.business_date >= (${ts(input.now)})::date - 30) as gross30
+        where d.platform_account_id = ${input.pageId} and d.fan_id = s.fan_id and ${inLast30BusinessDates(sql`d.business_date`, input.now)}) as gross30
     from sent s
     join fans f on f.id = s.fan_id
     left join page_fans pf on pf.platform_account_id = ${input.pageId} and pf.fan_id = s.fan_id
