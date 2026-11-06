@@ -16,6 +16,7 @@ import {
   pages,
   transactions,
 } from "../schema.ts";
+import { settledTransactionState, settledTransactionStateSql } from "./transaction-settled-state.ts";
 
 function transactionTypeListSql(transactionTypes: TransactionType[]) {
   return sql.join(
@@ -165,7 +166,8 @@ export async function upsertTransaction(db: Database, input: UpsertTransactionIn
   return transaction;
 }
 
-/** W7.3: point lookup for the negation guards (twin / settled-original). */
+/** W7.3: point lookup for the negation guards (twin / settled-original).
+ * `settledState` is the state readers count it in (settledTransactionState). */
 export async function getTransactionByTransactionId(
   db: Database,
   input: { platformAccountId: number; transactionId: string },
@@ -174,6 +176,7 @@ export async function getTransactionByTransactionId(
     id: transactions.id,
     transactionId: transactions.transactionId,
     transactionState: transactions.transactionState,
+    settledState: settledTransactionState(),
     isActive: transactions.isActive,
     inactiveReason: transactions.inactiveReason,
     occurredAt: transactions.occurredAt,
@@ -228,7 +231,8 @@ export async function reactivateSuppressedNegations(
 }
 
 /** W7.4 (A47): stale ACTIVE PENDING OFAPI rows — candidates for the
- * settle-or-expire reconciliation. */
+ * settle-or-expire reconciliation. A row OnlyFans' ledger settled since
+ * (settledTransactionState) is not pending any more and never a candidate. */
 export async function listStalePendingOfapiTransactions(
   db: Database,
   input: { olderThan: Date },
@@ -245,6 +249,7 @@ export async function listStalePendingOfapiTransactions(
     .where(and(
       inArray(transactions.source, ["ofapi:webhook", "ofapi:rest"]),
       eq(transactions.transactionState, "pending"),
+      sql`${settledTransactionState()} = 'pending'::transaction_state`,
       eq(transactions.isActive, true),
       lt(transactions.occurredAt, input.olderThan),
     ))
@@ -272,6 +277,8 @@ export async function retireStalePendingTransactionsById(
       inArray(transactions.id, input.ids),
       eq(transactions.isActive, true),
       eq(transactions.transactionState, "pending"),
+      // A row OnlyFans' ledger settled is a purchase that happened: never retired as missing.
+      sql`${settledTransactionState()} = 'pending'::transaction_state`,
     ))
     .returning({ id: transactions.id });
   return retired.length;
@@ -291,7 +298,7 @@ export async function countActivePendingTransactionsByIds(
     .where(and(
       inArray(transactions.id, ids),
       eq(transactions.isActive, true),
-      eq(transactions.transactionState, "pending"),
+      sql`${settledTransactionState()} = 'pending'::transaction_state`,
     ));
   return rows.length;
 }
@@ -327,7 +334,7 @@ export async function listActiveNegationAnomalies(db: Database) {
     from transactions t
     left join transactions o on o.platform_account_id = t.platform_account_id
      and o.transaction_id = regexp_replace(t.transaction_id, ':(reversal|chargeback)$', '')
-     and o.is_active and o.transaction_state = 'posted'
+     and o.is_active and ${settledTransactionStateSql("o")} = 'posted'::transaction_state
     where (t.transaction_id like '%:reversal' or t.transaction_id like '%:chargeback')
       and t.is_active and o.id is null
   `);
@@ -411,7 +418,7 @@ export async function rebuildRevenueRollups(
                  timezone(${BUSINESS_TZ}, t.occurred_at)::date
                ) as business_date,
                t.canonical_type,
-               t.transaction_state,
+               ${settledTransactionStateSql("t")} as transaction_state,
                count(*)::int as transaction_count,
                coalesce(sum(t.gross_amount_mills), 0)::bigint as gross_amount_mills,
                coalesce(sum(t.creator_net_amount_mills), 0)::bigint as creator_net_amount_mills

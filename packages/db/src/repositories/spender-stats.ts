@@ -56,6 +56,7 @@ import {
 import type { Database } from "../client.ts";
 import { aiTranscriptUnionLastFanTextAtSql } from "./ai-transcript-union.ts";
 import { unreachableInScopeSql } from "./spenders.ts";
+import { settledTransactionStateSql } from "./transaction-settled-state.ts";
 
 const READ_SNAPSHOT = { isolationLevel: "repeatable read", accessMode: "read only" } as const;
 
@@ -122,7 +123,7 @@ function windowRowsSql(scope: WindowScope): SQL {
   return sql`
     select t.fan_id,
            (${dates}::date[])[width_bucket(t.occurred_at, ${starts}::timestamptz[])] as local_date,
-           t.transaction_state::text as state,
+           ${settledTransactionStateSql("t")}::text as state,
            t.gross_amount_mills as gross,
            t.creator_net_amount_mills as net,
            (t.canonical_type in (${PURCHASE_TYPES_SQL}) and t.gross_amount_mills > 0) as is_purchase

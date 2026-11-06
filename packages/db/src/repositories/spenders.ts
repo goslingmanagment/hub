@@ -29,6 +29,7 @@ import {
   spenderProjectionWatermarks,
   transactions,
 } from "../schema.ts";
+import { settledTransactionState, settledTransactionStateSql } from "./transaction-settled-state.ts";
 import {
   buildContainsSearchPattern,
   ilikeEscaped,
@@ -84,7 +85,7 @@ export async function rebuildSpenderDailyFacts(
              t.fan_id,
              (timezone(${BUSINESS_TZ}, t.occurred_at)::date) as business_date,
              t.canonical_type,
-             t.transaction_state,
+             ${settledTransactionStateSql("t")} as transaction_state,
              count(*)::int as transaction_count,
              coalesce(sum(t.gross_amount_mills), 0)::bigint as gross_amount_mills,
              coalesce(sum(t.creator_net_amount_mills), 0)::bigint as creator_net_amount_mills,
@@ -1311,7 +1312,7 @@ export async function listRankedSpenders(
   const latestTransactions = db.select({
     fanId: transactions.fanId,
     canonicalType: transactions.canonicalType,
-    transactionState: transactions.transactionState,
+    transactionState: settledTransactionState().as("transaction_state"),
     grossAmountMills: transactions.grossAmountMills,
     creatorNetAmountMills: transactions.creatorNetAmountMills,
     occurredAt: transactions.occurredAt,

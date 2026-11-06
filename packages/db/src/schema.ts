@@ -2751,6 +2751,10 @@ export const onlyfansFeedMoneyClaims = pgTable(
       .notNull(),
     observationId: bigint("observation_id", { mode: "number" }),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    // 0357: the ledger reading that settled the purchase (`done` or `undo`): readers count
+    // a pending row it claims as posted (settledTransactionStateSql); the row itself is never changed.
+    settledObservationId: bigint("settled_observation_id", { mode: "number" }),
+    settledAt: timestamp("settled_at", { withTimezone: true }),
   },
   (table) => ({
     pk: primaryKey({ name: "onlyfans_feed_money_claims_pkey", columns: [table.platformAccountId, table.feedKey] }),

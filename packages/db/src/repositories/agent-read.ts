@@ -16,6 +16,7 @@ import {
 } from "./agent-keyset.ts";
 import { witnessFor, witnessesFor, type PlaneReadWitness } from "./agent-read-witness.ts";
 import { effectiveHistoryStateSql, type ThreadHistoryState } from "./sync/thread-chain.ts";
+import { settledTransactionStateSql } from "./transaction-settled-state.ts";
 
 /**
  * Every read the Agent Read Plane performs, except the transcript union (its own
@@ -782,7 +783,7 @@ export async function loadAgentPersonMoney(
     `),
     await db.execute<Record<string, unknown>>(sql`
       select tr.canonical_type::text as transaction_type,
-             tr.transaction_state::text as transaction_state,
+             ${settledTransactionStateSql("tr")}::text as transaction_state,
              coalesce(sum(tr.gross_amount_mills), 0)::text as gross_mills,
              coalesce(sum(tr.creator_net_amount_mills), 0)::text as net_mills,
              count(*)::text as transaction_count
@@ -1162,7 +1163,7 @@ export async function listAgentTimeline(
     arms.push(sql`
       select 'money'::text as lane,
              case when tr.canonical_type = 'tip' then 'tip.received'
-                  when tr.transaction_state = 'pending' then 'transaction.pending'
+                  when ${settledTransactionStateSql("tr")} = 'pending' then 'transaction.pending'
                   else 'transaction.posted' end as kind,
              tr.occurred_at as occurred_at,
              'transaction:' || tr.id::text as stable_ref,
@@ -1172,7 +1173,7 @@ export async function listAgentTimeline(
              tr.gross_amount_mills as gross_mills,
              tr.creator_net_amount_mills as net_mills,
              tr.canonical_type::text as transaction_type,
-             tr.transaction_state::text as transaction_state,
+             ${settledTransactionStateSql("tr")}::text as transaction_state,
              tr.currency::text as currency,
              null::text as direction, null::text as sender_role,
              null::int as text_length, null::boolean as has_media, null::boolean as is_tip,

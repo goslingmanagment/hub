@@ -15,7 +15,9 @@ import {
   findPageSummaryByLabel,
   getPageTransactionsWriterInfo,
   insertObservation,
+  listOnlyfansFeedLedgerSettlementObservations,
   listOnlyfansFeedMoneyObservations,
+  listOnlyfansFeedUnsettledPendings,
   markPageDmMessagePurchased,
   rebuildRevenueRollups,
   rebuildSpenderProjections,
@@ -41,6 +43,7 @@ import {
   ledgerKindOf,
   ppvKindOf,
   socketNetMills,
+  type FeedMoneyOutcome,
   type FeedMoneySightingInput,
 } from "./client-onlyfans-feed-money.ts";
 import { loadClientSwitches, requireClientFeatureOnLabel, type ClientFeatureRequest } from "./client-switches.ts";
@@ -464,6 +467,50 @@ export async function applyClientOnlyfansFeed(
 /** How many journaled money records the cutoff applies per transaction. */
 const TAKE_MONEY_PAGE = 100;
 
+type JournaledMoneyCounts = Record<FeedMoneyOutcome["status"], number> & {
+  /** Pending rows of another writer the ledger settled (readers count them as posted now). */
+  settled: number;
+};
+
+/**
+ * Journaled money records of a page applied again, oldest first, through the
+ * same sighting rule as when they came, in one transaction under the page's
+ * money lock (the page's writer must be `chatspace`); the rollups are rebuilt
+ * from the earliest time written.
+ */
+async function applyJournaledMoney(
+  app: AppContext,
+  pageId: number,
+  rows: ReadonlyArray<{ id: number; receivedAt: Date; payload: unknown }>,
+): Promise<JournaledMoneyCounts> {
+  const counts: JournaledMoneyCounts = { written: 0, claimed: 0, known: 0, settled: 0 };
+  await withOfapiSpendTransactionPageLock(app.db, pageId, async (db) => {
+    await assertPageTransactionsWriter(app, { platformAccountId: pageId, attemptedWriter: "chatspace" });
+    let dirtyFrom = null as Date | null;
+    for (const row of rows) {
+      const parsed = clientOnlyfansFeedRecordSchema.safeParse((row.payload as { record?: unknown } | null)?.record);
+      if (!parsed.success) continue;
+      const record = parsed.data;
+      if (!onlyfansFeedObservedInRange(new Date(record.observedAt), row.receivedAt)) continue;
+      const fanRef = fanRefOf(record);
+      const fanId = fanRef === null ? null : await fanRowId(db, pageId, fanRef, null);
+      const sighting = onlyfansFeedSighting(record, row.id, fanId);
+      if (sighting === null) continue;
+      const applied = await applyFeedMoneySighting(db, pageId, sighting);
+      counts[applied.status] += 1;
+      if (applied.settled) counts.settled += 1;
+      if (applied.status === "known") continue;
+      const from = applied.reactivatedFrom !== null && applied.reactivatedFrom < sighting.occurredAt ? applied.reactivatedFrom : sighting.occurredAt;
+      dirtyFrom = dirtyFrom === null || from < dirtyFrom ? from : dirtyFrom;
+    }
+    if (dirtyFrom !== null) {
+      await rebuildSpenderProjections(db, pageId, dirtyFrom);
+      await rebuildRevenueRollups(db, pageId, dirtyFrom);
+    }
+  });
+  return counts;
+}
+
 export interface TakeOnlyfansFeedMoneyResult {
   pageLabel: string;
   previousWriter: string | null;
@@ -472,6 +519,8 @@ export interface TakeOnlyfansFeedMoneyResult {
   written: number;
   claimed: number;
   known: number;
+  /** Pending rows of another writer the ledger settled. */
+  settled: number;
 }
 
 /**
@@ -489,7 +538,9 @@ export async function takeOnlyfansFeedMoney(
   const page = await findPageSummaryByLabel(app.db, input.pageLabel);
   if (!page || page.platform !== "onlyfans") throw new Error(`No OnlyFans page "${input.pageLabel}"`);
   const writerBefore = (await getPageTransactionsWriterInfo(app.db, page.id))?.transactionsWriter ?? null;
-  const result: TakeOnlyfansFeedMoneyResult = { pageLabel: page.label, previousWriter: writerBefore, records: 0, written: 0, claimed: 0, known: 0 };
+  const result: TakeOnlyfansFeedMoneyResult = {
+    pageLabel: page.label, previousWriter: writerBefore, records: 0, written: 0, claimed: 0, known: 0, settled: 0,
+  };
   if (!input.dryRun) {
     const moved = await setOnlyfansFeedTransactionsWriter(app.db, page.id);
     if (moved === null) throw new Error(`Page "${page.label}" is not an OnlyFans page`);
@@ -503,29 +554,54 @@ export async function takeOnlyfansFeedMoney(
     after = { receivedAt: rows.at(-1)!.receivedAt, id: rows.at(-1)!.id };
     result.records += rows.length;
     if (input.dryRun) continue;
-    await withOfapiSpendTransactionPageLock(app.db, page.id, async (db) => {
-      await assertPageTransactionsWriter(app, { platformAccountId: page.id, attemptedWriter: "chatspace" });
-      let dirtyFrom = null as Date | null;
-      for (const row of rows) {
-        const parsed = clientOnlyfansFeedRecordSchema.safeParse((row.payload as { record?: unknown } | null)?.record);
-        if (!parsed.success) continue;
-        const record = parsed.data;
-        if (!onlyfansFeedObservedInRange(new Date(record.observedAt), row.receivedAt)) continue;
-        const fanRef = fanRefOf(record);
-        const fanId = fanRef === null ? null : await fanRowId(db, page.id, fanRef, null);
-        const sighting = onlyfansFeedSighting(record, row.id, fanId);
-        if (sighting === null) continue;
-        const applied = await applyFeedMoneySighting(db, page.id, sighting);
-        result[applied.status] += 1;
-        if (applied.status === "known") continue;
-        const from = applied.reactivatedFrom !== null && applied.reactivatedFrom < sighting.occurredAt ? applied.reactivatedFrom : sighting.occurredAt;
-        dirtyFrom = dirtyFrom === null || from < dirtyFrom ? from : dirtyFrom;
-      }
-      if (dirtyFrom !== null) {
-        await rebuildSpenderProjections(db, page.id, dirtyFrom);
-        await rebuildRevenueRollups(db, page.id, dirtyFrom);
-      }
-    });
+    const counts = await applyJournaledMoney(app, page.id, rows);
+    result.written += counts.written;
+    result.claimed += counts.claimed;
+    result.known += counts.known;
+    result.settled += counts.settled;
+  }
+  return result;
+}
+
+export interface SettleOnlyfansFeedPendingsResult {
+  /** The page's active pending rows no ledger reading had settled. */
+  pending: number;
+  /** The journaled ledger readings of them that settle a purchase (`done`, `undo`), applied again. */
+  records: number;
+  /** Of the pending rows, the ones those readings settled. */
+  settled: number;
+}
+
+/**
+ * OnlyFans' ledger settles a page's pending purchases from what the feed has
+ * already journaled. A purchase OFAPI wrote `pending` and the ledger later
+ * listed `done` stayed pending when that reading came before the ledger
+ * recorded its settlements (0357), or while the page's writer was still OFAPI:
+ * the reading is journaled, its sighting known. Here every journaled ledger
+ * reading of the page's unsettled pendings that settles a purchase is applied
+ * again through the same sighting rule (applyFeedMoneySighting), which records
+ * the settlement on the feed's own claim; the pending row itself is never
+ * changed. Only on a page the feed writes; idempotent — run again, nothing is
+ * left to settle. The daily OFAPI pending reconcile runs it first
+ * (services/ofapi-pending-reconcile.ts).
+ */
+export async function settleOnlyfansFeedPendings(app: AppContext, pageId: number): Promise<SettleOnlyfansFeedPendingsResult> {
+  const result: SettleOnlyfansFeedPendingsResult = { pending: 0, records: 0, settled: 0 };
+  const writer = (await getPageTransactionsWriterInfo(app.db, pageId))?.transactionsWriter ?? null;
+  if (writer !== "chatspace") return result;
+  const pendings = await listOnlyfansFeedUnsettledPendings(app.db, pageId);
+  result.pending = pendings.length;
+  if (pendings.length === 0) return result;
+  // A ledger reading is journaled after the purchase it lists; a day of slack for the clocks.
+  const earliest = pendings.reduce((min, row) => Math.min(min, row.occurredAt.getTime()), Number.POSITIVE_INFINITY);
+  const rows = await listOnlyfansFeedLedgerSettlementObservations(app.db, {
+    pageId,
+    ledgerRefs: [...new Set(pendings.map((row) => row.ledgerRef))],
+    since: new Date(earliest - 86_400_000),
+  });
+  result.records = rows.length;
+  for (let start = 0; start < rows.length; start += TAKE_MONEY_PAGE) {
+    result.settled += (await applyJournaledMoney(app, pageId, rows.slice(start, start + TAKE_MONEY_PAGE))).settled;
   }
   return result;
 }

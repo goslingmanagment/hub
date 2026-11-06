@@ -117,6 +117,78 @@ export async function insertOnlyfansFeedMoneyClaim(
 }
 
 /**
+ * OnlyFans' ledger settled the purchase a ledger sighting claims — its `done`,
+ * or `undo` (charged back) — recorded on the feed's OWN claim, once: the first
+ * such reading stays. The claimed row is never changed (a row of another writer
+ * is not the feed's to change): readers count a pending row with a settled
+ * claim as posted (settledTransactionStateSql). Null when there is no unsettled
+ * ledger claim under this key; else the row's time and whether the state the
+ * readers count changed (the row is active and pending).
+ */
+export async function settleOnlyfansFeedMoneyClaim(
+  db: Database,
+  input: { pageId: number; feedKey: string; observationId: number },
+): Promise<{ occurredAt: Date; countedAsPosted: boolean } | null> {
+  const result = await db.execute<{ occurred_at: Date | string; counted_as_posted: boolean }>(sql`
+    update onlyfans_feed_money_claims c set
+      settled_observation_id = ${input.observationId},
+      settled_at = now()
+    from transactions t
+    where c.platform_account_id = ${input.pageId} and c.feed_key = ${input.feedKey}
+      and c.sighting = 'ledger' and c.settled_at is null
+      and t.id = c.transaction_row_id
+    returning t.occurred_at, (t.is_active and t.transaction_state = 'pending') as counted_as_posted
+  `);
+  const row = result.rows[0];
+  return row ? { occurredAt: new Date(row.occurred_at), countedAsPosted: row.counted_as_posted } : null;
+}
+
+/**
+ * The page's active pending rows no ledger reading settled yet, each with the
+ * OnlyFans id its ledger record carries: the claim's (`ledger:<id>`) when a
+ * ledger sighting claims it, else the row's own id (OnlyFans' own, as OFAPI
+ * wrote it). What a journaled `done` may still settle.
+ */
+export async function listOnlyfansFeedUnsettledPendings(
+  db: Database,
+  pageId: number,
+): Promise<Array<{ rowId: number; occurredAt: Date; ledgerRef: string }>> {
+  const result = await db.execute<{ id: string; occurred_at: Date | string; ledger_ref: string }>(sql`
+    select t.id::text, t.occurred_at,
+           case when c.feed_key like 'ledger:%' then substr(c.feed_key, 8) else t.transaction_id end as ledger_ref
+    from transactions t
+    left join onlyfans_feed_money_claims c on c.transaction_row_id = t.id and c.sighting = 'ledger'
+    where t.platform_account_id = ${pageId}
+      and t.is_active
+      and t.transaction_state = 'pending'
+      and c.settled_at is null
+    order by t.occurred_at, t.id
+  `);
+  return result.rows.map((row) => ({ rowId: Number(row.id), occurredAt: new Date(row.occurred_at), ledgerRef: row.ledger_ref }));
+}
+
+/** The page's journaled ledger records of these OnlyFans ids that settle a purchase (`done`, `undo`), since a time, oldest first. */
+export async function listOnlyfansFeedLedgerSettlementObservations(
+  db: Database,
+  input: { pageId: number; ledgerRefs: readonly string[]; since: Date },
+): Promise<Array<{ id: number; receivedAt: Date; payload: unknown }>> {
+  if (input.ledgerRefs.length === 0) return [];
+  const result = await db.execute<{ id: string; received_at: Date | string; payload: unknown }>(sql`
+    select id::text, received_at, payload
+    from observations
+    where source = 'client_capture'
+      and kind = 'client.onlyfans_feed.v1'
+      and account_id = ${input.pageId}
+      and received_at >= ${input.since}
+      and payload -> 'record' ->> 'kind' = 'ledger'
+      and payload -> 'record' ->> 'status' in ('done', 'undo')
+      and payload -> 'record' ->> 'transactionRef' = any(${sql.param([...input.ledgerRefs])}::text[])
+    order by received_at, id
+  `);
+  return result.rows.map((row) => ({ id: Number(row.id), receivedAt: new Date(row.received_at), payload: row.payload }));
+}
+
+/**
  * The ledger's own figures replace the socket's estimate on the row the socket
  * wrote for the same purchase: its net and its status. Only a `chatspace:ws`
  * row is ever touched here.

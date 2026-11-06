@@ -6,6 +6,14 @@
 // inflating displayed revenue forever (as of 2026-07-11: 156 rows
 // older than 7 days, ~$2,804 net). Fansly has a pending-rescan anchor; this
 // is the OFAPI mirror:
+//   0. LEDGER — on a page whose writer is the OnlyFans feed (`chatspace`),
+//      OFAPI writes nothing and its rescan below is blocked, so the feed
+//      settles first: every ledger reading it journaled that says OnlyFans
+//      paid (`done`) or took back (`undo`) one of these purchases is applied
+//      again through its sighting rule (settleOnlyfansFeedPendings), and the
+//      settlement lands on the feed's own claim — the OFAPI row is never
+//      changed, readers count it posted (settledTransactionStateSql). Such a
+//      row is no longer stale.
 //   1. RESCAN — run the existing REST transactions backfill over each page
 //      holding stale pendings, from the earliest stale row. Its upsert
 //      settles pendings that completed (same transaction id transitions in
@@ -28,6 +36,7 @@ import {
 } from "@agency_hub_core/db";
 
 import type { AppContext } from "../bootstrap.ts";
+import { settleOnlyfansFeedPendings } from "./client-onlyfans-feed.ts";
 import {
   runOfapiTransactionsBackfill,
   type OfapiTransactionsBackfillPageResult,
@@ -59,6 +68,8 @@ export function rescanProvesWindow(page: OfapiTransactionsBackfillPageResult): b
 
 export interface OfapiPendingReconcileResult {
   stalePendings: number;
+  /** Stale rows OnlyFans' ledger settled (step 0): no longer stale, never rescanned or retired. */
+  settledByLedger: number;
   pagesTouched: number;
   expired: number;
   /** Stale rows no longer pending after the rescan (settled or negated). */
@@ -81,6 +92,7 @@ export async function runOfapiPendingReconcile(
 ): Promise<OfapiPendingReconcileResult> {
   const empty: OfapiPendingReconcileResult = {
     stalePendings: 0,
+    settledByLedger: 0,
     pagesTouched: 0,
     expired: 0,
     settledByRescan: 0,
@@ -95,9 +107,18 @@ export async function runOfapiPendingReconcile(
   const mode = options.mode ?? "write";
   const now = options.now ?? new Date();
   const olderThan = new Date(now.getTime() - STALE_PENDING_AGE_DAYS * 86_400_000);
-  const stale = await listStalePendingOfapiTransactions(app.db, { olderThan });
-  if (stale.length === 0) {
+  const listed = await listStalePendingOfapiTransactions(app.db, { olderThan });
+  if (listed.length === 0) {
     return empty;
+  }
+  const stale = mode === "write" && await settleByLedger(app, listed)
+    ? await listStalePendingOfapiTransactions(app.db, { olderThan })
+    : listed;
+  const settledByLedger = Math.max(0, listed.length - stale.length);
+  if (stale.length === 0) {
+    const result = { ...empty, stalePendings: listed.length, settledByLedger };
+    app.logger.info(result, "OFAPI pending reconcile complete");
+    return result;
   }
 
   const byPage = new Map<number, typeof stale>();
@@ -170,7 +191,8 @@ export async function runOfapiPendingReconcile(
     ? await countActivePendingTransactionsByIds(app.db, provenRows.map((row) => row.id))
     : 0;
   const result: OfapiPendingReconcileResult = {
-    stalePendings: stale.length,
+    stalePendings: listed.length,
+    settledByLedger,
     pagesTouched,
     expired,
     settledByRescan: mode === "write"
@@ -184,6 +206,23 @@ export async function runOfapiPendingReconcile(
   };
   app.logger.info(result, "OFAPI pending reconcile complete");
   return result;
+}
+
+/** Step 0: the feed settles the stale rows of each page it writes from its journal; true when any row settled. */
+async function settleByLedger(
+  app: AppContext,
+  stale: ReadonlyArray<{ platformAccountId: number; pageLabel: string }>,
+): Promise<boolean> {
+  let settled = 0;
+  for (const pageId of new Set(stale.map((row) => row.platformAccountId))) {
+    try {
+      settled += (await settleOnlyfansFeedPendings(app, pageId)).settled;
+    } catch (error) {
+      // The rescan below still runs; the ledger tries again with the next run.
+      app.logger.warn({ err: error, pageId }, "OFAPI pending reconcile: the OnlyFans ledger could not settle the page's pendings");
+    }
+  }
+  return settled > 0;
 }
 
 export async function ensureOfapiPendingReconcileQueue(
