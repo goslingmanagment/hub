@@ -199,9 +199,6 @@ function catalogEvidence(def) {
   if (selected.length !== 1) throw new Error(`Catalog evidence must be unique: ${def.id}: ${JSON.stringify(selected)}`);
   return selected[0].evidence;
 }
-// The Smart Links screen left with the console rebuild (#1000); tracking and
-// trial links are read on the page card's «Продвижение».
-const NO_SMART_LINKS_SCREEN = "No dashboard screen since the console rebuild: Smart Links without a consumer";
 for (const def of catalog) {
   const global = def.scope === "smart_link";
   add(
@@ -210,11 +207,9 @@ for (const def of catalog) {
     catalogEvidence(def),
     "durable_read_catalog",
     Object.keys(def.query),
-    global
-      ? NO_SMART_LINKS_SCREEN
-      : def.category === "tracking_links"
-        ? "apps/dashboard/src/pages/page-card/PromoOnlyFans.tsx"
-        : "apps/dashboard/src/pages/system/onlyfans-api/OfapiStoredReads.tsx",
+    global || def.category === "tracking_links"
+      ? "apps/dashboard/src/pages/OfapiMarketing.tsx"
+      : "apps/dashboard/src/pages/system/onlyfans-api/OfapiStoredReads.tsx",
     global || def.category === "tracking_links"
       ? "tests/ofapi-smart-links.integration.test.ts"
       : "tests/ofapi-read-collections.integration.test.ts",
@@ -294,7 +289,7 @@ if (has(marketingFile)) {
       locate(marketingFile, "export function ofapiMarketingRequest"),
       "closed_marketing_command",
       [],
-      NO_SMART_LINKS_SCREEN,
+      "apps/dashboard/src/pages/OfapiMarketing.tsx",
       "tests/ofapi-smart-links.integration.test.ts",
     );
   }
@@ -305,7 +300,7 @@ if (has(marketingFile)) {
       locate(marketingFile, "pathname: `/smart-link-postbacks"),
       "encrypted_admin_read",
       [],
-      NO_SMART_LINKS_SCREEN,
+      "apps/dashboard/src/pages/OfapiMarketing.tsx",
       "tests/ofapi-smart-links.integration.test.ts",
     );
 }

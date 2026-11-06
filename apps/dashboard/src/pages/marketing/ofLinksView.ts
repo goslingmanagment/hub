@@ -233,3 +233,18 @@ export function filterLinks(links: readonly OfLink[], filter: LinkFilter): OfLin
   return [...links];
 }
 
+/** Totals of what is shown: fans are claims of trial links plus subscribers
+ * of tracking links; money over the links that know it. */
+export function linkTotals(links: readonly OfLink[]) {
+  let clicks = 0;
+  let fans = 0;
+  let vendorMills = 0;
+  let unknownMoney = 0;
+  for (const link of links) {
+    clicks += link.clicks;
+    fans += link.fans ?? 0;
+    if (link.vendorMoney.netMills === null) unknownMoney += 1;
+    else vendorMills += link.vendorMoney.netMills;
+  }
+  return { clicks, fans, vendorMills, unknownMoney };
+}
