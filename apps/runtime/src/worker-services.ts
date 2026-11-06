@@ -743,9 +743,11 @@ export async function startWorkerServices(
       );
 
       for (const reportDate of listPendingTelegramReportDates(latestSentReportDate, dueReportDate)) {
+        // The run time picks the revenue day; the team block reads the facts as of now.
         const result = await sendDailyRevenueTelegramReport(
           app,
           buildTelegramReportRunTime(reportDate),
+          now,
         );
         if (result.delivery.status === "failed") {
           throw new Error(`Telegram daily report delivery failed: ${result.delivery.error}`);

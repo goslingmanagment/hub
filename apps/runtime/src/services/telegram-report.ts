@@ -348,9 +348,16 @@ function sortByYesterday(left: ReportRow, right: ReportRow) {
   return left.label.localeCompare(right.label);
 }
 
+/**
+ * `now` picks the report's business day for the revenue windows (the scheduler
+ * passes a synthetic run time so a catch-up covers the right day). `factsAt` is
+ * the wall clock the team block reads its facts at: who waits for a reply now,
+ * not at the run time's 03:00 MSK.
+ */
 export async function buildDailyRevenueTelegramReport(
   app: Pick<AppContext, "db"> & Partial<Pick<AppContext, "logger">>,
   now = new Date(),
+  factsAt = new Date(),
 ): Promise<DailyRevenueTelegramReport> {
   const currentBusinessDayStart = startOfReportBusinessDay(now);
   const previousBusinessDayStart = addUtcDays(currentBusinessDayStart, -1);
@@ -449,7 +456,7 @@ export async function buildDailyRevenueTelegramReport(
   // The team block never holds the revenue report back.
   let team: string[] = [];
   try {
-    team = renderTeamBlock(await loadTeamBlockFacts(app, { from: previousBusinessDayStart, to: currentBusinessDayStart, now }), now);
+    team = renderTeamBlock(await loadTeamBlockFacts(app, { from: previousBusinessDayStart, to: currentBusinessDayStart, now: factsAt }), factsAt);
   } catch (error) {
     app.logger?.warn({ err: error }, "Morning report team block failed; sending the report without it");
   }
@@ -512,6 +519,7 @@ async function deliverDailyRevenueReport(
 export async function sendDailyRevenueTelegramReport(
   app: Pick<AppContext, "config" | "db" | "logger">,
   now = new Date(),
+  factsAt = new Date(),
 ): Promise<{
   delivery: TelegramSendResult;
   report: DailyRevenueTelegramReport | null;
@@ -534,7 +542,7 @@ export async function sendDailyRevenueTelegramReport(
     };
   }
 
-  const report = await buildDailyRevenueTelegramReport(app, now);
+  const report = await buildDailyRevenueTelegramReport(app, now, factsAt);
   const delivery = await deliverDailyRevenueReport(app, report);
 
   await insertDeliveryAttempt(app.db, {
