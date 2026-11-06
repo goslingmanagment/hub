@@ -31,8 +31,19 @@ export const TELEGRAM_DAILY_REPORT_QUEUE = "telegram.daily-report";
 //   projections.debt.sweep — the projection-debt repair sweep, retired at
 //   step 4 (S4-15) with the legacy DM writers that recorded the debt.
 // retention-tiering: the scheduled tiering run, removed 2026-10-21 (it was off).
-export const RETIRED_SCHEDULES = ["projections.debt.sweep", "retention-tiering"] as const;
-export const RETIRED_QUEUES = ["projections.debt.sweep", "retention-tiering"] as const;
+// ofapi.dm-analytics.rebuild: the hourly rebuild of dm_message_daily_aggregates,
+//   removed 2026-11-06. Nothing ever read the table, and its source (the OFAPI
+//   DM archive) stopped at 2026-11-01. The table and its rows stay.
+export const RETIRED_SCHEDULES = [
+  "projections.debt.sweep",
+  "retention-tiering",
+  "ofapi.dm-analytics.rebuild",
+] as const;
+export const RETIRED_QUEUES = [
+  "projections.debt.sweep",
+  "retention-tiering",
+  "ofapi.dm-analytics.rebuild",
+] as const;
 
 // work() options of a queue only its cron fills, once a minute or rarer.
 // pg-boss polls every worker each 2 s by default: ~19 fetches a second on prod,
