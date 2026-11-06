@@ -648,7 +648,9 @@ export async function settleNotSent(
     await settleAttemptWithoutCapture(tx, {
       attemptId: admission.attemptId,
       outcome: "aborted_before_send",
-      errorClass: `not_sent:${refusal}`,
+      // `not_sent:write_refused:publishing_off`: why stays with the attempt
+      // (and the write's command), not only in the refuser's memory.
+      errorClass: outcome.detail === undefined ? `not_sent:${refusal}` : `not_sent:${refusal}:${outcome.detail.slice(0, 200)}`,
       grantedAt,
     });
     await settleWork(tx, {

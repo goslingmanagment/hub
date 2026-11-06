@@ -727,4 +727,11 @@ export type FanslyWireOutcome =
      *  instant stands for it (the safe upper bound). */
     sentMono?: number;
   }
-  | { kind: "aborted_before_send"; refusal: FanslySendRefusalReason };
+  | {
+    kind: "aborted_before_send";
+    refusal: FanslySendRefusalReason;
+    /** Why, when the refuser said more than the refusal: a write's
+     *  confirmation (`publishing_off`, `publication_<status>`, …). Recorded
+     *  after the refusal in the attempt's error class. */
+    detail?: string;
+  };
