@@ -38,6 +38,7 @@ import { resolveEgress } from "./egress/resolver.ts";
 import { asRecord, idToString } from "./ofapi-payloads.ts";
 import { OfapiApiError, type OfapiListPage, type OfapiRequestContext } from "./ofapi.ts";
 import {
+  CRON_SWEEP_WORK_OPTIONS,
   ensureQueueCreated,
   type QueueCreationClient,
   type SyncQueueLifecycleClient,
@@ -294,7 +295,7 @@ export async function startOfapiFanAccountCheckWorker(
     ) => Promise<unknown>;
   },
 ) {
-  await boss.work(OFAPI_FAN_ACCOUNT_CHECK_QUEUE, { batchSize: 1 }, async () => {
+  await boss.work(OFAPI_FAN_ACCOUNT_CHECK_QUEUE, CRON_SWEEP_WORK_OPTIONS, async () => {
     const result = await runOfapiFanAccountCheck(app);
     const failed = result.pages.filter((page) => page.status === "failed");
     if (failed.length > 0) {

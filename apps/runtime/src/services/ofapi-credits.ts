@@ -29,7 +29,7 @@ import {
 } from "./notification-incidents.ts";
 import type { OfapiCreditSpendSink } from "./ofapi.ts";
 import { refreshOfapiVendorUsage } from "./ofapi-vendor-usage.ts";
-import { ensureQueueCreated, type QueueCreationClient } from "./sync-queue.ts";
+import { CRON_SWEEP_WORK_OPTIONS, ensureQueueCreated, type QueueCreationClient } from "./sync-queue.ts";
 
 export const OFAPI_CREDIT_ACCRUAL_QUEUE = "ofapi.credits.accrual";
 export const OFAPI_CREDIT_RECONCILE_QUEUE = "ofapi.credits.reconcile";
@@ -419,15 +419,15 @@ export async function ensureOfapiCreditSchedules(boss: QueueCreationClient) {
 type OfapiCreditWorkerBoss = Pick<PgBoss, "work">;
 
 export async function startOfapiCreditWorker(app: AppContext, boss: OfapiCreditWorkerBoss) {
-  await boss.work(OFAPI_CREDIT_ACCRUAL_QUEUE, { batchSize: 1 }, async () => {
+  await boss.work(OFAPI_CREDIT_ACCRUAL_QUEUE, CRON_SWEEP_WORK_OPTIONS, async () => {
     await runOfapiWebhookAccrual(app);
     // 00:40 UTC: the previous day's free vendor usage (media reconciliation).
     await runOfapiVendorUsageNightly(app);
   });
-  await boss.work(OFAPI_CREDIT_RECONCILE_QUEUE, { batchSize: 1 }, async () => {
+  await boss.work(OFAPI_CREDIT_RECONCILE_QUEUE, CRON_SWEEP_WORK_OPTIONS, async () => {
     await runOfapiCreditReconciliation(app);
   });
-  await boss.work(OFAPI_CREDIT_BALANCE_PING_QUEUE, { batchSize: 1 }, async () => {
+  await boss.work(OFAPI_CREDIT_BALANCE_PING_QUEUE, CRON_SWEEP_WORK_OPTIONS, async () => {
     await runOfapiBalancePing(app);
   });
 }

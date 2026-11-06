@@ -58,6 +58,10 @@ import { SyncRunTelemetry } from "./observability.ts";
 import { persistFailedSyncPayload } from "./shared.ts";
 
 const PAGE_EXECUTOR_IDLE_POLL_MS = 1_000;
+// An idle loop doubles its pause up to this; a job resets it to 1 s. This
+// legacy (OnlyFans) lane sits empty for days with OFAPI off, and its loops
+// polling every second were ~4 group fetches a second on prod (2026-11-06).
+const PAGE_EXECUTOR_IDLE_POLL_MAX_MS = 5_000;
 const PAGE_EXECUTOR_HEARTBEAT_MS = 15_000;
 const SYNC_RUN_HEARTBEAT_MS = 30_000;
 const SYNC_TASK_LEASE_TTL_MS = 120_000;
@@ -1023,6 +1027,7 @@ async function runSyncPageExecutorWorker(
     coordinator: ExecutorCoordinator;
   },
 ): Promise<void> {
+  let idlePollMs = PAGE_EXECUTOR_IDLE_POLL_MS;
   while (!input.signal?.aborted) {
     try {
       const previousFetch = input.coordinator.fetchLock;
@@ -1062,9 +1067,13 @@ async function runSyncPageExecutorWorker(
       }
 
       if (!job) {
-        await delay(PAGE_EXECUTOR_IDLE_POLL_MS);
+        // Abortable, so the longer pause never holds a shutdown: the abort
+        // lands in the catch below, which leaves the loop.
+        await delay(idlePollMs, undefined, input.signal ? { signal: input.signal } : {});
+        idlePollMs = Math.min(idlePollMs * 2, PAGE_EXECUTOR_IDLE_POLL_MAX_MS);
         continue;
       }
+      idlePollMs = PAGE_EXECUTOR_IDLE_POLL_MS;
 
       const heartbeat = setInterval(() => {
         void boss.touch(SYNC_PAGE_EXECUTE_QUEUE, job.id).catch((error) => {

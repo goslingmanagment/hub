@@ -50,6 +50,7 @@ import {
   resolveOfapiGlobalIncident,
 } from "./notification-incidents.ts";
 import {
+  CRON_SWEEP_WORK_OPTIONS,
   ensureQueueCreated,
   type QueueCreationClient,
   type SyncQueueLifecycleClient,
@@ -1347,7 +1348,7 @@ export async function startOfapiLinkStatsWorker(
       throw new Error(`OFAPI link-stats reconcile failed for ${failed.length} page(s)`);
     }
   };
-  await boss.work(OFAPI_LINK_STATS_RECONCILE_QUEUE, { batchSize: 1 }, async () => {
+  await boss.work(OFAPI_LINK_STATS_RECONCILE_QUEUE, CRON_SWEEP_WORK_OPTIONS, async () => {
     failOnFailedPages(await runOfapiLinkStatsReconcile(app, { boss }));
   });
   await boss.work(OFAPI_LINK_STATS_RETRY_QUEUE, { batchSize: 1 }, async (jobs) => {

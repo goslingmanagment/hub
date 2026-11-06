@@ -38,7 +38,7 @@ import {
   idToString,
   ofapiWebhookEnvelopeSchema,
 } from "./ofapi-payloads.ts";
-import { ensureQueueCreated, type QueueCreationClient } from "./sync-queue.ts";
+import { CRON_SWEEP_WORK_OPTIONS, ensureQueueCreated, type QueueCreationClient } from "./sync-queue.ts";
 
 export const OFAPI_COMMAND_EXECUTE_QUEUE = "ofapi.commands.execute";
 export const OFAPI_COMMAND_SWEEP_QUEUE = "ofapi.commands.sweep";
@@ -928,7 +928,7 @@ export async function startOfapiCommandWorker(
     },
   );
 
-  await boss.work(OFAPI_COMMAND_SWEEP_QUEUE, { batchSize: 1 }, async () => {
+  await boss.work(OFAPI_COMMAND_SWEEP_QUEUE, CRON_SWEEP_WORK_OPTIONS, async () => {
     const result = await sweepOfapiCommands(app, boss);
     if (result.enqueued > 0) {
       app.logger.info(
