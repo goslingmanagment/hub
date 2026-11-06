@@ -17,6 +17,7 @@ import {
 import type { PgBoss, Queue } from "pg-boss";
 
 import type { AppContext } from "../bootstrap.ts";
+import { NOTIFICATION_DELIVERY_OUTBOX_QUEUE } from "./notification-delivery-outbox.ts";
 import { subjectLabel } from "./notification-digest.ts";
 import {
   openMessageForIncident,
@@ -519,13 +520,25 @@ export async function runNotificationPagingSweepExclusive(
 
 export function startNotificationPagingSweepWorker(
   app: Pick<AppContext, "db" | "logger" | "pool">,
-  boss: Pick<PgBoss, "work">,
+  boss: Pick<PgBoss, "work" | "send">,
 ): Promise<string> {
   return boss.work(NOTIFICATION_PAGING_SWEEP_QUEUE, CRON_SWEEP_WORK_OPTIONS, async () => {
     const result = await runNotificationPagingSweepExclusive(app);
     if (result === null) {
       // The api watchdog's fallback holds this minute's pass.
       return;
+    }
+    if (result.paged > 0 || result.resolved > 0 || result.missedReported > 0) {
+      // Both sweeps fire on the same minute and the delivery pass is usually
+      // done before this one has enqueued: without a nudge every page waited
+      // for the next minute. The delivery queue is `exclusive` (at most one
+      // job queued or active), so while one is pending this send is a no-op
+      // and never a second pass; the rows' DB lease guards them either way.
+      try {
+        await boss.send(NOTIFICATION_DELIVERY_OUTBOX_QUEUE);
+      } catch (error) {
+        app.logger.warn({ err: error }, "Notification delivery nudge failed; the minutely sweep delivers");
+      }
     }
     if (
       result.paged > 0 || result.resolved > 0 || result.missedReported > 0

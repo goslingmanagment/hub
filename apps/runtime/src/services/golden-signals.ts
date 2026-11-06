@@ -176,10 +176,24 @@ export interface GoldenSignalsComputation {
   failedProbes: string[];
 }
 
+/** Which of the costly statements a run computes. Each defaults to true, so a
+ * direct call computes every signal; the minutely job thins them out
+ * (runGoldenSignalSample). A metric left out emits no sample. */
+export interface GoldenSignalsCadence {
+  /** The canonicalize quantile. Its join prunes no partition on either side
+   *  (domain_events is keyed by occurred_at, observations by received_at):
+   *  ~50 ms and ~29k buffers a run on prod (2026-11-06). */
+  canonicalize?: boolean;
+  /** acceptance_events_1h and ai_content_rows: threshold-free counts that grow
+   *  with their tables. */
+  volumeGauges?: boolean;
+}
+
 /** Compute the five signals over the trailing window. No-traffic metrics
  * emit no rows (absence is visible on the endpoint as a stale series). */
 export async function computeGoldenSignals(
   app: Pick<AppContext, "db" | "ofapi">,
+  cadence: GoldenSignalsCadence = {},
 ): Promise<GoldenSignalsComputation> {
   const windowSql = sql`now() - make_interval(mins => ${SAMPLE_WINDOW_MINUTES})`;
 
@@ -193,14 +207,16 @@ export async function computeGoldenSignals(
   `);
 
   // 2. Canonicalization: source observation → domain event append.
-  const canonicalize = await quantiles(app, sql`
-    select
-      percentile_cont(0.5) within group (order by extract(epoch from (de.created_at - o.received_at)) * 1000) as p50,
-      percentile_cont(0.95) within group (order by extract(epoch from (de.created_at - o.received_at)) * 1000) as p95
-    from domain_events de
-    join observations o on o.id = de.observation_id
-    where de.observation_id > 0 and de.created_at > ${windowSql}
-  `);
+  const canonicalize: QuantilePair = cadence.canonicalize === false
+    ? { p50: null, p95: null }
+    : await quantiles(app, sql`
+      select
+        percentile_cont(0.5) within group (order by extract(epoch from (de.created_at - o.received_at)) * 1000) as p50,
+        percentile_cont(0.95) within group (order by extract(epoch from (de.created_at - o.received_at)) * 1000) as p95
+      from domain_events de
+      join observations o on o.id = de.observation_id
+      where de.observation_id > 0 and de.created_at > ${windowSql}
+    `);
 
   // 3. Projection: backlog age per (projection, account) — the age of the
   // oldest event a projection has not consumed yet (0 when fully caught up).
@@ -277,23 +293,29 @@ export async function computeGoldenSignals(
 
   // W5.5 (D9): acceptance projection liveness — events per trailing hour.
   // Gauge only (no threshold): visibility, not alerting.
-  const acceptance = await app.db.execute<{ n: string }>(sql`
-    select count(*)::text as n
-    from ai_acceptance_events
-    where occurred_at > now() - make_interval(hours => 1)
-  `);
-  const acceptanceEvents1h = Number(acceptance.rows[0]?.n ?? 0);
-
+  let acceptanceEvents1h: number | null = null;
   // Restricted-class capture volume (rows + total relation bytes).
   // Gauges, not latencies — they ride the same sample table; the byte gauge
   // carries the alert threshold.
-  const aiVolume = await app.db.execute<{ rows: string; bytes: string }>(sql`
-    select count(*)::text as rows,
-           pg_total_relation_size('ai_generation_content')::text as bytes
-    from ai_generation_content
+  let aiRows: number | null = null;
+  if (cadence.volumeGauges !== false) {
+    const acceptance = await app.db.execute<{ n: string }>(sql`
+      select count(*)::text as n
+      from ai_acceptance_events
+      where occurred_at > now() - make_interval(hours => 1)
+    `);
+    acceptanceEvents1h = Number(acceptance.rows[0]?.n ?? 0);
+    const aiCount = await app.db.execute<{ rows: string }>(sql`
+      select count(*)::text as rows from ai_generation_content
+    `);
+    aiRows = Number(aiCount.rows[0]?.rows ?? 0);
+  }
+  // The byte gauge reads the relation's size, not its rows: cheap, so every
+  // run keeps its alert threshold live.
+  const aiSize = await app.db.execute<{ bytes: string }>(sql`
+    select pg_total_relation_size('ai_generation_content')::text as bytes
   `);
-  const aiRows = Number(aiVolume.rows[0]?.rows ?? 0);
-  const aiBytes = Number(aiVolume.rows[0]?.bytes ?? 0);
+  const aiBytes = Number(aiSize.rows[0]?.bytes ?? 0);
 
   // Fast-reply freshness PR3: per-family observation-backlog gauges from the
   // shared health-floor registry. Per-family try/catch — one failed probe
@@ -380,9 +402,19 @@ const ORPHAN_LATCH_RETIRE_GRACE_MS = 15 * 60_000;
 const PRUNE_EVERY_RUNS = 60;
 let pruneTick = 0;
 
-/** Test hook: make the next run a pruning run. */
+// The canonicalize quantile is the sampler's dearest statement; every 5th run
+// delays its page by at most 4 min against the 30-minute sustained policy of
+// golden_signal_lag. The volume gauges carry no threshold and nothing reads
+// them at minute grain: hourly. A skipped metric emits no sample, so its latch
+// stays as it is (below). The first run of a fresh process computes all.
+const CANONICALIZE_EVERY_RUNS = 5;
+const VOLUME_GAUGES_EVERY_RUNS = 60;
+let cadenceTick = 0;
+
+/** Test hook: make the next run a pruning run that computes every signal. */
 export function resetGoldenSignalPruneTick() {
   pruneTick = 0;
+  cadenceTick = 0;
 }
 
 /** The minutely job: sample, prune (hourly), and flip per-signal incidents.
@@ -405,7 +437,11 @@ export async function runGoldenSignalSample(
    *  passes it every `SYNC_METRICS_SAMPLE_EVERY_MINUTES`). */
   options: { syncEngine?: boolean } = {},
 ): Promise<GoldenSignalRunResult> {
-  const { samples, failedProbes } = await computeGoldenSignals(app);
+  const tick = cadenceTick++;
+  const { samples, failedProbes } = await computeGoldenSignals(app, {
+    canonicalize: tick % CANONICALIZE_EVERY_RUNS === 0,
+    volumeGauges: tick % VOLUME_GAUGES_EVERY_RUNS === 0,
+  });
   // The Fansly Sync Engine's families (design §9.5, [A11]): hourly windows,
   // recorded every few minutes. Threshold-free; a failed probe latches like
   // any other blind spot.
