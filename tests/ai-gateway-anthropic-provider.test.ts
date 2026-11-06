@@ -349,6 +349,53 @@ describe("Anthropic AI gateway provider", () => {
     expect(onProviderCacheWrites).toHaveBeenCalledWith({ cacheWrite5mTokens: 0, cacheWrite1hTokens: 300 });
   });
 
+  it("throws on our abort though the real SDK ends its stream quietly, after the billed usage", async () => {
+    // SDK 0.100.1 (core/streaming.js) swallows the AbortError of its body
+    // read: on our abort its iterator ends as if the stream were over.
+    const originalFetch = globalThis.fetch;
+    const abort = new AbortController();
+    const encoder = new TextEncoder();
+    const events = [
+      { type: "message_start", message: { id: "msg_quiet", type: "message", role: "assistant", model: "claude-opus-5-5", content: [], usage: { input_tokens: 1000, output_tokens: 1 } } },
+      { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+      { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "y".repeat(150) } },
+    ];
+    globalThis.fetch = (async (_url: unknown, init?: RequestInit) => new Response(new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (const event of events) {
+          controller.enqueue(encoder.encode(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`));
+        }
+        // The model is still writing: the body stays open until the request is aborted, as undici's does.
+        init?.signal?.addEventListener("abort", () => controller.error(init.signal?.reason), { once: true });
+      },
+    }), { status: 200, headers: { "content-type": "text/event-stream" } })) as typeof fetch;
+
+    try {
+      const provider = createAnthropicAiGatewayProvider({ apiKey: "test-key" });
+      const frames: { type: string }[] = [];
+      await expect((async () => {
+        for await (const frame of provider.stream(providerInput({
+          body: gatewayBody({ model: "anthropic:claude-opus-5-5", reasoningEffort: "low" }),
+          signal: abort.signal,
+        }))) {
+          frames.push(frame);
+          if (frame.type === "content_delta") abort.abort();
+        }
+      })()).rejects.toThrow();
+
+      // No `done`: the pump records a cancel, not a provider failure. 150
+      // streamed characters ≈ 50 output tokens; 1000 in at $4, 50 out at $20.
+      expect(frames.map((frame) => frame.type)).toEqual(["content_delta", "usage"]);
+      expect(frames.at(-1)).toMatchObject({
+        type: "usage",
+        providerResponseId: "msg_quiet",
+        usage: { inputTokens: 1000, outputTokens: 50, costMicroUsd: 4000 + 1000, costApproximate: true },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it("reports the cache writes by TTL, and none when the provider gives no split", async () => {
     async function* events(split: boolean) {
       yield {

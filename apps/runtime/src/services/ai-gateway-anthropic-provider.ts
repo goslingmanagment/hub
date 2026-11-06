@@ -609,6 +609,13 @@ export function createAnthropicAiGatewayProvider(
         if (fallbackModel !== null || refusalCategory !== null) {
           input.onProviderStop?.({ fallbackModel, refusalCategory });
         }
+        // The SDK ends its iterator quietly when our signal aborts it (it
+        // swallows the AbortError), which read as an answer the provider cut
+        // short: a failure that pages. Throw the abort as `open` does; the
+        // billed usage above is already out.
+        if (stopReason === null && input.signal.aborted) {
+          throw normalizeAnthropicProviderFailure(new Anthropic.APIUserAbortError(), "stream");
+        }
         yield { type: "done", stopReason };
       } finally {
         await opened.release?.();
