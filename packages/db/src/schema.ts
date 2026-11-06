@@ -3623,6 +3623,10 @@ export const aiUsageEvents = pgTable(
       .on(table.provider, table.errorCode, table.completedAt.desc())
       .where(sql`${table.gatewayOutcome} = 'failed'`),
     completedIdx: index("ai_usage_events_completed_idx").on(table.completedAt),
+    // The stale-reservation sweep (0355): provider attempts still without an outcome only.
+    openReservationIdx: index("ai_usage_events_open_reservation_idx")
+      .on(table.completedAt)
+      .where(sql`${table.provider} is not null and ${table.quotaAccepted} = true and ${table.gatewayOutcome} is null`),
     inputNonnegative: check("ai_usage_events_input_tokens_nonnegative", sql`${table.inputTokens} >= 0`),
     outputNonnegative: check("ai_usage_events_output_tokens_nonnegative", sql`${table.outputTokens} >= 0`),
     cacheWriteNonnegative: check(
@@ -5436,6 +5440,8 @@ export const aiAcceptanceEvents = pgTable(
       table.lifecycle,
       table.occurredAt,
     ),
+    // The golden-signals acceptance gauge counts the last hour (0355).
+    occurredAtIdx: index("ai_acceptance_events_occurred_at_idx").on(table.occurredAt),
   }),
 );
 
