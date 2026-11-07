@@ -1,14 +1,16 @@
 import type { ShiftReviewChat, ShiftReviewMessage, TeamShiftReviewResponse } from "@agency_hub_core/contracts";
-import { formatDuration } from "@agency_hub_core/ui/format";
+import { formatDuration } from "./format.js";
 
 /**
- * The rules of «Разбор смены»: whose a wait is, who was left without an answer
- * at the end, the AI share, the pulse minute by minute, what each chat is. A
- * port of the console's apps/dashboard/src/pages/team/review/shiftReviewView.ts
- * with the same meaning, line for line: the two must agree until Hub answers
- * these itself (phase 2: they become the server's definitions, one place for
- * the review, the shift journal and the person's card). Pure: the server sends
- * facts, this file counts them.
+ * The rules of «Разбор смены», one copy for the console and Workboard: what a
+ * screen derives from `teamShiftReview` — the waits and whose they are, the
+ * shift minute by minute for the pulse, the totals, what each chat shows in the
+ * list — and the three numbers of a shift's quality every screen shows
+ * («Ответ, медиана», «Без ответа к концу», «ИИ без правки», see `shiftQuality`).
+ * Pure; the server sends facts, this file counts them. Phase 2: Hub counts the
+ * same numbers by these rules for the shift journal and the people (spec §3 r2).
+ * The console's apps/dashboard/src/pages/team/review/shiftReviewView.ts
+ * re-exports this file.
  *
  * Whose a wait is (2026-11-07): a page can be worked by two people at once, or
  * handed over within a shift. A fan's wait is the reviewed chatter's when the
@@ -17,7 +19,7 @@ import { formatDuration } from "@agency_hub_core/ui/format";
  * on that page when it ended; or when a colleague answered it who was writing
  * on that page as it began. Anything else on the chatter's watch is theirs. A
  * chat with only colleagues' waits, where the chatter wrote nothing, is a
- * colleague's chat; its waits are counted apart.
+ * colleague's chat (the console's «Вели другие»); its waits are counted apart.
  */
 
 const MINUTE_MS = 60_000;
@@ -63,6 +65,8 @@ export interface PulseMinute {
   pace: number;
   /** The median reply of the last REPLY_WINDOW_MINUTES, seconds; null — no reply then. */
   replyMedianSeconds: number | null;
+  /** The same in minutes, for the chart. */
+  replyMedian: number | null;
   /** Replies in that window. */
   replies: number;
   /** The chatter's fans waiting at this minute who got an answer later in the shift: the queue the chatter worked through. */
@@ -117,6 +121,7 @@ function colleaguesIn(chat: ShiftReviewChat): Array<{ name: string; messages: nu
   return [...count].map(([name, messages]) => ({ name, messages })).sort((a, b) => b.messages - a.messages);
 }
 
+
 export interface ReviewWait {
   chat: string;
   /** When the fan began waiting, ms; `from` — the same, cut to the shift's start. */
@@ -157,6 +162,7 @@ export function reviewWaits(data: TeamShiftReviewResponse): ReviewWait[] {
   }
   const writingOn = (page: string, name: string | null, at: number) => (colleagueAt.get(`${page}|${name ?? ""}`) ?? [])
     .some((one) => one <= at && one >= at - norm);
+  // A chat's messages with their instants, parsed once per chat (a long shift has thousands of waits).
   const timedOf = new Map<string, Array<{ message: ShiftReviewMessage; at: number }>>();
   const timedFor = (key: string) => {
     let timed = timedOf.get(key);
@@ -273,6 +279,7 @@ export function pulseOf(data: TeamShiftReviewResponse, waits: readonly ReviewWai
       sent: sent[minute]!,
       pace,
       replyMedianSeconds: middle,
+      replyMedian: middle === null ? null : Math.round((middle / 60) * 10) / 10,
       replies: recent.length,
       waiting,
       waitingOpen,
@@ -283,6 +290,17 @@ export function pulseOf(data: TeamShiftReviewResponse, waits: readonly ReviewWai
     });
   }
   return out;
+}
+
+/** Stretches of the same activity, for the strip under the pace. */
+export function activityRuns(pulse: readonly PulseMinute[]): Array<{ from: number; to: number; state: ActivityState }> {
+  const runs: Array<{ from: number; to: number; state: ActivityState }> = [];
+  for (const minute of pulse) {
+    const last = runs.at(-1);
+    if (last && last.state === minute.activity && last.to === minute.at) last.to = minute.at + MINUTE_MS;
+    else runs.push({ from: minute.at, to: minute.at + MINUTE_MS, state: minute.activity });
+  }
+  return runs;
 }
 
 export interface Silence {
@@ -345,6 +363,10 @@ export interface ShiftTotals {
   handedOverUnanswered: number;
   /** Of the personal messages: Hi greetings apart from the other AI texts; copied — an AI text put in without a button. */
   origin: { ai: number; hi: number; copied: number; fix: number; own: number; none: number };
+  /** The personal messages with words, Hi greetings left out (`origin.ai + origin.fix + origin.own`): what «ИИ без правки» is a share of. */
+  textMessages: number;
+  /** Of them, the AI's text sent as it was (`aiUnedited`): «ИИ без правки». */
+  aiUnedited: number;
   dialogs: number;
   touches: number;
   ppvSent: number;
@@ -358,12 +380,14 @@ export function totalsOf(data: TeamShiftReviewResponse, mine: readonly MyMessage
   const end = Date.parse(data.shift.endedAt);
   const inheritedAnswers = new Set(waits.filter((wait) => wait.inherited && wait.by === "me").map((wait) => `${wait.chat}|${wait.to}`));
   const origin = { ai: 0, hi: 0, copied: 0, fix: 0, own: 0, none: 0 };
+  let unedited = 0;
   for (const one of personal) {
     const facts = one.message.mine;
     if (facts.origin === null) origin.none += 1;
     else if (facts.origin === "ai" && isHi(facts)) origin.hi += 1;
     else origin[facts.origin] += 1;
     if (facts.origin === "ai" && !isHi(facts) && facts.composedWith === "hand") origin.copied += 1;
+    if (aiUnedited(facts)) unedited += 1;
   }
   const unanswered = waits.filter(unansweredInShift);
   const colleagueSummaries = summaries.filter((summary) => summary.kind === "colleague");
@@ -389,6 +413,8 @@ export function totalsOf(data: TeamShiftReviewResponse, mine: readonly MyMessage
     colleagueUnanswered: theirOpen.filter((wait) => colleagueKeys.has(wait.chat)).length,
     handedOverUnanswered: theirOpen.filter((wait) => !colleagueKeys.has(wait.chat)).length,
     origin,
+    textMessages: origin.ai + origin.fix + origin.own,
+    aiUnedited: unedited,
     dialogs: summaries.filter((summary) => summary.kind === "dialog").length,
     touches: summaries.filter((summary) => summary.kind === "touch").length,
     ppvSent: mine.filter((one) => one.message.priceMills !== null).length,
@@ -411,6 +437,98 @@ export function isHi(mine: Pick<MineFacts, "composedWith" | "aiFeature">): boole
 
 function isPing(mine: Pick<MineFacts, "composedWith" | "aiFeature">): boolean {
   return mine.composedWith === "ping" || mine.aiFeature === "ping";
+}
+
+/** An AI text whose words match the sent text at least this much went out as it was. */
+export const AI_UNEDITED_MIN_SHARE = 0.98;
+
+/**
+ * «ИИ без правки»: the AI's text went to the fan as it was. Not a Hi greeting,
+ * not a Fix of a command («скажи…» — the transcript's «ИИ по команде»), not
+ * changed after it was put in (the extension saw no edit, and at least 98 % of
+ * the sent words are the AI's). The transcript's quiet mark of a message and
+ * the shift's share are this one rule.
+ */
+export function aiUnedited(mine: Pick<MineFacts, "origin" | "composedWith" | "aiFeature" | "edited" | "aiShare">): boolean {
+  return mine.origin === "ai" && !isHi(mine) && mine.aiFeature !== "improve-draft"
+    && mine.edited !== true && (mine.aiShare ?? 1) >= AI_UNEDITED_MIN_SHARE;
+}
+
+// ── The three numbers of a shift's quality (spec §3 r2: one definition per metric) ──
+
+/**
+ * A shift's quality as every screen shows it: the journal, the person's card
+ * and the review itself, so one shift never shows two sets of numbers. The
+ * words are Workboard's (apps/workboard/src/shared/metrics.ts).
+ */
+export interface ShiftQuality {
+  /** «Ответ, медиана»: the median of the chatter's replies in the shift, whole seconds; null — no reply. */
+  replyMedianSeconds: number | null;
+  /** «Без ответа к концу»: the chatter's fans who wrote in the shift (or began waiting in it) and got no answer before its end — now, for a shift going on. */
+  unansweredAtEnd: number;
+  /** «ИИ без правки»: the share (0…1) of the chatter's texts that are the AI's sent as it was; null — no texts. */
+  aiUneditedShare: number | null;
+}
+
+/** The quality of a reviewed shift, from its totals (`totalsOf`). */
+export function shiftQuality(totals: Pick<ShiftTotals, "replyMedianSeconds" | "unanswered" | "aiUnedited" | "textMessages">): ShiftQuality {
+  return {
+    replyMedianSeconds: totals.replyMedianSeconds === null ? null : Math.round(totals.replyMedianSeconds),
+    unansweredAtEnd: totals.unanswered,
+    aiUneditedShare: totals.textMessages === 0 ? null : totals.aiUnedited / totals.textMessages,
+  };
+}
+
+/** The quality of a whole review answer: waits, summaries, totals, then `shiftQuality`. */
+export function reviewQuality(data: TeamShiftReviewResponse): ShiftQuality {
+  const waits = reviewWaits(data);
+  const summaries = summariesOf(data, waits);
+  return shiftQuality(totalsOf(data, myMessages(data), summaries, waits));
+}
+
+/** The fields of a shift's numbers in `teamChatterNumbers` the stand-in below reads. */
+export interface ChatterNumbersLike {
+  replies: number;
+  replyMedianSeconds: number | null;
+  waitingAtEnd: number;
+  composed: { hand: number; reply: number; fix: number };
+}
+
+/**
+ * A shift's quality from `teamChatterNumbers` — the prototype's stand-in until
+ * Hub answers the three numbers by these rules (phase 2: `teamShiftJournal`
+ * `replyMedianSeconds` · `unansweredAtEnd` · `aiUneditedShare`). The demo's
+ * numbers are made by the review's rules, so there the two agree to the
+ * second; on today's Hub `composed.reply` is the Reply button, edited or not.
+ */
+export function qualityOfChatterNumbers(numbers: ChatterNumbersLike): ShiftQuality {
+  const texts = numbers.composed.hand + numbers.composed.reply + numbers.composed.fix;
+  return {
+    replyMedianSeconds: numbers.replies === 0 ? null : numbers.replyMedianSeconds,
+    unansweredAtEnd: numbers.waitingAtEnd,
+    aiUneditedShare: texts === 0 ? null : numbers.composed.reply / texts,
+  };
+}
+
+/** A period's quality: each number the plain average over its shifts that have one («…, в среднем за смену»). */
+export interface PeriodQuality {
+  /** The shifts averaged. */
+  shifts: number;
+  replyMedianSeconds: number | null;
+  /** Not rounded: «1,4 в среднем за смену». */
+  unansweredAtEnd: number | null;
+  aiUneditedShare: number | null;
+}
+
+export function averageQuality(shifts: readonly ShiftQuality[]): PeriodQuality {
+  const mean = (values: readonly number[]) => (values.length === 0 ? null : values.reduce((sum, value) => sum + value, 0) / values.length);
+  const replies = mean(shifts.flatMap((shift) => (shift.replyMedianSeconds === null ? [] : [shift.replyMedianSeconds])));
+  return {
+    shifts: shifts.length,
+    replyMedianSeconds: replies === null ? null : Math.round(replies),
+    unansweredAtEnd: mean(shifts.map((shift) => shift.unansweredAtEnd)),
+    aiUneditedShare: mean(shifts.flatMap((shift) => (shift.aiUneditedShare === null ? [] : [shift.aiUneditedShare]))),
+  };
 }
 
 /**
@@ -459,6 +577,12 @@ export interface ChatSummary {
   marked: number;
   ppv: number;
   bought: number;
+  firstFanText: string | null;
+  lastFanText: string | null;
+  /** The chatter's first text in the shift: what a first touch said. */
+  firstMineText: string | null;
+  /** The fan's last text before the shift, when the fan wrote nothing in it: what a waiting fan said. */
+  lastFanBeforeText: string | null;
 }
 
 export function summariesOf(data: TeamShiftReviewResponse, allWaits: readonly ReviewWait[]): ChatSummary[] {
@@ -480,6 +604,9 @@ export function summariesOf(data: TeamShiftReviewResponse, allWaits: readonly Re
     const open = waits.find((wait) => wait.by === null) ?? null;
     const openHis = open !== null && open.his ? open : null;
     const times = inShift.map((message) => Date.parse(message.at));
+    const textOf = (message: ShiftReviewMessage | undefined) => (message === undefined || message.text.trim() === "" ? null : message.text);
+    const firstFan = fan.find((message) => message.text.trim() !== "");
+    const lastFan = [...fan].reverse().find((message) => message.text.trim() !== "");
     const isAi = (message: ShiftReviewMessage) => message.mine!.origin === "ai";
     const kind: ChatKind = mine.length === 0 && colleagues.length > 0 && !waits.some((wait) => wait.his) ? "colleague"
       : fan.length > 0 || answered.length > 0 || mine.some((message) => message.mine!.replySeconds !== null) ? "dialog"
@@ -514,8 +641,47 @@ export function summariesOf(data: TeamShiftReviewResponse, allWaits: readonly Re
       marked: mine.filter((message) => message.mine!.marks.length > 0).length,
       ppv: mine.filter((message) => message.priceMills !== null).length,
       bought: mine.filter((message) => message.bought === true).length,
+      firstFanText: textOf(firstFan),
+      lastFanText: lastFan === firstFan ? null : textOf(lastFan),
+      firstMineText: textOf(mine.find((message) => message.text.trim() !== "")),
+      lastFanBeforeText: fan.length > 0 ? null : textOf([...chat.messages].reverse().find((message) => !message.inShift && message.side === "fan" && message.text.trim() !== "")),
     };
   });
+}
+
+export const CHAT_KINDS = ["dialog", "touch", "colleague", "waiting", "all"] as const;
+export type ChatKindFilter = (typeof CHAT_KINDS)[number];
+export const CHAT_SHOWS = ["all", "waited", "unanswered", "money"] as const;
+export type ChatShow = (typeof CHAT_SHOWS)[number];
+export const CHAT_SORTS = ["messages", "time", "wait", "money"] as const;
+export type ChatSort = (typeof CHAT_SORTS)[number];
+
+export function kindPasses(summary: ChatSummary, kind: ChatKindFilter): boolean {
+  return kind === "all" || summary.kind === kind;
+}
+
+export function showPasses(summary: ChatSummary, show: ChatShow): boolean {
+  switch (show) {
+    case "all": return true;
+    case "waited": return summary.longestWaitSeconds !== null && summary.longestWaitSeconds > REPLY_NORM_SECONDS;
+    case "unanswered": return summary.unansweredInShift;
+    case "money": return summary.ppv > 0 || summary.chat.shiftNetMills > 0;
+  }
+}
+
+/** The list in the chosen order; ties keep the server's order (by the first message in the shift). */
+export function sortSummaries(list: readonly ChatSummary[], sort: ChatSort): ChatSummary[] {
+  const key = (summary: ChatSummary): [number, number] => {
+    switch (sort) {
+      case "messages": return [-(summary.mine + summary.fan), summary.openSince ?? Number.MAX_SAFE_INTEGER];
+      case "time": return [summary.first ?? summary.openSince ?? Number.MAX_SAFE_INTEGER, 0];
+      case "wait": return [-Math.max(summary.longestWaitSeconds ?? -1, summary.openWaitSeconds ?? -1), summary.openSince ?? Number.MAX_SAFE_INTEGER];
+      case "money": return [-summary.chat.shiftNetMills, -summary.ppv];
+    }
+  };
+  return list.map((summary, index) => ({ summary, index, key: key(summary) }))
+    .sort((a, b) => a.key[0] - b.key[0] || a.key[1] - b.key[1] || a.index - b.index)
+    .map((one) => one.summary);
 }
 
 /**
@@ -535,6 +701,10 @@ export function chatMatches(chat: ShiftReviewChat, needle: string): boolean {
   if (query === "") return true;
   if ((chat.fanUsername ?? "").toLowerCase().includes(query) || (chat.fanDisplayName ?? "").toLowerCase().includes(query)) return true;
   return chat.messages.some((message) => message.text.toLowerCase().includes(query));
+}
+
+export function fanName(chat: ShiftReviewChat): string {
+  return chat.fanDisplayName ?? chat.fanUsername ?? (chat.fanRef ? `фан ${chat.fanRef}` : "фан");
 }
 
 /** A Coach answer as plain text: its markdown marks off, a ```draft block as quoted text. */

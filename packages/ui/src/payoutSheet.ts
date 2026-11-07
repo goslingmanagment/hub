@@ -5,9 +5,8 @@ import { millsToRoundedDollars } from "@agency_hub_core/shared";
  * chatter's tab of the payout table: a block per chatter, the page, then a
  * column per day; Fansly to the cent, OnlyFans whole dollars, no «$», tabs.
  *
- * The same functions as apps/dashboard/src/pages/team/payoutSheet.ts (pinned by
- * tests/payout-sheet.test.ts), moved here so both apps copy one text. Until the
- * console imports this file, the two must stay identical.
+ * One copy for both apps: the console's apps/dashboard/src/pages/team/payoutSheet.ts
+ * re-exports it, and tests/payout-sheet.test.ts pins the format through it.
  */
 
 /** A row of `teamShiftExport`: one chatter's credit on one page and day. */

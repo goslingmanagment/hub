@@ -1,24 +1,27 @@
 import { useMemo, type ReactNode } from "react";
-import { useLocation } from "react-router";
+import { useLocation, useSearchParams } from "react-router";
 import { CHATTER_SHIFT_MIN_MESSAGES, CHATTER_SHIFT_MIN_WORKED_MINUTES } from "@agency_hub_core/contracts";
-import { Button, Card, Delta, Disclosure, Duration, EmptyState, ErrorState, Mark, Money, Person, Skeleton, Table, type Column } from "@agency_hub_core/ui";
-import { formatDuration } from "@agency_hub_core/ui/format";
-import { PersonLink, personPath } from "@/shared/links";
+import { Button, Card, Delta, Disclosure, Duration, EmptyState, ErrorState, Mark, Money, PageLabels, Person, Skeleton, Table, Tooltip, type Column, type SortState } from "@agency_hub_core/ui";
+import { formatDay, formatDuration } from "@agency_hub_core/ui/format";
+import { PersonLink, personPath, useRowBackState } from "@/shared/links";
+import { formatAiUnedited, formatReplyMedian, formatUnanswered, METRICS, PER_SHIFT_HINT } from "@/shared/metrics";
 import { ScreenHeader } from "@/shared/ScreenHeader";
 import { usePageFilter } from "@/shared/usePageFilter";
 import { usePeriod } from "@/shared/usePeriod";
 import { useMe } from "@/shared/useMe";
+import { Head } from "./Head.js";
 import { SlowFailed } from "./SlowFailed.js";
 import { changePct, usePeopleList, type PeopleList, type PersonRef, type PersonSummary } from "./data.js";
-import { capitalized, periodWords, replyText, ROLE_WORD, shareText, statusOf, versusTitle } from "./words.js";
+import { capitalized, periodWords, ROLE_WORD, statusOf, versusTitle } from "./words.js";
 import "./people.css";
 
 /**
  * Люди (spec §4.3): everyone side by side for the period in one table — now,
  * money and its change, money per hour, how fast they answer, who was left
- * waiting at the end of a shift, how much the AI wrote and what it cost. A row
- * opens the person. People without a shift stand under the table; the
- * switched-off are folded.
+ * waiting at the end of a shift, how much the AI wrote unedited (each the
+ * average per shift, by the review's rules) and what the AI cost. A row opens
+ * the person. People without a shift stand under the table; the switched-off
+ * are folded, or — with shifts in the period — always the last rows.
  */
 export function PeopleScreen() {
   const { period, setPeriod } = usePeriod();
@@ -26,12 +29,24 @@ export function PeopleScreen() {
   const { isOwner } = useMe();
   const list = usePeopleList(period, page);
   const location = useLocation();
+  const [sort, setSort] = useListSort();
   const columns = useColumns(list, isOwner);
+  const rows = useMemo(() => sortedRows(list.rows, columns, sort), [list.rows, columns, sort]);
+  const firstOff = rows.find(isQuiet);
+  const rowState = useRowBackState("Люди");
   const noShifts = list.main === "ready" && list.rows.every((row) => !row.work || row.work.shifts === 0);
 
   return (
     <>
-      <ScreenHeader title="Люди" period pageFilter updatedAt={list.updatedAt} onRefresh={list.refresh} refreshing={list.refreshing} />
+      <ScreenHeader
+        title="Люди"
+        period
+        pageFilter
+        meta={list.comparable ? undefined : <NothingToCompare knownSince={list.knownSince} />}
+        updatedAt={list.updatedAt}
+        onRefresh={list.refresh}
+        refreshing={list.refreshing}
+      />
       <div className="wb-content">
         {list.tooLong ? (
           <Card>
@@ -49,15 +64,21 @@ export function PeopleScreen() {
             {list.quality === "failed" && <SlowFailed onRetry={list.retryQuality} />}
             <Table
               label="Люди за период"
+              className="people-table"
               columns={columns}
-              rows={list.rows}
+              rows={rows}
               rowKey={(row) => String(row.userId)}
               rowHref={(row) => personPath(row.userId, location.search)}
-              rowQuiet={(row) => row.state === "disabled" || !row.work || row.work.shifts === 0}
-              defaultSort={{ key: "sales", direction: "desc" }}
+              rowState={rowState}
+              rowQuiet={isQuiet}
+              rowClassName={(row) => (row === firstOff && row !== rows[0] ? "people-row--off" : undefined)}
+              sort={sort}
+              onSortChange={setSort}
+              align="first-line"
               loading={list.main === "loading"}
               refreshing={list.refreshing}
               skeletonRows={6}
+              skeletonLines={2}
               empty={(
                 <EmptyState
                   title={`${capitalized(periodWords(period))} смен не было`}
@@ -68,7 +89,7 @@ export function PeopleScreen() {
               )}
             />
             {noShifts && list.rows.length > 0 && (
-              <p className="people-note">{capitalized(periodWords(period))} смен не было: в таблице те, кто работал в прошлый период.</p>
+              <p className="people-note">{capitalized(periodWords(period))} смен не было: в таблице те, у кого были смены в прошлый период.</p>
             )}
             <Aside list={list} page={page} />
           </>
@@ -79,54 +100,123 @@ export function PeopleScreen() {
   );
 }
 
-/** A number with its change under it. */
-function WithDelta({ children, pct, was, title }: { children: ReactNode; pct: number | null; was?: number | null; title: string }) {
+/** «Сравнить не с чем: Hub пишет смены с 24 окт.» instead of the dates compared with, when nobody has a window before. */
+function NothingToCompare({ knownSince }: { knownSince: string | null }) {
+  return <span>Сравнить не с чем{knownSince ? `: Hub записывает смены с ${formatDay(knownSince)}` : ": у Hub нет прошлого периода"}</span>;
+}
+
+const SORT_KEYS = new Set(["who", "shifts", "sales", "hour", "reply", "unanswered", "ai", "spend"]);
+const DEFAULT_SORT: SortState = { key: "sales", direction: "desc" };
+
+/** The order in the address (`?sort=reply&dir=desc`): «←» from a person comes back to the same order. */
+function useListSort(): [SortState, (next: SortState) => void] {
+  const [search, setSearch] = useSearchParams();
+  const key = search.get("sort");
+  const sort: SortState = key && SORT_KEYS.has(key) ? { key, direction: search.get("dir") === "asc" ? "asc" : "desc" } : DEFAULT_SORT;
+  const setSort = (next: SortState) => setSearch((current) => {
+    const updated = new URLSearchParams(current);
+    if (next.key === DEFAULT_SORT.key && next.direction === DEFAULT_SORT.direction) {
+      updated.delete("sort");
+      updated.delete("dir");
+    } else {
+      updated.set("sort", next.key);
+      updated.set("dir", next.direction);
+    }
+    return updated;
+  }, { replace: true });
+  return [sort, setSort];
+}
+
+/** A row that is not one of the working people of the period: switched off, or no shift in it (only in the window before). */
+function isQuiet(row: PersonSummary): boolean {
+  return row.state === "disabled" || !row.work || row.work.shifts === 0;
+}
+
+/** The rows in the chosen order; the quiet ones always last, under a line (spec §4.3): they are not compared with the working ones. */
+function sortedRows(rows: readonly PersonSummary[], columns: readonly Column<PersonSummary>[], sort: SortState): PersonSummary[] {
+  const value = columns.find((column) => column.key === sort.key)?.sortValue;
+  const factor = sort.direction === "asc" ? 1 : -1;
+  const byValue = (left: PersonSummary, right: PersonSummary) => {
+    if (!value) return 0;
+    const a = value(left);
+    const b = value(right);
+    const aMissing = a === null || a === undefined;
+    const bMissing = b === null || b === undefined;
+    // Missing values stay last in both directions.
+    if (aMissing || bMissing) return aMissing === bMissing ? 0 : aMissing ? 1 : -1;
+    if (typeof a === "string" && typeof b === "string") return a.localeCompare(b, "ru") * factor;
+    return (Number(a) - Number(b)) * factor;
+  };
+  const off = (row: PersonSummary) => (isQuiet(row) ? 1 : 0);
+  return [...rows].sort((left, right) => off(left) - off(right) || byValue(left, right) || left.username.localeCompare(right.username, "ru"));
+}
+
+/** A number with its change under it; nothing under it when there is nothing to compare with. */
+function WithDelta({ children, change }: { children: ReactNode; change: ReactNode }) {
   return (
     <span className="people-num">
       <span>{children}</span>
-      <Delta pct={pct} was={was ?? null} title={title} />
+      {change}
     </span>
   );
 }
 
 function Pending() {
-  return <span style={{ display: "inline-flex", justifyContent: "flex-end", width: "100%" }}><Skeleton width={56} /></span>;
+  return <span className="people-pending"><Skeleton width={56} /></span>;
 }
 
-function Dash({ title }: { title: string }) {
-  return <span className="people-dash" title={title}>—</span>;
+function Dash({ hint }: { hint: string }) {
+  return <Tooltip content={hint} align="end"><span className="people-dash">—</span></Tooltip>;
+}
+
+/** A column of a quality number: its label says «в среднем за смену»; its hint, what it counts. */
+function qualityHint(key: keyof typeof METRICS): ReactNode {
+  return <>{METRICS[key].hint} {PER_SHIFT_HINT}</>;
 }
 
 function useColumns(list: PeopleList, isOwner: boolean): Column<PersonSummary>[] {
   const { period } = usePeriod();
   const versus = versusTitle(period);
-  const { team } = list;
+  const { team, comparable } = list;
+  const crowd = list.rows.filter((row) => row.quality).length >= 3;
   return useMemo(() => {
+    /** The change of a number against the window before: neutral words, never a grade (spec §5); none when there is nothing to compare with. */
+    const change = (current: number | null, previous: number | null | undefined, was: number | null = null) => {
+      if (!comparable) return null;
+      if (was !== null) return <Delta was={was} title={versus} />;
+      const pct = changePct(current, previous);
+      return pct === null ? null : <Delta pct={pct} kind="cost" title={versus} />;
+    };
     const quality = (row: PersonSummary, show: (value: NonNullable<PersonSummary["quality"]>) => ReactNode) => {
-      if (!row.work || row.work.shifts === 0) return <Dash title="Смен не было" />;
-      if (row.quality === undefined) return list.quality === "failed" ? <Dash title="Hub не ответил" /> : <Pending />;
-      if (row.quality === null) return <Dash title="Смена ещё идёт: числа будут после её конца" />;
+      if (!row.work || row.work.shifts === 0) return <Dash hint="Смен не было" />;
+      if (row.quality === undefined) return list.quality === "failed" ? <Dash hint="Hub не ответил" /> : <Pending />;
+      if (row.quality === null) return <Dash hint="Смена ещё идёт: числа будут после её конца" />;
       return show(row.quality);
     };
     const columns: Column<PersonSummary>[] = [
       {
         key: "who",
         header: "Человек",
+        grow: true,
         sortValue: (row) => row.username,
         cell: (row) => {
           const { status, words } = statusOf(row);
-          const hint = [row.role && row.role !== "chatter" ? ROLE_WORD[row.role] : "", words].filter(Boolean).join(" · ");
-          return <Person name={row.username} status={status} {...(hint ? { hint } : {})} />;
+          const hint = [row.role && row.role !== "chatter" ? ROLE_WORD[row.role].toLowerCase() : "", words].filter(Boolean).join(" · ");
+          return (
+            <span className="people-who">
+              <Person name={row.username} status={status} hint={hint} />
+              {row.pages.length > 0 && <PageLabels labels={row.pages} max={4} className="people-who__pages" />}
+            </span>
+          );
         },
       },
       {
         key: "shifts",
         header: "Смены",
         numeric: true,
-        title: "Смен за период и сколько в них работы",
         sortValue: (row) => row.work?.shifts ?? 0,
         cell: (row) => !row.work || row.work.shifts === 0
-          ? <span className="people-num"><span className="people-dash">0</span><span className="people-num__sub">смен не было</span></span>
+          ? <span className="people-dash">0</span>
           : (
             <span className="people-num">
               <span>{row.work.shifts}</span>
@@ -138,14 +228,14 @@ function useColumns(list: PeopleList, isOwner: boolean): Column<PersonSummary>[]
         key: "sales",
         header: "Продажи",
         numeric: true,
-        title: "Деньги после комиссии площадки за смены периода",
+        hint: "Деньги после комиссии площадки за смены периода. Под суммой — изменение к прошлому периоду, на то же время.",
         sortValue: (row) => row.work?.salesNetMills ?? 0,
         cell: (row) => {
           const work = row.work;
-          if (!work) return <Dash title="Смен не было" />;
+          if (!work) return <Dash hint="Смен не было" />;
           const gone = work.shifts === 0 && (work.previous?.salesNetMills ?? 0) > 0;
           return (
-            <WithDelta pct={changePct(work.salesNetMills, work.previous?.salesNetMills)} was={gone ? work.previous!.salesNetMills : null} title={versus}>
+            <WithDelta change={change(work.salesNetMills, work.previous?.salesNetMills, gone ? work.previous!.salesNetMills : null)}>
               <Money mills={work.salesNetMills} strong />
             </WithDelta>
           );
@@ -155,13 +245,12 @@ function useColumns(list: PeopleList, isOwner: boolean): Column<PersonSummary>[]
         key: "hour",
         header: "В час",
         numeric: true,
-        title: "Продажи на час работы",
         sortValue: (row) => row.work?.perHourMills ?? null,
         cell: (row) => {
           const work = row.work;
-          if (!work || work.perHourMills === null) return <Dash title="Смен не было" />;
+          if (!work || work.perHourMills === null) return <Dash hint="Смен не было" />;
           return (
-            <WithDelta pct={changePct(work.perHourMills, work.previous?.perHourMills)} title={versus}>
+            <WithDelta change={change(work.perHourMills, work.previous?.perHourMills)}>
               <Money mills={work.perHourMills} />
             </WithDelta>
           );
@@ -169,54 +258,62 @@ function useColumns(list: PeopleList, isOwner: boolean): Column<PersonSummary>[]
       },
       {
         key: "reply",
-        header: "Ответ, медиана",
+        header: <Head lines={[METRICS.reply.label]} sub="в среднем за смену" />,
+        headerWrap: false,
         numeric: true,
-        title: "Половина ответов ждущим фанам — быстрее этого",
+        hint: qualityHint("reply"),
         sortValue: (row) => row.quality?.replyMedianSeconds ?? null,
         sortFirst: "desc",
         cell: (row) => quality(row, (value) => {
-          const text = replyText(value.replyMedianSeconds);
-          const slow = value.replyMedianSeconds !== null && team.replyMedianSeconds !== null && list.rows.length >= 3
+          const text = formatReplyMedian(value.replyMedianSeconds);
+          const slow = crowd && value.replyMedianSeconds !== null && team.replyMedianSeconds !== null
             && value.replyMedianSeconds >= 2 * team.replyMedianSeconds && value.replyMedianSeconds >= 120;
-          return slow ? <Mark title={`Вдвое дольше середины команды (${replyText(team.replyMedianSeconds)})`}>{text}</Mark> : text;
+          return slow ? <Mark hint={`Вдвое дольше середины команды (${formatReplyMedian(team.replyMedianSeconds)})`}>{text}</Mark> : text;
         }),
       },
       {
-        key: "waiting",
-        header: "Без ответа в конце",
+        key: "unanswered",
+        header: <Head lines={[METRICS.unanswered.label]} sub="в среднем за смену" />,
+        headerWrap: false,
         numeric: true,
-        title: "Сколько фанов ждали ответа, когда смена кончилась: в среднем за смену",
-        sortValue: (row) => row.quality?.waitingAtEnd ?? null,
+        hint: qualityHint("unanswered"),
+        sortValue: (row) => row.quality?.unansweredAtEnd ?? null,
         sortFirst: "desc",
         cell: (row) => quality(row, (value) => {
-          const many = team.waitingAtEnd !== null && list.rows.length >= 3 && value.waitingAtEnd >= 3 && value.waitingAtEnd >= 2 * Math.max(team.waitingAtEnd, 1);
-          return many ? <Mark title={`Вдвое больше середины команды (${team.waitingAtEnd})`}>{value.waitingAtEnd}</Mark> : value.waitingAtEnd;
+          const text = formatUnanswered(value.unansweredAtEnd, { average: true });
+          const many = crowd && value.unansweredAtEnd !== null && team.unansweredAtEnd !== null
+            && value.unansweredAtEnd >= 3 && value.unansweredAtEnd >= 2 * Math.max(team.unansweredAtEnd, 1);
+          return many ? <Mark hint={`Вдвое больше середины команды (${formatUnanswered(team.unansweredAtEnd, { average: true })})`}>{text}</Mark> : text;
         }),
       },
       {
         key: "ai",
-        header: "Доля ИИ",
+        header: <Head lines={[METRICS.aiUnedited.label]} sub="в среднем за смену" />,
+        headerWrap: false,
         numeric: true,
-        title: "Сообщения, написанные кнопками Reply и Fix расширения, из всех",
-        sortValue: (row) => row.quality?.aiShare ?? null,
-        cell: (row) => quality(row, (value) => shareText(value.aiShare)),
+        hint: qualityHint("aiUnedited"),
+        sortValue: (row) => row.quality?.aiUneditedShare ?? null,
+        sortFirst: "desc",
+        cell: (row) => quality(row, (value) => formatAiUnedited(value.aiUneditedShare)),
       },
     ];
     if (isOwner) {
       columns.push({
         key: "spend",
-        header: "Траты на ИИ",
+        header: <Head lines={["Траты", "на ИИ"]} />,
+        headerWrap: false,
         numeric: true,
-        title: "Сколько стоили запросы человека к ИИ за дни периода, по всем страницам",
+        hint: "Сколько стоили запросы человека к ИИ за дни периода, по всем страницам",
         sortValue: (row) => row.aiSpendMicroUsd ?? null,
+        sortFirst: "desc",
         cell: (row) => {
-          if (row.aiSpendMicroUsd === undefined) return list.spend === "failed" ? <Dash title="Hub не ответил" /> : <Pending />;
-          return row.aiSpendMicroUsd === null ? <Dash title="Запросов к ИИ не было" /> : <Money microUsd={row.aiSpendMicroUsd} />;
+          if (row.aiSpendMicroUsd === undefined) return list.spend === "failed" ? <Dash hint="Hub не ответил" /> : <Pending />;
+          return row.aiSpendMicroUsd === null ? <Dash hint="Запросов к ИИ не было" /> : <Money microUsd={row.aiSpendMicroUsd} />;
         },
       });
     }
     return columns;
-  }, [isOwner, list.quality, list.spend, list.rows.length, team.replyMedianSeconds, team.waitingAtEnd, versus]);
+  }, [isOwner, list.quality, list.spend, crowd, comparable, team.replyMedianSeconds, team.unansweredAtEnd, versus]);
 }
 
 function Aside({ list, page }: { list: PeopleList; page: string | null }) {
@@ -240,7 +337,8 @@ function Aside({ list, page }: { list: PeopleList; page: string | null }) {
       )}
       {page && (
         <p className="people-note">
-          Смены и продажи — только по странице {page}. Ответ, «без ответа в конце», доля и траты ИИ — по всем страницам: Hub пока не делит их по страницам.
+          Смены и продажи — только по странице {page}. Ответ, без ответа к концу, ИИ без правки и траты на ИИ — по всем страницам:
+          Hub пока не делит их по страницам.
         </p>
       )}
     </div>
@@ -248,7 +346,7 @@ function Aside({ list, page }: { list: PeopleList; page: string | null }) {
 }
 
 function IdlePerson({ person }: { person: PersonRef }) {
-  const { status, words } = statusOf({ state: person.state, disabledAt: person.disabledAt, now: { onShiftSince: null, lastSeenAt: null } });
+  const { status, words } = statusOf({ state: person.state, disabledAt: person.disabledAt, now: { onShiftSince: null, lastShiftEnd: null, quietDays: 0 } });
   const role = ROLE_WORD[person.role].toLowerCase();
   const hint = person.state === "active" ? role : words;
   return <PersonLink userId={person.userId} name={person.username} status={status} hint={hint} backLabel="Люди" />;
@@ -259,17 +357,16 @@ function HowItCounts({ versus }: { versus: string }) {
     <Disclosure summary="Как это считается" className="people-help">
       <p>
         Смена — работа в расширении под своим входом: от {formatDuration(CHATTER_SHIFT_MIN_WORKED_MINUTES)} и {CHATTER_SHIFT_MIN_MESSAGES} сообщений,
-        конец — час без действий.
+        конец — час без действий. Статус рядом с именем — тоже по сменам, не по открытому расширению.
       </p>
       <p>
         Продажи — деньги после комиссии площадки за смены, на страницах, где человек писал. Если страницу вели двое, продажа у того,
         кто последним писал фану; если не писал никто, она видна у обоих. Поэтому строки «Итого» нет: сумма была бы больше настоящей.
       </p>
-      <p>
-        Ответ, медиана — половина ответов ждущим фанам быстрее этого. Без ответа в конце — сколько фанов ждали ответа, когда смена
-        кончилась, в среднем за смену. Доля ИИ — сообщения, написанные кнопками Reply и Fix.
-      </p>
-      <p>Изменение — {versus}. Это ориентир, а не основание для оплаты.</p>
+      <p><b>{METRICS.reply.label}.</b> {METRICS.reply.hint}</p>
+      <p><b>{METRICS.unanswered.label}.</b> {METRICS.unanswered.hint}</p>
+      <p><b>{METRICS.aiUnedited.label}.</b> {METRICS.aiUnedited.hint}</p>
+      <p>{PER_SHIFT_HINT} Изменение — {versus}; это ориентир, а не основание для оплаты.</p>
     </Disclosure>
   );
 }

@@ -1,5 +1,10 @@
 /* Решения: the few things the shared components do not say themselves. Tokens only. */
 @layer components {
+  /* A section an anchor lands on (`/decisions#held`): its title shows below the sticky header. */
+  .decisions-section {
+    scroll-margin-top: 96px;
+  }
+
   /* The number of a queue next to its title: quiet, the same size. */
   .decisions-count {
     margin-left: 8px;
@@ -8,12 +13,36 @@
     font-variant-numeric: tabular-nums;
   }
 
-  /* A quiet second line inside a cell («Оба записали «моё»», «без отчёта 28 ч»). */
+  /* «Ждут вашего решения: 1 спор · …»: each part goes to its section. */
+  .decisions-jump {
+    color: inherit;
+    text-decoration: underline;
+    text-decoration-color: var(--ui-line-strong);
+    text-underline-offset: 3px;
+    border-radius: var(--ui-radius-sm);
+  }
+
+  .decisions-jump:hover {
+    color: var(--ui-text);
+    text-decoration-color: currentColor;
+  }
+
+  .decisions-jump:focus-visible {
+    outline: var(--ui-focus);
+    outline-offset: 2px;
+  }
+
+  /* A quiet second line inside a cell («nova-1 · Fansly», «без отчёта 28 ч»). */
   .decisions-sub {
     display: block;
     color: var(--ui-text-2);
     font-size: var(--ui-fs-14);
     line-height: var(--ui-lh-14);
+  }
+
+  .decisions-fan {
+    display: block;
+    min-width: 0;
   }
 
   .decisions-nowrap {
@@ -28,9 +57,18 @@
     overflow-wrap: anywhere;
   }
 
-  .decisions-warn {
-    color: var(--ui-warn-text);
-    font-weight: 500;
+  /* The «›» of a row that opens a panel: quiet, ink under the pointer and on the open row. */
+  .decisions-go {
+    display: block;
+    margin-left: auto;
+    color: var(--ui-text-3);
+    transition: color var(--ui-fast), transform var(--ui-fast);
+  }
+
+  .ui-table tr:hover .decisions-go,
+  .ui-table tr:focus-within .decisions-go,
+  .ui-table tr[aria-selected="true"] .decisions-go {
+    color: var(--ui-text);
   }
 
   .decisions-note {
@@ -70,13 +108,6 @@
     background: var(--ui-surface);
   }
 
-  .decisions-skeleton {
-    padding: 24px;
-    border: 1px solid var(--ui-line);
-    border-radius: var(--ui-radius-lg);
-    background: var(--ui-surface);
-  }
-
   .decisions-pager {
     display: flex;
     align-items: center;
@@ -91,27 +122,67 @@
   .decisions-panel {
     display: flex;
     flex-direction: column;
-    gap: 24px;
+    gap: 28px;
   }
 
-  .decisions-panel:focus {
-    outline: none;
+  .decisions-panel__title {
+    margin: 0 0 8px;
+    color: var(--ui-text);
+    font-size: var(--ui-fs-15);
+    line-height: var(--ui-lh-15);
+    font-weight: 600;
   }
 
+  /* Who claims what, and beside each one their conversation with the fan in their shift. */
   .decisions-marks {
     display: flex;
     flex-direction: column;
-    gap: 8px;
     margin: 0;
     padding: 0;
     list-style: none;
+    border-top: 1px solid var(--ui-line-soft);
   }
 
   .decisions-marks li {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    gap: 4px 12px;
+    justify-content: space-between;
+    gap: 8px 16px;
+    min-height: 60px;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--ui-line-soft);
+  }
+
+  .decisions-marks__who {
+    min-width: 0;
+  }
+
+  .decisions-evidence {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--ui-accent);
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+    font-weight: 500;
+    text-decoration: none;
+    white-space: nowrap;
+    border-radius: var(--ui-radius-sm);
+  }
+
+  a.decisions-evidence:hover {
+    text-decoration: underline;
+  }
+
+  a.decisions-evidence:focus-visible {
+    outline: var(--ui-focus);
+    outline-offset: 2px;
+  }
+
+  .decisions-evidence--none {
+    color: var(--ui-text-2);
+    font-weight: 400;
   }
 
   /* Answers to choose from: a whole row is the target, the picked one in ink. */
@@ -132,6 +203,13 @@
     font-size: var(--ui-fs-15);
     line-height: var(--ui-lh-15);
     font-weight: 600;
+  }
+
+  /* Two answers side by side (a held send's resolve): the window stays short. */
+  .decisions-choices--pair {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 12px;
   }
 
   .decisions-choice {
@@ -198,14 +276,36 @@
   .decisions-resolve {
     display: flex;
     flex-direction: column;
-    gap: 20px;
+    gap: 16px;
   }
 
+  /* The send in two columns: label over value, three short rows instead of six. */
   .decisions-summary {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 12px 24px;
+    margin: 0;
     padding: 16px;
     border: 1px solid var(--ui-line-soft);
     border-radius: var(--ui-radius);
     background: var(--ui-hover-soft);
+  }
+
+  .decisions-summary__item {
+    min-width: 0;
+  }
+
+  .decisions-summary dt {
+    color: var(--ui-text-2);
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+  }
+
+  .decisions-summary dd {
+    margin: 2px 0 0;
+    color: var(--ui-text);
+    font-size: var(--ui-fs-15);
+    line-height: var(--ui-lh-15);
   }
 
   .decisions-intro {
@@ -223,29 +323,6 @@
     font-family: ui-monospace, "SF Mono", Menlo, monospace;
     font-size: var(--ui-fs-14);
     overflow-wrap: anywhere;
-  }
-
-  .decisions-textarea {
-    width: 100%;
-    min-height: 88px;
-    padding: 8px 12px;
-    border: 1px solid var(--ui-line-strong);
-    border-radius: var(--ui-radius);
-    background: var(--ui-surface);
-    color: var(--ui-text);
-    font: 400 var(--ui-fs-15) / var(--ui-lh-15) var(--ui-font);
-    resize: vertical;
-    transition: border-color var(--ui-fast), box-shadow var(--ui-fast);
-  }
-
-  .decisions-textarea::placeholder {
-    color: var(--ui-text-3);
-  }
-
-  .decisions-textarea:focus {
-    outline: none;
-    border-color: var(--ui-accent);
-    box-shadow: 0 0 0 3px var(--ui-accent-soft);
   }
 
   .decisions-missing {

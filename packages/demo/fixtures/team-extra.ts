@@ -227,21 +227,23 @@ export function teamWinBackResults(request: DemoRequest, scope: readonly string[
       const perDay = (PICKS_PER_DAY[user.username] ?? 1) * approach.popularity * between(random, 0.7, 1.3);
       const attempts = Math.round(perDay * span(start, end, 0));
       if (attempts === 0) continue;
+      const sent = Math.round(attempts * between(random, 0.82, 0.96));
+      // As Hub (repositories/winback.ts): what matured is of the written ones, and an answer or a purchase only of what matured.
       const fraction = (age: number) => span(start, end, age) / span(start, end, 0);
-      const matured72h = Math.round(attempts * fraction(3));
-      const matured7d = Math.round(attempts * fraction(7));
-      const matured30d = Math.round(attempts * fraction(30));
-      const bought7d = Math.round(matured7d * approach.buy * between(random, 0.7, 1.3) * (user.username === "ivan.p" ? 0.4 : 1));
-      const buyers30d = Math.round(matured30d * approach.buy * between(random, 0.9, 1.5));
+      const matured72h = Math.min(sent, Math.round(sent * fraction(3)));
+      const matured7d = Math.min(sent, Math.round(sent * fraction(7)));
+      const matured30d = Math.min(sent, Math.round(sent * fraction(30)));
+      const bought7d = Math.min(matured7d, Math.round(matured7d * approach.buy * between(random, 0.7, 1.3) * (user.username === "ivan.p" ? 0.4 : 1)));
+      const buyers30d = Math.min(matured30d, Math.round(matured30d * approach.buy * between(random, 0.9, 1.5)));
       rows.push({
         approachId: approach.id,
         approach: approach.label,
         userId: user.id,
         username: user.username,
         attempts,
-        sent: Math.round(attempts * between(random, 0.82, 0.96)),
+        sent,
         matured72h,
-        replied72h: Math.round(matured72h * approach.reply * between(random, 0.8, 1.2)),
+        replied72h: Math.min(matured72h, Math.round(matured72h * approach.reply * between(random, 0.8, 1.2))),
         matured7d,
         bought7d,
         matured30d,

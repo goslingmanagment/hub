@@ -1,7 +1,6 @@
-import { KeyRound, LogOut, RotateCcw } from "lucide-react";
+import { ExternalLink, KeyRound, LogOut, RotateCcw } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Button, Card, Confirm, Disclosure, EmptyState, ErrorState, Modal, Money, Notice, SkeletonText, TextInput, TimeMsk, toast } from "@agency_hub_core/ui";
-import { formatAgo, formatDateTime } from "@agency_hub_core/ui/format";
+import { Button, Card, Checkbox, Confirm, Disclosure, EmptyState, ErrorState, Modal, Money, Notice, PageLabels, SkeletonText, TextInput, toast, platformWord } from "@agency_hub_core/ui";
 import {
   LINK_KIND_LABEL,
   REVOCATION_LABEL,
@@ -28,13 +27,13 @@ import {
   useTerminateAccess,
   useUserDevices,
   useUserLinks,
-  type AdminPage,
   type AdminUser,
   type DeviceItem,
   type LinkItem,
 } from "./data";
 import { LinkReveal, type RevealedLink } from "./LinkReveal";
 import { usePageAccess } from "./pageAccess";
+import { whenWords } from "./when";
 import "./access.css";
 
 /**
@@ -117,18 +116,21 @@ function PersonAccessBody({ user, variant, meId, onChanged, onDeleted }: {
 
   // The state first, its one way on under the words (a side panel is too narrow for a button beside them).
   const notice = status === "disabled" && user.disabledAt ? (
-    <Notice tone="off" title={<>Доступ отключён <TimeMsk at={user.disabledAt} /></>}>
-      <p className="access-notice__text">Логин и история сохранены — восстановите доступ, если возвращается тот же человек.</p>
-      <div className="access-notice__action">
-        <Button variant="primary" size="sm" icon={RotateCcw} onClick={() => ask({ kind: "reactivate" })}>Восстановить доступ</Button>
-      </div>
+    <Notice
+      tone="off"
+      title={`Доступ отключён ${whenWords(user.disabledAt)}`}
+      actionPlacement="below"
+      action={<Button variant="primary" size="sm" icon={RotateCcw} onClick={() => ask({ kind: "reactivate" })}>Восстановить доступ</Button>}
+    >
+      Логин и история сохранены — восстановите доступ, если возвращается тот же человек.
     </Notice>
   ) : status === "invited" ? (
-    <Notice title="Ждёт регистрации">
-      <p className="access-notice__text">Человек ещё не открыл приглашение и не придумал пароль. Пока этого не случилось, войти он не может.</p>
-      <div className="access-notice__action">
-        <Button size="sm" onClick={() => ask({ kind: "newLink", linkKind: "invite" })}>Отправить приглашение заново</Button>
-      </div>
+    <Notice
+      title="Ждёт регистрации"
+      actionPlacement="below"
+      action={<Button size="sm" onClick={() => ask({ kind: "newLink", linkKind: "invite" })}>Отправить приглашение заново</Button>}
+    >
+      Человек ещё не открыл приглашение и не придумал пароль. Пока этого не случилось, войти он не может.
     </Notice>
   ) : null;
 
@@ -140,8 +142,7 @@ function PersonAccessBody({ user, variant, meId, onChanged, onDeleted }: {
   const end = <EndBlock user={user} variant={variant} canDelete={canDelete} busy={createLink.isPending} onAsk={ask} />;
 
   return (
-    // In a side panel the focus lands here, not on the first page's tick: a stray Space must not open a page.
-    <div className={variant === "page" ? "access-panel access-panel--page" : "access-panel"} {...(variant === "drawer" ? { tabIndex: -1, "data-autofocus": true } : {})}>
+    <div className={variant === "page" ? "access-panel access-panel--page" : "access-panel"}>
       {notice}
       {variant === "page" ? (
         <div className="access-panel__grid">
@@ -189,13 +190,28 @@ function PagesBlock({ user, variant, pageAccess }: { user: AdminUser; variant: "
   const assigned = new Set(user.assignedPages.map((page) => page.label));
   const count = user.assignedPages.length;
   const title = <>Страницы <span className="access-count">{count}</span></>;
+  if (user.role === "owner") {
+    // Hub gives the owner no page filter: ticks would change nothing (D11).
+    return (
+      <Block title="Страницы" variant={variant}>
+        <p className="access-text">Владелец видит все страницы — назначать их не нужно.</p>
+      </Block>
+    );
+  }
   if (user.disabledAt) {
     return (
       <Block title="Сохранённые страницы" variant={variant}>
         <p className="access-text">После восстановления доступа сотрудник снова сможет работать с этими страницами.</p>
-        {count === 0
-          ? <p className="access-hint">Страниц пока нет.</p>
-          : <div className="access-chips">{user.assignedPages.map((page) => <span key={page.id} className="access-chip">{page.label} · {page.modelName}</span>)}</div>}
+        {count === 0 ? <p className="access-hint">Страниц пока нет.</p> : <PageLabels labels={user.assignedPages.map((page) => page.label)} max={6} className="access-pages-line" />}
+      </Block>
+    );
+  }
+  if (variant === "drawer") {
+    // Beside the matrix the person's row is already in view: one line here, the ticks stay in the matrix (Д6).
+    return (
+      <Block title={title} variant={variant}>
+        {count === 0 ? <p className="access-text">Ни одной страницы.</p> : <PageLabels labels={user.assignedPages.map((page) => page.label)} max={6} className="access-pages-line" />}
+        <p className="access-hint">Открыть или снять страницу — в таблице «Кто на каких страницах».</p>
       </Block>
     );
   }
@@ -211,19 +227,28 @@ function PagesBlock({ user, variant, pageAccess }: { user: AdminUser; variant: "
       <div className="access-pages">
         {pagesByModel(all.data).map((model) => {
           const picked = model.pages.filter((page) => assigned.has(page.label)).length;
+          const busy = model.pages.some((page) => pageAccess.busy(user.id, page.label));
           return (
             <div key={model.modelSlug} className="access-pages__model">
-              <div className="access-pages__head">
-                <span className="access-pages__name">{model.modelName}</span>
-                {model.pages.length > 1 && (
-                  <Button size="sm" variant="ghost" onClick={() => pageAccess.toggleModel(user, model, assigned)}>
-                    {picked === model.pages.length ? "Снять всю модель" : "Открыть всю модель"}
-                  </Button>
-                )}
-              </div>
+              {model.pages.length > 1 ? (
+                <Checkbox
+                  className="access-pages__name"
+                  label={<span className="access-words">{model.modelName}<span className="access-hint">вся модель</span></span>}
+                  checked={picked === model.pages.length}
+                  indeterminate={picked > 0}
+                  disabled={busy}
+                  onChange={() => pageAccess.toggleModel(user, model, assigned)}
+                />
+              ) : <span className="access-pages__name access-pages__name--single">{model.modelName}</span>}
               <div className="access-pages__list">
                 {model.pages.map((page) => (
-                  <PageToggle key={page.label} page={page} has={assigned.has(page.label)} busy={pageAccess.busy(user.id, page.label)} onToggle={() => pageAccess.toggle(user, page, assigned.has(page.label))} />
+                  <Checkbox
+                    key={page.label}
+                    label={<span className="access-words">{page.label}<span className="access-hint">{platformWord(page.platform) ?? page.platform}</span></span>}
+                    checked={assigned.has(page.label)}
+                    disabled={pageAccess.busy(user.id, page.label)}
+                    onChange={() => pageAccess.toggle(user, page, assigned.has(page.label))}
+                  />
                 ))}
               </div>
             </div>
@@ -231,18 +256,6 @@ function PagesBlock({ user, variant, pageAccess }: { user: AdminUser; variant: "
         })}
       </div>
     </Block>
-  );
-}
-
-const PLATFORM: Readonly<Record<string, string>> = { fansly: "Fansly", onlyfans: "OnlyFans", telegram: "Telegram" };
-
-function PageToggle({ page, has, busy, onToggle }: { page: AdminPage; has: boolean; busy: boolean; onToggle: () => void }) {
-  return (
-    <label className="access-toggle" data-on={has || undefined}>
-      <input type="checkbox" checked={has} disabled={busy} onChange={onToggle} />
-      <span className="access-toggle__label">{page.label}</span>
-      <span className="access-hint">{PLATFORM[page.platform] ?? page.platform}</span>
-    </label>
   );
 }
 
@@ -274,7 +287,7 @@ function LinksBlock({ user, variant, onAsk }: { user: AdminUser; variant: "page"
             <li key={link.id} className="access-list__row">
               <span className="access-list__main">
                 {LINK_KIND_LABEL[link.kind]}
-                <span className="access-hint">{linkStateLabel(link, (iso) => formatDateTime(iso))} · создана {formatDateTime(link.createdAt)}</span>
+                <span className="access-hint">{linkStateLabel(link, whenWords)} · создана {whenWords(link.createdAt)}</span>
               </span>
               {!disabled && <Button size="sm" variant="ghost" onClick={() => onAsk({ kind: "link", link })}>Отозвать</Button>}
             </li>
@@ -289,7 +302,7 @@ function LinksBlock({ user, variant, onAsk }: { user: AdminUser; variant: "page"
               <li key={link.id} className="access-list__row">
                 <span className="access-list__main">
                   {LINK_KIND_LABEL[link.kind]}
-                  <span className="access-hint">{linkStateLabel(link, (iso) => formatDateTime(iso))} · создана {formatDateTime(link.createdAt)}</span>
+                  <span className="access-hint">{linkStateLabel(link, whenWords)} · создана {whenWords(link.createdAt)}</span>
                 </span>
               </li>
             ))}
@@ -311,17 +324,18 @@ function DevicesBlock({ user, variant, onAsk }: { user: AdminUser; variant: "pag
       {devices.isLoading && !devices.data && <SkeletonText lines={2} />}
       {devices.data && active.length === 0 && <p className="access-text">Сейчас ни одного входа.</p>}
       {active.length > 0 && (
-        <ul className="access-list">
+        <ul className="access-list access-list--hover">
           {active.map((device) => (
             <li key={device.id} className="access-list__row">
               <span className="access-list__main">
                 {device.label}
                 <span className="access-hint">
-                  {device.lastUsedAt ? `вход использован ${formatAgo(device.lastUsedAt)}` : "ещё ни разу не использовался"}
+                  {device.lastUsedAt ? `вход использован ${whenWords(device.lastUsedAt)}` : "ещё ни разу не использовался"}
                   {device.lastClientVersion && ` · версия ${device.lastClientVersion}`}
                 </span>
               </span>
-              <Button size="sm" variant="ghost" icon={LogOut} title={REVOCATION_LABEL.device} aria-label={`${REVOCATION_LABEL.device}: ${device.label}`} onClick={() => onAsk({ kind: "device", device })}>Завершить вход</Button>
+              {/* On hover and focus of its row only: no column of identical buttons (Д3). */}
+              <Button className="access-on-hover" size="sm" variant="ghost" icon={LogOut} aria-label={`${REVOCATION_LABEL.device}: ${device.label}`} onClick={() => onAsk({ kind: "device", device })}>Завершить вход</Button>
             </li>
           ))}
         </ul>
@@ -334,7 +348,7 @@ function DevicesBlock({ user, variant, onAsk }: { user: AdminUser; variant: "pag
                 <span className="access-list__main">
                   {device.label}
                   <span className="access-hint">
-                    {deviceRevokedReasonLabel(device.revokedReason) ?? (device.revokedAt ? "вход завершён" : "срок истёк")} · {formatDateTime(device.revokedAt ?? device.expiresAt)}
+                    {deviceRevokedReasonLabel(device.revokedReason) ?? (device.revokedAt ? "вход завершён" : "срок истёк")} · {whenWords(device.revokedAt ?? device.expiresAt)}
                   </span>
                 </span>
               </li>
@@ -351,7 +365,7 @@ function DevicesBlock({ user, variant, onAsk }: { user: AdminUser; variant: "pag
 function AiLimitBlock({ userId, variant }: { userId: number; variant: "page" | "drawer" }) {
   const limit = useAiLimit(userId);
   return (
-    <Block title="Лимит ИИ на день" variant={variant} aside={<a className="access-link" href={consoleHref("/settings/ai/limits")}>Изменить в консоли</a>}>
+    <Block title="Лимит ИИ на день" variant={variant} aside={<a className="access-link" href={consoleHref("/settings/ai/limits")} target="_blank" rel="noopener">Изменить в консоли <ExternalLink size={14} strokeWidth={1.75} aria-label="откроется консоль" /></a>}>
       {limit.isLoading && !limit.data ? <SkeletonText lines={1} /> : !limit.data ? (
         <ErrorState compact onRetry={() => void limit.refetch()} retrying={limit.isFetching} />
       ) : !limit.data.row ? (
@@ -493,12 +507,14 @@ function Question({ asking, user, createLink, onClose, onLink, onChanged, onDele
       case "cancelInvite":
         return {
           title: asking.kind === "cancelInvite" ? `Отменить приглашение ${name}?` : `Отключить доступ ${name}?`,
-          message: "Все входы и ссылки перестанут работать, сотрудник перейдёт в «Отключённые сотрудники». Логин (он останется занят), история, роль и страницы сохранятся — доступ можно будет восстановить.",
+          message: asking.kind === "cancelInvite"
+            ? "Ссылка-приглашение перестанет работать, человек перейдёт в «Отключённые». Логин (он останется занят), роль и страницы сохранятся — доступ можно будет восстановить."
+            : "Все входы и ссылки перестанут работать, сотрудник перейдёт в «Отключённые». Логин (он останется занят), история, роль и страницы сохранятся — доступ можно будет восстановить.",
           confirmLabel: asking.kind === "cancelInvite" ? "Отменить приглашение" : "Отключить доступ",
           pending: deactivate.isPending,
           run: async () => {
             await deactivate.mutateAsync();
-            toast.success(`Доступ ${name} отключён`);
+            toast.success(asking.kind === "cancelInvite" ? `Приглашение ${name} отменено` : `Доступ ${name} отключён`);
             onChanged?.();
           },
         };
@@ -521,7 +537,7 @@ function Question({ asking, user, createLink, onClose, onLink, onChanged, onDele
           message: `Расширение или приложение на этом устройстве у ${name} попросит войти заново. Другие устройства, консоль и пароль не затрагиваются.`,
           facts: [
             { label: "Кого", value: name },
-            { label: "Устройство", value: `${asking.device.label}${asking.device.lastUsedAt ? `, вход использован ${formatAgo(asking.device.lastUsedAt)}` : ""}` },
+            { label: "Устройство", value: `${asking.device.label}${asking.device.lastUsedAt ? `, вход использован ${whenWords(asking.device.lastUsedAt)}` : ""}` },
           ],
           confirmLabel: "Завершить вход",
           pending: revokeDevice.isPending,
@@ -536,7 +552,7 @@ function Question({ asking, user, createLink, onClose, onLink, onChanged, onDele
           message: user.registrationState === "invited"
             ? "Ссылка перестанет открываться. Пароль ещё не задан: войти человек не сможет, пока вы не создадите новое приглашение."
             : "Ссылка перестанет открываться. Пароль и входы на устройствах не затрагиваются.",
-          facts: [{ label: "Ссылка", value: `${LINK_KIND_LABEL[asking.link.kind]}, ${linkStateLabel(asking.link, (iso) => formatDateTime(iso))}` }],
+          facts: [{ label: "Ссылка", value: `${LINK_KIND_LABEL[asking.link.kind]}, ${linkStateLabel(asking.link, whenWords)}` }],
           confirmLabel: "Отозвать ссылку",
           pending: revokeLink.isPending,
           run: async () => {

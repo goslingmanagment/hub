@@ -9,6 +9,11 @@
     gap: 12px;
   }
 
+  /* People on a shift: a block of its own, as far from the line above as the blocks below are. */
+  .shifts-top > .ui-section:not(:first-child) {
+    margin-top: 20px;
+  }
+
   .shifts-waiting {
     display: flex;
     flex-wrap: wrap;
@@ -84,6 +89,19 @@
     color: var(--ui-text-3);
   }
 
+  /* The last shift opens its review: a quiet underline says so. */
+  .shifts-now-line__link {
+    color: var(--ui-text-2);
+    text-decoration: underline;
+    text-decoration-color: var(--ui-line-strong);
+    text-underline-offset: 3px;
+  }
+
+  .shifts-now-line__link:hover {
+    color: var(--ui-text);
+    text-decoration-color: currentColor;
+  }
+
   .shifts-card-note {
     display: inline-flex;
     align-items: center;
@@ -156,6 +174,12 @@
     font-size: var(--ui-fs-14);
   }
 
+  .shifts-now__waiting {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 6px;
+  }
+
   .shifts-now__go {
     color: var(--ui-text-3);
   }
@@ -166,14 +190,13 @@
 
   /* ---------------------------------------------------------- The grid */
 
-  .shifts-grid tbody tr:first-child td {
-    border-bottom-color: var(--ui-line);
-    background: var(--ui-hover-soft);
-  }
-
-  /* Someone without shifts in the period: the whole row greyed, the name too. */
-  .shifts-grid tr.ui-table__row--quiet .ui-person__name {
-    color: var(--ui-text-3);
+  /*
+   * The day columns (all but the name and the last two, «За неделю» and «В час»)
+   * stand a little closer: a past week of four-figure days fits 1440 whole.
+   */
+  .shifts-grid :is(th, td):not(:first-child):nth-last-child(n + 3) {
+    padding-right: 12px;
+    padding-left: 12px;
   }
 
   .shifts-grid__head {
@@ -213,6 +236,7 @@
 
   .shifts-grid__team-hint {
     color: var(--ui-text-2);
+    font-weight: 400;
     font-size: var(--ui-fs-14);
     line-height: var(--ui-lh-14);
     white-space: nowrap;
@@ -254,13 +278,21 @@
 
   /* ------------------------------------------------------- The journal */
 
+  /* The shift's day on the name's line, its hours under it, like the pages under the name. */
+  .shifts-journal__when {
+    display: inline-flex;
+    flex-direction: column;
+    white-space: nowrap;
+  }
+
   .shifts-journal__day {
     color: var(--ui-text);
   }
 
   .shifts-journal__span {
-    margin-left: 10px;
     color: var(--ui-text-2);
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
     font-variant-numeric: tabular-nums;
   }
 
@@ -356,10 +388,10 @@
     gap: 8px;
   }
 
+  /* One author a line, always. */
   .shifts-authors__who {
     display: flex;
-    flex-wrap: wrap;
-    gap: 0 14px;
+    flex-direction: column;
   }
 
   .shifts-authors__author {

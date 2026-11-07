@@ -26,17 +26,24 @@
  *     card reads from the period's first day to today and keeps the period's
  *     days; the price and speed buckets cannot be cut and say so. Hub answers an
  *     unknown `userId` with the FIRST person: every answer is checked.
- *   - `teamShifts` { from } — the last 24 hours: who is on shift NOW (the
- *     status does not follow the period).
- *   - `adminListUsers` (owner) — role, access state, pages, last use of the
- *     extension; `adminAiSpend` (owner) — AI spend by person for the period.
+ *   - `teamShifts` { from } — the last 7 days (the longest it reads): who is
+ *     on shift NOW and when each person's last shift ended (the status does
+ *     not follow the period, and never the extension's last use).
+ *   - `adminListUsers` (owner) — role, access state, pages;
+ *     `adminAiSpend` (owner) — AI spend by person for the period.
+ *
+ * The three quality numbers (D1) come only through `qualityOfChatterNumbers`
+ * (a shift) and `averageQuality` (a period: «…, в среднем за смену») of the
+ * review's rules — never `week.*` or `composed.reply / messages`.
  */
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import type { KernelOperationResponse } from "@agency_hub_core/contracts";
 import { millsToNumber, sumMills } from "@agency_hub_core/shared";
 import { addDays, daysInRange, moscowDayEnd, moscowDayOf } from "@agency_hub_core/ui/moscow";
 import type { ResolvedPeriod } from "@agency_hub_core/ui/period";
+import { CHATTER_SHIFTS_MAX_WINDOW_DAYS } from "@agency_hub_core/contracts";
 import { kernel } from "@/shared/hub";
+import { averageQuality, qualityOfChatterNumbers, type PeriodQuality as AveragedQuality, type ShiftQuality } from "@/shared/metrics";
 import { useMe } from "@/shared/useMe";
 
 const MINUTE = 60_000;
@@ -56,12 +63,14 @@ export type SaleKind = Stats["shifts"][number]["sales"][number]["kind"];
 export type PersonRole = "owner" | "team_lead" | "chatter";
 export type PersonState = "active" | "invited" | "disabled";
 
-/** Now, whatever the period. */
+/** Now, whatever the period: from the shifts only. */
 export interface PersonNow {
   /** The start of the shift going on now; null — not on a shift. */
   onShiftSince: string | null;
-  /** The last moment the person was seen working: a shift's end or the extension's last use. */
-  lastSeenAt: string | null;
+  /** The end of the person's last shift Hub was asked about; null — none in `quietDays`. */
+  lastShiftEnd: string | null;
+  /** How many days back «no shift» is known (the reads' reach); 0 — not known. */
+  quietDays: number;
 }
 
 export interface WorkTotals {
@@ -80,20 +89,15 @@ export interface PeriodWork extends WorkTotals {
   previous: WorkTotals | null;
 }
 
-/** How the person answers and writes; all pages. */
-export interface PeriodQuality {
-  /** Shifts these numbers are of (a shift going on is not counted yet). */
-  shifts: number;
-  messages: number;
+/**
+ * How the person answers and writes, all pages: the three numbers of the
+ * review's rules, each the average over the period's finished shifts
+ * («…, в среднем за смену»), and how many replies came within an hour.
+ */
+export interface PeriodQuality extends AveragedQuality {
   replies: number;
-  replyMedianSeconds: number | null;
   /** Of the replies, answered within an hour. */
   repliesWithinHour: number;
-  /** Fans whose message stood unanswered at a shift's end, per shift on average. */
-  waitingAtEnd: number;
-  /** Messages written with the extension's Reply and Fix, of all messages; null without messages. */
-  aiShare: number | null;
-  composed: { hand: number; reply: number; fix: number; other: number };
 }
 
 /** One row of «Люди»: the future `teamPeopleSummary.people[]`. */
@@ -134,16 +138,11 @@ export interface ShiftSale {
   overlap: boolean;
 }
 
-/** The per-shift numbers that take long to count. */
-export interface ShiftNumbers {
+/** The per-shift numbers that take long to count: the review's three (D1), and the replies within an hour. */
+export interface ShiftNumbers extends ShiftQuality {
   messages: number;
-  replyMedianSeconds: number | null;
-  repliesWithinHour: number;
   replies: number;
-  waitingAtEnd: number;
-  aiShare: number | null;
-  ppvSent: number;
-  ppvBought: number;
+  repliesWithinHour: number;
 }
 
 /** One shift of the person: the future `teamPersonShifts[]`. */
@@ -206,39 +205,31 @@ function perHour(netMills: number, minutes: number): number | null {
   return Number((BigInt(netMills) * 60n) / BigInt(minutes));
 }
 
-function aiShareOf(composed: { reply: number; fix: number }, messages: number): number | null {
-  return messages > 0 ? (composed.reply + composed.fix) / messages : null;
-}
-
 /** A change in percent; null when there is nothing to compare with. */
 export function changePct(current: number | null | undefined, previous: number | null | undefined): number | null {
   if (current === null || current === undefined || previous === null || previous === undefined || previous <= 0) return null;
   return ((current - previous) / previous) * 100;
 }
 
-function qualityOf(block: NumbersBlock, shifts: number): PeriodQuality {
+function shiftNumbersOf(block: NumbersBlock): ShiftNumbers {
   return {
-    shifts,
+    ...qualityOfChatterNumbers(block),
     messages: block.messages,
     replies: block.replies,
-    replyMedianSeconds: block.replies > 0 ? block.replyMedianSeconds : null,
     repliesWithinHour: block.repliesWithinHour,
-    waitingAtEnd: block.waitingAtEnd,
-    aiShare: aiShareOf(block.composed, block.messages),
-    composed: block.composed,
   };
 }
 
-function shiftNumbersOf(block: NumbersBlock): ShiftNumbers {
+type CountedShift = ChatterNumbersAnswer["chatters"][number]["shifts"][number];
+
+/** The period's quality: the average over its finished shifts (a shift going on is not counted yet); null — none finished. */
+function qualityOf(shifts: readonly CountedShift[]): PeriodQuality | null {
+  const done = shifts.filter((shift) => !shift.ongoing);
+  if (done.length === 0) return null;
   return {
-    messages: block.messages,
-    replyMedianSeconds: block.replies > 0 ? block.replyMedianSeconds : null,
-    repliesWithinHour: block.repliesWithinHour,
-    replies: block.replies,
-    waitingAtEnd: block.waitingAtEnd,
-    aiShare: aiShareOf(block.composed, block.messages),
-    ppvSent: block.ppvSent,
-    ppvBought: block.ppvBought,
+    ...averageQuality(done.map((shift) => qualityOfChatterNumbers(shift.numbers))),
+    replies: done.reduce((sum, shift) => sum + shift.numbers.replies, 0),
+    repliesWithinHour: done.reduce((sum, shift) => sum + shift.numbers.repliesWithinHour, 0),
   };
 }
 
@@ -257,14 +248,27 @@ function latest(...values: (string | null | undefined)[]): string | null {
 
 type NowShifts = KernelOperationResponse<"teamShifts">["shifts"];
 
-function nowOf(userId: number, recent: NowShifts | undefined, periodShifts: readonly ShiftSales["shifts"][number][], user: AdminUser | undefined): PersonNow {
-  const mine = (recent ?? []).filter((shift) => shift.userId === userId);
+/**
+ * Now, from the shifts only: the last 7 days of every page (`recent`) and,
+ * when the period runs to today on all pages, its shifts too (they reach
+ * further back). Not the extension's last use: an open tab is not work (Л1).
+ */
+function nowOf(
+  userId: number,
+  recent: NowShifts | undefined,
+  periodShifts: readonly ShiftSales["shifts"][number][],
+  reach: { periodToday: boolean; periodDays: number },
+): PersonNow {
+  if (recent === undefined) return { onShiftSince: null, lastShiftEnd: null, quietDays: 0 };
+  const mine = recent.filter((shift) => shift.userId === userId);
   const going = mine.find((shift) => shift.ongoing) ?? null;
-  const lastEnd = latest(
+  const fromPeriod = reach.periodToday ? periodShifts.filter((shift) => shift.userId === userId && !shift.ongoing) : [];
+  const lastShiftEnd = latest(
     ...mine.filter((shift) => !shift.ongoing).map((shift) => shift.endedAt),
-    ...periodShifts.filter((shift) => shift.userId === userId && !shift.ongoing).map((shift) => shift.endedAt),
+    ...fromPeriod.map((shift) => shift.endedAt),
   );
-  return { onShiftSince: going?.startedAt ?? null, lastSeenAt: latest(lastEnd, user?.lastActiveAt) };
+  const quietDays = Math.max(NOW_DAYS, reach.periodToday ? reach.periodDays : 0);
+  return { onShiftSince: going?.startedAt ?? null, lastShiftEnd, quietDays };
 }
 
 // ─────────────────────────────────────────────── Reads (one place each)
@@ -296,11 +300,15 @@ function useNumbers(period: ResolvedPeriod, userId?: number) {
   });
 }
 
-/** Who is on shift now: the last 24 hours of `teamShifts`. Read every minute while the tab is seen. */
+/** How far back `teamShifts` reads: the person's last shift is known this far. */
+const NOW_DAYS = CHATTER_SHIFTS_MAX_WINDOW_DAYS;
+
+/** Who is on shift now and when each person's last shift ended: the last 7 days of `teamShifts`, every page. Read every minute while the tab is seen. */
 function useNow() {
   return useQuery({
     queryKey: ["people", "now"] as const,
-    queryFn: () => kernel.teamShifts({ query: { from: new Date(Date.now() - 24 * 60 * MINUTE).toISOString() } }),
+    // A minute short of the longest window, so the clocks of Hub and the browser never make it too long.
+    queryFn: () => kernel.teamShifts({ query: { from: new Date(Date.now() - NOW_DAYS * 24 * 60 * MINUTE + MINUTE).toISOString() } }),
     staleTime: 30_000,
     refetchInterval: MINUTE,
   });
@@ -337,6 +345,11 @@ function stateOfRead(query: { isPending: boolean; isError: boolean; data?: unkno
   return "loading";
 }
 
+/** How far the period's own shifts tell the last shift: only a period that runs to today, on every page. */
+function reachOf(period: ResolvedPeriod, page: string | null): { periodToday: boolean; periodDays: number } {
+  return { periodToday: period.current && page === null, periodDays: period.shownDays };
+}
+
 function workOf(chatter: ShiftSales["chatters"][number]): PeriodWork {
   return {
     shifts: chatter.shifts,
@@ -357,8 +370,12 @@ export interface PeopleList {
   idle: PersonRef[];
   /** Switched off, without a shift in the period. */
   disabled: PersonRef[];
-  /** The team's middle, for the outliers: the median of the people's reply medians, of their unanswered at the end. */
-  team: { replyMedianSeconds: number | null; waitingAtEnd: number | null };
+  /** The team's middle, for the outliers: the median of the people's averages. */
+  team: { replyMedianSeconds: number | null; unansweredAtEnd: number | null };
+  /** Someone has a whole window before to compare with; false — nobody (Hub has not counted shifts that long). */
+  comparable: boolean;
+  /** The first day Hub has anyone's activity. */
+  knownSince: string | null;
   main: ReadState;
   quality: ReadState;
   spend: ReadState;
@@ -388,6 +405,7 @@ export function usePeopleList(period: ResolvedPeriod, page: string | null): Peop
   const users = accounts.data ?? [];
   const byId = new Map(users.map((user) => [user.id, user]));
   const periodShifts = sales.data?.shifts ?? [];
+  const reach = reachOf(period, page);
   const numbersById = new Map((numbers.data?.chatters ?? []).map((chatter) => [chatter.userId, chatter]));
   const qualityState = stateOfRead(numbers, numbersWindow(period) !== null);
   const spendState = stateOfRead(spend, isOwner);
@@ -411,9 +429,9 @@ export function usePeopleList(period: ResolvedPeriod, page: string | null): Peop
       state,
       disabledAt: user?.disabledAt ?? null,
       pages: user?.assignedPages.map((ref) => ref.label) ?? [],
-      now: nowOf(chatter.userId, now.data?.shifts, periodShifts, user),
+      now: nowOf(chatter.userId, now.data?.shifts, periodShifts, reach),
       work: workOf(chatter),
-      quality: qualityState !== "ready" ? undefined : counted ? qualityOf(counted.week, counted.week.shifts) : null,
+      quality: qualityState !== "ready" ? undefined : counted ? qualityOf(counted.shifts) : null,
       aiSpendMicroUsd: spendState === "ready" ? (spend.data!.get(String(chatter.userId)) ?? null) : undefined,
     });
   }
@@ -433,7 +451,7 @@ export function usePeopleList(period: ResolvedPeriod, page: string | null): Peop
   const working = rows.filter((row) => row.quality);
   const team = {
     replyMedianSeconds: median(working.map((row) => row.quality!.replyMedianSeconds).filter((value): value is number => value !== null)),
-    waitingAtEnd: median(working.map((row) => row.quality!.waitingAtEnd)),
+    unansweredAtEnd: median(working.map((row) => row.quality!.unansweredAtEnd).filter((value): value is number => value !== null)),
   };
 
   return {
@@ -441,6 +459,8 @@ export function usePeopleList(period: ResolvedPeriod, page: string | null): Peop
     idle,
     disabled,
     team,
+    comparable: sales.data === undefined || (sales.data.previous !== null && rows.some((row) => row.work?.previous)),
+    knownSince: sales.data?.knownSince ? moscowDayOf(sales.data.knownSince) : null,
     main: stateOfRead(sales, salesWindow(period) !== null),
     quality: qualityState,
     spend: spendState,
@@ -520,6 +540,7 @@ export function usePersonCard(userId: number, period: ResolvedPeriod, page: stri
   const user = accounts.data?.find((one) => one.id === userId && !one.deletedAt);
   const chatter = sales.data?.chatters.find((one) => one.userId === userId);
   const periodShifts = sales.data?.shifts ?? [];
+  const reach = reachOf(period, page);
   const counted = numbers.data?.chatters.find((one) => one.userId === userId);
   const qualityState = stateOfRead(numbers, numbersWindow(period) !== null);
   const spendState = stateOfRead(spend, isOwner);
@@ -536,9 +557,9 @@ export function usePersonCard(userId: number, period: ResolvedPeriod, page: stri
     state: user ? stateOf(user) : null,
     disabledAt: user?.disabledAt ?? null,
     pages: user ? user.assignedPages.map((ref) => ref.label) : (stats?.pages.map((one) => one.pageLabel) ?? []),
-    now: nowOf(userId, now.data?.shifts, periodShifts, user),
+    now: nowOf(userId, now.data?.shifts, periodShifts, reach),
     work: chatter ? workOf(chatter) : sales.data ? { shifts: 0, workedMinutes: 0, salesNetMills: 0, perHourMills: null, overlapNetMills: 0, previous: null } : null,
-    quality: qualityState !== "ready" ? undefined : counted ? qualityOf(counted.week, counted.week.shifts) : null,
+    quality: qualityState !== "ready" ? undefined : counted ? qualityOf(counted.shifts) : null,
     aiSpendMicroUsd: spendState === "ready" ? (spend.data!.get(String(userId)) ?? null) : undefined,
   };
 

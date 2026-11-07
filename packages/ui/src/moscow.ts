@@ -38,10 +38,16 @@ export function addDays(day: MoscowDay, days: number): MoscowDay {
   return shifted.toISOString().slice(0, 10);
 }
 
-/** Days from `from` to `to`, both counted: 2 → 8 Nov is 7. */
-export function daysInRange(from: MoscowDay, to: MoscowDay): number {
+/**
+ * Days from `from` to `to`, both counted: 2 → 8 Nov is 7. With `until` (today),
+ * `to` stops there: a week going on, on its Saturday, is 6 days so far; a range
+ * that has not begun by `until` is 0.
+ */
+export function daysInRange(from: MoscowDay, to: MoscowDay, until?: MoscowDay): number {
+  const last = until !== undefined && to > until ? until : to;
+  if (until !== undefined && from > last) return 0;
   const start = parseBusinessDate(from);
-  const end = parseBusinessDate(to);
+  const end = parseBusinessDate(last);
   const span = Date.UTC(end.year, end.month - 1, end.day) - Date.UTC(start.year, start.month - 1, start.day);
   return Math.round(span / 86_400_000) + 1;
 }

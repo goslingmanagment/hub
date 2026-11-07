@@ -1,9 +1,12 @@
 /**
- * The words of «Люди» and «Человек»: statuses, a reply's time, shares, the
- * comparison's words, the kinds of a sale. Pure; no React.
+ * The words of «Люди» and «Человек»: statuses, shares, the comparison's words,
+ * the kinds of a sale. Pure; no React. The three quality numbers of a shift
+ * have their words in `@/shared/metrics` (D1), not here.
  */
-import { formatAgo, formatDay, formatDuration, formatPercent, formatTimeOfDay } from "@agency_hub_core/ui/format";
+import { formatDay, formatPercent, formatTimeOfDay, formatWeekdayDay } from "@agency_hub_core/ui/format";
 import type { PersonStatus } from "@agency_hub_core/ui";
+import { addDays, moscowDayOf } from "@agency_hub_core/ui/moscow";
+import { ruPlural } from "@agency_hub_core/ui/plural";
 import type { ResolvedPeriod } from "@agency_hub_core/ui/period";
 import type { PersonNow, PersonRole, PersonState, SaleKind } from "./data.js";
 
@@ -13,35 +16,33 @@ export const ROLE_WORD: Readonly<Record<PersonRole, string>> = {
   chatter: "Чаттер",
 };
 
-/** The dot of a person and the words beside it: «на смене с 21:00», «был 2 ч назад», «отключён». */
-export function statusOf(person: { state: PersonState | null; disabledAt: string | null; now: PersonNow }, now: number = Date.now()): { status: PersonStatus; words: string } {
+/**
+ * The dot of a person and the words beside it — from the shifts only, never
+ * from the extension being open (that is «Доступ → Устройства»): «на смене с
+ * 21:00», «смена сегодня до 18:10», «смена вчера до 07:31»,
+ * «смен не было 7 дней», «доступ отключён 26 окт.». No «был/была»: the words
+ * have no gender.
+ */
+export function statusOf(person: { state: PersonState | null; disabledAt: string | null; now: PersonNow; role?: PersonRole | null }, now: number = Date.now()): { status: PersonStatus; words: string } {
   if (person.state === "disabled") {
-    return { status: "disabled", words: person.disabledAt ? `отключён ${formatDay(person.disabledAt)}` : "отключён" };
+    return { status: "disabled", words: person.disabledAt ? `доступ отключён ${formatDay(person.disabledAt)}` : "доступ отключён" };
   }
   if (person.state === "invited") return { status: "invited", words: "ждёт регистрации" };
   if (person.now.onShiftSince) return { status: "working", words: `на смене с ${formatTimeOfDay(person.now.onShiftSince)}` };
-  if (person.now.lastSeenAt) return { status: "away", words: lastSeen(person.now.lastSeenAt, now) };
-  // Without the accounts (a team lead) «never worked» is not known: say nothing.
-  return { status: "away", words: person.state === null ? "" : "ещё не работал" };
+  if (person.now.lastShiftEnd) return { status: "away", words: lastShiftWords(person.now.lastShiftEnd, now) };
+  // Without the accounts (a team lead) nothing is known of a person without a shift: say nothing; nor of
+  // the owner, who does not work shifts.
+  if (person.state === null || person.now.quietDays === 0 || person.role === "owner") return { status: "away", words: "" };
+  return { status: "away", words: `смен не было ${person.now.quietDays} ${ruPlural(person.now.quietDays, "день", "дня", "дней")}` };
 }
 
-/** «был 2 ч назад», «был 3 дня назад»; a week and older: «был 24 окт.». */
-function lastSeen(at: string, now: number): string {
-  const days = (now - Date.parse(at)) / 86_400_000;
-  return days < 7 ? `был ${formatAgo(at, now)}` : `был ${formatDay(at)}`;
-}
-
-/** A reply's median: «45 с», «1 мин 58 с», «1 ч 5 мин». */
-export function replyText(seconds: number | null | undefined): string {
-  if (seconds === null || seconds === undefined) return "—";
-  const whole = Math.max(0, Math.round(seconds));
-  if (whole < 60) return `${whole} с`;
-  if (whole < 3600) {
-    const minutes = Math.floor(whole / 60);
-    const rest = whole % 60;
-    return rest === 0 ? `${minutes} мин` : `${minutes} мин ${rest} с`;
-  }
-  return formatDuration(Math.round(whole / 60));
+/** «смена сегодня до 18:10», «смена вчера до 07:31», «последняя смена 4 нояб.». */
+function lastShiftWords(endedAt: string, now: number): string {
+  const today = moscowDayOf(now);
+  const day = moscowDayOf(endedAt);
+  if (day === today) return `смена сегодня до ${formatTimeOfDay(endedAt)}`;
+  if (day === addDays(today, -1)) return `смена вчера до ${formatTimeOfDay(endedAt)}`;
+  return `последняя смена ${formatDay(endedAt)}`;
 }
 
 /** A share (0…1) as «31 %»; none is «—». */
@@ -54,10 +55,10 @@ export function shareOf(part: number, whole: number): number | null {
   return whole > 0 ? part / whole : null;
 }
 
-/** What a change is against, short (under a number): «к прошлой неделе». */
+/** What a change is against, short (beside a number): «к прошлой неделе». */
 export function versusShort(period: ResolvedPeriod): string {
   if (period.spec.kind === "week") return "к прошлой неделе";
-  if (period.spec.kind === "days") return `к прошлым ${period.days} дням`;
+  if (period.spec.kind === "days") return `к прошлым ${period.days} ${ruPlural(period.days, "дню", "дням", "дням")}`;
   return "к прошлому периоду";
 }
 
@@ -73,6 +74,12 @@ export function periodWords(period: ResolvedPeriod): string {
   return `за ${period.label}`;
 }
 
+/** «за неделю», «за 14 дней», «за 2–8 нояб.»: the short form in a header line. */
+export function periodShort(period: ResolvedPeriod): string {
+  if (period.spec.kind === "week" && period.current) return "за неделю";
+  return periodWords(period);
+}
+
 /** The kinds of a sale: their names and colours (chart series, never a state). */
 export const KINDS: ReadonlyArray<{ kind: SaleKind; label: string; one: string; color: string }> = [
   { kind: "ppv", label: "Платные сообщения", one: "Платное сообщение", color: "var(--ui-series-1)" },
@@ -83,8 +90,9 @@ export const KINDS: ReadonlyArray<{ kind: SaleKind; label: string; one: string; 
 
 export const KIND_OF: Readonly<Record<SaleKind, (typeof KINDS)[number]>> = Object.fromEntries(KINDS.map((kind) => [kind.kind, kind])) as Record<SaleKind, (typeof KINDS)[number]>;
 
+/** The same words as «Что продаёт → Цена» («Дешевле $10», С10). */
 export const PRICE_WORDS: Readonly<Record<string, string>> = {
-  upTo10: "до $10",
+  upTo10: "дешевле $10",
   "10to25": "$10–25",
   "25to50": "$25–50",
   "50to100": "$50–100",
@@ -101,9 +109,7 @@ export const DELAY_WORDS: Readonly<Record<string, string>> = {
 
 /** «сб, 7 нояб.» of a Moscow day. */
 export function dayWords(day: string): string {
-  const at = new Date(`${day}T12:00:00+03:00`);
-  const weekday = new Intl.DateTimeFormat("ru-RU", { weekday: "short", timeZone: "Europe/Moscow" }).format(at);
-  return `${weekday}, ${formatDay(at)}`;
+  return formatWeekdayDay(day);
 }
 
 /** «09:19–18:10», «21:00 – сейчас». */

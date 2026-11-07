@@ -1,17 +1,19 @@
+import { ArrowRight } from "lucide-react";
 import { useState } from "react";
-import { Badge, Button, Confirm, Disclosure, Drawer, KeyValue, Money, Section, Table, TimeMsk, toast, type Column } from "@agency_hub_core/ui";
-import { formatDateTime, formatMills } from "@agency_hub_core/ui/format";
+import { Link, useLocation } from "react-router";
+import { Badge, Button, Confirm, Disclosure, Drawer, Fan, KeyValue, Money, Section, Skeleton, Table, TimeMsk, Tooltip, toast, type Column } from "@agency_hub_core/ui";
+import { formatDateTime, formatMills, formatTimeOfDay } from "@agency_hub_core/ui/format";
 import { ruPlural } from "@agency_hub_core/ui/plural";
-import { FanName } from "@/shared/FanName";
-import { PersonLink } from "@/shared/links";
-import { FanCell } from "./FanCell";
-import { disputeProblem, useResolveDispute, type Dispute, type FanRefOnPage, type KnownFan } from "./data";
+import { consoleFanHref, PersonLink, shiftPath } from "@/shared/links";
+import { FanCell, collidingIn, goColumn, pageWords } from "./FanCell";
+import { disputeProblem, useResolveDispute, useSaleShifts, type Dispute, type FanRefOnPage, type KnownFan, type SaleShift } from "./data";
 
 /**
  * Споры по продажам: a sale two chatters both put in their payout. The list
- * only names it; the decision is made in its panel (where / what / who claims
- * / what stands now), and recorded after the console's own question
- * (TeamPayoutsPage.tsx:93-134): its title, facts, button and toast, word for word.
+ * only names it; the decision is made in its panel (the fan, who claims what
+ * and each one's conversation with the fan in their shift, what stands now),
+ * and recorded after the console's own question (TeamPayoutsPage.tsx:93-134):
+ * its title, facts, button and toast.
  */
 
 const MARK_LABELS: Readonly<Record<string, string>> = { mine: "моё", share: "делим", not_mine: "не моё" };
@@ -20,9 +22,6 @@ const REASON_LABELS: Readonly<Record<string, string>> = {
   share_not_agreed: "«Делим» без согласия второго",
   conflicting: "Отметки не сходятся",
 };
-
-const PLATFORM_NAME: Readonly<Record<string, string>> = { fansly: "Fansly", onlyfans: "OnlyFans", telegram: "Telegram" };
-const platformName = (platform: string) => PLATFORM_NAME[platform] ?? platform;
 
 /** The console's «Было» line: every chatter's mark (TeamPayoutsPage.tsx:67-71). */
 function marksLine(dispute: Dispute): string {
@@ -72,31 +71,36 @@ function currentChoice(dispute: Dispute): string | null {
     && choice.shares.every((share) => dispute.resolution!.some((made) => made.userId === share.userId && made.percent === share.percent)))?.key ?? null;
 }
 
-function useDisputeColumns(fanOf: (fan: FanRefOnPage) => KnownFan | undefined, onOpen: (saleRef: string) => void) {
-  const when: Column<Dispute> = { key: "when", header: "Продажа", cell: (row) => <TimeMsk at={row.occurredAt} />, nowrap: true, width: 180, sortValue: (row) => row.occurredAt };
+function useDisputeColumns(rows: readonly Dispute[], fanOf: (fan: FanRefOnPage) => KnownFan | undefined) {
+  const collides = collidingIn(rows, fanOf);
+  const when: Column<Dispute> = { key: "when", header: "Продажа", cell: (row) => <TimeMsk at={row.occurredAt} />, nowrap: true, width: 170, sortValue: (row) => row.occurredAt };
   const fan: Column<Dispute> = {
     key: "fan",
     header: "Фан",
-    width: 240,
-    cell: (row) => <FanCell fan={row.fanRef === null ? undefined : fanOf({ pageLabel: row.pageLabel, fanRef: row.fanRef })} fanRef={row.fanRef} pageLabel={row.pageLabel} platform={row.platform} />,
+    width: 260,
+    cell: (row) => (
+      <FanCell
+        fan={row.fanRef === null ? undefined : fanOf({ pageLabel: row.pageLabel, fanRef: row.fanRef })}
+        fanRef={row.fanRef}
+        pageLabel={row.pageLabel}
+        platform={row.platform}
+        showLogin={collides(row)}
+      />
+    ),
   };
-  const sum: Column<Dispute> = { key: "sum", header: "Сумма", numeric: true, width: 140, cell: (row) => <Money mills={row.netMills} strong />, sortValue: (row) => row.netMills };
-  const go = (label: string): Column<Dispute> => ({
-    key: "go",
-    header: <span className="ui-sr-only">Действие</span>,
-    width: 120,
-    cell: (row) => <Button size="sm" variant="ghost" onClick={() => onOpen(row.saleRef)}>{label}</Button>,
-  });
+  // The sum beside the sale's time, the words last: on a wide screen the spare width falls after the words,
+  // not between a name and its money (С9).
+  const sum: Column<Dispute> = { key: "sum", header: "Сумма", numeric: true, width: 120, cell: (row) => <Money mills={row.netMills} strong />, sortValue: (row) => row.netMills };
   return {
     open: [
-      when, fan,
-      { key: "who", header: "Кто записал на себя", cell: (row) => <span>{claimants(row)}<span className="decisions-sub">{REASON_LABELS[row.reason] ?? row.reason}</span></span> },
-      sum, go("Решить"),
+      when, sum, fan,
+      { key: "who", header: "Кто записал на себя", grow: true, cell: (row) => <span>{claimants(row)}<span className="decisions-sub">{REASON_LABELS[row.reason] ?? row.reason}</span></span> },
+      goColumn<Dispute>(),
     ] satisfies Column<Dispute>[],
+    // A decided dispute is changed from inside its panel: its row has no arrow (Р3).
     settled: [
-      when, fan,
-      { key: "decided", header: "Решение", cell: (row) => resolutionLine(row)?.replace(/^Решено: /, "") ?? "—" },
-      sum, go("Изменить"),
+      when, sum, fan,
+      { key: "decided", header: "Решение", grow: true, cell: (row) => resolutionLine(row)?.replace(/^Решено: /, "") ?? "—" },
     ] satisfies Column<Dispute>[],
   };
 }
@@ -109,14 +113,15 @@ export function DisputesSection({ open, settled, fanOf, onOpen, selected }: {
   /** The dispute open in its panel. */
   selected: string | null;
 }) {
-  const columns = useDisputeColumns(fanOf, onOpen);
+  const columns = useDisputeColumns(open, fanOf);
   return (
     <Section
       id="disputes"
+      className="decisions-section"
       title={<>Споры по продажам <span className="decisions-count">{open.length}</span></>}
       description="Одну продажу записали на себя двое. Решите, кому она идёт в выплату: до решения её нет в выгрузке."
     >
-      <Table label="Споры по продажам" columns={columns.open} rows={open} rowKey={(row) => row.saleRef} onRowClick={(row) => onOpen(row.saleRef)} selectedKey={selected} />
+      <Table label="Споры по продажам" columns={columns.open} rows={open} rowKey={(row) => row.saleRef} onRowClick={(row) => onOpen(row.saleRef)} selectedKey={selected} skeletonLines={2} />
       {settled.length > 0 && <SettledDisputes settled={settled} fanOf={fanOf} onOpen={onOpen} selected={selected} />}
     </Section>
   );
@@ -129,7 +134,7 @@ export function SettledDisputes({ settled, fanOf, onOpen, selected }: {
   onOpen: (saleRef: string) => void;
   selected: string | null;
 }) {
-  const columns = useDisputeColumns(fanOf, onOpen);
+  const columns = useDisputeColumns(settled, fanOf);
   return (
     <Disclosure size="md" summary="Решённые споры за 31 день" hint={String(settled.length)} className="decisions-fold">
       <Table label="Решённые споры" columns={columns.settled} rows={settled} rowKey={(row) => row.saleRef} onRowClick={(row) => onOpen(row.saleRef)} selectedKey={selected} />
@@ -137,19 +142,47 @@ export function SettledDisputes({ settled, fanOf, onOpen, selected }: {
   );
 }
 
-/** The decision panel of one dispute: where, what, who claims, what stands; then a split and the console's question. */
+/**
+ * One claimant's conversation with the fan around the sale: the review of the
+ * shift that held it, opened on this fan's chat — what the owner decides by
+ * (Р4). No shift then is an answer too.
+ */
+function Evidence({ dispute, userId, shifts }: { dispute: Dispute; userId: number; shifts: ReturnType<typeof useSaleShifts> }) {
+  const location = useLocation();
+  if (shifts.isLoading) return <Skeleton width={180} />;
+  if (!shifts.data) return <span className="decisions-evidence decisions-evidence--none">смены не прочитались</span>;
+  const shift: SaleShift | undefined = shifts.data.get(userId);
+  if (!shift) return <span className="decisions-evidence decisions-evidence--none">в эти два дня смен нет</span>;
+  const path = shiftPath(userId, shift.startedAt, location.search);
+  const chat = dispute.fanRef === null ? "" : `${path.includes("?") ? "&" : "?"}chat=${encodeURIComponent(`${dispute.pageLabel}:${dispute.fanRef}`)}`;
+  const span = `${formatTimeOfDay(shift.startedAt)}–${shift.ongoing ? "сейчас" : formatTimeOfDay(shift.endedAt)}`;
+  return (
+    <Tooltip content={shift.holds ? "Разбор смены, в которую была продажа, — на чате с этим фаном" : "Продажа была после этой смены: разбор последней смены до неё"} align="end">
+      <Link to={`${path}${chat}`} state={{ back: { to: `${location.pathname}${location.search}`, label: "Решения" } }} className="decisions-evidence">
+        {shift.holds ? `Переписка в смене ${span}` : `Смена до продажи, ${span}`}
+        <ArrowRight size={14} strokeWidth={1.75} aria-hidden />
+      </Link>
+    </Tooltip>
+  );
+}
+
+/** The decision panel of one dispute: the fan, who claims what with their conversations, what stands; then a split and the console's question. */
 export function DisputeDrawer({ dispute, fan, onClose }: { dispute: Dispute; fan: KnownFan | undefined; onClose: () => void }) {
   const choices = choicesOf(dispute);
   const now = currentChoice(dispute);
   const [picked, setPicked] = useState<string | null>(now);
   const [asking, setAsking] = useState(false);
+  const shifts = useSaleShifts(dispute);
   const choice = choices.find((one) => one.key === picked) ?? null;
   const changed = choice !== null && choice.key !== now;
   return (
     <Drawer
       open
       onClose={onClose}
+      // The focus lands on the panel, not on the first answer: a stray Space must not pick one.
+      initialFocus="box"
       title={<>Спор о продаже <Money mills={dispute.netMills} /></>}
+      subtitle={<>{pageWords(dispute.pageLabel, dispute.platform)} · <TimeMsk at={dispute.occurredAt} /></>}
       footer={(
         <>
           <Button onClick={onClose}>Закрыть</Button>
@@ -159,44 +192,40 @@ export function DisputeDrawer({ dispute, fan, onClose }: { dispute: Dispute; fan
         </>
       )}
     >
-      {/* The focus lands on the panel, not on the first answer. */}
-      <div className="decisions-panel" tabIndex={-1} data-autofocus>
+      <div className="decisions-panel">
         <KeyValue
           items={[
-            { label: "Где", value: `${dispute.pageLabel}, ${platformName(dispute.platform)}` },
-            { label: "Что", value: <>Продажа <Money mills={dispute.netMills} strong />, <TimeMsk at={dispute.occurredAt} /></> },
             {
               label: "Фан",
               value: dispute.fanRef === null
                 ? "—"
-                : <FanName {...(fan ?? {})} fanRef={dispute.fanRef} pageLabel={dispute.pageLabel} platform={dispute.platform} />,
+                : <Fan name={fan?.name ?? null} username={fan?.username ?? null} fanRef={dispute.fanRef} href={consoleFanHref(dispute.pageLabel, dispute.platform, dispute.fanRef)} hint="Карточка фана в консоли" />,
             },
-            {
-              label: "Кто что отметил",
-              value: (
-                <ul className="decisions-marks">
-                  {dispute.marks.map((mark) => (
-                    <li key={mark.userId}>
-                      <PersonLink userId={mark.userId} name={mark.username} backLabel="Решения" />
-                      <span>
-                        «{MARK_LABELS[mark.mark] ?? mark.mark}»
-                        {mark.shareWith ? ` с ${mark.shareWith}` : ""}
-                        {mark.amountMills !== null && <>, своя сумма <Money mills={mark.amountMills} /></>}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              ),
-            },
-            { label: "Почему спор", value: REASON_LABELS[dispute.reason] ?? dispute.reason },
             {
               label: "Сейчас",
-              value: dispute.resolution === null
-                ? <Badge tone="accent">Ждёт решения</Badge>
-                : resolutionLine(dispute),
+              value: dispute.resolution === null ? <Badge tone="accent">Ждёт решения</Badge> : resolutionLine(dispute),
             },
           ]}
         />
+
+        <section className="decisions-claims" aria-labelledby={`claims-${dispute.saleRef}`}>
+          <h3 id={`claims-${dispute.saleRef}`} className="decisions-panel__title">Кто что отметил</h3>
+          <ul className="decisions-marks">
+            {dispute.marks.map((mark) => (
+              <li key={mark.userId}>
+                <span className="decisions-marks__who">
+                  <PersonLink
+                    userId={mark.userId}
+                    name={mark.username}
+                    hint={<>«{MARK_LABELS[mark.mark] ?? mark.mark}»{mark.shareWith ? ` с ${mark.shareWith}` : ""}{mark.amountMills !== null && <>, своя сумма <Money mills={mark.amountMills} /></>}</>}
+                    backLabel="Решения"
+                  />
+                </span>
+                <Evidence dispute={dispute} userId={mark.userId} shifts={shifts} />
+              </li>
+            ))}
+          </ul>
+        </section>
 
         <fieldset className="decisions-choices">
           <legend>Кому отдать продажу</legend>
@@ -216,14 +245,13 @@ export function DisputeDrawer({ dispute, fan, onClose }: { dispute: Dispute; fan
             <p className="decisions-note">Сейчас стоит другое деление: {resolutionLine(dispute)?.replace(/^Решено: /, "")}. Здесь его можно заменить.</p>
           )}
         </fieldset>
-        <p className="decisions-note">Решение заменит прежние отметки по этой продаже в выплате. Отменить нельзя, но можно заменить другим.</p>
       </div>
       {asking && choice && <ResolveConfirm dispute={dispute} shares={choice.shares} onClose={() => setAsking(false)} onDone={onClose} />}
     </Drawer>
   );
 }
 
-/** The console's question before a split, word for word (TeamPayoutsPage.tsx:93-134). */
+/** The console's question before a split (TeamPayoutsPage.tsx:93-134): its title, facts, button and toast; «Отменить» joins the message. */
 function ResolveConfirm({ dispute, shares, onClose, onDone }: { dispute: Dispute; shares: Share[]; onClose: () => void; onDone: () => void }) {
   const resolve = useResolveDispute();
   const [problem, setProblem] = useState<string | null>(null);
@@ -236,13 +264,17 @@ function ResolveConfirm({ dispute, shares, onClose, onDone }: { dispute: Dispute
   return (
     <Confirm
       title={whole ? `Отдать всю продажу ${shares[0]!.username}?` : "Разделить продажу пополам?"}
-      message="Решение заменит прежние отметки по этой продаже в выплате."
+      message={(
+        <>
+          Решение заменит прежние отметки по этой продаже в выплате. Отменить нельзя, но решение можно заменить другим. Если день
+          уже выгружен, изменение появится в блоке «Изменено после подтверждения дня».
+        </>
+      )}
       facts={[
-        { label: "Где", value: `${dispute.pageLabel}, ${platformName(dispute.platform)}` },
+        { label: "Где", value: pageWords(dispute.pageLabel, dispute.platform) },
         { label: "Что", value: `Продажа ${sum}, ${formatDateTime(dispute.occurredAt)}` },
         { label: "Кому", value: shares.map((share) => `${share.username} — ${share.percent} %`).join(", ") },
         { label: "Было", value: resolutionLine(dispute) ?? marksLine(dispute) },
-        { label: "Отменить", value: "Отменить нельзя, но решение можно заменить другим. Если день уже выгружен, изменение появится в блоке «Изменено после подтверждения дня»." },
       ]}
       confirmLabel={whole ? `Отдать ${shares[0]!.username}` : "Разделить пополам"}
       pendingLabel="Записываем…"

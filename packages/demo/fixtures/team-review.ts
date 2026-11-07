@@ -1,14 +1,21 @@
 import type { KernelOperationResponse, ShiftReviewChat, ShiftReviewMessage } from "@agency_hub_core/contracts";
+import { myMessages, reviewWaits, shiftQuality, summariesOf, totalsOf, type ShiftQuality } from "@agency_hub_core/ui/shiftReview";
 
 import { demoError, intBetween, pick, queryNumber, queryString, rng, type DemoReply, type DemoRequest } from "../core.ts";
 import { demoFans, demoPage } from "../world.ts";
-import { MIN, teamWorld, type DemoShift } from "./team-world.ts";
+import { MIN, teamWorld, workedPages, type DemoShift } from "./team-world.ts";
 
 /**
  * Команда → «Разбор смены» in the demo: one shift of the simulated team, opened
  * up. Its chats are invented around the shift's real numbers (pages, minutes,
  * pauses, messages), with a share of texts from the AI, some copied past the
- * button, waits that grow when the chatter slows down, and a pause or two.
+ * button, waits that grow when the chatter slows down, and a pause or two. The
+ * sales the shift journal shows for that very shift (team-world.ts) land in its
+ * chats: a bought PPV on the chatter's message before it, a tip on the fan's,
+ * the shift's total on the shift; two AI texts carry the long dash the screen
+ * marks. The quality numbers every other screen shows for the shift
+ * (`teamChatterNumbers`) are this review's, by the review's own rules
+ * (`shiftReviewNumbers` below, packages/ui/src/shiftReview.ts).
  */
 
 type Response = KernelOperationResponse<"teamShiftReview">;
@@ -44,7 +51,7 @@ const HI_LINES = [
   "omg hi! thank you for following, tell me a little about yourself?",
 ] as const;
 
-function reviewOf(shift: DemoShift, now: number): Response {
+function inventedReviewOf(shift: DemoShift, now: number): Response {
   const random = rng(`review:${shift.user.id}:${shift.startedAt}`);
   const start = shift.startedAt;
   const end = shift.ongoing ? now : shift.endedAt;
@@ -417,6 +424,117 @@ function reviewOf(shift: DemoShift, now: number): Response {
     deleted: deletedMine === 0 ? 0 : deletedMine + 1,
     serverNow: new Date(now).toISOString(),
   };
+}
+
+/** The chat of the page that was busiest around the sale: the fan's own when the chatter wrote to him. */
+function chatOfSale(chats: readonly ShiftReviewChat[], pageLabel: string, fanRef: string, at: number): ShiftReviewChat | null {
+  const onPage = chats.filter((chat) => chat.pageLabel === pageLabel && chat.messages.some((message) => message.inShift && message.mine !== null && message.mine.composedWith !== "hi"));
+  const own = onPage.find((chat) => chat.fanRef === fanRef);
+  if (own) return own;
+  let best: ShiftReviewChat | null = null;
+  let distance = Number.POSITIVE_INFINITY;
+  for (const chat of onPage) {
+    for (const message of chat.messages) {
+      if (!message.inShift) continue;
+      const gap = Math.abs(Date.parse(message.at) - at);
+      if (gap < distance) {
+        distance = gap;
+        best = chat;
+      }
+    }
+  }
+  return best;
+}
+
+/** The shift's sales (team-world.ts) in its chats, and the long dash in two AI texts. */
+function withMoney(review: Response, shift: DemoShift): Response {
+  const pages = workedPages(shift);
+  const sales = shift.sales.filter((sale) => pages.includes(sale.pageLabel));
+  // A PPV is bought only where a sale of the shift says so: the invented ones stay unbought.
+  for (const chat of review.chats) for (const message of chat.messages) if (message.bought === true) message.bought = false;
+  for (const sale of sales) {
+    const chat = chatOfSale(review.chats, sale.pageLabel, sale.fan.platformUserId, sale.at);
+    if (!chat) continue;
+    chat.shiftNetMills += sale.netMills;
+    // What the fan brought all time holds this shift's sale too.
+    chat.fanLifetimeNetMills = (chat.fanLifetimeNetMills ?? 0) + sale.netMills;
+    if (sale.kind === "ppv") {
+      const offer = [...chat.messages].reverse().find((message) => message.inShift && message.mine !== null && Date.parse(message.at) <= sale.at)
+        ?? chat.messages.find((message) => message.inShift && message.mine !== null);
+      if (offer) {
+        offer.priceMills = sale.priceMills;
+        offer.bought = true;
+        offer.media = Math.max(1, offer.media);
+      }
+    } else if (sale.kind === "tip") {
+      const fan = [...chat.messages].reverse().find((message) => message.inShift && message.side === "fan" && Date.parse(message.at) <= sale.at)
+        ?? chat.messages.find((message) => message.inShift && message.side === "fan");
+      if (fan) fan.tipMills = (fan.tipMills ?? 0) + sale.priceMills;
+    }
+  }
+  review.shift.salesNetMills = sales.reduce((sum, sale) => sum + sale.netMills, 0);
+
+  // The long dash, an AI tell the screen marks, in two of the AI's texts.
+  const random = rng(`wb-review:${shift.user.id}:${shift.startedAt}`);
+  let dashed = 0;
+  for (const chat of review.chats) {
+    for (const message of chat.messages) {
+      if (dashed >= 2 || message.mine === null || message.mine.origin !== "ai" || message.mine.composedWith === "hi" || !message.text.includes(", ")) continue;
+      if (random() > 0.25) continue;
+      message.text = message.text.replace(", ", " — ");
+      if (message.mine.aiText !== null) message.mine.aiText = message.mine.aiText.replace(", ", " — ");
+      message.mine.marks = [...message.mine.marks, "dash"];
+      dashed += 1;
+    }
+  }
+  return review;
+}
+
+/** One shift of the simulated team, opened up, with its money. */
+export function reviewOf(shift: DemoShift, now: number): Response {
+  return withMoney(inventedReviewOf(shift, now), shift);
+}
+
+/** What the shift numbers (team.ts) carry of a shift's review: its quality and the counts behind it. */
+export interface ReviewNumbers {
+  quality: ShiftQuality;
+  /** Personal messages, and of them the texts with words (Hi greetings left out), the AI's sent unedited, the drafts Fix made. */
+  messages: number;
+  textMessages: number;
+  aiUnedited: number;
+  fix: number;
+  replies: number;
+  repliesWithinHour: number;
+}
+
+// A finished shift's review never changes: its numbers are counted once per dev-server life.
+const numbersCache = new Map<string, ReviewNumbers>();
+
+/**
+ * The shift's three quality numbers by the review's rules — what its «Разбор
+ * смены» shows — and the counts behind them, for the shift numbers (team.ts) to
+ * carry, so the journal, the people and the review of one shift agree.
+ */
+export function shiftReviewNumbers(shift: DemoShift, now: number): ReviewNumbers {
+  const key = `${shift.user.id}:${shift.startedAt}:${shift.endedAt}`;
+  const known = shift.ongoing ? undefined : numbersCache.get(key);
+  if (known) return known;
+  const review = reviewOf(shift, now);
+  const mine = myMessages(review);
+  const waits = reviewWaits(review);
+  const totals = totalsOf(review, mine, summariesOf(review, waits), waits);
+  const delays = mine.flatMap((one) => (one.message.mass || one.message.mine.replySeconds === null ? [] : [one.message.mine.replySeconds]));
+  const numbers: ReviewNumbers = {
+    quality: shiftQuality(totals),
+    messages: totals.messages,
+    textMessages: totals.textMessages,
+    aiUnedited: totals.aiUnedited,
+    fix: totals.origin.fix,
+    replies: totals.replies,
+    repliesWithinHour: delays.filter((delay) => delay <= 3600).length,
+  };
+  if (!shift.ongoing) numbersCache.set(key, numbers);
+  return numbers;
 }
 
 function fanMessage(ref: string, at: number, text: string, inShift: boolean): ShiftReviewMessage {

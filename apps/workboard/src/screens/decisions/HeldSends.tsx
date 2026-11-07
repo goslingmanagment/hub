@@ -1,5 +1,6 @@
 import { useId, useState } from "react";
-import { Button, Disclosure, ErrorState, KeyValue, Modal, Notice, Section, Table, TextInput, TimeMsk, toast, type Column } from "@agency_hub_core/ui";
+import { Button, Disclosure, ErrorState, Fan, Field, Hint, Modal, Notice, Section, Table, Textarea, TextInput, TimeMsk, toast, type Column } from "@agency_hub_core/ui";
+import { formatTimeOfDay } from "@agency_hub_core/ui/format";
 import {
   EMPTY_RESOLVE_DRAFT,
   NOT_SENT_OUTCOME_HINT,
@@ -15,15 +16,13 @@ import {
   purposeLabel,
   resolveFailure,
   resolveForm,
-  resolveIntro,
   sentOutcomeHint,
   shortId,
   type ResolveDraft,
   type ResolveFailure,
 } from "@agency_hub_core/ui/heldSends";
-import { FanName } from "@/shared/FanName";
-import { PersonLink } from "@/shared/links";
-import { FanCell } from "./FanCell";
+import { consoleFanHref, PersonLink } from "@/shared/links";
+import { FanCell, collidingIn, goColumn, pageWords } from "./FanCell";
 import { RESOLVED_PAGE_SIZE, useResolveHeldSend, useResolvedSends, type FanRefOnPage, type HeldSend, type KnownFan } from "./data";
 
 /**
@@ -38,6 +37,27 @@ function What({ item }: { item: HeldSend }) {
   return <span>{purposeLabel(item.purpose)}<span className="decisions-sub decisions-nowrap">{partLabel(item)}</span></span>;
 }
 
+/**
+ * Is the fan's greeting already on record (Р8): «Ещё нет», «Да», «Да, вручную»
+ * — the last is the case not to misread (this very part went out by hand);
+ * how and when, on hover. Null: the send is not a greeting.
+ */
+function greeted(item: HeldSend): { text: string; hint: string | null } | null {
+  const cell = greetingCell(item);
+  if (cell === null) return null;
+  if (cell.sentByHand) return { text: "Да, вручную", hint: cell.hint };
+  if (cell.label === "Нет") return { text: "Ещё нет", hint: null };
+  return { text: "Да", hint: cell.hint };
+}
+
+const GREETED_HEADER = "Уже поприветствован?";
+
+function Greeted({ item, focusable }: { item: HeldSend; focusable: boolean }) {
+  const words = greeted(item);
+  if (words === null) return <Hint content="Это не приветствие: про приветствие фана отправка ничего не говорит" focusable={focusable}><span className="text-ink-3">—</span></Hint>;
+  return words.hint === null ? <span>{words.text}</span> : <Hint content={words.hint} focusable={focusable}>{words.text}</Hint>;
+}
+
 export function HeldSection({ items, total, serverNow, platformOf, fanOf, onOpen, selected }: {
   selected: string | null;
   items: readonly HeldSend[];
@@ -48,8 +68,9 @@ export function HeldSection({ items, total, serverNow, platformOf, fanOf, onOpen
   onOpen: (attemptId: string) => void;
 }) {
   const now = Date.parse(serverNow);
+  const collides = collidingIn(items, fanOf);
   const columns: Column<HeldSend>[] = [
-    { key: "fan", header: "Фан", width: 210, cell: (row) => <FanCell fan={fanOf(row)} fanRef={row.fanRef} pageLabel={row.pageLabel} platform={platformOf(row.pageLabel)} /> },
+    { key: "fan", header: "Фан", width: 210, cell: (row) => <FanCell fan={fanOf(row)} fanRef={row.fanRef} pageLabel={row.pageLabel} platform={platformOf(row.pageLabel)} showLogin={collides(row)} /> },
     { key: "what", header: "Что отправляли", headerWrap: false, cell: (row) => <What item={row} /> },
     { key: "who", header: "Кто отправлял", headerWrap: false, width: 180, cell: (row) => <PersonLink userId={row.userId} name={row.username} backLabel="Решения" /> },
     {
@@ -60,22 +81,13 @@ export function HeldSection({ items, total, serverNow, platformOf, fanOf, onOpen
       sortValue: (row) => row.createdAt,
       cell: (row) => <span><TimeMsk at={row.createdAt} /><span className="decisions-sub">без отчёта {formatSpan(now - heldSince(row))}</span></span>,
     },
-    {
-      key: "greeting",
-      header: "Приветствие фана",
-      headerWrap: false,
-      width: 200,
-      cell: (row) => {
-        const cell = greetingCell(row);
-        if (cell === null) return <span className="text-ink-3" title="Это не приветствие">—</span>;
-        return <span className={cell.sentByHand ? "decisions-warn" : undefined}>{cell.label}</span>;
-      },
-    },
-    { key: "go", header: <span className="ui-sr-only">Действие</span>, width: 120, cell: (row) => <Button size="sm" variant="ghost" onClick={() => onOpen(row.attemptId)}>Разобрать</Button> },
+    { key: "greeting", header: GREETED_HEADER, headerWrap: false, width: 200, cell: (row) => <Greeted item={row} focusable={false} /> },
+    goColumn<HeldSend>(),
   ];
   return (
     <Section
       id="held"
+      className="decisions-section"
       title={<>Зависшие отправки <span className="decisions-count">{total}</span></>}
       description="Расширение отправило сообщение и не сообщило, ушло ли оно. Пока отправку не разберут, Hub держит фана: из превью ему не отправят, нового подписчика не поприветствуют."
     >
@@ -94,6 +106,8 @@ export function ResolvedJournal({ page, platformOf, fanOf }: {
   const [offset, setOffset] = useState(0);
   const resolved = useResolvedSends({ offset, ...(page ? { pageLabel: page } : {}) });
   const data = resolved.data;
+  const rows = (data?.items ?? []).filter((item) => item.resolution !== null);
+  const collides = collidingIn(rows, fanOf);
   if (!data) {
     return resolved.isError
       ? <ErrorState compact onRetry={() => void resolved.refetch()} retrying={resolved.isFetching} title="Журнал разборов не пришёл" />
@@ -101,18 +115,18 @@ export function ResolvedJournal({ page, platformOf, fanOf }: {
   }
   if (data.total === 0) return null;
   const columns: Column<HeldSend>[] = [
-    { key: "fan", header: "Фан", width: 240, cell: (row) => <FanCell fan={fanOf(row)} fanRef={row.fanRef} pageLabel={row.pageLabel} platform={platformOf(row.pageLabel)} /> },
+    { key: "fan", header: "Фан", width: 240, cell: (row) => <FanCell fan={fanOf(row)} fanRef={row.fanRef} pageLabel={row.pageLabel} platform={platformOf(row.pageLabel)} showLogin={collides(row)} /> },
     { key: "what", header: "Что отправляли", headerWrap: false, width: 220, cell: (row) => <span>{purposeLabel(row.purpose)}<span className="decisions-sub">{row.username}, <TimeMsk at={row.createdAt} /></span></span> },
     {
       key: "outcome",
       header: "Итог",
       width: 200,
-      cell: (row) => row.resolution === null ? "—" : (
-        <span>
-          {outcomeLabel(row.resolution.outcome)}
-          {row.resolution.platformMessageId !== null && <span className="decisions-sub">ID сообщения {row.resolution.platformMessageId}</span>}
-        </span>
-      ),
+      cell: (row) => {
+        if (row.resolution === null) return "—";
+        const label = outcomeLabel(row.resolution.outcome);
+        // The message's number is for the audit, not for reading (Р8): on hover.
+        return row.resolution.platformMessageId === null ? label : <Hint content={`ID сообщения ${row.resolution.platformMessageId}`}>{label}</Hint>;
+      },
     },
     {
       key: "by",
@@ -132,7 +146,7 @@ export function ResolvedJournal({ page, platformOf, fanOf }: {
       <Table
         label="Разобранные отправки"
         columns={columns}
-        rows={data.items.filter((item) => item.resolution !== null)}
+        rows={rows}
         rowKey={(row) => row.attemptId}
         refreshing={resolved.isPlaceholderData}
         empty={<p className="decisions-note">На этой странице списка записей нет.</p>}
@@ -152,7 +166,8 @@ export function ResolvedJournal({ page, platformOf, fanOf }: {
  * The resolve of one held send. Two answers and neither is preselected:
  * «ушло» records a greeting for good, «не ушло» lets the fan be written to
  * again. The window cannot be closed while Hub records, nor by a stray click
- * once something is typed.
+ * once something is typed. It fits a 900 px screen with its buttons (Р1): the
+ * send in two columns, one sentence of what to do, the answers side by side.
  */
 export function ResolveSendModal({ item, serverNow, platform, fan, onClose }: {
   item: HeldSend;
@@ -166,7 +181,7 @@ export function ResolveSendModal({ item, serverNow, platform, fan, onClose }: {
   const [failure, setFailure] = useState<ResolveFailure | null>(null);
   const outcomeName = useId();
   const form = resolveForm(draft);
-  const greeting = greetingCell(item);
+  const greeting = greeted(item);
   const gone = failure?.gone === true;
   const pending = resolve.isPending;
   const dirty = draft.outcome !== null || draft.note.trim() !== "" || draft.platformMessageId.trim() !== "";
@@ -188,6 +203,18 @@ export function ResolveSendModal({ item, serverNow, platform, fan, onClose }: {
     });
   };
   const word = platformWord(platform);
+  const summary = [
+    { label: "Страница", value: pageWords(item.pageLabel, platform) },
+    {
+      label: "Фан",
+      value: <Fan name={fan?.name ?? null} username={fan?.username ?? null} fanRef={item.fanRef} {...(platform ? { href: consoleFanHref(item.pageLabel, platform, item.fanRef) } : {})} />,
+    },
+    { label: "Что отправляли", value: `${purposeLabel(item.purpose)}, ${partLabel(item)}` },
+    // The extension's install is for telling two installs of one person apart: on hover (Р8).
+    { label: "Кто отправлял", value: <Hint content={`Установка расширения ${shortId(item.instanceId)}`}>{item.username}</Hint> },
+    { label: "Когда, по Москве", value: <><TimeMsk at={item.createdAt} /> · без отчёта {formatSpan(Date.parse(serverNow) - heldSince(item))}</> },
+    ...(greeting !== null ? [{ label: GREETED_HEADER, value: greeting.hint === null ? greeting.text : <Hint content={greeting.hint}>{greeting.text}</Hint> }] : []),
+  ];
 
   return (
     <Modal
@@ -222,24 +249,22 @@ export function ResolveSendModal({ item, serverNow, platform, fan, onClose }: {
           submit();
         }}
       >
-        <KeyValue
-          className="decisions-summary"
-          items={[
-            { label: "Страница", value: <>{item.pageLabel}{word ? ` · ${word}` : ""}</> },
-            { label: "Фан", value: <FanName {...(fan ?? {})} fanRef={item.fanRef} pageLabel={item.pageLabel} {...(platform ? { platform } : {})} /> },
-            { label: "Что отправляли", value: `${purposeLabel(item.purpose)}, ${partLabel(item)}` },
-            { label: "Кто отправлял", value: <>{item.username}, установка расширения {shortId(item.instanceId)}</> },
-            { label: "Когда", value: <><TimeMsk at={item.createdAt} /> по Москве, без отчёта {formatSpan(Date.parse(serverNow) - heldSince(item))}</> },
-            ...(greeting !== null ? [{ label: "Приветствие фана", value: <>{greeting.label}{greeting.hint !== null && <span className="decisions-sub">{greeting.hint}</span>}</> }] : []),
-          ]}
-        />
-        <Disclosure summary="Для журнала: попытка и генерация">
-          <p className="decisions-mono">Попытка {item.attemptId} · генерация {item.generationRef}</p>
-        </Disclosure>
+        <dl className="decisions-summary">
+          {summary.map((one) => (
+            <div key={one.label} className="decisions-summary__item">
+              <dt>{one.label}</dt>
+              <dd>{one.value}</dd>
+            </div>
+          ))}
+        </dl>
 
-        <p className="decisions-intro">{resolveIntro(platform)}</p>
+        {/* One sentence of what to do (Р1); the text itself only the sender knows — Hub never had it. */}
+        <p className="decisions-intro">
+          Откройте чат с фаном {word ? `на ${word}` : "там, где вы работаете с этой страницей"} и найдите сообщение
+          около {formatTimeOfDay(item.createdAt)}. Текст знает {item.username}.
+        </p>
 
-        <fieldset disabled={pending || gone} className="decisions-choices">
+        <fieldset disabled={pending || gone} className="decisions-choices decisions-choices--pair">
           <legend>Что вы увидели в чате</legend>
           {([
             ["sent", "Сообщение ушло", sentOutcomeHint(item)],
@@ -268,40 +293,44 @@ export function ResolveSendModal({ item, serverNow, platform, fan, onClose }: {
         )}
 
         {draft.outcome === "sent" && (
-          <div className="ui-field">
-            <label className="ui-field__label" htmlFor={`${outcomeName}-id`}>{messageIdLabel(platform)}</label>
-            <TextInput
-              id={`${outcomeName}-id`}
-              value={draft.platformMessageId}
-              inputMode="numeric"
-              autoComplete="off"
-              maxLength={40}
-              disabled={pending || gone}
-              aria-invalid={form.platformMessageIdError !== null || undefined}
-              onChange={(event) => setDraft((current) => ({ ...current, platformMessageId: event.target.value }))}
-              className="decisions-mono"
-            />
-            {form.platformMessageIdError !== null && <p className="ui-field__error" role="alert">{form.platformMessageIdError}</p>}
-          </div>
+          <Field label={messageIdLabel(platform)} error={form.platformMessageIdError ?? undefined}>
+            {(control) => (
+              <TextInput
+                {...control}
+                value={draft.platformMessageId}
+                inputMode="numeric"
+                autoComplete="off"
+                maxLength={40}
+                disabled={pending || gone}
+                onChange={(event) => setDraft((current) => ({ ...current, platformMessageId: event.target.value }))}
+                className="decisions-mono"
+              />
+            )}
+          </Field>
         )}
 
-        <div className="ui-field">
-          <label className="ui-field__label" htmlFor={`${outcomeName}-note`}>Почему вы так решили (обязательно)</label>
-          <textarea
-            id={`${outcomeName}-note`}
-            value={draft.note}
-            rows={3}
-            disabled={pending || gone}
-            onChange={(event) => setDraft((current) => ({ ...current, note: event.target.value }))}
-            placeholder="например: посмотрел чат, сообщение от 14:02 на месте"
-            className="decisions-textarea"
-          />
-          <p className={form.noteLeft < 0 ? "ui-field__error" : "ui-field__hint"}>
-            Заметка сохранится в журнале разборов вместе с вашим именем. До {RESOLVE_NOTE_MAX} знаков, осталось {form.noteLeft}.
-          </p>
-        </div>
+        <Field
+          label="Почему вы так решили (обязательно)"
+          hint={form.noteLeft < 0 ? undefined : `Заметка сохранится в журнале разборов вместе с вашим именем. До ${RESOLVE_NOTE_MAX} знаков, осталось ${form.noteLeft}.`}
+          error={form.noteLeft < 0 ? `Заметка длиннее ${RESOLVE_NOTE_MAX} знаков: сократите на ${-form.noteLeft}.` : undefined}
+        >
+          {(control) => (
+            <Textarea
+              {...control}
+              value={draft.note}
+              rows={2}
+              disabled={pending || gone}
+              onChange={(event) => setDraft((current) => ({ ...current, note: event.target.value }))}
+              placeholder="например: посмотрел чат, сообщение от 14:02 на месте"
+            />
+          )}
+        </Field>
 
         {failure !== null && <Notice tone="danger" role="alert">{failure.message}</Notice>}
+
+        <Disclosure summary="Для журнала: попытка и генерация">
+          <p className="decisions-mono">Попытка {item.attemptId} · генерация {item.generationRef}</p>
+        </Disclosure>
       </form>
     </Modal>
   );

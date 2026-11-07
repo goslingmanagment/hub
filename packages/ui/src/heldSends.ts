@@ -9,12 +9,13 @@ import { ruPlural } from "./plural.js";
 
 /**
  * A held send of the chat extension and its manual resolve, as words and a
- * body ready to send (chat-extension H-7e). The rules are the console's
- * (apps/dashboard/src/pages/clientHeldSendsView.ts): nothing preselected, «why»
- * required, a message id only with «sent», the contract's schema has the last
- * word, every refusal in words. One difference on purpose: the words name the
- * platform of the send's page — 92 % of held sends are Fansly's, and the
- * console's texts say OnlyFans everywhere. Times are Moscow's, as everywhere.
+ * body ready to send (chat-extension H-7e). One copy for the console's cabinet
+ * page (apps/dashboard/src/pages/clientHeldSendsView.ts re-exports these) and
+ * Workboard's Решения: nothing preselected, «why» required, a message id only
+ * with «sent», the contract's schema has the last word, every refusal in words.
+ * The words name the platform of the send's page — 92 % of held sends are
+ * Fansly's; an OnlyFans send reads as the console always said. Times are
+ * Moscow's unless the caller passes its own clock (`greetingCell`).
  */
 
 type Item = ClientSendCustodyListItem;
@@ -34,6 +35,11 @@ export function platformWord(platform: string | null | undefined): string | null
 function onPlatform(platform: string | null | undefined): string {
   const word = platformWord(platform);
   return word ? `на ${word}` : "там, где вы работаете с этой страницей";
+}
+
+/** «там, где вы работаете с Fansly»; without a known platform — with this page. */
+function whereYouWork(platform: string | null | undefined): string {
+  return `там, где вы работаете с ${platformWord(platform) ?? "этой страницей"}`;
 }
 
 const PURPOSE_LABELS: Readonly<Record<string, string>> = {
@@ -88,12 +94,21 @@ export interface GreetingCell {
   sentByHand: boolean;
 }
 
-/** The fan's greeting next to a held greeting; null for any other send (it says nothing about a reply). */
-export function greetingCell(item: Pick<Item, "purpose" | "greeting">): GreetingCell | null {
+/** A moment of a greeting in the words: Moscow's date and time by default. */
+function moscowMoment(iso: string): string {
+  return formatDateTime(iso, { yearUnlessCurrent: true });
+}
+
+/**
+ * The fan's greeting next to a held greeting; null for any other send (it says
+ * nothing about a reply). `formatAt` writes the greeting's moment: Moscow's by
+ * default; the console's cabinet passes the viewer's own clock («как в чате»).
+ */
+export function greetingCell(item: Pick<Item, "purpose" | "greeting">, formatAt: (iso: string) => string = moscowMoment): GreetingCell | null {
   if (item.purpose !== "greeting") return null;
   const { greeting } = item;
   if (greeting.state !== "confirmed") return { label: "Нет", hint: null, sentByHand: false };
-  const when = greeting.at === null ? "" : `, ${formatDateTime(greeting.at, { yearUnlessCurrent: true })}`;
+  const when = greeting.at === null ? "" : `, ${formatAt(greeting.at)}`;
   const how = greeting.source === null ? "" : GREETING_SOURCE_LABELS[greeting.source] ?? greeting.source;
   if (greeting.firstPartIsThisAttempt && greeting.source === "native-register") {
     return {
@@ -106,11 +121,11 @@ export function greetingCell(item: Pick<Item, "purpose" | "greeting">): Greeting
   return { label: "Есть", hint: how === "" ? null : `${how}${when}`, sentByHand: false };
 }
 
-/** What the resolver does before answering, for the send's platform. */
+/** What the resolver does before answering, for the send's platform (the console's words, the platform named). */
 export function resolveIntro(platform: string | null | undefined): string {
   return "Расширение отправило это сообщение из превью и не сообщило, чем кончилось. Hub не знает, ушло ли оно, "
-    + `и сам не узнает. Откройте чат с этим фаном ${onPlatform(platform)} и найдите исходящее сообщение около `
-    + "указанного времени. Текста здесь нет: Hub не знает, какой текст ушёл, это знает сотрудник.";
+    + `и сам не узнает. Откройте чат с этим фаном ${whereYouWork(platform)}, и найдите исходящее сообщение около `
+    + "указанного времени. На этой странице текста нет: Hub не знает, какой текст ушёл, это знает сотрудник.";
 }
 
 /** The label of the optional message id, for the send's platform. */

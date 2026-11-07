@@ -322,6 +322,13 @@
     gap: 12px;
   }
 
+  /* The page filter's place on a screen without one (PageFilterSlot): kept, never seen. */
+  .wb-filter-slot {
+    display: inline-flex;
+    visibility: hidden;
+    pointer-events: none;
+  }
+
   .wb-back {
     display: inline-flex;
     flex: none;
@@ -403,6 +410,22 @@
     width: 100%;
     max-width: 2400px;
     padding: 24px var(--wb-gutter) 48px;
+  }
+
+  /* A working screen that fills the window (ScreenHeader `fill`): the frame is
+     the window's height, the content takes the rest, its panes scroll inside. */
+  @media (min-width: 1101px) {
+    :root[data-ui-full-window] .wb-main {
+      height: 100dvh;
+      min-height: 640px;
+      overflow: hidden;
+    }
+
+    :root[data-ui-full-window] .wb-main > .wb-content {
+      flex: 1 1 auto;
+      min-height: 0;
+      padding-bottom: 24px;
+    }
   }
 
   .wb-tabs + .wb-content {
@@ -489,6 +512,10 @@
 
     .wb-header {
       position: static;
+    }
+
+    .wb-filter-slot {
+      display: none;
     }
   }
 }

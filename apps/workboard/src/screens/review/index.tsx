@@ -1,17 +1,21 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { Link, useLocation, useParams } from "react-router";
+import { ChevronDown, X } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useLocation, useParams } from "react-router";
 import { hubErrorStatus } from "@agency_hub_core/ui/hubClient";
-import { Button, Chip, EmptyState, ErrorState, Facts, Kbd, LinkButton, Money, SearchInput, Segmented, Skeleton, Tooltip, type FactItem } from "@agency_hub_core/ui";
+import { Button, EmptyState, ErrorState, Facts, Hint, LinkButton, Menu, Money, SearchInput, Segmented, Skeleton, collidingFanNames, cx, type FactItem, type MenuEntry } from "@agency_hub_core/ui";
 import { formatCount, formatDay, formatDuration, formatMills, formatPercent, formatTimeOfDay, formatWeekdayDay } from "@agency_hub_core/ui/format";
 import { ruPlural } from "@agency_hub_core/ui/plural";
 import { CHATTER_SHIFT_PAGE_MIN_MESSAGES } from "@agency_hub_core/contracts";
-import { parseShiftKey, personPath, useBackTarget, type BackTarget } from "@/shared/links";
+import { REPLY_FAST_SECONDS, REPLY_NORM_SECONDS, shiftQuality } from "@agency_hub_core/ui/shiftReview";
+import { carryParams, parseShiftKey, personPath, shiftPath, useBackTarget, type BackTarget } from "@/shared/links";
+import { METRICS, UNANSWERED_NOW_LABEL, formatAiUnedited, formatReplyMedian, formatUnanswered } from "@/shared/metrics";
 import { ScreenHeader } from "@/shared/ScreenHeader";
+import { useMe } from "@/shared/useMe";
 import { ChatList } from "./ChatList.js";
-import { useShiftReview, type ReviewChatRow, type ReviewFilter, type ReviewIndex, type ReviewModel, type ReviewShift } from "./data.js";
+import { useShiftReview, useShiftsAround, type ReviewFilter, type ReviewIndex, type ReviewModel, type ReviewShift } from "./data.js";
 import { Evidence } from "./Evidence.js";
+import { LOOK, focusOf, ordered } from "./look.js";
 import { Pulse } from "./Pulse.js";
-import { REPLY_FAST_SECONDS, REPLY_NORM_SECONDS, waitText } from "./rules.js";
 import { ShiftStepper } from "./ShiftStepper.js";
 import { Transcript } from "./Transcript.js";
 import { useReviewParams, type ReviewChange, type ReviewParams } from "./useReviewParams.js";
@@ -19,10 +23,11 @@ import "./review.css";
 
 /**
  * Разбор смены (spec §4.2): one chatter's shift opened up, the core of
- * Workboard. One sticky line names the shift; one line of facts; the pulse of
- * its minutes; then the chats and the conversation fill the rest of the window,
- * so the conversation is in sight at 1440×900 without scrolling. Everything
- * chosen is in the address; ↑ ↓ (J K) step through the chats.
+ * Workboard. One line names the shift, one line of facts under it; then one
+ * sheet down to the window's bottom: the pulse of its minutes, the list's
+ * filters, the chats and the conversation — and the evidence of a message as a
+ * third column beside them (D7). Everything chosen is in the address; ↑ ↓ (J K)
+ * step through the chats.
  */
 
 const MINUTE_MS = 60_000;
@@ -36,27 +41,16 @@ const FILTER_WORDS: Record<ReviewFilter, string> = {
 };
 
 const FILTER_TITLES: Record<ReviewFilter, string> = {
-  look: "Чаты с причиной посмотреть (без ответа, долгое ожидание, платное, повтор текста, ИИ без правки) и 2 обычных диалога для сравнения",
+  look: `До ${LOOK.max} чатов с самыми сильными причинами: без ответа к концу смены, ожидание от ${LOOK.waitSeconds / 60} мин, `
+    + `покупки от ${formatMills(LOOK.paidMills)}, ИИ без правки во всём чате или ${LOOK.aiRunMin} подряд, один текст ${LOOK.repeatFans} фанам и больше, `
+    + `служебный текст ИИ. И ${LOOK.samples} обычных диалога для сравнения`,
   unanswered: "Фан писал в смену, ответа чаттера до конца смены не было",
   waited: `Фан ждал ответа дольше ${REPLY_NORM_SECONDS / 60} мин: с ответом в смену или без него`,
   paid: "Платные сообщения, чаевые или продажи этому фану в смену",
   all: "Все чаты смены по времени",
 };
 
-/** The order of each list: what to read first. */
-function ordered(rows: readonly ReviewChatRow[], filter: ReviewFilter): ReviewChatRow[] {
-  const when = (row: ReviewChatRow) => row.firstAt ?? row.waitingSince ?? Number.MAX_SAFE_INTEGER;
-  const list = [...rows];
-  switch (filter) {
-    case "look": return list.sort((a, b) => a.tier - b.tier || b.waitSeconds - a.waitSeconds || b.paidMills - a.paidMills || when(a) - when(b));
-    case "unanswered":
-    case "waited": return list.sort((a, b) => b.waitSeconds - a.waitSeconds || when(a) - when(b));
-    case "paid": return list.sort((a, b) => b.paidMills - a.paidMills || when(a) - when(b));
-    case "all": return list.sort((a, b) => when(a) - when(b));
-  }
-}
-
-/** «чт, 6 нояб. · 09:16–18:53»; a night shift says both days; a shift going on — since when. */
+/** «пт, 6 нояб. · 09:16–18:53»; a night shift says both days; a shift going on — since when. */
 function whenText(shift: ReviewShift): string {
   const day = (at: number) => new Date(at + 3 * 3_600_000).toISOString().slice(0, 10);
   if (shift.ongoing) return `${formatWeekdayDay(shift.start)} · с ${formatTimeOfDay(shift.start)}, идёт`;
@@ -64,137 +58,164 @@ function whenText(shift: ReviewShift): string {
   return `${formatWeekdayDay(shift.start)} · ${formatTimeOfDay(shift.start)}–${formatTimeOfDay(shift.end)}`;
 }
 
-function Hint({ children, content }: { children: ReactNode; content: ReactNode }) {
-  return <Tooltip content={<span className="review-tip">{content}</span>} side="bottom" align="start"><span className="review-hint">{children}</span></Tooltip>;
-}
-
+/** The three numbers of the shift are the review's rules and the app's words (D1): the journal and the card say the same. */
 function factsOf(index: ReviewIndex): FactItem[] {
   const { shift, totals } = index;
-  const withText = totals.origin.ai + totals.origin.fix + totals.origin.own;
+  const quality = shiftQuality(totals);
   const notMine = totals.handedOverUnanswered + totals.colleagueUnanswered;
+  const late = shift.ongoing ? 0 : totals.unansweredLate;
   return [
     {
       label: "Продажи",
       strong: true,
-      value: (
-        <Hint content={<>
+      value: <Money mills={shift.salesNetMills} strong />,
+      hint: (
+        <>
           Продажи на страницах смены после комиссии, пока она их держала, как в «Сменах».
           {shift.chatsNetMills !== shift.salesNetMills && <> В чатах ниже — {formatMills(shift.chatsNetMills)}: остальное купили фаны без переписки в эту смену.</>}
           {totals.ppvSent > 0 && <> Платных сообщений куплено {formatCount(totals.ppvBought)} из {formatCount(totals.ppvSent)}.</>}
-        </>}>
-          <Money mills={shift.salesNetMills} strong />
-        </Hint>
+        </>
       ),
     },
     {
       label: "Сообщений",
-      value: (
-        <Hint content={<>Личные сообщения фанам{totals.perHour !== null && <>, {totals.perHour.toLocaleString("ru-RU", { maximumFractionDigits: 0 })} в час без пауз</>}.{totals.massMessages > 0 && <> Рассылкой ещё {formatCount(totals.massMessages)} — их здесь не считаем.</>}</>}>
-          {formatCount(totals.messages)}{totals.massMessages > 0 && <span className="review-facts__quiet"> +{formatCount(totals.massMessages)} рассылкой</span>}
-        </Hint>
-      ),
+      value: <>{formatCount(totals.messages)}{totals.massMessages > 0 && <span className="review-facts__quiet"> +{formatCount(totals.massMessages)} рассылкой</span>}</>,
+      hint: <>Личные сообщения фанам{totals.perHour !== null && <>, {totals.perHour.toLocaleString("ru-RU", { maximumFractionDigits: 0 })} в час без пауз</>}.{totals.massMessages > 0 && <> Рассылки ({formatCount(totals.massMessages)}) никому не отвечают — их здесь не считаем.</>}</>,
     },
     {
       // Not «Все» of the list: that one holds the fans who only waited and the colleagues' chats too.
-      label: "Писал в чатах",
-      value: (
-        <Hint content={<>Чаты, где чаттер писал в смену{totals.chatsFanSilent > 0 && <>; в {formatCount(totals.chatsFanSilent)} из них фан в смену не писал (приветствия, первые сообщения)</>}.</>}>
-          {formatCount(totals.chats)}
-        </Hint>
+      label: "Чатов",
+      value: formatCount(totals.chats),
+      hint: <>Чаты, где чаттер писал в смену{totals.chatsFanSilent > 0 && <>; в {formatCount(totals.chatsFanSilent)} из них фан в смену не писал (приветствия, первые сообщения)</>}. В списке «Все» есть и чаты, где фаны только ждали.</>,
+    },
+    {
+      label: METRICS.reply.label,
+      value: formatReplyMedian(quality.replyMedianSeconds),
+      hint: (
+        <>
+          {METRICS.reply.hint}
+          {totals.replies > 0 && (
+            <> В эту смену {formatCount(totals.replies)} {ruPlural(totals.replies, "ответ", "ответа", "ответов")}: до {REPLY_FAST_SECONDS / 60} мин — {formatPercent((100 * totals.repliesWithinFast) / totals.replies)}, до {REPLY_NORM_SECONDS / 60} мин — {formatPercent((100 * totals.repliesWithinNorm) / totals.replies)}.</>
+          )}
+        </>
       ),
     },
     {
-      label: "Ответ, медиана",
+      label: shift.ongoing ? UNANSWERED_NOW_LABEL : METRICS.unanswered.label,
       value: (
-        <Hint content={totals.replies === 0 ? "Ответов фанам в смену не было." : (
-          <>
-            {formatCount(totals.replies)} {ruPlural(totals.replies, "ответ", "ответа", "ответов")}: до {REPLY_FAST_SECONDS / 60} мин — {formatPercent((100 * totals.repliesWithinFast) / totals.replies)}, до {REPLY_NORM_SECONDS / 60} мин — {formatPercent((100 * totals.repliesWithinNorm) / totals.replies)}.
-            {totals.repliesToInherited > 0 && <> {formatCount(totals.repliesToInherited)} — ждавшим с прошлых смен: их ожидание считается с начала смены.</>}
-          </>
-        )}>
-          {totals.replyMedianSeconds === null ? "—" : waitText(totals.replyMedianSeconds)}
-        </Hint>
+        <>
+          {formatUnanswered(quality.unansweredAtEnd)}
+          {late > 0 && <span className="review-facts__quiet"> · {formatCount(late)} в последние {REPLY_NORM_SECONDS / 60} мин</span>}
+        </>
       ),
-    },
-    {
-      label: shift.ongoing ? "Ждут ответа сейчас" : "Без ответа к концу",
-      value: (
-        <Hint content={<>
-          Фаны чаттера, писавшие в смену, без ответа {shift.ongoing ? "сейчас" : "до её конца"}.
+      hint: (
+        <>
+          {METRICS.unanswered.hint}
           {totals.unansweredInherited > 0 && <> Из них ждали ещё с прошлых смен: {formatCount(totals.unansweredInherited)}.</>}
-          {totals.unansweredLate > 0 && <> Написали за последние {REPLY_NORM_SECONDS / 60} мин: {formatCount(totals.unansweredLate)}.</>}
+          {late > 0 && <> Написали в последние {REPLY_NORM_SECONDS / 60} мин смены: {formatCount(late)} — ответить было почти некогда, но в счёте они есть.</>}
           {totals.waitingSilently > 0 && <> Ещё {formatCount(totals.waitingSilently)} ждали с прошлых смен и в смену не писали — не в счёте.</>}
           {notMine > 0 && <> Ещё {formatCount(notMine)} без ответа после сообщения коллеги — не в счёте.</>}
-        </>}>
-          {formatCount(totals.unanswered)}
-          {notMine > 0 && <span className="review-facts__quiet"> +{formatCount(notMine)} у коллег</span>}
-        </Hint>
+        </>
       ),
     },
     {
-      label: "Текст из ИИ",
-      value: (
-        <Hint content={withText === 0 ? "Сообщений с текстом не было." : (
-          <>
-            {formatCount(totals.origin.ai)} из {formatCount(withText)} сообщений с текстом{totals.origin.copied > 0 && <>, из них вставлено вручную {formatCount(totals.origin.copied)}</>}.
-            {" "}Свой черновик, поправленный ИИ, — {formatCount(totals.origin.fix)}; сам — {formatCount(totals.origin.own)}.
-            {totals.origin.hi > 0 && <> Приветствия ИИ ({formatCount(totals.origin.hi)}) не в счёте.</>}
-          </>
-        )}>
-          {withText === 0 ? "—" : formatPercent((100 * totals.origin.ai) / withText)}
-        </Hint>
+      label: METRICS.aiUnedited.label,
+      value: formatAiUnedited(quality.aiUneditedShare),
+      hint: (
+        <>
+          {METRICS.aiUnedited.hint}
+          {totals.textMessages > 0 && (
+            <>
+              {" "}В эту смену {formatCount(totals.aiUnedited)} из {formatCount(totals.textMessages)}. ИИ с правкой — {formatCount(totals.origin.ai - totals.aiUnedited)},
+              свой черновик через ИИ — {formatCount(totals.origin.fix)}, сам — {formatCount(totals.origin.own)}.
+              {totals.origin.hi > 0 && <> Приветствий Hi — {formatCount(totals.origin.hi)}.</>}
+            </>
+          )}
+        </>
       ),
     },
   ];
 }
 
-/** Under the title: how long, the pages (a page narrows the chats), what is missing from the screen. */
-function Meta({ shift, page, onPage }: { shift: ReviewShift; page: string | null; onPage: (page: string | null) => void }) {
-  const notes: string[] = [];
-  if (shift.kind === "visit") notes.push("это заход, а не смена");
-  if (shift.unarchived > 0) notes.push(`${formatCount(shift.unarchived)} сообщ. чаттера ещё нет в архиве — их нет и здесь`);
-  if (shift.deleted > 0) notes.push(`${formatCount(shift.deleted)} сообщ. удалены после отправки — их здесь нет`);
+/** «7 ч 28 мин · mia-1, mia-2» after the title: how long without the pauses, and the pages. */
+function TitleExtra({ shift }: { shift: ReviewShift }) {
   return (
-    <span className="review-meta">
-      <span>{shift.ongoing ? "идёт" : "работал"} {formatDuration(shift.workedMinutes)}{shift.pauseMinutes > 0 && <>, паузы {formatDuration(shift.pauseMinutes)}</>}</span>
-      {shift.pages.length === 1 && (
-        <span className="review-meta__pages">
-          <span className="review-page review-page--static" title={`${formatCount(shift.pages[0]!.messages)} ${ruPlural(shift.pages[0]!.messages, "сообщение", "сообщения", "сообщений")} чаттера, рассылки тоже`}>{shift.pages[0]!.pageLabel}</span>
-        </span>
-      )}
-      {shift.pages.length > 1 && (
-        <span className="review-meta__pages" role="group" aria-label="Страницы смены: нажмите, чтобы оставить чаты одной страницы">
-          {shift.pages.map((one) => (
-            <button
-              key={one.pageLabel}
-              type="button"
-              className={page === one.pageLabel ? "review-page is-on" : "review-page"}
-              aria-pressed={page === one.pageLabel}
-              onClick={() => onPage(page === one.pageLabel ? null : one.pageLabel)}
-              title={`${one.pageLabel}: ${formatCount(one.messages)} ${ruPlural(one.messages, "сообщение", "сообщения", "сообщений")} чаттера, рассылки тоже.${!one.worked && shift.kind === "shift" ? ` Меньше ${CHATTER_SHIFT_PAGE_MIN_MESSAGES}: продажи страницы не в этой смене, здесь только чаты, где писал чаттер.` : ""} ${page === one.pageLabel ? "Нажмите, чтобы показать все страницы." : "Нажмите, чтобы оставить чаты только этой страницы."}`}
-            >
-              {one.pageLabel}
-              {!one.worked && shift.kind === "shift" && <span className="review-page__count">заглядывал</span>}
-            </button>
-          ))}
-        </span>
-      )}
-      {notes.length > 0 && <span className="review-meta__note">{notes.join(" · ")}</span>}
+    <span className="review-title__extra">
+      <Hint
+        content={shift.pauseMinutes > 0
+          ? `Работа без пауз. Паузы — ${formatDuration(shift.pauseMinutes)}: серые полосы на пульсе.`
+          : "Работа без пауз."}
+        align="start"
+        side="bottom"
+      >
+        {formatDuration(shift.workedMinutes)}
+      </Hint>
+      <span aria-hidden> · </span>
+      <span>{shift.pages.map((one) => one.pageLabel).join(", ")}</span>
     </span>
+  );
+}
+
+/** The page filter of a shift with several pages: one menu in the list's row (the app's page filter, `?page=`). */
+function PageMenu({ shift, page, onPage }: { shift: ReviewShift; page: string | null; onPage: (page: string | null) => void }) {
+  const items: MenuEntry[] = [
+    { label: "Все страницы смены", checked: page === null, onSelect: () => onPage(null) },
+    { separator: true },
+    ...shift.pages.map((one): MenuEntry => ({
+      label: one.pageLabel,
+      hint: !one.worked && shift.kind === "shift"
+        ? "заглядывал"
+        : `${formatCount(one.messages)} ${ruPlural(one.messages, "сообщение", "сообщения", "сообщений")}`,
+      title: !one.worked && shift.kind === "shift"
+        ? `Меньше ${CHATTER_SHIFT_PAGE_MIN_MESSAGES} сообщений: продажи страницы не в этой смене, здесь только чаты, где писал чаттер`
+        : "Сообщений чаттера на странице за смену, рассылки тоже",
+      checked: page === one.pageLabel,
+      onSelect: () => onPage(one.pageLabel),
+    })),
+  ];
+  return (
+    <Menu
+      label="Страница"
+      items={items}
+      align="start"
+      renderTrigger={({ ref, ...trigger }) => page === null ? (
+        <button ref={ref} type="button" className="ui-chip ui-chip--md" {...trigger}>
+          <span className="ui-chip__text">Все страницы</span>
+          <ChevronDown size={16} strokeWidth={1.75} aria-hidden />
+        </button>
+      ) : (
+        <span className="ui-chip ui-chip--md ui-chip--selected">
+          <button ref={ref} type="button" className="ui-chip__main" aria-label={`Только чаты ${page}. Выбрать другую страницу`} {...trigger}>
+            <span className="ui-chip__text">{page}</span>
+            <ChevronDown size={16} strokeWidth={1.75} aria-hidden />
+          </button>
+          <button type="button" className="ui-chip__remove" aria-label="Все страницы смены" onClick={() => onPage(null)}>
+            <X size={14} strokeWidth={2} aria-hidden />
+          </button>
+        </span>
+      )}
+    />
   );
 }
 
 function Loading({ back }: { back: BackTarget }) {
   return (
     <>
-      <ScreenHeader title={<Skeleton width={260} height={28} radius={6} />} documentTitle="Разбор смены" back={back} meta={<Skeleton width={360} height={20} radius={6} />} />
+      <ScreenHeader
+        fill
+        title={<Skeleton width={420} height={28} radius={6} />}
+        documentTitle="Разбор смены"
+        back={back}
+        meta={(
+          <span className="review-facts review-facts--loading">
+            {Array.from({ length: 6 }, (_, index) => <Skeleton key={index} width={index === 0 ? 140 : 120} height={20} radius={6} />)}
+          </span>
+        )}
+      />
       <div className="wb-content review-content" aria-busy="true">
-        <div className="review-facts review-facts--loading">
-          {Array.from({ length: 6 }, (_, index) => <Skeleton key={index} width={index === 0 ? 150 : 120} height={22} radius={6} />)}
-        </div>
         <div className="review-panes">
-          <div className="review-pulse"><Skeleton height={78} radius={6} /></div>
-          <div className="review-toolbar"><Skeleton width={620} height={36} radius={8} /></div>
+          <div className="review-pulse"><Skeleton height={74} radius={6} /></div>
+          <div className="review-toolbar"><Skeleton width={640} height={36} radius={8} /></div>
           <div className="review-split">
             <div className="review-chats review-chats--loading">
               {Array.from({ length: 7 }, (_, index) => (
@@ -213,19 +234,49 @@ function Loading({ back }: { back: BackTarget }) {
   );
 }
 
-function Problem({ back, status, retry, retrying, userId, search }: { back: BackTarget; status: number | null; retry: () => void; retrying: boolean; userId: number; search: string }) {
-  const body = status === 404 || status === 400
-    ? (
-      <EmptyState title="Смены нет" action={<LinkButton to={personPath(userId, search, "shifts")}>Смены этого человека</LinkButton>}>
-        В это время у этого человека не было смены в расширении. Откройте смену из списка.
-      </EmptyState>
-    )
-    : status === 403
-      ? <EmptyState title="Разбор смены — только для владельца">В нём тексты ИИ и черновики чаттеров: Hub показывает их только владельцу.</EmptyState>
-      : <ErrorState onRetry={retry} retrying={retrying} />;
+/**
+ * No review to show: no shift there, a team lead (the review is the owner's),
+ * or Hub did not answer. The header still names whose shift and when, from the
+ * address and the week's shifts; «Смены нет» offers the nearest one.
+ */
+function Problem({ back, kind, retry, retrying, userId, at }: {
+  back: BackTarget;
+  kind: "missing" | "owner-only" | "error";
+  retry: () => void;
+  retrying: boolean;
+  userId: number;
+  at: string;
+}) {
+  const location = useLocation();
+  const around = useShiftsAround(at, kind !== "error");
+  const own = (around.data?.shifts ?? []).filter((one) => one.userId === userId);
+  const name = own[0]?.username ?? null;
+  const target = Date.parse(at);
+  const nearest = [...own].sort((a, b) => Math.abs(Date.parse(a.startedAt) - target) - Math.abs(Date.parse(b.startedAt) - target))[0] ?? null;
+  const when = `${formatWeekdayDay(at)}, ${formatTimeOfDay(at)}`;
+  const title = (
+    <span className="review-title">
+      <span>{name ?? "Разбор смены"}</span>
+      <span className="review-title__when">{when}</span>
+    </span>
+  );
+  const body = kind === "missing" ? (
+    <EmptyState
+      title="Смены нет"
+      action={nearest
+        ? <LinkButton to={shiftPath(userId, nearest.startedAt, location.search)} state={location.state}>Ближайшая смена: {formatWeekdayDay(nearest.startedAt)}, {formatTimeOfDay(nearest.startedAt)}</LinkButton>
+        : <LinkButton to={personPath(userId, location.search)}>Смены {name ?? "этого человека"}</LinkButton>}
+    >
+      {`В ${when} у ${name ?? "этого человека"} не было смены в расширении.`}
+    </EmptyState>
+  ) : kind === "owner-only" ? (
+    <EmptyState title="Разбор смены — только для владельца">В нём тексты ИИ и черновики чаттеров: Hub показывает их только владельцу.</EmptyState>
+  ) : (
+    <ErrorState onRetry={retry} retrying={retrying} />
+  );
   return (
     <>
-      <ScreenHeader title="Разбор смены" back={back} />
+      <ScreenHeader title={title} documentTitle={name ? `${name}, ${formatDay(at)} — Разбор смены` : "Разбор смены"} back={back} />
       <div className="wb-content">{body}</div>
     </>
   );
@@ -233,15 +284,18 @@ function Problem({ back, status, retry, retrying, userId, search }: { back: Back
 
 export function ReviewScreen() {
   const { userId: rawUser, shiftStart } = useParams();
+  const location = useLocation();
   const userId = Number(rawUser);
   const at = parseShiftKey(shiftStart);
-  const back = useBackTarget({ to: "/shifts", label: "Смены" });
+  // Straight from an address: «←» goes to Смены of the same period and page.
+  const carried = carryParams(location.search).toString();
+  const back = useBackTarget({ to: carried ? `/shifts?${carried}` : "/shifts", label: "Смены" });
   if (!Number.isInteger(userId) || userId <= 0 || at === null) {
     return (
       <>
         <ScreenHeader title="Разбор смены" back={back} />
         <div className="wb-content">
-          <EmptyState title="Смена не найдена в адресе" action={<LinkButton to="/shifts">К сменам</LinkButton>}>Откройте смену из журнала смен или со страницы человека.</EmptyState>
+          <EmptyState title="Смена не найдена в адресе" action={<LinkButton to={back.to}>К сменам</LinkButton>}>Откройте смену из журнала смен или со страницы человека.</EmptyState>
         </div>
       </>
     );
@@ -250,12 +304,25 @@ export function ReviewScreen() {
 }
 
 function Review({ userId, at, back }: { userId: number; at: string; back: BackTarget }) {
-  const { query, model } = useShiftReview(userId, at);
+  const me = useMe();
+  // The review is the owner's (Hub answers 403 to anyone else): a team lead is not sent to ask.
+  const owner = me.isOwner;
+  const { query, model } = useShiftReview(userId, at, owner);
   const [params, update] = useReviewParams();
-  const location = useLocation();
+  if (me.role !== null && !owner) return <Problem back={back} kind="owner-only" retry={() => undefined} retrying={false} userId={userId} at={at} />;
   if (!model) {
     if (query.isError) {
-      return <Problem back={back} status={hubErrorStatus(query.error)} retry={() => void query.refetch()} retrying={query.isFetching} userId={userId} search={location.search} />;
+      const status = hubErrorStatus(query.error);
+      return (
+        <Problem
+          back={back}
+          kind={status === 404 || status === 400 ? "missing" : status === 403 ? "owner-only" : "error"}
+          retry={() => void query.refetch()}
+          retrying={query.isFetching}
+          userId={userId}
+          at={at}
+        />
+      );
     }
     return <Loading back={back} />;
   }
@@ -271,10 +338,10 @@ function Loaded({ model, params, update, back, updatedAt, refreshing, onRefresh 
   refreshing: boolean;
   onRefresh: () => void;
 }) {
-  const location = useLocation();
   const { index } = model;
   const { shift } = index;
-  const pageKnown = params.page !== null && shift.pages.some((one) => one.pageLabel === params.page);
+  // The page narrows the chats only where the shift has more than one page.
+  const pageOn = params.page !== null && shift.pages.length > 1 && shift.pages.some((one) => one.pageLabel === params.page);
 
   const spanMs = params.span === null ? null : {
     from: Math.max(shift.start, shift.start + params.span.from * MINUTE_MS),
@@ -294,17 +361,27 @@ function Loaded({ model, params, update, back, updatedAt, refreshing, onRefresh 
     written.current = params.q;
     setQuery(params.q);
   }, [params.q]);
+  // Words search the whole shift: typing moves to «Все», clearing goes back to the list it left.
+  const before = useRef<ReviewFilter | null>(null);
   const search = (value: string) => {
+    const change: ReviewChange = { q: value, chat: null, msg: null };
+    if (value.trim() !== "" && query.trim() === "" && params.show !== "all") {
+      before.current = params.show;
+      change.show = "all";
+    } else if (value.trim() === "" && before.current !== null) {
+      change.show = before.current;
+      before.current = null;
+    }
     setQuery(value);
     written.current = value;
-    update({ q: value, chat: null, msg: null });
+    update(change);
   };
   const matching = useMemo(() => model.matching(query), [model, query]);
 
   // Every count follows what narrows the list: the page, the search, the picked minutes.
-  const base = useMemo(() => index.chats.filter((row) => (!pageKnown || row.pageLabel === params.page)
+  const base = useMemo(() => index.chats.filter((row) => (!pageOn || row.pageLabel === params.page)
     && (matching === null || matching.has(row.key))
-    && (busy === null || busy.has(row.key))), [index.chats, pageKnown, params.page, matching, busy]);
+    && (busy === null || busy.has(row.key))), [index.chats, pageOn, params.page, matching, busy]);
   const counts = useMemo(() => {
     const out = { look: 0, unanswered: 0, waited: 0, paid: 0, all: 0 } satisfies Record<ReviewFilter, number>;
     for (const row of base) for (const filter of Object.keys(out) as ReviewFilter[]) if (row.in[filter]) out[filter] += 1;
@@ -325,6 +402,8 @@ function Loaded({ model, params, update, back, updatedAt, refreshing, onRefresh 
   const evidenceMessage = transcript && params.msg !== null
     ? transcript.chat.messages.find((message) => message.ref === params.msg && message.mine !== null) ?? null
     : null;
+  // Two fans of one name in this shift: their logins go beside the names (D6).
+  const colliding = useMemo(() => collidingFanNames(index.chats.flatMap((row) => (row.fanRef ? [{ name: row.fanDisplayName, username: row.fanUsername, fanRef: row.fanRef }] : []))), [index.chats]);
 
   // Where the keys stand now: set on every render and at once on every step, so fast presses
   // (a held key) never read a list position the address has not caught up with yet.
@@ -368,6 +447,13 @@ function Loaded({ model, params, update, back, updatedAt, refreshing, onRefresh 
     return () => document.removeEventListener("keydown", onKey);
   }, []);
 
+  const closeEvidence = () => {
+    const ref = cursor.current.msg;
+    if (active) go(active.key, null);
+    // The focus goes back to the line that opened it.
+    if (ref !== null) requestAnimationFrame(() => document.querySelector<HTMLElement>(`[data-ref="${CSS.escape(ref)}"] .review-origin`)?.focus());
+  };
+
   const setSpan = (span: { from: number; to: number } | null) => update({
     span: span === null ? null : {
       from: Math.max(0, Math.floor((span.from - shift.start) / MINUTE_MS)),
@@ -376,32 +462,41 @@ function Loaded({ model, params, update, back, updatedAt, refreshing, onRefresh 
     chat: null,
     msg: null,
   });
-  const narrowed = query.trim() !== "" || params.span !== null || pageKnown;
-  const multiPage = shift.pages.length > 1 && !pageKnown;
+  const narrowed = query.trim() !== "" || params.span !== null || pageOn;
+  const pageWords = shift.pages.length === 2 ? "обе страницы" : "все страницы";
 
   const title = (
     <span className="review-title">
-      <Link to={personPath(shift.userId, location.search)} state={{ back: { to: `${location.pathname}${location.search}`, label: "Разбор" } }} className="ui-quiet-link" title={`Карточка ${shift.username}`}>{shift.username}</Link>
+      <span>{shift.username}</span>
       <span className="review-title__when">{whenText(shift)}</span>
+      <TitleExtra shift={shift} />
+    </span>
+  );
+  const notes: string[] = [];
+  if (shift.kind === "visit") notes.push("это заход, а не смена");
+  if (shift.unarchived > 0) notes.push(`${formatCount(shift.unarchived)} сообщ. чаттера ещё нет в архиве — их нет и здесь`);
+  if (shift.deleted > 0) notes.push(`${formatCount(shift.deleted)} сообщ. удалены после отправки — их здесь нет`);
+  const meta = (
+    <span className="review-meta">
+      <Facts items={factsOf(index)} className="review-facts" label="Смена в цифрах" />
+      {notes.length > 0 && <span className="review-meta__quiet">{notes.join(" · ")}</span>}
     </span>
   );
 
   return (
     <>
       <ScreenHeader
+        fill
         title={title}
         documentTitle={`${shift.username}, ${formatDay(shift.start)} — Разбор смены`}
         back={back}
         actions={<ShiftStepper shift={shift} />}
-        meta={<Meta shift={shift} page={pageKnown ? params.page : null} onPage={(page) => update({ page, chat: null, msg: null })} />}
-        updatedAt={updatedAt}
-        // A finished shift is read once; one going on is read every 2 min and can be read now.
-        {...(shift.ongoing ? { onRefresh } : {})}
-        refreshing={refreshing}
+        meta={meta}
+        // A finished shift is read once and does not change; one going on is read every 2 min and can be read now.
+        {...(shift.ongoing ? { updatedAt, onRefresh, refreshing } : {})}
       />
       <div className="wb-content review-content">
-        <Facts items={factsOf(index)} className="review-facts" label="Смена в цифрах" />
-        <div className={evidenceMessage ? "review-panes has-evidence" : "review-panes"}>
+        <div className="review-panes">
           <Pulse
             minutes={index.minutes}
             sales={index.sales}
@@ -411,6 +506,7 @@ function Loaded({ model, params, update, back, updatedAt, refreshing, onRefresh 
             ongoing={shift.ongoing}
             span={spanMs}
             silences={index.silences}
+            scope={pageOn ? { words: "цифры и пульс — вся смена", hint: `Цифры над пульсом и сам пульс — за всю смену, ${pageWords}. Чаты ниже — только ${params.page}.` } : null}
             onSpan={setSpan}
           />
           <div className="review-toolbar">
@@ -420,18 +516,10 @@ function Loaded({ model, params, update, back, updatedAt, refreshing, onRefresh 
               onChange={(value) => update({ show: value, chat: null, msg: null })}
               options={(Object.keys(FILTER_WORDS) as ReviewFilter[]).map((value) => ({ value, label: FILTER_WORDS[value], count: counts[value], title: FILTER_TITLES[value] }))}
             />
-            <SearchInput value={query} onChange={search} placeholder="Фан или слово" slashShortcut width={240} />
-            {spanMs !== null && (
-              <Chip size="md" selected onRemove={() => setSpan(null)} removeLabel="Показать всю смену" title="Выбрано на пульсе">
-                {formatTimeOfDay(spanMs.from)}–{formatTimeOfDay(spanMs.to)}
-              </Chip>
-            )}
-            {params.page !== null && (
-              <Chip size="md" selected onRemove={() => update({ page: null, chat: null })} removeLabel="Все страницы смены" title={pageKnown ? "Только чаты этой страницы" : "Этой страницы нет в смене"}>
-                {pageKnown ? params.page : `${params.page} — нет в этой смене`}
-              </Chip>
-            )}
-            <span className="review-toolbar__keys" aria-hidden><Kbd>↑</Kbd><Kbd>↓</Kbd> соседний чат</span>
+            {shift.pages.length > 1 && <PageMenu shift={shift} page={pageOn ? params.page : null} onPage={(page) => update({ page, chat: null, msg: null })} />}
+            <span className="review-toolbar__search">
+              <SearchInput value={query} onChange={search} placeholder="Фан или слово" slashShortcut width={240} />
+            </span>
           </div>
           {list.length === 0 || !active || !transcript ? (
             <div className="review-split review-split--empty">
@@ -443,40 +531,45 @@ function Loaded({ model, params, update, back, updatedAt, refreshing, onRefresh 
               </EmptyState>
             </div>
           ) : (
-            <div className="review-split">
+            <div className={cx("review-split", evidenceMessage && "has-evidence")}>
               <ChatList
                 rows={list}
                 activeKey={active.key}
                 outsideKey={outside?.key ?? null}
-                showPage={multiPage}
+                showPage={shift.pages.length > 1 && !pageOn}
                 ongoing={shift.ongoing}
                 shiftStart={shift.start}
+                colliding={colliding}
+                query={query}
+                snippet={model.snippet}
                 onPick={(key) => update({ chat: key, msg: null })}
               />
               <Transcript
                 shift={shift}
                 transcript={transcript}
                 row={active}
+                colliding={colliding}
                 position={{ index: activeIndex, count: list.length }}
                 onStep={step}
                 span={spanMs}
+                focus={focusOf(active, show)}
                 query={query}
                 openMessage={evidenceMessage?.ref ?? null}
                 onEvidence={(ref) => go(active.key, cursor.current.msg === ref ? null : ref)}
               />
+              {evidenceMessage && (
+                <Evidence
+                  transcript={transcript}
+                  message={evidenceMessage}
+                  onStep={(ref) => go(active.key, ref)}
+                  onClose={closeEvidence}
+                />
+              )}
             </div>
           )}
         </div>
       </div>
-      {evidenceMessage && transcript && (
-        <Evidence
-          transcript={transcript}
-          message={evidenceMessage}
-          username={shift.username}
-          onStep={(ref) => go(active!.key, ref)}
-          onClose={() => go(active!.key, null)}
-        />
-      )}
     </>
   );
 }
+

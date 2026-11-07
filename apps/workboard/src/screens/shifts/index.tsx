@@ -1,10 +1,10 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { useMemo } from "react";
+import { useMemo, type ReactNode } from "react";
 import { useLocation } from "react-router";
 import { Button, EmptyState, ErrorState, LinkButton, Notice } from "@agency_hub_core/ui";
-import { formatDayRange } from "@agency_hub_core/ui/format";
+import { formatDay, formatDayRange } from "@agency_hub_core/ui/format";
 import { addDays, daysInRange } from "@agency_hub_core/ui/moscow";
-import { stepWeek, withPeriod, type ResolvedPeriod } from "@agency_hub_core/ui/period";
+import { currentWeek, stepWeek, withPeriod, type ResolvedPeriod } from "@agency_hub_core/ui/period";
 import { ScreenHeader } from "@/shared/ScreenHeader";
 import { usePageFilter } from "@/shared/usePageFilter";
 import { usePeriod } from "@/shared/usePeriod";
@@ -46,6 +46,16 @@ export function ShiftsScreen() {
   const versus = spec.kind === "week" && period.current ? "к прошлой неделе на это же время" : `к ${period.previousLabel}`;
   const authorshipDays = Math.min(AUTHORSHIP_MAX_DAYS, daysInRange(period.from, today));
   const empty = model !== undefined && model.journal.length === 0 && model.chatters.length === 0;
+  // The whole period lies before Hub began counting shifts: nothing to show, nothing to compare.
+  const beforeCounting = model !== undefined && model.knownSince !== null && window.to < model.knownSince;
+
+  // The comparison is said once, here; the grid's cells only carry it on hover.
+  let meta: ReactNode;
+  // Before Hub counted: the empty state says it once, the header says nothing to compare.
+  if (beforeCounting) meta = <span />;
+  else if (model && !model.comparable) {
+    meta = <span>{model.knownSince ? `Сравнения нет: Hub считает смены с ${formatDay(model.knownSince)}` : "Сравнения нет"}</span>;
+  } else if (spec.kind === "week" && period.current) meta = <span>Эта неделя · проценты к {period.previousLabel} на это же время</span>;
 
   const refresh = () => {
     void queryClient.invalidateQueries({ queryKey: ["shifts"] });
@@ -54,7 +64,17 @@ export function ShiftsScreen() {
 
   let body;
   if (!sales.data && sales.isError) {
-    body = <ErrorState onRetry={() => void sales.refetch()} retrying={sales.isFetching} />;
+    body = <ErrorState onRetry={refresh} retrying={sales.isFetching} />;
+  } else if (empty && beforeCounting) {
+    const thisWeek = withPeriod(new URLSearchParams(location.search), currentWeek(today)).toString();
+    body = (
+      <EmptyState
+        title={`Hub считает смены с ${formatDay(model.knownSince!)}`}
+        action={<LinkButton to={{ pathname: "/shifts", search: thisWeek }}>К этой неделе</LinkButton>}
+      >
+        Раньше этого дня расширение ChatGoose не сообщало Hub о работе чаттеров, поэтому смен здесь нет.
+      </EmptyState>
+    );
   } else if (empty) {
     const words = periodWords(period);
     const previousWeek = spec.kind === "week" ? withPeriod(new URLSearchParams(location.search), stepWeek(spec, -1, today)).toString() : null;
@@ -106,6 +126,7 @@ export function ShiftsScreen() {
         title="Смены"
         period
         pageFilter
+        meta={meta}
         updatedAt={sales.dataUpdatedAt}
         onRefresh={refresh}
         refreshing={sales.isFetching}
@@ -123,7 +144,7 @@ export function ShiftsScreen() {
         )}
         {body}
         <div className="shifts-foot">
-          <AuthorlessLine days={authorshipDays} page={page} enabled={period.current} />
+          <AuthorlessLine days={authorshipDays} page={page} enabled={period.current} partial={authorshipDays < period.shownDays} />
           <HowItCounts page={page} />
         </div>
       </div>

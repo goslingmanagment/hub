@@ -1,28 +1,31 @@
 import { useMemo, type ReactNode } from "react";
-import { useLocation } from "react-router";
-import { CHATTER_SHIFT_MIN_MESSAGES, CHATTER_SHIFT_MIN_WORKED_MINUTES } from "@agency_hub_core/contracts";
-import { Button, Card, Count, Delta, Disclosure, Duration, EmptyState, Facts, LinkButton, Money, Skeleton, type FactItem } from "@agency_hub_core/ui";
-import { formatDuration, formatMills } from "@agency_hub_core/ui/format";
+import { Link, useLocation } from "react-router";
+import { CHATTER_SHIFT_MIN_MESSAGES, CHATTER_SHIFT_MIN_WORKED_MINUTES, SHIFT_REPORT_MAX_DAYS } from "@agency_hub_core/contracts";
+import { millsToNumber, sumMills } from "@agency_hub_core/shared";
+import { Button, Card, Delta, Disclosure, Duration, EmptyState, Hint, LinkButton, Money, Section, Skeleton } from "@agency_hub_core/ui";
+import { formatDuration, formatMills, formatPercent } from "@agency_hub_core/ui/format";
 import { addDays } from "@agency_hub_core/ui/moscow";
 import { ruPlural } from "@agency_hub_core/ui/plural";
-import { personPath } from "@/shared/links";
+import { carryParams, personPath } from "@/shared/links";
+import { formatAiUnedited, formatReplyMedian, formatUnanswered, METRICS, PER_SHIFT_HINT } from "@/shared/metrics";
 import { usePageFilter } from "@/shared/usePageFilter";
 import { usePeriod } from "@/shared/usePeriod";
 import { useMe } from "@/shared/useMe";
-import { changePct, type PersonCard, type PeriodQuality } from "./data.js";
+import { changePct, usePersonStats, type PeriodQuality, type PeriodWork, type PersonCard } from "./data.js";
 import { ShiftRibbon } from "./ShiftRibbon.js";
+import { ShiftTable } from "./ShiftTable.js";
 import { SlowFailed } from "./SlowFailed.js";
-import { capitalized, dayWords, periodWords, replyText, shareOf, shareText, versusTitle } from "./words.js";
+import { capitalized, dayWords, periodWords, versusTitle } from "./words.js";
 
 /**
- * «Работа» (spec §4.4): the verdict of the period in one strip — money and its
- * change, per hour, shifts, how fast the person answers, who was left waiting
- * at the end, how much the AI wrote — and the shifts by the hour, each bar
- * opening its review.
+ * «Работа» (spec §4.4, D2): the period's verdict in one line — money and its
+ * change, per hour, and the review's three numbers as the average per shift —
+ * then the shifts by the hour (the owner's favourite picture), then every
+ * shift in one table, each row opening its review.
  */
 export function WorkTab({ card, userId }: { card: PersonCard; userId: number }) {
   const { period, today } = usePeriod();
-  const { page } = usePageFilter();
+  const { isOwner } = useMe();
   const person = card.person;
   const work = person?.work ?? null;
 
@@ -36,104 +39,169 @@ export function WorkTab({ card, userId }: { card: PersonCard; userId: number }) 
   }, [period.from, period.to, today, card.knownSince]);
   const unknownBefore = card.knownSince !== null && card.knownSince > period.from && card.knownSince <= period.to ? dayWords(card.knownSince) : null;
 
-  if (card.main === "loading" || !person || !work) return <WorkSkeleton />;
-
+  if (card.main === "loading" || !person || !work) return <WorkSkeleton card={card} userId={userId} canOpen={isOwner} />;
   if (work.shifts === 0) return <NoShifts card={card} />;
-
-  const versus = versusTitle(period);
-  const quality = person.quality;
-  const change = (current: number | null, previous: number | null | undefined) => (work.previous === null
-    ? <span className="people-dash">не с чем сравнить</span>
-    : <Delta pct={changePct(current, previous)} title={versus} />);
-  const items: FactItem[] = [
-    {
-      label: "Продажи",
-      value: <Money mills={work.salesNetMills} />,
-      meta: change(work.salesNetMills, work.previous?.salesNetMills),
-      strong: true,
-    },
-    {
-      label: "В час",
-      value: <Money mills={work.perHourMills} />,
-      meta: change(work.perHourMills, work.previous?.perHourMills),
-    },
-    {
-      label: ruPlural(work.shifts, "Смена", "Смены", "Смен"),
-      value: <Count value={work.shifts} />,
-      meta: <><Duration minutes={work.workedMinutes} /> работы</>,
-    },
-    ...qualityFacts(quality, card.quality === "failed"),
-  ];
 
   return (
     <>
       {card.quality === "failed" && <SlowFailed onRetry={card.retryQuality} />}
-      <section className="people-verdict" aria-label="Итог периода">
-        <Facts layout="stacked" items={items} label={`Итог ${periodWords(period)}`} />
-        <p className="people-verdict__note">
-          {work.previous === null
-            ? `Сравнить не с чем: за ${period.previousLabel} у Hub нет всей работы ${person.username}.`
-            : `Изменения — ${versus}.`}
-          {page && ` Ответ, «без ответа в конце» и доля ИИ — по всем страницам: Hub пока не делит их по страницам.`}
-          {work.overlapNetMills > 0 && ` Из продаж ${formatMills(work.overlapNetMills)} видны и у коллег: страницу вели двое, а этим фанам никто из них не писал.`}
-        </p>
-      </section>
-      <Card title="Смены по часам" description="Время московское. Нажмите на смену — откроется её разбор.">
-        <ShiftRibbon
-          userId={userId}
-          backLabel={person.username}
-          shifts={card.shifts}
-          visits={card.visits}
-          days={days}
-          unknownBefore={unknownBefore}
-          salesRead={card.salesRead}
-          today={today}
-        />
-      </Card>
-      <Disclosure summary="Как это считается">
-        <div className="people-help">
-          <p>
-            Смена — работа в расширении под своим входом: от {formatDuration(CHATTER_SHIFT_MIN_WORKED_MINUTES)} и {CHATTER_SHIFT_MIN_MESSAGES} сообщений,
-            конец — час без действий. Смена относится к дню, на который пришлась большая её часть.
-          </p>
-          <p>Продажи — деньги после комиссии площадки на страницах, где человек писал в смене. Это ориентир, а не основание для оплаты.</p>
-          <p>
-            Ответ, медиана — половина ответов ждущим фанам быстрее этого. Без ответа в конце — сколько фанов ждали ответа, когда смена
-            кончилась. Доля ИИ — сообщения, написанные кнопками Reply и Fix.
-          </p>
-        </div>
-      </Disclosure>
+      <Verdict work={work} quality={person.quality} failed={card.quality === "failed"} username={person.username} />
+      <Section
+        title="Смены по часам"
+        description={isOwner ? "Время московское. Нажмите на смену — откроется её разбор." : "Время московское."}
+      >
+        <Card>
+          <ShiftRibbon
+            userId={userId}
+            backLabel={person.username}
+            shifts={card.shifts}
+            visits={card.visits}
+            days={days}
+            unknownBefore={unknownBefore}
+            salesRead={card.salesRead}
+            today={today}
+            canOpen={isOwner}
+          />
+        </Card>
+      </Section>
+      <Section
+        title="Смены"
+        {...(isOwner ? { description: "Строка открывает разбор смены. Числа каждой смены — те же, что в её разборе." } : {})}
+      >
+        <ShiftTable card={card} userId={userId} canOpen={isOwner} />
+        <Below card={card} userId={userId} />
+      </Section>
+      <HowItCounts />
     </>
   );
 }
 
-function qualityFacts(quality: PeriodQuality | null | undefined, failed: boolean): FactItem[] {
+/**
+ * The verdict of the period (spec §4.4): one line, 16 px — money with its
+ * change, per hour, and how the person answers and writes, the average per
+ * shift by the review's rules. Under it one quiet line: what the change is
+ * against and what the averages are.
+ */
+function Verdict({ work, quality, failed, username }: { work: PeriodWork; quality: PeriodQuality | null | undefined; failed: boolean; username: string }) {
+  const { period } = usePeriod();
+  const { page } = usePageFilter();
+  const versus = versusTitle(period);
+  const change = (current: number | null, previous: number | null | undefined) => {
+    if (work.previous === null) return null;
+    const pct = changePct(current, previous);
+    return pct === null ? null : <span className="people-verdict__change">(<Delta pct={pct} kind="cost" title={versus} />)</span>;
+  };
   const pending = quality === undefined && !failed;
-  const value = (text: ReactNode) => (pending ? <Skeleton width={72} height={28} /> : text);
-  const within = quality ? shareOf(quality.repliesWithinHour, quality.replies) : null;
-  const composed = quality?.composed;
-  return [
-    {
-      label: "Ответ, медиана",
-      value: value(quality ? replyText(quality.replyMedianSeconds) : "—"),
-      meta: pending ? undefined : within === null ? "ответов не было" : `за час — ${shareText(within)}`,
-      title: "Половина ответов ждущим фанам — быстрее этого",
-    },
-    {
-      label: "Без ответа в конце",
-      value: value(quality ? quality.waitingAtEnd : "—"),
-      meta: pending ? undefined : "в среднем за смену",
-      title: "Сколько фанов ждали ответа, когда смена кончилась",
-    },
-    {
-      label: "Доля ИИ",
-      value: value(quality ? shareText(quality.aiShare) : "—"),
-      meta: pending || !composed || !quality || quality.messages === 0
-        ? undefined
-        : `Reply ${shareText(shareOf(composed.reply, quality.messages))} · Fix ${shareText(shareOf(composed.fix, quality.messages))}`,
-      title: "Сообщения, написанные кнопками Reply и Fix расширения, из всех",
-    },
-  ];
+  const number = (text: string) => (pending ? <Skeleton width={56} height={16} /> : <b>{text}</b>);
+  const within = quality && quality.replies > 0 ? quality.repliesWithinHour / quality.replies : null;
+  const sales = <b><Money mills={work.salesNetMills} /></b>;
+
+  const notes = [
+    work.previous === null
+      ? `Сравнить не с чем: за ${period.previousLabel} у Hub нет всей работы ${username}.`
+      : `В скобках — изменение ${versus}.`,
+    within !== null ? `${formatPercent(within * 100)} ответов — быстрее часа.` : null,
+    page ? "Числа «в среднем за смену» — по всем страницам: Hub пока не делит их по страницам." : null,
+  ].filter(Boolean).join(" ");
+
+  return (
+    <section className="people-verdict" aria-label={`Итог ${periodWords(period)}`}>
+      <p className="people-verdict__line">
+        <span className="people-verdict__group">
+          <span className="people-verdict__part">
+            {work.overlapNetMills > 0
+              ? <Hint content={`Из них ${formatMills(work.overlapNetMills)} видны и у коллег: страницу вели двое, а этим фанам никто из них не писал.`}>{sales}</Hint>
+              : sales}
+            {change(work.salesNetMills, work.previous?.salesNetMills)}
+            {" "}за {work.shifts} {ruPlural(work.shifts, "смену", "смены", "смен")}, <Duration minutes={work.workedMinutes} />
+          </span>
+          <Sep />
+          <span className="people-verdict__part">
+            <b><Money mills={work.perHourMills} /></b> в час{change(work.perHourMills, work.previous?.perHourMills)}
+          </span>
+        </span>
+        <span className="people-verdict__group">
+          <Hint content={PER_SHIFT_HINT}>в среднем за смену</Hint>:{" "}
+          <span className="people-verdict__part">{METRICS.reply.label.toLowerCase()} {number(quality ? formatReplyMedian(quality.replyMedianSeconds) : "—")}</span>
+          <Sep />
+          <span className="people-verdict__part">{METRICS.unanswered.label.toLowerCase()} {number(quality ? formatUnanswered(quality.unansweredAtEnd, { average: true }) : "—")}</span>
+          <Sep />
+          <span className="people-verdict__part">{METRICS.aiUnedited.label} {number(quality ? formatAiUnedited(quality.aiUneditedShare) : "—")}</span>
+        </span>
+      </p>
+      <p className="people-verdict__note">{notes}</p>
+    </section>
+  );
+}
+
+function Sep(): ReactNode {
+  return <span className="people-verdict__sep" aria-hidden> · </span>;
+}
+
+/** Under the table: work outside shifts; what the shift reports confirmed, once anyone confirms; the page filter's caveat. */
+function Below({ card, userId }: { card: PersonCard; userId: number }) {
+  const { period, today } = usePeriod();
+  const location = useLocation();
+  const { stats, inPeriod } = usePersonStats(userId, period, today);
+  const { page } = usePageFilter();
+  const lines: ReactNode[] = [];
+
+  if (card.visits.length > 0) {
+    const minutes = card.visits.reduce((sum, visit) => sum + visit.workedMinutes, 0);
+    lines.push(
+      <p key="visits" className="people-note">
+        Вне смен: {card.visits.length} {ruPlural(card.visits.length, "раз", "раза", "раз")}, {formatDuration(minutes)}. Это меньше смены
+        (от {formatDuration(CHATTER_SHIFT_MIN_WORKED_MINUTES)} и {CHATTER_SHIFT_MIN_MESSAGES} сообщений): в таблицу и в продажи не входит.
+      </p>,
+    );
+  }
+
+  // The shift reports (week 4): shown only once someone confirms a shift — today nobody does.
+  const reported = (stats?.shifts ?? []).filter((shift) => inPeriod(shift.date));
+  const confirmed = reported.filter((shift) => shift.confirmedNetMills !== null);
+  if (confirmed.length > 0) {
+    const now = Date.now();
+    const waiting = reported.filter((shift) => !shift.ongoing && shift.confirmedNetMills === null && now - Date.parse(shift.startedAt) <= SHIFT_REPORT_MAX_DAYS * 86_400_000).length;
+    const sum = millsToNumber(sumMills(confirmed.map((shift) => shift.confirmedNetMills ?? 0)));
+    const params = carryParams(location.search).toString();
+    lines.push(
+      <div key="reports" className="people-idle">
+        <span>
+          Подтверждено к выплате: <span className="people-meta__strong">{formatMills(sum)}</span> за {confirmed.length} {ruPlural(confirmed.length, "смену", "смены", "смен")}
+          {waiting > 0 && <> · ждут подтверждения: {waiting}</>}
+        </span>
+        <Link className="people-link" to={`/payouts${params ? `?${params}` : ""}`}>Открыть выплаты →</Link>
+      </div>,
+    );
+  }
+  if (page) {
+    lines.push(
+      <p key="page" className="people-note">
+        Смены и продажи — только по странице {page}. {METRICS.reply.label}, без ответа к концу и ИИ без правки — по всей смене: Hub пока не делит их
+        по страницам.
+      </p>,
+    );
+  }
+  if (lines.length === 0) return null;
+  return <div className="people-aside people-aside--below">{lines}</div>;
+}
+
+function HowItCounts() {
+  return (
+    <Disclosure summary="Как это считается">
+      <div className="people-help">
+        <p>
+          Смена — работа в расширении под своим входом: от {formatDuration(CHATTER_SHIFT_MIN_WORKED_MINUTES)} и {CHATTER_SHIFT_MIN_MESSAGES} сообщений,
+          конец — час без действий. Смена относится к дню, на который пришлась большая её часть.
+        </p>
+        <p>Продажи — деньги после комиссии площадки на страницах, где человек писал в смене. Это ориентир, а не основание для оплаты.</p>
+        <p><b>{METRICS.reply.label}.</b> {METRICS.reply.hint}</p>
+        <p><b>{METRICS.unanswered.label}.</b> {METRICS.unanswered.hint}</p>
+        <p><b>{METRICS.aiUnedited.label}.</b> {METRICS.aiUnedited.hint}</p>
+        <p>{PER_SHIFT_HINT}</p>
+      </div>
+    </Disclosure>
+  );
 }
 
 /** A period without shifts, said for the person's state: not signed up yet, switched off, or simply not working. */
@@ -173,20 +241,23 @@ function NoShifts({ card }: { card: PersonCard }) {
   );
 }
 
-function WorkSkeleton() {
+function WorkSkeleton({ card, userId, canOpen }: { card: PersonCard; userId: number; canOpen: boolean }) {
   return (
     <>
       <section className="people-verdict" aria-busy>
-        <Facts
-          layout="stacked"
-          items={Array.from({ length: 6 }, () => ({ label: <Skeleton width={96} />, value: <Skeleton width={96} height={28} />, meta: <Skeleton width={120} /> }))}
-        />
+        <p className="people-verdict__line"><Skeleton width={720} height={20} /></p>
+        <p className="people-verdict__note"><Skeleton width={480} /></p>
       </section>
-      <Card title="Смены по часам" description="Время московское. Нажмите на смену — откроется её разбор.">
-        <div style={{ display: "flex", flexDirection: "column", gap: 20 }} aria-hidden>
-          {Array.from({ length: 7 }, (_, index) => <Skeleton key={index} width="100%" height={20} />)}
-        </div>
-      </Card>
+      <Section title="Смены по часам" description="Время московское.">
+        <Card>
+          <div className="people-ribbon-skeleton" aria-hidden>
+            {Array.from({ length: 7 }, (_, index) => <Skeleton key={index} width="100%" height={20} />)}
+          </div>
+        </Card>
+      </Section>
+      <Section title="Смены">
+        <ShiftTable card={{ ...card, main: "loading" }} userId={userId} canOpen={canOpen} />
+      </Section>
     </>
   );
 }

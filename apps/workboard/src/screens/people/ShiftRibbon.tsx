@@ -1,11 +1,12 @@
-import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { useEffect, useMemo, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { useLocation, useNavigate } from "react-router";
-import { Money } from "@agency_hub_core/ui";
+import { Money, PageLabels, Tooltip, type ScreenRect } from "@agency_hub_core/ui";
 import { formatDuration, formatMills, formatTimeOfDay } from "@agency_hub_core/ui/format";
 import { ruPlural } from "@agency_hub_core/ui/plural";
 import { ShiftLink, shiftPath } from "@/shared/links";
+import { formatAiUnedited, formatReplyMedian, formatUnanswered, METRICS, UNANSWERED_NOW_LABEL } from "@/shared/metrics";
 import type { PersonShift, PersonVisit, ReadState } from "./data.js";
-import { beadSize, ribbonClock, ribbonDays, ribbonRowOf, ribbonRowStart, RIBBON_STEP_HOURS, type RibbonSale } from "./ribbon.js";
+import { beadSize, ribbonClock, ribbonDays, ribbonRowOf, ribbonRowStart, ribbonView, RIBBON_STEP_HOURS, type RibbonSale } from "./ribbon.js";
 import { dayWords, KIND_OF, KINDS, timeRange } from "./words.js";
 
 /**
@@ -13,24 +14,14 @@ import { dayWords, KIND_OF, KINDS, timeRange } from "./words.js";
  * owner's favourite block): a row per day of the period, a bar per shift
  * (lighter where it paused), a bead per sale — the bigger, the more money; a
  * hollow bead also counts for a colleague; a thin line is work outside a
- * shift. A bar opens that shift's review. Hover or focus tells the numbers.
+ * shift. Only the hours that hold work are drawn. A bar opens that shift's
+ * review (the owner's). Hover or focus tells the numbers.
  */
 
-const DAY_MINUTES = 1440;
-const MARKS = Array.from({ length: 24 / RIBBON_STEP_HOURS + 1 }, (_, index) => index * RIBBON_STEP_HOURS * 60);
-
 type Target = { kind: "shift"; shift: number } | { kind: "sale"; sale: RibbonSale } | { kind: "visit"; visit: number };
-type Hover = Target & { x: number; y: number; below: boolean };
+type Hover = Target & { at: ScreenRect };
 
-function left(minute: number): string {
-  return `${(Math.min(Math.max(minute, 0), DAY_MINUTES) / DAY_MINUTES) * 100}%`;
-}
-
-function width(from: number, to: number): string {
-  return `${(Math.max(to - from, 0) / DAY_MINUTES) * 100}%`;
-}
-
-export function ShiftRibbon({ userId, backLabel, shifts, visits, days, unknownBefore, salesRead, today }: {
+export function ShiftRibbon({ userId, backLabel, shifts, visits, days, unknownBefore, salesRead, today, canOpen }: {
   userId: number;
   /** The review's «←» comes back here under this name. */
   backLabel: string;
@@ -43,67 +34,75 @@ export function ShiftRibbon({ userId, backLabel, shifts, visits, days, unknownBe
   /** Whether the sales (the beads) were read. */
   salesRead: ReadState;
   today: string;
+  /** The viewer may open a shift's review (the owner): bars are links. */
+  canOpen: boolean;
 }) {
   const clock = useMemo(() => ribbonClock(shifts), [shifts]);
   const rows = useMemo(() => ribbonDays(days, shifts, visits, clock), [days, shifts, visits, clock]);
-  const maxSale = useMemo(() => Math.max(0, ...shifts.flatMap((shift) => (shift.saleList ?? []).map((sale) => sale.netMills))), [shifts]);
-  const density = rows.length > 20 ? "dense" : rows.length > 10 ? "medium" : "roomy";
-  const frame = useRef<HTMLDivElement>(null);
-  const [hover, setHover] = useState<Hover | null>(null);
-  const navigate = useNavigate();
-  const location = useLocation();
   const nowAt = Date.now();
   const nowRow = ribbonRowOf(nowAt, clock);
   const nowMinute = (nowAt - ribbonRowStart(nowRow, clock)) / 60_000;
   const live = shifts.some((shift) => shift.ongoing);
+  const view = useMemo(() => ribbonView(rows, live ? [nowMinute] : []), [rows, live, nowMinute]);
+  const span = view.to - view.from;
+  const left = (minute: number) => `${((Math.min(Math.max(minute, view.from), view.to) - view.from) / span) * 100}%`;
+  const width = (from: number, to: number) => `${(Math.max(Math.min(to, view.to) - Math.max(from, view.from), 0) / span) * 100}%`;
+  // The hour marks of the clock (every 3 h) that fall inside the drawn hours; the edges of a narrowed view carry no label.
+  const marks = useMemo(() => {
+    const step = RIBBON_STEP_HOURS * 60;
+    const list: number[] = [];
+    for (let minute = Math.ceil(view.from / step) * step; minute <= view.to; minute += step) list.push(minute);
+    return list;
+  }, [view.from, view.to]);
+  const maxSale = useMemo(() => Math.max(0, ...shifts.flatMap((shift) => (shift.saleList ?? []).map((sale) => sale.netMills))), [shifts]);
+  const density = rows.length > 20 ? "dense" : rows.length > 10 ? "medium" : "roomy";
+  const [hover, setHover] = useState<Hover | null>(null);
+  const navigate = useNavigate();
+  const location = useLocation();
   const hasOverlap = shifts.some((shift) => (shift.saleList ?? []).some((sale) => sale.overlap));
   const kindsShown = KINDS.filter((kind) => shifts.some((shift) => (shift.saleList ?? []).some((sale) => sale.kind === kind.kind)));
 
   const show = (element: HTMLElement, target: Target) => {
-    const box = frame.current?.getBoundingClientRect();
-    const mark = element.getBoundingClientRect();
-    if (!box) return;
-    const y = mark.top - box.top;
-    setHover({ ...target, x: mark.left + mark.width / 2 - box.left, y: y < 120 ? mark.bottom - box.top : y, below: y < 120 });
+    const box = element.getBoundingClientRect();
+    setHover({ ...target, at: { x: box.left, y: box.top, width: box.width, height: box.height } });
   };
   const hoverProps = (target: Target) => ({
     onPointerEnter: (event: ReactPointerEvent<HTMLElement>) => { if (event.pointerType === "mouse") show(event.currentTarget, target); },
+    onPointerLeave: (event: ReactPointerEvent<HTMLElement>) => { if (event.pointerType === "mouse") setHover(null); },
     onFocus: (event: { currentTarget: HTMLElement }) => show(event.currentTarget, target),
     onBlur: () => setHover(null),
   });
   const openShift = (index: number) => {
     const shift = shifts[index];
-    if (!shift) return;
+    if (!shift || !canOpen) return;
     navigate(shiftPath(userId, shift.startedAt, location.search), { state: { back: { to: `${location.pathname}${location.search}`, label: backLabel } } });
   };
 
-  // A tap outside a mark closes its numbers; so does Esc.
+  // A tap outside a mark closes its numbers; so do Esc and a scroll (the hint stands where the mark was).
   useEffect(() => {
     if (hover === null) return;
     const close = (event: globalThis.PointerEvent) => {
       if (!(event.target as Element | null)?.closest?.("[data-ribbon-mark]")) setHover(null);
     };
     const escape = (event: KeyboardEvent) => { if (event.key === "Escape") setHover(null); };
+    const scroll = () => setHover(null);
     document.addEventListener("pointerdown", close);
     document.addEventListener("keydown", escape);
+    window.addEventListener("scroll", scroll, { passive: true });
     return () => {
       document.removeEventListener("pointerdown", close);
       document.removeEventListener("keydown", escape);
+      window.removeEventListener("scroll", scroll);
     };
   }, [hover]);
 
   return (
-    <div
-      className="people-ribbon"
-      data-density={density}
-      ref={frame}
-      onPointerLeave={(event) => { if (event.pointerType === "mouse") setHover(null); }}
-    >
+    <div className="people-ribbon" data-density={density}>
       <div className="people-ribbon__row people-ribbon__head" aria-hidden>
         <span />
         <div className="people-ribbon__hours">
-          {MARKS.map((minute) => (
-            <span key={minute} style={{ left: left(minute) }} data-edge={minute === 0 ? "start" : minute === DAY_MINUTES ? "end" : undefined}>
+          {marks.map((minute) => (
+            <span key={minute} style={{ left: left(minute) }} data-edge={minute === view.from ? "start" : minute === view.to ? "end" : undefined}>
               {String((clock.startHour + minute / 60) % 24).padStart(2, "0")}
             </span>
           ))}
@@ -116,7 +115,7 @@ export function ShiftRibbon({ userId, backLabel, shifts, visits, days, unknownBe
           <li key={row.day} className="people-ribbon__row" data-today={row.day === today || undefined}>
             <span className="people-ribbon__day">{dayWords(row.day)}</span>
             <div className="people-ribbon__track">
-              {MARKS.slice(1, -1).map((minute) => <span key={minute} className="people-ribbon__grid" style={{ left: left(minute) }} />)}
+              {marks.filter((minute) => minute > view.from && minute < view.to).map((minute) => <span key={minute} className="people-ribbon__grid" style={{ left: left(minute) }} />)}
               {row.visits.map((visit) => (
                 <span
                   key={`visit-${visit.visit}`}
@@ -129,7 +128,17 @@ export function ShiftRibbon({ userId, backLabel, shifts, visits, days, unknownBe
               ))}
               {row.pieces.map((piece) => {
                 const shift = shifts[piece.shift]!;
-                const label = `${dayWords(shift.date)}, ${timeRange(shift)}: продажи ${formatMills(shift.salesNetMills)}. Открыть разбор`;
+                const label = `${dayWords(shift.date)}, ${timeRange(shift)}: продажи ${formatMills(shift.salesNetMills)}${canOpen ? ". Открыть разбор" : ""}`;
+                const pauses = piece.pauses.map((pause) => (
+                  <span
+                    key={pause.from}
+                    className="people-ribbon__pause"
+                    style={{
+                      left: `${((pause.from - piece.from) / Math.max(piece.to - piece.from, 1)) * 100}%`,
+                      width: `${((pause.to - pause.from) / Math.max(piece.to - piece.from, 1)) * 100}%`,
+                    }}
+                  />
+                ));
                 return (
                   <span
                     key={`${piece.shift}-${piece.from}`}
@@ -139,19 +148,14 @@ export function ShiftRibbon({ userId, backLabel, shifts, visits, days, unknownBe
                     data-ribbon-mark
                     {...hoverProps({ kind: "shift", shift: piece.shift })}
                   >
-                    <ShiftLink userId={userId} startedAt={shift.startedAt} backLabel={backLabel} className="people-ribbon__shift">
-                      <span className="ui-sr-only">{label}</span>
-                      {piece.pauses.map((pause) => (
-                        <span
-                          key={pause.from}
-                          className="people-ribbon__pause"
-                          style={{
-                            left: `${((pause.from - piece.from) / Math.max(piece.to - piece.from, 1)) * 100}%`,
-                            width: `${((pause.to - pause.from) / Math.max(piece.to - piece.from, 1)) * 100}%`,
-                          }}
-                        />
-                      ))}
-                    </ShiftLink>
+                    {canOpen ? (
+                      <ShiftLink userId={userId} startedAt={shift.startedAt} backLabel={backLabel} className="people-ribbon__shift">
+                        <span className="ui-sr-only">{label}</span>
+                        {pauses}
+                      </ShiftLink>
+                    ) : (
+                      <span className="people-ribbon__shift" tabIndex={0} aria-label={label}>{pauses}</span>
+                    )}
                   </span>
                 );
               })}
@@ -162,6 +166,7 @@ export function ShiftRibbon({ userId, backLabel, shifts, visits, days, unknownBe
                     key={`${sale.at}-${index}`}
                     className="people-ribbon__sale"
                     data-overlap={sale.overlap || undefined}
+                    data-open={canOpen || undefined}
                     data-ribbon-mark
                     style={{ left: left(sale.minute), ["--bead" as string]: `${size}px`, ["--kind" as string]: KIND_OF[sale.kind].color }}
                     onClick={() => openShift(sale.shift)}
@@ -169,7 +174,9 @@ export function ShiftRibbon({ userId, backLabel, shifts, visits, days, unknownBe
                   />
                 );
               })}
-              {row.day === nowRow && live && <span className="people-ribbon__now" style={{ left: left(nowMinute) }} aria-hidden />}
+              {row.day === nowRow && live && nowMinute >= view.from && nowMinute <= view.to && (
+                <span className="people-ribbon__now" style={{ left: left(nowMinute) }} aria-hidden />
+              )}
             </div>
             <span className="people-ribbon__total">{row.totalMills === null ? "" : <Money mills={row.totalMills} />}</span>
           </li>
@@ -192,7 +199,7 @@ export function ShiftRibbon({ userId, backLabel, shifts, visits, days, unknownBe
           )}
           <li>
             <span aria-hidden className="people-ribbon__key-shift"><span /></span>
-            смена, бледнее — пауза
+            смена, светлее — пауза
           </li>
           {visits.length > 0 && (
             <li>
@@ -206,26 +213,33 @@ export function ShiftRibbon({ userId, backLabel, shifts, visits, days, unknownBe
         {unknownBefore && <p className="people-ribbon__note">Раньше {unknownBefore} смены не записывались: расширение начало их считать в этот день.</p>}
       </div>
 
-      {hover && <RibbonTip hover={hover} shifts={shifts} visits={visits} />}
+      <Tooltip at={hover?.at ?? null} content={hover ? <RibbonTip hover={hover} shifts={shifts} visits={visits} canOpen={canOpen} /> : null} />
     </div>
   );
 }
 
-function RibbonTip({ hover, shifts, visits }: { hover: Hover; shifts: readonly PersonShift[]; visits: readonly PersonVisit[] }) {
-  const style = { left: hover.x, top: hover.y };
-  const className = `people-ribbon__tip${hover.below ? " people-ribbon__tip--below" : ""}`;
+function TipRow({ name, children }: { name: string; children: ReactNode }) {
+  return (
+    <div className="people-tip__row">
+      <span className="people-tip__name">{name}</span>
+      <span className="people-tip__value">{children}</span>
+    </div>
+  );
+}
+
+function RibbonTip({ hover, shifts, visits, canOpen }: { hover: Hover; shifts: readonly PersonShift[]; visits: readonly PersonVisit[]; canOpen: boolean }) {
   if (hover.kind === "sale") {
     const { sale } = hover;
     const kind = KIND_OF[sale.kind];
     return (
-      <div className={className} style={style} role="status">
-        <div className="people-ribbon__tip-row">
+      <div className="people-tip">
+        <div className="people-tip__row">
           <span aria-hidden className="people-ribbon__key-bead" style={{ background: kind.color }} />
-          <span className="people-ribbon__tip-name">{kind.one}</span>
+          <span className="people-tip__name">{kind.one}</span>
           <Money mills={sale.netMills} strong />
         </div>
-        <div className="people-ribbon__tip-note">{formatTimeOfDay(sale.at)} · {sale.pageLabel}{sale.fanName ? ` · ${sale.fanName}` : ""}</div>
-        {sale.overlap && <div className="people-ribbon__tip-note">Страницу вели двое, этому фану никто из них не писал: продажа видна у обоих.</div>}
+        <div className="people-tip__note">{formatTimeOfDay(sale.at)} · {sale.pageLabel}{sale.fanName ? ` · ${sale.fanName}` : ""}</div>
+        {sale.overlap && <div className="people-tip__note">Страницу вели двое, этому фану никто из них не писал: продажа видна у обоих.</div>}
       </div>
     );
   }
@@ -233,9 +247,9 @@ function RibbonTip({ hover, shifts, visits }: { hover: Hover; shifts: readonly P
     const visit = visits[hover.visit];
     if (!visit) return null;
     return (
-      <div className={className} style={style} role="status">
-        <div className="people-ribbon__tip-title">Работа вне смены, {formatTimeOfDay(visit.startedAt)}–{formatTimeOfDay(visit.endedAt)}</div>
-        <div className="people-ribbon__tip-note">
+      <div className="people-tip">
+        <div className="people-tip__title">Работа вне смены, {formatTimeOfDay(visit.startedAt)}–{formatTimeOfDay(visit.endedAt)}</div>
+        <div className="people-tip__note">
           {formatDuration(visit.workedMinutes)}, {visit.messages} {ruPlural(visit.messages, "сообщение", "сообщения", "сообщений")}. Не смена: в продажи не входит.
         </div>
       </div>
@@ -243,19 +257,21 @@ function RibbonTip({ hover, shifts, visits }: { hover: Hover; shifts: readonly P
   }
   const shift = shifts[hover.shift];
   if (!shift) return null;
+  const numbers = shift.numbers;
   return (
-    <div className={className} style={style} role="status">
-      <div className="people-ribbon__tip-title">{dayWords(shift.date)}, {timeRange(shift)}</div>
-      <div className="people-ribbon__tip-row">
-        <span className="people-ribbon__tip-name">Продажи</span>
-        <Money mills={shift.salesNetMills} strong />
-      </div>
-      <div className="people-ribbon__tip-row">
-        <span className="people-ribbon__tip-name">Работа</span>
-        <span>{formatDuration(shift.workedMinutes)}</span>
-      </div>
-      <div className="people-ribbon__tip-note">{shift.pages.join(", ")}</div>
-      <div className="people-ribbon__tip-hint">Нажмите — откроется разбор смены</div>
+    <div className="people-tip">
+      <div className="people-tip__title">{dayWords(shift.date)}, {timeRange(shift)}</div>
+      <TipRow name="Продажи"><Money mills={shift.salesNetMills} strong /></TipRow>
+      <TipRow name="Отработано">{formatDuration(shift.workedMinutes)}</TipRow>
+      {numbers && (
+        <>
+          <TipRow name={METRICS.reply.label}>{formatReplyMedian(numbers.replyMedianSeconds)}</TipRow>
+          <TipRow name={shift.ongoing ? UNANSWERED_NOW_LABEL : METRICS.unanswered.label}>{formatUnanswered(numbers.unansweredAtEnd)}</TipRow>
+          <TipRow name={METRICS.aiUnedited.label}>{formatAiUnedited(numbers.aiUneditedShare)}</TipRow>
+        </>
+      )}
+      <div className="people-tip__note"><PageLabels labels={shift.pages} max={4} /></div>
+      {canOpen && <div className="people-tip__hint">Нажмите — откроется разбор смены</div>}
     </div>
   );
 }

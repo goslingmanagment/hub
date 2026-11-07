@@ -36,6 +36,8 @@
     --ui-text-2: light-dark(#57534e, #bdb6ad);
     --ui-text-3: light-dark(#736b65, #a1998f);
     --ui-backdrop: light-dark(rgb(28 25 23 / 0.32), rgb(0 0 0 / 0.6));
+    /* Under a side panel: lighter than a window's, the page stays readable. */
+    --ui-veil: light-dark(rgb(28 25 23 / 0.08), rgb(0 0 0 / 0.32));
 
     /* --- The one accent: ink. Three uses only: the main button, the current
        place (menu, tab, selected row, focus), and what waits for the owner. --- */
@@ -73,6 +75,8 @@
     /* An outlier against the team: one calm colour, no grading. */
     --ui-mark-soft: light-dark(#f6eedd, #2d2618);
     --ui-mark-text: light-dark(#6b4c12, #e6c88f);
+    /* A bar worse than the team: the same warmth, never a bright gold in the dark. */
+    --ui-mark-bar: light-dark(#7a5a1f, #9d8458);
 
     /* Chart series (validated as a categorical set in both themes); never a status. */
     --ui-series-1: light-dark(#2f5fb3, #4d86e0);

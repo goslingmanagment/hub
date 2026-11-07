@@ -24,6 +24,8 @@ export default defineConfig(({ mode }) => {
       // The role switch lands on Workboard's home (an anonymous visitor too:
       // Workboard says itself that nobody is signed in).
       home: () => base(),
+      // No console beside it: the sign-in Workboard sends a signed-out visitor to is the demo's own page.
+      signInPage: true,
     })));
   }
 

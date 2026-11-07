@@ -97,6 +97,61 @@ function responseSchema(key: string, status: number): SchemaLike | undefined {
 export interface DemoApiOptions {
   /** Where the role switch lands, by role: the app's own home. The console's by default. */
   home?: (role: DemoRole | "anon") => string;
+  /**
+   * Answer the console's sign-in address (`/login?next=…`) with a demo page of
+   * its own: an app without the console beside it (Workboard) sends a signed-out
+   * visitor there, as in production, and gets a choice of role instead of a 404.
+   */
+  signInPage?: boolean;
+}
+
+/** Only a path of this host: never another origin. */
+function safeNext(value: string | null): string | null {
+  return value !== null && value.startsWith("/") && !value.startsWith("//") ? value : null;
+}
+
+function escapeHtml(text: string): string {
+  return text.replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char] ?? char);
+}
+
+/** The demo's sign-in: who to be, then back to `next`. The design system's tokens by hand (no app loads here). */
+function signInHtml(next: string | null): string {
+  const role = (as: DemoRole) => `/__demo/role?${new URLSearchParams({ as, ...(next === null ? {} : { next }) }).toString()}`;
+  return `<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Вход — демо</title>
+<style>
+  :root { color-scheme: light dark; --bg: #f6f5f3; --surface: #ffffff; --line: #e6e3de; --text: #1c1917; --text-2: #57534e; --fill: #34467b; --fill-hover: #41558d; --hover: #f1efec; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #141211; --surface: #1c1a18; --line: #2f2b28; --text: #ece8e2; --text-2: #bdb6ad; --fill: #4f66ab; --fill-hover: #5d75bd; --hover: #262321; } }
+  * { box-sizing: border-box; }
+  body { margin: 0; min-height: 100dvh; display: grid; place-items: center; padding: 24px 16px; background: var(--bg); color: var(--text);
+    font: 16px/1.5 Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { width: 100%; max-width: 440px; padding: 32px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
+  h1 { margin: 0 0 8px; font-size: 24px; line-height: 32px; font-weight: 600; letter-spacing: -0.015em; }
+  p { margin: 0 0 24px; color: var(--text-2); font-size: 15px; line-height: 22px; }
+  .actions { display: flex; flex-direction: column; gap: 12px; }
+  a.button { display: flex; align-items: center; justify-content: center; height: 44px; border: 1px solid var(--line); border-radius: 8px;
+    color: var(--text); font-size: 15px; font-weight: 500; text-decoration: none; }
+  a.button:hover { background: var(--hover); }
+  a.button.primary { border-color: transparent; background: var(--fill); color: #ffffff; }
+  a.button.primary:hover { background: var(--fill-hover); }
+  a:focus-visible { outline: 2px solid var(--fill); outline-offset: 2px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Вход в демо</h1>
+  <p>Это демо на выдуманном агентстве: настоящих людей и денег здесь нет. В Hub вход общий с консолью; здесь просто выберите, кем войти${next === null ? "" : ", и вы вернётесь туда, откуда пришли"}.</p>
+  <div class="actions">
+    <a class="button primary" href="${escapeHtml(role("owner"))}">Войти как владелец</a>
+    <a class="button" href="${escapeHtml(role("team_lead"))}">Войти как тимлид</a>
+  </div>
+</main>
+</body>
+</html>`;
 }
 
 /** The console's homes: /login for nobody, the cabinet for a chatter, the start otherwise. */
@@ -115,15 +170,24 @@ export function demoApi(options: DemoApiOptions = {}): Plugin {
       server.middlewares.use((request, response, next) => {
         const url = new URL(request.url ?? "/", "http://demo.invalid");
 
-        // `/__demo/role`, also under an app's base (`/workboard/__demo/role`).
+        // `/__demo/role`, also under an app's base (`/workboard/__demo/role`); `next` — back where the visitor was.
         if (url.pathname.endsWith("/__demo/role")) {
           const as = url.searchParams.get("as");
           // `anon`: nobody signed in, so /login and /join can be shown (`me` answers 401).
           const role = as === "anon" ? "anon" : ROLES.find((item) => item === as) ?? "owner";
+          const next = role === "anon" ? null : safeNext(url.searchParams.get("next"));
           response.statusCode = 302;
           response.setHeader("set-cookie", `${ROLE_COOKIE}=${role}; Path=/; SameSite=Lax`);
-          response.setHeader("location", home(role));
+          response.setHeader("location", next ?? home(role));
           response.end();
+          return;
+        }
+
+        if (options.signInPage && (request.method === "GET" || request.method === "HEAD") && url.pathname === "/login") {
+          response.statusCode = 200;
+          response.setHeader("content-type", "text/html; charset=utf-8");
+          response.setHeader("cache-control", "no-store");
+          response.end(signInHtml(safeNext(url.searchParams.get("next"))));
           return;
         }
 

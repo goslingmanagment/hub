@@ -24,6 +24,7 @@ import type { KernelOperationResponse, TeamWinBackApproachSaveBody } from "@agen
 import { millsFromInteger, millsToNumber, sumMills } from "@agency_hub_core/shared";
 import { addDays, daysInRange, type MoscowDay } from "@agency_hub_core/ui/moscow";
 import type { ResolvedPeriod } from "@agency_hub_core/ui/period";
+import { REPLY_FAST_SECONDS, REPLY_NORM_SECONDS } from "@agency_hub_core/ui/shiftReview";
 import { kernel } from "@/shared/hub";
 
 // ---------------------------------------------------------------- The window
@@ -73,7 +74,7 @@ export const MIN_SAMPLE = { ppv: 20, replies: 20, winBack: 10, greetings: 10 } a
 // --------------------------------------------------------------------- Price
 
 export const PRICE_BUCKETS = [
-  { key: "upTo10", label: "до $10" },
+  { key: "upTo10", label: "дешевле $10" },
   { key: "10to25", label: "$10–25" },
   { key: "25to50", label: "$25–50" },
   { key: "50to100", label: "$50–100" },
@@ -142,14 +143,40 @@ export function perMessageMills(counts: PpvCounts): number | null {
   return millsToNumber(millsFromInteger(counts.netMills) / BigInt(counts.sent));
 }
 
-/** The price whose sent PPV brings the most money, among those with a fair sample. Pure. */
+/**
+ * The price whose sent PPV brings the most money, among those with a fair
+ * sample — and only when there are at least two such prices to choose from:
+ * «the best» of one is no news. Pure.
+ */
 export function bestPrice(cells: readonly PpvCell[]): PpvCell | null {
+  const fair = cells.filter((cell) => cell.sent >= MIN_SAMPLE.ppv);
+  if (fair.length < 2) return null;
   let best: PpvCell | null = null;
-  for (const cell of cells) {
-    if (cell.sent < MIN_SAMPLE.ppv) continue;
+  for (const cell of fair) {
     if (best === null || (perMessageMills(cell) ?? 0) > (perMessageMills(best) ?? 0)) best = cell;
   }
   return best !== null && best.bought > 0 ? best : null;
+}
+
+/** A price with too few messages that still shows more money per message than the best: said in words, not drawn. Pure. */
+export function richerSmallPrice(cells: readonly PpvCell[], best: PpvCell | null): PpvCell | null {
+  if (best === null) return null;
+  const bar = perMessageMills(best) ?? 0;
+  let found: PpvCell | null = null;
+  for (const cell of cells) {
+    if (cell.sent === 0 || cell.sent >= MIN_SAMPLE.ppv || cell.bought === 0) continue;
+    const value = perMessageMills(cell) ?? 0;
+    if (value > bar && (found === null || value > (perMessageMills(found) ?? 0))) found = cell;
+  }
+  return found;
+}
+
+/** The first PPV of a chat: the price it is bought most often at, among those with a fair sample (two at least). Pure. */
+export function firstPpvLead(cells: readonly PpvCell[]): PpvCell | null {
+  const fair = cells.filter((cell) => cell.sent >= MIN_SAMPLE.ppv);
+  if (fair.length < 2) return null;
+  const lead = fair.reduce((top, cell) => (cell.bought / cell.sent > top.bought / top.sent ? cell : top));
+  return lead.bought > 0 ? lead : null;
 }
 
 /** The share of PPVs sent at the cheapest price (до $10). Pure. */
@@ -214,8 +241,8 @@ export const DELAY_BUCKETS = [
   { key: "over6h", label: "больше 6 ч" },
 ] as const;
 
-/** The owner's norm of a reply (07.11): 5–10 minutes. */
-export const REPLY_NORM_MINUTES = { from: 5, to: 10 } as const;
+/** The owner's norm of a reply (07.11): 5–10 minutes — the review's own constants. */
+export const REPLY_NORM_MINUTES = { from: REPLY_FAST_SECONDS / 60, to: REPLY_NORM_SECONDS / 60 } as const;
 
 export interface ReplyCounts {
   replies: number;
@@ -323,6 +350,10 @@ export interface WinBackLine {
   name: string;
   /** An approach: whether chatters see it now (null: the viewer may not read the list). A chatter: null. */
   active: boolean | null;
+  /** An approach: its place in the extension's list, 1… (null: the list is not known). */
+  order: number | null;
+  /** An approach as the list has it (for the one write). */
+  approach: Approach | null;
   counts: WinBackCounts;
   /** The other cut: an approach's chatters, a chatter's approaches. */
   parts: WinBackLine[];
@@ -339,7 +370,7 @@ export interface WinBackView {
 type WinBackRow = KernelOperationResponse<"teamWinBackResults">["rows"][number];
 export type Approach = KernelOperationResponse<"teamWinBackApproaches">["approaches"][number];
 
-const NO_COUNTS: WinBackCounts = { attempts: 0, sent: 0, matured72h: 0, replied72h: 0, matured7d: 0, bought7d: 0, matured30d: 0, spent30dMills: 0 };
+export const NO_COUNTS: WinBackCounts = { attempts: 0, sent: 0, matured72h: 0, replied72h: 0, matured7d: 0, bought7d: 0, matured30d: 0, spent30dMills: 0 };
 
 function sumWinBack(rows: ReadonlyArray<WinBackCounts>): WinBackCounts {
   const total = { ...NO_COUNTS };
@@ -374,8 +405,13 @@ export function ripening(counts: WinBackCounts): number {
   return Math.max(0, counts.sent - counts.matured7d);
 }
 
+/**
+ * The results by approach and by chatter. With the owner's list every approach
+ * of it has a row — one nobody picked in the period too (zeros), so the list
+ * and its on/off live in the same table (spec r2) — with its place in the list.
+ */
 export function winBackView(rows: readonly WinBackRow[], approaches: readonly Approach[] | undefined, window: { from: string; to: string }): WinBackView {
-  const activeOf = new Map((approaches ?? []).map((approach) => [approach.id, approach.active]));
+  const listed = new Map((approaches ?? []).map((approach, index) => [approach.id, { approach, order: index + 1 }]));
   const group = (kind: "approach" | "chatter"): WinBackLine[] => {
     const byId = new Map<number, WinBackRow[]>();
     for (const row of rows) {
@@ -384,35 +420,64 @@ export function winBackView(rows: readonly WinBackRow[], approaches: readonly Ap
       if (list) list.push(row);
       else byId.set(id, [row]);
     }
-    return [...byId.entries()].map(([id, own]) => {
+    const lines: WinBackLine[] = [...byId.entries()].map(([id, own]) => {
       const first = own[0]!;
+      const known = kind === "approach" ? listed.get(id) : undefined;
       return {
         key: `${kind}:${id}`,
         kind,
         id,
-        name: kind === "approach" ? first.approach : first.username,
-        active: kind === "approach" ? activeOf.get(id) ?? null : null,
+        name: kind === "approach" ? known?.approach.label ?? first.approach : first.username,
+        active: known ? known.approach.active : null,
+        order: known?.order ?? null,
+        approach: known?.approach ?? null,
         counts: sumWinBack(own.map(countsOf)),
-        parts: own.map((row) => ({
-          key: kind === "approach" ? `chatter:${row.userId}` : `approach:${row.approachId}`,
-          kind: kind === "approach" ? "chatter" as const : "approach" as const,
-          id: kind === "approach" ? row.userId : row.approachId,
-          name: kind === "approach" ? row.username : row.approach,
-          active: kind === "approach" ? null : activeOf.get(row.approachId) ?? null,
-          counts: countsOf(row),
-          parts: [],
-        })),
+        parts: own.map((row) => {
+          const part = kind === "approach" ? undefined : listed.get(row.approachId);
+          return {
+            key: kind === "approach" ? `chatter:${row.userId}` : `approach:${row.approachId}`,
+            kind: kind === "approach" ? "chatter" as const : "approach" as const,
+            id: kind === "approach" ? row.userId : row.approachId,
+            name: kind === "approach" ? row.username : part?.approach.label ?? row.approach,
+            active: part ? part.approach.active : null,
+            order: part?.order ?? null,
+            approach: part?.approach ?? null,
+            counts: countsOf(row),
+            parts: [],
+          };
+        }),
       };
     });
+    if (kind === "approach") {
+      for (const [id, { approach, order }] of listed) {
+        if (byId.has(id)) continue;
+        lines.push({ key: `approach:${id}`, kind, id, name: approach.label, active: approach.active, order, approach, counts: { ...NO_COUNTS }, parts: [] });
+      }
+    }
+    return lines;
   };
   return { from: window.from, to: window.to, all: sumWinBack(rows.map(countsOf)), approaches: group("approach"), chatters: group("chatter") };
 }
 
-export function useWinBackResults(days: number) {
+/**
+ * The last week whose purchases are counted (spec r2, D9): a 14-day read up to
+ * today has every attempt older than 7 days matured — those written 7–13 days
+ * ago, about one calendar week back. Pure.
+ */
+export function maturedWeek(rows: readonly WinBackRow[], today: MoscowDay): { from: MoscowDay; to: MoscowDay; bought7d: number; matured7d: number } {
+  const total = sumWinBack(rows.map(countsOf));
+  return { from: addDays(today, -(LAST_MATURED_DAYS - 1)), to: addDays(today, -7), bought7d: total.bought7d, matured7d: total.matured7d };
+}
+
+/** The read behind «the last matured week». */
+export const LAST_MATURED_DAYS = 14;
+
+export function useWinBackResults(days: number, enabled = true) {
   return useQuery({
     queryKey: ["sales", "win-back", days],
     queryFn: () => kernel.teamWinBackResults({ query: { days } }),
     placeholderData: keepPreviousData,
+    enabled,
   });
 }
 

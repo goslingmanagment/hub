@@ -160,3 +160,34 @@ export function beadSize(netMills: number, maxMills: number, density: "roomy" | 
   if (maxMills <= 0) return low;
   return low + Math.sqrt(Math.max(0, netMills) / maxMills) * (high - low);
 }
+
+/** The part of the clock the ribbon draws, minutes from a row's start: [from, to). */
+export interface RibbonView {
+  from: number;
+  to: number;
+}
+
+/** A day of work fits this many hours: then the ribbon draws only them (and an hour around), not the empty night. */
+const NARROW_MAX_HOURS = 18;
+
+/**
+ * The hours worth drawing (Р4): when every shift and visit lies within
+ * 18 hours of the clock, from the whole hour before the first minute (half an
+ * hour of air at least) to the whole hour after the last; else the whole day.
+ * A shift going on is drawn up to now.
+ */
+export function ribbonView(rows: readonly RibbonDay[], extra: readonly number[] = []): RibbonView {
+  const whole = { from: 0, to: DAY_MINUTES };
+  const edges = [
+    ...rows.flatMap((row) => row.pieces.flatMap((piece) => [piece.from, piece.to])),
+    ...rows.flatMap((row) => row.visits.flatMap((visit) => [visit.from, visit.to])),
+    ...extra,
+  ];
+  if (edges.length === 0) return whole;
+  const first = Math.min(...edges);
+  const last = Math.max(...edges);
+  if (last - first > NARROW_MAX_HOURS * 60) return whole;
+  const from = Math.max(0, Math.floor((first - 30) / 60) * 60);
+  const to = Math.min(DAY_MINUTES, Math.ceil((last + 30) / 60) * 60);
+  return to - from >= DAY_MINUTES - RIBBON_STEP_HOURS * 60 ? whole : { from, to };
+}

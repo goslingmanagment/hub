@@ -1,30 +1,34 @@
 import { ArrowLeft, Banknote, CalendarClock, Inbox, KeyRound, LogOut, Monitor, Moon, Sun, TrendingUp, Users } from "lucide-react";
 import { Suspense, type ReactNode } from "react";
-import { NavLink, Outlet, useLocation } from "react-router";
+import { NavLink, Navigate, Outlet, useLocation } from "react-router";
 import { CountBadge, ErrorState, Menu, Skeleton, type IconComponent } from "@agency_hub_core/ui";
 import { THEME_OPTIONS, useThemeStore, type ThemePreference } from "@agency_hub_core/ui/theme";
 import { kernel, queryClient, signInHref } from "@/shared/hub";
 import { carryParams } from "@/shared/links";
 import { useDecisionCounts } from "@/shared/decisions";
 import { useMe } from "@/shared/useMe";
+import { useRestoredPeriod } from "@/shared/usePeriod";
 import { ErrorBoundary } from "./ErrorBoundary.js";
 
 interface NavItem {
   to: string;
   label: string;
   icon: IconComponent;
-  /** Carries the period and the page filter (screens about the same dates). */
-  carry?: boolean;
   ownerOnly?: boolean;
 }
 
-/** The sidebar, by work (spec §3). Labels are final unless the owner renames them. */
+/**
+ * The sidebar, by work (spec §3). Labels are final unless the owner renames
+ * them. Every item carries the period and the page filter (spec §3 r2, D3): a
+ * screen that does not need them keeps them in its address and does not show
+ * them, so the next screen opens on the same dates.
+ */
 const WORK: readonly NavItem[] = [
-  { to: "/shifts", label: "Смены", icon: CalendarClock, carry: true },
-  { to: "/people", label: "Люди", icon: Users, carry: true },
-  { to: "/sales", label: "Что продаёт", icon: TrendingUp, carry: true },
+  { to: "/shifts", label: "Смены", icon: CalendarClock },
+  { to: "/people", label: "Люди", icon: Users },
+  { to: "/sales", label: "Что продаёт", icon: TrendingUp },
   { to: "/decisions", label: "Решения", icon: Inbox },
-  { to: "/payouts", label: "Выплаты", icon: Banknote, carry: true },
+  { to: "/payouts", label: "Выплаты", icon: Banknote },
 ];
 
 const ADMIN: readonly NavItem[] = [
@@ -50,7 +54,7 @@ function Brand() {
 
 function NavRow({ item, end }: { item: NavItem; end?: ReactNode }) {
   const location = useLocation();
-  const search = item.carry ? carryParams(location.search).toString() : "";
+  const search = carryParams(location.search).toString();
   const Icon = item.icon;
   return (
     <NavLink to={{ pathname: item.to, search: search ? `?${search}` : "" }} className="wb-nav__item">
@@ -63,7 +67,8 @@ function NavRow({ item, end }: { item: NavItem; end?: ReactNode }) {
 
 function DecisionsCount() {
   const counts = useDecisionCounts();
-  if (counts.total === 0) return null;
+  // While a queue is still read, no number at all: never a partial sum that grows a moment later.
+  if (!counts.settled || counts.total === 0) return null;
   const parts = [
     counts.disputes ? `споры: ${counts.disputes}` : null,
     counts.customs ? `кастомы: ${counts.customs}` : null,
@@ -133,6 +138,8 @@ export function ScreenFallback() {
 export function Shell() {
   const { isOwner } = useMe();
   const location = useLocation();
+  // A bare address opens the period last used in this tab (D3); the address then says it.
+  const restored = useRestoredPeriod();
   return (
     <div className="wb-app">
       <aside className="wb-side">
@@ -153,11 +160,15 @@ export function Shell() {
         </div>
       </aside>
       <main className="wb-main">
-        <ErrorBoundary key={location.pathname} fallback={<div className="wb-content"><ErrorState title="Не удалось открыть экран" onRetry={() => window.location.reload()}>Что-то сломалось в самом экране. Перезагрузка обычно помогает; данные в Hub не тронуты.</ErrorState></div>}>
-          <Suspense fallback={<ScreenFallback />}>
-            <Outlet />
-          </Suspense>
-        </ErrorBoundary>
+        {restored !== null ? (
+          <Navigate replace to={{ pathname: location.pathname, search: restored, hash: location.hash }} state={location.state as unknown} />
+        ) : (
+          <ErrorBoundary key={location.pathname} fallback={<div className="wb-content"><ErrorState title="Не удалось открыть экран" onRetry={() => window.location.reload()}>Что-то сломалось в самом экране. Перезагрузка обычно помогает; данные в Hub не тронуты.</ErrorState></div>}>
+            <Suspense fallback={<ScreenFallback />}>
+              <Outlet />
+            </Suspense>
+          </ErrorBoundary>
+        )}
       </main>
     </div>
   );

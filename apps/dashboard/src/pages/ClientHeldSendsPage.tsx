@@ -27,10 +27,12 @@ import {
   heldCountLabel,
   heldSendRows,
   heldSendsPageLabels,
+  messageIdLabel,
   notSentWarning,
   parseHeldSendsView,
   resolveFailure,
   resolveForm,
+  resolveIntro,
   resolvedSendRows,
   sentOutcomeHint,
   shortId,
@@ -207,9 +209,11 @@ function SummaryLine({ label, children }: { label: string; children: ReactNode }
  * The mutation is the page's, not the dialog's: a dialog-owned one would drop
  * its answer if the dialog closed while the hub was still recording.
  */
-export function ResolveSendDialog({ item, serverNow, isPending, failure, onSubmit, onClose, initialDraft = EMPTY_RESOLVE_DRAFT }: {
+export function ResolveSendDialog({ item, serverNow, platform = "onlyfans", isPending, failure, onSubmit, onClose, initialDraft = EMPTY_RESOLVE_DRAFT }: {
   item: ClientSendCustodyListItem;
   serverNow: string;
+  /** The platform of the send's page: the words name it (a Fansly send says Fansly). OnlyFans by default. */
+  platform?: string | null;
   isPending: boolean;
   failure: ResolveFailure | null;
   onSubmit: (draft: ResolveDraft) => void;
@@ -260,11 +264,7 @@ export function ResolveSendDialog({ item, serverNow, isPending, failure, onSubmi
           </SummaryLine>
         </dl>
 
-        <p className="text-xs text-text-secondary">
-          Расширение отправило это сообщение из превью и не сообщило, чем кончилось. Hub не знает, ушло ли оно,
-          и сам не узнает. Откройте чат с этим фаном там, где вы работаете с OnlyFans, и найдите исходящее сообщение
-          около указанного времени. На этой странице текста нет: Hub не знает, какой текст ушёл, это знает сотрудник.
-        </p>
+        <p className="text-xs text-text-secondary">{resolveIntro(platform)}</p>
 
         <fieldset disabled={isPending || gone} className="space-y-2">
           <legend className="mb-1 text-sm font-semibold text-text-primary">Что вы увидели в чате</legend>
@@ -298,14 +298,14 @@ export function ResolveSendDialog({ item, serverNow, isPending, failure, onSubmi
           <div role="note" className="notice notice-warning">
             <div>
               <p className="font-semibold">Проверьте, прежде чем записать «не ушло»</p>
-              {notSentWarning(item).map((line) => <p key={line} className="mt-1">{line}</p>)}
+              {notSentWarning(item, platform).map((line) => <p key={line} className="mt-1">{line}</p>)}
             </div>
           </div>
         )}
 
         {draft.outcome === "sent" && (
           <label className="block">
-            <div className="field-label">ID сообщения в OnlyFans, если вы его знаете (необязательно)</div>
+            <div className="field-label">{messageIdLabel(platform)}</div>
             <input
               value={draft.platformMessageId}
               inputMode="numeric"
@@ -553,6 +553,7 @@ export function ClientHeldSendsPage() {
           key={resolving.item.attemptId}
           item={resolving.item}
           serverNow={resolving.serverNow}
+          platform={pages.find((page) => page.label === resolving.item.pageLabel)?.platform ?? null}
           isPending={resolve.isPending}
           failure={failure}
           onSubmit={submit}

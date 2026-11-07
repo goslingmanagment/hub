@@ -1,7 +1,7 @@
 import { CircleCheck } from "lucide-react";
-import { useRef } from "react";
+import { Fragment, useEffect, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { useSearchParams } from "react-router";
+import { useLocation, useNavigate, useSearchParams } from "react-router";
 import { Button, EmptyState, ErrorState, Notice, Section, Skeleton, Table, type Column } from "@agency_hub_core/ui";
 import { ruPlural } from "@agency_hub_core/ui/plural";
 import { kernel } from "@/shared/hub";
@@ -26,6 +26,8 @@ export function DecisionsScreen() {
   const { isOwner, role } = useMe();
   const { page, setPage } = usePageFilter();
   const [search, setSearch] = useSearchParams();
+  const location = useLocation();
+  const navigate = useNavigate();
   const pages = usePages();
   const decisions = useDecisions({ owner: isOwner, page });
   const { view } = decisions;
@@ -75,12 +77,27 @@ export function DecisionsScreen() {
   const waiting = counts.disputes + counts.customs + counts.held;
   const elsewhere = (view.disputes?.elsewhere ?? 0) + (view.customs?.elsewhere ?? 0) + (view.held?.elsewhere ?? 0);
 
+  // The header's line is the screen's contents: each part jumps to its section (Р2, Р5).
   const parts = [
-    counts.disputes > 0 && `${counts.disputes} ${ruPlural(counts.disputes, "спор", "спора", "споров")}`,
-    counts.customs > 0 && `${counts.customs} ${ruPlural(counts.customs, "кастом оплачен и не отдан", "кастома оплачены и не отданы", "кастомов оплачены и не отданы")}`,
-    counts.held > 0 && `${counts.held} ${ruPlural(counts.held, "зависшая отправка", "зависшие отправки", "зависших отправок")}`,
-  ].filter(Boolean);
+    counts.disputes > 0 && { id: "disputes", text: `${counts.disputes} ${ruPlural(counts.disputes, "спор", "спора", "споров")}` },
+    counts.customs > 0 && { id: "customs", text: `${counts.customs} ${ruPlural(counts.customs, "кастом оплачен и не отдан", "кастома оплачены и не отданы", "кастомов оплачены и не отданы")}` },
+    counts.held > 0 && { id: "held", text: `${counts.held} ${ruPlural(counts.held, "зависшая отправка", "зависшие отправки", "зависших отправок")}` },
+  ].filter((part) => part !== false);
   const unanswered = [failed.disputes && "споры", failed.customs && "кастомы", failed.held && "отправки"].filter(Boolean);
+
+  // A link with an anchor (`/decisions#held`, the «Ждут решения» line of Смены) lands on its section once the
+  // queues have answered: before that the section is not there yet. The sticky header is minded by scroll-margin.
+  const jumped = useRef<string | null>(null);
+  useEffect(() => {
+    const id = location.hash.slice(1);
+    if (decisions.loading || id === "" || jumped.current === location.key) return;
+    const target = document.getElementById(id);
+    if (!target) return;
+    const arriving = jumped.current === null;
+    jumped.current = location.key;
+    target.scrollIntoView({ block: "start", behavior: arriving ? "auto" : "smooth" });
+  }, [decisions.loading, location.hash, location.key]);
+  const jump = (id: string) => navigate({ search: location.search, hash: id }, { replace: true });
 
   const header = (
     <ScreenHeader
@@ -88,7 +105,26 @@ export function DecisionsScreen() {
       pageFilter
       meta={decisions.loading ? <Skeleton width={260} /> : (
         <>
-          {waiting > 0 && <>Ждут вашего решения: {parts.join(" · ")}</>}
+          {waiting > 0 && (
+            <>
+              Ждут вашего решения:{" "}
+              {parts.map((part, index) => (
+                <Fragment key={part.id}>
+                  {index > 0 && " · "}
+                  <a
+                    href={`#${part.id}`}
+                    className="decisions-jump"
+                    onClick={(event) => {
+                      event.preventDefault();
+                      jump(part.id);
+                    }}
+                  >
+                    {part.text}
+                  </a>
+                </Fragment>
+              ))}
+            </>
+          )}
           {unanswered.length > 0 && <>{waiting > 0 ? " · " : ""}не пришли: {unanswered.join(", ")}</>}
         </>
       )}
@@ -112,7 +148,7 @@ export function DecisionsScreen() {
 
         {decisions.loading ? (
           <Section title={<Skeleton width={220} height={24} />}>
-            <Table label="Решения загружаются" columns={SKELETON_COLUMNS} rows={[]} rowKey={() => ""} loading skeletonRows={3} />
+            <Table label="Решения загружаются" columns={SKELETON_COLUMNS} rows={[]} rowKey={() => ""} loading skeletonRows={3} skeletonLines={2} />
           </Section>
         ) : (
           <>
@@ -196,9 +232,9 @@ export function DecisionsScreen() {
 
 /** The skeleton of a queue: the shape of its rows before the first answer. */
 const SKELETON_COLUMNS: Column<never>[] = [
-  { key: "fan", header: "Фан", width: 240, cell: () => null },
+  { key: "when", header: "Когда", width: 170, cell: () => null },
+  { key: "sum", header: "Сумма", numeric: true, width: 120, cell: () => null },
+  { key: "fan", header: "Фан", width: 260, cell: () => null },
   { key: "what", header: "Что", cell: () => null },
-  { key: "who", header: "Кто", width: 200, cell: () => null },
-  { key: "when", header: "Когда", width: 200, cell: () => null },
-  { key: "sum", header: "Сумма", numeric: true, width: 140, cell: () => null },
+  { key: "go", header: "", width: 44, cell: () => null },
 ];

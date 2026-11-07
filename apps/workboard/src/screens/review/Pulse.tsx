@@ -1,24 +1,28 @@
+import { X } from "lucide-react";
 import { useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { Tooltip, type ScreenRect } from "@agency_hub_core/ui";
 import { formatCount, formatDuration, formatMills, formatTimeOfDay } from "@agency_hub_core/ui/format";
 import { ruPlural } from "@agency_hub_core/ui/plural";
 import type { PulseMinute, ReviewSale, Silence } from "./data.js";
-import { PICK_MINUTES, REPLY_NORM_SECONDS, type ActivityState } from "./rules.js";
+import { PICK_MINUTES, REPLY_NORM_SECONDS, type ActivityState } from "@agency_hub_core/ui/shiftReview";
 
 /**
  * The shift's pulse (spec §4.2): one thin strip of its minutes right above the
- * chats. Up — the chatter's messages; down — their fans waiting for an answer,
- * darker past the 10-minute norm; dots — money (a paid message bought, a tip);
- * grey bands — pauses; the line between — the extension: solid while the
- * chatter acted in it, faint while it was only open, none while closed. A click
- * picks ±10 minutes, a drag picks a span: the chats below narrow to it.
+ * chats, 88 px with its legend and hours. Up — the chatter's messages; down —
+ * their fans waiting for an answer, darker past the 10-minute norm; dots —
+ * money (a paid message bought, a tip); grey bands — pauses; the line between —
+ * the extension: solid while the chatter acted in it, faint while it was only
+ * open, none while closed. The minutes under the pointer are read in a hint by
+ * them. A click picks ±10 minutes, a drag picks a span: the chats below narrow
+ * to it, and the legend's line says so with a way back to the whole shift.
  */
 
 const MINUTE_MS = 60_000;
-const UP = 30;
-const DOWN = 24;
+const UP = 22;
+const DOWN = 18;
 const BASE = 3;
 const PLOT = UP + BASE + DOWN;
-const AXIS = 18;
+const AXIS = 15;
 /** At most this many columns: a column is 1, 2, 3, 5, 10 or 15 minutes. */
 const MAX_COLUMNS = 150;
 
@@ -93,7 +97,7 @@ function useWidth<T extends HTMLElement>(): [React.RefObject<T | null>, number] 
   return [ref, width];
 }
 
-function Readout({ column, ongoing }: { column: Column; ongoing: boolean }) {
+function readout(column: Column, ongoing: boolean): string {
   const parts: string[] = [`${formatTimeOfDay(column.from)}–${formatTimeOfDay(column.to)}`];
   if (column.pause) parts.push("пауза");
   parts.push(`${formatCount(column.sent)} ${ruPlural(column.sent, "сообщение", "сообщения", "сообщений")}`);
@@ -102,22 +106,23 @@ function Readout({ column, ongoing }: { column: Column; ongoing: boolean }) {
   } else parts.push("никто не ждал");
   if (column.sales > 0) parts.push(`${column.sales === 1 ? "покупка" : "покупки"} ${formatMills(column.saleMills)}`);
   if (!column.pause) parts.push(ACTIVITY_WORDS[column.activity]);
-  return <span className="review-pulse__readout">{parts.join(" · ")}</span>;
+  return parts.join(" · ");
 }
 
 function Legend() {
   return (
     <span className="review-pulse__legend" aria-hidden>
-      <span><i className="review-key review-key--sent" />сообщения чаттера</span>
+      <span><i className="review-key review-key--sent" />сообщения</span>
       <span><i className="review-key review-key--wait" />ждут ответа</span>
       <span><i className="review-key review-key--long" />дольше {REPLY_NORM_SECONDS / 60} мин</span>
       <span><i className="review-key review-key--sale" />покупка</span>
       <span><i className="review-key review-key--pause" />пауза</span>
+      <span><i className="review-key review-key--on" />в расширении</span>
     </span>
   );
 }
 
-export function Pulse({ minutes, sales, pauses, start, end, ongoing, span, silences, onSpan }: {
+export function Pulse({ minutes, sales, pauses, start, end, ongoing, span, silences, scope, onSpan }: {
   minutes: readonly PulseMinute[];
   sales: readonly ReviewSale[];
   pauses: ReadonlyArray<{ from: number; to: number }>;
@@ -127,11 +132,14 @@ export function Pulse({ minutes, sales, pauses, start, end, ongoing, span, silen
   /** The picked span, ms. */
   span: { from: number; to: number } | null;
   silences: readonly Silence[];
+  /** The chats are narrowed to a page, the facts and the pulse are not: said in quiet words, the detail on hover. */
+  scope: { words: string; hint: string } | null;
   onSpan: (span: { from: number; to: number } | null) => void;
 }) {
   const [box, width] = useWidth<HTMLDivElement>();
   const { columns } = useMemo(() => columnsOf(minutes, sales, pauses, start, end), [minutes, sales, pauses, start, end]);
-  const [hover, setHover] = useState<number | null>(null);
+  // The hovered column and where it stands in the window, for the hint over it.
+  const [hover, setHover] = useState<{ index: number; at: ScreenRect } | null>(null);
   const [drag, setDrag] = useState<{ anchor: number; at: number } | null>(null);
 
   const duration = Math.max(MINUTE_MS, end - start);
@@ -161,32 +169,41 @@ export function Pulse({ minutes, sales, pauses, start, end, ongoing, span, silen
   };
 
   const shown = drag ? { from: Math.min(drag.anchor, drag.at), to: Math.max(drag.anchor, drag.at) } : span;
-  const hovered = hover === null ? null : columns[hover] ?? null;
+  const hovered = hover === null ? null : columns[hover.index] ?? null;
 
   return (
     <section className="review-pulse" aria-label="Пульс смены">
       <div className="review-pulse__caption">
-        {hovered ? <Readout column={hovered} ongoing={ongoing} /> : <Legend />}
-        {!hovered && silences.length === 0 && <span className="review-pulse__hint">Нажмите или протяните по полосе — чаты этого времени</span>}
-        {!hovered && silences.length > 0 && (
-          <span className="review-pulse__silences">
-            Тишина:{" "}
-            {silences.map((one, index) => (
-              <span key={one.from}>
-                {index > 0 && " · "}
-                <button
-                  type="button"
-                  className="review-linkish"
-                  title={`Без сообщений ${formatDuration(one.minutes)}${one.pauseMinutes > 0 ? `, из них пауза ${formatDuration(one.pauseMinutes)}` : ""}: показать чаты этого времени`}
-                  onClick={() => onSpan({ from: one.from, to: one.to })}
-                >
-                  {formatTimeOfDay(one.from)}, {formatDuration(one.minutes - one.pauseMinutes)}
-                </button>
-              </span>
-            ))}
-          </span>
-        )}
+        <Legend />
+        <span className="review-pulse__side">
+          {scope && <Tooltip content={scope.hint} align="end"><span className="review-pulse__scope">{scope.words}</span></Tooltip>}
+          {span ? (
+            <span className="review-pulse__picked">
+              Чаты {formatTimeOfDay(span.from)}–{formatTimeOfDay(span.to)}
+              <button type="button" className="review-linkish review-pulse__clear" onClick={() => onSpan(null)}>
+                <X size={14} strokeWidth={2} aria-hidden />вся смена
+              </button>
+            </span>
+          ) : silences.length === 0 ? (
+            !scope && <span className="review-pulse__hint">Нажмите или протяните по полосе — чаты этого времени</span>
+          ) : (
+            <span className="review-pulse__silences">
+              Тишина:{" "}
+              {silences.map((one, index) => (
+                <span key={one.from}>
+                  {index > 0 && " · "}
+                  <Tooltip content={`Без сообщений ${formatDuration(one.minutes)}${one.pauseMinutes > 0 ? `, из них пауза ${formatDuration(one.pauseMinutes)}` : ""}: показать чаты этого времени`}>
+                    <button type="button" className="review-linkish" onClick={() => onSpan({ from: one.from, to: one.to })}>
+                      {formatTimeOfDay(one.from)}, {formatDuration(one.minutes - one.pauseMinutes)}
+                    </button>
+                  </Tooltip>
+                </span>
+              ))}
+            </span>
+          )}
+        </span>
       </div>
+      <Tooltip at={hovered && !drag ? hover!.at : null} content={hovered ? readout(hovered, ongoing) : null} />
       <div ref={box} className="review-pulse__plot">
         {width > 0 && (
           <svg width={width} height={PLOT + AXIS} role="img" aria-label="Минуты смены: сообщения чаттера, ждущие ответа фаны, покупки, паузы">
@@ -208,7 +225,7 @@ export function Pulse({ minutes, sales, pauses, start, end, ongoing, span, silen
               const down = column.waiting === 0 ? 0 : Math.max(2, (column.waiting / maxWait) * DOWN);
               const long = column.long === 0 ? 0 : Math.max(2, (column.long / maxWait) * DOWN);
               return (
-                <g key={column.from} className={hover === index ? "review-pulse__col is-hover" : "review-pulse__col"}>
+                <g key={column.from} className={hover?.index === index ? "review-pulse__col is-hover" : "review-pulse__col"}>
                   {up > 0 && <rect className="review-pulse__sent" x={left} y={UP - up} width={w} height={up} rx={1} />}
                   {down > 0 && <rect className="review-pulse__wait" x={left} y={UP + BASE} width={w} height={down} rx={1} />}
                   {long > 0 && <rect className="review-pulse__long" x={left} y={UP + BASE} width={w} height={long} rx={1} />}
@@ -221,12 +238,12 @@ export function Pulse({ minutes, sales, pauses, start, end, ongoing, span, silen
             {sales.map((sale, index) => (
               <circle key={`${sale.at}-${index}`} className="review-pulse__sale" cx={x(sale.at)} cy={4} r={3.5} />
             ))}
-            {hover !== null && columns[hover] && (
-              <line className="review-pulse__cursor" x1={x((columns[hover].from + columns[hover].to) / 2)} x2={x((columns[hover].from + columns[hover].to) / 2)} y1={0} y2={PLOT} />
+            {hovered && (
+              <line className="review-pulse__cursor" x1={x((hovered.from + hovered.to) / 2)} x2={x((hovered.from + hovered.to) / 2)} y1={0} y2={PLOT} />
             )}
             {ticks.map((tick) => (
               <g key={tick}>
-                <line className="review-pulse__tick" x1={x(tick)} x2={x(tick)} y1={PLOT} y2={PLOT + 4} />
+                <line className="review-pulse__tick" x1={x(tick)} x2={x(tick)} y1={PLOT} y2={PLOT + 3} />
                 <text className="review-pulse__hour" x={Math.min(Math.max(x(tick), 18), width - 18)} y={PLOT + AXIS - 2} textAnchor="middle">{formatTimeOfDay(tick)}</text>
               </g>
             ))}
@@ -238,7 +255,10 @@ export function Pulse({ minutes, sales, pauses, start, end, ongoing, span, silen
               height={PLOT}
               onPointerMove={(event) => {
                 const px = pointerX(event);
-                setHover(columnAt(px));
+                const index = columnAt(px);
+                const column = columns[index];
+                const plot = event.currentTarget.getBoundingClientRect();
+                if (column) setHover({ index, at: { x: plot.left + x(column.from), y: plot.top, width: Math.max(2, x(column.to) - x(column.from)), height: PLOT } });
                 if (drag) setDrag({ ...drag, at: atOf(px) });
               }}
               onPointerLeave={() => setHover(null)}

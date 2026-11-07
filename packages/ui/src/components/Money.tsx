@@ -1,6 +1,8 @@
 import type { MillsLike } from "@agency_hub_core/shared";
 import { formatAiUsd, formatCount, formatMills, formatSignedMills, formatUsdFromCents } from "../format.js";
+import type { ReactNode } from "react";
 import { cx } from "./cx.js";
+import { Tooltip } from "./Tooltip.js";
 
 export interface MoneyProps {
   /** Platform money: integer mills ($0.001), as Hub sends it. */
@@ -15,6 +17,9 @@ export interface MoneyProps {
   strong?: boolean;
   /** Context: the period before, a small sum. */
   muted?: boolean;
+  /** What the sum is, on hover (the app's Tooltip): «после комиссии площадки». */
+  hint?: ReactNode;
+  /** The same as `hint` (kept for old calls). */
   title?: string;
   className?: string;
 }
@@ -23,15 +28,21 @@ export interface MoneyProps {
  * Money as the platforms and the payout sheet write it: «$11,183.60», always the
  * cents, a real minus. No answer is not a zero: null shows «—».
  */
-export function Money({ mills, cents, microUsd, signed = false, strong = false, muted = false, title, className }: MoneyProps) {
+export function Money({ mills, cents, microUsd, signed = false, strong = false, muted = false, hint, title, className }: MoneyProps) {
   let text: string | null = null;
   if (mills !== undefined && mills !== null) text = signed ? formatSignedMills(mills) : formatMills(mills);
   else if (cents !== undefined && cents !== null) text = formatUsdFromCents(cents);
   else if (microUsd !== undefined && microUsd !== null) text = formatAiUsd(microUsd);
+  const words = hint ?? title;
   if (text === null) {
-    return <span title={title ?? "Нет данных"} className={cx("ui-money ui-money--none", className)}>—</span>;
+    // No answer is not a zero; the hint says so only when the screen has nothing better to say.
+    return withHint(<span className={cx("ui-money ui-money--none", className)}>—</span>, words ?? "Нет данных");
   }
-  return <span title={title} className={cx("ui-money", strong && "ui-money--strong", muted && "ui-money--muted", className)}>{text}</span>;
+  return withHint(<span className={cx("ui-money", strong && "ui-money--strong", muted && "ui-money--muted", className)}>{text}</span>, words);
+}
+
+function withHint(node: ReactNode, words: ReactNode): ReactNode {
+  return words === undefined || words === null || words === "" ? node : <Tooltip content={words}>{node}</Tooltip>;
 }
 
 /**

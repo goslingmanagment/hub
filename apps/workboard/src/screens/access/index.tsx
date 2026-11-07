@@ -1,7 +1,8 @@
 import { UserPlus } from "lucide-react";
 import { useState } from "react";
 import { useSearchParams } from "react-router";
-import { Button, Disclosure, Drawer, EmptyState, ErrorState, Notice, Person, SkeletonText, Table, TimeMsk, type Column } from "@agency_hub_core/ui";
+import { Button, Disclosure, Drawer, EmptyState, ErrorState, Notice, Person, Section, SkeletonText, Table, type Column } from "@agency_hub_core/ui";
+import { ruPlural } from "@agency_hub_core/ui/plural";
 import { ROLE_LABEL, teamStatus, type AccessRole } from "@agency_hub_core/ui/teamAccess";
 import { PersonLink } from "@/shared/links";
 import { useMe } from "@/shared/useMe";
@@ -12,6 +13,7 @@ import { AccessMatrix, personHint, personStatus } from "./Matrix";
 import { PersonAccess } from "./PersonAccess";
 import { useAccessPages, useAccessUsers, useCreateInvite, type AdminUser } from "./data";
 import { usePageAccess } from "./pageAccess";
+import { whenWords } from "./when";
 import "./access.css";
 
 /**
@@ -57,14 +59,16 @@ export function AccessScreen() {
   }
 
   const all = (users.data ?? []).filter((user) => !user.deletedAt);
-  const working = all.filter((user) => teamStatus(user) === "active").sort(byRoleThenName);
+  // The owner is not one of the team the matrix gives pages to (D11): the last row, out of «в команде».
+  const owners = all.filter((user) => user.role === "owner" && teamStatus(user) === "active");
+  const working = all.filter((user) => user.role !== "owner" && teamStatus(user) === "active").sort(byRoleThenName);
   const invited = all.filter((user) => teamStatus(user) === "invited").sort(byRoleThenName);
   const disabled = all.filter((user) => teamStatus(user) === "disabled").sort((left, right) => (right.disabledAt ?? "").localeCompare(left.disabledAt ?? ""));
   const selected = Number.isInteger(personId) && personId > 0 ? all.find((user) => user.id === personId) ?? null : null;
 
   const disabledColumns: Column<AdminUser>[] = [
     { key: "who", header: "Человек", cell: (row) => <Person name={row.username} status={personStatus(row)} hint={ROLE_LABEL[row.role as AccessRole] ?? row.role} /> },
-    { key: "when", header: "Доступ отключён", width: 220, nowrap: true, cell: (row) => <TimeMsk at={row.disabledAt} show="datetime-ago" /> },
+    { key: "when", header: "Доступ отключён", width: 220, nowrap: true, cell: (row) => (row.disabledAt ? whenWords(row.disabledAt) : "—") },
     { key: "pages", header: "Сохранённые страницы", cell: (row) => (row.assignedPages.length === 0 ? <span className="text-ink-3">—</span> : row.assignedPages.map((page) => page.label).join(", ")) },
   ];
 
@@ -73,7 +77,13 @@ export function AccessScreen() {
       <ScreenHeader
         title="Доступ"
         actions={<Button variant="primary" icon={UserPlus} onClick={() => setInviting(true)}>Пригласить</Button>}
-        meta={users.data ? <>{working.length} в команде{invited.length > 0 && <> · {invited.length} ждут регистрации</>}{disabled.length > 0 && <> · {disabled.length} отключено</>}</> : <span />}
+        meta={users.data ? (
+          <>
+            {working.length} в команде
+            {invited.length > 0 && <> · {invited.length} {ruPlural(invited.length, "ждёт", "ждут", "ждут")} регистрации</>}
+            {disabled.length > 0 && <> · {disabled.length} {ruPlural(disabled.length, "отключён", "отключены", "отключены")}</>}
+          </>
+        ) : <span />}
         updatedAt={users.dataUpdatedAt}
         onRefresh={() => {
           void users.refetch();
@@ -92,22 +102,22 @@ export function AccessScreen() {
             Пригласите первого человека: он получит ссылку и сам придумает пароль.
           </EmptyState>
         ) : (
-          <section className="access-section" aria-labelledby="access-matrix-title">
-            <header className="access-section__head">
-              <h2 id="access-matrix-title" className="access-section__title">Кто на каких страницах</h2>
-              <p className="access-section__desc">Клетка открывает страницу сразу; снять — после вопроса. Имя открывает ссылки, устройства и отключение.</p>
-            </header>
+          <Section
+            title="Кто на каких страницах"
+            description="Отметка открывает страницу сразу, промах можно отменить в сообщении внизу; снять — после вопроса. Имя открывает ссылки, устройства и отключение."
+          >
             <AccessMatrix
               groups={[
                 { key: "working", title: "В команде", users: working },
                 { key: "invited", title: "Ждут регистрации", users: invited },
               ]}
+              owners={owners}
               pages={pages.data}
               access={access}
               selectedId={selected?.id ?? null}
               onOpenPerson={(id) => openPerson(id)}
             />
-          </section>
+          </Section>
         )}
 
         {disabled.length > 0 && (
@@ -115,6 +125,7 @@ export function AccessScreen() {
             <p className="access-text">Логины и история сохранены. Восстановить доступ можно в панели человека.</p>
             <Table
               label="Отключённые"
+              skeletonLines={2}
               columns={disabledColumns}
               rows={disabled}
               rowKey={(row) => String(row.id)}
@@ -127,8 +138,9 @@ export function AccessScreen() {
 
         <Disclosure summary="Как это работает">
           <p>
-            Страница в матрице — это то, что человек видит в расширении: её чаты и фанов. Отметка открывает страницу сразу; снять страницу или
-            всю модель можно только после вопроса. «Вся» открывает или снимает все страницы модели — каждую отдельным запросом, по очереди.
+            Страница в таблице — это то, что человек видит в расширении: её чаты и фанов. Отметка открывает страницу сразу, а промах можно
+            отменить в сообщении внизу экрана; снять страницу или всю модель можно только после вопроса. «Вся» открывает или снимает все
+            страницы модели — каждую отдельным запросом, по очереди. Владелец видит все страницы и без отметок.
           </p>
           <p>
             Пригласить — один шаг: Hub создаёт аккаунт, открывает выбранные страницы и даёт ссылку, по которой человек сам придумает пароль.
@@ -141,6 +153,8 @@ export function AccessScreen() {
         <Drawer
           open
           onClose={() => openPerson(null)}
+          // The focus lands on the panel itself: a stray Space must not tick a page.
+          initialFocus="box"
           title={<PersonLink userId={selected.id} name={selected.username} status={personStatus(selected)} tab="access" backLabel="Доступ" />}
           subtitle={personHint(selected)}
         >

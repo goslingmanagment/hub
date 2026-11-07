@@ -1,5 +1,5 @@
 import { Check, MoreHorizontal } from "lucide-react";
-import { useCallback, useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { useCallback, useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { Button, IconButton, type ButtonSize, type IconComponent } from "./Button.js";
 import { cx } from "./cx.js";
@@ -37,6 +37,12 @@ export interface MenuProps {
   align?: "start" | "end";
   /** A trigger of one's own: gets the props to spread on a button. */
   renderTrigger?: (props: TriggerProps) => ReactNode;
+  /**
+   * Called when the menu opens and closes: load its items lazily on open
+   * (show a disabled «Загружаем…» item meanwhile — the menu finds its place
+   * again when it grows).
+   */
+  onOpenChange?: (open: boolean) => void;
 }
 
 export interface TriggerProps {
@@ -53,12 +59,23 @@ export interface TriggerProps {
  * action, the rest wait here. Arrows move, Enter picks, Escape closes and gives
  * the focus back. Dangerous actions are red and still ask before they run.
  */
-export function Menu({ items, label = "Ещё", trigger = "icon", triggerIcon = MoreHorizontal, size = "md", align = "end", renderTrigger }: MenuProps) {
-  const [open, setOpen] = useState(false);
+export function Menu({ items, label = "Ещё", trigger = "icon", triggerIcon = MoreHorizontal, size = "md", align = "end", renderTrigger, onOpenChange }: MenuProps) {
+  const [open, setOpenState] = useState(false);
+  const openRef = useRef(false);
+  const openChange = useRef(onOpenChange);
+  useLayoutEffect(() => {
+    openChange.current = onOpenChange;
+  });
+  const setOpen = useCallback((next: boolean) => {
+    if (openRef.current === next) return;
+    openRef.current = next;
+    setOpenState(next);
+    openChange.current?.(next);
+  }, []);
   const anchor = useRef<HTMLButtonElement | null>(null);
   const box = useRef<HTMLDivElement | null>(null);
   const id = useId();
-  const close = useCallback(() => setOpen(false), []);
+  const close = useCallback(() => setOpen(false), [setOpen]);
   const style = useAnchoredPosition(anchor, box, open, { align });
   useDismiss(open, close, [box, anchor], anchor);
 

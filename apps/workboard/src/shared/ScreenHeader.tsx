@@ -1,10 +1,10 @@
 import { ArrowLeft } from "lucide-react";
 import { useEffect, type ReactNode } from "react";
 import { Link } from "react-router";
-import { PeriodControl } from "@agency_hub_core/ui";
+import { PeriodControl, useFullWindow } from "@agency_hub_core/ui";
 import { Freshness } from "./Freshness.js";
 import type { BackTarget } from "./links.js";
-import { PageFilter } from "./PageFilter.js";
+import { PageFilter, PageFilterSlot } from "./PageFilter.js";
 import { usePeriod } from "./usePeriod.js";
 
 export interface ScreenHeaderProps {
@@ -28,16 +28,25 @@ export interface ScreenHeaderProps {
   refreshing?: boolean;
   /** Below the header line, still above the content: tabs of the screen. */
   tabs?: ReactNode;
+  /**
+   * A working screen that fills the window (Разбор): the frame is the window's
+   * height, the page does not scroll, `.wb-content` takes the rest and the
+   * screen's panes scroll inside it (`useFullWindow` of packages/ui).
+   */
+  fill?: boolean;
 }
 
 /**
  * The header of every screen (spec §3): the title on the left; the screen's
  * one action, the period and the page filter on the right — always in this
- * order, so the filter never moves. The bar sticks while the page scrolls; the
- * dates and «Обновлено …» stand under it.
+ * order, so the filter never moves; a screen with a period and no filter keeps
+ * the filter's place empty, so the period does not move either, whatever the
+ * action left of it. The bar sticks while the page scrolls; the dates and
+ * «Обновлено …» stand under it.
  */
-export function ScreenHeader({ title, documentTitle, back, period = false, pageFilter = false, actions, meta, updatedAt, onRefresh, refreshing, tabs }: ScreenHeaderProps) {
+export function ScreenHeader({ title, documentTitle, back, period = false, pageFilter = false, actions, meta, updatedAt, onRefresh, refreshing, tabs, fill = false }: ScreenHeaderProps) {
   const { spec, period: resolved, today, setPeriod } = usePeriod();
+  useFullWindow(fill);
   const name = documentTitle ?? (typeof title === "string" ? title : undefined);
   useEffect(() => {
     if (name) document.title = `${name} — Workboard`;
@@ -66,7 +75,8 @@ export function ScreenHeader({ title, documentTitle, back, period = false, pageF
           <div className="wb-header__controls">
             {actions}
             {period && <PeriodControl value={spec} today={today} onChange={setPeriod} />}
-            {pageFilter && <PageFilter />}
+            {/* Without a filter its place stays: the period stands where it stands on every screen (С7, D10). */}
+            {pageFilter ? <PageFilter /> : period ? <PageFilterSlot /> : null}
           </div>
         </div>
       </header>

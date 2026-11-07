@@ -1,5 +1,5 @@
-import { useState, type ReactNode } from "react";
-import { Confirm, toast } from "@agency_hub_core/ui";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import { Button, Confirm, toast } from "@agency_hub_core/ui";
 import { ruPlural } from "@agency_hub_core/ui/plural";
 import { useAssignPage, useUnassignPage, type AdminPage } from "./data";
 
@@ -10,7 +10,8 @@ import { useAssignPage, useUnassignPage, type AdminPage } from "./data";
  * goes at once, as the console's «Назначить» did. Removing always asks first
  * (spec §6: «Снять» had no question), and so does a whole model: several
  * pages, one request each, in order, stopping at the first refusal — never
- * repeated by itself.
+ * repeated by itself. A page opened by one press can be taken back from its
+ * toast at once (Д1: a slip in a dense grid), and its cell glows for a moment.
  */
 
 interface Person {
@@ -43,6 +44,8 @@ export interface PageAccess {
   toggleModel: (person: Person, model: { modelName: string; pages: readonly AdminPage[] }, assigned: ReadonlySet<string>) => void;
   /** A request of this person and page is on its way. */
   busy: (personId: number, pageLabel: string) => boolean;
+  /** This person's page changed a moment ago: its cell glows. */
+  recent: (personId: number, pageLabel: string) => boolean;
   /** The question, when one is open: render it once. */
   dialog: ReactNode;
 }
@@ -54,7 +57,18 @@ export function usePageAccess(onChanged?: () => void): PageAccess {
   const [running, setRunning] = useState<ReadonlySet<string>>(new Set());
   const [pending, setPending] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
+  const [glowing, setGlowing] = useState<ReadonlySet<string>>(new Set());
+  const glowTimer = useRef<number | null>(null);
+  useEffect(() => () => {
+    if (glowTimer.current !== null) window.clearTimeout(glowTimer.current);
+  }, []);
   const key = (personId: number, pageLabel: string) => `${personId}\u0000${pageLabel}`;
+
+  function glow(change: Change) {
+    setGlowing(new Set([...change.add, ...change.remove].map((page) => key(change.person.id, page.label))));
+    if (glowTimer.current !== null) window.clearTimeout(glowTimer.current);
+    glowTimer.current = window.setTimeout(() => setGlowing(new Set()), 1600);
+  }
 
   /** The change, one request after another; the first refusal stops the rest. Returns what was not done. */
   async function run(change: Change): Promise<string | null> {
@@ -82,10 +96,30 @@ export function usePageAccess(onChanged?: () => void): PageAccess {
     }
   }
 
-  function said(change: Change) {
+  function said(change: Change, undo?: () => void) {
+    glow(change);
     const one = change.add[0] ?? change.remove[0];
     if (change.add.length + change.remove.length === 1 && one) {
-      toast.success(change.add.length === 1 ? `Страница ${one.label} назначена ${change.person.username}` : `Страница ${one.label} снята с ${change.person.username}`);
+      const text = change.add.length === 1 ? `Страница ${one.label} назначена ${change.person.username}` : `Страница ${one.label} снята с ${change.person.username}`;
+      if (!undo) {
+        toast.success(text);
+        return;
+      }
+      const id = toast.success(text, {
+        duration: 8000,
+        action: (
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => {
+              toast.dismiss(id);
+              undo();
+            }}
+          >
+            Отменить
+          </Button>
+        ),
+      });
     } else {
       toast.success(change.add.length > 0
         ? `${change.person.username}: открыто ${pagesWord(change.add.length)} ${change.model ?? ""}`.trim()
@@ -102,8 +136,19 @@ export function usePageAccess(onChanged?: () => void): PageAccess {
     }
     const change = { person, add: [page], remove: [] };
     void run(change).then((failed) => {
-      if (failed === null) said(change);
-      else toast.error(failed);
+      if (failed !== null) {
+        toast.error(failed);
+        return;
+      }
+      // The one way back from a slip: the same person, the same page, the console's own «Снять» request, at once —
+      // it takes back only what this very press did.
+      said(change, () => {
+        const back = { person, add: [], remove: [page] };
+        void run(back).then((undone) => {
+          if (undone === null) said(back);
+          else toast.error(undone);
+        });
+      });
     });
   };
 
@@ -141,7 +186,7 @@ export function usePageAccess(onChanged?: () => void): PageAccess {
           single
             ? { label: "Страница", value: `${single.label} · ${PLATFORM[single.platform] ?? single.platform} · ${single.modelName}` }
             : { label: removing ? "Снимаем" : "Открываем", value: `${labels(pages)} (${pagesWord(pages.length)})` },
-          ...(single ? [] : [{ label: "Как", value: "Каждая страница — отдельным запросом, по очереди; на первой ошибке остановимся." }]),
+          ...(single ? [] : [{ label: "Если Hub откажет", value: "Дальше не пойдём и скажем, какие страницы успели." }]),
         ]}
         confirmLabel={single ? "Снять страницу" : removing ? `Снять ${pagesWord(pages.length)}` : `Открыть ${pagesWord(pages.length)}`}
         pendingLabel={removing ? "Снимаем…" : "Открываем…"}
@@ -171,6 +216,7 @@ export function usePageAccess(onChanged?: () => void): PageAccess {
     toggle,
     toggleModel,
     busy: (personId, pageLabel) => running.has(key(personId, pageLabel)),
+    recent: (personId, pageLabel) => glowing.has(key(personId, pageLabel)),
     dialog,
   };
 }

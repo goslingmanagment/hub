@@ -1,6 +1,7 @@
 import { queryOptions, useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ClientSendCustodyListItem, ClientSendCustodyResolveBody, KernelOperationResponse, TeamShiftResolveBody } from "@agency_hub_core/contracts";
 import { hubErrorStatus } from "@agency_hub_core/ui/hubClient";
+import { moscowDayOf, moscowToday } from "@agency_hub_core/ui/moscow";
 import { customsQuery, disputesQuery, heldSendsQuery } from "@/shared/decisions";
 import { kernel } from "@/shared/hub";
 
@@ -14,7 +15,9 @@ import { kernel } from "@/shared/hub";
  *   - customs: `teamCustoms`;
  *   - held sends: `clientSendCustodyList` (held: the shared key; resolved: ours);
  *   - fan names: `pageFanCard` per fan — Hub sends the number only (phase 2: the
- *     name in each answer, see the report).
+ *     name in each answer, see the report);
+ *   - a dispute's evidence: `teamShiftSales` of the sale's two days — whose shift
+ *     held the sale, to open that chatter's conversation with the fan (read only).
  *
  * Writes keep the console's requests and bodies:
  *   - a dispute's split: `teamShiftResolve` { params: { saleRef }, body: { shares } } —
@@ -156,7 +159,60 @@ export function useFanNames(fans: readonly FanRefOnPage[]): (fan: FanRefOnPage) 
   return (fan) => known.get(fanKey(fan));
 }
 
+// ── a dispute's evidence ─────────────────────────────────────────────────────
+
+/** The shift of one claimant around the sale: the one holding it, else their last one before it that day. */
+export interface SaleShift {
+  userId: number;
+  startedAt: string;
+  endedAt: string;
+  ongoing: boolean;
+  /** The sale fell inside it. */
+  holds: boolean;
+}
+
+/**
+ * Whose shift held a disputed sale (`teamShiftSales` of the sale's Moscow day
+ * and the day before: a night shift starts the evening before). Read only: the
+ * owner opens each claimant's conversation with the fan in that shift's review.
+ */
+export function useSaleShifts(dispute: Pick<Dispute, "saleRef" | "occurredAt">) {
+  const day = moscowDayOf(dispute.occurredAt);
+  const today = moscowToday();
+  const until = day > today ? today : day;
+  return useQuery({
+    queryKey: ["decisions", "sale-shifts", until] as const,
+    queryFn: () => kernel.teamShiftSales({ query: { days: 2, until } }),
+    staleTime: 5 * MINUTE,
+    select: (data: KernelOperationResponse<"teamShiftSales">) => {
+      const at = Date.parse(dispute.occurredAt);
+      const byUser = new Map<number, SaleShift>();
+      // Newest first: the first shift that holds the sale wins; else the latest that ended before it.
+      for (const shift of data.shifts) {
+        const start = Date.parse(shift.startedAt);
+        const end = Date.parse(shift.endedAt);
+        const holds = start <= at && at <= end;
+        const before = end < at;
+        const known = byUser.get(shift.userId);
+        if (holds && !known?.holds) byUser.set(shift.userId, { userId: shift.userId, startedAt: shift.startedAt, endedAt: shift.endedAt, ongoing: shift.ongoing, holds: true });
+        else if (before && !known) byUser.set(shift.userId, { userId: shift.userId, startedAt: shift.startedAt, endedAt: shift.endedAt, ongoing: shift.ongoing, holds: false });
+      }
+      return byUser;
+    },
+  });
+}
+
 // ── writes ───────────────────────────────────────────────────────────────────
+
+/**
+ * What a decision changes: the queues and their counts — not the fans' names
+ * (`["decisions","fan",…]`), the people list or a sale's shifts, which a write
+ * never changes (Р10: no N `pageFanCard` reads after every decision).
+ */
+function isQueueKey(query: { queryKey: readonly unknown[] }): boolean {
+  const [area, kind] = query.queryKey;
+  return area === "decisions" && kind !== "fan" && kind !== "users" && kind !== "sale-shifts";
+}
 
 /** The owner's split of a disputed sale: the console's request (`teamShiftResolve`), its refresh widened to Workboard's keys. */
 export function useResolveDispute() {
@@ -166,7 +222,7 @@ export function useResolveDispute() {
     mutationFn: (input: { saleRef: string; body: TeamShiftResolveBody }) =>
       kernel.teamShiftResolve({ params: { saleRef: input.saleRef }, body: input.body }),
     onSettled: () => Promise.all([
-      qc.invalidateQueries({ queryKey: ["decisions"] }),
+      qc.invalidateQueries({ predicate: isQueueKey }),
       qc.invalidateQueries({ queryKey: ["payouts"] }),
     ]),
   });
@@ -194,6 +250,6 @@ export function useResolveHeldSend() {
     meta: { suppressGlobalError: true },
     mutationFn: (input: { pageLabel: string; attemptId: string; body: ClientSendCustodyResolveBody }) =>
       kernel.clientSendCustodyResolve({ params: { pageLabel: input.pageLabel, attemptId: input.attemptId }, body: input.body }),
-    onSettled: () => qc.invalidateQueries({ queryKey: ["decisions"] }),
+    onSettled: () => qc.invalidateQueries({ predicate: isQueueKey }),
   });
 }

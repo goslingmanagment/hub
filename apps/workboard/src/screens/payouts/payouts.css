@@ -28,10 +28,6 @@
     white-space: nowrap;
   }
 
-  .payouts-page__label {
-    color: var(--ui-text-2);
-    font-size: var(--ui-fs-14);
-  }
 
   .payouts-notices,
   .payouts-folds {
@@ -98,5 +94,91 @@
     padding: 12px 0;
     border-bottom: 1px solid var(--ui-line-soft);
     font-variant-numeric: tabular-nums;
+  }
+
+  /* ----------------------------------------------------------- Round 1 */
+
+  /* «Итого» under the first column of a table. */
+  .payouts-total {
+    color: var(--ui-text);
+    font-weight: 600;
+  }
+
+  .payouts-strong {
+    color: var(--ui-text);
+    font-weight: 600;
+  }
+
+  /* «2 своих суммы» under a confirmed sum: quiet, but not grey on grey. */
+  .payouts-own {
+    color: var(--ui-text-2);
+  }
+
+  /* The «›» of a row that opens the chatter's panel. */
+  .payouts-go {
+    display: block;
+    margin-left: auto;
+    color: var(--ui-text-3);
+    transition: color var(--ui-fast);
+  }
+
+  .ui-table tr:hover .payouts-go,
+  .ui-table tr:focus-within .payouts-go,
+  .ui-table tr[aria-selected="true"] .payouts-go {
+    color: var(--ui-text);
+  }
+
+  /* What is left out of the copy: one notice, a line each with its own way on. */
+  .payouts-warnings {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .payouts-warnings li {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 4px 16px;
+  }
+
+  .payouts-notice-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--ui-text);
+    font: inherit;
+    font-weight: 600;
+    text-decoration: underline;
+    text-decoration-color: var(--ui-line-strong);
+    text-underline-offset: 3px;
+    white-space: nowrap;
+    cursor: pointer;
+    border-radius: var(--ui-radius-sm);
+  }
+
+  .payouts-notice-link:hover {
+    text-decoration-color: currentColor;
+  }
+
+  .payouts-notice-link:focus-visible {
+    outline: var(--ui-focus);
+    outline-offset: 2px;
+  }
+
+  /* «Что изменилось» comes into view below the sticky header. */
+  .payouts-anchor {
+    scroll-margin-top: 96px;
+  }
+
+  /* A new chatter's block in the export: a firmer line above it, as the sheet's blocks part. */
+  .ui-table tr.payouts-block-start > td {
+    border-top: 1px solid var(--ui-line);
   }
 }

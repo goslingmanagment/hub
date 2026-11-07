@@ -38,15 +38,22 @@ export function heldSendsQuery(params: { limit: number; offset: number; pageLabe
 }
 
 export interface DecisionCounts {
-  /** Disputes without a resolution; null: not read (failed, or not the owner's to see). */
+  /** Disputes without a resolution; null: not read (failed, still loading, or not the owner's to see). */
   disputes: number | null;
   /** Customs paid and not delivered. */
   customs: number | null;
   /** Sends waiting for a manual resolve. */
   held: number | null;
-  /** The sum of what answered: the sidebar's number. */
+  /** The sum of what answered: the sidebar's number. 0 until `settled`. */
   total: number;
+  /** A queue is still being read for the first time. */
   loading: boolean;
+  /**
+   * Every queue has answered (or failed): only then are the numbers shown. Until
+   * then all three are null and `total` is 0, so the sidebar's badge and the
+   * «Ждут решения» line never show a partial sum that grows a moment later.
+   */
+  settled: boolean;
 }
 
 export function useDecisionCounts(): DecisionCounts {
@@ -59,6 +66,10 @@ export function useDecisionCounts(): DecisionCounts {
       { ...heldSendsQuery(), enabled: signedIn, refetchInterval: MINUTE },
     ],
   });
+  const loading = disputes.isLoading || customs.isLoading || held.isLoading;
+  // Not signed in yet: the queues are not even asked, nothing is settled.
+  const settled = signedIn && !loading;
+  if (!settled) return { disputes: null, customs: null, held: null, total: 0, loading, settled: false };
   const counts = {
     disputes: disputes.data ? disputes.data.disputes.filter((dispute) => dispute.resolution === null).length : null,
     customs: customs.data ? customs.data.customs.filter((custom) => custom.state === "paid").length : null,
@@ -67,6 +78,7 @@ export function useDecisionCounts(): DecisionCounts {
   return {
     ...counts,
     total: (counts.disputes ?? 0) + (counts.customs ?? 0) + (counts.held ?? 0),
-    loading: disputes.isLoading || customs.isLoading || held.isLoading,
+    loading,
+    settled,
   };
 }

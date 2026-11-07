@@ -54,3 +54,19 @@ export function PageFilter() {
     />
   );
 }
+
+/**
+ * The filter's place on a screen without one: the closed filter's very width,
+ * unseen and unreachable, so the period beside it stands where it stands on
+ * every other screen.
+ */
+export function PageFilterSlot() {
+  return (
+    <span className="wb-filter-slot" aria-hidden>
+      <span className="ui-chip ui-chip--md">
+        <span className="ui-chip__text">Все страницы</span>
+        <ChevronDown size={16} strokeWidth={1.75} />
+      </span>
+    </span>
+  );
+}

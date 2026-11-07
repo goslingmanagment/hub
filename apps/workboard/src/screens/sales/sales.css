@@ -1,28 +1,59 @@
 /* Что продаёт: the screen's own pieces. Values only from the design system's tokens. */
 @layer components {
-  /* A share or a sum as a bar and its number, inside a cell. */
-  .sales-rate {
+  /* Money per message: a bar, the sum, a word for the best — fixed slots, so the bars of a column line up. */
+  .ui-tooltip-anchor.sales-money-tip {
+    display: flex;
+    width: 100%;
+  }
+
+  .sales-money {
     display: grid;
-    grid-template-columns: minmax(64px, 1fr) minmax(56px, auto);
+    grid-template-columns: minmax(64px, 1fr) 80px;
     align-items: center;
     gap: var(--ui-space-3);
     width: 100%;
     max-width: 360px;
+    font-variant-numeric: tabular-nums;
   }
 
-  .sales-rate__num {
-    color: var(--ui-text);
-    font-variant-numeric: tabular-nums;
+  .sales-money--word {
+    grid-template-columns: minmax(64px, 1fr) 80px 104px;
+    max-width: 464px;
+  }
+
+  .sales-money__track {
+    display: block;
+    height: 8px;
+  }
+
+  .sales-money__value {
     text-align: right;
     white-space: nowrap;
   }
 
-  .sales-rate--weak .sales-rate__num {
+  .sales-money--best .sales-money__value {
+    font-weight: 600;
+  }
+
+  .sales-money--weak .sales-money__value {
     color: var(--ui-text-3);
+  }
+
+  .sales-money__word {
+    color: var(--ui-text-2);
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+    white-space: nowrap;
   }
 
   .sales-quiet {
     color: var(--ui-text-3);
+  }
+
+  /* The total row's share: under the shares, in ink, no bar. */
+  .sales-total-rate .ui-rate__value {
+    color: var(--ui-text);
+    font-weight: 600;
   }
 
   .sales-name {
@@ -41,6 +72,18 @@
     font-weight: 400;
   }
 
+  /* An approach's place in the extension's list, before its name; a long name wraps under itself, not under the number. */
+  .sales-name__main--ordered {
+    display: grid;
+    grid-template-columns: 24px minmax(0, 1fr);
+  }
+
+  .sales-order {
+    color: var(--ui-text-3);
+    font-weight: 400;
+    font-variant-numeric: tabular-nums;
+  }
+
   .sales-sub {
     color: var(--ui-text-3);
     font-size: var(--ui-fs-14);
@@ -53,10 +96,20 @@
   }
 
   .sales-total-num {
-    display: block;
-    text-align: right;
     font-variant-numeric: tabular-nums;
-    max-width: 360px;
+    font-weight: 600;
+  }
+
+  /* The «›» at the end of a row that opens a panel. */
+  .sales-open {
+    display: block;
+    margin-left: auto;
+    color: var(--ui-text-3);
+  }
+
+  tr:hover .sales-open,
+  tr[aria-selected="true"] .sales-open {
+    color: var(--ui-text);
   }
 
   .sales-how {
@@ -70,20 +123,6 @@
 
   .sales-how p {
     margin: 0;
-  }
-
-  .sales-skeleton {
-    display: flex;
-    flex-direction: column;
-    padding: 0 var(--ui-space-6);
-  }
-
-  .sales-skeleton__row {
-    display: grid;
-    grid-template-columns: 160px 80px 1fr;
-    align-items: center;
-    gap: var(--ui-space-6);
-    border-bottom: 1px solid var(--ui-line-soft);
   }
 
   /* The side panel's body. */
@@ -120,6 +159,7 @@
     max-width: 56ch;
   }
 
+  /* A quiet line under a table: a note, a small action. */
   .sales-after {
     display: flex;
     flex-wrap: wrap;
@@ -129,6 +169,10 @@
     color: var(--ui-text-2);
     font-size: var(--ui-fs-14);
     line-height: var(--ui-lh-14);
+  }
+
+  .sales-after > p {
+    margin: 0;
   }
 
   .sales-fold {
@@ -151,36 +195,44 @@
 
   /* ------------------------------------------------ The win-back funnel */
 
+  /* Four steps with arrows on the left; what is still ripening and the money, one under the other, on the right. */
   .sales-funnel {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: var(--ui-space-6);
+  }
+
+  .sales-funnel__steps {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
     gap: var(--ui-space-4) var(--ui-space-6);
+    min-width: 0;
   }
 
   .sales-funnel__step {
     display: flex;
     flex-direction: column;
     gap: 2px;
-    min-width: 128px;
+    min-width: 136px;
   }
 
-  .sales-funnel__step--aside {
+  .sales-funnel__aside {
+    display: flex;
+    flex-direction: column;
+    gap: var(--ui-space-3);
+    align-self: stretch;
+    justify-content: center;
+    min-width: 200px;
     padding-left: var(--ui-space-6);
     border-left: 1px solid var(--ui-line);
   }
 
-  .sales-funnel__step--aside:first-of-type,
-  .sales-funnel__arrow + .sales-funnel__step--aside {
-    margin-left: 0;
-  }
-
-  .sales-funnel__step--aside {
-    margin-left: auto;
-  }
-
-  .sales-funnel__step--aside + .sales-funnel__step--aside {
-    margin-left: 0;
+  .sales-funnel__side {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
   }
 
   .sales-funnel__value {
@@ -190,6 +242,12 @@
     font-weight: 600;
     letter-spacing: -0.01em;
     white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .sales-funnel__value--small {
+    font-size: var(--ui-fs-20);
+    line-height: var(--ui-lh-20);
   }
 
   .sales-funnel__label {
@@ -212,184 +270,26 @@
     color: var(--ui-text-3);
   }
 
-  .sales-funnel__note {
-    margin: var(--ui-space-4) 0 0;
-    padding-top: var(--ui-space-3);
-    border-top: 1px solid var(--ui-line-soft);
-    color: var(--ui-text-2);
-    font-size: var(--ui-fs-14);
-    line-height: var(--ui-lh-14);
+  .sales-funnel--skeleton .sales-funnel__step {
+    gap: var(--ui-space-2);
   }
 
-  /* ------------------------------------------------ The list of approaches */
+  /* ------------------------------------------------ Approaches: the switch and the new one */
 
-  .sales-approaches {
+  .sales-switch {
     display: flex;
-    flex-direction: column;
-    margin: 0;
-    padding: 0;
-    list-style: none;
+    justify-content: flex-end;
   }
 
-  .sales-approaches__row {
-    display: flex;
-    align-items: center;
-    gap: var(--ui-space-3);
-    min-height: 52px;
-    border-bottom: 1px solid var(--ui-line-soft);
-  }
-
-  .sales-approaches__index {
-    width: 24px;
-    color: var(--ui-text-3);
-    font-variant-numeric: tabular-nums;
-  }
-
-  .sales-approaches__label {
-    color: var(--ui-text);
-    font-size: var(--ui-fs-15);
-    line-height: var(--ui-lh-15);
-  }
-
-  .sales-approaches__label--off {
-    color: var(--ui-text-3);
-  }
-
-  .sales-approaches__action {
-    margin-left: auto;
-  }
-
-  .sales-approaches__add {
+  .sales-add {
     display: flex;
     gap: var(--ui-space-3);
-    margin-top: var(--ui-space-4);
     max-width: 640px;
-  }
-
-  .sales-approaches__add .ui-input {
-    flex: 1;
-  }
-
-  /* ------------------------------------------------ The heat map of empty hours */
-
-  .sales-heat-wrap {
-    padding: var(--ui-space-4) var(--ui-space-6) var(--ui-space-4);
-    overflow-x: auto;
-  }
-
-  .sales-heat {
-    width: 100%;
-    min-width: 760px;
-    border-collapse: separate;
-    border-spacing: 2px;
-    table-layout: fixed;
-  }
-
-  .sales-heat th,
-  .sales-heat td {
-    padding: 0;
-  }
-
-  .sales-heat__label {
-    width: 132px;
-    padding-right: var(--ui-space-3) !important;
-    color: var(--ui-text);
-    font-size: var(--ui-fs-15);
-    line-height: var(--ui-lh-15);
-    font-weight: 500;
-    text-align: left;
-    white-space: nowrap;
-  }
-
-  .sales-heat__hour {
-    height: 24px;
-    color: var(--ui-text-3);
-    font-size: var(--ui-fs-13);
-    line-height: var(--ui-lh-13);
-    font-weight: 400;
-    font-variant-numeric: tabular-nums;
-    text-align: center;
-  }
-
-  .sales-heat__total {
-    width: 80px;
-    padding-left: var(--ui-space-3) !important;
-    color: var(--ui-text);
-    font-size: var(--ui-fs-15);
-    line-height: var(--ui-lh-15);
-    font-weight: 400;
-    font-variant-numeric: tabular-nums;
-    text-align: right;
-    white-space: nowrap;
-  }
-
-  thead .sales-heat__total {
-    color: var(--ui-text-2);
-    font-size: var(--ui-fs-14);
-  }
-
-  .sales-heat__cell {
-    height: 28px;
-  }
-
-  .sales-heat__swatch {
-    display: block;
-    width: 100%;
-    height: 100%;
-    min-height: 16px;
-    border-radius: 4px;
-    background: var(--ui-line-soft);
-  }
-
-  /* One ink, light to dark; the darkest stays a step short of black. */
-  .sales-heat__swatch--1 {
-    background: color-mix(in oklab, var(--ui-text-2) 14%, var(--ui-surface));
-  }
-
-  .sales-heat__swatch--2 {
-    background: color-mix(in oklab, var(--ui-text-2) 30%, var(--ui-surface));
-  }
-
-  .sales-heat__swatch--3 {
-    background: color-mix(in oklab, var(--ui-text-2) 50%, var(--ui-surface));
-  }
-
-  .sales-heat__swatch--4 {
-    background: color-mix(in oklab, var(--ui-text-2) 74%, var(--ui-surface));
-  }
-
-  .sales-heat__note {
-    height: 32px;
-    padding-left: var(--ui-space-2) !important;
-    color: var(--ui-text-3);
-    font-size: var(--ui-fs-14);
-  }
-
-  .sales-heat__legend {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: var(--ui-space-2) var(--ui-space-4);
     margin-top: var(--ui-space-4);
-    color: var(--ui-text-2);
-    font-size: var(--ui-fs-14);
-    line-height: var(--ui-lh-14);
   }
 
-  .sales-heat__key {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-  }
-
-  .sales-heat__key .sales-heat__swatch {
-    width: 16px;
-    height: 16px;
-  }
-
-  .sales-heat__legend-note {
-    margin-left: auto;
-    color: var(--ui-text-3);
+  .sales-add .ui-input {
+    flex: 1;
   }
 
   .sales-heat-skeleton {

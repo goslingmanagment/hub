@@ -1,11 +1,12 @@
 import type { KernelOperationResponse } from "@agency_hub_core/contracts";
+import { averageQuality, type ShiftQuality } from "@agency_hub_core/ui/shiftReview";
 
 import { demoError, queryNumber, queryString, type DemoHandlers, type DemoRequest } from "../core.ts";
 import { DEMO_CHATTERS, DEMO_DATA_PAGES, DEMO_PAGES, DEMO_USERS, demoFans, demoPage, type DemoUser } from "../world.ts";
 import { teamCustoms, teamGreetings, teamWinBackApproaches, teamWinBackResults } from "./team-extra.ts";
 import { adminModelApplication, adminModelApplications } from "./team-applications.ts";
 import { teamChatterStats, teamShiftSales } from "./team-stats.ts";
-import { teamShiftReview } from "./team-review.ts";
+import { shiftReviewNumbers, teamShiftReview } from "./team-review.ts";
 import {
   DAY,
   HOUR,
@@ -350,11 +351,24 @@ function salesReplies(request: DemoRequest, scope: readonly string[], days: numb
 
 type Numbers = KernelOperationResponse<"teamChatterNumbers">["chatters"][number]["shifts"][number]["numbers"];
 
-function numbersOf(shift: DemoShift, disputed: ReadonlySet<string>): Numbers {
+/**
+ * A shift's numbers. The three of its quality — the reply median, the fans left
+ * without an answer at the end, the AI's texts sent unedited — are its review's
+ * (team-review.ts, by the review's rules), so one shift shows one set of
+ * numbers on every screen (spec §3 r2). `composed` is laid out so that
+ * `qualityOfChatterNumbers` reads that very share back: `reply` — the AI's
+ * texts sent as they were, `fix` — the chatter's drafts the AI fixed, `hand` —
+ * the other texts, `other` — the rest of the shift's messages (Hi greetings,
+ * messages without words). In the demo the Reply button's texts are exactly the
+ * unedited ones, so these are also the counts by button.
+ */
+function numbersOf(shift: DemoShift, disputed: ReadonlySet<string>, now: Date): { numbers: Numbers; quality: ShiftQuality } {
+  const review = shiftReviewNumbers(shift, now.getTime());
+  const { quality } = review;
   const pages = workedPages(shift);
   const sales = shift.sales.filter((sale) => pages.includes(sale.pageLabel));
   const credited = shift.confirmedAt === null ? null : sales.filter((sale) => !disputed.has(sale.ref)).reduce((sum, sale) => sum + creditedOf(sale), 0);
-  return {
+  const numbers: Numbers = {
     workedMinutes: shift.workedMinutes,
     revenueMills: credited,
     revenuePerHourMills: credited === null ? null : Math.round(credited / (shift.workedMinutes / 60)),
@@ -365,22 +379,30 @@ function numbersOf(shift: DemoShift, disputed: ReadonlySet<string>): Numbers {
     ppvBought: sales.filter((sale) => sale.kind === "ppv").length,
     ppvAveragePriceMills: shift.ppvSent > 0 ? shift.ppvAveragePriceMills : null,
     ppvShare: shift.messages > 0 ? shift.ppvSent / shift.messages : null,
-    replies: shift.replies,
-    replyMedianSeconds: shift.replies > 0 ? shift.replyMedianSeconds : null,
-    repliesWithinHour: shift.repliesWithinHour,
-    waitingAtEnd: shift.waitingAtEnd,
-    composed: { hand: shift.composed.hand, reply: shift.composed.reply, fix: shift.composed.fix, other: shift.composed.greet + shift.composed.other },
+    replies: review.replies,
+    replyMedianSeconds: quality.replyMedianSeconds,
+    repliesWithinHour: review.repliesWithinHour,
+    waitingAtEnd: quality.unansweredAtEnd,
+    composed: {
+      hand: review.textMessages - review.aiUnedited - review.fix,
+      reply: review.aiUnedited,
+      fix: review.fix,
+      // The parts add up to the shift's messages, as Hub's do.
+      other: Math.max(0, shift.messages - review.textMessages),
+    },
   };
+  return { numbers, quality };
 }
 
-function weekOf(rows: ReadonlyArray<{ numbers: Numbers; confirmed: boolean }>) {
+function weekOf(rows: ReadonlyArray<{ numbers: Numbers; confirmed: boolean; quality: ShiftQuality }>) {
   const sum = (take: (numbers: Numbers) => number) => rows.reduce((total, row) => total + take(row.numbers), 0);
   const confirmed = rows.filter((row) => row.confirmed);
   const revenue = confirmed.length === 0 ? null : confirmed.reduce((total, row) => total + (row.numbers.revenueMills ?? 0), 0);
   const confirmedMinutes = confirmed.reduce((total, row) => total + row.numbers.workedMinutes, 0);
   const messages = sum((numbers) => numbers.messages);
   const ppvSent = sum((numbers) => numbers.ppvSent);
-  const medians = rows.filter((row) => row.numbers.replyMedianSeconds !== null).map((row) => row.numbers.replyMedianSeconds!).sort((left, right) => left - right);
+  // «…, в среднем за смену»: the plain average of the shifts' own numbers (the screens average the same way).
+  const average = averageQuality(rows.map((row) => row.quality));
   return {
     workedMinutes: sum((numbers) => numbers.workedMinutes),
     revenueMills: revenue,
@@ -393,9 +415,9 @@ function weekOf(rows: ReadonlyArray<{ numbers: Numbers; confirmed: boolean }>) {
     ppvAveragePriceMills: ppvSent === 0 ? null : Math.round(sum((numbers) => (numbers.ppvAveragePriceMills ?? 0) * numbers.ppvSent) / ppvSent / 10) * 10,
     ppvShare: messages === 0 ? null : ppvSent / messages,
     replies: sum((numbers) => numbers.replies),
-    replyMedianSeconds: medians.length === 0 ? null : medians[Math.floor(medians.length / 2)]!,
+    replyMedianSeconds: average.replyMedianSeconds,
     repliesWithinHour: sum((numbers) => numbers.repliesWithinHour),
-    waitingAtEnd: rows.length === 0 ? 0 : Math.round(sum((numbers) => numbers.waitingAtEnd) / rows.length),
+    waitingAtEnd: Math.round(average.unansweredAtEnd ?? 0),
     composed: {
       hand: sum((numbers) => numbers.composed.hand),
       reply: sum((numbers) => numbers.composed.reply),
@@ -602,18 +624,31 @@ export const teamHandlers: DemoHandlers = {
     const from = fromParsed ?? to - 7 * DAY;
     if (from >= to || to - from > 31 * DAY) return demoError(400, "Bad Request", "Окно — не больше 31 дня.");
     const disputed = new Set(teamDisputes(request.now).filter((dispute) => dispute.resolution === null).map((dispute) => dispute.sale.ref));
-    const shifts = scopedShifts(teamWorld(request.now).shifts, scope).filter((shift) => shift.startedAt >= from && shift.startedAt < to);
+    // As Hub (services/chatter-numbers.ts): a shift is the window's when the middle of its work falls inside.
+    const middleOfWork = (shift: DemoShift) => Math.floor((shift.startedAt + shift.endedAt - 1) / 2);
+    const shifts = scopedShifts(teamWorld(request.now).shifts, scope).filter((shift) => middleOfWork(shift) >= from && middleOfWork(shift) < to);
     const onlyUser = queryNumber(request, "userId", Number.NaN);
     const chatters = DEMO_CHATTERS.filter((user) => Number.isNaN(onlyUser) || user.id === onlyUser).map((user) => {
-      const rows = shifts.filter((shift) => shift.user.id === user.id).map((shift) => ({
-        startedAt: isoAt(shift.startedAt),
-        endedAt: isoAt(shift.endedAt),
-        ongoing: shift.ongoing,
-        pages: workedPages(shift),
-        confirmed: shift.confirmedAt !== null,
-        numbers: numbersOf(shift, disputed),
-      }));
-      return { userId: user.id, username: user.username, week: weekOf(rows), shifts: rows };
+      const rows = shifts.filter((shift) => shift.user.id === user.id).map((shift) => {
+        const { numbers, quality } = numbersOf(shift, disputed, request.now);
+        return {
+          row: {
+            startedAt: isoAt(shift.startedAt),
+            endedAt: isoAt(shift.endedAt),
+            ongoing: shift.ongoing,
+            pages: workedPages(shift),
+            confirmed: shift.confirmedAt !== null,
+            numbers,
+          },
+          quality,
+        };
+      });
+      return {
+        userId: user.id,
+        username: user.username,
+        week: weekOf(rows.map(({ row, quality }) => ({ numbers: row.numbers, confirmed: row.confirmed, quality }))),
+        shifts: rows.map(({ row }) => row),
+      };
     }).filter((chatter) => chatter.shifts.length > 0)
       .sort((left, right) => right.week.messages - left.week.messages);
     return { from: isoAt(from), to: isoAt(to), chatters, serverNow: request.now.toISOString() };

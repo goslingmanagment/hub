@@ -402,3 +402,17 @@ export function formatMomentAgo(at: string | number | Date, now: number = Date.n
   const today = DAY_AND_MONTH.format(instant) === DAY_AND_MONTH.format(new Date(now));
   return `${today ? CLOCK.format(instant) : formatDateTime(instant.toISOString(), { yearUnlessCurrent: true })}, ${formatAgo(at, now)}`;
 }
+
+/**
+ * A short phrase that must not break across lines: «2 из 3», «39 с», «7 ч 28 мин».
+ * Every ordinary space becomes a no-break one. For the screen only (a copied
+ * text, a payout sheet keep their own spaces).
+ */
+export function unbreakable(text: string): string {
+  return text.replace(/ +/g, NBSP);
+}
+
+/** «2 из 3» that never breaks: a part of a whole, in counts («1 420 из 9 840»). */
+export function formatOf(part: number, whole: number): string {
+  return `${formatCount(part)}${NBSP}из${NBSP}${formatCount(whole)}`;
+}

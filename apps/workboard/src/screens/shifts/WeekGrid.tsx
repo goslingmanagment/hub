@@ -1,15 +1,24 @@
 import { useMemo } from "react";
 import { Link, useLocation, useNavigate } from "react-router";
-import { Delta, Menu, Money, Person, Section, Table, Tooltip, type Column, type MenuEntry } from "@agency_hub_core/ui";
+import { Delta, Menu, Money, Section, Table, Tooltip, type Column, type MenuEntry } from "@agency_hub_core/ui";
 import { formatDay, formatDayRange, formatDuration, formatMills, formatTimeOfDay, formatWeekdayDay } from "@agency_hub_core/ui/format";
-import { daysInRange, moscowDayOf, moscowToday } from "@agency_hub_core/ui/moscow";
+import { moscowDayOf, moscowToday } from "@agency_hub_core/ui/moscow";
 import { withPeriod } from "@agency_hub_core/ui/period";
 import { ruPlural } from "@agency_hub_core/ui/plural";
-import { personPath, shiftPath, type BackTarget } from "@/shared/links";
-import { changePct, type GridCell, type GridColumn, type GridRow, type JournalShift, type ShiftsModel } from "./data.js";
+import { PersonLink, personPath, shiftPath, useBackState, type BackTarget } from "@/shared/links";
+import { COMPARE_FLOOR_MILLS, changePct, type GridCell, type GridColumn, type GridRow, type JournalShift, type ShiftsModel, type Totals } from "./data.js";
 
 const WEEKDAY = new Intl.DateTimeFormat("ru-RU", { weekday: "short", timeZone: "UTC" });
 const DAY_OF_MONTH = new Intl.DateTimeFormat("ru-RU", { day: "numeric", month: "short", timeZone: "UTC" });
+
+/** A day still to come: a narrow column (nothing there yet). */
+const FUTURE_COLUMN_WIDTH = 64;
+/**
+ * With few columns (14 days: two chunks) the name column keeps its width and the
+ * money columns share the rest evenly, so half a screen never lies between a name
+ * and its money.
+ */
+const WHO_COLUMN_WIDTH = 260;
 
 function noon(day: string): Date {
   return new Date(`${day}T12:00:00Z`);
@@ -30,12 +39,11 @@ function madeOf(shifts: number, minutes: number): string {
 }
 
 function ColumnHead({ column }: { column: GridColumn }) {
-  if (column.kind === "week") {
-    const days = daysInRange(column.from, column.to);
+  if (column.kind === "chunk") {
     return (
-      <span className="shifts-grid__head">
+      <span className={column.today ? "shifts-grid__head shifts-grid__head--today" : "shifts-grid__head"}>
         <span>{formatDayRange(column.from, column.to)}</span>
-        <span className="shifts-grid__head-sub">{column.today ? "эта неделя" : days === 7 ? "неделя" : `${days} ${ruPlural(days, "день", "дня", "дней")}`}</span>
+        <span className="shifts-grid__head-sub">{column.today ? "по сегодня" : `${column.days} ${ruPlural(column.days, "день", "дня", "дней")}`}</span>
       </span>
     );
   }
@@ -52,55 +60,81 @@ export function spanOf(shift: Pick<JournalShift, "startedAt" | "endedAt" | "ongo
   return shift.ongoing ? `${formatTimeOfDay(shift.startedAt)} – сейчас` : `${formatTimeOfDay(shift.startedAt)}–${formatTimeOfDay(shift.endedAt)}`;
 }
 
+function firstAndLastDay(shift: Pick<JournalShift, "startedAt" | "endedAt" | "ongoing">): [string, string] {
+  return [moscowDayOf(shift.startedAt), shift.ongoing ? moscowToday() : moscowDayOf(shift.endedAt)];
+}
+
 /**
  * The days a shift ran: «сб, 7 нояб.»; a night over midnight «пт, 6–7 нояб.»
  * (from Friday to Saturday). In the grid it counts for the day holding most of
  * it, as the payout sheet does.
  */
 export function daysOf(shift: Pick<JournalShift, "startedAt" | "endedAt" | "ongoing">): string {
-  const first = moscowDayOf(shift.startedAt);
-  const last = shift.ongoing ? moscowToday() : moscowDayOf(shift.endedAt);
+  const [first, last] = firstAndLastDay(shift);
   if (first === last) return formatWeekdayDay(first);
   return `${WEEKDAY.format(noon(first))}, ${formatDayRange(first, last)}`;
 }
 
+/** A night shift over midnight, in a cell of one day: «ночь с пт на сб, в сетке — сб, как в выплатах». */
+function nightNote(shift: JournalShift): string | null {
+  const [first, last] = firstAndLastDay(shift);
+  if (first === last) return null;
+  const weekday = (day: string) => WEEKDAY.format(noon(day));
+  return `Ночь с ${weekday(first)} на ${weekday(last)}: в сетке — ${weekday(shift.date)}, где большая часть смены, как в выплатах.`;
+}
+
 /**
  * A cell of the grid. A day with one shift opens it; with several, a short
- * list to pick from; a week's cell opens that week. Nothing there: «—», a day
- * ahead: empty, a day before Hub counted: «нет данных».
+ * list to pick from; a cell of a longer period opens those days, a column a
+ * day. Nothing there: «—», a day ahead: empty, a day before Hub counted: «нет
+ * данных».
  */
 function CellView({ row, cell, isOwner, back }: { row: GridRow; cell: GridCell; isOwner: boolean; back: BackTarget }) {
   const location = useLocation();
   const navigate = useNavigate();
   const { column } = cell;
   if (column.future) return null;
-  if (column.unknown) return <span className="ui-muted" title="Hub тогда ещё не считал смены">нет данных</span>;
+  if (column.unknown) {
+    return (
+      <Tooltip content="Hub тогда ещё не считал смены">
+        <span className="ui-muted">нет данных</span>
+      </Tooltip>
+    );
+  }
   if (cell.shifts === 0) return <span className="shifts-grid__none">—</span>;
 
   const team = row.userId === null;
   const money = <Money mills={cell.salesNetMills} strong={team} />;
   const tip = madeOf(cell.shifts, cell.workedMinutes);
 
-  if (column.kind === "week") {
-    const search = withPeriod(new URLSearchParams(location.search), { kind: "week", monday: column.from });
+  if (column.kind === "chunk") {
+    const search = withPeriod(new URLSearchParams(location.search), { kind: "range", from: column.from, to: column.to });
     return (
-      <Tooltip content={`${tip}. Открыть эту неделю`}>
+      <Tooltip content={`${team ? "" : `${row.username}, `}${formatDayRange(column.from, column.to)}: ${tip}. Открыть эти дни по дням`}>
         <Link to={{ pathname: "/shifts", search: search.toString() }} className="shifts-cell">{money}</Link>
       </Tooltip>
     );
   }
 
-  const open = (shift: JournalShift) => (isOwner ? shiftPath(shift.userId, shift.startedAt, location.search) : personPath(shift.userId, location.search, "shifts"));
+  const open = (shift: JournalShift) => (isOwner ? shiftPath(shift.userId, shift.startedAt, location.search) : personPath(shift.userId, location.search));
   if (cell.list.length === 1) {
     const shift = cell.list[0]!;
+    const night = nightNote(shift);
     return (
-      <Tooltip content={`${team ? `${shift.username}, ` : ""}${daysOf(shift)}, ${spanOf(shift)} · ${formatDuration(shift.workedMinutes)} работы`}>
+      <Tooltip
+        content={(
+          <>
+            {team ? `${shift.username}, ` : ""}{daysOf(shift)}, {spanOf(shift)} · {formatDuration(shift.workedMinutes)} работы
+            {night && <><br />{night}</>}
+          </>
+        )}
+      >
         <Link to={open(shift)} state={{ back }} className="shifts-cell">{money}</Link>
       </Tooltip>
     );
   }
   if (cell.list.length === 0) {
-    return <span title={tip}>{money}</span>;
+    return <Tooltip content={tip}>{money}</Tooltip>;
   }
   const items: MenuEntry[] = [
     { group: `${team ? "Смены" : `${row.username}: смены`} за ${formatWeekdayDay(column.from)}` },
@@ -124,12 +158,17 @@ function CellView({ row, cell, isOwner, back }: { row: GridRow; cell: GridCell; 
   );
 }
 
+/** The window before was too small for a percent to mean anything: «было $15.99» says more than «+100 %». */
+function smallBefore(previous: Totals | null): previous is Totals {
+  return previous !== null && previous.shifts > 0 && previous.salesNetMills < COMPARE_FLOOR_MILLS;
+}
+
 function TotalCell({ row, comparable, versus }: { row: GridRow; comparable: boolean; versus: string }) {
   if (row.gone) {
     return (
       <span className="shifts-stack">
         <span className="ui-muted">—</span>
-        {row.previous && row.previous.shifts > 0 && <Delta was={row.previous.salesNetMills} title={versus} />}
+        {row.previous && row.previous.shifts > 0 && <Delta was={row.previous.salesNetMills} title={versus} className="shifts-stack__sub" />}
       </span>
     );
   }
@@ -139,7 +178,9 @@ function TotalCell({ row, comparable, versus }: { row: GridRow; comparable: bool
       {row.isNew ? (
         <span className="shifts-stack__sub ui-muted">новый</span>
       ) : comparable && row.previous ? (
-        <Delta pct={changePct(row.totals.salesNetMills, row.previous.salesNetMills)} title={versus} className="shifts-stack__sub" />
+        smallBefore(row.previous) && row.userId !== null
+          ? <Delta was={row.previous.salesNetMills} title={versus} className="shifts-stack__sub" />
+          : <Delta pct={changePct(row.totals.salesNetMills, row.previous.salesNetMills)} title={versus} className="shifts-stack__sub" />
       ) : null}
     </span>
   );
@@ -147,11 +188,14 @@ function TotalCell({ row, comparable, versus }: { row: GridRow; comparable: bool
 
 function PerHourCell({ row, comparable, versus }: { row: GridRow; comparable: boolean; versus: string }) {
   if (row.gone) return <span className="ui-muted">—</span>;
+  const previous = row.previous;
   return (
     <span className="shifts-stack">
       <Money mills={row.totals.perHourMills} />
-      {comparable && row.previous && !row.isNew && row.previous.perHourMills !== null && (
-        <Delta pct={changePct(row.totals.perHourMills, row.previous.perHourMills)} title={versus} className="shifts-stack__sub" />
+      {comparable && previous && !row.isNew && previous.perHourMills !== null && (
+        smallBefore(previous) && row.userId !== null
+          ? <Delta was={previous.perHourMills} title={versus} className="shifts-stack__sub" />
+          : <Delta pct={changePct(row.totals.perHourMills, previous.perHourMills)} title={versus} className="shifts-stack__sub" />
       )}
     </span>
   );
@@ -160,9 +204,10 @@ function PerHourCell({ row, comparable, versus }: { row: GridRow; comparable: bo
 /**
  * Неделя (spec §4.1.3): the chatter × day money grid of #1006, the team on
  * top. «За неделю» and «В час» against the window before (this week so far
- * against last week up to the same hour), «было $X» for someone gone. A cell
- * opens that day's shift; a longer period has a column a week, which opens the
- * week. The chatter's name opens their card for the same period.
+ * against last week up to the same hour), «было $X» for someone gone or a
+ * window before too small for a percent. A cell opens that day's shift; a
+ * longer period has a column per 7 days back from today (D4), which opens
+ * those days. The chatter's name opens their card for the same period.
  */
 export function WeekGrid({ model, isOwner, versus, loading = false, refreshing = false, weekly, page, columns }: {
   model: ShiftsModel | undefined;
@@ -177,10 +222,9 @@ export function WeekGrid({ model, isOwner, versus, loading = false, refreshing =
   /** The columns to show while loading. */
   columns: readonly GridColumn[];
 }) {
-  const location = useLocation();
-  const back: BackTarget = { to: `${location.pathname}${location.search}`, label: "Смены" };
+  const { back } = useBackState("Смены");
   const shown = model?.columns ?? columns;
-  const byWeek = shown[0]?.kind === "week";
+  const byChunk = shown[0]?.kind === "chunk";
   const comparable = model?.comparable ?? false;
   const working = useMemo(() => new Set(model?.journal.filter((shift) => shift.ongoing).map((shift) => shift.userId) ?? []), [model]);
 
@@ -188,16 +232,19 @@ export function WeekGrid({ model, isOwner, versus, loading = false, refreshing =
     {
       key: "who",
       header: "Чаттер",
+      ...(byChunk ? { width: WHO_COLUMN_WIDTH } : {}),
       cell: (row) => row.userId === null ? (
         <span className="shifts-grid__team">
           <span className="shifts-grid__team-name">Вся команда</span>
           <span className="shifts-grid__team-hint">{madeOf(row.totals.shifts, row.totals.workedMinutes)}</span>
         </span>
       ) : (
-        <Person
+        <PersonLink
+          userId={row.userId}
           name={row.username}
           status={working.has(row.userId) ? "working" : "away"}
           hint={row.gone ? "смен не было" : madeOf(row.totals.shifts, row.totals.workedMinutes)}
+          backLabel="Смены"
         />
       ),
     },
@@ -206,6 +253,7 @@ export function WeekGrid({ model, isOwner, versus, loading = false, refreshing =
       header: <ColumnHead column={column} />,
       numeric: true,
       headerWrap: true,
+      ...(column.future ? { width: FUTURE_COLUMN_WIDTH } : {}),
       cell: (row) => {
         const cell = row.cells.find((one) => one.column.key === column.key);
         return cell ? <CellView row={row} cell={cell} isOwner={isOwner} back={back} /> : null;
@@ -221,33 +269,37 @@ export function WeekGrid({ model, isOwner, versus, loading = false, refreshing =
       key: "perHour",
       header: "В час",
       numeric: true,
-      title: "Продажи, делённые на отработанное время без пауз",
+      hint: "Продажи, делённые на отработанное время без пауз",
       cell: (row) => <PerHourCell row={row} comparable={comparable} versus={versus} />,
     },
   ];
 
   const rows = model ? [model.team, ...model.chatters] : [];
+  const last = shown.at(-1);
   const description = [
     page ? `Только работа на ${page}.` : null,
-    byWeek ? "Клетка открывает неделю." : "Клетка открывает смену этого дня.",
-    model && !model.comparable
-      ? model.knownSince ? `Сравнения нет: Hub считает смены с ${formatDay(model.knownSince)}, а прошлый период начинается раньше.` : null
-      : sentence(`Проценты — ${versus}`),
+    byChunk
+      ? `Столбцы по 7 дней назад от ${last?.today ? "сегодня" : last ? formatDay(last.to) : "конца периода"}. Клетка открывает эти дни по дням.`
+      : "Клетка открывает смену этого дня.",
   ].filter(Boolean).join(" ");
 
   return (
-    <Section title={byWeek ? "Продажи по неделям" : "Продажи по дням"} description={description}>
+    <Section title={byChunk ? "Продажи по 7 дней" : "Продажи по дням"} description={description}>
       <Table
-        label={byWeek ? "Продажи за смены по неделям" : "Продажи за смены по дням"}
+        label={byChunk ? "Продажи за смены по 7 дней" : "Продажи за смены по дням"}
         className="shifts-grid"
         columns={tableColumns}
         rows={rows}
         rowKey={(row) => (row.userId === null ? "team" : String(row.userId))}
-        rowHref={(row) => (row.userId === null ? undefined : personPath(row.userId, location.search))}
+        rowEmphasis={(row) => row.userId === null}
         rowQuiet={(row) => row.gone}
+        align="first-line"
+        stickyColumns={1}
+        moreLabel={(hidden) => `ещё ${hidden} ${ruPlural(hidden, "столбец", "столбца", "столбцов")}`}
         loading={loading}
         refreshing={refreshing}
         skeletonRows={5}
+        skeletonLines={2}
       />
     </Section>
   );

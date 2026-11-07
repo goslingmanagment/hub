@@ -1,11 +1,10 @@
+import { CHATTER_SITE_ORIGIN, chatterSiteOriginFor } from "./sites.js";
+
 /**
  * The people's access, without React: who is in what state, the one-time join
- * link and its Telegram text, the words of links and devices. The same rules
- * and words as the console's people screens
- * (apps/dashboard/src/pages/team/people/teamView.ts, lib/sites.ts), moved here
- * so both apps say one thing; until the console imports this file, the two
- * must stay identical (tests/dashboard-team-copy-vocabulary.test.ts pins the
- * console's words).
+ * link and its Telegram text, the words of links and devices. One copy for the
+ * console's people screens (apps/dashboard/src/pages/team/people/teamView.ts
+ * re-exports these) and Workboard's Доступ.
  */
 
 export type AccessRole = "owner" | "team_lead" | "chatter";
@@ -43,17 +42,8 @@ export function daysToHours(days: number): number {
   return days * 24;
 }
 
-/** The console's names in production; a session is a host-only cookie. */
-const CONSOLE_ORIGIN = "https://hub.gosling-agency.ru";
-const LEGACY_CONSOLE_ORIGIN = "https://gosling-agency.ru";
-/** The chatters' site: /join opens there. */
-export const CHATTER_SITE_ORIGIN = "https://chatgoose.gosling-agency.ru";
-const PRODUCTION_CONSOLE_ORIGINS: ReadonlySet<string> = new Set([CONSOLE_ORIGIN, LEGACY_CONSOLE_ORIGIN]);
-
-/** The chatters' site that goes with the console the link was made on (a local build is the whole app on one origin). */
-export function chatterSiteOriginFor(consoleOrigin: string): string {
-  return PRODUCTION_CONSOLE_ORIGINS.has(consoleOrigin) ? CHATTER_SITE_ORIGIN : consoleOrigin;
-}
+/** The chatters' site (/join opens there) and the one that goes with a console's origin: ./sites.ts. */
+export { CHATTER_SITE_ORIGIN, chatterSiteOriginFor } from "./sites.js";
 
 export const START_GUIDE_URL = `${CHATTER_SITE_ORIGIN}/fansly/start.html`;
 
@@ -73,10 +63,16 @@ export function telegramMessage(kind: LinkKind, username: string, link: string):
   return `Привет! Твой аккаунт ChatGoose: ${link}. Открой, придумай пароль. Логин: ${username}. Как начать: ${START_GUIDE_URL}`;
 }
 
-/** Capitalised for a list's first word (the console wrote them lower-case inside a sentence). */
+/** Capitalised for a list's first word. */
 export const LINK_KIND_LABEL: Readonly<Record<LinkKind, string>> = {
   invite: "Приглашение",
   password_reset: "Сброс пароля",
+};
+
+/** The same in lower case, as the console's staff card writes it (its LINK_KIND_LABEL). */
+export const LINK_KIND_WORD: Readonly<Record<LinkKind, string>> = {
+  invite: "приглашение",
+  password_reset: "сброс пароля",
 };
 
 const LINK_REVOKED_REASON_LABEL: Readonly<Record<string, string>> = {

@@ -1,4 +1,4 @@
-import { Navigate, createBrowserRouter, useLocation, type RouteObject } from "react-router";
+import { Navigate, createBrowserRouter, useLocation, useParams, type RouteObject } from "react-router";
 import { AuthGate } from "./AuthGate.js";
 import { NotFoundScreen } from "./NotFound.js";
 import { Shell } from "./Shell.js";
@@ -12,6 +12,16 @@ function HomeRedirect() {
   return <Navigate to={{ pathname: "/shifts", search: location.search }} replace />;
 }
 
+/**
+ * `/people/:userId/shifts` is Работа now (D2: the shift table lives there): the
+ * same person, period and page, and the same «←».
+ */
+function PersonShiftsRedirect() {
+  const location = useLocation();
+  const { userId } = useParams();
+  return <Navigate to={{ pathname: `/people/${userId ?? ""}`, search: location.search, hash: location.hash }} state={location.state as unknown} replace />;
+}
+
 /** `/sales` opens its first tab. */
 function SalesRedirect() {
   const location = useLocation();
@@ -21,13 +31,14 @@ function SalesRedirect() {
 /**
  * Every screen of the spec (§3–4), one folder per group under src/screens/,
  * each loaded on first visit. Deep pages: Разбор смены `/shifts/:userId/:shiftStart`,
- * Человек `/people/:userId[/shifts|sales|access]`.
+ * Человек `/people/:userId[/sales|access]` (`/shifts` redirects to Работа).
  */
 const screens: RouteObject[] = [
   { index: true, element: <HomeRedirect /> },
   { path: "shifts", lazy: () => import("../screens/shifts/index.js").then((m) => ({ Component: m.ShiftsScreen })) },
   { path: "shifts/:userId/:shiftStart", lazy: () => import("../screens/review/index.js").then((m) => ({ Component: m.ReviewScreen })) },
   { path: "people", lazy: () => import("../screens/people/index.js").then((m) => ({ Component: m.PeopleScreen })) },
+  { path: "people/:userId/shifts", element: <PersonShiftsRedirect /> },
   { path: "people/:userId/:tab?", lazy: () => import("../screens/people/index.js").then((m) => ({ Component: m.PersonScreen })) },
   { path: "sales", element: <SalesRedirect /> },
   { path: "sales/:tab", lazy: () => import("../screens/sales/index.js").then((m) => ({ Component: m.SalesScreen })) },

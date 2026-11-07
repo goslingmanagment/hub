@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useCallback, useMemo, type ReactNode } from "react";
 import { Link, useLocation, type To } from "react-router";
 import { Person, type PersonStatus } from "@agency_hub_core/ui";
 import { pickPeriodParams } from "@agency_hub_core/ui/period";
@@ -23,6 +23,10 @@ function withSearch(path: string, params: URLSearchParams): string {
   return query ? `${path}?${query}` : path;
 }
 
+/**
+ * The tabs of Человек (spec §4.4, D2): Работа · Продажи · Доступ. `shifts` is
+ * the old Смены tab: its address redirects to Работа (app/routes.tsx).
+ */
 export type PersonTab = "work" | "shifts" | "sales" | "access";
 
 /** `/people/:userId` (the «Работа» tab) or one of its tabs, with the period and page carried. */
@@ -52,13 +56,13 @@ export function parseShiftKey(key: string | undefined): string | null {
   return Number.isNaN(instant.getTime()) ? null : instant.toISOString();
 }
 
-/** `/shifts/:userId/:shiftStart`, with the page filter carried. */
+/**
+ * `/shifts/:userId/:shiftStart`, with the period and the page filter carried
+ * (D3): the review reads only the page, but the menu and «←» of the review take
+ * the period from its address.
+ */
 export function shiftPath(userId: number, startedAt: string, search: URLSearchParams | string = ""): string {
-  const source = typeof search === "string" ? new URLSearchParams(search) : search;
-  const params = new URLSearchParams();
-  const page = source.get("page");
-  if (page) params.set("page", page);
-  return withSearch(`/shifts/${userId}/${shiftKey(startedAt)}`, params);
+  return withSearch(`/shifts/${userId}/${shiftKey(startedAt)}`, carryParams(search));
 }
 
 /** Where «←» of a deep screen goes: the screen it was opened from, with its filters. */
@@ -67,10 +71,21 @@ export interface BackTarget {
   label: string;
 }
 
-/** The state a drill-down leaves for its «←». */
+/** The state a drill-down leaves for its «←»: this screen, with its filters, under `label` («Смены», «alex.k»). */
 export function useBackState(label: string): { back: BackTarget } {
   const location = useLocation();
-  return { back: { to: `${location.pathname}${location.search}`, label } };
+  const to = `${location.pathname}${location.search}`;
+  return useMemo(() => ({ back: { to, label } }), [to, label]);
+}
+
+/**
+ * The same for every row of a table: `<Table rowHref={…} rowState={useRowBackState("Смены")} />`.
+ * A plain click on the row then opens the deep screen with «← Смены» back here,
+ * this very week and page; ⌘-click and the middle button open a new tab as usual.
+ */
+export function useRowBackState(label: string): () => { back: BackTarget } {
+  const state = useBackState(label);
+  return useCallback(() => state, [state]);
 }
 
 /** The «←» of a deep screen: where it was opened from, else the fallback. Only paths of this app. */

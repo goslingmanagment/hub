@@ -1,13 +1,15 @@
-import { Copy } from "lucide-react";
-import { useSearchParams } from "react-router";
-import { Button, Disclosure, EmptyState, ErrorState, LinkButton, Money, Notice, Person, Table, TimeMsk, type Column } from "@agency_hub_core/ui";
-import { formatDayRange } from "@agency_hub_core/ui/format";
+import { ArrowRight, ChevronRight, Copy } from "lucide-react";
+import { useRef, useState } from "react";
+import { Link, useSearchParams } from "react-router";
+import { Button, Disclosure, EmptyState, ErrorState, Money, Notice, PageLabel, Person, Table, TimeMsk, Tooltip, type Column } from "@agency_hub_core/ui";
+import { formatDay, formatDayRange } from "@agency_hub_core/ui/format";
 import { sheetText } from "@agency_hub_core/ui/payoutSheet";
 import { ruPlural } from "@agency_hub_core/ui/plural";
 import { carryParams } from "@/shared/links";
 import { usePeriod } from "@/shared/usePeriod";
 import { ScreenHeader } from "@/shared/ScreenHeader";
 import { copySheet } from "./copy";
+import { rangeWords } from "./range";
 import { PayoutDrawer, SheetDayTable } from "./PayoutDrawer";
 import { usePayouts, CONFIRM_MAX_DAYS, EXPORT_MAX_DAYS, type PayoutChatter, type PayoutsView } from "./data";
 import "./payouts.css";
@@ -18,7 +20,7 @@ import "./payouts.css";
  * page, on purpose: the export is never cut by a page filter (the console's
  * rule, TeamPayoutsPage.tsx:28-33), so this screen has none. A row opens the
  * chatter's panel (`?chatter=`): their days, their block to copy, their shifts
- * without a confirmation.
+ * without a confirmation, their own amounts.
  */
 
 /** «3 строки» */
@@ -33,15 +35,19 @@ function UnconfirmedCell({ chatter }: { chatter: PayoutChatter }) {
   const late = chatter.unconfirmed.filter((shift) => shift.tooLate).length;
   return (
     <span>
-      {count} {ruPlural(count, "смена", "смены", "смен")}
-      {(going > 0 || late > 0) && (
-        <span className="payouts-sub">
-          {[going > 0 && (going === 1 ? "одна ещё идёт" : `${going} ещё идут`), late > 0 && `${late} уже нельзя подтвердить`].filter(Boolean).join(" · ")}
-        </span>
-      )}
+      <Money mills={chatter.atStakeMills} />
+      <span className="payouts-sub">
+        {[
+          `${count} ${ruPlural(count, "смена", "смены", "смен")}`,
+          going > 0 && (going === 1 ? "одна ещё идёт" : `${going} ещё идут`),
+          late > 0 && `${late} уже нельзя подтвердить`,
+        ].filter(Boolean).join(" · ")}
+      </span>
     </span>
   );
 }
+
+const STAKE_HINT = "Продажи смен, которые чаттер ещё не подтвердил, — по данным Hub, до его отметок. В выгрузку не входят, пока чаттер не подтвердит смену в кабинете.";
 
 function SummaryTable({ view, onOpen, selected }: { view: PayoutsView; onOpen: (username: string) => void; selected: string | null }) {
   // While nobody has confirmed anything, the confirmed columns would be a row of zeros: they wait until the first confirmation.
@@ -51,28 +57,40 @@ function SummaryTable({ view, onOpen, selected }: { view: PayoutsView; onOpen: (
     {
       key: "who",
       header: "Чаттер",
-      cell: (row) => <Person name={row.username} {...(row.days > 0 ? { hint: `${row.days} ${ruPlural(row.days, "день", "дня", "дней")} с продажами` } : {})} />,
+      // As wide as the names: the room of a wide screen goes after the pages.
+      nowrap: true,
+      cell: (row) => <Person name={row.username} hint={row.days > 0 ? `${row.days} ${ruPlural(row.days, "день", "дня", "дней")} с продажами` : null} />,
       sortValue: (row) => row.username,
+      // «Итого» only where a total stands beside it.
+      ...(anyConfirmed || (view.atStakeMills !== null && view.atStakeMills > 0n) ? { footer: <span className="payouts-total">Итого</span> } : {}),
     },
     ...(anyConfirmed ? [
       {
         key: "confirmed",
         header: "Подтверждено",
-        title: "Подтверждённые чаттером продажи за период: то, что копируется в таблицу выплат",
+        hint: "Подтверждённые чаттером продажи за эти дни: то, что копируется в таблицу выплат.",
         numeric: true,
-        width: 180,
-        cell: (row: PayoutChatter) => (row.confirmedMills > 0n ? <Money mills={row.confirmedMills} strong /> : <span className="text-ink-3">—</span>),
+        width: 190,
+        cell: (row: PayoutChatter) => (row.confirmedMills > 0n ? (
+          <span>
+            <Money mills={row.confirmedMills} strong />
+            {/* A sum the chatter wrote below Hub's: the owner pays by it, so the row says so (В1). */}
+            {row.ownAmounts.length > 0 && <span className="payouts-sub payouts-own">{row.ownAmounts.length} {ruPlural(row.ownAmounts.length, "своя сумма", "своих суммы", "своих сумм")}</span>}
+          </span>
+        ) : <span className="text-ink-3">—</span>),
         sortValue: (row: PayoutChatter) => row.confirmedMills,
         footer: <Money mills={view.confirmedMills} strong />,
       },
       {
         key: "pages",
         header: "Страницы",
+        // The spare width of a wide screen goes after the pages, not between the name and its sum.
+        grow: true,
         cell: (row: PayoutChatter) => row.pages.length === 0 ? <span className="text-ink-3">—</span> : (
           <span className="payouts-pages">
             {row.pages.map((page) => (
               <span key={page.pageLabel} className="payouts-page">
-                <span className="payouts-page__label">{page.pageLabel}</span>
+                <PageLabel label={page.pageLabel} platform={page.platform} />
                 {row.pages.length > 1 && <Money mills={page.mills} />}
               </span>
             ))}
@@ -82,26 +100,23 @@ function SummaryTable({ view, onOpen, selected }: { view: PayoutsView; onOpen: (
     ] satisfies Column<PayoutChatter>[] : []),
     ...(anyUnconfirmed ? [
       {
-        key: "unconfirmed",
-        header: "Без подтверждения",
-        headerWrap: false,
-        width: 220,
-        cell: (row: PayoutChatter) => <UnconfirmedCell chatter={row} />,
-        sortValue: (row: PayoutChatter) => row.unconfirmed.length,
-        sortFirst: "desc" as const,
-      },
-      {
         key: "stake",
-        header: "Продажи этих смен",
+        header: "Ждут подтверждения",
         headerWrap: false,
+        hint: STAKE_HINT,
         numeric: true,
-        width: 200,
-        title: "Продажи смен без подтверждения по данным Hub, до отметок чаттера. В выгрузку не входят, пока чаттер не подтвердит смену.",
-        cell: (row: PayoutChatter) => (row.unconfirmed.length === 0 ? <span className="text-ink-3">—</span> : <Money mills={row.atStakeMills} />),
-        sortValue: (row: PayoutChatter) => row.atStakeMills,
+        width: 240,
+        cell: (row: PayoutChatter) => <UnconfirmedCell chatter={row} />,
+        sortValue: (row: PayoutChatter) => (row.unconfirmed.length === 0 ? null : row.atStakeMills),
         footer: view.atStakeMills !== null && view.atStakeMills > 0n ? <Money mills={view.atStakeMills} /> : undefined,
       },
     ] satisfies Column<PayoutChatter>[] : []),
+    {
+      key: "go",
+      header: <span className="ui-sr-only">Открыть</span>,
+      width: 44,
+      cell: () => <ChevronRight size={18} strokeWidth={1.75} aria-hidden className="payouts-go" />,
+    },
   ];
   return (
     <Table
@@ -111,13 +126,17 @@ function SummaryTable({ view, onOpen, selected }: { view: PayoutsView; onOpen: (
       rowKey={(row) => row.username}
       onRowClick={(row) => onOpen(row.username)}
       selectedKey={selected}
+      skeletonLines={2}
+      align="first-line"
+      // Nobody confirmed (production today): two columns, not a table spread over 1 400 px (В6).
+      {...(anyConfirmed ? {} : { maxWidth: 720 })}
       defaultSort={anyConfirmed ? null : { key: "stake", direction: "desc" }}
     />
   );
 }
 
 export function PayoutsScreen() {
-  const { period, setPeriod } = usePeriod();
+  const { spec, period, setPeriod } = usePeriod();
   const [search, setSearch] = useSearchParams();
   const payouts = usePayouts(period);
   const { view, exported, problem } = payouts;
@@ -129,19 +148,43 @@ export function PayoutsScreen() {
     else next.set("chatter", username);
     return next;
   });
+  // «Что изменилось» opens and comes into view from the notice above the table (В4).
+  const [lateOpen, setLateOpen] = useState(false);
+  const lateRef = useRef<HTMLDivElement>(null);
+  const showLate = () => {
+    setLateOpen(true);
+    window.requestAnimationFrame(() => lateRef.current?.scrollIntoView({ block: "start", behavior: "smooth" }));
+  };
 
   const rows = view?.sheet.length ?? 0;
+  const words = view ? rangeWords(view, spec.kind === "week") : null;
   const why = problem !== null ? problem
     : view === null || exported.isFetching ? "Выгрузка ещё читается"
       : exported.isError ? "Не удалось обновить: копировать старые суммы нельзя"
         : rows === 0 ? "Нечего копировать: за эти дни нет подтверждённых отчётов" : null;
   const copyAll = () => {
-    if (view === null || why !== null) return;
-    void copySheet(sheetText(view.sheet, view.days), `Скопировано: ${linesWord(rows)}, ${formatDayRange(view.from, view.to)}, все страницы`);
+    if (view === null || why !== null || words === null) return;
+    void copySheet(
+      sheetText(view.sheet, view.days),
+      `Скопировано: ${linesWord(rows)}, ${words.range}${words.copyNote}, все страницы`,
+    );
   };
 
   const confirmedNone = view !== null && view.sheet.length === 0 && view.chatters.length > 0;
-  const decisionsHref = `/decisions?${carryParams(search).toString()}`;
+  const decisionsHref = `/decisions?${carryParams(search).toString()}#disputes`;
+  const ownAll = view ? view.chatters.flatMap((chatter) => chatter.ownAmounts) : [];
+  const warnings = view ? [
+    view.disputedOpen > 0 && {
+      key: "disputes",
+      text: `Не вошло: ${view.disputedOpen} ${ruPlural(view.disputedOpen, "продажа", "продажи", "продаж")} в споре. Решите спор — и продажа попадёт в выгрузку.`,
+      action: <Link to={decisionsHref} className="payouts-notice-link">К спорам <ArrowRight size={14} strokeWidth={1.75} aria-hidden /></Link>,
+    },
+    view.lateChanges.length > 0 && {
+      key: "late",
+      text: `Изменено после подтверждения дня: ${linesWord(view.lateChanges.length)}. Уже выгруженный день мог измениться.`,
+      action: <button type="button" className="payouts-notice-link" onClick={showLate}>Показать <ArrowRight size={14} strokeWidth={1.75} aria-hidden /></button>,
+    },
+  ].filter((one) => one !== false) : [];
 
   return (
     <>
@@ -149,11 +192,15 @@ export function PayoutsScreen() {
         title="Выплаты"
         period
         actions={(
-          <Button variant="primary" icon={Copy} disabled={why !== null} title={why ?? "Таблица по дням: блок на чаттера, Fansly до цента, OnlyFans целыми долларами"} onClick={copyAll}>
-            Скопировать для таблицы
-          </Button>
+          <Tooltip content={why ?? "Таблица по дням: блок на чаттера, Fansly до цента, OnlyFans целыми долларами"} align="end">
+            <Button variant="primary" icon={Copy} disabled={why !== null} onClick={copyAll}>
+              Скопировать для таблицы
+            </Button>
+          </Tooltip>
         )}
-        meta={<>Подтверждённые продажи за {period.label}, все страницы. Копируется в формате таблицы выплат.</>}
+        meta={words
+          ? <>Подтверждённые продажи за {words.range}{words.note}, все страницы. Копируется в формате таблицы выплат.</>
+          : <>Подтверждённые продажи за {period.label}, все страницы. Копируется в формате таблицы выплат.</>}
         updatedAt={exported.dataUpdatedAt}
         onRefresh={payouts.refetch}
         refreshing={exported.isFetching}
@@ -169,27 +216,26 @@ export function PayoutsScreen() {
           </EmptyState>
         ) : view === null ? (
           payouts.loading
-            ? <Table label="Выплаты по чаттерам" columns={SKELETON_COLUMNS} rows={[]} rowKey={() => ""} loading skeletonRows={5} />
+            ? <Table label="Выплаты по чаттерам" columns={SKELETON_COLUMNS} rows={[]} rowKey={() => ""} loading skeletonRows={5} skeletonLines={2} />
             : <ErrorState onRetry={payouts.refetch} retrying={exported.isFetching} />
         ) : (
           <>
             <div className="payouts-notices">
-            {exported.isError && <Notice tone="warning" role="alert" action={<Button size="sm" onClick={payouts.refetch}>Повторить</Button>}>Не удалось обновить: показаны прежние суммы, копировать их нельзя.</Notice>}
-            {view.disputedOpen > 0 && (
-              <Notice tone="warning" action={<LinkButton size="sm" to={decisionsHref}>К спорам</LinkButton>}>
-                Не вошло: {view.disputedOpen} {ruPlural(view.disputedOpen, "продажа", "продажи", "продаж")} в споре. Решите спор — и продажа попадёт в выгрузку.
-              </Notice>
-            )}
-            {view.lateChanges.length > 0 && (
-              <Notice tone="warning" title={`Изменено после подтверждения дня: ${linesWord(view.lateChanges.length)}`}>
-                Уже выгруженный день мог измениться. Что именно — внизу, в «Что изменилось».
-              </Notice>
-            )}
-            {confirmedNone && (
-              <Notice tone="off" title="Чаттеры ещё не подтвердили ни одной смены за эти дни">
-                Копировать пока нечего. Продажи их смен по данным Hub — в последнем столбце; в выгрузку они попадут, когда чаттер подтвердит смену в кабинете.
-              </Notice>
-            )}
+              {exported.isError && <Notice tone="warning" role="alert" action={<Button size="sm" onClick={payouts.refetch}>Повторить</Button>}>Не удалось обновить: показаны прежние суммы, копировать их нельзя.</Notice>}
+              {/* Two things left out of the copy, one notice: each line with its own way on (В4). */}
+              {warnings.length > 0 && (
+                <Notice tone="warning">
+                  <ul className="payouts-warnings">
+                    {warnings.map((one) => <li key={one.key}><span>{one.text}</span>{one.action}</li>)}
+                  </ul>
+                </Notice>
+              )}
+              {confirmedNone && (
+                <Notice title="Чаттеры ещё не подтвердили ни одной смены за эти дни">
+                  Копировать пока нечего. Продажи их смен по данным Hub — в столбце «Ждут подтверждения»; в выгрузку они попадут, когда чаттер
+                  подтвердит смену в кабинете.
+                </Notice>
+              )}
             </div>
 
             {view.chatters.length === 0 ? (
@@ -201,35 +247,50 @@ export function PayoutsScreen() {
             )}
 
             <div className="payouts-folds">
-            {view.sheet.length > 0 && (
-              <Disclosure size="md" summary="Вся выгрузка по дням" hint={`${linesWord(view.sheet.length)} · как вставится в таблицу`} className="payouts-fold">
-                <SheetDayTable sheet={view.sheet} days={view.days} withChatter />
+              {view.sheet.length > 0 && (
+                <Disclosure size="md" summary="Вся выгрузка по дням" hint={`${linesWord(view.sheet.length)} · по дням, как в таблице выплат`} className="payouts-fold">
+                  <SheetDayTable sheet={view.sheet} days={view.days} withChatter />
+                </Disclosure>
+              )}
+              {ownAll.length > 0 && (
+                <Disclosure size="md" summary="Своя сумма вместо суммы Hub" hint={String(ownAll.length)} className="payouts-fold">
+                  <p className="payouts-note">Чаттер записал продажу «моё» с суммой меньше, чем у Hub. В выгрузку идёт его сумма.</p>
+                  <OwnAmountsTable own={ownAll} />
+                </Disclosure>
+              )}
+              {view.lateChanges.length > 0 && (
+                <div ref={lateRef} className="payouts-anchor">
+                  <Disclosure size="md" summary="Что изменилось" hint={String(view.lateChanges.length)} className="payouts-fold" open={lateOpen} onOpenChange={setLateOpen}>
+                    <LateChangesTable changes={view.lateChanges} />
+                  </Disclosure>
+                </div>
+              )}
+              <Disclosure summary="Как это считается">
+                <p>
+                  Чаттеры отмечают продажи своих смен в кабинете («моё», «делим», «не моё») и подтверждают отчёт. Сумма чаттеру
+                  записывается один раз, когда он подтверждает смену, — на день его смены (тот, на который пришлась большая её часть,
+                  как в таблице выплат), и потом не переезжает; «делим» — пополам, на день первого подтверждения; решение спора
+                  заменяет прежние суммы продажи.
+                </p>
+                <p>
+                  «Ждут подтверждения» — продажи смен без подтверждения по данным Hub, до отметок чаттера: столько стоит на кону, в
+                  выгрузку они не входят. Подтвердить смену можно {CONFIRM_MAX_DAYS} дней.
+                </p>
+                <p>Выгрузка всегда по всем страницам: фильтр страницы её не меняет. Fansly — до цента, OnlyFans — целыми долларами.</p>
               </Disclosure>
-            )}
-            {view.lateChanges.length > 0 && (
-              <Disclosure size="md" summary="Что изменилось" hint={String(view.lateChanges.length)} className="payouts-fold">
-                <LateChangesTable changes={view.lateChanges} />
-              </Disclosure>
-            )}
-            <Disclosure summary="Как это считается">
-              <p>
-                Чаттеры отмечают продажи своих смен в кабинете («моё», «делим», «не моё») и подтверждают отчёт. Сумма чаттеру
-                записывается один раз, когда он подтверждает смену, — на день его смены (тот, на который пришлась большая её часть,
-                как в таблице выплат), и потом не переезжает; «делим» — пополам, на день первого подтверждения; решение спора
-                заменяет прежние суммы продажи.
-              </p>
-              <p>
-                «Продажи этих смен» — продажи смен без подтверждения по данным Hub, до отметок чаттера: столько стоит на кону, в
-                выгрузку они не входят. Подтвердить смену можно {CONFIRM_MAX_DAYS} дней.
-              </p>
-              <p>Выгрузка всегда по всем страницам: фильтр страницы её не меняет. Fansly — до цента, OnlyFans — целыми долларами.</p>
-            </Disclosure>
             </div>
           </>
         )}
       </div>
-      {openChatter && view && (
-        <PayoutDrawer key={openChatter.username} chatter={openChatter} view={view} canCopy={why === null || (openChatter.sheet.length > 0 && !exported.isFetching && !exported.isError)} onClose={() => setChatter(null)} />
+      {openChatter && view && words && (
+        <PayoutDrawer
+          key={openChatter.username}
+          chatter={openChatter}
+          view={view}
+          words={words}
+          canCopy={why === null || (openChatter.sheet.length > 0 && !exported.isFetching && !exported.isError)}
+          onClose={() => setChatter(null)}
+        />
       )}
     </>
   );
@@ -237,11 +298,22 @@ export function PayoutsScreen() {
 
 const SKELETON_COLUMNS: Column<never>[] = [
   { key: "who", header: "Чаттер", cell: () => null },
-  { key: "confirmed", header: "Подтверждено", numeric: true, width: 180, cell: () => null },
+  { key: "confirmed", header: "Подтверждено", numeric: true, width: 190, cell: () => null },
   { key: "pages", header: "Страницы", cell: () => null },
-  { key: "unconfirmed", header: "Без подтверждения", headerWrap: false, width: 220, cell: () => null },
-  { key: "stake", header: "Продажи этих смен", headerWrap: false, numeric: true, width: 200, cell: () => null },
+  { key: "stake", header: "Ждут подтверждения", headerWrap: false, numeric: true, width: 240, cell: () => null },
+  { key: "go", header: "", width: 44, cell: () => null },
 ];
+
+function OwnAmountsTable({ own }: { own: PayoutChatter["ownAmounts"] }) {
+  const columns: Column<PayoutChatter["ownAmounts"][number]>[] = [
+    { key: "who", header: "Чаттер", cell: (row) => row.username, sortValue: (row) => row.username },
+    { key: "page", header: "Страница", cell: (row) => row.pageLabel },
+    { key: "at", header: "Продажа", nowrap: true, cell: (row) => <TimeMsk at={row.occurredAt} />, sortValue: (row) => row.occurredAt },
+    { key: "hub", header: "Сумма Hub", numeric: true, cell: (row) => <Money mills={row.netMills} muted /> },
+    { key: "own", header: "Своя сумма", numeric: true, cell: (row) => <Money mills={row.amountMills} strong /> },
+  ];
+  return <Table label="Своя сумма вместо суммы Hub" columns={columns} rows={own} rowKey={(row) => `${row.username}-${row.saleRef}`} defaultSort={{ key: "at", direction: "desc" }} />;
+}
 
 function LateChangesTable({ changes }: { changes: PayoutsView["lateChanges"] }) {
   const columns: Column<PayoutsView["lateChanges"][number]>[] = [
@@ -249,9 +321,8 @@ function LateChangesTable({ changes }: { changes: PayoutsView["lateChanges"] }) 
     { key: "sum", header: "Сумма", numeric: true, width: 120, cell: (row) => <Money mills={row.creditedMills} /> },
     { key: "who", header: "Чаттер", cell: (row) => row.username },
     { key: "page", header: "Страница", cell: (row) => row.pageLabel },
-    { key: "day", header: "День выплаты", nowrap: true, cell: (row) => <TimeMsk at={row.payDay} show="date" /> },
+    { key: "day", header: "День выплаты", nowrap: true, cell: (row) => formatDay(row.payDay) },
     { key: "at", header: "Когда изменено", nowrap: true, cell: (row) => <TimeMsk at={row.at} /> },
   ];
   return <Table label="Изменено после подтверждения дня" columns={columns} rows={changes} rowKey={(row) => `${row.change}-${row.username}-${row.saleRef}-${row.at}`} />;
 }
-

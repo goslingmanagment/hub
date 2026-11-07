@@ -4,15 +4,18 @@
  * Future contract (phase 2, spec §2.7) — the shapes below are what the screen
  * needs, and what Hub should answer in one read each:
  *   - `teamNow`           → NowState: who is on a shift now, with live counters (fans waiting now);
- *   - `teamShiftJournal`  → ShiftsModel: every shift of the period with money, $/h and its quality
- *                           (reply median, fans left waiting at the end, AI share without an edit),
+ *   - `teamShiftJournal`  → ShiftsModel: every shift of the period with money, $/h and its quality —
+ *                           `replyMedianSeconds` · `unansweredAtEnd` · `aiUneditedShare`, counted by Hub
+ *                           by the shift review's rules (`@agency_hub_core/ui/shiftReview`, spec §3 r2) —
  *                           the chatter × day grid, page filters applied by Hub.
  *
  * Phase 1 adapter over today's operations (what the console's «Заработок» reads,
  * apps/dashboard/src/api/team.ts):
  *   - `teamShiftSales` { days, until?, pageLabel? } — the period's shifts with money, the grid, the window before;
- *   - `teamChatterNumbers` { from, to? } — per-shift numbers (reply median, waiting at the end, how the text
- *     was composed). It knows no page filter and is slow on a whole team: the quality columns fill in later;
+ *   - `teamChatterNumbers` { from, to? } — per-shift numbers, read into the three quality numbers by
+ *     `qualityOfChatterNumbers` (the prototype's stand-in until Hub counts them by the review's rules; in the
+ *     demo they equal the review of the same shift). It knows no page filter and is slow on a whole team: the
+ *     quality columns fill in later;
  *   - `teamAuthorship` { days ≤ 7 } — messages without an author (a data check, shown only for a current period);
  *   - waiting decisions: `useDecisionCounts()` from src/shared/decisions.ts.
  * Query keys start with "shifts". Polls only while the tab is visible (queryClient's default):
@@ -20,9 +23,10 @@
  */
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { CHATTER_SHIFT_PAGE_MIN_MESSAGES, type KernelOperationResponse } from "@agency_hub_core/contracts";
-import { addDays, daysInRange, mondayOf, moscowDayEnd, moscowDayOf, moscowDayStart, type MoscowDay } from "@agency_hub_core/ui/moscow";
-import type { ResolvedPeriod } from "@agency_hub_core/ui/period";
+import { addDays, daysInRange, moscowDayEnd, moscowDayOf, moscowDayStart, type MoscowDay } from "@agency_hub_core/ui/moscow";
+import { periodChunks, type ResolvedPeriod } from "@agency_hub_core/ui/period";
 import { kernel } from "@/shared/hub";
+import { qualityOfChatterNumbers, type ShiftQuality } from "@/shared/metrics";
 
 type SalesResponse = KernelOperationResponse<"teamShiftSales">;
 type SalesShift = SalesResponse["shifts"][number];
@@ -37,8 +41,10 @@ const HOUR = 60 * MINUTE;
 export const SHIFTS_MAX_DAYS = 31;
 /** The longest window `teamAuthorship` reads. */
 export const AUTHORSHIP_MAX_DAYS = 7;
-/** Up to this many days the grid has a column a day; a longer period has a column a calendar week. */
+/** Up to this many days the grid has a column a day; a longer period has a column per 7 days back from its end (D4). */
 export const GRID_DAY_COLUMNS_MAX = 8;
+/** The days of one column of a longer period. */
+export const GRID_CHUNK_DAYS = 7;
 
 // ─────────────────────────────────────────────────────────── The future contract
 
@@ -50,18 +56,7 @@ export interface ShiftPage {
   counts: boolean;
 }
 
-/** How a shift went, besides the money. */
-export interface ShiftQuality {
-  /** The median wait of a fan the chatter answered, seconds; null — nobody was answered. */
-  replyMedianSeconds: number | null;
-  /** Fans whose own message was the last at the shift's end (for a shift going on: now). */
-  unansweredAtEnd: number;
-  /**
-   * Of the chatter's messages, the share (0–1) put in by the AI «Ответ» button; null without messages.
-   * Phase 2: the AI text sent without an edit, the same rule as the review (`origin: "ai"`, `edited: false`).
-   */
-  aiShare: number | null;
-}
+export type { ShiftQuality };
 
 /** One row of the journal (`teamShiftJournal`). */
 export interface JournalShift {
@@ -94,11 +89,14 @@ export interface Totals {
 }
 
 export interface GridColumn {
-  /** The day, or the Monday of a week. */
+  /** The day, or the first day of a chunk. */
   key: string;
-  kind: "day" | "week";
+  /** A day, or (a period longer than GRID_DAY_COLUMNS_MAX) up to 7 days back from its end. */
+  kind: "day" | "chunk";
   from: MoscowDay;
   to: MoscowDay;
+  /** Days in the column: 1, or up to 7. */
+  days: number;
   /** Today is inside. */
   today: boolean;
   /** Entirely ahead. */
@@ -176,7 +174,7 @@ export interface NowShift {
 export interface NowState {
   shifts: NowShift[];
   /** The last shift that ended in the last two days; null — none. */
-  last: { userId: number; username: string; endedAt: string } | null;
+  last: { userId: number; username: string; startedAt: string; endedAt: string } | null;
 }
 
 // ─────────────────────────────────────────────────────────── Pure helpers
@@ -225,14 +223,6 @@ function pauseMinutesOf(shift: Pick<SalesShift, "pauses">): number {
   return shift.pauses.reduce((sum, pause) => sum + Math.max(0, Math.round((Date.parse(pause.to) - Date.parse(pause.from)) / MINUTE)), 0);
 }
 
-function qualityOf(numbers: NumbersShift["numbers"]): ShiftQuality {
-  return {
-    replyMedianSeconds: numbers.replies === 0 ? null : numbers.replyMedianSeconds,
-    unansweredAtEnd: numbers.waitingAtEnd,
-    aiShare: numbers.messages === 0 ? null : numbers.composed.reply / numbers.messages,
-  };
-}
-
 /**
  * The per-shift numbers of a shift. Without a page filter both reads cut the same
  * shift (services/chatter-shifts.ts), so the start matches. With one, Hub builds the
@@ -277,29 +267,30 @@ function journalOf(sales: SalesResponse, numbers: NumbersResponse | undefined): 
         salesNetMills: shift.salesNetMills,
         overlapNetMills: shift.overlapNetMills,
         perHourMills: perHourMills(shift.salesNetMills, shift.workedMinutes),
-        quality: found ? qualityOf(found.numbers) : null,
+        quality: found ? qualityOfChatterNumbers(found.numbers) : null,
       };
     })
     .sort((left, right) => Number(right.ongoing) - Number(left.ongoing) || right.startedAt.localeCompare(left.startedAt));
 }
 
+/**
+ * The grid's columns: a column a day up to GRID_DAY_COLUMNS_MAX days; a longer
+ * period in chunks of 7 days back from its last day (D4: the last chunk is
+ * full, the first holds the rest — 14 days are 7 + 7, 30 are 2 + 7 + 7 + 7 + 7).
+ */
 export function columnsOf(days: readonly string[], today: MoscowDay, knownSince: MoscowDay | null): GridColumn[] {
-  const make = (kind: "day" | "week", from: MoscowDay, to: MoscowDay): GridColumn => ({
+  const make = (kind: "day" | "chunk", from: MoscowDay, to: MoscowDay): GridColumn => ({
     key: from,
     kind,
     from,
     to,
+    days: daysInRange(from, to),
     today: from <= today && today <= to,
     future: from > today,
     unknown: knownSince !== null && to < knownSince,
   });
   if (days.length <= GRID_DAY_COLUMNS_MAX) return days.map((day) => make("day", day, day));
-  const weeks = new Map<string, string[]>();
-  for (const day of days) {
-    const monday = mondayOf(day);
-    weeks.set(monday, [...(weeks.get(monday) ?? []), day]);
-  }
-  return [...weeks.values()].map((group) => make("week", group[0]!, group.at(-1)!));
+  return periodChunks({ from: days[0]!, to: days.at(-1)! }, GRID_CHUNK_DAYS).map((chunk) => make("chunk", chunk.from, chunk.to));
 }
 
 type Daily = ReadonlyArray<{ date: string; salesNetMills: number; shifts: number; workedMinutes: number }>;
@@ -334,15 +325,31 @@ export function windowColumns(window: ShiftsWindow, today: MoscowDay): GridColum
 export interface TeamNorms {
   replyMedianSeconds: number | null;
   unansweredAtEnd: number | null;
-  aiShare: number | null;
+  aiUneditedShare: number | null;
 }
 
-function normsOf(journal: readonly JournalShift[]): TeamNorms {
-  const known = journal.filter((shift) => shift.quality !== null).map((shift) => shift.quality!);
+export const NO_NORMS: TeamNorms = { replyMedianSeconds: null, unansweredAtEnd: null, aiUneditedShare: null };
+
+/**
+ * The team's usual shift of the window: every shift of the whole team whose
+ * middle falls in it (as Hub puts a shift on a day), whatever page is picked —
+ * the quality numbers are the whole shift's, so a page filter never makes the
+ * same number an outlier or not.
+ */
+function normsOf(numbers: NumbersResponse | undefined, window: ShiftsWindow): TeamNorms {
+  if (!numbers) return NO_NORMS;
+  const from = Date.parse(moscowDayStart(window.from));
+  const to = Date.parse(moscowDayEnd(window.to));
+  const known = numbers.chatters.flatMap((chatter) => chatter.shifts)
+    .filter((shift) => {
+      const middle = (Date.parse(shift.startedAt) + Date.parse(shift.endedAt)) / 2;
+      return middle >= from && middle < to;
+    })
+    .map((shift) => qualityOfChatterNumbers(shift.numbers));
   return {
     replyMedianSeconds: median(known.flatMap((one) => (one.replyMedianSeconds === null ? [] : [one.replyMedianSeconds]))),
     unansweredAtEnd: median(known.map((one) => one.unansweredAtEnd)),
-    aiShare: median(known.flatMap((one) => (one.aiShare === null ? [] : [one.aiShare]))),
+    aiUneditedShare: median(known.flatMap((one) => (one.aiUneditedShare === null ? [] : [one.aiUneditedShare]))),
   };
 }
 
@@ -354,7 +361,7 @@ export const OUTLIER = {
   /** Twice as many fans left waiting, and at least this many. */
   unansweredTimes: 2,
   unansweredFloor: 3,
-  /** The AI's share this far above the team's usual (percentage points), and at least half of the messages. */
+  /** «ИИ без правки» this far above the team's usual (percentage points), and at least half of the texts. */
   aiAbovePoints: 0.25,
   aiFloor: 0.5,
 } as const;
@@ -371,9 +378,15 @@ export function manyUnanswered(quality: ShiftQuality, norms: TeamNorms): boolean
 }
 
 export function muchAi(quality: ShiftQuality, norms: TeamNorms): boolean {
-  const value = quality.aiShare;
-  return value !== null && norms.aiShare !== null && value >= OUTLIER.aiFloor && value >= norms.aiShare + OUTLIER.aiAbovePoints;
+  const value = quality.aiUneditedShare;
+  return value !== null && norms.aiUneditedShare !== null && value >= OUTLIER.aiFloor && value >= norms.aiUneditedShare + OUTLIER.aiAbovePoints;
 }
+
+/**
+ * Below this the window before is too small for a percent to mean anything
+ * («+100 %» from $15.99): the row says «было $15.99» instead.
+ */
+export const COMPARE_FLOOR_MILLS = 50_000;
 
 // ─────────────────────────────────────────────────────────── The period's model
 
@@ -403,7 +416,7 @@ export function buildModel(sales: SalesResponse, numbers: NumbersResponse | unde
   }));
   // Who worked first (Hub's order: the most money first); who did not, below.
   chatters.sort((left, right) => Number(left.gone) - Number(right.gone));
-  return { window, columns, team, chatters, journal, comparable, knownSince, norms: normsOf(journal), today };
+  return { window, columns, team, chatters, journal, comparable, knownSince, norms: normsOf(numbers, window), today };
 }
 
 // ─────────────────────────────────────────────────────────── Reads
@@ -486,14 +499,14 @@ export function useNowOnShift(page: string | null) {
           pages: pagesOf(shift).map((one) => one.pageLabel),
           salesNetMills: shift.salesNetMills,
           messages: shift.authoredMessages,
-          waitingNow: waiting.data ? (found ? found.numbers.waitingAtEnd : null) : waiting.isError ? null : undefined,
+          waitingNow: waiting.data ? (found ? qualityOfChatterNumbers(found.numbers).unansweredAtEnd : null) : waiting.isError ? null : undefined,
         };
       })
       .sort((left, right) => left.startedAt.localeCompare(right.startedAt));
     const last = sales.data.shifts
       .filter((shift) => !shift.ongoing)
       .reduce<SalesShift | null>((latest, shift) => (latest === null || shift.endedAt > latest.endedAt ? shift : latest), null);
-    state = { shifts, last: last === null ? null : { userId: last.userId, username: last.username, endedAt: last.endedAt } };
+    state = { shifts, last: last === null ? null : { userId: last.userId, username: last.username, startedAt: last.startedAt, endedAt: last.endedAt } };
   }
   return { state, sales, waiting };
 }

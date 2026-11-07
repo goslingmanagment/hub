@@ -1,25 +1,12 @@
 /*
- * Разбор смены. The screen fills the window: the header, one line of facts,
- * then one sheet — the pulse, the list's controls, the chats and the
- * conversation — down to the window's bottom; the list and the conversation
- * scroll inside it, the page does not. Values come only from the design
- * system's tokens.
+ * Разбор смены. The screen fills the window (ScreenHeader `fill`): the title
+ * line, one line of facts, then one sheet — the pulse, the list's filters, the
+ * chats, the conversation and, when open, the evidence beside it — down to the
+ * window's bottom; the list, the conversation and the evidence scroll inside
+ * it, the page does not. Values come only from the design system's tokens.
  */
 @layer components {
-  /* ------------------------------------------------------------ The frame */
-
-  .wb-main:has(.review-content) {
-    height: 100dvh;
-    min-height: 640px;
-  }
-
-  .wb-content.review-content {
-    flex: 1 1 auto;
-    gap: 16px;
-    min-height: 0;
-    padding-top: 0;
-    padding-bottom: 24px;
-  }
+  /* ------------------------------------------------------------ The title */
 
   .review-title {
     display: inline-flex;
@@ -37,66 +24,42 @@
     font-variant-numeric: tabular-nums;
   }
 
-  .review-meta {
-    display: inline-flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 8px 16px;
-    color: var(--ui-text-2);
-  }
-
-  .review-meta__pages {
-    display: inline-flex;
-    flex-wrap: wrap;
-    gap: 6px;
-  }
-
-  .review-meta__note {
+  .review-title__extra {
     color: var(--ui-text-3);
-  }
-
-  /* A page of the shift: a quiet chip that narrows the chats to it. */
-  .review-page {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    height: 28px;
-    padding: 0 8px;
-    border: 1px solid var(--ui-line);
-    border-radius: var(--ui-radius-sm);
-    background: var(--ui-surface);
-    color: var(--ui-text-2);
-    font: 500 var(--ui-fs-14) / var(--ui-lh-14) var(--ui-font);
-    cursor: pointer;
-    transition: background-color var(--ui-fast), border-color var(--ui-fast), color var(--ui-fast);
-  }
-
-  .review-page:hover {
-    background: var(--ui-hover);
-    color: var(--ui-text);
-  }
-
-  .review-page--static,
-  .review-page--static:hover {
-    background: var(--ui-surface);
-    color: var(--ui-text-2);
-    cursor: default;
-  }
-
-  .review-page.is-on {
-    border-color: var(--ui-accent-line);
-    background: var(--ui-accent-soft);
-    color: var(--ui-accent);
-  }
-
-  .review-page__count {
-    color: var(--ui-text-3);
+    font-size: var(--ui-fs-15);
+    line-height: var(--ui-lh-15);
     font-weight: 400;
+    letter-spacing: 0;
     font-variant-numeric: tabular-nums;
   }
 
-  .review-page.is-on .review-page__count {
-    color: inherit;
+  /* Under the title: the facts of the shift, then quiet notes. */
+  .review-meta {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 8px 32px;
+  }
+
+  .review-meta__quiet {
+    color: var(--ui-text-3);
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+  }
+
+  .review-facts {
+    gap: 8px 28px;
+  }
+
+  .review-facts--loading {
+    display: inline-flex;
+    gap: 32px;
+  }
+
+  .review-facts__quiet {
+    color: var(--ui-text-3);
+    font-size: var(--ui-fs-14);
+    font-weight: 400;
   }
 
   /* ------------------------------------------------- The shift stepper */
@@ -164,39 +127,11 @@
     outline-offset: -2px;
   }
 
-  /* --------------------------------------------------------- The facts */
-
-  .review-facts {
-    padding: 0 2px;
-    gap: 8px 40px;
-  }
-
-  .review-facts--loading {
-    display: flex;
-    gap: 40px;
-  }
-
-  .review-facts__quiet {
-    color: var(--ui-text-3);
-    font-size: var(--ui-fs-14);
-    font-weight: 400;
-  }
-
-  /* A value with more behind it on hover: a quiet dotted line. */
-  .review-hint {
-    border-radius: 2px;
-    text-decoration: underline dotted var(--ui-line-strong);
-    text-decoration-thickness: 1px;
-    text-underline-offset: 5px;
-    cursor: help;
-  }
-
-  .review-tip {
-    display: block;
-    max-width: 320px;
-  }
-
   /* --------------------------------------------------------- The sheet */
+
+  .review-content {
+    padding-top: 8px;
+  }
 
   .review-panes {
     /* Fans waiting past the norm: a calmer orange than the warning itself. */
@@ -221,22 +156,9 @@
     border-bottom: 1px solid var(--ui-line);
   }
 
-  .review-toolbar__keys {
+  .review-toolbar__search {
     display: inline-flex;
-    align-items: center;
-    gap: 4px;
     margin-left: auto;
-    color: var(--ui-text-3);
-    font-size: var(--ui-fs-14);
-    line-height: var(--ui-lh-14);
-    white-space: nowrap;
-  }
-
-  /* A chip of the span or the page takes the hint's room on a 1440 window. */
-  @media (max-width: 1599px) {
-    .review-toolbar:has(.ui-chip) .review-toolbar__keys {
-      display: none;
-    }
   }
 
   .review-split {
@@ -252,10 +174,53 @@
     place-items: center;
   }
 
+  /* The evidence: a third column beside the conversation (D7). */
+  .review-split.has-evidence {
+    grid-template-columns: clamp(320px, 26%, 400px) minmax(0, 1fr) 400px;
+  }
+
+  /* In the sheet the panel is a column of it: a hairline on its left, not a card of its own. */
+  .review-split > .review-evidence-panel {
+    border-width: 0 0 0 1px;
+    border-radius: 0;
+  }
+
+  /* Not room for three: the list narrows to one line a chat, it never goes away. */
+  @media (max-width: 1679px) {
+    .review-split.has-evidence {
+      grid-template-columns: 280px minmax(0, 1fr) 380px;
+    }
+
+    .review-split.has-evidence .review-chat {
+      flex-direction: row;
+      align-items: baseline;
+      gap: 8px;
+      padding: 9px 12px 9px 16px;
+    }
+
+    .review-split.has-evidence .review-chat__top {
+      flex: 0 1 auto;
+      max-width: 55%;
+    }
+
+    .review-split.has-evidence .review-chat__when,
+    .review-split.has-evidence .review-chat__page {
+      display: none;
+    }
+
+    .review-split.has-evidence .review-chat__why {
+      display: block;
+      flex: 1 1 0;
+      min-width: 0;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+  }
+
   /* --------------------------------------------------------- The pulse */
 
   .review-pulse {
-    padding: 10px 16px 6px;
+    padding: 6px 16px 2px;
     user-select: none;
   }
 
@@ -264,8 +229,8 @@
     align-items: center;
     justify-content: space-between;
     gap: 16px;
-    min-height: 20px;
-    margin-bottom: 6px;
+    height: 20px;
+    margin-bottom: 2px;
     color: var(--ui-text-2);
     font-size: var(--ui-fs-14);
     line-height: var(--ui-lh-14);
@@ -273,14 +238,9 @@
     white-space: nowrap;
   }
 
-  .review-pulse__readout {
-    overflow: hidden;
-    color: var(--ui-text);
-    text-overflow: ellipsis;
-  }
-
   .review-pulse__legend {
     display: inline-flex;
+    flex: none;
     gap: 16px;
     color: var(--ui-text-2);
   }
@@ -291,11 +251,38 @@
     gap: 6px;
   }
 
+  .review-pulse__side {
+    display: inline-flex;
+    gap: 16px;
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  .review-pulse__scope,
   .review-pulse__silences,
   .review-pulse__hint {
     overflow: hidden;
     color: var(--ui-text-3);
     text-overflow: ellipsis;
+  }
+
+  .review-pulse__scope {
+    flex: none;
+  }
+
+  .review-pulse__picked {
+    display: inline-flex;
+    align-items: center;
+    gap: 12px;
+    color: var(--ui-text);
+    font-weight: 500;
+  }
+
+  .review-pulse__clear {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-weight: 400;
   }
 
   .review-key {
@@ -329,10 +316,17 @@
     box-shadow: inset 0 0 0 1px var(--ui-line);
   }
 
+  .review-key--on {
+    width: 14px;
+    height: 3px;
+    border-radius: 0;
+    background: var(--ui-text-2);
+  }
+
   .review-pulse__plot {
     position: relative;
     width: 100%;
-    height: 75px;
+    height: 58px;
   }
 
   .review-pulse__plot svg {
@@ -443,7 +437,7 @@
     flex-direction: column;
     gap: 2px;
     width: 100%;
-    padding: 10px 16px 10px 16px;
+    padding: 10px 16px;
     border: 0;
     background: transparent;
     color: var(--ui-text);
@@ -484,13 +478,7 @@
     white-space: nowrap;
   }
 
-  .review-chat__page {
-    flex: none;
-    color: var(--ui-text-3);
-    font-size: var(--ui-fs-14);
-    line-height: var(--ui-lh-14);
-  }
-
+  .review-chat__page,
   .review-chat__when {
     flex: none;
     color: var(--ui-text-3);
@@ -509,14 +497,24 @@
     -webkit-line-clamp: 2;
   }
 
+  /* A strong reason (it put the chat in the selection): in ink; a fan left without an answer, the AI's service text: the outlier's colour. */
   .review-why--strong {
+    color: var(--ui-text);
+  }
+
+  .review-why--mark {
     color: var(--ui-mark-text);
     font-weight: 500;
   }
 
   .review-why--note,
+  .review-why--more,
   .review-chat__outside {
     color: var(--ui-text-3);
+  }
+
+  .review-chat__snippet {
+    color: var(--ui-text-2);
   }
 
   .review-chats--loading {
@@ -534,15 +532,12 @@
   /* -------------------------------------------------- The conversation */
 
   .review-transcript {
+    /* The head and the note line up with the messages' column (920 px at most, centred). */
+    --review-inline: max(24px, calc((100% - 920px) / 2));
     display: flex;
     flex-direction: column;
     min-width: 0;
     min-height: 0;
-  }
-
-  /* The head and the note line up with the messages' column (920 px at most, centred). */
-  .review-transcript {
-    --review-inline: max(24px, calc((100% - 920px) / 2));
   }
 
   .review-transcript__head {
@@ -576,17 +571,15 @@
     line-height: var(--ui-lh-14);
   }
 
+  .review-transcript__nobody {
+    color: var(--ui-text);
+  }
+
   .review-transcript__nav {
     display: inline-flex;
     flex: none;
     align-items: center;
     gap: 8px;
-  }
-
-  .review-transcript__keys {
-    display: inline-flex;
-    gap: 2px;
-    margin-right: 4px;
   }
 
   .review-transcript__pos {
@@ -695,11 +688,21 @@
     opacity: 0.6;
   }
 
+  /* Whose a page message is when it is not the reviewed chatter's: a colleague, a mass message, an automated one. */
+  .review-msg__author {
+    margin: 0 4px 2px;
+    color: var(--ui-text-2);
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+    font-weight: 500;
+  }
+
   .review-bubble {
-    padding: 8px 14px 8px;
+    padding: 8px 14px;
     border: 1px solid transparent;
     border-radius: 14px;
     background: var(--ui-track);
+    transition: box-shadow var(--ui-fast);
   }
 
   .review-msg--page .review-bubble {
@@ -708,10 +711,9 @@
     background: var(--ui-surface);
   }
 
-  /* A page message that is not the reviewed chatter's own (a colleague, a mass message, an automated one): the ground's colour, no edge. */
+  /* A page message that is not the reviewed chatter's own: the ground's colour, a dashed frame, no edge. */
   .review-msg--page:not(.review-msg--mine) .review-bubble {
-    border-color: var(--ui-line-soft);
-    border-left-width: 1px;
+    border: 1px dashed var(--ui-line-strong);
     background: var(--ui-bg);
   }
 
@@ -740,6 +742,11 @@
 
   .review-msg.is-span .review-bubble {
     box-shadow: 0 0 0 3px var(--ui-accent-soft);
+  }
+
+  /* The place of the chat's reason, lit for a moment when the chat opens. */
+  .review-msg.is-focus .review-bubble {
+    box-shadow: 0 0 0 3px var(--ui-accent-line);
   }
 
   .review-msg.is-open .review-bubble {
@@ -780,8 +787,10 @@
 
   .review-origin {
     display: inline-flex;
+    flex-wrap: wrap;
     align-items: center;
-    gap: 6px;
+    justify-content: flex-end;
+    gap: 0 6px;
     padding: 2px 4px 2px 6px;
     border: 0;
     border-radius: var(--ui-radius-sm);
@@ -799,12 +808,12 @@
     color: var(--ui-text);
   }
 
-  .review-origin__wait {
-    color: var(--ui-text-3);
+  .review-origin > span {
+    white-space: nowrap;
   }
 
-  .review-origin__wait::before {
-    content: "· ";
+  .review-origin__wait {
+    color: var(--ui-text-3);
   }
 
   .review-origin__wait.is-long {
@@ -830,35 +839,30 @@
 
   /* ------------------------------------------------------ The evidence */
 
-  /* The panel covers the window's right side: the sheet makes room for it; on a narrower window the list steps aside. */
-  .review-panes.has-evidence {
-    margin-right: calc(480px - var(--wb-gutter) + 16px);
-  }
-
-  .review-panes.has-evidence .review-pulse__hint {
-    display: none;
-  }
-
-  @media (max-width: 1679px) {
-    .review-panes.has-evidence .review-split {
-      grid-template-columns: minmax(0, 1fr);
-    }
-
-    .review-panes.has-evidence .review-chats {
-      display: none;
-    }
-  }
-
   .review-evidence {
     display: flex;
     flex-direction: column;
     gap: 24px;
   }
 
+  .review-evidence__lead {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
   .review-evidence__verdict {
     margin: 0;
     font-size: var(--ui-fs-16);
     line-height: var(--ui-lh-16);
+  }
+
+  .review-evidence__known {
+    margin: 0;
+    color: var(--ui-text-2);
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+    font-variant-numeric: tabular-nums;
   }
 
   .review-evidence__block {
@@ -890,8 +894,7 @@
     color: var(--ui-text-2);
   }
 
-  .review-evidence__hint,
-  .review-evidence__none {
+  .review-evidence__hint {
     margin: 0;
     color: var(--ui-text-3);
     font-size: var(--ui-fs-14);
@@ -927,10 +930,6 @@
   /* ---------------------------------------------- Narrow windows: scroll */
 
   @media (max-width: 1100px) {
-    .wb-main:has(.review-content) {
-      height: auto;
-    }
-
     .review-panes {
       flex: none;
       height: 720px;
@@ -940,7 +939,17 @@
       grid-template-columns: 280px minmax(0, 1fr);
     }
 
-    .review-title__when {
+    /* A small window only: the evidence takes the list's place, the conversation stays. */
+    .review-split.has-evidence {
+      grid-template-columns: minmax(0, 1fr) 340px;
+    }
+
+    .review-split.has-evidence .review-chats {
+      display: none;
+    }
+
+    .review-title__when,
+    .review-title__extra {
       display: none;
     }
   }

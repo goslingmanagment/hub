@@ -1,8 +1,8 @@
-import { Badge, Disclosure, Money, Section, Table, TimeMsk, type Column } from "@agency_hub_core/ui";
+import { Badge, Disclosure, Money, Person, Section, Table, type Column } from "@agency_hub_core/ui";
 import { ruPlural } from "@agency_hub_core/ui/plural";
 import { sumMills } from "@agency_hub_core/shared";
 import { PersonLink } from "@/shared/links";
-import { FanCell } from "./FanCell";
+import { FanCell, collidingIn } from "./FanCell";
 import { CUSTOM_OVERDUE_DAYS, CUSTOMS_LIMIT, type Custom, type FanRefOnPage, type KnownFan } from "./data";
 
 /**
@@ -41,15 +41,14 @@ export interface CustomsProps {
   userIdOf: (username: string) => number | null;
 }
 
-function useColumns({ serverNow, platformOf, fanOf, userIdOf }: Pick<CustomsProps, "serverNow" | "platformOf" | "fanOf" | "userIdOf">) {
+function useColumns({ serverNow, platformOf, fanOf, userIdOf, rows }: Pick<CustomsProps, "serverNow" | "platformOf" | "fanOf" | "userIdOf"> & { rows: readonly Custom[] }) {
   const now = Date.parse(serverNow);
-  const fanCell = (row: Custom) => <FanCell fan={fanOf(row)} fanRef={row.fanRef} pageLabel={row.pageLabel} platform={platformOf(row.pageLabel)} />;
+  const collides = collidingIn(rows, fanOf);
+  const fanCell = (row: Custom) => <FanCell fan={fanOf(row)} fanRef={row.fanRef} pageLabel={row.pageLabel} platform={platformOf(row.pageLabel)} showLogin={collides(row)} />;
+  // Who wrote it down, by name only: the row's one time is how long it waits (С10 — no «записал 29 окт.» beside «9 дней назад»).
   const whoCell = (row: Custom) => {
     const id = userIdOf(row.createdBy);
-    const hint = <>записал <TimeMsk at={row.createdAt} show="date" /></>;
-    return id === null
-      ? <span>{row.createdBy}<span className="decisions-sub">{hint}</span></span>
-      : <PersonLink userId={id} name={row.createdBy} hint={hint} backLabel="Решения" />;
+    return id === null ? <Person name={row.createdBy} /> : <PersonLink userId={id} name={row.createdBy} backLabel="Решения" />;
   };
   return (since: "paid" | "created"): Column<Custom>[] => [
     { key: "fan", header: "Фан", cell: fanCell, width: 240 },
@@ -81,12 +80,13 @@ function useColumns({ serverNow, platformOf, fanOf, userIdOf }: Pick<CustomsProp
 /** The section of paid customs (the screen shows it only when there are some), with the rest folded under it. */
 export function CustomsSection(props: CustomsProps) {
   const { paid, capped } = props;
-  const columns = useColumns(props);
+  const columns = useColumns({ ...props, rows: paid });
   return (
     <Section
       id="customs"
+      className="decisions-section"
       title={<>Кастомы: оплачены, не отданы <span className="decisions-count">{paid.length}</span></>}
-      description={<>Фаны заплатили <Money mills={totalOf(paid)} strong /> и ждут. Отдали — чаттер отмечает в карточке фана в расширении; как модель снимает, по-прежнему в Telegram.</>}
+      description={<>Фаны заплатили <Money mills={totalOf(paid)} strong /> и ждут. Когда кастом отдан, чаттер отмечает это в карточке фана в расширении. Съёмка у модели по-прежнему идёт через Telegram.</>}
     >
       <Table label="Кастомы: оплачены, не отданы" columns={columns("paid")} rows={paid} rowKey={(row) => String(row.id)} />
       <CustomsFolds {...props} />
@@ -98,7 +98,7 @@ export function CustomsSection(props: CustomsProps) {
 /** The customs that wait for the fan (and states Workboard does not know): folded, out of the count. */
 export function CustomsFolds(props: CustomsProps) {
   const { ordered, other } = props;
-  const columns = useColumns(props);
+  const columns = useColumns({ ...props, rows: [...ordered, ...other] });
   const orderedTotal = totalOf(ordered);
   return (
     <>

@@ -1,33 +1,26 @@
-import { useState, type ReactNode } from "react";
+import type { ReactNode } from "react";
 import { useLocation, useSearchParams } from "react-router";
 import { Button, Count, Duration, Mark, Money, Person, Section, Skeleton, Spinner, Table, Tooltip, type Column, type SortState } from "@agency_hub_core/ui";
-import { formatCount, formatDuration, formatMills, formatPercent } from "@agency_hub_core/ui/format";
+import { formatCount, formatDuration, formatMills } from "@agency_hub_core/ui/format";
 import { ruPlural } from "@agency_hub_core/ui/plural";
 import { CHATTER_SHIFT_PAGE_MIN_MESSAGES } from "@agency_hub_core/contracts";
-import { personPath, shiftPath } from "@/shared/links";
-import { manyUnanswered, muchAi, slowReply, type JournalShift, type ShiftsModel, type TeamNorms } from "./data.js";
+import { personPath, shiftPath, useRowBackState } from "@/shared/links";
+import { METRICS, formatAiUnedited, formatReplyMedian, formatUnanswered } from "@/shared/metrics";
+import { NO_NORMS, manyUnanswered, muchAi, slowReply, type JournalShift, type ShiftsModel, type TeamNorms } from "./data.js";
 import { daysOf, spanOf } from "./WeekGrid.js";
 
 /** Rows shown before «Показать все»: a week of a whole team fits. */
 const FIRST_ROWS = 50;
 
-/** «2 мин 10 с» under 20 minutes, then minutes and hours: a reply time. */
-export function replyText(seconds: number): string {
-  const total = Math.max(0, Math.round(seconds));
-  if (total < 60) return `${total} с`;
-  if (total < 20 * 60) {
-    const minutes = Math.floor(total / 60);
-    const rest = total % 60;
-    return rest === 0 ? `${minutes} мин` : `${minutes} мин ${rest} с`;
-  }
-  return formatDuration(Math.round(total / 60));
-}
-
-function percentOf(share: number): string {
-  return formatPercent(share * 100);
-}
+/**
+ * The three quality columns: wide enough for their full labels in two lines
+ * («Без ответа / к концу») at 1440, wider with the rest of the table at 1920.
+ */
+const QUALITY_WIDTH = "11%";
 
 type QualityState = "loading" | "failed" | "ready";
+
+const SORT_KEYS = new Set(["who", "when", "worked", "sales", "perHour", "reply", "unanswered", "ai"]);
 
 function sortValueOf(key: string, shift: JournalShift): number | string | null {
   switch (key) {
@@ -46,16 +39,17 @@ function sortValueOf(key: string, shift: JournalShift): number | string | null {
     case "unanswered":
       return shift.quality?.unansweredAtEnd ?? null;
     case "ai":
-      return shift.quality?.aiShare ?? null;
+      return shift.quality?.aiUneditedShare ?? null;
     default:
       return null;
   }
 }
 
-const SORT_KEYS = new Set(["who", "when", "worked", "sales", "perHour", "reply", "unanswered", "ai"]);
-
-/** The journal's order in the address (`?sort=sales&dir=desc`): «←» from a review comes back to the same order. */
-function useJournalSort(): [SortState | null, (next: SortState) => void] {
+/**
+ * The journal's order and length in the address (`?sort=sales&dir=desc&all=1`):
+ * «←» from a review, and the browser's «Назад», come back to the same rows.
+ */
+function useJournalAddress(): { sort: SortState | null; setSort: (next: SortState) => void; all: boolean; setAll: (all: boolean) => void } {
   const [search, setSearch] = useSearchParams();
   const key = search.get("sort");
   const sort: SortState | null = key && SORT_KEYS.has(key) ? { key, direction: search.get("dir") === "asc" ? "asc" : "desc" } : null;
@@ -65,7 +59,14 @@ function useJournalSort(): [SortState | null, (next: SortState) => void] {
     updated.set("dir", next.direction);
     return updated;
   }, { replace: true });
-  return [sort, setSort];
+  const all = search.get("all") === "1";
+  const setAll = (next: boolean) => setSearch((current) => {
+    const updated = new URLSearchParams(current);
+    if (next) updated.set("all", "1");
+    else updated.delete("all");
+    return updated;
+  }, { replace: true, preventScrollReset: true });
+  return { sort, setSort, all, setAll };
 }
 
 function sorted(rows: readonly JournalShift[], sort: SortState | null): JournalShift[] {
@@ -83,7 +84,11 @@ function sorted(rows: readonly JournalShift[], sort: SortState | null): JournalS
 function QualityCell({ state, shift, render }: { state: QualityState; shift: JournalShift; render: (quality: NonNullable<JournalShift["quality"]>) => ReactNode }) {
   if (shift.quality) return <>{render(shift.quality)}</>;
   if (state === "loading") return <span className="shifts-skeleton-cell"><Skeleton width={48} /></span>;
-  return <span className="ui-muted" title={state === "failed" ? "Hub не ответил" : "Для этой смены чисел нет"}>—</span>;
+  return (
+    <Tooltip content={state === "failed" ? "Hub не ответил" : "Для этой смены чисел нет"}>
+      <span className="ui-muted">—</span>
+    </Tooltip>
+  );
 }
 
 /** The shift's pages under the name: a page with too few messages to count is greyed. */
@@ -92,18 +97,24 @@ function PagesHint({ shift }: { shift: JournalShift }) {
   return (
     <span className="shifts-journal__pages">
       {shift.pages.map((page, index) => (
-        <span
-          key={page.pageLabel}
-          className={page.counts ? undefined : "shifts-journal__page--quiet"}
-          title={page.counts
-            ? `${page.pageLabel}: ${formatCount(page.messages)} ${ruPlural(page.messages, "сообщение", "сообщения", "сообщений")}`
-            : `${page.pageLabel}: меньше ${CHATTER_SHIFT_PAGE_MIN_MESSAGES} сообщений, продажи этой страницы в смену не идут`}
-        >
-          {index > 0 && ", "}{page.pageLabel}
+        <span key={page.pageLabel}>
+          {index > 0 && ", "}
+          <Tooltip
+            content={page.counts
+              ? `${page.pageLabel}: ${formatCount(page.messages)} ${ruPlural(page.messages, "сообщение", "сообщения", "сообщений")}`
+              : `${page.pageLabel}: меньше ${CHATTER_SHIFT_PAGE_MIN_MESSAGES} сообщений, продажи этой страницы в смену не идут`}
+          >
+            <span className={page.counts ? undefined : "shifts-journal__page--quiet"}>{page.pageLabel}</span>
+          </Tooltip>
         </span>
       ))}
     </span>
   );
+}
+
+/** «Обычно у команды — 3 мин 49 с»: why a number is marked. */
+function usual(text: string): string {
+  return `Заметно хуже обычной смены команды за этот период. Обычно — ${text}`;
 }
 
 function columnsOf(state: QualityState, norms: TeamNorms): Column<JournalShift>[] {
@@ -119,21 +130,22 @@ function columnsOf(state: QualityState, norms: TeamNorms): Column<JournalShift>[
       header: "Смена",
       sortValue: (shift) => shift.startedAt,
       sortFirst: "desc",
-      nowrap: true,
       cell: (shift) => (
         <Tooltip
           content={`${formatCount(shift.messages)} ${ruPlural(shift.messages, "сообщение", "сообщения", "сообщений")} · ${shift.pauseMinutes > 0 ? `паузы ${formatDuration(shift.pauseMinutes)}` : "без пауз"}`}
           align="start"
         >
-          <span className="shifts-journal__day">{daysOf(shift)}</span>
-          <span className={shift.ongoing ? "shifts-journal__span shifts-journal__span--now" : "shifts-journal__span"}>{spanOf(shift)}</span>
+          <span className="shifts-journal__when">
+            <span className="shifts-journal__day">{daysOf(shift)}</span>
+            <span className={shift.ongoing ? "shifts-journal__span shifts-journal__span--now" : "shifts-journal__span"}>{spanOf(shift)}</span>
+          </span>
         </Tooltip>
       ),
     },
     {
       key: "worked",
-      header: "Работа",
-      title: "Отработано: смена без пауз",
+      header: "Отработал",
+      hint: "Смена без пауз: время, когда чаттер работал в расширении",
       numeric: true,
       sortValue: (shift) => shift.workedMinutes,
       cell: (shift) => <Duration minutes={shift.workedMinutes} />,
@@ -152,14 +164,17 @@ function columnsOf(state: QualityState, norms: TeamNorms): Column<JournalShift>[
     {
       key: "perHour",
       header: "В час",
+      hint: "Продажи, делённые на отработанное время без пауз",
       numeric: true,
       sortValue: (shift) => shift.perHourMills,
       cell: (shift) => <Money mills={shift.perHourMills} />,
     },
     {
       key: "reply",
-      header: "Ответ",
-      title: "Медиана: за сколько чаттер отвечал фану, который ждал",
+      header: METRICS.reply.label,
+      hint: METRICS.reply.hint,
+      headerWrap: true,
+      width: QUALITY_WIDTH,
       numeric: true,
       sortValue: (shift) => shift.quality?.replyMedianSeconds ?? null,
       sortFirst: "desc",
@@ -169,17 +184,18 @@ function columnsOf(state: QualityState, norms: TeamNorms): Column<JournalShift>[
           shift={shift}
           render={(quality) => {
             if (quality.replyMedianSeconds === null) return <span className="ui-muted">—</span>;
-            const text = replyText(quality.replyMedianSeconds);
-            return slowReply(quality, norms) ? <Mark title={`Обычно у команды — ${replyText(norms.replyMedianSeconds ?? 0)}`}>{text}</Mark> : text;
+            const text = formatReplyMedian(quality.replyMedianSeconds);
+            return slowReply(quality, norms) ? <Mark hint={usual(formatReplyMedian(norms.replyMedianSeconds))}>{text}</Mark> : text;
           }}
         />
       ),
     },
     {
       key: "unanswered",
-      header: "Без ответа",
+      header: METRICS.unanswered.label,
+      hint: METRICS.unanswered.hint,
       headerWrap: true,
-      title: "Фаны, чьё сообщение осталось последним к концу смены",
+      width: QUALITY_WIDTH,
       numeric: true,
       sortValue: (shift) => shift.quality?.unansweredAtEnd ?? null,
       sortFirst: "desc",
@@ -188,26 +204,28 @@ function columnsOf(state: QualityState, norms: TeamNorms): Column<JournalShift>[
           state={state}
           shift={shift}
           render={(quality) => (manyUnanswered(quality, norms)
-            ? <Mark title={`Обычно у команды — ${formatCount(Math.round(norms.unansweredAtEnd ?? 0))}`}>{formatCount(quality.unansweredAtEnd)}</Mark>
+            ? <Mark hint={usual(formatUnanswered(norms.unansweredAtEnd))}>{formatUnanswered(quality.unansweredAtEnd)}</Mark>
             : <Count value={quality.unansweredAtEnd} />)}
         />
       ),
     },
     {
       key: "ai",
-      header: "ИИ",
-      title: "Доля сообщений, вставленных кнопкой ИИ «Ответ»",
+      header: METRICS.aiUnedited.label,
+      hint: METRICS.aiUnedited.hint,
+      headerWrap: true,
+      width: QUALITY_WIDTH,
       numeric: true,
-      sortValue: (shift) => shift.quality?.aiShare ?? null,
+      sortValue: (shift) => shift.quality?.aiUneditedShare ?? null,
       sortFirst: "desc",
       cell: (shift) => (
         <QualityCell
           state={state}
           shift={shift}
           render={(quality) => {
-            if (quality.aiShare === null) return <span className="ui-muted">—</span>;
-            const text = percentOf(quality.aiShare);
-            return muchAi(quality, norms) ? <Mark title={`Обычно у команды — ${percentOf(norms.aiShare ?? 0)}`}>{text}</Mark> : text;
+            if (quality.aiUneditedShare === null) return <span className="ui-muted">—</span>;
+            const text = formatAiUnedited(quality.aiUneditedShare);
+            return muchAi(quality, norms) ? <Mark hint={usual(formatAiUnedited(norms.aiUneditedShare))}>{text}</Mark> : text;
           }}
         />
       ),
@@ -217,8 +235,10 @@ function columnsOf(state: QualityState, norms: TeamNorms): Column<JournalShift>[
 
 /**
  * Журнал смен (spec §4.1.4): one table of every shift of the period, newest
- * first, a shift going on first; the whole row opens its review. Sort by any
- * column; an outlier against the team's usual shift gets one calm mark.
+ * first, a shift going on first; the whole row opens its review, and the
+ * review's «←» comes back to this very period, page and order. The three
+ * quality numbers are the review's own (D1: same rules, same words). Sort by
+ * any column; an outlier against the team's usual shift gets one calm mark.
  */
 export function Journal({ model, isOwner, quality, onRetryQuality, retryingQuality, loading = false, refreshing = false, page }: {
   model: ShiftsModel | undefined;
@@ -231,24 +251,19 @@ export function Journal({ model, isOwner, quality, onRetryQuality, retryingQuali
   page: string | null;
 }) {
   const location = useLocation();
-  const [sort, setSort] = useJournalSort();
-  const [all, setAll] = useState(false);
+  const { sort, setSort, all, setAll } = useJournalAddress();
+  const rowState = useRowBackState("Смены");
   const rows = sorted(model?.journal ?? [], sort);
   const shown = all ? rows : rows.slice(0, FIRST_ROWS);
-  const columns = columnsOf(quality, model?.norms ?? { replyMedianSeconds: null, unansweredAtEnd: null, aiShare: null });
-  const total = model?.journal.length ?? 0;
-  const minutes = model?.journal.reduce((sum, shift) => sum + shift.workedMinutes, 0) ?? 0;
+  const columns = columnsOf(quality, model?.norms ?? NO_NORMS);
 
-  const description = model
-    ? [
-      total === 0 ? null : `${formatCount(total)} ${ruPlural(total, "смена", "смены", "смен")}, ${formatDuration(minutes)} работы.`,
-      isOwner ? "Строка открывает разбор смены." : "Строка открывает смены чаттера.",
-      page ? "Ответ, без ответа и ИИ — по всей смене, на всех её страницах." : null,
-    ].filter(Boolean).join(" ")
-    : undefined;
+  const description = [
+    isOwner ? "Строка открывает разбор смены." : "Строка открывает карточку чаттера.",
+    page ? `Ответ, без ответа и ИИ — по всей смене, не только ${page}.` : null,
+  ].filter(Boolean).join(" ");
 
-  const status = quality === "loading" && model && total > 0 ? (
-    <span className="shifts-card-note"><Spinner /> Считаем ответ, без ответа и долю ИИ…</span>
+  const status = quality === "loading" && model && model.journal.length > 0 ? (
+    <span className="shifts-card-note"><Spinner /> Считаем ответ, без ответа и ИИ без правки…</span>
   ) : quality === "failed" ? (
     <span className="shifts-card-note">
       Ответ, без ответа и ИИ: Hub не ответил
@@ -264,16 +279,19 @@ export function Journal({ model, isOwner, quality, onRetryQuality, retryingQuali
         columns={columns}
         rows={shown}
         rowKey={(shift) => shift.key}
-        rowHref={(shift) => (isOwner ? shiftPath(shift.userId, shift.startedAt, location.search) : personPath(shift.userId, location.search, "shifts"))}
+        rowHref={(shift) => (isOwner ? shiftPath(shift.userId, shift.startedAt, location.search) : personPath(shift.userId, location.search))}
+        rowState={rowState}
         sort={sort}
         onSortChange={setSort}
         loading={loading}
         refreshing={refreshing}
+        align="first-line"
         skeletonRows={8}
+        skeletonLines={2}
       />
       {rows.length > FIRST_ROWS && (
         <div className="shifts-more">
-          <Button variant="ghost" onClick={() => setAll((was) => !was)}>
+          <Button variant="ghost" onClick={() => setAll(!all)}>
             {all ? "Свернуть" : `Показать все ${formatCount(rows.length)}`}
           </Button>
         </div>

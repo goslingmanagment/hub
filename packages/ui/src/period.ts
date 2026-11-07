@@ -32,6 +32,12 @@ export interface ResolvedPeriod {
   to: MoscowDay;
   /** Days covered, both ends included (a week is always 7, even while it goes on). */
   days: number;
+  /**
+   * Days from `from` to `to`, both included: today at most, so a week going on
+   * on a Saturday is 6. What a read counting whole days back from today takes
+   * (`teamShiftSales` without `until`).
+   */
+  shownDays: number;
   /** Today is inside: the numbers still move. */
   current: boolean;
   /** The same number of days right before: what a change is measured against. */
@@ -96,6 +102,11 @@ export function withPeriod(search: URLSearchParams, spec: PeriodSpec): URLSearch
   return next;
 }
 
+/** The address names a period itself (any of `week`, `days`, `from`, `to`). */
+export function hasPeriodParams(search: URLSearchParams): boolean {
+  return PARAMS.some((key) => search.has(key));
+}
+
 /** Only the period's parameters of an address: what a drill-down carries. */
 export function pickPeriodParams(search: URLSearchParams): URLSearchParams {
   const picked = new URLSearchParams();
@@ -131,6 +142,7 @@ export function resolvePeriod(spec: PeriodSpec, today: MoscowDay): ResolvedPerio
     from,
     to: shownTo,
     days,
+    shownDays: daysInRange(from, shownTo),
     current: from <= today && to >= today,
     previous,
     startsAt: moscowDayStart(from),
@@ -149,4 +161,33 @@ export function stepWeek(spec: PeriodSpec, delta: -1 | 1, today: MoscowDay): Per
 
 export function isSamePeriod(left: PeriodSpec, right: PeriodSpec): boolean {
   return JSON.stringify(periodParams(left)) === JSON.stringify(periodParams(right));
+}
+
+/** A stretch of whole Moscow days inside a period: one column of a week grid over 14 or 30 days. */
+export interface DayChunk {
+  from: MoscowDay;
+  /** Included. */
+  to: MoscowDay;
+  days: number;
+  /** «27 окт. – 2 нояб.»; one day: «7 нояб.». */
+  label: string;
+}
+
+/**
+ * A period cut in chunks of `size` days (7 by default) back from its last shown
+ * day — today at most (spec §3 r2, D4): the last chunk is full, the first holds
+ * what is left. 30 days → 2 + 7 + 7 + 7 + 7; 14 days → 7 + 7; a week → one
+ * chunk of the days shown so far. Oldest first.
+ */
+export function periodChunks(period: Pick<ResolvedPeriod, "from" | "to">, size = 7): DayChunk[] {
+  const step = Math.max(1, Math.floor(size));
+  const chunks: DayChunk[] = [];
+  let to = period.to;
+  while (to >= period.from) {
+    const start = addDays(to, -(step - 1));
+    const from = start < period.from ? period.from : start;
+    chunks.push({ from, to, days: daysInRange(from, to), label: formatDayRange(from, to) });
+    to = addDays(from, -1);
+  }
+  return chunks.reverse();
 }

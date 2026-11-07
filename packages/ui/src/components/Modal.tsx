@@ -1,5 +1,5 @@
 import { X } from "lucide-react";
-import { useEffect, useId, useRef, type ReactNode } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { Button, IconButton } from "./Button.js";
 import { cx } from "./cx.js";
@@ -24,13 +24,28 @@ export interface ModalProps {
 /**
  * A window over a dimmed page: a question or a short form. Focus starts inside
  * (`data-autofocus` names where), Tab stays inside, Escape and a click on the
- * dimmed page close it, unless `explicitCloseOnly`. Long editing is never a
- * window: that is a page.
+ * dimmed page close it, unless `explicitCloseOnly`. The title and the buttons
+ * stay in place; only the middle scrolls when the window is taller than the
+ * screen, so the buttons are always in sight. Long editing is never a window:
+ * that is a page.
  */
 export function Modal({ title, onClose, size = "form", explicitCloseOnly = false, actions, children, closeLabel = "Закрыть", className }: ModalProps) {
   const ref = useRef<HTMLDivElement>(null);
+  const body = useRef<HTMLDivElement>(null);
   const titleId = useId();
   useFocusScope(ref, true);
+  // The middle scrolls: a hairline then parts it from the buttons.
+  const [scrolls, setScrolls] = useState(false);
+  useLayoutEffect(() => {
+    const element = body.current;
+    if (!element || typeof ResizeObserver === "undefined") return;
+    const check = () => setScrolls(element.scrollHeight > element.clientHeight + 1);
+    check();
+    const observer = new ResizeObserver(check);
+    observer.observe(element);
+    for (const child of element.children) observer.observe(child);
+    return () => observer.disconnect();
+  });
 
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
@@ -52,13 +67,13 @@ export function Modal({ title, onClose, size = "form", explicitCloseOnly = false
         aria-modal="true"
         aria-labelledby={titleId}
         tabIndex={-1}
-        className={cx("ui-modal", size === "confirm" && "ui-modal--confirm", size === "wide" && "ui-modal--wide", className)}
+        className={cx("ui-modal", size === "confirm" && "ui-modal--confirm", size === "wide" && "ui-modal--wide", scrolls && "ui-modal--scrolls", className)}
       >
         <header className="ui-modal__head">
           <h2 id={titleId} className="ui-modal__title">{title}</h2>
           {!explicitCloseOnly && <IconButton icon={X} label={closeLabel} size="sm" onClick={onClose} />}
         </header>
-        {children}
+        <div ref={body} className="ui-modal__body">{children}</div>
         {actions !== undefined && <div className="ui-modal__actions">{actions}</div>}
       </div>
     </div>,

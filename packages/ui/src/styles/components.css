@@ -345,6 +345,7 @@
   /* ----------------------------------------------------------------- Table */
 
   .ui-table-frame {
+    position: relative;
     min-width: 0;
     border: 1px solid var(--ui-line);
     border-radius: var(--ui-radius-lg);
@@ -359,8 +360,46 @@
     background: transparent;
   }
 
-  .ui-table-frame--scroll {
+  .ui-table-scroll {
+    min-width: 0;
+  }
+
+  .ui-table-frame--scroll > .ui-table-scroll {
     overflow-x: auto;
+    overscroll-behavior-x: contain;
+  }
+
+  /* Columns out of sight on the right: the edge fades out under the «ещё N →» button. */
+  .ui-table-frame--more > .ui-table-scroll {
+    mask-image: linear-gradient(to left, transparent 0, #000 56px);
+  }
+
+  .ui-table__more {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    z-index: calc(var(--ui-z-sticky) + 1);
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: var(--ui-control-sm);
+    padding: 0 10px 0 12px;
+    border: 1px solid var(--ui-line-strong);
+    border-radius: var(--ui-radius);
+    background: var(--ui-surface);
+    color: var(--ui-text-2);
+    font: inherit;
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+    font-weight: 500;
+    white-space: nowrap;
+    cursor: pointer;
+    transition: background-color var(--ui-fast), color var(--ui-fast);
+  }
+
+  .ui-table__more:hover {
+    background: var(--ui-hover);
+    color: var(--ui-text);
   }
 
   .ui-table {
@@ -396,6 +435,11 @@
     padding: 12px 16px;
     border-bottom: 1px solid var(--ui-line-soft);
     vertical-align: middle;
+  }
+
+  /* Rows of two-line cells: every cell starts on the first line. */
+  .ui-table--top td {
+    vertical-align: top;
   }
 
   .ui-table--dense td {
@@ -441,10 +485,10 @@
     white-space: nowrap;
   }
 
+  /* The sort button is text in the header's line: the same baseline as a plain
+     header, and a wrapped header keeps its arrow next to the last word. */
   .ui-table__sort {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
+    display: inline;
     margin: 0 -4px;
     padding: 0 4px;
     border: 0;
@@ -461,19 +505,25 @@
     white-space: nowrap;
   }
 
-  .ui-table__num .ui-table__sort {
-    flex-direction: row-reverse;
-    text-align: right;
-  }
-
   .ui-table__sort:hover {
     color: var(--ui-text);
   }
 
+  .ui-table__glue {
+    white-space: nowrap;
+  }
+
   .ui-table__sort-icon {
-    flex: none;
+    display: inline-block;
+    margin-left: 4px;
+    vertical-align: -2px;
     opacity: 0;
     transition: opacity var(--ui-fast);
+  }
+
+  .ui-table__num .ui-table__sort-icon {
+    margin-right: 4px;
+    margin-left: 0;
   }
 
   .ui-table__sort:hover .ui-table__sort-icon,
@@ -489,6 +539,11 @@
   .ui-table th[aria-sort="ascending"] .ui-table__sort-icon,
   .ui-table th[aria-sort="descending"] .ui-table__sort-icon {
     opacity: 1;
+  }
+
+  /* A header with a definition behind it, without sorting: reachable with Tab. */
+  .ui-table__head-hint {
+    border-radius: var(--ui-radius-sm);
   }
 
   .ui-table tr.ui-table__row--link {
@@ -508,8 +563,48 @@
     background: var(--ui-accent-soft);
   }
 
-  .ui-table tr.ui-table__row--quiet td {
+  /* A total row among the rows («Вся команда»): 600, a quiet ground, a firmer line under it. */
+  .ui-table tr.ui-table__row--emphasis {
+    background: var(--ui-hover-soft);
+    font-weight: 600;
+  }
+
+  .ui-table tr.ui-table__row--emphasis td {
+    border-bottom-color: var(--ui-line);
+  }
+
+  .ui-table tr.ui-table__row--emphasis .ui-person__name {
+    font-weight: 600;
+  }
+
+  /* A quiet row: everything in it steps back — words, names, money, numbers, bars, marks. */
+  .ui-table tr.ui-table__row--quiet td,
+  .ui-table tr.ui-table__row--quiet .ui-person__name,
+  .ui-table tr.ui-table__row--quiet .ui-person__hint,
+  .ui-table tr.ui-table__row--quiet .ui-money,
+  .ui-table tr.ui-table__row--quiet .ui-delta,
+  .ui-table tr.ui-table__row--quiet .ui-fact__value,
+  .ui-table tr.ui-table__row--quiet .ui-rate__value,
+  .ui-table tr.ui-table__row--quiet .ui-mark {
     color: var(--ui-text-3);
+  }
+
+  .ui-table tr.ui-table__row--quiet .ui-person__avatar {
+    background: var(--ui-hover);
+    color: var(--ui-text-3);
+  }
+
+  .ui-table tr.ui-table__row--quiet .ui-mark {
+    background: transparent;
+    font-weight: inherit;
+  }
+
+  .ui-table tr.ui-table__row--quiet .ui-bar__fill {
+    background: var(--ui-line-strong);
+  }
+
+  .ui-table tr.ui-table__row--quiet .ui-bar__compare {
+    background: var(--ui-text-3);
   }
 
   /* The row's own link: the name in the first cell. The whole row answers the
@@ -518,6 +613,16 @@
     color: inherit;
     text-decoration: none;
     border-radius: 2px;
+  }
+
+  .ui-table__rowbutton {
+    padding: 0;
+    border: 0;
+    background: transparent;
+    font: inherit;
+    color: inherit;
+    text-align: left;
+    cursor: pointer;
   }
 
   .ui-table__rowlink:focus-visible {
@@ -552,7 +657,53 @@
     transition: opacity var(--ui-fast);
   }
 
-  /* An outlier against the team in a cell: one calm colour, no grading. */
+  .ui-table__skeleton {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .ui-table__skeleton-lines {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  /* The first columns that stay while the rest scroll sideways: opaque, the row's own ground. */
+  .ui-table .ui-table__sticky {
+    position: sticky;
+    z-index: 1;
+    background: var(--ui-surface);
+  }
+
+  .ui-table th.ui-table__sticky {
+    z-index: calc(var(--ui-z-sticky) + 1);
+  }
+
+  .ui-table--static-head th.ui-table__sticky {
+    position: sticky;
+    top: auto;
+  }
+
+  .ui-table tr.ui-table__row--link:hover > .ui-table__sticky,
+  .ui-table tr:has(.ui-table__rowlink:focus-visible) > .ui-table__sticky {
+    background: var(--ui-hover-soft);
+  }
+
+  .ui-table tr.ui-table__row--emphasis > .ui-table__sticky {
+    background: var(--ui-hover-soft);
+  }
+
+  .ui-table tr.ui-table__row--selected > .ui-table__sticky {
+    background: var(--ui-accent-soft);
+  }
+
+  /* Once the rest has scrolled under them, a hairline marks where the fixed columns end. */
+  .ui-table--scrolled .ui-table__sticky--last {
+    box-shadow: inset -1px 0 0 var(--ui-line);
+  }
+
+  /* An outlier against the team in a cell: the one warm ground, only for «worse than the team». */
   .ui-mark {
     display: inline-block;
     margin: -2px -6px;
@@ -560,6 +711,15 @@
     border-radius: var(--ui-radius-sm);
     background: var(--ui-mark-soft);
     color: var(--ui-mark-text);
+  }
+
+  /* The best of a column: no ground, the main ink in 600 (the screen adds the word). */
+  .ui-mark.ui-mark--best {
+    margin: 0;
+    padding: 0;
+    background: transparent;
+    color: var(--ui-text);
+    font-weight: 600;
   }
 
   /* ----------------------------------------------------------------- Badge */
@@ -945,6 +1105,46 @@
     outline: none;
   }
 
+  /* A light veil under an open panel: the panel reads as on top, the page stays usable under it. */
+  .ui-drawer-veil {
+    position: fixed;
+    inset: 0;
+    z-index: calc(var(--ui-z-drawer) - 1);
+    background: var(--ui-veil);
+    pointer-events: none;
+    animation: ui-fade-in var(--ui-slide) ease-out;
+  }
+
+  /* The same panel in the page's flow: a column next to the content. */
+  .ui-side-panel {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    min-height: 0;
+    border: 1px solid var(--ui-line);
+    border-radius: var(--ui-radius-lg);
+    background: var(--ui-surface);
+    overflow: hidden;
+    animation: ui-fade-in var(--ui-fast) ease-out;
+  }
+
+  .ui-side-panel .ui-drawer__head {
+    padding: 12px 12px 12px 20px;
+  }
+
+  .ui-side-panel .ui-drawer__title {
+    font-size: var(--ui-fs-16);
+    line-height: var(--ui-lh-16);
+  }
+
+  .ui-side-panel .ui-drawer__body {
+    padding: 16px 20px;
+  }
+
+  .ui-side-panel .ui-drawer__foot {
+    padding: 12px 20px;
+  }
+
   .ui-drawer__head {
     display: flex;
     align-items: flex-start;
@@ -969,6 +1169,7 @@
 
   .ui-drawer__subtitle {
     margin: 2px 0 0;
+    overflow-wrap: anywhere;
     color: var(--ui-text-2);
     font-size: var(--ui-fs-14);
     line-height: var(--ui-lh-14);
@@ -976,6 +1177,7 @@
 
   .ui-drawer__body {
     flex: 1;
+    min-height: 0;
     overflow: auto;
     padding: 24px;
     overscroll-behavior: contain;
@@ -1025,12 +1227,10 @@
   .ui-modal {
     display: flex;
     flex-direction: column;
-    gap: 16px;
     width: 100%;
     max-width: 560px;
-    max-height: calc(100vh - 48px);
-    overflow: auto;
-    padding: 24px;
+    max-height: calc(100dvh - 48px);
+    overflow: hidden;
     border-radius: var(--ui-radius-lg);
     background: var(--ui-raised);
     box-shadow: var(--ui-shadow-float);
@@ -1051,9 +1251,31 @@
 
   .ui-modal__head {
     display: flex;
+    flex: none;
     align-items: flex-start;
     justify-content: space-between;
     gap: 16px;
+    padding: 24px 24px 0;
+  }
+
+  /* The middle of a window: the only part that scrolls. */
+  .ui-modal__body {
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: column;
+    gap: 16px;
+    min-height: 0;
+    overflow: auto;
+    padding: 16px 24px 24px;
+    overscroll-behavior: contain;
+  }
+
+  .ui-modal__body:empty {
+    display: none;
+  }
+
+  .ui-modal__body:has(+ .ui-modal__actions) {
+    padding-bottom: 8px;
   }
 
   .ui-modal__title {
@@ -1077,9 +1299,16 @@
 
   .ui-modal__actions {
     display: flex;
+    flex: none;
     justify-content: flex-end;
     gap: 8px;
-    margin-top: 8px;
+    padding: 16px 24px 24px;
+    border-top: 1px solid transparent;
+  }
+
+  .ui-modal--scrolls .ui-modal__actions {
+    padding-top: 12px;
+    border-top-color: var(--ui-line-soft);
   }
 
   .ui-confirm-facts {
@@ -1355,6 +1584,19 @@
     max-width: 100%;
   }
 
+  /* Words with a definition behind them: a dotted underline, the definition on hover and focus. */
+  .ui-hint {
+    text-decoration: underline dotted;
+    text-decoration-color: var(--ui-text-3);
+    text-decoration-thickness: 1px;
+    text-underline-offset: 4px;
+    cursor: help;
+  }
+
+  .ui-hint:focus-visible {
+    border-radius: 2px;
+  }
+
   /* ----------------------------------------------------------------- Toast */
 
   .ui-toast {
@@ -1524,27 +1766,83 @@
     transform: translateY(-50%);
   }
 
+  /* A tick: one look everywhere — an 18 px box, the warm active ground and an ink tick when on (as the access matrix's cells). */
   .ui-check {
     display: inline-flex;
     align-items: flex-start;
-    gap: 8px;
+    gap: 10px;
     color: var(--ui-text);
     font-size: var(--ui-fs-15);
     line-height: var(--ui-lh-15);
     cursor: pointer;
   }
 
-  .ui-check input {
+  .ui-check--bare {
+    align-items: center;
+    vertical-align: middle;
+  }
+
+  .ui-check__control {
+    position: relative;
+    display: inline-grid;
     flex: none;
-    width: 16px;
-    height: 16px;
-    margin: 3px 0 0;
-    accent-color: var(--ui-text);
+    place-items: center;
+    width: 18px;
+    height: 18px;
+    margin-top: 2px;
+  }
+
+  .ui-check--bare .ui-check__control {
+    margin-top: 0;
+  }
+
+  .ui-check__box {
+    width: 18px;
+    height: 18px;
+    margin: 0;
+    border: 1px solid var(--ui-line-strong);
+    border-radius: 4px;
+    background: var(--ui-surface);
+    appearance: none;
     cursor: pointer;
+    transition: background-color var(--ui-fast), border-color var(--ui-fast);
+  }
+
+  .ui-check__box:hover {
+    border-color: var(--ui-text-2);
+  }
+
+  .ui-check__box:checked,
+  .ui-check__box:indeterminate {
+    border-color: var(--ui-text-2);
+    background: var(--ui-active);
+  }
+
+  .ui-check__box:focus-visible {
+    outline: var(--ui-focus);
+    outline-offset: var(--ui-focus-offset);
+  }
+
+  .ui-check__tick,
+  .ui-check__dash {
+    position: absolute;
+    color: var(--ui-text);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity var(--ui-fast);
+  }
+
+  .ui-check__box:checked ~ .ui-check__tick,
+  .ui-check__box:indeterminate:not(:checked) ~ .ui-check__dash {
+    opacity: 1;
   }
 
   .ui-check--disabled {
     opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .ui-check--disabled .ui-check__box {
     cursor: not-allowed;
   }
 
@@ -1553,6 +1851,95 @@
     color: var(--ui-text-2);
     font-size: var(--ui-fs-14);
     line-height: var(--ui-lh-14);
+  }
+
+  /* On / off, written at once: a 36 × 20 track; ink when on, a hairline grey when off. */
+  .ui-switch {
+    display: inline-flex;
+    align-items: flex-start;
+    gap: 10px;
+    min-height: 22px;
+    color: var(--ui-text);
+    font-size: var(--ui-fs-15);
+    line-height: var(--ui-lh-15);
+    vertical-align: middle;
+  }
+
+  .ui-switch__track {
+    position: relative;
+    flex: none;
+    width: 36px;
+    height: 20px;
+    margin: 1px 0 0;
+    padding: 0;
+    border: 0;
+    border-radius: 10px;
+    background: var(--ui-line-strong);
+    cursor: pointer;
+    transition: background-color var(--ui-fast);
+  }
+
+  .ui-switch__track:hover {
+    background: color-mix(in oklab, var(--ui-line-strong) 70%, var(--ui-text-3));
+  }
+
+  .ui-switch__track[aria-checked="true"] {
+    background: var(--ui-text);
+  }
+
+  .ui-switch__track[aria-checked="true"]:hover {
+    background: var(--ui-text-2);
+  }
+
+  .ui-switch__thumb {
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: var(--ui-surface);
+    box-shadow: var(--ui-shadow-raised);
+    transition: transform var(--ui-fast);
+  }
+
+  .ui-switch__track[aria-checked="true"] .ui-switch__thumb {
+    transform: translateX(16px);
+  }
+
+  .ui-switch__track:focus-visible {
+    outline: var(--ui-focus);
+    outline-offset: var(--ui-focus-offset);
+  }
+
+  .ui-switch--disabled .ui-switch__track {
+    cursor: not-allowed;
+    opacity: 0.5;
+  }
+
+  .ui-switch--pending .ui-switch__track {
+    cursor: progress;
+    opacity: 0.6;
+  }
+
+  .ui-switch__label {
+    cursor: pointer;
+  }
+
+  .ui-switch--disabled .ui-switch__label {
+    color: var(--ui-text-3);
+    cursor: not-allowed;
+  }
+
+  /* Several lines of one's own words: 16 px to read what one writes. */
+  .ui-input.ui-textarea {
+    display: block;
+    height: auto;
+    min-height: calc(var(--ui-lh-16) * 3 + 18px);
+    padding: 8px 12px;
+    font-size: var(--ui-fs-16);
+    line-height: var(--ui-lh-16);
+    resize: vertical;
   }
 
   .ui-search {
@@ -1652,6 +2039,14 @@
   .ui-notice__action {
     flex: none;
     align-self: center;
+  }
+
+  /* The button under the words (a narrow panel): the words keep the width. */
+  .ui-notice__action.ui-notice__action--below {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 12px;
   }
 
   .ui-notice--warning {
@@ -1759,6 +2154,36 @@
     white-space: nowrap;
   }
 
+  /* Under a tile's value the quiet line wraps inside its own tile, never into the next one. */
+  .ui-facts--stacked .ui-fact__meta {
+    max-width: 100%;
+    white-space: normal;
+    overflow-wrap: break-word;
+    text-wrap: pretty;
+  }
+
+  /* Even tiles in a grid: the same widths, whole rows, a hairline between tiles of a row. */
+  .ui-facts--grid {
+    display: grid;
+    grid-template-columns: repeat(var(--ui-facts-columns, 3), minmax(0, 1fr));
+    row-gap: 24px;
+  }
+
+  .ui-facts--grid .ui-fact {
+    min-width: 0;
+  }
+
+  .ui-facts--grid .ui-fact__label {
+    white-space: normal;
+    text-wrap: pretty;
+  }
+
+  .ui-facts--grid .ui-fact:first-child,
+  .ui-facts--grid .ui-fact.ui-fact--row-start {
+    padding-left: 0;
+    border-left: 0;
+  }
+
   /* ------------------------------------------------------------------- Bar */
 
   .ui-bar {
@@ -1785,7 +2210,7 @@
   }
 
   .ui-bar--mark .ui-bar__fill {
-    background: var(--ui-mark-text);
+    background: var(--ui-mark-bar);
   }
 
   .ui-bar--muted .ui-bar__fill {

@@ -21,6 +21,9 @@
   }
 
   .access-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
     color: var(--ui-accent);
     font-size: var(--ui-fs-14);
     font-weight: 500;
@@ -48,26 +51,8 @@
 
   /* ------------------------------------------------------------ The matrix */
 
-  .access-section {
-    display: flex;
-    flex-direction: column;
-    gap: 16px;
-  }
 
-  .access-section__title {
-    margin: 0;
-    color: var(--ui-text);
-    font-size: var(--ui-fs-20);
-    line-height: var(--ui-lh-20);
-    font-weight: 600;
-  }
 
-  .access-section__desc {
-    margin: 4px 0 0;
-    color: var(--ui-text-2);
-    font-size: var(--ui-fs-15);
-    line-height: var(--ui-lh-15);
-  }
 
   .access-matrix-frame {
     overflow-x: auto;
@@ -221,8 +206,24 @@
     transition: background-color var(--ui-fast), border-color var(--ui-fast);
   }
 
+  /* An empty cell: a quiet square, a step firmer in the dark theme so a free cell does not vanish there. */
   .access-cell[data-state="off"] {
-    border-color: var(--ui-line);
+    border-color: light-dark(var(--ui-line), var(--ui-line-strong));
+  }
+
+  /* A cell changed a moment ago (a press, its undo): a short glow, so a slip shows where it landed (Д1). */
+  .access-cell[data-glow] {
+    animation: access-glow 1.6s ease-out;
+  }
+
+  @keyframes access-glow {
+    from {
+      box-shadow: 0 0 0 4px var(--ui-accent-soft);
+      border-color: var(--ui-accent);
+    }
+    to {
+      box-shadow: 0 0 0 4px transparent;
+    }
   }
 
   .access-cell[data-state="on"],
@@ -253,10 +254,6 @@
 
   .access-cell:disabled {
     cursor: progress;
-  }
-
-  .access-cell--model[data-state="off"] {
-    border-style: dashed;
   }
 
   /* ------------------------------------------------------------ The invite */
@@ -305,39 +302,19 @@
     border-radius: var(--ui-radius);
   }
 
+  /* A model over its pages: the «вся модель» tick, or only its name. */
   .access-invite__model {
     display: flex;
-    flex-wrap: wrap;
-    align-items: baseline;
-    gap: 4px 8px;
     padding-bottom: 8px;
     margin-bottom: 4px;
     border-bottom: 1px solid var(--ui-line-soft);
     color: var(--ui-text);
     font-weight: 600;
-    cursor: pointer;
   }
 
   .access-invite__model--single {
-    cursor: default;
-  }
-
-  .access-invite__model input,
-  .access-invite__page input,
-  .access-toggle input {
-    flex: none;
-    width: 16px;
-    height: 16px;
-    margin: 0;
-    align-self: center;
-    accent-color: var(--ui-text);
-    cursor: pointer;
-  }
-
-  .access-invite__model .access-hint {
-    flex-basis: 100%;
-    padding-left: 24px;
-    font-weight: 400;
+    min-height: 32px;
+    align-items: flex-end;
   }
 
   .access-invite__list {
@@ -347,14 +324,19 @@
 
   .access-invite__page {
     display: flex;
-    align-items: center;
-    gap: 8px;
-    min-height: 32px;
-    cursor: pointer;
+    padding: 6px 0;
   }
 
-  .access-invite__page .access-hint {
-    margin-left: auto;
+  /* A tick's words on one line: «mia-1  Fansly», «Mia Hart  вся модель». */
+  .access-words {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0 8px;
+  }
+
+  .access-words .access-hint {
+    font-weight: 400;
   }
 
   .access-invite__more {
@@ -411,23 +393,6 @@
     line-height: var(--ui-lh-14);
     overflow-wrap: anywhere;
     user-select: all;
-  }
-
-  .access-textarea {
-    width: 100%;
-    padding: 8px 12px;
-    border: 1px solid var(--ui-line-strong);
-    border-radius: var(--ui-radius);
-    background: var(--ui-surface);
-    color: var(--ui-text);
-    font: 400 var(--ui-fs-15) / var(--ui-lh-15) var(--ui-font);
-    resize: none;
-  }
-
-  .access-textarea:focus {
-    outline: none;
-    border-color: var(--ui-accent);
-    box-shadow: 0 0 0 3px var(--ui-accent-soft);
   }
 
   /* ------------------------------------------------------ A person's panel */
@@ -504,72 +469,36 @@
     gap: 16px;
   }
 
-  .access-pages__head {
+  /* A model's name over its pages: the «вся модель» tick when it has several. */
+  .access-pages__name {
     display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    min-height: 32px;
+    font-weight: 600;
   }
 
-  .access-pages__name {
-    color: var(--ui-text-2);
-    font-size: var(--ui-fs-14);
-    font-weight: 600;
+  /* A model of one page has no «вся модель» tick: its name stands where a ticked name's words start. */
+  .access-pages__name--single {
+    padding-left: 28px;
+    color: var(--ui-text);
+    font-size: var(--ui-fs-15);
+    line-height: var(--ui-lh-15);
+  }
+
+  .access-pages__model {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
   }
 
   .access-pages__list {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-    gap: 8px;
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    gap: 10px 16px;
+    padding-left: 28px;
   }
 
-  .access-toggle {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    min-height: 40px;
-    padding: 0 12px;
-    border: 1px solid var(--ui-line);
-    border-radius: var(--ui-radius);
-    cursor: pointer;
-    transition: background-color var(--ui-fast), border-color var(--ui-fast);
-  }
-
-  .access-toggle:hover {
-    background: var(--ui-hover-soft);
-  }
-
-  .access-toggle[data-on] {
-    border-color: var(--ui-line-strong);
-    background: var(--ui-active);
-  }
-
-  .access-toggle__label {
-    color: var(--ui-text);
-    font-weight: 500;
-    white-space: nowrap;
-  }
-
-  .access-toggle .access-hint {
-    margin-left: auto;
-  }
-
-  .access-chips {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-  }
-
-  .access-chip {
-    display: inline-flex;
-    align-items: center;
-    height: 28px;
-    padding: 0 10px;
-    border: 1px solid var(--ui-line);
-    border-radius: var(--ui-radius-sm);
-    color: var(--ui-text-2);
-    font-size: var(--ui-fs-14);
+  .access-pages-line {
+    font-size: var(--ui-fs-15);
+    line-height: var(--ui-lh-15);
   }
 
   .access-list {
@@ -627,11 +556,34 @@
     margin-top: 4px;
   }
 
-  .access-notice__text {
-    margin: 0;
+  /* An action of a list row that shows on hover and focus of its row (one device's «Завершить вход»). */
+  .access-list--hover .access-on-hover {
+    opacity: 0;
+    transition: opacity var(--ui-fast);
   }
 
-  .access-notice__action {
-    margin-top: 12px;
+  .access-list--hover .access-list__row:hover .access-on-hover,
+  .access-list--hover .access-list__row:focus-within .access-on-hover {
+    opacity: 1;
+  }
+
+  @media (hover: none) {
+    .access-list--hover .access-on-hover {
+      opacity: 1;
+    }
+  }
+
+  /* The owner's row: one quiet line over all the page columns instead of cells. */
+  .access-matrix__all {
+    padding: 0 24px !important;
+    color: var(--ui-text-2);
+    font-size: var(--ui-fs-14);
+    text-align: left !important;
+  }
+
+  .access-matrix__head-word {
+    display: inline-block;
+    padding: 2px 0;
+    cursor: default;
   }
 }

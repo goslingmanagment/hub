@@ -1,21 +1,20 @@
-import { Bar, Card, EmptyState, ErrorState, Money, Skeleton } from "@agency_hub_core/ui";
+import { Card, EmptyState, ErrorState, Fan, Money, PageLabel, RateBar, Skeleton } from "@agency_hub_core/ui";
 import { formatCount, formatDayRange } from "@agency_hub_core/ui/format";
 import { ruPlural } from "@agency_hub_core/ui/plural";
-import { PageChip } from "@/shared/PageChip";
 import { usePageFilter } from "@/shared/usePageFilter";
 import { usePeriod } from "@/shared/usePeriod";
 import { personSalesOf, usePersonStats, type PersonSales, type RateRow } from "./data.js";
 import { capitalized, DELAY_WORDS, KIND_OF, periodWords, PRICE_WORDS, shareOf, shareText } from "./words.js";
 
-/** A rate on fewer than this many is shown, but greyed: too few to trust. */
+/** A rate on fewer than this many is shown, but pale, as «3 из 4»: too few to trust. */
 const WEAK_BASE = 10;
 
 /**
- * «Продажи» (spec §4.4): what the person's money is made of, which prices and
- * which reply speeds sell — against the team on the same pages — and the fans
- * who brought the most. Bars are drawn to 100 %, so 14 % looks like 14 %.
+ * «Продажи» (spec §4.4): what the person's money is made of, the fans who
+ * brought the most, which prices and which reply speeds sell — against the
+ * team on the same pages. Bars are drawn to 100 %, so 14 % looks like 14 %.
  */
-export function SalesTab({ userId, backLabel }: { userId: number; backLabel: string }) {
+export function SalesTab({ userId, name }: { userId: number; name: string }) {
   const { period, today } = usePeriod();
   const { page } = usePageFilter();
   const { query, days, stats, stranger } = usePersonStats(userId, period, today);
@@ -32,7 +31,7 @@ export function SalesTab({ userId, backLabel }: { userId: number; backLabel: str
   if (stranger || !stats) {
     return (
       <Card>
-        <EmptyState title="Продаж не найдено">За последний 31 день {backLabel} не работал на ваших страницах.</EmptyState>
+        <EmptyState title="Продаж не найдено">За последний 31 день у {name} не было смен на ваших страницах.</EmptyState>
       </Card>
     );
   }
@@ -59,20 +58,20 @@ export function SalesTab({ userId, backLabel }: { userId: number; backLabel: str
       <Card
         title="Лучшие фаны"
         description={sales.fans && sales.fans.written > 0
-          ? `Заплатили ${formatCount(sales.fans.paid)} из ${formatCount(sales.fans.written)} ${ruPlural(sales.fans.written, "фана", "фанов", "фанов")}, кому писал в сменах.`
+          ? `Заплатили ${formatCount(sales.fans.paid)} из ${formatCount(sales.fans.written)} ${ruPlural(sales.fans.written, "фана", "фанов", "фанов")}, с которыми была переписка в сменах.`
           : "Кто больше всех принёс за смены периода."}
       >
         <Fans sales={sales} />
       </Card>
       {caveat && <p className="people-note people-grid__wide">Цена и скорость ответа — {caveat}.</p>}
       <Card title="Цена платных сообщений" description="Сколько из отправленных купили; черта — команда на тех же страницах.">
-        <Rates rows={sales.byPrice} words={PRICE_WORDS} unit={["платное", "платных", "платных"]} empty="Личных платных сообщений не было." />
+        <Rates rows={sales.byPrice} words={PRICE_WORDS} unit={["платного", "платных", "платных"]} empty="Личных платных сообщений не было." />
       </Card>
       <Card
         title="Скорость ответа и покупки"
         description="Купил ли фан в течение суток после ответа, по тому, как быстро ответили. Ответы последних суток ещё не считаются."
       >
-        <Rates rows={sales.byDelay} words={DELAY_WORDS} unit={["ответ", "ответа", "ответов"]} empty="Ответов ждущим фанам не было." />
+        <Rates rows={sales.byDelay} words={DELAY_WORDS} unit={["ответа", "ответов", "ответов"]} empty="Ответов ждущим фанам не было." />
       </Card>
     </div>
   );
@@ -97,26 +96,26 @@ function Kinds({ sales }: { sales: PersonSales }) {
             <span className="people-kind__share">{part.netMills > 0 ? shareText(shareOf(part.netMills, sales.totalNetMills)) : ""}</span>
           </li>
         ))}
-        <li className="people-kind">
+        <li className="people-kind people-kind--total">
           <span />
-          <span style={{ fontWeight: 600 }}>Всего</span>
+          <span>Всего</span>
           <Money mills={sales.totalNetMills} strong />
           <span />
         </li>
       </ul>
       {sales.pages.length > 1 && (
         <>
-        <h3 className="people-subhead">По страницам</h3>
-        <ul className="people-kinds" aria-label="По страницам">
-          {sales.pages.map((one) => (
-            <li key={one.pageLabel} className="people-kind">
-              <span />
-              <span><PageChip label={one.pageLabel} {...(one.platform ? { platform: one.platform } : {})} /></span>
-              <Money mills={one.netMills} />
-              <span className="people-kind__share">{shareText(shareOf(one.netMills, sales.totalNetMills))}</span>
-            </li>
-          ))}
-        </ul>
+          <h3 className="people-subhead">По страницам</h3>
+          <ul className="people-kinds" aria-label="По страницам">
+            {sales.pages.map((one) => (
+              <li key={one.pageLabel} className="people-kind">
+                <span />
+                <PageLabel label={one.pageLabel} platform={one.platform} className="people-kind__page" />
+                <Money mills={one.netMills} />
+                <span className="people-kind__share">{shareText(shareOf(one.netMills, sales.totalNetMills))}</span>
+              </li>
+            ))}
+          </ul>
         </>
       )}
     </>
@@ -131,43 +130,42 @@ function Fans({ sales }: { sales: PersonSales }) {
         <li key={`${fan.pageLabel}-${fan.fanName}`} className="people-fan">
           <span className="people-fan__rank">{index + 1}</span>
           <span className="people-fan__who">
-            <span className="people-fan__name">{fan.fanName ?? "Фан без имени"}</span>
-            <PageChip label={fan.pageLabel} />
+            {fan.fanName
+              ? <Fan name={fan.fanName} fanRef={`${fan.pageLabel}:${fan.fanName}`} className="people-fan__name" />
+              : <span className="people-fan__name people-fan__name--unknown">фан без имени</span>}
+            <PageLabel label={fan.pageLabel} />
           </span>
-          <span className="people-fan__money">
-            <Money mills={fan.netMills} strong />
-            <span className="people-fan__count">{fan.sales} {ruPlural(fan.sales, "покупка", "покупки", "покупок")}</span>
-          </span>
+          <span className="people-fan__count">{fan.sales} {ruPlural(fan.sales, "покупка", "покупки", "покупок")}</span>
+          <Money mills={fan.netMills} strong />
         </li>
       ))}
     </ol>
   );
 }
 
+/** Each bucket: its words, a bar to 100 % with the team's tick, the share — pale «3 из 4» on a small sample — and the team in words. */
 function Rates({ rows, words, unit, empty }: { rows: readonly RateRow[]; words: Readonly<Record<string, string>>; unit: readonly [string, string, string]; empty: string }) {
   if (rows.every((row) => row.base === 0)) return <p className="people-note">{empty}</p>;
   return (
     <ul className="people-rates">
       {rows.map((row) => {
-        const mine = shareOf(row.hits, row.base);
         const team = shareOf(row.teamHits, row.teamBase);
-        const weak = row.base < WEAK_BASE;
+        const mine = shareOf(row.hits, row.base);
+        const label = words[row.key] ?? row.key;
         return (
           <li key={row.key} className="people-rate">
-            <span className="people-rate__label">{words[row.key] ?? row.key}</span>
-            <Bar
-              value={mine ?? 0}
+            <span className="people-rate__label">{label}</span>
+            <RateBar
+              hits={row.hits}
+              of={row.base}
+              min={WEAK_BASE}
               compare={team}
-              tone={weak ? "muted" : "neutral"}
-              label={mine === null ? undefined : `${shareText(mine)} купили${team === null ? "" : `, команда ${shareText(team)}`}`}
+              empty="—"
+              emptyHint="Таких не было"
+              detail={team === null ? null : `команда ${shareText(team)}`}
+              detailWidth={120}
+              hint={mine === null ? undefined : `${label}: купили ${formatCount(row.hits)} из ${formatCount(row.base)} ${ruPlural(row.base, ...unit)} — ${shareText(mine)}${team === null ? "" : `; команда ${shareText(team)}`}${row.base < WEAK_BASE ? ". Мало, чтобы судить" : ""}`}
             />
-            <span className="people-rate__value" data-weak={weak || undefined} title={weak ? "Мало данных: на такой выборке процент случаен" : undefined}>
-              {mine === null ? "—" : shareText(mine)}
-            </span>
-            <span className="people-rate__detail">
-              {row.base === 0 ? `не было` : `${formatCount(row.hits)} из ${formatCount(row.base)} ${ruPlural(row.base, ...unit)}`}
-              {team !== null && <span className="people-rate__team">команда {shareText(team)}</span>}
-            </span>
           </li>
         );
       })}
@@ -180,7 +178,7 @@ function SalesSkeleton() {
     <div className="people-grid" aria-busy>
       {Array.from({ length: 4 }, (_, index) => (
         <Card key={index} title={<Skeleton width={180} />}>
-          <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+          <div className="people-skeleton-lines">
             {Array.from({ length: 5 }, (_, line) => <Skeleton key={line} width="100%" height={20} />)}
           </div>
         </Card>

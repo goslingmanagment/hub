@@ -1,7 +1,7 @@
 import { normalizeDmMessageText } from "@agency_hub_core/shared";
 import { formatDateTime, formatTimeOfDay } from "@agency_hub_core/ui/format";
 import type { ReviewMessage } from "./data.js";
-import { aiButton, isHi } from "./rules.js";
+import { aiButton, aiUnedited, isHi } from "@agency_hub_core/ui/shiftReview";
 
 /**
  * The screen's words for a message: where its text came from, who wrote it,
@@ -37,8 +37,8 @@ export function originOf(message: ReviewMessage): Origin | null {
   if (isHi(mine)) return { key: "ai-hi", label: "приветствие ИИ" };
   if (mine.aiFeature === "improve-draft") return { key: "ai-command", label: "ИИ по команде" };
   const byHand = mine.composedWith === "hand" ? ", вставлен вручную" : "";
-  const edited = mine.edited === true || (mine.aiShare ?? 1) < 0.98;
-  return edited ? { key: "ai-edited", label: `ИИ с правкой${byHand}` } : { key: "ai-raw", label: `ИИ без правки${byHand}` };
+  // The same rule as the shift's «ИИ без правки» share (D1).
+  return aiUnedited(mine) ? { key: "ai-raw", label: `ИИ без правки${byHand}` } : { key: "ai-edited", label: `ИИ с правкой${byHand}` };
 }
 
 const FEATURE_WORDS: Record<string, string> = {
@@ -65,7 +65,7 @@ const COMPOSED_WORDS: Record<string, string> = {
 
 /** What the extension said about how the text got into the composer. */
 export function composedWords(mine: Mine): string {
-  const how = COMPOSED_WORDS[mine.composedWith ?? ""] ?? mine.composedWith ?? "ничего: старое расширение";
+  const how = COMPOSED_WORDS[mine.composedWith ?? ""] ?? mine.composedWith ?? "кнопка неизвестна: старое расширение";
   if (mine.edited === true) return `${how}, после вставки текст правили`;
   if (mine.edited === false && aiButton(mine.composedWith)) return `${how}, без правки`;
   return how;
@@ -92,8 +92,8 @@ export function originSentence(message: ReviewMessage): string {
     case "ai":
       if (isHi(mine)) return "Приветствие новому подписчику, написанное ИИ по кнопке Hi.";
       if (mine.aiFeature === "improve-draft") return "Черновик был командой («скажи…», «спроси…»), текст написал ИИ.";
-      return share >= 0.98 && mine.edited !== true
-        ? `Текст ИИ (${featureWord(mine.aiFeature)}) ушёл фану как есть.`
+      return aiUnedited(mine)
+        ? `Текст ИИ (${featureWord(mine.aiFeature)}) ушёл фану как есть, слово в слово.`
         : `Текст ИИ (${featureWord(mine.aiFeature)}), чаттер его поправил: совпало ${percent} слов.`;
   }
 }

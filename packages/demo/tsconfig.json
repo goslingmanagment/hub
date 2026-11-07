@@ -9,7 +9,8 @@
     "paths": {
       "@agency_hub_core/shared": ["../shared/src/browser.ts"],
       "@agency_hub_core/contracts": ["../contracts/src/index.ts"],
-      "@kernel/sdk": ["../sdk/src/index.ts"]
+      "@kernel/sdk": ["../sdk/src/index.ts"],
+      "@agency_hub_core/ui/*": ["../ui/src/*"]
     },
     "resolveJsonModule": true,
     "allowSyntheticDefaultImports": true,

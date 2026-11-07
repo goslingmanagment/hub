@@ -1,6 +1,6 @@
 import { Copy } from "lucide-react";
 import { useState } from "react";
-import { Button, Modal, Notice, TimeMsk, toast } from "@agency_hub_core/ui";
+import { Button, Field, Modal, Notice, Textarea, TimeMsk, toast } from "@agency_hub_core/ui";
 import { buildJoinLink, currentOrigin, telegramMessage, type LinkKind } from "@agency_hub_core/ui/teamAccess";
 
 /**
@@ -50,9 +50,10 @@ export function LinkReveal({ link, onClose }: { link: RevealedLink; onClose: () 
           Ссылка показывается один раз. Скопируйте её сейчас и отправьте человеку в Telegram — заново её не посмотреть, можно только создать новую.
         </Notice>
 
-        <div className="ui-field">
-          <label htmlFor="access-reveal-message" className="ui-field__label">Сообщение для Telegram</label>
-          <textarea id="access-reveal-message" readOnly rows={4} value={message} className="access-textarea" onFocus={(event) => event.currentTarget.select()} />
+        <div>
+          <Field label="Сообщение для Telegram">
+            {(control) => <Textarea {...control} readOnly rows={4} value={message} onFocus={(event) => event.currentTarget.select()} />}
+          </Field>
           <div className="access-reveal__row">
             <Button variant="primary" icon={Copy} onClick={() => void copy(message, "message")}>
               {copied === "message" ? "Скопировано" : "Скопировать сообщение"}

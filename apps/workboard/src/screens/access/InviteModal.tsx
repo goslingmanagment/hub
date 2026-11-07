@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from "react";
-import { Button, Disclosure, Field, Modal, Notice, Segmented, Spinner, TextInput } from "@agency_hub_core/ui";
+import { useState } from "react";
+import { Button, Checkbox, Disclosure, Field, Modal, Notice, Segmented, Spinner, TextInput, platformWord } from "@agency_hub_core/ui";
 import { ruPlural } from "@agency_hub_core/ui/plural";
 import { INVITE_DEFAULT_DAYS, INVITE_MAX_DAYS, daysToHours, findByLogin, isValidUsername } from "@agency_hub_core/ui/teamAccess";
 import { pagesByModel, useAccessPages, useAccessUsers, type AdminUser, type useCreateInvite } from "./data";
@@ -15,22 +15,6 @@ import type { RevealedLink } from "./LinkReveal";
  * The mutation is the screen's, not this window's: TanStack drops a callback
  * whose observer is gone, and that would lose the only copy of the link.
  */
-
-const PLATFORM: Readonly<Record<string, string>> = { fansly: "Fansly", onlyfans: "OnlyFans", telegram: "Telegram" };
-
-function ModelCheck({ label, count, picked, onChange, disabled }: { label: string; count: number; picked: number; onChange: (all: boolean) => void; disabled: boolean }) {
-  const ref = useRef<HTMLInputElement>(null);
-  useEffect(() => {
-    if (ref.current) ref.current.indeterminate = picked > 0 && picked < count;
-  }, [picked, count]);
-  return (
-    <label className="access-invite__model">
-      <input ref={ref} type="checkbox" checked={picked === count} disabled={disabled} onChange={(event) => onChange(event.target.checked)} />
-      <span>{label}</span>
-      <span className="access-hint">вся модель · {count} {ruPlural(count, "страница", "страницы", "страниц")}</span>
-    </label>
-  );
-}
 
 export function InviteModal({ create, onClose, onCreated, onOpenExisting }: {
   create: ReturnType<typeof useCreateInvite>;
@@ -165,16 +149,26 @@ export function InviteModal({ create, onClose, onCreated, onOpenExisting }: {
                 const picked = labels.filter((label) => pageLabels.includes(label)).length;
                 return (
                   <div key={model.modelSlug} className="access-invite__group">
-                    {model.pages.length > 1
-                      ? <ModelCheck label={model.modelName} count={labels.length} picked={picked} disabled={pending} onChange={(on) => toggleModel(labels, on)} />
-                      : <div className="access-invite__model access-invite__model--single"><span>{model.modelName}</span></div>}
+                    {model.pages.length > 1 ? (
+                      <Checkbox
+                        className="access-invite__model"
+                        label={<span className="access-words">{model.modelName}<span className="access-hint">вся модель · {labels.length} {ruPlural(labels.length, "страница", "страницы", "страниц")}</span></span>}
+                        checked={picked === labels.length}
+                        indeterminate={picked > 0}
+                        disabled={pending}
+                        onChange={(on) => toggleModel(labels, on)}
+                      />
+                    ) : <div className="access-invite__model access-invite__model--single">{model.modelName}</div>}
                     <div className="access-invite__list">
                       {model.pages.map((page) => (
-                        <label key={page.id} className="access-invite__page">
-                          <input type="checkbox" checked={pageLabels.includes(page.label)} onChange={(event) => toggle(page.label, event.target.checked)} />
-                          <span>{page.label}</span>
-                          <span className="access-hint">{PLATFORM[page.platform] ?? page.platform}</span>
-                        </label>
+                        <Checkbox
+                          key={page.id}
+                          className="access-invite__page"
+                          label={<span className="access-words">{page.label}<span className="access-hint">{platformWord(page.platform) ?? page.platform}</span></span>}
+                          checked={pageLabels.includes(page.label)}
+                          disabled={pending}
+                          onChange={(on) => toggle(page.label, on)}
+                        />
                       ))}
                     </div>
                   </div>

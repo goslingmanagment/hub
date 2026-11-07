@@ -24,8 +24,9 @@ function initialOf(name: string): string {
 
 /**
  * One way to show a person everywhere: a circle with the initial, the name and
- * a status dot. `hint` is a quiet second line («5 смен, 41 ч»). Wrap it in a
- * link outside (Workboard's PersonLink); it is not a link itself.
+ * a status dot. `hint` is a quiet second line («5 смен, 41 ч»); an empty hint
+ * ("" or null) draws no second line. Wrap it in a link outside (Workboard's
+ * PersonLink); it is not a link itself.
  */
 export function Person({ name, status = "away", hint, size = "md", className, title }: {
   name: string;
@@ -44,7 +45,7 @@ export function Person({ name, status = "away", hint, size = "md", className, ti
       </span>
       <span className="ui-person__text">
         <span className="ui-person__name">{name}</span>
-        {hint !== undefined && hint !== null && <span className="ui-person__hint">{hint}</span>}
+        {hint !== undefined && hint !== null && hint !== false && hint !== "" && <span className="ui-person__hint">{hint}</span>}
       </span>
       {status !== "away" && <span className="ui-sr-only">, {word.toLowerCase()}</span>}
     </span>
