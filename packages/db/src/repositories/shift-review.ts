@@ -34,15 +34,20 @@ export interface ShiftReviewMessageRow {
 
 /**
  * Every message, from `horizonHours` before the shift to its end, of the chats of
- * the shift's pages where, within [from, to), the fan wrote or `userId` sent, or
- * where the fan's message was the last one before `from`. Oldest first.
+ * the shift's pages where, within [from, to), `userId` sent, and — on the pages
+ * the shift worked (`workedPageIds`) — where the fan wrote or the fan's message
+ * was the last one before `from`. A tab only looked at brings in the chats the
+ * person wrote in, not the whole page a colleague kept. Oldest first.
  */
 export async function listShiftReviewMessages(
   db: Database,
-  input: { userId: number; pageIds: readonly number[]; from: Date; to: Date; horizonHours: number; burstMinChats: number },
+  input: {
+    userId: number; pageIds: readonly number[]; workedPageIds: readonly number[]; from: Date; to: Date; horizonHours: number; burstMinChats: number;
+  },
 ): Promise<ShiftReviewMessageRow[]> {
   if (input.pageIds.length === 0) return [];
   const pages = sql`${sql.param(input.pageIds.map(String))}::bigint[]`;
+  const worked = sql`${sql.param(input.workedPageIds.map(String))}::bigint[]`;
   const from = sql`${input.from.toISOString()}::timestamptz`;
   const to = sql`${input.to.toISOString()}::timestamptz`;
   const horizon = sql`${from} - make_interval(hours => ${input.horizonHours})`;
@@ -66,7 +71,7 @@ export async function listShiftReviewMessages(
         and a.observed_at >= ${from} and a.observed_at < ${to}
     ),
     chats as materialized (
-      select page_id, conv from page_msgs where at >= ${from} and not sent
+      select page_id, conv from page_msgs where at >= ${from} and not sent and page_id = any(${worked})
       union
       select pm.page_id, pm.conv from page_msgs pm
       join mine x on x.page_id = pm.page_id and x.platform = pm.platform and x.ref = pm.ref
@@ -75,7 +80,7 @@ export async function listShiftReviewMessages(
         select distinct on (page_id, conv) page_id, conv, sent
         from page_msgs where at < ${from}
         order by page_id, conv, at desc
-      ) last where not last.sent
+      ) last where not last.sent and last.page_id = any(${worked})
     ),
     shaped as materialized (
       select pm.*, md5(coalesce(pm.text_plain, '') || '|' || coalesce(pm.price_mills, 0)::text || '|' || pm.media::text) as shape
@@ -140,6 +145,8 @@ export interface ShiftReviewSendRow {
   edited: boolean | null;
   observedAt: Date;
   inArchive: boolean;
+  /** In the archive, deleted after it was sent. */
+  deleted: boolean;
 }
 
 /** `userId`'s reported sends on the pages in [from, to). */
@@ -149,10 +156,12 @@ export async function listShiftReviewSends(
 ): Promise<ShiftReviewSendRow[]> {
   if (input.pageIds.length === 0) return [];
   const result = await db.execute<{
-    page_id: string | number; ref: string; composed_with: string | null; edited: boolean | null; observed_at: Date | string; in_archive: boolean;
+    page_id: string | number; ref: string; composed_with: string | null; edited: boolean | null; observed_at: Date | string; in_archive: boolean; deleted: boolean;
   }>(sql`
     select a.page_id, a.platform_message_id as ref, a.composed_with, a.edited, a.observed_at,
-      exists (select 1 from message_archive m where m.account_id = a.page_id and m.platform = a.platform and m.message_ref = a.platform_message_id) as in_archive
+      exists (select 1 from message_archive m where m.account_id = a.page_id and m.platform = a.platform and m.message_ref = a.platform_message_id) as in_archive,
+      exists (select 1 from message_archive m where m.account_id = a.page_id and m.platform = a.platform and m.message_ref = a.platform_message_id
+        and m.deleted_at is not null) as deleted
     from client_send_attributions a
     where a.user_id = ${input.userId} and a.page_id = any(${sql.param(input.pageIds.map(String))}::bigint[])
       and a.observed_at >= ${input.from.toISOString()}::timestamptz and a.observed_at < ${input.to.toISOString()}::timestamptz`);
@@ -163,6 +172,7 @@ export async function listShiftReviewSends(
     edited: row.edited,
     observedAt: new Date(row.observed_at),
     inArchive: row.in_archive,
+    deleted: row.deleted,
   }));
 }
 

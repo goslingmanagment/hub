@@ -1,4 +1,5 @@
 import {
+  CHATTER_SHIFT_PIECE_MIN_MESSAGES,
   MASS_SEND_MIN_CHATS,
   SHIFT_REVIEW_AI_LOOKBACK_MINUTES,
   SHIFT_REVIEW_AI_SHARE,
@@ -19,13 +20,16 @@ import {
   listShiftReviewGenerations,
   listShiftReviewMessages,
   listShiftReviewSends,
+  listSaleLastWriters,
   type ShiftReviewGenerationRow,
   type ShiftReviewMessageRow,
+  type ShiftSale,
 } from "@agency_hub_core/db";
 
 import type { AppContext } from "../bootstrap.ts";
 import { requireOwner, type AuthPrincipal } from "./auth.ts";
-import { readPeopleWork, type ComputedWork } from "./chatter-shifts.ts";
+import { SALE_LAST_WRITER_HOURS, lastWriterQuery, readPeopleWork, salesHeldBy, workHoldsSale, type ComputedWork } from "./chatter-shifts.ts";
+import { settleSale } from "./chatter-stats.ts";
 import { NotFoundError } from "./errors.ts";
 
 /**
@@ -231,6 +235,29 @@ export function shiftAround(work: readonly ComputedWork[], at: number): { shift:
   return { shift, previous, next };
 }
 
+/**
+ * The shift's sales as «Смены → Заработок» settles them: of the sales it holds
+ * (`salesHeldBy`), one another person's overlapping shift holds too is theirs
+ * when they were the last to write to the fan.
+ */
+async function settledSales(app: AppContext, userId: number, shift: ComputedWork, pageIds: ReadonlyMap<string, number>, now: Date): Promise<ShiftSale[]> {
+  const held = await salesHeldBy(app.db, { userId, work: shift, pageIds });
+  if (shift.kind !== "shift" || held.length === 0) return held;
+  const people = await readPeopleWork(app.db, {
+    from: new Date(shift.startedAt - DAY_MS), to: new Date(Math.min(shift.endedAt + DAY_MS, now.getTime())), now, pages: "all",
+  });
+  const others = [...people].flatMap(([id, person]) => (id === userId ? [] : person.work
+    .filter((work) => work.kind === "shift" && work.startedAt < shift.endedAt && work.endedAt > shift.startedAt)
+    .map((work) => ({ userId: id, work }))));
+  const holdersOf = (sale: ShiftSale) => others
+    .filter((other) => workHoldsSale(other.work, { pageLabel: sale.pageLabel, at: sale.occurredAt.getTime() }))
+    .map((other) => other.userId);
+  const contested = held.filter((sale) => holdersOf(sale).length > 0);
+  if (contested.length === 0) return held;
+  const lastWriters = await listSaleLastWriters(app.db, { hours: SALE_LAST_WRITER_HOURS, sales: lastWriterQuery(contested) });
+  return held.filter((sale) => settleSale(userId, holdersOf(sale), lastWriters.get(sale.transactionId) ?? null) !== "theirs");
+}
+
 export async function readTeamShiftReview(
   app: AppContext,
   principal: AuthPrincipal,
@@ -255,14 +282,22 @@ export async function readTeamShiftReview(
   const from = new Date(start);
   const to = new Date(end + 1);
 
-  const labels = [...new Set([...shift.pages.keys(), ...shift.messages.keys()])].sort();
-  const pages = await listPagesByLabels(app.db, labels);
+  // The pages as «Смены» lists them: most messages first, then most active minutes.
+  const labels = [...new Set([...shift.pages.keys(), ...shift.messages.keys()])]
+    .sort((a, b) => (shift.messages.get(b) ?? 0) - (shift.messages.get(a) ?? 0) || (shift.pages.get(b) ?? 0) - (shift.pages.get(a) ?? 0) || a.localeCompare(b));
+  const known = await listPagesByLabels(app.db, labels);
+  const pages = labels.flatMap((label) => known.filter((page) => page.label === label));
   const pageIds = pages.map((page) => page.id);
+  // A page the shift works brings in all its fans' chats; a page only looked at, just the chats the person wrote in. A
+  // look-in works none; a shift going on works a page from CHATTER_SHIFT_PIECE_MIN_MESSAGES, before it holds the sales.
+  const worked = (label: string) => shift.kind === "shift"
+    && (shift.salesSince.has(label) || (shift.ongoing && (shift.messages.get(label) ?? 0) >= CHATTER_SHIFT_PIECE_MIN_MESSAGES));
+  const workedPageIds = pages.filter((page) => worked(page.label)).map((page) => page.id);
   const labelOf = new Map(pages.map((page) => [page.id, page.label]));
 
-  const [rows, sends, generations, autoTexts, minutes] = await Promise.all([
+  const [rows, sends, generations, autoTexts, minutes, sales] = await Promise.all([
     listShiftReviewMessages(app.db, {
-      userId: query.userId, pageIds, from, to, horizonHours: SHIFT_REVIEW_WAIT_HORIZON_HOURS, burstMinChats: MASS_SEND_MIN_CHATS,
+      userId: query.userId, pageIds, workedPageIds, from, to, horizonHours: SHIFT_REVIEW_WAIT_HORIZON_HOURS, burstMinChats: MASS_SEND_MIN_CHATS,
     }),
     listShiftReviewSends(app.db, { userId: query.userId, pageIds, from, to }),
     listShiftReviewGenerations(app.db, {
@@ -270,6 +305,7 @@ export async function readTeamShiftReview(
     }),
     listAllAutomatedTexts(app.db),
     listChatterActivityMinutes(app.db, { from, to, pages: pageIds, userId: query.userId }),
+    settledSales(app, query.userId, shift, person.pageIds, now),
   ]);
   const links = await listSentGenerationLinks(app.db, {
     refs: sends.map((send) => send.ref), from: new Date(start - 5 * MINUTE_MS), to: new Date(end + 60 * MINUTE_MS),
@@ -318,10 +354,13 @@ export async function readTeamShiftReview(
     const pageLabel = labelOf.get(chat.pageId) ?? String(chat.pageId);
     const fan = fanOf.get(key);
     const fanRef = fan?.fanRef ?? chat.messages.find((message) => !message.sent && message.fanNativeId !== null)?.fanNativeId ?? null;
-    const chatWaits = waitsOf(chat.messages, query.userId, end);
+    const chatWaits = waitsOf(chat.messages, query.userId, end).filter((wait) => wait.to > start && wait.since < end);
+    // A chat with nothing in the shift is here for a fan waiting at its start; past the wait horizon there is no wait, and no
+    // chat. One holding a send of the shift stays, though the archive may date it a few seconds before the start.
+    if (chatWaits.length === 0 && !chat.messages.some((message) => (message.at.getTime() >= start && message.at.getTime() <= end)
+      || (message.by === "me" && sendByRef.has(`${message.pageId}:${message.ref}`)))) continue;
     const replyByRef = new Map<string, number>();
     for (const wait of chatWaits) {
-      if (wait.to <= start || wait.since >= end) continue;
       waits.push({
         chat: chatKey(pageLabel, chat.conv),
         since: new Date(wait.since).toISOString(),
@@ -409,7 +448,10 @@ export async function readTeamShiftReview(
       ongoing: shift.ongoing,
       workedMinutes: shift.workedMinutes,
       pauses: shift.pauses.map((pause) => ({ from: new Date(pause.from).toISOString(), to: new Date(pause.to).toISOString() })),
-      pages: pages.map((page) => ({ pageLabel: page.label, platform: page.platform })),
+      pages: pages.map((page) => ({
+        pageLabel: page.label, platform: page.platform, messages: shift.messages.get(page.label) ?? 0, worked: worked(page.label),
+      })),
+      salesNetMills: sales.reduce((sum, sale) => sum + sale.netMills, 0),
     },
     previousAt: found.previous === null ? null : new Date(found.previous.startedAt).toISOString(),
     nextAt: found.next === null ? null : new Date(found.next.startedAt).toISOString(),
@@ -417,6 +459,7 @@ export async function readTeamShiftReview(
     chats: out,
     waits,
     unarchived: sends.filter((send) => !send.inArchive).length,
+    deleted: sends.filter((send) => send.deleted).length,
     serverNow: now.toISOString(),
   };
 }

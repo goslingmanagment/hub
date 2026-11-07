@@ -125,6 +125,46 @@ function reviewOf(shift: DemoShift, now: number): Response {
       });
     }
   }
+  // A chat a colleague kept on the same page, and fans who had waited since before the shift.
+  const firstPage = pages[0];
+  if (firstPage) {
+    const platform = demoPage(firstPage.pageLabel)?.platform ?? "fansly";
+    const used = new Set(chats.map((chat) => chat.key));
+    const free = demoFans(firstPage.pageLabel).filter((fan) => !used.has(`${firstPage.pageLabel}:${fan.platformUserId}`));
+    const chatOf = (fan: (typeof free)[number], messages: ShiftReviewMessage[]): ShiftReviewChat => ({
+      key: `${firstPage.pageLabel}:${fan.platformUserId}`, pageLabel: firstPage.pageLabel, platform, conversationRef: fan.platformUserId,
+      fanRef: fan.platformUserId, fanUsername: fan.username, fanDisplayName: fan.displayName,
+      fanLifetimeNetMills: Math.round(fan.totalSpent * 1000), shiftNetMills: 0, earlierHidden: 0, messages,
+    });
+    const colleague = free[0];
+    if (colleague) {
+      const key = `${firstPage.pageLabel}:${colleague.platformUserId}`;
+      const first = start + 40 * MIN;
+      const theirs = (ref: string, at: number, text: string): ShiftReviewMessage => ({
+        ref, at: new Date(at).toISOString(), side: "page", text, priceMills: null, bought: null, tipMills: null, media: 0,
+        inShift: true, by: "other", byName: "sofia", mass: false, mine: null,
+      });
+      const iso = (at: number) => new Date(at).toISOString();
+      chats.push(chatOf(colleague, [
+        fanMessage(`${key}:c0`, first, pick(random, FAN_LINES), true),
+        theirs(`${key}:c1`, first + 3 * MIN, pick(random, AI_LINES)),
+        fanMessage(`${key}:c2`, first + 20 * MIN, pick(random, FAN_LINES), true),
+        theirs(`${key}:c3`, first + 26 * MIN, pick(random, AI_LINES)),
+        fanMessage(`${key}:c4`, first + 70 * MIN, pick(random, FAN_LINES), true),
+      ]));
+      waits.push(
+        { chat: key, since: iso(first), from: iso(first), to: iso(first + 3 * MIN), by: "other" },
+        { chat: key, since: iso(first + 20 * MIN), from: iso(first + 20 * MIN), to: iso(first + 26 * MIN), by: "other" },
+        { chat: key, since: iso(first + 70 * MIN), from: iso(first + 70 * MIN), to: iso(end), by: null },
+      );
+    }
+    for (const [index, fan] of free.slice(1, 4).entries()) {
+      const key = `${firstPage.pageLabel}:${fan.platformUserId}`;
+      const since = start - (3 + index * 9) * 60 * MIN;
+      chats.push(chatOf(fan, [fanMessage(`${key}:w0`, since, pick(random, FAN_LINES), false)]));
+      waits.push({ chat: key, since: new Date(since).toISOString(), from: new Date(start).toISOString(), to: new Date(end).toISOString(), by: null });
+    }
+  }
   // The same template to several fans.
   const template = "heyy just got back, did you miss me? ♡";
   let repeated = 0;
@@ -159,7 +199,10 @@ function reviewOf(shift: DemoShift, now: number): Response {
       ongoing: shift.ongoing,
       workedMinutes: shift.workedMinutes,
       pauses: shift.pauses.map((pause) => ({ from: new Date(pause.from).toISOString(), to: new Date(pause.to).toISOString() })),
-      pages: pages.map((page) => ({ pageLabel: page.pageLabel, platform: demoPage(page.pageLabel)?.platform ?? "fansly" })),
+      pages: [...pages].sort((a, b) => b.messages - a.messages).map((page) => ({
+        pageLabel: page.pageLabel, platform: demoPage(page.pageLabel)?.platform ?? "fansly", messages: page.messages, worked: page.messages >= 10,
+      })),
+      salesNetMills: chats.reduce((sum, chat) => sum + chat.shiftNetMills, 0),
     },
     previousAt: position > 0 ? new Date(others[position - 1]!.startedAt).toISOString() : null,
     nextAt: position >= 0 && position < others.length - 1 ? new Date(others[position + 1]!.startedAt).toISOString() : null,
@@ -167,6 +210,7 @@ function reviewOf(shift: DemoShift, now: number): Response {
     chats,
     waits: waits.sort((a, b) => Date.parse(a.from) - Date.parse(b.from)),
     unarchived: 0,
+    deleted: 0,
     serverNow: new Date(now).toISOString(),
   };
 }
