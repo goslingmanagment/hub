@@ -2806,6 +2806,53 @@ export function buildProgram() {
       }
     });
 
+  // The owner-declared restrictions of the configured OFAPI key, checked before every
+  // OFAPI request (assertOfapiConfiguredAccess). The console sets the same declaration;
+  // this lets an operator save it right after the key returns, before accounts reconnect.
+  program
+    .command("ofapi:key-scope")
+    .description("Print the declared restrictions of the configured OFAPI key, or replace its capabilities (--apply); audited")
+    .option("--capabilities <list>", "comma list of reads,commands,webhooks,exports,uploads,links, or 'all' for no restriction")
+    .option("--owner-user-id <id>", "the active owner on whose word the restriction changes", parsePositiveInt)
+    .option("--apply", "write the declaration (without it, print what would change)")
+    .action(async (options: { capabilities?: string; ownerUserId?: number; apply?: boolean }) => {
+      const app = await createAppContext();
+      try {
+        const { getOfapiKeyScope, applyOfapiKeyScope } = await import("./services/ofapi-vendor-usage.ts");
+        const { ofapiCapabilitySchema } = await import("@agency_hub_core/contracts");
+        const describe = (scope: Awaited<ReturnType<typeof getOfapiKeyScope>>) =>
+          `key ${scope.credentialFingerprint.slice(0, 12)}…, version ${scope.version}: capabilities ${
+            scope.capabilities === null ? "unrestricted" : scope.capabilities.join(",") || "none"
+          }; accounts ${scope.accountIds === null ? "all" : scope.accountIds.join(",")}; visibility ${scope.visibility}`;
+        const current = await getOfapiKeyScope(app);
+        console.log(`current: ${describe(current)}`);
+        if (options.capabilities === undefined) return;
+        const capabilities = options.capabilities.trim() === "all"
+          ? null
+          : [...new Set(options.capabilities.split(",").map(item => item.trim()).filter(Boolean))]
+            .map(item => ofapiCapabilitySchema.parse(item));
+        if (options.apply !== true) {
+          console.log(`dry run: would set capabilities ${capabilities === null ? "unrestricted" : capabilities.join(",") || "none"}`);
+          return;
+        }
+        if (options.ownerUserId === undefined) throw new Error("--apply needs --owner-user-id");
+        const owner = await findUserById(app.db, options.ownerUserId);
+        if (!owner || owner.role !== "owner" || owner.disabledAt !== null || owner.deletedAt !== null) {
+          throw new Error(`Active owner required: user ID ${options.ownerUserId}`);
+        }
+        const next = await applyOfapiKeyScope(app, {
+          credentialFingerprint: current.credentialFingerprint,
+          expectedVersion: current.version,
+          capabilities,
+          accountIds: current.accountIds,
+          visibility: current.visibility,
+        }, owner.id);
+        console.log(`applied: ${describe(next)}`);
+      } finally {
+        await app.close();
+      }
+    });
+
   program
     .command("ofapi:pending-reconcile")
     .description(
