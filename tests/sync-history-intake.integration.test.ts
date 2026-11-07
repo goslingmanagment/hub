@@ -38,6 +38,7 @@ import {
   okResponse,
   ScriptedLiveTransport,
   seedSyncPage,
+  statusResponse,
   testConfig,
   waitFor,
 } from "./helpers/sync-engine-host.ts";
@@ -454,6 +455,66 @@ describe("serving and settling", () => {
     const after = await getHistoryRequest(ctx(), filed.request.ref);
     expect(after.items[0]).toMatchObject({ state: "refused", refusal: "excluded", excludedReason: "partner_unresolvable_from_account_lookup" });
     expect(after.request.state).toBe("done");
+  });
+
+  it("a read below the chain Fansly keeps refusing ends the walk at its 7th failure: the fan is refused older_refused, the request is done, the chain stays partial", async (context) => {
+    if (!testDb) return context.skip();
+    const { pageId } = await seedPage();
+    const threadId = await seedThread(pageId, { n: 1, chain: { from: 1, to: 10 } });
+    await openSocket(pageId, 2 * HOUR);
+    const filed = await submitHistoryRequest(ctx(), intake(pageId, [{ kind: "conversation", conversationRef: group(1) }]));
+    expect(filed.items[0]).toMatchObject({ state: "queued", anchorMessageRef: msg(10) });
+    // Every read below the chain gets what Fansly answers below a chat's
+    // first message (prod, 2026-11-07).
+    const requests: FanslyWireRequest[] = [];
+    const registry = createEngineRegistry(FANSLY_RESOURCE_SPECS);
+    async function runUntil(done: (work: Awaited<ReturnType<typeof historyWork>>) => boolean) {
+      const transport = new ScriptedLiveTransport();
+      transport.respond = (req) => {
+        if (req.spec !== "messages.page") return okResponse({ messages: [] });
+        requests.push(req);
+        return statusResponse(500, { success: false, error: { code: 500, details: "error getting group messages" } });
+      };
+      const { actor, stop, abort } = await makeTestActor({ db: db(), pageId, registry, transport, ownRef: OWN });
+      const run = actor.run({ stop: stop.signal, abort: abort.signal });
+      try {
+        await waitFor(async () => (done(await historyWork(pageId, 1)) ? true : null), 20_000, "the history work to settle");
+      } finally {
+        stop.abort();
+        await run;
+      }
+    }
+    const failures = async () => (await rows<{ n: number }>(
+      "select failure_count as n from sync_work where page_id = $1 and resource = 'dm-messages.history'", [pageId],
+    ))[0]?.n;
+
+    // The first refusal: the walk waits on its breaker, the fan still loads.
+    await runUntil((work) => work?.state === "open" && work.close_reason === null && requests.length === 1);
+    expect(await failures()).toBe(1);
+    expect((await getHistoryRequest(ctx(), filed.request.ref)).request.state).toBe("open");
+    // Six failures in a row and blocked by the vendor, as prod's youngest
+    // stuck walk stands: its next daily probe is the 7th.
+    await testDb.pool.query(
+      `update sync_work set failure_count = 6, blocked_by_vendor_at = now() - interval '1 day',
+              breaker_until = now() - interval '1 second', due_at = now() - interval '1 second'
+        where page_id = $1 and resource = 'dm-messages.history'`,
+      [pageId],
+    );
+    await runUntil((work) => work?.state === "done");
+
+    expect(requests).toHaveLength(2);
+    expect(requests.map((req) => new URL(req.url).searchParams.get("before"))).toEqual([msg(1), msg(1)]);
+    const [work] = await rows<{ close_reason: string; applied_revision: string; demand_revision: string; result: Record<string, unknown> }>(
+      "select close_reason, applied_revision::text, demand_revision::text, result from sync_work where page_id = $1 and resource = 'dm-messages.history'",
+      [pageId],
+    );
+    expect(work).toMatchObject({ close_reason: "older_refused", result: { olderRefused: { before: msg(1), failures: 7 } } });
+    expect(Number(work!.applied_revision)).toBeLessThan(Number(work!.demand_revision));
+    const after = await getHistoryRequest(ctx(), filed.request.ref);
+    expect(after.items[0]).toMatchObject({ state: "refused", refusal: "excluded", excludedReason: "older_refused", loadedMessages: 10 });
+    expect(after.request.state).toBe("done");
+    const [thread] = await rows<{ history_state: string }>("select history_state from page_dm_threads where id = $1", [threadId]);
+    expect(thread!.history_state).toBe("partial");
   });
 
   it("no history walk without a request (I12); the idle wait never counts work no fan rides on, nor the paused requests class", async (context) => {

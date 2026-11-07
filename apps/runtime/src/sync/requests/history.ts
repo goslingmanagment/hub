@@ -68,7 +68,7 @@ import {
   type WaitingReason,
 } from "../engine/status.ts";
 import { FANSLY_RESOURCE_SPECS } from "../fansly/registry.ts";
-import { parseDmMessagesCursor } from "../fansly/resources/dm-messages.ts";
+import { HISTORY_OLDER_REFUSED_REASON, parseDmMessagesCursor } from "../fansly/resources/dm-messages.ts";
 import {
   budgetUseOf,
   estimateItemReads,
@@ -898,10 +898,12 @@ export async function onHistoryThreadChainChanged(tx: Database, input: { pageId:
  * The engine's work-closed hook (`CommitDeps.onWorkClosed`): a chat's history
  * work closed for a reason of its own — the chat was deleted, unbound or
  * excluded since intake, Fansly's refusal of it was established
- * (`chat_unavailable`), or proven complete. Its open fans end now: satisfied
+ * (`chat_unavailable`), its read below the chain is refused for good
+ * (`older_refused`), or proven complete. Its open fans end now: satisfied
  * ones `ready`, the rest refused (`not_found`, `excluded` with the exclusion,
- * `unbound` or `chat_unavailable`) or `cancelled` with the reason in `final`;
- * what was loaded stays loaded. Other works are not the requests' business.
+ * `unbound`, `chat_unavailable` or `older_refused`) or `cancelled` with the
+ * reason in `final`; what was loaded stays loaded. Other works are not the
+ * requests' business.
  */
 export async function onHistoryWorkClosed(
   tx: Database,
@@ -934,7 +936,7 @@ export async function onHistoryWorkClosed(
     }
     const excluded = exclusionOf(thread);
     if (excluded !== null || input.closeReason === "excluded" || input.closeReason === "unbound"
-      || input.closeReason === CHAT_UNAVAILABLE_REASON) {
+      || input.closeReason === CHAT_UNAVAILABLE_REASON || input.closeReason === HISTORY_OLDER_REFUSED_REASON) {
       ended.push({ item, state: "refused", refusal: "excluded", excludedReason: excluded ?? input.closeReason, thread });
       continue;
     }

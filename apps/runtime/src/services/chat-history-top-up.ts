@@ -2,7 +2,10 @@ import { createHash } from "node:crypto";
 
 import { sql } from "drizzle-orm";
 
+import { HISTORY_WORK_RESOURCE } from "@agency_hub_core/db";
+
 import type { AppContext } from "../bootstrap.ts";
+import { HISTORY_OLDER_REFUSED_REASON } from "../sync/fansly/resources/dm-messages.ts";
 import { HistoryRequestError, submitHistoryRequest } from "../sync/requests/history.ts";
 import { loadEffectiveConfig } from "./effective-config.ts";
 import { ensureQueueCreated, type QueueCreationClient } from "./sync-queue.ts";
@@ -22,12 +25,18 @@ import { ensureQueueCreated, type QueueCreationClient } from "./sync-queue.ts";
  * The reads are the engine's, in the page's own pace and in its requests
  * class (40 % of the slots under contention); this job sends nothing to
  * Fansly itself. A chat Fansly refuses, or one excluded from message sync, is
- * left out: a request would only refuse it again.
+ * left out: a request would only refuse it again. So is a chat whose history
+ * walk Fansly refuses below the chain (a 500 below its first message): while
+ * that walk is open and blocked by the vendor (a new fan would only ride the
+ * stuck walk), and for CHAT_HISTORY_TOP_UP_OLDER_REFUSED_DAYS after it closed
+ * `older_refused`.
  */
 
 export const CHAT_HISTORY_TOP_UP_QUEUE = "chat-memory.history.top-up";
 /** The fan wrote within this long: the job runs daily, so a day and a margin. */
 export const CHAT_HISTORY_TOP_UP_WINDOW_HOURS = 26;
+/** A chat whose history walk closed `older_refused` is filed again only this long after. */
+export const CHAT_HISTORY_TOP_UP_OLDER_REFUSED_DAYS = 30;
 /** A history request names at most this many chats. */
 const MAX_CHATS_PER_REQUEST = 1000;
 const REASON = "chat memory: the full history of chats where the fan wrote in the last day (owner, 2026-10-24)";
@@ -61,6 +70,14 @@ export async function runChatHistoryTopUp(app: AppContext, now = new Date()): Pr
       and not exists (
         select 1 from page_dm_thread_unavailability u
         where u.thread_id = t.id and u.ended_at is null and u.state = 'established'
+      )
+      and not exists (
+        select 1 from sync_work w
+        where w.page_id = t.platform_account_id and w.resource = ${HISTORY_WORK_RESOURCE}
+          and w.subject = t.platform_conversation_id
+          and ((w.state in ('open', 'running') and w.blocked_by_vendor_at is not null)
+            or (w.close_reason = ${HISTORY_OLDER_REFUSED_REASON}
+              and w.closed_at >= ${now.toISOString()}::timestamptz - make_interval(days => ${CHAT_HISTORY_TOP_UP_OLDER_REFUSED_DAYS})))
       )
     order by p.id, t.last_fan_message_at desc`);
 

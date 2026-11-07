@@ -104,7 +104,11 @@ import { purchaseTargetFollowups, purchaseTargetSubject, type PurchaseTarget } f
 //   `before = contiguous_oldest_id` down to the EMPTY page that proves the
 //   start (owner decision №3). Every read runs the history hook
 //   (`onThreadChainChanged`: anchors, satisfaction, closing the work when no
-//   fan is left).
+//   fan is left). A `before` read Fansly keeps refusing with its own error
+//   envelope (a 500 below a chat's first message) ends the walk at the
+//   work's `HISTORY_OLDER_REFUSED_AFTER_FAILURES`-th failure in a row: it
+//   closes `older_refused` with its demand unserved and its fans are refused
+//   (`excluded`, what was loaded stays loaded); the chain stays partial.
 //
 // The apply (one transaction, the commit holds the erasure fence): the page
 // contract → the chain fold (pure, before any write; an anomaly the design
@@ -182,6 +186,13 @@ const LIMIT = FANSLY_MESSAGES_PAGE_LIMIT;
 export const DM_HEAD_FIND_WAIT_MAX_MS = 10 * 60_000;
 /** … and looks again this often while that find is open. */
 export const DM_HEAD_FIND_RECHECK_MS = 5_000;
+
+/** A history walk ends at this many failures in a row of its work when the
+ *  last one is Fansly's own refusal of a `before` read: the five that block
+ *  the work (about 7 h), then two daily probes. */
+export const HISTORY_OLDER_REFUSED_AFTER_FAILURES = 7;
+/** The close reason of such a walk, and its fans' `excludedReason`. */
+export const HISTORY_OLDER_REFUSED_REASON = "older_refused";
 
 /** A demanded id the vendor's head does not show yet is read again after
  *  these delays, then settled `not_found` (plan §7 p.4: 15 s, 60 s). */
@@ -1258,6 +1269,45 @@ export function isQualifyingChatRefusal(decision: Pick<OutcomeDecision, "errorCl
     && step.fanslyErrorEnvelope;
 }
 
+/**
+ * A history walk's `before` read that Fansly refused with its own error
+ * envelope (as `isQualifyingChatRefusal` asks of a head read) at the work's
+ * `HISTORY_OLDER_REFUSED_AFTER_FAILURES`-th failure in a row: the walk has no
+ * other end (only an empty page proves the start, and the daily probe of a
+ * blocked work runs while its fans wait), so the work closes `older_refused`
+ * with its demand unserved — the work-closed hook refuses its fans, what was
+ * loaded stays loaded, the chain stays partial. A newer demand that came
+ * during the flight keeps the row open as the refusal left it (its next
+ * refusal closes it). Null: the decision stands.
+ */
+export function historyOlderRefused(
+  decision: OutcomeDecision,
+  input: Pick<CaptureOutcomeInput, "step" | "sent">,
+): OutcomeDecision | null {
+  const { step } = input;
+  const breaker = decision.subjectBreaker;
+  const reopen = decision.work;
+  const before = step.request.spec === "messages.page" ? requestedParams(step.request).before : null;
+  if (!input.sent || step.outcome !== "response" || before === null || !step.fanslyErrorEnvelope
+    || (decision.errorClass !== "subject_failure" && decision.errorClass !== "envelope_unsuccessful")
+    || breaker === null || breaker.blockedByVendorAt === null
+    || breaker.failureCount < HISTORY_OLDER_REFUSED_AFTER_FAILURES || reopen.action !== "reopen") return null;
+  return {
+    ...decision,
+    work: {
+      action: "close",
+      closeReason: HISTORY_OLDER_REFUSED_REASON,
+      satisfiesRevision: false,
+      result: {
+        olderRefused: { before, failures: breaker.failureCount, blockedByVendorAt: breaker.blockedByVendorAt.toISOString() },
+      },
+      dueAt: reopen.dueAt,
+      waitingReason: reopen.waitingReason,
+      waitingUntil: reopen.waitingUntil,
+    },
+  };
+}
+
 /** The retry boundary an established refusal sets: the later of the refused
  *  attempt's breaker and the daily step (the blocked step of the ladder, which
  *  a key reading the chat's head for the first time in the episode does not
@@ -1384,7 +1434,11 @@ function variantModule(variant: DmMessagesVariant): ResourceModule {
     plan: (work, ctx) => planStep(variant, work, ctx),
     apply: (tx, input) => applyMessagesPage(variant, tx, input),
     applyLocal: (tx, input) => applyLocalStep(variant, tx, input),
-    outcomeInCapture: (tx, decision, input) => chatRefusalInCapture(tx, decision, input),
+    outcomeInCapture: async (tx, decision, input) => {
+      // A head read is never a `before` read: the two rules never meet.
+      const ended = variant === "history" ? historyOlderRefused(decision, input) : null;
+      return ended === null ? chatRefusalInCapture(tx, decision, input) : { decision: ended };
+    },
   };
 }
 
