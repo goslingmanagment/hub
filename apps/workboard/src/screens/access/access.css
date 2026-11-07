@@ -1,0 +1,637 @@
+/* Доступ: the matrix, the invite, a person's panel. Tokens only. */
+@layer components {
+  .access-text {
+    margin: 0;
+    color: var(--ui-text-2);
+    font-size: var(--ui-fs-15);
+    line-height: var(--ui-lh-15);
+  }
+
+  .access-hint {
+    color: var(--ui-text-2);
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+  }
+
+  .access-count {
+    margin-left: 6px;
+    color: var(--ui-text-3);
+    font-weight: 500;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .access-link {
+    color: var(--ui-accent);
+    font-size: var(--ui-fs-14);
+    font-weight: 500;
+    text-decoration: none;
+    white-space: nowrap;
+  }
+
+  .access-link:hover {
+    text-decoration: underline;
+  }
+
+  .access-skeleton {
+    padding: 24px;
+    border: 1px solid var(--ui-line);
+    border-radius: var(--ui-radius-lg);
+    background: var(--ui-surface);
+  }
+
+  .access-fold > .ui-disclosure__body {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding-top: 12px;
+  }
+
+  /* ------------------------------------------------------------ The matrix */
+
+  .access-section {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  .access-section__title {
+    margin: 0;
+    color: var(--ui-text);
+    font-size: var(--ui-fs-20);
+    line-height: var(--ui-lh-20);
+    font-weight: 600;
+  }
+
+  .access-section__desc {
+    margin: 4px 0 0;
+    color: var(--ui-text-2);
+    font-size: var(--ui-fs-15);
+    line-height: var(--ui-lh-15);
+  }
+
+  .access-matrix-frame {
+    overflow-x: auto;
+    border: 1px solid var(--ui-line);
+    border-radius: var(--ui-radius-lg);
+    background: var(--ui-surface);
+  }
+
+  .access-matrix {
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0;
+    font-size: var(--ui-fs-15);
+    line-height: var(--ui-lh-15);
+  }
+
+  .access-matrix th,
+  .access-matrix td {
+    padding: 0;
+    border-bottom: 1px solid var(--ui-line-soft);
+    text-align: center;
+    vertical-align: middle;
+  }
+
+  .access-matrix thead th {
+    color: var(--ui-text-2);
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+    font-weight: 500;
+    white-space: nowrap;
+    background: var(--ui-surface);
+  }
+
+  .access-matrix__corner {
+    position: sticky;
+    left: 0;
+    z-index: 2;
+    min-width: 248px;
+    padding: 0 16px 12px 24px !important;
+    text-align: left !important;
+    vertical-align: bottom !important;
+    border-bottom: 1px solid var(--ui-line) !important;
+  }
+
+  .access-matrix__model {
+    padding: 16px 12px 4px !important;
+    color: var(--ui-text) !important;
+    font-size: var(--ui-fs-15) !important;
+    font-weight: 600 !important;
+    border-bottom: 0 !important;
+  }
+
+  .access-matrix__page {
+    min-width: 72px;
+    padding: 4px 8px 12px !important;
+    border-bottom: 1px solid var(--ui-line) !important;
+  }
+
+  .access-matrix__page--all {
+    min-width: 56px;
+    color: var(--ui-text-3) !important;
+  }
+
+  /* A model's columns are fenced off by a hairline, so «вся» reads as its model's. */
+  .access-matrix .access-group-start {
+    border-left: 1px solid var(--ui-line);
+  }
+
+  .access-matrix__group th {
+    position: sticky;
+    left: 0;
+    padding: 20px 24px 8px !important;
+    color: var(--ui-text-2);
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+    font-weight: 600;
+    text-align: left !important;
+    background: var(--ui-surface);
+  }
+
+  .access-matrix__group-count {
+    margin-left: 4px;
+    color: var(--ui-text-3);
+    font-weight: 500;
+  }
+
+  .access-matrix__row:last-child th,
+  .access-matrix__row:last-child td {
+    border-bottom: 0;
+  }
+
+  tbody + tbody .access-matrix__group th {
+    border-top: 1px solid var(--ui-line);
+  }
+
+  .access-matrix__person {
+    position: sticky;
+    left: 0;
+    z-index: 1;
+    padding: 0 !important;
+    font-weight: 400;
+    text-align: left !important;
+    background: var(--ui-surface);
+  }
+
+  .access-matrix__row:hover > * {
+    background: var(--ui-hover-soft);
+  }
+
+  .access-matrix__row[data-selected] > * {
+    background: var(--ui-accent-soft);
+  }
+
+  .access-person {
+    display: flex;
+    align-items: center;
+    width: 100%;
+    min-height: 60px;
+    padding: 8px 16px 8px 24px;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .access-person:focus-visible {
+    outline: var(--ui-focus);
+    outline-offset: -4px;
+    border-radius: var(--ui-radius);
+  }
+
+  .access-cell-wrap {
+    height: 60px;
+  }
+
+  /* A cell: a 28 px square, the whole 60 px cell is not the target, so a slip lands nowhere. */
+  .access-cell {
+    display: inline-grid;
+    place-items: center;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    border: 1px solid var(--ui-line-strong);
+    border-radius: var(--ui-radius-sm);
+    /* Off: the row's own ground shows through (a selected row stays one colour). */
+    background: transparent;
+    color: var(--ui-text);
+    cursor: pointer;
+    transition: background-color var(--ui-fast), border-color var(--ui-fast);
+  }
+
+  .access-cell[data-state="off"] {
+    border-color: var(--ui-line);
+  }
+
+  .access-cell[data-state="on"],
+  .access-cell[data-state="some"] {
+    border-color: var(--ui-text-2);
+    background: var(--ui-active);
+  }
+
+  .access-cell__plus {
+    opacity: 0;
+    color: var(--ui-text-3);
+    transition: opacity var(--ui-fast);
+  }
+
+  .access-cell:hover {
+    border-color: var(--ui-text-2);
+  }
+
+  .access-cell:hover .access-cell__plus,
+  .access-cell:focus-visible .access-cell__plus {
+    opacity: 1;
+  }
+
+  .access-cell:focus-visible {
+    outline: var(--ui-focus);
+    outline-offset: var(--ui-focus-offset);
+  }
+
+  .access-cell:disabled {
+    cursor: progress;
+  }
+
+  .access-cell--model[data-state="off"] {
+    border-style: dashed;
+  }
+
+  /* ------------------------------------------------------------ The invite */
+
+  .access-invite {
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+  }
+
+  .access-invite__check {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    margin: 0;
+  }
+
+  .access-invite__pages {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    min-width: 0;
+  }
+
+  .access-invite__pages legend {
+    margin-bottom: 8px;
+    padding: 0;
+  }
+
+  .access-invite__models {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 16px;
+  }
+
+  .access-invite__group {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 12px 16px;
+    border: 1px solid var(--ui-line);
+    border-radius: var(--ui-radius);
+  }
+
+  .access-invite__model {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 4px 8px;
+    padding-bottom: 8px;
+    margin-bottom: 4px;
+    border-bottom: 1px solid var(--ui-line-soft);
+    color: var(--ui-text);
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  .access-invite__model--single {
+    cursor: default;
+  }
+
+  .access-invite__model input,
+  .access-invite__page input,
+  .access-toggle input {
+    flex: none;
+    width: 16px;
+    height: 16px;
+    margin: 0;
+    align-self: center;
+    accent-color: var(--ui-text);
+    cursor: pointer;
+  }
+
+  .access-invite__model .access-hint {
+    flex-basis: 100%;
+    padding-left: 24px;
+    font-weight: 400;
+  }
+
+  .access-invite__list {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .access-invite__page {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 32px;
+    cursor: pointer;
+  }
+
+  .access-invite__page .access-hint {
+    margin-left: auto;
+  }
+
+  .access-invite__more {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    gap: 24px;
+    padding-top: 12px;
+  }
+
+  .access-invite__days {
+    width: 120px;
+  }
+
+  .access-invite__picked {
+    margin-right: auto;
+    color: var(--ui-text-2);
+    font-size: var(--ui-fs-14);
+  }
+
+  /* -------------------------------------------------------------- A link */
+
+  .access-reveal {
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+  }
+
+  .access-reveal__row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 12px;
+    margin-top: 8px;
+  }
+
+  .access-reveal__link {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: stretch;
+    gap: 8px;
+  }
+
+  .access-code {
+    flex: 1;
+    min-width: 0;
+    padding: 7px 12px;
+    border: 1px solid var(--ui-line);
+    border-radius: var(--ui-radius);
+    background: var(--ui-hover-soft);
+    color: var(--ui-text);
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+    overflow-wrap: anywhere;
+    user-select: all;
+  }
+
+  .access-textarea {
+    width: 100%;
+    padding: 8px 12px;
+    border: 1px solid var(--ui-line-strong);
+    border-radius: var(--ui-radius);
+    background: var(--ui-surface);
+    color: var(--ui-text);
+    font: 400 var(--ui-fs-15) / var(--ui-lh-15) var(--ui-font);
+    resize: none;
+  }
+
+  .access-textarea:focus {
+    outline: none;
+    border-color: var(--ui-accent);
+    box-shadow: 0 0 0 3px var(--ui-accent-soft);
+  }
+
+  /* ------------------------------------------------------ A person's panel */
+
+  .access-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 28px;
+  }
+
+  .access-panel:focus {
+    outline: none;
+  }
+
+  .access-panel--page {
+    gap: 24px;
+  }
+
+  .access-panel__grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 24px;
+    align-items: start;
+  }
+
+  .access-panel__col {
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+  }
+
+  @media (max-width: 1100px) {
+    .access-panel__grid {
+      grid-template-columns: minmax(0, 1fr);
+    }
+  }
+
+  .access-block {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .access-block + .access-block {
+    padding-top: 24px;
+    border-top: 1px solid var(--ui-line);
+  }
+
+  .access-block__body {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .access-block__head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    min-height: 32px;
+  }
+
+  .access-block__title {
+    margin: 0;
+    color: var(--ui-text);
+    font-size: var(--ui-fs-16);
+    line-height: var(--ui-lh-16);
+    font-weight: 600;
+  }
+
+  .access-pages {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  .access-pages__head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    min-height: 32px;
+  }
+
+  .access-pages__name {
+    color: var(--ui-text-2);
+    font-size: var(--ui-fs-14);
+    font-weight: 600;
+  }
+
+  .access-pages__list {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 8px;
+  }
+
+  .access-toggle {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 40px;
+    padding: 0 12px;
+    border: 1px solid var(--ui-line);
+    border-radius: var(--ui-radius);
+    cursor: pointer;
+    transition: background-color var(--ui-fast), border-color var(--ui-fast);
+  }
+
+  .access-toggle:hover {
+    background: var(--ui-hover-soft);
+  }
+
+  .access-toggle[data-on] {
+    border-color: var(--ui-line-strong);
+    background: var(--ui-active);
+  }
+
+  .access-toggle__label {
+    color: var(--ui-text);
+    font-weight: 500;
+    white-space: nowrap;
+  }
+
+  .access-toggle .access-hint {
+    margin-left: auto;
+  }
+
+  .access-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .access-chip {
+    display: inline-flex;
+    align-items: center;
+    height: 28px;
+    padding: 0 10px;
+    border: 1px solid var(--ui-line);
+    border-radius: var(--ui-radius-sm);
+    color: var(--ui-text-2);
+    font-size: var(--ui-fs-14);
+  }
+
+  .access-list {
+    display: flex;
+    flex-direction: column;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .access-list__row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    min-height: 56px;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--ui-line-soft);
+  }
+
+  .access-list__row:last-child {
+    border-bottom: 0;
+  }
+
+  .access-list__main {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    color: var(--ui-text);
+  }
+
+  .access-list__main--text {
+    color: var(--ui-text-2);
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+  }
+
+  .access-list--quiet .access-list__main {
+    color: var(--ui-text-2);
+  }
+
+  .access-end {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px 24px;
+  }
+
+  .access-end .access-text {
+    flex: 1 1 280px;
+  }
+
+  .access-delete {
+    margin-top: 4px;
+  }
+
+  .access-notice__text {
+    margin: 0;
+  }
+
+  .access-notice__action {
+    margin-top: 12px;
+  }
+}

@@ -1,0 +1,102 @@
+/* Выплаты: what the shared components do not say themselves. Tokens only. */
+@layer components {
+  .payouts-sub {
+    display: block;
+    color: var(--ui-text-2);
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+  }
+
+  .payouts-note {
+    margin: 0;
+    color: var(--ui-text-2);
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+  }
+
+  /* A chatter's pages with their sums: «mia-1 $820.00   mia-2 $250.15», wrapping. */
+  .payouts-pages {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 20px;
+  }
+
+  .payouts-page {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 8px;
+    white-space: nowrap;
+  }
+
+  .payouts-page__label {
+    color: var(--ui-text-2);
+    font-size: var(--ui-fs-14);
+  }
+
+  .payouts-notices,
+  .payouts-folds {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .payouts-notices:empty {
+    display: none;
+  }
+
+  .payouts-folds {
+    gap: 16px;
+  }
+
+  .payouts-fold > .ui-disclosure__body {
+    padding-top: 12px;
+  }
+
+  .payouts-empty {
+    padding: 64px 24px;
+    border: 1px solid var(--ui-line);
+    border-radius: var(--ui-radius-lg);
+    background: var(--ui-surface);
+  }
+
+  /* ------------------------------------------------------ A chatter's panel */
+
+  .payouts-drawer {
+    display: flex;
+    flex-direction: column;
+    gap: 28px;
+  }
+
+  .payouts-block {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .payouts-block__title {
+    margin: 0;
+    color: var(--ui-text);
+    font-size: var(--ui-fs-16);
+    line-height: var(--ui-lh-16);
+    font-weight: 600;
+  }
+
+  .payouts-shifts {
+    display: flex;
+    flex-direction: column;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    border-top: 1px solid var(--ui-line-soft);
+  }
+
+  .payouts-shifts li {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 12px 0;
+    border-bottom: 1px solid var(--ui-line-soft);
+    font-variant-numeric: tabular-nums;
+  }
+}

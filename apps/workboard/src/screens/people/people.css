@@ -1,0 +1,662 @@
+/*
+ * «Люди» and «Человек»: what the shared components do not draw — the shift
+ * ribbon, the two-line numbers of a row, the sales blocks. Tokens only.
+ */
+@layer components {
+  /* ------------------------------------------------- A number with its change under it */
+
+  .people-num {
+    display: inline-flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 2px;
+  }
+
+  .people-num__sub {
+    color: var(--ui-text-3);
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+    white-space: nowrap;
+  }
+
+  .people-num .ui-delta {
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+  }
+
+  .people-dash {
+    color: var(--ui-text-3);
+  }
+
+  /* ------------------------------------------------- Below the table: people without shifts */
+
+  .people-aside {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  .people-idle {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 24px;
+    color: var(--ui-text-2);
+    font-size: var(--ui-fs-15);
+    line-height: var(--ui-lh-15);
+  }
+
+  .people-idle__label {
+    color: var(--ui-text-2);
+  }
+
+  .people-folded {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 12px 24px;
+    padding: 8px 0 0;
+  }
+
+  .people-note {
+    max-width: var(--ui-measure);
+    margin: 0;
+    color: var(--ui-text-2);
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+  }
+
+  .people-help p {
+    max-width: var(--ui-measure);
+    margin: 0 0 8px;
+  }
+
+  /* ------------------------------------------------- The card's header line */
+
+  .people-meta {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 12px;
+    color: var(--ui-text-2);
+    font-size: var(--ui-fs-15);
+    line-height: var(--ui-lh-15);
+  }
+
+  .people-meta__sep {
+    color: var(--ui-line-strong);
+  }
+
+  .people-meta__pages {
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+
+  .people-meta__strong {
+    color: var(--ui-text);
+    font-weight: 500;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .people-meta a.people-meta__live {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--ui-good-text);
+    font-weight: 500;
+    text-decoration: none;
+  }
+
+  .people-meta a.people-meta__live:hover {
+    text-decoration: underline;
+    text-underline-offset: 3px;
+  }
+
+  /* ------------------------------------------------- The verdict */
+
+  .people-verdict {
+    padding: 4px 0 0;
+  }
+
+  /* Six equal columns that use the width; a hairline between them, as the strip of tiles. */
+  .people-verdict .ui-facts--stacked {
+    display: grid;
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    row-gap: 24px;
+  }
+
+  .people-verdict .ui-facts--stacked .ui-fact {
+    padding: 0 24px;
+  }
+
+  .people-verdict .ui-facts--stacked .ui-fact:first-child {
+    padding-left: 0;
+  }
+
+  @media (max-width: 1280px) {
+    .people-verdict .ui-facts--stacked {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+
+    .people-verdict .ui-facts--stacked .ui-fact:nth-child(3n + 1) {
+      padding-left: 0;
+      border-left: 0;
+    }
+  }
+
+  .people-verdict__note {
+    margin: 16px 0 0;
+    color: var(--ui-text-2);
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+  }
+
+  /* ------------------------------------------------- A shift's cell in the table */
+
+  .people-shift {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+  }
+
+  .people-shift__day {
+    color: var(--ui-text);
+    font-weight: 500;
+    white-space: nowrap;
+  }
+
+  .people-shift__hint {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    overflow: hidden;
+    color: var(--ui-text-2);
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* ------------------------------------------------- The ribbon */
+
+  .people-ribbon {
+    --row: 40px;
+    --bar: 12px;
+    --day-col: 116px;
+    --total-col: 104px;
+    position: relative;
+  }
+
+  .people-ribbon[data-density="medium"] {
+    --row: 32px;
+    --bar: 10px;
+  }
+
+  .people-ribbon[data-density="dense"] {
+    --row: 26px;
+    --bar: 8px;
+  }
+
+  .people-ribbon__days {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .people-ribbon__row {
+    display: grid;
+    grid-template-columns: var(--day-col) minmax(0, 1fr) var(--total-col);
+    align-items: center;
+    gap: 16px;
+    min-height: var(--row);
+  }
+
+  .people-ribbon__days .people-ribbon__row + .people-ribbon__row {
+    border-top: 1px solid var(--ui-line-soft);
+  }
+
+  .people-ribbon__head {
+    min-height: 28px;
+    margin-bottom: 4px;
+  }
+
+  .people-ribbon__hours {
+    position: relative;
+    height: 18px;
+  }
+
+  .people-ribbon__hours span {
+    position: absolute;
+    top: 0;
+    transform: translateX(-50%);
+    color: var(--ui-text-3);
+    font-size: var(--ui-fs-13);
+    line-height: var(--ui-lh-13);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .people-ribbon__hours span[data-edge="start"] {
+    transform: none;
+  }
+
+  .people-ribbon__hours span[data-edge="end"] {
+    transform: translateX(-100%);
+  }
+
+  .people-ribbon__total-head {
+    color: var(--ui-text-3);
+    font-size: var(--ui-fs-13);
+    line-height: var(--ui-lh-13);
+    text-align: right;
+  }
+
+  .people-ribbon__day {
+    color: var(--ui-text-2);
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+    white-space: nowrap;
+  }
+
+  .people-ribbon__row[data-today] .people-ribbon__day {
+    color: var(--ui-text);
+    font-weight: 600;
+  }
+
+  .people-ribbon__total {
+    font-size: var(--ui-fs-15);
+    line-height: var(--ui-lh-15);
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .people-ribbon__track {
+    position: relative;
+    height: var(--row);
+  }
+
+  .people-ribbon__grid {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 1px;
+    background: var(--ui-line-soft);
+  }
+
+  .people-ribbon__piece {
+    position: absolute;
+    top: 50%;
+    height: var(--bar);
+    min-width: 4px;
+    transform: translateY(-50%);
+  }
+
+  .people-ribbon__shift {
+    position: absolute;
+    inset: 0;
+    display: block;
+    overflow: hidden;
+    border-radius: calc(var(--bar) / 2);
+    background: var(--ui-line-strong);
+    transition: background-color var(--ui-fast);
+  }
+
+  .people-ribbon__piece:hover .people-ribbon__shift {
+    background: var(--ui-series-compare);
+  }
+
+  .people-ribbon__shift:focus-visible {
+    outline: var(--ui-focus);
+    outline-offset: var(--ui-focus-offset);
+  }
+
+  .people-ribbon__piece[data-live] .people-ribbon__shift {
+    background: var(--ui-good-line);
+  }
+
+  .people-ribbon__piece[data-live]:hover .people-ribbon__shift {
+    background: var(--ui-good);
+  }
+
+  .people-ribbon__pause {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    background: var(--ui-track);
+  }
+
+  .people-ribbon__visit {
+    position: absolute;
+    top: 50%;
+    height: 2px;
+    min-width: 6px;
+    margin-top: -1px;
+    border-radius: 1px;
+    background: var(--ui-text-3);
+  }
+
+  .people-ribbon__visit::before {
+    content: "";
+    position: absolute;
+    inset: -8px 0;
+  }
+
+  .people-ribbon__sale {
+    position: absolute;
+    top: 50%;
+    width: var(--bead);
+    height: var(--bead);
+    margin-left: calc(var(--bead) / -2);
+    margin-top: calc(var(--bead) / -2);
+    border-radius: 50%;
+    background: var(--kind);
+    box-shadow: 0 0 0 2px var(--ui-surface);
+    cursor: pointer;
+  }
+
+  .people-ribbon__sale[data-overlap] {
+    border: 2px solid var(--kind);
+    background: var(--ui-surface);
+  }
+
+  .people-ribbon__now {
+    position: absolute;
+    top: 4px;
+    bottom: 4px;
+    width: 2px;
+    margin-left: -1px;
+    border-radius: 1px;
+    background: var(--ui-good);
+    pointer-events: none;
+  }
+
+  .people-ribbon__foot {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-top: 16px;
+    padding-left: calc(var(--day-col) + 16px);
+  }
+
+  .people-ribbon__legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 20px;
+    margin: 0;
+    padding: 0;
+    color: var(--ui-text-2);
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+    list-style: none;
+  }
+
+  .people-ribbon__legend li {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .people-ribbon__key-bead {
+    display: inline-block;
+    flex: none;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+  }
+
+  .people-ribbon__key-bead--hollow {
+    border: 2px solid var(--ui-text-2);
+  }
+
+  .people-ribbon__key-shift {
+    position: relative;
+    display: inline-block;
+    width: 28px;
+    height: 10px;
+    overflow: hidden;
+    border-radius: 5px;
+    background: var(--ui-line-strong);
+  }
+
+  .people-ribbon__key-shift span {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 12px;
+    width: 8px;
+    background: var(--ui-track);
+  }
+
+  .people-ribbon__key-visit {
+    display: inline-block;
+    width: 20px;
+    height: 2px;
+    border-radius: 1px;
+    background: var(--ui-text-3);
+  }
+
+  .people-ribbon__note {
+    margin: 0;
+    color: var(--ui-text-2);
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+  }
+
+  .people-ribbon__tip {
+    position: absolute;
+    z-index: var(--ui-z-tooltip);
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 200px;
+    max-width: 320px;
+    padding: 10px 12px;
+    border: 1px solid var(--ui-line);
+    border-radius: var(--ui-radius);
+    background: var(--ui-raised);
+    color: var(--ui-text);
+    box-shadow: var(--ui-shadow-float);
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+    transform: translate(-50%, calc(-100% - 10px));
+    pointer-events: none;
+  }
+
+  .people-ribbon__tip--below {
+    transform: translate(-50%, 10px);
+  }
+
+  .people-ribbon__tip-title {
+    font-weight: 500;
+  }
+
+  .people-ribbon__tip-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .people-ribbon__tip-name {
+    flex: 1;
+    color: var(--ui-text-2);
+  }
+
+  .people-ribbon__tip-note {
+    color: var(--ui-text-2);
+  }
+
+  .people-ribbon__tip-hint {
+    margin-top: 2px;
+    color: var(--ui-text-3);
+  }
+
+  /* ------------------------------------------------- Sales of a person */
+
+  .people-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 24px;
+    align-items: start;
+  }
+
+  .people-grid__wide {
+    grid-column: 1 / -1;
+    max-width: none;
+    margin: 0 0 -8px;
+  }
+
+  @media (max-width: 1100px) {
+    .people-grid {
+      grid-template-columns: minmax(0, 1fr);
+    }
+  }
+
+  .people-rates {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .people-rate {
+    display: grid;
+    grid-template-columns: 88px minmax(80px, 1fr) 48px 132px;
+    align-items: center;
+    gap: 16px;
+    font-size: var(--ui-fs-15);
+    line-height: var(--ui-lh-15);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .people-rate__label {
+    color: var(--ui-text-2);
+    white-space: nowrap;
+  }
+
+  .people-rate__value {
+    font-weight: 600;
+    text-align: right;
+  }
+
+  .people-rate__value[data-weak] {
+    color: var(--ui-text-3);
+    font-weight: 500;
+  }
+
+  .people-rate__detail {
+    color: var(--ui-text-2);
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+    white-space: nowrap;
+  }
+
+  .people-rate__team {
+    display: block;
+    color: var(--ui-text-3);
+  }
+
+  .people-kinds {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .people-kind {
+    display: grid;
+    grid-template-columns: 12px minmax(0, 1fr) auto 48px;
+    align-items: center;
+    gap: 12px;
+    font-size: var(--ui-fs-15);
+    line-height: var(--ui-lh-15);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .people-kind__share {
+    color: var(--ui-text-2);
+    text-align: right;
+  }
+
+  .people-subhead {
+    margin: 24px 0 12px;
+    padding-top: 16px;
+    border-top: 1px solid var(--ui-line);
+    color: var(--ui-text-2);
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+    font-weight: 500;
+  }
+
+  .people-split {
+    display: flex;
+    height: 12px;
+    margin: 4px 0 16px;
+    overflow: hidden;
+    border-radius: 6px;
+    background: var(--ui-track);
+    gap: 2px;
+  }
+
+  .people-split span {
+    display: block;
+    height: 100%;
+  }
+
+  .people-fans {
+    display: flex;
+    flex-direction: column;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .people-fan {
+    display: grid;
+    grid-template-columns: 24px minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 12px;
+    min-height: 48px;
+    border-top: 1px solid var(--ui-line-soft);
+    font-size: var(--ui-fs-15);
+    line-height: var(--ui-lh-15);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .people-fan:first-child {
+    border-top: 0;
+  }
+
+  .people-fan__rank {
+    color: var(--ui-text-3);
+  }
+
+  .people-fan__who {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+  }
+
+  .people-fan__name {
+    overflow: hidden;
+    font-weight: 500;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .people-fan__money {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+  }
+
+  .people-fan__count {
+    color: var(--ui-text-2);
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+  }
+}

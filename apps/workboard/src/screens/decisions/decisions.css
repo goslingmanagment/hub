@@ -1,0 +1,257 @@
+/* Решения: the few things the shared components do not say themselves. Tokens only. */
+@layer components {
+  /* The number of a queue next to its title: quiet, the same size. */
+  .decisions-count {
+    margin-left: 8px;
+    color: var(--ui-text-3);
+    font-weight: 500;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* A quiet second line inside a cell («Оба записали «моё»», «без отчёта 28 ч»). */
+  .decisions-sub {
+    display: block;
+    color: var(--ui-text-2);
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+  }
+
+  .decisions-nowrap {
+    white-space: nowrap;
+  }
+
+  /* Text a person wrote (what was ordered, why it was decided): wraps, never cut. */
+  .decisions-text {
+    display: block;
+    max-width: 72ch;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+
+  .decisions-warn {
+    color: var(--ui-warn-text);
+    font-weight: 500;
+  }
+
+  .decisions-note {
+    margin: 0;
+    color: var(--ui-text-2);
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+  }
+
+  .decisions-fold > .ui-disclosure__body {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding-top: 12px;
+  }
+
+  .decisions-history {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  .decisions-history:empty {
+    display: none;
+  }
+
+  .decisions-empty {
+    padding: 64px 24px;
+    border: 1px solid var(--ui-line);
+    border-radius: var(--ui-radius-lg);
+    background: var(--ui-surface);
+  }
+
+  .decisions-error {
+    border: 1px solid var(--ui-line);
+    border-radius: var(--ui-radius-lg);
+    background: var(--ui-surface);
+  }
+
+  .decisions-skeleton {
+    padding: 24px;
+    border: 1px solid var(--ui-line);
+    border-radius: var(--ui-radius-lg);
+    background: var(--ui-surface);
+  }
+
+  .decisions-pager {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    color: var(--ui-text-2);
+    font-size: var(--ui-fs-14);
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* ----------------------------------------------------- A dispute's panel */
+
+  .decisions-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+  }
+
+  .decisions-panel:focus {
+    outline: none;
+  }
+
+  .decisions-marks {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .decisions-marks li {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 12px;
+  }
+
+  /* Answers to choose from: a whole row is the target, the picked one in ink. */
+  .decisions-choices {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    min-width: 0;
+  }
+
+  .decisions-choices legend {
+    margin-bottom: 8px;
+    padding: 0;
+    color: var(--ui-text);
+    font-size: var(--ui-fs-15);
+    line-height: var(--ui-lh-15);
+    font-weight: 600;
+  }
+
+  .decisions-choice {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 12px 16px;
+    border: 1px solid var(--ui-line-strong);
+    border-radius: var(--ui-radius);
+    background: var(--ui-surface);
+    cursor: pointer;
+    transition: background-color var(--ui-fast), border-color var(--ui-fast);
+  }
+
+  .decisions-choice:hover {
+    background: var(--ui-hover-soft);
+  }
+
+  .decisions-choice[data-picked] {
+    border-color: var(--ui-accent);
+    background: var(--ui-accent-soft);
+  }
+
+  .decisions-choice input {
+    flex: none;
+    width: 16px;
+    height: 16px;
+    margin: 3px 0 0;
+    accent-color: var(--ui-accent);
+  }
+
+  .decisions-choices:disabled .decisions-choice {
+    cursor: not-allowed;
+    opacity: 0.6;
+  }
+
+  .decisions-choice__title {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 4px 12px;
+    color: var(--ui-text);
+    font-size: var(--ui-fs-15);
+    line-height: var(--ui-lh-15);
+    font-weight: 500;
+  }
+
+  .decisions-choice__now {
+    color: var(--ui-accent);
+    font-size: var(--ui-fs-14);
+    font-weight: 500;
+  }
+
+  .decisions-choice__hint {
+    display: block;
+    margin-top: 2px;
+    color: var(--ui-text-2);
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+  }
+
+  /* ----------------------------------------------- A held send's resolve */
+
+  .decisions-resolve {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+  }
+
+  .decisions-summary {
+    padding: 16px;
+    border: 1px solid var(--ui-line-soft);
+    border-radius: var(--ui-radius);
+    background: var(--ui-hover-soft);
+  }
+
+  .decisions-intro {
+    margin: 0;
+    color: var(--ui-text);
+    font-size: var(--ui-fs-15);
+    line-height: var(--ui-lh-15);
+  }
+
+  .decisions-warning-line {
+    margin: 4px 0 0;
+  }
+
+  .decisions-mono {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: var(--ui-fs-14);
+    overflow-wrap: anywhere;
+  }
+
+  .decisions-textarea {
+    width: 100%;
+    min-height: 88px;
+    padding: 8px 12px;
+    border: 1px solid var(--ui-line-strong);
+    border-radius: var(--ui-radius);
+    background: var(--ui-surface);
+    color: var(--ui-text);
+    font: 400 var(--ui-fs-15) / var(--ui-lh-15) var(--ui-font);
+    resize: vertical;
+    transition: border-color var(--ui-fast), box-shadow var(--ui-fast);
+  }
+
+  .decisions-textarea::placeholder {
+    color: var(--ui-text-3);
+  }
+
+  .decisions-textarea:focus {
+    outline: none;
+    border-color: var(--ui-accent);
+    box-shadow: 0 0 0 3px var(--ui-accent-soft);
+  }
+
+  .decisions-missing {
+    margin-right: auto;
+    color: var(--ui-text-2);
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+  }
+}

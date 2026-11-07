@@ -8,15 +8,22 @@ import { settingsHandlers } from "./settings.ts";
 import { shellHandlers } from "./shell.ts";
 import { systemHandlers } from "./system.ts";
 import { teamHandlers } from "./team.ts";
+import { wbReviewHandlers } from "./wb-review.ts";
+import { wbSalesHandlers } from "./wb-sales.ts";
+import { wbAdminHandlers, wbHeldHandlers } from "./wb-admin.ts";
 
 const AREAS: Readonly<Record<string, DemoHandlers>> = {
   shell: shellHandlers,
   money: moneyHandlers,
   page: pageHandlers,
-  team: teamHandlers,
+  // «Разбор смены» with the shift's money (wb-review.ts wraps team-review.ts's answer);
+  // «Что продаёт»: the approaches write, win-back results ripened from the written (wb-sales.ts).
+  team: { ...teamHandlers, ...wbReviewHandlers, ...wbSalesHandlers },
   account: accountHandlers,
   "publish-of": publishOfHandlers,
-  "costs-attention": costsAttentionHandlers,
+  // Workboard «Решения» and «Доступ»: Fansly held sends over the console's queue, and the access writes (wb-admin.ts).
+  "costs-attention": { ...costsAttentionHandlers, ...wbHeldHandlers },
+  "wb-admin": wbAdminHandlers,
   settings: settingsHandlers,
   system: systemHandlers,
 };

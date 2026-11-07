@@ -1,4 +1,4 @@
-import { EmptyState } from "@agency_hub_core/ui";
+import { PersonAccess } from "@/screens/access/PersonAccess";
 
 /**
  * The agreed interface of a person's access (spec §4.4 «Доступ», §4.8): pages,
@@ -6,15 +6,16 @@ import { EmptyState } from "@agency_hub_core/ui";
  * adapted to the state (a pending invite → «Отменить приглашение»; disabled →
  * «Восстановить»).
  *
- * Built by the «Доступ» screen (src/screens/access/); shown by the «Люди»
- * screen in the «Доступ» tab of a person's card and by «Доступ» in its side
- * panel. The owner's only: Hub refuses everyone else, and the caller does not
- * render it for a team lead.
+ * Built by the «Доступ» screen (src/screens/access/PersonAccess.tsx); shown by
+ * the «Люди» screen in the «Доступ» tab of a person's card and by «Доступ» in
+ * its side panel. The owner's only: Hub refuses everyone else, and the panel
+ * says so itself for a team lead.
  *
  * Every write keeps the console's request, server checks and confirmation
  * texts (apps/dashboard/src/pages/team/people/PersonPage.tsx and api/adminUsers.ts);
  * confirmations are only added («Снять» страницу, «Завершить вход на
- * устройстве», «Сбросить пароль ссылкой» get one).
+ * устройстве», «Сбросить пароль ссылкой», «Отозвать ссылку» get one; deleting
+ * the account also asks to type the login).
  */
 export interface PersonAccessPanelProps {
   /** Hub's user id (`adminUsers` / `teamChatterStats.people[].userId`). */
@@ -25,11 +26,6 @@ export interface PersonAccessPanelProps {
   onChanged?: () => void;
 }
 
-/** Placeholder until the «Доступ» screen fills it in (same file, same props). */
-export function PersonAccessPanel({ userId, variant }: PersonAccessPanelProps) {
-  return (
-    <EmptyState title="Доступ человека" compact={variant === "drawer"}>
-      Здесь будут страницы, ссылки, устройства и отключение (пользователь {userId}).
-    </EmptyState>
-  );
+export function PersonAccessPanel({ userId, variant, onChanged }: PersonAccessPanelProps) {
+  return <PersonAccess userId={userId} variant={variant} {...(onChanged ? { onChanged } : {})} />;
 }
