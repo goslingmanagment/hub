@@ -1,6 +1,7 @@
 import { VAULT_MEDIA_HEAD_CURSOR } from "@agency_hub_core/fansly";
 
 import { classifyFanslyResponse } from "./lane.ts";
+import { parseVaultHeadBasis, parseVaultHeadFallback, type VaultHeadBasis, type VaultHeadFallback } from "./vault-head-walk.ts";
 import { parseVaultWalkProof, type VaultWalkProof } from "./vault-walk-proof.ts";
 
 // The catalog rules of the Sync Engine's `catalog.*` resources
@@ -53,6 +54,18 @@ export interface VaultAlbumWalkState {
   completedOnUtcDay?: string | undefined;
   /** Last proven complete generation, retained when a recheck starts. */
   lastCompleteWalkAt?: string | undefined;
+  /** `"head"`: this generation reads the album from its head only down to a
+   *  media id of its last proven inventory (lib/vault-head-walk.ts); absent:
+   *  the full walk, head to an empty page. */
+  mode?: "head" | undefined;
+  /** A head walk's inventory: the proven one it counts against while under
+   *  way, the one it proved once it caught up. */
+  basis?: VaultHeadBasis | undefined;
+  /** The UTC day the album's last full walk closed: the weekly full walk is
+   *  due from it (a head walk keeps it). */
+  fullWalkOnUtcDay?: string | undefined;
+  /** Why a head walk handed the album to the full walk it waits for. */
+  fallbackFrom?: VaultHeadFallback | undefined;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -84,6 +97,10 @@ export function parseAlbumWalk(value: unknown): VaultAlbumWalkState | null {
     proof: parseVaultWalkProof(record.proof),
     completedOnUtcDay: asNullableString(record.completedOnUtcDay) ?? undefined,
     lastCompleteWalkAt: asNullableString(record.lastCompleteWalkAt) ?? undefined,
+    mode: record.mode === "head" ? "head" : undefined,
+    basis: parseVaultHeadBasis(record.basis),
+    fullWalkOnUtcDay: asNullableString(record.fullWalkOnUtcDay) ?? undefined,
+    fallbackFrom: parseVaultHeadFallback(record.fallbackFrom),
   };
 }
 

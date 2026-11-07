@@ -120,6 +120,9 @@ const envSchema = z.object({
   OFAPI_WEBHOOK_MANAGEMENT_SCOPE: z.enum(["unknown", "team"]).default("unknown"),
   OFAPI_EVENT_WORKER_REPLICAS: z.coerce.number().int().positive().default(1),
   FANSLY_REPLIES_REWALK_CYCLE_DAYS: z.coerce.number().int().min(1).max(365).default(14),
+  // Owner decision №6 (2026-11-07 rollout): the pages whose vault walk reads a
+  // moved album from its head only; empty = every page walks it in full.
+  FANSLY_VAULT_HEAD_WALK_PAGES: z.string().default(""),
   // Arena "vanished chat" R5: the session-less public account reader (off at
   // rest) and the ids it asks for per request.
   FANSLY_PUBLIC_LOOKUP_ENABLED: booleanSchema.default(false),
@@ -409,6 +412,9 @@ export interface AppConfig {
   ofapiEventWorkerReplicas?: number;
   /** How stale a post's last walk must be before the round-robin re-reads it. */
   fanslyRepliesRewalkCycleDays?: number;
+  /** CSV of exact page labels whose vault walk reads a moved album from its
+   *  head down to the old head (empty: none — the full walk everywhere). */
+  fanslyVaultHeadWalkPages?: string;
   /** Arena R5: the session-less public account reader runs (off by default). */
   fanslyPublicLookupEnabled?: boolean;
   /** Arena R5: ids per session-less lookup, 1–100. */
@@ -794,6 +800,7 @@ export function loadConfig(
     ofapiWebhookManagementScope: parsed.OFAPI_WEBHOOK_MANAGEMENT_SCOPE,
     ofapiEventWorkerReplicas: parsed.OFAPI_EVENT_WORKER_REPLICAS,
     fanslyRepliesRewalkCycleDays: parsed.FANSLY_REPLIES_REWALK_CYCLE_DAYS,
+    fanslyVaultHeadWalkPages: parsed.FANSLY_VAULT_HEAD_WALK_PAGES,
     fanslyPublicLookupEnabled: parsed.FANSLY_PUBLIC_LOOKUP_ENABLED,
     fanslyPublicLookupBatchSize: parsed.FANSLY_PUBLIC_LOOKUP_BATCH_SIZE,
     ofapiRestDelayMs: parsed.OFAPI_REST_DELAY_MS,

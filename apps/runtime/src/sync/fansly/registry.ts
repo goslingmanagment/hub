@@ -585,7 +585,8 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
   {
     // A standing walk over the albums the catalog projection lists: it looks
     // at them daily (an album whose head or count moved is walked again —
-    // incremental daily) and an album walked a week ago is due again (full
+    // incremental daily; on the pages of `fanslyVaultHeadWalkPages` only down
+    // to the old head) and an album fully walked a week ago is due again (full
     // weekly; a page's override changes either period, owner decision №6);
     // `catalog.fixed` makes it due as soon as it listed the albums.
     key: "catalog.vault", file: "catalog", subject: "page", kind: "goal", class: "planned",

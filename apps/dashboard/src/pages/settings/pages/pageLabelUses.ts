@@ -12,6 +12,7 @@ export const PAGE_LABEL_KEYS: readonly { key: string; name: string }[] = [
   { key: "chatExtensionFeatures", name: "Функции расширения" },
   { key: "voiceNotesPageAllowlist", name: "Голосовые сообщения" },
   { key: "fanFactsPages", name: "Факты из чата" },
+  { key: "fanslyVaultHeadWalkPages", name: CONFIG_COPY_RU.fanslyVaultHeadWalkPages?.title ?? "Сейф: обход от начала альбома" },
   { key: "aiMediaDescribePagePolicies", name: "Описание картинок" },
   { key: "crossSpendersLists", name: CONFIG_COPY_RU.crossSpendersLists?.title ?? "Спендеры других страниц" },
   { key: "chatExtensionHostBindings", name: CONFIG_COPY_RU.chatExtensionHostBindings?.title ?? "Привязка аккаунтов расширения" },
