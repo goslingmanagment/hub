@@ -469,6 +469,12 @@ export const WRITTEN_OBSERVATION_KINDS: readonly WrittenObservationKind[] = [
     source: "operator",
     writer: "packages/db/src/repositories/ofapi-message-coverage.ts",
   },
+  // Hub closed a held Fansly greeting as sent on its own archive's copy: the evidence, before the close.
+  {
+    kind: "client.send_custody_archive_proof.v1",
+    source: "operator",
+    writer: "packages/db/src/repositories/client-send-custody-archive.ts",
+  },
 ];
 
 /**
@@ -757,6 +763,13 @@ export const RAW_ONLY_OBSERVATION_KINDS: readonly RawOnlyObservationKind[] = [
     justification:
       "An operator-run archive reconstruction witness. It records that a repair RAN; the "
       + "material itself arrives through message.material_observed.",
+  },
+  {
+    kind: "client.send_custody_archive_proof.v1",
+    justification:
+      "The evidence Hub closed a held Fansly greeting on (the dispatcher's own send report and the "
+      + "archive's copy of that message), journaled before the close. The custody row is the state it "
+      + "moves; the facts themselves are already journaled by their own capture.",
   },
   {
     kind: "ofapi_gateway_chats",

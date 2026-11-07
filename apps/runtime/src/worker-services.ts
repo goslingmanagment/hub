@@ -35,6 +35,11 @@ import {
   runModelApplicationAbandonSweep,
 } from "./services/model-application-sessions.ts";
 import {
+  CLIENT_SEND_ARCHIVE_SWEEP_QUEUE,
+  ensureClientSendArchiveSweepQueue,
+  runClientSendArchiveSweep,
+} from "./services/client-send-custody-archive.ts";
+import {
   OBSERVATIONS_PARTITIONS_QUEUE,
   ensureObservationsPartitionQueue,
   runObservationsPartitionCheck,
@@ -260,6 +265,7 @@ export async function startWorkerServices(
   await ensureOfapiCollectionQueues(boss, createdQueues);
   await ensureDbDiskUsageQueue(boss, createdQueues);
   await ensureModelApplicationAbandonSweepQueue(boss, createdQueues);
+  await ensureClientSendArchiveSweepQueue(boss, createdQueues);
   await ensureObservationsPartitionQueue(boss, createdQueues);
   await ensureCapturePayloadParityQueue(boss, createdQueues);
   await ensureCanonicalizeQueues(boss, createdQueues);
@@ -452,6 +458,14 @@ export async function startWorkerServices(
     const result = await runModelApplicationAbandonSweep(app);
     if (result.notified > 0) {
       app.logger.info(result, "Model questionnaire abandon sweep complete");
+    }
+  });
+
+  // Fansly greetings held only because Fansly's live channel dropped their echo, closed on the archive's copy.
+  await boss.work(CLIENT_SEND_ARCHIVE_SWEEP_QUEUE, CRON_SWEEP_WORK_OPTIONS, async () => {
+    const tally = await runClientSendArchiveSweep(app);
+    if (tally.closed + tally.refused + tally.errored > 0) {
+      app.logger.info(tally, "Send custody archive sweep complete");
     }
   });
 

@@ -11,7 +11,10 @@
 // next dispatch to the fan: that one stores it `unconfirmed` and goes on
 // (audit 2026-10-20, row 2: an unknown outcome no longer holds the fan; the
 // person decides and may send the part again by a new click). A late `sent`
-// report still lands on it; the manual resolve still ends it.
+// report still lands on it; the manual resolve still ends it. A Fansly greeting
+// held only because the live channel never echoed it is reported `sent` by Hub
+// itself, for the install that dispatched it, once the page's own archive has
+// that very message (owner, 2026-11-07: client-send-custody-archive.ts).
 
 export const CLIENT_FAN_LEASE_TTL_MS = 120_000;
 export const CLIENT_SEND_TICKET_TTL_MS = 10_000;
@@ -182,7 +185,16 @@ export type ClientClaimRequest = ActorFields & (
     /** The rate it counts toward; CLIENT_PREVIEW_SEND_RATE when absent. Not part of the request's hash. */
     rate?: ClientSendRate;
   }
-  | { action: "sent"; attemptId: string; instanceId: string; platformMessageId: string }
+  | {
+    action: "sent"; attemptId: string; instanceId: string; platformMessageId: string;
+    /**
+     * When the part went out, where the proof dates it better than the report does. Only Hub's
+     * archive sweep names it (client-send-custody-archive.ts): it closes a held greeting long after
+     * it left, so the first greeting is dated by the archive's copy, not by the sweep. A client never
+     * names it (the route builds the request field by field).
+     */
+    sentAt?: Date;
+  }
   | {
     action: "failed"; attemptId: string; instanceId: string; reason: ClientSendFailureReason;
     httpStatus: number | null;
@@ -239,6 +251,8 @@ export type ClientClaimWrite =
   | {
     op: "confirmGreeting"; source: "preview-send" | "native-register" | "resolve"; ownerUserId: number;
     group: ClientClaimGroup; messageRef: string | null; attemptId: string;
+    /** The `sent` report's `sentAt`; absent, the greeting is confirmed at the decision's `now`. */
+    confirmedAt?: Date;
   };
 
 export type ClientClaimDecision =
@@ -440,7 +454,7 @@ export function decideClaimTransition(snapshot: ClientFanClaimSnapshot, request:
         if (attempt.state === "unconfirmed" && partTakenByAnother(snapshot, attempt)) return reject("attempt_conflict");
         return apply(
           { op: "markSent", attemptId: attempt.attemptId, platformMessageId: request.platformMessageId },
-          ...greetingConfirmation(snapshot, attempt, "preview-send", request.platformMessageId),
+          ...greetingConfirmation(snapshot, attempt, "preview-send", request.platformMessageId, request.sentAt),
         );
       }
       if (attempt.state === "failed") {
@@ -543,11 +557,13 @@ function greetingConfirmation(
   attempt: ClientCustodyRow,
   source: "preview-send" | "native-register" | "resolve",
   messageRef: string | null,
+  confirmedAt?: Date,
 ): ClientClaimWrite[] {
   if (attempt.purpose !== "greeting" || confirmedGreeting(snapshot)) return [];
   return [{
     op: "confirmGreeting", source, ownerUserId: attempt.userId, attemptId: attempt.attemptId, messageRef,
     group: { generationRef: attempt.generationRef, variant: attempt.variant, partCount: attempt.partCount },
+    ...(confirmedAt === undefined ? {} : { confirmedAt }),
   }];
 }
 

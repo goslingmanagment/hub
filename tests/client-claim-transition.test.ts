@@ -333,6 +333,17 @@ describe("sent and failed: only the dispatching user and instance (critic 12)", 
     ]);
   });
 
+  it("dates the greeting by the report's sentAt when it names one (Hub's archive sweep), else by now", () => {
+    const held = custody({ ticketExpiresAt: later(-3_600_000) });
+    const sentAt = later(-3_610_000);
+    expect(decideClaimTransition(snapshot({ attempt: held, openCustody: held }), sent({ sentAt })).writes).toEqual([
+      { op: "markSent", attemptId: A1, platformMessageId: "901" },
+      { op: "confirmGreeting", source: "preview-send", ownerUserId: ME, attemptId: A1, messageRef: "901", group: GROUP, confirmedAt: sentAt },
+    ]);
+    const confirm = decideClaimTransition(snapshot({ attempt: held, openCustody: held }), sent()).writes[1];
+    expect(confirm !== undefined && "confirmedAt" in confirm).toBe(false);
+  });
+
   it("takes the late proof of a set-aside send unless its part moved on (audit 2026-10-20 row 2)", () => {
     const aside = custody({ state: "unconfirmed", ticketExpiresAt: later(-60_000) });
     expect(decideClaimTransition(snapshot({ attempt: aside, group: GROUP, groupParts: [] }), sent()).writes.map((write) => write.op))

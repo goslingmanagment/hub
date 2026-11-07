@@ -9,6 +9,8 @@ export * from "./repositories/client-claim.ts";
 export * from "./repositories/client-claim-transition.ts";
 // The cabinet's list of held and hand-resolved sends over the same tables (H-7e).
 export * from "./repositories/client-send-custody-list.ts";
+// A Fansly greeting held only because Fansly's live channel dropped its echo, closed on Hub's archive copy.
+export * from "./repositories/client-send-custody-archive.ts";
 // chat-extension "new subscribers" list reads (H-7c).
 export * from "./repositories/client-audience-new.ts";
 // Who sent each outgoing message (send-attribution-v1, 0286).

@@ -150,6 +150,9 @@ function validate(request: ClientClaimRequest): void {
     assertShape(request.flagRevision === null || (Number.isInteger(request.flagRevision) && request.flagRevision >= 0), "flagRevision");
   }
   if (request.action === "resolve") assertShape(request.note.length >= 1 && request.note.length <= 500, "note");
+  if (request.action === "sent" && request.sentAt !== undefined) {
+    assertShape(Number.isFinite(request.sentAt.getTime()), "sentAt");
+  }
 }
 
 const CUSTODY_COLUMNS = sql`attempt_id::text, page_id, fan_ref, user_id, instance_id::text, purpose, origin,
@@ -404,7 +407,8 @@ async function applyWrites(
           (page_id, fan_ref, owner_user_id, generation_ref, variant, part_count, confirmed_at, first_message_ref,
             first_attempt_id, source)
           values (${pageId}, ${fanRef}, ${write.ownerUserId}, ${write.group.generationRef}, ${write.group.variant},
-            ${write.group.partCount}, ${now}, ${write.messageRef}, ${write.attemptId}::uuid, ${write.source})`,
+            ${write.group.partCount}, ${write.confirmedAt ?? now}, ${write.messageRef}, ${write.attemptId}::uuid,
+            ${write.source})`,
           "greeting confirmation");
         break;
     }
@@ -474,6 +478,71 @@ export function applyClientClaimAction(
   options: ApplyClientClaimOptions = {},
 ): Promise<ClientClaimResult> {
   return runLocked(db, hashed(input), options);
+}
+
+/** What Hub's own `sent` report stands on: the dispatcher it reports for, and the message. */
+export interface ClientSentProof {
+  userId: number;
+  instanceId: string;
+  platformMessageId: string;
+  /** When the message went out: the greeting it confirms is dated by it. */
+  sentAt: Date;
+}
+
+/**
+ * - `closed`: the send is now sent (and the fan greeted, when it was the first greeting).
+ * - `unproven`: under the lock the proof no longer held; nothing was written.
+ * - `unchanged`: the send was already sent with this very message; nothing was written.
+ * - `refused`: the rules refused the report; nothing was written.
+ */
+export type ClientSentOnProofResult =
+  | { outcome: "closed" | "unproven" | "unchanged" }
+  | { outcome: "refused"; code: ClientClaimRejectionCode };
+
+/**
+ * Hub's own `sent` report of a held send, on proof (the archive sweep,
+ * client-send-custody-archive.ts): the report the dispatching install would
+ * have made, decided by the same rules (decideClaimTransition) under the same
+ * fan lock, so a report of the extension that lands first wins and this one
+ * changes nothing. `prove` reads the proof again under that lock (null: it no
+ * longer holds); `journal` records it before the first write, in the same
+ * transaction. Writes nothing unless the send closes, not even a lazy lease
+ * expiry: the clients' next action does that.
+ */
+export async function reportClientSentOnProof(
+  db: Database,
+  input: { pageId: number; fanRef: string; attemptId: string },
+  steps: {
+    prove: (tx: Database) => Promise<ClientSentProof | null>;
+    journal: (tx: Database, proof: ClientSentProof) => Promise<void>;
+  },
+): Promise<ClientSentOnProofResult> {
+  const once = () => db.transaction(async (transaction): Promise<ClientSentOnProofResult> => {
+    const tx = transaction as unknown as Database;
+    await lockFan(tx, input.pageId, input.fanRef);
+    const proof = await steps.prove(tx);
+    if (proof === null) return { outcome: "unproven" };
+    const request: ClientClaimRequest = {
+      action: "sent", pageId: input.pageId, fanRef: input.fanRef, userId: proof.userId, instanceId: proof.instanceId,
+      attemptId: input.attemptId, platformMessageId: proof.platformMessageId, sentAt: proof.sentAt,
+    };
+    validate(request);
+    const snapshot = await loadSnapshot(tx, input.pageId, input.fanRef, snapshotRefs(request));
+    const decision = decideClaimTransition(snapshot, request);
+    if (decision.outcome === "rejected") return { outcome: "refused", code: decision.code };
+    if (!decision.writes.some((write) => write.op === "markSent")) return { outcome: "unchanged" };
+    await steps.journal(tx, proof);
+    await applyWrites(tx, request, snapshot.now, decision.writes);
+    return { outcome: "closed" };
+  });
+  try {
+    return await once();
+  } catch (error) {
+    // Another fan's row took the message id between our read and our write (CROSS_FAN_UNIQUE_KEYS):
+    // everything rolled back, and deciding once more reads that row and refuses.
+    if (!CROSS_FAN_UNIQUE_KEYS.some((key) => isUniqueViolation(error, key))) throw error;
+    return once();
+  }
 }
 
 /**

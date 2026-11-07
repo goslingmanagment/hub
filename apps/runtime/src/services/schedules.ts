@@ -17,6 +17,10 @@ import {
   ensureModelApplicationAbandonSweepQueue,
   ensureModelApplicationAbandonSweepSchedule,
 } from "./model-application-sessions.ts";
+import {
+  ensureClientSendArchiveSweepQueue,
+  ensureClientSendArchiveSweepSchedule,
+} from "./client-send-custody-archive.ts";
 import { ensureObservationsPartitionQueue, ensureObservationsPartitionSchedule } from "./observations-partitions.ts";
 import { ensureCapturePayloadParityQueue, ensureCapturePayloadParitySchedule } from "./capture-payload-parity.ts";
 import { ensureOfapiChargebacksQueue, ensureOfapiChargebacksSchedule } from "./ofapi-chargebacks-sync.ts";
@@ -105,6 +109,7 @@ export async function registerAllSchedules(
   await ensureAiProviderReportsQueue(boss, createdQueues);
   await ensureFanslyBlocklistQueue(boss, createdQueues);
   await ensureModelApplicationAbandonSweepQueue(boss, createdQueues);
+  await ensureClientSendArchiveSweepQueue(boss, createdQueues);
   // Retired cron + queue rows of removed jobs (RETIRED_SCHEDULES). Best
   // effort: a stale queue row costs nothing, so a failure here must never keep
   // the live schedules below from registering.
@@ -152,5 +157,6 @@ export async function registerAllSchedules(
     ensureAiProviderReportsSchedule(boss),
     ensureFanslyBlocklistSchedule(boss),
     ensureModelApplicationAbandonSweepSchedule(boss),
+    ensureClientSendArchiveSweepSchedule(boss),
   ]);
 }
