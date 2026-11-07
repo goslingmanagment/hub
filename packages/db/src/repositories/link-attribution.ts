@@ -6,6 +6,7 @@ import {
 } from "@agency_hub_core/shared";
 
 import type { Database } from "../client.ts";
+import { settledTransactionStateSql, settledTransactionStateText } from "./transaction-settled-state.ts";
 
 // Hub's own money per OnlyFans link (traffic sources plan §2.4, PR 13), under
 // `ofapi_subscription_period_equal_split.v1` (LINK_ATTRIBUTION_RULE): a
@@ -18,7 +19,8 @@ import type { Database } from "../client.ts";
 // Which transactions count (П9.3): active, posted, with a fan, of the types
 // the fan spend rollup counts (spenderAnalyticsTransactionTypes — the same
 // selection as `fan_spend_daily`). Pending ones are carried separately and
-// never enter the figure. The money is `creator_net_amount_mills`: net after
+// never enter the figure; a pending row OnlyFans' ledger settled since counts
+// as posted (settledTransactionStateSql). The money is `creator_net_amount_mills`: net after
 // the OnlyFans fee, like the vendor's revenue.total.
 //
 // A chargeback or refund (`<id>:chargeback` / `<id>:reversal`) whose original
@@ -243,7 +245,7 @@ export async function readHubLinkAttribution(
     occurred_at: Date | string; attribution_at: Date | string; original_id: string | null;
   }>(sql`
     select t.id::text, t.platform_account_id::text as page_id, t.fan_id::text,
-           t.transaction_state::text as state, t.creator_net_amount_mills::text as net_mills,
+           ${settledTransactionStateSql("t")}::text as state, t.creator_net_amount_mills::text as net_mills,
            t.occurred_at, coalesce(o.occurred_at, t.occurred_at) as attribution_at, o.id::text as original_id
       from transactions t
       left join transactions o
@@ -398,7 +400,7 @@ export const HUB_LINK_ALLOCATIONS_SQL = `
              ) as ord
         from (
           select distinct t.id as transaction_id, t.platform_account_id as page_id, t.fan_id,
-                 t.transaction_state::text as state, t.creator_net_amount_mills as amount, t.occurred_at,
+                 ${settledTransactionStateText("t")}::text as state, t.creator_net_amount_mills as amount, t.occurred_at,
                  pe.link_kind, pe.platform_link_id as link_ref, w.floor_at
             from transactions t
             left join transactions o

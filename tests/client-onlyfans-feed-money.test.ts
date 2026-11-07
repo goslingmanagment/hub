@@ -6,6 +6,7 @@ import {
   feedDollarsToMills,
   kindsAgree,
   ledgerKindOf,
+  ledgerSettles,
   ONLYFANS_FEED_MATCH_WINDOW_MS,
   pickFeedMoneyClaim,
   socketNetMills,
@@ -90,6 +91,15 @@ describe("what a ledger row is, and the socket's net", () => {
     expect(kindsAgree("tip", "other")).toBe(true);
     expect(kindsAgree("tip", "stream_tip")).toBe(true);
     expect(kindsAgree("subscription", "tip")).toBe(false);
+  });
+
+  it("settles a purchase only by the ledger's done or undo", () => {
+    // `loading` is OnlyFans' hold: the purchase is listed, not paid out yet.
+    expect(ledgerSettles({ sighting: "ledger", rawStatus: "done", chargeback: false })).toBe(true);
+    expect(ledgerSettles({ sighting: "ledger", rawStatus: "undo", chargeback: true })).toBe(true);
+    expect(ledgerSettles({ sighting: "ledger", rawStatus: "loading", chargeback: false })).toBe(false);
+    expect(ledgerSettles({ sighting: "ledger", rawStatus: "", chargeback: false })).toBe(false);
+    expect(ledgerSettles({ sighting: "ws", rawStatus: "done", chargeback: false })).toBe(false);
   });
 
   it("counts the socket's net as OnlyFans' 80 %, in mills", () => {

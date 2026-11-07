@@ -5,6 +5,7 @@ import {
   insertOnlyfansFeedMoneyClaim,
   listOnlyfansFeedMoneyCandidates,
   refineOnlyfansFeedWsTransaction,
+  settleOnlyfansFeedMoneyClaim,
   type Database,
   type OnlyfansFeedMoneyCandidate,
   type OnlyfansFeedMoneySighting,
@@ -37,6 +38,12 @@ import { upsertTransactionWithNegationGuards } from "./money-negation-guards.ts"
  * - A ledger row with status `undo` is a chargeback: the purchase is counted
  *   and its reversal `<id>:reversal` written beside it, through the negation
  *   guards, as OFAPI's chargebacks are.
+ * - A ledger row with status `done` (or `undo`) settles the purchase: the
+ *   feed records it on its OWN claim (`settled_at`), and readers count a
+ *   pending row of another writer it claims as posted
+ *   (settledTransactionStateSql). OFAPI wrote its purchases `pending` until its
+ *   own rescan settled them; on a page the feed writes, that rescan never runs,
+ *   so without this they stayed pending for good. The row is still not changed.
  *
  * Every write of a sighting carries its journal entry (`source_observation_id`):
  * the person whose tab saw it is that observation's actor. The caller holds
@@ -79,9 +86,19 @@ export type FeedMoneyOutcome = (
   | { status: "claimed"; rowId: number; reversed: boolean }
   | { status: "written"; rowId: number; reversed: boolean }
 ) & {
-  /** A settled positive that brought a suppressed negation back (the negation guards): the rollups start there. */
+  /**
+   * Where the rollups start when it is before the sighting's own time: a settled positive that brought a suppressed
+   * negation back (the negation guards), or the claimed row this sighting settled (its time is the writer's).
+   */
   reactivatedFrom: Date | null;
+  /** The ledger settled a pending row this sighting claims: readers count it as posted from now on. */
+  settled: boolean;
 };
+
+/** Whether a ledger reading of this status settles the purchase it lists: OnlyFans paid it (`done`) or took it back (`undo`). Pure. */
+export function ledgerSettles(sighting: Pick<FeedMoneySightingInput, "sighting" | "rawStatus" | "chargeback">): boolean {
+  return sighting.sighting === "ledger" && (sighting.rawStatus === "done" || sighting.chargeback);
+}
 
 /** What a ledger row is, by OnlyFans' description of it. Pure. */
 export function ledgerKindOf(description: string): FeedMoneyKind {
@@ -178,18 +195,27 @@ export async function applyFeedMoneySighting(
   pageId: number,
   sighting: FeedMoneySightingInput,
 ): Promise<FeedMoneyOutcome> {
-  if (sighting.grossMills <= 0n) return { status: "known", reactivatedFrom: null };
+  if (sighting.grossMills <= 0n) return { status: "known", reactivatedFrom: null, settled: false };
   const reverse = async (purchaseTransactionId: string | null): Promise<boolean> => {
     if (!sighting.chargeback || purchaseTransactionId === null) return false;
     await writeReversal(db, { pageId, purchaseTransactionId, sighting });
     return true;
   };
+  // Before any reversal: the negation guards then find the original settled.
+  const settle = async (): Promise<{ settled: boolean; reactivatedFrom: Date | null }> => {
+    if (!ledgerSettles(sighting)) return { settled: false, reactivatedFrom: null };
+    const claim = await settleOnlyfansFeedMoneyClaim(db, { pageId, feedKey: sighting.feedKey, observationId: sighting.observationId });
+    return claim?.countedAsPosted === true ? { settled: true, reactivatedFrom: claim.occurredAt } : { settled: false, reactivatedFrom: null };
+  };
 
-  // Seen before: its purchase is counted. A ledger row may since have been charged back.
+  // Seen before: its purchase is counted. A ledger row may since have been paid out or charged back.
   const claimed = await findOnlyfansFeedMoneyClaim(db, { pageId, feedKey: sighting.feedKey });
   if (claimed !== null) {
+    const settled = await settle();
     const reversed = await reverse(await getOnlyfansFeedTransactionId(db, claimed.transactionRowId));
-    return reversed ? { status: "claimed", rowId: claimed.transactionRowId, reversed, reactivatedFrom: null } : { status: "known", reactivatedFrom: null };
+    return reversed || settled.settled
+      ? { status: "claimed", rowId: claimed.transactionRowId, reversed, ...settled }
+      : { status: "known", reactivatedFrom: null, settled: false };
   }
   // The page holds this very id: OnlyMonster's id of a ledger row is OnlyFans' own, as OFAPI wrote it.
   const same = await findOnlyfansFeedTransactionRow(db, { pageId, transactionId: sighting.transactionId });
@@ -197,8 +223,9 @@ export async function applyFeedMoneySighting(
     await insertOnlyfansFeedMoneyClaim(db, {
       pageId, feedKey: sighting.feedKey, sighting: sighting.sighting, transactionRowId: same.id, observationId: sighting.observationId,
     });
+    const settled = await settle();
     const reversed = await reverse(same.transactionId);
-    return { status: "claimed", rowId: same.id, reversed, reactivatedFrom: null };
+    return { status: "claimed", rowId: same.id, reversed, ...settled };
   }
 
   const candidates = sighting.fanRef === null
@@ -224,8 +251,9 @@ export async function applyFeedMoneySighting(
         sourceObservationId: sighting.observationId,
       });
     }
+    const settled = await settle();
     const reversed = await reverse(match.transactionId);
-    return { status: "claimed", rowId: match.id, reversed, reactivatedFrom: null };
+    return { status: "claimed", rowId: match.id, reversed, ...settled };
   }
 
   const guarded = await upsertTransactionWithNegationGuards(db, {
@@ -247,10 +275,12 @@ export async function applyFeedMoneySighting(
     sourceUpdatedAt: sighting.occurredAt,
   });
   const written = await findOnlyfansFeedTransactionRow(db, { pageId, transactionId: sighting.transactionId });
-  if (written === null) return { status: "known", reactivatedFrom: null };
+  if (written === null) return { status: "known", reactivatedFrom: null, settled: false };
   await insertOnlyfansFeedMoneyClaim(db, {
     pageId, feedKey: sighting.feedKey, sighting: sighting.sighting, transactionRowId: written.id, observationId: sighting.observationId,
   });
+  // Its own row is posted already: the claim keeps the ledger's reading all the same.
+  await settle();
   const reversed = await reverse(sighting.transactionId);
-  return { status: "written", rowId: written.id, reversed, reactivatedFrom: guarded.reactivatedFrom };
+  return { status: "written", rowId: written.id, reversed, reactivatedFrom: guarded.reactivatedFrom, settled: false };
 }

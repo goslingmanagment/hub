@@ -1,13 +1,14 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { clientOnlyfansFeedResponseSchema, errorResponseSchema, type ClientOnlyfansFeedResponse } from "@agency_hub_core/contracts";
-import { createModel, createOnlyFansPage } from "@agency_hub_core/db";
+import { createModel, createOnlyFansPage, listStalePendingOfapiTransactions, upsertFans } from "@agency_hub_core/db";
 
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import { assignPageToUser, createUserAccount, setUserPassword } from "../apps/runtime/src/services/auth.ts";
 import { runCanonicalization } from "../apps/runtime/src/services/canonicalize-driver.ts";
 import { takeOnlyfansFeedMoney } from "../apps/runtime/src/services/client-onlyfans-feed.ts";
+import { runOfapiPendingReconcile } from "../apps/runtime/src/services/ofapi-pending-reconcile.ts";
 import { runMessageArchiveProjection } from "../apps/runtime/src/services/projections/message-archive.ts";
 import { startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
@@ -284,5 +285,84 @@ describe("the OnlyFans feed route", () => {
       transaction_id: "e940b5fb905ba0815d5842a7bde1118c:reversal", source: "chatspace:ledger", gross: "-25000", net: "-20000", canonical_type: "chargeback",
     });
     expect(rows).toHaveLength(4);
+  });
+  // OFAPI wrote its purchases `pending` until its own rescan settled them; on a page the feed writes that rescan never
+  // runs. A row of another writer is never changed: the ledger's `done` settles it on the feed's own claim, and the
+  // money readers count it posted.
+  const ofapiPending = async (transactionId: string, occurredAt: Date) => {
+    const [fan] = await upsertFans(app.db, [{ platform: "onlyfans", platformUserId: FAN }]);
+    await testDb!.pool.query(
+      `insert into transactions (platform_account_id, fan_id, transaction_id, raw_type, canonical_type, transaction_state, raw_status,
+         gross_amount_mills, source_destination_amount_mills, creator_net_amount_mills, correlation_account_id, sender_id, occurred_at, source)
+       values ($1, $2, $3, 'ofapi:message', 'message_purchase', 'pending', 'pending', 30000, 30000, 24000, $4, $4, $5, 'ofapi:webhook')`,
+      [pageId, fan!.id, transactionId, FAN, occurredAt],
+    );
+  };
+  const counted = (transactionId: string) => query<{ writer_state: string; raw_status: string; source: string; fan_spend: string; revenue: string }>(
+    `select t.transaction_state::text as writer_state, t.raw_status, t.source,
+            (select string_agg(d.transaction_state::text || ':' || d.gross_amount_mills, ',' order by d.transaction_state)
+               from fan_spend_daily d where d.platform_account_id = t.platform_account_id and d.fan_id = t.fan_id) as fan_spend,
+            (select string_agg(r.transaction_state::text || ':' || r.gross_amount_mills, ',' order by r.transaction_state)
+               from revenue_daily r where r.platform_account_id = t.platform_account_id and r.canonical_type = t.canonical_type) as revenue
+     from transactions t where t.platform_account_id = $1 and t.transaction_id = $2`,
+    [pageId, transactionId],
+  ).then((rows) => rows[0]);
+  const purchaseLedger = (transactionRef: string, createdAt: Date, status: string) => ledger({
+    transactionRef, createdAt: createdAt.toISOString(), amountGross: 30, amountNet: 24, description: "Payment for message from Mike", status,
+  });
+
+  it("settles an OFAPI pending purchase by the ledger's done, leaves the row as OFAPI wrote it, and subtracts a later chargeback", async () => {
+    await testDb!.pool.query("delete from onlyfans_feed_money_claims where platform_account_id = $1", [pageId]);
+    await testDb!.pool.query("delete from transactions where platform_account_id = $1", [pageId]);
+    await setWriter("chatspace");
+    const id = "f3c1a2b4d5e6f7a8b9c0d1e2f3a4b5c6";
+    const occurredAt = new Date(Date.now() - 3_600_000);
+    await ofapiPending(id, occurredAt);
+
+    // OnlyFans' hold: the ledger lists it `loading` — claimed, still pending.
+    expect(await ok([purchaseLedger(id, occurredAt, "loading")])).toMatchObject({ taken: 1 });
+    expect((await counted(id))!.writer_state).toBe("pending");
+    const [unsettled] = await query<{ settled_at: Date | null }>("select settled_at from onlyfans_feed_money_claims where platform_account_id = $1", [pageId]);
+    expect(unsettled!.settled_at).toBeNull();
+
+    // Paid out: OFAPI's row is unchanged, the feed's claim holds the ledger's reading, the readers count it posted.
+    expect(await ok([purchaseLedger(id, occurredAt, "done")])).toMatchObject({ taken: 1 });
+    expect(await counted(id)).toEqual({ writer_state: "pending", raw_status: "pending", source: "ofapi:webhook", fan_spend: "posted:30000", revenue: "posted:30000" });
+    const [claim] = await query<{ settled: boolean; ledger_obs: boolean }>(
+      `select c.settled_at is not null as settled,
+              exists (select 1 from observations o where o.id = c.settled_observation_id and o.payload -> 'record' ->> 'status' = 'done') as ledger_obs
+       from onlyfans_feed_money_claims c where c.platform_account_id = $1`,
+      [pageId],
+    );
+    expect(claim).toEqual({ settled: true, ledger_obs: true });
+    // The daily reconcile no longer carries it as stale, however old it gets.
+    expect((await listStalePendingOfapiTransactions(app.db, { olderThan: new Date(Date.now() + 86_400_000) })).map((row) => row.transactionId)).not.toContain(id);
+
+    // Charged back later: the reversal counts — its original is settled — and the purchase nets to zero.
+    expect(await ok([purchaseLedger(id, occurredAt, "undo")])).toMatchObject({ taken: 1 });
+    const [reversal] = await query<{ is_active: boolean; inactive_reason: string | null; gross: string }>(
+      "select is_active, inactive_reason, gross_amount_mills::text as gross from transactions where platform_account_id = $1 and transaction_id = $2",
+      [pageId, `${id}:reversal`],
+    );
+    expect(reversal).toEqual({ is_active: true, inactive_reason: null, gross: "-30000" });
+  });
+
+  it("settles from the journal a done the ledger read before it could settle, through the daily reconcile", async () => {
+    await testDb!.pool.query("delete from onlyfans_feed_money_claims where platform_account_id = $1", [pageId]);
+    await testDb!.pool.query("delete from transactions where platform_account_id = $1", [pageId]);
+    const id = "0a1b2c3d4e5f60718293a4b5c6d7e8f9";
+    const occurredAt = new Date(Date.now() - 8 * 86_400_000);
+    await ofapiPending(id, occurredAt);
+    // The ledger's `done` came while OFAPI still wrote the page: journaled, held.
+    await setWriter("ofapi");
+    expect(await ok([purchaseLedger(id, occurredAt, "done")])).toMatchObject({ held: 1 });
+    await setWriter("chatspace");
+    expect((await counted(id))!.writer_state).toBe("pending");
+
+    const result = await runOfapiPendingReconcile(app);
+    expect(result).toMatchObject({ stalePendings: 1, settledByLedger: 1, expired: 0, deferred: 0 });
+    expect(await counted(id)).toMatchObject({ writer_state: "pending", source: "ofapi:webhook", fan_spend: "posted:30000" });
+    // Idempotent: nothing is left to settle.
+    expect(await runOfapiPendingReconcile(app)).toMatchObject({ stalePendings: 0, settledByLedger: 0 });
   });
 });

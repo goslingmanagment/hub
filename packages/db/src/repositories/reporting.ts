@@ -36,6 +36,7 @@ import {
   pageAliasMatchSql,
 } from "./search.ts";
 import { egressKeySql } from "./egress.ts";
+import { settledTransactionState } from "./transaction-settled-state.ts";
 
 function applyPageScope<T>(clauses: T[], pageIds?: number[]) {
   if (pageIds !== undefined) {
@@ -290,7 +291,8 @@ function buildTransactionScopeClauses(
     clauses.push(eq(transactions.canonicalType, input.canonicalType as typeof transactions.$inferSelect.canonicalType));
   }
   if (input.transactionState) {
-    clauses.push(eq(transactions.transactionState, input.transactionState as typeof transactions.$inferSelect.transactionState));
+    // The state readers count it in: a pending row OnlyFans' ledger settled since is posted.
+    clauses.push(sql`${settledTransactionState()} = ${input.transactionState}::transaction_state`);
   }
 
   return clauses;
@@ -468,7 +470,7 @@ export async function listTransactionsForPage(
     transactionId: transactions.transactionId,
     rawType: transactions.rawType,
     canonicalType: transactions.canonicalType,
-    transactionState: transactions.transactionState,
+    transactionState: settledTransactionState(),
     amountMills: transactions.grossAmountMills,
     destinationAmountMills: transactions.sourceDestinationAmountMills,
     netAmountMills: transactions.creatorNetAmountMills,
@@ -1294,7 +1296,7 @@ export async function listTransactionsForScope(
       transactionId: transactions.transactionId,
       rawType: transactions.rawType,
       canonicalType: transactions.canonicalType,
-      transactionState: transactions.transactionState,
+      transactionState: settledTransactionState(),
       amountMills: transactions.grossAmountMills,
       destinationAmountMills: transactions.sourceDestinationAmountMills,
       netAmountMills: transactions.creatorNetAmountMills,
@@ -1348,7 +1350,7 @@ export async function listFanTransactionsOnPage(
     transactionId: transactions.transactionId,
     rawType: transactions.rawType,
     canonicalType: transactions.canonicalType,
-    transactionState: transactions.transactionState,
+    transactionState: settledTransactionState(),
     amountMills: transactions.grossAmountMills,
     destinationAmountMills: transactions.sourceDestinationAmountMills,
     netAmountMills: transactions.creatorNetAmountMills,
@@ -1395,7 +1397,7 @@ export async function listFanTransactionsCrossPage(
     transactionId: transactions.transactionId,
     rawType: transactions.rawType,
     canonicalType: transactions.canonicalType,
-    transactionState: transactions.transactionState,
+    transactionState: settledTransactionState(),
     amountMills: transactions.grossAmountMills,
     destinationAmountMills: transactions.sourceDestinationAmountMills,
     netAmountMills: transactions.creatorNetAmountMills,

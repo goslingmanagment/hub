@@ -33,6 +33,7 @@ import { HUB_LINK_ALLOCATIONS_SQL, HUB_LINK_FLOORS_SQL } from "./link-attributio
 import { linkStatRunUsableResultSql } from "./ofapi.ts";
 import { LEGACY_EXECUTOR_PLATFORMS } from "./page-sync.ts";
 import { OFAPI_PROVEN_VAULT_WALKS_SQL } from "./vault-album-scans.ts";
+import { settledTransactionStateText } from "./transaction-settled-state.ts";
 
 import { sql } from "drizzle-orm";
 import { PgDialect } from "drizzle-orm/pg-core";
@@ -266,7 +267,7 @@ const TRANSACTIONS = `
          f.platform_user_id     as f_platform_user_id,
          tr.transaction_id      as f_transaction_ref,
          tr.canonical_type::text  as f_transaction_type,
-         tr.transaction_state::text as f_transaction_state,
+         ${settledTransactionStateText("tr")}::text as f_transaction_state,
          tr.occurred_at         as f_occurred_at,
          tr.gross_amount_mills  as f_gross_mills,
          tr.creator_net_amount_mills as f_net_mills,
@@ -296,7 +297,7 @@ const TIP_TRANSACTIONS = `
          f.platform_user_id     as f_platform_user_id,
          tr.transaction_id      as f_transaction_ref,
          tr.canonical_type::text as f_transaction_type,
-         tr.transaction_state::text as f_transaction_state,
+         ${settledTransactionStateText("tr")}::text as f_transaction_state,
          tr.occurred_at         as f_occurred_at,
          tr.gross_amount_mills  as f_gross_mills,
          tr.creator_net_amount_mills as f_net_mills,

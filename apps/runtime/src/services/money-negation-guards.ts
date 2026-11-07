@@ -12,7 +12,8 @@
 // withOfapiSpendTransactionPageLock, which makes this race-safe per page):
 // - Guard 1 (B4): the OTHER-suffix twin is active → write THIS negative
 //   inactive as 'superseded_duplicate_negation'. First negative wins.
-// - Guard 2 (A21): no active SETTLED positive under the base id → write the
+// - Guard 2 (A21): no active SETTLED positive under the base id (posted, or
+//   pending and settled by OnlyFans' ledger since) → write the
 //   negative inactive as 'reversal_without_settled_original'. A
 //   later-arriving settled original reactivates it (the fixup below — the
 //   ONLY reactivation path; redeliveries never resurrect, see Guard 0 in
@@ -69,7 +70,8 @@ export async function evaluateNegationSuppression(
     platformAccountId: input.platformAccountId,
     transactionId: base,
   });
-  if (!original || !original.isActive || original.transactionState !== "posted") {
+  // Settled as readers count it: a pending row OnlyFans' ledger settled since is settled (settledTransactionState).
+  if (!original || !original.isActive || original.settledState !== "posted") {
     return "reversal_without_settled_original";
   }
 
