@@ -10,6 +10,7 @@ import { sql } from "drizzle-orm";
 
 import {
   findPageByLabel,
+  getPageTransactionsWriterInfo,
   listOfapiMappedPages,
   rebuildRevenueRollups,
   rebuildSpenderProjections,
@@ -32,7 +33,9 @@ import { resolveEgress } from "./egress/resolver.ts";
 import {
   notifyOfapiGlobalIncident,
   resolveOfapiGlobalIncident,
+  resolveWrongTransactionsWriterIncident,
 } from "./notification-incidents.ts";
+import { ofapiAuthStatusNeedsAction } from "./ofapi-account-health.ts";
 import {
   CRON_SWEEP_WORK_OPTIONS,
   ensureQueueCreated,
@@ -242,23 +245,40 @@ async function reconcilePage(
     pageId: number;
     pageLabel: string;
     ofapiAccountId: string;
+    ofapiAuthStatus: string | null;
     guard: ReturnType<typeof createOfapiRestGuard>;
   },
 ): Promise<OfapiChargebacksPageResult> {
-  if (!app.ofapi?.listChargebacks) {
-    return {
+  const skipped = (reason: string): OfapiChargebacksPageResult => ({
+    pageLabel: input.pageLabel,
+    status: "skipped",
+    reason,
+    apiPages: 0,
+    rawRows: 0,
+    writtenRows: 0,
+    skippedReasons: {},
+  });
+  // A page the owner gave to another writer (`onlyfans-feed:take-money`: the
+  // ChatSpace feed writes OnlyFans chargebacks itself) is not OFAPI's to write:
+  // no request, no incident — and the writer-conflict latch an earlier run of
+  // this reconcile raised there closes, with a key or without one.
+  const writer = (await getPageTransactionsWriterInfo(app.db, input.pageId))?.transactionsWriter ?? null;
+  if (writer !== null && writer !== "ofapi") {
+    await resolveWrongTransactionsWriterIncident(app, {
+      platformAccountId: input.pageId,
       pageLabel: input.pageLabel,
-      status: "skipped",
-      reason: "ofapi_client_not_configured",
-      apiPages: 0,
-      rawRows: 0,
-      writtenRows: 0,
-      skippedReasons: {},
-    };
+      platform: "onlyfans",
+      standingDownWriter: "ofapi",
+    });
+    return skipped(`writer_${writer}`);
   }
 
-  // Single-writer gate: a page whose writer is not 'ofapi' opens an
-  // incident and is skipped; other pages still reconcile.
+  if (!app.ofapi?.listChargebacks) {
+    return skipped("ofapi_client_not_configured");
+  }
+
+  // Single-writer gate: an unassigned page (a defect) opens an incident and
+  // is blocked; other pages still reconcile.
   try {
     await assertPageTransactionsWriter(app, {
       platformAccountId: input.pageId,
@@ -277,6 +297,12 @@ async function reconcilePage(
       };
     }
     throw error;
+  }
+
+  // A session that needs the owner's action answers nothing; its own
+  // ofapi_auth latch already says so.
+  if (ofapiAuthStatusNeedsAction(input.ofapiAuthStatus)) {
+    return skipped("page_auth_dead");
   }
 
   const stored = await findPageByLabel(app.db, input.pageLabel);
@@ -506,6 +532,7 @@ export async function runOfapiChargebacksReconcile(app: AppContext) {
         pageId: page.id,
         pageLabel: page.label,
         ofapiAccountId: page.ofapiAccountId,
+        ofapiAuthStatus: page.ofapiAuthStatus,
         guard,
       }));
     } catch (error) {

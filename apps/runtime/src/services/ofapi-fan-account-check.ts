@@ -35,6 +35,7 @@ import {
 
 import type { AppContext } from "../bootstrap.ts";
 import { resolveEgress } from "./egress/resolver.ts";
+import { ofapiAuthStatusNeedsAction } from "./ofapi-account-health.ts";
 import { asRecord, idToString } from "./ofapi-payloads.ts";
 import { OfapiApiError, type OfapiListPage, type OfapiRequestContext } from "./ofapi.ts";
 import {
@@ -66,7 +67,7 @@ const JOURNAL_ACTION = "journal users list";
 
 export interface OfapiFanAccountCheckPageResult {
   pageLabel: string;
-  status: "checked" | "blocked" | "failed";
+  status: "checked" | "blocked" | "skipped" | "failed";
   reason: string | null;
   requests: number;
   answers: Partial<Record<FanPageContactability, number>>;
@@ -199,7 +200,12 @@ export async function runOfapiFanAccountCheck(app: AppContext) {
   if (!app.ofapi?.getUserDetailsList) {
     return { pages: [] as OfapiFanAccountCheckPageResult[] };
   }
-  const mapped = (await listOfapiMappedPages(app.db)).filter((page) => page.platform === "onlyfans");
+  const onlyfans = (await listOfapiMappedPages(app.db)).filter((page) => page.platform === "onlyfans");
+  // A page whose OFAPI session needs the owner's action has no account binding
+  // to ask through; its own ofapi_auth latch already says so, so the pass
+  // leaves it out instead of failing on it.
+  const authDead = onlyfans.filter((page) => ofapiAuthStatusNeedsAction(page.ofapiAuthStatus));
+  const mapped = onlyfans.filter((page) => !ofapiAuthStatusNeedsAction(page.ofapiAuthStatus));
   const guard = createOfapiRestGuard(app, {
     maxRequestsPerRun: OFAPI_FAN_ACCOUNT_CHECK_REQUESTS_PER_PASS,
     budgetScope: "audience",
@@ -207,7 +213,9 @@ export async function runOfapiFanAccountCheck(app: AppContext) {
   // An even share first, so one page's backlog never starves another; then
   // what a page left unused goes to the pages that still have fans due.
   const share = Math.ceil(OFAPI_FAN_ACCOUNT_CHECK_REQUESTS_PER_PASS / Math.max(1, mapped.length));
-  const results = new Map<number, OfapiFanAccountCheckPageResult>();
+  const results = new Map<number, OfapiFanAccountCheckPageResult>(authDead.map((page) => [page.id, {
+    pageLabel: page.label, status: "skipped", reason: "page_auth_dead", requests: 0, answers: {}, unanswered: 0,
+  }]));
 
   for (const round of ["share", "rest"] as const) {
     for (const page of mapped) {

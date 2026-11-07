@@ -1,4 +1,5 @@
 import {
+  getNotificationIncidentByKey,
   hasRecentTerminalProxyFailure,
   isFanslyPageEngineOwned,
   listNotificationIncidents,
@@ -288,6 +289,12 @@ export const INCIDENT_RESOLUTION_REASONS = {
   /** An OFAPI latch whose check stops while OFAPI is switched off on purpose
    *  (no key, so no client): nothing would ever resolve it. */
   ofapi_off: "OFAPI is switched off (no key); the check no longer runs",
+  /** A writer-conflict latch whose refused writer now stands down because the
+   *  owner gave the page's money to another writer on purpose. */
+  writer_assigned_elsewhere: "the page's money has another writer on purpose; the refused writer no longer tries",
+  /** Webhook silence with no mapped page whose OFAPI session is alive: none
+   *  is expected to deliver, and each page's own auth alert already says why. */
+  ofapi_no_live_page: "no mapped page has a live OFAPI session; each page's auth alert covers it",
 } as const;
 export type IncidentResolution = keyof typeof INCIDENT_RESOLUTION_REASONS;
 
@@ -580,7 +587,11 @@ function resolveDetailForIncident(
       return subKey === null ? "ChatSpace server tab alert cleared" : CHATSPACE_TAB_RESOLVE_DETAILS[subKey];
     }
     case "ofapi_webhook_silence":
-      return "OFAPI webhooks delivering again";
+      // Closed, not recovered, when no live page is left to deliver (the
+      // reason is the message's own line).
+      return incidentResolutionReason(input.resolution) === null
+        ? "OFAPI webhooks delivering again"
+        : "OFAPI webhook silence check closed";
     case "wrong_transactions_writer":
       return "Transactions writer conflict cleared";
     case "read_gateway_capture":
@@ -790,9 +801,58 @@ export async function notifyWrongTransactionsWriterIncident(
     pageLabel: input.pageLabel,
     platform: input.platform,
     errorCode: "wrong_transactions_writer",
-    errorSummary: `'${input.attemptedWriter}' attempted to write transactions for a page whose writer is ${
+    errorSummary: `${wrongWriterSummaryPrefix(input.attemptedWriter)} transactions for a page whose writer is ${
       input.assignedWriter ? `'${input.assignedWriter}'` : "unassigned"
     }`,
+  });
+}
+
+/** The latch has no sub-key per writer (kind + page), so the newest refused
+ *  attempt's writer is read back from the start of its summary. */
+function wrongWriterSummaryPrefix(attemptedWriter: string) {
+  return `'${attemptedWriter}' attempted to write`;
+}
+
+/**
+ * A writer that stands down on a page the owner gave to another writer
+ * (`onlyfans-feed:take-money`) closes the page's writer-conflict latch — but
+ * only one its own refused attempt raised (the newest attempt owns the
+ * summary): a conflict another writer raised stays open and keeps paging.
+ */
+export async function resolveWrongTransactionsWriterIncident(
+  app: IncidentApp,
+  input: {
+    platformAccountId: number;
+    pageLabel: string | null;
+    platform: Platform | null;
+    standingDownWriter: string;
+    recoveredAt?: Date;
+  },
+): Promise<boolean> {
+  try {
+    const open = await getNotificationIncidentByKey(app.db, incidentKey({
+      kind: "wrong_transactions_writer",
+      platformAccountId: input.platformAccountId,
+    }));
+    if (open?.status !== "open" ||
+        !(open.errorSummary ?? "").startsWith(wrongWriterSummaryPrefix(input.standingDownWriter))) {
+      return false;
+    }
+  } catch (error) {
+    app.logger.warn({
+      platformAccountId: input.platformAccountId,
+      incidentKind: "wrong_transactions_writer",
+      err: error,
+    }, "Notification incident read failed; continuing");
+    return false;
+  }
+  return resolveIncidentAndNotify(app, {
+    kind: "wrong_transactions_writer",
+    platformAccountId: input.platformAccountId,
+    pageLabel: input.pageLabel,
+    platform: input.platform,
+    resolution: "writer_assigned_elsewhere",
+    ...(input.recoveredAt === undefined ? {} : { recoveredAt: input.recoveredAt }),
   });
 }
 
@@ -1320,6 +1380,7 @@ export async function resolveOfapiGlobalIncident(
     kind: GlobalIncidentKind;
     subKey?: string | null;
     recoveredAt?: Date;
+    resolution?: IncidentResolution;
   },
 ) {
   await resolveIncidentAndNotify(app, {
@@ -1329,6 +1390,7 @@ export async function resolveOfapiGlobalIncident(
     platform: null,
     subKey: input.subKey ?? null,
     ...(input.recoveredAt === undefined ? {} : { recoveredAt: input.recoveredAt }),
+    ...(input.resolution === undefined ? {} : { resolution: input.resolution }),
   });
 }
 

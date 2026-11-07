@@ -1,8 +1,10 @@
 import {
   findObservationByKey,
+  getPageTransactionsWriterInfo,
   listMissingOfapiSpendProjectionTransactionsForTruthIngest,
   rebuildRevenueRollups,
   rebuildSpenderProjections,
+  skipOfapiSpendProjectionEventsForTruthIngest,
   upsertFanPages,
   upsertFans,
   withOfapiSpendTransactionPageLock,
@@ -16,6 +18,7 @@ import {
   normalizeOfapiSpendAmountMills,
 } from "./ofapi-spend-transaction-mapping.ts";
 import { upsertTransactionWithNegationGuards } from "./money-negation-guards.ts";
+import { resolveWrongTransactionsWriterIncident } from "./notification-incidents.ts";
 import {
   assertPageTransactionsWriter,
   WrongTransactionsWriterError,
@@ -36,19 +39,41 @@ function groupByPage(rows: OfapiSpendProjectionTransactionIngestRow[]) {
   return grouped;
 }
 
+/** What one page's turn did: rows written, or the page's money is another
+ *  writer's and its rows left the ingest (`skippedFor` names that writer). */
+interface PageApplyOutcome {
+  applied: number;
+  skippedFor: string | null;
+  skippedRows: number;
+  pageLabel: string | null;
+}
+
 async function applyPageRows(
   app: AppContext,
   pageId: number,
   rows: OfapiSpendProjectionTransactionIngestRow[],
-) {
+): Promise<PageApplyOutcome> {
   if (rows.length === 0) {
-    return 0;
+    return { applied: 0, skippedFor: null, skippedRows: 0, pageLabel: null };
   }
 
-  return withOfapiSpendTransactionPageLock(app.db, pageId, async (db) => {
-    // Single-writer gate, evaluated inside the page lock. A refused
-    // page opens an incident and skips ITS rows only (they stay pending and
-    // re-list until the writer assignment is fixed); other pages still apply.
+  return withOfapiSpendTransactionPageLock(app.db, pageId, async (db): Promise<PageApplyOutcome> => {
+    // A page the owner gave to another writer (`onlyfans-feed:take-money`):
+    // that writer writes this money, so OFAPI's rows for it leave the ingest
+    // for good instead of re-listing every minute ahead of other pages'.
+    const page = await getPageTransactionsWriterInfo(db, pageId);
+    const writer = page?.transactionsWriter ?? null;
+    if (writer !== null && writer !== "ofapi") {
+      const skippedRows = await skipOfapiSpendProjectionEventsForTruthIngest(db, {
+        ids: rows.map((row) => row.id),
+        reason: `writer_${writer}`,
+      });
+      return { applied: 0, skippedFor: writer, skippedRows, pageLabel: page?.label ?? null };
+    }
+
+    // Single-writer gate, evaluated inside the page lock. An unassigned
+    // page (a defect) opens an incident and skips ITS rows only (they stay
+    // pending and re-list until a writer is assigned); other pages still apply.
     await assertPageTransactionsWriter(app, {
       platformAccountId: pageId,
       attemptedWriter: "ofapi",
@@ -122,7 +147,7 @@ async function applyPageRows(
       await rebuildRevenueRollups(db, pageId, dirtyFrom);
     }
 
-    return applied;
+    return { applied, skippedFor: null, skippedRows: 0, pageLabel: null };
   });
 }
 
@@ -134,11 +159,26 @@ export async function applyOfapiSpendProjectionTransactions(app: AppContext) {
 
   for (const [pageId, pageRows] of groupByPage(rows)) {
     try {
-      applied += await applyPageRows(app, pageId, pageRows);
+      const outcome = await applyPageRows(app, pageId, pageRows);
+      applied += outcome.applied;
+      if (outcome.skippedFor !== null) {
+        app.logger.info({
+          pageId,
+          assignedWriter: outcome.skippedFor,
+          rows: outcome.skippedRows,
+        }, "OFAPI spend ingest: the page's money has another writer; its OFAPI rows skipped");
+        await resolveWrongTransactionsWriterIncident(app, {
+          platformAccountId: pageId,
+          pageLabel: outcome.pageLabel,
+          platform: "onlyfans",
+          standingDownWriter: "ofapi",
+        });
+      }
     } catch (error) {
       if (error instanceof WrongTransactionsWriterError) {
-        // Incident already opened by the gate; this page's rows stay pending
-        // and re-list next sweep. Other pages must still apply.
+        // An unassigned page: incident already opened by the gate; this
+        // page's rows stay pending and re-list next sweep. Other pages must
+        // still apply.
         app.logger.error({
           pageId,
           assignedWriter: error.assignedWriter,

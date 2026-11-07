@@ -197,8 +197,18 @@ export async function runOfapiAccountHealthMonitor(app: AppContext, now = new Da
       });
     }
 
-    const mappedPages = await listOfapiMappedPages(app.db);
-    if (mappedPages.length > 0) {
+    // A page whose OFAPI session needs the owner's action delivers nothing, and
+    // its own ofapi_auth latch already says why (the link-stats monitor below
+    // gets the same rule): silence is measured over the live pages only.
+    const livePages = (await listOfapiMappedPages(app.db))
+      .filter((page) => !ofapiAuthStatusNeedsAction(page.ofapiAuthStatus));
+    if (livePages.length === 0) {
+      await resolveOfapiGlobalIncident(app, {
+        kind: "ofapi_webhook_silence",
+        recoveredAt: now,
+        resolution: "ofapi_no_live_page",
+      });
+    } else {
       const thresholdMs = Math.max(
         1,
         effective.ofapiWebhookSilenceThresholdMinutes ?? DEFAULT_WEBHOOK_SILENCE_THRESHOLD_MINUTES,
@@ -211,8 +221,8 @@ export async function runOfapiAccountHealthMonitor(app: AppContext, now = new Da
           await notifyOfapiGlobalIncident(app, {
             kind: "ofapi_webhook_silence",
             errorSummary: `No OFAPI webhook events received since ${latestEventAt.toISOString()} (${
-              mappedPages.length
-            } mapped page${mappedPages.length === 1 ? "" : "s"})`,
+              livePages.length
+            } live mapped page${livePages.length === 1 ? "" : "s"})`,
             occurredAt: now,
           });
         } else {
