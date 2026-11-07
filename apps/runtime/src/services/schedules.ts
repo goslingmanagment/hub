@@ -33,6 +33,7 @@ import { ensureOfapiQueues, ensureOfapiSchedules } from "./ofapi-events.ts";
 import { ensureMessageArchiveQueues, ensureMessageArchiveSchedule } from "./projections/message-archive.ts";
 import { ensureVoiceNotesSweepQueue, ensureVoiceNotesSweepSchedule } from "./voice-notes-sweep.ts";
 import { ensureVoiceProviderHealthQueue, ensureVoiceProviderHealthSchedule } from "./voice-provider-health.ts";
+import { ensureAiBalanceWatchQueue, ensureAiBalanceWatchSchedule } from "./ai-balance-watch.ts";
 import { ensurePublicationsOnlyfansQueue, ensurePublicationsOnlyfansSchedule } from "./publications-onlyfans.ts";
 import { ensurePublicationsOnlyfansChecksQueue, ensurePublicationsOnlyfansChecksSchedule } from "./publications-onlyfans-checks.ts";
 import { ensurePublicationsFanslyQueue, ensurePublicationsFanslySchedule } from "./publications-fansly.ts";
@@ -95,6 +96,7 @@ export async function registerAllSchedules(
   await ensureMessageArchiveQueues(boss, createdQueues);
   await ensureVoiceNotesSweepQueue(boss, createdQueues);
   await ensureVoiceProviderHealthQueue(boss, createdQueues);
+  await ensureAiBalanceWatchQueue(boss, createdQueues);
   await ensurePublicationsOnlyfansQueue(boss, createdQueues);
   await ensurePublicationsOnlyfansChecksQueue(boss, createdQueues);
   await ensurePublicationsFanslyQueue(boss, createdQueues);
@@ -143,6 +145,7 @@ export async function registerAllSchedules(
     ensureMessageArchiveSchedule(boss),
     ensureVoiceNotesSweepSchedule(boss),
     ensureVoiceProviderHealthSchedule(boss),
+    ensureAiBalanceWatchSchedule(boss),
     ensurePublicationsOnlyfansSchedule(boss),
     ensurePublicationsOnlyfansChecksSchedule(boss),
     ensurePublicationsFanslySchedule(boss),

@@ -30,6 +30,9 @@ export const AI_MEDIA_DESCRIBE_BREAKER_SUBKEY = "media_describe_breaker";
  * out of credit or its key was rejected while the others serve. The latch
  * without a sub-key stays the "nothing serves" one. */
 export const AI_PROVIDER_ACCOUNT_INCIDENT_SUBKEY_PREFIX = "account:";
+/** ai_provider_billing of the Anthropic pool's money (ai-balance-watch.ts):
+ * it runs out within aiBalanceWarnDays, monthly credits to come included. */
+export const AI_BALANCE_LOW_SUBKEY = "anthropic:balance_low";
 /** ai_provider_billing of the voice-notes account at ElevenLabs
  * (voice-provider-health.ts): one global latch per condition, so each pages
  * once when it starts and once when it clears, and a worse one pages again.
@@ -460,6 +463,9 @@ function openTitleForIncident(
       if (input.subKey?.startsWith(AI_PROVIDER_ACCOUNT_INCIDENT_SUBKEY_PREFIX)) {
         return `🚨 Anthropic account ${input.subKey.slice(AI_PROVIDER_ACCOUNT_INCIDENT_SUBKEY_PREFIX.length)} stopped serving`;
       }
+      if (input.subKey === AI_BALANCE_LOW_SUBKEY) {
+        return "⚠️ Anthropic: Hub's AI money runs out soon";
+      }
       const voice = voiceProviderSubKey(input.subKey);
       if (voice !== null) {
         return VOICE_PROVIDER_OPEN_TITLES[voice];
@@ -622,6 +628,9 @@ function resolveDetailForIncident(
     case "ai_provider_billing": {
       if (input.subKey?.startsWith(AI_PROVIDER_ACCOUNT_INCIDENT_SUBKEY_PREFIX)) {
         return `Anthropic account ${input.subKey.slice(AI_PROVIDER_ACCOUNT_INCIDENT_SUBKEY_PREFIX.length)} is serving again`;
+      }
+      if (input.subKey === AI_BALANCE_LOW_SUBKEY) {
+        return "Anthropic: Hub's AI money lasts past the warning window again";
       }
       const voice = voiceProviderSubKey(input.subKey);
       if (voice !== null) {

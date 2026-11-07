@@ -247,6 +247,7 @@ function accountRow(overrides: Partial<AiProviderAccountRow> & Pick<AiProviderAc
     lastSuccessAt: null,
     balanceSnapshotMicroUsd: null,
     balanceSnapshotAt: null,
+    balanceSnapshotSource: null,
     createdAt: new Date(0),
     updatedAt: new Date(0),
     ...overrides,

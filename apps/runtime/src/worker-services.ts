@@ -72,6 +72,11 @@ import {
   runVoiceProviderHealthCheck,
 } from "./services/voice-provider-health.ts";
 import {
+  AI_BALANCE_WATCH_QUEUE,
+  ensureAiBalanceWatchQueue,
+  runAiBalanceWatch,
+} from "./services/ai-balance-watch.ts";
+import {
   PUBLICATIONS_ONLYFANS_QUEUE,
   ensurePublicationsOnlyfansQueue,
   runOnlyfansPublishingTick,
@@ -272,6 +277,7 @@ export async function startWorkerServices(
   await ensureMessageArchiveQueues(boss, createdQueues);
   await ensureVoiceNotesSweepQueue(boss, createdQueues);
   await ensureVoiceProviderHealthQueue(boss, createdQueues);
+  await ensureAiBalanceWatchQueue(boss, createdQueues);
   await ensurePublicationsOnlyfansQueue(boss, createdQueues);
   await ensurePublicationsOnlyfansChecksQueue(boss, createdQueues);
   await ensurePublicationsFanslyQueue(boss, createdQueues);
@@ -640,6 +646,17 @@ export async function startWorkerServices(
   // characters running out). Logs its own counts-only line.
   await boss.work(VOICE_PROVIDER_HEALTH_QUEUE, CRON_SWEEP_WORK_OPTIONS, async () => {
     await runVoiceProviderHealthCheck(app);
+  });
+
+  // Every 30 min: the Anthropic accounts' money — counts the monthly credits
+  // that came in and pages the owner once when it runs out within
+  // aiBalanceWarnDays (ai-balance-watch.ts).
+  await boss.work(AI_BALANCE_WATCH_QUEUE, CRON_SWEEP_WORK_OPTIONS, async () => {
+    try {
+      await runAiBalanceWatch(app);
+    } catch (error) {
+      app.logger.error({ error }, "Anthropic balance check failed");
+    }
   });
 
   // The three publishing ticks below keep pg-boss's 2 s poll: the owner waits

@@ -2302,6 +2302,40 @@
                             ],
                             "additionalProperties": false
                           },
+                          "monthlyCredit": {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "day": {
+                                    "type": "integer",
+                                    "minimum": 1,
+                                    "maximum": 31
+                                  },
+                                  "microUsd": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "nextExpectedAt": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "day",
+                                  "microUsd",
+                                  "nextExpectedAt"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
                           "balance": {
                             "anyOf": [
                               {
@@ -2314,6 +2348,59 @@
                                   },
                                   "readAt": {
                                     "type": "string"
+                                  },
+                                  "readSource": {
+                                    "type": "string",
+                                    "enum": [
+                                      "reading",
+                                      "credit_refusal"
+                                    ]
+                                  },
+                                  "creditedSinceMicroUsd": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "credits": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "object",
+                                      "properties": {
+                                        "kind": {
+                                          "type": "string",
+                                          "enum": [
+                                            "monthly",
+                                            "topup"
+                                          ]
+                                        },
+                                        "microUsd": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "at": {
+                                          "type": "string"
+                                        },
+                                        "source": {
+                                          "type": "string",
+                                          "enum": [
+                                            "revived",
+                                            "schedule",
+                                            "dashboard"
+                                          ]
+                                        }
+                                      },
+                                      "required": [
+                                        "kind",
+                                        "microUsd",
+                                        "at",
+                                        "source"
+                                      ],
+                                      "additionalProperties": false
+                                    }
+                                  },
+                                  "unknownTopUp": {
+                                    "type": "boolean"
                                   },
                                   "spentSinceMicroUsd": {
                                     "type": "integer",
@@ -2395,6 +2482,10 @@
                                 "required": [
                                   "readMicroUsd",
                                   "readAt",
+                                  "readSource",
+                                  "creditedSinceMicroUsd",
+                                  "credits",
+                                  "unknownTopUp",
                                   "spentSinceMicroUsd",
                                   "estimatedMicroUsd",
                                   "daysLeft",
@@ -2424,6 +2515,7 @@
                           "lastUsedAt",
                           "spent",
                           "requests",
+                          "monthlyCredit",
                           "balance"
                         ],
                         "additionalProperties": false
@@ -2442,6 +2534,98 @@
                     "balanceWarnDays": {
                       "type": "number",
                       "minimum": 0
+                    },
+                    "forecast": {
+                      "type": "object",
+                      "properties": {
+                        "leftMicroUsd": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "missing": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "runsOutAt": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "nextCredit": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "label": {
+                                  "type": "string"
+                                },
+                                "microUsd": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                "expectedAt": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "label",
+                                "microUsd",
+                                "expectedAt"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "gap": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "label": {
+                                  "type": "string"
+                                },
+                                "untilAt": {
+                                  "type": "string"
+                                },
+                                "shortfallMicroUsd": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                }
+                              },
+                              "required": [
+                                "label",
+                                "untilAt",
+                                "shortfallMicroUsd"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "low": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "leftMicroUsd",
+                        "missing",
+                        "runsOutAt",
+                        "nextCredit",
+                        "gap",
+                        "low"
+                      ],
+                      "additionalProperties": false
                     }
                   },
                   "required": [
@@ -2449,7 +2633,8 @@
                     "accounts",
                     "dailyBurnMicroUsd",
                     "unattributed30dMicroUsd",
-                    "balanceWarnDays"
+                    "balanceWarnDays",
+                    "forecast"
                   ],
                   "additionalProperties": false
                 }
@@ -2563,6 +2748,11 @@
                         "type": "null"
                       }
                     ]
+                  },
+                  "topUpMicroUsd": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0,
+                    "maximum": 100000000000
                   }
                 },
                 "additionalProperties": false
@@ -2703,6 +2893,40 @@
                             ],
                             "additionalProperties": false
                           },
+                          "monthlyCredit": {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "day": {
+                                    "type": "integer",
+                                    "minimum": 1,
+                                    "maximum": 31
+                                  },
+                                  "microUsd": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "nextExpectedAt": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "day",
+                                  "microUsd",
+                                  "nextExpectedAt"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
                           "balance": {
                             "anyOf": [
                               {
@@ -2715,6 +2939,59 @@
                                   },
                                   "readAt": {
                                     "type": "string"
+                                  },
+                                  "readSource": {
+                                    "type": "string",
+                                    "enum": [
+                                      "reading",
+                                      "credit_refusal"
+                                    ]
+                                  },
+                                  "creditedSinceMicroUsd": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "credits": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "object",
+                                      "properties": {
+                                        "kind": {
+                                          "type": "string",
+                                          "enum": [
+                                            "monthly",
+                                            "topup"
+                                          ]
+                                        },
+                                        "microUsd": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "at": {
+                                          "type": "string"
+                                        },
+                                        "source": {
+                                          "type": "string",
+                                          "enum": [
+                                            "revived",
+                                            "schedule",
+                                            "dashboard"
+                                          ]
+                                        }
+                                      },
+                                      "required": [
+                                        "kind",
+                                        "microUsd",
+                                        "at",
+                                        "source"
+                                      ],
+                                      "additionalProperties": false
+                                    }
+                                  },
+                                  "unknownTopUp": {
+                                    "type": "boolean"
                                   },
                                   "spentSinceMicroUsd": {
                                     "type": "integer",
@@ -2796,6 +3073,10 @@
                                 "required": [
                                   "readMicroUsd",
                                   "readAt",
+                                  "readSource",
+                                  "creditedSinceMicroUsd",
+                                  "credits",
+                                  "unknownTopUp",
                                   "spentSinceMicroUsd",
                                   "estimatedMicroUsd",
                                   "daysLeft",
@@ -2825,6 +3106,7 @@
                           "lastUsedAt",
                           "spent",
                           "requests",
+                          "monthlyCredit",
                           "balance"
                         ],
                         "additionalProperties": false
@@ -2843,6 +3125,98 @@
                     "balanceWarnDays": {
                       "type": "number",
                       "minimum": 0
+                    },
+                    "forecast": {
+                      "type": "object",
+                      "properties": {
+                        "leftMicroUsd": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "missing": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "runsOutAt": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "nextCredit": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "label": {
+                                  "type": "string"
+                                },
+                                "microUsd": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                "expectedAt": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "label",
+                                "microUsd",
+                                "expectedAt"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "gap": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "label": {
+                                  "type": "string"
+                                },
+                                "untilAt": {
+                                  "type": "string"
+                                },
+                                "shortfallMicroUsd": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                }
+                              },
+                              "required": [
+                                "label",
+                                "untilAt",
+                                "shortfallMicroUsd"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "low": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "leftMicroUsd",
+                        "missing",
+                        "runsOutAt",
+                        "nextCredit",
+                        "gap",
+                        "low"
+                      ],
+                      "additionalProperties": false
                     }
                   },
                   "required": [
@@ -2850,7 +3224,8 @@
                     "accounts",
                     "dailyBurnMicroUsd",
                     "unattributed30dMicroUsd",
-                    "balanceWarnDays"
+                    "balanceWarnDays",
+                    "forecast"
                   ],
                   "additionalProperties": false
                 }

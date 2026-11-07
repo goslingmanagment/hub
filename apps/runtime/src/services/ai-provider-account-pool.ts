@@ -201,7 +201,7 @@ export function createAnthropicAccountPool(deps: {
             subKey: aiProviderAccountIncidentSubKey(account.label),
             errorCode: failure === "credit_exhausted" ? "provider_billing" : "provider_auth",
             errorSummary: failure === "credit_exhausted"
-              ? `Anthropic account ${account.label} is out of credit${httpStatus}; Hub spends the next account in order. Top it up, then note the balance on the usage screen.`
+              ? `Anthropic account ${account.label} is out of credit${httpStatus}; Hub spends the next account in order and counts its balance from $0. A purchase: note it on the usage screen («Положил деньги»); the monthly credit is counted by itself.`
               : `Anthropic account ${account.label}: the key was rejected${httpStatus}; Hub spends the next account in order. Replace the key in ANTHROPIC_API_KEYS.`,
             occurredAt: at,
           });

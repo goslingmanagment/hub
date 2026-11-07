@@ -3544,6 +3544,9 @@ export const aiProviderAccounts = pgTable(
     lastSuccessAt: timestamp("last_success_at", { withTimezone: true }),
     balanceSnapshotMicroUsd: bigint("balance_snapshot_micro_usd", { mode: "number" }),
     balanceSnapshotAt: timestamp("balance_snapshot_at", { withTimezone: true }),
+    // 0358: reading (the owner typed it) or credit_refusal (Anthropic refused
+    // for credit: $0). Null = reading.
+    balanceSnapshotSource: text("balance_snapshot_source").$type<"reading" | "credit_refusal">(),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
@@ -3558,6 +3561,36 @@ export const aiProviderAccounts = pgTable(
       (${table.balanceSnapshotMicroUsd} is null) = (${table.balanceSnapshotAt} is null)
       and (${table.balanceSnapshotMicroUsd} is null or ${table.balanceSnapshotMicroUsd} >= 0)
     `),
+  }),
+);
+
+// 0358: money into an Anthropic account — the subscription's monthly credit
+// (one per renewal) and the owner's purchases; the balance counts them after
+// its last reading or zero.
+export const aiProviderAccountCredits = pgTable(
+  "ai_provider_account_credits",
+  {
+    id: bigint("id", { mode: "number" }).primaryKey(),
+    accountId: bigint("account_id", { mode: "number" }).notNull().references(() => aiProviderAccounts.id),
+    kind: text("kind").$type<"monthly" | "topup">().notNull(),
+    amountMicroUsd: bigint("amount_micro_usd", { mode: "number" }).notNull(),
+    creditedAt: timestamp("credited_at", { withTimezone: true }).notNull(),
+    cycleDate: date("cycle_date", { mode: "string" }),
+    source: text("source").$type<"revived" | "schedule" | "dashboard">().notNull(),
+    actorUserId: bigint("actor_user_id", { mode: "number" }).references(() => users.id),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    cycleUniq: uniqueIndex("ai_provider_account_credits_cycle_uniq")
+      .on(table.accountId, table.cycleDate)
+      .where(sql`${table.kind} = 'monthly'`),
+    accountTime: index("ai_provider_account_credits_account_time").on(table.accountId, table.creditedAt.desc()),
+    kindCheck: check("ai_provider_account_credits_kind_check", sql`${table.kind} in ('monthly', 'topup')`),
+    amountCheck: check("ai_provider_account_credits_amount_check", sql`${table.amountMicroUsd} > 0`),
+    cycleCheck: check(
+      "ai_provider_account_credits_cycle_check",
+      sql`(${table.kind} = 'monthly') = (${table.cycleDate} is not null)`,
+    ),
   }),
 );
 
