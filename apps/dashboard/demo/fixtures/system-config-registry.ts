@@ -217,6 +217,21 @@ export const DEMO_CONFIG_DESCRIPTORS: readonly DemoConfigDescriptor[] = [
     "destructive": false
   },
   {
+    "key": "fanslyVaultHeadWalkPages",
+    "envName": "FANSLY_VAULT_HEAD_WALK_PAGES",
+    "configField": "fanslyVaultHeadWalkPages",
+    "kind": "string",
+    "subsystem": "Fansly",
+    "label": "Fansly vault walk: head-only pages",
+    "default": "",
+    "editability": "editable",
+    "runtimeApply": "live",
+    "comparable": true,
+    "note": "Comma-separated exact page labels (lora-1). On these pages the daily vault walk reads an album that grew only from its head down to a media id it already knows, then checks Fansly's album count; a count that does not add up, an old head not found or a page it cannot read sends that album to the full walk at once. Every album still gets a full walk a week after its last one, the only walk that marks removed media. Empty: every page walks a moved album in full, as before. Read live at every walk step; the request pace does not change.",
+    "costWarning": null,
+    "destructive": false
+  },
+  {
     "key": "fanslyPublicLookupEnabled",
     "envName": "FANSLY_PUBLIC_LOOKUP_ENABLED",
     "configField": "fanslyPublicLookupEnabled",

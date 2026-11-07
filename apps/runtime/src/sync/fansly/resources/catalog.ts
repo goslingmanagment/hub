@@ -27,8 +27,19 @@ import {
   type VaultAlbumWalkState,
 } from "../lib/catalog-rules.ts";
 import { fanslyUtcDayKey, writeFanslyLaneCoverage } from "../lib/lane.ts";
+import {
+  parseVaultHeadBasis,
+  parseVaultHeadFallback,
+  vaultFullWalkDue,
+  vaultHeadWalkPage,
+  vaultRewalkMode,
+  type VaultHeadBasis,
+  type VaultHeadFallback,
+  type VaultHeadPage,
+} from "../lib/vault-head-walk.ts";
 import { observeVaultWalkPage, vaultWalkIsComplete, type VaultWalkProof } from "../lib/vault-walk-proof.ts";
 import { ApplyQuarantine } from "../../engine/commit.ts";
+import type { SettingsSource } from "../../engine/ports.ts";
 import {
   effectiveCadence,
   type ApplyInput,
@@ -60,13 +71,18 @@ import { fanslyResourceSpec } from "../registry.ts";
 // `before` = the last row's id, down to an empty page, ≤ 400 pages an album.
 // The albums come from the projection, in a durable rotation, never-completed
 // first; an album is walked again when its head or count moved, its proof is
-// missing, or its last walk is a week old (incremental daily, full weekly —
-// owner decision №6; a page's override changes either period). A
+// missing, or its last full walk is a week old (incremental daily, full weekly —
+// owner decision №6; a page's override changes either period). On a page of
+// `fanslyVaultHeadWalkPages` (live) an album that only grew is read from its
+// head down to the old head and checked against Fansly's count, falling back
+// to the full walk at once when it does not add up (lib/vault-head-walk.ts);
+// elsewhere, and weekly everywhere, the walk is full. A
 // new walk waits while album events of the page are not projected yet, so it
 // never walks a list the last `.fixed` read has not reached. An empty first
 // page of a non-empty album, a cursor that does not move, rows without ids or
-// the page cap park THAT album; a walk that proves the whole album writes the
-// synthetic `vault_album_walk_completed` observation, as legacy.
+// the page cap park THAT album; a full walk that proves the whole album writes
+// the synthetic `vault_album_walk_completed` observation, as legacy (a head
+// walk never does: it proves no removal).
 //
 // hydrate (planned trigger after the walk and the fixed reads): ≤ 100 refs a
 // step from the members no card was projected for yet, media first, then
@@ -87,6 +103,13 @@ export function vaultCadence(page: Parameters<typeof effectiveCadence>[1]): Requ
   const cadence = effectiveCadence(fanslyResourceSpec(VAULT_KEY)!, page);
   if (cadence === null || cadence.fullEveryMs === undefined) throw new Error(`${VAULT_KEY} needs a cadence with a full sweep`);
   return { everyMs: cadence.everyMs, fullEveryMs: cadence.fullEveryMs };
+}
+/** The page reads a moved album from its head (`fanslyVaultHeadWalkPages`,
+ *  live: comma-separated exact page labels; empty — every page walks in full). */
+async function vaultHeadWalkOn(settings: SettingsSource | undefined, pageLabel: string | null): Promise<boolean> {
+  if (settings === undefined || pageLabel === null) return false;
+  const listed = (await settings.read()).fanslyVaultHeadWalkPages ?? "";
+  return listed.split(",").some((label) => label.trim() === pageLabel);
 }
 /** A ref a batch did not return is not asked again for this long. */
 const UNSERVED_MEMORY_MS = DAY_MS;
@@ -262,11 +285,27 @@ function parseVaultCursor(value: unknown): VaultCursor {
 
 type ParkReason = "repeat_request" | "page_cap";
 
+/** How a new walk of an album opens. */
+interface VaultWalkStart {
+  walkRef: string;
+  startedAt: string;
+  lastCompleteWalkAt: string | null;
+  /** A head walk: the proven inventory it counts against, and the day of the
+   *  album's last full walk it keeps. */
+  mode?: "head";
+  basis?: VaultHeadBasis;
+  fullWalkOnUtcDay?: string;
+  /** A full walk a head walk handed over: why. */
+  fallbackFrom?: VaultHeadFallback;
+}
+
 interface VaultStep {
   album: VaultAlbum;
   /** This request opens a new walk of the album at its head (fresh, or a
    *  re-walk): the proof header the walk is proved against. */
-  start: { walkRef: string; startedAt: string; lastCompleteWalkAt: string | null } | null;
+  start: VaultWalkStart | null;
+  /** Every page of a head walk says so (the attempt's request records it). */
+  mode?: "head";
   /** Albums the choice passed over that cannot be asked again as they stand
    *  (an imported walk at a repeated cursor or at the page cap): parked by
    *  the apply. */
@@ -287,62 +326,102 @@ function vaultStepOf(request: Pick<RequestPlan, "step">): VaultStep | null {
   const start = recordOf(record.start);
   const walkRef = text(start.walkRef);
   const startedAt = text(start.startedAt);
+  const basis = parseVaultHeadBasis(start.basis);
+  const fullWalkOnUtcDay = text(start.fullWalkOnUtcDay);
+  const fallbackFrom = parseVaultHeadFallback(start.fallbackFrom);
   const parked = (Array.isArray(record.parked) ? record.parked : []).flatMap((entry) => {
     const item = recordOf(entry);
     const parkedAlbum = parseAlbum(item.album);
     const reason: ParkReason | null = item.reason === "repeat_request" || item.reason === "page_cap" ? item.reason : null;
     return parkedAlbum === null || reason === null ? [] : [{ album: parkedAlbum, reason }];
   });
+  if (start.mode === "head" && (basis === undefined || fullWalkOnUtcDay === null)) return null;
   return {
     album,
-    start: walkRef === null || startedAt === null ? null : { walkRef, startedAt, lastCompleteWalkAt: text(start.lastCompleteWalkAt) },
+    ...(record.mode === "head" ? { mode: "head" as const } : {}),
+    start: walkRef === null || startedAt === null ? null : {
+      walkRef,
+      startedAt,
+      lastCompleteWalkAt: text(start.lastCompleteWalkAt),
+      ...(start.mode === "head" ? { mode: "head" as const, basis: basis!, fullWalkOnUtcDay: fullWalkOnUtcDay! } : {}),
+      ...(fallbackFrom === undefined ? {} : { fallbackFrom }),
+    },
     parked,
   };
 }
 
 /** An album's walk is due again: its head or count moved, its proof is
- *  missing or stale, or its last walk is `fullEveryMs` old (legacy rule: a
- *  week, by UTC day). */
+ *  missing or stale, or its last full walk is `fullEveryMs` old (legacy rule:
+ *  a week, by UTC day). */
 function rewalkDue(walk: VaultAlbumWalkState, album: VaultAlbum, utcDay: string, fullEveryMs: number): boolean {
   return walk.completedAtLastItemRef !== album.lastItemRef
     || walk.proof === undefined || walk.proof.expectedCount !== album.itemCount
     || walk.completedOnUtcDay === undefined
-    || Date.parse(utcDay) - Date.parse(walk.completedOnUtcDay) >= fullEveryMs;
+    || vaultFullWalkDue(walk, utcDay, fullEveryMs);
+}
+
+export interface VaultAlbumChoice {
+  album: VaultAlbum;
+  walk: VaultAlbumWalkState;
+  start: boolean;
+  parked: VaultStep["parked"];
+  /** A new head walk (`start`): what it counts against. */
+  head?: { basis: VaultHeadBasis; fullWalkOnUtcDay: string };
+  /** A new full walk (`start`) a head walk handed over. */
+  fallbackFrom?: VaultHeadFallback;
 }
 
 /** The album the walk serves next and its effective walk state (the legacy
  *  lane's rotation: never-completed first, round robin after the last
- *  served), or null when every album is walked. */
+ *  served), or null when every album is walked. `headWalk`: the page reads a
+ *  moved album from its head (`fanslyVaultHeadWalkPages`). */
 export function chooseVaultAlbum(
   albums: readonly VaultAlbum[],
   cursor: Pick<VaultCursor, "vaultWalk" | "afterAlbumRef">,
   utcDay: string,
   fullEveryMs: number,
-): { album: VaultAlbum; walk: VaultAlbumWalkState; start: boolean; parked: VaultStep["parked"] } | null {
+  options: { headWalk?: boolean } = {},
+): VaultAlbumChoice | null {
   const start = albums.findIndex((album) => album.albumRef === cursor.afterAlbumRef) + 1;
   const rotated = [...albums.slice(start), ...albums.slice(0, start)];
   const ordered = [
     ...rotated.filter((album) => !cursor.vaultWalk[album.albumRef]?.lastCompleteWalkAt),
     ...rotated.filter((album) => cursor.vaultWalk[album.albumRef]?.lastCompleteWalkAt),
   ];
+  // An album a head walk just handed to the full walk goes first: same day,
+  // right away.
+  const handedOver = rotated.filter((album) => cursor.vaultWalk[album.albumRef]?.fallbackFrom !== undefined);
   const parked: VaultStep["parked"] = [];
-  for (const album of ordered) {
-    let walk = cursor.vaultWalk[album.albumRef] ?? emptyAlbumWalk();
-    if (walk.done && rewalkDue(walk, album, utcDay, fullEveryMs)) walk = { ...emptyAlbumWalk(), lastCompleteWalkAt: walk.lastCompleteWalkAt };
-    if (walk.done) continue;
+  for (const album of [...handedOver, ...ordered.filter((album) => !handedOver.includes(album))]) {
+    const stored = cursor.vaultWalk[album.albumRef] ?? emptyAlbumWalk();
+    if (stored.done && !rewalkDue(stored, album, utcDay, fullEveryMs)) continue;
     // A walk without an inventory proof (fresh, re-opened, or a legacy tail)
     // starts its generation at the head.
-    const opens = walk.proof === undefined;
-    if (opens) walk = { ...emptyAlbumWalk(), lastCompleteWalkAt: walk.lastCompleteWalkAt };
-    if (walk.lastRequestedBefore === walk.beforeRef) {
+    if (stored.done || stored.proof === undefined) {
+      const how = stored.done
+        ? vaultRewalkMode({ headWalkOn: options.headWalk === true, walk: stored, album, utcDay, fullEveryMs })
+        : { mode: "full" as const };
+      const walk: VaultAlbumWalkState = { ...emptyAlbumWalk(), lastCompleteWalkAt: stored.lastCompleteWalkAt };
+      if (how.mode === "head") {
+        return {
+          album,
+          walk: { ...walk, mode: "head", basis: how.basis, fullWalkOnUtcDay: how.fullWalkOnUtcDay },
+          start: true,
+          parked,
+          head: { basis: how.basis, fullWalkOnUtcDay: how.fullWalkOnUtcDay },
+        };
+      }
+      return { album, walk, start: true, parked, ...(stored.fallbackFrom === undefined ? {} : { fallbackFrom: stored.fallbackFrom }) };
+    }
+    if (stored.lastRequestedBefore === stored.beforeRef) {
       parked.push({ album, reason: "repeat_request" });
       continue;
     }
-    if (walk.pages >= VAULT_ALBUM_MAX_PAGES) {
+    if (stored.pages >= VAULT_ALBUM_MAX_PAGES) {
       parked.push({ album, reason: "page_cap" });
       continue;
     }
-    return { album, walk, start: opens, parked };
+    return { album, walk: stored, start: false, parked };
   }
   return null;
 }
@@ -359,8 +438,15 @@ function headProof(album: VaultAlbum, start: NonNullable<VaultStep["start"]>): V
   };
 }
 
+/** A walk closed today; a full one is the album's last full walk from now on. */
 function closedWalk(walk: VaultAlbumWalkState, album: VaultAlbum, utcDay: string): VaultAlbumWalkState {
-  return { ...walk, done: true, completedAtLastItemRef: album.lastItemRef, completedOnUtcDay: utcDay };
+  return {
+    ...walk,
+    done: true,
+    completedAtLastItemRef: album.lastItemRef,
+    completedOnUtcDay: utcDay,
+    ...(walk.mode === "head" ? {} : { fullWalkOnUtcDay: utcDay }),
+  };
 }
 
 const HYDRATE_AFTER_WALK: readonly DemandSignal[] = [{ resource: HYDRATE_KEY, demand: { reason: "album_walked" } }];
@@ -370,7 +456,8 @@ const vaultModule: ResourceModule = {
     const cursor = parseVaultCursor(work.cursor);
     const cadence = vaultCadence(ctx.page);
     const albums = await listCreatorVaultAlbumsForWalk(ctx.db, ctx.pageId);
-    const choice = albums.length === 0 ? null : chooseVaultAlbum(albums, cursor, fanslyUtcDayKey(ctx.now), cadence.fullEveryMs);
+    const headWalk = albums.length > 0 && await vaultHeadWalkOn(ctx.settings, ctx.page.pageLabel);
+    const choice = albums.length === 0 ? null : chooseVaultAlbum(albums, cursor, fanslyUtcDayKey(ctx.now), cadence.fullEveryMs, { headWalk });
     // A new walk — and a look that finds none — waits for the album list the
     // last `.fixed` read put in the journal (its projection runs about a
     // minute behind): resting a day on the previous sweep's list would walk
@@ -384,9 +471,16 @@ const vaultModule: ResourceModule = {
     const step: VaultStep = {
       album: choice.album,
       start: choice.start
-        ? { walkRef: randomUUID(), startedAt: ctx.now.toISOString(), lastCompleteWalkAt: choice.walk.lastCompleteWalkAt ?? null }
+        ? {
+          walkRef: randomUUID(),
+          startedAt: ctx.now.toISOString(),
+          lastCompleteWalkAt: choice.walk.lastCompleteWalkAt ?? null,
+          ...(choice.head === undefined ? {} : { mode: "head" as const, basis: choice.head.basis, fullWalkOnUtcDay: choice.head.fullWalkOnUtcDay }),
+          ...(choice.fallbackFrom === undefined ? {} : { fallbackFrom: choice.fallbackFrom }),
+        }
         : null,
       parked: choice.parked,
+      ...(choice.walk.mode === "head" ? { mode: "head" as const } : {}),
     };
     return {
       kind: "request",
@@ -423,7 +517,12 @@ const vaultModule: ResourceModule = {
     let walk: VaultAlbumWalkState;
     if (step.start !== null) {
       if (requestedBefore !== VAULT_MEDIA_HEAD_CURSOR) throw new ApplyQuarantine("catalog_vault_cursor_mismatch", { album: album.albumRef });
-      walk = { ...emptyAlbumWalk(), lastCompleteWalkAt: step.start.lastCompleteWalkAt ?? undefined, proof: headProof(album, step.start) };
+      walk = {
+        ...emptyAlbumWalk(),
+        lastCompleteWalkAt: step.start.lastCompleteWalkAt ?? undefined,
+        proof: headProof(album, step.start),
+        ...(step.start.mode === "head" ? { mode: "head" as const, basis: step.start.basis, fullWalkOnUtcDay: step.start.fullWalkOnUtcDay } : {}),
+      };
     } else {
       const stored = walks[album.albumRef];
       if (stored === undefined || stored.done || stored.proof === undefined || stored.beforeRef !== requestedBefore) {
@@ -437,14 +536,54 @@ const vaultModule: ResourceModule = {
 
     walk = { ...walk, lastRequestedBefore: requestedBefore, pages: walk.pages + 1 };
     const rows = vaultMediaRows(input.response);
-    let proof = observeVaultWalkPage(walk.proof!, album.albumRef, rows, input.observation.id);
+    const before = walk.proof!;
+    let proof = observeVaultWalkPage(before, album.albumRef, rows, input.observation.id);
     const served = recordOf(input.response).albumMedia;
     if (Array.isArray(served) && served.length !== rows.length) proof = { ...proof, valid: false };
     walk = { ...walk, proof };
     let finished = true;
     let outcome: string;
 
-    if (rows.length === 0) {
+    if (walk.mode === "head") {
+      // A head walk (lib/vault-head-walk.ts): down to the old head, then the
+      // count; anything else hands the album to a full walk, served next.
+      const next = nextVaultCursor(rows);
+      const page: VaultHeadPage = walk.basis === undefined
+        ? { kind: "fallback", reason: "invalid_page" }
+        : vaultHeadWalkPage({
+          basis: walk.basis, before, after: proof, rows, next, requestedBefore,
+          pages: walk.pages, maxPages: VAULT_ALBUM_MAX_PAGES, album,
+        });
+      if (page.kind === "continue") {
+        walk = { ...walk, sawRows: true, beforeRef: next! };
+        await coverage(album.albumRef, "in_progress", "none", {
+          reasonCode: "head_walking",
+          expectedCount: album.itemCount,
+          cursor: { beforeRef: walk.beforeRef, pages: walk.pages },
+        });
+        finished = false;
+        outcome = "head_walking";
+      } else if (page.kind === "caught_up") {
+        walk = closedWalk({ ...walk, sawRows: true, basis: page.basis }, album, utcDay);
+        await coverage(album.albumRef, "provider_exhausted", "complete_count_matched", {
+          proofObservationId: input.observation.id,
+          reasonCode: "head_walk_caught_up",
+          expectedCount: album.itemCount,
+          observedUniqueCount: page.basis.count,
+          cursor: { pages: walk.pages, lastItemRef: album.lastItemRef, newMembers: page.newMembers },
+        });
+        outcome = "head_walk_caught_up";
+      } else {
+        await coverage(album.albumRef, "in_progress", "none", {
+          reasonCode: "head_walk_fallback",
+          expectedCount: album.itemCount,
+          cursor: { reason: page.reason, pages: walk.pages },
+        });
+        walk = { ...emptyAlbumWalk(), lastCompleteWalkAt: walk.lastCompleteWalkAt, fallbackFrom: page.reason };
+        finished = false;
+        outcome = `head_walk_fallback:${page.reason}`;
+      }
+    } else if (rows.length === 0) {
       const firstPage = requestedBefore === VAULT_MEDIA_HEAD_CURSOR && !walk.sawRows;
       const albumClaimsEmpty = album.itemCount === 0;
       if (firstPage && !albumClaimsEmpty) {
