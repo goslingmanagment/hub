@@ -122,7 +122,18 @@ export const teamShiftReviewResponseSchema = z.object({
     ongoing: z.boolean(),
     workedMinutes: count,
     pauses: z.array(z.object({ from: isoTimestamp, to: isoTimestamp })),
-    pages: z.array(z.object({ pageLabel: z.string(), platform: z.string() })),
+    /**
+     * The pages of the shift, most messages first: `messages` — the person's there; `worked` — the shift works the page
+     * (CHATTER_SHIFT_PAGE_MIN_MESSAGES or more, as «Смены»; a shift going on, from CHATTER_SHIFT_PIECE_MIN_MESSAGES), its
+     * fans' chats are in `chats`; a page only looked at, and every page of a look-in, brings in just the chats the person
+     * wrote in.
+     */
+    pages: z.array(z.object({ pageLabel: z.string(), platform: z.string(), messages: count, worked: z.boolean() })),
+    /**
+     * The shift's sales, net, as «Смены → Заработок» settles them: the sales on its pages while it held them
+     * (`salesHeldBy`), less those a colleague's overlapping shift held too when the colleague last wrote to the fan.
+     */
+    salesNetMills: mills,
   }),
   /** The person's shifts just before and after, within a week; their start. */
   previousAt: isoTimestamp.nullable(),
@@ -143,6 +154,8 @@ export const teamShiftReviewResponseSchema = z.object({
   })),
   /** The chatter's messages of the shift the archive does not hold yet (no text, not in `chats`). */
   unarchived: count,
+  /** The chatter's messages of the shift deleted after they were sent (not in `chats`). */
+  deleted: count,
   serverNow: isoTimestamp,
 });
 
@@ -158,8 +171,8 @@ export const shiftReviewRouteSchemas = {
     tags: ["client"],
     summary: "One chatter's shift opened up: its pulse, every chat, and where each message's text came from",
     description: "The owner only; read-only, database only. The shift of `userId` that holds `at` (a shift or a look-in), "
-      + "its activity minutes, every chat of its pages where the chatter or the fan wrote within it or the fan was waiting "
-      + "at its start, with the messages of the shift and the last few before it, and the waits that overlap it. Each of "
+      + "its activity minutes, every chat where the chatter wrote within it and, on the pages it worked, every chat where the "
+      + "fan wrote within it or was waiting at its start, with the messages of the shift and the last few before it, and the waits that overlap it. Each of "
       + "the chatter's messages carries the closest AI text of its chat and the share of its words taken from it. "
       + "404 when the person has no shift there.",
     querystring: teamShiftReviewQuerySchema,

@@ -246,13 +246,16 @@ export function useTeamChatterStats(params: TeamChatterStatsParams) {
  * only). A finished shift does not change; one going on is read again every
  * two minutes.
  */
-export function useTeamShiftReview(params: { userId: number; at: string } | null) {
-  return useQuery(queryOptions({
+export function teamShiftReviewQueryOptions(params: { userId: number; at: string }) {
+  return queryOptions({
     queryKey: ["team-shift-review", params] as const,
-    queryFn: () => kernel.teamShiftReview({ query: params! }),
+    queryFn: () => kernel.teamShiftReview({ query: params }),
     meta: { suppressGlobalError: true },
-    enabled: params !== null,
     staleTime: 60_000,
     refetchInterval: (query) => (query.state.data?.shift.ongoing ? 120_000 : false),
-  }));
+  });
+}
+
+export function useTeamShiftReview(params: { userId: number; at: string }) {
+  return useQuery(teamShiftReviewQueryOptions(params));
 }
