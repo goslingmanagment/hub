@@ -118,7 +118,10 @@ export type InTransactionCanonicalizeResult =
  *
  * Safe to repeat: the dedup keys and the checkpoint key make a second run —
  * or the driver's run on the same observation — append nothing, and the
- * stamp only moves forward.
+ * stamp only moves forward. One exception: if the driver listed the row
+ * before this commit and `excludeDraft` dropped a draft here, the driver
+ * builds that draft and loses the checkpoint to this commit; its append rolls
+ * back and it counts the row as `raced`.
  */
 export async function canonicalizeObservationInTransaction(
   tx: Database,

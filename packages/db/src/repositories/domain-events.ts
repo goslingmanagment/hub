@@ -54,6 +54,25 @@ export interface ProjectionCheckpointInput {
   data?: Record<string, unknown>;
 }
 
+/**
+ * The batch appended NEW hidden material, but another writer already holds
+ * this observation's projection checkpoint. The batch's transaction rolls
+ * back. In the minutely sweep that writer is the Fansly Sync Engine, which
+ * canonicalizes the same observation inline and stamps it; the caller tells
+ * that race from a real collision by re-reading the observation's stamp.
+ */
+export class ProjectionCheckpointClaimedError extends Error {
+  readonly observationId: number;
+  readonly dedupKey: string;
+
+  constructor(checkpoint: Pick<ProjectionCheckpointInput, "observationId" | "dedupKey">) {
+    super("Projection checkpoint was already claimed for newly appended material");
+    this.name = "ProjectionCheckpointClaimedError";
+    this.observationId = checkpoint.observationId;
+    this.dedupKey = checkpoint.dedupKey;
+  }
+}
+
 const PROJECTION_ONLY_DOMAIN_EVENT_TYPES = new Set([
   "fansly.ws_signal_observed",
   "ofapi.post_like_observed",
@@ -472,7 +491,7 @@ async function appendDomainEventsBatchInTransaction(
       dedupKey: checkpoint.dedupKey,
     });
     if (!checkpointAppended) {
-      throw new Error("Projection checkpoint was already claimed for newly appended material");
+      throw new ProjectionCheckpointClaimedError(checkpoint);
     }
   }
 
@@ -1320,6 +1339,19 @@ export async function markObservationParsed(
       and received_at = ${input.receivedAt}
       and parse_version < ${input.parseVersion}
   `);
+}
+
+/** The observation's current stamp, or null when the row is gone. */
+export async function getObservationParseVersion(
+  db: Database,
+  input: { observationId: number; receivedAt: Date },
+): Promise<number | null> {
+  const result = await db.execute<{ parse_version: number }>(sql`
+    select parse_version from observations
+    where id = ${input.observationId} and received_at = ${input.receivedAt}
+  `);
+  const row = result.rows[0];
+  return row === undefined ? null : Number(row.parse_version);
 }
 
 function partitionName(year: number, month: number) {
