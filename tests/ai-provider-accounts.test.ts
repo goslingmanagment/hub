@@ -300,4 +300,20 @@ describe("the account pool's order", () => {
     db.claimAiProviderAccountProbe.mockResolvedValueOnce(false);
     expect((await pool().candidates()).map((account) => account.label)).toEqual(["second", "main"]);
   });
+
+  it("probes an exhausted account below the serving one too, but only when its probe is due", async () => {
+    db.listAiProviderAccounts.mockResolvedValue([
+      accountRow({ id: 1, label: "main", priority: 1 }),
+      accountRow({ id: 2, label: "second", priority: 3, status: "exhausted", nextProbeAt: new Date(NOW.getTime() - 1) }),
+      accountRow({ id: 3, label: "third", priority: 6, status: "exhausted", nextProbeAt: new Date(NOW.getTime() + 60_000) }),
+    ]);
+
+    expect((await pool().candidates()).map((account) => account.label)).toEqual(["second", "main", "third"]);
+    expect(db.claimAiProviderAccountProbe).toHaveBeenCalledTimes(1);
+    expect(db.claimAiProviderAccountProbe).toHaveBeenCalledWith({}, {
+      id: 2,
+      at: NOW,
+      nextProbeAt: new Date(NOW.getTime() + 60 * 60 * 1000),
+    });
+  });
 });

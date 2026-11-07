@@ -47,11 +47,13 @@ export interface AnthropicAccountPool {
   ensureRegistered(): Promise<void>;
   /** Forget this process's copy of the accounts' state (an owner change). */
   invalidate(): void;
-  /** The accounts one call may try, in order: an exhausted account above
-   * the first active one when its hourly probe is due, then every active
-   * account, then the exhausted ones as a last resort (a refusal for credit
-   * is free; when all are out the call still asks, so a top-up is noticed
-   * at once). Disabled and invalid accounts are never offered. */
+  /** The accounts one call may try, in order: an exhausted account whose
+   * hourly probe is due (whatever its rank, so a monthly credit landing on
+   * one below the serving account is seen within the hour), then every
+   * active account, then the exhausted ones as a last resort (a refusal for
+   * credit is free and moves on to the next in the same call; when all are
+   * out the call still asks, so a top-up is noticed at once). Disabled and
+   * invalid accounts are never offered. */
   candidates(): Promise<AiProviderAccountCandidate[]>;
   /** Anthropic refused the account before any output. Never throws. */
   reportRefusal(
@@ -139,12 +141,12 @@ export function createAnthropicAccountPool(deps: {
       const exhausted = enabled.filter((row) => row.status === "exhausted");
       const now = clock();
       let probe: AiProviderAccountRow | null = null;
-      // With no active account every exhausted one is asked anyway (below).
-      const firstActive = active[0];
-      for (const row of firstActive ? exhausted : []) {
-        if (compareOrder(row, firstActive!) > 0) {
-          break;
-        }
+      // Any rank: the balance counts a renewal's credit only from a revival
+      // inside its window, and one ranked below the serving account would
+      // otherwise wait until everything above it runs dry. A won probe that
+      // revives serves this one call; the next goes by priority again. With
+      // no active account every exhausted one is asked anyway (below).
+      for (const row of active.length > 0 ? exhausted : []) {
         if (row.nextProbeAt && row.nextProbeAt > now) {
           continue;
         }
