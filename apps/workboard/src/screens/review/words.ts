@@ -1,4 +1,5 @@
 import { normalizeDmMessageText } from "@agency_hub_core/shared";
+import { SHIFT_REVIEW_AI_LOOKBACK_MINUTES, SHIFT_REVIEW_AI_SHARE } from "@agency_hub_core/contracts";
 import { formatDateTime, formatTimeOfDay } from "@agency_hub_core/ui/format";
 import type { ReviewMessage } from "./data.js";
 import { aiButton, aiUnedited, isHi } from "@agency_hub_core/ui/shiftReview";
@@ -13,32 +14,43 @@ import { aiButton, aiUnedited, isHi } from "@agency_hub_core/ui/shiftReview";
 type Mine = NonNullable<ReviewMessage["mine"]>;
 
 /**
- * The origin of the chatter's text. `edge` is the bubble's quiet left edge:
- * the AI's texts one colour (fainter once edited), the chatter's own draft run
- * through the AI another, the chatter's own words none.
+ * The origin of the chatter's text. Only «ИИ без правки» colours the bubble's
+ * left edge; every other origin is said in words under the bubble.
+ *
+ * `own` is what Hub could NOT tie to an AI text of the chat — not proof that the
+ * chatter wrote it (the AI may have been outside Hub): its word is the neutral
+ * «ИИ не найден» everywhere (spec r3, E2), and the evidence says on what basis.
  */
 export type OriginKey = "ai-raw" | "ai-edited" | "ai-hi" | "ai-command" | "fix" | "own" | "none";
 
 export interface Origin {
   key: OriginKey;
-  /** One quiet line under the bubble: «ИИ без правки». */
+  /** One quiet line under the bubble: «ИИ без правки, вставлен вручную». */
   label: string;
+  /** The same without how it got into the composer, for a narrow list: «ИИ без правки». */
+  short: string;
 }
 
-/** Texts of this many words or fewer are the chatter's unless a button put them there (the server's rule). */
+/** The one word for a text Hub found no AI text for: under the bubble, in the evidence, in the facts' hint (M9). */
+export const OWN_WORDS = "ИИ не найден";
+
+/** Texts of this many words or fewer are not the AI's unless an AI button put them there (the server's rule). */
 const SHORT_WORDS = 3;
 
 export function originOf(message: ReviewMessage): Origin | null {
   const mine = message.mine;
   if (mine === null) return null;
-  if (mine.origin === null) return { key: "none", label: message.text.trim() !== "" ? "без слов" : "без текста" };
-  if (mine.origin === "own") return { key: "own", label: "сам" };
-  if (mine.origin === "fix") return { key: "fix", label: "свой черновик, ИИ поправил" };
-  if (isHi(mine)) return { key: "ai-hi", label: "приветствие ИИ" };
-  if (mine.aiFeature === "improve-draft") return { key: "ai-command", label: "ИИ по команде" };
+  const one = (key: OriginKey, label: string): Origin => ({ key, label, short: label });
+  if (mine.origin === null) return one("none", message.text.trim() !== "" ? "без слов" : "без текста");
+  if (mine.origin === "own") return one("own", OWN_WORDS);
+  if (mine.origin === "fix") return one("fix", "свой черновик, ИИ поправил");
+  if (isHi(mine)) return one("ai-hi", "приветствие ИИ");
+  if (mine.aiFeature === "improve-draft") return one("ai-command", "ИИ по команде");
   const byHand = mine.composedWith === "hand" ? ", вставлен вручную" : "";
   // The same rule as the shift's «ИИ без правки» share (D1).
-  return aiUnedited(mine) ? { key: "ai-raw", label: `ИИ без правки${byHand}` } : { key: "ai-edited", label: `ИИ с правкой${byHand}` };
+  return aiUnedited(mine)
+    ? { key: "ai-raw", label: `ИИ без правки${byHand}`, short: "ИИ без правки" }
+    : { key: "ai-edited", label: `ИИ с правкой${byHand}`, short: "ИИ с правкой" };
 }
 
 const FEATURE_WORDS: Record<string, string> = {
@@ -71,24 +83,31 @@ export function composedWords(mine: Mine): string {
   return how;
 }
 
-/** The verdict in one sentence, for the evidence panel. */
+const LOOKBACK = `${SHIFT_REVIEW_AI_LOOKBACK_MINUTES} мин`;
+const THRESHOLD = `${Math.round(SHIFT_REVIEW_AI_SHARE * 100)} %`;
+
+/**
+ * The verdict in one sentence, for the evidence panel: what Hub compared and
+ * what came out. For a text without an AI match it says the basis and never
+ * «своё»: Hub did not see where the words came from (`OWN_CAVEAT` says so).
+ */
 export function originSentence(message: ReviewMessage): string {
   const mine = message.mine!;
-  const share = mine.aiShare ?? 0;
-  const percent = `${Math.round(share * 100)} %`;
+  const share = mine.aiShare;
+  const percent = `${Math.round((share ?? 0) * 100)} %`;
   switch (mine.origin) {
     case null:
       return "В сообщении нет слов (файл, смайл): сравнивать с ИИ не с чем.";
     case "own": {
-      if (aiButton(mine.composedWith) && share === 0) return "Нажата кнопка ИИ, но среди текстов ИИ этого чата такого текста нет: чаттер написал своё.";
-      if (share === 0) return "Среди текстов ИИ этого чата за полтора часа до сообщения такого текста нет. Это не доказывает, что текст свой: ИИ мог быть вне Hub.";
+      if (share === null || mine.aiText === null) return `В Hub нет текстов ИИ этого чата за ${LOOKBACK} до сообщения — сравнивать не с чем.`;
+      if (aiButton(mine.composedWith) && share === 0) return `Нажата кнопка ИИ, но ни один текст ИИ этого чата за ${LOOKBACK} с отправленным не совпал.`;
       const short = message.text.trim().split(/\s+/).length <= SHORT_WORDS;
       return short
-        ? `Совпало с ИИ ${percent} слов, но текст короткий (до ${SHORT_WORDS} слов): такой считается своим.`
-        : `С ближайшим текстом ИИ совпало ${percent} слов — меньше 70 %, текст считается своим.`;
+        ? `Совпало ${percent} слов, но текст короткий (до ${SHORT_WORDS} слов): такие Hub относит к ИИ, только если их вставила кнопка ИИ.`
+        : `С ближайшим текстом ИИ совпало ${percent} слов — меньше порога ${THRESHOLD}.`;
     }
     case "fix":
-      return "Чаттер написал черновик сам (обычно по-русски), ИИ перевёл и поправил его. Мысль — чаттера.";
+      return "Черновик набрал чаттер (обычно по-русски), кнопка Fix перевела и поправила его — черновик ниже.";
     case "ai":
       if (isHi(mine)) return "Приветствие новому подписчику, написанное ИИ по кнопке Hi.";
       if (mine.aiFeature === "improve-draft") return "Черновик был командой («скажи…», «спроси…»), текст написал ИИ.";
@@ -97,6 +116,9 @@ export function originSentence(message: ReviewMessage): string {
         : `Текст ИИ (${featureWord(mine.aiFeature)}), чаттер его поправил: совпало ${percent} слов.`;
   }
 }
+
+/** Under the verdict of «ИИ не найден»: what it does not prove (E2). */
+export const OWN_CAVEAT = "Это не доказывает, что текст свой: его могли взять у ИИ вне Hub.";
 
 /** Who wrote a page message that is not the reviewed chatter's own in the shift. */
 export function authorOf(message: ReviewMessage, username: string): string | null {

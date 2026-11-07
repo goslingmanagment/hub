@@ -61,6 +61,7 @@ import { ruPlural } from "@agency_hub_core/ui/plural";
 import { useBackState } from "@/shared/links";
 import { METRICS } from "@/shared/metrics";
 import { ScreenHeader } from "@/shared/ScreenHeader";
+import { RoundTwoSection } from "./RoundTwo.js";
 
 /**
  * The specimen of packages/ui: every component in the states a screen uses,
@@ -80,22 +81,22 @@ interface ChatterRow {
   shifts: number;
   minutes: number;
   salesMills: number;
-  deltaPct: number | null;
+  /** Sales of the week before; null: nothing to compare with. */
+  prevMills: number | null;
   perHourMills: number;
   replySeconds: number | null;
   unanswered: number | null;
   aiShare: number | null;
-  wasMills?: number;
   team?: boolean;
 }
 
 const CHATTERS: ChatterRow[] = [
-  { id: 4, name: "den.s", status: "working", pages: ["nova-1"], shifts: 5, minutes: 2484, salesMills: 2_144_380, deltaPct: -29, perHourMills: 51_790, replySeconds: 74, unanswered: 1, aiShare: 0.42 },
-  { id: 2, name: "alex.k", status: "away", pages: ["mia-1", "mia-2"], shifts: 6, minutes: 2815, salesMills: 1_070_150, deltaPct: 18, perHourMills: 22_810, replySeconds: 118, unanswered: 3, aiShare: 0.31 },
-  { id: 6, name: "kate.v", status: "away", pages: ["mia-3", "mia-1"], shifts: 4, minutes: 1822, salesMills: 526_270, deltaPct: 0, perHourMills: 17_330, replySeconds: 96, unanswered: 0, aiShare: 0.27 },
-  { id: 7, name: "olya.m", status: "working", pages: ["mia-vip-of", "mia-of", "mia-1", "mia-2"], shifts: 3, minutes: 1392, salesMills: 103_960, deltaPct: -85, perHourMills: 4_480, replySeconds: 412, unanswered: 9, aiShare: 0.71 },
-  { id: 8, name: "ivan.p", status: "away", pages: ["ivy-2"], shifts: 4, minutes: 739, salesMills: 31_980, deltaPct: null, perHourMills: 2_590, replySeconds: 205, unanswered: 2, aiShare: 0.18 },
-  { id: 9, name: "lena.r", status: "disabled", pages: ["ivy-1"], shifts: 0, minutes: 0, salesMills: 0, deltaPct: null, perHourMills: 0, replySeconds: null, unanswered: null, aiShare: null, wasMills: 419_940 },
+  { id: 4, name: "den.s", status: "working", pages: ["nova-1"], shifts: 5, minutes: 2484, salesMills: 2_144_380, prevMills: 3_020_000, perHourMills: 51_790, replySeconds: 74, unanswered: 1, aiShare: 0.42 },
+  { id: 2, name: "alex.k", status: "away", pages: ["mia-1", "mia-2"], shifts: 6, minutes: 2815, salesMills: 1_070_150, prevMills: 906_900, perHourMills: 22_810, replySeconds: 118, unanswered: 3, aiShare: 0.31 },
+  { id: 6, name: "kate.v", status: "away", pages: ["mia-3", "mia-1"], shifts: 4, minutes: 1822, salesMills: 526_270, prevMills: 526_270, perHourMills: 17_330, replySeconds: 96, unanswered: 0, aiShare: 0.27 },
+  { id: 7, name: "olya.m", status: "working", pages: ["mia-vip-of", "mia-of", "mia-1", "mia-2"], shifts: 3, minutes: 1392, salesMills: 103_960, prevMills: 693_000, perHourMills: 4_480, replySeconds: 412, unanswered: 9, aiShare: 0.71 },
+  { id: 8, name: "ivan.p", status: "away", pages: ["ivy-2"], shifts: 4, minutes: 739, salesMills: 31_980, prevMills: 16_000, perHourMills: 2_590, replySeconds: 205, unanswered: 2, aiShare: 0.18 },
+  { id: 9, name: "lena.r", status: "disabled", pages: ["ivy-1"], shifts: 0, minutes: 0, salesMills: 0, prevMills: 419_940, perHourMills: 0, replySeconds: null, unanswered: null, aiShare: null },
 ];
 
 const TEAM_ROW: ChatterRow = {
@@ -106,7 +107,7 @@ const TEAM_ROW: ChatterRow = {
   shifts: 22,
   minutes: 9252,
   salesMills: 3_876_740,
-  deltaPct: -30,
+  prevMills: 5_538_000,
   perHourMills: 25_140,
   replySeconds: 112,
   unanswered: 15,
@@ -259,8 +260,9 @@ export function SpecimenScreen() {
       key: "delta",
       header: "К прошлой неделе",
       numeric: true,
-      sortValue: (row) => row.deltaPct,
-      cell: (row) => <Delta pct={row.deltaPct} was={row.wasMills} noneText="не с чем сравнить" title="К 26 окт. – 1 нояб., на то же время" />,
+      sortValue: (row) => (row.prevMills ? (row.salesMills - row.prevMills) / row.prevMills : null),
+      // One rule (D13): Delta itself picks «−29 %», «было $16.00» (a base under $50) or «было $419.94» (nothing now).
+      cell: (row) => <Delta current={row.salesMills} previous={row.prevMills} noneText="не с чем сравнить" title="К 26 окт. – 1 нояб., на то же время" />,
     },
     { key: "hour", header: "В час", numeric: true, sortValue: (row) => row.perHourMills, cell: (row) => <Money mills={row.perHourMills} /> },
     { key: "reply", header: METRIC.reply.label, hint: METRIC.reply.hint, numeric: true, sortValue: (row) => row.replySeconds, cell: (row) => <ReplyTime seconds={row.replySeconds} team={!!row.team} /> },
@@ -336,9 +338,11 @@ export function SpecimenScreen() {
           Каждый компонент из packages/ui в состояниях, которые встречаются на экранах. Числа выдуманы.
         </Notice>
 
+        <RoundTwoSection />
+
         <Section
           title="Таблица"
-          description="Одна таблица на всё приложение. Итоговая строка сверху остаётся сверху при сортировке. Пунктир у заголовка — определение по наведению. Строка-ссылка уносит «←» сюда."
+          description="Одна таблица на всё приложение. Строка 52 px, с подписью — 64. Итоговая строка сверху остаётся сверху при сортировке; сортировка по умолчанию держится и после загрузки. Пунктир у заголовка — определение по наведению."
           actions={(
             <>
               <Segmented
@@ -556,13 +560,13 @@ export function SpecimenScreen() {
               <Money microUsd={4_200} />
             </Row>
             <Row label="Изменение">
-              <Delta pct={13} />
-              <Delta pct={-29} />
-              <Delta pct={0} />
-              <Delta pct={null} />
-              <Delta pct={null} noneText="не с чем сравнить" />
+              <Delta current={1_130_000} previous={1_000_000} />
+              <Delta current={710_000} previous={1_000_000} />
+              <Delta current={1_000_000} previous={1_000_000} />
+              <Delta current={31_980} previous={16_000} />
+              <Delta current={52_000} previous={0} />
+              <Delta current={null} previous={null} noneText="не с чем сравнить" />
               <Delta mills={4_104_210} pct={64} />
-              <Delta was={419_940} />
               <Delta pct={22} kind="cost" title="Траты на ИИ: рост не хорош и не плох" />
             </Row>
             <Row label="Хуже и лучшее">
@@ -600,8 +604,8 @@ export function SpecimenScreen() {
                   layout="stacked"
                   columns={3}
                   items={[
-                    { label: "Продажи за неделю", value: <Money mills={3_876_750} />, meta: <Delta pct={-30} title="К прошлой неделе на то же время" /> },
-                    { label: "В час работы", value: <Money mills={25_140} />, meta: <Delta pct={-28} /> },
+                    { label: "Продажи за неделю", value: <Money mills={3_876_750} />, meta: <Delta current={3_876_750} previous={5_538_000} title="К прошлой неделе на то же время" /> },
+                    { label: "В час работы", value: <Money mills={25_140} />, meta: <Delta current={25_140} previous={34_900} base={5_538_000} /> },
                     { label: "Смен", value: "22", meta: "154 ч 12 мин, из них 3 ночные смены дольше десяти часов" },
                     { label: METRIC.reply.perShift, value: "1 мин 52 с", hint: METRIC.reply.hint },
                     { label: METRIC.unanswered.perShift, value: "2,1", hint: METRIC.unanswered.hint },

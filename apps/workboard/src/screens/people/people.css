@@ -48,6 +48,8 @@
     font-size: var(--ui-fs-13);
     line-height: var(--ui-lh-13);
     font-weight: 400;
+    /* «mia-1», not «mia - 1»: a page's digit keeps the text's width. */
+    font-variant-numeric: normal;
   }
 
   .people-link {
@@ -193,6 +195,24 @@
     font-variant-numeric: normal;
   }
 
+  /* As «и ещё N» of the shared page list. */
+  .people-meta__more {
+    color: var(--ui-text-2);
+    text-decoration: underline dotted;
+    text-decoration-color: var(--ui-line-strong);
+    text-underline-offset: 4px;
+    cursor: help;
+  }
+
+  /* The pages in a hint: one a line, never broken inside a name («ivy- / 2»). */
+  .people-pages-tip {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    white-space: nowrap;
+    font-variant-numeric: normal;
+  }
+
   .people-meta__strong {
     color: var(--ui-text);
     font-weight: 500;
@@ -260,6 +280,11 @@
     color: var(--ui-text-3);
   }
 
+  .people-verdict__page {
+    color: var(--ui-text);
+    font-variant-numeric: normal;
+  }
+
   .people-verdict__change {
     margin-left: 6px;
     color: var(--ui-text-2);
@@ -293,14 +318,23 @@
   .people-shift {
     display: inline-flex;
     align-items: baseline;
-    gap: 8px;
+    gap: 12px;
     white-space: nowrap;
   }
 
+  /* The day and its invisible longest neighbours share one cell of a grid: every row's time starts on one line. */
   .people-shift__day {
-    min-width: 88px;
+    display: inline-grid;
     color: var(--ui-text);
     font-weight: 500;
+  }
+
+  .people-shift__day > span {
+    grid-area: 1 / 1;
+  }
+
+  .people-shift__sizer {
+    visibility: hidden;
   }
 
   .people-shift__time {
@@ -317,6 +351,17 @@
 
   .people-shifts .ui-page {
     color: var(--ui-text-2);
+  }
+
+  /* The card's shift table breaks its long headers in two (D18) — except on 1440 without the pages column, where one line fits. */
+  .people-shifts .people-head__break {
+    display: inline;
+  }
+
+  @media (max-width: 1679px) {
+    .people-shifts--oneline .people-head__break {
+      display: none;
+    }
   }
 
   /* ------------------------------------------------- The ribbon */
@@ -489,6 +534,40 @@
     inset: -8px 0;
   }
 
+  /* Work outside a shift beyond the drawn hours: a short line at the edge with an arrow to where it was. */
+  .people-ribbon__visit[data-edge] {
+    width: 14px;
+    min-width: 0;
+  }
+
+  .people-ribbon__visit[data-edge="end"] {
+    right: 0;
+  }
+
+  .people-ribbon__visit[data-edge="start"] {
+    left: 0;
+  }
+
+  .people-ribbon__visit[data-edge]::after {
+    content: "";
+    position: absolute;
+    top: -3px;
+    width: 6px;
+    height: 6px;
+    border-top: 2px solid var(--ui-text-3);
+    border-right: 2px solid var(--ui-text-3);
+  }
+
+  .people-ribbon__visit[data-edge="end"]::after {
+    right: 1px;
+    transform: rotate(45deg);
+  }
+
+  .people-ribbon__visit[data-edge="start"]::after {
+    left: 1px;
+    transform: rotate(-135deg);
+  }
+
   .people-ribbon__sale {
     position: absolute;
     top: 50%;
@@ -560,21 +639,20 @@
   }
 
   .people-ribbon__key-shift {
-    position: relative;
     display: inline-block;
-    width: 28px;
+    width: 24px;
     height: 10px;
-    overflow: hidden;
     border-radius: 5px;
     background: var(--shift);
   }
 
-  .people-ribbon__key-shift span {
-    position: absolute;
-    top: 0;
-    bottom: 0;
-    left: 12px;
-    width: 8px;
+  /* A pause is a stretch of the bar in its own shade: the sample is that stretch, edged by the bar's colour. */
+  .people-ribbon__key-pause {
+    display: inline-block;
+    width: 16px;
+    height: 10px;
+    border: 2px solid var(--shift);
+    border-radius: 3px;
     background: var(--pause);
   }
 
@@ -627,6 +705,11 @@
 
   .people-tip__note .ui-page {
     color: var(--ui-text-2);
+  }
+
+  .people-tip__note--right {
+    margin-top: -4px;
+    text-align: right;
   }
 
   .people-tip__hint {
@@ -803,5 +886,20 @@
 
   .people-fan .ui-money {
     text-align: right;
+  }
+
+  /* The paying fans past the five: one quiet line, their money together. */
+  .people-fan--rest {
+    color: var(--ui-text-2);
+  }
+
+  .people-fan--rest .ui-money {
+    color: var(--ui-text-2);
+  }
+
+  .people-rates-failed {
+    display: flex;
+    align-items: center;
+    gap: 16px;
   }
 }

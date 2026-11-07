@@ -80,16 +80,20 @@ export function Fan({ name, username, fanRef, showLogin = false, href, hint, cla
       {inline && <span className="ui-fan__login">@{login}</span>}
     </>
   );
-  const body = href
-    ? <a href={href} className={cx("ui-fan ui-quiet-link", className)}>{words}</a>
-    : <span className={cx("ui-fan", className)}>{words}</span>;
   const tipParts: ReactNode[] = [];
   if (cleanName !== null && login !== null && !inline) tipParts.push(`@${login}`);
   if (!known) tipParts.push("Площадка не дала ни имени, ни логина");
   if (hint !== undefined && hint !== null && hint !== "") tipParts.push(hint);
-  if (tipParts.length === 0) return body;
+  const tipped = tipParts.length > 0;
+  // `className` always lands on the outermost element: with a hint that is the Tooltip's wrapper, so a Fan in a
+  // flex row («flex: 1», a cut with «…») lays out the same with and without a login to show on hover.
+  const own = tipped ? undefined : className;
+  const body = href
+    ? <a href={href} className={cx("ui-fan ui-quiet-link", tipped && "ui-fan--inner", own)}>{words}</a>
+    : <span className={cx("ui-fan", tipped && "ui-fan--inner", own)}>{words}</span>;
+  if (!tipped) return body;
   return (
-    <Tooltip content={tipParts.map((part, index) => <span key={index} className="ui-fan__tip-line">{part}</span>)} align="start">
+    <Tooltip content={tipParts.map((part, index) => <span key={index} className="ui-fan__tip-line">{part}</span>)} align="start" className={className}>
       {body}
     </Tooltip>
   );

@@ -163,8 +163,8 @@ function AuthorlessDrawer({ open, picked, onPick, onClose, state, dates }: {
     <Drawer open={open} onClose={onClose} title="Сообщения без автора" subtitle={dates} size="lg">
       <div className="shifts-drawer">
         <p className="shifts-drawer__lead">
-          Сколько личных сообщений страницы ушло без автора — Hub не знает, кто из чаттеров их написал. Цель: не больше
-          {" "}{AUTHORSHIP_GOAL_PERCENT} % из тех, что ушли, пока у кого-то было открыто расширение. Без автора смена
+          Сообщения без автора — личные сообщения страницы, про которые Hub не знает, кто из чаттеров их написал. Цель: не
+          больше {AUTHORSHIP_GOAL_PERCENT} % из тех, что ушли, пока у кого-то было открыто расширение. Без автора смена
           недосчитывает сообщения и продажи.
         </p>
         <Table

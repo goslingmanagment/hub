@@ -170,11 +170,86 @@ const HANDLE_STEMS = [
   "eddie", "frank", "gabe", "harry", "iggy", "jonny", "kyle", "liam", "marco", "nate",
 ] as const;
 
-const DISPLAY_NAMES = [
-  "Mike", "Tom", "Jake R.", "Sunny", "Dan", "Chris", "Wolf", "Joey", "Kev", "Ricky", "Paul",
-  "Hunter", "Max", "Oliver", "Leo", "Storm", "Ace", "Vince", "Eddie", "Frank", "Gabe", "Harry",
-  "Sir Lancelot", "Dark Viking", "Cold Captain", "Night Owl", "Big Mike", "Texas Tom", "Marco", "Nate",
+// --- A fan's name, as the platform shows it ---
+//
+// As on production (spec r2, D6): most fans go by a name of their own, a good
+// share by their handle; now and then two fans of a shift share a common name
+// (then the screens add the @login); a few are known to Hub by their number only
+// («фан ·0120»). The name has its own random stream: the fans' money stays put.
+
+/** Names that two fans of one shift share now and then. */
+const COMMON_NAMES = ["Mike", "Chris", "Dan", "Matt"] as const;
+
+const FIRST_NAMES = [
+  "Aaron", "Adam", "Adrian", "Aiden", "Alan", "Alberto", "Andre", "Andy", "Anton", "Arthur", "Austin", "Ben",
+  "Blake", "Brandon", "Brian", "Bruno", "Caleb", "Calvin", "Cameron", "Carl", "Carter", "Cole", "Colin", "Connor",
+  "Curtis", "Damian", "Danny", "Darren", "David", "Dean", "Dennis", "Diego", "Dominic", "Drew", "Dustin", "Eli",
+  "Elliot", "Emil", "Eric", "Evan", "Fabian", "Finn", "Floyd", "Gavin", "George", "Gordon", "Grady", "Hector",
+  "Henry", "Hugo", "Isaac", "Ivan", "Jared", "Jason", "Jasper", "Javier", "Jesse", "Joel", "Jordan", "Julian",
+  "Justin", "Kai", "Kenny", "Kieran", "Lars", "Lewis", "Logan", "Lorenzo", "Lucas", "Malik", "Manny", "Martin",
+  "Mason", "Miles", "Mitch", "Nathan", "Nico", "Nolan", "Omar", "Oscar", "Patrick", "Pedro", "Rafael", "Reggie",
+  "Rhys", "Roman", "Rudy", "Ruben", "Sergio", "Simon", "Stefan", "Theo", "Toby", "Trent", "Tristan", "Vic",
+  "Warren", "Wyatt", "Xavier", "Zane",
 ] as const;
+
+const NICKNAMES = [
+  "Sir Lancelot", "Dark Viking", "Cold Captain", "Night Owl", "Big Mike", "Texas Tom", "Lone Wolf", "Mr. Smooth",
+  "Gentle Giant", "Silver Fox", "Captain Jack", "Midnight Rider", "Desert Fox", "Iron Mike", "Lucky Luke", "Old Sport",
+  "Sea Dog", "Mountain Man", "The Professor", "Mr. Right",
+] as const;
+
+const INITIALS = "ABCDEFGHJKLMNPRSTVW";
+
+/** The name a fan shows on the platform: one of their own, a common one, a nickname, or just the handle. */
+function fanNameOf(label: string, index: number, handle: string): string {
+  const random = rng(`fan-name:${label}:${index}`);
+  const roll = random();
+  if (roll < 0.2) return handle;
+  if (roll < 0.25) return pick(random, COMMON_NAMES);
+  if (roll < 0.3) return pick(random, NICKNAMES);
+  const first = pick(random, FIRST_NAMES);
+  return roll < 0.5 ? first : `${first} ${INITIALS[Math.floor(random() * INITIALS.length)]}.`;
+}
+
+/**
+ * People who follow more than one page of a model: the first fans of the source
+ * page live on these too, under the same number, handle and name (one person on
+ * every screen of both apps). Each page keeps its own money: only who the fan
+ * is changes, not how much this page's fan spent.
+ */
+const SHARED_FANS: Readonly<Record<string, { from: string; count: number }>> = {
+  "mia-2": { from: "mia-1", count: 12 },
+  "mia-3": { from: "mia-1", count: 12 },
+  "nova-1": { from: "mia-1", count: 4 },
+  "mia-vip-of": { from: "mia-of", count: 3 },
+};
+
+/** A page's fans as one world: the shared people from their source page, a nickname («Cold Captain») to one fan of a page. */
+function asOneWorld(label: string, own: DemoFan[]): DemoFan[] {
+  const shared = SHARED_FANS[label];
+  const source = shared ? demoFans(shared.from).slice(0, shared.count) : [];
+  const nicknames = new Set<string>();
+  return own.map((fan, index) => {
+    const person = source[index];
+    const one = person ? { ...fan, platformUserId: person.platformUserId, username: person.username, displayName: person.displayName } : fan;
+    if (!one.displayName.includes(" ") || one.displayName === one.username) return one;
+    if (!nicknames.has(one.displayName)) {
+      nicknames.add(one.displayName);
+      return one;
+    }
+    return { ...one, displayName: one.username };
+  });
+}
+
+/**
+ * What Hub knows of a fan's profile, as its answers carry it: the handle, and a
+ * name only when it is not the handle itself. A few fans (≈ 3 %) are known by
+ * their number only — no name, no handle: the screens show «фан ·0120».
+ */
+export function demoFanProfile(fan: Pick<DemoFan, "platformUserId" | "username" | "displayName">): { username: string | null; displayName: string | null } {
+  if (hashString(`profile:${fan.platformUserId}`) % 100 < 3) return { username: null, displayName: null };
+  return { username: fan.username, displayName: fan.displayName === fan.username ? null : fan.displayName };
+}
 
 const COUNTRIES = ["US", "US", "US", "US", "GB", "CA", "DE", "AU", "NL", "SE"] as const;
 
@@ -200,10 +275,12 @@ export function demoFans(label: string): DemoFan[] {
     const lastPurchaseDaysAgo = buyer ? Math.min(firstSeenDaysAgo, Math.round(between(random, 0, 1) ** 2 * 120)) : null;
     const isSubscriber = source?.platform === "onlyfans" ? true : random() < 0.35;
     const id = String(hashString(`${label}:${index}`)).padStart(10, "7");
+    // The old draw of a name stays in the stream, so every fan's money after it stays put; the name has its own (fanNameOf).
+    if (random() < 0.7) random();
     fans.push({
       platformUserId: source?.platform === "fansly" ? `7${id}${String(index).padStart(7, "0")}` : `${200000 + (hashString(id) % 800000)}`,
       username: `${stem}${suffix}`,
-      displayName: random() < 0.7 ? pick(random, DISPLAY_NAMES) : `${stem}${suffix}`,
+      displayName: fanNameOf(label, index, `${stem}${suffix}`),
       totalSpent,
       spent30d: lastPurchaseDaysAgo !== null && lastPurchaseDaysAgo <= 30 ? Math.round(totalSpent * between(random, 0.05, 0.6) * 100) / 100 : 0,
       purchases: buyer ? Math.max(1, Math.round(totalSpent / between(random, 8, 30))) : 0,
@@ -218,8 +295,9 @@ export function demoFans(label: string): DemoFan[] {
     });
   }
   fans.sort((left, right) => right.totalSpent - left.totalSpent);
-  fanCache.set(label, fans);
-  return fans;
+  const world = asOneWorld(label, fans);
+  fanCache.set(label, world);
+  return world;
 }
 
 export function demoFan(label: string, platformUserId: string): DemoFan | undefined {

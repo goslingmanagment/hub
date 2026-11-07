@@ -2,8 +2,8 @@ import { CircleCheck } from "lucide-react";
 import { Fragment, useEffect, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useLocation, useNavigate, useSearchParams } from "react-router";
-import { Button, EmptyState, ErrorState, Notice, Section, Skeleton, Table, type Column } from "@agency_hub_core/ui";
-import { ruPlural } from "@agency_hub_core/ui/plural";
+import { EmptyState, ErrorState, Section, Skeleton, Table, type Column } from "@agency_hub_core/ui";
+import { decisionParts, decisionsElsewhereText, decisionsFailedText, type DecisionQueue } from "@/shared/decisions";
 import { kernel } from "@/shared/hub";
 import { useMe } from "@/shared/useMe";
 import { usePageFilter } from "@/shared/usePageFilter";
@@ -39,7 +39,7 @@ export function DecisionsScreen() {
 
   const fans: FanRefOnPage[] = [
     ...(view.disputes ? [...view.disputes.open, ...view.disputes.settled].flatMap((one) => (one.fanRef === null ? [] : [{ pageLabel: one.pageLabel, fanRef: one.fanRef }])) : []),
-    ...(view.customs ? [...view.customs.paid, ...view.customs.ordered] : []),
+    ...(view.customs ? [...view.customs.paid, ...view.customs.ordered, ...view.customs.other] : []),
     ...(view.held ? view.held.items : []),
   ];
   const fanOf = useFanNames(fans);
@@ -63,27 +63,26 @@ export function DecisionsScreen() {
   const openDispute = foundDispute ?? (saleRef && lastDispute.current?.saleRef === saleRef ? lastDispute.current : undefined);
   const openSend = foundSend ?? (attemptId && lastSend.current?.attemptId === attemptId ? lastSend.current : undefined);
 
-  const counts = {
-    disputes: view.disputes?.open.length ?? 0,
-    customs: view.customs?.paid.length ?? 0,
-    held: view.held?.total ?? 0,
-  };
   const failed = {
     disputes: isOwner && decisions.disputes.isError && !view.disputes,
     customs: decisions.customs.isError && !view.customs,
     held: decisions.held.isError && !view.held,
   };
   const anyFailed = failed.disputes || failed.customs || failed.held;
-  const waiting = counts.disputes + counts.customs + counts.held;
+  // The counts of this page (or of all), in the words the menu and Смены use (D17): a queue that did not answer is
+  // null, never a zero. A team lead has no disputes to read: theirs is a zero, not a failure.
+  const counts = {
+    disputes: !isOwner ? 0 : view.disputes ? view.disputes.open.length : null,
+    customs: view.customs ? view.customs.paid.length : null,
+    held: view.held ? view.held.total : null,
+    failed: (["disputes", "customs", "held"] as const).filter((queue) => failed[queue]) as DecisionQueue[],
+  };
+  const waiting = (counts.disputes ?? 0) + (counts.customs ?? 0) + (counts.held ?? 0);
   const elsewhere = (view.disputes?.elsewhere ?? 0) + (view.customs?.elsewhere ?? 0) + (view.held?.elsewhere ?? 0);
-
   // The header's line is the screen's contents: each part jumps to its section (Р2, Р5).
-  const parts = [
-    counts.disputes > 0 && { id: "disputes", text: `${counts.disputes} ${ruPlural(counts.disputes, "спор", "спора", "споров")}` },
-    counts.customs > 0 && { id: "customs", text: `${counts.customs} ${ruPlural(counts.customs, "кастом оплачен и не отдан", "кастома оплачены и не отданы", "кастомов оплачены и не отданы")}` },
-    counts.held > 0 && { id: "held", text: `${counts.held} ${ruPlural(counts.held, "зависшая отправка", "зависшие отправки", "зависших отправок")}` },
-  ].filter((part) => part !== false);
-  const unanswered = [failed.disputes && "споры", failed.customs && "кастомы", failed.held && "отправки"].filter(Boolean);
+  const parts = decisionParts(counts, location.search);
+  const failedText = decisionsFailedText(counts);
+  const elsewhereText = page !== null ? decisionsElsewhereText(elsewhere) : null;
 
   // A link with an anchor (`/decisions#held`, the «Ждут решения» line of Смены) lands on its section once the
   // queues have answered: before that the section is not there yet. The sticky header is minded by scroll-margin.
@@ -105,27 +104,30 @@ export function DecisionsScreen() {
       pageFilter
       meta={decisions.loading ? <Skeleton width={260} /> : (
         <>
-          {waiting > 0 && (
+          {parts.length > 0 ? "Ждут вашего решения: " : page !== null && !anyFailed ? `На ${page} решений нет` : ""}
+          {parts.map((part, index) => (
+            <Fragment key={part.queue}>
+              {index > 0 && " · "}
+              <a
+                href={`#${part.queue}`}
+                className="decisions-jump"
+                onClick={(event) => {
+                  event.preventDefault();
+                  jump(part.queue);
+                }}
+              >
+                {part.text}
+              </a>
+            </Fragment>
+          ))}
+          {failedText !== null && <>{parts.length > 0 || page !== null ? " · " : ""}{failedText}</>}
+          {/* The rest of the team's decisions, when a page is picked: a quiet tail that shows them all (D17). */}
+          {elsewhereText !== null && (
             <>
-              Ждут вашего решения:{" "}
-              {parts.map((part, index) => (
-                <Fragment key={part.id}>
-                  {index > 0 && " · "}
-                  <a
-                    href={`#${part.id}`}
-                    className="decisions-jump"
-                    onClick={(event) => {
-                      event.preventDefault();
-                      jump(part.id);
-                    }}
-                  >
-                    {part.text}
-                  </a>
-                </Fragment>
-              ))}
+              {" · "}
+              <button type="button" className="decisions-jump decisions-elsewhere" onClick={() => setPage(null)}>{elsewhereText}</button>
             </>
           )}
-          {unanswered.length > 0 && <>{waiting > 0 ? " · " : ""}не пришли: {unanswered.join(", ")}</>}
         </>
       )}
       updatedAt={decisions.updatedAt}
@@ -140,15 +142,9 @@ export function DecisionsScreen() {
     <>
       {header}
       <div className="wb-content">
-        {page !== null && elsewhere > 0 && (
-          <Notice action={<Button size="sm" onClick={() => setPage(null)}>Показать все страницы</Button>}>
-            Показана только {page}. На других страницах ещё {elsewhere} {ruPlural(elsewhere, "решение", "решения", "решений")}.
-          </Notice>
-        )}
-
         {decisions.loading ? (
           <Section title={<Skeleton width={220} height={24} />}>
-            <Table label="Решения загружаются" columns={SKELETON_COLUMNS} rows={[]} rowKey={() => ""} loading skeletonRows={3} skeletonLines={2} />
+            <Table label="Решения загружаются" columns={SKELETON_COLUMNS} rows={[]} rowKey={() => ""} loading skeletonRows={3} skeletonLines={2} className="decisions-skeleton" />
           </Section>
         ) : (
           <>
@@ -202,7 +198,7 @@ export function DecisionsScreen() {
               {view.customs && view.customs.paid.length === 0 && (
                 <CustomsFolds {...view.customs} platformOf={platformOf} fanOf={fanOf} userIdOf={userIdOf} />
               )}
-              <ResolvedJournal page={page} platformOf={platformOf} fanOf={fanOf} />
+              <ResolvedJournal page={page} platformOf={platformOf} />
             </div>
           </>
         )}
@@ -230,11 +226,11 @@ export function DecisionsScreen() {
   );
 }
 
-/** The skeleton of a queue: the shape of its rows before the first answer. */
+/** The skeleton of a queue: the shape of its rows before the first answer — a fan and its page, what, who, when, the arrow. */
 const SKELETON_COLUMNS: Column<never>[] = [
-  { key: "when", header: "Когда", width: 170, cell: () => null },
-  { key: "sum", header: "Сумма", numeric: true, width: 120, cell: () => null },
-  { key: "fan", header: "Фан", width: 260, cell: () => null },
+  { key: "fan", header: "Фан", width: 220, cell: () => null },
   { key: "what", header: "Что", cell: () => null },
+  { key: "who", header: "Кто", width: 180, cell: () => null },
+  { key: "when", header: "Когда", width: 200, cell: () => null },
   { key: "go", header: "", width: 44, cell: () => null },
 ];

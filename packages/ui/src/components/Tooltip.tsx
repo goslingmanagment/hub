@@ -76,6 +76,8 @@ function TooltipAroundElement({ content, children, side = "top", align = "center
         aria-describedby={open ? id : undefined}
         onMouseEnter={show}
         onMouseLeave={hide}
+        // A press means the reader moved on (a row opens a panel): the hint must not stay over what opened.
+        onPointerDown={hide}
         onFocus={() => setOpen(true)}
         onBlur={hide}
       >

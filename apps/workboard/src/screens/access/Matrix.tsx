@@ -19,12 +19,17 @@ export function personStatus(user: AdminUser): PersonStatus {
   return status === "disabled" ? "disabled" : status === "invited" ? "invited" : "away";
 }
 
-/** «Чаттер · был 3 ч назад», «Тимлид · ещё не входил», «Чаттер · был 26 окт.». */
+/**
+ * «Чаттер · в расширении 3 мин назад», «Тимлид · в расширение не входил»,
+ * «Чаттер · в расширении 26 окт.». Hub's `lastActiveAt` is the last use of the
+ * person's sign-in on a device (the extension, the app) — a fact of access,
+ * said as one: not «был», which «Люди» keep for shifts (С7).
+ */
 export function personHint(user: AdminUser): string {
   const role = ROLE_LABEL[user.role as AccessRole] ?? user.role;
   if (user.disabledAt) return `${role} · отключён ${whenWords(user.disabledAt)}`;
   if (user.registrationState === "invited") return `${role} · ждёт регистрации`;
-  return `${role} · ${user.lastActiveAt ? `был ${whenWords(user.lastActiveAt)}` : "ещё не входил"}`;
+  return `${role} · ${user.lastActiveAt ? `в расширении ${whenWords(user.lastActiveAt)}` : "в расширение не входил"}`;
 }
 
 function ModelCell({ user, model, assigned, access }: {
@@ -80,7 +85,7 @@ function PageCell({ user, page, has, access, start }: { user: AdminUser; page: A
   );
 }
 
-export function AccessMatrix({ groups, owners, pages, access, selectedId, onOpenPerson }: {
+export function AccessMatrix({ groups, owners, pages, access, selectedId, flashId = null, onOpenPerson }: {
   /** People in groups by their state: «В команде», «Ждут регистрации». */
   groups: ReadonlyArray<{ key: string; title: string; users: readonly AdminUser[] }>;
   /** The owner: the last row, no cells — sees every page. */
@@ -88,6 +93,8 @@ export function AccessMatrix({ groups, owners, pages, access, selectedId, onOpen
   pages: readonly AdminPage[];
   access: PageAccess;
   selectedId: number | null;
+  /** A row to light for a moment: the person whose panel sent the owner here («Изменить в таблице», Д-н1). */
+  flashId?: number | null;
   onOpenPerson: (userId: number) => void;
 }) {
   const models = pagesByModel(pages);
@@ -129,7 +136,14 @@ export function AccessMatrix({ groups, owners, pages, access, selectedId, onOpen
             {group.users.map((user) => {
               const assigned = new Set(user.assignedPages.map((page) => page.label));
               return (
-                <tr key={user.id} className="access-matrix__row" aria-selected={selectedId === user.id} data-selected={selectedId === user.id || undefined}>
+                <tr
+                  key={user.id}
+                  id={`access-row-${user.id}`}
+                  className="access-matrix__row"
+                  aria-selected={selectedId === user.id}
+                  data-selected={selectedId === user.id || undefined}
+                  data-flash={flashId === user.id || undefined}
+                >
                   {personCell(user)}
                   {models.map((model) => (
                     <ModelRow key={model.modelSlug} user={user} model={model} assigned={assigned} access={access} />

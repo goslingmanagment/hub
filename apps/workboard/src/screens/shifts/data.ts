@@ -17,7 +17,7 @@
  *     demo they equal the review of the same shift). It knows no page filter and is slow on a whole team: the
  *     quality columns fill in later;
  *   - `teamAuthorship` { days ≤ 7 } — messages without an author (a data check, shown only for a current period);
- *   - waiting decisions: `useDecisionCounts()` from src/shared/decisions.ts.
+ *   - waiting decisions: `useDecisionCounts({ page })` from src/shared/decisions.ts (the line WaitingLine.tsx).
  * Query keys start with "shifts". Polls only while the tab is visible (queryClient's default):
  * a minute for «now» and a current period, never for a closed one.
  */
@@ -25,6 +25,7 @@ import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { CHATTER_SHIFT_PAGE_MIN_MESSAGES, type KernelOperationResponse } from "@agency_hub_core/contracts";
 import { addDays, daysInRange, moscowDayEnd, moscowDayOf, moscowDayStart, type MoscowDay } from "@agency_hub_core/ui/moscow";
 import { periodChunks, type ResolvedPeriod } from "@agency_hub_core/ui/period";
+import { shiftWhen, type ShiftWhen } from "@agency_hub_core/ui/shiftWhen";
 import { kernel } from "@/shared/hub";
 import { qualityOfChatterNumbers, type ShiftQuality } from "@/shared/metrics";
 
@@ -67,10 +68,11 @@ export interface JournalShift {
   startedAt: string;
   endedAt: string;
   ongoing: boolean;
-  /** The Moscow day holding most of the shift: the payout sheet's day, the grid's column. */
+  /** The Moscow day holding most of the shift: the payout sheet's day, the grid's column (Hub's, = `when.payDay`). */
   date: MoscowDay;
+  /** Its one label and duration (D12): «вс, 1–2 нояб. 21:00–05:49», «8 ч 21 мин», the pauses only for a hint. */
+  when: ShiftWhen;
   workedMinutes: number;
-  pauseMinutes: number;
   pages: ShiftPage[];
   messages: number;
   salesNetMills: number;
@@ -121,8 +123,12 @@ export interface GridRow {
   totals: Totals;
   /** The window just before (cut at the same point while this one goes on); null — Hub did not have it all. */
   previous: Totals | null;
-  /** Worked now and had no window before, though the team had one. */
-  isNew: boolean;
+  /**
+   * Worked now, the team has a window before but Hub has none for them: it began
+   * to see them after that window began (half of it, or only now). Not «new»:
+   * nothing to compare with.
+   */
+  unmatched: boolean;
   /** No shift in this window: only their window before is shown. */
   gone: boolean;
   cells: GridCell[];
@@ -161,8 +167,8 @@ export interface NowShift {
   userId: number;
   username: string;
   startedAt: string;
-  /** Since the shift began, pauses included. */
-  sinceMinutes: number;
+  /** Its label and the time worked so far (D12): «18:02 – сейчас», «3 ч 10 мин», the pauses only for a hint. */
+  when: ShiftWhen;
   workedMinutes: number;
   pages: string[];
   salesNetMills: number;
@@ -183,12 +189,6 @@ export interface NowState {
 export function perHourMills(netMills: number, minutes: number): number | null {
   if (minutes <= 0) return null;
   return Number((BigInt(netMills) * 60n) / BigInt(minutes));
-}
-
-/** The change in percent; null when there is nothing to compare with. */
-export function changePct(current: number | null | undefined, before: number | null | undefined): number | null {
-  if (current === null || current === undefined || before === null || before === undefined || before === 0) return null;
-  return ((current - before) / before) * 100;
 }
 
 function median(values: readonly number[]): number | null {
@@ -217,10 +217,6 @@ function pagesOf(shift: Pick<SalesShift, "pages">): ShiftPage[] {
   return shift.pages
     .filter((page) => page.messages > 0)
     .map((page) => ({ pageLabel: page.pageLabel, messages: page.messages, counts: page.messages >= CHATTER_SHIFT_PAGE_MIN_MESSAGES }));
-}
-
-function pauseMinutesOf(shift: Pick<SalesShift, "pauses">): number {
-  return shift.pauses.reduce((sum, pause) => sum + Math.max(0, Math.round((Date.parse(pause.to) - Date.parse(pause.from)) / MINUTE)), 0);
 }
 
 /**
@@ -260,8 +256,8 @@ function journalOf(sales: SalesResponse, numbers: NumbersResponse | undefined): 
         endedAt: shift.endedAt,
         ongoing: shift.ongoing,
         date: shift.date,
+        when: shiftWhen(shift),
         workedMinutes: shift.workedMinutes,
-        pauseMinutes: pauseMinutesOf(shift),
         pages: pagesOf(shift),
         messages: shift.authoredMessages,
         salesNetMills: shift.salesNetMills,
@@ -382,12 +378,6 @@ export function muchAi(quality: ShiftQuality, norms: TeamNorms): boolean {
   return value !== null && norms.aiUneditedShare !== null && value >= OUTLIER.aiFloor && value >= norms.aiUneditedShare + OUTLIER.aiAbovePoints;
 }
 
-/**
- * Below this the window before is too small for a percent to mean anything
- * («+100 %» from $15.99): the row says «было $15.99» instead.
- */
-export const COMPARE_FLOOR_MILLS = 50_000;
-
 // ─────────────────────────────────────────────────────────── The period's model
 
 export function buildModel(sales: SalesResponse, numbers: NumbersResponse | undefined, window: ShiftsWindow): ShiftsModel {
@@ -401,7 +391,7 @@ export function buildModel(sales: SalesResponse, numbers: NumbersResponse | unde
     username: "Вся команда",
     totals: totalsOf(sales.team),
     previous: sales.previous === null ? null : totalsOf(sales.previous),
-    isNew: false,
+    unmatched: false,
     gone: false,
     cells: cellsOf(columns, sales.team.daily, journal),
   };
@@ -410,7 +400,7 @@ export function buildModel(sales: SalesResponse, numbers: NumbersResponse | unde
     username: chatter.username,
     totals: totalsOf(chatter),
     previous: chatter.previous === null ? null : totalsOf(chatter.previous),
-    isNew: comparable && chatter.previous === null && chatter.shifts > 0,
+    unmatched: comparable && chatter.previous === null && chatter.shifts > 0,
     gone: chatter.shifts === 0,
     cells: cellsOf(columns, chatter.daily, journal.filter((shift) => shift.userId === chatter.userId)),
   }));
@@ -494,7 +484,8 @@ export function useNowOnShift(page: string | null) {
           userId: shift.userId,
           username: shift.username,
           startedAt: shift.startedAt,
-          sinceMinutes: Math.max(0, Math.round((now - Date.parse(shift.startedAt)) / MINUTE)),
+          // Going on: up to Hub's «now», the pauses so far only in the hint.
+          when: shiftWhen({ startedAt: shift.startedAt, endedAt: Math.max(now, Date.parse(shift.endedAt)), ongoing: true, workedMinutes: shift.workedMinutes }),
           workedMinutes: shift.workedMinutes,
           pages: pagesOf(shift).map((one) => one.pageLabel),
           salesNetMills: shift.salesNetMills,

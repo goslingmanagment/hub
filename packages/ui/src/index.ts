@@ -21,7 +21,7 @@ export { Button, IconButton, LinkButton, type ButtonProps, type ButtonSize, type
 export { Card, Section, type CardProps, type SectionProps } from "./components/Card.js";
 export { Chip, type ChipProps } from "./components/Chip.js";
 export { cx } from "./components/cx.js";
-export { Delta, type DeltaProps } from "./components/Delta.js";
+export { DELTA_SMALL_BASE_COUNT, DELTA_SMALL_BASE_MILLS, Delta, deltaText, readDelta, type DeltaProps, type DeltaReading, type DeltaRule } from "./components/Delta.js";
 export { Disclosure } from "./components/Disclosure.js";
 export { Drawer, SidePanel, type DrawerProps, type PanelSize, type SidePanelProps } from "./components/Drawer.js";
 export { Duration } from "./components/Duration.js";

@@ -38,12 +38,14 @@ export function HowItCounts({ page }: { page: string | null }) {
           периоду прямо перед выбранным; у идущей недели — к прошлой на это же время.
         </p>
         <p>
-          Три числа качества считаются так же, как в разборе смены, и у одной смены везде одинаковы.
-          {" "}<b>{METRICS.reply.label}</b>: {lower(METRICS.reply.hint)}
-          {" "}<b>{METRICS.unanswered.label}</b>: {lower(METRICS.unanswered.hint)} У идущей смены — те, кто ждёт сейчас.
-          {" "}<b>{METRICS.aiUnedited.label}</b>: {lower(METRICS.aiUnedited.hint)}
-          {page ? " С выбранной страницей эти три числа — по всей смене, на всех её страницах." : ""}
+          Три числа качества считаются так же, как в разборе смены, и у одной смены везде одинаковы
+          {page ? ". С выбранной страницей они — по всей смене, на всех её страницах" : ""}:
         </p>
+        <ul className="shifts-how__terms">
+          <li><b>{METRICS.reply.label}</b> — {lower(METRICS.reply.hint)}</li>
+          <li><b>{METRICS.unanswered.label}</b> — {lower(METRICS.unanswered.hint)} У идущей смены — те, кто ждёт сейчас.</li>
+          <li><b>{METRICS.aiUnedited.label}</b> — {lower(METRICS.aiUnedited.hint)}</li>
+        </ul>
         <p>
           <b>Выделено</b> то, что заметно хуже обычной смены всей команды за этот период (на всех страницах): ответ вдвое
           дольше обычного и дольше {OUTLIER.replyFloorSeconds / 60} минут; без ответа к концу вдвое больше обычного и от

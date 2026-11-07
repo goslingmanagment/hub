@@ -181,4 +181,21 @@
   .ui-table tr.payouts-block-start > td {
     border-top: 1px solid var(--ui-line);
   }
+
+  /* ----------------------------------------------------------- Round 2 */
+
+  /* The notices over the table end where a fitted table ends (В-н6); a full-width table leaves them full width. */
+  .payouts-main.ui-section--fit > .payouts-notices {
+    max-width: var(--ui-section-fit);
+  }
+
+  /* «нет данных»: the sales of the shifts were not read — quiet words with a hint, never a zero or a dash (В-н5). */
+  .payouts-unknown {
+    color: var(--ui-text-2);
+  }
+
+  /* «без alex.k» under a total: the total is bold, its note is not. */
+  .ui-table tfoot .payouts-sub {
+    font-weight: 400;
+  }
 }

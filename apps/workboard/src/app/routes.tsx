@@ -1,10 +1,21 @@
-import { Navigate, createBrowserRouter, useLocation, useParams, type RouteObject } from "react-router";
+import { Navigate, createBrowserRouter, useLocation, useParams, type Params, type RouteObject } from "react-router";
 import { AuthGate } from "./AuthGate.js";
 import { NotFoundScreen } from "./NotFound.js";
 import { Shell } from "./Shell.js";
 
 /** The router's basename: Vite's `base` without its last slash (src/base.ts is the one constant). */
 export const BASENAME = import.meta.env.BASE_URL.replace(/\/$/, "") || "/";
+
+/**
+ * A route's `handle`: what makes a new instance of its screen besides the route
+ * (Shell keys the screen's error boundary by both). Without it, every address
+ * of the route is one screen that stays mounted — the tabs of Что продаёт; the
+ * person's card is one screen per person (its tabs keep it), the review one per
+ * shift.
+ */
+export interface ScreenHandle {
+  screenKey?: (params: Params) => string;
+}
 
 /** `/` is Смены, with whatever the address carried. */
 function HomeRedirect() {
@@ -36,10 +47,18 @@ function SalesRedirect() {
 const screens: RouteObject[] = [
   { index: true, element: <HomeRedirect /> },
   { path: "shifts", lazy: () => import("../screens/shifts/index.js").then((m) => ({ Component: m.ShiftsScreen })) },
-  { path: "shifts/:userId/:shiftStart", lazy: () => import("../screens/review/index.js").then((m) => ({ Component: m.ReviewScreen })) },
+  {
+    path: "shifts/:userId/:shiftStart",
+    handle: { screenKey: (params) => `${params.userId ?? ""}/${params.shiftStart ?? ""}` } satisfies ScreenHandle,
+    lazy: () => import("../screens/review/index.js").then((m) => ({ Component: m.ReviewScreen })),
+  },
   { path: "people", lazy: () => import("../screens/people/index.js").then((m) => ({ Component: m.PeopleScreen })) },
   { path: "people/:userId/shifts", element: <PersonShiftsRedirect /> },
-  { path: "people/:userId/:tab?", lazy: () => import("../screens/people/index.js").then((m) => ({ Component: m.PersonScreen })) },
+  {
+    path: "people/:userId/:tab?",
+    handle: { screenKey: (params) => params.userId ?? "" } satisfies ScreenHandle,
+    lazy: () => import("../screens/people/index.js").then((m) => ({ Component: m.PersonScreen })),
+  },
   { path: "sales", element: <SalesRedirect /> },
   { path: "sales/:tab", lazy: () => import("../screens/sales/index.js").then((m) => ({ Component: m.SalesScreen })) },
   { path: "decisions", lazy: () => import("../screens/decisions/index.js").then((m) => ({ Component: m.DecisionsScreen })) },

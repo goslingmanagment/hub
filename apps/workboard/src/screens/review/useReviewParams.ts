@@ -1,5 +1,5 @@
-import { useCallback, useMemo } from "react";
-import { useSearchParams } from "react-router";
+import { useCallback, useMemo, useRef } from "react";
+import { useLocation, useSearchParams } from "react-router";
 import { REVIEW_FILTERS, type ReviewFilter } from "./data.js";
 
 /**
@@ -12,6 +12,8 @@ import { REVIEW_FILTERS, type ReviewFilter } from "./data.js";
  *   `msg`   the message whose evidence is open;
  *   `page`  the app's page filter (usePageFilter's `?page=`), carried from the screen the shift was opened on.
  * Changes replace the address: stepping through chats does not fill the history.
+ * They keep the screen's router state — its «←» and the chain behind it (D16):
+ * «← alex.k» stays «← alex.k» after a click on a chat.
  */
 export interface ReviewParams {
   chat: string | null;
@@ -34,6 +36,10 @@ export type ReviewChange = Partial<{
 
 export function useReviewParams(): [ReviewParams, (change: ReviewChange) => void] {
   const [search, setSearch] = useSearchParams();
+  const location = useLocation();
+  // The state as the next change keeps it: «←» and its chain, without the one-time scroll request.
+  const kept = useRef<unknown>(undefined);
+  kept.current = withoutScroll(location.state);
   const params = useMemo<ReviewParams>(() => {
     const show = search.get("show");
     const span = /^(\d+)-(\d+)$/.exec(search.get("span") ?? "");
@@ -63,8 +69,14 @@ export function useReviewParams(): [ReviewParams, (change: ReviewChange) => void
       if ("msg" in change) put("msg", change.msg);
       if ("page" in change) put("page", change.page);
       return next;
-    }, { replace: true });
+    }, { replace: true, state: kept.current });
   }, [setSearch]);
 
   return [params, update];
+}
+
+function withoutScroll(state: unknown): unknown {
+  if (state === null || typeof state !== "object") return state;
+  const { restoreScroll: _once, ...rest } = state as { restoreScroll?: unknown };
+  return rest;
 }

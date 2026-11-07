@@ -11,8 +11,12 @@
  *   - Приветствия и охват: `teamGreetings` { days ≤ 31 }, `teamEmptyHours` { days ≤ 31 }.
  *
  * The period of the app (a week Mon–Sun, 14/30 days, a range) becomes the
- * smallest `days` that reaches its first day (`readWindow`): exact for any period
- * that ends today; an earlier one reads up to today, and the screen says so.
+ * smallest `days` that reaches its first day (`readWindow`). A period that ends
+ * before today is that read minus the read of the days after it (both at once,
+ * one answer): every count here belongs to one moment — a message, a reply, a
+ * pick, a subscription, a clock hour — so the difference is exactly the period
+ * (X2). What is not a sum (a median, distinct fans) the difference cannot give:
+ * such a read says so (`partial`) and the screen leaves those numbers out.
  * The page filter narrows the pages here, in the browser (Hub reads every page
  * the viewer reaches); a chatter's numbers cover all pages (Hub has no
  * chatter × page split yet). Both are phase-2 asks (`from`/`to`, `page`).
@@ -33,24 +37,70 @@ import { kernel } from "@/shared/hub";
 export const MAX_DAYS = { sales: 31, coverage: 31, winBack: 90 } as const;
 
 export interface ReadWindow {
-  /** What the operation gets. */
+  /** What the operation gets: whole Moscow days back from today, today included. */
   days: number;
-  /** The first Moscow day the read covers. */
+  /** A period that ends before today: the days after it, read too and taken away. Null: the period runs to today. */
+  minusDays: number | null;
+  /** The first Moscow day the numbers cover. */
   from: MoscowDay;
-  /** Today: every read here runs up to now. */
+  /** The last one: the period's last day (never after today). */
   to: MoscowDay;
-  /** The read covers exactly the period on screen. */
+  /** The numbers cover exactly the period on screen. */
   exact: boolean;
   /** The period starts earlier than Hub reads: its first days are left out. */
   clipped: boolean;
+  /** Nothing of the period is within Hub's reach: there is nothing to read. */
+  beyond: boolean;
 }
 
-/** The smallest `days` whose window starts on the period's first day (at most `maxDays`). Pure. */
+/** The read that gives the period: from its first day (at most `maxDays` back), minus the days after it. Pure. */
 export function readWindow(period: Pick<ResolvedPeriod, "from" | "to">, today: MoscowDay, maxDays: number): ReadWindow {
   const wanted = daysInRange(period.from, today);
   const days = Math.max(1, Math.min(wanted, maxDays));
   const from = addDays(today, -(days - 1));
-  return { days, from, to: today, exact: from === period.from && period.to === today, clipped: wanted > maxDays };
+  const to = period.to < today ? period.to : today;
+  const beyond = to < from;
+  const after = to < today ? daysInRange(addDays(to, 1), today) : 0;
+  return {
+    days,
+    minusDays: after > 0 && !beyond ? after : null,
+    from,
+    to: beyond ? from : to,
+    exact: !beyond && from === period.from && to === period.to,
+    clipped: wanted > maxDays,
+    beyond,
+  };
+}
+
+/** The window of an answer: the read's own when it runs to today, else up to the day after the period. Pure. */
+function cutTo(whole: { to: string }, after: { from: string }): string {
+  return new Date(Math.min(Date.parse(whole.to), Date.parse(after.from) - 1)).toISOString();
+}
+
+const nonNegative = (value: number) => Math.max(0, value);
+
+/** `a − b` of two sums of mills, never below zero. Pure. */
+function millsMinus(a: number, b: number): number {
+  const left = millsFromInteger(a) - millsFromInteger(b);
+  return left > 0n ? millsToNumber(left) : 0;
+}
+
+/**
+ * One read of a window: for a period up to today the operation itself; for an
+ * earlier one, the read from its first day and the read of the days after it,
+ * fetched together (one moment, one answer), the second taken away.
+ */
+function useWindowRead<T>(name: string, window: ReadWindow, read: (days: number) => Promise<T>, minus: (whole: T, after: T) => T, enabled = true) {
+  return useQuery({
+    queryKey: ["sales", name, window.days, window.minusDays] as const,
+    queryFn: async () => {
+      if (window.minusDays === null) return read(window.days);
+      const [whole, after] = await Promise.all([read(window.days), read(window.minusDays)]);
+      return minus(whole, after);
+    },
+    placeholderData: keepPreviousData,
+    enabled: enabled && !window.beyond,
+  });
 }
 
 // ------------------------------------------------------------- Shared shapes
@@ -73,12 +123,13 @@ export const MIN_SAMPLE = { ppv: 20, replies: 20, winBack: 10, greetings: 10 } a
 
 // --------------------------------------------------------------------- Price
 
+/** The labels never break inside: «от\u00a0$100» stays one piece at the end of a line. */
 export const PRICE_BUCKETS = [
-  { key: "upTo10", label: "дешевле $10" },
+  { key: "upTo10", label: "дешевле\u00a0$10" },
   { key: "10to25", label: "$10–25" },
   { key: "25to50", label: "$25–50" },
   { key: "50to100", label: "$50–100" },
-  { key: "over100", label: "от $100" },
+  { key: "over100", label: "от\u00a0$100" },
 ] as const;
 
 export interface PpvCounts {
@@ -171,14 +222,6 @@ export function richerSmallPrice(cells: readonly PpvCell[], best: PpvCell | null
   return found;
 }
 
-/** The first PPV of a chat: the price it is bought most often at, among those with a fair sample (two at least). Pure. */
-export function firstPpvLead(cells: readonly PpvCell[]): PpvCell | null {
-  const fair = cells.filter((cell) => cell.sent >= MIN_SAMPLE.ppv);
-  if (fair.length < 2) return null;
-  const lead = fair.reduce((top, cell) => (cell.bought / cell.sent > top.bought / top.sent ? cell : top));
-  return lead.bought > 0 ? lead : null;
-}
-
 /** The share of PPVs sent at the cheapest price (до $10). Pure. */
 export function cheapShare(line: Pick<PpvLine, "total" | "byPrice">): number | null {
   const cheap = line.byPrice.find((cell) => cell.bucket === "upTo10");
@@ -223,12 +266,39 @@ export function priceView(data: PpvResponse, page: string | null): PriceView {
   return { from: data.from, to: data.to, all, pages, chatters, firstPpv };
 }
 
-export function useSalesPpv(days: number) {
-  return useQuery({
-    queryKey: ["sales", "ppv", days],
-    queryFn: () => kernel.teamSalesPpv({ query: { days } }),
-    placeholderData: keepPreviousData,
+type PpvTable = PpvResponse["pages"][number]["byPrice"];
+
+/** Bucket by bucket (by key), never below zero, a sale never above its sends. Pure. */
+function ppvMinus(whole: PpvTable, after: PpvTable): PpvTable {
+  return whole.map((cell) => {
+    const later = after.find((one) => one.bucket === cell.bucket);
+    if (!later) return cell;
+    const bought = nonNegative(cell.bought - later.bought);
+    return { bucket: cell.bucket, sent: Math.max(bought, nonNegative(cell.sent - later.sent)), bought, netMills: millsMinus(cell.netMills, later.netMills) };
   });
+}
+
+/** The PPVs of a period that ended before today: the read from its first day minus the days after it. Pure. */
+export function ppvMinusAfter(whole: PpvResponse, after: PpvResponse): PpvResponse {
+  const pages = whole.pages.flatMap((page) => {
+    const later = after.pages.find((one) => one.pageLabel === page.pageLabel);
+    if (!later) return [page];
+    const byPrice = ppvMinus(page.byPrice, later.byPrice);
+    const total = sumPpv(byPrice);
+    return total.sent === 0 ? [] : [{ ...page, total, byPrice, firstPpv: ppvMinus(page.firstPpv, later.firstPpv), withoutAuthor: Math.min(total.sent, nonNegative(page.withoutAuthor - later.withoutAuthor)) }];
+  });
+  const chatters = whole.chatters.flatMap((chatter) => {
+    const later = after.chatters.find((one) => one.userId === chatter.userId);
+    if (!later) return [chatter];
+    const byPrice = ppvMinus(chatter.byPrice, later.byPrice);
+    const total = sumPpv(byPrice);
+    return total.sent === 0 ? [] : [{ ...chatter, total, byPrice }];
+  });
+  return { ...whole, to: cutTo(whole, after), pages, chatters };
+}
+
+export function useSalesPpv(window: ReadWindow) {
+  return useWindowRead("ppv", window, (days) => kernel.teamSalesPpv({ query: { days } }), ppvMinusAfter);
 }
 
 // --------------------------------------------------------------------- Speed
@@ -317,12 +387,35 @@ export function speedView(data: RepliesResponse, page: string | null): SpeedView
   return { from: data.from, to: data.to, all: { key: "all", kind: "page", name: page ?? "Все страницы", userId: null, total: sumReplies(byDelay), byDelay }, pages, chatters };
 }
 
-export function useSalesReplies(days: number) {
-  return useQuery({
-    queryKey: ["sales", "replies", days],
-    queryFn: () => kernel.teamSalesReplies({ query: { days } }),
-    placeholderData: keepPreviousData,
+type ReplyTable = RepliesResponse["pages"][number]["byDelay"];
+
+function repliesMinus(whole: ReplyTable, after: ReplyTable): ReplyTable {
+  return whole.map((cell) => {
+    const later = after.find((one) => one.bucket === cell.bucket);
+    if (!later) return cell;
+    const bought = nonNegative(cell.bought - later.bought);
+    return { bucket: cell.bucket, replies: Math.max(bought, nonNegative(cell.replies - later.replies)), bought };
   });
+}
+
+/** The replies of a period that ended before today (the same rule as `ppvMinusAfter`). Pure. */
+export function repliesMinusAfter(whole: RepliesResponse, after: RepliesResponse): RepliesResponse {
+  const cut = <Line extends { byDelay: ReplyTable }>(line: Line, later: Line | undefined): Line[] => {
+    if (!later) return [line];
+    const byDelay = repliesMinus(line.byDelay, later.byDelay);
+    const total = sumReplies(byDelay);
+    return total.replies === 0 ? [] : [{ ...line, total, byDelay }];
+  };
+  return {
+    ...whole,
+    to: cutTo(whole, after),
+    pages: whole.pages.flatMap((page) => cut(page, after.pages.find((one) => one.pageLabel === page.pageLabel))),
+    chatters: whole.chatters.flatMap((chatter) => cut(chatter, after.chatters.find((one) => one.userId === chatter.userId))),
+  };
+}
+
+export function useSalesReplies(window: ReadWindow) {
+  return useWindowRead("replies", window, (days) => kernel.teamSalesReplies({ query: { days } }), repliesMinusAfter);
 }
 
 // ------------------------------------------------------------------ Win-back
@@ -472,13 +565,41 @@ export function maturedWeek(rows: readonly WinBackRow[], today: MoscowDay): { fr
 /** The read behind «the last matured week». */
 export const LAST_MATURED_DAYS = 14;
 
-export function useWinBackResults(days: number, enabled = true) {
-  return useQuery({
-    queryKey: ["sales", "win-back", days],
-    queryFn: () => kernel.teamWinBackResults({ query: { days } }),
-    placeholderData: keepPreviousData,
-    enabled,
+/** That read as a window: 14 days up to today. */
+export function lastMaturedWindow(today: MoscowDay): ReadWindow {
+  return { days: LAST_MATURED_DAYS, minusDays: null, from: addDays(today, -(LAST_MATURED_DAYS - 1)), to: today, exact: true, clipped: false, beyond: false };
+}
+
+/** The picks of a period that ended before today: row by row (approach × chatter), each count never below what follows from it. Pure. */
+export function winBackMinusAfter(whole: WinBackResponse, after: WinBackResponse): WinBackResponse {
+  const rows = whole.rows.flatMap((row) => {
+    const later = after.rows.find((one) => one.approachId === row.approachId && one.userId === row.userId);
+    if (!later) return [row];
+    const attempts = nonNegative(row.attempts - later.attempts);
+    if (attempts === 0) return [];
+    const sent = Math.min(attempts, nonNegative(row.sent - later.sent));
+    const matured72h = Math.min(sent, nonNegative(row.matured72h - later.matured72h));
+    const matured7d = Math.min(sent, nonNegative(row.matured7d - later.matured7d));
+    const matured30d = Math.min(sent, nonNegative(row.matured30d - later.matured30d));
+    return [{
+      ...row,
+      attempts,
+      sent,
+      matured72h,
+      replied72h: Math.min(matured72h, nonNegative(row.replied72h - later.replied72h)),
+      matured7d,
+      bought7d: Math.min(matured7d, nonNegative(row.bought7d - later.bought7d)),
+      matured30d,
+      spent30dMills: matured30d === 0 ? 0 : millsMinus(row.spent30dMills, later.spent30dMills),
+    }];
   });
+  return { ...whole, to: cutTo(whole, after), rows };
+}
+
+type WinBackResponse = KernelOperationResponse<"teamWinBackResults">;
+
+export function useWinBackResults(window: ReadWindow, enabled = true) {
+  return useWindowRead("win-back", window, (days) => kernel.teamWinBackResults({ query: { days } }), winBackMinusAfter, enabled);
 }
 
 const APPROACHES_KEY = ["sales", "win-back-approaches"] as const;
@@ -532,9 +653,84 @@ export interface GreetingsView {
   pages: GreetingsPage[];
   broadcasts: Broadcast[];
   totals: GreetingsTotals;
+  /** The read is a difference (a past period): the greetings' medians are not known. */
+  partial: boolean;
+  /** Hub's list holds its latest 100 broadcasts only: older ones of the period may be missing. */
+  listCut: boolean;
 }
 
-export function greetingsView(data: GreetingsResponse, page: string | null): GreetingsView {
+/** A read of greetings or empty hours: `partial` — a past period, where what is not a sum is unknown. */
+type WindowRead<T> = T & { partial?: boolean; listCut?: boolean };
+export type GreetingsRead = WindowRead<GreetingsResponse>;
+export type EmptyHoursRead = WindowRead<EmptyHoursResponse>;
+
+/** The greetings of a period that ended before today: the counts by subscription; the medians unknown. Pure. */
+export function greetingsMinusAfter(whole: GreetingsRead, after: GreetingsRead): GreetingsRead {
+  const cutoff = Date.parse(after.from);
+  const pages = whole.pages.flatMap((page) => {
+    const later = after.pages.find((one) => one.pageLabel === page.pageLabel);
+    if (!later) return [{ ...page, greetingMedianSeconds: null }];
+    const newSubscribers = nonNegative(page.newSubscribers - later.newSubscribers);
+    const greeted = Math.min(newSubscribers, nonNegative(page.greeted - later.greeted));
+    const deliveries = nonNegative(page.broadcasts.deliveries - later.broadcasts.deliveries);
+    const sent = nonNegative(page.broadcasts.sent - later.broadcasts.sent);
+    if (newSubscribers === 0 && sent === 0) return [];
+    return [{
+      ...page,
+      newSubscribers,
+      autoWelcomed: Math.min(newSubscribers, nonNegative(page.autoWelcomed - later.autoWelcomed)),
+      greeted,
+      greetingMedianSeconds: null,
+      repliedWithinHour: Math.min(greeted, nonNegative(page.repliedWithinHour - later.repliedWithinHour)),
+      boughtGreeted: Math.min(greeted, nonNegative(page.boughtGreeted - later.boughtGreeted)),
+      boughtNotGreeted: Math.min(newSubscribers - greeted, nonNegative(page.boughtNotGreeted - later.boughtNotGreeted)),
+      recent: Math.min(newSubscribers, nonNegative(page.recent - later.recent)),
+      broadcasts: {
+        sent,
+        deliveries,
+        replied: Math.min(deliveries, nonNegative(page.broadcasts.replied - later.broadcasts.replied)),
+        bought: Math.min(deliveries, nonNegative(page.broadcasts.bought - later.broadcasts.bought)),
+      },
+    }];
+  });
+  return {
+    ...whole,
+    to: cutTo(whole, after),
+    pages,
+    broadcasts: whole.broadcasts.filter((cast) => Date.parse(cast.sentAt) < cutoff),
+    partial: true,
+    listCut: whole.broadcasts.length >= BROADCASTS_MAX,
+  };
+}
+
+/** The empty hours of a period that ended before today: the hours by the clock; who wrote and waited unknown. Pure. */
+export function emptyHoursMinusAfter(whole: EmptyHoursRead, after: EmptyHoursRead): EmptyHoursRead {
+  const cutoff = Date.parse(after.from);
+  const pages = whole.pages.map((page) => {
+    // The page's first shift came after the period: nothing of it was counted.
+    if (page.shiftsSince === null || Date.parse(page.shiftsSince) >= cutoff) {
+      return { ...page, shiftsSince: null, hoursWithFans: 0, emptyHours: 0, emptyByHour: page.emptyByHour.map(() => 0), fans: 0, payers: 0, waitedOverHour: 0, waitedNetMills: 0 };
+    }
+    const later = after.pages.find((one) => one.pageLabel === page.pageLabel);
+    const hoursWithFans = nonNegative(page.hoursWithFans - (later?.hoursWithFans ?? 0));
+    return {
+      ...page,
+      hoursWithFans,
+      emptyHours: Math.min(hoursWithFans, nonNegative(page.emptyHours - (later?.emptyHours ?? 0))),
+      emptyByHour: page.emptyByHour.map((value, hour) => nonNegative(value - (later?.emptyByHour[hour] ?? 0))),
+      fans: 0,
+      payers: 0,
+      waitedOverHour: 0,
+      waitedNetMills: 0,
+    };
+  });
+  return { ...whole, to: cutTo(whole, after), pages, partial: true };
+}
+
+/** Hub's longest broadcast list (contracts: TEAM_BROADCASTS_MAX). */
+export const BROADCASTS_MAX = 100;
+
+export function greetingsView(data: GreetingsRead, page: string | null): GreetingsView {
   const pages = data.pages.filter((one) => page === null || one.pageLabel === page);
   const totals: GreetingsTotals = {
     newSubscribers: pages.reduce((sum, one) => sum + one.newSubscribers, 0),
@@ -544,7 +740,15 @@ export function greetingsView(data: GreetingsResponse, page: string | null): Gre
     boughtNotGreeted: pages.reduce((sum, one) => sum + one.boughtNotGreeted, 0),
     recent: pages.reduce((sum, one) => sum + one.recent, 0),
   };
-  return { from: data.from, to: data.to, pages, broadcasts: data.broadcasts.filter((one) => page === null || one.pageLabel === page), totals };
+  return {
+    from: data.from,
+    to: data.to,
+    pages,
+    broadcasts: data.broadcasts.filter((one) => page === null || one.pageLabel === page),
+    totals,
+    partial: data.partial === true,
+    listCut: data.listCut === true || data.broadcasts.length >= BROADCASTS_MAX,
+  };
 }
 
 export interface EmptyHoursLine extends EmptyHoursPage {
@@ -558,11 +762,13 @@ export interface CoverageView {
   pages: EmptyHoursLine[];
   /** Pages counted (with shifts in the extension), together. */
   totals: { hoursWithFans: number; emptyHours: number; fans: number; payers: number; waitedOverHour: number; waitedNetMills: number };
+  /** The read is a difference (a past period): the hours are known, who wrote and waited in them is not. */
+  partial: boolean;
 }
 
 const DAY_MS = 86_400_000;
 
-export function coverageView(data: EmptyHoursResponse, page: string | null): CoverageView {
+export function coverageView(data: EmptyHoursRead, page: string | null): CoverageView {
   const windowStart = Date.parse(data.from);
   const windowEnd = Date.parse(data.to);
   const pages = data.pages
@@ -584,21 +790,14 @@ export function coverageView(data: EmptyHoursResponse, page: string | null): Cov
       waitedOverHour: counted.reduce((sum, one) => sum + one.waitedOverHour, 0),
       waitedNetMills: millsToNumber(sumMills(counted.map((one) => one.waitedNetMills))),
     },
+    partial: data.partial === true,
   };
 }
 
-export function useGreetings(days: number) {
-  return useQuery({
-    queryKey: ["sales", "greetings", days],
-    queryFn: () => kernel.teamGreetings({ query: { days } }),
-    placeholderData: keepPreviousData,
-  });
+export function useGreetings(window: ReadWindow) {
+  return useWindowRead<GreetingsRead>("greetings", window, (days) => kernel.teamGreetings({ query: { days } }), greetingsMinusAfter);
 }
 
-export function useEmptyHours(days: number) {
-  return useQuery({
-    queryKey: ["sales", "empty-hours", days],
-    queryFn: () => kernel.teamEmptyHours({ query: { days } }),
-    placeholderData: keepPreviousData,
-  });
+export function useEmptyHours(window: ReadWindow) {
+  return useWindowRead<EmptyHoursRead>("empty-hours", window, (days) => kernel.teamEmptyHours({ query: { days } }), emptyHoursMinusAfter);
 }

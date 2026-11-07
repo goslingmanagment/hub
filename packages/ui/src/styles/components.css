@@ -305,11 +305,17 @@
     line-height: var(--ui-lh-14);
   }
 
+  /* Title to content 12 px (D18: less empty height between blocks; the screen puts 24 px between sections). */
   .ui-section {
     display: flex;
     flex-direction: column;
-    gap: 16px;
+    gap: 12px;
     min-width: 0;
+  }
+
+  /* A Section around a fitted table (Table «fit»): its head is as wide as the table, the actions end where the table ends. */
+  .ui-section.ui-section--fit > .ui-section__head {
+    max-width: var(--ui-section-fit, none);
   }
 
   .ui-section__head {
@@ -431,8 +437,14 @@
     position: static;
   }
 
+  /*
+   * D18: one-line rows 52 px, two-line rows (a name over a hint) 64–65 px, the
+   * same 15 px text. The cell's height is the row's least height (padding
+   * included); a taller content grows the row with 10 px above and below.
+   */
   .ui-table td {
-    padding: 12px 16px;
+    height: 52px;
+    padding: 10px 16px;
     border-bottom: 1px solid var(--ui-line-soft);
     vertical-align: middle;
   }
@@ -443,6 +455,7 @@
   }
 
   .ui-table--dense td {
+    height: auto;
     padding-top: 8px;
     padding-bottom: 8px;
   }
@@ -948,17 +961,22 @@
     white-space: nowrap;
   }
 
-  .ui-delta--up {
+  /* Better / worse than before (D13): the calm green-grey and brown of the shifts grid, on every screen. */
+  .ui-delta--up,
+  .ui-delta--better {
     color: var(--ui-up);
   }
 
-  .ui-delta--down {
+  .ui-delta--down,
+  .ui-delta--worse {
     color: var(--ui-down);
   }
 
+  /* «было $16.00», «впервые», «—»: the base was too small for a percent — quiet words, no grade. */
   .ui-delta--flat,
   .ui-delta--none,
-  .ui-delta--was {
+  .ui-delta--was,
+  .ui-delta--first {
     color: var(--ui-text-3);
   }
 
@@ -1931,6 +1949,62 @@
     cursor: not-allowed;
   }
 
+  /* The press lands on a 36 px tall zone around the track (§5: no target under 36 px), the layout stays. */
+  .ui-switch__track::after {
+    content: "";
+    position: absolute;
+    inset: -8px -6px;
+  }
+
+  /* Quiet (a column of them in a table): a thin outline in the line colour; on is the calm accent, never a black pill. */
+  .ui-switch--quiet .ui-switch__track {
+    width: 30px;
+    height: 18px;
+    margin-top: 2px;
+    border: 1px solid var(--ui-line-strong);
+    border-radius: 9px;
+    background: var(--ui-surface);
+    transition: background-color var(--ui-fast), border-color var(--ui-fast);
+  }
+
+  .ui-switch--quiet .ui-switch__thumb {
+    top: 3px;
+    left: 3px;
+    width: 10px;
+    height: 10px;
+    background: var(--ui-text-3);
+    box-shadow: none;
+    transition: transform var(--ui-fast), background-color var(--ui-fast);
+  }
+
+  .ui-switch--quiet .ui-switch__track:hover {
+    border-color: var(--ui-text-3);
+    background: var(--ui-hover-soft);
+  }
+
+  .ui-switch--quiet .ui-switch__track[aria-checked="true"] {
+    border-color: var(--ui-accent-line);
+    background: var(--ui-accent-soft);
+  }
+
+  .ui-switch--quiet .ui-switch__track[aria-checked="true"]:hover {
+    border-color: var(--ui-accent);
+    background: var(--ui-accent-soft);
+  }
+
+  .ui-switch--quiet .ui-switch__track[aria-checked="true"] .ui-switch__thumb {
+    background: var(--ui-accent);
+    transform: translateX(12px);
+  }
+
+  .ui-switch--quiet .ui-switch__track::after {
+    inset: -10px -8px;
+  }
+
+  .ui-switch--quiet.ui-switch--disabled .ui-switch__track {
+    opacity: 0.6;
+  }
+
   /* Several lines of one's own words: 16 px to read what one writes. */
   .ui-input.ui-textarea {
     display: block;
@@ -2265,9 +2339,12 @@
     flex-wrap: wrap;
   }
 
+  /* One width for a week with arrows and for 14 / 30 days without them (D15): switching moves nothing. */
   .ui-period__dates {
     display: inline-flex;
     align-items: center;
+    justify-content: space-between;
+    min-width: 200px;
     height: var(--ui-control);
     border: 1px solid var(--ui-line-strong);
     border-radius: var(--ui-radius);
@@ -2319,6 +2396,7 @@
   }
 
   .ui-period__label--alone {
+    flex: 1 1 auto;
     align-self: stretch;
     min-width: 0;
     padding: 0 12px;

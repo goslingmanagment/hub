@@ -152,9 +152,14 @@ export function rowOf(summary: ChatSummary, shift: ReviewShift, waits: readonly 
     const parts: string[] = [];
     if (summary.ppv === 1) parts.push(summary.bought > 0 ? `платное ${formatMills(boughtMills)} куплено` : "платное не куплено");
     else if (summary.ppv > 1) {
-      parts.push(summary.bought > 0 ? `платные: куплено ${formatOf(summary.bought, summary.ppv)}, ${formatMills(boughtMills)}` : `платные: ${formatCount(summary.ppv)}, не куплены`);
+      // The money first: on a narrow card the count is what gets cut, never the sum.
+      parts.push(summary.bought > 0 ? `платные ${formatMills(boughtMills)}, куплено ${formatOf(summary.bought, summary.ppv)}` : `платные: ${formatCount(summary.ppv)}, не куплены`);
     }
-    if (tipMills > 0) parts.push(`чаевые ${formatMills(tipMills)}`);
+    // Money before words without it: «чаевые $150.00, платное не куплено» — a cut card loses the words, not the sum.
+    if (tipMills > 0) {
+      if (boughtMills > 0) parts.push(`чаевые ${formatMills(tipMills)}`);
+      else parts.unshift(`чаевые ${formatMills(tipMills)}`);
+    }
     if (boughtMills + tipMills === 0 && Number(chat.shiftNetMills) > 0) parts.push(`принёс в смену ${formatMills(chat.shiftNetMills)}`);
     // A paid message nobody bought is ordinary work: in «Платные», not a reason to look.
     add({
@@ -226,10 +231,12 @@ function strength(a: ReviewChatRow, b: ReviewChatRow): number {
 /**
  * The selection's reading order: the chats the chatter wrote in first — a chat
  * with a colleague's words only is not where reading this chatter's work
- * starts — then the strongest.
+ * starts — then the strongest; the two ordinary dialogs for comparison always
+ * last, after the colleagues' chats (M3).
  */
 function rank(a: ReviewChatRow, b: ReviewChatRow): number {
-  return Number(b.mine > 0) - Number(a.mine > 0) || strength(a, b);
+  const sample = (row: ReviewChatRow) => Number(row.tier === TIER.sample);
+  return sample(a) - sample(b) || Number(b.mine > 0) - Number(a.mine > 0) || strength(a, b);
 }
 
 /**
@@ -276,7 +283,7 @@ export function selectLook(rows: ReviewChatRow[], seed: string): void {
   for (const row of ordinary) {
     row.in.look = true;
     row.tier = TIER.sample;
-    row.reasons.push({ kind: "sample", look: false, text: "обычный диалог — для сравнения", focus: null });
+    row.reasons.push({ kind: "sample", look: false, text: "обычный — для сравнения", focus: null });
   }
 }
 

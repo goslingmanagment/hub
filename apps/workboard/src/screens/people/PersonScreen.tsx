@@ -1,14 +1,17 @@
 import { useEffect, useRef, type ReactNode } from "react";
 import { useLocation, useNavigate, useParams } from "react-router";
-import { Badge, Card, EmptyState, ErrorState, LinkButton, Money, PageLabels, Skeleton, StatusDot, Tabs } from "@agency_hub_core/ui";
+import { Badge, Card, EmptyState, ErrorState, LinkButton, Money, Skeleton, StatusDot, Tabs, Tooltip } from "@agency_hub_core/ui";
+import { ruPlural } from "@agency_hub_core/ui/plural";
 import { carryParams, personPath, ShiftLink, useBackTarget, type PersonTab } from "@/shared/links";
 import { PersonAccessPanel } from "@/shared/PersonAccessPanel";
 import { ScreenHeader } from "@/shared/ScreenHeader";
 import { usePageFilter } from "@/shared/usePageFilter";
+import { usePages } from "@/shared/usePages";
 import { usePeriod } from "@/shared/usePeriod";
 import { useMe } from "@/shared/useMe";
 import { usePersonCard, type PersonCard, type PersonSummary } from "./data.js";
 import { SalesTab } from "./SalesTab.js";
+import { pagesInOrder } from "./ShiftTable.js";
 import { WorkTab } from "./WorkTab.js";
 import { capitalized, periodShort, ROLE_WORD, statusOf } from "./words.js";
 import "./people.css";
@@ -65,7 +68,7 @@ export function PersonScreen() {
         back={back}
         period
         pageFilter
-        meta={person ? <PersonMeta person={person} periodLabel={periodShort(period)} /> : <Skeleton width={320} />}
+        meta={person ? <PersonMeta person={person} periodLabel={periodShort(period)} statusKnown={card.nowKnown} /> : <Skeleton width={320} />}
         updatedAt={card.updatedAt}
         onRefresh={card.refresh}
         refreshing={card.refreshing}
@@ -73,7 +76,7 @@ export function PersonScreen() {
           <Tabs
             label="Разделы карточки"
             items={TABS.filter((item) => item.tab !== "access" || isOwner).map((item) => ({
-              to: personPath(id, location.search, item.tab),
+              to: item.tab === "work" ? workPath(id, location.search, tab === undefined) : personPath(id, location.search, item.tab),
               label: item.label,
               end: true,
             }))}
@@ -97,6 +100,19 @@ export function PersonScreen() {
       </div>
     </>
   );
+}
+
+/**
+ * «Работа» from another tab is the explicit `/people/:id/work`: the bare address
+ * may open Доступ first (below), the explicit one never does — so «Работа»
+ * pressed, «←» back to it and the browser's «Назад» all stay on it. On the bare
+ * address itself the tab links there, so it is the current one.
+ */
+function workPath(userId: number, search: string, bare: boolean): string {
+  const path = personPath(userId, search);
+  if (bare) return path;
+  const [pathname, query] = path.split("?");
+  return `${pathname}/work${query ? `?${query}` : ""}`;
 }
 
 /**
@@ -124,7 +140,7 @@ function useOpenAccessFirst(card: PersonCard, userId: number, bare: boolean) {
  * live shift opens its review), role, pages as quiet text («mia-1, mia-2 и
  * ещё 6», the rest on hover), the AI spend of the period.
  */
-function PersonMeta({ person, periodLabel }: { person: PersonSummary; periodLabel: string }) {
+function PersonMeta({ person, periodLabel, statusKnown }: { person: PersonSummary; periodLabel: string; statusKnown: boolean }) {
   const { status, words } = statusOf(person);
   const { isOwner } = useMe();
   const parts: ReactNode[] = [];
@@ -141,11 +157,14 @@ function PersonMeta({ person, periodLabel }: { person: PersonSummary; periodLabe
     parts.push(<Badge key="status" tone="off" bare>{capitalized(words)}</Badge>);
   } else if (status === "invited") {
     parts.push(<Badge key="status" tone="info" bare>Ждёт регистрации</Badge>);
+  } else if (!statusKnown) {
+    // The status comes with «who is on shift now»: hold its place, so the role and the pages do not jump right.
+    parts.push(<Skeleton key="status" width={150} />);
   } else if (words) {
     parts.push(<span key="status">{capitalized(words)}</span>);
   }
   if (person.role) parts.push(<span key="role">{ROLE_WORD[person.role]}</span>);
-  if (person.pages.length > 0) parts.push(<PageLabels key="pages" labels={person.pages} max={3} />);
+  if (person.pages.length > 0) parts.push(<MetaPages key="pages" pages={person.pages} />);
   if (person.aiSpendMicroUsd !== undefined && !(person.aiSpendMicroUsd === null && person.state === "invited")) {
     parts.push(
       <span key="ai">
@@ -162,5 +181,37 @@ function PersonMeta({ person, periodLabel }: { person: PersonSummary; periodLabe
         </span>
       ))}
     </div>
+  );
+}
+
+/**
+ * The person's pages as quiet text, by name: up to three; more — «mia-1, mia-2
+ * и ещё 6»; every page the viewer has — «все 9 страниц». The rest on hover,
+ * one page a line, never broken inside a name.
+ */
+function MetaPages({ pages }: { pages: readonly string[] }) {
+  const all = usePages().data;
+  const sorted = pagesInOrder(pages);
+  const list = (names: readonly string[]) => (
+    <span className="people-pages-tip">{names.map((name) => <span key={name}>{name}</span>)}</span>
+  );
+  const everyPage = all !== undefined && all.length > 3 && all.every((one) => pages.includes(one.label));
+  if (everyPage) {
+    return (
+      <Tooltip content={list(sorted)}>
+        <span className="people-meta__more" tabIndex={0}>все {sorted.length} {ruPlural(sorted.length, "страница", "страницы", "страниц")}</span>
+      </Tooltip>
+    );
+  }
+  if (sorted.length <= 3) return <span className="ui-page">{sorted.join(", ")}</span>;
+  const shown = sorted.slice(0, 2);
+  const rest = sorted.slice(2);
+  return (
+    <span>
+      <span className="ui-page">{shown.join(", ")}</span>{" "}
+      <Tooltip content={list(rest)}>
+        <span className="people-meta__more" tabIndex={0}>и ещё {rest.length}</span>
+      </Tooltip>
+    </span>
   );
 }

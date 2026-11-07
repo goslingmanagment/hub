@@ -31,6 +31,11 @@
  *     not follow the period, and never the extension's last use).
  *   - `adminListUsers` (owner) — role, access state, pages;
  *     `adminAiSpend` (owner) — AI spend by person for the period.
+ *   - «Продажи → Цена, Скорость» read exactly what «Что продаёт» reads for its
+ *     chatter panel — `teamSalesPpv` / `teamSalesReplies` through the sales
+ *     group's data layer (`useSalesPpv`, `priceView`, `MIN_SAMPLE`…): one
+ *     window, one comparison (everyone together), one small-sample rule, so
+ *     one chatter shows the same shares on both screens (X1).
  *
  * The three quality numbers (D1) come only through `qualityOfChatterNumbers`
  * (a shift) and `averageQuality` (a period: «…, в среднем за смену») of the
@@ -43,6 +48,7 @@ import { addDays, daysInRange, moscowDayEnd, moscowDayOf } from "@agency_hub_cor
 import type { ResolvedPeriod } from "@agency_hub_core/ui/period";
 import { CHATTER_SHIFTS_MAX_WINDOW_DAYS } from "@agency_hub_core/contracts";
 import { kernel } from "@/shared/hub";
+import { MAX_DAYS, MIN_SAMPLE, priceView, readWindow, speedView, useSalesPpv, useSalesReplies, type ReadWindow } from "@/screens/sales/data";
 import { averageQuality, qualityOfChatterNumbers, type PeriodQuality as AveragedQuality, type ShiftQuality } from "@/shared/metrics";
 import { useMe } from "@/shared/useMe";
 
@@ -492,6 +498,8 @@ export interface PersonCard {
   knownSince: string | null;
   /** The sales of the shifts are read (the ribbon's beads). */
   salesRead: ReadState;
+  /** Who is on shift now is known (the header's status): until then the status is a placeholder, so the line never moves. */
+  nowKnown: boolean;
   main: ReadState;
   quality: ReadState;
   tooLong: boolean;
@@ -607,6 +615,7 @@ export function usePersonCard(userId: number, period: ResolvedPeriod, page: stri
     visits,
     knownSince: knownSince ? moscowDayOf(knownSince) : null,
     salesRead,
+    nowKnown: now.data !== undefined || now.isError,
     main: stateOfRead(sales, salesWindow(period) !== null),
     quality: qualityState,
     tooLong: salesWindow(period) === null,
@@ -645,23 +654,18 @@ export interface PersonSales {
   totalNetMills: number;
   /** The fans who brought the most in the period's shifts, up to five. */
   topFans: { fanName: string | null; pageLabel: string; netMills: number; sales: number }[];
+  /** The other paying fans (by name and page) and their money. */
+  restFans: { count: number; netMills: number };
   /** Per page: sales and minutes on it. */
   pages: { pageLabel: string; platform: string | null; netMills: number; sales: number }[];
-  /** Personal paid messages by price, against the team on the same pages (the statistics' window). */
-  byPrice: RateRow[];
-  ppv: { sent: number; bought: number; netMills: number };
-  /** Replies to a waiting fan by delay, and whether the fan bought within a day. */
-  byDelay: RateRow[];
-  /** The window of the price and speed buckets, when it is wider than the period (a past period: up to today). */
-  wider: { from: string; to: string } | null;
-  /** Fans written to in the period's shifts and, of them, who paid before the shift's end. */
+  /** Fans written to in the period's shifts and, of them, who paid before the shift's end (summed over the shifts, every page). */
   fans: { written: number; paid: number } | null;
 }
 
 const KIND_ORDER: readonly SaleKind[] = ["ppv", "tip", "subscription", "post"];
 
 /** The period's cut of a person's statistics. Pure. */
-export function personSalesOf(stats: Stats, period: ResolvedPeriod, today: string, page: string | null): PersonSales {
+export function personSalesOf(stats: Stats, period: ResolvedPeriod, page: string | null): PersonSales {
   const shifts = stats.shifts.filter((shift) => shift.date >= period.from && shift.date <= period.to);
   const sales = shifts.flatMap((shift) => shift.sales).filter((sale) => page === null || sale.pageLabel === page);
   const byKind = KIND_ORDER.map((kind) => ({ kind, netMills: millsToNumber(sumMills(sales.filter((sale) => sale.kind === kind).map((sale) => sale.netMills))) }));
@@ -676,7 +680,10 @@ export function personSalesOf(stats: Stats, period: ResolvedPeriod, today: strin
     fan.sales += 1;
     fans.set(key, fan);
   }
-  const topFans = [...fans.values()].sort((a, b) => b.netMills - a.netMills).slice(0, 5);
+  const ranked = [...fans.values()].sort((a, b) => b.netMills - a.netMills);
+  const topFans = ranked.slice(0, 5);
+  const rest = ranked.slice(5);
+  const restFans = { count: rest.length, netMills: millsToNumber(sumMills(rest.map((fan) => fan.netMills))) };
 
   const platformOf = new Map(stats.pages.map((one) => [one.pageLabel, one.platform]));
   const pages = new Map<string, { pageLabel: string; platform: string | null; netMills: number; sales: number }>();
@@ -687,21 +694,67 @@ export function personSalesOf(stats: Stats, period: ResolvedPeriod, today: strin
     pages.set(sale.pageLabel, one);
   }
 
-  // The buckets are the statistics' whole window: from the period's first day to today.
-  const wholeWindow = period.from === addDays(today, -(stats.days - 1)) && period.to === today;
-
   return {
     byKind,
     totalNetMills,
     topFans,
+    restFans,
     pages: [...pages.values()].sort((a, b) => b.netMills - a.netMills),
-    byPrice: stats.ppv.byPrice.map((cell) => ({ key: cell.bucket, label: cell.bucket, hits: cell.bought, base: cell.sent, teamHits: cell.teamBought, teamBase: cell.teamSent, netMills: cell.netMills })),
-    ppv: { sent: stats.ppv.sent, bought: stats.ppv.bought, netMills: stats.ppv.netMills },
-    byDelay: stats.replies.byDelay.map((cell) => ({ key: cell.bucket, label: cell.bucket, hits: cell.bought, base: cell.replies, teamHits: cell.teamBought, teamBase: cell.teamReplies, netMills: null })),
-    wider: wholeWindow ? null : { from: addDays(today, -(stats.days - 1)), to: today },
     fans: shifts.length === 0 ? null : {
       written: shifts.reduce((sum, shift) => sum + shift.fansWritten, 0),
       paid: shifts.reduce((sum, shift) => sum + shift.fansPaid, 0),
+    },
+  };
+}
+
+// ─────────────────────────────────────────────── «Продажи → Цена, Скорость» of a person
+
+export interface PersonRates {
+  /** The window both reads cover (the panel's own): the period, or as much of it as Hub reads. */
+  window: ReadWindow;
+  /** The person's paid messages by price against everyone together; null — not here yet or failed (see `price`). */
+  byPrice: RateRow[] | null;
+  /** The person's replies by delay and whether the fan bought within a day, against everyone together. */
+  byDelay: RateRow[] | null;
+  price: ReadState;
+  speed: ReadState;
+  /** Below these samples a share is shown pale, «4 из 14»: the panel's rule. */
+  min: { ppv: number; replies: number };
+  retry: () => void;
+}
+
+/**
+ * The person's prices and reply speeds as «Что продаёт» shows them in its
+ * chatter panel (X1): the same reads and window, the same comparison —
+ * everyone together on the pages on screen — and the same small sample.
+ * The person's own numbers cover every page: Hub does not split a chatter by page.
+ */
+export function usePersonRates(userId: number, period: ResolvedPeriod, today: string, page: string | null): PersonRates {
+  const window = readWindow(period, today, MAX_DAYS.sales);
+  const ppv = useSalesPpv(window);
+  const replies = useSalesReplies(window);
+  const price = ppv.data ? priceView(ppv.data, page) : null;
+  const speed = replies.data ? speedView(replies.data, page) : null;
+  const myPrice = price?.chatters.find((line) => line.userId === userId) ?? null;
+  const mySpeed = speed?.chatters.find((line) => line.userId === userId) ?? null;
+  const byPrice = price === null ? null : price.all.byPrice.map((team) => {
+    const mine = myPrice?.byPrice.find((cell) => cell.bucket === team.bucket);
+    return { key: team.bucket, label: team.label, hits: mine?.bought ?? 0, base: mine?.sent ?? 0, teamHits: team.bought, teamBase: team.sent, netMills: mine?.netMills ?? 0 };
+  });
+  const byDelay = speed === null ? null : speed.all.byDelay.map((team) => {
+    const mine = mySpeed?.byDelay.find((cell) => cell.bucket === team.bucket);
+    return { key: team.bucket, label: team.label, hits: mine?.bought ?? 0, base: mine?.replies ?? 0, teamHits: team.bought, teamBase: team.replies, netMills: null };
+  });
+  return {
+    window,
+    byPrice,
+    byDelay,
+    price: window.beyond ? "off" : stateOfRead(ppv),
+    speed: window.beyond ? "off" : stateOfRead(replies),
+    min: { ppv: MIN_SAMPLE.ppv, replies: MIN_SAMPLE.replies },
+    retry: () => {
+      void ppv.refetch();
+      void replies.refetch();
     },
   };
 }

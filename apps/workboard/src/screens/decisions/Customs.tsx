@@ -86,7 +86,7 @@ export function CustomsSection(props: CustomsProps) {
       id="customs"
       className="decisions-section"
       title={<>Кастомы: оплачены, не отданы <span className="decisions-count">{paid.length}</span></>}
-      description={<>Фаны заплатили <Money mills={totalOf(paid)} strong /> и ждут. Когда кастом отдан, чаттер отмечает это в карточке фана в расширении. Съёмка у модели по-прежнему идёт через Telegram.</>}
+      description={<>Фаны заплатили <Money mills={totalOf(paid)} strong /> и ждут. «Отдали» чаттер отмечает в расширении.</>}
     >
       <Table label="Кастомы: оплачены, не отданы" columns={columns("paid")} rows={paid} rowKey={(row) => String(row.id)} />
       <CustomsFolds {...props} />

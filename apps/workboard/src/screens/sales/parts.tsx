@@ -1,7 +1,7 @@
 import { ChevronRight } from "lucide-react";
 import type { ReactNode } from "react";
 import { useLocation, useSearchParams } from "react-router";
-import { Bar, Disclosure, ErrorState, Money, Notice, PageLabel, Person, Segmented, Tabs, Tooltip, cx, type Column } from "@agency_hub_core/ui";
+import { Bar, Button, Disclosure, EmptyState, ErrorState, Money, Notice, PageLabel, Person, Segmented, Tabs, Tooltip, cx, type Column } from "@agency_hub_core/ui";
 import { formatDayRange } from "@agency_hub_core/ui/format";
 import { ruPlural } from "@agency_hub_core/ui/plural";
 import { ScreenHeader } from "@/shared/ScreenHeader";
@@ -49,9 +49,14 @@ export function useSalesParams() {
   };
 }
 
-/** The screen's header: h1, the period, the page filter, the tabs (the cut travels with them). */
+/**
+ * The screen's header: h1, the period, the page filter, the tabs (the cut
+ * travels with them). The line under it says only what the controls do not:
+ * nothing when the numbers cover the period on screen (X6), the words of an
+ * other window when they do not («Ответы до 7 нояб. 01:20: последние сутки…»).
+ */
 export function SalesHeader({ meta, updatedAt, onRefresh, refreshing }: {
-  meta: ReactNode;
+  meta?: ReactNode;
   updatedAt: number | undefined;
   onRefresh: () => void;
   refreshing: boolean;
@@ -66,7 +71,9 @@ export function SalesHeader({ meta, updatedAt, onRefresh, refreshing }: {
       title="Что продаёт"
       period
       pageFilter
-      meta={meta}
+      // Not null: the header would fill an empty line with «Сравнение с …», and nothing here is compared. A no-break
+      // space keeps the line's height while «Обновлено …» is not there yet: the tabs do not jump when the numbers come.
+      meta={meta ?? "\u00a0"}
       {...(updatedAt ? { updatedAt } : {})}
       onRefresh={onRefresh}
       refreshing={refreshing}
@@ -91,39 +98,39 @@ export function windowWords(from: string, to: string): string {
 }
 
 /**
- * The read covers other days than the period on screen (Hub counts back from
- * today, at most so many days): said once, above the numbers.
+ * The read covers other days than the period on screen: Hub reads at most so
+ * many days back, so the period's first days are left out. Said once, above
+ * the numbers. (A period that ends before today is read exactly: `readWindow`.)
  */
 export function WindowNotice({ window, maxDays, shown }: { window: ReadWindow; maxDays: number; shown?: string }) {
   const { period } = usePeriod();
-  if (window.exact) return null;
+  if (window.exact || window.beyond) return null;
   const words = shown ?? formatDayRange(window.from, window.to);
   return (
     <Notice title={`Здесь ${words}, а не ${period.label}`}>
-      {window.clipped
-        ? `Hub отдаёт эти числа не дальше чем на ${maxDays} ${ruPlural(maxDays, "день", "дня", "дней")} назад, поэтому начало периода не вошло.`
-        : "Hub пока считает эти числа только до сегодняшнего дня, поэтому в них вошли и дни после периода."}
+      {`Hub отдаёт эти числа не дальше чем на ${maxDays} ${ruPlural(maxDays, "день", "дня", "дней")} назад, поэтому начало периода не вошло.`}
     </Notice>
   );
 }
 
-/** A share counts for a column's scale from this sample on: a small one may set it, «1 из 1» may not. */
-export const SCALE_SAMPLE = 5;
-
-/**
- * The scale of a column of bars: the largest share with a little room above it,
- * rounded up to 10 %, so the longest bar (and a team's mark next to it) never
- * runs into the end of the track.
- */
-export function scaleOf(values: ReadonlyArray<number | null>): number {
-  const top = Math.max(0, ...values.map((value) => value ?? 0));
-  return top <= 0 ? 1 : Math.min(1, Math.ceil(top * 1.15 * 10) / 10);
+/** The whole period lies further back than Hub reads: no numbers, not zeros — and the way to the latest ones. */
+export function BeyondReach({ maxDays }: { maxDays: number }) {
+  const { period, setPeriod } = usePeriod();
+  return (
+    <EmptyState
+      title={`За ${period.label} этих чисел нет`}
+      action={<Button onClick={() => setPeriod({ kind: "days", days: 30 })}>Показать последние 30 дней</Button>}
+    >
+      Hub отдаёт их только за последние {maxDays} {ruPlural(maxDays, "день", "дня", "дней")}.
+    </EmptyState>
+  );
 }
 
 /**
  * Money one sent message brought, as a bar of the column's largest and the sum.
  * A small sample has no bar, only a pale sum: a long pale bar would argue with
- * the marked best. The best is the sum in bold ink and a word (never yellow).
+ * the marked best. The best is the sum in bold ink and a word (never yellow);
+ * in the same slot a small sample says «мало данных» (E3).
  */
 export function MoneyBar({ mills, max, weak, best = false, total = false, wordSlot = false, compare, hint, emptyHint }: {
   mills: number | null;
@@ -153,7 +160,7 @@ export function MoneyBar({ mills, max, weak, best = false, total = false, wordSl
     <span className={cx("sales-money", wordSlot && "sales-money--word", weak && "sales-money--weak", (best || total) && !weak && "sales-money--best")}>
       {weak || total ? <span aria-hidden className="sales-money__track" /> : <Bar value={mills} max={max} compare={compare ?? null} className="sales-money__bar" />}
       <span className="sales-money__value"><Money mills={mills} muted={weak} /></span>
-      {wordSlot && <span className="sales-money__word">{best && !weak ? "больше всего" : null}</span>}
+      {wordSlot && <span className={cx("sales-money__word", weak && "sales-money__word--quiet")}>{weak ? "мало данных" : best ? "больше всего" : null}</span>}
     </span>
   );
   return hint ? <Tooltip content={hint} className="sales-money-tip">{cell}</Tooltip> : cell;
@@ -215,6 +222,11 @@ export function LineName({ kind, name, hint, platform, order, quiet = false }: {
       {hint !== undefined && hint !== null && <span className="sales-sub">{hint}</span>}
     </span>
   );
+}
+
+/** The folds at the end of a tab, close together: one quiet list, not blocks 32 px apart (D18). */
+export function Folds({ children }: { children: ReactNode }) {
+  return <div className="sales-folds">{children}</div>;
 }
 
 /** «Как это считается»: the rules in plain words, folded at the bottom. */

@@ -199,6 +199,25 @@
   .wb-nav__count {
     display: inline-flex;
     flex: none;
+    align-items: center;
+    gap: 6px;
+  }
+
+  /* A queue of Решения that did not answer: a quiet question, not an alarm (D17). */
+  .wb-nav__unknown {
+    display: inline-grid;
+    place-items: center;
+    width: 22px;
+    height: 22px;
+    border: 1px dashed var(--ui-line-strong);
+    border-radius: 11px;
+    color: var(--ui-text-3);
+    font-size: var(--ui-fs-13);
+    line-height: 1;
+  }
+
+  .wb-nav__tip-line {
+    display: block;
   }
 
   .wb-nav__sep {
@@ -320,6 +339,22 @@
     align-items: center;
     justify-content: flex-end;
     gap: 12px;
+  }
+
+  /*
+   * The page filter's place at the right end (D15): never narrower than the closed filter (the unseen
+   * PageFilterSlot under it), its content — the filter, or the action of a screen without one — at its right edge.
+   */
+  .wb-header__slot {
+    display: inline-grid;
+    align-items: center;
+    justify-items: end;
+    /* A verb and an icon («Скопировать», «Пригласить») fit as well as the filter: the period does not move for them. */
+    min-width: 160px;
+  }
+
+  .wb-header__slot > * {
+    grid-area: 1 / 1;
   }
 
   /* The page filter's place on a screen without one (PageFilterSlot): kept, never seen. */

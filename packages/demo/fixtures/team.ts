@@ -1,11 +1,13 @@
 import type { KernelOperationResponse } from "@agency_hub_core/contracts";
 import { averageQuality, type ShiftQuality } from "@agency_hub_core/ui/shiftReview";
+import { shiftPayDay } from "@agency_hub_core/ui/shiftWhen";
 
 import { demoError, queryNumber, queryString, type DemoHandlers, type DemoRequest } from "../core.ts";
 import { DEMO_CHATTERS, DEMO_DATA_PAGES, DEMO_PAGES, DEMO_USERS, demoFans, demoPage, type DemoUser } from "../world.ts";
 import { teamCustoms, teamGreetings, teamWinBackApproaches, teamWinBackResults } from "./team-extra.ts";
 import { adminModelApplication, adminModelApplications } from "./team-applications.ts";
 import { teamChatterStats, teamShiftSales } from "./team-stats.ts";
+import { teamDisputes, type DemoDispute } from "./team-disputes.ts";
 import { shiftReviewNumbers, teamShiftReview } from "./team-review.ts";
 import {
   DAY,
@@ -27,7 +29,6 @@ import {
   rng,
   teamWorld,
   viewerPages,
-  workingAt,
   windowDays,
   windowStart,
   workedPages,
@@ -53,52 +54,7 @@ function scopedShifts(shifts: readonly DemoShift[], scope: readonly string[]): D
   return shifts.filter((shift) => shift.pages.some((page) => page.messages > 0 && scope.includes(page.pageLabel)));
 }
 
-// --- Disputes: sales on shared pages where two chatters' marks do not agree ---
-
-export interface DemoDispute {
-  sale: DemoSale;
-  shift: DemoShift;
-  reason: "two_mine" | "share_not_agreed" | "conflicting";
-  other: DemoUser;
-  /** The owner's split, or null. */
-  resolution: Array<{ user: DemoUser; percent: number }> | null;
-  resolvedAt: number | null;
-}
-
-export function teamDisputes(now: Date): DemoDispute[] {
-  const disputes: DemoDispute[] = [];
-  for (const shift of teamWorld(now).shifts) {
-    if (shift.confirmedAt === null) continue;
-    for (const sale of shift.sales) {
-      const others = DEMO_CHATTERS.filter((user) => user.id !== shift.user.id && user.pages.includes(sale.pageLabel) && workingAt(user, sale.at, now));
-      if (others.length === 0 || sale.netMills < 12_000) continue;
-      const random = rng(`dispute:${sale.ref}`);
-      if (random() > 0.03) continue;
-      const together = others.find((user) => shift.together.includes(user.username));
-      const other = together ?? others[Math.floor(random() * others.length)]!;
-      const roll = random();
-      const reason = roll < 0.55 ? "two_mine" : roll < 0.85 ? "share_not_agreed" : "conflicting";
-      const age = now.getTime() - sale.at;
-      const resolved = age > 4 * DAY && random() < 0.7;
-      const resolution = !resolved
-        ? null
-        : random() < 0.5
-          ? [{ user: shift.user, percent: 50 }, { user: other, percent: 50 }]
-          : random() < 0.7
-            ? [{ user: shift.user, percent: 100 }]
-            : [{ user: shift.user, percent: 70 }, { user: other, percent: 30 }];
-      disputes.push({ sale, shift, reason, other, resolution, resolvedAt: resolved ? sale.at + Math.round(between(random, 1.6, 3.5) * DAY) : null });
-    }
-  }
-  // Calm, as on production: one dispute waits for the owner, the newest; the others were settled.
-  const newestOpen = disputes.filter((dispute) => dispute.resolution === null).sort((left, right) => right.sale.at - left.sale.at)[0];
-  for (const dispute of disputes) {
-    if (dispute.resolution !== null || dispute === newestOpen) continue;
-    dispute.resolution = [{ user: dispute.shift.user, percent: 50 }, { user: dispute.other, percent: 50 }];
-    dispute.resolvedAt = Math.min(now.getTime() - HOUR, dispute.sale.at + DAY);
-  }
-  return disputes;
-}
+// --- Disputes: sales on shared pages where two chatters' marks do not agree (team-disputes.ts) ---
 
 function disputeMarks(dispute: DemoDispute) {
   const { shift, other, reason, sale } = dispute;
@@ -455,7 +411,8 @@ function exportOf(request: DemoRequest, scope: readonly string[], fromDay: strin
   const unconfirmed: KernelOperationResponse<"teamShiftExport">["unconfirmed"] = [];
   let disputedOpen = 0;
   for (const shift of scopedShifts(world.shifts, scope)) {
-    const day = mskDay(shift.startedAt);
+    // The day holding most of the shift, as Hub's payout sheet (shift-report.ts payDay = dayOfWork) and the grid.
+    const day = shiftPayDay(shift);
     if (!inWindow(day)) continue;
     if (shift.confirmedAt === null) {
       unconfirmed.push({ username: shift.user.username, startedAt: isoAt(shift.startedAt), endedAt: isoAt(shift.endedAt), ongoing: shift.ongoing });
@@ -482,7 +439,7 @@ function exportOf(request: DemoRequest, scope: readonly string[], fromDay: strin
   }
   const lateChanges: KernelOperationResponse<"teamShiftExport">["lateChanges"] = [];
   for (const dispute of disputes) {
-    const payDay = mskDay(dispute.shift.startedAt);
+    const payDay = shiftPayDay(dispute.shift);
     if (!inWindow(payDay) || dispute.resolution === null || dispute.resolvedAt === null || !scope.includes(dispute.sale.pageLabel)) continue;
     if (dispute.resolvedAt < mskMidnight(addDays(payDay, 2))) continue;
     for (const share of dispute.resolution) {

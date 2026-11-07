@@ -54,6 +54,8 @@ export interface PersonAccessProps {
   onChanged?: () => void;
   /** After the account is deleted: leave wherever the panel was. */
   onDeleted?: () => void;
+  /** The side panel beside the matrix: close it and light the person's row there, where the pages are ticked (Д-н1). */
+  onEditInMatrix?: () => void;
 }
 
 type Asking =
@@ -78,7 +80,7 @@ function Block({ title, aside, children, variant }: { title: ReactNode; aside?: 
   );
 }
 
-export function PersonAccess({ userId, variant, onChanged, onDeleted }: PersonAccessProps) {
+export function PersonAccess({ userId, variant, onChanged, onDeleted, onEditInMatrix }: PersonAccessProps) {
   const { isOwner, user: me } = useMe();
   const users = useAccessUsers(isOwner);
   const user = users.data?.find((one) => one.id === userId && !one.deletedAt) ?? null;
@@ -93,15 +95,16 @@ export function PersonAccess({ userId, variant, onChanged, onDeleted }: PersonAc
   if (!user) {
     return <EmptyState title="Сотрудник больше недоступен" compact={variant === "drawer"}>Этот аккаунт удалён или больше не доступен.</EmptyState>;
   }
-  return <PersonAccessBody key={user.id} user={user} variant={variant} meId={me?.id ?? null} onChanged={onChanged} onDeleted={onDeleted} />;
+  return <PersonAccessBody key={user.id} user={user} variant={variant} meId={me?.id ?? null} onChanged={onChanged} onDeleted={onDeleted} onEditInMatrix={onEditInMatrix} />;
 }
 
-function PersonAccessBody({ user, variant, meId, onChanged, onDeleted }: {
+function PersonAccessBody({ user, variant, meId, onChanged, onDeleted, onEditInMatrix }: {
   user: AdminUser;
   variant: "page" | "drawer";
   meId: number | null;
   onChanged: (() => void) | undefined;
   onDeleted: (() => void) | undefined;
+  onEditInMatrix: (() => void) | undefined;
 }) {
   const status = teamStatus(user);
   const owner = user.role === "owner";
@@ -125,34 +128,43 @@ function PersonAccessBody({ user, variant, meId, onChanged, onDeleted }: {
       Логин и история сохранены — восстановите доступ, если возвращается тот же человек.
     </Notice>
   ) : status === "invited" ? (
+    // The invite's two ways on, side by side (З3): send it again, or call it off. The link itself only says how long it lives.
     <Notice
       title="Ждёт регистрации"
       actionPlacement="below"
-      action={<Button size="sm" onClick={() => ask({ kind: "newLink", linkKind: "invite" })}>Отправить приглашение заново</Button>}
+      action={(
+        <>
+          <Button size="sm" onClick={() => ask({ kind: "newLink", linkKind: "invite" })}>Отправить заново</Button>
+          <Button size="sm" variant="ghost" onClick={() => ask({ kind: "cancelInvite" })}>Отменить приглашение</Button>
+        </>
+      )}
     >
-      Человек ещё не открыл приглашение и не придумал пароль. Пока этого не случилось, войти он не может.
+      Человек ещё не открыл приглашение и не придумал пароль, поэтому войти не может.
     </Notice>
   ) : null;
 
-  const pages = <PagesBlock user={user} variant={variant} pageAccess={pageAccess} />;
+  const pages = <PagesBlock user={user} variant={variant} pageAccess={pageAccess} onEditInMatrix={onEditInMatrix} />;
   const links = <LinksBlock user={user} variant={variant} onAsk={ask} />;
   // Nothing to show for someone who never signed in or is switched off: their devices and AI limit stay out of the way.
   const devices = status === "invited" ? null : <DevicesBlock user={user} variant={variant} onAsk={ask} />;
   const limit = status === "active" ? <AiLimitBlock userId={user.id} variant={variant} /> : null;
   const end = <EndBlock user={user} variant={variant} canDelete={canDelete} busy={createLink.isPending} onAsk={ask} />;
+  // On the tab, a short «Аккаунт» (only «Удалить навсегда» left: invited, disabled) fills a column's foot instead of a
+  // full-width card for one fold; the active person's «Закрыть доступ» stays across, under everything.
+  const shortEnd = status !== "active" && user.role !== "owner";
 
   return (
     <div className={variant === "page" ? "access-panel access-panel--page" : "access-panel"}>
       {notice}
       {variant === "page" ? (
         <div className="access-panel__grid">
-          <div className="access-panel__col">{pages}{limit}</div>
-          <div className="access-panel__col">{links}{devices}</div>
+          <div className="access-panel__col">{pages}{limit}{shortEnd && status === "disabled" && end}</div>
+          <div className="access-panel__col">{links}{devices}{shortEnd && status !== "disabled" && end}</div>
         </div>
       ) : (
         <>{pages}{links}{devices}{limit}</>
       )}
-      {end}
+      {(variant === "drawer" || !shortEnd) && end}
 
       {pageAccess.dialog}
       {asking && (
@@ -185,7 +197,12 @@ function PersonAccessBody({ user, variant, meId, onChanged, onDeleted }: {
 
 // ── pages ────────────────────────────────────────────────────────────────────
 
-function PagesBlock({ user, variant, pageAccess }: { user: AdminUser; variant: "page" | "drawer"; pageAccess: ReturnType<typeof usePageAccess> }) {
+function PagesBlock({ user, variant, pageAccess, onEditInMatrix }: {
+  user: AdminUser;
+  variant: "page" | "drawer";
+  pageAccess: ReturnType<typeof usePageAccess>;
+  onEditInMatrix: (() => void) | undefined;
+}) {
   const all = useAccessPages();
   const assigned = new Set(user.assignedPages.map((page) => page.label));
   const count = user.assignedPages.length;
@@ -209,9 +226,12 @@ function PagesBlock({ user, variant, pageAccess }: { user: AdminUser; variant: "
   if (variant === "drawer") {
     // Beside the matrix the person's row is already in view: one line here, the ticks stay in the matrix (Д6).
     return (
-      <Block title={title} variant={variant}>
+      <Block
+        title={title}
+        variant={variant}
+        aside={onEditInMatrix ? <button type="button" className="access-link access-link--button" onClick={onEditInMatrix}>Изменить в таблице</button> : undefined}
+      >
         {count === 0 ? <p className="access-text">Ни одной страницы.</p> : <PageLabels labels={user.assignedPages.map((page) => page.label)} max={6} className="access-pages-line" />}
-        <p className="access-hint">Открыть или снять страницу — в таблице «Кто на каких страницах».</p>
       </Block>
     );
   }
@@ -278,7 +298,7 @@ function LinksBlock({ user, variant, onAsk }: { user: AdminUser; variant: "page"
       {links.isLoading && !links.data && <SkeletonText lines={2} />}
       {links.data && active.length === 0 && !disabled && (
         <p className="access-text">
-          {status === "invited" ? "Действующей ссылки нет: создайте приглашение заново." : status === "active" ? "Действующих ссылок нет. Пароль задан — человек входит сам." : "Действующих ссылок нет."}
+          {status === "invited" ? "Действующей ссылки нет: отправьте приглашение заново." : status === "active" ? "Действующих ссылок нет. Пароль задан — человек входит сам." : "Действующих ссылок нет."}
         </p>
       )}
       {active.length > 0 && (
@@ -289,7 +309,8 @@ function LinksBlock({ user, variant, onAsk }: { user: AdminUser; variant: "page"
                 {LINK_KIND_LABEL[link.kind]}
                 <span className="access-hint">{linkStateLabel(link, whenWords)} · создана {whenWords(link.createdAt)}</span>
               </span>
-              {!disabled && <Button size="sm" variant="ghost" onClick={() => onAsk({ kind: "link", link })}>Отозвать</Button>}
+              {/* The invite's link is not revoked by itself (З3): «Отправить заново» replaces it, «Отменить приглашение» ends it. */}
+              {!disabled && status !== "invited" && <Button size="sm" variant="ghost" onClick={() => onAsk({ kind: "link", link })}>Отозвать ссылку</Button>}
             </li>
           ))}
         </ul>
@@ -399,23 +420,20 @@ function EndBlock({ user, variant, canDelete, busy, onAsk }: { user: AdminUser; 
       kind: "terminateAccess" as const,
     },
   ].filter((row) => row !== false);
+  // An invite or a switched-off person keeps only «Удалить навсегда» here: without it, no block at all.
+  if (!owner && status !== "active" && !canDelete) return null;
   return (
-    <Block title={disabled ? "Аккаунт" : "Закрыть доступ"} variant={variant}>
+    <Block title={disabled || status === "invited" ? "Аккаунт" : "Закрыть доступ"} variant={variant}>
       {owner && (
         <p className="access-text">
           Владельца нельзя деактивировать и нельзя завершить все его входы — иначе консоль осталась бы без хозяина. Пароль владелец меняет сам.
         </p>
       )}
-      {!owner && !disabled && (
+      {/* An invite is called off in its notice above (З3): here only the account itself. */}
+      {!owner && status === "active" && (
         <div className="access-end">
-          <p className="access-text">
-            {status === "invited"
-              ? "Ссылка-приглашение перестанет работать, человек уйдёт в «Отключённые». Логин и страницы сохранятся — доступ можно будет восстановить."
-              : "Все входы и ссылки перестанут работать. Логин, история, роль и страницы сохранятся, доступ можно будет восстановить."}
-          </p>
-          <Button variant="danger-outline" onClick={() => onAsk({ kind: status === "invited" ? "cancelInvite" : "deactivate" })}>
-            {status === "invited" ? "Отменить приглашение" : "Отключить доступ"}
-          </Button>
+          <p className="access-text">Все входы и ссылки перестанут работать. Логин, история, роль и страницы сохранятся, доступ можно будет восстановить.</p>
+          <Button variant="danger-outline" onClick={() => onAsk({ kind: "deactivate" })}>Отключить доступ</Button>
         </div>
       )}
       {others.length > 0 && (

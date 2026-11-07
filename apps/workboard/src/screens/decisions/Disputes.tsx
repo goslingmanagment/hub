@@ -1,10 +1,11 @@
 import { ArrowRight } from "lucide-react";
 import { useState } from "react";
 import { Link, useLocation } from "react-router";
-import { Badge, Button, Confirm, Disclosure, Drawer, Fan, KeyValue, Money, Section, Skeleton, Table, TimeMsk, Tooltip, toast, type Column } from "@agency_hub_core/ui";
+import { Badge, Button, Confirm, Disclosure, Drawer, Fan, KeyValue, Money, Person, Section, Skeleton, Table, TimeMsk, Tooltip, toast, type Column } from "@agency_hub_core/ui";
 import { formatDateTime, formatMills, formatTimeOfDay } from "@agency_hub_core/ui/format";
 import { ruPlural } from "@agency_hub_core/ui/plural";
-import { consoleFanHref, PersonLink, shiftPath } from "@/shared/links";
+import { shiftWhen } from "@agency_hub_core/ui/shiftWhen";
+import { consoleFanHref, PersonLink, shiftPath, useBackState } from "@/shared/links";
 import { FanCell, collidingIn, goColumn, pageWords } from "./FanCell";
 import { disputeProblem, useResolveDispute, useSaleShifts, type Dispute, type FanRefOnPage, type KnownFan, type SaleShift } from "./data";
 
@@ -34,9 +35,11 @@ function resolutionLine(dispute: Dispute): string | null {
   return dispute.resolution === null ? null : `Решено: ${dispute.resolution.map((share) => `${share.username} ${share.percent} %`).join(", ")}`;
 }
 
-function claimants(dispute: Dispute): string {
-  const names = dispute.people.map((person) => person.username);
-  return names.length <= 2 ? names.join(" и ") : `${names.slice(0, -1).join(", ")} и ${names.at(-1)}`;
+/** One claimant's mark in words: «моё», «делим с alex.k», «моё, своя сумма $24.00»; null — they marked nothing. */
+function markWords(dispute: Dispute, userId: number) {
+  const mark = dispute.marks.find((one) => one.userId === userId);
+  if (!mark) return null;
+  return <>«{MARK_LABELS[mark.mark] ?? mark.mark}»{mark.shareWith ? ` с ${mark.shareWith}` : ""}{mark.amountMills !== null && <>, своя сумма <Money mills={mark.amountMills} /></>}</>;
 }
 
 interface Share {
@@ -94,7 +97,18 @@ function useDisputeColumns(rows: readonly Dispute[], fanOf: (fan: FanRefOnPage) 
   return {
     open: [
       when, sum, fan,
-      { key: "who", header: "Кто записал на себя", grow: true, cell: (row) => <span>{claimants(row)}<span className="decisions-sub">{REASON_LABELS[row.reason] ?? row.reason}</span></span> },
+      {
+        key: "who",
+        header: "Кто записал на себя",
+        grow: true,
+        // People as everywhere on the screen: the circle and the name (Р-н4); why it is a dispute under them.
+        cell: (row) => (
+          <span className="decisions-claimants">
+            <span className="decisions-people">{row.people.map((person) => <Person key={person.userId} name={person.username} />)}</span>
+            <span className="decisions-sub">{REASON_LABELS[row.reason] ?? row.reason}</span>
+          </span>
+        ),
+      },
       goColumn<Dispute>(),
     ] satisfies Column<Dispute>[],
     // A decided dispute is changed from inside its panel: its row has no arrow (Р3).
@@ -119,7 +133,7 @@ export function DisputesSection({ open, settled, fanOf, onOpen, selected }: {
       id="disputes"
       className="decisions-section"
       title={<>Споры по продажам <span className="decisions-count">{open.length}</span></>}
-      description="Одну продажу записали на себя двое. Решите, кому она идёт в выплату: до решения её нет в выгрузке."
+      description="Одну продажу записали на себя двое. Пока вы не решите, её нет в выгрузке."
     >
       <Table label="Споры по продажам" columns={columns.open} rows={open} rowKey={(row) => row.saleRef} onRowClick={(row) => onOpen(row.saleRef)} selectedKey={selected} skeletonLines={2} />
       {settled.length > 0 && <SettledDisputes settled={settled} fanOf={fanOf} onOpen={onOpen} selected={selected} />}
@@ -127,7 +141,7 @@ export function DisputesSection({ open, settled, fanOf, onOpen, selected }: {
   );
 }
 
-/** Disputes decided in the 31 days, folded: a decision can be replaced from its panel. */
+/** Disputes decided in Hub's window (31 days), folded: a decision can be replaced from its panel. */
 export function SettledDisputes({ settled, fanOf, onOpen, selected }: {
   settled: readonly Dispute[];
   fanOf: (fan: FanRefOnPage) => KnownFan | undefined;
@@ -136,34 +150,74 @@ export function SettledDisputes({ settled, fanOf, onOpen, selected }: {
 }) {
   const columns = useDisputeColumns(settled, fanOf);
   return (
-    <Disclosure size="md" summary="Решённые споры за 31 день" hint={String(settled.length)} className="decisions-fold">
+    <Disclosure size="md" summary="Решённые споры за последний месяц" hint={String(settled.length)} className="decisions-fold">
       <Table label="Решённые споры" columns={columns.settled} rows={settled} rowKey={(row) => row.saleRef} onRowClick={(row) => onOpen(row.saleRef)} selectedKey={selected} />
     </Disclosure>
   );
 }
 
+/** Minutes before and after the sale the review lights up (its pulse span): the talk that led to it. */
+const SPAN_BEFORE = 20;
+const SPAN_AFTER = 10;
+
 /**
- * One claimant's conversation with the fan around the sale: the review of the
- * shift that held it, opened on this fan's chat — what the owner decides by
- * (Р4). No shift then is an answer too.
+ * One claimant's conversation with the fan at the sale (E5): the review of their
+ * shift that held it, opened on this fan's chat with the minutes around the sale
+ * lit (`span`). A shift that ended before the sale opens on the chat only and
+ * says so with its date (Р-н2). No shift at the sale is said in words: then only
+ * the other side is known.
  */
 function Evidence({ dispute, userId, shifts }: { dispute: Dispute; userId: number; shifts: ReturnType<typeof useSaleShifts> }) {
   const location = useLocation();
+  const back = useBackState("Решения");
   if (shifts.isLoading) return <Skeleton width={180} />;
-  if (!shifts.data) return <span className="decisions-evidence decisions-evidence--none">смены не прочитались</span>;
+  if (!shifts.data) return <span className="decisions-evidence decisions-evidence--none">Смены не прочитались</span>;
   const shift: SaleShift | undefined = shifts.data.get(userId);
-  if (!shift) return <span className="decisions-evidence decisions-evidence--none">в эти два дня смен нет</span>;
+  if (!shift) {
+    return <span className="decisions-evidence decisions-evidence--none">Смены у продажи нет</span>;
+  }
+  const when = shiftWhen(shift);
+  const params = new URLSearchParams();
+  if (dispute.fanRef !== null) params.set("chat", `${dispute.pageLabel}:${dispute.fanRef}`);
+  if (shift.holds) {
+    const minute = Math.floor((Date.parse(dispute.occurredAt) - Date.parse(shift.startedAt)) / 60_000);
+    params.set("span", `${Math.max(0, minute - SPAN_BEFORE)}-${minute + SPAN_AFTER}`);
+  }
   const path = shiftPath(userId, shift.startedAt, location.search);
-  const chat = dispute.fanRef === null ? "" : `${path.includes("?") ? "&" : "?"}chat=${encodeURIComponent(`${dispute.pageLabel}:${dispute.fanRef}`)}`;
-  const span = `${formatTimeOfDay(shift.startedAt)}–${shift.ongoing ? "сейчас" : formatTimeOfDay(shift.endedAt)}`;
+  const to = `${path}${path.includes("?") ? "&" : "?"}${params.toString()}`;
+  const sale = formatTimeOfDay(dispute.occurredAt);
   return (
-    <Tooltip content={shift.holds ? "Разбор смены, в которую была продажа, — на чате с этим фаном" : "Продажа была после этой смены: разбор последней смены до неё"} align="end">
-      <Link to={`${path}${chat}`} state={{ back: { to: `${location.pathname}${location.search}`, label: "Решения" } }} className="decisions-evidence">
-        {shift.holds ? `Переписка в смене ${span}` : `Смена до продажи, ${span}`}
-        <ArrowRight size={14} strokeWidth={1.75} aria-hidden />
-      </Link>
-    </Tooltip>
+    <span className="decisions-evidence-box">
+      <Tooltip
+        content={shift.holds
+          ? `Разбор этой смены на чате с фаном: сообщения около ${sale} подсвечены`
+          : `Продажа в ${sale} была после этой смены: разбор последней смены до неё, на чате с фаном`}
+        align="end"
+      >
+        <Link to={to} state={back} className="decisions-evidence">
+          {shift.holds ? "Переписка у продажи" : "Смена до продажи"}
+          <ArrowRight size={14} strokeWidth={1.75} aria-hidden />
+        </Link>
+      </Tooltip>
+      <span className="decisions-sub">{shift.holds ? `смена ${when.label}` : when.label}</span>
+    </span>
   );
+}
+
+/**
+ * «Известна только сторона kate.v: у alex.k смены у продажи нет, и продажу он не
+ * отмечал.» when a claimant had no shift holding the sale (E5: say it plainly);
+ * null when both sides can be read.
+ */
+function oneSidedWords(dispute: Dispute, shifts: Map<number, SaleShift> | undefined): string | null {
+  if (!shifts) return null;
+  const read = dispute.people.filter((person) => shifts.get(person.userId)?.holds === true);
+  const unread = dispute.people.filter((person) => shifts.get(person.userId)?.holds !== true);
+  if (read.length === 0 || unread.length === 0) return null;
+  const names = (people: typeof read) => people.map((person) => person.username).join(" и ");
+  const marked = unread.some((person) => dispute.marks.some((mark) => mark.userId === person.userId));
+  const quiet = marked ? "" : unread.length === 1 ? ", и продажу он не отмечал" : ", и продажу они не отмечали";
+  return `Известна только сторона ${names(read)}: у ${names(unread)} смены у продажи нет${quiet}.`;
 }
 
 /** The decision panel of one dispute: the fan, who claims what with their conversations, what stands; then a split and the console's question. */
@@ -173,6 +227,7 @@ export function DisputeDrawer({ dispute, fan, onClose }: { dispute: Dispute; fan
   const [picked, setPicked] = useState<string | null>(now);
   const [asking, setAsking] = useState(false);
   const shifts = useSaleShifts(dispute);
+  const oneSided = oneSidedWords(dispute, shifts.data);
   const choice = choices.find((one) => one.key === picked) ?? null;
   const changed = choice !== null && choice.key !== now;
   return (
@@ -211,20 +266,17 @@ export function DisputeDrawer({ dispute, fan, onClose }: { dispute: Dispute; fan
         <section className="decisions-claims" aria-labelledby={`claims-${dispute.saleRef}`}>
           <h3 id={`claims-${dispute.saleRef}`} className="decisions-panel__title">Кто что отметил</h3>
           <ul className="decisions-marks">
-            {dispute.marks.map((mark) => (
-              <li key={mark.userId}>
+            {dispute.people.map((person) => (
+              <li key={person.userId}>
                 <span className="decisions-marks__who">
-                  <PersonLink
-                    userId={mark.userId}
-                    name={mark.username}
-                    hint={<>«{MARK_LABELS[mark.mark] ?? mark.mark}»{mark.shareWith ? ` с ${mark.shareWith}` : ""}{mark.amountMills !== null && <>, своя сумма <Money mills={mark.amountMills} /></>}</>}
-                    backLabel="Решения"
-                  />
+                  <PersonLink userId={person.userId} name={person.username} hint={markWords(dispute, person.userId) ?? "продажу не отмечал"} backLabel="Решения" />
                 </span>
-                <Evidence dispute={dispute} userId={mark.userId} shifts={shifts} />
+                <Evidence dispute={dispute} userId={person.userId} shifts={shifts} />
               </li>
             ))}
           </ul>
+          {/* Only one side can be read (E5): said once, plainly, before the choice. */}
+          {oneSided !== null && <p className="decisions-note decisions-oneside">{oneSided}</p>}
         </section>
 
         <fieldset className="decisions-choices">

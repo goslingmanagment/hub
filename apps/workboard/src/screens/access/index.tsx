@@ -1,5 +1,5 @@
 import { UserPlus } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router";
 import { Button, Disclosure, Drawer, EmptyState, ErrorState, Notice, Person, Section, SkeletonText, Table, type Column } from "@agency_hub_core/ui";
 import { ruPlural } from "@agency_hub_core/ui/plural";
@@ -38,6 +38,19 @@ export function AccessScreen() {
   const [inviting, setInviting] = useState(false);
   const [revealed, setRevealed] = useState<RevealedLink | null>(null);
   const access = usePageAccess();
+  // «Изменить в таблице» in a person's panel (Д-н1): the panel closes, the person's row comes into view and glows.
+  const [flashId, setFlashId] = useState<number | null>(null);
+  const flashTimer = useRef<number | null>(null);
+  useEffect(() => () => {
+    if (flashTimer.current !== null) window.clearTimeout(flashTimer.current);
+  }, []);
+  const editInMatrix = (id: number) => {
+    openPerson(null);
+    setFlashId(id);
+    window.requestAnimationFrame(() => document.getElementById(`access-row-${id}`)?.scrollIntoView({ block: "center", behavior: "smooth" }));
+    if (flashTimer.current !== null) window.clearTimeout(flashTimer.current);
+    flashTimer.current = window.setTimeout(() => setFlashId(null), 1800);
+  };
 
   const personId = Number(search.get("person"));
   const openPerson = (id: number | null) => setSearch((current) => {
@@ -104,7 +117,7 @@ export function AccessScreen() {
         ) : (
           <Section
             title="Кто на каких страницах"
-            description="Отметка открывает страницу сразу, промах можно отменить в сообщении внизу; снять — после вопроса. Имя открывает ссылки, устройства и отключение."
+            description="Отметка открывает страницу сразу, снять — после вопроса."
           >
             <AccessMatrix
               groups={[
@@ -115,6 +128,7 @@ export function AccessScreen() {
               pages={pages.data}
               access={access}
               selectedId={selected?.id ?? null}
+              flashId={flashId}
               onOpenPerson={(id) => openPerson(id)}
             />
           </Section>
@@ -138,9 +152,10 @@ export function AccessScreen() {
 
         <Disclosure summary="Как это работает">
           <p>
-            Страница в таблице — это то, что человек видит в расширении: её чаты и фанов. Отметка открывает страницу сразу, а промах можно
+            Страница в таблице — это то, что человек видит в расширении: её чаты и фанов. Имя открывает панель человека: ссылки,
+            устройства, отключение. Отметка открывает страницу сразу, а промах можно
             отменить в сообщении внизу экрана; снять страницу или всю модель можно только после вопроса. «Вся» открывает или снимает все
-            страницы модели — каждую отдельным запросом, по очереди. Владелец видит все страницы и без отметок.
+            страницы модели по одной; если Hub откажет, остановимся и скажем, что успели. Владелец видит все страницы и без отметок.
           </p>
           <p>
             Пригласить — один шаг: Hub создаёт аккаунт, открывает выбранные страницы и даёт ссылку, по которой человек сам придумает пароль.
@@ -158,7 +173,7 @@ export function AccessScreen() {
           title={<PersonLink userId={selected.id} name={selected.username} status={personStatus(selected)} tab="access" backLabel="Доступ" />}
           subtitle={personHint(selected)}
         >
-          <PersonAccess userId={selected.id} variant="drawer" onDeleted={() => openPerson(null)} />
+          <PersonAccess userId={selected.id} variant="drawer" onDeleted={() => openPerson(null)} {...(selected.role !== "owner" && !selected.disabledAt ? { onEditInMatrix: () => editInMatrix(selected.id) } : {})} />
         </Drawer>
       )}
 

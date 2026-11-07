@@ -1,5 +1,5 @@
 import { useId, useState } from "react";
-import { Button, Disclosure, ErrorState, Fan, Field, Hint, Modal, Notice, Section, Table, Textarea, TextInput, TimeMsk, toast, type Column } from "@agency_hub_core/ui";
+import { Button, Disclosure, ErrorState, Fan, Field, Hint, Modal, Notice, Person, Section, Table, Textarea, TextInput, TimeMsk, Tooltip, toast, type Column } from "@agency_hub_core/ui";
 import { formatTimeOfDay } from "@agency_hub_core/ui/format";
 import {
   EMPTY_RESOLVE_DRAFT,
@@ -23,7 +23,7 @@ import {
 } from "@agency_hub_core/ui/heldSends";
 import { consoleFanHref, PersonLink } from "@/shared/links";
 import { FanCell, collidingIn, goColumn, pageWords } from "./FanCell";
-import { RESOLVED_PAGE_SIZE, useResolveHeldSend, useResolvedSends, type FanRefOnPage, type HeldSend, type KnownFan } from "./data";
+import { RESOLVED_PAGE_SIZE, useFanNames, useResolveHeldSend, useResolvedSends, type FanRefOnPage, type HeldSend, type KnownFan } from "./data";
 
 /**
  * Зависшие отправки: a send from the extension's preview whose outcome Hub
@@ -51,11 +51,13 @@ function greeted(item: HeldSend): { text: string; hint: string | null } | null {
 }
 
 const GREETED_HEADER = "Уже поприветствован?";
+const GREETED_HINT = "Записано ли в Hub, что нового подписчика уже поприветствовали. «Да, вручную» — эту часть приветствия отправили руками.";
 
-function Greeted({ item, focusable }: { item: HeldSend; focusable: boolean }) {
+/** The value with its note on hover — no dotted line: the line belongs to the column's term (D14). */
+function Greeted({ item }: { item: HeldSend }) {
   const words = greeted(item);
-  if (words === null) return <Hint content="Это не приветствие: про приветствие фана отправка ничего не говорит" focusable={focusable}><span className="text-ink-3">—</span></Hint>;
-  return words.hint === null ? <span>{words.text}</span> : <Hint content={words.hint} focusable={focusable}>{words.text}</Hint>;
+  if (words === null) return <Tooltip content="Это не приветствие: про приветствие фана отправка ничего не говорит"><span className="text-ink-3">—</span></Tooltip>;
+  return words.hint === null ? <span>{words.text}</span> : <Tooltip content={words.hint}><span>{words.text}</span></Tooltip>;
 }
 
 export function HeldSection({ items, total, serverNow, platformOf, fanOf, onOpen, selected }: {
@@ -81,7 +83,7 @@ export function HeldSection({ items, total, serverNow, platformOf, fanOf, onOpen
       sortValue: (row) => row.createdAt,
       cell: (row) => <span><TimeMsk at={row.createdAt} /><span className="decisions-sub">без отчёта {formatSpan(now - heldSince(row))}</span></span>,
     },
-    { key: "greeting", header: GREETED_HEADER, headerWrap: false, width: 200, cell: (row) => <Greeted item={row} focusable={false} /> },
+    { key: "greeting", header: GREETED_HEADER, hint: GREETED_HINT, headerWrap: false, width: 200, cell: (row) => <Greeted item={row} /> },
     goColumn<HeldSend>(),
   ];
   return (
@@ -89,7 +91,7 @@ export function HeldSection({ items, total, serverNow, platformOf, fanOf, onOpen
       id="held"
       className="decisions-section"
       title={<>Зависшие отправки <span className="decisions-count">{total}</span></>}
-      description="Расширение отправило сообщение и не сообщило, ушло ли оно. Пока отправку не разберут, Hub держит фана: из превью ему не отправят, нового подписчика не поприветствуют."
+      description={<>Расширение не сообщило, ушло ли сообщение. До разбора Hub <Hint content="Из превью этому фану не отправят, нового подписчика не поприветствуют, пока кто-то не посмотрит чат и не запишет, что увидел.">держит фана</Hint>.</>}
     >
       <Table label="Зависшие отправки" columns={columns} rows={items} rowKey={(row) => row.attemptId} onRowClick={(row) => onOpen(row.attemptId)} selectedKey={selected} />
       {total > items.length && <p className="decisions-note">Показаны {items.length} из {total}: сверху те, что ждут дольше всех.</p>}
@@ -98,15 +100,17 @@ export function HeldSection({ items, total, serverNow, platformOf, fanOf, onOpen
 }
 
 /** The journal of resolves, folded: who, when, what they saw, why. Every resolve is also in Hub's audit. */
-export function ResolvedJournal({ page, platformOf, fanOf }: {
+export function ResolvedJournal({ page, platformOf }: {
   page: string | null;
   platformOf: (pageLabel: string) => string | undefined;
-  fanOf: (fan: FanRefOnPage) => KnownFan | undefined;
 }) {
   const [offset, setOffset] = useState(0);
+  const [open, setOpen] = useState(false);
   const resolved = useResolvedSends({ offset, ...(page ? { pageLabel: page } : {}) });
   const data = resolved.data;
   const rows = (data?.items ?? []).filter((item) => item.resolution !== null);
+  // The journal's own fans, read once it is opened: folded, it costs no reads (and never shows «фан ·2754» where a name is known).
+  const fanOf = useFanNames(open ? rows : []);
   const collides = collidingIn(rows, fanOf);
   if (!data) {
     return resolved.isError
@@ -125,7 +129,7 @@ export function ResolvedJournal({ page, platformOf, fanOf }: {
         if (row.resolution === null) return "—";
         const label = outcomeLabel(row.resolution.outcome);
         // The message's number is for the audit, not for reading (Р8): on hover.
-        return row.resolution.platformMessageId === null ? label : <Hint content={`ID сообщения ${row.resolution.platformMessageId}`}>{label}</Hint>;
+        return row.resolution.platformMessageId === null ? label : <Tooltip content={`ID сообщения ${row.resolution.platformMessageId}`}><span>{label}</span></Tooltip>;
       },
     },
     {
@@ -134,14 +138,14 @@ export function ResolvedJournal({ page, platformOf, fanOf }: {
       headerWrap: false,
       width: 190,
       nowrap: true,
-      cell: (row) => row.resolution === null ? "—" : <span>{row.resolution.username}<span className="decisions-sub"><TimeMsk at={row.resolution.at} /></span></span>,
+      cell: (row) => row.resolution === null ? "—" : <Person name={row.resolution.username} hint={<TimeMsk at={row.resolution.at} />} />,
     },
     { key: "why", header: "Почему так решили", cell: (row) => <span className="decisions-text">{row.resolution?.note ?? "—"}</span> },
   ];
   const pages = Math.ceil(data.total / RESOLVED_PAGE_SIZE);
   const at = Math.floor(offset / RESOLVED_PAGE_SIZE) + 1;
   return (
-    <Disclosure size="md" className="decisions-fold" summary="Разобранные отправки" hint={String(data.total)}>
+    <Disclosure size="md" className="decisions-fold" summary="Разобранные отправки" hint={String(data.total)} open={open} onOpenChange={setOpen}>
       <p className="decisions-note">Сверху последние. Каждый разбор записан и в журнале аудита Hub.</p>
       <Table
         label="Разобранные отправки"
@@ -211,9 +215,9 @@ export function ResolveSendModal({ item, serverNow, platform, fan, onClose }: {
     },
     { label: "Что отправляли", value: `${purposeLabel(item.purpose)}, ${partLabel(item)}` },
     // The extension's install is for telling two installs of one person apart: on hover (Р8).
-    { label: "Кто отправлял", value: <Hint content={`Установка расширения ${shortId(item.instanceId)}`}>{item.username}</Hint> },
+    { label: "Кто отправлял", value: <Tooltip content={`Установка расширения ${shortId(item.instanceId)}`}><span>{item.username}</span></Tooltip> },
     { label: "Когда, по Москве", value: <><TimeMsk at={item.createdAt} /> · без отчёта {formatSpan(Date.parse(serverNow) - heldSince(item))}</> },
-    ...(greeting !== null ? [{ label: GREETED_HEADER, value: greeting.hint === null ? greeting.text : <Hint content={greeting.hint}>{greeting.text}</Hint> }] : []),
+    ...(greeting !== null ? [{ label: GREETED_HEADER, value: greeting.hint === null ? greeting.text : <Tooltip content={greeting.hint}><span>{greeting.text}</span></Tooltip> }] : []),
   ];
 
   return (
@@ -244,6 +248,9 @@ export function ResolveSendModal({ item, serverNow, platform, fan, onClose }: {
     >
       <form
         className="decisions-resolve"
+        // The focus starts on the window's words, not on an answer (Р-н7): a stray Space must not pick «ушло».
+        tabIndex={-1}
+        data-autofocus={gone ? undefined : true}
         onSubmit={(event) => {
           event.preventDefault();
           submit();
@@ -321,7 +328,7 @@ export function ResolveSendModal({ item, serverNow, platform, fan, onClose }: {
               rows={2}
               disabled={pending || gone}
               onChange={(event) => setDraft((current) => ({ ...current, note: event.target.value }))}
-              placeholder="например: посмотрел чат, сообщение от 14:02 на месте"
+              placeholder={`например: посмотрел чат, сообщение от ${formatTimeOfDay(item.createdAt)} на месте`}
             />
           )}
         </Field>

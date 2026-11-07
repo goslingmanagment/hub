@@ -7,6 +7,7 @@
  */
 import { sumMills, millsToNumber } from "@agency_hub_core/shared";
 import { moscowDayOf, moscowDayStart } from "@agency_hub_core/ui/moscow";
+import { shiftWhen } from "@agency_hub_core/ui/shiftWhen";
 import type { PersonShift, PersonVisit, ShiftSale } from "./data.js";
 
 const DAY_MINUTES = 1440;
@@ -171,16 +172,18 @@ export interface RibbonView {
 const NARROW_MAX_HOURS = 18;
 
 /**
- * The hours worth drawing (Р4): when every shift and visit lies within
- * 18 hours of the clock, from the whole hour before the first minute (half an
- * hour of air at least) to the whole hour after the last; else the whole day.
- * A shift going on is drawn up to now.
+ * The hours worth drawing (Р4): when every shift lies within 18 hours of the
+ * clock, from the whole hour before the first minute (half an hour of air at
+ * least) to the whole hour after the last; else the whole day. A shift going on
+ * is drawn up to now. Work outside a shift does not stretch the hours (27 minutes
+ * at noon must not leave a third of the ribbon empty): one beyond the edge is
+ * drawn at the edge. Only visits, no shift: their hours.
  */
 export function ribbonView(rows: readonly RibbonDay[], extra: readonly number[] = []): RibbonView {
   const whole = { from: 0, to: DAY_MINUTES };
+  const pieces = rows.flatMap((row) => row.pieces.flatMap((piece) => [piece.from, piece.to]));
   const edges = [
-    ...rows.flatMap((row) => row.pieces.flatMap((piece) => [piece.from, piece.to])),
-    ...rows.flatMap((row) => row.visits.flatMap((visit) => [visit.from, visit.to])),
+    ...(pieces.length > 0 ? pieces : rows.flatMap((row) => row.visits.flatMap((visit) => [visit.from, visit.to]))),
     ...extra,
   ];
   if (edges.length === 0) return whole;
@@ -190,4 +193,16 @@ export function ribbonView(rows: readonly RibbonDay[], extra: readonly number[] 
   const from = Math.max(0, Math.floor((first - 30) / 60) * 60);
   const to = Math.min(DAY_MINUTES, Math.ceil((last + 30) / 60) * 60);
   return to - from >= DAY_MINUTES - RIBBON_STEP_HOURS * 60 ? whole : { from, to };
+}
+
+/**
+ * What a row is called (D12): the real dates of the hours it draws. A row of
+ * day hours is its day, «сб, 7 нояб.»; a row whose drawn hours cross midnight
+ * says both days the way a night shift is said everywhere, «пт, 6–7 нояб.» —
+ * never «сб, 7 нояб.» over a bar that begins on Friday evening. The row itself
+ * is the day of its hours' middle, the day Hub gives such a shift.
+ */
+export function ribbonRowLabel(day: string, clock: RibbonClock, view: RibbonView): string {
+  const start = ribbonRowStart(day, clock);
+  return shiftWhen({ startedAt: start + view.from * MINUTE_MS, endedAt: start + view.to * MINUTE_MS }).days;
 }

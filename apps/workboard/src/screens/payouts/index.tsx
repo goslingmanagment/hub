@@ -35,7 +35,10 @@ function UnconfirmedCell({ chatter }: { chatter: PayoutChatter }) {
   const late = chatter.unconfirmed.filter((shift) => shift.tooLate).length;
   return (
     <span>
-      <Money mills={chatter.atStakeMills} />
+      {/* Not read is not zero (В-н5): the shifts are known, their sales are not. */}
+      {chatter.atStakeMills === null
+        ? <Tooltip content="Hub не ответил, сколько продаж в этих сменах: суммы нет, это не ноль. Обновите экран." align="end"><span className="payouts-unknown">нет данных</span></Tooltip>
+        : <Money mills={chatter.atStakeMills} />}
       <span className="payouts-sub">
         {[
           `${count} ${ruPlural(count, "смена", "смены", "смен")}`,
@@ -48,6 +51,19 @@ function UnconfirmedCell({ chatter }: { chatter: PayoutChatter }) {
 }
 
 const STAKE_HINT = "Продажи смен, которые чаттер ещё не подтвердил, — по данным Hub, до его отметок. В выгрузку не входят, пока чаттер не подтвердит смену в кабинете.";
+const CONFIRMED_HINT = "Подтверждённые чаттером продажи за эти дни — то, что копируется в таблицу выплат. Суммы такие, какими вставятся: Fansly до цента, OnlyFans целыми долларами.";
+
+/** «Итого» of «Ждут подтверждения»: every chatter's, or the known ones' with who is left out (В-н5). */
+function StakeTotal({ view }: { view: PayoutsView }) {
+  if (view.atStakeMills !== null) return view.atStakeMills > 0n ? <Money mills={view.atStakeMills} /> : null;
+  const left = view.atStakeUnknown;
+  return (
+    <span>
+      <Money mills={view.atStakeKnownMills} />
+      <span className="payouts-sub">без {left.length <= 2 ? left.join(" и ") : `${left.slice(0, 2).join(", ")} и ещё ${left.length - 2}`}</span>
+    </span>
+  );
+}
 
 function SummaryTable({ view, onOpen, selected }: { view: PayoutsView; onOpen: (username: string) => void; selected: string | null }) {
   // While nobody has confirmed anything, the confirmed columns would be a row of zeros: they wait until the first confirmation.
@@ -62,13 +78,13 @@ function SummaryTable({ view, onOpen, selected }: { view: PayoutsView; onOpen: (
       cell: (row) => <Person name={row.username} hint={row.days > 0 ? `${row.days} ${ruPlural(row.days, "день", "дня", "дней")} с продажами` : null} />,
       sortValue: (row) => row.username,
       // «Итого» only where a total stands beside it.
-      ...(anyConfirmed || (view.atStakeMills !== null && view.atStakeMills > 0n) ? { footer: <span className="payouts-total">Итого</span> } : {}),
+      ...(anyConfirmed || view.atStakeKnownMills > 0n || view.atStakeUnknown.length > 0 ? { footer: <span className="payouts-total">Итого</span> } : {}),
     },
     ...(anyConfirmed ? [
       {
         key: "confirmed",
         header: "Подтверждено",
-        hint: "Подтверждённые чаттером продажи за эти дни: то, что копируется в таблицу выплат.",
+        hint: CONFIRMED_HINT,
         numeric: true,
         width: 190,
         cell: (row: PayoutChatter) => (row.confirmedMills > 0n ? (
@@ -108,7 +124,7 @@ function SummaryTable({ view, onOpen, selected }: { view: PayoutsView; onOpen: (
         width: 240,
         cell: (row: PayoutChatter) => <UnconfirmedCell chatter={row} />,
         sortValue: (row: PayoutChatter) => (row.unconfirmed.length === 0 ? null : row.atStakeMills),
-        footer: view.atStakeMills !== null && view.atStakeMills > 0n ? <Money mills={view.atStakeMills} /> : undefined,
+        footer: <StakeTotal view={view} />,
       },
     ] satisfies Column<PayoutChatter>[] : []),
     {
@@ -128,8 +144,8 @@ function SummaryTable({ view, onOpen, selected }: { view: PayoutsView; onOpen: (
       selectedKey={selected}
       skeletonLines={2}
       align="first-line"
-      // Nobody confirmed (production today): two columns, not a table spread over 1 400 px (В6).
-      {...(anyConfirmed ? {} : { maxWidth: 720 })}
+      // Nobody confirmed (production today): two columns make a narrow sheet by the width rule (Table «fit»), and the notices
+      // over it end where it ends (В6).
       defaultSort={anyConfirmed ? null : { key: "stake", direction: "desc" }}
     />
   );
@@ -192,9 +208,11 @@ export function PayoutsScreen() {
         title="Выплаты"
         period
         actions={(
-          <Tooltip content={why ?? "Таблица по дням: блок на чаттера, Fansly до цента, OnlyFans целыми долларами"} align="end">
+          // A verb and an icon in the filter's place (D15): the period stands where it stands on every screen; what is copied is in the
+          // line under the title and in the hint.
+          <Tooltip content={why ?? "Скопировать для таблицы выплат: блок на чаттера, дни столбцами, Fansly до цента, OnlyFans целыми долларами"} align="end">
             <Button variant="primary" icon={Copy} disabled={why !== null} onClick={copyAll}>
-              Скопировать для таблицы
+              Скопировать
             </Button>
           </Tooltip>
         )}
@@ -220,31 +238,37 @@ export function PayoutsScreen() {
             : <ErrorState onRetry={payouts.refetch} retrying={exported.isFetching} />
         ) : (
           <>
-            <div className="payouts-notices">
-              {exported.isError && <Notice tone="warning" role="alert" action={<Button size="sm" onClick={payouts.refetch}>Повторить</Button>}>Не удалось обновить: показаны прежние суммы, копировать их нельзя.</Notice>}
-              {/* Two things left out of the copy, one notice: each line with its own way on (В4). */}
-              {warnings.length > 0 && (
-                <Notice tone="warning">
-                  <ul className="payouts-warnings">
-                    {warnings.map((one) => <li key={one.key}><span>{one.text}</span>{one.action}</li>)}
-                  </ul>
-                </Notice>
-              )}
-              {confirmedNone && (
-                <Notice title="Чаттеры ещё не подтвердили ни одной смены за эти дни">
-                  Копировать пока нечего. Продажи их смен по данным Hub — в столбце «Ждут подтверждения»; в выгрузку они попадут, когда чаттер
-                  подтвердит смену в кабинете.
-                </Notice>
+            {/*
+              The notices and the table as one block: a fitted table (Table «fit») makes the block's notices end where the table
+              ends (`--ui-section-fit`), so a notice never runs 500 px past the table it is about (В-н6).
+            */}
+            <div className="ui-section payouts-main">
+              <div className="payouts-notices">
+                {exported.isError && <Notice tone="warning" role="alert" action={<Button size="sm" onClick={payouts.refetch}>Повторить</Button>}>Не удалось обновить: показаны прежние суммы, копировать их нельзя.</Notice>}
+                {/* Two things left out of the copy, one notice: each line with its own way on (В4). */}
+                {warnings.length > 0 && (
+                  <Notice tone="warning">
+                    <ul className="payouts-warnings">
+                      {warnings.map((one) => <li key={one.key}><span>{one.text}</span>{one.action}</li>)}
+                    </ul>
+                  </Notice>
+                )}
+                {confirmedNone && (
+                  <Notice title="Чаттеры ещё не подтвердили ни одной смены за эти дни">
+                    Копировать пока нечего. Продажи их смен по данным Hub — в столбце «Ждут подтверждения»; в выгрузку они попадут, когда чаттер
+                    подтвердит смену в кабинете.
+                  </Notice>
+                )}
+              </div>
+
+              {view.chatters.length === 0 ? (
+                <EmptyState title="За эти дни смен нет" className="payouts-empty">
+                  Ни подтверждённых отчётов, ни смен без подтверждения за {formatDayRange(view.from, view.to)}.
+                </EmptyState>
+              ) : (
+                <SummaryTable view={view} onOpen={setChatter} selected={openChatter?.username ?? null} />
               )}
             </div>
-
-            {view.chatters.length === 0 ? (
-              <EmptyState title="За эти дни смен нет" className="payouts-empty">
-                Ни подтверждённых отчётов, ни смен без подтверждения за {formatDayRange(view.from, view.to)}.
-              </EmptyState>
-            ) : (
-              <SummaryTable view={view} onOpen={setChatter} selected={openChatter?.username ?? null} />
-            )}
 
             <div className="payouts-folds">
               {view.sheet.length > 0 && (

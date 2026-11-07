@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import { useLocation } from "react-router";
 import { Button, Disclosure, Drawer, EmptyState, LinkButton, Mark, Money, RateBar, Section, Table, Tooltip, type Column } from "@agency_hub_core/ui";
 import { formatCount, formatMills, formatOf, formatPercent } from "@agency_hub_core/ui/format";
+import { ruPlural } from "@agency_hub_core/ui/plural";
 import { personPath, useBackState } from "@/shared/links";
 import { usePageFilter } from "@/shared/usePageFilter";
 import { usePeriod } from "@/shared/usePeriod";
@@ -10,7 +11,6 @@ import {
   MIN_SAMPLE,
   bestPrice,
   cheapShare,
-  firstPpvLead,
   perMessageMills,
   priceView,
   readWindow,
@@ -22,13 +22,16 @@ import {
   type PpvLine,
   type PriceView,
 } from "./data";
-import { BACK_LABEL, barWidth, BySwitch, HowItCounts, LineName, MoneyBar, NoAnswer, SalesHeader, WindowNotice, openColumn, panelColumns, SCALE_SAMPLE, scaleOf, skeletonColumns, useSalesParams, windowWords } from "./parts";
+import { BACK_LABEL, barWidth, BeyondReach, BySwitch, Folds, HowItCounts, LineName, MoneyBar, NoAnswer, SalesHeader, WindowNotice, openColumn, panelColumns, skeletonColumns, useSalesParams, windowWords } from "./parts";
 
 /**
  * Цена: which price of a paid message brings money — by the money one sent
  * message brings, not only by how often it is bought — for the team, then page
  * by page or chatter by chatter, bars instead of matrices. The best price is
  * bold ink and a word (spec r2), never the warm mark: that one means «worse».
+ * «The best» is chosen among prices sent 20 times or more, and the sentence
+ * above the table says so; a smaller one says «мало данных» in the same slot
+ * (E3). A share's bar runs from 0 to 100 %: 26 % looks like a quarter.
  */
 
 const rateOf = (counts: { sent: number; bought: number }) => ({ hits: counts.bought, of: counts.sent });
@@ -36,7 +39,7 @@ const rateOf = (counts: { sent: number; bought: number }) => ({ hits: counts.bou
 /** The shape of a line before anything is read: for the skeleton's columns. */
 const EMPTY_LINE: PpvLine = { key: "all", kind: "page", name: "", userId: null, platform: null, total: { sent: 0, bought: 0, netMills: 0 }, byPrice: [], withoutAuthor: null };
 
-const SMALL_HINT = (sent: number) => `Всего ${formatCount(sent)} ${sent === 1 ? "сообщение" : "сообщений"} — мало, чтобы судить`;
+const SMALL_HINT = (sent: number) => `Всего ${formatCount(sent)} ${ruPlural(sent, "сообщение", "сообщения", "сообщений")} — мало, чтобы судить`;
 
 /** The money scale of a column: only fair samples set it (a pale «$19.99 из 18» may not outgrow the best). */
 function moneyScale(counts: readonly PpvCounts[], extra: ReadonlyArray<number | null> = []): number {
@@ -46,7 +49,6 @@ function moneyScale(counts: readonly PpvCounts[], extra: ReadonlyArray<number | 
 function priceColumns(cells: readonly PpvCell[], options: { compare?: readonly PpvCell[]; compareLabel?: string; word?: boolean } = {}): Column<PpvCell>[] {
   const best = bestPrice(cells);
   const teamOf = (bucket: string) => options.compare?.find((cell) => cell.bucket === bucket);
-  const rateMax = scaleOf(cells.map((cell) => (cell.sent >= SCALE_SAMPLE ? share(rateOf(cell)) : null)).concat(options.compare?.map((cell) => share(rateOf(cell))) ?? []));
   const moneyMax = moneyScale(cells, options.compare?.map((cell) => (cell.sent >= MIN_SAMPLE.ppv ? perMessageMills(cell) : null)) ?? []);
   const compareLabel = options.compareLabel ?? "все вместе";
   return [
@@ -60,12 +62,12 @@ function priceColumns(cells: readonly PpvCell[], options: { compare?: readonly P
     {
       key: "bought",
       header: "Купили",
-      hint: "Доля купленных из отправленных платных этой цены",
       cell: (cell) => {
         const team = teamOf(cell.bucket);
-        return <RateBar {...rateOf(cell)} min={MIN_SAMPLE.ppv} max={rateMax} compare={team ? share(rateOf(team)) : null} compareLabel={compareLabel} />;
+        return <RateBar {...rateOf(cell)} min={MIN_SAMPLE.ppv} compare={team ? share(rateOf(team)) : null} compareLabel={compareLabel} />;
       },
       width: barWidth(30, 460),
+      className: "sales-bar-col",
     },
     {
       key: "per",
@@ -90,6 +92,7 @@ function priceColumns(cells: readonly PpvCell[], options: { compare?: readonly P
         );
       },
       width: barWidth(34, options.word === false ? 420 : 540),
+      className: "sales-bar-col",
     },
     {
       key: "net",
@@ -100,22 +103,26 @@ function priceColumns(cells: readonly PpvCell[], options: { compare?: readonly P
   ];
 }
 
-/** «Больше всего денег на одно сообщение — у $50–100: $14.54. У «от $100» больше, но таких всего 18: мало, чтобы судить». */
-function verdictOf(cells: readonly PpvCell[]): string {
+/**
+ * The answer above the table, then its rule (E3): «Больше всего денег на одно
+ * сообщение приносит цена $50–100 — $13.91. Сравниваем цены, отправленные
+ * 20 раз и больше; у «от $100» больше — $39.99, но её отправили всего 9 раз:
+ * мало данных.» Pure.
+ */
+export function verdictOf(cells: readonly PpvCell[]): string {
   const best = bestPrice(cells);
-  if (!best) return "Ни у одной цены пока не набралось 20 отправленных — сравнивать рано. Бледные строки — малые выборки.";
+  if (!best) return `Сравнивать рано: ни у двух цен не набралось ${MIN_SAMPLE.ppv} отправленных. Бледные строки — мало данных.`;
   const value = perMessageMills(best);
-  const words = [`Больше всего денег на одно отправленное сообщение — у цены ${best.label}${value !== null ? `: ${formatMills(value)}` : ""}.`];
+  const answer = `Больше всего денег на одно сообщение приносит цена ${best.label}${value !== null ? ` — ${formatMills(value)}` : ""}.`;
   const richer = richerSmallPrice(cells, best);
-  if (richer) {
-    const richerValue = perMessageMills(richer);
-    words.push(`У «${richer.label}» больше${richerValue !== null ? ` — ${formatMills(richerValue)}` : ""}, но таких всего ${formatCount(richer.sent)}: мало, чтобы судить.`);
-  }
-  return words.join(" ");
+  const rule = `Сравниваем цены, отправленные ${MIN_SAMPLE.ppv}\u00a0раз и больше`;
+  if (!richer) return `${answer} ${rule}.`;
+  const richerValue = perMessageMills(richer);
+  return `${answer} ${rule}; у «${richer.label}» больше${richerValue !== null ? ` — ${formatMills(richerValue)}` : ""}, но её отправили всего ${formatCount(richer.sent)}\u00a0${ruPlural(richer.sent, "раз", "раза", "раз")}: мало данных.`;
 }
 
 /** The team's (or the chosen page's) prices: five rows, the best one in bold with its word. */
-function TeamPrices({ view }: { view: PriceView }) {
+function TeamPrices({ view, onAllPages }: { view: PriceView; onAllPages: (() => void) | null }) {
   const { all } = view;
   const columns = priceColumns(all.byPrice).map((column): Column<PpvCell> => {
     switch (column.key) {
@@ -133,11 +140,12 @@ function TeamPrices({ view }: { view: PriceView }) {
   });
   const withoutAuthor = all.withoutAuthor ?? 0;
   return (
-    <Section title="Какая цена приносит больше" description={verdictOf(all.byPrice)}>
+    <Section title={onAllPages ? `Какая цена приносит больше на ${all.name}` : "Какая цена приносит больше"} description={verdictOf(all.byPrice)}>
       <Table label="Платные сообщения по цене" columns={columns} rows={all.byPrice} rowKey={(cell) => cell.bucket} stickyHeader={false} />
-      {withoutAuthor > 0 && (
+      {(withoutAuthor > 0 || onAllPages) && (
         <div className="sales-after">
-          <p>Из {formatCount(all.total.sent)} платных {formatCount(withoutAuthor)} без автора: ушли не из расширения, поэтому по чаттерам их не видно.</p>
+          {withoutAuthor > 0 && <p>Из {formatCount(all.total.sent)} платных {formatCount(withoutAuthor)} без автора: ушли не из расширения, поэтому по чаттерам их не видно.</p>}
+          {onAllPages && <Button size="sm" variant="ghost" onClick={onAllPages}>Сравнить с другими страницами</Button>}
         </div>
       )}
     </Section>
@@ -161,7 +169,6 @@ function lineColumns(lines: readonly PpvLine[], all: PpvLine, by: "pages" | "cha
     {
       key: "bought",
       header: "Купили",
-      hint: "Доля купленных из отправленных платных",
       numeric: true,
       cell: (line) => {
         if (line.total.sent === 0) return <span className="sales-quiet">—</span>;
@@ -185,6 +192,7 @@ function lineColumns(lines: readonly PpvLine[], all: PpvLine, by: "pages" | "cha
       sortValue: (line) => (line.total.sent >= MIN_SAMPLE.ppv ? perMessageMills(line.total) : null),
       sortFirst: "desc",
       width: barWidth(34, 440),
+      className: "sales-bar-col",
     },
     { key: "net", header: "Получили", numeric: true, cell: (line) => <Money mills={line.total.netMills} />, sortValue: (line) => line.total.netMills },
     {
@@ -205,13 +213,13 @@ function lineColumns(lines: readonly PpvLine[], all: PpvLine, by: "pages" | "cha
   ];
 }
 
-/** One page's or chatter's prices against everyone together. */
+/** One page's or chatter's prices against everyone together: the same answer, the same rule as the table above. */
 function LineDrawer({ line, all, onClose, windowLabel }: { line: PpvLine; all: PpvLine; onClose: () => void; windowLabel: string }) {
   const location = useLocation();
   const back = useBackState(BACK_LABEL);
   const together = line.kind === "chatter" ? "вся команда" : "все страницы";
-  const columns = panelColumns(priceColumns(line.byPrice, { compare: all.byPrice, compareLabel: together, word: false }), { price: "18%", sent: "15%", bought: "33%", per: "34%" }, { nowrapFirst: true });
-  const best = bestPrice(line.byPrice);
+  const columns = panelColumns(priceColumns(line.byPrice, { compare: all.byPrice, compareLabel: together }), { price: "19%", sent: "14%", bought: "27%", per: "40%" }, { nowrapFirst: true });
+  const bought = line.total.sent > 0 ? formatPercent((100 * line.total.bought) / line.total.sent) : "—";
   return (
     <Drawer
       open
@@ -225,12 +233,12 @@ function LineDrawer({ line, all, onClose, windowLabel }: { line: PpvLine; all: P
     >
       <div className="sales-drawer">
         <p className="sales-drawer__lead">
-          {formatCount(line.total.sent)} отправлено, купили {line.total.sent > 0 ? formatPercent((100 * line.total.bought) / line.total.sent) : "—"},
-          получено <Money mills={line.total.netMills} />.
-          {best ? ` Больше всего денег на одно сообщение — у цены ${best.label}.` : " Сравнивать цены рано: ни у двух цен не набралось 20 сообщений."}
+          Отправлено {formatCount(line.total.sent)}, купили {line.total.sent >= MIN_SAMPLE.ppv ? bought : formatOf(line.total.bought, line.total.sent)},
+          получено <Money mills={line.total.netMills} />.{" "}
+          {verdictOf(line.byPrice)}
           {line.withoutAuthor ? ` Без автора ${formatCount(line.withoutAuthor)}: ушли не из расширения.` : ""}
         </p>
-        <Table label={`${line.name}: платные по цене`} columns={columns} rows={line.byPrice} rowKey={(cell) => cell.bucket} stickyHeader={false} />
+        <Table label={`${line.name}: платные по цене`} columns={columns} rows={line.byPrice} rowKey={(cell) => cell.bucket} stickyHeader={false} fit={false} />
         <p className="sales-sub">Черта на полосе — {together}.</p>
       </div>
     </Drawer>
@@ -242,24 +250,28 @@ export function PriceTab() {
   const { page, setPage } = usePageFilter();
   const { by, open, setBy, setOpen } = useSalesParams();
   const window = readWindow(period, today, MAX_DAYS.sales);
-  const query = useSalesPpv(window.days);
+  const query = useSalesPpv(window);
   const view = useMemo(() => (query.data ? priceView(query.data, page) : null), [query.data, page]);
   const lines = view ? (by === "pages" ? view.pages : view.chatters) : [];
   const openLine = view ? [...view.pages, ...view.chatters].find((line) => line.key === open) ?? null : null;
   const label = view ? windowWords(view.from, view.to) : "";
 
   let body;
-  if (!view) {
+  if (window.beyond) {
+    body = <BeyondReach maxDays={MAX_DAYS.sales} />;
+  } else if (!view) {
     body = query.isError
       ? <NoAnswer onRetry={() => void query.refetch()} retrying={query.isFetching} />
       : (
         <>
           <Section title="Какая цена приносит больше" description="Считаем деньги на одно отправленное сообщение…">
-            <Table label="Платные сообщения по цене" columns={priceColumns([])} rows={[]} rowKey={(cell) => cell.bucket} loading skeletonRows={6} stickyHeader={false} />
+            <Table label="Платные сообщения по цене" columns={priceColumns([])} rows={[]} rowKey={(cell) => cell.bucket} fit={false} loading skeletonRows={6} stickyHeader={false} />
           </Section>
-          <Section title={by === "pages" ? "По страницам" : "По чаттерам"} actions={<BySwitch value={by} onChange={setBy} />}>
-            <Table label="Платные по страницам" columns={skeletonColumns(lineColumns([], EMPTY_LINE, by))} rows={[]} rowKey={(line) => line.key} loading skeletonRows={6} />
-          </Section>
+          {page === null && (
+            <Section title={by === "pages" ? "По страницам" : "По чаттерам"} actions={<BySwitch value={by} onChange={setBy} />}>
+              <Table label="Платные по страницам" columns={skeletonColumns(lineColumns([], EMPTY_LINE, by))} rows={[]} rowKey={(line) => line.key} fit={false} loading skeletonRows={6} />
+            </Section>
+          )}
         </>
       );
   } else if (view.all.total.sent === 0) {
@@ -272,23 +284,16 @@ export function PriceTab() {
       </EmptyState>
     );
   } else {
-    const lead = firstPpvLead(view.firstPpv);
     body = (
       <>
-        <TeamPrices view={view} />
-        <Section
-          title={by === "pages" ? "По страницам" : "По чаттерам"}
-          {...(by === "chatters"
-            ? { description: page ? `По всем страницам, не только ${page}: Hub пока не делит чаттера по страницам. Без платных без автора.` : "Только платные, у которых Hub знает автора." }
-            : {})}
-          actions={<BySwitch value={by} onChange={setBy} />}
-        >
-          {by === "pages" && page !== null ? (
-            <div className="sales-after">
-              <p>Выбрана одна страница — её цены выше.</p>
-              <Button size="sm" variant="ghost" onClick={() => setPage(null)}>Сравнить все страницы</Button>
-            </div>
-          ) : (
+        <TeamPrices view={view} onAllPages={page !== null ? () => setPage(null) : null} />
+        {/* One page chosen: its prices are the answer; pages and chatters are compared without the filter (Ц5). */}
+        {page === null && (
+          <Section
+            title={by === "pages" ? "По страницам" : "По чаттерам"}
+            {...(by === "chatters" ? { description: "Только платные, у которых Hub знает автора." } : {})}
+            actions={<BySwitch value={by} onChange={setBy} />}
+          >
             <Table
               label={by === "pages" ? "Платные по страницам" : "Платные по чаттерам"}
               columns={lineColumns(lines, view.all, by)}
@@ -300,59 +305,61 @@ export function PriceTab() {
               refreshing={query.isPlaceholderData}
               empty={<EmptyState compact title={by === "pages" ? "Страниц с платными нет" : "Платных с известным автором нет"}>За эти дни Hub не нашёл таких сообщений.</EmptyState>}
             />
-          )}
-        </Section>
-        <Disclosure
-          size="md"
-          summary="Первое платное в чате"
-          hint={lead ? `чаще всего покупают ${lead.label.startsWith("$") ? `по ${lead.label}` : lead.label}: ${formatPercent((100 * lead.bought) / lead.sent)}` : "купил ли фан своё первое платное, по его цене"}
-        >
-          <div className="sales-fold">
-            <Table label="Первое платное в чате по цене" columns={priceColumns(view.firstPpv)} rows={view.firstPpv} rowKey={(cell) => cell.bucket} stickyHeader={false} />
-          </div>
-        </Disclosure>
+          </Section>
+        )}
       </>
     );
   }
 
+  const firstBest = view ? bestPrice(view.firstPpv) : null;
+  const firstBestValue = firstBest ? perMessageMills(firstBest) : null;
   return (
     <>
-      <SalesHeader
-        meta={view ? `Платные сообщения ${label}${page ? ` · ${page}` : " · все страницы"}` : "Платные сообщения"}
-        updatedAt={query.dataUpdatedAt}
-        onRefresh={() => void query.refetch()}
-        refreshing={query.isFetching}
-      />
+      <SalesHeader updatedAt={query.dataUpdatedAt} onRefresh={() => void query.refetch()} refreshing={query.isFetching} />
       <div className="wb-content">
         <WindowNotice window={window} maxDays={MAX_DAYS.sales} {...(label ? { shown: label } : {})} />
         {body}
-        <HowItCounts>
-          <p>
-            Платное сообщение — личное сообщение за деньги: без рассылок Fansly и без одинакового текста, ушедшего пяти и
-            больше фанам за час.
-          </p>
-          <p>
-            Куплено — Fansly отметил покупку, на OnlyFans у сообщения есть время покупки. Деньги — после комиссии: на Fansly
-            из статистики продаж платных сообщений, на OnlyFans — покупка этого фана в пределах 3 минут. «На одно сообщение» —
-            эти деньги, делённые на все отправленные платные этой цены: так видно и долю купивших, и саму цену. Больше всего
-            денег — жирным и словом «больше всего», если сравнивать есть с чем: хотя бы у двух цен по 20 сообщений.
-          </p>
-          <p>
-            Свежие платные сообщения ещё могут купить, поэтому последние дни занижают долю. Меньше 20 сообщений — слишком мало,
-            чтобы судить: такие строки бледнее, показаны как «2 из 14», и полосы денег у них нет. Черта на полосе — все
-            страницы (или вся команда) вместе.
-          </p>
-          <p>
-            Первое платное в чате — первое платное, которое знает Hub: если история чата загружена не целиком, первым может
-            оказаться не самое первое.
-          </p>
-          <p>
-            Без автора — платные, отправленные не из расширения (с телефона или сайта): Hub не знает, кто их написал. По чаттерам
-            их нет, поэтому сумма по чаттерам меньше суммы по страницам. «Дешевле $10» отмечено, когда у страницы или чаттера
-            таких заметно больше, чем у всех вместе.
-          </p>
-          <p>Это ориентир, а не основание для оплаты.</p>
-        </HowItCounts>
+        <Folds>
+          {view && view.all.total.sent > 0 && (
+            <Disclosure
+              summary="Первое платное в чате"
+              hint={firstBest && firstBestValue !== null
+                ? `больше всего денег — у ${firstBest.label}: ${formatMills(firstBestValue)} на сообщение`
+                : "купил ли фан своё первое платное, по его цене"}
+            >
+              <div className="sales-fold">
+                <Table label="Первое платное в чате по цене" columns={priceColumns(view.firstPpv)} rows={view.firstPpv} rowKey={(cell) => cell.bucket} stickyHeader={false} />
+              </div>
+            </Disclosure>
+          )}
+          <HowItCounts>
+            <p>
+              Платное сообщение — личное сообщение за деньги: без рассылок Fansly и без одинакового текста, ушедшего пяти и
+              больше фанам за час.
+            </p>
+            <p>
+              Куплено — Fansly отметил покупку, на OnlyFans у сообщения есть время покупки. Деньги — после комиссии: на Fansly
+              из статистики продаж платных сообщений, на OnlyFans — покупка этого фана в пределах 3 минут. «На одно сообщение» —
+              эти деньги, делённые на все отправленные платные этой цены: так видно и долю купивших, и саму цену.
+            </p>
+            <p>
+              «Больше всего» выбирается только среди цен, отправленных {MIN_SAMPLE.ppv} раз и больше, и только если таких цен хотя
+              бы две. Цена, отправленная реже, — «мало данных»: она бледнее, её доля показана как «2 из 14», полосы денег у
+              неё нет. Свежие платные ещё могут купить, поэтому последние дни занижают долю. Полоса доли — от 0 до 100 %; черта
+              на полосе — все страницы (или вся команда) вместе.
+            </p>
+            <p>
+              Первое платное в чате — первое платное, которое знает Hub: если история чата загружена не целиком, первым может
+              оказаться не самое первое.
+            </p>
+            <p>
+              Без автора — платные, отправленные не из расширения (с телефона или сайта): Hub не знает, кто их написал. По чаттерам
+              их нет, поэтому сумма по чаттерам меньше суммы по страницам. «Дешевле $10» отмечено, когда у страницы или чаттера
+              таких заметно больше, чем у всех вместе.
+            </p>
+            <p>Это ориентир, а не основание для оплаты.</p>
+          </HowItCounts>
+        </Folds>
       </div>
       {openLine && view && <LineDrawer line={openLine} all={view.all} onClose={() => setOpen(null)} windowLabel={label} />}
     </>

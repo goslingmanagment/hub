@@ -3,19 +3,23 @@ import { useLocation, useNavigate } from "react-router";
 import { Money, PageLabels, Tooltip, type ScreenRect } from "@agency_hub_core/ui";
 import { formatDuration, formatMills, formatTimeOfDay } from "@agency_hub_core/ui/format";
 import { ruPlural } from "@agency_hub_core/ui/plural";
+import { shiftWhen } from "@agency_hub_core/ui/shiftWhen";
 import { ShiftLink, shiftPath } from "@/shared/links";
 import { formatAiUnedited, formatReplyMedian, formatUnanswered, METRICS, UNANSWERED_NOW_LABEL } from "@/shared/metrics";
 import type { PersonShift, PersonVisit, ReadState } from "./data.js";
-import { beadSize, ribbonClock, ribbonDays, ribbonRowOf, ribbonRowStart, ribbonView, RIBBON_STEP_HOURS, type RibbonSale } from "./ribbon.js";
-import { dayWords, KIND_OF, KINDS, timeRange } from "./words.js";
+import { beadSize, ribbonClock, ribbonDays, ribbonRowLabel, ribbonRowOf, ribbonRowStart, ribbonView, RIBBON_STEP_HOURS, type RibbonSale } from "./ribbon.js";
+import { pagesInOrder } from "./ShiftTable.js";
+import { KIND_OF, KINDS } from "./words.js";
 
 /**
  * The person's shifts by the hour (kept from the console's «Статистика» — the
  * owner's favourite block): a row per day of the period, a bar per shift
- * (lighter where it paused), a bead per sale — the bigger, the more money; a
+ * (its pauses in another shade), a bead per sale — the bigger, the more money; a
  * hollow bead also counts for a colleague; a thin line is work outside a
- * shift. Only the hours that hold work are drawn. A bar opens that shift's
- * review (the owner's). Hover or focus tells the numbers.
+ * shift. Only the hours that hold shifts are drawn; a row is called by the real
+ * dates of those hours («пт, 6–7 нояб.» for a night, D12); today's row shows
+ * once its hours begin. A bar opens that shift's review (the owner's).
+ * Hover or focus tells the numbers.
  */
 
 type Target = { kind: "shift"; shift: number } | { kind: "sale"; sale: RibbonSale } | { kind: "visit"; visit: number };
@@ -38,12 +42,18 @@ export function ShiftRibbon({ userId, backLabel, shifts, visits, days, unknownBe
   canOpen: boolean;
 }) {
   const clock = useMemo(() => ribbonClock(shifts), [shifts]);
-  const rows = useMemo(() => ribbonDays(days, shifts, visits, clock), [days, shifts, visits, clock]);
+  const allRows = useMemo(() => ribbonDays(days, shifts, visits, clock), [days, shifts, visits, clock]);
   const nowAt = Date.now();
   const nowRow = ribbonRowOf(nowAt, clock);
   const nowMinute = (nowAt - ribbonRowStart(nowRow, clock)) / 60_000;
   const live = shifts.some((shift) => shift.ongoing);
-  const view = useMemo(() => ribbonView(rows, live ? [nowMinute] : []), [rows, live, nowMinute]);
+  const view = useMemo(() => ribbonView(allRows, live ? [nowMinute] : []), [allRows, live, nowMinute]);
+  // A row whose drawn hours have not begun yet (today's, at night for a day worker) says nothing: it stays out until
+  // they begin. A row going on without work stays, quiet — «not working tonight» is news.
+  const rows = useMemo(
+    () => allRows.filter((row) => row.pieces.length > 0 || row.visits.length > 0 || nowAt >= ribbonRowStart(row.day, clock) + view.from * 60_000),
+    [allRows, clock, view.from, nowAt],
+  );
   const span = view.to - view.from;
   const left = (minute: number) => `${((Math.min(Math.max(minute, view.from), view.to) - view.from) / span) * 100}%`;
   const width = (from: number, to: number) => `${(Math.max(Math.min(to, view.to) - Math.max(from, view.from), 0) / span) * 100}%`;
@@ -55,6 +65,10 @@ export function ShiftRibbon({ userId, backLabel, shifts, visits, days, unknownBe
     return list;
   }, [view.from, view.to]);
   const maxSale = useMemo(() => Math.max(0, ...shifts.flatMap((shift) => (shift.saleList ?? []).map((sale) => sale.netMills))), [shifts]);
+  const labels = useMemo(() => new Map(rows.map((row) => [row.day, ribbonRowLabel(row.day, clock, view)])), [rows, clock, view]);
+  // «пт, 31 окт. – 1 нояб.» needs a wider column than «вс, 1–2 нояб.».
+  const dayColumn = Math.max(...[...labels.values()].map((label) => label.length), 0) > 15 ? "156px" : undefined;
+  const hasPauses = shifts.some((shift) => shift.pauses.length > 0);
   const density = rows.length > 20 ? "dense" : rows.length > 10 ? "medium" : "roomy";
   const [hover, setHover] = useState<Hover | null>(null);
   const navigate = useNavigate();
@@ -97,7 +111,7 @@ export function ShiftRibbon({ userId, backLabel, shifts, visits, days, unknownBe
   }, [hover]);
 
   return (
-    <div className="people-ribbon" data-density={density}>
+    <div className="people-ribbon" data-density={density} style={dayColumn ? { ["--day-col" as string]: dayColumn } : undefined}>
       <div className="people-ribbon__row people-ribbon__head" aria-hidden>
         <span />
         <div className="people-ribbon__hours">
@@ -107,28 +121,33 @@ export function ShiftRibbon({ userId, backLabel, shifts, visits, days, unknownBe
             </span>
           ))}
         </div>
-        <span className="people-ribbon__total-head">за день</span>
+        <span className="people-ribbon__total-head">продажи</span>
       </div>
 
       <ol className="people-ribbon__days" aria-label="Смены по дням и часам, московское время">
         {rows.map((row) => (
-          <li key={row.day} className="people-ribbon__row" data-today={row.day === today || undefined}>
-            <span className="people-ribbon__day">{dayWords(row.day)}</span>
+          <li key={row.day} className="people-ribbon__row" data-today={(row.day === today && row.pieces.length > 0) || undefined}>
+            <span className="people-ribbon__day">{labels.get(row.day)}</span>
             <div className="people-ribbon__track">
               {marks.filter((minute) => minute > view.from && minute < view.to).map((minute) => <span key={minute} className="people-ribbon__grid" style={{ left: left(minute) }} />)}
-              {row.visits.map((visit) => (
-                <span
-                  key={`visit-${visit.visit}`}
-                  className="people-ribbon__visit"
-                  style={{ left: left(visit.from), width: width(visit.from, visit.to) }}
-                  data-ribbon-mark
-                  tabIndex={-1}
-                  {...hoverProps({ kind: "visit", visit: visit.visit })}
-                />
-              ))}
+              {row.visits.map((visit) => {
+                // Work outside a shift beyond the drawn hours stands at that edge, an arrow pointing where it was.
+                const edge = visit.to <= view.from ? "start" : visit.from >= view.to ? "end" : undefined;
+                return (
+                  <span
+                    key={`visit-${visit.visit}`}
+                    className="people-ribbon__visit"
+                    data-edge={edge}
+                    style={edge ? undefined : { left: left(visit.from), width: width(visit.from, visit.to) }}
+                    data-ribbon-mark
+                    tabIndex={-1}
+                    {...hoverProps({ kind: "visit", visit: visit.visit })}
+                  />
+                );
+              })}
               {row.pieces.map((piece) => {
                 const shift = shifts[piece.shift]!;
-                const label = `${dayWords(shift.date)}, ${timeRange(shift)}: продажи ${formatMills(shift.salesNetMills)}${canOpen ? ". Открыть разбор" : ""}`;
+                const label = `${shiftWhen(shift).label}: продажи ${formatMills(shift.salesNetMills)}${canOpen ? ". Открыть разбор" : ""}`;
                 const pauses = piece.pauses.map((pause) => (
                   <span
                     key={pause.from}
@@ -198,9 +217,15 @@ export function ShiftRibbon({ userId, backLabel, shifts, visits, days, unknownBe
             </li>
           )}
           <li>
-            <span aria-hidden className="people-ribbon__key-shift"><span /></span>
-            смена, светлее — пауза
+            <span aria-hidden className="people-ribbon__key-shift" />
+            смена
           </li>
+          {hasPauses && (
+            <li>
+              <span aria-hidden className="people-ribbon__key-pause" />
+              пауза
+            </li>
+          )}
           {visits.length > 0 && (
             <li>
               <span aria-hidden className="people-ribbon__key-visit" />
@@ -258,11 +283,13 @@ function RibbonTip({ hover, shifts, visits, canOpen }: { hover: Hover; shifts: r
   const shift = shifts[hover.shift];
   if (!shift) return null;
   const numbers = shift.numbers;
+  const when = shiftWhen(shift);
   return (
     <div className="people-tip">
-      <div className="people-tip__title">{dayWords(shift.date)}, {timeRange(shift)}</div>
+      <div className="people-tip__title">{when.label}</div>
       <TipRow name="Продажи"><Money mills={shift.salesNetMills} strong /></TipRow>
-      <TipRow name="Отработано">{formatDuration(shift.workedMinutes)}</TipRow>
+      <TipRow name="Длительность">{when.worked}</TipRow>
+      {when.withPauses && <div className="people-tip__note people-tip__note--right">{when.withPauses}</div>}
       {numbers && (
         <>
           <TipRow name={METRICS.reply.label}>{formatReplyMedian(numbers.replyMedianSeconds)}</TipRow>
@@ -270,7 +297,7 @@ function RibbonTip({ hover, shifts, visits, canOpen }: { hover: Hover; shifts: r
           <TipRow name={METRICS.aiUnedited.label}>{formatAiUnedited(numbers.aiUneditedShare)}</TipRow>
         </>
       )}
-      <div className="people-tip__note"><PageLabels labels={shift.pages} max={4} /></div>
+      <div className="people-tip__note"><PageLabels labels={pagesInOrder(shift.pages)} max={4} /></div>
       {canOpen && <div className="people-tip__hint">Нажмите — откроется разбор смены</div>}
     </div>
   );

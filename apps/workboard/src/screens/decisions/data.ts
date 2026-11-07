@@ -167,6 +167,8 @@ export interface SaleShift {
   startedAt: string;
   endedAt: string;
   ongoing: boolean;
+  /** Minutes worked, pauses left out. */
+  workedMinutes: number;
   /** The sale fell inside it. */
   holds: boolean;
 }
@@ -194,8 +196,9 @@ export function useSaleShifts(dispute: Pick<Dispute, "saleRef" | "occurredAt">) 
         const holds = start <= at && at <= end;
         const before = end < at;
         const known = byUser.get(shift.userId);
-        if (holds && !known?.holds) byUser.set(shift.userId, { userId: shift.userId, startedAt: shift.startedAt, endedAt: shift.endedAt, ongoing: shift.ongoing, holds: true });
-        else if (before && !known) byUser.set(shift.userId, { userId: shift.userId, startedAt: shift.startedAt, endedAt: shift.endedAt, ongoing: shift.ongoing, holds: false });
+        const found = { userId: shift.userId, startedAt: shift.startedAt, endedAt: shift.endedAt, ongoing: shift.ongoing, workedMinutes: shift.workedMinutes };
+        if (holds && !known?.holds) byUser.set(shift.userId, { ...found, holds: true });
+        else if (before && !known) byUser.set(shift.userId, { ...found, holds: false });
       }
       return byUser;
     },

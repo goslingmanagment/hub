@@ -128,6 +128,16 @@ export interface TableProps<Row> {
   moreLabel?: (hidden: number) => string;
   /** At most this wide (a short table on a 1920 screen that should not spread). */
   maxWidth?: number | string;
+  /**
+   * The width rule (default on): when the table's content is narrower than its
+   * place, the sheet takes its content plus some air per column (at least 960 px)
+   * and stands left, instead of spreading the columns over a 1920 screen; the
+   * air is shared evenly, so no gap between two columns grows into a hole. Close
+   * to the full width it takes the full width. A table that is the only child
+   * block of a `Section` makes the Section as wide (its title, actions and notes
+   * end where the table ends). `false`: always the full width.
+   */
+  fit?: boolean;
   className?: string;
 }
 
@@ -178,6 +188,70 @@ const FADE = 56;
 /** Below this many pixels per column a table has no spare room to give away. */
 const ROOMY_COLUMN = 220;
 
+/** The air one gap between two columns may get beyond the content (px), on top of the cells' 32 px. */
+const FIT_AIR = 64;
+/** A fitted sheet is never narrower than this: a short table stays a sheet, not a strip. */
+const FIT_MIN = 720;
+/** Closer than this to the full width: the table takes the full width (no ragged edge of 40 px). */
+const FIT_SNAP = 120;
+
+/**
+ * Which column widens for each gap between two columns, so that every gap gets
+ * the air once: a text column (its words stand left) widens on its right; a
+ * number column (right edge) widens on its left. A number followed by text
+ * takes none — widening either would open another gap.
+ */
+function airTakers(numeric: readonly boolean[]): number[] {
+  const takers: number[] = [];
+  for (let gap = 0; gap + 1 < numeric.length; gap += 1) {
+    if (!numeric[gap]) takers.push(gap);
+    else if (numeric[gap + 1]) takers.push(gap + 1);
+  }
+  return takers;
+}
+
+interface Fitted {
+  /** The sheet's width (px), or null: the full width of its place. */
+  width: number | null;
+  /** Each column's width (px): its content plus an even share of the air. */
+  cols: readonly number[];
+}
+
+function sameFit(left: Fitted | null, right: Fitted | null): boolean {
+  if (left === null || right === null) return left === right;
+  if ((left.width === null) !== (right.width === null)) return false;
+  if (left.width !== null && right.width !== null && Math.abs(left.width - right.width) > 1) return false;
+  return left.cols.length === right.cols.length && left.cols.every((value, index) => Math.abs(value - right.cols[index]!) <= 1);
+}
+
+/** The content width of an element (its width without padding). */
+function contentWidth(element: HTMLElement): number {
+  const style = getComputedStyle(element);
+  return element.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+}
+
+/**
+ * Sections whose head a fitted table narrows (the widest of its tables that are
+ * direct children): `--ui-section-fit` and the class `ui-section--fit`, so the
+ * title's actions end where the table ends. Only the head: a chart or another
+ * table in the same Section keeps the Section's full width.
+ */
+const sectionFits = new WeakMap<HTMLElement, Map<symbol, number>>();
+
+function setSectionFit(section: HTMLElement, owner: symbol, width: number | null) {
+  const fits = sectionFits.get(section) ?? new Map<symbol, number>();
+  if (width === null) fits.delete(owner);
+  else fits.set(owner, width);
+  sectionFits.set(section, fits);
+  if (fits.size === 0) {
+    section.classList.remove("ui-section--fit");
+    section.style.removeProperty("--ui-section-fit");
+    return;
+  }
+  section.classList.add("ui-section--fit");
+  section.style.setProperty("--ui-section-fit", `${Math.max(...fits.values())}px`);
+}
+
 /**
  * The column that takes the spare width: the one marked `grow`; else, in a
  * roomy frame, a table of up to five columns without widths gives it to its
@@ -224,11 +298,17 @@ export function Table<Row>({
   stickyColumns = 0,
   moreLabel = defaultMoreLabel,
   maxWidth,
+  fit = true,
   className,
 }: TableProps<Row>) {
-  const [ownSort, setOwnSort] = useState<SortState | null>(defaultSort);
+  // undefined: nobody pressed a header yet, so `defaultSort` rules — even when it arrives after a skeleton drew
+  // the same table without one (React keeps that instance; a state seeded once would stay null).
+  const [ownSort, setOwnSort] = useState<SortState | null | undefined>(undefined);
+  const frameRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const tableRef = useRef<HTMLTableElement>(null);
+  const [fitted, setFitted] = useState<Fitted | null>(null);
+  const [owner] = useState(() => Symbol("table"));
   const sticky = Math.max(0, Math.min(stickyColumns, columns.length - 1));
   // Wider than its place (many columns, a narrow window): scroll sideways inside
   // the frame instead of cutting the last columns. Only then does the header stop sticking.
@@ -273,18 +353,101 @@ export function Table<Row>({
     setScrolled(scroller.scrollLeft > 0);
   }, [columns.length, sticky]);
 
+  // The width rule (`fit`): the content's own width, measured with our column widths off and the sheet as wide as
+  // its content (restored at once, before anything paints), then air shared evenly up to the place's width.
+  const canFit = fit && frame !== "bare" && !scrollX && typeof maxWidth !== "string" && !(rows.length === 0 && !loading);
+  // Read through a ref: callers build `columns` anew on each render, the observer must not be rebuilt for it.
+  const fitInputs = useRef({ canFit, columns, maxWidth });
+  fitInputs.current = { canFit, columns, maxWidth };
+  const fitNow = useCallback(() => {
+    const { canFit, columns, maxWidth } = fitInputs.current;
+    const sheet = frameRef.current;
+    const table = tableRef.current;
+    const parent = sheet?.parentElement;
+    if (!sheet || !table || !parent) return;
+    const section = parent.classList.contains("ui-section") ? parent : null;
+    let next: Fitted | null = null;
+    const heads = [...table.querySelectorAll<HTMLTableCellElement>(":scope > thead > tr > th")];
+    if (canFit && heads.length === columns.length) {
+      const cols = [...table.querySelectorAll<HTMLTableColElement>(":scope > colgroup > col")];
+      const saved = { cols: cols.map((col) => col.style.width), width: sheet.style.width, maxWidth: sheet.style.maxWidth };
+      const border = sheet.offsetWidth - sheet.clientWidth;
+      // The sheet's own width counts its hairlines when the app sizes boxes by their border (Tailwind's base does).
+      const borderBox = getComputedStyle(sheet).boxSizing === "border-box";
+      // The table's room: the place less the sheet's hairlines.
+      const available = Math.min(contentWidth(parent), typeof maxWidth === "number" ? maxWidth : Infinity) - border;
+      // The content's own widths: a column's set width is for a table that does not fit, not a reason to spread.
+      cols.forEach((col) => {
+        col.style.width = "";
+      });
+      sheet.style.width = "max-content";
+      sheet.style.maxWidth = "none";
+      // Whole pixels up: a column cut by half a pixel would wrap its header.
+      const naturalCols = heads.map((head) => Math.ceil(head.getBoundingClientRect().width));
+      const natural = naturalCols.reduce((sum, width) => sum + width, 0);
+      cols.forEach((col, index) => {
+        col.style.width = saved.cols[index] ?? "";
+      });
+      sheet.style.width = saved.width;
+      sheet.style.maxWidth = saved.maxWidth;
+      if (Number.isFinite(available) && available - natural > 1) {
+        const numeric = columns.map((column) => column.numeric === true);
+        const found = airTakers(numeric);
+        const takers = found.length > 0 ? found : columns.map((_, index) => index);
+        let target = Math.min(available, Math.max(natural + FIT_AIR * takers.length, FIT_MIN));
+        if (available - target < FIT_SNAP) target = available;
+        const spare = Math.max(0, target - natural);
+        const air = Math.min(FIT_AIR, spare / takers.length);
+        // What the gaps cannot take (the sheet's least width, the last few px to the full width) goes after the
+        // last column when its words stand left — room at the row's end is no hole; else it is shared.
+        const rest = spare - air * takers.length;
+        const last = columns.length - 1;
+        // Not into an icon column («›»): that would only push the arrow away from its row.
+        const tail = numeric[last] || (naturalCols[last] ?? 0) < 72 ? 0 : rest;
+        const shared = (rest - tail) / takers.length;
+        next = {
+          width: target >= available ? null : Math.ceil(target) + (borderBox ? border : 0),
+          cols: naturalCols.map((width, index) => width + Math.floor((takers.includes(index) ? air + shared : 0) + (index === last ? tail : 0))),
+        };
+        if (section) setSectionFit(section, owner, next.width === null ? null : next.width + (borderBox ? 0 : border));
+      } else if (section) setSectionFit(section, owner, null);
+    } else if (section) setSectionFit(section, owner, null);
+    setFitted((current) => (sameFit(current, next) ? current : next));
+  }, [owner]);
+
   useLayoutEffect(() => {
     const scroller = scrollRef.current;
     const table = tableRef.current;
+    const section = frameRef.current?.parentElement?.classList.contains("ui-section") ? frameRef.current.parentElement : null;
     if (!scroller || !table || typeof ResizeObserver === "undefined") return;
+    fitNow();
     measure();
-    const observer = new ResizeObserver(measure);
+    let frameId = 0;
+    // The rule again on the next frame, not inside the observer: its own change of width would loop the observer.
+    const observer = new ResizeObserver(() => {
+      measure();
+      cancelAnimationFrame(frameId);
+      frameId = requestAnimationFrame(fitNow);
+    });
     observer.observe(scroller);
     observer.observe(table);
-    return () => observer.disconnect();
-  }, [measure, rows.length === 0, loading, columns.length]);
+    // A fitted sheet is narrower than its place: watch the place to see the window grow.
+    const place = frameRef.current?.parentElement;
+    if (place) observer.observe(place);
+    return () => {
+      observer.disconnect();
+      cancelAnimationFrame(frameId);
+      if (section) setSectionFit(section, owner, null);
+    };
+  }, [measure, fitNow, owner, canFit, rows.length === 0, loading, columns.length]);
 
-  const sort = controlledSort !== undefined ? controlledSort : ownSort;
+  // New rows of the same count (a refresh, another page) may need other widths.
+  useLayoutEffect(() => {
+    const frameId = requestAnimationFrame(fitNow);
+    return () => cancelAnimationFrame(frameId);
+  }, [rows, fitNow]);
+
+  const sort = controlledSort !== undefined ? controlledSort : ownSort !== undefined ? ownSort : defaultSort;
   const navigate = useNavigate();
   const base = useHref("/").replace(/\/$/, "");
   const growKey = useMemo(() => growKeyOf(columns, roomy), [columns, roomy]);
@@ -332,7 +495,8 @@ export function Table<Row>({
 
   const stickyStyle = (index: number): CSSProperties | undefined => (index < sticky ? { left: stickyLeft[index] ?? 0 } : undefined);
   const stickyClass = (index: number) => index < sticky && cx("ui-table__sticky", index === sticky - 1 && "ui-table__sticky--last");
-  const shrinks = (column: Column<Row>) => growKey !== null && column.key !== growKey && column.width === undefined && (column.numeric || column.nowrap);
+  // Without the width rule (or with no room to share) the spare width goes to one column, the others hug their content.
+  const shrinks = (column: Column<Row>) => fitted === null && growKey !== null && column.key !== growKey && column.width === undefined && (column.numeric || column.nowrap);
 
   const cellClass = (column: Column<Row>, index: number) => cx(
     column.numeric && "ui-table__num",
@@ -345,8 +509,9 @@ export function Table<Row>({
 
   return (
     <div
+      ref={frameRef}
       className={cx("ui-table-frame", frame === "bare" && "ui-table-frame--bare", scrolling && "ui-table-frame--scroll", hidden > 0 && "ui-table-frame--more", className)}
-      style={maxWidth !== undefined ? { maxWidth } : undefined}
+      style={maxWidth !== undefined || fitted?.width != null ? { ...(maxWidth !== undefined ? { maxWidth } : {}), ...(fitted?.width != null ? { width: fitted.width } : {}) } : undefined}
     >
       <div ref={scrollRef} className="ui-table-scroll" onScroll={scrolling ? measure : undefined}>
         <table
@@ -363,8 +528,11 @@ export function Table<Row>({
           )}
         >
           <colgroup>
-            {columns.map((column) => (
-              <col key={column.key} style={column.width !== undefined ? { width: column.width } : shrinks(column) ? { width: "1%" } : undefined} />
+            {columns.map((column, index) => (
+              <col
+                key={column.key}
+                style={fitted ? { width: fitted.cols[index] } : column.width !== undefined ? { width: column.width } : shrinks(column) ? { width: "1%" } : undefined}
+              />
             ))}
           </colgroup>
           <thead>

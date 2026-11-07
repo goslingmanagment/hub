@@ -208,16 +208,15 @@ export function Pulse({ minutes, sales, pauses, start, end, ongoing, span, silen
         {width > 0 && (
           <svg width={width} height={PLOT + AXIS} role="img" aria-label="Минуты смены: сообщения чаттера, ждущие ответа фаны, покупки, паузы">
             {pauses.map((pause) => (
-              <g key={pause.from}>
-                <rect className="review-pulse__pause" x={x(Math.max(start, pause.from))} y={0} width={Math.max(1, x(Math.min(end, pause.to)) - x(Math.max(start, pause.from)))} height={PLOT} rx={3} />
-                {x(Math.min(end, pause.to)) - x(Math.max(start, pause.from)) > 56 && (
-                  <text className="review-pulse__pause-label" x={(x(Math.max(start, pause.from)) + x(Math.min(end, pause.to))) / 2} y={UP / 2 + 5} textAnchor="middle">пауза</text>
-                )}
-              </g>
+              <rect key={pause.from} className="review-pulse__pause" x={x(Math.max(start, pause.from))} y={0} width={Math.max(1, x(Math.min(end, pause.to)) - x(Math.max(start, pause.from)))} height={PLOT} rx={3} />
             ))}
             {shown && (
               <rect className="review-pulse__span" x={x(Math.max(start, shown.from))} y={0.5} width={Math.max(2, x(Math.min(end, shown.to)) - x(Math.max(start, shown.from)))} height={PLOT - 1} rx={3} />
             )}
+            {/* The pauses' words over the picked span, never under it (M10). */}
+            {pauses.map((pause) => (x(Math.min(end, pause.to)) - x(Math.max(start, pause.from)) > 56 ? (
+              <text key={pause.from} className="review-pulse__pause-label" x={(x(Math.max(start, pause.from)) + x(Math.min(end, pause.to))) / 2} y={UP / 2 + 5} textAnchor="middle">пауза</text>
+            ) : null))}
             {columns.map((column, index) => {
               const left = x(column.from) + gap / 2;
               const w = Math.max(1, x(column.to) - x(column.from) - gap);

@@ -1,12 +1,13 @@
 import { Copy } from "lucide-react";
 import { Button, Drawer, Facts, Money, Table, TimeMsk, Tooltip, type Column } from "@agency_hub_core/ui";
-import { formatDay, formatDuration, formatWeekdayDay } from "@agency_hub_core/ui/format";
+import { formatDay, formatWeekdayDay } from "@agency_hub_core/ui/format";
 import { sheetCell, sheetText, type PivotRow } from "@agency_hub_core/ui/payoutSheet";
 import { ruPlural } from "@agency_hub_core/ui/plural";
+import { shiftDurationHint, shiftWhen } from "@agency_hub_core/ui/shiftWhen";
 import { sumMills } from "@agency_hub_core/shared";
 import { PersonLink, ShiftLink } from "@/shared/links";
 import { copySheet } from "./copy";
-import type { PayoutChatter, PayoutsView, UnconfirmedShift } from "./data";
+import { pastedMills, pastedRowMills, type PayoutChatter, type PayoutsView, type UnconfirmedShift } from "./data";
 import type { RangeWords } from "./range";
 
 /** «02.11»: a day's column, as the console's sheet heads it. */
@@ -36,7 +37,8 @@ export function SheetDayTable({ sheet, days, withChatter = false }: { sheet: rea
       header: "Итого",
       numeric: true,
       nowrap: true,
-      cell: (row) => <Money mills={sumMills(row.cells.values())} strong />,
+      // The row's cells as they paste, added up: the sheet's own sum after the paste (В-н1).
+      cell: (row) => <Money mills={pastedRowMills(row)} strong />,
     },
     ...days.map((day): Column<PivotRow> => ({
       key: day,
@@ -63,21 +65,24 @@ export function SheetDayTable({ sheet, days, withChatter = false }: { sheet: rea
 
 interface DayRow {
   day: string;
-  cells: Map<string, number>;
+  /** Each page's cell of the day as it pastes (mills). */
+  cells: Map<string, bigint>;
 }
 
 /**
  * One chatter's days in a narrow panel (В2): a day per row, a page per column
- * (one to three), the total at the end — every day of any window fits.
+ * (one to three), the total at the end — every day of any window fits. Each
+ * cell is the sheet's cell as it pastes, and every total adds those (В-н1): the
+ * panel, the copy and the pasted sheet agree to the cent.
  */
 function ChatterDays({ chatter }: { chatter: PayoutChatter }) {
   const pages = chatter.sheet.map((row) => row.pageLabel);
   const days = [...new Set(chatter.sheet.flatMap((row) => [...row.cells.keys()]))].sort();
   const rows: DayRow[] = days.map((day) => {
-    const cells = new Map<string, number>();
+    const cells = new Map<string, bigint>();
     for (const row of chatter.sheet) {
       const value = row.cells.get(day);
-      if (value !== undefined) cells.set(row.pageLabel, value);
+      if (value !== undefined) cells.set(row.pageLabel, pastedMills(row.platform, value));
     }
     return { day, cells };
   });
@@ -89,7 +94,7 @@ function ChatterDays({ chatter }: { chatter: PayoutChatter }) {
       numeric: true,
       nowrap: true,
       cell: (row) => (row.cells.has(page) ? <Money mills={row.cells.get(page)!} /> : <span className="text-ink-3">—</span>),
-      footer: <Money mills={sumMills(rows.map((row) => row.cells.get(page) ?? 0))} strong={pages.length === 1} />,
+      footer: <Money mills={sumMills(rows.map((row) => row.cells.get(page) ?? 0n))} strong={pages.length === 1} />,
     })),
     ...(pages.length > 1 ? [{
       key: "total",
@@ -103,9 +108,15 @@ function ChatterDays({ chatter }: { chatter: PayoutChatter }) {
   return <Table label={`Выплата ${chatter.username} по дням`} columns={columns} rows={rows} rowKey={(row) => row.day} dense stickyHeader={false} />;
 }
 
-function shiftLine(shift: UnconfirmedShift): string {
-  const minutes = Math.max(0, Math.round((Date.parse(shift.endedAt) - Date.parse(shift.startedAt)) / 60_000));
-  return formatDuration(minutes);
+/** «8 ч 21 мин · ещё идёт»: the shift's worked time (D12, pauses only in the hint) and what holds it. */
+function ShiftNote({ shift }: { shift: UnconfirmedShift }) {
+  const when = shiftWhen(shift);
+  const state = shift.ongoing ? "ещё идёт" : shift.tooLate ? "подтвердить уже нельзя" : null;
+  const parts = [when.worked, state].filter((part): part is string => part !== null);
+  if (parts.length === 0) return null;
+  const hint = shiftDurationHint(when);
+  const text = parts.join(" · ");
+  return <span className="payouts-sub">{hint !== null && when.withPauses !== null ? <Tooltip content={hint} align="start">{text}</Tooltip> : text}</span>;
 }
 
 /** One chatter's payout of the window: the days, their own amounts, the shifts not confirmed, the late changes; their block to copy. */
@@ -148,24 +159,12 @@ export function PayoutDrawer({ chatter, view, words, canCopy, onClose }: {
             { label: "Дней с продажами", value: chatter.days },
             {
               label: "Ждут подтверждения",
-              value: stake === 0 ? "—" : <Money mills={chatter.atStakeMills} />,
+              // Nothing waits is a fact, not a missing answer: «нет», not «—».
+              value: stake === 0 ? "нет" : chatter.atStakeMills === null ? "нет данных" : <Money mills={chatter.atStakeMills} />,
               ...(stake > 0 ? { meta: `${stake} ${ruPlural(stake, "смена", "смены", "смен")}` } : {}),
             },
           ]}
         />
-
-        {lines > 0 ? (
-          <section className="payouts-block">
-            <h3 className="payouts-block__title">По дням</h3>
-            <ChatterDays chatter={chatter} />
-            <p className="payouts-note">
-              Здесь — дни с продажами. Скопируется блок за все {view.days.length} {ruPlural(view.days.length, "день", "дня", "дней")} периода, как в
-              таблице выплат.
-            </p>
-          </section>
-        ) : (
-          <p className="payouts-note">Подтверждённых отчётов за эти дни нет: в выгрузку от {chatter.username} ничего не попадёт.</p>
-        )}
 
         {chatter.ownAmounts.length > 0 && (
           <section className="payouts-block">
@@ -182,20 +181,31 @@ export function PayoutDrawer({ chatter, view, words, canCopy, onClose }: {
           </section>
         )}
 
+        {lines > 0 ? (
+          <section className="payouts-block">
+            <h3 className="payouts-block__title">По дням</h3>
+            <ChatterDays chatter={chatter} />
+            <p className="payouts-note">
+              Здесь — дни с продажами. Скопируется блок за все {view.days.length} {ruPlural(view.days.length, "день", "дня", "дней")} периода, как в
+              таблице выплат.
+            </p>
+          </section>
+        ) : (
+          <p className="payouts-note">Подтверждённых отчётов за эти дни нет: в выгрузку от {chatter.username} ничего не попадёт.</p>
+        )}
+
         {stake > 0 && (
           <section className="payouts-block">
             <h3 className="payouts-block__title">Смены без подтверждения</h3>
             <ul className="payouts-shifts">
               {chatter.unconfirmed.map((shift) => {
-                const when = <><TimeMsk at={shift.startedAt} show="weekday" />, <TimeMsk at={shift.startedAt} show="time" />–<TimeMsk at={shift.endedAt} show="time" /></>;
+                // One label of a shift on every screen (D12): «пт, 6–7 нояб. 21:45–07:31».
+                const label = shiftWhen(shift).label;
                 return (
                   <li key={shift.startedAt}>
                     <span>
-                      {chatter.userId !== null ? <ShiftLink userId={chatter.userId} startedAt={shift.startedAt} backLabel="Выплаты">{when}</ShiftLink> : when}
-                      <span className="payouts-sub">
-                        {shiftLine(shift)}
-                        {shift.ongoing ? " · ещё идёт" : shift.tooLate ? " · подтвердить уже нельзя" : ""}
-                      </span>
+                      {chatter.userId !== null ? <ShiftLink userId={chatter.userId} startedAt={shift.startedAt} backLabel="Выплаты">{label}</ShiftLink> : label}
+                      <ShiftNote shift={shift} />
                     </span>
                     <Money mills={shift.salesNetMills} />
                   </li>

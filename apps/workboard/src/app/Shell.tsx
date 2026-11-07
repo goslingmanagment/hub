@@ -1,14 +1,17 @@
 import { ArrowLeft, Banknote, CalendarClock, Inbox, KeyRound, LogOut, Monitor, Moon, Sun, TrendingUp, Users } from "lucide-react";
 import { Suspense, type ReactNode } from "react";
-import { NavLink, Navigate, Outlet, useLocation } from "react-router";
-import { CountBadge, ErrorState, Menu, Skeleton, type IconComponent } from "@agency_hub_core/ui";
+import { NavLink, Navigate, Outlet, useLocation, useMatches, type UIMatch } from "react-router";
+import { CountBadge, ErrorState, Menu, Skeleton, Tooltip, type IconComponent } from "@agency_hub_core/ui";
 import { THEME_OPTIONS, useThemeStore, type ThemePreference } from "@agency_hub_core/ui/theme";
 import { kernel, queryClient, signInHref } from "@/shared/hub";
 import { carryParams } from "@/shared/links";
-import { useDecisionCounts } from "@/shared/decisions";
+import { decisionParts, decisionsElsewhereText, decisionsFailedText, useDecisionCounts } from "@/shared/decisions";
 import { useMe } from "@/shared/useMe";
+import { usePageFilter } from "@/shared/usePageFilter";
 import { useRestoredPeriod } from "@/shared/usePeriod";
+import { useScrollMemory } from "@/shared/scroll";
 import { ErrorBoundary } from "./ErrorBoundary.js";
+import type { ScreenHandle } from "./routes.js";
 
 interface NavItem {
   to: string;
@@ -65,16 +68,47 @@ function NavRow({ item, end }: { item: NavItem; end?: ReactNode }) {
   );
 }
 
+/**
+ * The badge of Решения: what waits on the chosen page — the number Решения
+ * shows after the click — the other pages in its hint (D17). A queue that did
+ * not answer is a quiet «?» beside it, never a silent zero; while a queue is
+ * still read, nothing at all (never a partial sum that grows a moment later).
+ */
 function DecisionsCount() {
-  const counts = useDecisionCounts();
-  // While a queue is still read, no number at all: never a partial sum that grows a moment later.
-  if (!counts.settled || counts.total === 0) return null;
-  const parts = [
-    counts.disputes ? `споры: ${counts.disputes}` : null,
-    counts.customs ? `кастомы: ${counts.customs}` : null,
-    counts.held ? `отправки: ${counts.held}` : null,
-  ].filter(Boolean).join(", ");
-  return <span className="wb-nav__count"><CountBadge value={counts.total} label={`Ждут решения — ${parts}`} /></span>;
+  const { page } = usePageFilter();
+  const counts = useDecisionCounts({ page });
+  if (!counts.settled) return null;
+  const failed = decisionsFailedText(counts);
+  const elsewhere = decisionsElsewhereText(counts.elsewhere);
+  if (counts.total === 0 && failed === null && elsewhere === null) return null;
+  const lines = [
+    counts.total > 0 ? `Ждут решения${page ? ` на ${page}` : ""}: ${decisionParts(counts, "").map((part) => part.text).join(", ")}` : page ? `На ${page} решений нет` : null,
+    elsewhere ? `${elsewhere.charAt(0).toUpperCase()}${elsewhere.slice(1)}` : null,
+    // With some numbers shown, the failed queue may add to them; with none, nothing is known.
+    failed ? (counts.total > 0 || counts.elsewhere > 0 ? `${failed}: решений может быть больше` : `${failed}. Hub не ответил — это не ноль`) : null,
+  ].filter((line): line is string => line !== null);
+  // Nothing here but something on the other pages: the number of those, quiet.
+  const shown = counts.total > 0 ? counts.total : counts.elsewhere;
+  return (
+    <Tooltip content={lines.map((line) => <span key={line} className="wb-nav__tip-line">{line}</span>)} align="start">
+      <span className="wb-nav__count" aria-label={lines.join(". ")}>
+        {shown > 0 && <CountBadge value={shown} quiet={counts.total === 0} />}
+        {failed && <span className="wb-nav__unknown" aria-hidden>?</span>}
+      </span>
+    </Tooltip>
+  );
+}
+
+/**
+ * What makes a new instance of the screen: its route, and for a deep page the
+ * object it shows (`handle.screenKey`, routes.tsx). Tabs of one card or one
+ * screen keep the screen — and its state — mounted.
+ */
+function useScreenKey(): string {
+  const matches = useMatches() as UIMatch<unknown, ScreenHandle | undefined>[];
+  const leaf = matches.at(-1);
+  if (!leaf) return "";
+  return `${leaf.id}:${leaf.handle?.screenKey?.(leaf.params) ?? ""}`;
 }
 
 function Account() {
@@ -140,6 +174,9 @@ export function Shell() {
   const location = useLocation();
   // A bare address opens the period last used in this tab (D3); the address then says it.
   const restored = useRestoredPeriod();
+  // «←» comes back to the same place of the page; a new screen opens at its top (D16).
+  useScrollMemory();
+  const screenKey = useScreenKey();
   return (
     <div className="wb-app">
       <aside className="wb-side">
@@ -163,7 +200,7 @@ export function Shell() {
         {restored !== null ? (
           <Navigate replace to={{ pathname: location.pathname, search: restored, hash: location.hash }} state={location.state as unknown} />
         ) : (
-          <ErrorBoundary key={location.pathname} fallback={<div className="wb-content"><ErrorState title="Не удалось открыть экран" onRetry={() => window.location.reload()}>Что-то сломалось в самом экране. Перезагрузка обычно помогает; данные в Hub не тронуты.</ErrorState></div>}>
+          <ErrorBoundary key={screenKey} resetKey={location.pathname} fallback={<div className="wb-content"><ErrorState title="Не удалось открыть экран" onRetry={() => window.location.reload()}>Что-то сломалось в самом экране. Перезагрузка обычно помогает; данные в Hub не тронуты.</ErrorState></div>}>
             <Suspense fallback={<ScreenFallback />}>
               <Outlet />
             </Suspense>

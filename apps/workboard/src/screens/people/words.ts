@@ -20,8 +20,8 @@ export const ROLE_WORD: Readonly<Record<PersonRole, string>> = {
  * The dot of a person and the words beside it — from the shifts only, never
  * from the extension being open (that is «Доступ → Устройства»): «на смене с
  * 21:00», «смена сегодня до 18:10», «смена вчера до 07:31»,
- * «смен не было 7 дней», «доступ отключён 26 окт.». No «был/была»: the words
- * have no gender.
+ * «за 7 дней смен не было» (Hub looks only that far back), «доступ отключён 26 окт.».
+ * No «был/была»: the words have no gender.
  */
 export function statusOf(person: { state: PersonState | null; disabledAt: string | null; now: PersonNow; role?: PersonRole | null }, now: number = Date.now()): { status: PersonStatus; words: string } {
   if (person.state === "disabled") {
@@ -30,10 +30,10 @@ export function statusOf(person: { state: PersonState | null; disabledAt: string
   if (person.state === "invited") return { status: "invited", words: "ждёт регистрации" };
   if (person.now.onShiftSince) return { status: "working", words: `на смене с ${formatTimeOfDay(person.now.onShiftSince)}` };
   if (person.now.lastShiftEnd) return { status: "away", words: lastShiftWords(person.now.lastShiftEnd, now) };
-  // Without the accounts (a team lead) nothing is known of a person without a shift: say nothing; nor of
-  // the owner, who does not work shifts.
-  if (person.state === null || person.now.quietDays === 0 || person.role === "owner") return { status: "away", words: "" };
-  return { status: "away", words: `смен не было ${person.now.quietDays} ${ruPlural(person.now.quietDays, "день", "дня", "дней")}` };
+  // Nothing is said of the owner, who does not work shifts, nor when the shifts were not read. A team lead does not
+  // read the accounts (state null), but the shifts are read for everyone: «за 7 дней смен не было» holds for them too.
+  if (person.now.quietDays === 0 || person.role === "owner") return { status: "away", words: "" };
+  return { status: "away", words: `за ${person.now.quietDays} ${ruPlural(person.now.quietDays, "день", "дня", "дней")} смен не было` };
 }
 
 /** «смена сегодня до 18:10», «смена вчера до 07:31», «последняя смена 4 нояб.». */
@@ -107,14 +107,14 @@ export const DELAY_WORDS: Readonly<Record<string, string>> = {
   over6h: "больше 6 ч",
 };
 
-/** «сб, 7 нояб.» of a Moscow day. */
+/** «сб, 7 нояб.» of a Moscow day. A shift is said by `shiftWhen` (D12), never by its day and clock glued together. */
 export function dayWords(day: string): string {
   return formatWeekdayDay(day);
 }
 
-/** «09:19–18:10», «21:00 – сейчас». */
-export function timeRange(shift: { startedAt: string; endedAt: string; ongoing: boolean }): string {
-  return shift.ongoing ? `${formatTimeOfDay(shift.startedAt)} – сейчас` : `${formatTimeOfDay(shift.startedAt)}–${formatTimeOfDay(shift.endedAt)}`;
+/** A sentence that may end on an abbreviation («…1 нояб.») gets no second full stop. */
+export function sentence(text: string): string {
+  return text.endsWith(".") ? text : `${text}.`;
 }
 
 /** «за эту неделю» → «За эту неделю». */

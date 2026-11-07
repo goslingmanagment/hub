@@ -1,8 +1,10 @@
 import { ChevronRight } from "lucide-react";
 import { Link, useLocation } from "react-router";
-import { Card, Count, Duration, Money, Person, Section, Skeleton, TimeMsk, Tooltip } from "@agency_hub_core/ui";
-import { moscowDayOf, moscowToday } from "@agency_hub_core/ui/moscow";
+import { Card, Count, Money, Person, Section, Skeleton, TimeMsk, Tooltip } from "@agency_hub_core/ui";
+import { formatDay, formatTimeOfDay } from "@agency_hub_core/ui/format";
+import { addDays, moscowDayOf, moscowToday } from "@agency_hub_core/ui/moscow";
 import { ruPlural } from "@agency_hub_core/ui/plural";
+import { shiftDurationHint } from "@agency_hub_core/ui/shiftWhen";
 import { ShiftLink, personPath, shiftPath, useBackState } from "@/shared/links";
 import { UNANSWERED_NOW_LABEL } from "@/shared/metrics";
 import { useMe } from "@/shared/useMe";
@@ -41,6 +43,7 @@ export function NowOnShift({ page }: { page: string | null }) {
 
   if (state.shifts.length === 0) {
     const last = state.last;
+    const ended = last ? endedWords(last.endedAt) : null;
     return (
       <p className="shifts-now-line">
         <span aria-hidden className="shifts-now-line__dot" />
@@ -52,14 +55,10 @@ export function NowOnShift({ page }: { page: string | null }) {
               {"последняя смена — "}
               {isOwner ? (
                 <ShiftLink userId={last.userId} startedAt={last.startedAt} backLabel="Смены" className="shifts-now-line__link">
-                  {last.username}, закончилась {moscowDayOf(last.endedAt) === moscowToday() ? "в " : ""}
-                  <TimeMsk at={last.endedAt} show={moscowDayOf(last.endedAt) === moscowToday() ? "time" : "datetime"} />
+                  {last.username}, закончилась {ended}
                 </ShiftLink>
               ) : (
-                <>
-                  {last.username}, закончилась {moscowDayOf(last.endedAt) === moscowToday() ? "в " : ""}
-                  <TimeMsk at={last.endedAt} show={moscowDayOf(last.endedAt) === moscowToday() ? "time" : "datetime"} />
-                </>
+                <>{last.username}, закончилась {ended}</>
               )}
             </>
           )}
@@ -91,6 +90,19 @@ export function NowOnShift({ page }: { page: string | null }) {
   );
 }
 
+/**
+ * When the last shift ended, as the owner reads it after midnight: «в 18:53»
+ * today, «вчера в 18:53», else «7 нояб. в 18:53».
+ */
+function endedWords(endedAt: string): string {
+  const day = moscowDayOf(endedAt);
+  const today = moscowToday();
+  const time = formatTimeOfDay(endedAt);
+  if (day === today) return `в ${time}`;
+  if (day === addDays(today, -1)) return `вчера в ${time}`;
+  return `${formatDay(day)} в ${time}`;
+}
+
 function NowRow({ shift }: { shift: NowShift }) {
   return (
     <>
@@ -99,7 +111,11 @@ function NowRow({ shift }: { shift: NowShift }) {
       </span>
       <span className="shifts-now__since">
         с <TimeMsk at={shift.startedAt} show="time" />
-        <span className="ui-muted"> · идёт <Duration minutes={shift.sinceMinutes} /></span>
+        <span className="shifts-now__sep" aria-hidden>·</span>
+        {/* D12: the time worked so far; with the pauses only on hover. */}
+        <Tooltip content={shiftDurationHint(shift.when) ?? shift.when.label} align="start">
+          <span className="ui-muted">{shift.when.worked} работы</span>
+        </Tooltip>
       </span>
       <span className="shifts-now__fact">
         <Money mills={shift.salesNetMills} strong />

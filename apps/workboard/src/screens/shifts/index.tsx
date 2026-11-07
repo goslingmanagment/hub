@@ -43,11 +43,13 @@ export function ShiftsScreen() {
 
   const quality = numbers.data ? "ready" : numbers.isError ? "failed" : "loading";
   const refreshing = sales.isPlaceholderData && sales.isFetching;
-  const versus = spec.kind === "week" && period.current ? "к прошлой неделе на это же время" : `к ${period.previousLabel}`;
+  const versus = spec.kind === "week" && period.current ? "Сравнение с прошлой неделей на это же время" : `Сравнение с ${period.previousLabel}`;
   const authorshipDays = Math.min(AUTHORSHIP_MAX_DAYS, daysInRange(period.from, today));
   const empty = model !== undefined && model.journal.length === 0 && model.chatters.length === 0;
   // The whole period lies before Hub began counting shifts: nothing to show, nothing to compare.
   const beforeCounting = model !== undefined && model.knownSince !== null && window.to < model.knownSince;
+  // A period longer than Hub reads, whose days cut off all lie before Hub counted.
+  const cutBeforeCounting = window.clipped && model !== undefined && model.knownSince !== null && addDays(window.from, -1) < model.knownSince;
 
   // The comparison is said once, here; the grid's cells only carry it on hover.
   let meta: ReactNode;
@@ -55,7 +57,7 @@ export function ShiftsScreen() {
   if (beforeCounting) meta = <span />;
   else if (model && !model.comparable) {
     meta = <span>{model.knownSince ? `Сравнения нет: Hub считает смены с ${formatDay(model.knownSince)}` : "Сравнения нет"}</span>;
-  } else if (spec.kind === "week" && period.current) meta = <span>Эта неделя · проценты к {period.previousLabel} на это же время</span>;
+  } else if (spec.kind === "week" && period.current) meta = <span>Эта неделя · сравнение с {period.previousLabel} на это же время</span>;
 
   const refresh = () => {
     void queryClient.invalidateQueries({ queryKey: ["shifts"] });
@@ -136,7 +138,8 @@ export function ShiftsScreen() {
           <WaitingLine />
           <NowOnShift page={page} />
         </div>
-        {window.clipped && (
+        {/* Cut off only days before Hub counted: the header's «Hub считает смены с …» says it all, no advice to pick them. */}
+        {window.clipped && model !== undefined && !cutBeforeCounting && (
           <Notice title={`Hub считает смены не больше чем за ${SHIFTS_MAX_DAYS} день`}>
             Чтобы увидеть {formatDayRange(period.from, addDays(window.from, -1))}, выберите эти дни отдельно. Сейчас показаны
             {" "}{sentence(formatDayRange(window.from, window.to))}

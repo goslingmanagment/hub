@@ -1,9 +1,7 @@
-import { ArrowLeft } from "lucide-react";
 import { useEffect, type ReactNode } from "react";
-import { Link } from "react-router";
 import { PeriodControl, useFullWindow } from "@agency_hub_core/ui";
 import { Freshness } from "./Freshness.js";
-import type { BackTarget } from "./links.js";
+import { BackLink, type BackTarget } from "./links.js";
 import { PageFilter, PageFilterSlot } from "./PageFilter.js";
 import { usePeriod } from "./usePeriod.js";
 
@@ -18,7 +16,13 @@ export interface ScreenHeaderProps {
   period?: boolean;
   /** Show the page filter. */
   pageFilter?: boolean;
-  /** Left of the period: at most one primary action, or a menu. */
+  /**
+   * The screen's one main action (or a menu). Without a page filter it stands at
+   * the right end, in the filter's place (D15) — keep it short (a verb and an
+   * icon, ≤ ~150 px: «Скопировать», «Пригласить»), or the period moves on this
+   * screen; the longer words go into its tooltip or the line under the title.
+   * With a filter it stands left of the period.
+   */
   actions?: ReactNode;
   /** Under the title, left: one sentence of purpose, or facts of a deep screen. Defaults to the period's dates. */
   meta?: ReactNode;
@@ -37,12 +41,11 @@ export interface ScreenHeaderProps {
 }
 
 /**
- * The header of every screen (spec §3): the title on the left; the screen's
- * one action, the period and the page filter on the right — always in this
- * order, so the filter never moves; a screen with a period and no filter keeps
- * the filter's place empty, so the period does not move either, whatever the
- * action left of it. The bar sticks while the page scrolls; the dates and
- * «Обновлено …» stand under it.
+ * The header of every screen (spec §3): the title on the left; the period and
+ * the page filter's place on the right. That place is as wide as the closed
+ * filter everywhere and holds the filter, or the screen's one action when the
+ * screen has no filter (D15), so the period stands in one spot on every screen.
+ * The bar sticks while the page scrolls; the dates and «Обновлено …» stand under it.
  */
 export function ScreenHeader({ title, documentTitle, back, period = false, pageFilter = false, actions, meta, updatedAt, onRefresh, refreshing, tabs, fill = false }: ScreenHeaderProps) {
   const { spec, period: resolved, today, setPeriod } = usePeriod();
@@ -64,19 +67,23 @@ export function ScreenHeader({ title, documentTitle, back, period = false, pageF
       <header className="wb-header">
         <div className="wb-header__bar">
           <div className="wb-header__titles">
-            {back && (
-              <Link to={back.to} className="wb-back" title={`Назад: ${back.label}`}>
-                <ArrowLeft size={16} strokeWidth={1.75} aria-hidden />
-                <span>{back.label}</span>
-              </Link>
-            )}
+            {back && <BackLink back={back} />}
             <h1 className="wb-header__title">{title}</h1>
           </div>
           <div className="wb-header__controls">
-            {actions}
+            {pageFilter && actions}
             {period && <PeriodControl value={spec} today={today} onChange={setPeriod} />}
-            {/* Without a filter its place stays: the period stands where it stands on every screen (С7, D10). */}
-            {pageFilter ? <PageFilter /> : period ? <PageFilterSlot /> : null}
+            {/*
+              The right end is the page filter's place, as wide as the closed filter on every screen (D15): the filter;
+              on a screen without one, the screen's action; else empty. So the period never moves — not between
+              screens, not when a page is picked, not when the period changes.
+            */}
+            {(pageFilter || period || actions !== undefined) && (
+              <span className="wb-header__slot">
+                <PageFilterSlot />
+                {pageFilter ? <PageFilter /> : actions}
+              </span>
+            )}
           </div>
         </div>
       </header>

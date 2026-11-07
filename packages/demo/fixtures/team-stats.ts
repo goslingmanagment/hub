@@ -3,9 +3,10 @@
  * built from the same simulated shifts as every other «Команда» screen.
  */
 import type { KernelOperationResponse } from "@agency_hub_core/contracts";
+import { shiftPayDay } from "@agency_hub_core/ui/shiftWhen";
 
 import { intBetween, pick, rng, type DemoRequest } from "../core.ts";
-import { DEMO_CHATTERS, demoFans, demoPage, type DemoUser } from "../world.ts";
+import { DEMO_CHATTERS, demoFanProfile, demoFans, demoPage, type DemoFan, type DemoUser } from "../world.ts";
 import {
   DAY,
   addDays,
@@ -27,8 +28,15 @@ type Response = KernelOperationResponse<"teamChatterStats">;
 type Stats = NonNullable<Response["stats"]>;
 
 /** The Moscow day holding most of the shift. */
+/** The day a shift belongs to: Hub's `dayOfWork`, the payout sheet's day (one rule, @agency_hub_core/ui/shiftWhen). */
+/** A fan as Hub names them in its answers: the name, else the handle; null when Hub knows the number only (world.ts). */
+function fanNameOf(fan: DemoFan): string | null {
+  const profile = demoFanProfile(fan);
+  return profile.displayName ?? profile.username;
+}
+
 function dateOf(shift: Pick<DemoShift, "startedAt" | "endedAt">): string {
-  return mskDay(shift.startedAt + (shift.endedAt - shift.startedAt) / 2);
+  return shiftPayDay(shift);
 }
 
 function salesIn(shift: DemoShift, scope: readonly string[]): DemoSale[] {
@@ -138,7 +146,7 @@ function statsOf(request: DemoRequest, scope: readonly string[], days: number, u
         netMills: sale.netMills,
         kind: sale.kind,
         pageLabel: sale.pageLabel,
-        fanName: sale.fan.displayName,
+        fanName: fanNameOf(sale.fan),
         overlap: sale.overlap,
       })),
     };
@@ -159,7 +167,7 @@ function statsOf(request: DemoRequest, scope: readonly string[], days: number, u
   const visits: Stats["visits"] = world.visits
     .filter((visit) => visit.user.id === user.id && scope.includes(visit.pageLabel) && visit.startedAt >= from)
     .map((visit) => ({
-      date: mskDay(visit.startedAt),
+      date: shiftPayDay(visit),
       startedAt: isoAt(visit.startedAt),
       endedAt: isoAt(visit.endedAt),
       workedMinutes: visit.workedMinutes,
@@ -216,10 +224,11 @@ function statsOf(request: DemoRequest, scope: readonly string[], days: number, u
   const names = new Map<string, string>();
   for (const sale of windowSales) {
     const key = `${sale.pageLabel}:${sale.fan.platformUserId}`;
-    // Two fans with one display name read as one: the second goes by the handle.
-    const taken = names.get(sale.fan.displayName);
-    if (taken === undefined) names.set(sale.fan.displayName, key);
-    const name = taken === undefined || taken === key ? sale.fan.displayName : sale.fan.username;
+    // Two fans with one name read as one: the second goes by the handle.
+    const own = fanNameOf(sale.fan);
+    const taken = own === null ? undefined : names.get(own);
+    if (own !== null && taken === undefined) names.set(own, key);
+    const name = taken === undefined || taken === key ? own : demoFanProfile(sale.fan).username;
     const entry = fans.get(key) ?? { fanName: name, pageLabel: sale.pageLabel, netMills: 0, sales: 0 };
     entry.netMills += sale.netMills;
     entry.sales += 1;
@@ -278,7 +287,7 @@ function statsOf(request: DemoRequest, scope: readonly string[], days: number, u
     records: {
       bestShift: bestShift === null || bestShift.salesNetMills === 0 ? null : { startedAt: bestShift.startedAt, salesNetMills: bestShift.salesNetMills },
       bestDay: bestDay === null ? null : { date: bestDay.date, salesNetMills: bestDay.salesNetMills },
-      biggestSale: biggest === null ? null : { at: isoAt(biggest.at), netMills: biggest.netMills, kind: biggest.kind, pageLabel: biggest.pageLabel, fanName: biggest.fan.displayName },
+      biggestSale: biggest === null ? null : { at: isoAt(biggest.at), netMills: biggest.netMills, kind: biggest.kind, pageLabel: biggest.pageLabel, fanName: fanNameOf(biggest.fan) },
       streakDays: streakOf(shiftDays, today),
       longestStreakDays: Math.max(streakOf(shiftDays, today), longestStreak(shiftDays, prevFirstDay, today)),
     },

@@ -21,7 +21,7 @@ import {
   type DemoReply,
   type DemoRequest,
 } from "../core.ts";
-import { DEMO_OFAPI_OFF_DAY, DEMO_PAGES, DEMO_USERS, demoPage, type DemoPage } from "../world.ts";
+import { DEMO_OFAPI_OFF_DAY, DEMO_PAGES, DEMO_USERS, demoFanProfile, demoPage, type DemoPage } from "../world.ts";
 import {
   DAY_MS,
   FAN_LINES,
@@ -216,7 +216,8 @@ function fanCard(page: DemoPage, fanRef: string, now: Date): KernelOperationResp
   const empty = { pageLabel: page.label, fanRef, accounts: [], pages: [], suggestions: [], facts: [], customs: [], customPayments: [], serverNow: iso(now) };
   const item = findPageFan(page, fanRef);
   if (!item) return { ...empty, known: false };
-  const account = { platform: page.platform, fanRef, username: item.fan.username, displayName: item.fan.displayName === item.fan.username ? null : item.fan.displayName, gone: false };
+  // What Hub knows of the profile: the same for the console's card and Workboard's Решения and Разбор (world.ts).
+  const account = { platform: page.platform, fanRef, ...demoFanProfile(item.fan), gone: false };
   const own = metricsOf(fanTransactions(page, item.fan), now);
   const row = (ref: string, spentMills: number) => ({
     pageLabel: page.label, platform: page.platform, modelName: page.modelName, fanRef: ref, granted: true, alias: null,

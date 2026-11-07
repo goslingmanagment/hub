@@ -1,7 +1,7 @@
 import { useMemo, type ReactNode } from "react";
 import { useLocation, useSearchParams } from "react-router";
 import { CHATTER_SHIFT_MIN_MESSAGES, CHATTER_SHIFT_MIN_WORKED_MINUTES } from "@agency_hub_core/contracts";
-import { Button, Card, Delta, Disclosure, Duration, EmptyState, ErrorState, Mark, Money, PageLabels, Person, Skeleton, Table, Tooltip, type Column, type SortState } from "@agency_hub_core/ui";
+import { Button, Card, Delta, Disclosure, Duration, EmptyState, ErrorState, Mark, Money, PageLabels, Person, Skeleton, Table, Tooltip, readDelta, type Column, type SortState } from "@agency_hub_core/ui";
 import { formatDay, formatDuration } from "@agency_hub_core/ui/format";
 import { PersonLink, personPath, useRowBackState } from "@/shared/links";
 import { formatAiUnedited, formatReplyMedian, formatUnanswered, METRICS, PER_SHIFT_HINT } from "@/shared/metrics";
@@ -10,8 +10,9 @@ import { usePageFilter } from "@/shared/usePageFilter";
 import { usePeriod } from "@/shared/usePeriod";
 import { useMe } from "@/shared/useMe";
 import { Head } from "./Head.js";
+import { pagesInOrder } from "./ShiftTable.js";
 import { SlowFailed } from "./SlowFailed.js";
-import { changePct, usePeopleList, type PeopleList, type PersonRef, type PersonSummary } from "./data.js";
+import { usePeopleList, type PeopleList, type PersonRef, type PersonSummary } from "./data.js";
 import { capitalized, periodWords, ROLE_WORD, statusOf, versusTitle } from "./words.js";
 import "./people.css";
 
@@ -30,7 +31,7 @@ export function PeopleScreen() {
   const list = usePeopleList(period, page);
   const location = useLocation();
   const [sort, setSort] = useListSort();
-  const columns = useColumns(list, isOwner);
+  const columns = useColumns(list, isOwner, page);
   const rows = useMemo(() => sortedRows(list.rows, columns, sort), [list.rows, columns, sort]);
   const firstOff = rows.find(isQuiet);
   const rowState = useRowBackState("Люди");
@@ -174,18 +175,20 @@ function qualityHint(key: keyof typeof METRICS): ReactNode {
   return <>{METRICS[key].hint} {PER_SHIFT_HINT}</>;
 }
 
-function useColumns(list: PeopleList, isOwner: boolean): Column<PersonSummary>[] {
+function useColumns(list: PeopleList, isOwner: boolean, page: string | null): Column<PersonSummary>[] {
   const { period } = usePeriod();
   const versus = versusTitle(period);
   const { team, comparable } = list;
   const crowd = list.rows.filter((row) => row.quality).length >= 3;
   return useMemo(() => {
-    /** The change of a number against the window before: neutral words, never a grade (spec §5); none when there is nothing to compare with. */
-    const change = (current: number | null, previous: number | null | undefined, was: number | null = null) => {
-      if (!comparable) return null;
-      if (was !== null) return <Delta was={was} title={versus} />;
-      const pct = changePct(current, previous);
-      return pct === null ? null : <Delta pct={pct} kind="cost" title={versus} />;
+    /**
+     * The change against the window before, by the one rule of Delta (D13): calm better / worse colours as on «Смены»,
+     * «было $X» / «впервые» at a small base; nothing when there is nothing to compare with. `base`: the money behind a rate.
+     */
+    const change = (current: number | null, previous: number | null | undefined, base?: number | null) => {
+      if (!comparable || previous === null || previous === undefined) return null;
+      if (readDelta(current ?? 0, previous, { base }).kind === "none") return null;
+      return <Delta current={current ?? 0} previous={previous} base={base} title={versus} />;
     };
     const quality = (row: PersonSummary, show: (value: NonNullable<PersonSummary["quality"]>) => ReactNode) => {
       if (!row.work || row.work.shifts === 0) return <Dash hint="Смен не было" />;
@@ -193,6 +196,9 @@ function useColumns(list: PeopleList, isOwner: boolean): Column<PersonSummary>[]
       if (row.quality === null) return <Dash hint="Смена ещё идёт: числа будут после её конца" />;
       return show(row.quality);
     };
+    // E1: under a page filter each column says whether it is that page's or every page's.
+    const perShift = page ? ["в среднем за смену", "все страницы"] : "в среднем за смену";
+    const onPage = page ? { sub: page } : {};
     const columns: Column<PersonSummary>[] = [
       {
         key: "who",
@@ -205,7 +211,7 @@ function useColumns(list: PeopleList, isOwner: boolean): Column<PersonSummary>[]
           return (
             <span className="people-who">
               <Person name={row.username} status={status} hint={hint} />
-              {row.pages.length > 0 && <PageLabels labels={row.pages} max={4} className="people-who__pages" />}
+              {row.pages.length > 0 && <PageLabels labels={pagesInOrder(row.pages)} max={4} className="people-who__pages" />}
             </span>
           );
         },
@@ -226,16 +232,15 @@ function useColumns(list: PeopleList, isOwner: boolean): Column<PersonSummary>[]
       },
       {
         key: "sales",
-        header: "Продажи",
+        header: <Head lines={["Продажи"]} {...onPage} />,
+        headerWrap: false,
         numeric: true,
-        hint: "Деньги после комиссии площадки за смены периода. Под суммой — изменение к прошлому периоду, на то же время.",
         sortValue: (row) => row.work?.salesNetMills ?? 0,
         cell: (row) => {
           const work = row.work;
           if (!work) return <Dash hint="Смен не было" />;
-          const gone = work.shifts === 0 && (work.previous?.salesNetMills ?? 0) > 0;
           return (
-            <WithDelta change={change(work.salesNetMills, work.previous?.salesNetMills, gone ? work.previous!.salesNetMills : null)}>
+            <WithDelta change={change(work.salesNetMills, work.previous?.salesNetMills)}>
               <Money mills={work.salesNetMills} strong />
             </WithDelta>
           );
@@ -243,14 +248,15 @@ function useColumns(list: PeopleList, isOwner: boolean): Column<PersonSummary>[]
       },
       {
         key: "hour",
-        header: "В час",
+        header: <Head lines={["В час"]} {...onPage} />,
+        headerWrap: false,
         numeric: true,
         sortValue: (row) => row.work?.perHourMills ?? null,
         cell: (row) => {
           const work = row.work;
           if (!work || work.perHourMills === null) return <Dash hint="Смен не было" />;
           return (
-            <WithDelta change={change(work.perHourMills, work.previous?.perHourMills)}>
+            <WithDelta change={change(work.perHourMills, work.previous?.perHourMills, work.previous?.salesNetMills)}>
               <Money mills={work.perHourMills} />
             </WithDelta>
           );
@@ -258,7 +264,7 @@ function useColumns(list: PeopleList, isOwner: boolean): Column<PersonSummary>[]
       },
       {
         key: "reply",
-        header: <Head lines={[METRICS.reply.label]} sub="в среднем за смену" />,
+        header: <Head lines={[METRICS.reply.label]} sub={perShift} />,
         headerWrap: false,
         numeric: true,
         hint: qualityHint("reply"),
@@ -273,7 +279,7 @@ function useColumns(list: PeopleList, isOwner: boolean): Column<PersonSummary>[]
       },
       {
         key: "unanswered",
-        header: <Head lines={[METRICS.unanswered.label]} sub="в среднем за смену" />,
+        header: <Head lines={[METRICS.unanswered.label]} sub={perShift} />,
         headerWrap: false,
         numeric: true,
         hint: qualityHint("unanswered"),
@@ -288,7 +294,7 @@ function useColumns(list: PeopleList, isOwner: boolean): Column<PersonSummary>[]
       },
       {
         key: "ai",
-        header: <Head lines={[METRICS.aiUnedited.label]} sub="в среднем за смену" />,
+        header: <Head lines={[METRICS.aiUnedited.label]} sub={perShift} />,
         headerWrap: false,
         numeric: true,
         hint: qualityHint("aiUnedited"),
@@ -300,7 +306,7 @@ function useColumns(list: PeopleList, isOwner: boolean): Column<PersonSummary>[]
     if (isOwner) {
       columns.push({
         key: "spend",
-        header: <Head lines={["Траты", "на ИИ"]} />,
+        header: <Head lines={["Траты", "на ИИ"]} {...(page ? { sub: "все страницы" } : {})} />,
         headerWrap: false,
         numeric: true,
         hint: "Сколько стоили запросы человека к ИИ за дни периода, по всем страницам",
@@ -313,7 +319,7 @@ function useColumns(list: PeopleList, isOwner: boolean): Column<PersonSummary>[]
       });
     }
     return columns;
-  }, [isOwner, list.quality, list.spend, crowd, comparable, team.replyMedianSeconds, team.unansweredAtEnd, versus]);
+  }, [isOwner, list.quality, list.spend, crowd, comparable, team.replyMedianSeconds, team.unansweredAtEnd, versus, page]);
 }
 
 function Aside({ list, page }: { list: PeopleList; page: string | null }) {
@@ -337,8 +343,8 @@ function Aside({ list, page }: { list: PeopleList; page: string | null }) {
       )}
       {page && (
         <p className="people-note">
-          Смены и продажи — только по странице {page}. Ответ, без ответа к концу, ИИ без правки и траты на ИИ — по всем страницам:
-          Hub пока не делит их по страницам.
+          Фильтр {page} сужает смены и продажи. Ответ, без ответа к концу, ИИ без правки и траты на ИИ — по всем страницам: Hub пока не
+          делит их по страницам.
         </p>
       )}
     </div>

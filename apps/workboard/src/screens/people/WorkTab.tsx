@@ -2,7 +2,7 @@ import { useMemo, type ReactNode } from "react";
 import { Link, useLocation } from "react-router";
 import { CHATTER_SHIFT_MIN_MESSAGES, CHATTER_SHIFT_MIN_WORKED_MINUTES, SHIFT_REPORT_MAX_DAYS } from "@agency_hub_core/contracts";
 import { millsToNumber, sumMills } from "@agency_hub_core/shared";
-import { Button, Card, Delta, Disclosure, Duration, EmptyState, Hint, LinkButton, Money, Section, Skeleton } from "@agency_hub_core/ui";
+import { Button, Card, Delta, Disclosure, Duration, EmptyState, Hint, LinkButton, Money, Section, Skeleton, Tooltip, readDelta } from "@agency_hub_core/ui";
 import { formatDuration, formatMills, formatPercent } from "@agency_hub_core/ui/format";
 import { addDays } from "@agency_hub_core/ui/moscow";
 import { ruPlural } from "@agency_hub_core/ui/plural";
@@ -11,11 +11,11 @@ import { formatAiUnedited, formatReplyMedian, formatUnanswered, METRICS, PER_SHI
 import { usePageFilter } from "@/shared/usePageFilter";
 import { usePeriod } from "@/shared/usePeriod";
 import { useMe } from "@/shared/useMe";
-import { changePct, usePersonStats, type PeriodQuality, type PeriodWork, type PersonCard } from "./data.js";
+import { usePersonStats, type PeriodQuality, type PeriodWork, type PersonCard } from "./data.js";
 import { ShiftRibbon } from "./ShiftRibbon.js";
 import { ShiftTable } from "./ShiftTable.js";
 import { SlowFailed } from "./SlowFailed.js";
-import { capitalized, dayWords, periodWords, versusTitle } from "./words.js";
+import { capitalized, dayWords, periodWords, sentence, versusTitle } from "./words.js";
 
 /**
  * «Работа» (spec §4.4, D2): the period's verdict in one line — money and its
@@ -64,10 +64,7 @@ export function WorkTab({ card, userId }: { card: PersonCard; userId: number }) 
           />
         </Card>
       </Section>
-      <Section
-        title="Смены"
-        {...(isOwner ? { description: "Строка открывает разбор смены. Числа каждой смены — те же, что в её разборе." } : {})}
-      >
+      <Section title="Смены" {...(isOwner ? { description: "Числа каждой смены — те же, что в её разборе." } : {})}>
         <ShiftTable card={card} userId={userId} canOpen={isOwner} />
         <Below card={card} userId={userId} />
       </Section>
@@ -80,28 +77,35 @@ export function WorkTab({ card, userId }: { card: PersonCard; userId: number }) 
  * The verdict of the period (spec §4.4): one line, 16 px — money with its
  * change, per hour, and how the person answers and writes, the average per
  * shift by the review's rules. Under it one quiet line: what the change is
- * against and what the averages are.
+ * against. D14: only the three terms that need a definition are dotted; the
+ * note about the money is a plain hint on the sum. E1: under a page filter the
+ * money says its page and the averages say they are of every page.
  */
 function Verdict({ work, quality, failed, username }: { work: PeriodWork; quality: PeriodQuality | null | undefined; failed: boolean; username: string }) {
   const { period } = usePeriod();
   const { page } = usePageFilter();
   const versus = versusTitle(period);
-  const change = (current: number | null, previous: number | null | undefined) => {
-    if (work.previous === null) return null;
-    const pct = changePct(current, previous);
-    return pct === null ? null : <span className="people-verdict__change">(<Delta pct={pct} kind="cost" title={versus} />)</span>;
+  /** The one rule of a change (D13): calm better / worse colours, «было $X» / «впервые» at a small base. `base`: the money behind a rate. */
+  const change = (current: number | null, previous: number | null | undefined, base?: number | null) => {
+    if (work.previous === null || previous === null || previous === undefined) return null;
+    if (readDelta(current ?? 0, previous, { base }).kind === "none") return null;
+    return <span className="people-verdict__change">(<Delta current={current ?? 0} previous={previous} base={base} title={versus} />)</span>;
   };
   const pending = quality === undefined && !failed;
   const number = (text: string) => (pending ? <Skeleton width={56} height={16} /> : <b>{text}</b>);
+  const term = (key: "reply" | "unanswered" | "aiUnedited", words: string) => <Hint content={<>{METRICS[key].hint} {PER_SHIFT_HINT}</>}>{words}</Hint>;
   const within = quality && quality.replies > 0 ? quality.repliesWithinHour / quality.replies : null;
-  const sales = <b><Money mills={work.salesNetMills} /></b>;
+  const money = <b><Money mills={work.salesNetMills} /></b>;
+  const sales = work.overlapNetMills > 0
+    ? <Tooltip content={`Из них ${formatMills(work.overlapNetMills)} видны и у коллег: страницу вели двое, а этим фанам никто из них не писал.`}><span>{money}</span></Tooltip>
+    : money;
 
   const notes = [
     work.previous === null
       ? `Сравнить не с чем: за ${period.previousLabel} у Hub нет всей работы ${username}.`
-      : `В скобках — изменение ${versus}.`,
-    within !== null ? `${formatPercent(within * 100)} ответов — быстрее часа.` : null,
-    page ? "Числа «в среднем за смену» — по всем страницам: Hub пока не делит их по страницам." : null,
+      : sentence(`В скобках — изменение ${versus}`),
+    // «99 % быстрее часа» says nothing; only a slip is news.
+    within !== null && within < 0.95 ? `${formatPercent(within * 100)} ответов — быстрее часа.` : null,
   ].filter(Boolean).join(" ");
 
   return (
@@ -109,27 +113,25 @@ function Verdict({ work, quality, failed, username }: { work: PeriodWork; qualit
       <p className="people-verdict__line">
         <span className="people-verdict__group">
           <span className="people-verdict__part">
-            {work.overlapNetMills > 0
-              ? <Hint content={`Из них ${formatMills(work.overlapNetMills)} видны и у коллег: страницу вели двое, а этим фанам никто из них не писал.`}>{sales}</Hint>
-              : sales}
+            {sales}
             {change(work.salesNetMills, work.previous?.salesNetMills)}
-            {" "}за {work.shifts} {ruPlural(work.shifts, "смену", "смены", "смен")}, <Duration minutes={work.workedMinutes} />
+            {" "}за {work.shifts} {ruPlural(work.shifts, "смену", "смены", "смен")}{page ? <> на <span className="people-verdict__page">{page}</span></> : null}, <Duration minutes={work.workedMinutes} />
           </span>
           <Sep />
           <span className="people-verdict__part">
-            <b><Money mills={work.perHourMills} /></b> в час{change(work.perHourMills, work.previous?.perHourMills)}
+            <b><Money mills={work.perHourMills} /></b> в час{change(work.perHourMills, work.previous?.perHourMills, work.previous?.salesNetMills)}
           </span>
         </span>
         <span className="people-verdict__group">
-          <Hint content={PER_SHIFT_HINT}>в среднем за смену</Hint>:{" "}
-          <span className="people-verdict__part">{METRICS.reply.label.toLowerCase()} {number(quality ? formatReplyMedian(quality.replyMedianSeconds) : "—")}</span>
+          {page ? "В среднем за смену, по всем страницам: " : "В среднем за смену: "}
+          <span className="people-verdict__part">{term("reply", METRICS.reply.label.toLowerCase())} {number(quality ? formatReplyMedian(quality.replyMedianSeconds) : "—")}</span>
           <Sep />
-          <span className="people-verdict__part">{METRICS.unanswered.label.toLowerCase()} {number(quality ? formatUnanswered(quality.unansweredAtEnd, { average: true }) : "—")}</span>
+          <span className="people-verdict__part">{term("unanswered", METRICS.unanswered.label.toLowerCase())} {number(quality ? formatUnanswered(quality.unansweredAtEnd, { average: true }) : "—")}</span>
           <Sep />
-          <span className="people-verdict__part">{METRICS.aiUnedited.label} {number(quality ? formatAiUnedited(quality.aiUneditedShare) : "—")}</span>
+          <span className="people-verdict__part">{term("aiUnedited", METRICS.aiUnedited.label)} {number(quality ? formatAiUnedited(quality.aiUneditedShare) : "—")}</span>
         </span>
       </p>
-      <p className="people-verdict__note">{notes}</p>
+      {notes && <p className="people-verdict__note">{notes}</p>}
     </section>
   );
 }
@@ -167,7 +169,7 @@ function Below({ card, userId }: { card: PersonCard; userId: number }) {
     lines.push(
       <div key="reports" className="people-idle">
         <span>
-          Подтверждено к выплате: <span className="people-meta__strong">{formatMills(sum)}</span> за {confirmed.length} {ruPlural(confirmed.length, "смену", "смены", "смен")}
+          Подтверждено к выплате{page ? " по всем страницам" : ""}: <span className="people-meta__strong">{formatMills(sum)}</span> за {confirmed.length} {ruPlural(confirmed.length, "смену", "смены", "смен")}
           {waiting > 0 && <> · ждут подтверждения: {waiting}</>}
         </span>
         <Link className="people-link" to={`/payouts${params ? `?${params}` : ""}`}>Открыть выплаты →</Link>
@@ -177,8 +179,8 @@ function Below({ card, userId }: { card: PersonCard; userId: number }) {
   if (page) {
     lines.push(
       <p key="page" className="people-note">
-        Смены и продажи — только по странице {page}. {METRICS.reply.label}, без ответа к концу и ИИ без правки — по всей смене: Hub пока не делит их
-        по страницам.
+        Фильтр {page} сужает смены и продажи. {METRICS.reply.label}, без ответа к концу и ИИ без правки — по всей смене: Hub пока не делит их по
+        страницам.
       </p>,
     );
   }
@@ -192,7 +194,8 @@ function HowItCounts() {
       <div className="people-help">
         <p>
           Смена — работа в расширении под своим входом: от {formatDuration(CHATTER_SHIFT_MIN_WORKED_MINUTES)} и {CHATTER_SHIFT_MIN_MESSAGES} сообщений,
-          конец — час без действий. Смена относится к дню, на который пришлась большая её часть.
+          конец — час без действий. Ночная смена подписана обоими днями («вс, 1–2 нояб. 21:00–05:49»), а в сетке «Смен» и в
+          выплатах стоит в дне, где прошла большая её часть. Длительность — время работы без пауз.
         </p>
         <p>Продажи — деньги после комиссии площадки на страницах, где человек писал в смене. Это ориентир, а не основание для оплаты.</p>
         <p><b>{METRICS.reply.label}.</b> {METRICS.reply.hint}</p>

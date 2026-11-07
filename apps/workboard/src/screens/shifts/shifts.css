@@ -3,10 +3,11 @@
   /* ------------------------------------------------------ «Ждут решения» */
 
   /* The two status lines on top: what waits for a decision, who is on a shift. */
+  /* Two status lines (36 px each) read as one block: no air between them beyond their own. */
   .shifts-top {
     display: flex;
     flex-direction: column;
-    gap: 12px;
+    gap: 0;
   }
 
   /* People on a shift: a block of its own, as far from the line above as the blocks below are. */
@@ -27,7 +28,7 @@
   .shifts-waiting__label {
     display: inline-flex;
     align-items: center;
-    gap: 10px;
+    gap: 12px;
     color: var(--ui-text);
     font-weight: 500;
   }
@@ -60,6 +61,37 @@
 
   .shifts-waiting__link:hover {
     text-decoration-color: currentColor;
+  }
+
+  /* What waits on the other pages, a queue that did not answer: said, quieter than what waits here. */
+  .shifts-waiting__link--quiet {
+    color: var(--ui-text-2);
+  }
+
+  .shifts-waiting__link--quiet:hover {
+    color: var(--ui-text);
+  }
+
+  .shifts-waiting__failed {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--ui-text-2);
+  }
+
+  /* Nothing waits here: no accent, the hollow dot of «никто не на смене»; the label reads on into its tail. */
+  .shifts-waiting--quiet {
+    column-gap: 10px;
+  }
+
+  .shifts-waiting--quiet .shifts-waiting__label {
+    color: var(--ui-text-2);
+    font-weight: 400;
+  }
+
+  .shifts-waiting--quiet .shifts-waiting__dot {
+    border: 1.5px solid var(--ui-text-3);
+    background: transparent;
   }
 
   /* ---------------------------------------------------- «Сейчас на смене» */
@@ -158,6 +190,11 @@
   .shifts-now__since {
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
+  }
+
+  .shifts-now__sep {
+    margin: 0 8px;
+    color: var(--ui-text-3);
   }
 
   .shifts-now__fact {
@@ -440,5 +477,18 @@
   .shifts-how b {
     color: var(--ui-text);
     font-weight: 500;
+  }
+
+  /* The three quality numbers: one definition a line. */
+  .shifts-how__terms {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin: -4px 0 12px;
+    padding: 0;
+    list-style: none;
+    color: var(--ui-text-2);
+    font-size: var(--ui-fs-15);
+    line-height: var(--ui-lh-read);
   }
 }

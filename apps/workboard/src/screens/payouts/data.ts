@@ -1,8 +1,8 @@
 import { useQuery } from "@tanstack/react-query";
 import type { KernelOperationResponse } from "@agency_hub_core/contracts";
-import { sumMills } from "@agency_hub_core/shared";
+import { millsFromDollars, sumMills, type Mills } from "@agency_hub_core/shared";
 import { daysInRange } from "@agency_hub_core/ui/moscow";
-import { daysOf, pivotOf, type PivotRow } from "@agency_hub_core/ui/payoutSheet";
+import { daysOf, pivotOf, sheetCell, type PivotRow } from "@agency_hub_core/ui/payoutSheet";
 import type { ResolvedPeriod } from "@agency_hub_core/ui/period";
 import { kernel } from "@/shared/hub";
 
@@ -18,8 +18,11 @@ import { kernel } from "@/shared/hub";
  *     only for «sales at stake» of the shifts nobody confirmed and for the people's
  *     ids; joined here in the browser (phase 2: one `teamPayouts` read).
  * The copy for the payout sheet is packages/ui/src/payoutSheet.ts — the
- * console's format, byte for byte. No writes on this screen: the disputes it
- * leaves out are decided on Решения.
+ * console's format, byte for byte. Every sum on this screen is a sum of the
+ * sheet's cells as they paste (В-н1): a Fansly cell to the cent, an OnlyFans
+ * cell to the dollar — so a row, its days and «Итого» add up to what the sheet
+ * adds up to after the paste. No writes on this screen: the disputes it leaves
+ * out are decided on Решения.
  * Query keys start with "payouts" (a dispute's decision refreshes them).
  */
 
@@ -31,10 +34,26 @@ export const EXPORT_MAX_DAYS = 31;
 /** How far back a chatter can still confirm a shift in the cabinet (SHIFT_REPORT_MAX_DAYS). */
 export const CONFIRM_MAX_DAYS = 14;
 
+/**
+ * One cell of the payout sheet as it pastes, back in mills: «479.94» → 479 940.
+ * The cell's own text is the rule (sheetCell), so the screen and the pasted
+ * sheet can never part by a cent.
+ */
+export function pastedMills(platform: string, mills: number): Mills {
+  return millsFromDollars(sheetCell(platform, mills));
+}
+
+/** The pasted sum of one row of the sheet (a chatter's page): its cells as they paste. */
+export function pastedRowMills(row: PivotRow): Mills {
+  return sumMills([...row.cells.values()].map((value) => pastedMills(row.platform, value)));
+}
+
 export interface UnconfirmedShift {
   startedAt: string;
   endedAt: string;
   ongoing: boolean;
+  /** Minutes worked, pauses left out (the same shift of `teamShiftSales`); null — not known. */
+  workedMinutes: number | null;
   /** The shift's sales by Hub's shifts (before any chatter's marks); null — the sales read did not answer or has no such shift. */
   salesNetMills: number | null;
   /** Too old to confirm in the cabinet now. */
@@ -45,7 +64,7 @@ export interface UnconfirmedShift {
 export interface PayoutChatter {
   username: string;
   userId: number | null;
-  /** Confirmed credits of the window: what goes into the payout sheet. */
+  /** Confirmed credits of the window as they paste: the sum of the chatter's sheet cells. */
   confirmedMills: bigint;
   pages: Array<{ pageLabel: string; platform: string; mills: bigint }>;
   /** Days with a confirmed credit. */
@@ -67,7 +86,11 @@ export interface PayoutsView {
   /** The whole sheet, every chatter (what «Скопировать всё» copies). */
   sheet: PivotRow[];
   confirmedMills: bigint;
+  /** Every chatter's sales at stake; null when some chatter's are not known. */
   atStakeMills: bigint | null;
+  /** The sales at stake of the chatters whose are known, and who is left out of it (В-н5). */
+  atStakeKnownMills: bigint;
+  atStakeUnknown: string[];
   disputedOpen: number;
   lateChanges: Export["lateChanges"];
   serverNow: string;
@@ -97,12 +120,7 @@ export function buildPayouts(data: Export, sales: ShiftSales | undefined): Payou
   const names = [...new Set([...data.rows.map((row) => row.username), ...data.unconfirmed.map((shift) => shift.username)])];
   const chatters = names.map((username): PayoutChatter => {
     const rows = data.rows.filter((row) => row.username === username);
-    const byPage = new Map<string, { pageLabel: string; platform: string; values: number[] }>();
-    for (const row of rows) {
-      const entry = byPage.get(row.pageLabel) ?? { pageLabel: row.pageLabel, platform: row.platform, values: [] };
-      entry.values.push(row.creditedMills);
-      byPage.set(row.pageLabel, entry);
-    }
+    const blocks = sheet.filter((row) => row.username === username);
     const unconfirmed = data.unconfirmed
       .filter((shift) => shift.username === username)
       .sort((left, right) => left.startedAt.localeCompare(right.startedAt))
@@ -110,6 +128,7 @@ export function buildPayouts(data: Export, sales: ShiftSales | undefined): Payou
         const match = sales?.shifts.find((one) => one.username === username && (one.startedAt === shift.startedAt || overlaps(one, shift)));
         return {
           ...shift,
+          workedMinutes: match ? match.workedMinutes : null,
           salesNetMills: match ? match.salesNetMills : null,
           tooLate: !shift.ongoing && now - Date.parse(shift.startedAt) > CONFIRM_MAX_DAYS * DAY_MS,
         };
@@ -118,10 +137,10 @@ export function buildPayouts(data: Export, sales: ShiftSales | undefined): Payou
     return {
       username,
       userId: ids.get(username) ?? null,
-      confirmedMills: sumMills(rows.map((row) => row.creditedMills)),
-      pages: [...byPage.values()].map((page) => ({ pageLabel: page.pageLabel, platform: page.platform, mills: sumMills(page.values) })),
+      confirmedMills: sumMills(blocks.map(pastedRowMills)),
+      pages: blocks.map((row) => ({ pageLabel: row.pageLabel, platform: row.platform, mills: pastedRowMills(row) })),
       days: new Set(rows.map((row) => row.shiftDate)).size,
-      sheet: sheet.filter((row) => row.username === username),
+      sheet: blocks,
       unconfirmed,
       atStakeMills: known ? sumMills(unconfirmed.map((shift) => shift.salesNetMills ?? 0)) : null,
       ownAmounts: data.ownAmounts.filter((own) => own.username === username),
@@ -130,6 +149,7 @@ export function buildPayouts(data: Export, sales: ShiftSales | undefined): Payou
   }).sort((left, right) => (left.confirmedMills === right.confirmedMills ? left.username.localeCompare(right.username) : left.confirmedMills > right.confirmedMills ? -1 : 1));
 
   const allKnown = chatters.every((chatter) => chatter.atStakeMills !== null);
+  const atStakeKnownMills = sumMills(chatters.map((chatter) => chatter.atStakeMills ?? 0n));
   return {
     from: data.from,
     to: data.to,
@@ -137,7 +157,9 @@ export function buildPayouts(data: Export, sales: ShiftSales | undefined): Payou
     chatters,
     sheet,
     confirmedMills: sumMills(chatters.map((chatter) => chatter.confirmedMills)),
-    atStakeMills: allKnown ? sumMills(chatters.map((chatter) => chatter.atStakeMills ?? 0n)) : null,
+    atStakeMills: allKnown ? atStakeKnownMills : null,
+    atStakeKnownMills,
+    atStakeUnknown: chatters.filter((chatter) => chatter.atStakeMills === null).map((chatter) => chatter.username),
     disputedOpen: data.disputedOpen,
     lateChanges: data.lateChanges,
     serverNow: data.serverNow,

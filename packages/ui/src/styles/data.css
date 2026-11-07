@@ -232,6 +232,14 @@
     min-width: 0;
   }
 
+  /* Inside its hint's wrapper (the wrapper wears the caller's class): cut with «…» when the wrapper is narrower. */
+  .ui-fan--inner {
+    /* clip, not hidden: no scroll container, so the name keeps its baseline in a sentence. */
+    overflow: clip;
+    text-overflow: ellipsis;
+    white-space: inherit;
+  }
+
   .ui-fan__name--unknown {
     color: var(--ui-text-2);
   }

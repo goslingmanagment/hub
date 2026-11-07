@@ -33,12 +33,71 @@
     font-variant-numeric: tabular-nums;
   }
 
+  /* A page's name is a word, not a number: «mia-1», never the spaced «mia - 1» of tabular figures (M5). */
+  .review-page-text {
+    font-variant-numeric: normal;
+  }
+
+  /* The title row's right end: «Обновлено …» of a shift going on, then the shift stepper. */
+  .review-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 16px;
+  }
+
   /* Under the title: the facts of the shift, then quiet notes. */
   .review-meta {
     display: flex;
     flex-wrap: wrap;
     align-items: baseline;
     gap: 8px 32px;
+  }
+
+  .review-live {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 6px;
+    border: 0;
+    border-radius: var(--ui-radius-sm);
+    background: transparent;
+    color: var(--ui-text-3);
+    font: 400 var(--ui-fs-14) / var(--ui-lh-14) var(--ui-font);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    cursor: pointer;
+    transition: background-color var(--ui-fast), color var(--ui-fast);
+  }
+
+  .review-live:hover:not(:disabled) {
+    background: var(--ui-hover);
+    color: var(--ui-text);
+  }
+
+  /*
+   * «Вся смена:» and its facts (E1): the scope said before the numbers, quieter than them. One row: the facts wrap
+   * inside their own box, the scope stays in front of them.
+   */
+  .review-meta__facts {
+    display: flex;
+    align-items: baseline;
+    gap: 14px;
+    min-width: 0;
+  }
+
+  .review-meta__facts > .review-facts {
+    flex: 0 1 auto;
+    min-width: 0;
+  }
+
+  .review-scope {
+    flex: none;
+    color: var(--ui-text-3);
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+    font-weight: 500;
+    white-space: nowrap;
+    cursor: default;
   }
 
   .review-meta__quiet {
@@ -48,7 +107,13 @@
   }
 
   .review-facts {
-    gap: 8px 28px;
+    gap: 8px 20px;
+  }
+
+  @media (min-width: 1680px) {
+    .review-facts {
+      gap: 8px 28px;
+    }
   }
 
   .review-facts--loading {
@@ -185,22 +250,17 @@
     border-radius: 0;
   }
 
-  /* Not room for three: the list narrows to one line a chat, it never goes away. */
+  /*
+   * Not room for three (1440): the list narrows to the fan and the first reason, two short lines, it never goes
+   * away; the evidence takes 360 px; the conversation keeps the rest (~520 px) and its bubbles grow to it.
+   */
   @media (max-width: 1679px) {
     .review-split.has-evidence {
-      grid-template-columns: 280px minmax(0, 1fr) 380px;
+      grid-template-columns: 248px minmax(0, 1fr) 360px;
     }
 
     .review-split.has-evidence .review-chat {
-      flex-direction: row;
-      align-items: baseline;
-      gap: 8px;
-      padding: 9px 12px 9px 16px;
-    }
-
-    .review-split.has-evidence .review-chat__top {
-      flex: 0 1 auto;
-      max-width: 55%;
+      padding: 8px 12px 8px 16px;
     }
 
     .review-split.has-evidence .review-chat__when,
@@ -208,12 +268,27 @@
       display: none;
     }
 
-    .review-split.has-evidence .review-chat__why {
-      display: block;
-      flex: 1 1 0;
-      min-width: 0;
-      text-overflow: ellipsis;
-      white-space: nowrap;
+    .review-split.has-evidence .review-transcript {
+      --review-inline: 16px;
+    }
+
+    .review-split.has-evidence .review-transcript__scroll {
+      padding-inline: 16px;
+    }
+
+    .review-split.has-evidence .review-msg {
+      max-width: 88%;
+    }
+  }
+
+  /* A smaller window still (not a target width): every column gives a little; the pulse's how-to goes (M12). */
+  @media (max-width: 1359px) {
+    .review-split.has-evidence {
+      grid-template-columns: 216px minmax(0, 1fr) 320px;
+    }
+
+    .review-pulse__hint {
+      display: none;
     }
   }
 
@@ -487,14 +562,31 @@
     font-variant-numeric: tabular-nums;
   }
 
+  .review-chat__page {
+    font-variant-numeric: normal;
+  }
+
+  /* The second line is one line: the reasons that fit (measured), «…» on the last, «+N» never cut (M2). */
   .review-chat__why {
-    display: -webkit-box;
-    overflow: hidden;
+    display: flex;
+    align-items: baseline;
+    min-width: 0;
     color: var(--ui-text-2);
     font-size: var(--ui-fs-14);
     line-height: var(--ui-lh-14);
-    -webkit-box-orient: vertical;
-    -webkit-line-clamp: 2;
+    white-space: nowrap;
+  }
+
+  .review-chat__line {
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .review-chat__outside,
+  .review-why--more {
+    flex: none;
   }
 
   /* A strong reason (it put the chat in the selection): in ink; a fan left without an answer, the AI's service text: the outlier's colour. */
@@ -672,7 +764,6 @@
 
   /* A message: the fan on the left, the page on the right. */
   .review-msg {
-    --review-edge: var(--ui-line);
     display: flex;
     flex-direction: column;
     align-items: flex-start;
@@ -707,7 +798,6 @@
 
   .review-msg--page .review-bubble {
     border-color: var(--ui-line);
-    border-left: 3px solid var(--review-edge);
     background: var(--ui-surface);
   }
 
@@ -717,27 +807,9 @@
     background: var(--ui-bg);
   }
 
-  /* Where the text came from, on the bubble's edge: the AI's texts, the chatter's draft through the AI, the chatter's own. */
-  .review-msg[data-origin="ai-raw"] {
-    --review-edge: var(--ui-series-4);
-  }
-
-  .review-msg[data-origin="ai-edited"],
-  .review-msg[data-origin="ai-command"] {
-    --review-edge: color-mix(in srgb, var(--ui-series-4) 45%, var(--ui-surface));
-  }
-
-  .review-msg[data-origin="ai-hi"] {
-    --review-edge: color-mix(in srgb, var(--ui-series-4) 25%, var(--ui-surface));
-  }
-
-  .review-msg[data-origin="fix"] {
-    --review-edge: var(--ui-series-1);
-  }
-
-  .review-msg[data-origin="own"],
-  .review-msg[data-origin="none"] {
-    --review-edge: var(--ui-line-strong);
+  /* Only «ИИ без правки» marks the bubble's edge (M15); every other origin is said in words under it. */
+  .review-msg[data-origin="ai-raw"] .review-bubble {
+    border-left: 3px solid var(--ui-series-4);
   }
 
   .review-msg.is-span .review-bubble {
@@ -831,10 +903,13 @@
     line-height: var(--ui-lh-14);
   }
 
+  /* Found words: the ink's soft ground — a search is not an outlier, so not the warm colour (M14). */
   .review-hit {
     border-radius: 3px;
-    background: var(--ui-mark-soft);
-    color: var(--ui-mark-text);
+    background: var(--ui-accent-soft);
+    box-shadow: inset 0 -2px 0 var(--ui-accent-line);
+    color: var(--ui-text);
+    font-weight: 600;
   }
 
   /* ------------------------------------------------------ The evidence */
@@ -842,7 +917,7 @@
   .review-evidence {
     display: flex;
     flex-direction: column;
-    gap: 24px;
+    gap: 20px;
   }
 
   .review-evidence__lead {
@@ -903,8 +978,8 @@
 
   .review-diff--added {
     border-radius: 3px;
-    background: var(--ui-mark-soft);
-    color: var(--ui-mark-text);
+    background: var(--ui-accent-soft);
+    color: var(--ui-text);
   }
 
   .review-diff--dropped {
@@ -913,18 +988,152 @@
     text-decoration-color: var(--ui-text-3);
   }
 
-  .review-evidence__foot {
+  /* The fan's message the text answered: a small fan bubble, three lines at most. */
+  .review-evidence__quote {
     display: flex;
-    flex: 1;
-    align-items: center;
-    gap: 8px;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+    margin: 0;
   }
 
-  .review-evidence__count {
-    flex: 1;
+  .review-evidence__quote-head {
+    color: var(--ui-text-3);
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .review-evidence__quote-text {
+    display: -webkit-box;
+    max-width: 100%;
+    margin: 0;
+    padding: 8px 12px;
+    overflow: hidden;
+    border-radius: 12px;
+    background: var(--ui-track);
+    font-size: var(--ui-fs-15);
+    line-height: var(--ui-lh-15);
+    overflow-wrap: anywhere;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 3;
+  }
+
+  .review-evidence__quote-text.is-empty {
+    color: var(--ui-text-3);
+  }
+
+  /* Every message of the chatter in this chat: the picture of the chat, and the way to the next one. */
+  .review-mine {
+    gap: 6px;
+    padding-top: 20px;
+    border-top: 1px solid var(--ui-line-soft);
+  }
+
+  .review-mine__head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+  }
+
+  .review-mine__keys {
+    flex: none;
+    color: var(--ui-text-3);
+    font-weight: 400;
+    cursor: default;
+  }
+
+  .review-mine__list {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    margin: 0 -12px;
+    padding: 0;
+    list-style: none;
+  }
+
+  .review-mine__item {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    width: 100%;
+    padding: 8px 12px;
+    border: 0;
+    border-radius: var(--ui-radius);
+    background: transparent;
+    color: var(--ui-text);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+    transition: background-color var(--ui-fast);
+  }
+
+  .review-mine__item:hover {
+    background: var(--ui-hover-soft);
+  }
+
+  .review-mine__item.is-current {
+    background: var(--ui-accent-soft);
+    box-shadow: inset 3px 0 0 var(--ui-accent);
+  }
+
+  .review-mine__item:focus-visible {
+    outline-offset: -2px;
+  }
+
+  .review-mine__top {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    min-width: 0;
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+    white-space: nowrap;
+  }
+
+  .review-mine__at {
+    flex: none;
+    color: var(--ui-text-2);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .review-mine__origin {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  /* «ИИ без правки»: the bubble's own mark, a dot of its edge colour. */
+  .review-mine__item.is-raw .review-mine__origin::before {
+    content: "";
+    display: inline-block;
+    width: 7px;
+    height: 7px;
+    margin-right: 6px;
+    border-radius: 50%;
+    background: var(--ui-series-4);
+    vertical-align: 1px;
+  }
+
+  .review-mine__wait {
+    flex: none;
+    margin-left: auto;
+    color: var(--ui-mark-text);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .review-mine__text {
+    overflow: hidden;
     color: var(--ui-text-2);
     font-size: var(--ui-fs-14);
-    font-variant-numeric: tabular-nums;
+    line-height: var(--ui-lh-14);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .review-mine__text.is-empty {
+    color: var(--ui-text-3);
   }
 
   /* ---------------------------------------------- Narrow windows: scroll */

@@ -21,13 +21,16 @@ import {
   type GreetingsTotals,
   type GreetingsView,
 } from "./data";
-import { barWidth, HowItCounts, LineName, NoAnswer, SalesHeader, WindowNotice, openColumn, SCALE_SAMPLE, scaleOf, skeletonColumns, useSalesParams, windowWords } from "./parts";
+import { barWidth, BeyondReach, Folds, HowItCounts, LineName, NoAnswer, SalesHeader, WindowNotice, openColumn, skeletonColumns, useSalesParams, windowWords } from "./parts";
 
 /**
  * Приветствия и охват: are new subscribers greeted by a person and do they buy
  * after; when fans wrote and nobody was on shift (a page × hour heat map); do
  * fans answer broadcasts. Two reads, each shown as soon as it comes: the slow
  * one never holds the other. A row opens the page's full greeting numbers.
+ * A past period is read exactly, but without what is not a sum: the medians of
+ * greetings and who wrote and waited in the empty hours (`partial`) — those are
+ * left out and the screen says so. A share's bar runs from 0 to 100 %.
  */
 
 const pct = (part: number, whole: number) => (whole > 0 ? formatPercent((100 * part) / whole) : "—");
@@ -37,13 +40,15 @@ const minutesOf = (seconds: number) => Math.max(1, Math.round(seconds / 60));
 /** A greeting later than this is marked: an hour is six times the owner's reply norm. */
 const SLOW_GREETING_SECONDS = 60 * 60;
 
+/** A page greets «worse» when it greets a third less often than all pages together: a clear gap, not a point around a line (П2). */
+const WORSE_GREETED = 2 / 3;
+
 // ------------------------------------------------------------------ Greetings
 
-function greetingColumns(pages: readonly GreetingsPage[], totals: GreetingsTotals | null): Column<GreetingsPage>[] {
-  const teamGreeted = totals && totals.newSubscribers > 0 ? totals.greeted / totals.newSubscribers : null;
-  const greetedMax = scaleOf(pages.map((page) => (page.newSubscribers >= SCALE_SAMPLE ? page.greeted / page.newSubscribers : null)).concat(teamGreeted));
-  const boughtMax = scaleOf(pages.map((page) => (page.greeted >= SCALE_SAMPLE ? page.boughtGreeted / page.greeted : null)));
-  return [
+function greetingColumns(pages: readonly GreetingsPage[], totals: GreetingsTotals | null, options: { partial?: boolean } = {}): Column<GreetingsPage>[] {
+  // With one page «all pages» is the page itself: no line to compare with (П1).
+  const teamGreeted = pages.length > 1 && totals && totals.newSubscribers > 0 ? totals.greeted / totals.newSubscribers : null;
+  const columns: Column<GreetingsPage>[] = [
     {
       key: "page",
       header: "Страница",
@@ -62,25 +67,25 @@ function greetingColumns(pages: readonly GreetingsPage[], totals: GreetingsTotal
     {
       key: "greeted",
       header: "Лично за сутки",
-      hint: "Первое личное сообщение в 24 часа после подписки: написал чаттер, не рассылка и не автоприветствие. Черта — все страницы вместе; отмечено, когда заметно реже",
+      hint: "Первое личное сообщение в 24 часа после подписки: написал человек, а не рассылка и не автоприветствие. Отмечено, когда на треть реже, чем у всех страниц",
       cell: (page) => {
         const value = page.newSubscribers > 0 ? page.greeted / page.newSubscribers : null;
-        const worse = value !== null && teamGreeted !== null && page.newSubscribers >= MIN_SAMPLE.greetings && value <= teamGreeted - 0.15;
-        return <RateBar hits={page.greeted} of={page.newSubscribers} min={MIN_SAMPLE.greetings} max={greetedMax} compare={teamGreeted} compareLabel="все страницы" tone={worse ? "mark" : "neutral"} />;
+        const worse = value !== null && teamGreeted !== null && page.newSubscribers >= MIN_SAMPLE.greetings && value < teamGreeted * WORSE_GREETED;
+        return <RateBar hits={page.greeted} of={page.newSubscribers} min={MIN_SAMPLE.greetings} compare={teamGreeted} compareLabel="все страницы" tone={worse ? "mark" : "neutral"} />;
       },
       sortValue: (page) => (page.newSubscribers > 0 ? page.greeted / page.newSubscribers : null),
       sortFirst: "desc",
       width: barWidth(28, 440),
+      className: "sales-bar-col",
     },
     {
       key: "median",
       header: "Обычно через",
       numeric: true,
-      hint: "Медиана: половина личных приветствий пришла быстрее. Отмечено, когда дольше часа",
       cell: (page) => {
         if (page.greetingMedianSeconds === null) return <span className="sales-quiet">—</span>;
         const text = formatDuration(minutesOf(page.greetingMedianSeconds));
-        return page.greetingMedianSeconds > SLOW_GREETING_SECONDS ? <Mark hint="Дольше часа: в шесть раз дольше вашей нормы ответа">{text}</Mark> : text;
+        return page.greetingMedianSeconds > SLOW_GREETING_SECONDS ? <Mark hint="Половина приветствий — дольше часа: в шесть раз дольше вашей нормы ответа">{text}</Mark> : text;
       },
       sortValue: (page) => page.greetingMedianSeconds,
       sortFirst: "asc",
@@ -92,14 +97,17 @@ function greetingColumns(pages: readonly GreetingsPage[], totals: GreetingsTotal
       cell: (page) => {
         const rest = notGreeted(page);
         const detail = rest === 0 ? "без личного —" : rest < MIN_SAMPLE.greetings ? `без личного ${formatOf(page.boughtNotGreeted, rest)}` : `без личного ${pct(page.boughtNotGreeted, rest)}`;
-        return <RateBar hits={page.boughtGreeted} of={page.greeted} min={MIN_SAMPLE.greetings} max={boughtMax} detail={detail} detailWidth={140} />;
+        return <RateBar hits={page.boughtGreeted} of={page.greeted} min={MIN_SAMPLE.greetings} detail={detail} detailWidth={140} />;
       },
       sortValue: (page) => (page.greeted >= MIN_SAMPLE.greetings ? page.boughtGreeted / page.greeted : null),
       sortFirst: "desc",
       width: barWidth(36, 580),
+      className: "sales-bar-col",
     },
     openColumn<GreetingsPage>(),
   ];
+  // A past period: Hub gives the medians only up to today — a column of «—» says nothing (the line above says why).
+  return options.partial ? columns.filter((column) => column.key !== "median") : columns;
 }
 
 function GreetingsBlock({ view, loading, failed, onRetry, retrying, refreshing, openKey, onOpen }: {
@@ -114,35 +122,38 @@ function GreetingsBlock({ view, loading, failed, onRetry, retrying, refreshing, 
 }) {
   const totals = view?.totals ?? null;
   const everyoneRecent = totals !== null && totals.newSubscribers > 0 && totals.recent === totals.newSubscribers;
+  const words = [
+    "Кого поприветствовали лично, как быстро и купили ли после.",
+    everyoneRecent
+      ? "У всех подписчиков этих дней 7 дней ещё не прошли: покупки могут добавиться."
+      : totals && totals.recent > 0
+        ? `У ${formatCount(totals.recent)} ${ruPlural(totals.recent, "подписчика", "подписчиков", "подписчиков")} 7 дней ещё не прошли: их покупки могут добавиться.`
+        : null,
+    view?.partial ? "Как быстро приветствовали, Hub пока отдаёт только для дней до сегодня — за прошлые недели этого столбца нет." : null,
+  ].filter(Boolean).join(" ");
   return (
-    <Section
-      title="Приветствия новых подписчиков"
-      description={everyoneRecent
-        ? "Кого поприветствовали лично, как быстро и купили ли после. У всех подписчиков этих дней 7 дней ещё не прошли: покупки могут добавиться."
-        : totals && totals.recent > 0
-          ? `Кого поприветствовали лично, как быстро и купили ли после. У ${formatCount(totals.recent)} ${ruPlural(totals.recent, "подписчика", "подписчиков", "подписчиков")} 7 дней ещё не прошли: их покупки могут добавиться.`
-          : "Кого поприветствовали лично, как быстро и купили ли после."}
-    >
+    <Section title="Приветствия новых подписчиков" description={words}>
       {!view ? (
-        failed ? <NoAnswer onRetry={onRetry} retrying={retrying} /> : <Table label="Приветствия по страницам" columns={skeletonColumns(greetingColumns([], null))} rows={[]} rowKey={(page) => page.pageLabel} loading={loading} skeletonRows={6} />
+        failed ? <NoAnswer onRetry={onRetry} retrying={retrying} /> : <Table label="Приветствия по страницам" columns={skeletonColumns(greetingColumns([], null))} rows={[]} rowKey={(page) => page.pageLabel} fit={false} loading={loading} skeletonRows={6} />
       ) : view.pages.length === 0 ? (
         <EmptyState title="Новых подписчиков и рассылок нет">За эти дни никто не подписался и рассылок не было.</EmptyState>
       ) : (
         <>
-          {totals && totals.newSubscribers > 0 && (
+          {/* One page: its row is the whole answer, a line of the same numbers above it would repeat it (П1). */}
+          {totals && totals.newSubscribers > 0 && view.pages.length > 1 && (
             <Facts
               label="Приветствия вместе"
               items={[
                 { label: "Новых подписчиков", value: formatCount(totals.newSubscribers), strong: true },
-                { label: "Лично поприветствовали", value: pct(totals.greeted, totals.newSubscribers), hint: `${formatOf(totals.greeted, totals.newSubscribers)} — в 24 часа после подписки` },
-                { label: "Купили с личным приветствием", value: pct(totals.boughtGreeted, totals.greeted) },
-                { label: "без личного", value: pct(totals.boughtNotGreeted, totals.notGreeted) },
+                { label: "Лично поприветствовали", value: pct(totals.greeted, totals.newSubscribers), title: `${formatOf(totals.greeted, totals.newSubscribers)} — в 24 часа после подписки` },
+                { label: "Купили с личным приветствием", value: pct(totals.boughtGreeted, totals.greeted), title: formatOf(totals.boughtGreeted, totals.greeted) },
+                { label: "без личного", value: pct(totals.boughtNotGreeted, totals.notGreeted), title: formatOf(totals.boughtNotGreeted, totals.notGreeted) },
               ]}
             />
           )}
           <Table
             label="Приветствия по страницам"
-            columns={greetingColumns(view.pages, totals)}
+            columns={greetingColumns(view.pages, totals, { partial: view.partial })}
             rows={view.pages}
             rowKey={(page) => page.pageLabel}
             onRowClick={onOpen}
@@ -157,7 +168,7 @@ function GreetingsBlock({ view, loading, failed, onRetry, retrying, refreshing, 
 }
 
 /** One page's greetings in full: what the table leaves out (the automatic welcome, answers within an hour). */
-function GreetingDrawer({ page, onClose, windowLabel }: { page: GreetingsPage; onClose: () => void; windowLabel: string }) {
+function GreetingDrawer({ page, partial, onClose, windowLabel }: { page: GreetingsPage; partial: boolean; onClose: () => void; windowLabel: string }) {
   const rest = notGreeted(page);
   return (
     <Drawer open onClose={onClose} title={page.pageLabel} subtitle={`Новые подписчики · ${windowLabel}`}>
@@ -170,7 +181,7 @@ function GreetingDrawer({ page, onClose, windowLabel }: { page: GreetingsPage; o
             { label: "Новых подписчиков", value: formatCount(page.newSubscribers), strong: true, ...(page.recent > 0 ? { meta: `у ${formatCount(page.recent)} ещё идут 7 дней` } : {}) },
             { label: "Автоприветствие", value: pct(page.autoWelcomed, page.newSubscribers), meta: `${formatOf(page.autoWelcomed, page.newSubscribers)}, в первые 2 минуты` },
             { label: "Лично за сутки", value: pct(page.greeted, page.newSubscribers), meta: formatOf(page.greeted, page.newSubscribers) },
-            { label: "Обычно через", value: page.greetingMedianSeconds === null ? "—" : formatDuration(minutesOf(page.greetingMedianSeconds)), meta: "половина приветствий быстрее" },
+            { label: "Обычно через", value: page.greetingMedianSeconds === null ? "—" : formatDuration(minutesOf(page.greetingMedianSeconds)), meta: partial ? "Hub считает только до сегодня" : "половина приветствий быстрее" },
             { label: "Фан ответил за час", value: pct(page.repliedWithinHour, page.greeted), meta: `${formatOf(page.repliedWithinHour, page.greeted)} после личного` },
             { label: "Купили с личным", value: pct(page.boughtGreeted, page.greeted), meta: `${formatOf(page.boughtGreeted, page.greeted)}; без личного ${rest > 0 ? pct(page.boughtNotGreeted, rest) : "—"}` },
           ]}
@@ -279,21 +290,28 @@ function CoverageBlock({ view, loading, failed, onRetry, retrying, refreshing, o
             <Facts
               label="Пустые часы вместе"
               items={[
-                { label: "Пусто", value: `${pct(totals.emptyHours, totals.hoursWithFans)} часов`, strong: true, hint: `${formatCount(totals.emptyHours)} из ${formatCount(totals.hoursWithFans)} часов, когда фаны писали` },
-                { label: "Писали в пустые часы", value: `${formatCount(totals.fans)} ${ruPlural(totals.fans, "фан", "фана", "фанов")}` },
-                { label: "Ждали ответа больше часа", value: formatCount(totals.waitedOverHour), hint: "В шесть раз дольше вашей нормы: Hub пока считает только «больше часа»" },
-                { label: "Их траты за 30 дней", value: <Money mills={totals.waitedNetMills} />, hint: "Это кто ждал, а не потерянные деньги" },
+                { label: "Пусто", value: `${pct(totals.emptyHours, totals.hoursWithFans)} часов`, strong: true, title: `${formatCount(totals.emptyHours)} из ${formatCount(totals.hoursWithFans)} часов, когда фаны писали` },
+                // A past period: the hours are known, who wrote and waited in them Hub counts only up to today.
+                ...(view.partial ? [] : [
+                  { label: "Писали в пустые часы", value: `${formatCount(totals.fans)} ${ruPlural(totals.fans, "фан", "фана", "фанов")}` },
+                  { label: "Ждали ответа больше часа", value: formatCount(totals.waitedOverHour), hint: "В шесть раз дольше вашей нормы: Hub пока считает только «больше часа»" },
+                  { label: "Их траты за 30 дней", value: <Money mills={totals.waitedNetMills} />, hint: "Сколько ждавшие потратили на странице за 30 дней: это кто ждал, а не потерянные деньги" },
+                ]),
               ]}
             />
           )}
           <Card padding="md" className={refreshing ? "sales-refreshing" : undefined}>
             <HeatMap pages={view.pages} />
           </Card>
-          <Disclosure summary="Числа по страницам" hint="кто писал в пустые часы и ждал">
-            <div className="sales-fold">
-              <Table label="Пустые часы: числа по страницам" columns={pageNumberColumns()} rows={view.pages} rowKey={(one) => one.pageLabel} defaultSort={{ key: "waited", direction: "desc" }} stickyHeader={false} />
-            </div>
-          </Disclosure>
+          {view.partial ? (
+            <p className="sales-note">Кто писал в пустые часы и ждал ответа, Hub пока считает только до сегодняшнего дня: за прошлые дни видны сами часы.</p>
+          ) : (
+            <Disclosure summary="Числа по страницам" hint="кто писал в пустые часы и ждал">
+              <div className="sales-fold">
+                <Table label="Пустые часы: числа по страницам" columns={pageNumberColumns()} rows={view.pages} rowKey={(one) => one.pageLabel} defaultSort={{ key: "waited", direction: "desc" }} stickyHeader={false} />
+              </div>
+            </Disclosure>
+          )}
         </>
       )}
     </Section>
@@ -376,7 +394,7 @@ function BroadcastsBlock({ view, owner }: { view: GreetingsView; owner: boolean 
   ];
   const shown = all ? view.broadcasts : view.broadcasts.slice(0, BROADCASTS_SHOWN);
   return (
-    <Disclosure size="md" summary="Рассылки: отвечают ли" hint={`${formatCount(view.broadcasts.length)} за эти дни`}>
+    <Disclosure summary="Рассылки: отвечают ли" hint={view.listCut ? `последние ${formatCount(view.broadcasts.length)}` : `${formatCount(view.broadcasts.length)} за эти дни`}>
       <div className="sales-fold">
         {sending.length === 0 ? <p className="sales-quiet">Рассылок не было.</p> : (
           <Table label="Рассылки по страницам" columns={columns} rows={sending} rowKey={(page) => page.pageLabel} defaultSort={{ key: "deliveries", direction: "desc" }} stickyHeader={false} />
@@ -386,7 +404,7 @@ function BroadcastsBlock({ view, owner }: { view: GreetingsView; owner: boolean 
             <Table label="Последние рассылки" columns={broadcastColumns(now)} rows={shown} rowKey={(cast) => `${cast.pageLabel}:${cast.sentAt}:${cast.priceMills ?? 0}`} stickyHeader={false} />
             {view.broadcasts.length > BROADCASTS_SHOWN && (
               <div className="sales-after">
-                <p>{all ? `Все ${formatCount(view.broadcasts.length)}` : `Последние ${BROADCASTS_SHOWN} из ${formatCount(view.broadcasts.length)}`}{view.broadcasts.length >= 100 ? " (Hub отдаёт не больше 100)" : ""}.</p>
+                <p>{all ? `Все ${formatCount(view.broadcasts.length)}` : `Последние ${BROADCASTS_SHOWN} из ${formatCount(view.broadcasts.length)}`}{view.listCut ? " — больше Hub не отдаёт" : ""}.</p>
                 <Button size="sm" variant="ghost" onClick={() => setAll((value) => !value)}>{all ? "Свернуть" : "Показать все"}</Button>
               </div>
             )}
@@ -409,8 +427,8 @@ export function GreetingsTab() {
   const { open, setOpen } = useSalesParams();
   const { isOwner } = useMe();
   const window = readWindow(period, today, MAX_DAYS.coverage);
-  const greetings = useGreetings(window.days);
-  const hours = useEmptyHours(window.days);
+  const greetings = useGreetings(window);
+  const hours = useEmptyHours(window);
   const greetingsShown = useMemo(() => (greetings.data ? greetingsView(greetings.data, page) : null), [greetings.data, page]);
   const coverage = useMemo(() => (hours.data ? coverageView(hours.data, page) : null), [hours.data, page]);
   const label = hours.data ? windowWords(hours.data.from, hours.data.to) : greetings.data ? windowWords(greetings.data.from, greetings.data.to) : "";
@@ -420,7 +438,6 @@ export function GreetingsTab() {
   return (
     <>
       <SalesHeader
-        meta={label ? `Подписки, рассылки и часы ${label}${page ? ` · ${page}` : " · все страницы"}` : "Приветствия и пустые часы"}
         updatedAt={Number.isFinite(updatedAt) ? updatedAt : undefined}
         onRefresh={() => {
           void greetings.refetch();
@@ -430,60 +447,71 @@ export function GreetingsTab() {
       />
       <div className="wb-content">
         <WindowNotice window={window} maxDays={MAX_DAYS.coverage} {...(label ? { shown: label } : {})} />
-        <GreetingsBlock
-          view={greetingsShown}
-          loading={greetings.isLoading}
-          failed={greetings.isError}
-          onRetry={() => void greetings.refetch()}
-          retrying={greetings.isFetching}
-          refreshing={greetings.isPlaceholderData}
-          openKey={openPage?.pageLabel ?? null}
-          onOpen={(one) => setOpen(`page:${one.pageLabel}`)}
-        />
-        <CoverageBlock
-          view={coverage}
-          loading={hours.isLoading}
-          failed={hours.isError}
-          onRetry={() => void hours.refetch()}
-          retrying={hours.isFetching}
-          refreshing={hours.isPlaceholderData}
-          onAllPages={() => setPage(null)}
-          page={page}
-        />
-        {greetingsShown && greetingsShown.pages.length > 0 && <BroadcastsBlock view={greetingsShown} owner={isOwner} />}
-        <HowItCounts>
-          <p>
-            Новые подписчики — подписки, начавшиеся за эти дни, у фанов, которые раньше ничего не покупали на странице и не
-            переписывались с ней: продление и возвращение не считаются. Сообщение страницы в первые 2 минуты после подписки
-            без автора из команды — автоприветствие. Личное приветствие — первое сообщение за 24 часа после подписки,
-            написанное чаттером или пришедшее позже 2 минут, не рассылка Fansly и не один текст пяти и больше фанам за час.
-          </p>
-          <p>
-            «Ответили за час» — фан написал в течение часа после личного приветствия. «Купили» — любая покупка, кроме
-            подписки, в 7 дней после подписки: отдельно у поприветствованных лично и у остальных. У подписавшихся в последние
-            7 дней срок ещё идёт. Автоприветствие и «ответили за час» — в панели страницы.
-          </p>
-          <p>
-            Час пустой, если фаны в нём писали, а на этой странице ни одной минуты никто из команды не был на смене: расширение
-            ChatGoose открыто, и чаттер что-то делал на странице не больше часа назад. Расширение, забытое открытым на ночь,
-            смены не делает. Считается с первой смены страницы в расширении: раньше Hub не отличит пустой час от работы с
-            телефона. Цвет клетки — сколько дней из этих этот час был пустым.
-          </p>
-          <p>
-            «Ждали больше часа» — после сообщения в пустой час личный ответ пришёл позже чем через час или его ещё нет
-            (рассылка Fansly и один текст пяти и больше фанам за час ответом не считаются). Час — в шесть раз дольше вашей
-            нормы ответа, {REPLY_NORM_MINUTES.from}–{REPLY_NORM_MINUTES.to} минут: точнее Hub пока не считает. Траты — сколько
-            фан потратил на этой странице за последние 30 дней, после комиссии: это кто ждал, а не потерянные деньги.
-          </p>
-          <p>
-            Рассылки — массовые сообщения Fansly и один текст пяти и больше фанам за час, одна строка на текст и день.
-            «Ответили» — фан написал в 24 часа после неё, «купили» — любая покупка, кроме подписки, за 7 дней; у платной —
-            купил ли фан её саму. Пока сутки (или 7 дней) не прошли, число ещё растёт.
-          </p>
-          <p>Это ориентир, а не основание для оплаты.</p>
-        </HowItCounts>
+        {window.beyond ? <BeyondReach maxDays={MAX_DAYS.coverage} /> : (
+          <>
+            <GreetingsBlock
+              view={greetingsShown}
+              loading={greetings.isLoading}
+              failed={greetings.isError}
+              onRetry={() => void greetings.refetch()}
+              retrying={greetings.isFetching}
+              refreshing={greetings.isPlaceholderData}
+              openKey={openPage?.pageLabel ?? null}
+              onOpen={(one) => setOpen(`page:${one.pageLabel}`)}
+            />
+            <CoverageBlock
+              view={coverage}
+              loading={hours.isLoading}
+              failed={hours.isError}
+              onRetry={() => void hours.refetch()}
+              retrying={hours.isFetching}
+              refreshing={hours.isPlaceholderData}
+              onAllPages={() => setPage(null)}
+              page={page}
+            />
+          </>
+        )}
+        <Folds>
+          {greetingsShown && greetingsShown.pages.length > 0 && <BroadcastsBlock view={greetingsShown} owner={isOwner} />}
+          <HowItCounts>
+            <p>
+              Новые подписчики — подписки, начавшиеся за эти дни, у фанов, которые раньше ничего не покупали на странице и не
+              переписывались с ней: продление и возвращение не считаются. Сообщение страницы в первые 2 минуты после подписки
+              без автора из команды — автоприветствие. Личное приветствие — первое сообщение за 24 часа после подписки,
+              написанное чаттером или пришедшее позже 2 минут, не рассылка Fansly и не один текст пяти и больше фанам за час.
+            </p>
+            <p>
+              «Ответили за час» — фан написал в течение часа после личного приветствия. «Купили» — любая покупка, кроме
+              подписки, в 7 дней после подписки: отдельно у поприветствованных лично и у остальных. У подписавшихся в последние
+              7 дней срок ещё идёт. Автоприветствие и «ответили за час» — в панели страницы. «Лично за сутки» отмечено, когда
+              страница приветствует на треть реже, чем все страницы вместе; «обычно через» — когда дольше часа.
+            </p>
+            <p>
+              Час пустой, если фаны в нём писали, а на этой странице ни одной минуты никто из команды не был на смене: расширение
+              ChatGoose открыто, и чаттер что-то делал на странице не больше часа назад. Расширение, забытое открытым на ночь,
+              смены не делает. Считается с первой смены страницы в расширении: раньше Hub не отличит пустой час от работы с
+              телефона. Цвет клетки — сколько дней из этих этот час был пустым.
+            </p>
+            <p>
+              «Ждали больше часа» — после сообщения в пустой час личный ответ пришёл позже чем через час или его ещё нет
+              (рассылка Fansly и один текст пяти и больше фанам за час ответом не считаются). Час — в шесть раз дольше вашей
+              нормы ответа, {REPLY_NORM_MINUTES.from}–{REPLY_NORM_MINUTES.to} минут: точнее Hub пока не считает. Траты — сколько
+              фан потратил на этой странице за последние 30 дней, после комиссии: это кто ждал, а не потерянные деньги.
+            </p>
+            <p>
+              Рассылки — массовые сообщения Fansly и один текст пяти и больше фанам за час, одна строка на текст и день.
+              «Ответили» — фан написал в 24 часа после неё, «купили» — любая покупка, кроме подписки, за 7 дней; у платной —
+              купил ли фан её саму. Пока сутки (или 7 дней) не прошли, число ещё растёт.
+            </p>
+            <p>
+              За прошлые недели Hub отдаёт всё, что складывается по дням: подписки, приветствия, покупки, пустые часы. Медиану
+              приветствий и кто писал в пустые часы он пока считает только до сегодняшнего дня — за прошлые дни их нет. Полоса
+              доли — от 0 до 100 %. Это ориентир, а не основание для оплаты.
+            </p>
+          </HowItCounts>
+        </Folds>
       </div>
-      {openPage && <GreetingDrawer page={openPage} onClose={() => setOpen(null)} windowLabel={label} />}
+      {openPage && <GreetingDrawer page={openPage} partial={greetingsShown?.partial ?? false} onClose={() => setOpen(null)} windowLabel={label} />}
     </>
   );
 }

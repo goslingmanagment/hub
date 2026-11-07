@@ -331,4 +331,60 @@
     font-size: var(--ui-fs-14);
     line-height: var(--ui-lh-14);
   }
+
+  /* ----------------------------------------------------------- Round 2 */
+
+  /* Who claims a sale in a row: the people side by side, why it is a dispute under them. */
+  .decisions-claimants {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+  }
+
+  .decisions-people {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 20px;
+  }
+
+  /* A claimant's way to the conversation at the sale: the link, and under it which shift it opens. */
+  .decisions-evidence-box {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 2px;
+    text-align: right;
+  }
+
+  .decisions-oneside {
+    margin-top: 12px;
+  }
+
+  /* A held send's resolve takes the focus on its words, not on an answer: a stray Space picks nothing (Р-н7). */
+  .decisions-resolve:focus {
+    outline: none;
+  }
+
+  /*
+   * The first load of the queues: the rows' shape without a person's circle (the queues start with a fan or a time) and
+   * nothing in the arrow's column (Р-н5). Table draws the circle for every two-line skeleton; here it is not there.
+   */
+  .decisions-skeleton .ui-table__skeleton > .ui-skel:first-child:not(:only-child) {
+    display: none;
+  }
+
+  .decisions-skeleton td:last-child .ui-table__skeleton {
+    visibility: hidden;
+  }
+
+  /* «ещё 4 на других страницах»: a link-like button in the header's line, quiet like the line itself. */
+  .decisions-elsewhere {
+    padding: 0;
+    border: 0;
+    background: none;
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+  }
 }

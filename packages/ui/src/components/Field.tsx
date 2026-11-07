@@ -1,6 +1,7 @@
 import { Check, ChevronDown, Minus } from "lucide-react";
 import { forwardRef, useEffect, useId, useRef, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes, type TextareaHTMLAttributes } from "react";
 import { cx } from "./cx.js";
+import { Tooltip } from "./Tooltip.js";
 
 /** A label above a control, a hint and an error below it. The control gets the label's id. */
 export function Field({ label, hint, error, children, className }: {
@@ -105,12 +106,16 @@ export function Checkbox({ checked, onChange, label, hint, disabled = false, ind
 }
 
 /**
- * On or off, written at once (an approach in the extension): a 36 × 20 track.
- * The words say what is on («В расширении»); `pending` while the request
- * runs — the switch waits and cannot be pressed twice. The request and any
- * question before it are the caller's.
+ * On or off, written at once (an approach in the extension). The words say what
+ * is on («В расширении»); `pending` while the request runs — the switch waits and
+ * cannot be pressed twice. The request and any question before it are the caller's.
+ *
+ * `default`: a 36 × 20 track, ink when on — a setting of its own on a form.
+ * `quiet`: for a column of switches in a table — a thin 30 × 18 outline in the
+ * line colour; on is the calm accent (a soft ink ground, an ink dot), never a
+ * black pill. Both take a press on a 36 px tall zone around the track.
  */
-export function Switch({ checked, onChange, label, hint, disabled = false, pending = false, labelHidden = false, className, title }: {
+export function Switch({ checked, onChange, label, hint, disabled = false, pending = false, labelHidden = false, variant = "default", className, title }: {
   checked: boolean;
   onChange: (checked: boolean) => void;
   /** What is on when it is on. Always needed — shown, or only for a screen reader with `labelHidden`. */
@@ -120,13 +125,16 @@ export function Switch({ checked, onChange, label, hint, disabled = false, pendi
   pending?: boolean;
   /** Only the track is seen (in a table row whose words already say what it is). */
   labelHidden?: boolean;
+  /** `quiet` in table rows (a column of them must not be the darkest spot of the screen). */
+  variant?: "default" | "quiet";
   className?: string;
-  title?: string;
+  /** Said on hover (the app's Tooltip): what switching does, why it is off. */
+  title?: ReactNode;
 }) {
   const id = useId();
   const off = disabled || pending;
-  return (
-    <span className={cx("ui-switch", off && "ui-switch--disabled", pending && "ui-switch--pending", className)} title={title}>
+  const control = (
+    <span className={cx("ui-switch", variant === "quiet" && "ui-switch--quiet", off && "ui-switch--disabled", pending && "ui-switch--pending", className)}>
       <button
         id={id}
         type="button"
@@ -148,4 +156,5 @@ export function Switch({ checked, onChange, label, hint, disabled = false, pendi
       )}
     </span>
   );
+  return title === undefined || title === null || title === "" ? control : <Tooltip content={title} align="start">{control}</Tooltip>;
 }

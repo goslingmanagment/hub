@@ -8,7 +8,7 @@
 
   .sales-money {
     display: grid;
-    grid-template-columns: minmax(64px, 1fr) 80px;
+    grid-template-columns: minmax(64px, 1fr) 72px;
     align-items: center;
     gap: var(--ui-space-3);
     width: 100%;
@@ -17,7 +17,7 @@
   }
 
   .sales-money--word {
-    grid-template-columns: minmax(64px, 1fr) 80px 104px;
+    grid-template-columns: minmax(48px, 1fr) 72px 96px;
     max-width: 464px;
   }
 
@@ -44,6 +44,23 @@
     font-size: var(--ui-fs-14);
     line-height: var(--ui-lh-14);
     white-space: nowrap;
+  }
+
+  /* «мало данных»: the same slot as «больше всего», as quiet as the small sample itself. */
+  .sales-money__word--quiet {
+    color: var(--ui-text-3);
+  }
+
+  /*
+   * A column of bars is never narrower than this (the cell's own width, which the table's width rule measures):
+   * on 1440 and 1920 the spare room goes to the bars, not into a long name. A side panel's table sets its own widths.
+   */
+  td.sales-bar-col {
+    min-width: 200px;
+  }
+
+  .sales-drawer td.sales-bar-col {
+    min-width: 0;
   }
 
   .sales-quiet {
@@ -76,6 +93,7 @@
   .sales-name__main--ordered {
     display: grid;
     grid-template-columns: 24px minmax(0, 1fr);
+    max-width: 36ch;
   }
 
   .sales-order {
@@ -188,6 +206,23 @@
     line-height: var(--ui-lh-14);
   }
 
+  /* The folds at the end of a tab: one quiet list, close together (D18). */
+  .sales-folds {
+    display: flex;
+    flex-direction: column;
+    gap: var(--ui-space-2);
+    margin-top: calc(-1 * var(--ui-space-3));
+  }
+
+  /* A quiet sentence in a block, where a number is not known. */
+  .sales-note {
+    margin: 0;
+    max-width: var(--ui-measure);
+    color: var(--ui-text-2);
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+  }
+
   .sales-refreshing {
     opacity: 0.6;
     transition: opacity var(--ui-fast);
@@ -196,18 +231,25 @@
   /* ------------------------------------------------ The win-back funnel */
 
   /* Four steps with arrows on the left; what is still ripening and the money, one under the other, on the right. */
+  /* The funnel's card is as wide as the funnel: on 1920 no strip of nothing between the steps and the side block. */
+  .sales-funnel-card {
+    width: fit-content;
+    max-width: 100%;
+  }
+
+  /* The steps stand on one line of numbers (top-aligned: a step with two quiet lines under it does not lift its number). */
   .sales-funnel {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
-    align-items: center;
-    gap: var(--ui-space-6);
+    grid-template-columns: minmax(0, auto) auto;
+    align-items: start;
+    gap: var(--ui-space-8);
   }
 
   .sales-funnel__steps {
     display: flex;
     flex-wrap: wrap;
-    align-items: center;
-    gap: var(--ui-space-4) var(--ui-space-6);
+    align-items: flex-start;
+    gap: var(--ui-space-4) var(--ui-space-4);
     min-width: 0;
   }
 
@@ -215,7 +257,7 @@
     display: flex;
     flex-direction: column;
     gap: 2px;
-    min-width: 136px;
+    min-width: 120px;
   }
 
   .sales-funnel__aside {
@@ -223,7 +265,7 @@
     flex-direction: column;
     gap: var(--ui-space-3);
     align-self: stretch;
-    justify-content: center;
+    justify-content: flex-start;
     min-width: 200px;
     padding-left: var(--ui-space-6);
     border-left: 1px solid var(--ui-line);
@@ -250,6 +292,21 @@
     line-height: var(--ui-lh-20);
   }
 
+  /* A share of fewer than the sample: as pale as a small sample in a table. */
+  .sales-funnel__value--weak {
+    color: var(--ui-text-3);
+  }
+
+  /* The block's own name above its number: «Неделя 26 окт. – 1 нояб.» — other fans than the funnel's. */
+  .sales-funnel__kicker {
+    margin-bottom: var(--ui-space-1);
+    color: var(--ui-text);
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+    font-weight: 500;
+    white-space: nowrap;
+  }
+
   .sales-funnel__label {
     color: var(--ui-text-2);
     font-size: var(--ui-fs-14);
@@ -265,8 +322,10 @@
     white-space: nowrap;
   }
 
+  /* On the numbers' line: 28 px numbers, a 20 px arrow. */
   .sales-funnel__arrow {
     flex: none;
+    margin-top: 4px;
     color: var(--ui-text-3);
   }
 
@@ -279,6 +338,43 @@
   .sales-switch {
     display: flex;
     justify-content: flex-end;
+  }
+
+  /* «Выключенные подходы»: the quiet words of a fold (as Disclosure's), but the rows join the table above. */
+  .sales-toggle {
+    display: inline-flex;
+    align-items: center;
+    align-self: flex-start;
+    gap: 6px;
+    min-height: 36px;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--ui-text-2);
+    font: inherit;
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+    cursor: pointer;
+    transition: color var(--ui-fast);
+  }
+
+  .sales-toggle:hover {
+    color: var(--ui-text);
+  }
+
+  .sales-toggle:focus-visible {
+    outline: var(--ui-focus);
+    outline-offset: var(--ui-focus-offset);
+    border-radius: var(--ui-radius-sm);
+  }
+
+  .sales-toggle__label {
+    font-weight: 500;
+  }
+
+  .sales-toggle__hint {
+    color: var(--ui-text-3);
+    font-weight: 400;
   }
 
   .sales-add {

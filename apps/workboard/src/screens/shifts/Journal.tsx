@@ -1,22 +1,41 @@
 import type { ReactNode } from "react";
 import { useLocation, useSearchParams } from "react-router";
 import { Button, Count, Duration, Mark, Money, Person, Section, Skeleton, Spinner, Table, Tooltip, type Column, type SortState } from "@agency_hub_core/ui";
-import { formatCount, formatDuration, formatMills } from "@agency_hub_core/ui/format";
+import { formatCount, formatMills } from "@agency_hub_core/ui/format";
 import { ruPlural } from "@agency_hub_core/ui/plural";
+import { shiftDurationHint } from "@agency_hub_core/ui/shiftWhen";
 import { CHATTER_SHIFT_PAGE_MIN_MESSAGES } from "@agency_hub_core/contracts";
 import { personPath, shiftPath, useRowBackState } from "@/shared/links";
 import { METRICS, formatAiUnedited, formatReplyMedian, formatUnanswered } from "@/shared/metrics";
 import { NO_NORMS, manyUnanswered, muchAi, slowReply, type JournalShift, type ShiftsModel, type TeamNorms } from "./data.js";
-import { daysOf, spanOf } from "./WeekGrid.js";
 
 /** Rows shown before «Показать все»: a week of a whole team fits. */
 const FIRST_ROWS = 50;
 
+/** A line of a header never ends on these: «ИИ / без правки», not «ИИ без / правки». */
+const PREPOSITION = /^(без|к|с|в|на|по|до|от|и)$/i;
+
 /**
- * The three quality columns: wide enough for their full labels in two lines
- * («Без ответа / к концу») at 1440, wider with the rest of the table at 1920.
+ * A long label in two lines, always the same two (M5): «Ответ, / медиана»,
+ * «Без ответа / к концу», «ИИ / без правки». One-line headers over short numbers
+ * would leave 200+ px holes on 1920; the three quality columns read alike at any width.
  */
-const QUALITY_WIDTH = "11%";
+function twoLines(label: string): ReactNode {
+  const words = label.split(" ");
+  if (words.length < 2) return label;
+  let best = 1;
+  let bestScore = Infinity;
+  for (let index = 1; index < words.length; index += 1) {
+    const left = words.slice(0, index).join(" ");
+    const right = words.slice(index).join(" ");
+    const score = Math.max(left.length, right.length) + (PREPOSITION.test(words[index - 1]!) ? 100 : 0);
+    if (score < bestScore) {
+      best = index;
+      bestScore = score;
+    }
+  }
+  return <>{words.slice(0, best).join(" ")}<br />{words.slice(best).join(" ")}</>;
+}
 
 type QualityState = "loading" | "failed" | "ready";
 
@@ -112,12 +131,20 @@ function PagesHint({ shift }: { shift: JournalShift }) {
   );
 }
 
+/** On the shift's label: where a night counts (D12) and how much it wrote. */
+function WhenHint({ shift }: { shift: JournalShift }) {
+  const messages = `${formatCount(shift.messages)} ${ruPlural(shift.messages, "личное сообщение", "личных сообщения", "личных сообщений")} за смену`;
+  return shift.when.payDayNote ? <>{shift.when.payDayNote}<br />{messages}</> : <>{messages}</>;
+}
+
 /** «Обычно у команды — 3 мин 49 с»: why a number is marked. */
 function usual(text: string): string {
   return `Заметно хуже обычной смены команды за этот период. Обычно — ${text}`;
 }
 
-function columnsOf(state: QualityState, norms: TeamNorms): Column<JournalShift>[] {
+function columnsOf(state: QualityState, norms: TeamNorms, page: string | null): Column<JournalShift>[] {
+  // E1: with a page picked, the quality columns still count the whole shift — said at the columns themselves.
+  const scope = (hint: string) => (page ? `${hint} По всей смене, не только ${page}.` : hint);
   return [
     {
       key: "who",
@@ -130,25 +157,26 @@ function columnsOf(state: QualityState, norms: TeamNorms): Column<JournalShift>[
       header: "Смена",
       sortValue: (shift) => shift.startedAt,
       sortFirst: "desc",
+      // D12: the one label of a shift — the start's weekday and the dates it touched, the clock under it.
       cell: (shift) => (
-        <Tooltip
-          content={`${formatCount(shift.messages)} ${ruPlural(shift.messages, "сообщение", "сообщения", "сообщений")} · ${shift.pauseMinutes > 0 ? `паузы ${formatDuration(shift.pauseMinutes)}` : "без пауз"}`}
-          align="start"
-        >
+        <Tooltip content={<WhenHint shift={shift} />} align="start">
           <span className="shifts-journal__when">
-            <span className="shifts-journal__day">{daysOf(shift)}</span>
-            <span className={shift.ongoing ? "shifts-journal__span shifts-journal__span--now" : "shifts-journal__span"}>{spanOf(shift)}</span>
+            <span className="shifts-journal__day">{shift.when.days}</span>
+            <span className={shift.ongoing ? "shifts-journal__span shifts-journal__span--now" : "shifts-journal__span"}>{shift.when.time}</span>
           </span>
         </Tooltip>
       ),
     },
     {
+      // The time worked, pauses left out (D12): with them only on hover. No dotted header: the hint is the value's.
       key: "worked",
       header: "Отработал",
-      hint: "Смена без пауз: время, когда чаттер работал в расширении",
       numeric: true,
       sortValue: (shift) => shift.workedMinutes,
-      cell: (shift) => <Duration minutes={shift.workedMinutes} />,
+      cell: (shift) => {
+        const words = shiftDurationHint(shift.when);
+        return words ? <Tooltip content={words} align="end"><Duration minutes={shift.workedMinutes} /></Tooltip> : <Duration minutes={shift.workedMinutes} />;
+      },
     },
     {
       key: "sales",
@@ -162,19 +190,18 @@ function columnsOf(state: QualityState, norms: TeamNorms): Column<JournalShift>[
       ) : <Money mills={shift.salesNetMills} strong />),
     },
     {
+      // «Продажи» over «Отработал», the two columns to its left: said on the value, not as a dotted term.
       key: "perHour",
       header: "В час",
-      hint: "Продажи, делённые на отработанное время без пауз",
       numeric: true,
       sortValue: (shift) => shift.perHourMills,
-      cell: (shift) => <Money mills={shift.perHourMills} />,
+      cell: (shift) => <Money mills={shift.perHourMills} hint={shift.perHourMills === null ? undefined : `${formatMills(shift.salesNetMills)} за ${shift.when.worked} работы`} />,
     },
     {
       key: "reply",
-      header: METRICS.reply.label,
-      hint: METRICS.reply.hint,
+      header: twoLines(METRICS.reply.label),
+      hint: scope(METRICS.reply.hint),
       headerWrap: true,
-      width: QUALITY_WIDTH,
       numeric: true,
       sortValue: (shift) => shift.quality?.replyMedianSeconds ?? null,
       sortFirst: "desc",
@@ -192,10 +219,9 @@ function columnsOf(state: QualityState, norms: TeamNorms): Column<JournalShift>[
     },
     {
       key: "unanswered",
-      header: METRICS.unanswered.label,
-      hint: METRICS.unanswered.hint,
+      header: twoLines(METRICS.unanswered.label),
+      hint: scope(METRICS.unanswered.hint),
       headerWrap: true,
-      width: QUALITY_WIDTH,
       numeric: true,
       sortValue: (shift) => shift.quality?.unansweredAtEnd ?? null,
       sortFirst: "desc",
@@ -211,10 +237,9 @@ function columnsOf(state: QualityState, norms: TeamNorms): Column<JournalShift>[
     },
     {
       key: "ai",
-      header: METRICS.aiUnedited.label,
-      hint: METRICS.aiUnedited.hint,
+      header: twoLines(METRICS.aiUnedited.label),
+      hint: scope(METRICS.aiUnedited.hint),
       headerWrap: true,
-      width: QUALITY_WIDTH,
       numeric: true,
       sortValue: (shift) => shift.quality?.aiUneditedShare ?? null,
       sortFirst: "desc",
@@ -255,7 +280,7 @@ export function Journal({ model, isOwner, quality, onRetryQuality, retryingQuali
   const rowState = useRowBackState("Смены");
   const rows = sorted(model?.journal ?? [], sort);
   const shown = all ? rows : rows.slice(0, FIRST_ROWS);
-  const columns = columnsOf(quality, model?.norms ?? NO_NORMS);
+  const columns = columnsOf(quality, model?.norms ?? NO_NORMS, page);
 
   const description = [
     isOwner ? "Строка открывает разбор смены." : "Строка открывает карточку чаттера.",

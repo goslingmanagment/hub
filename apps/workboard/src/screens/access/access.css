@@ -54,7 +54,10 @@
 
 
 
+  /* The sheet is as wide as its columns (Д-н2): on 1920 the ticks stay 72 px apart, the eye keeps the row; a narrow window scrolls. */
   .access-matrix-frame {
+    width: fit-content;
+    max-width: 100%;
     overflow-x: auto;
     border: 1px solid var(--ui-line);
     border-radius: var(--ui-radius-lg);
@@ -62,7 +65,7 @@
   }
 
   .access-matrix {
-    width: 100%;
+    width: auto;
     border-collapse: separate;
     border-spacing: 0;
     font-size: var(--ui-fs-15);
@@ -90,7 +93,7 @@
     position: sticky;
     left: 0;
     z-index: 2;
-    min-width: 248px;
+    min-width: 280px;
     padding: 0 16px 12px 24px !important;
     text-align: left !important;
     vertical-align: bottom !important;
@@ -105,13 +108,16 @@
     border-bottom: 0 !important;
   }
 
+  /* 72 px a page: the ticks stay close on 1920 (Д-н2), and the whole sheet fits 1440 beside the people's column. */
   .access-matrix__page {
+    width: 72px;
     min-width: 72px;
-    padding: 4px 8px 12px !important;
+    padding: 4px 4px 12px !important;
     border-bottom: 1px solid var(--ui-line) !important;
   }
 
   .access-matrix__page--all {
+    width: 56px;
     min-width: 56px;
     color: var(--ui-text-3) !important;
   }
@@ -206,9 +212,9 @@
     transition: background-color var(--ui-fast), border-color var(--ui-fast);
   }
 
-  /* An empty cell: a quiet square, a step firmer in the dark theme so a free cell does not vanish there. */
+  /* An empty cell: a quiet square; in the dark theme a clear step firmer than the lines, so a free cell does not vanish (E8). */
   .access-cell[data-state="off"] {
-    border-color: light-dark(var(--ui-line), var(--ui-line-strong));
+    border-color: light-dark(var(--ui-line), color-mix(in srgb, var(--ui-text-3) 42%, var(--ui-surface)));
   }
 
   /* A cell changed a moment ago (a press, its undo): a short glow, so a slip shows where it landed (Д1). */
@@ -330,7 +336,8 @@
   /* A tick's words on one line: «mia-1  Fansly», «Mia Hart  вся модель». */
   .access-words {
     display: inline-flex;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
+    white-space: nowrap;
     align-items: baseline;
     gap: 0 8px;
   }
@@ -491,7 +498,7 @@
 
   .access-pages__list {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(184px, 1fr));
     gap: 10px 16px;
     padding-left: 28px;
   }
@@ -585,5 +592,39 @@
     display: inline-block;
     padding: 2px 0;
     cursor: default;
+  }
+
+  /* ----------------------------------------------------------- Round 2 */
+
+  /* «Изменить в таблице»: a link that is a button (it closes the panel and lights the row). */
+  .access-link--button {
+    padding: 0;
+    border: 0;
+    background: none;
+    font: inherit;
+    font-size: var(--ui-fs-14);
+    font-weight: 500;
+    cursor: pointer;
+    border-radius: var(--ui-radius-sm);
+  }
+
+  .access-link--button:focus-visible {
+    outline: var(--ui-focus);
+    outline-offset: 2px;
+  }
+
+  /* The person's row the panel sent the owner to: a short glow, then the row as it was (Д-н1). */
+  .access-matrix__row[data-flash] > * {
+    animation: access-row-flash 1.8s ease-out;
+  }
+
+  @keyframes access-row-flash {
+    from,
+    35% {
+      box-shadow: inset 0 0 0 999px var(--ui-accent-soft);
+    }
+    to {
+      box-shadow: inset 0 0 0 999px transparent;
+    }
   }
 }

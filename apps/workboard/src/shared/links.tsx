@@ -1,3 +1,4 @@
+import { ArrowLeft } from "lucide-react";
 import { useCallback, useMemo, type ReactNode } from "react";
 import { Link, useLocation, type To } from "react-router";
 import { Person, type PersonStatus } from "@agency_hub_core/ui";
@@ -69,13 +70,45 @@ export function shiftPath(userId: number, startedAt: string, search: URLSearchPa
 export interface BackTarget {
   to: string;
   label: string;
+  /**
+   * That screen's own router state (its own «←», D16): «← alex.k» from a review
+   * opened in the card returns to a card whose «←» still says «Смены».
+   */
+  state?: unknown;
 }
 
-/** The state a drill-down leaves for its «←»: this screen, with its filters, under `label` («Смены», «alex.k»). */
+/** How deep «←» remembers the screens before: a chain longer than this forgets the oldest. */
+const BACK_DEPTH = 4;
+
+/** A screen's router state as the next screen keeps it for «←»: without the one-time scroll request, at most BACK_DEPTH deep. */
+function keptState(state: unknown, depth = BACK_DEPTH): unknown {
+  if (state === null || typeof state !== "object") return undefined;
+  const { restoreScroll: _once, back, ...rest } = state as { restoreScroll?: unknown; back?: unknown };
+  const kept: Record<string, unknown> = { ...rest };
+  if (depth > 1 && back !== null && typeof back === "object") {
+    const target = back as Partial<BackTarget>;
+    if (typeof target.to === "string" && typeof target.label === "string") {
+      const inner = keptState(target.state, depth - 1);
+      kept.back = { to: target.to, label: target.label, ...(inner === undefined ? {} : { state: inner }) };
+    }
+  }
+  return Object.keys(kept).length === 0 ? undefined : kept;
+}
+
+/** The back target of the screen showing now, under `label` («Смены», «alex.k»). */
+function backHere(location: { pathname: string; search: string; state: unknown }, label: string): BackTarget {
+  const state = keptState(location.state);
+  return { to: `${location.pathname}${location.search}`, label, ...(state === undefined ? {} : { state }) };
+}
+
+/**
+ * The state a drill-down leaves for its «←»: this screen, with its filters and
+ * its own «←», under `label` («Смены», «alex.k»). The place on the page comes
+ * back by itself (the shell remembers the scroll of every address, D16).
+ */
 export function useBackState(label: string): { back: BackTarget } {
   const location = useLocation();
-  const to = `${location.pathname}${location.search}`;
-  return useMemo(() => ({ back: { to, label } }), [to, label]);
+  return useMemo(() => ({ back: backHere(location, label) }), [location, label]);
 }
 
 /**
@@ -93,9 +126,24 @@ export function useBackTarget(fallback: BackTarget): BackTarget {
   const state = useLocation().state as { back?: Partial<BackTarget> } | null;
   const back = state?.back;
   if (back && typeof back.to === "string" && back.to.startsWith("/") && !back.to.startsWith("//") && typeof back.label === "string") {
-    return { to: back.to, label: back.label };
+    return { to: back.to, label: back.label, ...(back.state === undefined ? {} : { state: back.state }) };
   }
   return fallback;
+}
+
+/**
+ * «←» of a deep screen (ScreenHeader puts it): back to the screen it came from,
+ * with its filters, its own «←» and the place it was scrolled to (D16) — the
+ * shell scrolls there as soon as the screen is tall enough.
+ */
+export function BackLink({ back, className = "wb-back" }: { back: BackTarget; className?: string }) {
+  const state = back.state !== null && typeof back.state === "object" ? back.state : {};
+  return (
+    <Link to={back.to} state={{ ...state, restoreScroll: true }} className={className} aria-label={`Назад: ${back.label}`}>
+      <ArrowLeft size={16} strokeWidth={1.75} aria-hidden />
+      <span>{back.label}</span>
+    </Link>
+  );
 }
 
 /**
@@ -114,7 +162,7 @@ export function PersonLink({ userId, name, status, hint, tab = "work", backLabel
   className?: string;
 }) {
   const location = useLocation();
-  const state = backLabel ? { back: { to: `${location.pathname}${location.search}`, label: backLabel } } : undefined;
+  const state = backLabel ? { back: backHere(location, backLabel) } : undefined;
   return (
     <Link to={personPath(userId, location.search, tab)} state={state} className={["ui-quiet-link", className].filter(Boolean).join(" ")}>
       <Person name={name} {...(status ? { status } : {})} {...(hint !== undefined ? { hint } : {})} />
@@ -139,7 +187,7 @@ export function ShiftLink({ userId, startedAt, backLabel, children, className, t
   return (
     <Link
       to={to}
-      state={{ back: { to: `${location.pathname}${location.search}`, label: backLabel } satisfies BackTarget }}
+      state={{ back: backHere(location, backLabel) }}
       className={className ?? "ui-quiet-link"}
       title={title}
     >
