@@ -1,0 +1,22 @@
+{
+  "name": "@agency_hub_core/ui",
+  "private": true,
+  "type": "module",
+  "description": "The shared design system of Hub's web apps (Workboard now, the console screen by screen): tokens, base CSS, React components, and the browser helpers both apps need (money, dates in Moscow, plurals, the period model, the theme, the Hub client).",
+  "dependencies": {
+    "lucide-react": "^0.511.0",
+    "react-router": "^7.17.0",
+    "sonner": "^2.0.3",
+    "zustand": "^5.0.5"
+  },
+  "peerDependencies": {
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.1.6",
+    "@types/react-dom": "^19.1.6",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
+  }
+}

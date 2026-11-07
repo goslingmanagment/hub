@@ -1,9 +1,10 @@
 /**
  * The dashboard's demo mode: the console without a hub behind it.
  *
- * `pnpm dev:demo` serves the dashboard with every API call answered from
- * the fixtures in `demo/fixtures/` — an invented agency, its models, pages,
- * fans and team. Nothing here is real data and nothing leaves the machine.
+ * `pnpm dev:demo` serves the dashboard (and `pnpm dev:workboard:demo` serves
+ * Workboard) with every API call answered from the fixtures in
+ * `packages/demo/fixtures/` — an invented agency, its models, pages, fans and
+ * team. Nothing here is real data and nothing leaves the machine.
  *
  * A fixture is typed by its operation's response (`KernelOperationResponse`),
  * so `pnpm --dir apps/dashboard typecheck:demo` holds it to the contract,

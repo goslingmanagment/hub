@@ -1,0 +1,11 @@
+/*
+ * The shared design system's styles, in one import:
+ *   tokens (light and dark), base (ground, type, focus), components.
+ * Everything sits in `@layer ui`. The order below puts it after the reset and
+ * before an app's utilities, so a utility class on a component wins.
+ */
+@layer theme, base, ui, components, utilities;
+
+@import "./styles/tokens.css";
+@import "./styles/base.css";
+@import "./styles/components.css";

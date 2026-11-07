@@ -126,7 +126,8 @@ function ancestorDirs(start: string) {
   }
 }
 
-export function resolveDashboardDistPath(options: DashboardDistResolverOptions = {}) {
+/** A built web app's dist (`apps/<app>/dist` with its index.html), looked for up from the cwd and this module. */
+function resolveWebAppDistPath(app: "dashboard" | "workboard", options: DashboardDistResolverOptions = {}) {
   const pathExists = options.pathExists ?? existsSync;
   const moduleDir = dirname(fileURLToPath(options.moduleUrl ?? import.meta.url));
   const roots = new Set([
@@ -135,7 +136,7 @@ export function resolveDashboardDistPath(options: DashboardDistResolverOptions =
   ]);
 
   for (const root of roots) {
-    const candidate = resolve(root, "apps/dashboard/dist");
+    const candidate = resolve(root, `apps/${app}/dist`);
     if (pathExists(resolve(candidate, "index.html"))) {
       return candidate;
     }
@@ -143,6 +144,18 @@ export function resolveDashboardDistPath(options: DashboardDistResolverOptions =
 
   return null;
 }
+
+export function resolveDashboardDistPath(options: DashboardDistResolverOptions = {}) {
+  return resolveWebAppDistPath("dashboard", options);
+}
+
+/** Workboard (apps/workboard), served under /workboard/ beside the console. */
+export function resolveWorkboardDistPath(options: DashboardDistResolverOptions = {}) {
+  return resolveWebAppDistPath("workboard", options);
+}
+
+/** Workboard's address on this host: its build's Vite `base` (apps/workboard/src/base.ts). */
+const WORKBOARD_PREFIX = "/workboard/";
 
 export function normalizeOpenApiDocument<T extends Record<string, unknown>>(spec: T): T {
   // Deterministic path order: swagger emits paths in ROUTE REGISTRATION order,
@@ -702,14 +715,27 @@ export async function buildApiServer(appContext: AppContext) {
 
   // === Admin routes ===
 
-  // SPA static file serving (production only)
+  // SPA static file serving (production only): the console at /, Workboard
+  // (apps/workboard) at /workboard/ — each with its own index.html as the
+  // fallback of its own paths. Same origin, same session.
   const dashboardDist = resolveDashboardDistPath();
-  if (dashboardDist) {
+  const workboardDist = resolveWorkboardDistPath();
+  if (dashboardDist || workboardDist) {
     const fastifyStatic = (await import("@fastify/static")).default;
-    await server.register(fastifyStatic, { root: dashboardDist, prefix: "/", wildcard: false });
+    if (dashboardDist) {
+      await server.register(fastifyStatic, { root: dashboardDist, prefix: "/", wildcard: false });
+    }
+    if (workboardDist) {
+      // The console's registration decorates reply.sendFile; this one must not again.
+      await server.register(fastifyStatic, { root: workboardDist, prefix: WORKBOARD_PREFIX, wildcard: false, decorateReply: !dashboardDist });
+    }
     server.setNotFoundHandler((req, reply) => {
-      if (!req.url.startsWith("/api/") && !req.url.startsWith("/documentation")) {
-        return reply.sendFile("index.html");
+      const path = req.url.split("?")[0] ?? "";
+      if (workboardDist && (path === "/workboard" || path.startsWith(WORKBOARD_PREFIX))) {
+        return reply.sendFile("index.html", workboardDist);
+      }
+      if (dashboardDist && !req.url.startsWith("/api/") && !req.url.startsWith("/documentation")) {
+        return reply.sendFile("index.html", dashboardDist);
       }
       reply.status(404).send({ error: "Not Found", message: "Route not found", statusCode: 404 });
     });

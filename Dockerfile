@@ -51,12 +51,14 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY patches ./patches
 COPY apps/dashboard/package.json ./apps/dashboard/package.json
 COPY apps/runtime/package.json ./apps/runtime/package.json
+COPY apps/workboard/package.json ./apps/workboard/package.json
 COPY packages/contracts/package.json ./packages/contracts/package.json
 COPY packages/db/package.json ./packages/db/package.json
 COPY packages/fansly/package.json ./packages/fansly/package.json
 COPY packages/platform-core/package.json ./packages/platform-core/package.json
 COPY packages/sdk/package.json ./packages/sdk/package.json
 COPY packages/shared/package.json ./packages/shared/package.json
+COPY packages/ui/package.json ./packages/ui/package.json
 
 RUN --mount=type=cache,id=agency-hub-corepack-build-${BUILDARCH},target=/corepack,sharing=locked \
     --mount=type=cache,id=agency-hub-pnpm-build-${BUILDARCH},target=/pnpm/store,sharing=locked \
@@ -99,6 +101,7 @@ RUN node apps/runtime/node_modules/playwright/cli.js install --with-deps --only-
     && rm -rf /var/lib/apt/lists/* /tmp/*
 COPY scripts/smoke-playwright-runtime.mjs ./scripts/smoke-playwright-runtime.mjs
 COPY --from=build /app/apps/dashboard/dist ./apps/dashboard/dist
+COPY --from=build /app/apps/workboard/dist ./apps/workboard/dist
 COPY --from=build /app/apps/runtime/dist ./apps/runtime/dist
 COPY --from=build /app/packages/db/dist ./packages/db/dist
 COPY --from=build /app/packages/db/migrations ./packages/db/migrations

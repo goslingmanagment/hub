@@ -1,4 +1,4 @@
-import { KernelApiError, createClient } from "@kernel/sdk";
+import { KernelApiError, createHubClient } from "@agency_hub_core/ui/hubClient";
 
 import { clearDashboardSession } from "@/lib/queryClient";
 import { buildLoginRoute } from "@/lib/navigation";
@@ -21,22 +21,9 @@ function redirectToLogin() {
   window.location.assign(buildLoginRoute(`${window.location.pathname}${window.location.search}${window.location.hash}`));
 }
 
-// Operations whose 401 means "these credentials are wrong", not "your session
-// expired" — both are answered inside a form the person is looking at.
-const AUTH_FORM_OPERATIONS = new Set(["login", "authChangePassword"]);
-
-export const kernel = createClient({
-  baseUrl: "",
-  auth: { mode: "cookie" },
-  onAuthError: (error, operation) => {
-    // A failed login is a normal form error, not an expired session. So is a
-    // mistyped current password in the cabinet: the kernel
-    // answers 401 there too, and bouncing the person to /login would lose the
-    // form instead of telling them the password did not match.
-    if (error.status === 401 && !AUTH_FORM_OPERATIONS.has(operation ?? "")) {
-      redirectToLogin();
-    }
-  },
-});
+// The shared client (packages/ui/src/hubClient.ts): an expired session — any
+// 401 but a failed login or a mistyped current password — sends the person to
+// sign in again and back here.
+export const kernel = createHubClient({ onSessionExpired: redirectToLogin });
 
 export { KernelApiError };

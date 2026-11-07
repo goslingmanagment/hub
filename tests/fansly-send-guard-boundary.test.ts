@@ -44,6 +44,9 @@ const SANCTIONED_FANSLY_ORIGIN_FILES: Record<string, string> = {
   "apps/runtime/src/sync/fansly/lib/cdn-tokens.ts": "comments only: reads signed CDN URLs, sends nothing",
   "packages/contracts/src/generate.ts": "the base URL default of the generated docs, sends nothing",
   "packages/contracts/src/routes.ts": "validates avatar URLs the API returns, sends nothing",
+  "packages/demo/fixtures/costs-attention-queues.ts": "invented demo answers (console and Workboard demo), sends nothing",
+  "packages/demo/fixtures/system-config-registry.ts": "invented demo answers (console and Workboard demo), sends nothing",
+  "packages/demo/fixtures/system-sync.ts": "invented demo answers (console and Workboard demo), sends nothing",
   "packages/shared/src/config-registry.ts": "the base URL setting of the wire layer (sent by the engine's transport)",
   "packages/shared/src/config.ts": "the base URL setting of the wire layer (sent by the engine's transport)",
 };

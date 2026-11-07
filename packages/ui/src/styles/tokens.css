@@ -1,0 +1,158 @@
+/*
+ * Tokens of the shared design system (packages/ui).
+ *
+ * A sheet of paper and ink, as the console (design-language 2026-11-03): a warm
+ * grey ground, a white sheet with hairlines, black exact numbers, blue ink only
+ * where something is current or waits for a person. Colour is an event.
+ *
+ * Every colour is written once as light-dark(light, dark). `color-scheme` picks
+ * the side: the system's by default (prefers-color-scheme), or the choice in
+ * [data-theme="light" | "dark"] on <html> (src/theme.ts). Text clears 4.5:1 on
+ * its own ground in both themes (the console's checked values).
+ *
+ * Everything is prefixed `--ui-`, so the console's `--color-*` and these live
+ * side by side while the console moves over screen by screen.
+ */
+@layer ui {
+  :root {
+    color-scheme: light dark;
+
+    /* --- Neutrals: the ground, the sheet, the lines, the ink of text --- */
+    --ui-bg: light-dark(#f6f5f3, #141211);
+    --ui-surface: light-dark(#ffffff, #1c1a18);
+    /* A menu, a window, a tooltip: raised over the sheet. */
+    --ui-raised: light-dark(#ffffff, #2a2724);
+    --ui-hover: light-dark(#f1efec, #262321);
+    /* A row under the pointer: quieter than a button's hover. */
+    --ui-hover-soft: light-dark(#faf9f7, #211e1c);
+    /* The current item of the menu, the avatar. */
+    --ui-active: light-dark(#ebe8e3, #2e2a27);
+    --ui-track: light-dark(#ebe8e3, #262321);
+    --ui-picked: light-dark(#ffffff, #403b37);
+    --ui-line: light-dark(#e6e3de, #2f2b28);
+    --ui-line-soft: light-dark(#efede9, #262321);
+    --ui-line-strong: light-dark(#d3cec7, #403b37);
+    --ui-text: light-dark(#1c1917, #ece8e2);
+    --ui-text-2: light-dark(#57534e, #bdb6ad);
+    --ui-text-3: light-dark(#736b65, #a1998f);
+    --ui-backdrop: light-dark(rgb(28 25 23 / 0.32), rgb(0 0 0 / 0.6));
+
+    /* --- The one accent: ink. Three uses only: the main button, the current
+       place (menu, tab, selected row, focus), and what waits for the owner. --- */
+    --ui-accent: light-dark(#34467b, #95a9df);
+    --ui-accent-fill: light-dark(#34467b, #4f66ab);
+    --ui-accent-fill-hover: light-dark(#41558d, #5d75bd);
+    --ui-accent-soft: light-dark(#ebf0fb, #21293e);
+    --ui-accent-line: light-dark(#c6d1ec, #3f4c6e);
+    --ui-on-fill: #ffffff;
+
+    /* --- States: calm, never a whole painted panel --- */
+    /* Good: a small green dot and a dark-green word. */
+    --ui-good: light-dark(#15803d, #5bc98a);
+    --ui-good-text: light-dark(#14532d, #86dca9);
+    --ui-good-soft: light-dark(#e8f5ec, #16301f);
+    --ui-good-line: light-dark(#bfe3cc, #24503a);
+    /* Attention: not broken, worth a look. */
+    --ui-warn: light-dark(#d97706, #f0a33a);
+    --ui-warn-text: light-dark(#7a4708, #f5bd6e);
+    --ui-warn-soft: light-dark(#fdf3e2, #33240f);
+    --ui-warn-line: light-dark(#f1d9b5, #5a4020);
+    /* Error: broken, a person must act. */
+    --ui-bad: light-dark(#c53a3a, #f27c7c);
+    --ui-bad-text: light-dark(#8f2525, #f6a0a0);
+    --ui-bad-soft: light-dark(#fbeaea, #3a1d1d);
+    --ui-bad-line: light-dark(#f1c4c4, #5c2b2b);
+    --ui-danger-fill: light-dark(#c53a3a, #b84848);
+    --ui-danger-fill-hover: light-dark(#a92f2f, #c55656);
+
+    /* Better / worse than before: muted text colours, not statuses. A drop of
+       income is not an alarm, so it is never the error red. */
+    --ui-up: light-dark(#356748, #94c5a4);
+    --ui-down: light-dark(#874b3c, #dda596);
+
+    /* An outlier against the team: one calm colour, no grading. */
+    --ui-mark-soft: light-dark(#f6eedd, #2d2618);
+    --ui-mark-text: light-dark(#6b4c12, #e6c88f);
+
+    /* Chart series (validated as a categorical set in both themes); never a status. */
+    --ui-series-1: light-dark(#2f5fb3, #4d86e0);
+    --ui-series-2: light-dark(#d9572a, #d9612e);
+    --ui-series-3: light-dark(#119467, #199e70);
+    --ui-series-4: light-dark(#6250d6, #8f80f0);
+    --ui-series-5: light-dark(#d4568a, #d55181);
+    --ui-series-6: light-dark(#4d7c0f, #7a9a1e);
+    /* The last period's line, the team's mark on a bar. */
+    --ui-series-compare: light-dark(#9a948b, #6f685f);
+
+    /* --- Type: Inter 400/500/600. Nothing below 13 px; 13 only for axes and keys --- */
+    --ui-font: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    --ui-fs-13: 13px;
+    --ui-lh-13: 18px;
+    --ui-fs-14: 14px;
+    --ui-lh-14: 20px;
+    --ui-fs-15: 15px;
+    --ui-lh-15: 22px;
+    --ui-fs-16: 16px;
+    --ui-lh-16: 24px;
+    --ui-fs-20: 20px;
+    --ui-lh-20: 28px;
+    --ui-fs-24: 24px;
+    --ui-lh-24: 32px;
+    --ui-fs-32: 32px;
+    --ui-lh-32: 40px;
+    /* Long reading (a conversation): 16 on 26. */
+    --ui-lh-read: 26px;
+    /* A line of reading text never wider than this. */
+    --ui-measure: 72ch;
+
+    /* --- Space: 4 8 12 16 24 32 48 64, nothing else --- */
+    --ui-space-1: 4px;
+    --ui-space-2: 8px;
+    --ui-space-3: 12px;
+    --ui-space-4: 16px;
+    --ui-space-6: 24px;
+    --ui-space-8: 32px;
+    --ui-space-12: 48px;
+    --ui-space-16: 64px;
+
+    /* --- Shape --- */
+    --ui-radius-sm: 6px;
+    --ui-radius: 8px;
+    --ui-radius-lg: 12px;
+    --ui-control-sm: 32px;
+    --ui-control: 36px;
+    --ui-control-lg: 44px;
+
+    /* Almost no shadows: a sheet has none. */
+    --ui-shadow-raised: 0 1px 2px light-dark(rgb(28 25 23 / 0.1), rgb(0 0 0 / 0.4));
+    --ui-shadow-float: 0 8px 24px light-dark(rgb(28 25 23 / 0.12), rgb(0 0 0 / 0.5)), 0 0 0 1px light-dark(rgb(28 25 23 / 0.04), rgb(255 255 255 / 0.04));
+
+    /* Keyboard focus: 2 px of ink, 2 px away. */
+    --ui-focus: 2px solid var(--ui-accent);
+    --ui-focus-offset: 2px;
+
+    /* Motion: a colour change, a panel sliding in. Nothing else moves. */
+    --ui-fast: 150ms;
+    --ui-slide: 200ms;
+
+    /* Layers. */
+    --ui-z-sticky: 4;
+    --ui-z-header: 5;
+    --ui-z-drawer: 10;
+    --ui-z-menu: 20;
+    --ui-z-modal: 30;
+    --ui-z-toast: 40;
+    --ui-z-tooltip: 50;
+
+    /* How far a table's header sticks from the top: the app sets it under its own header. */
+    --ui-sticky-top: 0px;
+  }
+
+  :root[data-theme="light"] {
+    color-scheme: light;
+  }
+
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+  }
+}

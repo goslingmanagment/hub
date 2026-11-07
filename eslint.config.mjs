@@ -61,6 +61,9 @@ export default tseslint.config(
       "**/node_modules/**",
       ".claude/worktrees/**",
       "apps/dashboard/**",
+      // The demo world of both apps (moved from apps/dashboard/demo, unlinted there):
+      // invented fixtures, typed by `pnpm --dir apps/dashboard typecheck:demo`.
+      "packages/demo/**",
       "artifacts/**",
       "docs/**",
       "packages/contracts/src/generated/**",

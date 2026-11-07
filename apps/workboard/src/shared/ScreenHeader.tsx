@@ -1,0 +1,82 @@
+import { ArrowLeft } from "lucide-react";
+import { useEffect, type ReactNode } from "react";
+import { Link } from "react-router";
+import { PeriodControl } from "@agency_hub_core/ui";
+import { Freshness } from "./Freshness.js";
+import type { BackTarget } from "./links.js";
+import { PageFilter } from "./PageFilter.js";
+import { usePeriod } from "./usePeriod.js";
+
+export interface ScreenHeaderProps {
+  /** h1: the screen's name («Смены»), or the object itself on a deep screen («alex.k»). Never «Команда». */
+  title: ReactNode;
+  /** The browser tab: «Смены — Workboard». Defaults to the title when it is text. */
+  documentTitle?: string;
+  /** «←» of a deep screen (useBackTarget). */
+  back?: BackTarget;
+  /** Show the period control (most screens). */
+  period?: boolean;
+  /** Show the page filter. */
+  pageFilter?: boolean;
+  /** Left of the period: at most one primary action, or a menu. */
+  actions?: ReactNode;
+  /** Under the title, left: one sentence of purpose, or facts of a deep screen. Defaults to the period's dates. */
+  meta?: ReactNode;
+  /** `dataUpdatedAt` of the screen's main read. */
+  updatedAt?: number;
+  onRefresh?: () => void;
+  refreshing?: boolean;
+  /** Below the header line, still above the content: tabs of the screen. */
+  tabs?: ReactNode;
+}
+
+/**
+ * The header of every screen (spec §3): the title on the left; the screen's
+ * one action, the period and the page filter on the right — always in this
+ * order, so the filter never moves. The bar sticks while the page scrolls; the
+ * dates and «Обновлено …» stand under it.
+ */
+export function ScreenHeader({ title, documentTitle, back, period = false, pageFilter = false, actions, meta, updatedAt, onRefresh, refreshing, tabs }: ScreenHeaderProps) {
+  const { spec, period: resolved, today, setPeriod } = usePeriod();
+  const name = documentTitle ?? (typeof title === "string" ? title : undefined);
+  useEffect(() => {
+    if (name) document.title = `${name} — Workboard`;
+  }, [name]);
+
+  // The dates themselves stand in the period control; here only what they are compared with.
+  const dates = period ? (
+    <span>
+      {resolved.current && spec.kind === "week" ? "Эта неделя · сравнение" : "Сравнение"} с {resolved.previousLabel}
+    </span>
+  ) : null;
+
+  return (
+    <>
+      <header className="wb-header">
+        <div className="wb-header__bar">
+          <div className="wb-header__titles">
+            {back && (
+              <Link to={back.to} className="wb-back" title={`Назад: ${back.label}`}>
+                <ArrowLeft size={16} strokeWidth={1.75} aria-hidden />
+                <span>{back.label}</span>
+              </Link>
+            )}
+            <h1 className="wb-header__title">{title}</h1>
+          </div>
+          <div className="wb-header__controls">
+            {actions}
+            {period && <PeriodControl value={spec} today={today} onChange={setPeriod} />}
+            {pageFilter && <PageFilter />}
+          </div>
+        </div>
+      </header>
+      {(meta !== undefined || dates !== null || updatedAt) && (
+        <div className="wb-meta">
+          <div className="wb-meta__left">{meta ?? dates}</div>
+          <Freshness updatedAt={updatedAt} {...(onRefresh ? { onRefresh } : {})} refreshing={refreshing ?? false} />
+        </div>
+      )}
+      {tabs !== undefined && <div className="wb-tabs">{tabs}</div>}
+    </>
+  );
+}

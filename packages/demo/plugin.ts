@@ -1,19 +1,23 @@
 /**
  * The demo API: a Vite dev-server middleware that answers `/api/v1/*` from
- * `demo/fixtures/` instead of proxying to a hub (see demo/core.ts).
+ * `packages/demo/fixtures/` instead of proxying to a hub (see core.ts).
  *
- * Loaded only by `vite --mode demo` (vite.config.ts imports it lazily), never
- * part of the production bundle.
+ * One harness and one set of fixtures for both apps: the console
+ * (`pnpm dev:demo`) and Workboard (`pnpm dev:workboard:demo`). Loaded only by
+ * `vite --mode demo` (each app's vite.config.ts imports it lazily), never part
+ * of a production bundle.
  */
 import type { Plugin } from "vite";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { kernelOperations } from "../../../packages/sdk/src/operations.ts";
-import { routeSchemas } from "../../../packages/contracts/src/routes.ts";
+import { fileURLToPath } from "node:url";
+import { kernelOperations } from "../sdk/src/operations.ts";
+import { routeSchemas } from "../contracts/src/routes.ts";
 import { demoError, isDemoReply, type DemoRequest, type DemoRole } from "./core.ts";
 
 // The fixtures load through Vite's module graph on every request, so an edit
-// to a fixture shows on the next reload without restarting the server.
-const FIXTURES = "/demo/fixtures/index.ts";
+// to a fixture shows on the next reload without restarting the server. An
+// absolute path: the fixtures live outside either app's Vite root.
+const FIXTURES = fileURLToPath(new URL("./fixtures/index.ts", import.meta.url));
 
 interface Route {
   key: string;
@@ -90,7 +94,18 @@ function responseSchema(key: string, status: number): SchemaLike | undefined {
   return route?.response?.[status];
 }
 
-export function demoApi(): Plugin {
+export interface DemoApiOptions {
+  /** Where the role switch lands, by role: the app's own home. The console's by default. */
+  home?: (role: DemoRole | "anon") => string;
+}
+
+/** The console's homes: /login for nobody, the cabinet for a chatter, the start otherwise. */
+function consoleHome(role: DemoRole | "anon"): string {
+  return role === "anon" ? "/login" : role === "chatter" ? "/account" : "/";
+}
+
+export function demoApi(options: DemoApiOptions = {}): Plugin {
+  const home = options.home ?? consoleHome;
   const routes = compile();
   const warned = new Set<string>();
 
@@ -100,13 +115,14 @@ export function demoApi(): Plugin {
       server.middlewares.use((request, response, next) => {
         const url = new URL(request.url ?? "/", "http://demo.invalid");
 
-        if (url.pathname === "/__demo/role") {
+        // `/__demo/role`, also under an app's base (`/workboard/__demo/role`).
+        if (url.pathname.endsWith("/__demo/role")) {
           const as = url.searchParams.get("as");
           // `anon`: nobody signed in, so /login and /join can be shown (`me` answers 401).
           const role = as === "anon" ? "anon" : ROLES.find((item) => item === as) ?? "owner";
           response.statusCode = 302;
           response.setHeader("set-cookie", `${ROLE_COOKIE}=${role}; Path=/; SameSite=Lax`);
-          response.setHeader("location", role === "anon" ? "/login" : role === "chatter" ? "/account" : "/");
+          response.setHeader("location", home(role));
           response.end();
           return;
         }

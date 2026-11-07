@@ -11,7 +11,7 @@ import { describe, expect, it } from "vitest";
 
 const ROOT = join(__dirname, "..");
 const PATTERN = String.raw`Math\.round\(.*(1000|[Pp]rice|[Aa]mount|[Mm]ills)`;
-const SCOPES = ["apps/runtime/src", "apps/dashboard/src", "packages"];
+const SCOPES = ["apps/runtime/src", "apps/dashboard/src", "apps/workboard/src", "packages"];
 
 /** grep's matching lines in one scope. Exit 1 is "no match"; any other
  * failure (exit 2: a bad pattern, an unreadable file) throws instead of

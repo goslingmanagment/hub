@@ -10,8 +10,11 @@ chatters' AI features, the owner's dashboard. Production is `agency-de` (`root@1
   `dev-chatter-password` (client token), pages `dev-lora-of`, `dev-lora-vip-of`.
 - Dashboard: http://localhost:5173 (Vite, proxied to the API) — look at UI changes there, with your own eyes.
 - `pnpm dev:demo` — the dashboard alone, every screen full of an invented agency (no Docker, no API):
-  http://localhost:5180, `/__demo/role?as=team_lead|chatter` switches the role. Data: `apps/dashboard/demo/fixtures/`
+  http://localhost:5180, `/__demo/role?as=team_lead|chatter` switches the role. Data: `packages/demo/fixtures/`
   (typed by the contracts: `pnpm --dir apps/dashboard typecheck:demo`). A new screen or API field gets its fixture there.
+- Workboard (`apps/workboard`, the owner's team control, served by Hub at `/workboard/`; design system `packages/ui`):
+  `pnpm dev:workboard:demo` → http://localhost:5190/workboard/ on the same demo data (`/workboard/__specimen` — every
+  component). Against a local API: `pnpm dev:workboard` (proxies `/api` to :3000).
 - API: `curl localhost:3000/api/v1/health`; the token and sample requests — `docs/runbooks/client-dev-hub.md`.
 - AI without spending money: `pnpm dev:fake-ai` + the variables from the same runbook.
 

@@ -1,0 +1,107 @@
+/*
+ * Base of a page on the shared design system: the ground, the type, focus,
+ * motion. No reset here (the app brings Tailwind's preflight or its own).
+ */
+@layer ui {
+  html {
+    background: var(--ui-bg);
+    scrollbar-gutter: stable;
+  }
+
+  body {
+    margin: 0;
+    background: var(--ui-bg);
+    color: var(--ui-text);
+    font-family: var(--ui-font);
+    font-size: var(--ui-fs-15);
+    line-height: var(--ui-lh-15);
+    font-weight: 400;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
+
+  ::selection {
+    background: var(--ui-accent-soft);
+    color: var(--ui-text);
+  }
+
+  :focus-visible {
+    outline: var(--ui-focus);
+    outline-offset: var(--ui-focus-offset);
+  }
+
+  /* Numbers that stand in a column line up. */
+  .ui-num {
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+
+  .ui-muted {
+    color: var(--ui-text-3);
+  }
+
+  .ui-secondary {
+    color: var(--ui-text-2);
+  }
+
+  /* For screen readers only. */
+  .ui-sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
+
+  /* A link inside text: the text's own colour and a quiet line, never the accent. */
+  .ui-link {
+    color: inherit;
+    text-decoration: underline;
+    text-decoration-color: var(--ui-line-strong);
+    text-decoration-thickness: 1px;
+    text-underline-offset: 3px;
+    transition: text-decoration-color var(--ui-fast);
+  }
+
+  .ui-link:hover {
+    text-decoration-color: currentColor;
+  }
+
+  /* A name that leads somewhere (a person, a page): no line until the pointer is on it. */
+  .ui-quiet-link {
+    color: inherit;
+    text-decoration: none;
+    border-radius: 2px;
+  }
+
+  .ui-quiet-link:hover {
+    text-decoration: underline;
+    text-decoration-color: var(--ui-line-strong);
+    text-underline-offset: 3px;
+  }
+
+  /* A person as a link: only the name answers the pointer, not the circle. */
+  .ui-quiet-link:has(.ui-person):hover {
+    text-decoration: none;
+  }
+
+  .ui-quiet-link:hover .ui-person__name {
+    text-decoration: underline;
+    text-decoration-color: var(--ui-line-strong);
+    text-underline-offset: 3px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      transition: none !important;
+      animation: none !important;
+    }
+  }
+}

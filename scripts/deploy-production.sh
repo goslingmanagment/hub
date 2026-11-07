@@ -570,6 +570,7 @@ done
 
 DIST_OVERLAY_PATHS=(
   apps/dashboard/dist
+  apps/workboard/dist
   apps/runtime/dist
   packages/db/dist
   packages/db/migrations
@@ -2083,6 +2084,7 @@ LABEL agency-hub.source-revision="\${APP_SOURCE_REVISION}"
 ENV GIT_SHA=\${APP_SOURCE_REVISION}
 
 COPY apps/dashboard/dist /app/apps/dashboard/dist
+COPY apps/workboard/dist /app/apps/workboard/dist
 COPY apps/runtime/dist /app/apps/runtime/dist
 COPY packages/db/dist /app/packages/db/dist
 COPY packages/db/migrations /app/packages/db/migrations
@@ -2114,7 +2116,8 @@ build_local_artifacts() (
   runtime_build=$!
   status=0
   # The hub CLI goes into the dashboard's dist after vite, which empties it.
-  pnpm --dir apps/dashboard exec vite build && node scripts/build-hub-cli.mjs || status=$?
+  # Workboard (apps/workboard) ships beside it, served under /workboard/.
+  pnpm --dir apps/dashboard exec vite build && node scripts/build-hub-cli.mjs && pnpm --dir apps/workboard exec vite build || status=$?
   wait "$runtime_build" || status=$?
   exit "$status"
 )
