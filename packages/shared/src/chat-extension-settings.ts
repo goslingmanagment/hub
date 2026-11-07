@@ -14,6 +14,7 @@
 // stored value can never reach an object's prototype.
 
 import type { ConfigStringFormat } from "./config-registry.ts";
+import { parseAiAccountCredits } from "./ai-account-credits.ts";
 import { parseAiFeatureEfforts, parseAiFeatureModels, parseAiFeatureWindows } from "./ai-feature-settings.ts";
 import { parseCrossSpendersLists } from "./cross-spenders-lists.ts";
 
@@ -231,6 +232,8 @@ function parseConfigStringFormat(format: ConfigStringFormat, value: string): Cha
       return parseAiFeatureEfforts(value);
     case "ai-feature-windows":
       return parseAiFeatureWindows(value);
+    case "ai-account-credits":
+      return parseAiAccountCredits(value);
     default: {
       // A new format without a parser fails closed, and fails the build first.
       const unhandled: never = format;

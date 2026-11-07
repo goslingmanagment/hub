@@ -75,6 +75,8 @@ export async function findAiProviderAccount(db: Database, id: number) {
  * Anthropic refused the account (no credit, or a key it does not know).
  * Returns the status the account had before, so only the first refusal of a
  * streak opens an alert; a repeat (a failed probe) only moves next_probe_at.
+ * The first refusal for credit is the account's exact balance: $0 at that
+ * moment (the balance counts from here, 0358).
  */
 export async function markAiProviderAccountUnavailable(
   db: Database,
@@ -98,6 +100,18 @@ export async function markAiProviderAccountUnavailable(
         else ${input.at}
       end,
       next_probe_at = ${input.nextProbeAt},
+      balance_snapshot_micro_usd = case
+        when ${input.status} = 'exhausted' and previous.status <> 'exhausted' then 0
+        else account.balance_snapshot_micro_usd
+      end,
+      balance_snapshot_at = case
+        when ${input.status} = 'exhausted' and previous.status <> 'exhausted' then ${input.at}
+        else account.balance_snapshot_at
+      end,
+      balance_snapshot_source = case
+        when ${input.status} = 'exhausted' and previous.status <> 'exhausted' then 'credit_refusal'
+        else account.balance_snapshot_source
+      end,
       updated_at = ${input.at}
     from previous
     where account.id = previous.id
@@ -174,6 +188,7 @@ export async function updateAiProviderAccountSettings(
         ? {
           balanceSnapshotMicroUsd: input.balanceSnapshot?.microUsd ?? null,
           balanceSnapshotAt: input.balanceSnapshot?.at ?? null,
+          balanceSnapshotSource: input.balanceSnapshot ? "reading" as const : null,
         }
         : {}),
       updatedAt: input.at,
@@ -181,6 +196,86 @@ export async function updateAiProviderAccountSettings(
     .where(eq(aiProviderAccounts.id, input.id))
     .returning();
   return row ?? null;
+}
+
+export type AiProviderAccountCreditKind = "monthly" | "topup";
+export type AiProviderAccountCreditSource = "revived" | "schedule" | "dashboard";
+
+export interface AiProviderAccountCreditRow {
+  id: number;
+  accountId: number;
+  kind: AiProviderAccountCreditKind;
+  amountMicroUsd: number;
+  creditedAt: Date;
+  /** monthly: the Moscow date of its renewal (YYYY-MM-DD). */
+  cycleDate: string | null;
+  source: AiProviderAccountCreditSource;
+}
+
+/**
+ * Money into an account. A monthly credit is one per renewal: a second one
+ * for the same cycle is ignored and null comes back.
+ */
+export async function insertAiProviderAccountCredit(
+  db: Database,
+  input: {
+    accountId: number;
+    kind: AiProviderAccountCreditKind;
+    amountMicroUsd: number;
+    creditedAt: Date;
+    cycleDate: string | null;
+    source: AiProviderAccountCreditSource;
+    actorUserId: number | null;
+  },
+): Promise<{ id: number } | null> {
+  const result = await db.execute(sql`
+    insert into ai_provider_account_credits
+      (account_id, kind, amount_micro_usd, credited_at, cycle_date, source, actor_user_id)
+    values (
+      ${input.accountId}, ${input.kind}, ${input.amountMicroUsd}, ${input.creditedAt},
+      ${input.cycleDate}::date, ${input.source}, ${input.actorUserId}
+    )
+    on conflict (account_id, cycle_date) where kind = 'monthly' do nothing
+    returning id
+  `);
+  const [row] = rowsOf<{ id: NumericValue }>(result);
+  return row ? { id: toNumber(row.id) } : null;
+}
+
+/** Every credit of the provider's accounts credited after `since`, and every
+ * monthly one of a renewal on or after `cycleSince` (so a renewal already
+ * counted is known), oldest first. */
+export async function listAiProviderAccountCredits(
+  db: Database,
+  input: { provider: AiProviderAccountProvider; since: Date; cycleSince: string },
+): Promise<AiProviderAccountCreditRow[]> {
+  const result = await db.execute(sql`
+    select credit.id, credit.account_id as "accountId", credit.kind,
+           credit.amount_micro_usd as "amountMicroUsd", credit.credited_at as "creditedAt",
+           to_char(credit.cycle_date, 'YYYY-MM-DD') as "cycleDate", credit.source
+    from ai_provider_account_credits credit
+    join ai_provider_accounts account on account.id = credit.account_id
+    where account.provider = ${input.provider}
+      and (credit.credited_at > ${input.since} or credit.cycle_date >= ${input.cycleSince}::date)
+    order by credit.credited_at, credit.id
+  `);
+  return rowsOf<{
+    id: NumericValue;
+    accountId: NumericValue;
+    kind: AiProviderAccountCreditKind;
+    amountMicroUsd: NumericValue;
+    creditedAt: Date | string;
+    cycleDate: string | null;
+    source: AiProviderAccountCreditSource;
+  }>(result).map((row) => ({
+    id: toNumber(row.id),
+    accountId: toNumber(row.accountId),
+    kind: row.kind,
+    amountMicroUsd: toNumber(row.amountMicroUsd),
+    creditedAt: new Date(row.creditedAt),
+    cycleDate: row.cycleDate,
+    source: row.source,
+  }));
 }
 
 /** Swap two accounts' places in the order (the owner's up/down arrows). */

@@ -2,14 +2,25 @@ import type { AdminAiAccountUpdateBody, AdminAiAccountsResponse } from "@agency_
 import {
   findAiProviderAccount,
   getAnthropicSpendTotals,
+  insertAiProviderAccountCredit,
   insertAuditEvent,
+  listAiProviderAccountCredits,
   listAiProviderAccountUsage,
   listAiProviderAccounts,
   swapAiProviderAccountPriorities,
   updateAiProviderAccountSettings,
 } from "@agency_hub_core/db";
+import { aiAccountCreditsOf } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
+import {
+  CREDIT_EXPECTED_AFTER_MS,
+  forecastPool,
+  moscowDate,
+  renewalsFrom,
+  topUpUnknown,
+  upcomingCredits,
+} from "./ai-account-balance.ts";
 import { loadReconciliation, providerSpendSinceReading, utcDay } from "./ai-provider-reconciliation.ts";
 import { loadEffectiveConfig } from "./effective-config.ts";
 import { ConflictError, NotFoundError } from "./errors.ts";
@@ -33,7 +44,8 @@ export function balanceRunway(input: { estimatedMicroUsd: number; dailyBurnMicro
 }
 
 /** The usage screen's accounts block: each account's state, Hub's spend
- * through it and the balance left by the owner's last console reading. */
+ * through it, its balance (the last reading or zero + money in since − Hub's
+ * spend since, ai-account-balance.ts) and the pool's forecast. */
 export async function getAdminAiAccountsReport(
   app: AccountsApp,
   now = new Date(),
@@ -45,11 +57,18 @@ export async function getAdminAiAccountsReport(
     listAiProviderAccountUsage(app.db, { provider: "anthropic", now }),
     getAnthropicSpendTotals(app.db, { now }),
   ]);
+  const anchors = rows.flatMap((row) => (row.balanceSnapshotAt ? [row.balanceSnapshotAt.getTime()] : []));
+  const credits = await listAiProviderAccountCredits(app.db, {
+    provider: "anthropic",
+    since: new Date(Math.min(now.getTime(), ...anchors)),
+    cycleSince: moscowDate(new Date(now.getTime() - 40 * DAY_MS)),
+  });
   const usageById = new Map(usage.map((row) => [row.accountId, row]));
   const dailyBurnMicroUsd = Math.round(totals.spent3dMicroUsd / 3);
   const serving = rows.find((row) => row.enabled && row.status === "active" && configured.has(row.label));
   const effective = await loadEffectiveConfig(app.db, app.config);
   const balanceWarnDays = effective.aiBalanceWarnDays ?? 2;
+  const schedules = aiAccountCreditsOf(effective.aiAccountCredits);
 
   // Anthropic's own bill since each reading, where its reports reach back.
   const readings = rows.flatMap((row) => (row.balanceSnapshotAt ? [row.balanceSnapshotAt] : []))
@@ -61,17 +80,19 @@ export async function getAdminAiAccountsReport(
     })
     : null;
 
-  return {
-    generatedAt: now.toISOString(),
-    dailyBurnMicroUsd,
-    unattributed30dMicroUsd: totals.unattributed30dMicroUsd,
-    balanceWarnDays,
-    accounts: rows.map((row) => {
+  const accounts = rows.map((row) => {
       const spent = usageById.get(row.id);
+      const schedule = schedules[row.label];
+      const nextRenewal = schedule
+        ? renewalsFrom(schedule.day, now, 2).find((renewal) => renewal.getTime() + CREDIT_EXPECTED_AFTER_MS > now.getTime()
+          && !credits.some((credit) => credit.accountId === row.id && credit.kind === "monthly" && credit.cycleDate === moscowDate(renewal)))
+        : undefined;
       const balance = row.balanceSnapshotMicroUsd !== null && row.balanceSnapshotAt !== null
         ? (() => {
           const spentSince = spent?.spentSinceSnapshotMicroUsd ?? 0;
-          const estimated = Math.max(row.balanceSnapshotMicroUsd! - spentSince, 0);
+          const creditsSince = credits.filter((credit) => credit.accountId === row.id && credit.creditedAt > row.balanceSnapshotAt!);
+          const creditedSince = creditsSince.reduce((sum, credit) => sum + credit.amountMicroUsd, 0);
+          const estimated = Math.max(row.balanceSnapshotMicroUsd! + creditedSince - spentSince, 0);
           const runway = balanceRunway({ estimatedMicroUsd: estimated, dailyBurnMicroUsd, now });
           const providerSpent = reconciliation && utcDay(row.balanceSnapshotAt!) >= utcDay(new Date(now.getTime() - (PROVIDER_LOOKBACK_DAYS - 1) * DAY_MS))
             ? providerSpendSinceReading({
@@ -81,10 +102,19 @@ export async function getAdminAiAccountsReport(
               hubSpentSinceMicroUsd: spentSince,
             })
             : null;
-          const providerEstimated = providerSpent === null ? null : Math.max(row.balanceSnapshotMicroUsd! - providerSpent, 0);
+          const providerEstimated = providerSpent === null ? null : Math.max(row.balanceSnapshotMicroUsd! + creditedSince - providerSpent, 0);
           return {
             readMicroUsd: row.balanceSnapshotMicroUsd!,
             readAt: row.balanceSnapshotAt!.toISOString(),
+            readSource: row.balanceSnapshotSource ?? "reading",
+            creditedSinceMicroUsd: creditedSince,
+            credits: creditsSince.slice(-5).map((credit) => ({
+              kind: credit.kind,
+              microUsd: credit.amountMicroUsd,
+              at: credit.creditedAt.toISOString(),
+              source: credit.source,
+            })),
+            unknownTopUp: topUpUnknown(row, creditsSince.length),
             spentSinceMicroUsd: spentSince,
             estimatedMicroUsd: estimated,
             ...runway,
@@ -118,9 +148,51 @@ export async function getAdminAiAccountsReport(
           last24h: spent?.requests1d ?? 0,
           last30d: spent?.requests30d ?? 0,
         },
+        monthlyCredit: schedule
+          ? {
+            day: schedule.day,
+            microUsd: schedule.microUsd,
+            nextExpectedAt: nextRenewal
+              ? new Date(Math.max(nextRenewal.getTime() + CREDIT_EXPECTED_AFTER_MS, now.getTime())).toISOString()
+              : null,
+          }
+          : null,
         balance,
       };
-    }),
+    });
+
+  // The pool: accounts that spend or will once their credit comes.
+  const pool = accounts.filter((account) => account.enabled && account.configured && account.status !== "invalid");
+  const forecast = forecastPool({
+    now,
+    dailyBurnMicroUsd,
+    balances: pool.map((account) => ({
+      label: account.label,
+      estimatedMicroUsd: account.balance && !account.balance.unknownTopUp ? account.balance.estimatedMicroUsd : null,
+    })),
+    upcoming: upcomingCredits({ accounts: pool, credits: schedules, recorded: credits, now }),
+  });
+  return {
+    generatedAt: now.toISOString(),
+    dailyBurnMicroUsd,
+    unattributed30dMicroUsd: totals.unattributed30dMicroUsd,
+    balanceWarnDays,
+    accounts,
+    forecast: {
+      leftMicroUsd: forecast.leftMicroUsd,
+      missing: forecast.missing,
+      runsOutAt: forecast.runsOutAt?.toISOString() ?? null,
+      nextCredit: forecast.nextCredit
+        ? { label: forecast.nextCredit.label, microUsd: forecast.nextCredit.microUsd, expectedAt: forecast.nextCredit.expectedAt.toISOString() }
+        : null,
+      gap: forecast.gap
+        ? { label: forecast.gap.label, untilAt: forecast.gap.untilAt.toISOString(), shortfallMicroUsd: forecast.gap.shortfallMicroUsd }
+        : null,
+      low: forecast.missing.length === 0
+        && balanceWarnDays > 0
+        && forecast.runsOutAt !== null
+        && forecast.runsOutAt.getTime() - now.getTime() < balanceWarnDays * DAY_MS,
+    },
   };
 }
 
@@ -149,6 +221,17 @@ export async function updateAdminAiAccount(
     if (neighbour) {
       await swapAiProviderAccountPriorities(app.db, { id: account.id, otherId: neighbour.id, at: now });
     }
+  }
+  if (input.body.topUpMicroUsd !== undefined) {
+    await insertAiProviderAccountCredit(app.db, {
+      accountId: account.id,
+      kind: "topup",
+      amountMicroUsd: input.body.topUpMicroUsd,
+      creditedAt: now,
+      cycleDate: null,
+      source: "dashboard",
+      actorUserId: input.actorUserId,
+    });
   }
   if (input.body.enabled !== undefined || input.body.balanceMicroUsd !== undefined) {
     await updateAiProviderAccountSettings(app.db, {

@@ -201,6 +201,7 @@ const envSchema = z.object({
   ANTHROPIC_ADMIN_KEYS: optionalTrimmedStringSchema,
   // The accounts block turns red when a balance has fewer days left than this.
   AI_BALANCE_WARN_DAYS: z.coerce.number().int().min(0).max(30).default(2),
+  AI_ACCOUNT_CREDITS: z.string().default("{}"),
   // AI media describer (docs/runbooks/ai-media-describe.md): ships inert. Every
   // knob is live-wired (read per sweep / per generation). The page policies
   // FAIL CLOSED: "{}" grants no page; a page describes only messages newer than
@@ -480,6 +481,9 @@ export interface AppConfig {
   anthropicAdminKeys?: AnthropicAdminKeyEntry[];
   /** The accounts block turns red under this many days of balance left. */
   aiBalanceWarnDays?: number;
+  /** Each account's monthly API credit and renewal day (JSON keyed by label,
+   * `ai-account-credits.ts`); `{}`: no credit is counted by itself. */
+  aiAccountCredits?: string;
   // AI media describer — ships inert; every knob live-wired.
   /** Optional separate Anthropic key/workspace for the describer (spend
    * accounting and a provider-side limit). Unset = the main key. */
@@ -839,6 +843,7 @@ export function loadConfig(
     anthropicApiKeys: parseAnthropicApiKeys(parsed.ANTHROPIC_API_KEYS),
     anthropicAdminKeys: parseAnthropicAdminKeys(parsed.ANTHROPIC_ADMIN_KEYS),
     aiBalanceWarnDays: parsed.AI_BALANCE_WARN_DAYS,
+    aiAccountCredits: parsed.AI_ACCOUNT_CREDITS,
     anthropicMediaApiKey: parsed.ANTHROPIC_MEDIA_API_KEY ?? null,
     aiMediaDescribeEnabled: parsed.AI_MEDIA_DESCRIBE_ENABLED,
     aiNotesTrimEnabled: parsed.AI_NOTES_TRIM_ENABLED,

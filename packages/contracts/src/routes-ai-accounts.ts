@@ -6,8 +6,9 @@
  *
  * Money is micro-USD (1 000 000 = $1) — Hub's own price of every call it
  * made; Anthropic's own bill is the reconciliation below. Anthropic has no API for an account's
- * remaining credit, so the balance is estimated: the owner's reading minus
- * Hub's spend through the account since.
+ * remaining credit, so the balance is Hub's count: the owner's last reading,
+ * or $0 at Anthropic's last refusal for credit, plus the money that came in
+ * since (the monthly credit, the owner's purchases), minus Hub's spend since.
  */
 import { z } from "zod";
 
@@ -41,12 +42,41 @@ export const adminAiAccountSchema = z.object({
     last24h: z.number().int().nonnegative(),
     last30d: z.number().int().nonnegative(),
   }),
-  /** Null until the owner notes a balance read in the Anthropic console. */
+  /** The account's monthly API credit (aiAccountCredits); null: none counted. */
+  monthlyCredit: z.object({
+    /** Renewal day of the month, Moscow. */
+    day: z.number().int().min(1).max(31),
+    microUsd,
+    /** When Hub expects the next one (two days after the renewal). */
+    nextExpectedAt: isoTimestamp.nullable(),
+  }).nullable(),
+  /** Null until Hub has a starting point: the owner's reading, or Anthropic's
+   *  first refusal for credit. */
   balance: z.object({
+    /** The starting point: its amount and time. */
     readMicroUsd: microUsd,
     readAt: isoTimestamp,
+    /** reading: the owner typed it; credit_refusal: Anthropic refused for
+     *  credit, so the balance was $0. */
+    readSource: z.enum(["reading", "credit_refusal"]),
+    /** Money in since the starting point (monthly credits, purchases). */
+    creditedSinceMicroUsd: microUsd,
+    /** The last five of them, oldest first. */
+    credits: z.array(z.object({
+      /** monthly: the subscription's credit; topup: the owner's purchase. */
+      kind: z.enum(["monthly", "topup"]),
+      microUsd,
+      at: isoTimestamp,
+      /** revived: the account answered again after its zero near the renewal;
+       *  schedule: three days after the renewal, the account never ran dry;
+       *  dashboard: the owner typed it. */
+      source: z.enum(["revived", "schedule", "dashboard"]),
+    })),
+    /** The account answered again after a refusal for credit and no money in
+     *  is known: someone bought credit, Hub does not know how much. */
+    unknownTopUp: z.boolean(),
     spentSinceMicroUsd: microUsd,
-    /** The reading minus the spend since; 0 once spent past it. */
+    /** Starting point + money in − spend since; 0 once spent past it. */
     estimatedMicroUsd: microUsd,
     /** At the last 3 days' pace of all Anthropic spend; null without spend. */
     daysLeft: z.number().nonnegative().nullable(),
@@ -76,6 +106,22 @@ export const adminAiAccountsResponseSchema = z.object({
   unattributed30dMicroUsd: microUsd,
   /** aiBalanceWarnDays: a balance with fewer days left is shown red. */
   balanceWarnDays: z.number().nonnegative(),
+  /** The pool's money (enabled accounts with a key that Anthropic accepts),
+   *  walked down at dailyBurnMicroUsd with the monthly credits still to come. */
+  forecast: z.object({
+    /** Money on those accounts now, of those whose balance is known. */
+    leftMicroUsd: microUsd,
+    /** Accounts whose balance Hub does not know: left out of the forecast. */
+    missing: z.array(z.string()),
+    /** When the money is gone; null without spend. */
+    runsOutAt: isoTimestamp.nullable(),
+    nextCredit: z.object({ label: z.string(), microUsd, expectedAt: isoTimestamp }).nullable(),
+    /** The money is gone before a credit comes: how much to buy to last until it. */
+    gap: z.object({ label: z.string(), untilAt: isoTimestamp, shortfallMicroUsd: microUsd }).nullable(),
+    /** Gone within balanceWarnDays and no account is missing: Hub has paged
+     *  the owner (the half-hourly check). */
+    low: z.boolean(),
+  }),
 });
 
 /**
@@ -275,8 +321,12 @@ export const adminAiAccountUpdateBodySchema = z.object({
   /** The balance the owner reads in the Anthropic console now, in micro-USD;
    *  null forgets the reading. */
   balanceMicroUsd: z.number().int().nonnegative().max(100_000_000_000).nullable().optional(),
+  /** Money the owner put into the account (a purchase), in micro-USD: added
+   *  to the balance from now. */
+  topUpMicroUsd: z.number().int().positive().max(100_000_000_000).optional(),
 }).strict().refine(
-  (body) => body.enabled !== undefined || body.move !== undefined || body.balanceMicroUsd !== undefined,
+  (body) => body.enabled !== undefined || body.move !== undefined || body.balanceMicroUsd !== undefined
+    || body.topUpMicroUsd !== undefined,
   { message: "Nothing to change" },
 );
 

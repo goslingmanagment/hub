@@ -1,7 +1,6 @@
 import { Fragment, useState } from "react";
 import { ChevronRight } from "lucide-react";
 import type { AdminAiAccount, AdminVoiceAccountResponse } from "@agency_hub_core/contracts";
-import { sumMicroUsd } from "@agency_hub_core/shared";
 import { useAdminAiAccounts, useAdminUpdateAiAccount, useAdminVoiceAccount } from "@/api/adminAiAccounts";
 import { ConfirmModal } from "@/components/shared/ConfirmModal";
 import { NoAnswerPanel } from "@/components/shared/StatusPanel";
@@ -36,20 +35,25 @@ function errorText(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause);
 }
 
+type EditMode = "reading" | "topup";
+
 /** The balance of an account and its form, in the row's own cell. */
 function BalanceCell({ account, busy, editing, onEdit, onCancel, onSave }: {
   account: AdminAiAccount;
   busy: boolean;
-  editing: boolean;
+  /** reading: the console balance; topup: money just put in. */
+  editing: EditMode | null;
   onEdit: () => void;
   onCancel: () => void;
   onSave: (microUsd: number) => void;
 }) {
-  const [draft, setDraft] = useState(() => (account.balance ? String(account.balance.estimatedMicroUsd / 1_000_000) : ""));
+  const [draft, setDraft] = useState(() => (
+    editing === "reading" && account.balance && !account.balance.unknownTopUp ? String(account.balance.estimatedMicroUsd / 1_000_000) : ""
+  ));
   if (editing) {
     // The same check and conversion as before the move: logic of the write, not of the look.
     const parsed = Number(draft.replace(",", ".").replace(/[$\s]/g, ""));
-    const valid = draft.trim() !== "" && Number.isFinite(parsed) && parsed >= 0;
+    const valid = draft.trim() !== "" && Number.isFinite(parsed) && (editing === "topup" ? parsed > 0 : parsed >= 0);
     return (
       <form
         className="ai-balance-form"
@@ -59,14 +63,18 @@ function BalanceCell({ account, busy, editing, onEdit, onCancel, onSave }: {
           onSave(Math.round(parsed * 1_000_000));
         }}
       >
-        <span className="ai-balance-label">Остаток {account.label} из консоли Anthropic</span>
+        <span className="ai-balance-label">
+          {editing === "topup" ? `Сколько положили на ${account.label}` : `Остаток ${account.label} из консоли Anthropic`}
+        </span>
         <span className="flex items-center justify-end gap-2">
           <span className="text-text-secondary">$</span>
           <input
             className="input w-28 text-right"
             inputMode="decimal"
             autoFocus
-            aria-label={`Остаток счёта ${account.label} в консоли Anthropic, долларов`}
+            aria-label={editing === "topup"
+              ? `Сколько положили на счёт ${account.label}, долларов`
+              : `Остаток счёта ${account.label} в консоли Anthropic, долларов`}
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
           />
@@ -80,9 +88,17 @@ function BalanceCell({ account, busy, editing, onEdit, onCancel, onSave }: {
     return <button type="button" className="btn btn-sm" onClick={onEdit} disabled={busy}>Указать остаток</button>;
   }
   const { balance } = account;
+  if (balance.unknownTopUp) {
+    return (
+      <div className="text-right">
+        <button type="button" className="btn btn-sm" onClick={onEdit} disabled={busy}>Указать остаток</button>
+        <div className="ai-sub ai-warn">снова работает, сколько положили — неизвестно</div>
+      </div>
+    );
+  }
   return (
     <div className="text-right">
-      <button type="button" className="ai-balance" title="Изменить: введите остаток из консоли Anthropic" onClick={onEdit} disabled={busy}>
+      <button type="button" className="ai-balance" title="Уточнить: введите остаток из консоли Anthropic" onClick={onEdit} disabled={busy}>
         ≈ {formatAiUsd(balance.estimatedMicroUsd)}
       </button>
       <div className={`ai-sub${balance.low ? " ai-warn" : ""}`}>
@@ -160,7 +176,7 @@ export function AiMoneyBlock() {
   const { data, isLoading, refetch } = useAdminAiAccounts();
   const update = useAdminUpdateAiAccount();
   const [error, setError] = useState<unknown>(null);
-  const [editing, setEditing] = useState<number | null>(null);
+  const [editing, setEditing] = useState<{ id: number; mode: EditMode } | null>(null);
   const [open, setOpen] = useState<number | null>(null);
   const [disabling, setDisabling] = useState<AdminAiAccount | null>(null);
   const [disableError, setDisableError] = useState<unknown>(null);
@@ -188,30 +204,35 @@ export function AiMoneyBlock() {
     );
   } else {
     const accounts = data.accounts;
-    const workingAccounts = accounts.filter(working);
-    const withBalance = workingAccounts.filter((account) => account.balance);
-    const withoutBalance = workingAccounts.filter((account) => !account.balance);
-    const left = sumMicroUsd(withBalance.map((account) => account.balance!.estimatedMicroUsd));
+    const { forecast } = data;
     const burn = data.dailyBurnMicroUsd;
-    const days = burn > 0 && withBalance.length > 0 ? left / burn : null;
-    const until = days !== null ? new Date(Date.now() + days * 86_400_000).toISOString() : null;
+    const known = accounts.some((account) => working(account) && account.balance && !account.balance.unknownTopUp);
+    const days = forecast.runsOutAt ? Math.max(0, (Date.parse(forecast.runsOutAt) - Date.parse(data.generatedAt)) / 86_400_000) : null;
+    const missing = forecast.missing.length > 0 ? `Без ${forecast.missing.join(", ")}: остаток неизвестен, укажите его в строке счёта` : null;
     content = (
       <>
         <div className="card-body pb-0">
           <StatGrid className="ai-strip">
             <Stat
               label="Осталось на счетах"
-              value={withBalance.length > 0 ? `≈ ${formatAiUsd(left)}` : "—"}
-              meta={withoutBalance.length > 0 ? `Без ${withoutBalance.map((account) => account.label).join(", ")}: остаток не указан` : "Ваш остаток минус траты Hub"}
+              value={known ? `≈ ${formatAiUsd(forecast.leftMicroUsd)}` : "—"}
+              meta={missing ?? "Считает Hub: ноль при отказе Anthropic, плюс кредиты и докупки, минус траты"}
             />
             <Stat
               label="Хватит на"
-              value={days !== null ? daysLeftLabel(days) : "—"}
+              value={known && days !== null ? daysLeftLabel(days) : "—"}
               meta={burn === 0
                 ? "За 3 дня трат не было"
-                : until
-                  ? <span className={days !== null && days < data.balanceWarnDays ? "ai-warn" : undefined}>до {formatDate(until)}</span>
-                  : "Остаток не указан"}
+                : !known || !forecast.runsOutAt
+                  ? "Остаток не известен"
+                  : (
+                    <>
+                      <span className={forecast.low || forecast.gap ? "ai-warn" : undefined}>до {formatDateTime(forecast.runsOutAt)}</span>
+                      {forecast.gap
+                        ? <span className="ai-warn">. Кредит {forecast.gap.label} придёт ~{formatDate(forecast.gap.untilAt)}: чтобы дотянуть, докупите ≈ {formatAiUsd(forecast.gap.shortfallMicroUsd)}</span>
+                        : forecast.nextCredit && <>, с кредитами (следующий: {forecast.nextCredit.label} ~{formatDate(forecast.nextCredit.expectedAt)}, +{formatAiUsd(forecast.nextCredit.microUsd)})</>}
+                    </>
+                  )}
             />
             <Stat label="Уходит в день" value={formatAiUsd(burn)} meta="Среднее за 3 дня, все счета" />
           </StatGrid>
@@ -270,13 +291,17 @@ export function AiMoneyBlock() {
                       <td className="num">{formatAiUsd(account.spent.last30dMicroUsd)}</td>
                       <td className="num">
                         <BalanceCell
-                          key={`${account.id}-${editing === account.id}`}
+                          key={`${account.id}-${editing?.id === account.id ? editing.mode : "view"}`}
                           account={account}
                           busy={update.isPending}
-                          editing={editing === account.id}
-                          onEdit={() => setEditing(account.id)}
+                          editing={editing?.id === account.id ? editing.mode : null}
+                          onEdit={() => setEditing({ id: account.id, mode: "reading" })}
                           onCancel={() => setEditing(null)}
-                          onSave={(microUsd) => change(account.id, { balanceMicroUsd: microUsd }, () => setEditing(null))}
+                          onSave={(microUsd) => change(
+                            account.id,
+                            editing?.mode === "topup" ? { topUpMicroUsd: microUsd } : { balanceMicroUsd: microUsd },
+                            () => setEditing(null),
+                          )}
                         />
                       </td>
                       <td className="num">
@@ -285,7 +310,8 @@ export function AiMoneyBlock() {
                           items={[
                             { label: "Поднять в очереди", disabled: index === 0 || update.isPending, onSelect: () => change(account.id, { move: "up" }) },
                             { label: "Опустить в очереди", disabled: index === accounts.length - 1 || update.isPending, onSelect: () => change(account.id, { move: "down" }) },
-                            { label: balance ? "Изменить остаток" : "Указать остаток", disabled: update.isPending, onSelect: () => setEditing(account.id) },
+                            { label: "Положил деньги…", disabled: update.isPending || !balance, hint: balance ? undefined : "Сначала укажите остаток", onSelect: () => setEditing({ id: account.id, mode: "topup" }) },
+                            { label: balance ? "Уточнить остаток из консоли" : "Указать остаток", disabled: update.isPending, onSelect: () => setEditing({ id: account.id, mode: "reading" }) },
                             account.enabled
                               ? { label: "Выключить", danger: true, disabled: update.isPending || !account.configured, onSelect: () => { setDisableError(null); setDisabling(account); } }
                               : { label: "Включить", disabled: update.isPending || !account.configured, hint: account.configured ? undefined : "Ключа этого счёта нет на сервере", onSelect: () => change(account.id, { enabled: true }) },
@@ -299,8 +325,27 @@ export function AiMoneyBlock() {
                           <div className="row-detail-body">
                             <KeyValue
                               rows={[
-                                { label: "Ввели вы", value: balance ? `${formatDateTime(balance.readAt)}: ${formatAiUsd(balance.readMicroUsd)}` : null },
+                                {
+                                  label: "Считаем от",
+                                  value: !balance
+                                    ? null
+                                    : balance.readSource === "credit_refusal"
+                                      ? `$0 — ${formatDateTime(balance.readAt)} Anthropic отказал: денег не было`
+                                      : `${formatAiUsd(balance.readMicroUsd)}: ввели вы ${formatDateTime(balance.readAt)}`,
+                                },
+                                {
+                                  label: "Пришло с тех пор",
+                                  value: balance && balance.credits.length > 0
+                                    ? balance.credits.map((credit) => `${credit.kind === "monthly" ? "кредит" : "докупка"} ${formatAiUsd(credit.microUsd)} ${formatDateTime(credit.at)}`).join("; ")
+                                    : balance ? "ничего" : null,
+                                },
                                 { label: "Потрачено с тех пор", value: balance ? formatAiUsd(balance.spentSinceMicroUsd) : null },
+                                {
+                                  label: "Ежемесячный кредит",
+                                  value: account.monthlyCredit
+                                    ? `${formatAiUsd(account.monthlyCredit.microUsd)}, продление ${account.monthlyCredit.day}-го${account.monthlyCredit.nextExpectedAt ? `, следующий ~${formatDate(account.monthlyCredit.nextExpectedAt)}` : ""}`
+                                    : "не задан (настройка «Anthropic: ежемесячный кредит и день продления»)",
+                                },
                                 ...(balance?.provider ? [{
                                   label: "По счёту Anthropic",
                                   value: `≈ ${formatAiUsd(balance.provider.estimatedMicroUsd)}${balance.provider.runsOutAt && balance.provider.estimatedMicroUsd > 0 ? `, до ${formatDateTime(balance.provider.runsOutAt)}` : ""}`,
@@ -341,8 +386,9 @@ export function AiMoneyBlock() {
         <div className="min-w-0">
           <h2 id="ai-money-title" className="card-title">Деньги на ИИ<span className="ai-subtitle-note">сейчас</span></h2>
           <p className="card-description">
-            Hub тратит счета по очереди. Кончились деньги — сам переходит к следующему. Остаток Anthropic не сообщает: его
-            вводите вы, Hub вычитает свои траты.
+            Hub тратит счета по очереди. Кончились деньги — сам переходит к следующему. Остаток Anthropic не сообщает, Hub
+            считает его сам: ноль, когда Anthropic отказал, плюс ежемесячный кредит и ваши докупки, минус свои траты.
+            Докупили — «Положил деньги» в меню счёта. Если деньги скоро кончатся, Hub заранее напишет в Telegram.
           </p>
         </div>
       </div>

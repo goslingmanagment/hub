@@ -34,16 +34,29 @@ export function adminAiAccountsList(request: DemoRequest): Accounts {
   const spentOf = (account: number | null, days: number) =>
     aiSpendBetween(new Date(now.getTime() - days * DAY_MS), now, now, (cell) => cell.account === account);
 
-  const balanceOf = (account: number, read: number, readAt: Date, withProvider: boolean): NonNullable<Accounts["accounts"][number]["balance"]> => {
+  type Balance = NonNullable<Accounts["accounts"][number]["balance"]>;
+  const balanceOf = (
+    account: number,
+    read: number,
+    readAt: Date,
+    withProvider: boolean,
+    readSource: Balance["readSource"] = "reading",
+    credits: Balance["credits"] = [],
+  ): Balance => {
     const spentSince = aiSpendBetween(readAt, now, now, (cell) => cell.account === account).cost;
-    const estimated = Math.max(0, read - spentSince);
+    const creditedSince = credits.reduce((sum, credit) => sum + credit.microUsd, 0);
+    const estimated = Math.max(0, read + creditedSince - spentSince);
     const daysLeft = dailyBurn > 0 ? Math.round((estimated / dailyBurn) * 100) / 100 : null;
     const providerSpent = Math.round(spentSince * 0.986);
-    const providerEstimated = Math.max(0, read - providerSpent);
+    const providerEstimated = Math.max(0, read + creditedSince - providerSpent);
     const providerDays = dailyBurn > 0 ? Math.round((providerEstimated / dailyBurn) * 100) / 100 : null;
     return {
       readMicroUsd: read,
       readAt: iso(readAt),
+      readSource,
+      creditedSinceMicroUsd: creditedSince,
+      credits,
+      unknownTopUp: false,
       spentSinceMicroUsd: spentSince,
       estimatedMicroUsd: estimated,
       daysLeft,
@@ -61,7 +74,11 @@ export function adminAiAccountsList(request: DemoRequest): Accounts {
   };
 
   const mainReadAt = new Date(moscowDayStart(shiftDay(today, -3)).getTime() + 9.2 * HOUR_MS);
-  const reserveReadAt = new Date(moscowDayStart(shiftDay(today, -13)).getTime() + 15.6 * HOUR_MS);
+  const reserveZeroAt = new Date(moscowDayStart(shiftDay(today, -13)).getTime() + 15.6 * HOUR_MS);
+  const reserveRevivedAt = new Date(moscowDayStart(shiftDay(today, -12)).getTime() + 1.4 * HOUR_MS);
+  const mainTopUpAt = new Date(moscowDayStart(shiftDay(today, -1)).getTime() + 20.3 * HOUR_MS);
+  const mainCreditAt = new Date(moscowDayStart(shiftDay(today, 4)).getTime() + 2 * DAY_MS);
+  const reserveCreditAt = new Date(moscowDayStart(shiftDay(today, 17)).getTime() + 2 * DAY_MS);
   const reserveLastUse = new Date(moscowDayStart(shiftDay(today, -10)).getTime() + 22.7 * HOUR_MS);
   const legacyLastUse = new Date(moscowDayStart(shiftDay(today, -25)).getTime() + 23.4 * HOUR_MS);
 
@@ -75,9 +92,7 @@ export function adminAiAccountsList(request: DemoRequest): Accounts {
   const reserve = account(2);
   const legacy = account(3);
 
-  return {
-    generatedAt: iso(now),
-    accounts: [
+  const accounts: Accounts["accounts"] = [
       {
         id: 1,
         label: ACCOUNT_LABELS[1]!,
@@ -92,7 +107,10 @@ export function adminAiAccountsList(request: DemoRequest): Accounts {
         lastUsedAt: iso(new Date(now.getTime() - 2 * 60_000)),
         spent: { last24hMicroUsd: main.day.cost, last7dMicroUsd: main.week.cost, last30dMicroUsd: main.month.cost },
         requests: { last24h: main.day.calls, last30d: main.month.calls },
-        balance: balanceOf(1, microUsd(140), mainReadAt, true),
+        monthlyCredit: { day: Number(shiftDay(today, 4).slice(8, 10)), microUsd: microUsd(200), nextExpectedAt: iso(mainCreditAt) },
+        balance: balanceOf(1, microUsd(140), mainReadAt, true, "reading", [
+          { kind: "topup", microUsd: microUsd(50), at: iso(mainTopUpAt), source: "dashboard" },
+        ]),
       },
       {
         id: 2,
@@ -101,14 +119,17 @@ export function adminAiAccountsList(request: DemoRequest): Accounts {
         enabled: true,
         status: "active",
         statusReason: null,
-        statusChangedAt: null,
+        statusChangedAt: iso(reserveRevivedAt),
         configured: true,
         serving: false,
         keyHint: "M2rd",
         lastUsedAt: iso(reserveLastUse),
         spent: { last24hMicroUsd: reserve.day.cost, last7dMicroUsd: reserve.week.cost, last30dMicroUsd: reserve.month.cost },
         requests: { last24h: reserve.day.calls, last30d: reserve.month.calls },
-        balance: balanceOf(2, microUsd(200), reserveReadAt, false),
+        monthlyCredit: { day: Number(shiftDay(today, 17).slice(8, 10)), microUsd: microUsd(200), nextExpectedAt: iso(reserveCreditAt) },
+        balance: balanceOf(2, 0, reserveZeroAt, false, "credit_refusal", [
+          { kind: "monthly", microUsd: microUsd(200), at: iso(reserveRevivedAt), source: "revived" },
+        ]),
       },
       {
         id: 3,
@@ -124,13 +145,53 @@ export function adminAiAccountsList(request: DemoRequest): Accounts {
         lastUsedAt: iso(legacyLastUse),
         spent: { last24hMicroUsd: legacy.day.cost, last7dMicroUsd: legacy.week.cost, last30dMicroUsd: legacy.month.cost },
         requests: { last24h: legacy.day.calls, last30d: legacy.month.calls },
+        monthlyCredit: null,
         balance: null,
       },
-    ],
+    ];
+  return {
+    generatedAt: iso(now),
+    accounts,
     dailyBurnMicroUsd: dailyBurn,
     unattributed30dMicroUsd: spentOf(null, 30).cost,
     balanceWarnDays: BALANCE_WARN_DAYS,
+    forecast: forecastOf(now, dailyBurn, [accounts[0]!, accounts[1]!], [
+      { label: ACCOUNT_LABELS[1]!, microUsd: microUsd(200), expectedAt: mainCreditAt },
+      { label: ACCOUNT_LABELS[2]!, microUsd: microUsd(200), expectedAt: reserveCreditAt },
+    ]),
   };
+}
+
+/** The runtime's forecast (ai-account-balance.ts forecastPool), on the demo's numbers. */
+function forecastOf(
+  now: Date,
+  dailyBurn: number,
+  accounts: Accounts["accounts"],
+  upcoming: Array<{ label: string; microUsd: number; expectedAt: Date }>,
+): Accounts["forecast"] {
+  const left = accounts.reduce((sum, account) => sum + (account.balance?.estimatedMicroUsd ?? 0), 0);
+  const nextCredit = upcoming[0] ? { label: upcoming[0].label, microUsd: upcoming[0].microUsd, expectedAt: iso(upcoming[0].expectedAt) } : null;
+  if (dailyBurn <= 0) return { leftMicroUsd: left, missing: [], runsOutAt: null, nextCredit, gap: null, low: false };
+  const perMs = dailyBurn / DAY_MS;
+  let money = left;
+  let at = now.getTime();
+  for (const credit of upcoming) {
+    const zeroAt = at + money / perMs;
+    if (zeroAt < credit.expectedAt.getTime()) {
+      return {
+        leftMicroUsd: left,
+        missing: [],
+        runsOutAt: iso(new Date(zeroAt)),
+        nextCredit,
+        gap: { label: credit.label, untilAt: iso(credit.expectedAt), shortfallMicroUsd: Math.ceil((credit.expectedAt.getTime() - zeroAt) * perMs) },
+        low: zeroAt - now.getTime() < BALANCE_WARN_DAYS * DAY_MS,
+      };
+    }
+    money += credit.microUsd - (credit.expectedAt.getTime() - at) * perMs;
+    at = credit.expectedAt.getTime();
+  }
+  const runsOut = at + money / perMs;
+  return { leftMicroUsd: left, missing: [], runsOutAt: iso(new Date(runsOut)), nextCredit, gap: null, low: runsOut - now.getTime() < BALANCE_WARN_DAYS * DAY_MS };
 }
 
 // --- Reconciliation with Anthropic (adminAiReconciliation) -------------------------
