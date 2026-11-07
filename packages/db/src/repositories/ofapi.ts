@@ -811,6 +811,30 @@ export async function listMissingOfapiSpendProjectionTransactionsForTruthIngest(
     }));
 }
 
+/**
+ * The truth ingest's rows for a page another writer owns: that writer writes
+ * the money they carry, so they leave the ingest's candidates for good —
+ * `skipped` with the reason, the row itself kept. Only rows still `projected`
+ * move; returns how many did.
+ */
+export async function skipOfapiSpendProjectionEventsForTruthIngest(
+  db: Database,
+  input: { ids: number[]; reason: string; now?: Date },
+): Promise<number> {
+  if (input.ids.length === 0) {
+    return 0;
+  }
+  const rows = await db
+    .update(ofapiSpendProjectionEvents)
+    .set({ projectionStatus: "skipped", blockedReason: input.reason, updatedAt: input.now ?? new Date() })
+    .where(and(
+      inArray(ofapiSpendProjectionEvents.id, input.ids),
+      eq(ofapiSpendProjectionEvents.projectionStatus, "projected"),
+    ))
+    .returning({ id: ofapiSpendProjectionEvents.id });
+  return rows.length;
+}
+
 export type OfapiSpendProjectionComparisonStatus =
   | "matched"
   | "missing_in_core_truth"

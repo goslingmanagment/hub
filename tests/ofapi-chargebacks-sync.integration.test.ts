@@ -19,6 +19,7 @@ import {
   upsertTransactionWithNegationGuards,
 } from "../apps/runtime/src/services/money-negation-guards.ts";
 import { runOfapiPendingReconcile } from "../apps/runtime/src/services/ofapi-pending-reconcile.ts";
+import { notifyWrongTransactionsWriterIncident } from "../apps/runtime/src/services/notification-incidents.ts";
 
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import {
@@ -143,6 +144,49 @@ function chargebacksClient(input: {
 }
 
 describe("OFAPI chargebacks reconcile", () => {
+  it("stands down on a page given to another writer and on a dead session: no request, no incident, and closes only the latch an OFAPI attempt raised", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    // Two pages the owner gave to the ChatSpace feed: on one an earlier OFAPI
+    // run raised the writer latch, on the other a different writer did.
+    const raisedByOfapi = await seedOfapiPage("cb-a-of", "acct_cb_a");
+    const raisedByOther = await seedOfapiPage("cb-b-of", "acct_cb_b");
+    const authDead = await seedOfapiPage("cb-c-of", "acct_cb_c");
+    await testDb.pool.query(
+      "update pages set transactions_writer = 'chatspace' where id = any($1::bigint[])",
+      [[raisedByOfapi.id, raisedByOther.id]],
+    );
+    await testDb.pool.query("update pages set ofapi_auth_status = 'account_not_found' where id = $1", [authDead.id]);
+    await notifyWrongTransactionsWriterIncident(appContext, {
+      platformAccountId: raisedByOfapi.id, pageLabel: "cb-a-of", platform: "onlyfans",
+      attemptedWriter: "ofapi", assignedWriter: "chatspace",
+    });
+    await notifyWrongTransactionsWriterIncident(appContext, {
+      platformAccountId: raisedByOther.id, pageLabel: "cb-b-of", platform: "onlyfans",
+      attemptedWriter: "onlymonster", assignedWriter: "chatspace",
+    });
+
+    const calls: ChargebacksCall[] = [];
+    appContext = { ...appContext, ofapi: chargebacksClient({ calls, itemsByAccount: new Map() }) };
+    const result = await runOfapiChargebacksReconcile(appContext);
+
+    expect(calls).toEqual([]);
+    expect(result.pages.map((page) => [page.pageLabel, page.status, page.reason])).toEqual([
+      ["cb-a-of", "skipped", "writer_chatspace"],
+      ["cb-b-of", "skipped", "writer_chatspace"],
+      ["cb-c-of", "skipped", "page_auth_dead"],
+    ]);
+    const incidents = Object.fromEntries((await listNotificationIncidents(appContext.db))
+      .map((incident) => [incident.incidentKey, incident.status]));
+    expect(incidents).toEqual({
+      [`wrong_transactions_writer:${raisedByOfapi.id}`]: "resolved",
+      [`wrong_transactions_writer:${raisedByOther.id}`]: "open",
+    });
+  });
+
   it("writes negated chargeback rows without demoting the original settled spend", async (context) => {
     if (!testDb) {
       context.skip();

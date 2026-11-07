@@ -17,6 +17,7 @@ import {
   assertPageTransactionsWriter,
   WrongTransactionsWriterError,
 } from "../apps/runtime/src/services/transactions-writer-gate.ts";
+import { notifyWrongTransactionsWriterIncident } from "../apps/runtime/src/services/notification-incidents.ts";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import {
   resetIntegrationDatabase,
@@ -135,7 +136,7 @@ describe("transactions single-writer gate (Stage 13)", () => {
     })).resolves.toBeUndefined();
   });
 
-  it("ingest refuses a wrongly-assigned page, keeps rows pending, applies after reassignment with the observation link", async (context) => {
+  it("ingest refuses an unassigned page, keeps rows pending, applies after assignment with the observation link", async (context) => {
     if (!testDb) {
       context.skip();
       return;
@@ -164,9 +165,9 @@ describe("transactions single-writer gate (Stage 13)", () => {
       sourceIdempotencyKey: idempotencyKey,
     });
 
-    // Force a wrong writer assignment; the ingest must refuse THIS page.
+    // No writer assigned (a defect): the ingest must refuse THIS page.
     await testDb.pool.query(
-      "update pages set transactions_writer = 'fansly' where id = $1",
+      "update pages set transactions_writer = null where id = $1",
       [page.id],
     );
     expect(await applyOfapiSpendProjectionTransactions(appContext)).toBe(0);
@@ -182,7 +183,7 @@ describe("transactions single-writer gate (Stage 13)", () => {
     );
     expect(noRows.rows).toHaveLength(0);
 
-    // Fix the assignment: the same pending rows apply — nothing was lost —
+    // Assign the writer: the same pending rows apply — nothing was lost —
     // stamped with provenance and linked to the journaled observation.
     await testDb.pool.query(
       "update pages set transactions_writer = 'ofapi' where id = $1",
@@ -202,6 +203,45 @@ describe("transactions single-writer gate (Stage 13)", () => {
     expect(row.rows[0]?.source).toBe("ofapi:webhook");
     expect(row.rows[0]?.source_observation_id).toBe(String(observation.observationId));
     expect(row.rows[0]?.currency).toBe("USD");
+  });
+
+  it("ingest leaves a page given to another writer quietly: its rows skipped for good, only the OFAPI-raised latch closes", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const page = await seedOfapiPage("given-of", "acct-given");
+    await seedProjectedTransaction({
+      pageId: page.id,
+      ofapiAccountId: "acct-given",
+      transactionId: "tx-given-1",
+      sourceIdempotencyKey: "wh-delivery-given-1",
+    });
+    await testDb.pool.query("update pages set transactions_writer = 'chatspace' where id = $1", [page.id]);
+    await notifyWrongTransactionsWriterIncident(appContext, {
+      platformAccountId: page.id, pageLabel: "given-of", platform: "onlyfans",
+      attemptedWriter: "ofapi", assignedWriter: "chatspace",
+    });
+
+    expect(await applyOfapiSpendProjectionTransactions(appContext)).toBe(0);
+    const projection = await testDb.pool.query<{ projection_status: string; blocked_reason: string | null }>(
+      "select projection_status, blocked_reason from ofapi_spend_projection_events where page_id = $1",
+      [page.id],
+    );
+    expect(projection.rows).toEqual([{ projection_status: "skipped", blocked_reason: "writer_chatspace" }]);
+    const incidents = await testDb.pool.query<{ status: string }>(
+      "select status from notification_incidents where kind = 'wrong_transactions_writer' and platform_account_id = $1",
+      [page.id],
+    );
+    expect(incidents.rows).toEqual([{ status: "resolved" }]);
+
+    // The money was the other writer's: handing the page back to OFAPI does
+    // not replay it as a second copy.
+    await testDb.pool.query("update pages set transactions_writer = 'ofapi' where id = $1", [page.id]);
+    expect(await applyOfapiSpendProjectionTransactions(appContext)).toBe(0);
+    const written = await testDb.pool.query("select 1 from transactions where platform_account_id = $1", [page.id]);
+    expect(written.rows).toHaveLength(0);
   });
 
   it("rejects an unknown provenance value at the CHECK level", async (context) => {
