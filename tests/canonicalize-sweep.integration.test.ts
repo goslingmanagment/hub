@@ -3,6 +3,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 
 import {
   appendDomainEvents,
+  appendProjectionOnlyDomainEvents,
   advanceCanonicalizeSweepCursor,
   applyVerifiedOfapiBinding,
   getOfapiBindingPage,
@@ -608,6 +609,100 @@ describe("canonicalization sweep (Stage 8)", () => {
     // never spreading to already-stamped work.
     const second = await runCanonicalization(appStub(), { families: [throwingFamily] });
     expect(second).toMatchObject({ scanned: 1, errored: 1, stamped: 0, appended: 0 });
+  });
+
+  // Prod 2026-10-31..11-07: the sweep listed a Fansly DM read between the sync
+  // engine's capture and apply commits. The engine had dropped an unchanged
+  // draft the sweep rebuilds, so the sweep's append lost the checkpoint and
+  // was logged as a failure although the engine had settled the row.
+  it("counts a row another writer stamped mid-run as raced; an unstamped lost checkpoint still errors", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const db = testDb.db;
+    const version = 2;
+    const insertRaceRow = (ref: string) => insertObservation(db, {
+      source: "pull",
+      producer: "sync:test:race",
+      platform: "fansly",
+      accountId: 4,
+      kind: "race.test",
+      payload: { ref },
+      payloadHash: sha256(`race-${ref}`),
+      idempotencyKey: `race-${ref}`,
+    });
+    const draft = (ref: string, writer: string) => ({
+      type: "message.material_observed",
+      occurredAt: new Date("2026-06-01T00:00:00.000Z"),
+      fanIdentityRef: "555",
+      messageRef: `race-${ref}`,
+      data: {},
+      schemaVersion: 1,
+      dedupKey: `race:${writer}:${ref}`,
+    });
+    const settled = await insertRaceRow("settled");
+    const unsettled = await insertRaceRow("unsettled");
+    // The other writer's commit claimed both checkpoints with a smaller draft set.
+    for (const [ref, row] of [["settled", settled], ["unsettled", unsettled]] as const) {
+      await appendProjectionOnlyDomainEvents(db, 4, [{ ...draft(ref, "engine"), observationId: row.observationId }], {
+        occurredAt: row.receivedAt,
+        observationId: row.observationId,
+        dedupKey: `pull:v${version}:checkpoint:${row.observationId}`,
+      });
+    }
+
+    // The "settled" row gets stamped after the sweep listed it, before its append.
+    let stampBeforeNextTransaction = false;
+    const racingDb = new Proxy(db, {
+      get(target, property) {
+        if (property === "transaction") {
+          return async (...args: Parameters<typeof db.transaction>) => {
+            if (stampBeforeNextTransaction) {
+              stampBeforeNextTransaction = false;
+              await markObservationParsed(db, {
+                observationId: settled.observationId,
+                receivedAt: settled.receivedAt,
+                parseVersion: version,
+              });
+            }
+            return target.transaction(...args);
+          };
+        }
+        const value: unknown = Reflect.get(target, property, target);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    const family = {
+      source: "pull" as const,
+      lane: "race-test",
+      kinds: ["race.test"],
+      version,
+      projectionOnly: true,
+      canonicalize: (observation: { payload: unknown }) => {
+        const ref = (observation.payload as { ref: string }).ref;
+        if (ref === "settled") stampBeforeNextTransaction = true;
+        return [draft(ref, "sweep")];
+      },
+    };
+
+    const run = await runCanonicalization({
+      db: racingDb,
+      logger: { info: () => {}, warn: () => {}, error: () => {} },
+    } as never, { families: [family] });
+    expect(run).toMatchObject({ scanned: 2, raced: 1, errored: 1, stamped: 0, appended: 0 });
+
+    const versions = await testDb.pool.query<{ idempotency_key: string; parse_version: number }>(
+      "select idempotency_key, parse_version from observations where kind = 'race.test' order by idempotency_key",
+    );
+    expect(versions.rows).toEqual([
+      { idempotency_key: "race-settled", parse_version: version },
+      { idempotency_key: "race-unsettled", parse_version: 0 },
+    ]);
+    const sweepEvents = await testDb.pool.query(
+      "select 1 from domain_events where dedup_key like 'race:sweep:%'",
+    );
+    expect(sweepEvents.rows).toHaveLength(0);
   });
 
   // W8.2 / A48 (decision #133): the v2→v3 webhook version bump makes the

@@ -19,6 +19,7 @@ import {
   assertDomainEventTargetMonthsAttached,
   type DomainEventPartitionCoverage,
   DomainEventTargetMonthsUnattachedError,
+  getObservationParseVersion,
   isDmArchiveScopeFenced,
   listObservationsForReplay,
   listDetachedPartitionsHoldingAccount,
@@ -26,6 +27,7 @@ import {
   listPageNativeAccountRefs,
   loadDomainEventPartitionCoverage,
   markObservationParsed,
+  ProjectionCheckpointClaimedError,
   recordObservationQuarantine,
   type ReplayObservationRow,
   tryAcquireDmArchiveWriterFenceLock,
@@ -169,6 +171,16 @@ export interface CanonicalizationRunResult {
    * worth the error-log line it produces every sweep.
    */
   errored: number;
+  /**
+   * Rows another writer settled while this run held them: the append lost the
+   * projection checkpoint, and the re-read after the rollback found the row
+   * already stamped at this run's version. In the sweep that writer is the
+   * Fansly Sync Engine, which canonicalizes its own reads inline; the sweep
+   * can list such a row in the moment between the engine's capture commit and
+   * its apply commit. Nothing is lost and nothing is retried, so this is not
+   * `errored`. A lost checkpoint on a row that is still unstamped is.
+   */
+  raced: number;
   /**
    * §3.2c(ii): rows REFUSED before any write because a draft's target month
    * has no attached domain_events partition. Deliberately distinct from
@@ -757,6 +769,18 @@ async function runFamily(
           );
           continue;
         }
+        // The append's own transaction has rolled back by now. If another
+        // writer (the sync engine's inline apply) stamped the row meanwhile,
+        // the checkpoint is its and the row is settled: count it apart.
+        if (error instanceof ProjectionCheckpointClaimedError
+          && await isStampedAtLeast(app, row, belowParseVersion)) {
+          totals.raced += 1;
+          app.logger.info(
+            { observationId: row.id, source: family.source, kind: row.kind },
+            "Observation was canonicalized by another writer during the sweep; skipped",
+          );
+          continue;
+        }
         totals.errored += 1;
         app.logger.error(
           { error, observationId: row.id, source: family.source, kind: row.kind },
@@ -770,6 +794,23 @@ async function runFamily(
     if (reachedEnd) break;
   }
   return { budgetExhausted, pagesUsed, reachedEnd };
+}
+
+/** A failed re-read answers false: the row then stays `errored`, as before. */
+async function isStampedAtLeast(
+  app: Pick<AppContext, "db">,
+  row: ReplayObservationRow,
+  parseVersion: number,
+): Promise<boolean> {
+  try {
+    const current = await getObservationParseVersion(app.db, {
+      observationId: row.id,
+      receivedAt: row.receivedAt,
+    });
+    return current !== null && current >= parseVersion;
+  } catch {
+    return false;
+  }
 }
 
 function noteQuarantine(
@@ -829,6 +870,7 @@ export async function runCanonicalization(
     quarantineSamples: [],
     lastObservationId: null,
     errored: 0,
+    raced: 0,
     partitionBlocked: 0,
     partitionAnomalies: [],
     maxLagSeconds: 0,
