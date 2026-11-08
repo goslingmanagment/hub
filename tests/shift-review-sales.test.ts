@@ -100,7 +100,7 @@ describe("settleShiftSales", () => {
 
   // The owner, 2026-11-08: from 02.11 a PPV is its sender's, a tip under a post the общак.
   it("gives a colleague's PPV to its sender and keeps the общак out of the header", () => {
-    const ppv = sale("2026-11-03T02:30:00Z", 31_200);
+    const ppv = sale("2026-11-03T02:30:00Z", 30_000);
     const postTip = { ...sale("2026-11-03T03:00:00Z", 40_000), kind: "tip" };
     const facts = new Map<number, SaleRuleFacts>([
       [ppv.transactionId, { ppvSender: { userId: SOFIA, username: "Sofia" }, common: null }],
