@@ -6,7 +6,6 @@ import {
   CHATTER_SHIFT_PAGE_MIN_MESSAGES,
   CHATTER_SHIFT_PIECE_MIN_MESSAGES,
   CHATTER_SHIFTS_MAX_WINDOW_DAYS,
-  CLIENT_ACTIVITY_LOST_MINUTES,
   type ClientActivityBody,
   type ClientActivityResponse,
   type TeamShift,
@@ -45,7 +44,9 @@ import { BadRequestError, ForbiddenError, NotFoundError } from "./errors.ts";
  *
  * - A stretch runs from the first active minute until
  *   CHATTER_SHIFT_END_IDLE_MINUTES with no activity. The extension closing or
- *   the browser restarting ends nothing. A gap's first
+ *   the browser restarting ends nothing, now as afterwards: a stretch goes on
+ *   until that long after its last action, the extension beating or not, and
+ *   a break going on now is a pause of it already. A gap's first
  *   CHATTER_SHIFT_IDLE_PAUSE_MINUTES are work (reading, waiting for a fan), the
  *   rest is a pause.
  * - With CHATTER_SHIFT_MIN_WORKED_MINUTES of work and
@@ -116,7 +117,12 @@ export interface ComputedWork {
   endedAt: number;
   ongoing: boolean;
   workedMinutes: number;
+  /** A break going on now is one too: from its 10th idle minute to now. */
   pauses: Array<{ from: number; to: number }>;
+  /** The start of its last minute with an action, ms. */
+  lastInputAt: number;
+  /** The start of its last minute the extension beat in, ms: a silence since says the extension is closed or offline. */
+  lastBeatAt: number;
   /** Active minutes per page. */
   pages: Map<string, number>;
   /** Messages per page. */
@@ -182,7 +188,6 @@ export function workOfMinutes(minutes: readonly ActivityMinute[], sent: readonly
   for (const one of messages) messagesBefore.push(messagesBefore.at(-1)! + one.messages);
   const messagesIn = (from: number, to: number) => messagesBefore[countBelow(messageAts, to)]! - messagesBefore[countBelow(messageAts, from)]!;
 
-  const lost = CLIENT_ACTIVITY_LOST_MINUTES * MINUTE_MS;
   const pauseAfter = CHATTER_SHIFT_IDLE_PAUSE_MINUTES * MINUTE_MS;
   const endAfter = CHATTER_SHIFT_END_IDLE_MINUTES * MINUTE_MS;
 
@@ -200,7 +205,8 @@ export function workOfMinutes(minutes: readonly ActivityMinute[], sent: readonly
     part.forEach((at, index) => {
       const next = part[index + 1] ?? end;
       worked += Math.min(next - at, pauseAfter);
-      if (next - at > pauseAfter && index + 1 < part.length) pauses.push({ from: at + pauseAfter, to: next });
+      // Work that stopped ends within the idle that counts; one going on pauses from then to now.
+      if (next - at > pauseAfter) pauses.push({ from: at + pauseAfter, to: next });
       for (const page of activeAt.get(at)!) {
         addTo(pages, page, 1);
         if (!firstSeen.has(page)) firstSeen.set(page, at);
@@ -208,12 +214,16 @@ export function workOfMinutes(minutes: readonly ActivityMinute[], sent: readonly
     });
     const ownMessages = new Map<string, number>();
     const start = part[0]!;
+    const lastInputAt = part.at(-1)!;
+    const lastBeatAt = Math.max(lastInputAt, open[countBelow(open, end) - 1] ?? lastInputAt);
     for (let index = countBelow(messageAts, start); index < messages.length && messages[index]!.at < end; index += 1) {
       const one = messages[index]!;
       addTo(ownMessages, one.pageLabel, one.messages);
       if ((firstSeen.get(one.pageLabel) ?? Infinity) > one.at) firstSeen.set(one.pageLabel, one.at);
     }
-    return { startedAt: start, endedAt: end, ongoing, workedMinutes: Math.round(worked / MINUTE_MS), pauses, pages, messages: ownMessages, firstSeen };
+    return {
+      startedAt: start, endedAt: end, ongoing, workedMinutes: Math.round(worked / MINUTE_MS), pauses, lastInputAt, lastBeatAt, pages, messages: ownMessages, firstSeen,
+    };
   };
   const finish = ({ firstSeen, ...work }: ReturnType<typeof workOf>, kind: ComputedWork["kind"]): ComputedWork => {
     const atLeast = kind === "shift" ? CHATTER_SHIFT_PAGE_MIN_MESSAGES : 1;
@@ -227,7 +237,8 @@ export function workOfMinutes(minutes: readonly ActivityMinute[], sent: readonly
   const out: ComputedWork[] = [];
   stretches.forEach((stretch, index) => {
     const lastInput = stretch.at(-1)!;
-    const going = index === stretches.length - 1 && now - open.at(-1)! <= lost && now - lastInput < endAfter;
+    // Still going: the last stretch, under an hour since its last action, whether the extension beats now or not (a break).
+    const going = index === stretches.length - 1 && now - lastInput < endAfter;
     const pieces = splitWhere(stretch, (gap) => gap > pauseAfter);
     const sent = pieces.map((piece, at) => messagesIn(piece[0]!, pieces[at + 1]?.[0] ?? (going ? now + 1 : piece.at(-1)! + pauseAfter)));
     // The pieces at the start and, once it is over, at the end with too few messages each are not the shift.
@@ -380,6 +391,8 @@ export function teamShiftOf(userId: number, username: string, shift: ComputedWor
     ongoing: shift.ongoing,
     workedMinutes: shift.workedMinutes,
     pauses: shift.pauses.map((pause) => ({ from: new Date(pause.from).toISOString(), to: new Date(pause.to).toISOString() })),
+    lastInputAt: new Date(shift.lastInputAt).toISOString(),
+    lastBeatAt: new Date(shift.lastBeatAt).toISOString(),
     pages: [...new Set([...shift.pages.keys(), ...shift.messages.keys()])]
       .map((pageLabel) => ({ pageLabel, activeMinutes: shift.pages.get(pageLabel) ?? 0, messages: shift.messages.get(pageLabel) ?? 0 }))
       .sort((a, b) => b.messages - a.messages || b.activeMinutes - a.activeMinutes),

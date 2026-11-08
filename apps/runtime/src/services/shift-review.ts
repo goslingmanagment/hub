@@ -1,5 +1,4 @@
 import {
-  CHATTER_SHIFT_PIECE_MIN_MESSAGES,
   MASS_SEND_MIN_CHATS,
   SHIFT_REVIEW_AI_LOOKBACK_MINUTES,
   SHIFT_REVIEW_AI_SHARE,
@@ -288,10 +287,9 @@ export async function readTeamShiftReview(
   const known = await listPagesByLabels(app.db, labels);
   const pages = labels.flatMap((label) => known.filter((page) => page.label === label));
   const pageIds = pages.map((page) => page.id);
-  // A page the shift works brings in all its fans' chats; a page only looked at, just the chats the person wrote in. A
-  // look-in works none; a shift going on works a page from CHATTER_SHIFT_PIECE_MIN_MESSAGES, before it holds the sales.
-  const worked = (label: string) => shift.kind === "shift"
-    && (shift.salesSince.has(label) || (shift.ongoing && (shift.messages.get(label) ?? 0) >= CHATTER_SHIFT_PIECE_MIN_MESSAGES));
+  // A page the shift works (holds the sales of) brings in all its fans' chats, going on or over alike; a page only looked
+  // at, just the chats the person wrote in. A look-in works none.
+  const worked = (label: string) => shift.kind === "shift" && shift.salesSince.has(label);
   const workedPageIds = pages.filter((page) => worked(page.label)).map((page) => page.id);
   const labelOf = new Map(pages.map((page) => [page.id, page.label]));
 
@@ -448,6 +446,8 @@ export async function readTeamShiftReview(
       ongoing: shift.ongoing,
       workedMinutes: shift.workedMinutes,
       pauses: shift.pauses.map((pause) => ({ from: new Date(pause.from).toISOString(), to: new Date(pause.to).toISOString() })),
+      lastInputAt: new Date(shift.lastInputAt).toISOString(),
+      lastBeatAt: new Date(shift.lastBeatAt).toISOString(),
       pages: pages.map((page) => ({
         pageLabel: page.label, platform: page.platform, messages: shift.messages.get(page.label) ?? 0, worked: worked(page.label),
       })),

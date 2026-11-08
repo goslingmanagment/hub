@@ -26,6 +26,7 @@ import { StatusBadge } from "@/components/ui/StatusBadge";
 import { formatCount, formatDateTime, formatDay, formatDayRange, formatDuration, formatMills, formatSignedPercent, formatTimeOfDay, weekEnd, weekStart } from "@/lib/format";
 import { ruPlural } from "@/lib/plural";
 import { isPlainRowClick } from "@/lib/rowClick";
+import { shiftIdleText, shiftIdleTitle } from "@/lib/shiftLive";
 import { TEAM_STATUS } from "@/lib/statusWords";
 import { change, dayLabel, moscowOf, shortDay } from "@/pages/account/stats/statsView";
 import { AuthorlessCard } from "./AuthorlessCard.js";
@@ -411,8 +412,8 @@ function WeekGrid({ data, period }: { data: Data; period: string }) {
   );
 }
 
-/** Г: who is on a shift now, and what their shift sold so far. */
-function OnShiftNow({ shifts }: { shifts: readonly MoneyShift[] }) {
+/** Г: who is on a shift now, and what their shift sold so far; a break or an end not yet known says how long nothing has happened. */
+function OnShiftNow({ shifts, serverNow }: { shifts: readonly MoneyShift[]; serverNow: string }) {
   const ongoing = shifts.filter((shift) => shift.ongoing);
   if (ongoing.length === 0) return null;
   return (
@@ -432,11 +433,15 @@ function OnShiftNow({ shifts }: { shifts: readonly MoneyShift[] }) {
           <tbody>
             {ongoing.map((shift) => {
               const perHour = perHourOf(shift.salesNetMills, shift.workedMinutes);
+              const idle = shiftIdleText(shift, serverNow);
               return (
                 <tr key={shift.userId}>
                   <td><ChatterLink userId={shift.userId} username={shift.username} /></td>
                   <td>{workedPages(shift).map((page, at) => <span key={page.pageLabel}>{at > 0 && ", "}<PageLink label={page.pageLabel} /></span>)}</td>
-                  <td>с {formatTimeOfDay(shift.startedAt)}, {formatDuration(shift.workedMinutes)}</td>
+                  <td>
+                    с {formatTimeOfDay(shift.startedAt)}, {formatDuration(shift.workedMinutes)}
+                    {idle !== null && <span className="team-faint" title={shiftIdleTitle(shift)}> · {idle}</span>}
+                  </td>
                   <td className="num font-medium">{formatMills(shift.salesNetMills)}</td>
                   <td className="num">{perHour === null ? "—" : formatMills(perHour)}</td>
                 </tr>
@@ -654,7 +659,7 @@ export function TeamShiftsPage() {
           {mode === "week" && <WeekGrid data={data} period={chatterPeriod} />}
           <ByDay data={data} mode={mode} />
           {mode !== "week" && <ByChatter data={data} period={chatterPeriod} mode={mode} />}
-          <OnShiftNow shifts={data.shifts} />
+          <OnShiftNow shifts={data.shifts} serverNow={data.serverNow} />
           {data.shifts.length > 0 && <AllShifts shifts={data.shifts} />}
         </div>
       )}

@@ -245577,6 +245577,12 @@
                             "additionalProperties": false
                           }
                         },
+                        "lastInputAt": {
+                          "type": "string"
+                        },
+                        "lastBeatAt": {
+                          "type": "string"
+                        },
                         "pages": {
                           "type": "array",
                           "items": {
@@ -245621,6 +245627,8 @@
                         "ongoing",
                         "workedMinutes",
                         "pauses",
+                        "lastInputAt",
+                        "lastBeatAt",
                         "pages",
                         "salesNetMills"
                       ],
@@ -246548,6 +246556,12 @@
                               "additionalProperties": false
                             }
                           },
+                          "lastInputAt": {
+                            "type": "string"
+                          },
+                          "lastBeatAt": {
+                            "type": "string"
+                          },
                           "pages": {
                             "type": "array",
                             "items": {
@@ -246608,6 +246622,8 @@
                           "ongoing",
                           "workedMinutes",
                           "pauses",
+                          "lastInputAt",
+                          "lastBeatAt",
                           "pages",
                           "authoredMessages",
                           "date",
@@ -246884,6 +246900,12 @@
                               "additionalProperties": false
                             }
                           },
+                          "lastInputAt": {
+                            "type": "string"
+                          },
+                          "lastBeatAt": {
+                            "type": "string"
+                          },
                           "pages": {
                             "type": "array",
                             "items": {
@@ -246925,6 +246947,8 @@
                           "ongoing",
                           "workedMinutes",
                           "pauses",
+                          "lastInputAt",
+                          "lastBeatAt",
                           "pages",
                           "authoredMessages"
                         ],

@@ -528,6 +528,8 @@ export const teamHandlers: DemoHandlers = {
           ongoing: shift.ongoing,
           workedMinutes: shift.workedMinutes,
           pauses: shift.pauses.map((pause) => ({ from: isoAt(pause.from), to: isoAt(pause.to) })),
+          lastInputAt: isoAt(shift.lastInputAt),
+          lastBeatAt: isoAt(shift.lastBeatAt),
           pages,
           authoredMessages: pages.reduce((sum, page) => sum + page.messages, 0),
         };

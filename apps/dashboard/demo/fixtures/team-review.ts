@@ -48,6 +48,8 @@ function reviewOf(shift: DemoShift, now: number): Response {
   const end = shift.ongoing ? now : shift.endedAt;
   const minutes = Math.max(1, Math.round((end - start) / MIN));
   const inPause = (at: number) => shift.pauses.some((pause) => at >= pause.from && at < pause.to);
+  // Nothing is written after the last action: a shift on a break now has its fans waiting.
+  const lastWrite = shift.ongoing ? shift.lastInputAt + MIN : end;
   // A slow hour in the middle: the chatter writes less and the fans wait longer.
   const slowFrom = start + Math.round(minutes * 0.55) * MIN;
   const slowTo = slowFrom + 50 * MIN;
@@ -70,14 +72,14 @@ function reviewOf(shift: DemoShift, now: number): Response {
       for (let before = 0; before < 3; before += 1) {
         messages.push(fanMessage(`${key}:b${before}`, start - (3 - before) * 47 * MIN, pick(random, FAN_LINES), false));
       }
-      for (let turn = 0; turn < mineCount && at < end; turn += 1) {
+      for (let turn = 0; turn < mineCount && at < lastWrite; turn += 1) {
         while (inPause(at)) at += 5 * MIN;
         const fanAt = at;
         messages.push(fanMessage(`${key}:f${turn}`, fanAt, pick(random, FAN_LINES), true));
         const slow = fanAt >= slowFrom && fanAt < slowTo;
         const delay = Math.round((slow ? intBetween(random, 8, 35) : intBetween(random, 0, 6)) * MIN + intBetween(random, 10, 59) * 1000);
         const replyAt = Math.min(end, fanAt + delay);
-        if (replyAt >= end) {
+        if (replyAt >= lastWrite) {
           waits.push({ chat: key, since: new Date(fanAt).toISOString(), from: new Date(fanAt).toISOString(), to: new Date(end).toISOString(), by: null });
           break;
         }
@@ -112,7 +114,7 @@ function reviewOf(shift: DemoShift, now: number): Response {
       if (used.has(key)) continue;
       used.add(key);
       added += 1;
-      const at = start + intBetween(random, 5, Math.max(6, minutes - 5)) * MIN;
+      const at = Math.min(start + intBetween(random, 5, Math.max(6, minutes - 5)) * MIN, lastWrite - MIN);
       const text = pick(random, HI_LINES);
       const hi: ShiftReviewMessage = {
         ref: `${key}:hi`, at: new Date(at).toISOString(), side: "page", text, priceMills: null, bought: null, tipMills: null, media: 0,
@@ -210,6 +212,11 @@ function reviewOf(shift: DemoShift, now: number): Response {
   for (let minute = 0; minute < minutes; minute += 1) {
     const at = start + minute * MIN;
     if (inPause(at)) continue;
+    // After the last action the tab is open with nothing done until the extension's last beat, then closed.
+    if (shift.ongoing && at > shift.lastInputAt) {
+      if (at <= shift.lastBeatAt) activity.push({ at: new Date(at).toISOString(), input: false });
+      continue;
+    }
     activity.push({ at: new Date(at).toISOString(), input: !(at >= slowFrom && at < slowTo) || random() < 0.4 });
   }
 
@@ -225,6 +232,8 @@ function reviewOf(shift: DemoShift, now: number): Response {
       ongoing: shift.ongoing,
       workedMinutes: shift.workedMinutes,
       pauses: shift.pauses.map((pause) => ({ from: new Date(pause.from).toISOString(), to: new Date(pause.to).toISOString() })),
+      lastInputAt: new Date(shift.lastInputAt).toISOString(),
+      lastBeatAt: new Date(shift.lastBeatAt).toISOString(),
       pages: [...pages].sort((a, b) => b.messages - a.messages).map((page) => ({
         pageLabel: page.pageLabel, platform: demoPage(page.pageLabel)?.platform ?? "fansly", messages: page.messages, worked: page.messages >= 10,
       })),

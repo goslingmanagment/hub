@@ -2320,7 +2320,7 @@ export const clientFanNoteAttributionsResponseSchema = z.object({
 //
 // - One stretch of work runs from the first active minute until
 //   CHATTER_SHIFT_END_IDLE_MINUTES with no activity. The extension closing or a
-//   browser restarting ends nothing. Idle up to
+//   browser restarting ends nothing, while it goes on or afterwards. Idle up to
 //   CHATTER_SHIFT_IDLE_PAUSE_MINUTES is work, the rest of a gap is a pause.
 // - A stretch with CHATTER_SHIFT_MIN_WORKED_MINUTES of work and
 //   CHATTER_SHIFT_MIN_MESSAGES messages is a SHIFT; anything less is a VISIT, a
@@ -2451,9 +2451,18 @@ export const teamShiftSchema = z.object({
   startedAt: isoTimestamp,
   /** Still going: the end is the hub's now. */
   endedAt: isoTimestamp,
+  /**
+   * Under CHATTER_SHIFT_END_IDLE_MINUTES since its last action, the extension open or not: a break is no end. A shift that
+   * truly ended is still «going» for that hour; `lastInputAt` says how long nothing has happened.
+   */
   ongoing: z.boolean(),
   workedMinutes: z.number().int().nonnegative(),
+  /** A break going on now is one too, up to the hub's now. */
   pauses: z.array(z.object({ from: isoTimestamp, to: isoTimestamp })),
+  /** The start of the shift's last minute with an action. */
+  lastInputAt: isoTimestamp,
+  /** The start of its last minute the extension beat in: older than CLIENT_ACTIVITY_LOST_MINUTES — closed or offline. */
+  lastBeatAt: isoTimestamp,
   /**
    * The shift's pages, the most messages first: minutes with an action there (a
    * minute two tabs saw counts on both, so they do not add up to the shift) and

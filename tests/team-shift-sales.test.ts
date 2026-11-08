@@ -22,6 +22,8 @@ function work(startedAt: string, endedAt: string, page = "ari-1"): ComputedWork 
     ongoing: false,
     workedMinutes: Math.round((end - start) / 60_000),
     pauses: [],
+    lastInputAt: end - 60_000,
+    lastBeatAt: end - 60_000,
     pages: new Map([[page, Math.round((end - start) / 60_000)]]),
     messages: new Map([[page, 60]]),
     salesSince: new Map([[page, start]]),
