@@ -18,6 +18,10 @@ import { formatDuration } from "@/lib/format";
  * on the page as this one began, is not the chatter's. Anything else on the
  * chatter's watch is theirs. A chat with only colleagues' waits, where the
  * chatter wrote nothing, is under «Вели другие»; its waits are counted apart.
+ *
+ * Whose a chat's money is: the server settles each sale as the header does
+ * (`sales`). A chat shows the fan's sales that count for the chatter, and the
+ * colleague's beside them; the list's money filter and order go by the first.
  */
 
 const MINUTE_MS = 60_000;
@@ -381,6 +385,32 @@ export function silences(pulse: readonly PulseMinute[], pauses: ReadonlyArray<{ 
   });
 }
 
+type Sale = TeamShiftReviewResponse["sales"][number];
+
+/** A sale that counts for the chatter: theirs alone, or theirs and a colleague's. */
+function counts(sale: Sale): boolean {
+  return sale.verdict === "mine" || sale.verdict === "both";
+}
+
+export interface SalesSplit {
+  /** The sales that count for the chatter: `salesNetMills`. */
+  netMills: number;
+  /** Of them, counted for a colleague too. */
+  bothNetMills: number;
+  /** Of them, to fans without a chat in the review. */
+  withoutChatNetMills: number;
+}
+
+export function salesSplit(data: TeamShiftReviewResponse): SalesSplit {
+  const own = data.sales.filter(counts);
+  const sum = (list: readonly Sale[]) => list.reduce((total, sale) => total + sale.netMills, 0);
+  return {
+    netMills: sum(own),
+    bothNetMills: sum(own.filter((sale) => sale.verdict === "both")),
+    withoutChatNetMills: sum(own.filter((sale) => sale.chatKey === null)),
+  };
+}
+
 export interface ShiftTotals {
   messages: number;
   massMessages: number;
@@ -524,6 +554,10 @@ export interface ChatSummary {
   bought: number;
   firstFanText: string | null;
   lastFanText: string | null;
+  /** The fan's sales in the shift that count for the chatter (see the file's head). */
+  heldNetMills: number;
+  /** The rest of the fan's money in the shift: a colleague's, by name, most first; `name` null — no shift's. */
+  others: Array<{ name: string | null; netMills: number }>;
   /** The chatter's first text in the shift: what a first touch said. */
   firstMineText: string | null;
   /** The fan's last text before the shift, when the fan wrote nothing in it: what a waiting fan said. */
@@ -534,7 +568,12 @@ export function summariesOf(data: TeamShiftReviewResponse, allWaits: readonly Re
   const end = Date.parse(data.shift.endedAt);
   const waitsByChat = new Map<string, ReviewWait[]>();
   for (const wait of allWaits) waitsByChat.set(wait.chat, [...(waitsByChat.get(wait.chat) ?? []), wait]);
+  const salesByChat = new Map<string, Sale[]>();
+  for (const sale of data.sales) if (sale.chatKey !== null) salesByChat.set(sale.chatKey, [...(salesByChat.get(sale.chatKey) ?? []), sale]);
   return data.chats.map((chat) => {
+    const sales = salesByChat.get(chat.key) ?? [];
+    const others = new Map<string | null, number>();
+    for (const sale of sales) if (!counts(sale)) others.set(sale.holderName, (others.get(sale.holderName) ?? 0) + sale.netMills);
     const inShift = chat.messages.filter((message) => message.inShift);
     const mine = inShift.filter((message) => message.mine !== null);
     const fan = inShift.filter((message) => message.side === "fan");
@@ -582,6 +621,8 @@ export function summariesOf(data: TeamShiftReviewResponse, allWaits: readonly Re
       marked: mine.filter((message) => message.mine!.marks.length > 0).length,
       ppv: mine.filter((message) => message.priceMills !== null).length,
       bought: mine.filter((message) => message.bought === true).length,
+      heldNetMills: sales.filter(counts).reduce((sum, sale) => sum + sale.netMills, 0),
+      others: [...others].map(([name, netMills]) => ({ name, netMills })).sort((a, b) => b.netMills - a.netMills),
       firstFanText: textOf(firstFan),
       lastFanText: lastFan === firstFan ? null : textOf(lastFan),
       firstMineText: textOf(mine.find((message) => message.text.trim() !== "")),
@@ -606,7 +647,7 @@ export function showPasses(summary: ChatSummary, show: ChatShow): boolean {
     case "all": return true;
     case "waited": return summary.longestWaitSeconds !== null && summary.longestWaitSeconds > REPLY_NORM_SECONDS;
     case "unanswered": return summary.unansweredInShift;
-    case "money": return summary.ppv > 0 || summary.chat.shiftNetMills > 0;
+    case "money": return summary.ppv > 0 || summary.heldNetMills > 0;
   }
 }
 
@@ -617,7 +658,7 @@ export function sortSummaries(list: readonly ChatSummary[], sort: ChatSort): Cha
       case "messages": return [-(summary.mine + summary.fan), summary.openSince ?? Number.MAX_SAFE_INTEGER];
       case "time": return [summary.first ?? summary.openSince ?? Number.MAX_SAFE_INTEGER, 0];
       case "wait": return [-Math.max(summary.longestWaitSeconds ?? -1, summary.openWaitSeconds ?? -1), summary.openSince ?? Number.MAX_SAFE_INTEGER];
-      case "money": return [-summary.chat.shiftNetMills, -summary.ppv];
+      case "money": return [-summary.heldNetMills, -summary.ppv];
     }
   };
   return list.map((summary, index) => ({ summary, index, key: key(summary) }))

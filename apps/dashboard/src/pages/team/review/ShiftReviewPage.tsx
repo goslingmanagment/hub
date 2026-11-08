@@ -26,6 +26,7 @@ import {
   myMessages,
   pulseOf,
   reviewWaits,
+  salesSplit,
   silences,
   summariesOf,
   totalsOf,
@@ -239,7 +240,12 @@ function ShiftReview({ userId, at }: { userId: number; at: string }) {
   const onView = (change: Partial<ChatsView>) => update(change as Record<string, string | null>);
   const toChats = () => document.getElementById("review-chats")?.scrollIntoView({ block: "start", behavior: "smooth" });
 
-  const chatsNetMills = data.chats.reduce((sum, chat) => sum + chat.shiftNetMills, 0);
+  const split = salesSplit(data);
+  const salesHint = [
+    "Продажи на страницах смены, пока смена их держала, как в «Заработке»; продажа фану, которому последним писал коллега на своей смене, — его",
+    split.bothNetMills > 0 ? `из них ${formatMills(split.bothNetMills)} засчитано и коллеге: его смена тоже держала страницу, а последним фану писал не он и не чаттер` : null,
+    split.withoutChatNetMills > 0 ? `${formatMills(split.withoutChatNetMills)} — от фанов, чьих чатов в разборе нет` : null,
+  ].filter((part) => part !== null).join("; ");
   // Hi greetings are not replies in a conversation: the share is of the rest.
   const withText = totals.origin.ai + totals.origin.fix + totals.origin.own;
   const ongoing = shift.ongoing;
@@ -278,9 +284,7 @@ function ShiftReview({ userId, at }: { userId: number; at: string }) {
           {pauseMinutes > 0 && <> · паузы {formatDuration(pauseMinutes)}</>}
           {totals.ppvSent > 0 && <> · PPV куплено {formatCount(totals.ppvBought)} из {formatCount(totals.ppvSent)}</>}
           {shift.salesNetMills > 0 && (
-            <span title="Продажи на страницах смены, пока смена их держала, как в «Заработке»: и фанам, которых нет в чатах ниже">
-              {" · "}продажи смены {formatMills(shift.salesNetMills)}{chatsNetMills !== shift.salesNetMills && <>, в чатах ниже {formatMills(chatsNetMills)}</>}
-            </span>
+            <span title={salesHint}>{" · "}продажи смены {formatMills(shift.salesNetMills)}</span>
           )}
           {shift.kind === "visit" && " · это заход, не смена"}
         </p>

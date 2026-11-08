@@ -16,6 +16,7 @@
  */
 import { z } from "zod";
 
+import { CHATTER_SALE_KINDS } from "./chatter-stats.ts";
 import { errorResponseSchema, intId, isoDateTime, isoTimestamp, mills } from "./primitives.ts";
 
 const count = z.number().int().nonnegative();
@@ -34,6 +35,7 @@ export const SHIFT_REVIEW_NEIGHBOUR_DAYS = 14;
 export const SHIFT_REVIEW_ORIGINS = ["ai", "fix", "own"] as const;
 export const SHIFT_REVIEW_MARKS = ["dash", "cyrillic", "leak"] as const;
 export const SHIFT_REVIEW_AUTHORS = ["me", "other", "none", "auto"] as const;
+export const SHIFT_REVIEW_SALE_VERDICTS = ["mine", "both", "theirs", "none"] as const;
 
 export const teamShiftReviewQuerySchema = z.object({
   userId: z.coerce.number().int().positive(),
@@ -106,12 +108,33 @@ const shiftReviewChatSchema = z.object({
   fanDisplayName: z.string().nullable(),
   /** The fan's net on this page, all time; null — Hub knows none. */
   fanLifetimeNetMills: mills.nullable(),
-  /** The fan's net on this page within the shift (any author's sale). */
+  /** The fan's net on this page within the shift (any author's sale); whose each sale is — `sales`. */
   shiftNetMills: mills,
   /** Messages before the shift that are not sent (only the last SHIFT_REVIEW_CONTEXT_MESSAGES are). */
   earlierHidden: count,
   /** Oldest first. */
   messages: z.array(shiftReviewMessageSchema),
+});
+
+const shiftReviewSaleSchema = z.object({
+  /** The transaction's id. */
+  saleRef: z.string(),
+  at: isoTimestamp,
+  pageLabel: z.string(),
+  fanRef: z.string().nullable(),
+  fanName: z.string().nullable(),
+  /** The fan's chat in `chats`; null — the fan has none there. */
+  chatKey: z.string().nullable(),
+  kind: z.enum(CHATTER_SALE_KINDS),
+  netMills: mills,
+  /**
+   * Whose it is, as `salesNetMills` settles it. `mine` — the shift's; `both` — a colleague's overlapping shift holds it
+   * too and neither of them was the last to write to the fan: it counts for both; `theirs` — the colleague's: they were
+   * the last to write, or their shift holds it and this one does not; `none` — no shift holds it.
+   */
+  verdict: z.enum(SHIFT_REVIEW_SALE_VERDICTS),
+  /** `theirs` — the colleague whose it is; `both` — the colleague it counts for too. */
+  holderName: z.string().nullable(),
 });
 
 export const teamShiftReviewResponseSchema = z.object({
@@ -149,6 +172,11 @@ export const teamShiftReviewResponseSchema = z.object({
   activity: z.array(z.object({ at: isoTimestamp, input: z.boolean() })),
   chats: z.array(shiftReviewChatSchema),
   /**
+   * The sales on the shift's pages within it, oldest first: every one the shift holds (`mine` and `both` add up to
+   * `salesNetMills`), and the rest to the fans of `chats`.
+   */
+  sales: z.array(shiftReviewSaleSchema),
+  /**
    * Every wait that overlaps the shift, cut to it: `since` is when the fan really started waiting. `by` — who ended it
    * (`me`, `other`, `none` — a message without an author); null — still waiting at the shift's end.
    */
@@ -171,6 +199,7 @@ export type TeamShiftReviewResponse = z.infer<typeof teamShiftReviewResponseSche
 export type ShiftReviewChat = z.infer<typeof shiftReviewChatSchema>;
 export type ShiftReviewMessage = z.infer<typeof shiftReviewMessageSchema>;
 export type ShiftReviewMine = z.infer<typeof shiftReviewMineSchema>;
+export type ShiftReviewSale = z.infer<typeof shiftReviewSaleSchema>;
 
 export const shiftReviewRouteSchemas = {
   teamShiftReview: {

@@ -525,6 +525,7 @@
     font-size: 12px; line-height: 18px; color: var(--color-text-secondary); white-space: nowrap; font-variant-numeric: tabular-nums;
   }
   .sr-tag-strong { border-color: var(--color-text-muted); color: var(--color-text-primary); font-weight: 600; }
+  .sr-tag-faint { border-style: dashed; color: var(--color-text-muted); }
   .sr-chat-tags .sr-tag { max-width: 100%; white-space: normal; }
 
   .sr-transcript-wrap { min-width: 0; min-height: 0; }
