@@ -60,6 +60,8 @@ const data: TeamShiftReviewResponse = {
     wait("c", "10:50", "10:55", "other"),
   ],
   sales: [],
+  beforeSales: [],
+  laterSales: [],
   unarchived: 0,
   deleted: 0,
   serverNow: at("12:00"),

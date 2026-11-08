@@ -118,11 +118,21 @@ function TeamStatsOf({ data, mode }: { data: Data; mode: Mode }) {
   const { team, previous } = data;
   const { versusShort: versus, waiting } = useVersus(data, mode);
   const ongoing = data.shifts.filter((shift) => shift.ongoing);
+  const outside = data.outside.visitsNetMills + data.outside.nobodyNetMills;
   const compare = (current: number | null, before: number | null | undefined): ReactNode =>
     previous === null ? (waiting ? "Сравнения пока нет" : undefined) : <Delta value={change(current ?? 0, before)} label={versus} />;
   return (
     <StatGrid>
-      <Stat label="Продажи за смены" value={formatMills(team.salesNetMills)} meta={compare(team.salesNetMills, previous?.salesNetMills)} />
+      <Stat
+        label="Продажи за смены"
+        value={formatMills(team.salesNetMills)}
+        meta={<>
+          {compare(team.salesNetMills, previous?.salesNetMills)}
+          {outside > 0 && (
+            <span className="block" title={outsideTitle(data.outside)}>вне смен ещё {formatMills(outside)}</span>
+          )}
+        </>}
+      />
       <Stat label="В час работы" value={team.perHourMills === null ? "—" : formatMills(team.perHourMills)} meta={compare(team.perHourMills, previous?.perHourMills)} />
       <Stat
         label="Смен"
@@ -136,6 +146,17 @@ function TeamStatsOf({ data, mode }: { data: Data; mode: Mode }) {
       />
     </StatGrid>
   );
+}
+
+/** What «вне смен» holds: in look-ins, nobody's, by page. */
+function outsideTitle(outside: Data["outside"]): string {
+  const parts = [
+    "Продажи страниц в эти дни, которые не держала ни одна смена: в «Продажи за смены» и «Заработок» они не входят",
+    outside.visitsNetMills > 0 ? `в заходах (чаттер писал фану последним) ${formatMills(outside.visitsNetMills)}` : null,
+    outside.nobodyNetMills > 0 ? `ничьи ${formatMills(outside.nobodyNetMills)}` : null,
+    `по страницам: ${outside.pages.map((page) => `${page.pageLabel} ${formatMills(page.visitsNetMills + page.nobodyNetMills)}`).join(", ")}`,
+  ];
+  return parts.filter((part) => part !== null).join("; ");
 }
 
 /** Б: the team's money by day; on hover, whose it was. */

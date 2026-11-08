@@ -304,6 +304,25 @@ function reviewOf(shift: DemoShift, now: number): Response {
     sell(null, start + Math.round(minutes * 0.6) * MIN, "tip", 40_000, { origin: "post_tip" });
   }
   sales.sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
+  // Around the shift: a renewal before it from a fan the chatter wrote to last, no shift's; a PPV of the shift not bought
+  // in it, bought the next morning in a colleague's shift.
+  const around = (chat: ShiftReviewChat, at: number, kind: Sale["kind"], netMills: number, facts: Partial<Sale>): Sale => ({
+    saleRef: `demo-around-${at}`, at: new Date(at).toISOString(), pageLabel: chat.pageLabel, fanRef: chat.fanRef,
+    fanName: chat.fanDisplayName ?? chat.fanUsername, chatKey: chat.key, kind, netMills, verdict: "none", holderName: null,
+    ppvSender: null, ppvSentAt: null, lastWriter: me, writers: [{ name: me, messages: intBetween(random, 2, 9) }], origin: "own", ...facts,
+  });
+  const beforeSales: Sale[] = [];
+  const laterSales: Sale[] = [];
+  const talked = chats.find((chat) => chat.messages.some((message) => message.mine !== null && message.mine.composedWith !== "hi"));
+  if (talked) beforeSales.push(around(talked, start - 40 * MIN, "subscription", 12_000, {}));
+  const unsold = chats.flatMap((chat) => chat.messages.filter((message) => message.mine !== null && message.priceMills !== null && message.bought !== true)
+    .map((message) => ({ chat, message })))[0];
+  if (unsold && !shift.ongoing && end + 9 * 60 * MIN < now) {
+    unsold.message.bought = true;
+    laterSales.push(around(unsold.chat, end + 9 * 60 * MIN, "ppv", Math.round(unsold.message.priceMills! * 0.8), {
+      verdict: "theirs", holderName: "sofia", ppvSender: me, ppvSentAt: unsold.message.at,
+    }));
+  }
 
   const others = teamWorld(new Date(now)).shifts.filter((one) => one.user.id === shift.user.id).sort((a, b) => a.startedAt - b.startedAt);
   const position = others.findIndex((one) => one.startedAt === shift.startedAt);
@@ -329,6 +348,8 @@ function reviewOf(shift: DemoShift, now: number): Response {
     activity,
     chats,
     sales,
+    beforeSales,
+    laterSales,
     waits: waits.sort((a, b) => Date.parse(a.from) - Date.parse(b.from)),
     unarchived: 0,
     deleted: 0,

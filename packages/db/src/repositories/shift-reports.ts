@@ -22,12 +22,13 @@ export interface ShiftSale {
   occurredAt: Date;
 }
 
-/** Sales on the pages in [from, to): money a fan paid (no refund, chargeback or reversal), oldest first. */
+/** Sales on the pages in [from, to) (of `fanIds` only, when given): money a fan paid (no refund, chargeback or reversal), oldest first. */
 export async function listShiftSales(
   db: Database,
-  input: { pageIds: readonly number[]; from: Date; to: Date },
+  input: { pageIds: readonly number[]; from: Date; to: Date; fanIds?: readonly number[] },
 ): Promise<ShiftSale[]> {
-  if (input.pageIds.length === 0) return [];
+  if (input.pageIds.length === 0 || input.fanIds?.length === 0) return [];
+  const fans = input.fanIds === undefined ? sql`` : sql`and t.fan_id = any(${sql.param(input.fanIds.map(String))}::bigint[])`;
   const result = await db.execute<{
     id: string | number; page_id: string | number; label: string; platform: string; fan_id: string | number | null;
     fan_ref: string | null; fan_name: string | null; kind: string; gross: string | number; net: string | number; occurred_at: Date | string;
@@ -41,6 +42,7 @@ export async function listShiftSales(
       and t.is_active and t.gross_amount_mills > 0
       and t.canonical_type in ('subscription', 'tip', 'message_purchase', 'post_purchase', 'stream_tip')
       and t.occurred_at >= ${input.from.toISOString()}::timestamptz and t.occurred_at < ${input.to.toISOString()}::timestamptz
+      ${fans}
     order by t.occurred_at, t.id`);
   return result.rows.map((row) => ({
     transactionId: Number(row.id),

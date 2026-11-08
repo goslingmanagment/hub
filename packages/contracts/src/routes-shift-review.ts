@@ -27,6 +27,8 @@ export const SHIFT_REVIEW_AI_SHARE = 0.7;
 export const SHIFT_REVIEW_AI_LOOKBACK_MINUTES = 90;
 /** Messages shown before the shift's start in each chat, for context. */
 export const SHIFT_REVIEW_CONTEXT_MESSAGES = 8;
+/** A PPV of the shift bought this long after it still shows with the shift (`laterSales`). */
+export const SHIFT_REVIEW_LATER_SALES_DAYS = 14;
 /** A fan's message older than this before a reply is not waited on (as `teamChatterNumbers`). */
 export const SHIFT_REVIEW_WAIT_HORIZON_HOURS = 72;
 /** The person's previous and next shift are looked for this far from the shift. */
@@ -206,6 +208,18 @@ export const teamShiftReviewResponseSchema = z.object({
    * `salesNetMills`), and the rest to the fans of `chats`.
    */
   sales: z.array(shiftReviewSaleSchema),
+  /**
+   * Before the shift, no shift's: the sales on its pages from the person's previous shift's end (a day back at most) to
+   * its start that no shift or look-in holds («вне смен» of «Смены»), to a fan the person sent the bought PPV to or was
+   * the last to write to. `verdict` is `none`. Empty for a look-in.
+   */
+  beforeSales: z.array(shiftReviewSaleSchema),
+  /**
+   * After the shift: the person's PPVs sent in it that fans bought after it, within SHIFT_REVIEW_LATER_SALES_DAYS.
+   * `theirs` and `holderName` — the shift that held the purchase (the person's own later one too); `none` — no shift
+   * held it. Empty for a look-in.
+   */
+  laterSales: z.array(shiftReviewSaleSchema),
   /**
    * Every wait that overlaps the shift, cut to it: `since` is when the fan really started waiting. `by` — who ended it
    * (`me`, `other`, `none` — a message without an author); null — still waiting at the shift's end.

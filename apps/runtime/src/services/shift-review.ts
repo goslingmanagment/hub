@@ -3,6 +3,7 @@ import {
   SHIFT_REVIEW_AI_LOOKBACK_MINUTES,
   SHIFT_REVIEW_AI_SHARE,
   SHIFT_REVIEW_CONTEXT_MESSAGES,
+  SHIFT_REVIEW_LATER_SALES_DAYS,
   SHIFT_REVIEW_NEIGHBOUR_DAYS,
   SHIFT_REVIEW_WAIT_HORIZON_HOURS,
   type ShiftReviewChat,
@@ -26,15 +27,19 @@ import {
   listSaleFacts,
   listSaleLastWriters,
   type ShiftReviewGenerationRow,
+  type SaleFacts,
   type ShiftReviewMessageRow,
   type ShiftSale,
 } from "@agency_hub_core/db";
 
 import type { AppContext } from "../bootstrap.ts";
 import { requireOwner, type AuthPrincipal } from "./auth.ts";
-import { SALE_LAST_WRITER_HOURS, lastWriterQuery, readPeopleWork, salesHeldBy, workHoldsSale, type ComputedWork } from "./chatter-shifts.ts";
+import {
+  SALE_LAST_WRITER_HOURS, lastWriterQuery, readPeopleWork, salesHeldBy, workHoldsSale, type ComputedWork, type PersonWork,
+} from "./chatter-shifts.ts";
 import { saleKindOf, saleOriginOf, settleSale } from "./chatter-stats.ts";
 import { NotFoundError } from "./errors.ts";
+import { salesNoShiftHolds, salesOfWork, settleOutsideShifts } from "./team-shift-sales.ts";
 
 /**
  * Команда → «Разбор смены» (`teamShiftReview`, owner, 2026-11-06): one
@@ -405,6 +410,83 @@ async function shiftSales(
   return settleShiftSales({ userId: input.userId, kind: shift.kind, sales, held: heldIds, colleagues, lastWriters });
 }
 
+function piecesOf(people: ReadonlyMap<number, PersonWork>, kind: ComputedWork["kind"]): ColleagueWork[] {
+  return [...people].flatMap(([id, person]) => person.work
+    .filter((work) => work.kind === kind).map((work) => ({ userId: id, username: person.username, work })));
+}
+
+/**
+ * Before the shift, no shift's: the sales on its pages from the person's
+ * previous shift's end (a day back at most) to its start that no shift or
+ * look-in holds (as «Смены» puts them outside shifts), to a fan the person sent
+ * the bought PPV to or was the last to write to. With their facts.
+ */
+async function salesBeforeShift(
+  app: AppContext,
+  input: { userId: number; start: number; previousEnd: number | null; pageIds: readonly number[]; now: Date },
+): Promise<{ sales: SettledSale[]; facts: SaleFacts[] }> {
+  const { userId, start, now } = input;
+  const from = Math.max(input.previousEnd ?? 0, start - DAY_MS);
+  const read = from < start ? await listShiftSales(app.db, { pageIds: input.pageIds, from: new Date(from), to: new Date(start) }) : [];
+  if (read.length === 0) return { sales: [], facts: [] };
+  const people = await readPeopleWork(app.db, { from: new Date(from - DAY_MS), to: new Date(Math.min(now.getTime(), start + DAY_MS)), now, pages: "all" });
+  const shifts = piecesOf(people, "shift").map((one) => ({ ...one, held: salesOfWork(one.work, read) }));
+  const unheld = salesNoShiftHolds({ from, to: start, sales: read, shifts });
+  const lastWriters = await listSaleLastWriters(app.db, { hours: SALE_LAST_WRITER_HOURS, sales: lastWriterQuery(unheld) });
+  const nobodys = settleOutsideShifts(unheld, piecesOf(people, "visit"), lastWriters).filter((one) => one.visit === null).map((one) => one.sale);
+  const facts = await listSaleFacts(app.db, { transactionIds: nobodys.map((sale) => sale.transactionId) });
+  const sentBy = new Map(facts.map((fact) => [fact.transactionId, fact.ppvSender?.userId ?? null]));
+  const lastWriterOf = (sale: ShiftSale) => lastWriters.get(sale.transactionId) ?? null;
+  return {
+    sales: nobodys
+      .filter((sale) => sentBy.get(sale.transactionId) === userId || lastWriterOf(sale) === userId)
+      .map((sale) => ({ sale, held: false, verdict: "none", holder: null, lastWriter: lastWriterOf(sale) })),
+    facts,
+  };
+}
+
+/**
+ * After the shift: the person's PPVs sent in it that `ppvFans` bought after it,
+ * within SHIFT_REVIEW_LATER_SALES_DAYS, and the shift that held each (of
+ * several, the one whose person last wrote to the fan). With their facts.
+ */
+async function salesAfterShift(
+  app: AppContext,
+  input: { userId: number; start: number; end: number; ppvFans: ReadonlyArray<{ pageId: number; fanId: number }>; now: Date },
+): Promise<{ sales: SettledSale[]; facts: SaleFacts[] }> {
+  const { userId, start, end, now } = input;
+  const to = Math.min(now.getTime(), end + SHIFT_REVIEW_LATER_SALES_DAYS * DAY_MS);
+  const ppvFan = new Set(input.ppvFans.map((fan) => `${fan.pageId}:${fan.fanId}`));
+  if (ppvFan.size === 0 || end >= to) return { sales: [], facts: [] };
+  const bought = (await listShiftSales(app.db, {
+    pageIds: [...new Set(input.ppvFans.map((fan) => fan.pageId))], fanIds: [...new Set(input.ppvFans.map((fan) => fan.fanId))], from: new Date(end), to: new Date(to),
+  }))
+    .filter((sale) => sale.kind === "message_purchase" && ppvFan.has(`${sale.pageId}:${sale.fanId}`));
+  const facts = await listSaleFacts(app.db, { transactionIds: bought.map((sale) => sale.transactionId) });
+  const factOf = new Map(facts.map((fact) => [fact.transactionId, fact]));
+  const mine = bought.filter((sale) => {
+    const fact = factOf.get(sale.transactionId);
+    const sentAt = fact?.ppvSentAt?.getTime();
+    return fact?.ppvSender?.userId === userId && sentAt !== undefined && sentAt >= start && sentAt <= end;
+  });
+  if (mine.length === 0) return { sales: [], facts };
+  const times = mine.map((sale) => sale.occurredAt.getTime());
+  const [people, lastWriters] = await Promise.all([
+    readPeopleWork(app.db, { from: new Date(Math.min(...times) - DAY_MS), to: new Date(Math.min(now.getTime(), Math.max(...times) + DAY_MS)), now, pages: "all" }),
+    listSaleLastWriters(app.db, { hours: SALE_LAST_WRITER_HOURS, sales: lastWriterQuery(mine) }),
+  ]);
+  const shifts = piecesOf(people, "shift");
+  return {
+    sales: mine.map((sale) => {
+      const lastWriter = lastWriters.get(sale.transactionId) ?? null;
+      const holders = holdersOfSale(shifts, sale);
+      const holder = holders.find((one) => one.userId === lastWriter) ?? holders[0];
+      return { sale, held: false, verdict: holder === undefined ? "none" : "theirs", holder: holder?.username ?? null, lastWriter };
+    }),
+    facts,
+  };
+}
+
 export async function readTeamShiftReview(
   app: AppContext,
   principal: AuthPrincipal,
@@ -445,7 +527,7 @@ export async function readTeamShiftReview(
   const workedPageIds = pages.filter((page) => worked(page.label)).map((page) => page.id);
   const labelOf = new Map(pages.map((page) => [page.id, page.label]));
 
-  const [rows, sends, generations, autoTexts, minutes, sales] = await Promise.all([
+  const [rows, sends, generations, autoTexts, minutes, sales, before] = await Promise.all([
     listShiftReviewMessages(app.db, {
       userId: query.userId, pageIds, workedPageIds, from, to, horizonHours: SHIFT_REVIEW_WAIT_HORIZON_HOURS, burstMinChats: MASS_SEND_MIN_CHATS,
     }),
@@ -456,6 +538,9 @@ export async function readTeamShiftReview(
     listAllAutomatedTexts(app.db),
     listChatterActivityMinutes(app.db, { from, to, pages: pageIds, userId: query.userId }),
     shiftSales(app, { userId: query.userId, shift, personPageIds: person.pageIds, pageIds, from, to, now }),
+    shift.kind === "shift"
+      ? salesBeforeShift(app, { userId: query.userId, start, previousEnd: found.previous?.endedAt ?? null, pageIds, now })
+      : Promise.resolve({ sales: [], facts: [] }),
   ]);
   const links = await listSentGenerationLinks(app.db, {
     refs: sends.map((send) => send.ref), from: new Date(start - 5 * MINUTE_MS), to: new Date(end + 60 * MINUTE_MS),
@@ -601,12 +686,22 @@ export async function readTeamShiftReview(
   out.sort((a, b) => firstInShift(a) - firstInShift(b) || a.key.localeCompare(b.key));
   waits.sort((a, b) => Date.parse(a.from) - Date.parse(b.from));
 
-  // Each sale in its fan's chat: the ones the shift holds, and the rest to the fans of the chats shown; with its facts.
+  // Each sale in its fan's chat: the ones the shift holds, and the rest to the fans of the chats shown; with its facts. And
+  // the person's money around the shift: before it, no shift's; after it, their PPVs of the shift bought later.
   const chatOfSale = (one: SettledSale) => (one.sale.fanId === null ? null : chatOfFan.get(`${one.sale.pageId}:${one.sale.fanId}`) ?? null);
   const listed = sales.filter((one) => one.held || chatOfSale(one) !== null);
-  const facts = new Map((await listSaleFacts(app.db, { transactionIds: listed.map((one) => one.sale.transactionId) }))
-    .map((fact) => [fact.transactionId, fact]));
-  const shownSales = listed.map((one): TeamShiftReviewResponse["sales"][number] => {
+  const ppvFans = [...chats].flatMap(([key, chat]) => {
+    const fanId = fanOf.get(key)?.fanId ?? null;
+    const sentPpv = chat.messages.some((message) => message.by === "me" && message.priceMills !== null
+      && message.at.getTime() >= start && message.at.getTime() <= end);
+    return fanId === null || !sentPpv ? [] : [{ pageId: chat.pageId, fanId }];
+  });
+  const [listedFacts, after] = await Promise.all([
+    listSaleFacts(app.db, { transactionIds: listed.map((one) => one.sale.transactionId) }),
+    shift.kind === "shift" ? salesAfterShift(app, { userId: query.userId, start, end, ppvFans, now }) : Promise.resolve({ sales: [], facts: [] }),
+  ]);
+  const facts = new Map([...listedFacts, ...before.facts, ...after.facts].map((fact) => [fact.transactionId, fact]));
+  const rowOf = (one: SettledSale): TeamShiftReviewResponse["sales"][number] => {
     const fact = facts.get(one.sale.transactionId);
     const writers = fact?.writers ?? [];
     return {
@@ -633,7 +728,7 @@ export async function readTeamShiftReview(
         lastWriter: one.lastWriter,
       }),
     };
-  });
+  };
 
   // A minute counts as active when any of the shift's pages had an action in it.
   const activity = new Map<number, boolean>();
@@ -663,7 +758,9 @@ export async function readTeamShiftReview(
     nextAt: found.next === null ? null : new Date(found.next.startedAt).toISOString(),
     activity: [...activity].sort((a, b) => a[0] - b[0]).map(([ms, input]) => ({ at: new Date(ms).toISOString(), input })),
     chats: out,
-    sales: shownSales,
+    sales: listed.map(rowOf),
+    beforeSales: before.sales.map(rowOf),
+    laterSales: after.sales.map(rowOf),
     waits,
     unarchived: sends.filter((send) => !send.inArchive).length,
     deleted: sends.filter((send) => send.deleted).length,

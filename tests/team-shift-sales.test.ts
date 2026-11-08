@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 
 import type { ShiftSale } from "@agency_hub_core/db";
 import type { ComputedWork } from "../apps/runtime/src/services/chatter-shifts.ts";
-import { contestedSales, salesOfWork, shiftSalesWindow, teamShiftMoney, type HeldShift } from "../apps/runtime/src/services/team-shift-sales.ts";
+import {
+  contestedSales, outsideMoney, salesNoShiftHolds, salesOfWork, settleOutsideShifts, shiftSalesWindow, teamShiftMoney, type HeldShift,
+} from "../apps/runtime/src/services/team-shift-sales.ts";
 
 // The team's money by shift: a sale two shifts hold is the last writer's; neither
 // wrote — both have it, and the team still counts it once.
@@ -120,5 +122,42 @@ describe("teamShiftMoney", () => {
     expect(window.previousTo).toBe(window.from);
     // A day far ahead keeps today inside the window.
     expect(shiftSalesWindow({ days: 7, now: NOW, until: "2026-12-31" }).dates.at(-1)).toBe("2026-11-10");
+  });
+});
+
+// Sales no shift held were nowhere on the screens: $1,213.50 of $10,493.57 in the week to 07.11 (the shift audit).
+describe("the money outside shifts", () => {
+  const sales = [
+    sale("2026-11-04T06:30:00Z", 10_000),
+    sale("2026-11-04T07:30:00Z", 20_000),
+    sale("2026-11-04T08:10:00Z", 40_000),
+    sale("2026-11-04T08:20:00Z", 8_000),
+    sale("2026-11-04T08:40:00Z", 16_000),
+    sale("2026-11-04T09:30:00Z", 5_000, "lora-1"),
+  ];
+  const [early, inShift, visited, visitedOther, nobodys, otherPage] = sales;
+  // A shift on ari-1 07:00–08:00, a look-in on ari-1 08:00–09:00 and no one on lora-1.
+  const shifts = [held(1, work("2026-11-04T07:00:00Z", "2026-11-04T08:00:00Z"), sales)];
+  const visits = [{ userId: 2, username: "user2", work: { ...work("2026-11-04T08:00:00Z", "2026-11-04T09:00:00Z"), kind: "visit" as const } }];
+  const from = at("2026-11-04T00:00:00Z");
+  const to = at("2026-11-04T12:00:00Z");
+
+  it("is every sale less the ones a shift or a look-in holds, a look-in holding only those its person last wrote to", () => {
+    const unheld = salesNoShiftHolds({ from, to, sales, shifts });
+    expect(unheld.map((one) => one.transactionId)).toEqual([early, visited, visitedOther, nobodys, otherPage].map((one) => one!.transactionId));
+    const lastWriters = new Map([[visited!.transactionId, 2], [visitedOther!.transactionId, 1]]);
+    const settled = settleOutsideShifts(unheld, visits, lastWriters);
+    const money = outsideMoney(settled, ["2026-11-04"]);
+    expect(money.visitsNetMills).toBe(visited!.netMills);
+    expect(money.nobodyNetMills).toBe(early!.netMills + visitedOther!.netMills + nobodys!.netMills + otherPage!.netMills);
+    const total = sales.reduce((sum, one) => sum + one.netMills, 0);
+    expect(money.visitsNetMills + money.nobodyNetMills + inShift!.netMills).toBe(total);
+    expect(money.daily).toEqual([{ date: "2026-11-04", visitsNetMills: 40_000, nobodyNetMills: 39_000 }]);
+    expect(money.pages[0]).toEqual({ pageLabel: "ari-1", visitsNetMills: 40_000, nobodyNetMills: 34_000 });
+  });
+
+  it("leaves the shifts' money alone", () => {
+    const money = teamShiftMoney({ days: 1, now: NOW, shifts, lastWriters: new Map(), firstActivity: LONG_AGO });
+    expect(money.team.salesNetMills).toBe(inShift!.netMills);
   });
 });

@@ -14,7 +14,7 @@ import { shiftSpan } from "@/pages/team/TeamShiftsPage";
 import { ChatterLink, PageLink } from "@/pages/team/teamLinks";
 import { ShiftChats, type ChatsView } from "./ShiftChats.js";
 import { ShiftPulse } from "./ShiftPulse.js";
-import { CHATTER_SHIFT_PAGE_MIN_MESSAGES, SHIFT_REVIEW_NEIGHBOUR_DAYS } from "@agency_hub_core/contracts";
+import { CHATTER_SHIFT_PAGE_MIN_MESSAGES, SHIFT_REVIEW_LATER_SALES_DAYS, SHIFT_REVIEW_NEIGHBOUR_DAYS } from "@agency_hub_core/contracts";
 import {
   CHAT_KINDS,
   CHAT_SHOWS,
@@ -58,6 +58,10 @@ const SILENCES_SHOWN = 4;
 const ORIGIN_TITLE = "Откуда пришли продажи смены — только факты, зачёт тот же: свои — PPV чаттера, а не PPV — чаттер писал фану последним; "
   + "PPV коллег — их отправили коллеги; PPV без автора — старые и массовые; последним писал другой; фану за 48 ч до покупки никто не писал; "
   + "чаевые под постом на стене; взносы в Campaign на OnlyFans";
+
+const AROUND_TITLE = "До неё, без смены — продажи страниц смены от конца прошлой смены чаттера (не раньше суток) до начала этой, которые не держала "
+  + "ни одна смена и ни один заход, фанам, которым чаттер отправил купленный PPV или писал последним. PPV этой смены, купленные позже — "
+  + `PPV, которые чаттер отправил в эту смену, а фан купил после её конца (до ${SHIFT_REVIEW_LATER_SALES_DAYS} дней), и чья смена держала покупку`;
 
 export function reviewHref(userId: number, at: string, keep?: URLSearchParams): string {
   const params = new URLSearchParams({ user: String(userId), at });
@@ -259,6 +263,18 @@ function ShiftReview({ userId, at }: { userId: number; at: string }) {
     origins.postTip > 0 ? `чаевые под постом ${formatMills(origins.postTip)}` : null,
     origins.campaign > 0 ? `Campaign ${formatMills(origins.campaign)}` : null,
   ].filter((part) => part !== null);
+  const beforeNetMills = sum(data.beforeSales);
+  const laterBy = new Map<string, number>();
+  for (const sale of data.laterSales) {
+    const where = sale.holderName === null ? "без смены" : `в смене ${sale.holderName}`;
+    laterBy.set(where, (laterBy.get(where) ?? 0) + sale.netMills);
+  }
+  const aroundParts = [
+    beforeNetMills > 0 ? `до неё, без смены ${formatMills(beforeNetMills)}` : null,
+    data.laterSales.length > 0
+      ? `PPV этой смены, купленные позже ${formatMills(sum(data.laterSales))} (${[...laterBy].map(([where, net]) => `${where} ${formatMills(net)}`).join(", ")})`
+      : null,
+  ].filter((part) => part !== null);
   const salesHint = [
     "Продажи на страницах смены, пока смена их держала, как в «Заработке»; продажа фану, которому последним писал коллега на своей смене, — его",
     split.bothNetMills > 0 ? `из них ${formatMills(split.bothNetMills)} засчитано и коллеге: его смена тоже держала страницу, а последним фану писал не он и не чаттер` : null,
@@ -309,6 +325,11 @@ function ShiftReview({ userId, at }: { userId: number; at: string }) {
         {shift.salesNetMills > 0 && originParts.length > 0 && (
           <p className="sr-who-line" title={ORIGIN_TITLE}>
             <span className="team-faint">Из чего продажи смены: </span>{originParts.join(" · ")}
+          </p>
+        )}
+        {aroundParts.length > 0 && (
+          <p className="sr-who-line" title={AROUND_TITLE}>
+            <span className="team-faint">Не в продажах смены: </span>{aroundParts.join(" · ")}
           </p>
         )}
         <p className="sr-who-line sr-who-pages">
