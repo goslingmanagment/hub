@@ -9,6 +9,7 @@ import {
   exportCellsOf,
   judgeMarks,
   payoutCellOf,
+  reportsOfShifts,
 } from "../apps/runtime/src/services/shift-report.ts";
 
 // The draft shift report's money rules (week-4.md §2): what a mark claims,
@@ -103,5 +104,33 @@ describe("shift report money", () => {
   it("lets the owner split a «делим» dispute with the teammate who has not marked the sale yet", () => {
     expect(disputePeopleOf({ marks: [{ ...mark(NIKITA, "share", VANYA), shareWith: null }] }))
       .toEqual([{ userId: NIKITA, username: "nikita" }, { userId: VANYA, username: String(VANYA) }]);
+  });
+});
+
+describe("a confirmed report's shift", () => {
+  const at = (hhmm: string, day = "2026-11-07") => Date.parse(`${day}T${hhmm}:00+03:00`);
+  const shift = (from: string, to: string) => ({ startedAt: at(from), endedAt: at(to) });
+  const report = (from: string, to: string) => ({ startedAt: new Date(at(from)), endedAt: new Date(at(to)) });
+  const indexes = (map: Map<number, unknown[]>) => [...map].map(([index, reports]) => [index, reports.length]);
+
+  it("is the shift that began with it", () => {
+    expect(indexes(reportsOfShifts([shift("00:20", "08:25"), shift("08:24", "16:32")], [report("08:24", "16:32")]))).toEqual([[1, 1]]);
+  });
+
+  it("stays the shift's when a later rule moved its start earlier (a look-in joined) or later (a tab looked at cut off)", () => {
+    // Confirmed as 11:22–15:58; the shift is now 08:34–15:58.
+    expect(indexes(reportsOfShifts([shift("00:39", "07:57"), shift("08:34", "15:58")], [report("11:22", "15:58")]))).toEqual([[1, 1]]);
+    // Confirmed as 14:24–19:00; the shift is now 14:53–19:00, a look-in before it.
+    expect(indexes(reportsOfShifts([shift("14:24", "14:34"), shift("14:53", "19:00")], [report("14:24", "19:00")]))).toEqual([[1, 1]]);
+  });
+
+  it("goes to the shift it overlaps most, never to a neighbour it touches, and to none it does not touch", () => {
+    // Confirmed as 00:23–08:31; the night now ends at 08:18 and the morning shift begins at 08:11.
+    expect(indexes(reportsOfShifts([shift("00:23", "08:18"), shift("08:11", "15:55")], [report("00:23", "08:31")]))).toEqual([[0, 1]]);
+    expect(reportsOfShifts([shift("00:23", "08:18")], [report("09:00", "15:00")]).size).toBe(0);
+  });
+
+  it("lets one shift hold two reports when a rule joined two pieces of work", () => {
+    expect(indexes(reportsOfShifts([shift("08:15", "17:34")], [report("08:15", "09:30"), report("10:36", "17:34")]))).toEqual([[0, 2]]);
   });
 });

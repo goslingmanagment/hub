@@ -218,6 +218,36 @@ async function callerShifts(app: AppContext, userId: number, pages: "all" | read
     .sort((a, b) => b.startedAt.getTime() - a.startedAt.getTime());
 }
 
+/**
+ * Each confirmed report's shift, by the shift's index: the piece of work it overlaps most (a tie: the one that began
+ * with it). A report is written with its shift's bounds of the day, and a later rule of a shift may move them (#1081
+ * moved the start of 14 closed shifts): the report stays that shift's, not a look-in's beside it. A shift may hold two
+ * when a rule joins two pieces of work. Pure.
+ */
+export function reportsOfShifts<R extends { startedAt: Date; endedAt: Date }>(
+  shifts: ReadonlyArray<{ startedAt: number; endedAt: number }>,
+  reports: readonly R[],
+): Map<number, R[]> {
+  const out = new Map<number, R[]>();
+  for (const report of reports) {
+    const start = report.startedAt.getTime();
+    const end = report.endedAt.getTime();
+    let best = -1;
+    let bestOverlap = 0;
+    shifts.forEach((shift, index) => {
+      const overlap = Math.min(end, shift.endedAt) - Math.max(start, shift.startedAt);
+      if (overlap > bestOverlap || (overlap === bestOverlap && overlap > 0 && shift.startedAt === start)) {
+        best = index;
+        bestOverlap = overlap;
+      }
+    });
+    if (best >= 0) out.set(best, [...(out.get(best) ?? []), report]);
+  }
+  return out;
+}
+
+const boundsOf = (shift: Pick<CallerShift, "startedAt" | "endedAt">) => ({ startedAt: shift.startedAt.getTime(), endedAt: shift.endedAt.getTime() });
+
 async function shiftSales(app: AppContext, shift: CallerShift): Promise<ShiftSale[]> {
   return salesHeldBy(app.db, { userId: shift.userId, work: shift.work, pageIds: shift.pageIdOf });
 }
@@ -283,16 +313,20 @@ export async function readAccountShiftReport(
   const pageIds = [...new Set(shifts.flatMap((shift) => shift.pageIds).concat(shared.map((sale) => sale.pageId)))];
   const teammates = (await listPageWorkers(app.db, { pageIds, from: new Date(now.getTime() - SHIFT_REPORT_MAX_DAYS * DAY_MS), to: now }))
     .filter((worker) => worker.userId !== userId);
+  // Matched against every piece of work read, so a report never goes to a neighbour of its own shift.
+  const reportsOf = reportsOfShifts(worked.map(boundsOf), confirmed);
 
   return {
     shifts: shifts.map((shift, index) => {
       const sales = salesByShift[index]!;
-      const report = confirmed.find((one) => one.startedAt.getTime() === shift.startedAt.getTime());
+      const reports = reportsOf.get(worked.indexOf(shift)) ?? [];
+      const report = reports[0];
+      const reportStarts = new Set(reports.map((one) => one.startedAt.getTime()));
       const open = sales.filter((sale) => !heldSet.has(sale.transactionId));
       const myMarks = open.map((sale) => marks.find((mark) => mark.transactionId === sale.transactionId && mark.userId === userId));
       // A confirmed shift credits its lines on the pages the chatter works now — a page taken away takes its money off this view.
       const credited = report !== undefined
-        ? lines.filter((line) => line.reportStartedAt.getTime() === shift.startedAt.getTime() && shift.pageIds.includes(line.pageId))
+        ? lines.filter((line) => reportStarts.has(line.reportStartedAt.getTime()) && shift.pageIds.includes(line.pageId))
           .reduce((sum, line) => sum + line.creditedMills, 0)
         : open.reduce((sum, sale, at) => {
         const mark = myMarks[at];
@@ -368,15 +402,20 @@ export async function confirmAccountShiftReport(
   const userId = principal.user.id;
   const startedAt = new Date(body.startedAt);
   if (Number.isNaN(startedAt.getTime())) throw new BadRequestError("`startedAt` is not a time");
-  const shift = (await callerShifts(app, userId, reportPagesOf(principal), SHIFT_REPORT_MAX_DAYS, now))
-    .find((one) => one.startedAt.getTime() === startedAt.getTime());
+  const worked = await callerShifts(app, userId, reportPagesOf(principal), SHIFT_REPORT_MAX_DAYS, now);
+  // The start the report showed; the one it lies in, when the shift's bounds moved since.
+  const shift = worked.find((one) => one.startedAt.getTime() === startedAt.getTime())
+    ?? worked.find((one) => startedAt >= one.startedAt && startedAt < one.endedAt);
   if (shift === undefined) throw new NotFoundError("The shift was not found");
   if (shift.ongoing) throw new ConflictError("The shift is still going", { reason: "ongoing" });
+  // A shift confirmed before keeps its report (written with its bounds then): a late sale joins it, never a second one.
+  const reports = await listConfirmedReports(app.db, { userId, since: new Date(now.getTime() - (SHIFT_REPORT_MAX_DAYS + 2) * DAY_MS) });
+  const existing = reportsOfShifts(worked.map(boundsOf), reports).get(worked.indexOf(shift))?.[0];
   const sales = await shiftSales(app, shift);
   const { recorded, unmarked } = await confirmShiftReport(app.db, {
     userId,
-    startedAt: shift.startedAt,
-    endedAt: shift.endedAt,
+    startedAt: existing?.startedAt ?? shift.startedAt,
+    endedAt: existing?.endedAt ?? shift.endedAt,
     sales: sales.map((sale) => ({ transactionId: sale.transactionId, pageId: sale.pageId, netMills: sale.netMills, occurredAt: sale.occurredAt })),
     claimOf: (mark, sale) => claimOf(mark, sale.netMills),
     plan: dueCreditsOf,

@@ -9,7 +9,7 @@ import {
 
 import type { AppContext } from "../bootstrap.ts";
 import { dayOfShift, moscowDayOf, readPeopleWork } from "./chatter-shifts.ts";
-import { listSaleDisputes } from "./shift-report.ts";
+import { listSaleDisputes, reportsOfShifts } from "./shift-report.ts";
 
 /**
  * Chat Memory week 5 (docs/plans/2026-10-24-chat-memory/week-5.md §3): the
@@ -80,9 +80,11 @@ export async function loadTeamBlockFacts(app: Pick<AppContext, "db">, input: { f
       return day >= firstDay && day <= lastDay;
     });
     if (dayShifts.length === 0) continue;
-    const reports = await listConfirmedReports(app.db, { userId, since: input.from });
+    // A report is its shift's though the shift's bounds moved since (`reportsOfShifts`), matched against all the work read.
+    const reports = await listConfirmedReports(app.db, { userId, since: new Date(input.from.getTime() - DAY_MS) });
+    const reportsOf = reportsOfShifts(person.work, reports);
     shifts += dayShifts.length;
-    confirmed += dayShifts.filter((shift) => reports.some((report) => report.startedAt.getTime() === shift.startedAt)).length;
+    confirmed += dayShifts.filter((shift) => reportsOf.has(person.work.indexOf(shift))).length;
   }
   const [disputes, customs, waiting, winBack] = await Promise.all([
     // Every undecided dispute, however old: age decides nothing about money.
