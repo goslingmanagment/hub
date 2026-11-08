@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ShiftReviewChat, ShiftReviewMessage, TeamShiftReviewResponse } from "@agency_hub_core/contracts";
-import { cameBack, chatBusyIn, myMessages, pulseOf, reviewWaits, salesSplit, showPasses, sortSummaries, summariesOf, totalsOf } from "@/pages/team/review/shiftReviewView";
+import { cameBack, chatBusyIn, myMessages, pulseOf, reviewWaits, salesByOrigin, salesSplit, showPasses, sortSummaries, summariesOf, totalsOf } from "@/pages/team/review/shiftReviewView";
 
 // «Разбор смены»: whose a fan's wait is when a page is shared or handed over (2026-11-07). The first version counted
 // a colleague's chats, waits and money as the reviewed chatter's.
@@ -153,6 +153,7 @@ describe("shift review: the pulse keeps the tail of past shifts apart", () => {
 type Sale = TeamShiftReviewResponse["sales"][number];
 const sale = (chatKey: string | null, netMills: number, verdict: Sale["verdict"], holderName: string | null = null): Sale => ({
   saleRef: `${chatKey}-${netMills}`, at: at("10:00"), pageLabel: "page-1", fanRef: chatKey, fanName: null, chatKey, kind: "ppv", netMills, verdict, holderName,
+  ppvSender: null, ppvSentAt: null, lastWriter: null, writers: [], origin: "own",
 });
 
 // The chat labels added up every sale of the fan in the shift: a colleague's PPVs in a chat the chatter never wrote in
@@ -187,5 +188,29 @@ describe("shift review: whose a chat's money is", () => {
   it("filters and orders by money by the chatter's share, not the colleague's", () => {
     expect(sortSummaries(summaries, "money").slice(0, 2).map((summary) => summary.chat.key)).toEqual(["a", "b"]);
     expect(showPasses(of("c"), "money")).toBe(false);
+  });
+});
+
+// The header was one sum: a colleague's PPV, tips under a post and Campaign money inside it, unseen (2026-11-07).
+describe("shift review: where the shift's sales came from", () => {
+  const of = (netMills: number, origin: Sale["origin"], extra: Partial<Sale> = {}): Sale => ({ ...sale("a", netMills, "mine"), origin, ...extra });
+  const sales = [
+    of(10_000, "own"), of(52_000, "colleague_ppv", { ppvSender: "Nikita" }), of(31_200, "colleague_ppv", { ppvSender: "Miron", verdict: "both" }),
+    of(8_000, "no_author_ppv"), of(4_000, "other_wrote", { lastWriter: "Sofia" }), of(40_000, "nobody_wrote_48h"),
+    of(44_800, "post_tip"), of(148_000, "campaign"),
+    of(303_200, "colleague_ppv", { ppvSender: "Nikita", verdict: "theirs", holderName: "Nikita" }),
+  ];
+  const money: TeamShiftReviewResponse = { ...data, sales, shift: { ...data.shift, salesNetMills: 338_000 } };
+
+  it("splits the sales that count for the chatter by origin, and the parts add up to the header", () => {
+    const parts = salesByOrigin(money);
+    expect(parts).toEqual({
+      own: 10_000, colleaguePpv: [{ name: "Nikita", netMills: 52_000 }, { name: "Miron", netMills: 31_200 }], noAuthorPpv: 8_000,
+      otherWrote: [{ name: "Sofia", netMills: 4_000 }], nobodyWrote: 40_000, postTip: 44_800, campaign: 148_000,
+    });
+    const total = parts.own + parts.noAuthorPpv + parts.nobodyWrote + parts.postTip + parts.campaign
+      + [...parts.colleaguePpv, ...parts.otherWrote].reduce((sum, one) => sum + one.netMills, 0);
+    expect(total).toBe(salesSplit(money).netMills);
+    expect(total).toBe(money.shift.salesNetMills);
   });
 });

@@ -3,6 +3,7 @@ import {
   MASS_SEND_MIN_CHATS,
   type ChatterSaleKind,
   type ChatterStats,
+  type ShiftReviewSaleOrigin,
   type TeamChatterStatsQuery,
   type TeamChatterStatsResponse,
 } from "@agency_hub_core/contracts";
@@ -94,6 +95,29 @@ function push<K, V>(map: Map<K, V[]>, key: K, value: V) {
 export function settleSale(userId: number, others: readonly number[], lastWriter: number | null): "mine" | "theirs" | "both" {
   if (others.length === 0 || lastWriter === userId) return "mine";
   return lastWriter !== null && others.includes(lastWriter) ? "theirs" : "both";
+}
+
+/**
+ * Where a sale came from, for `userId`: facts that say nothing of whose it is.
+ * A tip under a wall post and a Campaign contribution are those; a PPV with a
+ * known author is the author's whoever wrote last; one sent without an author
+ * is that; the rest go by who last wrote to the fan (null — nobody with an
+ * author in SALE_LAST_WRITER_HOURS). Pure.
+ */
+export function saleOriginOf(userId: number, sale: {
+  kind: string;
+  ppvSenderId: number | null;
+  ppvWithoutAuthor: boolean;
+  postTip: boolean;
+  campaign: boolean;
+  lastWriter: number | null;
+}): ShiftReviewSaleOrigin {
+  if (sale.postTip) return "post_tip";
+  if (sale.campaign) return "campaign";
+  if (sale.kind === "message_purchase" && sale.ppvSenderId !== null) return sale.ppvSenderId === userId ? "own" : "colleague_ppv";
+  if (sale.kind === "message_purchase" && sale.ppvWithoutAuthor) return "no_author_ppv";
+  if (sale.lastWriter === null) return "nobody_wrote_48h";
+  return sale.lastWriter === userId ? "own" : "other_wrote";
 }
 
 /** Moscow days in a row with a shift: up to today (or yesterday while today has none yet), and the longest run. Pure. */

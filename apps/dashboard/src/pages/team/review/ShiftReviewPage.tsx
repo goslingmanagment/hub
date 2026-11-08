@@ -26,6 +26,7 @@ import {
   myMessages,
   pulseOf,
   reviewWaits,
+  salesByOrigin,
   salesSplit,
   silences,
   summariesOf,
@@ -53,6 +54,10 @@ const PICKER_HOURS = 7 * 24;
 const SILENCE_MINUTES = 20;
 /** At most this many of them, the longest. */
 const SILENCES_SHOWN = 4;
+
+const ORIGIN_TITLE = "Откуда пришли продажи смены — только факты, зачёт тот же: свои — PPV чаттера, а не PPV — чаттер писал фану последним; "
+  + "PPV коллег — их отправили коллеги; PPV без автора — старые и массовые; последним писал другой; фану за 48 ч до покупки никто не писал; "
+  + "чаевые под постом на стене; взносы в Campaign на OnlyFans";
 
 export function reviewHref(userId: number, at: string, keep?: URLSearchParams): string {
   const params = new URLSearchParams({ user: String(userId), at });
@@ -241,6 +246,19 @@ function ShiftReview({ userId, at }: { userId: number; at: string }) {
   const toChats = () => document.getElementById("review-chats")?.scrollIntoView({ block: "start", behavior: "smooth" });
 
   const split = salesSplit(data);
+  const origins = salesByOrigin(data);
+  const byName = (list: Array<{ name: string; netMills: number }>) => (list.length === 1 ? list[0]!.name
+    : list.map((one) => `${one.name} ${formatMills(one.netMills)}`).join(", "));
+  const sum = (list: Array<{ netMills: number }>) => list.reduce((total, one) => total + one.netMills, 0);
+  const originParts = [
+    origins.own > 0 ? `свои ${formatMills(origins.own)}` : null,
+    origins.colleaguePpv.length > 0 ? `PPV коллег ${formatMills(sum(origins.colleaguePpv))} (${byName(origins.colleaguePpv)})` : null,
+    origins.noAuthorPpv > 0 ? `PPV без автора ${formatMills(origins.noAuthorPpv)}` : null,
+    origins.otherWrote.length > 0 ? `последним писал другой ${formatMills(sum(origins.otherWrote))} (${byName(origins.otherWrote)})` : null,
+    origins.nobodyWrote > 0 ? `фану 48 ч никто не писал ${formatMills(origins.nobodyWrote)}` : null,
+    origins.postTip > 0 ? `чаевые под постом ${formatMills(origins.postTip)}` : null,
+    origins.campaign > 0 ? `Campaign ${formatMills(origins.campaign)}` : null,
+  ].filter((part) => part !== null);
   const salesHint = [
     "Продажи на страницах смены, пока смена их держала, как в «Заработке»; продажа фану, которому последним писал коллега на своей смене, — его",
     split.bothNetMills > 0 ? `из них ${formatMills(split.bothNetMills)} засчитано и коллеге: его смена тоже держала страницу, а последним фану писал не он и не чаттер` : null,
@@ -288,6 +306,11 @@ function ShiftReview({ userId, at }: { userId: number; at: string }) {
           )}
           {shift.kind === "visit" && " · это заход, не смена"}
         </p>
+        {shift.salesNetMills > 0 && originParts.length > 0 && (
+          <p className="sr-who-line" title={ORIGIN_TITLE}>
+            <span className="team-faint">Из чего продажи смены: </span>{originParts.join(" · ")}
+          </p>
+        )}
         <p className="sr-who-line sr-who-pages">
           <span className="team-faint">Сообщений по страницам: </span>
           {shift.pages.map((page, index) => (

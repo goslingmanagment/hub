@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { ShiftSale } from "@agency_hub_core/db";
 import type { ComputedWork } from "../apps/runtime/src/services/chatter-shifts.ts";
+import { saleOriginOf } from "../apps/runtime/src/services/chatter-stats.ts";
 import { heldNetMills, settleShiftSales } from "../apps/runtime/src/services/shift-review.ts";
 import { salesOfWork, teamShiftMoney } from "../apps/runtime/src/services/team-shift-sales.ts";
 
@@ -83,5 +84,29 @@ describe("settleShiftSales", () => {
   it("leaves a look-in its own sales", () => {
     const visit = settleShiftSales({ userId: ME, kind: "visit", sales: [nikitaWrote], held: new Set([nikitaWrote.transactionId]), colleagues, lastWriters });
     expect(visit[0]).toMatchObject({ held: true, verdict: "mine" });
+  });
+});
+
+// Where a sale came from (2026-11-07): the team credits a PPV to its sender and keeps tips under a post and Campaign
+// money apart, while the screen showed one sum. The facts, not a rule: whose it is stays `settleShiftSales`'s.
+describe("saleOriginOf", () => {
+  const facts = { kind: "message_purchase", ppvSenderId: null, ppvWithoutAuthor: false, postTip: false, campaign: false, lastWriter: null };
+
+  it("goes by the PPV's sender, whoever wrote last", () => {
+    expect(saleOriginOf(ME, { ...facts, ppvSenderId: ME, lastWriter: NIKITA })).toBe("own");
+    expect(saleOriginOf(ME, { ...facts, ppvSenderId: NIKITA, lastWriter: ME })).toBe("colleague_ppv");
+    expect(saleOriginOf(ME, { ...facts, ppvWithoutAuthor: true, lastWriter: ME })).toBe("no_author_ppv");
+  });
+
+  it("goes by who last wrote when no PPV says", () => {
+    expect(saleOriginOf(ME, { ...facts, kind: "tip", lastWriter: ME })).toBe("own");
+    expect(saleOriginOf(ME, { ...facts, kind: "subscription", lastWriter: SOFIA })).toBe("other_wrote");
+    expect(saleOriginOf(ME, { ...facts, kind: "tip" })).toBe("nobody_wrote_48h");
+    expect(saleOriginOf(ME, { ...facts, lastWriter: ME })).toBe("own");
+  });
+
+  it("keeps a tip under a post and a Campaign contribution apart, whoever wrote", () => {
+    expect(saleOriginOf(ME, { ...facts, kind: "tip", postTip: true, lastWriter: ME })).toBe("post_tip");
+    expect(saleOriginOf(ME, { ...facts, kind: "tip", campaign: true, lastWriter: ME })).toBe("campaign");
   });
 });

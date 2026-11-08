@@ -23,6 +23,7 @@ import {
   listShiftReviewMessages,
   listShiftReviewSends,
   listShiftSales,
+  listSaleFacts,
   listSaleLastWriters,
   type ShiftReviewGenerationRow,
   type ShiftReviewMessageRow,
@@ -32,7 +33,7 @@ import {
 import type { AppContext } from "../bootstrap.ts";
 import { requireOwner, type AuthPrincipal } from "./auth.ts";
 import { SALE_LAST_WRITER_HOURS, lastWriterQuery, readPeopleWork, salesHeldBy, workHoldsSale, type ComputedWork } from "./chatter-shifts.ts";
-import { saleKindOf, settleSale } from "./chatter-stats.ts";
+import { saleKindOf, saleOriginOf, settleSale } from "./chatter-stats.ts";
 import { NotFoundError } from "./errors.ts";
 
 /**
@@ -330,6 +331,8 @@ export interface SettledSale {
   verdict: ShiftReviewSale["verdict"];
   /** `theirs` — the colleague whose it is; `both` — the colleague it counts for too. */
   holder: string | null;
+  /** Who last wrote to the fan in SALE_LAST_WRITER_HOURS before it; null — nobody with an author. */
+  lastWriter: number | null;
 }
 
 /**
@@ -353,13 +356,13 @@ export function settleShiftSales(input: {
     const lastWriter = input.lastWriters.get(sale.transactionId) ?? null;
     const named = (userId: number | null) => holders.find((one) => one.userId === userId) ?? holders[0];
     if (input.held.has(sale.transactionId)) {
-      if (input.kind !== "shift") return { sale, held: true, verdict: "mine", holder: null };
+      if (input.kind !== "shift") return { sale, held: true, verdict: "mine", holder: null, lastWriter };
       const verdict = settleSale(input.userId, holders.map((one) => one.userId), lastWriter);
-      return { sale, held: true, verdict, holder: verdict === "mine" ? null : named(lastWriter)?.username ?? null };
+      return { sale, held: true, verdict, holder: verdict === "mine" ? null : named(lastWriter)?.username ?? null, lastWriter };
     }
     return holders.length === 0
-      ? { sale, held: false, verdict: "none", holder: null }
-      : { sale, held: false, verdict: "theirs", holder: named(lastWriter)!.username };
+      ? { sale, held: false, verdict: "none", holder: null, lastWriter }
+      : { sale, held: false, verdict: "theirs", holder: named(lastWriter)!.username, lastWriter };
   });
 }
 
@@ -397,13 +400,8 @@ async function shiftSales(
   const colleagues = [...people].flatMap(([id, person]) => (id === input.userId ? [] : person.work
     .filter((work) => work.kind === "shift" && work.startedAt < shift.endedAt && work.endedAt > shift.startedAt)
     .map((work) => ({ userId: id, username: person.username, work }))));
-  // Who last wrote decides a sale two shifts hold, and names the colleague of a sale several hold.
-  const asked = sales.filter((sale) => {
-    const holders = holdersOfSale(colleagues, sale).length;
-    return heldIds.has(sale.transactionId) ? shift.kind === "shift" && holders > 0 : holders > 1;
-  });
-  const lastWriters = asked.length === 0 ? new Map<number, number>()
-    : await listSaleLastWriters(app.db, { hours: SALE_LAST_WRITER_HOURS, sales: lastWriterQuery(asked) });
+  // Who last wrote decides a sale two shifts hold, names the colleague of a sale several hold, and says where each came from.
+  const lastWriters = await listSaleLastWriters(app.db, { hours: SALE_LAST_WRITER_HOURS, sales: lastWriterQuery(sales) });
   return settleShiftSales({ userId: input.userId, kind: shift.kind, sales, held: heldIds, colleagues, lastWriters });
 }
 
@@ -603,22 +601,38 @@ export async function readTeamShiftReview(
   out.sort((a, b) => firstInShift(a) - firstInShift(b) || a.key.localeCompare(b.key));
   waits.sort((a, b) => Date.parse(a.from) - Date.parse(b.from));
 
-  // Each sale in its fan's chat: the ones the shift holds, and the rest to the fans of the chats shown.
-  const shownSales = sales.flatMap((one): TeamShiftReviewResponse["sales"] => {
-    const chat = one.sale.fanId === null ? null : chatOfFan.get(`${one.sale.pageId}:${one.sale.fanId}`) ?? null;
-    if (!one.held && chat === null) return [];
-    return [{
+  // Each sale in its fan's chat: the ones the shift holds, and the rest to the fans of the chats shown; with its facts.
+  const chatOfSale = (one: SettledSale) => (one.sale.fanId === null ? null : chatOfFan.get(`${one.sale.pageId}:${one.sale.fanId}`) ?? null);
+  const listed = sales.filter((one) => one.held || chatOfSale(one) !== null);
+  const facts = new Map((await listSaleFacts(app.db, { transactionIds: listed.map((one) => one.sale.transactionId) }))
+    .map((fact) => [fact.transactionId, fact]));
+  const shownSales = listed.map((one): TeamShiftReviewResponse["sales"][number] => {
+    const fact = facts.get(one.sale.transactionId);
+    const writers = fact?.writers ?? [];
+    return {
       saleRef: String(one.sale.transactionId),
       at: one.sale.occurredAt.toISOString(),
       pageLabel: one.sale.pageLabel,
       fanRef: one.sale.fanRef,
       fanName: one.sale.fanName,
-      chatKey: chat,
+      chatKey: chatOfSale(one),
       kind: saleKindOf(one.sale.kind),
       netMills: one.sale.netMills,
       verdict: one.verdict,
       holderName: one.holder,
-    }];
+      ppvSender: fact?.ppvSender?.username ?? null,
+      ppvSentAt: fact?.ppvSentAt?.toISOString() ?? null,
+      lastWriter: one.lastWriter === null ? null : writers.find((writer) => writer.userId === one.lastWriter)?.username ?? null,
+      writers: writers.map((writer) => ({ name: writer.username, messages: writer.messages })),
+      origin: saleOriginOf(query.userId, {
+        kind: one.sale.kind,
+        ppvSenderId: fact?.ppvSender?.userId ?? null,
+        ppvWithoutAuthor: fact?.ppvWithoutAuthor ?? false,
+        postTip: fact?.postTip ?? false,
+        campaign: fact?.campaign ?? false,
+        lastWriter: one.lastWriter,
+      }),
+    };
   });
 
   // A minute counts as active when any of the shift's pages had an action in it.

@@ -36,6 +36,7 @@ export const SHIFT_REVIEW_ORIGINS = ["ai", "fix", "own"] as const;
 export const SHIFT_REVIEW_MARKS = ["dash", "cyrillic", "leak"] as const;
 export const SHIFT_REVIEW_AUTHORS = ["me", "other", "none", "auto"] as const;
 export const SHIFT_REVIEW_SALE_VERDICTS = ["mine", "both", "theirs", "none"] as const;
+export const SHIFT_REVIEW_SALE_ORIGINS = ["own", "colleague_ppv", "no_author_ppv", "other_wrote", "nobody_wrote_48h", "post_tip", "campaign"] as const;
 
 export const teamShiftReviewQuerySchema = z.object({
   userId: z.coerce.number().int().positive(),
@@ -148,6 +149,22 @@ const shiftReviewSaleSchema = z.object({
   verdict: z.enum(SHIFT_REVIEW_SALE_VERDICTS),
   /** `theirs` — the colleague whose it is; `both` — the colleague it counts for too. */
   holderName: z.string().nullable(),
+  /** Who sent the PPV the fan bought (the chatter too); null — not a PPV, its message not found, or sent without an author. */
+  ppvSender: z.string().nullable(),
+  /** When that PPV was sent; null — not a PPV, or its message not found. */
+  ppvSentAt: isoTimestamp.nullable(),
+  /** Who last wrote to the fan on the page in the 48 hours before the sale (the chatter too); null — nobody with an author. */
+  lastWriter: z.string().nullable(),
+  /** Everyone who wrote to the fan on the page in those 48 hours, most messages first. */
+  writers: z.array(z.object({ name: z.string(), messages: count })),
+  /**
+   * Where it came from, facts for the reviewed chatter, not whose it is: `own` — the chatter's PPV, or the chatter wrote
+   * to the fan last; `colleague_ppv` — a colleague's PPV; `no_author_ppv` — a PPV sent without an author (an old or a
+   * mass one); `other_wrote` — another person wrote to the fan last; `nobody_wrote_48h` — nobody with an author wrote
+   * to the fan in the 48 hours before; `post_tip` — a tip under a wall post; `campaign` — an OnlyFans Campaign
+   * contribution. A PPV with a known author goes by it, whoever wrote last.
+   */
+  origin: z.enum(SHIFT_REVIEW_SALE_ORIGINS),
 });
 
 export const teamShiftReviewResponseSchema = z.object({
@@ -213,6 +230,7 @@ export type ShiftReviewChat = z.infer<typeof shiftReviewChatSchema>;
 export type ShiftReviewMessage = z.infer<typeof shiftReviewMessageSchema>;
 export type ShiftReviewMine = z.infer<typeof shiftReviewMineSchema>;
 export type ShiftReviewSale = z.infer<typeof shiftReviewSaleSchema>;
+export type ShiftReviewSaleOrigin = (typeof SHIFT_REVIEW_SALE_ORIGINS)[number];
 
 export const shiftReviewRouteSchemas = {
   teamShiftReview: {

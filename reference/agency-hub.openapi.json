@@ -246063,6 +246063,57 @@
                               "string",
                               "null"
                             ]
+                          },
+                          "ppvSender": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "ppvSentAt": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "lastWriter": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "writers": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "name": {
+                                  "type": "string"
+                                },
+                                "messages": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                }
+                              },
+                              "required": [
+                                "name",
+                                "messages"
+                              ],
+                              "additionalProperties": false
+                            }
+                          },
+                          "origin": {
+                            "type": "string",
+                            "enum": [
+                              "own",
+                              "colleague_ppv",
+                              "no_author_ppv",
+                              "other_wrote",
+                              "nobody_wrote_48h",
+                              "post_tip",
+                              "campaign"
+                            ]
                           }
                         },
                         "required": [
@@ -246075,7 +246126,12 @@
                           "kind",
                           "netMills",
                           "verdict",
-                          "holderName"
+                          "holderName",
+                          "ppvSender",
+                          "ppvSentAt",
+                          "lastWriter",
+                          "writers",
+                          "origin"
                         ],
                         "additionalProperties": false
                       }

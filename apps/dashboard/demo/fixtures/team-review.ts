@@ -259,35 +259,50 @@ function reviewOf(shift: DemoShift, now: number): Response {
     activity.push({ at: new Date(at).toISOString(), input: !(at >= slowFrom && at < slowTo) || random() < 0.4 });
   }
 
-  // The money: the PPVs bought and a tip in the chatter's chats, a tip after the colleague's message in theirs, a
-  // renewal from a fan without a chat. The colleague's sale is in the fan's money of the shift, not in the shift's.
+  // The money: the PPVs bought and a tip in the chatter's chats, a colleague's PPV from before the shift bought in it,
+  // a tip after the colleague's message in their chat, a tip under a wall post and a renewal from a fan without a chat.
+  // The colleague's sale is in the fan's money of the shift, not in the shift's.
   const sales: Response["sales"] = [];
   const quiet = firstPage === undefined ? undefined
     : demoFans(firstPage.pageLabel).find((fan) => !chats.some((chat) => chat.key === `${firstPage.pageLabel}:${fan.platformUserId}`));
   const withoutChat = firstPage === undefined || quiet === undefined ? null : { pageLabel: firstPage.pageLabel, fan: quiet };
-  const sell = (chat: ShiftReviewChat | null, at: number, kind: Response["sales"][number]["kind"], netMills: number, theirs = false) => {
+  const me = shift.user.username;
+  type Sale = Response["sales"][number];
+  const sell = (chat: ShiftReviewChat | null, at: number, kind: Sale["kind"], netMills: number, facts: Partial<Sale> & Pick<Sale, "origin">) => {
     const fan = chat === null ? withoutChat?.fan ?? null : null;
+    const lastWriter = facts.lastWriter ?? null;
     sales.push({
       saleRef: `demo-${sales.length + 1}`, at: new Date(Math.min(at, end - 1)).toISOString(), pageLabel: chat?.pageLabel ?? withoutChat?.pageLabel ?? "",
       fanRef: chat?.fanRef ?? fan?.platformUserId ?? null, fanName: chat === null ? fan?.displayName ?? null : chat.fanDisplayName ?? chat.fanUsername,
-      chatKey: chat?.key ?? null, kind, netMills, verdict: theirs ? "theirs" : "mine", holderName: theirs ? "sofia" : null,
+      chatKey: chat?.key ?? null, kind, netMills, verdict: "mine", holderName: null, ppvSender: null, ppvSentAt: null,
+      writers: lastWriter === null ? [] : [{ name: lastWriter, messages: intBetween(random, 2, 9) }], ...facts, lastWriter,
     });
     if (chat !== null) chat.shiftNetMills += netMills;
   };
   let tipped = false;
+  let carried = false;
   for (const chat of chats) {
     for (const message of chat.messages) {
       if (message.mine === null || message.bought !== true || message.priceMills === null) continue;
-      sell(chat, Date.parse(message.at) + intBetween(random, 3, 40) * MIN, "ppv", Math.round(message.priceMills * 0.8));
+      sell(chat, Date.parse(message.at) + intBetween(random, 3, 40) * MIN, "ppv", Math.round(message.priceMills * 0.8),
+        { origin: "own", ppvSender: me, ppvSentAt: message.at, lastWriter: me });
     }
-    if (!tipped && chat.messages.filter((message) => message.mine !== null).length >= 3) {
+    const mine = chat.messages.filter((message) => message.mine !== null);
+    if (!tipped && mine.length >= 3) {
       tipped = true;
-      sell(chat, Date.parse(chat.messages.at(-1)!.at) + 2 * MIN, "tip", 16_000);
+      sell(chat, Date.parse(chat.messages.at(-1)!.at) + 2 * MIN, "tip", 16_000, { origin: "own", lastWriter: me });
+    } else if (!carried && mine.length >= 2) {
+      carried = true;
+      sell(chat, Date.parse(mine[0]!.at) + 6 * MIN, "ppv", 31_200,
+        { origin: "colleague_ppv", ppvSender: "sofia", ppvSentAt: new Date(start - 5 * 60 * MIN).toISOString(), lastWriter: me });
     }
   }
   const kept = colleagueChat === null ? undefined : chats.find((chat) => chat.key === colleagueChat!.key);
-  if (kept && colleagueChat) sell(kept, colleagueChat.at, "tip", 32_000, true);
-  if (withoutChat) sell(null, start + Math.round(minutes * 0.3) * MIN, "subscription", 8_000);
+  if (kept && colleagueChat) sell(kept, colleagueChat.at, "tip", 32_000, { origin: "other_wrote", verdict: "theirs", holderName: "sofia", lastWriter: "sofia" });
+  if (withoutChat) {
+    sell(null, start + Math.round(minutes * 0.3) * MIN, "subscription", 8_000, { origin: "nobody_wrote_48h" });
+    sell(null, start + Math.round(minutes * 0.6) * MIN, "tip", 40_000, { origin: "post_tip" });
+  }
   sales.sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
 
   const others = teamWorld(new Date(now)).shifts.filter((one) => one.user.id === shift.user.id).sort((a, b) => a.startedAt - b.startedAt);
