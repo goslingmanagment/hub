@@ -8,6 +8,7 @@ import {
   PACE_WINDOW_MINUTES,
   PICK_MINUTES,
   REPLY_FAST_SECONDS,
+  REPLY_LINE_MIN_REPLIES,
   REPLY_NORM_SECONDS,
   REPLY_WINDOW_MINUTES,
   activityRuns,
@@ -24,6 +25,8 @@ import {
  * line above says every value at the hovered minute and keeps its height, so
  * the bands do not move under the cursor. A click picks ±10 minutes: the chats
  * narrow to them. The reply band carries the norm as a band, 5–10 minutes.
+ * The pace and its average are without Hi greetings: a pack to new followers
+ * is not the pace of the chats.
  */
 
 const PACE = "var(--color-chart-blue)";
@@ -36,6 +39,8 @@ const AXIS_WIDTH = 44;
 const MARGIN = { top: 6, right: 20, left: 0, bottom: 0 } as const;
 const ANSWERED_FILL = 0.28;
 const OPEN_FILL = 0.75;
+/** The pace as the band draws it: without Hi greetings. */
+const chatPace = (minute: PulseMinute) => minute.pace - minute.paceHi;
 
 const ACTIVITY_WORDS: Record<ActivityState, string> = {
   input: "действия в расширении",
@@ -70,16 +75,26 @@ function Readout({ minute, average, ongoing }: { minute: PulseMinute | null; ave
   return (
     <dl className="sr-readout" aria-live="polite">
       <div><dt>Время</dt><dd className="font-medium">{formatTimeOfDay(minute.at)}</dd></div>
-      <div><dt><span className="sr-key" style={{ background: PACE }} />За {PACE_WINDOW_MINUTES} мин</dt><dd>{formatCount(minute.pace)} {ruPlural(minute.pace, "сообщение", "сообщения", "сообщений")}</dd></div>
+      <div>
+        <dt><span className="sr-key" style={{ background: PACE }} />За {PACE_WINDOW_MINUTES} мин</dt>
+        <dd>
+          {formatCount(chatPace(minute))} {ruPlural(chatPace(minute), "сообщение", "сообщения", "сообщений")}
+          {minute.paceHi > 0 && <span className="team-faint"> · ещё {formatCount(minute.paceHi)} Hi</span>}
+        </dd>
+      </div>
       <div>
         <dt><span className="sr-key" style={{ background: REPLY }} />Ответ, медиана {REPLY_WINDOW_MINUTES} мин</dt>
-        <dd>{minute.replyMedianSeconds === null ? "ответов не было" : `${waitText(minute.replyMedianSeconds)} · ${formatCount(minute.replies)} ${ruPlural(minute.replies, "ответ", "ответа", "ответов")}`}</dd>
+        <dd>
+          {minute.replyMedianSeconds === null ? "ответов не было" : `${waitText(minute.replyMedianSeconds)} · ${formatCount(minute.replies)} ${ruPlural(minute.replies, "ответ", "ответа", "ответов")}`}
+          {minute.tailReplies > 0 && <span className="team-faint"> · ещё {formatCount(minute.tailReplies)} ждавшим с прошлых смен</span>}
+        </dd>
       </div>
       <div>
         <dt><span className="sr-key" style={{ background: WAIT }} />Ждали ответа</dt>
         <dd>
           {formatCount(minute.waitingOpen)} {ongoing ? "пока без ответа" : "без ответа до конца"}, {formatCount(minute.waiting)} — ответ потом был
           {minute.waitingLong > 0 && <> · дольше {REPLY_NORM_SECONDS / 60} мин — {formatCount(minute.waitingLong)}</>}
+          {minute.waitingTail > 0 && <span className="team-faint"> · ещё {formatCount(minute.waitingTail)} с прошлых смен, ответ в смену был</span>}
           {minute.waitingInherited > 0 && <span className="team-faint"> · ещё {formatCount(minute.waitingInherited)} с прошлых смен, в смену не писали</span>}
         </dd>
       </div>
@@ -200,10 +215,10 @@ export function ShiftPulse({ pulse, start, end, pauses, picked, ongoing, onPick 
 }) {
   const [hovered, setHovered] = useState<number | null>(null);
   const average = useMemo(() => {
-    const sent = pulse.reduce((sum, minute) => sum + minute.sent, 0);
+    const sent = pulse.reduce((sum, minute) => sum + minute.sent - minute.sentHi, 0);
     return pulse.length === 0 ? 0 : (sent * PACE_WINDOW_MINUTES) / pulse.length;
   }, [pulse]);
-  const paceAxis = useMemo(() => linearTicks(0, Math.max(4, ...pulse.map((minute) => minute.pace)), { integer: true, target: 3 }), [pulse]);
+  const paceAxis = useMemo(() => linearTicks(0, Math.max(4, ...pulse.map(chatPace)), { integer: true, target: 3 }), [pulse]);
   const replyAxis = useMemo(() => {
     const values = pulse.flatMap((minute) => (minute.replyMedian === null ? [] : [minute.replyMedian])).sort((a, b) => a - b);
     const high = values[Math.floor(values.length * 0.97)] ?? 0;
@@ -220,12 +235,12 @@ export function ShiftPulse({ pulse, start, end, pauses, picked, ongoing, onPick 
   return (
     <div className="sr-pulse">
       <Readout minute={dataMinute} average={average} ongoing={ongoing} />
-      <Band {...shared} height={100} label={`Темп: сообщений за последние ${PACE_WINDOW_MINUTES} минут`} axis={paceAxis}>
+      <Band {...shared} height={100} label={`Темп: сообщений за последние ${PACE_WINDOW_MINUTES} минут, без Hi`} axis={paceAxis}>
         <ReferenceLine y={average} stroke="var(--color-chart-compare)" strokeDasharray="4 4" ifOverflow="extendDomain" />
-        <Area type="monotone" dataKey="pace" stroke={PACE} strokeWidth={2} fill={PACE} fillOpacity={0.14} dot={false} activeDot={false} {...CHART_ANIMATION} />
+        <Area type="monotone" dataKey={chatPace} stroke={PACE} strokeWidth={2} fill={PACE} fillOpacity={0.14} dot={false} activeDot={false} {...CHART_ANIMATION} />
       </Band>
       <ActivityStrip pulse={pulse} start={start} end={end} />
-      <Band {...shared} height={92} label={`Ответ фану: медиана за последние ${REPLY_WINDOW_MINUTES} минут, мин`} axis={replyAxis}>
+      <Band {...shared} height={92} label={`Ответ фану: медиана за последние ${REPLY_WINDOW_MINUTES} минут, мин; линия — от ${REPLY_LINE_MIN_REPLIES} ответов`} axis={replyAxis}>
         <ReferenceArea
           y1={REPLY_FAST_SECONDS / 60}
           y2={REPLY_NORM_SECONDS / 60}
@@ -253,7 +268,7 @@ export function ShiftPulse({ pulse, start, end, pauses, picked, ongoing, onPick 
       </Band>
       <p className="sr-foot">
         Пунктир на темпе — среднее за смену; серое — паузы; «актив.»: плотное — действия в расширении, бледное — открыто без действий.
-        {" "}Ожидания, которые были у коллег, сюда не входят.
+        {" "}Ожидания, которые были у коллег, и фаны с прошлых смен, не писавшие в эту, сюда не входят; ответы ждавшим с прошлых смен — не в медиане.
       </p>
     </div>
   );
