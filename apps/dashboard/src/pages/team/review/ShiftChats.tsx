@@ -75,7 +75,7 @@ const SHOW_TITLES: Record<ChatShow, string> = {
   all: "Все чаты выбранного вида",
   waited: `Фан ждал ответа чаттера дольше ${REPLY_NORM_SECONDS / 60} мин, и ответ в смену был (ждавшие с прошлых смен — с начала смены). Без ответа — в соседнем отборе`,
   unanswered: "Фан писал в смену, ответа чаттера до конца смены не было",
-  money: "Чаттер отправил PPV, или фан заплатил в смену",
+  money: "Чаттер отправил PPV, или продажа фану в смену засчитана смене",
 };
 const SORT_WORDS: Record<ChatSort, string> = { messages: "Больше сообщений", time: "По времени", wait: "Дольше ждали", money: "Больше денег" };
 
@@ -194,11 +194,20 @@ function SummaryRow({ summary, active, showPage, outside, shiftStart, ongoing, o
           {summary.openHeldBy !== null && <span className="sr-tag">без ответа после сообщения {summary.openHeldBy} — не в счёте</span>}
           {summary.repeated > 0 && <span className="sr-tag">повторы {formatCount(summary.repeated)}</span>}
           {summary.ppv > 0 && <span className="sr-tag">PPV куплено {formatCount(summary.bought)} из {formatCount(summary.ppv)}</span>}
-          {chat.shiftNetMills > 0 && <span className="sr-tag">в смену {formatMills(chat.shiftNetMills)}</span>}
+          {summary.heldNetMills > 0 && <span className="sr-tag">в смену {formatMills(summary.heldNetMills)}</span>}
+          {summary.others.length > 0 && <span className="sr-tag sr-tag-faint" title={OTHERS_TITLE}>{othersText(summary)}</span>}
         </span>
       </button>
     </li>
   );
+}
+
+const OTHERS_TITLE = "Продажи этому фану в смену, которые не в продажах смены: их засчитали коллеге, который последним писал фану или держал страницу, или ни одной смене";
+
+/** The fan's money in the shift that is not the chatter's: «ещё $303.20 продал Nikita». */
+function othersText(summary: ChatSummary): string {
+  const parts = summary.others.map((one) => `${formatMills(one.netMills)} ${one.name === null ? "ни в чьей смене" : `продал ${one.name}`}`);
+  return `${summary.heldNetMills > 0 ? "ещё " : ""}${parts.join(", ")}`;
 }
 
 /** Where the bubble's text came from, for its colour. */
@@ -406,7 +415,8 @@ function Transcript({ data, chat, summary, waits, picked, showDrafts, position, 
             {chat.pageLabel}
             {chat.fanUsername && chat.fanUsername !== fanName(chat) && <> · @{chat.fanUsername}</>}
             {chat.fanLifetimeNetMills !== null && <> · принёс странице за всё время {formatMills(chat.fanLifetimeNetMills)} (после комиссии)</>}
-            {chat.shiftNetMills > 0 && <> · в смену {formatMills(chat.shiftNetMills)}</>}
+            {summary.heldNetMills > 0 && <> · в смену {formatMills(summary.heldNetMills)}</>}
+            {summary.others.length > 0 && <span className="team-faint" title={OTHERS_TITLE}> · {othersText(summary)}</span>}
             {summary.colleagues.length > 0 && <> · в смену писали также {names(summary.colleagues)}</>}
           </p>
         </div>

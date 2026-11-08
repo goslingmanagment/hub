@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ShiftReviewChat, ShiftReviewMessage, TeamShiftReviewResponse } from "@agency_hub_core/contracts";
-import { cameBack, chatBusyIn, myMessages, pulseOf, reviewWaits, summariesOf, totalsOf } from "@/pages/team/review/shiftReviewView";
+import { cameBack, chatBusyIn, myMessages, pulseOf, reviewWaits, salesSplit, showPasses, sortSummaries, summariesOf, totalsOf } from "@/pages/team/review/shiftReviewView";
 
 // «Разбор смены»: whose a fan's wait is when a page is shared or handed over (2026-11-07). The first version counted
 // a colleague's chats, waits and money as the reviewed chatter's.
@@ -59,6 +59,7 @@ const data: TeamShiftReviewResponse = {
     wait("b", "10:31", "11:00", null),
     wait("c", "10:50", "10:55", "other"),
   ],
+  sales: [],
   unarchived: 0,
   deleted: 0,
   serverNow: at("12:00"),
@@ -146,5 +147,45 @@ describe("shift review: the pulse keeps the tail of past shifts apart", () => {
 
   it("keeps the replies to fans from past shifts off the median", () => {
     expect(pulse[7]).toMatchObject({ replies: 1, replyMedianSeconds: 120, tailReplies: 2 });
+  });
+});
+
+type Sale = TeamShiftReviewResponse["sales"][number];
+const sale = (chatKey: string | null, netMills: number, verdict: Sale["verdict"], holderName: string | null = null): Sale => ({
+  saleRef: `${chatKey}-${netMills}`, at: at("10:00"), pageLabel: "page-1", fanRef: chatKey, fanName: null, chatKey, kind: "ppv", netMills, verdict, holderName,
+});
+
+// The chat labels added up every sale of the fan in the shift: a colleague's PPVs in a chat the chatter never wrote in
+// stood first under «Больше денег» (2026-11-07; #1058 had fixed the header only).
+describe("shift review: whose a chat's money is", () => {
+  const sales = [
+    sale("a", 12_000, "mine"), sale("a", 4_000, "both", "Sofia"), sale("a", 2_000, "none"),
+    sale("c", 303_200, "theirs", "Sofia"),
+    sale("b", 9_000, "mine"),
+    sale(null, 5_000, "mine"),
+  ];
+  const money: TeamShiftReviewResponse = {
+    ...data,
+    shift: { ...data.shift, salesNetMills: 30_000 },
+    chats: data.chats.map((one) => ({ ...one, shiftNetMills: sales.filter((x) => x.chatKey === one.key).reduce((sum, x) => sum + x.netMills, 0) })),
+    sales,
+  };
+  const summaries = summariesOf(money, reviewWaits(money));
+  const of = (key: string) => summaries.find((summary) => summary.chat.key === key)!;
+
+  it("counts in a chat the sales that count for the chatter, and the rest apart by whose", () => {
+    expect(of("a")).toMatchObject({ heldNetMills: 16_000, others: [{ name: null, netMills: 2_000 }] });
+    expect(of("c")).toMatchObject({ heldNetMills: 0, others: [{ name: "Sofia", netMills: 303_200 }] });
+  });
+
+  it("adds the chats' money and the fans without a chat up to the header", () => {
+    const split = salesSplit(money);
+    expect(split).toEqual({ netMills: 30_000, bothNetMills: 4_000, withoutChatNetMills: 5_000 });
+    expect(summaries.reduce((sum, summary) => sum + summary.heldNetMills, 0) + split.withoutChatNetMills).toBe(money.shift.salesNetMills);
+  });
+
+  it("filters and orders by money by the chatter's share, not the colleague's", () => {
+    expect(sortSummaries(summaries, "money").slice(0, 2).map((summary) => summary.chat.key)).toEqual(["a", "b"]);
+    expect(showPasses(of("c"), "money")).toBe(false);
   });
 });

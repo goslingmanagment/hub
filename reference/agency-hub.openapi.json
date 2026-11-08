@@ -245995,6 +245995,83 @@
                         "additionalProperties": false
                       }
                     },
+                    "sales": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "saleRef": {
+                            "type": "string"
+                          },
+                          "at": {
+                            "type": "string"
+                          },
+                          "pageLabel": {
+                            "type": "string"
+                          },
+                          "fanRef": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "fanName": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "chatKey": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "kind": {
+                            "type": "string",
+                            "enum": [
+                              "ppv",
+                              "tip",
+                              "subscription",
+                              "post"
+                            ]
+                          },
+                          "netMills": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          },
+                          "verdict": {
+                            "type": "string",
+                            "enum": [
+                              "mine",
+                              "both",
+                              "theirs",
+                              "none"
+                            ]
+                          },
+                          "holderName": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "saleRef",
+                          "at",
+                          "pageLabel",
+                          "fanRef",
+                          "fanName",
+                          "chatKey",
+                          "kind",
+                          "netMills",
+                          "verdict",
+                          "holderName"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
                     "waits": {
                       "type": "array",
                       "items": {
@@ -246058,6 +246135,7 @@
                     "nextAt",
                     "activity",
                     "chats",
+                    "sales",
                     "waits",
                     "unarchived",
                     "deleted",

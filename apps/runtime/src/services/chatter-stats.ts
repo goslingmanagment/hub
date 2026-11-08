@@ -75,6 +75,11 @@ const KIND_OF: Readonly<Record<string, ChatterSaleKind>> = {
   post_purchase: "post",
 };
 
+/** A sale's kind as the screens name it, from the transaction's canonical type. Pure. */
+export function saleKindOf(canonicalType: string): ChatterSaleKind {
+  return KIND_OF[canonicalType] ?? "tip";
+}
+
 function push<K, V>(map: Map<K, V[]>, key: K, value: V) {
   const known = map.get(key);
   if (known === undefined) map.set(key, [value]);

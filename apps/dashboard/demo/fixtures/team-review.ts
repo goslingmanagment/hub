@@ -129,6 +129,7 @@ function reviewOf(shift: DemoShift, now: number): Response {
   }
   // A chat a colleague kept on the same page, and fans who had waited since before the shift.
   const firstPage = pages[0];
+  let colleagueChat: { key: string; at: number } | null = null;
   if (firstPage) {
     const platform = demoPage(firstPage.pageLabel)?.platform ?? "fansly";
     const used = new Set(chats.map((chat) => chat.key));
@@ -154,6 +155,7 @@ function reviewOf(shift: DemoShift, now: number): Response {
         theirs(`${key}:c3`, first + 26 * MIN, pick(random, AI_LINES)),
         fanMessage(`${key}:c4`, first + 70 * MIN, pick(random, FAN_LINES), true),
       ]));
+      colleagueChat = { key, at: first + 24 * MIN };
       waits.push(
         { chat: key, since: iso(first), from: iso(first), to: iso(first + 3 * MIN), by: "other" },
         { chat: key, since: iso(first + 20 * MIN), from: iso(first + 20 * MIN), to: iso(first + 26 * MIN), by: "other" },
@@ -243,6 +245,37 @@ function reviewOf(shift: DemoShift, now: number): Response {
     activity.push({ at: new Date(at).toISOString(), input: !(at >= slowFrom && at < slowTo) || random() < 0.4 });
   }
 
+  // The money: the PPVs bought and a tip in the chatter's chats, a tip after the colleague's message in theirs, a
+  // renewal from a fan without a chat. The colleague's sale is in the fan's money of the shift, not in the shift's.
+  const sales: Response["sales"] = [];
+  const quiet = firstPage === undefined ? undefined
+    : demoFans(firstPage.pageLabel).find((fan) => !chats.some((chat) => chat.key === `${firstPage.pageLabel}:${fan.platformUserId}`));
+  const withoutChat = firstPage === undefined || quiet === undefined ? null : { pageLabel: firstPage.pageLabel, fan: quiet };
+  const sell = (chat: ShiftReviewChat | null, at: number, kind: Response["sales"][number]["kind"], netMills: number, theirs = false) => {
+    const fan = chat === null ? withoutChat?.fan ?? null : null;
+    sales.push({
+      saleRef: `demo-${sales.length + 1}`, at: new Date(Math.min(at, end - 1)).toISOString(), pageLabel: chat?.pageLabel ?? withoutChat?.pageLabel ?? "",
+      fanRef: chat?.fanRef ?? fan?.platformUserId ?? null, fanName: chat === null ? fan?.displayName ?? null : chat.fanDisplayName ?? chat.fanUsername,
+      chatKey: chat?.key ?? null, kind, netMills, verdict: theirs ? "theirs" : "mine", holderName: theirs ? "sofia" : null,
+    });
+    if (chat !== null) chat.shiftNetMills += netMills;
+  };
+  let tipped = false;
+  for (const chat of chats) {
+    for (const message of chat.messages) {
+      if (message.mine === null || message.bought !== true || message.priceMills === null) continue;
+      sell(chat, Date.parse(message.at) + intBetween(random, 3, 40) * MIN, "ppv", Math.round(message.priceMills * 0.8));
+    }
+    if (!tipped && chat.messages.filter((message) => message.mine !== null).length >= 3) {
+      tipped = true;
+      sell(chat, Date.parse(chat.messages.at(-1)!.at) + 2 * MIN, "tip", 16_000);
+    }
+  }
+  const kept = colleagueChat === null ? undefined : chats.find((chat) => chat.key === colleagueChat!.key);
+  if (kept && colleagueChat) sell(kept, colleagueChat.at, "tip", 32_000, true);
+  if (withoutChat) sell(null, start + Math.round(minutes * 0.3) * MIN, "subscription", 8_000);
+  sales.sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
+
   const others = teamWorld(new Date(now)).shifts.filter((one) => one.user.id === shift.user.id).sort((a, b) => a.startedAt - b.startedAt);
   const position = others.findIndex((one) => one.startedAt === shift.startedAt);
   return {
@@ -260,12 +293,13 @@ function reviewOf(shift: DemoShift, now: number): Response {
       pages: [...pages].sort((a, b) => b.messages - a.messages).map((page) => ({
         pageLabel: page.pageLabel, platform: demoPage(page.pageLabel)?.platform ?? "fansly", messages: page.messages, worked: page.messages >= 10,
       })),
-      salesNetMills: chats.reduce((sum, chat) => sum + chat.shiftNetMills, 0),
+      salesNetMills: sales.reduce((sum, sale) => sum + (sale.verdict === "theirs" ? 0 : sale.netMills), 0),
     },
     previousAt: position > 0 ? new Date(others[position - 1]!.startedAt).toISOString() : null,
     nextAt: position >= 0 && position < others.length - 1 ? new Date(others[position + 1]!.startedAt).toISOString() : null,
     activity,
     chats,
+    sales,
     waits: waits.sort((a, b) => Date.parse(a.from) - Date.parse(b.from)),
     unarchived: 0,
     deleted: 0,
