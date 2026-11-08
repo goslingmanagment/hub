@@ -7,6 +7,7 @@ import {
   SHIFT_REVIEW_DELETED_UNSEEN_SECONDS,
   SHIFT_REVIEW_LATER_SALES_DAYS,
   SHIFT_REVIEW_NEIGHBOUR_DAYS,
+  SHIFT_REVIEW_SEAM_MINUTES,
   SHIFT_REVIEW_WAIT_HORIZON_HOURS,
   type ShiftReviewChat,
   type ShiftReviewMessage,
@@ -465,7 +466,9 @@ function piecesOf(people: ReadonlyMap<number, PersonWork>, kind: ComputedWork["k
 /**
  * The pages whose every fan's chat the review shows: the ones the shift works (holds the sales of), and — owner,
  * 2026-11-08 — a page with fewer of the person's messages that nobody else kept in [start, end]: no colleague's shift
- * held it then, so its fans waited on this person. Its sales stay out of the shift. A look-in shows none. Pure.
+ * held it then, so its fans waited on this person. A colleague's shift that held it for less than
+ * SHIFT_REVIEW_SEAM_MINUTES of [start, end] — the seam of two shifts — did not keep it. Its sales stay out of the shift.
+ * A look-in shows none. Pure.
  */
 export function pagesWithAllFans(shift: ComputedWork, colleagues: readonly ColleagueWork[], start: number, end: number): Set<string> {
   if (shift.kind !== "shift") return new Set();
@@ -474,7 +477,8 @@ export function pagesWithAllFans(shift: ComputedWork, colleagues: readonly Colle
     if (messages === 0 || out.has(label)) continue;
     const kept = colleagues.some(({ work }) => {
       const since = work.salesSince.get(label);
-      return work.kind === "shift" && since !== undefined && since <= end && work.endedAt >= start;
+      return work.kind === "shift" && since !== undefined
+        && Math.min(work.endedAt, end) - Math.max(since, start) >= SHIFT_REVIEW_SEAM_MINUTES * MINUTE_MS;
     });
     if (!kept) out.add(label);
   }

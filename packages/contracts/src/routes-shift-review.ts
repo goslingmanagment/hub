@@ -49,6 +49,12 @@ export const SHIFT_REVIEW_BROADCAST_OWN_WORDS = 4;
  * starts no wait, a page's answers none, and the chatter's is not counted. One deleted later counts as sent.
  */
 export const SHIFT_REVIEW_DELETED_UNSEEN_SECONDS = 60;
+/**
+ * A colleague's shift that held a page for less than this of the shift (the seam of two shifts, one ending as the other
+ * begins) did not keep the page then (owner, 2026-11-08): a page with fewer of the person's messages still shows all its
+ * fans (`allFans`).
+ */
+export const SHIFT_REVIEW_SEAM_MINUTES = 10;
 
 export const SHIFT_REVIEW_ORIGINS = ["ai", "fix", "own"] as const;
 export const SHIFT_REVIEW_MARKS = ["dash", "cyrillic", "leak"] as const;
@@ -215,7 +221,7 @@ export const teamShiftReviewResponseSchema = z.object({
      * The pages of the shift, most messages first: `messages` — the person's there; `worked` — the shift works the page
      * (CHATTER_SHIFT_PAGE_MIN_MESSAGES or more, as «Смены», going on or over: its sales are the shift's); `allFans` — all
      * its fans' chats are in `chats`: a worked page, or one with fewer messages that no colleague's shift held then
-     * (owner, 2026-11-08). Any other page, and every page of a look-in, brings in just the chats the person wrote in.
+     * (owner, 2026-11-08) for SHIFT_REVIEW_SEAM_MINUTES or more. Any other page, and every page of a look-in, brings in just the chats the person wrote in.
      * `allFans` absent — as `worked`.
      */
     pages: z.array(z.object({ pageLabel: z.string(), platform: z.string(), messages: count, worked: z.boolean(), allFans: z.boolean().optional() })),
