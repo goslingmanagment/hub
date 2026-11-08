@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { ShiftReviewMessageRow, ShiftReviewSendRow } from "@agency_hub_core/db";
-import { shiftNumbersOf } from "../apps/runtime/src/services/chatter-numbers.ts";
+import { revenueOfShifts, shiftNumbersOf } from "../apps/runtime/src/services/chatter-numbers.ts";
 import { autoOpenings } from "../apps/runtime/src/services/shift-review.ts";
 
 // «Смены» counts a shift as «Разбор смены» does (the audit of 2026-11-08: they differed on all 34 shifts of a week).
@@ -70,5 +70,34 @@ describe("the numbers of a shift, by the review's rules", () => {
     expect(numbers(rows, [send("52", at, "reply")])).toMatchObject({
       messages: 1, replyDelays: [0], waitingAtEnd: 0, composed: { hand: 0, reply: 1, fix: 0, other: 0 },
     });
+  });
+});
+
+describe("a shift's confirmed revenue", () => {
+  // A report carries the bounds its shift had when it was confirmed; a later rule may move them (#1081, #1089).
+  const at = (hhmm: string) => Date.parse(`2026-11-07T${hhmm}:00+03:00`);
+  const piece = (from: string, to: string) => ({ startedAt: at(from), endedAt: at(to) });
+  const report = (from: string, to: string, creditedMills: number) => ({ startedAt: new Date(at(from)), endedAt: new Date(at(to)), creditedMills });
+
+  it("stays the shift's when a later rule moved its start earlier, past the report's start", () => {
+    // Confirmed as 11:22–15:58; a look-in joined it, the shift is now 08:34–15:58.
+    const night = piece("00:39", "07:57");
+    const moved = piece("08:34", "15:58");
+    expect(revenueOfShifts([night, moved], [night, moved], [report("11:22", "15:58", 40_000)]))
+      .toEqual([{ confirmed: false, revenueMills: null }, { confirmed: true, revenueMills: 40_000 }]);
+  });
+
+  it("goes to the shift, not to the look-in that now starts where the report does", () => {
+    // Confirmed as 14:24–19:00; the shift is now 14:53–19:00, a look-in 14:24–14:34 before it.
+    const lookIn = piece("14:24", "14:34");
+    const shift = piece("14:53", "19:00");
+    expect(revenueOfShifts([lookIn, shift], [lookIn, shift], [report("14:24", "19:00", 40_000)]))
+      .toEqual([{ confirmed: false, revenueMills: null }, { confirmed: true, revenueMills: 40_000 }]);
+  });
+
+  it("shows both reports of a shift a rule joined from two pieces of work", () => {
+    const joined = piece("08:15", "17:34");
+    expect(revenueOfShifts([joined], [joined], [report("08:15", "09:30", 10_000), report("10:36", "17:34", 30_000)]))
+      .toEqual([{ confirmed: true, revenueMills: 40_000 }]);
   });
 });

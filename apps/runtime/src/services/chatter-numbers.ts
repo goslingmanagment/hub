@@ -27,6 +27,7 @@ import type { AppContext } from "../bootstrap.ts";
 import { requireDashboardUser, type AuthPrincipal } from "./auth.ts";
 import { middleOfWork, readPeopleWork } from "./chatter-shifts.ts";
 import { BadRequestError } from "./errors.ts";
+import { reportsOfShifts } from "./shift-report.ts";
 import { autoOpenings, pagesWithAllFans, piecesOf, shiftChatsOf, shiftNeedsColleagues, shiftPageLabels, shiftRuleDataOf } from "./shift-review.ts";
 
 /**
@@ -151,27 +152,23 @@ function averagePrice(prices: readonly number[]): number | null {
 }
 
 /**
- * Each shift's confirmed report and the revenue it shows: the report is the one
- * that started with the shift, else one it lies in (a report older than the
- * shift's present bounds), and it credits the first of its shifts only — the
- * rest are confirmed with no revenue of their own. Pure.
+ * Each of `shifts`' confirmed report and the revenue it shows. A report is the shift's the report screen gives it
+ * (`reportsOfShifts`: the piece of `work`, all of the person's work read, it overlaps most), so it stays its shift's when
+ * a later rule moved the shift's bounds; a shift holding two (a rule joined two pieces of work) shows both. `shifts` are
+ * pieces of `work`. Pure.
  */
-export function revenueOfShifts(
-  shifts: ReadonlyArray<{ startedAt: number }>,
+export function revenueOfShifts<W extends { startedAt: number; endedAt: number }>(
+  work: readonly W[],
+  shifts: readonly W[],
   reports: ReadonlyArray<{ startedAt: Date; endedAt: Date; creditedMills: number }>,
 ): Array<{ confirmed: boolean; revenueMills: number | null }> {
-  const credited = new Set<number>();
-  const out: Array<{ confirmed: boolean; revenueMills: number | null }> = shifts.map(() => ({ confirmed: false, revenueMills: null }));
-  const order = shifts.map((shift, index) => ({ startedAt: shift.startedAt, index })).sort((a, b) => a.startedAt - b.startedAt);
-  for (const { startedAt, index } of order) {
-    const report = reports.find((one) => one.startedAt.getTime() === startedAt)
-      ?? reports.find((one) => one.startedAt.getTime() <= startedAt && one.endedAt.getTime() > startedAt);
-    if (report === undefined) continue;
-    const key = report.startedAt.getTime();
-    out[index] = { confirmed: true, revenueMills: credited.has(key) ? 0 : report.creditedMills };
-    credited.add(key);
-  }
-  return out;
+  const reportsOf = reportsOfShifts(work, reports);
+  return shifts.map((shift) => {
+    const own = reportsOf.get(work.indexOf(shift));
+    return own === undefined
+      ? { confirmed: false, revenueMills: null }
+      : { confirmed: true, revenueMills: own.reduce((sum, report) => sum + report.creditedMills, 0) };
+  });
 }
 
 /**
@@ -276,7 +273,7 @@ export async function readTeamChatterNumbers(
 
   const chatters: TeamChatterNumbersResponse["chatters"] = chatterIds.map((userId, chatter) => {
     const mine = jobs.flatMap((job, index) => (job.userId === userId ? [{ shift: job.shift, row: rows[index]! }] : []));
-    const revenue = revenueOfShifts(mine.map((one) => one.shift), reports[chatter]!);
+    const revenue = revenueOfShifts(people.get(userId)!.work, mine.map((one) => one.shift), reports[chatter]!);
     const computed = mine.map((one, index) => ({ ...one, workedMinutes: one.shift.workedMinutes, ...revenue[index]! }));
     return {
       userId,
