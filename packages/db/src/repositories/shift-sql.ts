@@ -48,15 +48,29 @@ export function sentMediaKeySql(alias: string): SQL {
 }
 
 /**
+ * The page message (its page, platform and ref) is one the extension reported sent with the Hi button: a greeting from
+ * the page's set to a new fan. It is the chatter's own work, seen in «Приветствия», and never a mass message (owner,
+ * 2026-11-08): neither one text to many chats in an hour nor a broadcast, though the set's texts repeat by design. Such
+ * a send neither is one nor counts towards one.
+ */
+export function hiGreetingSql(columns: { pageId: string; platform: string; ref: string }): SQL {
+  const [pageId, platform, ref] = [columns.pageId, columns.platform, columns.ref].map(columnOf);
+  return sql`exists (
+    select 1 from client_send_attributions hi
+    where hi.page_id = ${pageId} and hi.platform = ${platform} and hi.platform_message_id = ${ref} and hi.composed_with = 'hi')`;
+}
+
+/**
  * A broadcast with names (owner, 2026-11-08): one file set at one price (none — 0) from one sender (the reported
  * author; no author — one unknown sender) to `minChats` chats of a page or more within an hour is a mass message, the
  * texts and names in it different or not. A message of it stays personal when it carries a live answer: `ownWords`
  * words or more of its own beyond the broadcast's template — words no other message of the broadcast within an hour
- * of it has (letters and digits, two or more). A Fansly mass message (type 2) is one already.
+ * of it has (letters and digits, two or more). A Fansly mass message (type 2) is one already; a Hi greeting
+ * (`hiGreetingSql`) never is.
  *
  * The CTEs `broadcast_sends`, `broadcast_openers` and `broadcast_refs` (page_id, ref of each such mass message), to
- * follow a CTE `source` with page_id, platform, conv, ref, at, sent, message_type, text_plain, price_mills and
- * media_key (`sentMediaKeySql`). An hour is any 60 minutes: one opens at each send of the file set.
+ * follow a CTE `source` with page_id, platform, conv, ref, at, sent, message_type, text_plain, price_mills, media_key
+ * (`sentMediaKeySql`) and hi (`hiGreetingSql`). An hour is any 60 minutes: one opens at each send of the file set.
  */
 export function broadcastCtesSql(source: string, input: { minChats: number; ownWords: number }): SQL {
   const pm = tableOf(source);
@@ -67,7 +81,7 @@ export function broadcastCtesSql(source: string, input: { minChats: number; ownW
         array(select distinct w from regexp_split_to_table(lower(coalesce(pm.text_plain, '')), '[^[:alnum:]]+') w where length(w) >= 2) as words
       from ${pm} pm
       left join client_send_attributions a on a.page_id = pm.page_id and a.platform = pm.platform and a.platform_message_id = pm.ref
-      where pm.sent and pm.media_key <> '' and coalesce(pm.message_type, 1) <> 2
+      where pm.sent and not pm.hi and pm.media_key <> '' and coalesce(pm.message_type, 1) <> 2
     ),
     broadcast_openers as materialized (
       select s.page_id, s.media_key, s.price, s.author, s.at
