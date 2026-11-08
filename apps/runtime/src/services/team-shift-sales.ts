@@ -6,7 +6,7 @@ import type { AppContext } from "../bootstrap.ts";
 import { requireDashboardUser, type AuthPrincipal } from "./auth.ts";
 import {
   SALE_LAST_WRITER_HOURS,
-  dayOfWork,
+  dayOfShift,
   lastWriterQuery,
   middleOfWork,
   moscowDayOf,
@@ -36,7 +36,6 @@ import { perHour, saleKindOf, settleSale } from "./chatter-stats.ts";
  */
 
 const DAY_MS = 86_400_000;
-const HOUR_MS = 3_600_000;
 
 type Totals = Omit<TeamShiftSalesResponse["team"], "daily">;
 
@@ -203,11 +202,7 @@ export function teamShiftMoney(input: {
     [...(holders.get(sale.transactionId) ?? [])].filter((other) => other !== userId),
     input.lastWriters.get(sale.transactionId) ?? null,
   );
-  // As the chatter's own screen: their first shift began before Hub heard of them, so its start dates it.
-  const dayOf = (userId: number, work: ComputedWork) => {
-    const first = input.firstActivity.get(userId);
-    return first !== undefined && work.startedAt - first.getTime() < HOUR_MS ? moscowDayOf(work.startedAt) : dayOfWork(work);
-  };
+  const dayOf = (userId: number, work: ComputedWork) => dayOfShift(work, input.firstActivity.get(userId)?.getTime());
 
   const inWindow = (work: ComputedWork) => middleOfWork(work) >= window.from && middleOfWork(work) < window.to;
   const inPrevious = (work: ComputedWork) => middleOfWork(work) >= previousFrom && middleOfWork(work) < previousTo;
