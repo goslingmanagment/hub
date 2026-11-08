@@ -164,6 +164,32 @@ function reviewOf(shift: DemoShift, now: number): Response {
       chats.push(chatOf(fan, [fanMessage(`${key}:w0`, since, pick(random, FAN_LINES), false)]));
       waits.push({ chat: key, since: new Date(since).toISOString(), from: new Date(start).toISOString(), to: new Date(end).toISOString(), by: null });
     }
+    // A colleague still on the page as the shift began: wrote a minute before its start, then answered a fan waiting since
+    // the last shift. Both chats are the colleague's.
+    const [lateFan, carriedFan] = free.slice(4, 6);
+    if (lateFan && carriedFan) {
+      const iso = (at: number) => new Date(at).toISOString();
+      const theirs = (ref: string, at: number): ShiftReviewMessage => ({
+        ref, at: iso(at), side: "page", text: pick(random, AI_LINES), priceMills: null, bought: null, tipMills: null, media: 0,
+        inShift: at >= start, by: "other", byName: "sofia", mass: false, mine: null,
+      });
+      const late = `${firstPage.pageLabel}:${lateFan.platformUserId}`;
+      chats.push(chatOf(lateFan, [
+        fanMessage(`${late}:l0`, start - 6 * MIN, pick(random, FAN_LINES), false),
+        theirs(`${late}:l1`, start - MIN),
+        fanMessage(`${late}:l2`, start + 4 * MIN, pick(random, FAN_LINES), true),
+        theirs(`${late}:l3`, start + 7 * MIN),
+      ]));
+      const carried = `${firstPage.pageLabel}:${carriedFan.platformUserId}`;
+      chats.push(chatOf(carriedFan, [
+        fanMessage(`${carried}:t0`, start - 95 * MIN, pick(random, FAN_LINES), false),
+        theirs(`${carried}:t1`, start + 12 * MIN),
+      ]));
+      waits.push(
+        { chat: late, since: iso(start + 4 * MIN), from: iso(start + 4 * MIN), to: iso(start + 7 * MIN), by: "other" },
+        { chat: carried, since: iso(start - 95 * MIN), from: iso(start), to: iso(start + 12 * MIN), by: "other" },
+      );
+    }
   }
   // The same template to several fans.
   const template = "heyy just got back, did you miss me? ♡";

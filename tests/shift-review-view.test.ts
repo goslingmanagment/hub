@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ShiftReviewChat, ShiftReviewMessage, TeamShiftReviewResponse } from "@agency_hub_core/contracts";
-import { chatBusyIn, myMessages, reviewWaits, summariesOf, totalsOf } from "@/pages/team/review/shiftReviewView";
+import { cameBack, chatBusyIn, myMessages, reviewWaits, summariesOf, totalsOf } from "@/pages/team/review/shiftReviewView";
 
 // «Разбор смены»: whose a fan's wait is when a page is shared or handed over (2026-11-07). The first version counted
 // a colleague's chats, waits and money as the reviewed chatter's.
@@ -94,5 +94,31 @@ describe("shift review: whose a wait is", () => {
     const to = Date.parse(at("10:10"));
     expect(chatBusyIn(data.chats[4]!, waits, from, to)).toBe(true);
     expect(chatBusyIn(data.chats[3]!, waits, from, to)).toBe(false);
+  });
+});
+
+// A colleague who sat on the page as the shift began wrote a minute before its start: the first version saw only the
+// colleague's messages within the shift, and gave the chatter the fans from the last shift the colleague answered.
+describe("shift review: a colleague on the page at the shift's start", () => {
+  const handover: TeamShiftReviewResponse = {
+    ...data,
+    chats: [
+      chat("f", [message("08:30", "fan", null), message("08:59", "page", "other"), message("09:30", "page", "other")]),
+      chat("g", [message("07:00", "fan", null), message("09:20", "page", "other")]),
+    ],
+    waits: [wait("g", "07:00", "09:20", "other")],
+  };
+  const waits = reviewWaits(handover);
+
+  it("leaves to the colleague a wait from the last shift they answered", () => {
+    expect(waits[0]!.his).toBe(false);
+    expect(summariesOf(handover, waits).find((summary) => summary.chat.key === "g")?.kind).toBe("colleague");
+  });
+});
+
+describe("shift review: a fan who came back", () => {
+  it("is one who went quiet, not one who kept writing", () => {
+    expect(cameBack(40 * 60, 30, 25 * 60)).toBe(true);
+    expect(cameBack(40 * 60, 30, 4 * 60)).toBe(false);
   });
 });
