@@ -44,8 +44,13 @@ export const teamShiftReviewQuerySchema = z.object({
 });
 
 const shiftReviewMineSchema = z.object({
-  /** What the extension said: hand, reply, fix, hi, ping, coach, unknown; null from an older client. */
+  /**
+   * What the extension said: hand, reply, fix, hi, ping, coach, unknown; null from an older client. A later part of an AI
+   * text sent in pieces (`part`) has the button its first part was sent with.
+   */
   composedWith: z.string().nullable(),
+  /** A later part of one AI text sent in pieces ([NEXT]) after the first went by a button: its number, from 2; absent — not one. */
+  part: z.number().int().min(2).optional(),
   /** Changed in the composer after an AI text was put there; null when the extension did not say. */
   edited: z.boolean().nullable(),
   /**
@@ -54,16 +59,24 @@ const shiftReviewMineSchema = z.object({
    * `own` — no AI text of the chat holds it. Null: a message with no words (media, emoji).
    */
   origin: z.enum(SHIFT_REVIEW_ORIGINS).nullable(),
-  /** The share of the words that come from the closest AI text, 0–1; null without words or AI texts. */
+  /**
+   * The share of the words that come from the closest AI text, 0–1; null without words or AI texts. For `own`, cut down
+   * to the hundredth, and 0 when the two share no run of 3 words.
+   */
   aiShare: z.number().nullable(),
-  /** That AI text's feature (fast-reply, improve-draft, coach-chat, ping, hi-greeting) and its words. */
+  /**
+   * That AI text's feature (fast-reply, improve-draft, coach-chat, ping, hi-greeting) and its words; for `own`, only with
+   * a shared run of 3 words, or the text the extension says the chatter put in and replaced.
+   */
   aiFeature: z.string().nullable(),
   aiText: z.string().nullable(),
   /** A Fix's draft: what the chatter typed before Fix. */
   draft: z.string().nullable(),
+  /** `fix` of a draft the AI made far longer: the chatter's thought, the AI's words. Absent — no. */
+  fixExpanded: z.boolean().optional(),
   /** Seconds the fan had waited (from the shift's start at most) when this message answered them; null — no one waited. */
   replySeconds: count.nullable(),
-  /** Other chats the chatter sent the same text to in this shift. */
+  /** Other chats the chatter sent the same text to in this shift; a Hi greeting (the page's A/B set) repeats nothing. */
   repeats: count,
   /** `dash` — a long dash (an AI tell), `cyrillic` — Russian letters to a fan who writes none, `leak` — the AI's service text. */
   marks: z.array(z.enum(SHIFT_REVIEW_MARKS)),

@@ -223,14 +223,14 @@ function originText(message: ShiftReviewMessage): string {
   const matched = share < 1 && share > 0 ? ` · совпало ${percent(share)}` : "";
   if (mine.origin === null) return message.text.trim() !== "" ? "без слов — не сравнивали" : "без текста";
   if (mine.origin === "own") {
-    if (aiButton(mine.composedWith) && share === 0) return `${COMPOSED_WORDS[mine.composedWith!]} — текст ИИ не найден`;
+    if (aiButton(mine.composedWith) && share === 0) return `${COMPOSED_WORDS[mine.composedWith!]} — ${mine.aiText !== null ? "текст ИИ заменён целиком" : "текст ИИ не найден"}`;
     if (share === 0) return "с ИИ не совпало";
     const short = message.text.trim().split(/\s+/).length <= SHORT_WORDS;
     return `с ИИ совпало ${percent(share)}${short ? " · короткий текст" : " — меньше 70 %"}`;
   }
-  if (mine.origin === "fix") return `Fix своего черновика${matched}`;
+  if (mine.origin === "fix") return `${mine.fixExpanded ? "Fix: свой черновик, ИИ дописал" : "Fix своего черновика"}${matched}`;
   const feature = FEATURE_WORDS[mine.aiFeature ?? ""] ?? mine.aiFeature ?? "?";
-  const how = aiButton(mine.composedWith) ? (mine.edited ? " · с правкой" : "")
+  const how = aiButton(mine.composedWith) ? `${mine.part !== undefined ? ` · часть ${mine.part}` : ""}${mine.edited ? " · с правкой" : ""}`
     : mine.composedWith === "hand" ? " · без кнопки"
       : " · кнопка неизвестна";
   return `ИИ: ${feature}${mine.aiFeature === "improve-draft" ? " по команде" : ""}${matched}${how}`;

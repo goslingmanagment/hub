@@ -229,6 +229,28 @@ export async function listShiftReviewFans(
 }
 
 /**
+ * Of these chats, the ones whose fan writes Russian: in Russian letters in at least a quarter of their messages, over
+ * the whole archive (deleted ones too) — a fan quiet for days still writes Russian, and one Russian word among a
+ * thousand English messages is not that. By `<page id>:<conversation ref>`.
+ */
+export async function listChatsFanWroteRussian(
+  db: Database,
+  chats: ReadonlyArray<{ pageId: number; conv: string }>,
+): Promise<Set<string>> {
+  if (chats.length === 0) return new Set();
+  const result = await db.execute<{ page_id: string | number; conv: string }>(sql`
+    select w.page_id, w.conv
+    from unnest(${sql.param(chats.map((chat) => String(chat.pageId)))}::bigint[], ${sql.param(chats.map((chat) => chat.conv))}::text[]) as w(page_id, conv)
+    cross join lateral (
+      select count(*) as fan, count(*) filter (where m.text_plain ~ '[А-Яа-яЁё]') as russian
+      from message_archive m
+      where m.account_id = w.page_id and m.conversation_ref = w.conv and not m.is_sent_by_me
+    ) c
+    where c.russian > 0 and c.russian * 4 >= c.fan`);
+  return new Set(result.rows.map((row) => `${row.page_id}:${row.conv}`));
+}
+
+/**
  * The texts of every page's automated messages (a welcome after a follow, a renewal): such a message answers nobody.
  * Every page's, as the shift audit does: an OnlyFans page has no rows of its own and sends the Fansly page's welcome.
  */

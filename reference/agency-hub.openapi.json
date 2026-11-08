@@ -245866,6 +245866,11 @@
                                             "null"
                                           ]
                                         },
+                                        "part": {
+                                          "type": "integer",
+                                          "minimum": 2,
+                                          "maximum": 9007199254740991
+                                        },
                                         "edited": {
                                           "type": [
                                             "boolean",
@@ -245910,6 +245915,9 @@
                                             "string",
                                             "null"
                                           ]
+                                        },
+                                        "fixExpanded": {
+                                          "type": "boolean"
                                         },
                                         "replySeconds": {
                                           "anyOf": [
