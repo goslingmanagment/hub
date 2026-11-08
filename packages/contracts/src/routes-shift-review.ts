@@ -28,6 +28,8 @@ export const SHIFT_REVIEW_AI_LOOKBACK_MINUTES = 90;
 export const SHIFT_REVIEW_CONTEXT_MESSAGES = 8;
 /** A fan's message older than this before a reply is not waited on (as `teamChatterNumbers`). */
 export const SHIFT_REVIEW_WAIT_HORIZON_HOURS = 72;
+/** The person's previous and next shift are looked for this far from the shift. */
+export const SHIFT_REVIEW_NEIGHBOUR_DAYS = 14;
 
 export const SHIFT_REVIEW_ORIGINS = ["ai", "fix", "own"] as const;
 export const SHIFT_REVIEW_MARKS = ["dash", "cyrillic", "leak"] as const;
@@ -135,7 +137,7 @@ export const teamShiftReviewResponseSchema = z.object({
      */
     salesNetMills: mills,
   }),
-  /** The person's shifts just before and after, within a week; their start. */
+  /** The person's shifts just before and after, within SHIFT_REVIEW_NEIGHBOUR_DAYS; their start. */
   previousAt: isoTimestamp.nullable(),
   nextAt: isoTimestamp.nullable(),
   /** The minutes the extension beat on the shift's pages; `input` — the person did something in one of them. A minute missing — closed. */

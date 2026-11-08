@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
+import { notOwnAccountMessageSql } from "./shift-sql.ts";
 
 // The numbers of one chatter's shift (Chat Memory week 5, 0305/0306/0311,
 // docs/plans/2026-10-24-chat-memory/week-5.md §1). Only messages with this
@@ -50,13 +51,15 @@ export async function readShiftNumbers(
       where a.user_id = ${input.userId} and a.page_id = any(${pages})
         and a.observed_at >= ${from} and a.observed_at < ${to}
     ),
-    -- The shift's pages' messages from 3 days before it (a reply waits at most 3 days) to its end, the page's mass messages marked.
+    -- The shift's pages' messages from 3 days before it (a reply waits at most 3 days) to its end, the page's mass messages
+    -- marked; a chat with another page of ours is no fan's.
     page_msgs as materialized (
       select m.account_id as page_id, m.conversation_ref as conv, m.message_ref as ref, m.occurred_at as at, m.is_sent_by_me as sent, m.message_type,
         md5(coalesce(m.text_plain, '') || '|' || coalesce(m.price_mills, 0)::text || '|' || jsonb_array_length(m.media_metadata)::text) as shape
       from message_archive m
       where m.account_id = any(${pages}) and m.conversation_ref is not null
         and m.occurred_at > ${from} - interval '3 days' and m.occurred_at <= ${to}
+        and ${notOwnAccountMessageSql("m")}
     ),
     bursts as materialized (
       select page_id, shape, date_trunc('hour', at) as hour

@@ -4,6 +4,7 @@ import {
   SHIFT_REVIEW_AI_LOOKBACK_MINUTES,
   SHIFT_REVIEW_AI_SHARE,
   SHIFT_REVIEW_CONTEXT_MESSAGES,
+  SHIFT_REVIEW_NEIGHBOUR_DAYS,
   SHIFT_REVIEW_WAIT_HORIZON_HOURS,
   type ShiftReviewChat,
   type ShiftReviewMessage,
@@ -47,8 +48,6 @@ import { NotFoundError } from "./errors.ts";
 
 const MINUTE_MS = 60_000;
 const DAY_MS = 86_400_000;
-/** Shifts this far around `at` are read, so the neighbours are found too. */
-const NEIGHBOUR_DAYS = 3;
 const TEXT_LIMIT = 2000;
 /** The features a chatter sends a text from. */
 const SENDABLE_FEATURES = ["fast-reply", "improve-draft", "coach-chat", "ping", "hi-greeting"] as const;
@@ -266,9 +265,12 @@ export async function readTeamShiftReview(
   requireOwner(principal);
   const now = new Date();
   const at = Date.parse(query.at);
+  // The person's work SHIFT_REVIEW_NEIGHBOUR_DAYS around `at`, for the shifts before and after too, and a day more: a shift
+  // the window cuts at its start is not whole. One person's fortnight reads as fast as their three days.
+  const windowFrom = at - (SHIFT_REVIEW_NEIGHBOUR_DAYS + 1) * DAY_MS;
   const people = await readPeopleWork(app.db, {
-    from: new Date(at - NEIGHBOUR_DAYS * DAY_MS),
-    to: new Date(Math.min(at + NEIGHBOUR_DAYS * DAY_MS, now.getTime())),
+    from: new Date(windowFrom),
+    to: new Date(Math.min(at + (SHIFT_REVIEW_NEIGHBOUR_DAYS + 1) * DAY_MS, now.getTime())),
     now,
     pages: "all",
     userId: query.userId,
@@ -277,6 +279,7 @@ export async function readTeamShiftReview(
   const found = person === undefined ? null : shiftAround(person.work, at);
   if (person === undefined || found === null) throw new NotFoundError("The person has no shift at that time");
   const { shift } = found;
+  const previous = found.previous !== null && found.previous.startedAt >= windowFrom + DAY_MS ? found.previous : null;
   const start = shift.startedAt;
   const end = shift.ongoing ? now.getTime() : shift.endedAt;
   const from = new Date(start);
@@ -453,7 +456,7 @@ export async function readTeamShiftReview(
       })),
       salesNetMills: sales.reduce((sum, sale) => sum + sale.netMills, 0),
     },
-    previousAt: found.previous === null ? null : new Date(found.previous.startedAt).toISOString(),
+    previousAt: previous === null ? null : new Date(previous.startedAt).toISOString(),
     nextAt: found.next === null ? null : new Date(found.next.startedAt).toISOString(),
     activity: [...activity].sort((a, b) => a[0] - b[0]).map(([ms, input]) => ({ at: new Date(ms).toISOString(), input })),
     chats: out,

@@ -13,7 +13,7 @@ import { shiftSpan } from "@/pages/team/TeamShiftsPage";
 import { ChatterLink, PageLink } from "@/pages/team/teamLinks";
 import { ShiftChats, type ChatsView } from "./ShiftChats.js";
 import { ShiftPulse } from "./ShiftPulse.js";
-import { CHATTER_SHIFT_PAGE_MIN_MESSAGES } from "@agency_hub_core/contracts";
+import { CHATTER_SHIFT_PAGE_MIN_MESSAGES, SHIFT_REVIEW_NEIGHBOUR_DAYS } from "@agency_hub_core/contracts";
 import {
   CHAT_KINDS,
   CHAT_SHOWS,
@@ -249,8 +249,10 @@ function ShiftReview({ userId, at }: { userId: number; at: string }) {
   const actions = (
     <>
       <span className="sr-bar-who">{shift.username} · {shiftSpan(shift)}</span>
-      {neighbour(data.previousAt, "← Прошлая", "Прошлой смены за 3 дня до этой нет")}
-      {neighbour(data.nextAt, "Следующая →", "Следующей смены пока нет")}
+      {neighbour(data.previousAt, "← Прошлая", `Прошлой смены за ${SHIFT_REVIEW_NEIGHBOUR_DAYS} дней до этой нет`)}
+      {neighbour(data.nextAt, "Следующая →", Date.parse(shift.endedAt) + SHIFT_REVIEW_NEIGHBOUR_DAYS * 86_400_000 > Date.parse(data.serverNow)
+        ? "Следующей смены пока нет"
+        : `Следующей смены за ${SHIFT_REVIEW_NEIGHBOUR_DAYS} дней после этой нет`)}
       {back}
     </>
   );
