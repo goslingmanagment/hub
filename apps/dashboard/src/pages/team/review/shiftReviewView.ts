@@ -10,11 +10,14 @@ import { formatDuration } from "@/lib/format";
  * Whose a wait is (2026-11-07): a page can be worked by two people at once, or
  * handed over within a shift. A fan's wait is the reviewed chatter's when the
  * chatter answered it or wrote last before it began. It is a colleague's when
- * the colleague wrote last before it, within the shift, and was still writing
- * on that page when it ended; or when a colleague answered it who was writing
- * on that page as it began. Anything else on the chatter's watch is theirs. A
- * chat with only colleagues' waits, where the chatter wrote nothing, is under
- * «Вели другие»; its waits are counted apart.
+ * the colleague wrote last before it, within the shift or in the
+ * REPLY_NORM_SECONDS before it, and was still writing on that page when it
+ * ended; or when a colleague answered it who was writing on that page as it
+ * began. «Writing on that page» counts the colleague's messages before the
+ * shift too: a fan waiting from the last shift, answered by a colleague who sat
+ * on the page as this one began, is not the chatter's. Anything else on the
+ * chatter's watch is theirs. A chat with only colleagues' waits, where the
+ * chatter wrote nothing, is under «Вели другие»; its waits are counted apart.
  */
 
 const MINUTE_MS = 60_000;
@@ -33,6 +36,8 @@ export const REPLY_NORM_SECONDS = 10 * 60;
 export const PICK_MINUTES = 10;
 /** A silence this long inside a chat gets a line of its own in the transcript. */
 export const GAP_MINUTES = 15;
+/** A fan quiet this long inside a wait, who then wrote again, came back (see `cameBack`). */
+export const FAN_QUIET_SECONDS = 15 * 60;
 
 /**
  * A wait as the screen writes it. Under 20 minutes to the second, so 9 мин 49 с
@@ -126,7 +131,7 @@ export interface ReviewWait {
   by: "me" | "other" | "none" | null;
   /** The colleague who ended it. */
   byName: string | null;
-  /** The colleague whose wait it is: who wrote last before it within the shift and was still writing on the page at its end. */
+  /** The colleague whose wait it is: who wrote last before it, in the shift or just before it, and was still writing on the page at its end. */
   heldBy: string | null;
   /** The fan began waiting before the shift. */
   inherited: boolean;
@@ -134,6 +139,8 @@ export interface ReviewWait {
   fanWrote: boolean;
   /** The fan's latest message before the wait ended, ms. */
   lastFanAt: number;
+  /** The fan's longest silence between two of their messages inside the wait, seconds; 0 — one message. */
+  fanQuietSeconds: number;
   /** How long, seconds: a wait from before the shift counts from its start (the approved definition). */
   seconds: number;
   /** The reviewed chatter's (see the file's head). */
@@ -144,11 +151,11 @@ export function reviewWaits(data: TeamShiftReviewResponse): ReviewWait[] {
   const start = Date.parse(data.shift.startedAt);
   const norm = REPLY_NORM_SECONDS * 1000;
   const chats = new Map(data.chats.map((chat) => [chat.key, chat]));
-  // When each colleague wrote on each page within the shift.
+  // When each colleague wrote on each page: within the shift, and in the messages shown before it.
   const colleagueAt = new Map<string, number[]>();
   for (const chat of data.chats) {
     for (const message of chat.messages) {
-      if (!message.inShift || message.by !== "other" || message.mass) continue;
+      if (message.by !== "other" || message.mass) continue;
       const key = `${chat.pageLabel}|${message.byName ?? ""}`;
       colleagueAt.set(key, [...(colleagueAt.get(key) ?? []), Date.parse(message.at)]);
     }
@@ -164,7 +171,7 @@ export function reviewWaits(data: TeamShiftReviewResponse): ReviewWait[] {
     const timed = (chat?.messages ?? []).map((message) => ({ message, at: Date.parse(message.at) }));
     const before = timed.filter((one) => isPersonal(one.message) && one.at < since).at(-1);
     const heldByMe = before?.message.by === "me";
-    const holder = before && before.message.inShift && before.message.by === "other" ? before.message.byName : undefined;
+    const holder = before && before.at >= start - norm && before.message.by === "other" ? before.message.byName : undefined;
     const heldBy = holder !== undefined && (wait.by === "other" || writingOn(page, holder, to)) ? holder ?? "коллега" : null;
     const answer = wait.by === "other" ? timed.find((one) => one.at === to && one.message.by === "other") : undefined;
     const answeredOnTheirWatch = answer !== undefined && writingOn(page, answer.message.byName, from);
@@ -180,6 +187,7 @@ export function reviewWaits(data: TeamShiftReviewResponse): ReviewWait[] {
       inherited: since < start,
       fanWrote: timed.some((one) => one.message.side === "fan" && one.message.inShift && one.at >= since && one.at <= to),
       lastFanAt: fanAts.at(-1) ?? since,
+      fanQuietSeconds: fanAts.reduce((longest, one, index) => (index === 0 ? 0 : Math.max(longest, one - fanAts[index - 1]!)), 0) / 1000,
       seconds: (to - Math.max(since, start)) / 1000,
       his: wait.by === "me" || heldByMe || (heldBy === null && !answeredOnTheirWatch),
     };
@@ -189,10 +197,12 @@ export function reviewWaits(data: TeamShiftReviewResponse): ReviewWait[] {
 /**
  * A long wait whose fan went quiet and wrote again just before the answer: a
  * «goodnight», then a «good morning» answered in minutes. Worth saying beside
- * the wait, which still counts from its start.
+ * the wait, which still counts from its start. A fan who kept writing all the
+ * while did not come back: they waited.
  */
-export function cameBack(waitSeconds: number, lastFanGapSeconds: number): boolean {
-  return waitSeconds > REPLY_NORM_SECONDS && lastFanGapSeconds <= REPLY_NORM_SECONDS && waitSeconds - lastFanGapSeconds >= 15 * 60;
+export function cameBack(waitSeconds: number, lastFanGapSeconds: number, fanQuietSeconds: number): boolean {
+  return waitSeconds > REPLY_NORM_SECONDS && lastFanGapSeconds <= REPLY_NORM_SECONDS && waitSeconds - lastFanGapSeconds >= 15 * 60
+    && fanQuietSeconds >= FAN_QUIET_SECONDS;
 }
 
 /** A wait the chatter left without an answer at the end: the fan wrote in the shift, or began waiting in it. */
@@ -510,7 +520,7 @@ export function summariesOf(data: TeamShiftReviewResponse, allWaits: readonly Re
       longestWaitSeconds: longest?.seconds ?? null,
       longestWaitInherited: longest?.inherited ?? false,
       longestWaitAnsweredBy: longest?.by === "other" ? longest.byName ?? "коллега" : null,
-      longestWaitLastFanSeconds: longest !== null && lastFanGap !== null && cameBack(longest.seconds, lastFanGap) ? lastFanGap : null,
+      longestWaitLastFanSeconds: longest !== null && lastFanGap !== null && cameBack(longest.seconds, lastFanGap, longest.fanQuietSeconds) ? lastFanGap : null,
       openWaitSeconds: openHis?.seconds ?? null,
       openSince: openHis?.since ?? null,
       unansweredInShift: openHis !== null && unansweredInShift(openHis),

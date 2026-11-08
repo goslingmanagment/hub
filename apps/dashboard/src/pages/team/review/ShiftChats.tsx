@@ -271,7 +271,7 @@ function Bubble({ message, picked, showDraft, answered, shiftStart, username }: 
   const fixDraft = mine !== null && (mine.origin === "fix" || (mine.origin === "ai" && mine.aiFeature === "improve-draft"));
   const draft = showDraft && fixDraft && mine?.draft ? mine.draft.trim() : "";
   const lastFanGap = answered === null ? null : (answered.to - answered.lastFanAt) / 1000;
-  const again = answered !== null && lastFanGap !== null && cameBack(answered.seconds, lastFanGap) ? `, снова писал за ${waitText(lastFanGap)} до ответа` : "";
+  const again = answered !== null && lastFanGap !== null && cameBack(answered.seconds, lastFanGap, answered.fanQuietSeconds) ? `, снова писал за ${waitText(lastFanGap)} до ответа` : "";
   const waited = mine === null || mine.replySeconds === null ? null
     : answered !== null && answered.inherited ? `фан ждал с ${momentText(answered.since, shiftStart)}, в смену ${waitText(mine.replySeconds)}${again}`
       : `фан ждал ${waitText(mine.replySeconds)}${again}`;
