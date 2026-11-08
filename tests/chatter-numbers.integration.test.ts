@@ -233,7 +233,7 @@ describe("the numbers of a chatter's shift", () => {
       `insert into message_archive (account_id, platform, conversation_ref, message_ref, sender_role, is_sent_by_me, occurred_at, text_plain,
          media_metadata, message_type, deleted_at, content_pending)
        values ($1, 'fansly', '8960000001', $2, $3, $4, $5, $6, '[]'::jsonb, 1, $7, $8)`,
-      [page, ref, fromFan ? "fan" : "model", !fromFan, at(minutesBeforeEnd), stub ? null : `text ${ref}`,
+      [page, ref, fromFan ? "fan" : "model", !fromFan, at(minutesBeforeEnd), stub ? "" : `text ${ref}`,
         deletedAfterSeconds === null ? null : new Date(at(minutesBeforeEnd).getTime() + deletedAfterSeconds * 1000), stub]);
     const sent = (ref: string, minutesBeforeEnd: number) => q(
       `insert into client_send_attributions (platform, page_id, platform_message_id, fan_ref, user_id, source, priced, with_media, observed_at, composed_with)
