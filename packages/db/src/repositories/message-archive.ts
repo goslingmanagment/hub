@@ -346,6 +346,8 @@ export async function applyMessageEventsToArchive(
       const observesReply = fieldPresence?.reply !== false
         && head.originClass !== "fansly_dm_sidecar";
       const observesTipText = fieldPresence?.tipText !== false;
+      // A head that did not see the price (an OnlyFans chat list's last message) keeps the price and the tip known.
+      const observesPrice = fieldPresence?.price !== false;
       const markers = headAutomationMarkers(head, fieldPresence);
       const reply = typeof head.reply === "object" && head.reply !== null && !Array.isArray(head.reply)
         ? head.reply as Record<string, unknown>
@@ -415,15 +417,24 @@ export async function applyMessageEventsToArchive(
           occurred_at = excluded.occurred_at,
           text_plain = excluded.text_plain,
           text_html = excluded.text_html,
-          price_mills = excluded.price_mills,
+          price_mills = case
+            when ${observesPrice} then excluded.price_mills
+            else ${target}.price_mills
+          end,
           is_opened = case
             when ${target}.is_opened is true or excluded.is_opened is true then true
             when ${target}.is_opened is false or excluded.is_opened is false then false
             else null
           end,
           is_new = excluded.is_new,
-          is_tip = excluded.is_tip,
-          tip_amount_mills = excluded.tip_amount_mills,
+          is_tip = case
+            when ${observesPrice} then excluded.is_tip
+            else ${target}.is_tip
+          end,
+          tip_amount_mills = case
+            when ${observesPrice} then excluded.tip_amount_mills
+            else ${target}.tip_amount_mills
+          end,
           tip_text_plain = case
             when ${observesTipText} then excluded.tip_text_plain
             else ${target}.tip_text_plain

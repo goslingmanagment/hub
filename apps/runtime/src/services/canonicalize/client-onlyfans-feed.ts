@@ -91,7 +91,7 @@ function messageEvents(
       duration: typeof item.duration === "number" && Number.isFinite(item.duration) ? item.duration : null,
     })).filter((item) => item.id !== "").sort((left, right) => left.id.localeCompare(right.id))
     : [];
-  // A chat list's last message names no media and no price: it does not say they are absent.
+  // A chat list's last message names no media and no price (nor a tip): it does not say they are absent.
   const listed = record.via === "chat_list";
   const head = {
     nativeMessageId: messageId,
@@ -107,7 +107,7 @@ function messageEvents(
     tipTextPlain: typeof record.tipText === "string" ? record.tipText : null,
     reply: null,
     media,
-    fieldPresence: { media: !listed, reply: false, tipText: record.tipText !== null && record.tipText !== undefined },
+    fieldPresence: { media: !listed, price: !listed, reply: false, tipText: record.tipText !== null && record.tipText !== undefined },
     // The message's own time: the archive dates the row by it even where the driver clamps the event's.
     messageCreatedAt: sentAt.toISOString(),
     vendorChangedAt: date(record.changedAt)?.toISOString() ?? null,
