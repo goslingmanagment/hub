@@ -1,6 +1,9 @@
 import {
+  CHATTER_SHIFT_EDGE_BLOCK_GAP_MINUTES,
+  CHATTER_SHIFT_EDGE_NEAR_MINUTES,
   CHATTER_SHIFT_END_IDLE_MINUTES,
   CHATTER_SHIFT_IDLE_PAUSE_MINUTES,
+  CHATTER_SHIFT_LOOK_IN_JOIN_MINUTES,
   CHATTER_SHIFT_MIN_MESSAGES,
   CHATTER_SHIFT_MIN_WORKED_MINUTES,
   CHATTER_SHIFT_PAGE_MIN_MESSAGES,
@@ -54,10 +57,20 @@ import { BadRequestError, ForbiddenError, NotFoundError } from "./errors.ts";
  *   that is not counted as one. A stretch still going is a shift once it has
  *   CHATTER_SHIFT_PIECE_MIN_MESSAGES messages: a glance at the extension is no
  *   «смена идёт».
- * - The pieces of work (between two pauses) at a shift's start or end with
- *   under CHATTER_SHIFT_PIECE_MIN_MESSAGES messages each are not the shift: a
- *   look-in half an hour before it, answers at noon after a night shift — each
- *   a visit of its own.
+ * - Its edges. Its body runs from the first to the last piece of work (between
+ *   two pauses) with CHATTER_SHIFT_PIECE_MIN_MESSAGES messages. The piece next
+ *   to the body at its start or end, under CHATTER_SHIFT_EDGE_NEAR_MINUTES from
+ *   it, is the shift whatever its messages: two last answers 20 minutes after
+ *   the night. The pieces beyond, in blocks at most
+ *   CHATTER_SHIFT_EDGE_BLOCK_GAP_MINUTES apart, are cut from the outside in
+ *   while a block has under CHATTER_SHIFT_PIECE_MIN_MESSAGES: a look-in half an
+ *   hour before it, answers one at a time at noon after a night shift — each a
+ *   visit of its own.
+ * - A look-in BEFORE a shift with CHATTER_SHIFT_PIECE_MIN_MESSAGES messages that
+ *   ended at most CHATTER_SHIFT_LOOK_IN_JOIN_MINUTES before it began is its
+ *   start, the gap a pause (owner, 2026-11-08): a morning's work before a break
+ *   of over an hour is the day's shift, with its sales. One after a shift stays
+ *   a look-in: answers after a night are no part of it.
  * - It belongs to the Moscow day holding most of it (`dayOfWork`), the day the
  *   payout sheet gives it: a night entered at 23:54 or at 00:08 is one day.
  * - It holds the sales (`workHoldsSale`) on the pages it worked, from the
@@ -233,34 +246,89 @@ export function workOfMinutes(minutes: readonly ActivityMinute[], sent: readonly
   const messagesOf = (work: ReturnType<typeof workOf>) => [...work.messages.values()].reduce((sum, count) => sum + count, 0);
   const isShift = (work: ReturnType<typeof workOf>) => work.workedMinutes >= CHATTER_SHIFT_MIN_WORKED_MINUTES && messagesOf(work) >= CHATTER_SHIFT_MIN_MESSAGES;
 
+  const nearEdge = CHATTER_SHIFT_EDGE_NEAR_MINUTES * MINUTE_MS;
+  const blockGap = CHATTER_SHIFT_EDGE_BLOCK_GAP_MINUTES * MINUTE_MS;
+  /**
+   * How many pieces at one edge of a shift's body are the shift. `edge` — those
+   * pieces, the one next to the body first: each one's gap from the piece nearer
+   * the body, and its messages. The one next to the body, under `nearEdge` from
+   * it, stays whatever its messages; the ones beyond, in blocks at most
+   * `blockGap` apart, are cut from the outside in while a block has too few.
+   */
+  const edgeKept = (edge: ReadonlyArray<{ gap: number; messages: number }>): number => {
+    const near = edge.length > 0 && edge[0]!.gap < nearEdge ? 1 : 0;
+    let kept = edge.length;
+    while (kept > near) {
+      let from = kept - 1;
+      let messages = edge[from]!.messages;
+      while (from > near && edge[from]!.gap <= blockGap) {
+        from -= 1;
+        messages += edge[from]!.messages;
+      }
+      if (messages >= CHATTER_SHIFT_PIECE_MIN_MESSAGES) break;
+      kept = from;
+    }
+    return kept;
+  };
+
+  /** A piece of work before it is computed: its active minutes and its end. */
+  type Segment = { kind: ComputedWork["kind"]; part: number[]; end: number; ongoing: boolean };
   const stretches = splitWhere(inputs, (gap) => gap >= endAfter);
-  const out: ComputedWork[] = [];
+  const segments: Segment[] = [];
   stretches.forEach((stretch, index) => {
     const lastInput = stretch.at(-1)!;
     // Still going: the last stretch, under an hour since its last action, whether the extension beats now or not (a break).
     const going = index === stretches.length - 1 && now - lastInput < endAfter;
     const pieces = splitWhere(stretch, (gap) => gap > pauseAfter);
     const sent = pieces.map((piece, at) => messagesIn(piece[0]!, pieces[at + 1]?.[0] ?? (going ? now + 1 : piece.at(-1)! + pauseAfter)));
-    // The pieces at the start and, once it is over, at the end with too few messages each are not the shift.
+    // The body: from the first to the last piece with enough messages (once it is over; while it goes, to now).
     let first = 0;
     let last = pieces.length;
     if (!going) while (last - first > 1 && sent[last - 1]! < CHATTER_SHIFT_PIECE_MIN_MESSAGES) last -= 1;
     while (last - first > 1 && sent[first]! < CHATTER_SHIFT_PIECE_MIN_MESSAGES) first += 1;
+    // Its edges: the piece next to it, and the blocks beyond with enough messages.
+    if (!going) {
+      last += edgeKept(pieces.slice(last).map((piece, at) => ({ gap: piece[0]! - pieces[last + at - 1]!.at(-1)!, messages: sent[last + at]! })));
+    }
+    first -= edgeKept(pieces.slice(0, first).reverse().map((piece, at) => ({ gap: pieces[first - at]![0]! - piece.at(-1)!, messages: sent[first - at - 1]! })));
     const body = pieces.slice(first, last).flat();
     const core = workOf(body, going ? now : endOf(body.at(-1)!), going);
     const shift = going ? messagesOf(core) >= CHATTER_SHIFT_PIECE_MIN_MESSAGES : isShift(core);
     if (!shift) {
-      out.push(finish(workOf(stretch, going ? now : endOf(lastInput), going), "visit"));
+      segments.push({ kind: "visit", part: stretch, end: going ? now : endOf(lastInput), ongoing: going });
       return;
     }
     if (first > 0) {
       const head = pieces.slice(0, first).flat();
-      out.push(finish(workOf(head, endOf(head.at(-1)!), false), "visit"));
+      segments.push({ kind: "visit", part: head, end: endOf(head.at(-1)!), ongoing: false });
     }
-    out.push(finish(core, "shift"));
-    if (last < pieces.length) out.push(finish(workOf(pieces.slice(last).flat(), endOf(lastInput), false), "visit"));
+    segments.push({ kind: "shift", part: body, end: core.endedAt, ongoing: going });
+    if (last < pieces.length) segments.push({ kind: "visit", part: pieces.slice(last).flat(), end: endOf(lastInput), ongoing: false });
   });
-  return out;
+
+  // A look-in with enough messages that ended at most LOOK_IN_JOIN before a shift began is its start, and so on back;
+  // what lies between joins it too. Only before: answers after a shift stay a look-in.
+  const joinBefore = CHATTER_SHIFT_LOOK_IN_JOIN_MINUTES * MINUTE_MS;
+  const joined: Segment[] = [];
+  for (const segment of segments) {
+    if (segment.kind === "shift") {
+      let start = segment.part[0]!;
+      let from = joined.length;
+      for (let before = joined.length - 1; before >= 0 && joined[before]!.kind === "visit" && joined[before]!.end >= start - joinBefore; before -= 1) {
+        const visit = joined[before]!;
+        if (messagesIn(visit.part[0]!, visit.end) < CHATTER_SHIFT_PIECE_MIN_MESSAGES) continue;
+        from = before;
+        start = visit.part[0]!;
+      }
+      if (from < joined.length) {
+        const look = joined.splice(from).flatMap((visit) => visit.part);
+        joined.push({ ...segment, part: [...look, ...segment.part] });
+        continue;
+      }
+    }
+    joined.push(segment);
+  }
+  return joined.map((segment) => finish(workOf(segment.part, segment.end, segment.ongoing), segment.kind));
 }
 
 /** The instant in the middle of a piece of work: the Moscow day holding most of it holds this (a tie: the day it began). Pure. */
