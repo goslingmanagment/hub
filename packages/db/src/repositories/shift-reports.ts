@@ -136,14 +136,21 @@ export async function listSaleFacts(db: Database, input: { transactionIds: reado
           when s.kind <> 'message_purchase' then null
           -- Fansly: the page's message that carried the bought media or bundle to
           -- the fan. Before the purchase the projection files the offer under the
-          -- model's id, not the buyer's: the fan's chat finds it then.
-          when s.platform = 'fansly' then (
-            select mo.message_ref from message_media_offers mo
-            where mo.page_id = s.page_id
-              and (mo.fan_platform_user_id = s.fan_ref or mo.conversation_ref = any(c.refs))
-              and (mo.media_offer_ref = s.correlation_id or mo.bundle_ref = s.correlation_id)
-              and coalesce(mo.message_created_at, s.occurred_at) <= s.occurred_at
-            order by (mo.fan_platform_user_id = s.fan_ref) desc, mo.message_created_at desc nulls last limit 1)
+          -- model's id, not the buyer's: the fan's chat finds it then. By the
+          -- offer's media id (indexed) first; a bundle's id is its media id too in
+          -- every row so far, so the bundle look-up (no index: the page's offers
+          -- one by one, ~40k) runs only when the first finds nothing.
+          when s.platform = 'fansly' then coalesce(
+            (select mo.message_ref from message_media_offers mo
+              where mo.page_id = s.page_id and mo.media_offer_ref = s.correlation_id
+                and (mo.fan_platform_user_id = s.fan_ref or mo.conversation_ref = any(c.refs))
+                and coalesce(mo.message_created_at, s.occurred_at) <= s.occurred_at
+              order by (mo.fan_platform_user_id = s.fan_ref) desc, mo.message_created_at desc nulls last limit 1),
+            (select mo.message_ref from message_media_offers mo
+              where mo.page_id = s.page_id and mo.bundle_ref = s.correlation_id
+                and (mo.fan_platform_user_id = s.fan_ref or mo.conversation_ref = any(c.refs))
+                and coalesce(mo.message_created_at, s.occurred_at) <= s.occurred_at
+              order by (mo.fan_platform_user_id = s.fan_ref) desc, mo.message_created_at desc nulls last limit 1))
           -- OnlyFans: the unlock paired with this purchase, one to one.
           else (select l.ref from of_links l where l.id = s.id)
         end as message_ref
