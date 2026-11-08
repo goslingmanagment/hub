@@ -3,6 +3,7 @@ import {
   SHIFT_REVIEW_AI_LOOKBACK_MINUTES,
   SHIFT_REVIEW_AI_SHARE,
   SHIFT_REVIEW_CONTEXT_MESSAGES,
+  SHIFT_REVIEW_DELETED_UNSEEN_SECONDS,
   SHIFT_REVIEW_LATER_SALES_DAYS,
   SHIFT_REVIEW_NEIGHBOUR_DAYS,
   SHIFT_REVIEW_WAIT_HORIZON_HOURS,
@@ -265,6 +266,14 @@ export function marksOf(text: string, fanWritesRussian: boolean): ShiftReviewMin
   return marks;
 }
 
+/**
+ * The other side could see the message: not deleted, or deleted SHIFT_REVIEW_DELETED_UNSEEN_SECONDS after it was sent or
+ * later (owner, 2026-11-08). One deleted sooner starts no wait and answers none. Pure.
+ */
+export function seenMessage(message: Pick<ShiftReviewMessageRow, "at" | "deletedAt">): boolean {
+  return message.deletedAt === null || message.deletedAt.getTime() - message.at.getTime() >= SHIFT_REVIEW_DELETED_UNSEEN_SECONDS * 1000;
+}
+
 export interface ChatMessage extends ShiftReviewMessageRow {
   by: ShiftReviewMessage["by"];
   personal: boolean;
@@ -285,7 +294,8 @@ export interface ChatWait {
 /**
  * The waits of one chat, oldest first: from the fan's first message after the
  * page's last personal one (any author's; a mass or automated message answers
- * nobody) to the next personal one, or to `end`. A fan's message older than the
+ * nobody) to the next personal one, or to `end`. A message deleted before the
+ * other side could see it (`seenMessage`) is neither. A fan's message older than the
  * horizon is not waited on — before the answer, or, for a wait still open at the
  * end, before the shift's `start` (the window the messages are read in) — and
  * the wait begins at the fan's first message within it: an old unanswered one
@@ -299,6 +309,7 @@ export function waitsOf(messages: readonly ChatMessage[], userId: number, start:
   const firstAfter = (limit: number) => fanAts.find((at) => at > limit) ?? null;
   for (const message of messages) {
     const at = message.at.getTime();
+    if (!seenMessage(message)) continue;
     if (!message.sent) {
       fanAts.push(at);
       continue;
@@ -331,7 +342,7 @@ export function pendingSendsByChat(sends: readonly ShiftReviewSendRow[], userId:
     const key = `${send.pageId}:${conv}`;
     const message: ChatMessage = {
       pageId: send.pageId, platform: send.platform, conv, ref: send.ref, at: send.observedAt, sent: true, text: "", priceMills: null, tipMills: null,
-      media: 0, fanNativeId: null, mass: false, authorId: userId, authorName: username, bought: null, unarchived: true,
+      media: 0, fanNativeId: null, mass: false, authorId: userId, authorName: username, bought: null, unarchived: true, deletedAt: null,
       by: "me", personal: true, pending: true,
     };
     out.set(key, [...(out.get(key) ?? []), message]);
@@ -565,6 +576,7 @@ export async function readTeamShiftReview(
   const [rows, sends, generations, autoTexts, minutes, sales, before] = await Promise.all([
     listShiftReviewMessages(app.db, {
       userId: query.userId, pageIds, workedPageIds, from, to, horizonHours: SHIFT_REVIEW_WAIT_HORIZON_HOURS, burstMinChats: MASS_SEND_MIN_CHATS,
+      deletedUnseenSeconds: SHIFT_REVIEW_DELETED_UNSEEN_SECONDS,
     }),
     listShiftReviewSends(app.db, { userId: query.userId, pageIds, from, to }),
     listShiftReviewGenerations(app.db, {
@@ -597,7 +609,8 @@ export async function readTeamShiftReview(
         by = text !== "" && openings.some((opening) => text.startsWith(opening)) ? "auto" : "none";
       }
     }
-    chat.messages.push({ ...row, by, personal: row.sent && !row.mass && by !== "auto", pending: false });
+    // A page message deleted before the fan could see it answers nobody: shown, struck through.
+    chat.messages.push({ ...row, by, personal: row.sent && !row.mass && by !== "auto" && seenMessage(row), pending: false });
     chats.set(key, chat);
   }
   const pendingSends = pendingSendsByChat(sends, query.userId, person.username);
@@ -616,7 +629,7 @@ export async function readTeamShiftReview(
   for (const [key, chat] of chats) {
     for (const message of chat.messages) {
       const atMs = message.at.getTime();
-      if (message.by !== "me" || atMs < start || atMs > end) continue;
+      if (message.by !== "me" || atMs < start || atMs > end || !seenMessage(message)) continue;
       if (sendByRef.get(`${message.pageId}:${message.ref}`)?.composedWith === "hi") continue;
       const text = normalized(message.text);
       if (text.split(" ").length < REPEAT_MIN_WORDS) continue;
@@ -718,6 +731,7 @@ export async function readTeamShiftReview(
           byName: message.by === "other" ? message.authorName : null,
           mass: message.mass,
           unarchived: message.unarchived,
+          ...(message.deletedAt === null ? {} : { deletedAt: message.deletedAt.toISOString() }),
           mine,
         };
       }),

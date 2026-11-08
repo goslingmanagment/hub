@@ -24,6 +24,18 @@ export function notOwnAccountMessageSql(alias: string): SQL {
   )`;
 }
 
+/**
+ * The message_archive row aliased `alias` was there for the other side to see: not deleted, or deleted `unseenSeconds`
+ * after it was sent or later (owner, 2026-11-08). One deleted sooner most likely nobody saw: a fan's starts no wait, a
+ * page's answers none and is not the chatter's message. A Fansly deletion keeps the text (`deleted_at` alone). A
+ * deletion that came before the message's content (a content_pending stub, no text) goes by the same rule: Fansly's
+ * socket names the send time, and most such stubs are sends recalled within seconds (production, 2026-11-08).
+ */
+export function seenMessageSql(alias: string, unseenSeconds: number): SQL {
+  const m = tableOf(alias);
+  return sql`(${m}.deleted_at is null or ${m}.deleted_at >= ${m}.occurred_at + make_interval(secs => ${unseenSeconds}))`;
+}
+
 function columnOf(column: string): SQL {
   if (!/^[a-z_][a-z0-9_]*\.[a-z_][a-z0-9_]*$/.test(column)) throw new Error(`Invalid SQL column: ${column}`);
   return sql.raw(column);

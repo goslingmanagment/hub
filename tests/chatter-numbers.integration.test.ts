@@ -84,7 +84,7 @@ describe("the numbers of a chatter's shift", () => {
 
   it("counts the chatter's messages, replies, PPV, payers and who waits at the end", async (context) => {
     if (!testDb) return context.skip();
-    const row = await readShiftNumbers(app.db, { userId: vanya, pageIds: [pageId], from: at(60), to: end, burstMinChats: 5 });
+    const row = await readShiftNumbers(app.db, { userId: vanya, pageIds: [pageId], from: at(60), to: end, burstMinChats: 5, deletedUnseenSeconds: 60 });
     expect(row).toEqual({
       messages: 2,
       ppvSent: 1,
@@ -121,7 +121,7 @@ describe("the numbers of a chatter's shift", () => {
                values ('fansly', $1, $2, $3, $4, 'fansly-extension', false, false, $5, 'hand')`,
         [page, String(9300000010 + index), String(7300000001 + index), vanya, at(20)]);
     }
-    const row = await readShiftNumbers(app.db, { userId: vanya, pageIds: [page], from: at(60), to: end, burstMinChats: 5 });
+    const row = await readShiftNumbers(app.db, { userId: vanya, pageIds: [page], from: at(60), to: end, burstMinChats: 5, deletedUnseenSeconds: 60 });
     expect(row).toMatchObject({ messages: 5, replyDelays: [], waitingAtEnd: 1 });
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
@@ -215,11 +215,52 @@ describe("the numbers of a chatter's shift", () => {
       });
     }
 
-    const row = await readShiftNumbers(app.db, { userId: vanya, pageIds: [page], from: at(45), to: end, burstMinChats: 5 });
+    const row = await readShiftNumbers(app.db, { userId: vanya, pageIds: [page], from: at(45), to: end, burstMinChats: 5, deletedUnseenSeconds: 60 });
     expect(row).toMatchObject({ ppvSent: 2, ppvBought: 1, boughtPrices: [30_000] });
     const review = await listShiftReviewMessages(app.db, {
-      userId: vanya, pageIds: [page], workedPageIds: [], from: at(45), to: end, horizonHours: 72, burstMinChats: 5,
+      userId: vanya, pageIds: [page], workedPageIds: [], from: at(45), to: end, horizonHours: 72, burstMinChats: 5, deletedUnseenSeconds: 60,
     });
     expect(review.map((message) => [message.ref, message.bought])).toEqual([["9500000001", true], ["9500000002", false]]);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("counts a message deleted a minute or more after it was sent, and leaves out one deleted sooner", async (context) => {
+    if (!testDb) return context.skip();
+    // The audit of 2026-11-07: a fan who erased the chat a day later took their waits out of a closed shift; a send the
+    // chatter recalled in 6 s counted as a reply. Owner, 2026-11-08: what the other side could see counts.
+    const model = await createModel(app.db, { slug: "erased", name: "Erased" });
+    const page = (await createFanslyPage(app.db, { modelId: model!.id, label: "erased-1" }))!.id;
+    const archive = (ref: string, fromFan: boolean, minutesBeforeEnd: number, deletedAfterSeconds: number | null, stub = false) => q(
+      `insert into message_archive (account_id, platform, conversation_ref, message_ref, sender_role, is_sent_by_me, occurred_at, text_plain,
+         media_metadata, message_type, deleted_at, content_pending)
+       values ($1, 'fansly', '8960000001', $2, $3, $4, $5, $6, '[]'::jsonb, 1, $7, $8)`,
+      [page, ref, fromFan ? "fan" : "model", !fromFan, at(minutesBeforeEnd), stub ? "" : `text ${ref}`,
+        deletedAfterSeconds === null ? null : new Date(at(minutesBeforeEnd).getTime() + deletedAfterSeconds * 1000), stub]);
+    const sent = (ref: string, minutesBeforeEnd: number) => q(
+      `insert into client_send_attributions (platform, page_id, platform_message_id, fan_ref, user_id, source, priced, with_media, observed_at, composed_with)
+       values ('fansly', $1, $2, '7600000001', $3, 'fansly-extension', false, false, $4, 'hand')`, [page, ref, vanya, at(minutesBeforeEnd)]);
+    // The fan wrote and deleted it half an hour later; Ваня sent a text and recalled it in 6 s, then answered.
+    await archive("9600000001", true, 50, 30 * 60);
+    await archive("9600000002", false, 45, 6);
+    await sent("9600000002", 45);
+    await archive("9600000003", false, 44, null);
+    await sent("9600000003", 44);
+    // The fan wrote and deleted it in 40 s; Ваня wrote again — no reply. Two deletions that came before their text: one
+    // recalled in 5 s (most such stubs on production), one deleted 5 minutes later.
+    await archive("9600000004", true, 30, 40);
+    await archive("9600000005", false, 20, null);
+    await sent("9600000005", 20);
+    await archive("9600000006", false, 10, 5, true);
+    await sent("9600000006", 10);
+    await archive("9600000007", false, 8, 300, true);
+    await sent("9600000007", 8);
+
+    const row = await readShiftNumbers(app.db, { userId: vanya, pageIds: [page], from: at(60), to: end, burstMinChats: 5, deletedUnseenSeconds: 60 });
+    expect(row).toMatchObject({ messages: 3, replyDelays: [360], composed: { hand: 3, reply: 0, fix: 0, other: 0 }, waitingAtEnd: 0 });
+    const review = await listShiftReviewMessages(app.db, {
+      userId: vanya, pageIds: [page], workedPageIds: [page], from: at(60), to: end, horizonHours: 72, burstMinChats: 5, deletedUnseenSeconds: 60,
+    });
+    expect(review.map((message) => [message.ref, message.deletedAt === null ? null : (message.deletedAt.getTime() - message.at.getTime()) / 1000]))
+      .toEqual([["9600000001", 1800], ["9600000002", 6], ["9600000003", null], ["9600000004", 40], ["9600000005", null], ["9600000007", 300]]);
+    expect(review[0]!.text).toBe("text 9600000001");
   }, INTEGRATION_TEST_TIMEOUT_MS);
 });

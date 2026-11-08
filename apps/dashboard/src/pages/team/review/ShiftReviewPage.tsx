@@ -14,7 +14,7 @@ import { shiftSpan } from "@/pages/team/TeamShiftsPage";
 import { ChatterLink, PageLink } from "@/pages/team/teamLinks";
 import { ShiftChats, type ChatsView } from "./ShiftChats.js";
 import { ShiftPulse } from "./ShiftPulse.js";
-import { CHATTER_SHIFT_PAGE_MIN_MESSAGES, SHIFT_REVIEW_LATER_SALES_DAYS, SHIFT_REVIEW_NEIGHBOUR_DAYS } from "@agency_hub_core/contracts";
+import { CHATTER_SHIFT_PAGE_MIN_MESSAGES, SHIFT_REVIEW_LATER_SALES_DAYS, SHIFT_REVIEW_NEIGHBOUR_DAYS, type TeamShiftReviewResponse } from "@agency_hub_core/contracts";
 import {
   CHAT_KINDS,
   CHAT_SHOWS,
@@ -62,6 +62,13 @@ const ORIGIN_TITLE = "Откуда пришли продажи смены — т
 const AROUND_TITLE = "До неё, без смены — продажи страниц смены от конца прошлой смены чаттера (не раньше суток) до начала этой, которые не держала "
   + "ни одна смена и ни один заход, фанам, которым чаттер отправил купленный PPV или писал последним. PPV этой смены, купленные позже — "
   + `PPV, которые чаттер отправил в эту смену, а фан купил после её конца (до ${SHIFT_REVIEW_LATER_SALES_DAYS} дней), и чья смена держала покупку`;
+
+/** The header's line on the chatter's deleted messages: shown struck through, but the quick ones the archive has no text of are not. */
+function deletedNote(data: TeamShiftReviewResponse): string {
+  const shown = data.chats.reduce((sum, chat) => sum + chat.messages.filter((message) => message.by === "me" && message.inShift && message.deletedAt !== undefined).length, 0);
+  const missing = Math.max(0, data.deleted - shown);
+  return `${formatCount(data.deleted)} сообщ. чаттера удалены после отправки — они зачёркнуты${missing > 0 ? `, у ${formatCount(missing)} нет текста, их здесь нет` : ""}; удалённые быстрее минуты не в счёте.`;
+}
 
 export function reviewHref(userId: number, at: string, keep?: URLSearchParams): string {
   const params = new URLSearchParams({ user: String(userId), at });
@@ -395,7 +402,7 @@ function ShiftReview({ userId, at }: { userId: number; at: string }) {
           <p className="card-description">
             ← и → — соседний чат.
             {data.unarchived > 0 && ` ${formatCount(data.unarchived)} сообщ. чаттера ещё нет в архиве — их нет и здесь.`}
-            {data.deleted > 0 && ` ${formatCount(data.deleted)} сообщ. удалены после отправки — их здесь нет.`}
+            {data.deleted > 0 && ` ${deletedNote(data)}`}
           </p>
         </header>
         <div className="card-body">

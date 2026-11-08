@@ -561,6 +561,10 @@
   .sr-msg-mine .sr-bubble { border-color: var(--color-border); background: var(--color-card); box-shadow: inset 4px 0 0 var(--sr-origin, transparent); padding-left: 14px; }
   .sr-msg-before .sr-bubble, .sr-msg-page.sr-msg-before .sr-bubble { border: 1px dashed var(--color-border); background: transparent; }
   .sr-msg-picked .sr-bubble { box-shadow: 0 0 0 2px var(--color-accent-border), inset 4px 0 0 var(--sr-origin, transparent); }
+  /* Deleted after it was sent: a fan's pale, the page's struck through. */
+  .sr-msg-deleted.sr-msg-fan .sr-bubble { opacity: 0.6; }
+  .sr-msg-deleted.sr-msg-page .sr-bubble > p:first-child { text-decoration: line-through; text-decoration-color: var(--color-text-muted); }
+  .sr-deleted { color: var(--color-text-secondary); }
   .sr-draft { margin-top: 4px; font-size: 13px; line-height: 18px; color: var(--color-text-secondary); white-space: pre-wrap; }
   .sr-draft-label { color: var(--color-text-muted); }
   .sr-meta { display: flex; flex-wrap: wrap; gap: 2px 8px; margin-top: 4px; font-size: 12px; line-height: 16px; color: var(--color-text-muted); font-variant-numeric: tabular-nums; }

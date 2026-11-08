@@ -18,10 +18,12 @@ import {
   cameBack,
   chatBusyIn,
   chatMatches,
+  deletedAfterSeconds,
   fanName,
   isHi,
   kindPasses,
   plainAiText,
+  seen,
   showPasses,
   sortSummaries,
   waitText,
@@ -161,9 +163,9 @@ function SummaryRow({ summary, active, showPage, outside, shiftStart, ongoing, o
         <span className="sr-chat-line">
           {outside && <span className="sr-chat-outside">вне отбора</span>}
           {showPage && <span>{chat.pageLabel}</span>}
-          {summary.kind === "colleague" ? <span>у коллег: {names(summary.colleagues)} · фан {formatCount(summary.fan)}</span>
+          {summary.kind === "colleague" ? <span>у коллег: {names(summary.colleagues)} · фан {fanCount(summary)}</span>
             : summary.kind === "waiting" ? <span>в смену в чате не писали</span>
-              : <span>чаттер {formatCount(summary.mine)} · фан {formatCount(summary.fan)}</span>}
+              : <span>чаттер {formatCount(summary.mine)} · фан {fanCount(summary)}</span>}
           {summary.kind !== "colleague" && summary.colleagues.length > 0 && <span>ещё {names(summary.colleagues)}</span>}
           {chat.fanLifetimeNetMills !== null && chat.fanLifetimeNetMills > 0 && <span>принёс {formatMills(chat.fanLifetimeNetMills)}</span>}
         </span>
@@ -200,6 +202,11 @@ function SummaryRow({ summary, active, showPage, outside, shiftStart, ongoing, o
       </button>
     </li>
   );
+}
+
+/** The fan's messages of the shift: «69 (удалил 66)». */
+function fanCount(summary: ChatSummary): string {
+  return `${formatCount(summary.fan)}${summary.fanDeleted > 0 ? ` (удалил ${formatCount(summary.fanDeleted)})` : ""}`;
 }
 
 const OTHERS_TITLE = "Продажи этому фану в смену, которые не в продажах смены: их засчитали коллеге, который последним писал фану или держал страницу, или ни одной смене";
@@ -275,7 +282,11 @@ function Bubble({ message, picked, showDraft, answered, shiftStart, username }: 
       : message.by === "auto" ? "автосообщение"
         : message.by === "me" && !message.inShift ? `${username}, до смены`
           : null;
-  const classes = ["sr-msg", fan ? "sr-msg-fan" : "sr-msg-page", mine ? "sr-msg-mine" : "", !message.inShift ? "sr-msg-before" : "", picked ? "sr-msg-picked" : ""].join(" ");
+  const deletedAfter = deletedAfterSeconds(message);
+  const classes = [
+    "sr-msg", fan ? "sr-msg-fan" : "sr-msg-page", mine ? "sr-msg-mine" : "", !message.inShift ? "sr-msg-before" : "", picked ? "sr-msg-picked" : "",
+    deletedAfter !== null ? "sr-msg-deleted" : "",
+  ].join(" ");
   const text = normalizeDmMessageText(message.text);
   const fixDraft = mine !== null && (mine.origin === "fix" || (mine.origin === "ai" && mine.aiFeature === "improve-draft"));
   const draft = showDraft && fixDraft && mine?.draft ? mine.draft.trim() : "";
@@ -296,6 +307,11 @@ function Bubble({ message, picked, showDraft, answered, shiftStart, username }: 
           {message.tipMills !== null && <span>чаевые {formatMills(message.tipMills)}</span>}
           {message.mass && <span>рассылка</span>}
           {author && <span>{author}</span>}
+          {deletedAfter !== null && (
+            <span className="sr-deleted" title={fan ? DELETED_FAN_TITLE : DELETED_PAGE_TITLE}>
+              {fan ? "фан удалил" : "удалено"} через {waitText(deletedAfter)}{!seen(message) && " — не в счёте"}
+            </span>
+          )}
           {message.unarchived && (
             <span title="Fansly не отдал это сообщение в архив Hub (чат недоступен или выпал из синхронизации); текст и время — из сокета страницы, цены нет">
               нет в архиве Fansly, взято из сокета
@@ -317,6 +333,9 @@ function Bubble({ message, picked, showDraft, answered, shiftStart, username }: 
     </div>
   );
 }
+
+const DELETED_FAN_TITLE = "Фан удалил сообщение после отправки. Удалённое через минуту и позже чаттер мог увидеть: оно в ожиданиях и ответах. Удалённое быстрее — нет";
+const DELETED_PAGE_TITLE = "Сообщение удалили после отправки. Удалённое быстрее минуты фан скорее всего не видел: оно не ответ и не в числах смены. Удалённое позже — в счёте, как отправленное";
 
 function OriginLegend() {
   return (

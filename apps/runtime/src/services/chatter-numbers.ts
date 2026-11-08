@@ -1,6 +1,7 @@
 import {
   CHATTER_NUMBERS_MAX_DAYS,
   MASS_SEND_MIN_CHATS,
+  SHIFT_REVIEW_DELETED_UNSEEN_SECONDS,
   type ChatterNumbers,
   type TeamChatterNumbersResponse,
 } from "@agency_hub_core/contracts";
@@ -137,7 +138,7 @@ export async function readTeamChatterNumbers(
         const labels = [...shift.pages.keys()].sort();
         const row = await readShiftNumbers(app.db, {
           userId, pageIds: labels.map((label) => person.pageIds.get(label)!), from: new Date(shift.startedAt), to: new Date(shift.endedAt),
-          burstMinChats: MASS_SEND_MIN_CHATS,
+          burstMinChats: MASS_SEND_MIN_CHATS, deletedUnseenSeconds: SHIFT_REVIEW_DELETED_UNSEEN_SECONDS,
         });
         const { confirmed, revenueMills } = revenue[index + offset]!;
         return { shift, row, workedMinutes: shift.workedMinutes, revenueMills, confirmed };

@@ -1,7 +1,7 @@
 import { sql } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
-import { notOwnAccountMessageSql, ppvBoughtSql } from "./shift-sql.ts";
+import { notOwnAccountMessageSql, ppvBoughtSql, seenMessageSql } from "./shift-sql.ts";
 
 // The reads of Команда → «Разбор смены» (apps/runtime services/shift-review.ts):
 // the chats a chatter's shift touched with their messages, who sent each page
@@ -17,6 +17,12 @@ import { notOwnAccountMessageSql, ppvBoughtSql } from "./shift-sql.ts";
 // it: Fansly may never hand the archive a message of a chat it later refuses or
 // drops from sync, and the fan's wait still ended then. The archive's copy
 // wins once it is there.
+//
+// A deleted message stays, with its text and when it was deleted: a Fansly
+// deletion keeps the text. One deleted within `unseenSeconds` of being sent is
+// not `seen`: it brings in no chat and leaves no fan waiting. A deletion that
+// came before the message's content (a content_pending stub, no text) stays
+// only when seen: the quick ones are recalls, nothing to show.
 
 export interface ShiftReviewMessageRow {
   pageId: number;
@@ -39,6 +45,8 @@ export interface ShiftReviewMessageRow {
   bought: boolean | null;
   /** Not in the archive: the page socket's copy of a reported send (no price). */
   unarchived: boolean;
+  /** When the platform said it was deleted; null — not deleted. */
+  deletedAt: Date | null;
 }
 
 /**
@@ -54,6 +62,8 @@ export async function listShiftReviewMessages(
   db: Database,
   input: {
     userId: number; pageIds: readonly number[]; workedPageIds: readonly number[]; from: Date; to: Date; horizonHours: number; burstMinChats: number;
+    /** A message deleted sooner than this after it was sent is not seen. */
+    deletedUnseenSeconds: number;
   },
 ): Promise<ShiftReviewMessageRow[]> {
   if (input.pageIds.length === 0) return [];
@@ -66,28 +76,31 @@ export async function listShiftReviewMessages(
     page_id: string | number; platform: string; conv: string; ref: string; at: Date | string; sent: boolean; text: string | null;
     price_mills: string | number | null; tip_mills: string | number | null; media: string | number; fan_native_id: string | null;
     mass: boolean; author_id: string | number | null; author_name: string | null; bought: boolean | null; unarchived: boolean;
+    deleted_at: Date | string | null;
   }>(sql`
     with page_msgs as materialized (
       select m.account_id as page_id, m.platform, m.conversation_ref as conv, m.message_ref as ref, m.occurred_at as at,
         m.is_sent_by_me as sent, m.message_type, m.text_plain, m.price_mills, m.is_tip, m.tip_amount_mills, m.fan_native_id,
         case when jsonb_typeof(m.media_metadata) = 'array' then jsonb_array_length(m.media_metadata) else 0 end as media,
-        false as unarchived
+        false as unarchived, m.deleted_at, ${seenMessageSql("m", input.deletedUnseenSeconds)} as seen
       from message_archive m
-      where m.account_id = any(${pages}) and m.conversation_ref is not null and m.deleted_at is null
+      where m.account_id = any(${pages}) and m.conversation_ref is not null
+        and (not m.content_pending or ${seenMessageSql("m", input.deletedUnseenSeconds)})
         and m.occurred_at > ${horizon} and m.occurred_at < ${to}
         and ${notOwnAccountMessageSql("m")}
       union all
-      -- A reported send the archive has no row of (deleted or not): the socket's copy, while the socket holds it undeleted.
+      -- A reported send the archive has no row of (deleted or not): the socket's copy, deleted there or not.
       select l.page_id, a.platform, l.platform_conversation_id as conv, l.platform_message_id as ref, l.created_at as at,
         true as sent, l.message_type, l.content as text_plain, null::bigint as price_mills, false as is_tip, null::bigint as tip_amount_mills,
         null::text as fan_native_id,
         case when jsonb_typeof(l.attachments) = 'array' then jsonb_array_length(l.attachments) else 0 end as media,
-        true as unarchived
+        true as unarchived, l.deleted_at,
+        l.deleted_at is null or l.deleted_at >= l.created_at + make_interval(secs => ${input.deletedUnseenSeconds}) as seen
       from client_send_attributions a
       join dm_live_messages l on l.page_id = a.page_id and l.platform_message_id = a.platform_message_id
       where a.platform = 'fansly' and a.page_id = any(${pages})
         and a.observed_at > ${horizon} - interval '1 hour' and a.observed_at < ${to} + interval '1 hour'
-        and l.is_sent_by_page and l.deleted_at is null and l.platform_conversation_id is not null
+        and l.is_sent_by_page and l.platform_conversation_id is not null
         and l.created_at > ${horizon} and l.created_at < ${to}
         and not exists (
           select 1 from message_archive m where m.account_id = a.page_id and m.platform = a.platform and m.message_ref = a.platform_message_id)
@@ -101,14 +114,14 @@ export async function listShiftReviewMessages(
         and a.observed_at >= ${from} and a.observed_at < ${to}
     ),
     chats as materialized (
-      select page_id, conv from page_msgs where at >= ${from} and not sent and page_id = any(${worked})
+      select page_id, conv from page_msgs where at >= ${from} and not sent and seen and page_id = any(${worked})
       union
       select pm.page_id, pm.conv from page_msgs pm
       join mine x on x.page_id = pm.page_id and x.platform = pm.platform and x.ref = pm.ref
       union
       select page_id, conv from (
         select distinct on (page_id, conv) page_id, conv, sent
-        from page_msgs where at < ${from}
+        from page_msgs where at < ${from} and seen
         order by page_id, conv, at desc, ref desc
       ) last where not last.sent and last.page_id = any(${worked})
     ),
@@ -136,7 +149,7 @@ export async function listShiftReviewMessages(
         select 1 from bursts b
         where b.page_id = p.page_id and b.hour = date_trunc('hour', p.at)
           and b.shape = md5(coalesce(p.text_plain, '') || '|' || coalesce(p.price_mills, 0)::text || '|' || p.media::text))) as mass,
-      a.user_id as author_id, u.username as author_name, p.unarchived,
+      a.user_id as author_id, u.username as author_name, p.unarchived, p.deleted_at,
       case when not (p.sent and coalesce(p.price_mills, 0) > 0) then null
         else ${ppvBoughtSql({ pageId: "p.page_id", platform: "p.platform", ref: "p.ref", conv: "p.conv", at: "p.at" })}
       end as bought
@@ -162,6 +175,7 @@ export async function listShiftReviewMessages(
     authorName: row.author_name,
     bought: row.bought,
     unarchived: row.unarchived,
+    deletedAt: row.deleted_at === null ? null : new Date(row.deleted_at),
   }));
 }
 
