@@ -3,31 +3,71 @@ import {
   MASS_SEND_MIN_CHATS,
   SHIFT_REVIEW_BROADCAST_OWN_WORDS,
   SHIFT_REVIEW_DELETED_UNSEEN_SECONDS,
+  SHIFT_REVIEW_WAIT_HORIZON_HOURS,
+  shiftReviewCounts,
+  shiftReviewMedian,
+  shiftReviewMine,
+  shiftReviewWaits,
   type ChatterNumbers,
   type TeamChatterNumbersResponse,
 } from "@agency_hub_core/contracts";
-import { listConfirmedShiftCredits, readShiftNumbers, type ShiftNumbersRow } from "@agency_hub_core/db";
+import {
+  listAllAutomatedTexts,
+  listConfirmedShiftCredits,
+  listPagesByLabels,
+  listShiftReviewMessages,
+  listShiftReviewSends,
+  readShiftFans,
+  type ShiftFansRow,
+  type ShiftReviewMessageRow,
+  type ShiftReviewSendRow,
+} from "@agency_hub_core/db";
 
 import type { AppContext } from "../bootstrap.ts";
 import { requireDashboardUser, type AuthPrincipal } from "./auth.ts";
 import { middleOfWork, readPeopleWork } from "./chatter-shifts.ts";
 import { BadRequestError } from "./errors.ts";
+import { autoOpenings, pagesWithAllFans, piecesOf, shiftChatsOf, shiftNeedsColleagues, shiftPageLabels, shiftRuleDataOf } from "./shift-review.ts";
 
 /**
  * Chat Memory week 5 (docs/plans/2026-10-24-chat-memory/week-5.md §1): the
  * eight numbers of each chatter's shifts and week (`teamChatterNumbers`).
  *
  * A shift is services/chatter-shifts.ts's, of the window when the day it belongs
- * to is; its pages are those the chatter was active on. Only messages with the chatter as their author count — a message without
- * an author is nobody's; revenue only from the confirmed shift report (week 4),
- * and for a team lead only its lines on the lead's pages. The same for Fansly
- * and OnlyFans. A guide, not a basis for pay. Database only.
+ * to is. Its messages, replies, their median and the fans left without an
+ * answer at its end are «Разбор смены»'s, to the one: the review's reads of the
+ * shift (its pages, the pages whose every fan it answers for, `shiftChatsOf`)
+ * counted by the review's rules (`shiftReviewWaits`, `shiftReviewCounts` in
+ * packages/contracts). Only messages with the chatter as their author are the
+ * chatter's — a message without an author is nobody's; revenue only from the
+ * confirmed shift report (week 4), and for a team lead only its lines on the
+ * lead's pages. The same for Fansly and OnlyFans. A guide, not a basis for pay.
+ * Database only.
  */
 
 const DAY_MS = 86_400_000;
 const HOUR_SECONDS = 3600;
-/** Shifts read at once: one query each. */
-const SHIFT_READS_AT_ONCE = 4;
+/** Shifts read at once, one query at a time each: the API's pool holds ten connections for every request. */
+const SHIFT_READS_AT_ONCE = 6;
+
+export interface ShiftNumbersRow {
+  /** The chatter's personal messages of the shift the fans could see. */
+  messages: number;
+  /** The chatter's mass messages of the shift: in the shares of PPV and of how the messages were written, not in `messages`. */
+  massMessages: number;
+  ppvSent: number;
+  ppvBought: number;
+  /** The archive's price of each bought PPV, mills. */
+  boughtPrices: number[];
+  writtenFans: string[];
+  paidFans: string[];
+  /** How long the fan had waited for each of the chatter's replies (from the shift's start at most), seconds. */
+  replyDelays: number[];
+  /** How the chatter's messages of the shift, mass ones too, were written: the extension's word on each. */
+  composed: { hand: number; reply: number; fix: number; other: number };
+  /** The chatter's fans who wrote in the shift (or began waiting in it) and got no answer before its end. */
+  waitingAtEnd: number;
+}
 
 interface ShiftInput {
   workedMinutes: number;
@@ -35,11 +75,73 @@ interface ShiftInput {
   row: ShiftNumbersRow;
 }
 
-function median(values: readonly number[]): number | null {
-  if (values.length === 0) return null;
-  const sorted = [...values].sort((a, b) => a - b);
-  const middle = Math.floor(sorted.length / 2);
-  return sorted.length % 2 === 1 ? sorted[middle]! : Math.floor((sorted[middle - 1]! + sorted[middle]!) / 2);
+/**
+ * The numbers of a shift from the review's reads of it, by the review's rules: the same chats, waits and counts as
+ * «Разбор смены» shows, and how each of the chatter's messages was written. `end` — the shift's end, now for one going
+ * on. Pure.
+ */
+export function shiftNumbersOf(input: {
+  rows: readonly ShiftReviewMessageRow[];
+  sends: readonly ShiftReviewSendRow[];
+  fans: ShiftFansRow;
+  userId: number;
+  username: string;
+  labelOf: ReadonlyMap<number, string>;
+  openings: readonly string[];
+  start: number;
+  end: number;
+}): ShiftNumbersRow {
+  const { start, end } = input;
+  const chats = shiftChatsOf({ rows: input.rows, sends: input.sends, userId: input.userId, username: input.username, openings: input.openings, start, end });
+  const data = shiftRuleDataOf(chats, input.labelOf, start, end);
+  const counts = shiftReviewCounts(data, shiftReviewWaits(data));
+  const composedWith = new Map(input.sends.map((send) => [`${send.pageId}:${send.ref}`, send.composedWith]));
+  const composed = { hand: 0, reply: 0, fix: 0, other: 0 };
+  chats.forEach((chat, index) => data.chats[index]!.messages.forEach((message, at) => {
+    if (!shiftReviewMine(message)) return;
+    const shown = chat.shown[at]!;
+    const how = composedWith.get(`${shown.pageId}:${shown.ref}`);
+    if (how === "hand" || how === "reply" || how === "fix") composed[how] += 1;
+    else composed.other += 1;
+  }));
+  return {
+    messages: counts.messages,
+    massMessages: counts.massMessages,
+    ppvSent: counts.ppvSent,
+    ppvBought: counts.ppvBought,
+    boughtPrices: counts.boughtPrices,
+    writtenFans: input.fans.writtenFans,
+    paidFans: input.fans.paidFans,
+    replyDelays: counts.replyDelays,
+    composed,
+    waitingAtEnd: counts.unanswered,
+  };
+}
+
+/**
+ * The numbers of one shift, read as «Разбор смены» reads it: the chats of its pages it wrote in, and every fan's of
+ * `allFansPageIds` (`pagesWithAllFans`), from the wait horizon before `start` to `end`.
+ */
+export async function readShiftNumbers(
+  app: AppContext,
+  input: {
+    userId: number; username: string; pages: ReadonlyArray<{ id: number; label: string }>; allFansPageIds: readonly number[];
+    start: number; end: number; openings: readonly string[];
+  },
+): Promise<ShiftNumbersRow> {
+  const { userId, start, end } = input;
+  const pageIds = input.pages.map((page) => page.id);
+  const from = new Date(start);
+  const to = new Date(end + 1);
+  // One query after another: the shifts are read side by side instead.
+  const rows = await listShiftReviewMessages(app.db, {
+    userId, pageIds, workedPageIds: input.allFansPageIds, from, to, horizonHours: SHIFT_REVIEW_WAIT_HORIZON_HOURS, burstMinChats: MASS_SEND_MIN_CHATS,
+    deletedUnseenSeconds: SHIFT_REVIEW_DELETED_UNSEEN_SECONDS, broadcastOwnWords: SHIFT_REVIEW_BROADCAST_OWN_WORDS, texts: "authorless",
+  });
+  const sends = await listShiftReviewSends(app.db, { userId, pageIds, from, to });
+  const fans = await readShiftFans(app.db, { userId, pageIds, from, to, deletedUnseenSeconds: SHIFT_REVIEW_DELETED_UNSEEN_SECONDS });
+  const labelOf = new Map(input.pages.map((page) => [page.id, page.label]));
+  return shiftNumbersOf({ rows, sends, fans, userId, username: input.username, labelOf, openings: input.openings, start, end });
 }
 
 function averagePrice(prices: readonly number[]): number | null {
@@ -72,29 +174,33 @@ export function revenueOfShifts(
   return out;
 }
 
-/** The numbers of one or more shifts together: a fan written to in several counts once; `waitingAtEnd` of several is their average. Pure. */
+/**
+ * The numbers of one or more shifts together: a fan written to in several counts once; `waitingAtEnd` of several is
+ * their average; the median reply is the review's, to the second. Pure.
+ */
 export function numbersOf(shifts: readonly ShiftInput[]): ChatterNumbers {
   const rows = shifts.map((shift) => shift.row);
   const sum = (pick: (row: ShiftNumbersRow) => number) => rows.reduce((total, row) => total + pick(row), 0);
   const confirmed = shifts.filter((shift) => shift.revenueMills !== null);
   const revenue = confirmed.length === 0 ? null : confirmed.reduce((total, shift) => total + shift.revenueMills!, 0);
   const confirmedMinutes = confirmed.reduce((total, shift) => total + shift.workedMinutes, 0);
-  const messages = sum((row) => row.messages);
+  const allMessages = sum((row) => row.messages + row.massMessages);
   const ppvSent = sum((row) => row.ppvSent);
   const delays = rows.flatMap((row) => row.replyDelays);
+  const middle = shiftReviewMedian(delays);
   return {
     workedMinutes: shifts.reduce((total, shift) => total + shift.workedMinutes, 0),
     revenueMills: revenue,
     revenuePerHourMills: revenue === null || confirmedMinutes === 0 ? null : Number((BigInt(revenue) * 60n) / BigInt(confirmedMinutes)),
     fansWritten: new Set(rows.flatMap((row) => row.writtenFans)).size,
     fansPaid: new Set(rows.flatMap((row) => row.paidFans)).size,
-    messages,
+    messages: sum((row) => row.messages),
     ppvSent,
     ppvBought: sum((row) => row.ppvBought),
     ppvAveragePriceMills: averagePrice(rows.flatMap((row) => row.boughtPrices)),
-    ppvShare: messages === 0 ? null : ppvSent / messages,
+    ppvShare: allMessages === 0 ? null : ppvSent / allMessages,
     replies: delays.length,
-    replyMedianSeconds: median(delays),
+    replyMedianSeconds: middle === null ? null : Math.round(middle),
     repliesWithinHour: delays.filter((delay) => delay <= HOUR_SECONDS).length,
     waitingAtEnd: rows.length === 0 ? 0 : Math.round(sum((row) => row.waitingAtEnd) / rows.length),
     composed: {
@@ -104,6 +210,21 @@ export function numbersOf(shifts: readonly ShiftInput[]): ChatterNumbers {
       other: sum((row) => row.composed.other),
     },
   };
+}
+
+/** `run` over `items`, at most `limit` at once; the results in the items' order. */
+async function eachAtMost<T, R>(items: readonly T[], limit: number, run: (item: T) => Promise<R>): Promise<R[]> {
+  const out = new Array<R>(items.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      const index = next;
+      next += 1;
+      out[index] = await run(items[index]!);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return out;
 }
 
 export async function readTeamChatterNumbers(
@@ -121,34 +242,45 @@ export async function readTeamChatterNumbers(
   }
 
   // A day more on each side, so the shifts of the window are whole.
-  const people = await readPeopleWork(app.db, {
-    from: new Date(from.getTime() - DAY_MS), to: new Date(Math.min(to.getTime() + DAY_MS, now.getTime())), now, pages: input.pageScope ?? "all",
-    ...(input.userId === undefined ? {} : { userId: input.userId }),
+  const around = { from: new Date(from.getTime() - DAY_MS), to: new Date(Math.min(to.getTime() + DAY_MS, now.getTime())), now };
+  const scope = input.pageScope ?? "all";
+  // Whether a page with fewer of the person's messages shows all its fans is a question of the colleagues' shifts on every
+  // page (`pagesWithAllFans`), so everyone's work, read beside the people asked when it is not theirs already.
+  const whole = scope === "all" && input.userId === undefined;
+  const [people, others] = await Promise.all([
+    readPeopleWork(app.db, { ...around, pages: scope, ...(input.userId === undefined ? {} : { userId: input.userId }) }),
+    whole ? null : readPeopleWork(app.db, { ...around, pages: "all" }),
+  ]);
+  const jobs = [...people].flatMap(([userId, person]) => person.work
+    .filter((shift) => shift.kind === "shift" && middleOfWork(shift) >= from.getTime() && middleOfWork(shift) < to.getTime())
+    .map((shift) => ({ userId, username: person.username, shift })));
+  if (jobs.length === 0) return { from: from.toISOString(), to: to.toISOString(), chatters: [], serverNow: now.toISOString() };
+
+  // As the review reads a shift: its pages, the automated texts, the colleagues' shifts.
+  const chatterIds = [...new Set(jobs.map((job) => job.userId))];
+  const [known, autoTexts, reports] = await Promise.all([
+    listPagesByLabels(app.db, [...new Set(jobs.flatMap(({ shift }) => shiftPageLabels(shift)))]),
+    listAllAutomatedTexts(app.db),
+    Promise.all(chatterIds.map((userId) => listConfirmedShiftCredits(app.db, { userId, since: new Date(from.getTime() - DAY_MS), pageIds: scope }))),
+  ]);
+  const shiftsOfAll = jobs.some(({ shift }) => shiftNeedsColleagues(shift)) ? piecesOf(others ?? people, "shift") : [];
+  const openings = autoOpenings(autoTexts);
+  const rows = await eachAtMost(jobs, SHIFT_READS_AT_ONCE, ({ userId, username, shift }) => {
+    const end = shift.ongoing ? now.getTime() : shift.endedAt;
+    const pages = shiftPageLabels(shift).flatMap((label) => known.filter((page) => page.label === label));
+    const allFans = pagesWithAllFans(shift, shiftsOfAll.filter((one) => one.userId !== userId), shift.startedAt, end);
+    return readShiftNumbers(app, {
+      userId, username, pages, allFansPageIds: pages.filter((page) => allFans.has(page.label)).map((page) => page.id), start: shift.startedAt, end, openings,
+    });
   });
 
-  const chatters: TeamChatterNumbersResponse["chatters"] = [];
-  for (const [userId, person] of people) {
-    const shifts = person.work
-      .filter((shift) => shift.kind === "shift" && middleOfWork(shift) >= from.getTime() && middleOfWork(shift) < to.getTime());
-    if (shifts.length === 0) continue;
-    const reports = await listConfirmedShiftCredits(app.db, { userId, since: new Date(from.getTime() - DAY_MS), pageIds: input.pageScope ?? "all" });
-    const revenue = revenueOfShifts(shifts, reports);
-    const computed: Array<ShiftInput & { shift: (typeof shifts)[number]; confirmed: boolean }> = [];
-    for (let index = 0; index < shifts.length; index += SHIFT_READS_AT_ONCE) {
-      computed.push(...await Promise.all(shifts.slice(index, index + SHIFT_READS_AT_ONCE).map(async (shift, offset) => {
-        const labels = [...shift.pages.keys()].sort();
-        const row = await readShiftNumbers(app.db, {
-          userId, pageIds: labels.map((label) => person.pageIds.get(label)!), from: new Date(shift.startedAt), to: new Date(shift.endedAt),
-          burstMinChats: MASS_SEND_MIN_CHATS, deletedUnseenSeconds: SHIFT_REVIEW_DELETED_UNSEEN_SECONDS,
-          broadcastOwnWords: SHIFT_REVIEW_BROADCAST_OWN_WORDS,
-        });
-        const { confirmed, revenueMills } = revenue[index + offset]!;
-        return { shift, row, workedMinutes: shift.workedMinutes, revenueMills, confirmed };
-      })));
-    }
-    chatters.push({
+  const chatters: TeamChatterNumbersResponse["chatters"] = chatterIds.map((userId, chatter) => {
+    const mine = jobs.flatMap((job, index) => (job.userId === userId ? [{ shift: job.shift, row: rows[index]! }] : []));
+    const revenue = revenueOfShifts(mine.map((one) => one.shift), reports[chatter]!);
+    const computed = mine.map((one, index) => ({ ...one, workedMinutes: one.shift.workedMinutes, ...revenue[index]! }));
+    return {
       userId,
-      username: person.username,
+      username: people.get(userId)!.username,
       week: { ...numbersOf(computed), shifts: computed.length, unconfirmedShifts: computed.filter((one) => !one.confirmed).length },
       shifts: computed
         .sort((a, b) => b.shift.startedAt - a.shift.startedAt)
@@ -160,8 +292,8 @@ export async function readTeamChatterNumbers(
           confirmed: one.confirmed,
           numbers: numbersOf([one]),
         })),
-    });
-  }
+    };
+  });
   chatters.sort((a, b) => a.username.localeCompare(b.username));
   return { from: from.toISOString(), to: to.toISOString(), chatters, serverNow: now.toISOString() };
 }

@@ -1,7 +1,7 @@
 import { sql } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
-import { broadcastCtesSql, hiGreetingSql, notOwnAccountMessageSql, ppvBoughtSql, seenMessageSql, sentMediaKeySql } from "./shift-sql.ts";
+import { broadcastCtesSql, hiGreetingSql, notOwnAccountChatSql, notOwnAccountMessageSql, ppvBoughtSql, seenMessageSql, sentMediaKeySql } from "./shift-sql.ts";
 
 // The reads of Команда → «Разбор смены» (apps/runtime services/shift-review.ts):
 // the chats a chatter's shift touched with their messages, who sent each page
@@ -69,9 +69,15 @@ export async function listShiftReviewMessages(
     deletedUnseenSeconds: number;
     /** A broadcast's message with this many words of its own or more is personal. */
     broadcastOwnWords: number;
+    /**
+     * `authorless` — the text only of a page message without an author (an automated one is told by it), '' for the rest:
+     * the shift's numbers read no other text. Absent — every text.
+     */
+    texts?: "all" | "authorless";
   },
 ): Promise<ShiftReviewMessageRow[]> {
   if (input.pageIds.length === 0) return [];
+  const allTexts = input.texts !== "authorless";
   const pages = sql`${sql.param(input.pageIds.map(String))}::bigint[]`;
   const worked = sql`${sql.param(input.workedPageIds.map(String))}::bigint[]`;
   const from = sql`${input.from.toISOString()}::timestamptz`;
@@ -111,8 +117,7 @@ export async function listShiftReviewMessages(
         and l.created_at > ${horizon} and l.created_at < ${to}
         and not exists (
           select 1 from message_archive m where m.account_id = a.page_id and m.platform = a.platform and m.message_ref = a.platform_message_id)
-        and not exists (
-          select 1 from pages own where own.platform = a.platform and own.external_page_id in (l.platform_conversation_id, a.fan_ref))
+        and ${notOwnAccountChatSql({ pageId: "a.page_id", platform: "a.platform", conv: "l.platform_conversation_id", fan: "a.fan_ref" })}
     ),
     mine as materialized (
       select a.page_id, a.platform, a.platform_message_id as ref
@@ -149,7 +154,8 @@ export async function listShiftReviewMessages(
       select pm.* from page_msgs pm
       where (pm.page_id, pm.conv) in (select page_id, conv from chats)
     )
-    select p.page_id, p.platform, p.conv, p.ref, p.at, p.sent, left(p.text_plain, 2000) as text,
+    select p.page_id, p.platform, p.conv, p.ref, p.at, p.sent,
+      case when ${allTexts}::boolean or (p.sent and a.user_id is null) then left(p.text_plain, 2000) end as text,
       case when p.sent and p.price_mills > 0 then p.price_mills end as price_mills,
       case when not p.sent and p.is_tip and p.tip_amount_mills > 0 then p.tip_amount_mills end as tip_mills,
       p.media, p.fan_native_id,

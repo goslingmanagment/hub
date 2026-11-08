@@ -10,18 +10,32 @@ function tableOf(alias: string): SQL {
 }
 
 /**
- * The message_archive row aliased `alias` is not one of a chat with another
- * page of this hub (loravie ↔ loravievip forwarding media to each other): that
- * side is ours, not a fan. On OnlyFans the conversation ref names the other
- * account; on Fansly the fan's messages carry its id. Known account ids are
+ * The chat (its page, platform and conversation ref) is not one with another
+ * page of this hub (loravie ↔ loravievip forwarding media to each other, lora-2
+ * writing to lora-3): that side is ours, not a fan — every message of the chat,
+ * the page's too. On OnlyFans the conversation ref names the other account; on
+ * Fansly the chat's thread names its partner, and the fan's messages carry its
+ * id (`fan`: the row's other side, when it names it). Known account ids are
  * unique among a platform's pages (pages_platform_external_id_uniq).
  */
+export function notOwnAccountChatSql(columns: { pageId: string; platform: string; conv: string; fan: string }): SQL {
+  const [pageId, platform, conv, fan] = [columns.pageId, columns.platform, columns.conv, columns.fan].map(columnOf);
+  // The threads with our pages are a set read once a query (a hashed subplan), not a lookup for every row: thousands of
+  // rows a shift. A row with no conversation ref (an OnlyFans send) is no thread's.
+  return sql`(not exists (
+    select 1 from pages own where own.platform = ${platform} and own.external_page_id in (${conv}, ${fan})
+  ) and coalesce((${pageId}, ${conv}) not in (
+    select t.platform_account_id, t.platform_conversation_id
+    from page_dm_threads t
+    join pages p on p.id = t.platform_account_id
+    join pages own on own.platform = p.platform and own.external_page_id = t.partner_platform_user_id
+  ), true))`;
+}
+
+/** The message_archive row aliased `alias` is not of a chat with another page of this hub (`notOwnAccountChatSql`). */
 export function notOwnAccountMessageSql(alias: string): SQL {
-  const m = tableOf(alias);
-  return sql`not exists (
-    select 1 from pages own
-    where own.platform = ${m}.platform and own.external_page_id in (${m}.conversation_ref, ${m}.fan_native_id)
-  )`;
+  tableOf(alias);
+  return notOwnAccountChatSql({ pageId: `${alias}.account_id`, platform: `${alias}.platform`, conv: `${alias}.conversation_ref`, fan: `${alias}.fan_native_id` });
 }
 
 /**

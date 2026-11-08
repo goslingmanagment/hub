@@ -12,7 +12,7 @@ import { ppvBoughtSql } from "./shift-sql.ts";
 // fan bought it and the net it brought. Database only.
 //
 // Bought: Fansly — an offer of the message `purchased` or a media order of it
-// (as readShiftNumbers); OnlyFans — `page_dm_messages.purchased_at`. The net is
+// (as «Разбор смены» and «Смены»); OnlyFans — `page_dm_messages.purchased_at`. The net is
 // the creator net of the fan's own purchase, never an offer's running total of
 // all its buyers (`sales_net_mills`: one offer sent in three messages counted
 // its three sales in each). Fansly — the fan's message purchases of the
@@ -28,7 +28,7 @@ import { ppvBoughtSql } from "./shift-sql.ts";
 // B, reply time against purchases (listReplyDelayCounts): a reply is the
 // page's first personal message after one or more messages of the fan; its
 // delay runs from the first of them (a fan who waited more than 3 days is
-// left out, as readShiftNumbers). Bought: the fan paid the page a tip or for
+// left out, as «Разбор смены»). Bought: the fan paid the page a tip or for
 // a message, a post or a stream within 24 hours after the reply — a
 // subscription renews by itself and does not count.
 
