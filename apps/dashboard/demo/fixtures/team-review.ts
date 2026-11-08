@@ -245,6 +245,10 @@ function reviewOf(shift: DemoShift, now: number): Response {
       priceMills: null, bought: null, media: 0, mine: { ...first, part: 2, replySeconds: null },
     });
   }
+  // One answer Fansly never gave the archive (the chat dropped from sync): the page socket's copy, no price.
+  const socketOnly = chats.find((chat) => chat.platform === "fansly" && chat.messages.some((message) => message.mine !== null && message.mine.replySeconds !== null))
+    ?.messages.find((message) => message.mine !== null && message.mine.replySeconds !== null);
+  if (socketOnly) Object.assign(socketOnly, { unarchived: true, priceMills: null, bought: null });
   chats.sort((a, b) => Date.parse(a.messages.find((m) => m.inShift)?.at ?? "") - Date.parse(b.messages.find((m) => m.inShift)?.at ?? ""));
 
   const activity: Response["activity"] = [];

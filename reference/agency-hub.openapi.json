@@ -245849,6 +245849,9 @@
                                 "mass": {
                                   "type": "boolean"
                                 },
+                                "unarchived": {
+                                  "type": "boolean"
+                                },
                                 "byName": {
                                   "type": [
                                     "string",
@@ -246433,6 +246436,9 @@
                                 "type": "null"
                               }
                             ]
+                          },
+                          "pending": {
+                            "type": "boolean"
                           }
                         },
                         "required": [

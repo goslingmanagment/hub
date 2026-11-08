@@ -296,6 +296,11 @@ function Bubble({ message, picked, showDraft, answered, shiftStart, username }: 
           {message.tipMills !== null && <span>чаевые {formatMills(message.tipMills)}</span>}
           {message.mass && <span>рассылка</span>}
           {author && <span>{author}</span>}
+          {message.unarchived && (
+            <span title="Fansly не отдал это сообщение в архив Hub (чат недоступен или выпал из синхронизации); текст и время — из сокета страницы, цены нет">
+              нет в архиве Fansly, взято из сокета
+            </span>
+          )}
         </div>
         {mine && (
           <div className="sr-facts">

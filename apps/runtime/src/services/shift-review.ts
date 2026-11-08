@@ -29,6 +29,7 @@ import {
   type ShiftReviewGenerationRow,
   type SaleFacts,
   type ShiftReviewMessageRow,
+  type ShiftReviewSendRow,
   type ShiftSale,
 } from "@agency_hub_core/db";
 
@@ -264,9 +265,11 @@ export function marksOf(text: string, fanWritesRussian: boolean): ShiftReviewMin
   return marks;
 }
 
-interface ChatMessage extends ShiftReviewMessageRow {
+export interface ChatMessage extends ShiftReviewMessageRow {
   by: ShiftReviewMessage["by"];
   personal: boolean;
+  /** The chatter's reported send that neither the archive nor the page's socket holds yet: it ends a wait, it is not shown. */
+  pending: boolean;
 }
 
 export interface ChatWait {
@@ -275,33 +278,65 @@ export interface ChatWait {
   by: "me" | "other" | "none" | null;
   /** The answering message, when it is the chatter's. */
   answerRef: string | null;
+  /** Ended by a `pending` send: the answer is still being checked. */
+  pending: boolean;
 }
 
 /**
  * The waits of one chat, oldest first: from the fan's first message after the
  * page's last personal one (any author's; a mass or automated message answers
  * nobody) to the next personal one, or to `end`. A fan's message older than the
- * horizon before the answer is not waited on. Pure.
+ * horizon is not waited on — before the answer, or, for a wait still open at the
+ * end, before the shift's `start` (the window the messages are read in) — and
+ * the wait begins at the fan's first message within it: an old unanswered one
+ * does not take the fresh ones with it. Pure.
  */
-export function waitsOf(messages: readonly ChatMessage[], userId: number, end: number): ChatWait[] {
+export function waitsOf(messages: readonly ChatMessage[], userId: number, start: number, end: number): ChatWait[] {
   const horizon = SHIFT_REVIEW_WAIT_HORIZON_HOURS * 60 * MINUTE_MS;
   const waits: ChatWait[] = [];
-  let since: number | null = null;
+  // The fan's messages since the page's last personal one, oldest first.
+  let fanAts: number[] = [];
+  const firstAfter = (limit: number) => fanAts.find((at) => at > limit) ?? null;
   for (const message of messages) {
     const at = message.at.getTime();
     if (!message.sent) {
-      since ??= at;
+      fanAts.push(at);
       continue;
     }
     if (!message.personal) continue;
-    if (since !== null && since > at - horizon) {
+    const since = firstAfter(at - horizon);
+    if (since !== null) {
       const by = message.by === "me" || message.by === "other" || message.by === "none" ? message.by : "none";
-      waits.push({ since, to: at, by, answerRef: message.authorId === userId ? message.ref : null });
+      waits.push({ since, to: at, by, answerRef: message.authorId === userId && !message.pending ? message.ref : null, pending: message.pending });
     }
-    since = null;
+    fanAts = [];
   }
-  if (since !== null && since > end - horizon) waits.push({ since, to: end, by: null, answerRef: null });
+  const since = firstAfter(start - horizon);
+  if (since !== null) waits.push({ since, to: end, by: null, answerRef: null, pending: false });
   return waits;
+}
+
+/**
+ * The chatter's sends that neither the archive nor the page's socket holds, as
+ * the messages that end their fans' waits, by `<page id>:<chat>`. The chat is
+ * the reported one: Fansly's group, or on OnlyFans the fan, who is the chat
+ * there. Their time is the client's, when the page confirmed the send. Pure.
+ */
+export function pendingSendsByChat(sends: readonly ShiftReviewSendRow[], userId: number, username: string): Map<string, ChatMessage[]> {
+  const out = new Map<string, ChatMessage[]>();
+  for (const send of sends) {
+    if (send.inArchive || send.inSocket) continue;
+    const conv = send.platform === "onlyfans" ? send.fanRef : send.conversationRef;
+    if (conv === null) continue;
+    const key = `${send.pageId}:${conv}`;
+    const message: ChatMessage = {
+      pageId: send.pageId, platform: send.platform, conv, ref: send.ref, at: send.observedAt, sent: true, text: "", priceMills: null, tipMills: null,
+      media: 0, fanNativeId: null, mass: false, authorId: userId, authorName: username, bought: null, unarchived: true,
+      by: "me", personal: true, pending: true,
+    };
+    out.set(key, [...(out.get(key) ?? []), message]);
+  }
+  return out;
 }
 
 /** The automated-message openings a page message is matched against: the first 40 characters of each, words only. */
@@ -562,9 +597,10 @@ export async function readTeamShiftReview(
         by = text !== "" && openings.some((opening) => text.startsWith(opening)) ? "auto" : "none";
       }
     }
-    chat.messages.push({ ...row, by, personal: row.sent && !row.mass && by !== "auto" });
+    chat.messages.push({ ...row, by, personal: row.sent && !row.mass && by !== "auto", pending: false });
     chats.set(key, chat);
   }
+  const pendingSends = pendingSendsByChat(sends, query.userId, person.username);
 
   // A chat where the chatter wrote Russian to a fan with no Russian in the window: the fan's whole history says.
   const russianAsked = [...chats.values()].filter((chat) => !chat.messages.some((message) => !message.sent && CYRILLIC_RE.test(message.text))
@@ -597,7 +633,9 @@ export async function readTeamShiftReview(
     const pageLabel = labelOf.get(chat.pageId) ?? String(chat.pageId);
     const fan = fanOf.get(key);
     const fanRef = fan?.fanRef ?? chat.messages.find((message) => !message.sent && message.fanNativeId !== null)?.fanNativeId ?? null;
-    const chatWaits = waitsOf(chat.messages, query.userId, end).filter((wait) => wait.to > start && wait.since < end);
+    const pending = pendingSends.get(key) ?? [];
+    const answers = pending.length === 0 ? chat.messages : [...chat.messages, ...pending].sort((a, b) => a.at.getTime() - b.at.getTime());
+    const chatWaits = waitsOf(answers, query.userId, start, end).filter((wait) => wait.to > start && wait.since < end);
     // A chat with nothing in the shift is here for a fan waiting at its start; past the wait horizon there is no wait, and no
     // chat. One holding a send of the shift stays, though the archive may date it a few seconds before the start.
     if (chatWaits.length === 0 && !chat.messages.some((message) => (message.at.getTime() >= start && message.at.getTime() <= end)
@@ -610,6 +648,7 @@ export async function readTeamShiftReview(
         from: new Date(Math.max(wait.since, start)).toISOString(),
         to: new Date(Math.min(wait.to, end)).toISOString(),
         by: wait.by,
+        pending: wait.pending,
       });
       if (wait.answerRef !== null) replyByRef.set(wait.answerRef, Math.round((wait.to - Math.max(wait.since, start)) / 1000));
     }
@@ -678,6 +717,7 @@ export async function readTeamShiftReview(
           by: message.by,
           byName: message.by === "other" ? message.authorName : null,
           mass: message.mass,
+          unarchived: message.unarchived,
           mine,
         };
       }),
@@ -762,7 +802,7 @@ export async function readTeamShiftReview(
     beforeSales: before.sales.map(rowOf),
     laterSales: after.sales.map(rowOf),
     waits,
-    unarchived: sends.filter((send) => !send.inArchive).length,
+    unarchived: sends.filter((send) => !send.inArchive && !send.inSocket).length,
     deleted: sends.filter((send) => send.deleted).length,
     serverNow: now.toISOString(),
   };
