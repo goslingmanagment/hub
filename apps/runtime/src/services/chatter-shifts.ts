@@ -65,8 +65,9 @@ import { BadRequestError, ForbiddenError, NotFoundError } from "./errors.ts";
  * - Its edges. Its body runs from the first to the last piece of work (between
  *   two pauses) with CHATTER_SHIFT_PIECE_MIN_MESSAGES messages. The piece next
  *   to the body at its start or end, under CHATTER_SHIFT_EDGE_NEAR_MINUTES from
- *   it, is the shift whatever its messages: two last answers 20 minutes after
- *   the night. The pieces beyond, in blocks at most
+ *   it, is the shift with one of the person's messages at least: two last
+ *   answers 20 minutes after the night; a tab only looked at is no part of it.
+ *   The pieces beyond (and that one with no message), in blocks at most
  *   CHATTER_SHIFT_EDGE_BLOCK_GAP_MINUTES apart, are cut from the outside in
  *   while a block has under CHATTER_SHIFT_PIECE_MIN_MESSAGES: a look-in half an
  *   hour before it, answers one at a time at noon after a night shift — each a
@@ -274,11 +275,11 @@ export function workOfMinutes(minutes: readonly ActivityMinute[], sent: readonly
    * How many pieces at one edge of a shift's body are the shift. `edge` — those
    * pieces, the one next to the body first: each one's gap from the piece nearer
    * the body, and its messages. The one next to the body, under `nearEdge` from
-   * it, stays whatever its messages; the ones beyond, in blocks at most
+   * it, stays with a message at least; the ones beyond, in blocks at most
    * `blockGap` apart, are cut from the outside in while a block has too few.
    */
   const edgeKept = (edge: ReadonlyArray<{ gap: number; messages: number }>): number => {
-    const near = edge.length > 0 && edge[0]!.gap < nearEdge ? 1 : 0;
+    const near = edge.length > 0 && edge[0]!.gap < nearEdge && edge[0]!.messages > 0 ? 1 : 0;
     let kept = edge.length;
     while (kept > near) {
       let from = kept - 1;

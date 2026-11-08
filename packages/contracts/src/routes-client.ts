@@ -2360,7 +2360,7 @@ export const clientFanNoteAttributionsResponseSchema = z.object({
 //   once it has CHATTER_SHIFT_PIECE_MIN_MESSAGES messages.
 // - A shift's edges. The piece of work (between two pauses) next to it at its
 //   start or end, under CHATTER_SHIFT_EDGE_NEAR_MINUTES from it, is the shift
-//   whatever its messages. The pieces beyond, in blocks
+//   with one of the person's messages at least. The pieces beyond, in blocks
 //   CHATTER_SHIFT_EDGE_BLOCK_GAP_MINUTES apart at most, are cut from the
 //   outside in while a block has under CHATTER_SHIFT_PIECE_MIN_MESSAGES: sparse
 //   answers after it are a visit.
@@ -2397,7 +2397,7 @@ export const CHATTER_SHIFT_MIN_WORKED_MINUTES = 120;
 export const CHATTER_SHIFT_MIN_MESSAGES = 50;
 /** A piece of work (between two pauses) with fewer messages is a look-in: at a shift's start or end it is not the shift. */
 export const CHATTER_SHIFT_PIECE_MIN_MESSAGES = 5;
-/** The piece of work next to a shift's start or end, closer than this to it, is the shift whatever its messages. */
+/** The piece of work next to a shift's start or end, closer than this to it, is the shift with one of the person's messages at least. */
 export const CHATTER_SHIFT_EDGE_NEAR_MINUTES = 30;
 /** Pieces at a shift's edge at most this far apart are one block: the block is the shift with CHATTER_SHIFT_PIECE_MIN_MESSAGES. */
 export const CHATTER_SHIFT_EDGE_BLOCK_GAP_MINUTES = 20;
