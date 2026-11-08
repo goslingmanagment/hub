@@ -1,13 +1,14 @@
 import {
   listConfirmedReports,
   listFansWaitingSince,
+  listFirstChatterActivities,
   listPageOpenCustoms,
   listWinBackResults,
   type PageWaitingRow,
 } from "@agency_hub_core/db";
 
 import type { AppContext } from "../bootstrap.ts";
-import { middleOfWork, readPeopleWork } from "./chatter-shifts.ts";
+import { dayOfShift, moscowDayOf, readPeopleWork } from "./chatter-shifts.ts";
 import { listSaleDisputes } from "./shift-report.ts";
 
 /**
@@ -63,12 +64,21 @@ export function renderTeamBlock(facts: TeamBlockFacts, now: Date): string[] {
 
 /** The facts of the block for the business day [from, to), as of `now`. */
 export async function loadTeamBlockFacts(app: Pick<AppContext, "db">, input: { from: Date; to: Date; now: Date }): Promise<TeamBlockFacts> {
-  const people = await readPeopleWork(app.db, { from: new Date(input.from.getTime() - DAY_MS), to: input.now, now: input.now, pages: "all" });
+  const [people, firstActivity] = await Promise.all([
+    readPeopleWork(app.db, { from: new Date(input.from.getTime() - DAY_MS), to: input.now, now: input.now, pages: "all" }),
+    listFirstChatterActivities(app.db),
+  ]);
+  // The shifts of the day as every other screen dates them (`dayOfShift`).
+  const firstDay = moscowDayOf(input.from.getTime());
+  const lastDay = moscowDayOf(input.to.getTime() - 1);
   let shifts = 0;
   let confirmed = 0;
   for (const [userId, person] of people) {
-    const dayShifts = person.work
-      .filter((shift) => shift.kind === "shift" && middleOfWork(shift) >= input.from.getTime() && middleOfWork(shift) < input.to.getTime());
+    const dayShifts = person.work.filter((shift) => {
+      if (shift.kind !== "shift") return false;
+      const day = dayOfShift(shift, firstActivity.get(userId)?.getTime());
+      return day >= firstDay && day <= lastDay;
+    });
     if (dayShifts.length === 0) continue;
     const reports = await listConfirmedReports(app.db, { userId, since: input.from });
     shifts += dayShifts.length;
