@@ -22,12 +22,13 @@ export interface ShiftSale {
   occurredAt: Date;
 }
 
-/** Sales on the pages in [from, to) (of `fanIds` only, when given): money a fan paid (no refund, chargeback or reversal), oldest first. */
+/** Sales on the pages (every page: "all") in [from, to) (of `fanIds` only, when given): money a fan paid (no refund, chargeback or reversal), oldest first. */
 export async function listShiftSales(
   db: Database,
-  input: { pageIds: readonly number[]; from: Date; to: Date; fanIds?: readonly number[] },
+  input: { pageIds: "all" | readonly number[]; from: Date; to: Date; fanIds?: readonly number[] },
 ): Promise<ShiftSale[]> {
-  if (input.pageIds.length === 0 || input.fanIds?.length === 0) return [];
+  if ((input.pageIds !== "all" && input.pageIds.length === 0) || input.fanIds?.length === 0) return [];
+  const pages = input.pageIds === "all" ? sql`true` : sql`t.platform_account_id = any(${sql.param(input.pageIds.map(String))}::bigint[])`;
   const fans = input.fanIds === undefined ? sql`` : sql`and t.fan_id = any(${sql.param(input.fanIds.map(String))}::bigint[])`;
   const result = await db.execute<{
     id: string | number; page_id: string | number; label: string; platform: string; fan_id: string | number | null;
@@ -38,7 +39,7 @@ export async function listShiftSales(
     from transactions t
     join pages p on p.id = t.platform_account_id
     left join fans f on f.id = t.fan_id
-    where t.platform_account_id = any(${sql.param(input.pageIds.map(String))}::bigint[])
+    where ${pages}
       and t.is_active and t.gross_amount_mills > 0
       and t.canonical_type in ('subscription', 'tip', 'message_purchase', 'post_purchase', 'stream_tip')
       and t.occurred_at >= ${input.from.toISOString()}::timestamptz and t.occurred_at < ${input.to.toISOString()}::timestamptz
