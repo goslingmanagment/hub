@@ -29,7 +29,10 @@ export const SHIFT_REVIEW_AI_LOOKBACK_MINUTES = 90;
 export const SHIFT_REVIEW_CONTEXT_MESSAGES = 8;
 /** A PPV of the shift bought this long after it still shows with the shift (`laterSales`). */
 export const SHIFT_REVIEW_LATER_SALES_DAYS = 14;
-/** A fan's message older than this before a reply is not waited on (as `teamChatterNumbers`). */
+/**
+ * A fan's message older than this before a reply — or, for a wait still open at the end, before the shift's start (the
+ * window the review reads) — is not waited on (as `teamChatterNumbers`).
+ */
 export const SHIFT_REVIEW_WAIT_HORIZON_HOURS = 72;
 /** The person's previous and next shift are looked for this far from the shift. */
 export const SHIFT_REVIEW_NEIGHBOUR_DAYS = 14;
@@ -107,6 +110,11 @@ const shiftReviewMessageSchema = z.object({
   by: z.enum(SHIFT_REVIEW_AUTHORS).nullable(),
   /** A page message sent as a mass message (a Fansly one, or a burst): it answers nobody. */
   mass: z.boolean(),
+  /**
+   * A reported send the platform's archive does not hold: the page socket's copy (Fansly), no price. Fansly may never
+   * give the archive a message of a chat it refuses or drops from sync; the fan's wait still ended then. Absent — false.
+   */
+  unarchived: z.boolean().optional(),
   /** `other`: the colleague's name. */
   byName: z.string().nullable(),
   /** The chatter's own message in the shift. */
@@ -221,8 +229,10 @@ export const teamShiftReviewResponseSchema = z.object({
    */
   laterSales: z.array(shiftReviewSaleSchema),
   /**
-   * Every wait that overlaps the shift, cut to it: `since` is when the fan really started waiting. `by` — who ended it
-   * (`me`, `other`, `none` — a message without an author); null — still waiting at the shift's end.
+   * Every wait that overlaps the shift, cut to it: `since` is when the fan really started waiting — their first message
+   * within SHIFT_REVIEW_WAIT_HORIZON_HOURS. `by` — who ended it (`me`, `other`, `none` — a message without an author);
+   * null — still waiting at the shift's end. `pending` — ended by the chatter's send that neither the archive nor the
+   * page's socket holds yet, at the moment the extension saw the page confirm it: the answer is still being checked.
    */
   waits: z.array(z.object({
     chat: z.string(),
@@ -230,8 +240,9 @@ export const teamShiftReviewResponseSchema = z.object({
     from: isoTimestamp,
     to: isoTimestamp,
     by: z.enum(["me", "other", "none"]).nullable(),
+    pending: z.boolean().optional(),
   })),
-  /** The chatter's messages of the shift the archive does not hold yet (no text, not in `chats`). */
+  /** The chatter's messages of the shift neither the archive nor the page's socket holds yet (no text, not in `chats`). */
   unarchived: count,
   /** The chatter's messages of the shift deleted after they were sent (not in `chats`). */
   deleted: count,

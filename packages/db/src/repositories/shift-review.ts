@@ -11,6 +11,12 @@ import { notOwnAccountMessageSql, ppvBoughtSql } from "./shift-sql.ts";
 // A mass message is the one of chatter-numbers.ts: a Fansly mass message
 // (message_type 2), or one text with the same price and files sent to
 // `burstMinChats` chats of the page or more in its clock hour.
+//
+// A reported send (client_send_attributions) the archive does not hold is
+// taken from the page's socket (dm_live_messages, Fansly) when the socket saw
+// it: Fansly may never hand the archive a message of a chat it later refuses or
+// drops from sync, and the fan's wait still ended then. The archive's copy
+// wins once it is there.
 
 export interface ShiftReviewMessageRow {
   pageId: number;
@@ -31,6 +37,8 @@ export interface ShiftReviewMessageRow {
   authorName: string | null;
   /** A priced page message: bought; null for the rest. */
   bought: boolean | null;
+  /** Not in the archive: the page socket's copy of a reported send (no price). */
+  unarchived: boolean;
 }
 
 /**
@@ -39,7 +47,8 @@ export interface ShiftReviewMessageRow {
  * the shift worked (`workedPageIds`) — where the fan wrote or the fan's message
  * was the last one before `from`. A tab only looked at brings in the chats the
  * person wrote in, not the whole page a colleague kept. A chat with another page
- * of ours is no fan's and is left out. Oldest first.
+ * of ours is no fan's and is left out. Oldest first; a reported send the archive
+ * lacks comes from the page's socket (`unarchived`).
  */
 export async function listShiftReviewMessages(
   db: Database,
@@ -56,16 +65,34 @@ export async function listShiftReviewMessages(
   const result = await db.execute<{
     page_id: string | number; platform: string; conv: string; ref: string; at: Date | string; sent: boolean; text: string | null;
     price_mills: string | number | null; tip_mills: string | number | null; media: string | number; fan_native_id: string | null;
-    mass: boolean; author_id: string | number | null; author_name: string | null; bought: boolean | null;
+    mass: boolean; author_id: string | number | null; author_name: string | null; bought: boolean | null; unarchived: boolean;
   }>(sql`
     with page_msgs as materialized (
       select m.account_id as page_id, m.platform, m.conversation_ref as conv, m.message_ref as ref, m.occurred_at as at,
         m.is_sent_by_me as sent, m.message_type, m.text_plain, m.price_mills, m.is_tip, m.tip_amount_mills, m.fan_native_id,
-        case when jsonb_typeof(m.media_metadata) = 'array' then jsonb_array_length(m.media_metadata) else 0 end as media
+        case when jsonb_typeof(m.media_metadata) = 'array' then jsonb_array_length(m.media_metadata) else 0 end as media,
+        false as unarchived
       from message_archive m
       where m.account_id = any(${pages}) and m.conversation_ref is not null and m.deleted_at is null
         and m.occurred_at > ${horizon} and m.occurred_at < ${to}
         and ${notOwnAccountMessageSql("m")}
+      union all
+      -- A reported send the archive has no row of (deleted or not): the socket's copy, while the socket holds it undeleted.
+      select l.page_id, a.platform, l.platform_conversation_id as conv, l.platform_message_id as ref, l.created_at as at,
+        true as sent, l.message_type, l.content as text_plain, null::bigint as price_mills, false as is_tip, null::bigint as tip_amount_mills,
+        null::text as fan_native_id,
+        case when jsonb_typeof(l.attachments) = 'array' then jsonb_array_length(l.attachments) else 0 end as media,
+        true as unarchived
+      from client_send_attributions a
+      join dm_live_messages l on l.page_id = a.page_id and l.platform_message_id = a.platform_message_id
+      where a.platform = 'fansly' and a.page_id = any(${pages})
+        and a.observed_at > ${horizon} - interval '1 hour' and a.observed_at < ${to} + interval '1 hour'
+        and l.is_sent_by_page and l.deleted_at is null and l.platform_conversation_id is not null
+        and l.created_at > ${horizon} and l.created_at < ${to}
+        and not exists (
+          select 1 from message_archive m where m.account_id = a.page_id and m.platform = a.platform and m.message_ref = a.platform_message_id)
+        and not exists (
+          select 1 from pages own where own.platform = a.platform and own.external_page_id in (l.platform_conversation_id, a.fan_ref))
     ),
     mine as materialized (
       select a.page_id, a.platform, a.platform_message_id as ref
@@ -82,7 +109,7 @@ export async function listShiftReviewMessages(
       select page_id, conv from (
         select distinct on (page_id, conv) page_id, conv, sent
         from page_msgs where at < ${from}
-        order by page_id, conv, at desc
+        order by page_id, conv, at desc, ref desc
       ) last where not last.sent and last.page_id = any(${worked})
     ),
     shaped as materialized (
@@ -109,7 +136,7 @@ export async function listShiftReviewMessages(
         select 1 from bursts b
         where b.page_id = p.page_id and b.hour = date_trunc('hour', p.at)
           and b.shape = md5(coalesce(p.text_plain, '') || '|' || coalesce(p.price_mills, 0)::text || '|' || p.media::text))) as mass,
-      a.user_id as author_id, u.username as author_name,
+      a.user_id as author_id, u.username as author_name, p.unarchived,
       case when not (p.sent and coalesce(p.price_mills, 0) > 0) then null
         else ${ppvBoughtSql({ pageId: "p.page_id", platform: "p.platform", ref: "p.ref", conv: "p.conv", at: "p.at" })}
       end as bought
@@ -134,16 +161,23 @@ export async function listShiftReviewMessages(
     authorId: num(row.author_id),
     authorName: row.author_name,
     bought: row.bought,
+    unarchived: row.unarchived,
   }));
 }
 
 export interface ShiftReviewSendRow {
   pageId: number;
+  platform: string;
   ref: string;
+  /** The chat: Fansly's group; null on OnlyFans, whose chat is the fan (`fanRef`, the archive's conversation_ref there). */
+  conversationRef: string | null;
+  fanRef: string;
   composedWith: string | null;
   edited: boolean | null;
   observedAt: Date;
   inArchive: boolean;
+  /** The page's socket saw it (Fansly; deleted there or not). */
+  inSocket: boolean;
   /** In the archive, deleted after it was sent. */
   deleted: boolean;
 }
@@ -155,10 +189,13 @@ export async function listShiftReviewSends(
 ): Promise<ShiftReviewSendRow[]> {
   if (input.pageIds.length === 0) return [];
   const result = await db.execute<{
-    page_id: string | number; ref: string; composed_with: string | null; edited: boolean | null; observed_at: Date | string; in_archive: boolean; deleted: boolean;
+    page_id: string | number; platform: string; ref: string; conversation_ref: string | null; fan_ref: string; composed_with: string | null;
+    edited: boolean | null; observed_at: Date | string; in_archive: boolean; in_socket: boolean; deleted: boolean;
   }>(sql`
-    select a.page_id, a.platform_message_id as ref, a.composed_with, a.edited, a.observed_at,
+    select a.page_id, a.platform, a.platform_message_id as ref, a.conversation_ref, a.fan_ref, a.composed_with, a.edited, a.observed_at,
       exists (select 1 from message_archive m where m.account_id = a.page_id and m.platform = a.platform and m.message_ref = a.platform_message_id) as in_archive,
+      a.platform = 'fansly' and exists (
+        select 1 from dm_live_messages l where l.page_id = a.page_id and l.platform_message_id = a.platform_message_id) as in_socket,
       exists (select 1 from message_archive m where m.account_id = a.page_id and m.platform = a.platform and m.message_ref = a.platform_message_id
         and m.deleted_at is not null) as deleted
     from client_send_attributions a
@@ -166,11 +203,15 @@ export async function listShiftReviewSends(
       and a.observed_at >= ${input.from.toISOString()}::timestamptz and a.observed_at < ${input.to.toISOString()}::timestamptz`);
   return result.rows.map((row) => ({
     pageId: Number(row.page_id),
+    platform: row.platform,
     ref: row.ref,
+    conversationRef: row.conversation_ref,
+    fanRef: row.fan_ref,
     composedWith: row.composed_with,
     edited: row.edited,
     observedAt: new Date(row.observed_at),
     inArchive: row.in_archive,
+    inSocket: row.in_socket,
     deleted: row.deleted,
   }));
 }
