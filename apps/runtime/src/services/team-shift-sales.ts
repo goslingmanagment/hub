@@ -309,8 +309,8 @@ export async function readTeamShiftSales(
     .map((work) => ({ userId, username: person.username, work })));
   const shifts = pieces("shift");
   const visits = pieces("visit");
-  const pageIds = pages === "all" ? [...new Set([...people.values()].flatMap((person) => [...person.pageIds.values()]))] : pages;
-  const sales = shifts.length + visits.length === 0 ? [] : await listShiftSales(app.db, { pageIds, from: readFrom, to: readTo });
+  // Every page's sales, a page nobody had open in the window too: its money is outside the shifts, never out of sight.
+  const sales = await listShiftSales(app.db, { pageIds: pages, from: readFrom, to: readTo });
   const held = shifts.map((shift) => ({ ...shift, held: salesOfWork(shift.work, sales) }));
   // The window's sales no shift holds: a look-in's when its person last wrote to the fan, else nobody's.
   const outside = salesNoShiftHolds({ from: window.from, to: window.to, sales, shifts: held });
