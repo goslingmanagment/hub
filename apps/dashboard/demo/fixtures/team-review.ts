@@ -192,6 +192,29 @@ function reviewOf(shift: DemoShift, now: number): Response {
         { chat: carried, since: iso(start - 95 * MIN), from: iso(start), to: iso(start + 12 * MIN), by: "other" },
       );
     }
+    // The tail of past shifts the chatter worked through in the first 15 minutes: fans silent in this shift, each
+    // answered a minute or two after the last. Not the shift's queue, and off the median.
+    for (const [index, fan] of free.slice(6, 14).entries()) {
+      const key = `${firstPage.pageLabel}:${fan.platformUserId}`;
+      const since = start - (2 + index * 3) * 60 * MIN;
+      const replyAt = Math.min(end - MIN, start + (1 + index * 1.7) * MIN + intBetween(random, 5, 50) * 1000);
+      chats.push(chatOf(fan, [
+        fanMessage(`${key}:h0`, since, pick(random, FAN_LINES), false),
+        myMessage(random, `${key}:h1`, replyAt, Math.round((replyAt - start) / 1000)),
+      ]));
+      waits.push({ chat: key, since: new Date(since).toISOString(), from: new Date(start).toISOString(), to: new Date(replyAt).toISOString(), by: "me" });
+    }
+    // A pack of Hi to new followers by «Отправить всем»: a second apart, many in a minute, apart from the pace.
+    const packAt = start + Math.round(minutes * 0.3) * MIN;
+    for (const [index, fan] of free.slice(14, 24).entries()) {
+      const key = `${firstPage.pageLabel}:${fan.platformUserId}`;
+      const text = pick(random, HI_LINES);
+      chats.push({ ...chatOf(fan, [{
+        ref: `${key}:hi`, at: new Date(packAt + index * 1000).toISOString(), side: "page", text, priceMills: null, bought: null, tipMills: null,
+        media: 0, inShift: true, by: "me", byName: null, mass: false,
+        mine: { composedWith: "hi", edited: false, origin: "ai", aiShare: 1, aiFeature: "hi-greeting", aiText: text, draft: null, replySeconds: null, repeats: 0, marks: [] },
+      }]), fanLifetimeNetMills: null });
+    }
   }
   // The same template to several fans.
   const template = "heyy just got back, did you miss me? ♡";

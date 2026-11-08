@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ShiftReviewChat, ShiftReviewMessage, TeamShiftReviewResponse } from "@agency_hub_core/contracts";
-import { cameBack, chatBusyIn, myMessages, reviewWaits, summariesOf, totalsOf } from "@/pages/team/review/shiftReviewView";
+import { cameBack, chatBusyIn, myMessages, pulseOf, reviewWaits, summariesOf, totalsOf } from "@/pages/team/review/shiftReviewView";
 
 // «Разбор смены»: whose a fan's wait is when a page is shared or handed over (2026-11-07). The first version counted
 // a colleague's chats, waits and money as the reviewed chatter's.
@@ -120,5 +120,31 @@ describe("shift review: a fan who came back", () => {
   it("is one who went quiet, not one who kept writing", () => {
     expect(cameBack(40 * 60, 30, 25 * 60)).toBe(true);
     expect(cameBack(40 * 60, 30, 4 * 60)).toBe(false);
+  });
+});
+
+// The pulse drew the fans from past shifts the chatter answered at the start as the shift's own queue, and their waits,
+// counted from the start, as slow replies: a peak of 40 and a median line over 10 minutes in the first half hour.
+describe("shift review: the pulse keeps the tail of past shifts apart", () => {
+  const tail: TeamShiftReviewResponse = {
+    ...data,
+    chats: [
+      // Silent in the shift, answered in it: the tail.
+      chat("t", [message("08:00", "fan", null), mine("09:05", 300)]),
+      // Waiting from before the shift, wrote in it: on the shift's queue.
+      chat("u", [message("08:30", "fan", null), message("09:02", "fan", null), mine("09:06", 360)]),
+      // Began waiting in the shift.
+      chat("v", [message("09:01", "fan", null), mine("09:03", 120)]),
+    ],
+    waits: [wait("t", "08:00", "09:05", "me"), wait("u", "08:30", "09:06", "me"), wait("v", "09:01", "09:03", "me")],
+  };
+  const pulse = pulseOf(tail, reviewWaits(tail));
+
+  it("puts a silent fan from a past shift off the queue, and one who wrote in the shift on it", () => {
+    expect(pulse[4]).toMatchObject({ waiting: 1, waitingTail: 1 });
+  });
+
+  it("keeps the replies to fans from past shifts off the median", () => {
+    expect(pulse[7]).toMatchObject({ replies: 1, replyMedianSeconds: 120, tailReplies: 2 });
   });
 });

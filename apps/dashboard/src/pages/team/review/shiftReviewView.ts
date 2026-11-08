@@ -25,6 +25,10 @@ const MINUTE_MS = 60_000;
 export const PACE_WINDOW_MINUTES = 10;
 /** The reply time is the median of the replies of the last this many minutes. */
 export const REPLY_WINDOW_MINUTES = 30;
+/** The median's line is drawn from this many replies in its window: one or two replies are not a pace. */
+export const REPLY_LINE_MIN_REPLIES = 5;
+/** Minutes without a word from the extension, this many at most between two it reported, count as open: a lost beat. */
+const ACTIVITY_HOLE_MINUTES = 2;
 /**
  * The reply norm is a band, not a line: the owner put it at «5-10 минут»
  * (2026-11-07); the job description says «до 10 минут». Past the upper end a
@@ -61,14 +65,20 @@ export interface PulseMinute {
   at: number;
   /** The chatter's personal messages in this minute. */
   sent: number;
+  /** Of them, Hi greetings: a pack to new followers is many at once, and is not the pace of the chats. */
+  sentHi: number;
   /** In the last PACE_WINDOW_MINUTES. */
   pace: number;
-  /** The median reply of the last REPLY_WINDOW_MINUTES, seconds; null — no reply then. */
+  /** Of the pace, Hi greetings. */
+  paceHi: number;
+  /** The median reply of the last REPLY_WINDOW_MINUTES, seconds; null — no reply then. Replies to fans from past shifts are apart. */
   replyMedianSeconds: number | null;
-  /** The same in minutes, for the chart. */
+  /** The same in minutes, for the chart; null under REPLY_LINE_MIN_REPLIES replies. */
   replyMedian: number | null;
   /** Replies in that window. */
   replies: number;
+  /** Replies in that window to fans waiting since before the shift: their wait counts from its start, so off the median. */
+  tailReplies: number;
   /** The chatter's fans waiting at this minute who got an answer later in the shift: the queue the chatter worked through. */
   waiting: number;
   /** The chatter's fans waiting at this minute who got no answer before the shift's end. */
@@ -77,6 +87,8 @@ export interface PulseMinute {
   waitingLong: number;
   /** Fans waiting since before the shift who did not write in it and got no answer in it. */
   waitingInherited: number;
+  /** Fans waiting since before the shift who did not write in it and got an answer in it: the tail the chatter worked through. */
+  waitingTail: number;
   /** The fans' messages in this minute. */
   fanMessages: number;
   activity: ActivityState;
@@ -215,16 +227,27 @@ function waitingSilently(wait: ReviewWait): boolean {
   return wait.his && wait.by === null && wait.inherited && !wait.fanWrote;
 }
 
-/** The shift minute by minute, from its first minute to its last. */
+/**
+ * The shift minute by minute, from its first minute to its last. The queue is
+ * the shift's own: a fan from a past shift who did not write in this one and
+ * got an answer is the tail the chatter worked through, apart from the queue,
+ * and replies to fans from past shifts are apart from the median, since their
+ * wait counts from the shift's start. Hi greetings are apart from the pace. A
+ * minute with a personal send is a minute of input, whatever the extension
+ * reported for it.
+ */
 export function pulseOf(data: TeamShiftReviewResponse, waits: readonly ReviewWait[]): PulseMinute[] {
   const start = Math.floor(Date.parse(data.shift.startedAt) / MINUTE_MS) * MINUTE_MS;
   const end = Date.parse(data.shift.endedAt);
   const count = Math.max(1, Math.ceil((end - start) / MINUTE_MS));
   const index = (at: number) => Math.min(count - 1, Math.max(0, Math.floor((at - start) / MINUTE_MS)));
 
+  const tailAnswers = new Set(waits.filter((wait) => wait.inherited && wait.by === "me").map((wait) => `${wait.chat}|${wait.to}`));
   const sent = new Array<number>(count).fill(0);
+  const sentHi = new Array<number>(count).fill(0);
   const fans = new Array<number>(count).fill(0);
   const replyAt: Array<number[]> = Array.from({ length: count }, () => []);
+  const tailAt = new Array<number>(count).fill(0);
   for (const chat of data.chats) {
     for (const message of chat.messages) {
       if (!message.inShift) continue;
@@ -232,29 +255,49 @@ export function pulseOf(data: TeamShiftReviewResponse, waits: readonly ReviewWai
       if (message.side === "fan") fans[index(at)]! += 1;
       if (message.mine === null || message.mass) continue;
       sent[index(at)]! += 1;
-      if (message.mine.replySeconds !== null) replyAt[index(at)]!.push(message.mine.replySeconds);
+      if (isHi(message.mine)) sentHi[index(at)]! += 1;
+      if (message.mine.replySeconds === null) continue;
+      if (tailAnswers.has(`${chat.key}|${at}`)) tailAt[index(at)]! += 1;
+      else replyAt[index(at)]!.push(message.mine.replySeconds);
     }
   }
 
   const activity = new Map(data.activity.map((minute) => [Date.parse(minute.at), minute.input]));
+  const reported = Array.from({ length: count }, (_, minute) => activity.get(start + minute * MINUTE_MS));
+  // A short hole between two reported minutes: the minute's beat was lost, the extension was open.
+  const lostBeat = new Array<boolean>(count).fill(false);
+  for (let minute = 0; minute < count; minute += 1) {
+    if (reported[minute] !== undefined || minute === 0 || reported[minute - 1] === undefined) continue;
+    let next = minute;
+    while (next < count && reported[next] === undefined) next += 1;
+    if (next < count && next - minute <= ACTIVITY_HOLE_MINUTES) lostBeat.fill(true, minute, next);
+  }
   const shiftStart = Date.parse(data.shift.startedAt);
   const queue = waits.filter((wait) => wait.his).map((wait) => ({
     ...wait,
-    kind: wait.by !== null ? "answered" as const : waitingSilently(wait) ? "inherited" as const : "open" as const,
+    kind: wait.by === null ? (waitingSilently(wait) ? "inherited" as const : "open" as const)
+      : wait.inherited && !wait.fanWrote ? "tail" as const : "answered" as const,
   }));
 
   const out: PulseMinute[] = [];
   let pace = 0;
+  let paceHi = 0;
   for (let minute = 0; minute < count; minute += 1) {
     const at = start + minute * MINUTE_MS;
     pace += sent[minute]!;
-    if (minute >= PACE_WINDOW_MINUTES) pace -= sent[minute - PACE_WINDOW_MINUTES]!;
-    const recent = replyAt.slice(Math.max(0, minute - REPLY_WINDOW_MINUTES + 1), minute + 1).flat();
+    paceHi += sentHi[minute]!;
+    if (minute >= PACE_WINDOW_MINUTES) {
+      pace -= sent[minute - PACE_WINDOW_MINUTES]!;
+      paceHi -= sentHi[minute - PACE_WINDOW_MINUTES]!;
+    }
+    const windowFrom = Math.max(0, minute - REPLY_WINDOW_MINUTES + 1);
+    const recent = replyAt.slice(windowFrom, minute + 1).flat();
     const middle = median(recent);
     let waiting = 0;
     let waitingOpen = 0;
     let waitingLong = 0;
     let waitingInherited = 0;
+    let waitingTail = 0;
     // The middle of the minute; the last minute of a shift going on ends at `end`, mid-minute.
     const probe = Math.min(at + MINUTE_MS / 2, end - 1);
     for (const wait of queue) {
@@ -263,24 +306,32 @@ export function pulseOf(data: TeamShiftReviewResponse, waits: readonly ReviewWai
         waitingInherited += 1;
         continue;
       }
+      if (wait.kind === "tail") {
+        waitingTail += 1;
+        continue;
+      }
       if (wait.kind === "answered") waiting += 1;
       else waitingOpen += 1;
       if (probe - Math.max(wait.since, shiftStart) > REPLY_NORM_SECONDS * 1000) waitingLong += 1;
     }
-    const input = activity.get(at);
+    const input = reported[minute];
     out.push({
       at,
       sent: sent[minute]!,
+      sentHi: sentHi[minute]!,
       pace,
+      paceHi,
       replyMedianSeconds: middle,
-      replyMedian: middle === null ? null : Math.round((middle / 60) * 10) / 10,
+      replyMedian: middle === null || recent.length < REPLY_LINE_MIN_REPLIES ? null : Math.round((middle / 60) * 10) / 10,
       replies: recent.length,
+      tailReplies: tailAt.slice(windowFrom, minute + 1).reduce((sum, one) => sum + one, 0),
       waiting,
       waitingOpen,
       waitingLong,
       waitingInherited,
+      waitingTail,
       fanMessages: fans[minute]!,
-      activity: input === undefined ? "closed" : input ? "input" : "open",
+      activity: sent[minute]! > 0 || input === true ? "input" : input === false || lostBeat[minute] ? "open" : "closed",
     });
   }
   return out;
