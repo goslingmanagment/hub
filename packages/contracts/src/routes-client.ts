@@ -2355,9 +2355,16 @@ export const clientFanNoteAttributionsResponseSchema = z.object({
 //   CHATTER_SHIFT_MIN_MESSAGES messages is a SHIFT; anything less is a VISIT, a
 //   look-in that is not counted as a shift. A stretch still going is a shift
 //   once it has CHATTER_SHIFT_PIECE_MIN_MESSAGES messages.
-// - The pieces of work (between two pauses) at a shift's start or end with
-//   under CHATTER_SHIFT_PIECE_MIN_MESSAGES messages each are not the shift: a
-//   look-in before it, answers after it — visits.
+// - A shift's edges. The piece of work (between two pauses) next to it at its
+//   start or end, under CHATTER_SHIFT_EDGE_NEAR_MINUTES from it, is the shift
+//   whatever its messages. The pieces beyond, in blocks
+//   CHATTER_SHIFT_EDGE_BLOCK_GAP_MINUTES apart at most, are cut from the
+//   outside in while a block has under CHATTER_SHIFT_PIECE_MIN_MESSAGES: sparse
+//   answers after it are a visit.
+// - A look-in BEFORE a shift with CHATTER_SHIFT_PIECE_MIN_MESSAGES messages that
+//   ended at most CHATTER_SHIFT_LOOK_IN_JOIN_MINUTES before it began is its
+//   start, the gap a pause: a morning before a break is the day's shift. A
+//   look-in after a shift stays one.
 // - A shift belongs to the Moscow day holding most of it: a night entered at
 //   23:54 is the next day's, as the payout sheet dates it.
 // - Its sales are those on the pages it worked (CHATTER_SHIFT_PAGE_MIN_MESSAGES
@@ -2383,6 +2390,12 @@ export const CHATTER_SHIFT_MIN_WORKED_MINUTES = 120;
 export const CHATTER_SHIFT_MIN_MESSAGES = 50;
 /** A piece of work (between two pauses) with fewer messages is a look-in: at a shift's start or end it is not the shift. */
 export const CHATTER_SHIFT_PIECE_MIN_MESSAGES = 5;
+/** The piece of work next to a shift's start or end, closer than this to it, is the shift whatever its messages. */
+export const CHATTER_SHIFT_EDGE_NEAR_MINUTES = 30;
+/** Pieces at a shift's edge at most this far apart are one block: the block is the shift with CHATTER_SHIFT_PIECE_MIN_MESSAGES. */
+export const CHATTER_SHIFT_EDGE_BLOCK_GAP_MINUTES = 20;
+/** A look-in with CHATTER_SHIFT_PIECE_MIN_MESSAGES that ended at most this long before a shift began is its start. */
+export const CHATTER_SHIFT_LOOK_IN_JOIN_MINUTES = 90;
 /** Messages on a page in a shift that make it a page the shift worked: its sales count. */
 export const CHATTER_SHIFT_PAGE_MIN_MESSAGES = 10;
 /** The longest window `teamShifts` reads. */

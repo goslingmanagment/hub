@@ -74,16 +74,77 @@ describe("workOfMinutes", () => {
     ]);
   });
 
-  it("leaves a look-in the next morning out of the shift, and an earlier one 66 minutes before it", () => {
+  it("takes a look-in with five messages that ended at most 90 minutes before the shift for its start; the next morning's stays a look-in", () => {
     const work = workOfMinutes(
       [...minutes(0, 8, range(0, 8)), ...minutes(74, 500, range(74, 500)), ...minutes(1000, 1030, range(1000, 1030))],
       [...sends(0, 8, 8), ...sends(74, 500, 800), ...sends(1000, 1030, 14)],
       FAR_LATER,
     );
     expect(bounds(work)).toEqual([
-      ["visit", at(0), at(8)],
-      ["shift", at(74), at(500)],
+      ["shift", at(0), at(500)],
       ["visit", at(1000), at(1030)],
+    ]);
+    // 91 minutes before it: a look-in of its own.
+    const earlier = workOfMinutes([...minutes(0, 8, range(0, 8)), ...minutes(99, 500, range(99, 500))], [...sends(0, 8, 8), ...sends(99, 500, 800)], FAR_LATER);
+    expect(bounds(earlier)).toEqual([
+      ["visit", at(0), at(8)],
+      ["shift", at(99), at(500)],
+    ]);
+  });
+
+  it("makes a morning's look-in before a break of an hour the shift's start, the break a pause, its sales the shift's", () => {
+    // 92 minutes and 75 messages from 08:34, a break of 63 minutes, then the shift: one shift from 08:34.
+    const work = workOfMinutes(
+      [...minutes(0, 92, range(0, 92)), ...minutes(155, 455, range(155, 455))],
+      [...sends(0, 92, 75), ...sends(155, 455, 150)],
+      FAR_LATER,
+    );
+    expect(bounds(work)).toEqual([["shift", at(0), at(455)]]);
+    expect(work[0]).toMatchObject({ workedMinutes: 401, pauses: [{ from: at(101), to: at(155) }] });
+    expect(totalMessages(work[0]!)).toBe(225);
+    expect(workHoldsSale(work[0]!, { pageLabel: "ari-1", at: at(50) })).toBe(true);
+    expect(workHoldsSale(work[0]!, { pageLabel: "ari-1", at: at(120) })).toBe(true);
+  });
+
+  it("leaves a look-in 68 minutes after a night out of it, many messages as it has", () => {
+    const work = workOfMinutes(
+      [...minutes(0, 480, range(0, 480)), ...minutes(548, 560, range(548, 560))],
+      [...sends(0, 480, 300), ...sends(548, 560, 20)],
+      FAR_LATER,
+    );
+    expect(bounds(work)).toEqual([
+      ["shift", at(0), at(480)],
+      ["visit", at(548), at(560)],
+    ]);
+  });
+
+  it("keeps the piece next to the shift's end, under 30 minutes from it, whatever its messages, and its sales", () => {
+    // Two last answers 16 minutes after the night.
+    const work = workOfMinutes(minutes(0, 450, [...range(0, 420), ...range(435, 437)]), [...sends(0, 420, 300), ...sends(435, 437, 2)], FAR_LATER);
+    expect(bounds(work)).toEqual([["shift", at(0), at(446)]]);
+    expect(totalMessages(work[0]!)).toBe(302);
+    expect(workHoldsSale(work[0]!, { pageLabel: "ari-1", at: at(440) })).toBe(true);
+  });
+
+  it("keeps the pieces beyond in a block of five messages, and cuts a block with fewer", () => {
+    // The night; a minute with no message 11 minutes after it; then 3 and 2 messages 15 minutes apart, 40 minutes on.
+    const active = [...range(0, 420), 430, ...range(470, 472), ...range(487, 489)];
+    const kept = workOfMinutes(minutes(0, 500, active), [...sends(0, 420, 300), ...sends(470, 472, 3), ...sends(487, 489, 2)], FAR_LATER);
+    expect(bounds(kept)).toEqual([["shift", at(0), at(498)]]);
+    const cut = workOfMinutes(minutes(0, 500, active), [...sends(0, 420, 300), ...sends(470, 472, 3), ...sends(487, 488, 1)], FAR_LATER);
+    expect(bounds(cut)).toEqual([
+      ["shift", at(0), at(440)],
+      ["visit", at(470), at(498)],
+    ]);
+  });
+
+  it("keeps the piece next to the shift's start, and leaves a sparse block before it out", () => {
+    // 2 and 2 messages 16 minutes apart, the third piece (3 messages) 16 minutes before the shift.
+    const active = [...range(0, 3), ...range(18, 21), ...range(36, 39), ...range(54, 400)];
+    const work = workOfMinutes(minutes(0, 400, active), [...sends(0, 3, 2), ...sends(18, 21, 2), ...sends(36, 39, 3), ...sends(54, 400, 200)], FAR_LATER);
+    expect(bounds(work)).toEqual([
+      ["visit", at(0), at(30)],
+      ["shift", at(36), at(400)],
     ]);
   });
 
