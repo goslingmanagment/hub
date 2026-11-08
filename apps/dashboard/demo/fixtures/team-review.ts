@@ -35,6 +35,8 @@ const FIX_PAIRS = [
   ["только проснулась и сразу подумала о тебе хах", "just woke up and you were the first thing on my mind hehe"],
   ["а ты откуда кстати", "where are you from btw? :3"],
   ["видео дома, скину чуть позже ок?", "the video is at home rn, i'll send it to you a bit later ok?"],
+  // A short draft the AI made far longer: «Fix: свой черновик, ИИ дописал».
+  ["думаю да", "i think so yeah :3 honestly i've been wanting to try that for a while, you always come up with the best ideas"],
 ] as const;
 const HI_LINES = [
   "heyyy thanks for the follow ♡ i'm so happy you found me, how's your day going?",
@@ -231,6 +233,18 @@ function reviewOf(shift: DemoShift, now: number): Response {
   for (const chat of chats) {
     for (const message of chat.messages) if (message.mine !== null && message.text === template) message.mine.repeats = repeated - 1;
   }
+  // A Reply sent in two parts ([NEXT]): the second one typed by the extension, the button's all the same.
+  const replied = chats.flatMap((chat) => chat.messages.map((message, index) => ({ chat, message, index })))
+    .find(({ message }) => message.mine?.composedWith === "reply" && message.mine.origin === "ai");
+  if (replied !== undefined) {
+    const first = replied.message.mine!;
+    const second = "anyway enough about me, how's your night going?";
+    first.aiText = `${replied.message.text} [NEXT] ${second}`;
+    replied.chat.messages.splice(replied.index + 1, 0, {
+      ...replied.message, ref: `${replied.message.ref}:2`, at: new Date(Date.parse(replied.message.at) + 2000).toISOString(), text: second,
+      priceMills: null, bought: null, media: 0, mine: { ...first, part: 2, replySeconds: null },
+    });
+  }
   chats.sort((a, b) => Date.parse(a.messages.find((m) => m.inShift)?.at ?? "") - Date.parse(b.messages.find((m) => m.inShift)?.at ?? ""));
 
   const activity: Response["activity"] = [];
@@ -325,7 +339,10 @@ function myMessage(random: () => number, ref: string, at: number, replySeconds: 
   } else if (roll < 0.7) {
     const [draft, polished] = pick(random, FIX_PAIRS);
     text = polished;
-    mine = { ...base, composedWith: "fix", edited: false, origin: "fix", aiShare: 1, aiFeature: "improve-draft", aiText: polished, draft };
+    mine = {
+      ...base, composedWith: "fix", edited: false, origin: "fix", aiShare: 1, aiFeature: "improve-draft", aiText: polished, draft,
+      fixExpanded: polished.length > 2.2 * draft.length && polished.length - draft.length > 60,
+    };
   } else {
     text = pick(random, OWN_LINES);
     mine = { ...base, composedWith: "hand", edited: null, origin: "own", aiShare: null, aiFeature: null, aiText: null, draft: null };

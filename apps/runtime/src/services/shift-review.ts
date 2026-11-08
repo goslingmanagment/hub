@@ -14,6 +14,7 @@ import {
 } from "@agency_hub_core/contracts";
 import {
   listAllAutomatedTexts,
+  listChatsFanWroteRussian,
   listChatterActivityMinutes,
   listPagesByLabels,
   listSentGenerationLinks,
@@ -61,11 +62,39 @@ const REPEAT_MIN_WORDS = 4;
 
 const WORD_RE = /[\p{L}\p{N}_']+/gu;
 /** The AI's service text sent to a fan (the shift audit's `ai_leak`). */
-const LEAK_RE = /\bcop(?:y|ies|ying)\b[^.\n]{0,25}\bsamples?\b|\bsample openers?\b|\bavoid copying\b|\bvary(?: it\b| wording\b|\s*[:.])|\bit'?s fine though\b|\bthat could read as\b|\[NEXT\]|```|\bСИТУАЦИЯ:|ЧТО УПУЩЕНО/i;
+const LEAK_RE = /\bcop(?:y|ies|ying)\b[^.\n]{0,25}\bsamples?\b|\bsample openers?\b|\bavoid copying\b|\bvary(?: it\b| wording\b|\s*[:.])|\[NEXT\]|```|\bСИТУАЦИЯ:|ЧТО УПУЩЕНО/i;
 const DASH_RE = /[—–]/;
 const CYRILLIC_RE = /[А-Яа-яЁё]/;
-/** A Fix draft that is an instruction, not a text: the AI wrote the message (the study's rule). */
-const FIX_COMMAND_RE = /^\s*(\*|напиши|ответь|объясни|обьясни|скажи|спроси|предложи|придумай|сделай|пошути|поблагодари|похвали|извинись|пожелай|расскажи|опиши|поддержи|переведи|уточни|можно|нужно|надо|типо|типа|короче)/i;
+/** A shared run shorter than this is no sign of an AI text in a message that is the chatter's own: «are you», «haha babe». */
+const OWN_MATCH_MIN_WORDS = 3;
+/** A part of an AI text sent in pieces ([NEXT]) follows the first one within this. */
+const PART_WITHIN_MINUTES = 30;
+
+// A Fix draft that is an instruction to the AI, not the chatter's text (the audit of 2026-11-07 on 3,637 Fix drafts).
+// Anywhere in it: what to do with the answer («пингани по контексту», «развернуто», «*переформулируй»).
+const FIX_ORDER_RE = new RegExp(`(?<!\\p{L})(?:${[
+  "по\\s+ко\\p{L}{0,3}ксту", "по\\s+теме", "по\\s+имени",
+  "пингани\\p{L}*", "пингуй", "пинг(?!\\p{L})",
+  "поблагодари(?:м)?(?!\\p{L})",
+  "(?:полу)?ра[зщх]в[её]р(?:нут|ни|нт|тун)",
+  "адаптируй", "перефраз", "переформулир", "переделай", "вставь\\s+(?:по|это|этот)(?!\\p{L})",
+  "апсейл", "аспейсл", "upsell", "sell(?!\\p{L})",
+  "подводк", "продаж", "сочно(?!\\p{L})", "абзац", "поясни", "пояснени",
+  "(?:скажи|опиши|ответь|обьясни|объясни|поясни|напиши|спроси|предложи|затизь|перечисли|придумай|пожелай)\\s+(?:ему|его|ей|её|ее|у\\s+него|у\\s+неё|у\\s+нее)(?!\\p{L})",
+  "переведи\\s+(?:к|на|плавно)(?!\\p{L})",
+].join("|")})`, "iu");
+/** The word a draft opens with that orders the AI — unless the draft speaks to the fan: «скажи мне потом как тебе». */
+const FIX_ORDER_START_RE = new RegExp(`^[\\s*]*(?:${[
+  "напиши", "ответь", "отвечай", "объясни", "обьясни", "скажи", "спроси", "предложи", "придумай", "пошути", "поблагодари",
+  "похвали", "извинись", "пожелай", "расскажи", "опиши", "поддержи", "переведи", "уточни", "попрощайся", "поздоровайся",
+  "согласись", "перечисли", "учти", "отреагируй", "затизь", "вкинь", "намекни", "обыграй", "игриво", "плавно",
+].join("|")})(?!\\p{L})`, "iu");
+/** About the answer, not to the fan: an order in a draft with no «я» or «ты» («*короткий поддерживающий ответ»). */
+const FIX_ANSWER_WORD_RE = /(?<!\p{L})(?:ответ|answer|тиз|тизинг|доминаци\p{L}*|прощание|извинение|намек|флирт)(?!\p{L})/iu;
+/** The model speaking to the fan: I, you. */
+const FIX_PERSON_RE = /(?<!\p{L})(?:я|мне|меня|мной|мой|моя|моё|мое|мои|моих|моей|моим|ты|тебе|тебя|тобой|твой|твоя|твоё|твое|твои|твоих|твоей|твоим|вы|вас|вам|ваш|ваша|ваши)(?!\p{L})/iu;
+/** The fan spoken of. */
+const FIX_FAN_RE = /(?<!\p{L})(?:он|ему|его|него|нему|ним|она|ей|её|ее|ней|неё|нее|фану)(?!\p{L})/iu;
 
 export function wordsOf(text: string): string[] {
   return text.toLowerCase().match(WORD_RE) ?? [];
@@ -120,16 +149,42 @@ function matchingBlockSizes(a: readonly string[], b: readonly string[]): number[
 
 /** The share of the sent words that come straight from `aiText`: runs of two words or more (one, for a short text). Pure. */
 export function aiShareOf(sentWords: readonly string[], aiText: string): number {
-  const aiWords = wordsOf(aiText);
-  if (sentWords.length === 0 || aiWords.length === 0) return 0;
-  const short = sentWords.length <= SHORT_WORDS;
-  const taken = matchingBlockSizes(sentWords, aiWords).filter((size) => size >= 2 || (short && size >= 1)).reduce((sum, size) => sum + size, 0);
-  return taken / sentWords.length;
+  return aiMatchOf(sentWords, aiText).share;
 }
 
-/** A Fix whose draft is an instruction («*развёрнутый ответ», «скажи что…») or far shorter than what came back. Pure. */
-export function isFixCommand(draft: string, completion: string): boolean {
-  return FIX_COMMAND_RE.test(draft) || (completion.length > 2.2 * Math.max(draft.length, 1) && completion.length - draft.length > 60);
+/** The share as `aiShareOf` counts it, and the longest run of words the two texts share. Pure. */
+function aiMatchOf(sentWords: readonly string[], aiText: string): { share: number; longest: number } {
+  const aiWords = wordsOf(aiText);
+  if (sentWords.length === 0 || aiWords.length === 0) return { share: 0, longest: 0 };
+  const short = sentWords.length <= SHORT_WORDS;
+  const sizes = matchingBlockSizes(sentWords, aiWords);
+  const taken = sizes.filter((size) => size >= 2 || (short && size >= 1)).reduce((sum, size) => sum + size, 0);
+  return { share: taken / sentWords.length, longest: Math.max(0, ...sizes) };
+}
+
+/** An order to the AI after an asterisk past the draft's start («yeah sure *разверни»), not «work**» correcting a word. Pure. */
+function orderAfterAsterisk(draft: string): boolean {
+  const text = draft.trim();
+  for (const match of text.matchAll(/\*+/g)) {
+    if (match.index === 0 || /[\p{L}\p{N}]/u.test(text[match.index - 1]!)) continue;
+    if (/^\s*[а-яё]/iu.test(text.slice(match.index + match[0].length))) return true;
+  }
+  return false;
+}
+
+/**
+ * What a Fix's draft was to the text sent from it. `command` — an instruction to the AI («пингани по контексту»,
+ * «*развернутый ответ», «скажи ему что…»): the AI wrote the message. `expanded` — the chatter's own draft the AI made far
+ * longer. `own` — the chatter's own text, translated or polished. A leading «*» alone orders nothing: some chatters mark
+ * every draft with it. Pure.
+ */
+export function fixDraftKind(draft: string, sent: string): "command" | "expanded" | "own" {
+  const person = FIX_PERSON_RE.test(draft);
+  if (FIX_ORDER_RE.test(draft) || orderAfterAsterisk(draft)) return "command";
+  if (FIX_ORDER_START_RE.test(draft) && (!person || FIX_FAN_RE.test(draft))) return "command";
+  if (FIX_ANSWER_WORD_RE.test(draft) && !person) return "command";
+  const length = draft.trim().length;
+  return sent.length > 2.2 * Math.max(length, 1) && sent.length - length > 60 ? "expanded" : "own";
 }
 
 export interface MineInput {
@@ -139,31 +194,58 @@ export interface MineInput {
   linkedGeneration: string | null;
 }
 
-/** Where a message's text came from among the chat's AI texts. Pure. */
-export function originOf(
-  message: MineInput,
-  generations: readonly ShiftReviewGenerationRow[],
-): Pick<ShiftReviewMine, "origin" | "aiShare" | "aiFeature" | "aiText" | "draft"> {
+export type MineOrigin = Pick<ShiftReviewMine, "origin" | "aiShare" | "aiFeature" | "aiText" | "draft" | "fixExpanded"> & {
+  /** The AI text it was matched to; null — none shown. */
+  generationRef: string | null;
+};
+
+/**
+ * Where a message's text came from among the chat's AI texts. A text that is the chatter's own shows an AI text only
+ * when they share a run of OWN_MATCH_MIN_WORDS words, or when the extension linked the message to it (the chatter put
+ * it in and replaced it); its share is cut down, not rounded, so it never reads as the threshold. Pure.
+ */
+export function originOf(message: MineInput, generations: readonly ShiftReviewGenerationRow[]): MineOrigin {
+  const none = { aiShare: null, aiFeature: null, aiText: null, draft: null, fixExpanded: false, generationRef: null };
   const words = wordsOf(message.text);
-  if (words.length === 0) return { origin: null, aiShare: null, aiFeature: null, aiText: null, draft: null };
-  let best: { share: number; generation: ShiftReviewGenerationRow } | null = null;
+  if (words.length === 0) return { origin: null, ...none };
+  type Match = { share: number; longest: number; generation: ShiftReviewGenerationRow };
+  let best: Match | null = null;
+  let linked: Match | null = null;
   for (const generation of generations) {
-    const share = aiShareOf(words, generation.completion);
-    const linked = generation.generationRef === message.linkedGeneration;
-    if (best === null || share > best.share || (linked && share === best.share)) best = { share, generation };
+    const match = { ...aiMatchOf(words, generation.completion), generation };
+    const isLinked = generation.generationRef === message.linkedGeneration;
+    if (isLinked) linked = match;
+    if (best === null || match.share > best.share || (isLinked && match.share === best.share)) best = match;
   }
-  if (best === null) return { origin: "own", aiShare: null, aiFeature: null, aiText: null, draft: null };
+  if (best === null) return { origin: "own", ...none };
+  const shown = (match: Match, share: number): MineOrigin => ({
+    origin: "own",
+    aiShare: share,
+    aiFeature: match.generation.feature,
+    aiText: match.generation.completion.slice(0, TEXT_LIMIT),
+    draft: match.generation.feature === "improve-draft" ? match.generation.draft : null,
+    fixExpanded: false,
+    generationRef: match.generation.generationRef,
+  });
   const { share, generation } = best;
   const byButton = message.composedWith !== null && AI_BUTTONS.has(message.composedWith);
   const fromAi = share >= SHIFT_REVIEW_AI_SHARE && (words.length > SHORT_WORDS || byButton || generation.generationRef === message.linkedGeneration);
-  const ownDraft = generation.feature === "improve-draft" && generation.draft !== null && generation.draft.trim() !== ""
-    && !isFixCommand(generation.draft, generation.completion);
+  if (!fromAi) {
+    const cut = (match: Match) => (match.longest < OWN_MATCH_MIN_WORDS ? 0 : Math.floor(match.share * 100) / 100);
+    if (linked !== null) return shown(linked, cut(linked));
+    if (share > 0 && best.longest >= OWN_MATCH_MIN_WORDS) return shown(best, cut(best));
+    return { origin: "own", ...none, aiShare: 0 };
+  }
+  const kind = generation.feature === "improve-draft" && generation.draft !== null && generation.draft.trim() !== ""
+    ? fixDraftKind(generation.draft, message.text) : "command";
   return {
-    origin: !fromAi ? "own" : ownDraft ? "fix" : "ai",
+    origin: kind === "command" ? "ai" : "fix",
     aiShare: Math.round(share * 100) / 100,
-    aiFeature: share > 0 ? generation.feature : null,
-    aiText: share > 0 ? generation.completion.slice(0, TEXT_LIMIT) : null,
-    draft: share > 0 && generation.feature === "improve-draft" ? generation.draft : null,
+    aiFeature: generation.feature,
+    aiText: generation.completion.slice(0, TEXT_LIMIT),
+    draft: generation.feature === "improve-draft" ? generation.draft : null,
+    fixExpanded: kind === "expanded",
+    generationRef: generation.generationRef,
   };
 }
 
@@ -401,15 +483,22 @@ export async function readTeamShiftReview(
     chats.set(key, chat);
   }
 
-  const fans = await listShiftReviewFans(app.db, { chats: [...chats.values()].map((chat) => ({ pageId: chat.pageId, conv: chat.conv })), from, to });
+  // A chat where the chatter wrote Russian to a fan with no Russian in the window: the fan's whole history says.
+  const russianAsked = [...chats.values()].filter((chat) => !chat.messages.some((message) => !message.sent && CYRILLIC_RE.test(message.text))
+    && chat.messages.some((message) => message.by === "me" && message.at.getTime() >= start && CYRILLIC_RE.test(message.text)));
+  const [fans, wroteRussian] = await Promise.all([
+    listShiftReviewFans(app.db, { chats: [...chats.values()].map((chat) => ({ pageId: chat.pageId, conv: chat.conv })), from, to }),
+    listChatsFanWroteRussian(app.db, russianAsked.map((chat) => ({ pageId: chat.pageId, conv: chat.conv }))),
+  ]);
   const fanOf = new Map(fans.map((fan) => [`${fan.pageId}:${fan.conv}`, fan]));
 
-  // The chatter's texts of the shift by chat, for repeats.
+  // The chatter's texts of the shift by chat, for repeats. A Hi greeting is the page's A/B set: the same by design.
   const mineText = new Map<string, Set<string>>();
   for (const [key, chat] of chats) {
     for (const message of chat.messages) {
       const atMs = message.at.getTime();
       if (message.by !== "me" || atMs < start || atMs > end) continue;
+      if (sendByRef.get(`${message.pageId}:${message.ref}`)?.composedWith === "hi") continue;
       const text = normalized(message.text);
       if (text.split(" ").length < REPEAT_MIN_WORDS) continue;
       const seen = mineText.get(text) ?? new Set<string>();
@@ -446,7 +535,9 @@ export async function readTeamShiftReview(
 
     const fanKey = fan === undefined || fan.fanId === null ? null : `${chat.pageId}:${fan.fanId}`;
     if (fanKey !== null && !chatOfFan.has(fanKey)) chatOfFan.set(fanKey, chatKey(pageLabel, chat.conv));
-    const fanWritesRussian = chat.messages.some((message) => !message.sent && CYRILLIC_RE.test(message.text));
+    const fanWritesRussian = wroteRussian.has(key) || chat.messages.some((message) => !message.sent && CYRILLIC_RE.test(message.text));
+    // The AI texts this chat's earlier messages of the shift were sent from by a button, for the later parts of one.
+    const byButton: Array<{ generationRef: string; composedWith: string; at: number }> = [];
     const before = chat.messages.filter((message) => message.at.getTime() < start);
     const shown = [...before.slice(-SHIFT_REVIEW_CONTEXT_MESSAGES), ...chat.messages.filter((message) => message.at.getTime() >= start)];
     out.push({
@@ -474,12 +565,20 @@ export async function readTeamShiftReview(
           const linkedRow = linked === null ? undefined : generations.find((generation) => generation.generationRef === linked);
           const candidates = linkedRow === undefined || nearby.includes(linkedRow) ? nearby : [...nearby, linkedRow];
           const text = normalized(message.text);
+          const composedWith = send?.composedWith ?? null;
+          const { generationRef, ...origin } = originOf({ text: message.text, at: atMs, composedWith, linkedGeneration: linked }, candidates);
+          // The second part of a Reply ([NEXT]) the extension saw typed: the part of a text a button put in.
+          const parts = generationRef === null || origin.origin === "own" || (composedWith !== null && AI_BUTTONS.has(composedWith)) ? []
+            : byButton.filter((one) => one.generationRef === generationRef && one.at >= atMs - PART_WITHIN_MINUTES * MINUTE_MS);
+          if (generationRef !== null && composedWith !== null && AI_BUTTONS.has(composedWith)) byButton.push({ generationRef, composedWith, at: atMs });
+          const hi = composedWith === "hi" || origin.aiFeature === "hi-greeting";
           mine = {
-            composedWith: send?.composedWith ?? null,
+            composedWith: parts[0]?.composedWith ?? composedWith,
+            ...(parts.length === 0 ? {} : { part: parts.length + 1 }),
             edited: send?.edited ?? null,
-            ...originOf({ text: message.text, at: atMs, composedWith: send?.composedWith ?? null, linkedGeneration: linked }, candidates),
+            ...origin,
             replySeconds: replyByRef.get(message.ref) ?? null,
-            repeats: Math.max(0, (mineText.get(text)?.size ?? 1) - 1),
+            repeats: hi ? 0 : Math.max(0, (mineText.get(text)?.size ?? 1) - 1),
             marks: marksOf(message.text, fanWritesRussian),
           };
         }
