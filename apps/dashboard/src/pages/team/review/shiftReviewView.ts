@@ -411,6 +411,45 @@ export function salesSplit(data: TeamShiftReviewResponse): SalesSplit {
   };
 }
 
+export interface SalesByOrigin {
+  /** The chatter's PPV, or the chatter wrote to the fan last. */
+  own: number;
+  /** Colleagues' PPVs, by sender, most first. */
+  colleaguePpv: Array<{ name: string; netMills: number }>;
+  /** PPVs sent without an author: old or mass ones. */
+  noAuthorPpv: number;
+  /** Another person wrote to the fan last, by them, most first. */
+  otherWrote: Array<{ name: string; netMills: number }>;
+  /** Nobody with an author wrote to the fan in the 48 hours before. */
+  nobodyWrote: number;
+  postTip: number;
+  campaign: number;
+}
+
+/** Where the sales that count for the chatter came from (`sales[].origin`): the parts add up to `salesNetMills`. */
+export function salesByOrigin(data: TeamShiftReviewResponse): SalesByOrigin {
+  const out: SalesByOrigin = { own: 0, colleaguePpv: [], noAuthorPpv: 0, otherWrote: [], nobodyWrote: 0, postTip: 0, campaign: 0 };
+  const add = (list: Array<{ name: string; netMills: number }>, name: string, netMills: number) => {
+    const known = list.find((one) => one.name === name);
+    if (known) known.netMills += netMills;
+    else list.push({ name, netMills });
+  };
+  for (const sale of data.sales.filter(counts)) {
+    switch (sale.origin) {
+      case "own": out.own += sale.netMills; break;
+      case "colleague_ppv": add(out.colleaguePpv, sale.ppvSender ?? "коллега", sale.netMills); break;
+      case "no_author_ppv": out.noAuthorPpv += sale.netMills; break;
+      case "other_wrote": add(out.otherWrote, sale.lastWriter ?? "коллега", sale.netMills); break;
+      case "nobody_wrote_48h": out.nobodyWrote += sale.netMills; break;
+      case "post_tip": out.postTip += sale.netMills; break;
+      case "campaign": out.campaign += sale.netMills; break;
+    }
+  }
+  out.colleaguePpv.sort((a, b) => b.netMills - a.netMills);
+  out.otherWrote.sort((a, b) => b.netMills - a.netMills);
+  return out;
+}
+
 export interface ShiftTotals {
   messages: number;
   massMessages: number;

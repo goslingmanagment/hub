@@ -63,6 +63,12 @@ export interface SaleFacts {
   ppvSender: { userId: number; username: string } | null;
   /** The PPV message was found but has no author (sent from a phone, another browser, an old client). */
   ppvWithoutAuthor: boolean;
+  /** When the PPV message the fan bought was sent; null — not a PPV, or its message not found. */
+  ppvSentAt: Date | null;
+  /** A tip under a wall post (Fansly: `creator_post_tips` by the tip's id), not in a chat. */
+  postTip: boolean;
+  /** An OnlyFans tip that is a contribution to the page's Campaign: the fan's message «… $X to your Campaign» with it. */
+  campaign: boolean;
   /** Who wrote to the fan on the page in the 48 hours before the sale, most messages first. */
   writers: Array<{ userId: number; username: string; messages: number }>;
   /** Personal messages to the fan in those 48 hours with no author. */
@@ -74,8 +80,12 @@ export interface SaleFacts {
  * message that carried the bought media or bundle to that fan (the latest
  * before the purchase); on OnlyFans the unlock paired with the purchase one to
  * one (onlyfans-unlocks.ts: two purchases never share a message). Its author
- * is week 1's (client_send_attributions).
+ * is week 1's (client_send_attributions). A tip under a wall post is the post's
+ * (`creator_post_tips`); an OnlyFans Campaign contribution is a tip whose fan
+ * wrote «… to your Campaign» within CAMPAIGN_TEXT_MINUTES of it.
  */
+const CAMPAIGN_TEXT_MINUTES = 2;
+
 export async function listSaleFacts(db: Database, input: { transactionIds: readonly number[] }): Promise<SaleFacts[]> {
   if (input.transactionIds.length === 0) return [];
   const ofPurchases = await db.execute<{ id: string | number; page_id: string | number; fan_ref: string; occurred_at: Date | string }>(sql`
@@ -93,6 +103,7 @@ export async function listSaleFacts(db: Database, input: { transactionIds: reado
   const ofLinks = unlocks.filter((match) => input.transactionIds.includes(match.transactionId));
   const result = await db.execute<{
     id: string | number; ppv_user_id: string | number | null; ppv_username: string | null; ppv_message_ref: string | null;
+    ppv_sent_at: Date | string | null; post_tip: boolean; campaign: boolean;
     writers: Array<{ user_id: number; username: string; messages: number }> | null; written: string | number; outgoing: string | number;
   }>(sql`
     with of_links as (
@@ -137,6 +148,15 @@ export async function listSaleFacts(db: Database, input: { transactionIds: reado
       join chats c on c.id = s.id
     )
     select s.id, a.user_id as ppv_user_id, u.username as ppv_username, ppv.message_ref as ppv_message_ref,
+      (select pm.occurred_at from message_archive pm
+        where pm.account_id = s.page_id and pm.platform = s.platform and pm.message_ref = ppv.message_ref) as ppv_sent_at,
+      (s.kind = 'tip' and s.correlation_id is not null and exists (select 1 from creator_post_tips pt
+        where pt.account_id = s.page_id and pt.platform_tip_id = s.correlation_id)) as post_tip,
+      (s.kind = 'tip' and s.platform = 'onlyfans' and exists (select 1 from message_archive m, chats c
+        where c.id = s.id and m.account_id = s.page_id and m.conversation_ref = any(c.refs) and not m.is_sent_by_me
+          and m.occurred_at between s.occurred_at - make_interval(mins => ${CAMPAIGN_TEXT_MINUTES})
+            and s.occurred_at + make_interval(mins => ${CAMPAIGN_TEXT_MINUTES})
+          and m.text_plain ~* '\\mto your campaign\\M')) as campaign,
       (
         select json_agg(json_build_object('user_id', w.user_id, 'username', w.username, 'messages', w.messages) order by w.messages desc)
         from (
@@ -162,6 +182,9 @@ export async function listSaleFacts(db: Database, input: { transactionIds: reado
     transactionId: Number(row.id),
     ppvSender: row.ppv_user_id === null ? null : { userId: Number(row.ppv_user_id), username: row.ppv_username ?? "" },
     ppvWithoutAuthor: row.ppv_message_ref !== null && row.ppv_user_id === null,
+    ppvSentAt: row.ppv_sent_at === null ? null : new Date(row.ppv_sent_at),
+    postTip: row.post_tip === true,
+    campaign: row.campaign === true,
     writers: (row.writers ?? []).map((writer) => ({ userId: Number(writer.user_id), username: writer.username, messages: Number(writer.messages) })),
     withoutAuthor: Math.max(0, Number(row.outgoing) - Number(row.written)),
   }));
