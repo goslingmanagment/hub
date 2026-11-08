@@ -2,6 +2,7 @@ import {
   MASS_SEND_MIN_CHATS,
   SHIFT_REVIEW_AI_LOOKBACK_MINUTES,
   SHIFT_REVIEW_AI_SHARE,
+  SHIFT_REVIEW_BROADCAST_OWN_WORDS,
   SHIFT_REVIEW_CONTEXT_MESSAGES,
   SHIFT_REVIEW_DELETED_UNSEEN_SECONDS,
   SHIFT_REVIEW_LATER_SALES_DAYS,
@@ -576,7 +577,7 @@ export async function readTeamShiftReview(
   const [rows, sends, generations, autoTexts, minutes, sales, before] = await Promise.all([
     listShiftReviewMessages(app.db, {
       userId: query.userId, pageIds, workedPageIds, from, to, horizonHours: SHIFT_REVIEW_WAIT_HORIZON_HOURS, burstMinChats: MASS_SEND_MIN_CHATS,
-      deletedUnseenSeconds: SHIFT_REVIEW_DELETED_UNSEEN_SECONDS,
+      deletedUnseenSeconds: SHIFT_REVIEW_DELETED_UNSEEN_SECONDS, broadcastOwnWords: SHIFT_REVIEW_BROADCAST_OWN_WORDS,
     }),
     listShiftReviewSends(app.db, { userId: query.userId, pageIds, from, to }),
     listShiftReviewGenerations(app.db, {

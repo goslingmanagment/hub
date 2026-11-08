@@ -1,7 +1,7 @@
 import { sql } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
-import { notOwnAccountMessageSql, ppvBoughtSql, seenMessageSql } from "./shift-sql.ts";
+import { broadcastCtesSql, notOwnAccountMessageSql, ppvBoughtSql, seenMessageSql, sentMediaKeySql } from "./shift-sql.ts";
 
 // The numbers of one chatter's shift (Chat Memory week 5, 0305/0306/0311,
 // docs/plans/2026-10-24-chat-memory/week-5.md §1). Only messages with this
@@ -9,9 +9,11 @@ import { notOwnAccountMessageSql, ppvBoughtSql, seenMessageSql } from "./shift-s
 // an author is nobody's. A PPV is a message with a price in the archive (the
 // extension cannot see a Fansly price; the client's flag only stands in for a
 // message the archive does not hold yet), as on «Продажи». A mass message
-// answers nobody: a Fansly mass message, or one text with the same price and
+// answers nobody: a Fansly mass message, one text with the same price and
 // files sent to `burstMinChats` or more chats of the page in its clock hour
-// (OnlyMonster's, as in «Авторы»). A message deleted within
+// (OnlyMonster's, as in «Авторы»), or a broadcast with names — one file set at
+// one price from one sender to `burstMinChats` chats within an hour, but for a
+// message with `broadcastOwnWords` words of its own (shift-sql.ts). A message deleted within
 // `deletedUnseenSeconds` of being sent nobody saw, as in «Разбор смены»: a
 // page's is not the chatter's message and answers nobody, a fan's leaves the
 // fan waiting on nothing. Database only.
@@ -35,7 +37,9 @@ export interface ShiftNumbersRow {
 
 export async function readShiftNumbers(
   db: Database,
-  input: { userId: number; pageIds: readonly number[]; from: Date; to: Date; burstMinChats: number; deletedUnseenSeconds: number },
+  input: {
+    userId: number; pageIds: readonly number[]; from: Date; to: Date; burstMinChats: number; deletedUnseenSeconds: number; broadcastOwnWords: number;
+  },
 ): Promise<ShiftNumbersRow> {
   const pages = sql`${sql.param(input.pageIds.map(String))}::bigint[]`;
   const from = sql`${input.from.toISOString()}::timestamptz`;
@@ -58,7 +62,8 @@ export async function readShiftNumbers(
     -- The shift's pages' messages from 3 days before it (a reply waits at most 3 days) to its end, the page's mass messages
     -- marked; a chat with another page of ours is no fan's.
     page_msgs as materialized (
-      select m.account_id as page_id, m.conversation_ref as conv, m.message_ref as ref, m.occurred_at as at, m.is_sent_by_me as sent, m.message_type,
+      select m.account_id as page_id, m.platform, m.conversation_ref as conv, m.message_ref as ref, m.occurred_at as at, m.is_sent_by_me as sent,
+        m.message_type, m.text_plain, m.price_mills, ${sentMediaKeySql("m")} as media_key,
         md5(coalesce(m.text_plain, '') || '|' || coalesce(m.price_mills, 0)::text || '|' || jsonb_array_length(m.media_metadata)::text) as shape,
         ${seenMessageSql("m", input.deletedUnseenSeconds)} as seen
       from message_archive m
@@ -73,9 +78,11 @@ export async function readShiftNumbers(
       group by 1, 2, 3
       having count(distinct conv) >= ${input.burstMinChats}
     ),
+    ${broadcastCtesSql("page_msgs", { minChats: input.burstMinChats, ownWords: input.broadcastOwnWords })},
     flagged as materialized (
       select pm.*, pm.sent and (coalesce(pm.message_type, 1) = 2 or exists (
-        select 1 from bursts b where b.page_id = pm.page_id and b.shape = pm.shape and b.hour = date_trunc('hour', pm.at))) as mass
+        select 1 from bursts b where b.page_id = pm.page_id and b.shape = pm.shape and b.hour = date_trunc('hour', pm.at))
+        or exists (select 1 from broadcast_refs r where r.page_id = pm.page_id and r.ref = pm.ref)) as mass
       from page_msgs pm
     ),
     bought as (

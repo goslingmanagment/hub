@@ -1,7 +1,7 @@
 import { sql } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
-import { notOwnAccountMessageSql, ppvBoughtSql, seenMessageSql } from "./shift-sql.ts";
+import { broadcastCtesSql, notOwnAccountMessageSql, ppvBoughtSql, seenMessageSql, sentMediaKeySql } from "./shift-sql.ts";
 
 // The reads of Команда → «Разбор смены» (apps/runtime services/shift-review.ts):
 // the chats a chatter's shift touched with their messages, who sent each page
@@ -9,8 +9,10 @@ import { notOwnAccountMessageSql, ppvBoughtSql, seenMessageSql } from "./shift-s
 // database only; the shift itself is services/chatter-shifts.ts's.
 //
 // A mass message is the one of chatter-numbers.ts: a Fansly mass message
-// (message_type 2), or one text with the same price and files sent to
-// `burstMinChats` chats of the page or more in its clock hour.
+// (message_type 2), one text with the same price and files sent to
+// `burstMinChats` chats of the page or more in its clock hour, or a broadcast
+// with names (`broadcastCtesSql`: one file set at one price from one sender to
+// `burstMinChats` chats within an hour, but for a message with a live answer).
 //
 // A reported send (client_send_attributions) the archive does not hold is
 // taken from the page's socket (dm_live_messages, Fansly) when the socket saw
@@ -64,6 +66,8 @@ export async function listShiftReviewMessages(
     userId: number; pageIds: readonly number[]; workedPageIds: readonly number[]; from: Date; to: Date; horizonHours: number; burstMinChats: number;
     /** A message deleted sooner than this after it was sent is not seen. */
     deletedUnseenSeconds: number;
+    /** A broadcast's message with this many words of its own or more is personal. */
+    broadcastOwnWords: number;
   },
 ): Promise<ShiftReviewMessageRow[]> {
   if (input.pageIds.length === 0) return [];
@@ -82,7 +86,7 @@ export async function listShiftReviewMessages(
       select m.account_id as page_id, m.platform, m.conversation_ref as conv, m.message_ref as ref, m.occurred_at as at,
         m.is_sent_by_me as sent, m.message_type, m.text_plain, m.price_mills, m.is_tip, m.tip_amount_mills, m.fan_native_id,
         case when jsonb_typeof(m.media_metadata) = 'array' then jsonb_array_length(m.media_metadata) else 0 end as media,
-        false as unarchived, m.deleted_at, ${seenMessageSql("m", input.deletedUnseenSeconds)} as seen
+        false as unarchived, m.deleted_at, ${seenMessageSql("m", input.deletedUnseenSeconds)} as seen, ${sentMediaKeySql("m")} as media_key
       from message_archive m
       where m.account_id = any(${pages}) and m.conversation_ref is not null
         and (not m.content_pending or ${seenMessageSql("m", input.deletedUnseenSeconds)})
@@ -95,7 +99,8 @@ export async function listShiftReviewMessages(
         null::text as fan_native_id,
         case when jsonb_typeof(l.attachments) = 'array' then jsonb_array_length(l.attachments) else 0 end as media,
         true as unarchived, l.deleted_at,
-        l.deleted_at is null or l.deleted_at >= l.created_at + make_interval(secs => ${input.deletedUnseenSeconds}) as seen
+        l.deleted_at is null or l.deleted_at >= l.created_at + make_interval(secs => ${input.deletedUnseenSeconds}) as seen,
+        '' as media_key
       from client_send_attributions a
       join dm_live_messages l on l.page_id = a.page_id and l.platform_message_id = a.platform_message_id
       where a.platform = 'fansly' and a.page_id = any(${pages})
@@ -137,6 +142,7 @@ export async function listShiftReviewMessages(
       group by 1, 2, 3
       having count(distinct conv) >= ${input.burstMinChats}
     ),
+    ${broadcastCtesSql("page_msgs", { minChats: input.burstMinChats, ownWords: input.broadcastOwnWords })},
     picked as materialized (
       select pm.* from page_msgs pm
       where (pm.page_id, pm.conv) in (select page_id, conv from chats)
@@ -148,7 +154,8 @@ export async function listShiftReviewMessages(
       p.sent and (coalesce(p.message_type, 1) = 2 or exists (
         select 1 from bursts b
         where b.page_id = p.page_id and b.hour = date_trunc('hour', p.at)
-          and b.shape = md5(coalesce(p.text_plain, '') || '|' || coalesce(p.price_mills, 0)::text || '|' || p.media::text))) as mass,
+          and b.shape = md5(coalesce(p.text_plain, '') || '|' || coalesce(p.price_mills, 0)::text || '|' || p.media::text))
+        or exists (select 1 from broadcast_refs r where r.page_id = p.page_id and r.ref = p.ref)) as mass,
       a.user_id as author_id, u.username as author_name, p.unarchived, p.deleted_at,
       case when not (p.sent and coalesce(p.price_mills, 0) > 0) then null
         else ${ppvBoughtSql({ pageId: "p.page_id", platform: "p.platform", ref: "p.ref", conv: "p.conv", at: "p.at" })}

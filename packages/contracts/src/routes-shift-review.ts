@@ -9,8 +9,11 @@
  *
  * The shift is services/chatter-shifts.ts's; the author of a message is
  * `client_send_attributions`; a mass message is the one of `teamChatterNumbers`
- * (a Fansly mass message, or one text with its price and files sent to
- * MASS_SEND_MIN_CHATS chats of a page or more in a clock hour). A wait runs from
+ * (a Fansly mass message, one text with its price and files sent to
+ * MASS_SEND_MIN_CHATS chats of a page or more in a clock hour, or a broadcast
+ * with names: one file set at one price from one sender to MASS_SEND_MIN_CHATS
+ * chats within an hour, whatever the texts, but for a message with
+ * SHIFT_REVIEW_BROADCAST_OWN_WORDS words of its own). A wait runs from
  * the fan's first message after the page's last personal one to the next
  * personal one, any author's, as in the «Обучалка» shift audit.
  */
@@ -36,6 +39,11 @@ export const SHIFT_REVIEW_LATER_SALES_DAYS = 14;
 export const SHIFT_REVIEW_WAIT_HORIZON_HOURS = 72;
 /** The person's previous and next shift are looked for this far from the shift. */
 export const SHIFT_REVIEW_NEIGHBOUR_DAYS = 14;
+/**
+ * A broadcast with names (owner, 2026-11-08): its message stays personal — a live answer — with this many words of its
+ * own or more, words no other message of the broadcast within an hour of it has. A name is one.
+ */
+export const SHIFT_REVIEW_BROADCAST_OWN_WORDS = 4;
 /**
  * A message deleted sooner than this after it was sent the other side most likely never saw (owner, 2026-11-08): a fan's
  * starts no wait, a page's answers none, and the chatter's is not counted. One deleted later counts as sent.
@@ -113,7 +121,7 @@ const shiftReviewMessageSchema = z.object({
    * automated messages. Null for a fan's message.
    */
   by: z.enum(SHIFT_REVIEW_AUTHORS).nullable(),
-  /** A page message sent as a mass message (a Fansly one, or a burst): it answers nobody. */
+  /** A page message sent as a mass message (a Fansly one, a burst, or a broadcast with names): it answers nobody. */
   mass: z.boolean(),
   /**
    * A reported send the platform's archive does not hold: the page socket's copy (Fansly), no price. Fansly may never
