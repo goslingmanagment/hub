@@ -14,7 +14,7 @@ import { shiftSpan } from "@/pages/team/TeamShiftsPage";
 import { ChatterLink, PageLink } from "@/pages/team/teamLinks";
 import { ShiftChats, type ChatsView } from "./ShiftChats.js";
 import { ShiftPulse } from "./ShiftPulse.js";
-import { CHATTER_SHIFT_PAGE_MIN_MESSAGES, SHIFT_REVIEW_LATER_SALES_DAYS, SHIFT_REVIEW_NEIGHBOUR_DAYS, type TeamShiftReviewResponse } from "@agency_hub_core/contracts";
+import { CHATTER_SHIFT_PAGE_MIN_MESSAGES, SHIFT_REVIEW_LATER_SALES_DAYS, SHIFT_REVIEW_NEIGHBOUR_DAYS, SHIFT_REVIEW_SEAM_MINUTES, type TeamShiftReviewResponse } from "@agency_hub_core/contracts";
 import {
   CHAT_KINDS,
   CHAT_SHOWS,
@@ -345,7 +345,7 @@ function ShiftReview({ userId, at }: { userId: number; at: string }) {
             <span key={page.pageLabel}>
               {index > 0 && ", "}<PageLink label={page.pageLabel} /> {formatCount(page.messages)}
               {!page.worked && shift.kind === "shift" && (page.allFans ? (
-                <span className="team-faint" title={`Меньше ${CHATTER_SHIFT_PAGE_MIN_MESSAGES} сообщений: продажи страницы не в этой смене. Но страницу в смену больше никто не вёл — в разборе все её фаны, как на отработанной`}>
+                <span className="team-faint" title={`Меньше ${CHATTER_SHIFT_PAGE_MIN_MESSAGES} сообщений: продажи страницы не в этой смене. Но страницу в смену больше никто не вёл (стык с чужой сменой короче ${SHIFT_REVIEW_SEAM_MINUTES} мин не в счёт) — в разборе все её фаны, как на отработанной`}>
                   {" "}(меньше {CHATTER_SHIFT_PAGE_MIN_MESSAGES} — продажи не в смене, фаны все: больше никто не вёл)
                 </span>
               ) : (
