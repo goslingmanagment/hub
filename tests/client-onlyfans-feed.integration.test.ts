@@ -191,6 +191,21 @@ describe("the OnlyFans feed route", () => {
     expect(bought!.purchased_at).not.toBeNull();
   });
 
+  it("keeps the price and the media of a PPV when the chat list then shows it as the chat's last message", async () => {
+    // 31.10: a chat list's head (no price, no media) overwrote 7 PPV prices of lora-vip-of in one batch.
+    const sent = message({ fromFan: false, fan: null, textHtml: "<p>just for you</p>", price: 25, isFree: false, isOpened: false, mediaCount: 1,
+      media: [{ ref: "91", type: "video", canView: true, duration: 30 }] });
+    expect(await ok([sent])).toMatchObject({ taken: 1 });
+    expect(await ok([{ ...sent, via: "chat_list", observedAt: now(), price: null, isFree: null, mediaCount: 0, media: [] }])).toMatchObject({ taken: 1 });
+    await runCanonicalization(app, {});
+    await runMessageArchiveProjection(app, { accountId: pageId });
+    const [archived] = await query<{ price_mills: string | null; media: number }>(
+      "select price_mills::text, jsonb_array_length(media_metadata) as media from message_archive where account_id = $1 and message_ref = $2",
+      [pageId, sent.messageRef],
+    );
+    expect(archived).toEqual({ price_mills: "25000", media: 1 });
+  });
+
   it("lends the page's poll to one tab at a time, the always-on tab first, and reads back to what the feed brought", async () => {
     const poll = (token: string) => server!.inject({
       method: "POST",
