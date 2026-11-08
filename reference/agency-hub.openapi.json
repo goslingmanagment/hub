@@ -171966,8 +171966,17 @@
         "tags": [
           "client"
         ],
-        "description": "Read-only and database-only: no platform request, no queued work. A device token's, for an active page granted to the caller (else 409 `client_feature_disabled` / `not_granted`); a cookie session is 403. No owner switch. The messages of the fan in the path that the page's Fansly socket saw the fan delete (the live overlay, kept since 2026-10-01), the latest deleted first, at most 50, and `total` for all of them: the message id, its chat, the text the socket carried (null when the hub kept none), how many attachments it had, when it was sent and when it was deleted. Unlike the conversation feed and the AI, which read a deleted message as an empty row, this read serves its text: a Fansly deletion is a fact about the message, not an erasure (owner, 2026-09-28), and the chat extension shows the fan's deleted messages to the chatters of the page (owner, 2026-11-03). Fansly only: on another platform's page the list is empty. `fanRef` is the fan's account id on Fansly.",
+        "description": "Read-only and database-only: no platform request, no queued work. A device token's, for an active page granted to the caller (else 409 `client_feature_disabled` / `not_granted`); a cookie session is 403. No owner switch. The messages of the fan in the path that the page's Fansly socket saw the fan delete (the live overlay, kept since 2026-10-01), the latest deleted first, at most 50, and `total` for all of them: the message id, its chat, the text the socket carried (null when the hub kept none), how many attachments it had, when it was sent and when it was deleted. Unlike the conversation feed and the AI, which read a deleted message as an empty row, this read serves its text: a Fansly deletion is a fact about the message, not an erasure (owner, 2026-09-28), and the chat extension shows the fan's deleted messages to the chatters of the page (owner, 2026-11-03). Fansly only: on another platform's page the list is empty. `fanRef` is the fan's account id on Fansly. With `conversationRef` (the open chat's group id) the answer also carries `chat`: how many messages that chat ever had (both sides, deleted ones included) and when its first was sent, both null until Hub holds the chat from its first message; null for a group that is not this fan's chat with the page.",
         "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[1-9]\\d{0,29}$"
+            },
+            "in": "query",
+            "name": "conversationRef",
+            "required": false
+          },
           {
             "schema": {
               "type": "string",
@@ -172059,6 +172068,46 @@
                         ],
                         "additionalProperties": false
                       }
+                    },
+                    "chat": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "conversationRef": {
+                              "type": "string",
+                              "pattern": "^[1-9]\\d{0,29}$"
+                            },
+                            "messages": {
+                              "anyOf": [
+                                {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "firstMessageAt": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "conversationRef",
+                            "messages",
+                            "firstMessageAt"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
                     },
                     "serverNow": {
                       "type": "string"

@@ -52,3 +52,46 @@ export async function listClientDeletedMessages(
     })),
   };
 }
+
+export interface ClientChatLengthRow {
+  /** The sync chain's state of the thread (`effectiveHistoryStateSql`): only `complete` proves the first message. */
+  historyState: "none" | "unverified" | "partial" | "complete";
+  /** The proven chain from its head down, and what the page's socket stored after that head. */
+  chainCount: number;
+  afterHead: number;
+  /** When the chain's oldest message was sent. */
+  oldestAt: Date | null;
+}
+
+/**
+ * The length of one chat of a page (the chat header, 2026-11-08), when the page's thread of the group is this fan's;
+ * null otherwise. The sync chain (0231, repositories/sync/thread-chain.ts) counts the messages from its head down to
+ * its oldest, and `complete` proves the oldest is the chat's first; the live overlay holds what the socket brought
+ * after the head before the chain took it in. Ids are snowflakes: after the head means a greater id. Two index reads
+ * (the thread's unique key, dm_live_messages_thread).
+ */
+export async function readClientChatLength(
+  db: Database,
+  input: { pageId: number; conversationRef: string; fanRef: string },
+): Promise<ClientChatLengthRow | null> {
+  const result = await db.execute<{
+    history_state: ClientChatLengthRow["historyState"]; contiguous_count: number | string;
+    contiguous_oldest_at: Date | string | null; after_head: number | string;
+  }>(sql`
+    select (case when t.history_state = 'none' and t.stored_message_count > 0 then 'unverified' else t.history_state end) as history_state,
+      t.contiguous_count, t.contiguous_oldest_at,
+      (select count(*) from dm_live_messages l
+        where l.page_id = t.platform_account_id and l.platform_conversation_id = t.platform_conversation_id
+          and (t.head_confirmed_id is null or l.platform_message_id::numeric > t.head_confirmed_id::numeric)) as after_head
+    from page_dm_threads t
+    where t.platform_account_id = ${input.pageId} and t.platform_conversation_id = ${input.conversationRef}
+      and t.partner_platform_user_id = ${input.fanRef}`);
+  const row = result.rows[0];
+  if (row === undefined) return null;
+  return {
+    historyState: row.history_state,
+    chainCount: Number(row.contiguous_count),
+    afterHead: Number(row.after_head),
+    oldestAt: row.contiguous_oldest_at === null ? null : new Date(row.contiguous_oldest_at),
+  };
+}
