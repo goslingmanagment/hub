@@ -63,7 +63,17 @@ describe("workOfMinutes", () => {
       FAR_LATER,
     );
     expect(bounds(work)).toEqual([["shift", at(0), at(400)]]);
-    expect(work[0]!.pauses).toEqual([{ from: at(209), to: at(235) }]);
+    expect(work[0]!.pauses).toEqual([{ from: at(201), to: at(235) }]);
+  });
+
+  it("ends the work before a silence of the extension of 10 minutes at its last open minute plus 2, and holds the break's sales still", () => {
+    // Open and idle until 203, closed until 230: work to 205, a pause after.
+    const closed = workOfMinutes([...minutes(0, 204, range(0, 200)), ...minutes(230, 400, range(230, 400))], [...sends(0, 200, 100), ...sends(230, 400, 100)], FAR_LATER);
+    expect(closed[0]).toMatchObject({ kind: "shift", startedAt: at(0), endedAt: at(400), workedMinutes: 375, pauses: [{ from: at(205), to: at(230) }] });
+    expect(workHoldsSale(closed[0]!, { pageLabel: "ari-1", at: at(215) })).toBe(true);
+    // Silent 7 minutes, then open and idle: the first 10 idle minutes stay work.
+    const blip = workOfMinutes([...minutes(0, 204, range(0, 200)), ...minutes(211, 400, range(230, 400))], [...sends(0, 200, 100), ...sends(230, 400, 100)], FAR_LATER);
+    expect(blip[0]).toMatchObject({ kind: "shift", endedAt: at(400), workedMinutes: 379, pauses: [{ from: at(209), to: at(230) }] });
   });
 
   it("ends after 60 minutes with no activity, the extension open or not, at the last activity plus the idle that counts", () => {
@@ -100,7 +110,8 @@ describe("workOfMinutes", () => {
       FAR_LATER,
     );
     expect(bounds(work)).toEqual([["shift", at(0), at(455)]]);
-    expect(work[0]).toMatchObject({ workedMinutes: 401, pauses: [{ from: at(101), to: at(155) }] });
+    // The extension closed in the break: the work before it ends 2 minutes after its last open minute.
+    expect(work[0]).toMatchObject({ workedMinutes: 393, pauses: [{ from: at(93), to: at(155) }] });
     expect(totalMessages(work[0]!)).toBe(225);
     expect(workHoldsSale(work[0]!, { pageLabel: "ari-1", at: at(50) })).toBe(true);
     expect(workHoldsSale(work[0]!, { pageLabel: "ari-1", at: at(120) })).toBe(true);
@@ -187,12 +198,12 @@ describe("workOfMinutes", () => {
     // Three hours of work, the extension closed after the minute at 180; 35 minutes later the person is on a break.
     const work = workOfMinutes(minutes(0, 181, range(0, 180)), sends(0, 180, 120), at(215));
     expect(bounds(work)).toEqual([["shift", at(0), at(215)]]);
-    expect(work[0]).toMatchObject({ ongoing: true, workedMinutes: 189, lastInputAt: at(179), lastBeatAt: at(180), pauses: [{ from: at(189), to: at(215) }] });
+    expect(work[0]).toMatchObject({ ongoing: true, workedMinutes: 182, lastInputAt: at(179), lastBeatAt: at(180), pauses: [{ from: at(182), to: at(215) }] });
     expect(work[0]!.salesSince.get("ari-1")).toBe(at(0));
     // Back before the hour is out: one shift, the break a pause between.
     const back = workOfMinutes([...minutes(0, 181, range(0, 180)), ...minutes(230, 260, range(230, 260))], [...sends(0, 180, 120), ...sends(230, 260, 20)], at(260));
     expect(bounds(back)).toEqual([["shift", at(0), at(260)]]);
-    expect(back[0]!.pauses).toEqual([{ from: at(189), to: at(230) }]);
+    expect(back[0]!.pauses).toEqual([{ from: at(182), to: at(230) }]);
   });
 
   it("ends a shift whose extension closed an hour after its last action, at that action plus the idle that counts", () => {

@@ -2350,7 +2350,10 @@ export const clientFanNoteAttributionsResponseSchema = z.object({
 // - One stretch of work runs from the first active minute until
 //   CHATTER_SHIFT_END_IDLE_MINUTES with no activity. The extension closing or a
 //   browser restarting ends nothing, while it goes on or afterwards. Idle up to
-//   CHATTER_SHIFT_IDLE_PAUSE_MINUTES is work, the rest of a gap is a pause.
+//   CHATTER_SHIFT_IDLE_PAUSE_MINUTES is work, the rest of a gap is a pause; but
+//   with the extension then silent CHATTER_SHIFT_CLOSED_SILENT_MINUTES or more
+//   (closed, the computer asleep), the work ends at its last open minute plus
+//   CHATTER_SHIFT_CLOSED_GRACE_MINUTES.
 // - A stretch with CHATTER_SHIFT_MIN_WORKED_MINUTES of work and
 //   CHATTER_SHIFT_MIN_MESSAGES messages is a SHIFT; anything less is a VISIT, a
 //   look-in that is not counted as a shift. A stretch still going is a shift
@@ -2382,6 +2385,10 @@ export const CLIENT_ACTIVITY_MAX_IDLE_MS = 24 * 60 * 60_000;
 export const CLIENT_ACTIVITY_LOST_MINUTES = 3;
 /** Idle minutes that still count as work; from this one on it is a pause. */
 export const CHATTER_SHIFT_IDLE_PAUSE_MINUTES = 10;
+/** The extension silent this long after an action was closed (or the computer asleep): the idle after its last beat is no work. */
+export const CHATTER_SHIFT_CLOSED_SILENT_MINUTES = 10;
+/** The work before such a silence ends this long after the extension's last open minute (a beat comes once a minute). */
+export const CHATTER_SHIFT_CLOSED_GRACE_MINUTES = 2;
 /** Minutes without activity that end a stretch of work, the extension open or not. */
 export const CHATTER_SHIFT_END_IDLE_MINUTES = 60;
 /** Less work than this is a visit, not a shift. */

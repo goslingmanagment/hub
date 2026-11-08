@@ -1,4 +1,6 @@
 import {
+  CHATTER_SHIFT_CLOSED_GRACE_MINUTES,
+  CHATTER_SHIFT_CLOSED_SILENT_MINUTES,
   CHATTER_SHIFT_EDGE_BLOCK_GAP_MINUTES,
   CHATTER_SHIFT_EDGE_NEAR_MINUTES,
   CHATTER_SHIFT_END_IDLE_MINUTES,
@@ -51,7 +53,10 @@ import { BadRequestError, ForbiddenError, NotFoundError } from "./errors.ts";
  *   until that long after its last action, the extension beating or not, and
  *   a break going on now is a pause of it already. A gap's first
  *   CHATTER_SHIFT_IDLE_PAUSE_MINUTES are work (reading, waiting for a fan), the
- *   rest is a pause.
+ *   rest is a pause; but with the extension then silent for
+ *   CHATTER_SHIFT_CLOSED_SILENT_MINUTES or more (closed, the computer asleep),
+ *   the work ends at its last open minute plus CHATTER_SHIFT_CLOSED_GRACE_MINUTES
+ *   (owner, 2026-11-08): the time with it closed is no work.
  * - With CHATTER_SHIFT_MIN_WORKED_MINUTES of work and
  *   CHATTER_SHIFT_MIN_MESSAGES messages it is a SHIFT; else a VISIT, a look-in
  *   that is not counted as one. A stretch still going is a shift once it has
@@ -130,7 +135,7 @@ export interface ComputedWork {
   endedAt: number;
   ongoing: boolean;
   workedMinutes: number;
-  /** A break going on now is one too: from its 10th idle minute to now. */
+  /** A break going on now is one too: from the end of the work before it to now. */
   pauses: Array<{ from: number; to: number }>;
   /** The start of its last minute with an action, ms. */
   lastInputAt: number;
@@ -210,6 +215,22 @@ export function workOfMinutes(minutes: readonly ActivityMinute[], sent: readonly
     return Math.min(lastOpen + MINUTE_MS, lastInput + pauseAfter);
   };
 
+  const closedSilence = CHATTER_SHIFT_CLOSED_SILENT_MINUTES * MINUTE_MS;
+  const closedGrace = CHATTER_SHIFT_CLOSED_GRACE_MINUTES * MINUTE_MS;
+  /**
+   * The idle after the action at `at` that is work, until `next` (the next action, or now in a break going on): up to
+   * pauseAfter, but no further than the extension's last open minute plus closedGrace when it then went silent for
+   * closedSilence or more — closed, or the computer asleep: the time with it closed is no work.
+   */
+  const idleWorked = (at: number, next: number) => {
+    const counted = Math.min(next - at, pauseAfter);
+    for (let index = countBelow(open, at); index < open.length && open[index]! < at + counted; index += 1) {
+      const minute = open[index]!;
+      if ((open[index + 1] ?? now) - minute >= closedSilence) return Math.min(counted, minute + closedGrace - at);
+    }
+    return counted;
+  };
+
   const workOf = (part: readonly number[], end: number, ongoing: boolean): Omit<ComputedWork, "kind" | "salesSince"> & { firstSeen: Map<string, number> } => {
     let worked = 0;
     const pauses: Array<{ from: number; to: number }> = [];
@@ -217,9 +238,10 @@ export function workOfMinutes(minutes: readonly ActivityMinute[], sent: readonly
     const firstSeen = new Map<string, number>();
     part.forEach((at, index) => {
       const next = part[index + 1] ?? end;
-      worked += Math.min(next - at, pauseAfter);
-      // Work that stopped ends within the idle that counts; one going on pauses from then to now.
-      if (next - at > pauseAfter) pauses.push({ from: at + pauseAfter, to: next });
+      // Work that stopped ends within the idle that counts (`endOf`); one going on pauses from then to now.
+      const idle = index + 1 < part.length || ongoing ? idleWorked(at, next) : Math.min(next - at, pauseAfter);
+      worked += idle;
+      if (next - at > idle) pauses.push({ from: at + idle, to: next });
       for (const page of activeAt.get(at)!) {
         addTo(pages, page, 1);
         if (!firstSeen.has(page)) firstSeen.set(page, at);
