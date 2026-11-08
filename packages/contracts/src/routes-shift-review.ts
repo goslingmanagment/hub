@@ -213,10 +213,12 @@ export const teamShiftReviewResponseSchema = z.object({
     lastBeatAt: isoTimestamp,
     /**
      * The pages of the shift, most messages first: `messages` — the person's there; `worked` — the shift works the page
-     * (CHATTER_SHIFT_PAGE_MIN_MESSAGES or more, as «Смены», going on or over), its fans' chats are in `chats`; a page only
-     * looked at, and every page of a look-in, brings in just the chats the person wrote in.
+     * (CHATTER_SHIFT_PAGE_MIN_MESSAGES or more, as «Смены», going on or over: its sales are the shift's); `allFans` — all
+     * its fans' chats are in `chats`: a worked page, or one with fewer messages that no colleague's shift held then
+     * (owner, 2026-11-08). Any other page, and every page of a look-in, brings in just the chats the person wrote in.
+     * `allFans` absent — as `worked`.
      */
-    pages: z.array(z.object({ pageLabel: z.string(), platform: z.string(), messages: count, worked: z.boolean() })),
+    pages: z.array(z.object({ pageLabel: z.string(), platform: z.string(), messages: count, worked: z.boolean(), allFans: z.boolean().optional() })),
     /**
      * The shift's sales, net, as «Смены → Заработок» settles them: the sales on its pages while it held them
      * (`salesHeldBy`), less those a colleague's overlapping shift held too when the colleague last wrote to the fan.

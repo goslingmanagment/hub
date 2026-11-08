@@ -245650,6 +245650,9 @@
                               },
                               "worked": {
                                 "type": "boolean"
+                              },
+                              "allFans": {
+                                "type": "boolean"
                               }
                             },
                             "required": [

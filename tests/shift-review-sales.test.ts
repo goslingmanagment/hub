@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { ShiftSale } from "@agency_hub_core/db";
 import type { ComputedWork } from "../apps/runtime/src/services/chatter-shifts.ts";
 import { saleOriginOf } from "../apps/runtime/src/services/chatter-stats.ts";
-import { heldNetMills, settleShiftSales } from "../apps/runtime/src/services/shift-review.ts";
+import { heldNetMills, pagesWithAllFans, settleShiftSales } from "../apps/runtime/src/services/shift-review.ts";
 import { salesOfWork, teamShiftMoney } from "../apps/runtime/src/services/team-shift-sales.ts";
 
 // «Разбор смены»: whose each sale on the shift's pages is. The header must stay «Заработок»'s number; the chat
@@ -108,5 +108,27 @@ describe("saleOriginOf", () => {
   it("keeps a tip under a post and a Campaign contribution apart, whoever wrote", () => {
     expect(saleOriginOf(ME, { ...facts, kind: "tip", postTip: true, lastWriter: ME })).toBe("post_tip");
     expect(saleOriginOf(ME, { ...facts, kind: "tip", campaign: true, lastWriter: ME })).toBe("campaign");
+  });
+});
+
+// A page with fewer than 10 of the chatter's messages showed only the chats they wrote in, though nobody else kept the
+// page and its fans waited on them (2026-11-07). Owner, 2026-11-08: then the review shows all its fans; money stays.
+describe("pagesWithAllFans", () => {
+  const start = Date.parse("2026-11-02T21:00:00Z");
+  const end = Date.parse("2026-11-03T05:00:00Z");
+  // ari-1 worked (60 messages); 4 on lora-1, which Nikita's shift held then; 3 on lora-2, which Sofia took only after the
+  // shift; lora-3 only looked at.
+  const mine: ComputedWork = { ...work("2026-11-02T21:00:00Z", "2026-11-03T05:00:00Z"), messages: new Map([["ari-1", 60], ["lora-1", 4], ["lora-2", 3], ["lora-3", 0]]) };
+  const colleagues = [
+    { userId: NIKITA, username: "Nikita", work: work("2026-11-02T15:00:00Z", "2026-11-02T23:00:00Z", "lora-1") },
+    { userId: SOFIA, username: "Sofia", work: work("2026-11-03T06:00:00Z", "2026-11-03T12:00:00Z", "lora-2") },
+  ];
+
+  it("shows all the fans of a page nobody else kept, not of one a colleague's shift held", () => {
+    expect([...pagesWithAllFans(mine, colleagues, start, end)].sort()).toEqual(["ari-1", "lora-2"]);
+  });
+
+  it("shows none for a look-in", () => {
+    expect(pagesWithAllFans({ ...mine, kind: "visit" }, colleagues, start, end).size).toBe(0);
   });
 });

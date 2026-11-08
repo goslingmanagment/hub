@@ -463,6 +463,25 @@ function piecesOf(people: ReadonlyMap<number, PersonWork>, kind: ComputedWork["k
 }
 
 /**
+ * The pages whose every fan's chat the review shows: the ones the shift works (holds the sales of), and — owner,
+ * 2026-11-08 — a page with fewer of the person's messages that nobody else kept in [start, end]: no colleague's shift
+ * held it then, so its fans waited on this person. Its sales stay out of the shift. A look-in shows none. Pure.
+ */
+export function pagesWithAllFans(shift: ComputedWork, colleagues: readonly ColleagueWork[], start: number, end: number): Set<string> {
+  if (shift.kind !== "shift") return new Set();
+  const out = new Set(shift.salesSince.keys());
+  for (const [label, messages] of shift.messages) {
+    if (messages === 0 || out.has(label)) continue;
+    const kept = colleagues.some(({ work }) => {
+      const since = work.salesSince.get(label);
+      return work.kind === "shift" && since !== undefined && since <= end && work.endedAt >= start;
+    });
+    if (!kept) out.add(label);
+  }
+  return out;
+}
+
+/**
  * Before the shift, no shift's: the sales on its pages from the person's
  * previous shift's end (a day back at most) to its start that no shift or
  * look-in holds (as «Смены» puts them outside shifts), to a fan the person sent
@@ -568,10 +587,16 @@ export async function readTeamShiftReview(
   const known = await listPagesByLabels(app.db, labels);
   const pages = labels.flatMap((label) => known.filter((page) => page.label === label));
   const pageIds = pages.map((page) => page.id);
-  // A page the shift works (holds the sales of) brings in all its fans' chats, going on or over alike; a page only looked
-  // at, just the chats the person wrote in. A look-in works none.
+  // A page the shift works (holds the sales of) brings in all its fans' chats, going on or over alike, and so does one
+  // with fewer of the person's messages nobody else kept then (`pagesWithAllFans`); a page only looked at, just the chats
+  // the person wrote in. A look-in works none.
   const worked = (label: string) => shift.kind === "shift" && shift.salesSince.has(label);
-  const workedPageIds = pages.filter((page) => worked(page.label)).map((page) => page.id);
+  const unheld = shift.kind === "shift" && [...shift.messages].some(([label, messages]) => messages > 0 && !worked(label));
+  const colleagues = !unheld ? [] : piecesOf(await readPeopleWork(app.db, {
+    from: new Date(start - DAY_MS), to: new Date(Math.min(end + DAY_MS, now.getTime())), now, pages: "all",
+  }), "shift").filter((one) => one.userId !== query.userId);
+  const allFans = pagesWithAllFans(shift, colleagues, start, end);
+  const workedPageIds = pages.filter((page) => allFans.has(page.label)).map((page) => page.id);
   const labelOf = new Map(pages.map((page) => [page.id, page.label]));
 
   const [rows, sends, generations, autoTexts, minutes, sales, before] = await Promise.all([
@@ -806,6 +831,7 @@ export async function readTeamShiftReview(
       lastBeatAt: new Date(shift.lastBeatAt).toISOString(),
       pages: pages.map((page) => ({
         pageLabel: page.label, platform: page.platform, messages: shift.messages.get(page.label) ?? 0, worked: worked(page.label),
+        allFans: allFans.has(page.label),
       })),
       salesNetMills: heldNetMills(sales),
     },
