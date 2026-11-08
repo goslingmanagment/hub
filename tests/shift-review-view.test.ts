@@ -216,3 +216,31 @@ describe("shift review: where the shift's sales came from", () => {
     expect(total).toBe(money.shift.salesNetMills);
   });
 });
+
+// Deleted messages were left out whole: a fan who erased the chat a day later turned a dialog into a monologue, and the
+// chatter's recalled sends vanished (2026-11-07). Now what the other side could see counts (owner, 2026-11-08).
+describe("shift review: deleted messages", () => {
+  const deletedAfter = (time: string, seconds: number) => ({ deletedAt: new Date(Date.parse(at(time)) + seconds * 1000).toISOString() });
+  const recalled = { ...mine("10:01", null), ref: "10:01-recalled", ...deletedAfter("10:01", 6) };
+  const deleted: TeamShiftReviewResponse = {
+    ...data,
+    chats: [chat("f", [
+      // The fan wrote twice and deleted both a day later; then a third time, deleted in 30 s.
+      message("10:00", "fan", null, deletedAfter("10:00", 86_400)), message("10:03", "fan", null, deletedAfter("10:03", 86_400)),
+      recalled, mine("10:05", 300), message("10:40", "fan", null, deletedAfter("10:40", 30)),
+    ])],
+    waits: [wait("f", "10:00", "10:05", "me")],
+  };
+  const waits = reviewWaits(deleted);
+  const summary = summariesOf(deleted, waits)[0]!;
+
+  it("counts the fan's messages deleted later and marks them, but not one deleted in seconds", () => {
+    expect(summary).toMatchObject({ kind: "dialog", mine: 1, fan: 2, fanDeleted: 2 });
+    expect(waits[0]).toMatchObject({ fanWrote: true, lastFanAt: Date.parse(at("10:03")) });
+  });
+
+  it("leaves the chatter's send recalled in 6 s out of the shift's messages", () => {
+    expect(myMessages(deleted).map((one) => one.message.ref)).toEqual(["10:05-page-me"]);
+    expect(totalsOf(deleted, myMessages(deleted), [summary], waits)).toMatchObject({ messages: 1, replies: 1 });
+  });
+});

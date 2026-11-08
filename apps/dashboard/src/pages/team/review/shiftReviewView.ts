@@ -1,4 +1,4 @@
-import type { ShiftReviewChat, ShiftReviewMessage, TeamShiftReviewResponse } from "@agency_hub_core/contracts";
+import { SHIFT_REVIEW_DELETED_UNSEEN_SECONDS, type ShiftReviewChat, type ShiftReviewMessage, type TeamShiftReviewResponse } from "@agency_hub_core/contracts";
 import { formatDuration } from "@/lib/format";
 
 /**
@@ -22,6 +22,11 @@ import { formatDuration } from "@/lib/format";
  * Whose a chat's money is: the server settles each sale as the header does
  * (`sales`). A chat shows the fan's sales that count for the chatter, and the
  * colleague's beside them; the list's money filter and order go by the first.
+ *
+ * A deleted message (owner, 2026-11-08) counts as sent once the other side
+ * could see it — deleted SHIFT_REVIEW_DELETED_UNSEEN_SECONDS after it was sent
+ * or later (`seen`). One deleted sooner is only shown: a fan's starts no wait,
+ * the chatter's answers none and is not among the shift's messages.
  */
 
 const MINUTE_MS = 60_000;
@@ -104,11 +109,22 @@ export interface MyMessage {
   at: number;
 }
 
+/** The other side could see the message: not deleted, or deleted SHIFT_REVIEW_DELETED_UNSEEN_SECONDS after it was sent or later. */
+export function seen(message: Pick<ShiftReviewMessage, "at" | "deletedAt">): boolean {
+  return message.deletedAt === undefined || Date.parse(message.deletedAt) - Date.parse(message.at) >= SHIFT_REVIEW_DELETED_UNSEEN_SECONDS * 1000;
+}
+
+/** How long after it was sent the message was deleted, seconds; null — not deleted. */
+export function deletedAfterSeconds(message: Pick<ShiftReviewMessage, "at" | "deletedAt">): number | null {
+  return message.deletedAt === undefined ? null : Math.max(0, (Date.parse(message.deletedAt) - Date.parse(message.at)) / 1000);
+}
+
+/** The chatter's messages of the shift the fans could see. */
 export function myMessages(data: TeamShiftReviewResponse): MyMessage[] {
   const out: MyMessage[] = [];
   for (const chat of data.chats) {
     for (const message of chat.messages) {
-      if (message.mine !== null) out.push({ chat, message: message as MyMessage["message"], at: Date.parse(message.at) });
+      if (message.mine !== null && seen(message)) out.push({ chat, message: message as MyMessage["message"], at: Date.parse(message.at) });
     }
   }
   return out.sort((a, b) => a.at - b.at);
@@ -121,9 +137,14 @@ export function median(values: readonly number[]): number | null {
   return sorted.length % 2 === 1 ? sorted[middle]! : (sorted[middle - 1]! + sorted[middle]!) / 2;
 }
 
-/** A page message that answers a fan: not a mass message, not an automated one. */
+/** A page message that answers a fan: not a mass message, not an automated one, not deleted before the fan saw it. */
 function isPersonal(message: ShiftReviewMessage): boolean {
-  return message.side === "page" && !message.mass && message.by !== "auto";
+  return message.side === "page" && !message.mass && message.by !== "auto" && seen(message);
+}
+
+/** A fan's message the chatter could see. */
+function isFans(message: ShiftReviewMessage): boolean {
+  return message.side === "fan" && seen(message);
 }
 
 /** Who else wrote in the chat within the shift, by name, most first. */
@@ -191,7 +212,7 @@ export function reviewWaits(data: TeamShiftReviewResponse): ReviewWait[] {
     const heldBy = holder !== undefined && (wait.by === "other" || writingOn(page, holder, to)) ? holder ?? "коллега" : null;
     const answer = wait.by === "other" ? timed.find((one) => one.at === to && one.message.by === "other") : undefined;
     const answeredOnTheirWatch = answer !== undefined && writingOn(page, answer.message.byName, from);
-    const fanAts = timed.filter((one) => one.message.side === "fan" && one.at >= since && one.at <= to).map((one) => one.at);
+    const fanAts = timed.filter((one) => isFans(one.message) && one.at >= since && one.at <= to).map((one) => one.at);
     return {
       chat: wait.chat,
       since,
@@ -201,7 +222,7 @@ export function reviewWaits(data: TeamShiftReviewResponse): ReviewWait[] {
       byName: answer?.message.byName ?? null,
       heldBy,
       inherited: since < start,
-      fanWrote: timed.some((one) => one.message.side === "fan" && one.message.inShift && one.at >= since && one.at <= to),
+      fanWrote: timed.some((one) => isFans(one.message) && one.message.inShift && one.at >= since && one.at <= to),
       lastFanAt: fanAts.at(-1) ?? since,
       fanQuietSeconds: fanAts.reduce((longest, one, index) => (index === 0 ? 0 : Math.max(longest, one - fanAts[index - 1]!)), 0) / 1000,
       seconds: (to - Math.max(since, start)) / 1000,
@@ -256,8 +277,8 @@ export function pulseOf(data: TeamShiftReviewResponse, waits: readonly ReviewWai
     for (const message of chat.messages) {
       if (!message.inShift) continue;
       const at = Date.parse(message.at);
-      if (message.side === "fan") fans[index(at)]! += 1;
-      if (message.mine === null || message.mass) continue;
+      if (isFans(message)) fans[index(at)]! += 1;
+      if (message.mine === null || message.mass || !seen(message)) continue;
       sent[index(at)]! += 1;
       if (isHi(message.mine)) sentHi[index(at)]! += 1;
       if (message.mine.replySeconds === null) continue;
@@ -556,8 +577,11 @@ export type ChatKind = "dialog" | "touch" | "colleague" | "waiting";
 export interface ChatSummary {
   chat: ShiftReviewChat;
   kind: ChatKind;
+  /** The chatter's and the fan's messages in the shift, the ones the other side could see. */
   mine: number;
   fan: number;
+  /** Of the fan's, deleted by the fan later. */
+  fanDeleted: number;
   /** Colleagues who wrote in the chat within the shift. */
   colleagues: Array<{ name: string; messages: number }>;
   ai: number;
@@ -614,8 +638,8 @@ export function summariesOf(data: TeamShiftReviewResponse, allWaits: readonly Re
     const others = new Map<string | null, number>();
     for (const sale of sales) if (!counts(sale)) others.set(sale.holderName, (others.get(sale.holderName) ?? 0) + sale.netMills);
     const inShift = chat.messages.filter((message) => message.inShift);
-    const mine = inShift.filter((message) => message.mine !== null);
-    const fan = inShift.filter((message) => message.side === "fan");
+    const mine = inShift.filter((message) => message.mine !== null && seen(message));
+    const fan = inShift.filter(isFans);
     const colleagues = colleaguesIn(chat);
     const waits = waitsByChat.get(chat.key) ?? [];
     const answered = waits.filter((wait) => wait.his && wait.by !== null);
@@ -637,6 +661,7 @@ export function summariesOf(data: TeamShiftReviewResponse, allWaits: readonly Re
       kind,
       mine: mine.length,
       fan: fan.length,
+      fanDeleted: fan.filter((message) => message.deletedAt !== undefined).length,
       colleagues,
       ai: mine.filter((message) => isAi(message) && !isHi(message.mine!)).length,
       hi: mine.filter((message) => isAi(message) && isHi(message.mine!)).length,
@@ -665,7 +690,7 @@ export function summariesOf(data: TeamShiftReviewResponse, allWaits: readonly Re
       firstFanText: textOf(firstFan),
       lastFanText: lastFan === firstFan ? null : textOf(lastFan),
       firstMineText: textOf(mine.find((message) => message.text.trim() !== "")),
-      lastFanBeforeText: fan.length > 0 ? null : textOf([...chat.messages].reverse().find((message) => !message.inShift && message.side === "fan" && message.text.trim() !== "")),
+      lastFanBeforeText: fan.length > 0 ? null : textOf([...chat.messages].reverse().find((message) => !message.inShift && isFans(message) && message.text.trim() !== "")),
     };
   });
 }

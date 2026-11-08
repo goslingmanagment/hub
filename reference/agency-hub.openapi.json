@@ -245852,6 +245852,9 @@
                                 "unarchived": {
                                   "type": "boolean"
                                 },
+                                "deletedAt": {
+                                  "type": "string"
+                                },
                                 "byName": {
                                   "type": [
                                     "string",

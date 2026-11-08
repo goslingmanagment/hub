@@ -245,6 +245,30 @@ function reviewOf(shift: DemoShift, now: number): Response {
       priceMills: null, bought: null, media: 0, mine: { ...first, part: 2, replySeconds: null },
     });
   }
+  // Deleted after they were sent. A fan who erased the whole chat half an hour after their last message: shown pale,
+  // counted. The chatter's Russian to an English fan, deleted after 6 min 25 s (the fan saw it), and a Fix command sent as
+  // text, deleted after 6 s (no one saw it: not counted). One more of the chatter's deleted ones the archive has no text of.
+  const isoAt = (at: number) => new Date(at).toISOString();
+  const erased = chats.find((chat) => chat.messages.filter((message) => message.side === "fan" && message.inShift).length >= 3);
+  if (erased) {
+    const lastFan = Math.max(...erased.messages.filter((message) => message.side === "fan").map((message) => Date.parse(message.at)));
+    for (const message of erased.messages) if (message.side === "fan") message.deletedAt = isoAt(lastFan + 27 * MIN);
+  }
+  let deletedMine = 0;
+  const struck = chats.filter((chat) => chat !== erased && chat.messages.some((message) => message.mine !== null && message.mine.composedWith !== "hi"))
+    .slice(0, 2);
+  for (const [index, chat] of struck.entries()) {
+    const position = chat.messages.findIndex((message) => message.mine !== null);
+    const after = Date.parse(chat.messages[position]!.at);
+    const [text, deletedSeconds] = index === 0 ? ["ой я тоже щас пойду отдыхать после работы", 385] : ["*разверни поигривее", 6];
+    const at = Math.min(after + 40_000, end - 2 * MIN);
+    chat.messages.splice(position + 1, 0, {
+      ref: `${chat.key}:del${index}`, at: isoAt(at), side: "page", text, priceMills: null, bought: null, tipMills: null, media: 0,
+      inShift: true, by: "me", byName: null, mass: false, deletedAt: isoAt(at + deletedSeconds * 1000),
+      mine: { composedWith: "hand", edited: null, origin: "own", aiShare: 0, aiFeature: null, aiText: null, draft: null, replySeconds: null, repeats: 0, marks: ["cyrillic"] },
+    });
+    deletedMine += 1;
+  }
   // One answer Fansly never gave the archive (the chat dropped from sync): the page socket's copy, no price.
   const socketOnly = chats.find((chat) => chat.platform === "fansly" && chat.messages.some((message) => message.mine !== null && message.mine.replySeconds !== null))
     ?.messages.find((message) => message.mine !== null && message.mine.replySeconds !== null);
@@ -356,7 +380,7 @@ function reviewOf(shift: DemoShift, now: number): Response {
     laterSales,
     waits: waits.sort((a, b) => Date.parse(a.from) - Date.parse(b.from)),
     unarchived: 0,
-    deleted: 0,
+    deleted: deletedMine === 0 ? 0 : deletedMine + 1,
     serverNow: new Date(now).toISOString(),
   };
 }

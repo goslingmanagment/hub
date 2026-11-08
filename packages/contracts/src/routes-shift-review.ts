@@ -36,6 +36,11 @@ export const SHIFT_REVIEW_LATER_SALES_DAYS = 14;
 export const SHIFT_REVIEW_WAIT_HORIZON_HOURS = 72;
 /** The person's previous and next shift are looked for this far from the shift. */
 export const SHIFT_REVIEW_NEIGHBOUR_DAYS = 14;
+/**
+ * A message deleted sooner than this after it was sent the other side most likely never saw (owner, 2026-11-08): a fan's
+ * starts no wait, a page's answers none, and the chatter's is not counted. One deleted later counts as sent.
+ */
+export const SHIFT_REVIEW_DELETED_UNSEEN_SECONDS = 60;
 
 export const SHIFT_REVIEW_ORIGINS = ["ai", "fix", "own"] as const;
 export const SHIFT_REVIEW_MARKS = ["dash", "cyrillic", "leak"] as const;
@@ -115,6 +120,11 @@ const shiftReviewMessageSchema = z.object({
    * give the archive a message of a chat it refuses or drops from sync; the fan's wait still ended then. Absent — false.
    */
   unarchived: z.boolean().optional(),
+  /**
+   * When the platform said the message was deleted (by the side that sent it): the text stays shown. Under
+   * SHIFT_REVIEW_DELETED_UNSEEN_SECONDS after it was sent it counts for nothing. Absent — not deleted.
+   */
+  deletedAt: isoTimestamp.optional(),
   /** `other`: the colleague's name. */
   byName: z.string().nullable(),
   /** The chatter's own message in the shift. */
@@ -244,7 +254,10 @@ export const teamShiftReviewResponseSchema = z.object({
   })),
   /** The chatter's messages of the shift neither the archive nor the page's socket holds yet (no text, not in `chats`). */
   unarchived: count,
-  /** The chatter's messages of the shift deleted after they were sent (not in `chats`). */
+  /**
+   * The chatter's messages of the shift deleted after they were sent. They are in `chats` with `deletedAt`, but for
+   * the ones deleted within SHIFT_REVIEW_DELETED_UNSEEN_SECONDS whose text the archive never got: those are only here.
+   */
   deleted: count,
   serverNow: isoTimestamp,
 });

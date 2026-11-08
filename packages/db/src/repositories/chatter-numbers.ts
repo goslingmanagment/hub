@@ -1,7 +1,7 @@
 import { sql } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
-import { notOwnAccountMessageSql, ppvBoughtSql } from "./shift-sql.ts";
+import { notOwnAccountMessageSql, ppvBoughtSql, seenMessageSql } from "./shift-sql.ts";
 
 // The numbers of one chatter's shift (Chat Memory week 5, 0305/0306/0311,
 // docs/plans/2026-10-24-chat-memory/week-5.md §1). Only messages with this
@@ -11,7 +11,10 @@ import { notOwnAccountMessageSql, ppvBoughtSql } from "./shift-sql.ts";
 // message the archive does not hold yet), as on «Продажи». A mass message
 // answers nobody: a Fansly mass message, or one text with the same price and
 // files sent to `burstMinChats` or more chats of the page in its clock hour
-// (OnlyMonster's, as in «Авторы»). Database only.
+// (OnlyMonster's, as in «Авторы»). A message deleted within
+// `deletedUnseenSeconds` of being sent nobody saw, as in «Разбор смены»: a
+// page's is not the chatter's message and answers nobody, a fan's leaves the
+// fan waiting on nothing. Database only.
 
 export interface ShiftNumbersRow {
   messages: number;
@@ -32,7 +35,7 @@ export interface ShiftNumbersRow {
 
 export async function readShiftNumbers(
   db: Database,
-  input: { userId: number; pageIds: readonly number[]; from: Date; to: Date; burstMinChats: number },
+  input: { userId: number; pageIds: readonly number[]; from: Date; to: Date; burstMinChats: number; deletedUnseenSeconds: number },
 ): Promise<ShiftNumbersRow> {
   const pages = sql`${sql.param(input.pageIds.map(String))}::bigint[]`;
   const from = sql`${input.from.toISOString()}::timestamptz`;
@@ -50,12 +53,14 @@ export async function readShiftNumbers(
       left join message_archive m on m.account_id = a.page_id and m.platform = a.platform and m.message_ref = a.platform_message_id
       where a.user_id = ${input.userId} and a.page_id = any(${pages})
         and a.observed_at >= ${from} and a.observed_at < ${to}
+        and ${seenMessageSql("m", input.deletedUnseenSeconds)}
     ),
     -- The shift's pages' messages from 3 days before it (a reply waits at most 3 days) to its end, the page's mass messages
     -- marked; a chat with another page of ours is no fan's.
     page_msgs as materialized (
       select m.account_id as page_id, m.conversation_ref as conv, m.message_ref as ref, m.occurred_at as at, m.is_sent_by_me as sent, m.message_type,
-        md5(coalesce(m.text_plain, '') || '|' || coalesce(m.price_mills, 0)::text || '|' || jsonb_array_length(m.media_metadata)::text) as shape
+        md5(coalesce(m.text_plain, '') || '|' || coalesce(m.price_mills, 0)::text || '|' || jsonb_array_length(m.media_metadata)::text) as shape,
+        ${seenMessageSql("m", input.deletedUnseenSeconds)} as seen
       from message_archive m
       where m.account_id = any(${pages}) and m.conversation_ref is not null
         and m.occurred_at > ${from} - interval '3 days' and m.occurred_at <= ${to}
@@ -108,7 +113,7 @@ export async function readShiftNumbers(
       select x.id, max(o.at) as at
       from answering x
       join chats_flagged o on o.page_id = x.page_id and o.conv = x.conv
-      where o.sent and not o.mass and o.at < x.at
+      where o.sent and not o.mass and o.seen and o.at < x.at
       group by x.id
     ),
     since_own as materialized (
@@ -120,13 +125,13 @@ export async function readShiftNumbers(
       select x.at, min(f.at) as waited_from
       from since_own x
       join chats_flagged f on f.page_id = x.page_id and f.conv = x.conv
-      where not f.sent and f.at < x.at and f.at > x.at - interval '3 days' and f.at > x.own_at
+      where not f.sent and f.seen and f.at < x.at and f.at > x.at - interval '3 days' and f.at > x.own_at
       group by x.id, x.at
     ),
     last_messages as (
       select distinct on (f.page_id, f.conv) f.sent
       from flagged f
-      where f.at > ${to} - interval '3 days' and not f.mass
+      where f.at > ${to} - interval '3 days' and not f.mass and f.seen
       order by f.page_id, f.conv, f.at desc
     )
     select
