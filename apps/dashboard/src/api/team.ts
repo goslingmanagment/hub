@@ -1,6 +1,7 @@
 import { queryOptions, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { TeamShiftResolveBody, TeamWinBackApproachSaveBody } from "@agency_hub_core/contracts";
 
+import { shiftSettling } from "@/lib/shiftLive";
 import { kernel } from "./sdk.js";
 
 /**
@@ -243,8 +244,9 @@ export function useTeamChatterStats(params: TeamChatterStatsParams) {
 
 /**
  * Команда → «Разбор смены»: one shift opened up (`teamShiftReview`, the owner
- * only). A finished shift does not change; one going on is read again every
- * two minutes.
+ * only). One going on, or ended under an hour ago (its last messages and sales
+ * still coming in), is read again every two minutes; an older one does not
+ * change.
  */
 export function teamShiftReviewQueryOptions(params: { userId: number; at: string }) {
   return queryOptions({
@@ -252,7 +254,10 @@ export function teamShiftReviewQueryOptions(params: { userId: number; at: string
     queryFn: () => kernel.teamShiftReview({ query: params }),
     meta: { suppressGlobalError: true },
     staleTime: 60_000,
-    refetchInterval: (query) => (query.state.data?.shift.ongoing ? 120_000 : false),
+    refetchInterval: (query) => {
+      const data = query.state.data;
+      return data !== undefined && shiftSettling(data.shift, data.serverNow) ? 120_000 : false;
+    },
   });
 }
 

@@ -120,8 +120,24 @@ describe("workOfMinutes", () => {
   it("counts work going on now as a shift once it has five messages, short as it is", () => {
     const [shift] = workOfMinutes(minutes(0, 30, [0, 27]), sends(0, 5, 5), at(30));
     expect(shift).toMatchObject({ kind: "shift", ongoing: true, endedAt: at(30), workedMinutes: 13, pauses: [{ from: at(10), to: at(27) }] });
-    // The extension closed: it does not go on, and with so little work it is a visit.
-    expect(workOfMinutes(minutes(0, 30, [0, 27]), sends(0, 5, 5), at(40))).toMatchObject([{ kind: "visit", ongoing: false }]);
+  });
+
+  it("keeps a shift going through a break with the extension closed: the same shift, its pages, the break so far a pause", () => {
+    // Three hours of work, the extension closed after the minute at 180; 35 minutes later the person is on a break.
+    const work = workOfMinutes(minutes(0, 181, range(0, 180)), sends(0, 180, 120), at(215));
+    expect(bounds(work)).toEqual([["shift", at(0), at(215)]]);
+    expect(work[0]).toMatchObject({ ongoing: true, workedMinutes: 189, lastInputAt: at(179), lastBeatAt: at(180), pauses: [{ from: at(189), to: at(215) }] });
+    expect(work[0]!.salesSince.get("ari-1")).toBe(at(0));
+    // Back before the hour is out: one shift, the break a pause between.
+    const back = workOfMinutes([...minutes(0, 181, range(0, 180)), ...minutes(230, 260, range(230, 260))], [...sends(0, 180, 120), ...sends(230, 260, 20)], at(260));
+    expect(bounds(back)).toEqual([["shift", at(0), at(260)]]);
+    expect(back[0]!.pauses).toEqual([{ from: at(189), to: at(230) }]);
+  });
+
+  it("ends a shift whose extension closed an hour after its last action, at that action plus the idle that counts", () => {
+    expect(bounds(workOfMinutes(minutes(0, 181, range(0, 180)), sends(0, 180, 120), at(238)))).toEqual([["shift", at(0), at(238)]]);
+    const [shift] = workOfMinutes(minutes(0, 181, range(0, 180)), sends(0, 180, 120), at(239));
+    expect(shift).toMatchObject({ kind: "shift", ongoing: false, endedAt: at(181), pauses: [] });
   });
 
   it("does not take a glance at the extension going on now for a shift", () => {

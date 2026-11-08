@@ -119,14 +119,19 @@ export const teamShiftReviewResponseSchema = z.object({
     kind: z.enum(["shift", "visit"]),
     startedAt: isoTimestamp,
     endedAt: isoTimestamp,
+    /** As «Смены»: under CHATTER_SHIFT_END_IDLE_MINUTES since its last action, a break included. */
     ongoing: z.boolean(),
     workedMinutes: count,
+    /** A break going on now is one too, up to the hub's now. */
     pauses: z.array(z.object({ from: isoTimestamp, to: isoTimestamp })),
+    /** The start of the shift's last minute with an action. */
+    lastInputAt: isoTimestamp,
+    /** The start of its last minute the extension beat in: older than CLIENT_ACTIVITY_LOST_MINUTES — closed or offline. */
+    lastBeatAt: isoTimestamp,
     /**
      * The pages of the shift, most messages first: `messages` — the person's there; `worked` — the shift works the page
-     * (CHATTER_SHIFT_PAGE_MIN_MESSAGES or more, as «Смены»; a shift going on, from CHATTER_SHIFT_PIECE_MIN_MESSAGES), its
-     * fans' chats are in `chats`; a page only looked at, and every page of a look-in, brings in just the chats the person
-     * wrote in.
+     * (CHATTER_SHIFT_PAGE_MIN_MESSAGES or more, as «Смены», going on or over), its fans' chats are in `chats`; a page only
+     * looked at, and every page of a look-in, brings in just the chats the person wrote in.
      */
     pages: z.array(z.object({ pageLabel: z.string(), platform: z.string(), messages: count, worked: z.boolean() })),
     /**

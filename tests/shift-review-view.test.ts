@@ -34,7 +34,7 @@ const wait = (key: string, since: string, to: string, by: TeamShiftReviewRespons
 const data: TeamShiftReviewResponse = {
   shift: {
     userId: 1, username: "chatter", kind: "shift", startedAt: at("09:00"), endedAt: at("11:00"), ongoing: false, workedMinutes: 120,
-    pauses: [], pages: [{ pageLabel: "page-1", platform: "fansly", messages: 3, worked: true }], salesNetMills: 0,
+    pauses: [], lastInputAt: at("10:59"), lastBeatAt: at("10:59"), pages: [{ pageLabel: "page-1", platform: "fansly", messages: 3, worked: true }], salesNetMills: 0,
   },
   previousAt: null,
   nextAt: null,

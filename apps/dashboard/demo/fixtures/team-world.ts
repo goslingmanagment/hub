@@ -139,7 +139,11 @@ export interface DemoShift {
   endedAt: number;
   ongoing: boolean;
   workedMinutes: number;
+  /** A break going on now is one too, up to the end. */
   pauses: Array<{ from: number; to: number }>;
+  /** The start of the last minute with an action, and of the last one the extension beat in. */
+  lastInputAt: number;
+  lastBeatAt: number;
   /** The most messages first. */
   pages: DemoShiftPage[];
   messages: number;
@@ -254,7 +258,11 @@ function makeSales(
   return sales.sort((left, right) => left.at - right.at);
 }
 
-function simulateChatter(schedule: Schedule, now: Date): { shifts: DemoShift[]; visits: DemoVisit[]; since: number } {
+/**
+ * `takeBreak`: a shift of this chatter going on now, and in no pause, is on a break: nothing for 12 to 48 minutes, the
+ * extension closed. As on the hub, it still goes on — an hour without an action ends a shift, a closed extension does not.
+ */
+function simulateChatter(schedule: Schedule, now: Date, takeBreak: boolean): { shifts: DemoShift[]; visits: DemoVisit[]; since: number } {
   const user = userOf(schedule.username);
   const nowMs = now.getTime();
   const today = mskDay(nowMs);
@@ -301,6 +309,20 @@ function simulateChatter(schedule: Schedule, now: Date): { shifts: DemoShift[]; 
       ongoing = true;
       end = Math.floor(nowMs / MIN) * MIN;
       shiftPauses = pauses.filter((pause) => pause.from < end).map((pause) => ({ from: pause.from, to: Math.min(pause.to, end) }));
+    }
+    // The last action: a pause starts 10 minutes after it. A shift that ended stopped a minute before its end.
+    let lastInputAt = ongoing ? end : end - MIN;
+    let lastBeatAt = lastInputAt;
+    const pausedNow = ongoing ? shiftPauses.find((pause) => pause.to === end) : undefined;
+    if (pausedNow) {
+      // In a pause with the tab open: the extension still beats.
+      lastInputAt = pausedNow.from - 10 * MIN;
+      lastBeatAt = end;
+    } else if (ongoing && takeBreak && end - start >= 90 * MIN) {
+      // 12 to 48 minutes without an action, by the clock: the break goes on as the screen is watched.
+      lastInputAt = end - (12 + (Math.floor(end / MIN) % 37)) * MIN;
+      lastBeatAt = lastInputAt + 2 * MIN;
+      shiftPauses = [...shiftPauses, { from: lastInputAt + 10 * MIN, to: end }];
     }
     const pausedMinutes = shiftPauses.reduce((sum, pause) => sum + Math.round((pause.to - pause.from) / MIN), 0);
     const workedMinutes = Math.round((end - start) / MIN) - pausedMinutes;
@@ -353,6 +375,8 @@ function simulateChatter(schedule: Schedule, now: Date): { shifts: DemoShift[]; 
       ongoing,
       workedMinutes,
       pauses: shiftPauses,
+      lastInputAt,
+      lastBeatAt,
       pages,
       messages: totalMessages,
       ppvSent,
@@ -381,8 +405,11 @@ export function teamWorld(now: Date): DemoTeamWorld {
   const shifts: DemoShift[] = [];
   const visits: DemoVisit[] = [];
   const activitySince = new Map<number, number>();
+  // One chatter on a shift now is on a break, the extension closed: the first whose shift allows it.
+  let onBreak = false;
   for (const schedule of SCHEDULES) {
-    const result = simulateChatter(schedule, now);
+    const result = simulateChatter(schedule, now, !onBreak);
+    onBreak ||= result.shifts.some((shift) => shift.ongoing && shift.lastBeatAt < shift.endedAt - 3 * MIN);
     shifts.push(...result.shifts);
     visits.push(...result.visits);
     activitySince.set(userOf(schedule.username).id, result.since);

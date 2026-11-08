@@ -9,6 +9,7 @@ import { PageHeader } from "@/components/ui/PageHeader";
 import { Stat, StatGrid } from "@/components/ui/StatGrid";
 import { formatCount, formatDateTime, formatDay, formatDuration, formatMills, formatPercent, formatTimeOfDay } from "@/lib/format";
 import { ruPlural } from "@/lib/plural";
+import { shiftIdleText, shiftIdleTitle, shiftSettling } from "@/lib/shiftLive";
 import { shiftSpan } from "@/pages/team/TeamShiftsPage";
 import { ChatterLink, PageLink } from "@/pages/team/teamLinks";
 import { ShiftChats, type ChatsView } from "./ShiftChats.js";
@@ -242,6 +243,8 @@ function ShiftReview({ userId, at }: { userId: number; at: string }) {
   // Hi greetings are not replies in a conversation: the share is of the rest.
   const withText = totals.origin.ai + totals.origin.fix + totals.origin.own;
   const ongoing = shift.ongoing;
+  const idle = shiftIdleText(shift, data.serverNow);
+  const settling = shiftSettling(shift, data.serverNow);
   const neighbour = (target: string | null, label: string, none: string) => (target
     ? <Link to={reviewHref(userId, target, search)} className="btn" title={`Смена с ${formatDateTime(target)}`}>{label}</Link>
     : <button type="button" className="btn" disabled title={none}>{label}</button>);
@@ -263,6 +266,12 @@ function ShiftReview({ userId, at }: { userId: number; at: string }) {
         <h2 className="sr-who-name"><ChatterLink userId={userId} username={shift.username} /></h2>
         <p className="sr-who-line">
           {shiftSpan(shift)}
+          {ongoing && <span title={shiftIdleTitle(shift)}>{" · "}идёт{idle !== null && `, ${idle}`}</span>}
+          {settling && (
+            <span className="team-faint" title="Сообщения и продажи доходят до Hub с опозданием: числа станут окончательными через час после конца смены">
+              {" · "}числа предварительные
+            </span>
+          )}
           {" · "}отработано {formatDuration(shift.workedMinutes)}
           {pauseMinutes > 0 && <> · паузы {formatDuration(pauseMinutes)}</>}
           {totals.ppvSent > 0 && <> · PPV куплено {formatCount(totals.ppvBought)} из {formatCount(totals.ppvSent)}</>}
