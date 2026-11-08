@@ -1,7 +1,7 @@
 import { sql } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
-import { broadcastCtesSql, notOwnAccountMessageSql, ppvBoughtSql, seenMessageSql, sentMediaKeySql } from "./shift-sql.ts";
+import { broadcastCtesSql, hiGreetingSql, notOwnAccountMessageSql, ppvBoughtSql, seenMessageSql, sentMediaKeySql } from "./shift-sql.ts";
 
 // The numbers of one chatter's shift (Chat Memory week 5, 0305/0306/0311,
 // docs/plans/2026-10-24-chat-memory/week-5.md §1). Only messages with this
@@ -13,7 +13,8 @@ import { broadcastCtesSql, notOwnAccountMessageSql, ppvBoughtSql, seenMessageSql
 // files sent to `burstMinChats` or more chats of the page in its clock hour
 // (OnlyMonster's, as in «Авторы»), or a broadcast with names — one file set at
 // one price from one sender to `burstMinChats` chats within an hour, but for a
-// message with `broadcastOwnWords` words of its own (shift-sql.ts). A message deleted within
+// message with `broadcastOwnWords` words of its own (shift-sql.ts); a Hi greeting
+// sent by the button never is one (`hiGreetingSql`). A message deleted within
 // `deletedUnseenSeconds` of being sent nobody saw, as in «Разбор смены»: a
 // page's is not the chatter's message and answers nobody, a fan's leaves the
 // fan waiting on nothing. Database only.
@@ -65,7 +66,8 @@ export async function readShiftNumbers(
       select m.account_id as page_id, m.platform, m.conversation_ref as conv, m.message_ref as ref, m.occurred_at as at, m.is_sent_by_me as sent,
         m.message_type, m.text_plain, m.price_mills, ${sentMediaKeySql("m")} as media_key,
         md5(coalesce(m.text_plain, '') || '|' || coalesce(m.price_mills, 0)::text || '|' || jsonb_array_length(m.media_metadata)::text) as shape,
-        ${seenMessageSql("m", input.deletedUnseenSeconds)} as seen
+        ${seenMessageSql("m", input.deletedUnseenSeconds)} as seen,
+        m.is_sent_by_me and ${hiGreetingSql({ pageId: "m.account_id", platform: "m.platform", ref: "m.message_ref" })} as hi
       from message_archive m
       where m.account_id = any(${pages}) and m.conversation_ref is not null
         and m.occurred_at > ${from} - interval '3 days' and m.occurred_at <= ${to}
@@ -74,13 +76,13 @@ export async function readShiftNumbers(
     bursts as materialized (
       select page_id, shape, date_trunc('hour', at) as hour
       from page_msgs
-      where sent and coalesce(message_type, 1) <> 2
+      where sent and not hi and coalesce(message_type, 1) <> 2
       group by 1, 2, 3
       having count(distinct conv) >= ${input.burstMinChats}
     ),
     ${broadcastCtesSql("page_msgs", { minChats: input.burstMinChats, ownWords: input.broadcastOwnWords })},
     flagged as materialized (
-      select pm.*, pm.sent and (coalesce(pm.message_type, 1) = 2 or exists (
+      select pm.*, pm.sent and not pm.hi and (coalesce(pm.message_type, 1) = 2 or exists (
         select 1 from bursts b where b.page_id = pm.page_id and b.shape = pm.shape and b.hour = date_trunc('hour', pm.at))
         or exists (select 1 from broadcast_refs r where r.page_id = pm.page_id and r.ref = pm.ref)) as mass
       from page_msgs pm

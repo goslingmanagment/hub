@@ -1,7 +1,7 @@
 import { sql } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
-import { broadcastCtesSql, notOwnAccountMessageSql, ppvBoughtSql, seenMessageSql, sentMediaKeySql } from "./shift-sql.ts";
+import { broadcastCtesSql, hiGreetingSql, notOwnAccountMessageSql, ppvBoughtSql, seenMessageSql, sentMediaKeySql } from "./shift-sql.ts";
 
 // The reads of Команда → «Разбор смены» (apps/runtime services/shift-review.ts):
 // the chats a chatter's shift touched with their messages, who sent each page
@@ -13,6 +13,7 @@ import { broadcastCtesSql, notOwnAccountMessageSql, ppvBoughtSql, seenMessageSql
 // `burstMinChats` chats of the page or more in its clock hour, or a broadcast
 // with names (`broadcastCtesSql`: one file set at one price from one sender to
 // `burstMinChats` chats within an hour, but for a message with a live answer).
+// A Hi greeting sent by the button never is (`hiGreetingSql`).
 //
 // A reported send (client_send_attributions) the archive does not hold is
 // taken from the page's socket (dm_live_messages, Fansly) when the socket saw
@@ -86,7 +87,8 @@ export async function listShiftReviewMessages(
       select m.account_id as page_id, m.platform, m.conversation_ref as conv, m.message_ref as ref, m.occurred_at as at,
         m.is_sent_by_me as sent, m.message_type, m.text_plain, m.price_mills, m.is_tip, m.tip_amount_mills, m.fan_native_id,
         case when jsonb_typeof(m.media_metadata) = 'array' then jsonb_array_length(m.media_metadata) else 0 end as media,
-        false as unarchived, m.deleted_at, ${seenMessageSql("m", input.deletedUnseenSeconds)} as seen, ${sentMediaKeySql("m")} as media_key
+        false as unarchived, m.deleted_at, ${seenMessageSql("m", input.deletedUnseenSeconds)} as seen, ${sentMediaKeySql("m")} as media_key,
+        m.is_sent_by_me and ${hiGreetingSql({ pageId: "m.account_id", platform: "m.platform", ref: "m.message_ref" })} as hi
       from message_archive m
       where m.account_id = any(${pages}) and m.conversation_ref is not null
         and (not m.content_pending or ${seenMessageSql("m", input.deletedUnseenSeconds)})
@@ -100,7 +102,7 @@ export async function listShiftReviewMessages(
         case when jsonb_typeof(l.attachments) = 'array' then jsonb_array_length(l.attachments) else 0 end as media,
         true as unarchived, l.deleted_at,
         l.deleted_at is null or l.deleted_at >= l.created_at + make_interval(secs => ${input.deletedUnseenSeconds}) as seen,
-        '' as media_key
+        '' as media_key, ${hiGreetingSql({ pageId: "a.page_id", platform: "a.platform", ref: "a.platform_message_id" })} as hi
       from client_send_attributions a
       join dm_live_messages l on l.page_id = a.page_id and l.platform_message_id = a.platform_message_id
       where a.platform = 'fansly' and a.page_id = any(${pages})
@@ -133,7 +135,7 @@ export async function listShiftReviewMessages(
     shaped as materialized (
       select pm.*, md5(coalesce(pm.text_plain, '') || '|' || coalesce(pm.price_mills, 0)::text || '|' || pm.media::text) as shape
       from page_msgs pm
-      where pm.sent
+      where pm.sent and not pm.hi
     ),
     bursts as materialized (
       select page_id, shape, date_trunc('hour', at) as hour
@@ -151,7 +153,7 @@ export async function listShiftReviewMessages(
       case when p.sent and p.price_mills > 0 then p.price_mills end as price_mills,
       case when not p.sent and p.is_tip and p.tip_amount_mills > 0 then p.tip_amount_mills end as tip_mills,
       p.media, p.fan_native_id,
-      p.sent and (coalesce(p.message_type, 1) = 2 or exists (
+      p.sent and not p.hi and (coalesce(p.message_type, 1) = 2 or exists (
         select 1 from bursts b
         where b.page_id = p.page_id and b.hour = date_trunc('hour', p.at)
           and b.shape = md5(coalesce(p.text_plain, '') || '|' || coalesce(p.price_mills, 0)::text || '|' || p.media::text))

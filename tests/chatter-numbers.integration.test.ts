@@ -171,6 +171,36 @@ describe("the numbers of a chatter's shift", () => {
     ]);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
+  it("takes Hi greetings sent by the button for the chatter's own messages, though five chats got the same text and file", async (context) => {
+    if (!testDb) return context.skip();
+    // The audit of 2026-11-07: five identical Hi greetings in 21 s came out a mass message in the review, not in «Смены».
+    // Owner, 2026-11-08: a Hi to a new fan is the chatter's own work, by either rule of mass messages.
+    const model = await createModel(app.db, { slug: "greet", name: "Greet" });
+    const page = (await createFanslyPage(app.db, { modelId: model!.id, label: "greet-1" }))!.id;
+    const archive = (ref: string, chat: string, fromFan: boolean, minutesBeforeEnd: number, text: string, files = "[]") => q(
+      `insert into message_archive (account_id, platform, conversation_ref, message_ref, sender_role, is_sent_by_me, occurred_at, text_plain,
+         media_metadata, message_type)
+       values ($1, 'fansly', $2, $3, $4, $5, $6, $7, $8::jsonb, 1)`,
+      [page, chat, ref, fromFan ? "fan" : "model", !fromFan, at(minutesBeforeEnd), text, files]);
+    await archive("9800000001", "8980000001", true, 30, "hey");
+    for (const index of [0, 1, 2, 3, 4]) {
+      const ref = String(9800000010 + index);
+      await archive(ref, String(8980000001 + index), false, 20, "hiii babe, so happy you're here 💕", '[{"id": "4200000001", "type": "image/jpeg"}]');
+      await q(`insert into client_send_attributions (platform, page_id, platform_message_id, fan_ref, user_id, source, priced, with_media, observed_at, composed_with)
+               values ('fansly', $1, $2, $3, $4, 'fansly-extension', false, true, $5, 'hi')`,
+        [page, ref, String(7800000001 + index), vanya, at(20)]);
+    }
+    const row = await readShiftNumbers(app.db, {
+      userId: vanya, pageIds: [page], from: at(60), to: end, burstMinChats: 5, deletedUnseenSeconds: 60, broadcastOwnWords: 4,
+    });
+    expect(row).toMatchObject({ messages: 5, replyDelays: [10 * 60], waitingAtEnd: 0 });
+    const review = await listShiftReviewMessages(app.db, {
+      userId: vanya, pageIds: [page], workedPageIds: [page], from: at(60), to: end, horizonHours: 72, burstMinChats: 5, deletedUnseenSeconds: 60,
+      broadcastOwnWords: 4,
+    });
+    expect(review.filter((message) => message.sent).map((message) => message.mass)).toEqual([false, false, false, false, false]);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
   it("shows a lead one shift and its revenue on the lead's page, though the shift went through another page", async (context) => {
     if (!testDb) return context.skip();
     // Коля works page A, then page B (not the lead's), then A again — one shift. His report credits $40 on A, $10 on B.
