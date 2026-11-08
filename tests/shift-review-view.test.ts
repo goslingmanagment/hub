@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ShiftReviewChat, ShiftReviewMessage, TeamShiftReviewResponse } from "@agency_hub_core/contracts";
-import { cameBack, chatBusyIn, myMessages, pulseOf, reviewWaits, salesByOrigin, salesSplit, showPasses, sortSummaries, summariesOf, totalsOf } from "@/pages/team/review/shiftReviewView";
+import { chatBusyIn, fanReturnOf, myMessages, pulseOf, reviewWaits, salesByOrigin, salesSplit, showPasses, sortSummaries, summariesOf, totalsOf } from "@/pages/team/review/shiftReviewView";
 
 // «Разбор смены»: whose a fan's wait is when a page is shared or handed over (2026-11-07). The first version counted
 // a colleague's chats, waits and money as the reviewed chatter's.
@@ -119,10 +119,28 @@ describe("shift review: a colleague on the page at the shift's start", () => {
   });
 });
 
+// «снова писал за N до ответа» stood under fans who wrote all the while (W6), and was measured from the fan's last
+// message: a fan who came back, got nothing and wrote again an hour later read as answered in minutes.
 describe("shift review: a fan who came back", () => {
+  const fan = (time: string) => message(time, "fan", null);
+  const quiet: TeamShiftReviewResponse = {
+    ...data,
+    chats: [
+      chat("q", [fan("09:10"), fan("09:50"), fan("09:51"), mine("09:54", 2640)]),
+      chat("w", [fan("09:10"), fan("09:20"), fan("09:30"), fan("09:40"), fan("09:50"), mine("09:54", 2640)]),
+      chat("x", [fan("09:05"), fan("09:30"), fan("10:30"), mine("10:33", 5280)]),
+    ],
+    waits: [wait("q", "09:10", "09:54", "me"), wait("w", "09:10", "09:54", "me"), wait("x", "09:05", "10:33", "me")],
+  };
+  const back = Object.fromEntries(reviewWaits(quiet).map((one) => [one.chat, fanReturnOf(one)]));
+
   it("is one who went quiet, not one who kept writing", () => {
-    expect(cameBack(40 * 60, 30, 25 * 60)).toBe(true);
-    expect(cameBack(40 * 60, 30, 4 * 60)).toBe(false);
+    expect(back.q).toEqual({ quietSeconds: 40 * 60, at: Date.parse(at("09:50")), answerSeconds: 4 * 60 });
+    expect(back.w).toBeNull();
+  });
+
+  it("says the first return, and the answer from it", () => {
+    expect(back.x).toEqual({ quietSeconds: 25 * 60, at: Date.parse(at("09:30")), answerSeconds: 63 * 60 });
   });
 });
 
@@ -236,7 +254,7 @@ describe("shift review: deleted messages", () => {
 
   it("counts the fan's messages deleted later and marks them, but not one deleted in seconds", () => {
     expect(summary).toMatchObject({ kind: "dialog", mine: 1, fan: 2, fanDeleted: 2 });
-    expect(waits[0]).toMatchObject({ fanWrote: true, lastFanAt: Date.parse(at("10:03")) });
+    expect(waits[0]).toMatchObject({ fanWrote: true });
   });
 
   it("leaves the chatter's send recalled in 6 s out of the shift's messages", () => {

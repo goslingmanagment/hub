@@ -219,6 +219,36 @@ function reviewOf(shift: DemoShift, now: number): Response {
         mine: { composedWith: "hi", edited: false, origin: "ai", aiShare: 1, aiFeature: "hi-greeting", aiText: text, draft: null, replySeconds: null, repeats: 0, marks: [] },
       }]), fanLifetimeNetMills: null });
     }
+    // A fan who said goodnight after the chatter's answer and got nothing back — «без ответа», but nothing to answer; and
+    // one who asked, went quiet for hours and came back, answered in minutes: a long wait the silence explains.
+    const [sleepy, returned] = free.slice(24, 26);
+    const iso = (at: number) => new Date(at).toISOString();
+    if (sleepy && lastWrite - start > 30 * MIN) {
+      const key = `${firstPage.pageLabel}:${sleepy.platformUserId}`;
+      const asked = lastWrite - 26 * MIN;
+      const replyAt = asked + 3 * MIN;
+      chats.push(chatOf(sleepy, [
+        fanMessage(`${key}:s0`, asked, "how was your day?", true),
+        myMessage(random, `${key}:s1`, replyAt, 3 * 60),
+        fanMessage(`${key}:s2`, replyAt + 2 * MIN, "Good night babe, sweet dreams ♡", true),
+      ]));
+      waits.push(
+        { chat: key, since: iso(asked), from: iso(asked), to: iso(replyAt), by: "me" },
+        { chat: key, since: iso(replyAt + 2 * MIN), from: iso(replyAt + 2 * MIN), to: iso(end), by: null },
+      );
+    }
+    const back = lastWrite - 40 * MIN;
+    if (returned && back - start > 100 * MIN && !inPause(back + 4 * MIN)) {
+      const key = `${firstPage.pageLabel}:${returned.platformUserId}`;
+      const since = start + 10 * MIN;
+      const replyAt = back + 4 * MIN;
+      chats.push(chatOf(returned, [
+        fanMessage(`${key}:r0`, since, "do you have anything new?", true),
+        fanMessage(`${key}:r1`, back, "good morning babe", true),
+        myMessage(random, `${key}:r2`, replyAt, Math.round((replyAt - since) / 1000)),
+      ]));
+      waits.push({ chat: key, since: iso(since), from: iso(since), to: iso(replyAt), by: "me" });
+    }
   }
   // The same template to several fans.
   const template = "heyy just got back, did you miss me? ♡";

@@ -15,11 +15,11 @@ import {
   GAP_MINUTES,
   REPLY_NORM_SECONDS,
   aiButton,
-  cameBack,
   chatBusyIn,
   chatMatches,
   deletedAfterSeconds,
   fanName,
+  fanReturnOf,
   isHi,
   kindPasses,
   plainAiText,
@@ -31,6 +31,8 @@ import {
   type ChatShow,
   type ChatSort,
   type ChatSummary,
+  type FanLastKind,
+  type FanReturn,
   type ReviewWait,
 } from "./shiftReviewView.js";
 
@@ -125,6 +127,16 @@ function momentText(at: number, shiftStart: number): string {
   return moscowDay(at) === moscowDay(shiftStart) ? formatTimeOfDay(at) : formatDateTime(new Date(at).toISOString());
 }
 
+/** A fan who went quiet in a long wait and wrote again: «молчал 5 ч, снова написал в 10:33, ответ через 4 мин». */
+function returnText(back: FanReturn, shiftStart: number): string {
+  const when = `${moscowDay(back.at) === moscowDay(shiftStart) ? "в " : ""}${momentText(back.at, shiftStart)}`;
+  return `молчал ${waitText(back.quietSeconds)}, снова написал ${when}, ответ через ${waitText(back.answerSeconds)}`;
+}
+
+const NO_NEED_TITLE = "Последнее сообщение фана — прощание, «ok», «спасибо» или эмодзи, и до него он ничего не спросил: на такое можно не отвечать. Чат остаётся в «Без ответа» и в числе, но не выделен";
+/** What the fan's last word was, when it needs no answer: the quote itself is in the row above. */
+const NO_NEED_WORDS: Partial<Record<FanLastKind, string>> = { farewell: "фан попрощался", thanks: "фан ответил коротко", emoji: "фан ответил эмодзи" };
+
 function names(list: ReadonlyArray<{ name: string; messages: number }>): string {
   return list.map((one) => `${one.name} ${formatCount(one.messages)}`).join(", ");
 }
@@ -150,6 +162,7 @@ function SummaryRow({ summary, active, showPage, outside, shiftStart, ongoing, o
 }) {
   const { chat } = summary;
   const made = composition(summary);
+  const noNeed = summary.openNoNeed;
   const slot = summary.first !== null
     ? `${formatTimeOfDay(summary.first)}–${formatTimeOfDay(summary.last!)}`
     : summary.openSince !== null ? `${ongoing ? "ждёт" : "ждал"} с ${momentText(summary.openSince, shiftStart)}` : "";
@@ -182,15 +195,19 @@ function SummaryRow({ summary, active, showPage, outside, shiftStart, ongoing, o
           {summary.longestWaitSeconds !== null && summary.longestWaitSeconds > REPLY_NORM_SECONDS && (
             <span className="sr-tag">
               ждал ответа {waitText(summary.longestWaitSeconds)}{summary.longestWaitInherited && " с начала смены"}
-              {summary.longestWaitLastFanSeconds !== null && `, снова писал за ${waitText(summary.longestWaitLastFanSeconds)} до ответа`}
+              {summary.longestWaitReturn !== null && ` · ${returnText(summary.longestWaitReturn, shiftStart)}`}
               {summary.longestWaitAnsweredBy !== null && ` · ответил ${summary.longestWaitAnsweredBy}`}
             </span>
           )}
           {summary.unansweredInShift && summary.openWaitSeconds !== null && (
-            <span className="sr-tag sr-tag-strong" title={summary.openSince !== null ? `Фан ждал ответа с ${formatDateTime(new Date(summary.openSince).toISOString())}` : undefined}>
+            <span
+              className={`sr-tag${noNeed ? "" : " sr-tag-strong"}`}
+              title={noNeed ? NO_NEED_TITLE : summary.openSince !== null ? `Фан ждал ответа с ${formatDateTime(new Date(summary.openSince).toISOString())}` : undefined}
+            >
               {summary.unansweredLate
                 ? ongoing ? `написал ${waitText(summary.openWaitSeconds)} назад` : `написал за ${waitText(summary.openWaitSeconds)} до конца смены`
                 : `${ongoing ? "пока " : ""}без ответа ${waitText(summary.openWaitSeconds)}${summary.openSince !== null && summary.openSince < shiftStart ? " с начала смены" : ""}`}
+              {noNeed && summary.openLast !== null && ` · ${NO_NEED_WORDS[summary.openLast.kind] ?? ""}`}
             </span>
           )}
           {summary.openHeldBy !== null && <span className="sr-tag">без ответа после сообщения {summary.openHeldBy} — не в счёте</span>}
@@ -290,8 +307,8 @@ function Bubble({ message, picked, showDraft, answered, shiftStart, username }: 
   const text = normalizeDmMessageText(message.text);
   const fixDraft = mine !== null && (mine.origin === "fix" || (mine.origin === "ai" && mine.aiFeature === "improve-draft"));
   const draft = showDraft && fixDraft && mine?.draft ? mine.draft.trim() : "";
-  const lastFanGap = answered === null ? null : (answered.to - answered.lastFanAt) / 1000;
-  const again = answered !== null && lastFanGap !== null && cameBack(answered.seconds, lastFanGap, answered.fanQuietSeconds) ? `, снова писал за ${waitText(lastFanGap)} до ответа` : "";
+  const back = answered === null ? null : fanReturnOf(answered);
+  const again = back === null ? "" : `, ${returnText(back, shiftStart)}`;
   const waited = mine === null || mine.replySeconds === null ? null
     : answered !== null && answered.inherited ? `фан ждал с ${momentText(answered.since, shiftStart)}, в смену ${waitText(mine.replySeconds)}${again}`
       : `фан ждал ${waitText(mine.replySeconds)}${again}`;
