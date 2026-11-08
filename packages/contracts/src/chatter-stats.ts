@@ -13,8 +13,20 @@ import { teamShiftSchema } from "./routes-client.ts";
 // confirmed shift report's (Chat Memory week 4). A sale another chatter's shift
 // holds by the same rule is the money of who last wrote to its fan; neither
 // wrote — it counts for both and is marked: Hub does not split it.
+//
+// From SALE_RULE_SINCE_DAY (the owner, 2026-11-08) a sale goes by the team's
+// rule (runtime sale-rule.ts): a PPV a chatter sent is theirs whoever's shift
+// it was bought in («долёт отправителю»), a tip under a wall post and an
+// OnlyFans Campaign contribution are the общак, no shift's; the rest as above.
 
 const count = z.number().int().nonnegative();
+
+/** The Moscow day from which the team's rule settles a sale (owner, 2026-11-08); the weeks before keep the old one. */
+export const SALE_RULE_SINCE_DAY = "2026-11-02";
+/** A PPV a chatter sent, bought while they are off, waits this long for their next shift; later it is nobody's. */
+export const SALE_RULE_WAIT_DAYS = 7;
+/** Where a sale outside the shifts' money went: a look-in's, nobody's, the общак, or waiting for its sender's next shift. */
+export const OUTSIDE_SALE_HOMES = ["visit", "nobody", "common", "waiting"] as const;
 
 /** The longest window of the statistics, Moscow days. */
 export const CHATTER_STATS_MAX_DAYS = 31;
@@ -237,23 +249,30 @@ export const teamShiftSalesResponseSchema = z.object({
     sales: count,
   })),
   /**
-   * The window's sales no shift holds, outside the money above: `visits` — a look-in's, its person the last to write to
-   * the fan (as a visit's sales); `nobody` — the rest. By the Moscow day of the sale (one per day of the window, the
-   * oldest first) and by page (the most first), and each sale, the oldest first.
+   * The window's sales in no shift's money, outside the money above: `visits` — a look-in's, its person the last to
+   * write to the fan (as a visit's sales); `common` — the общак (from SALE_RULE_SINCE_DAY: a tip under a wall post, a
+   * Campaign contribution); `waiting` — a chatter's PPV bought while they were off, until their next shift; `nobody` —
+   * the rest. By the Moscow day of the sale (one per day of the window, the oldest first) and by page (the most first),
+   * and each sale, the oldest first.
    */
   outside: z.object({
     visitsNetMills: mills,
     nobodyNetMills: mills,
-    daily: z.array(z.object({ date: businessDate, visitsNetMills: mills, nobodyNetMills: mills })),
-    pages: z.array(z.object({ pageLabel: z.string(), visitsNetMills: mills, nobodyNetMills: mills })),
+    commonNetMills: mills,
+    waitingNetMills: mills,
+    daily: z.array(z.object({ date: businessDate, visitsNetMills: mills, nobodyNetMills: mills, commonNetMills: mills, waitingNetMills: mills })),
+    pages: z.array(z.object({ pageLabel: z.string(), visitsNetMills: mills, nobodyNetMills: mills, commonNetMills: mills, waitingNetMills: mills })),
     sales: z.array(z.object({
       at: isoTimestamp,
       pageLabel: z.string(),
       fanName: z.string().nullable(),
       kind: z.enum(CHATTER_SALE_KINDS),
       netMills: mills,
-      /** The look-in's person; null — nobody's. */
+      /** The look-in's person; null — not a look-in's. */
       visitBy: z.string().nullable(),
+      home: z.enum(OUTSIDE_SALE_HOMES),
+      /** `waiting` — the chatter whose PPV it is; null otherwise. */
+      waitingFor: z.string().nullable(),
     })),
   }),
   serverNow: isoTimestamp,

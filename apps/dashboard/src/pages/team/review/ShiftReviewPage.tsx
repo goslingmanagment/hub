@@ -14,7 +14,13 @@ import { shiftSpan } from "@/pages/team/TeamShiftsPage";
 import { ChatterLink, PageLink } from "@/pages/team/teamLinks";
 import { ShiftChats, type ChatsView } from "./ShiftChats.js";
 import { ShiftPulse } from "./ShiftPulse.js";
-import { CHATTER_SHIFT_PAGE_MIN_MESSAGES, SHIFT_REVIEW_LATER_SALES_DAYS, SHIFT_REVIEW_NEIGHBOUR_DAYS, type TeamShiftReviewResponse } from "@agency_hub_core/contracts";
+import {
+  CHATTER_SHIFT_PAGE_MIN_MESSAGES,
+  SALE_RULE_SINCE_DAY,
+  SHIFT_REVIEW_LATER_SALES_DAYS,
+  SHIFT_REVIEW_NEIGHBOUR_DAYS,
+  type TeamShiftReviewResponse,
+} from "@agency_hub_core/contracts";
 import {
   CHAT_KINDS,
   CHAT_SHOWS,
@@ -273,9 +279,18 @@ function ShiftReview({ userId, at }: { userId: number; at: string }) {
   const beforeNetMills = sum(data.beforeSales);
   const laterBy = new Map<string, number>();
   for (const sale of data.laterSales) {
-    const where = sale.holderName === null ? "без смены" : `в смене ${sale.holderName}`;
+    const where = sale.verdict === "mine" ? "засчитаны ему" : sale.holderName === null ? "без смены" : `в смене ${sale.holderName}`;
     laterBy.set(where, (laterBy.get(where) ?? 0) + sale.netMills);
   }
+  // By the team's rule: the общак, colleagues' PPVs bought in the shift, the chatter's PPVs bought while they were off or
+  // on another page that it brings in.
+  const worked = new Set(shift.pages.filter((page) => page.worked).map((page) => page.pageLabel));
+  const inShift = (sale: { at: string; pageLabel: string }) => worked.has(sale.pageLabel)
+    && Date.parse(sale.at) >= Date.parse(shift.startedAt) && Date.parse(sale.at) <= Date.parse(shift.endedAt);
+  const commonNetMills = sum(data.sales.filter((sale) => sale.verdict === "common"));
+  const sentAwayNetMills = sum(data.sales.filter((sale) => sale.verdict === "theirs" && sale.origin === "colleague_ppv" && inShift(sale)));
+  const broughtNetMills = sum(data.sales.filter((sale) => (sale.verdict === "mine" || sale.verdict === "both") && !inShift(sale)));
+  const ruled = Date.parse(shift.endedAt) >= Date.parse(`${SALE_RULE_SINCE_DAY}T00:00:00+03:00`);
   const aroundParts = [
     beforeNetMills > 0 ? `до неё, без смены ${formatMills(beforeNetMills)}` : null,
     data.laterSales.length > 0
@@ -284,6 +299,10 @@ function ShiftReview({ userId, at }: { userId: number; at: string }) {
   ].filter((part) => part !== null);
   const salesHint = [
     "Продажи на страницах смены, пока смена их держала, как в «Заработке»; продажа фану, которому последним писал коллега на своей смене, — его",
+    ruled ? `с ${formatDay(SALE_RULE_SINCE_DAY)} купленный PPV — того, кто его отправил, а чаевые под постами и Campaign — общак` : null,
+    broughtNetMills > 0 ? `${formatMills(broughtNetMills)} — его PPV, купленные вне этой смены, пока он не работал: засчитаны в неё` : null,
+    sentAwayNetMills > 0 ? `${formatMills(sentAwayNetMills)} — PPV коллег, купленные в эту смену: у отправителей` : null,
+    commonNetMills > 0 ? `${formatMills(commonNetMills)} — общак, не в продажах смены` : null,
     split.bothNetMills > 0 ? `из них ${formatMills(split.bothNetMills)} засчитано и коллеге: его смена тоже держала страницу, а последним фану писал не он и не чаттер` : null,
     split.withoutChatNetMills > 0 ? `${formatMills(split.withoutChatNetMills)} — от фанов, чьих чатов в разборе нет` : null,
   ].filter((part) => part !== null).join("; ");

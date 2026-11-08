@@ -410,7 +410,9 @@ function outsideOf(world: ReturnType<typeof teamWorld>, scope: readonly string[]
   const sales: Sale[] = world.visits
     .flatMap((visit) => visit.sales.map((sale) => ({ sale, by: visit.user.username })))
     .filter(({ sale }) => scope.includes(sale.pageLabel) && dayList.includes(mskDay(sale.at)) && sale.at < to)
-    .map(({ sale, by }) => ({ at: isoAt(sale.at), pageLabel: sale.pageLabel, fanName: sale.fan.displayName, kind: sale.kind, netMills: sale.netMills, visitBy: by }));
+    .map(({ sale, by }): Sale => ({
+      at: isoAt(sale.at), pageLabel: sale.pageLabel, fanName: sale.fan.displayName, kind: sale.kind, netMills: sale.netMills, visitBy: by, home: "visit", waitingFor: null,
+    }));
   for (const day of dayList) {
     const random = rng(`outside:${day}`);
     for (let index = intBetween(random, 0, 3); index > 0; index -= 1) {
@@ -419,20 +421,26 @@ function outsideOf(world: ReturnType<typeof teamWorld>, scope: readonly string[]
       const at = mskMidnightOf(day) + intBetween(random, 2, 10) * 3_600_000 + intBetween(random, 0, 59) * 60_000;
       if (fans.length === 0 || at >= to) continue;
       const kind = pick(random, ["ppv", "subscription", "tip"] as const);
-      sales.push({ at: isoAt(at), pageLabel, fanName: pick(random, fans).displayName, kind, netMills: pick(random, [8_000, 12_000, 19_200, 31_200, 40_000]), visitBy: null });
+      // A tip under a post is the общак; now and then a PPV bought at night waits for its sender's next shift.
+      const home = kind === "tip" ? "common" : kind === "ppv" && random() < 0.3 ? "waiting" : "nobody";
+      sales.push({
+        at: isoAt(at), pageLabel, fanName: pick(random, fans).displayName, kind, netMills: pick(random, [8_000, 12_000, 19_200, 31_200, 40_000]), visitBy: null,
+        home, waitingFor: home === "waiting" ? pick(random, world.visits.map((visit) => visit.user.username).concat(["sofia"])) : null,
+      });
     }
   }
   sales.sort((left, right) => left.at.localeCompare(right.at));
+  const sum = (list: readonly Sale[], home: Sale["home"]) => list.filter((sale) => sale.home === home).reduce((total, sale) => total + sale.netMills, 0);
   const of = (list: readonly Sale[]) => ({
-    visitsNetMills: list.filter((sale) => sale.visitBy !== null).reduce((sum, sale) => sum + sale.netMills, 0),
-    nobodyNetMills: list.filter((sale) => sale.visitBy === null).reduce((sum, sale) => sum + sale.netMills, 0),
+    visitsNetMills: sum(list, "visit"), nobodyNetMills: sum(list, "nobody"), commonNetMills: sum(list, "common"), waitingNetMills: sum(list, "waiting"),
   });
+  const total = (money: ReturnType<typeof of>) => money.visitsNetMills + money.nobodyNetMills + money.commonNetMills + money.waitingNetMills;
   const labels = [...new Set(sales.map((sale) => sale.pageLabel))];
   return {
     ...of(sales),
     daily: dayList.map((date) => ({ date, ...of(sales.filter((sale) => mskDay(Date.parse(sale.at)) === date)) })),
     pages: labels.map((pageLabel) => ({ pageLabel, ...of(sales.filter((sale) => sale.pageLabel === pageLabel)) }))
-      .sort((left, right) => right.visitsNetMills + right.nobodyNetMills - (left.visitsNetMills + left.nobodyNetMills)),
+      .sort((left, right) => total(right) - total(left)),
     sales,
   };
 }

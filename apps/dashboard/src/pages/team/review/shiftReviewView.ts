@@ -496,6 +496,9 @@ export function silences(pulse: readonly PulseMinute[], pauses: ReadonlyArray<{ 
 
 type Sale = TeamShiftReviewResponse["sales"][number];
 
+/** The name a chat's `others` gives the общак (`verdict` `common`): a tip under a post, a Campaign contribution. */
+export const COMMON_NAME = "общак";
+
 /** A sale that counts for the chatter: theirs alone, or theirs and a colleague's. */
 function counts(sale: Sale): boolean {
   return sale.verdict === "mine" || sale.verdict === "both";
@@ -714,7 +717,7 @@ export interface ChatSummary {
   lastFanText: string | null;
   /** The fan's sales in the shift that count for the chatter (see the file's head). */
   heldNetMills: number;
-  /** The rest of the fan's money in the shift: a colleague's, by name, most first; `name` null — no shift's. */
+  /** The rest of the fan's money in the shift: a colleague's, by name, most first; `name` null — no shift's; COMMON_NAME — the общак. */
   others: Array<{ name: string | null; netMills: number }>;
   /** The chatter's first text in the shift: what a first touch said. */
   firstMineText: string | null;
@@ -731,7 +734,11 @@ export function summariesOf(data: TeamShiftReviewResponse, allWaits: readonly Re
   return data.chats.map((chat) => {
     const sales = salesByChat.get(chat.key) ?? [];
     const others = new Map<string | null, number>();
-    for (const sale of sales) if (!counts(sale)) others.set(sale.holderName, (others.get(sale.holderName) ?? 0) + sale.netMills);
+    for (const sale of sales) {
+      if (counts(sale)) continue;
+      const name = sale.verdict === "common" ? COMMON_NAME : sale.holderName;
+      others.set(name, (others.get(name) ?? 0) + sale.netMills);
+    }
     const inShift = chat.messages.filter((message) => message.inShift);
     const mine = inShift.filter((message) => message.mine !== null && seen(message));
     const fan = inShift.filter(isFans);

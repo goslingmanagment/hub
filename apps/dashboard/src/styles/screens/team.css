@@ -232,6 +232,9 @@
   .dispute-what { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; min-width: 0; }
   .dispute-facts { color: var(--color-text-primary); }
   .dispute-money { font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .payout-common { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; padding-top: 16px; border-top: 1px solid var(--color-border-light); }
+  .payout-common-label { font-weight: 600; }
+  .payout-common-money { font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
   .dispute-marks { font-size: 14px; line-height: 20px; color: var(--color-text-secondary); }
   .dispute-marks > span:first-child { color: var(--color-text-primary); }
   .dispute-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }

@@ -3440,6 +3440,23 @@ export const teamShiftExportResponseSchema = z.object({
     change: z.enum(["added", "removed"]),
     at: isoTimestamp,
   })),
+  /**
+   * The общак of the window's days (from SALE_RULE_SINCE_DAY, owner 2026-11-08): tips under wall posts and OnlyFans
+   * Campaign contributions, by the Moscow day of the sale — no chatter's shift and no row of `rows`. Net, the oldest first.
+   */
+  common: z.object({
+    netMills: mills,
+    sales: z.array(z.object({
+      saleRef: clientNumericIdSchema,
+      occurredAt: isoTimestamp,
+      pageLabel: z.string(),
+      platform: clientOpenToken,
+      fanName: z.string().nullable(),
+      /** `post_tip` — a tip under a wall post; `campaign` — an OnlyFans Campaign contribution. */
+      source: z.enum(["post_tip", "campaign"]),
+      netMills: mills,
+    })),
+  }),
   serverNow: isoTimestamp,
 });
 

@@ -53,7 +53,7 @@ export const SHIFT_REVIEW_DELETED_UNSEEN_SECONDS = 60;
 export const SHIFT_REVIEW_ORIGINS = ["ai", "fix", "own"] as const;
 export const SHIFT_REVIEW_MARKS = ["dash", "cyrillic", "leak"] as const;
 export const SHIFT_REVIEW_AUTHORS = ["me", "other", "none", "auto"] as const;
-export const SHIFT_REVIEW_SALE_VERDICTS = ["mine", "both", "theirs", "none"] as const;
+export const SHIFT_REVIEW_SALE_VERDICTS = ["mine", "both", "theirs", "none", "common"] as const;
 export const SHIFT_REVIEW_SALE_ORIGINS = ["own", "colleague_ppv", "no_author_ppv", "other_wrote", "nobody_wrote_48h", "post_tip", "campaign"] as const;
 
 export const teamShiftReviewQuerySchema = z.object({
@@ -172,10 +172,13 @@ const shiftReviewSaleSchema = z.object({
   /**
    * Whose it is, as `salesNetMills` settles it. `mine` — the shift's; `both` — a colleague's overlapping shift holds it
    * too and neither of them was the last to write to the fan: it counts for both; `theirs` — the colleague's: they were
-   * the last to write, or their shift holds it and this one does not; `none` — no shift holds it.
+   * the last to write, or their shift holds it and this one does not, or (from SALE_RULE_SINCE_DAY) they sent the PPV;
+   * `none` — no shift holds it; `common` — the общак (from SALE_RULE_SINCE_DAY: a tip under a wall post, a Campaign
+   * contribution), no shift's. From that day a chatter's PPV bought elsewhere while they were off is `mine` of their
+   * next shift: it is in that shift's `sales`, though not on its pages or within it.
    */
   verdict: z.enum(SHIFT_REVIEW_SALE_VERDICTS),
-  /** `theirs` — the colleague whose it is; `both` — the colleague it counts for too. */
+  /** `theirs` — the colleague whose it is (the PPV's sender, though their next shift has not come yet); `both` — the colleague it counts for too. */
   holderName: z.string().nullable(),
   /** Who sent the PPV the fan bought (the chatter too); null — not a PPV, its message not found, or sent without an author. */
   ppvSender: z.string().nullable(),
@@ -221,7 +224,8 @@ export const teamShiftReviewResponseSchema = z.object({
     pages: z.array(z.object({ pageLabel: z.string(), platform: z.string(), messages: count, worked: z.boolean(), allFans: z.boolean().optional() })),
     /**
      * The shift's sales, net, as «Смены → Заработок» settles them: the sales on its pages while it held them
-     * (`salesHeldBy`), less those a colleague's overlapping shift held too when the colleague last wrote to the fan.
+     * (`workHoldsSale`), less those a colleague's overlapping shift held too when the colleague last wrote to the fan;
+     * from SALE_RULE_SINCE_DAY less a colleague's PPVs and the общак, plus the chatter's PPVs it brings in (`sales`).
      */
     salesNetMills: mills,
   }),
@@ -245,7 +249,8 @@ export const teamShiftReviewResponseSchema = z.object({
   /**
    * After the shift: the person's PPVs sent in it that fans bought after it, within SHIFT_REVIEW_LATER_SALES_DAYS.
    * `theirs` and `holderName` — the shift that held the purchase (the person's own later one too); `none` — no shift
-   * held it. Empty for a look-in.
+   * held it; `mine` — the person's by the rule from SALE_RULE_SINCE_DAY, in their shift at or after the purchase. Empty
+   * for a look-in.
    */
   laterSales: z.array(shiftReviewSaleSchema),
   /**

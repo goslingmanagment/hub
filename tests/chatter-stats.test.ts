@@ -24,6 +24,25 @@ describe("settleSale", () => {
     expect(settleSale(ME, [COLLEAGUE], null)).toBe("both");
     expect(settleSale(ME, [COLLEAGUE], 3)).toBe("both");
   });
+
+  // The owner, 2026-11-08: from 02.11 a PPV is its sender's whoever's shift it came in, a post tip or a Campaign
+  // contribution the общак.
+  it("gives a PPV to its sender, whoever's shift holds it and whoever wrote last", () => {
+    const mineSent = { ppvSender: { userId: ME, username: "me" }, common: null };
+    const theirsSent = { ppvSender: { userId: COLLEAGUE, username: "colleague" }, common: null };
+    expect(settleSale(ME, [], ME, theirsSent)).toBe("theirs");
+    expect(settleSale(ME, [COLLEAGUE], COLLEAGUE, mineSent)).toBe("mine");
+    expect(settleSale(ME, [COLLEAGUE], null, mineSent)).toBe("mine");
+  });
+
+  it("gives the общак to no shift", () => {
+    expect(settleSale(ME, [], ME, { ppvSender: null, common: "post_tip" })).toBe("common");
+    expect(settleSale(ME, [COLLEAGUE], ME, { ppvSender: null, common: "campaign" })).toBe("common");
+  });
+
+  it("settles by the old rule what the team's rule says nothing of", () => {
+    expect(settleSale(ME, [COLLEAGUE], COLLEAGUE, { ppvSender: null, common: null })).toBe("theirs");
+  });
 });
 
 describe("streaksOf", () => {

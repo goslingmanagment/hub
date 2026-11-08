@@ -2,8 +2,9 @@ import { describe, expect, it } from "vitest";
 
 import type { ShiftSale } from "@agency_hub_core/db";
 import type { ComputedWork } from "../apps/runtime/src/services/chatter-shifts.ts";
+import { homesOfSales, reportSalesOf, type Piece, type SaleRuleFacts } from "../apps/runtime/src/services/sale-rule.ts";
 import {
-  contestedSales, outsideMoney, salesNoShiftHolds, salesOfWork, settleOutsideShifts, shiftSalesWindow, teamShiftMoney, type HeldShift,
+  outsideMoney, salesOfWork, salesOutsideShifts, shiftSalesWindow, teamShiftMoney, type HeldShift,
 } from "../apps/runtime/src/services/team-shift-sales.ts";
 
 // The team's money by shift: a sale two shifts hold is the last writer's; neither
@@ -61,7 +62,6 @@ describe("teamShiftMoney", () => {
     const mine = sale("2026-11-04T07:00:00Z", 10_000);
     const sales = [mine, shared];
     const shifts = [held(1, work("2026-11-04T06:00:00Z", "2026-11-04T10:00:00Z"), sales), held(2, work("2026-11-04T07:30:00Z", "2026-11-04T11:00:00Z"), sales)];
-    expect(contestedSales(shifts).map((one) => one.transactionId)).toEqual([shared.transactionId]);
 
     const money = teamShiftMoney({ days: 7, now: NOW, shifts, lastWriters: new Map([[shared.transactionId, 2]]), firstActivity: LONG_AGO });
     const byUser = new Map(money.chatters.map((one) => [one.userId, one]));
@@ -139,25 +139,125 @@ describe("the money outside shifts", () => {
   // A shift on ari-1 07:00–08:00, a look-in on ari-1 08:00–09:00 and no one on lora-1.
   const shifts = [held(1, work("2026-11-04T07:00:00Z", "2026-11-04T08:00:00Z"), sales)];
   const visits = [{ userId: 2, username: "user2", work: { ...work("2026-11-04T08:00:00Z", "2026-11-04T09:00:00Z"), kind: "visit" as const } }];
-  const from = at("2026-11-04T00:00:00Z");
-  const to = at("2026-11-04T12:00:00Z");
+  const window = { from: at("2026-11-04T00:00:00Z"), to: at("2026-11-04T12:00:00Z") };
 
-  it("is every sale less the ones a shift or a look-in holds, a look-in holding only those its person last wrote to", () => {
-    const unheld = salesNoShiftHolds({ from, to, sales, shifts });
-    expect(unheld.map((one) => one.transactionId)).toEqual([early, visited, visitedOther, nobodys, otherPage].map((one) => one!.transactionId));
+  it("is every sale less the shifts' money, a look-in holding only those its person last wrote to", () => {
     const lastWriters = new Map([[visited!.transactionId, 2], [visitedOther!.transactionId, 1]]);
-    const settled = settleOutsideShifts(unheld, visits, lastWriters);
-    const money = outsideMoney(settled, ["2026-11-04"]);
+    const settled = homesOfSales({ sales, shifts, visits, lastWriters, facts: new Map(), now: NOW.getTime() });
+    const outside = salesOutsideShifts(settled, window);
+    expect(outside.map((one) => one.sale.transactionId)).toEqual([early, visited, visitedOther, nobodys, otherPage].map((one) => one!.transactionId));
+    const money = outsideMoney(outside, ["2026-11-04"]);
     expect(money.visitsNetMills).toBe(visited!.netMills);
     expect(money.nobodyNetMills).toBe(early!.netMills + visitedOther!.netMills + nobodys!.netMills + otherPage!.netMills);
     const total = sales.reduce((sum, one) => sum + one.netMills, 0);
     expect(money.visitsNetMills + money.nobodyNetMills + inShift!.netMills).toBe(total);
-    expect(money.daily).toEqual([{ date: "2026-11-04", visitsNetMills: 40_000, nobodyNetMills: 39_000 }]);
-    expect(money.pages[0]).toEqual({ pageLabel: "ari-1", visitsNetMills: 40_000, nobodyNetMills: 34_000 });
+    expect(money.daily).toEqual([{ date: "2026-11-04", visitsNetMills: 40_000, nobodyNetMills: 39_000, commonNetMills: 0, waitingNetMills: 0 }]);
+    expect(money.pages[0]).toEqual({ pageLabel: "ari-1", visitsNetMills: 40_000, nobodyNetMills: 34_000, commonNetMills: 0, waitingNetMills: 0 });
   });
 
   it("leaves the shifts' money alone", () => {
     const money = teamShiftMoney({ days: 1, now: NOW, shifts, lastWriters: new Map(), firstActivity: LONG_AGO });
     expect(money.team.salesNetMills).toBe(inShift!.netMills);
+  });
+});
+
+// The owner, 2026-11-08: from 02.11 00:00 Moscow a PPV is its sender's («долёт отправителю»), a tip under a wall post and
+// an OnlyFans Campaign contribution the общак; renewals and the rest stay the shift's. The weeks before keep the old rule.
+describe("the team's rule: долёт to the PPV's sender, the общак apart", () => {
+  const MAXIM = 3;
+  const GRISHA = 4;
+  // Thu 5 Nov: Grisha on lora-vip 13:00–20:00 MSK; Maxim's night shift there from 03:39 MSK on the 6th.
+  const grisha = held(GRISHA, work("2026-11-05T10:00:00Z", "2026-11-05T17:00:00Z", "lora-vip"), []);
+  const maximNight = held(MAXIM, work("2026-11-06T00:39:00Z", "2026-11-06T08:00:00Z", "lora-vip"), []);
+  const piece = (one: HeldShift): Piece => ({ userId: one.userId, username: one.username, work: one.work });
+  const ppvOf = (sender: number, name: string): SaleRuleFacts => ({ ppvSender: { userId: sender, username: name }, common: null });
+  const now = at("2026-11-08T12:00:00Z");
+
+  it("moves a colleague's PPV bought in my shift to the sender's next shift, and counts it once for the team", () => {
+    const thomas = { ...sale("2026-11-05T13:44:00Z", 31_200, "lora-vip"), kind: "message_purchase" };
+    const mine = sale("2026-11-05T12:00:00Z", 10_000, "lora-vip");
+    const sales = [mine, thomas];
+    const shifts = [{ ...grisha, held: salesOfWork(grisha.work, sales) }, { ...maximNight, held: salesOfWork(maximNight.work, sales) }];
+    const facts = new Map([[thomas.transactionId, ppvOf(MAXIM, "Maxim")]]);
+    const settled = homesOfSales({ sales, shifts, visits: [], lastWriters: new Map(), facts, now });
+    expect(settled.find((one) => one.sale === thomas)!.home).toMatchObject({ kind: "pieces", bySender: true, pieces: [{ userId: MAXIM }] });
+
+    const money = teamShiftMoney({ days: 7, now: new Date(now), until: "2026-11-08", shifts, lastWriters: new Map(), firstActivity: new Map([[GRISHA, new Date(0)], [MAXIM, new Date(0)]]), settled });
+    const byUser = new Map(money.chatters.map((one) => [one.userId, one]));
+    expect(byUser.get(GRISHA)!.salesNetMills).toBe(10_000);
+    expect(byUser.get(MAXIM)!.salesNetMills).toBe(31_200);
+    expect(money.team.salesNetMills).toBe(41_200);
+    // The shift it came to is the sender's: a sale outside its pages' time, in its money.
+    expect(money.shifts.find((one) => one.userId === MAXIM)).toMatchObject({ date: "2026-11-06", salesNetMills: 31_200, sales: 1 });
+    // Its report lists it for Maxim, not for Grisha, whose shift held it.
+    expect(reportSalesOf({ settled, lastWriters: new Map() }, maximNight)).toEqual([thomas]);
+    expect(reportSalesOf({ settled, lastWriters: new Map() }, grisha)).toEqual([mine]);
+  });
+
+  it("puts the sender's PPV in their shift going then on another page, else waits for their next one, a week at most", () => {
+    const ppv = { ...sale("2026-11-05T14:00:00Z", 24_000, "lora-vip"), kind: "message_purchase" };
+    const elsewhere = work("2026-11-05T12:00:00Z", "2026-11-05T18:00:00Z", "lora-2");
+    const going = homesOfSales({ sales: [ppv], shifts: [piece(grisha), { userId: MAXIM, username: "Maxim", work: elsewhere }], visits: [], lastWriters: new Map(), facts: new Map([[ppv.transactionId, ppvOf(MAXIM, "Maxim")]]), now });
+    expect(going[0]!.home).toMatchObject({ kind: "pieces", pieces: [{ work: elsewhere }] });
+
+    const off = homesOfSales({ sales: [ppv], shifts: [piece(grisha)], visits: [], lastWriters: new Map(), facts: new Map([[ppv.transactionId, ppvOf(MAXIM, "Maxim")]]), now });
+    expect(off[0]!.home).toEqual({ kind: "waiting", userId: MAXIM, username: "Maxim" });
+    const late = homesOfSales({ sales: [ppv], shifts: [piece(grisha)], visits: [], lastWriters: new Map(), facts: new Map([[ppv.transactionId, ppvOf(MAXIM, "Maxim")]]), now: at("2026-11-13T12:00:00Z") });
+    expect(late[0]!.home).toEqual({ kind: "nobody", bySender: true });
+
+    const outside = outsideMoney(salesOutsideShifts(off, { from: at("2026-11-04T21:00:00Z"), to: at("2026-11-05T21:00:00Z") }), ["2026-11-05"]);
+    expect(outside).toMatchObject({ waitingNetMills: 24_000, nobodyNetMills: 0, sales: [{ home: "waiting", waitingFor: "Maxim" }] });
+  });
+
+  it("keeps a PPV the sender's own look-in holds in it", () => {
+    const look = { userId: MAXIM, username: "Maxim", work: { ...work("2026-11-05T09:00:00Z", "2026-11-05T09:50:00Z", "lora-vip"), kind: "visit" as const } };
+    const ppv = { ...sale("2026-11-05T09:30:00Z", 52_000, "lora-vip"), kind: "message_purchase" };
+    const homes = homesOfSales({ sales: [ppv], shifts: [], visits: [look], lastWriters: new Map(), facts: new Map([[ppv.transactionId, ppvOf(MAXIM, "Maxim")]]), now });
+    expect(homes[0]!.home).toMatchObject({ kind: "pieces", pieces: [look] });
+  });
+
+  it("gives the общак no shift, and lists it apart", () => {
+    const postTip = sale("2026-11-05T14:00:00Z", 359_040, "lora-vip");
+    const campaign = sale("2026-11-05T15:00:00Z", 148_000, "lora-vip");
+    const sales = [postTip, campaign];
+    const facts = new Map<number, SaleRuleFacts>([[postTip.transactionId, { ppvSender: null, common: "post_tip" }], [campaign.transactionId, { ppvSender: null, common: "campaign" }]]);
+    const shifts = [{ ...grisha, held: salesOfWork(grisha.work, sales) }];
+    const settled = homesOfSales({ sales, shifts, visits: [], lastWriters: new Map(), facts, now });
+    const money = teamShiftMoney({ days: 7, now: new Date(now), until: "2026-11-08", shifts, lastWriters: new Map(), firstActivity: LONG_AGO, settled });
+    expect(money.team.salesNetMills).toBe(0);
+    const outside = outsideMoney(salesOutsideShifts(settled, { from: at("2026-11-01T21:00:00Z"), to: now }), ["2026-11-05"]);
+    expect(outside.commonNetMills).toBe(507_040);
+    expect(reportSalesOf({ settled, lastWriters: new Map() }, grisha)).toEqual([]);
+  });
+
+  it("leaves a renewal, a chat tip and a PPV without a chatter author to the shift that holds it", () => {
+    const renewal = { ...sale("2026-11-05T12:00:00Z", 40_000, "lora-vip"), kind: "subscription" };
+    const ownerPpv = { ...sale("2026-11-05T12:10:00Z", 20_000, "lora-vip"), kind: "message_purchase" };
+    const sales = [renewal, ownerPpv];
+    const shifts = [{ ...grisha, held: salesOfWork(grisha.work, sales) }];
+    // A PPV the owner's account sent has no chatter sender: `saleRuleFactsOf` gives it none.
+    const settled = homesOfSales({ sales, shifts, visits: [], lastWriters: new Map(), facts: new Map([[ownerPpv.transactionId, { ppvSender: null, common: null }]]), now });
+    for (const one of settled) expect(one.home).toMatchObject({ kind: "pieces", bySender: false, pieces: [{ userId: GRISHA }] });
+  });
+
+  it("does not move a cent of the weeks before 2 November", () => {
+    // Sun 1 Nov: Maxim's PPV bought in Grisha's shift — before the rule, Grisha's.
+    const sunday = held(GRISHA, work("2026-11-01T08:00:00Z", "2026-11-01T13:30:00Z", "lora-vip"), []);
+    const before = { ...sale("2026-11-01T13:00:00Z", 31_200, "lora-vip"), kind: "message_purchase" };
+    // Grisha's night of 1 Nov past midnight: a shift of the 1st keeps what the old rule gives it.
+    const night = held(GRISHA, work("2026-11-01T16:00:00Z", "2026-11-01T22:30:00Z", "lora-vip"), []);
+    const afterMidnight = { ...sale("2026-11-01T21:20:00Z", 12_000, "lora-vip"), kind: "message_purchase" };
+    const sales = [before, afterMidnight];
+    const shifts = [sunday, night, maximNight].map((one) => ({ ...one, held: salesOfWork(one.work, sales) }));
+    const facts = new Map([[before.transactionId, ppvOf(MAXIM, "Maxim")], [afterMidnight.transactionId, ppvOf(MAXIM, "Maxim")]]);
+    const settled = homesOfSales({ sales, shifts, visits: [], lastWriters: new Map(), facts, now });
+    expect(settled.map((one) => one.home)).toMatchObject([
+      { kind: "pieces", bySender: false, pieces: [{ userId: GRISHA }] },
+      { kind: "pieces", bySender: false, pieces: [{ userId: GRISHA }] },
+    ]);
+    const lastWeek = teamShiftMoney({ days: 7, now: new Date(now), until: "2026-11-01", shifts, lastWriters: new Map(), firstActivity: LONG_AGO, settled });
+    const oldRule = teamShiftMoney({ days: 7, now: new Date(now), until: "2026-11-01", shifts, lastWriters: new Map(), firstActivity: LONG_AGO });
+    expect(lastWeek.chatters).toEqual(oldRule.chatters);
+    expect(lastWeek.team.salesNetMills).toBe(43_200);
   });
 });

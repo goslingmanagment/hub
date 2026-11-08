@@ -20,10 +20,8 @@ import {
   listReportLines,
   listSaleFacts,
   listSalesByIds,
-  listSaleLastWriters,
   listSharedWithMe,
   listShiftMarks,
-  listShiftSales,
   markShiftSale,
   resolveShiftSale,
   type Database,
@@ -40,17 +38,9 @@ import { millsPercentOf, millsRoundedTo } from "@agency_hub_core/shared";
 import { pageScopeFor } from "../api/request-auth.ts";
 import type { AppContext } from "../bootstrap.ts";
 import { requireDashboardUser, requireOwner, requireSessionUser, type AuthPrincipal, type HumanAuthPrincipal } from "./auth.ts";
-import {
-  SALE_LAST_WRITER_HOURS,
-  dayOfWork,
-  lastWriterQuery,
-  moscowDayOf,
-  readPeopleWork,
-  salesHeldBy,
-  workHoldsSale,
-  type ComputedWork,
-} from "./chatter-shifts.ts";
+import { dayOfWork, moscowDayOf, type ComputedWork } from "./chatter-shifts.ts";
 import { BadRequestError, ConflictError, NotFoundError } from "./errors.ts";
+import { readTeamSales, reportSalesOf } from "./sale-rule.ts";
 
 /**
  * Chat Memory week 4 (docs/plans/2026-10-24-chat-memory/week-4.md §2): the
@@ -58,9 +48,11 @@ import { BadRequestError, ConflictError, NotFoundError } from "./errors.ts";
  *
  * THE DRAFT (`accountShiftReport`, the chatter's cabinet). The caller's actual
  * shifts (services/chatter-shifts.ts) on the pages they work now, and their
- * visits holding a sale; their sales are chatter-shifts.ts's `salesHeldBy` —
- * the money fans paid on the pages each worked, from the chatter's first action
- * there (net, as the payout sheet counts). Each
+ * visits holding a sale; their sales are sale-rule.ts's `reportSalesOf` — the
+ * money fans paid on the pages each worked, from the chatter's first action
+ * there (net, as the payout sheet counts); from SALE_RULE_SINCE_DAY without a
+ * colleague's PPVs and the общак, with the chatter's own PPVs bought elsewhere
+ * that the rule brings to the shift. Each
  * sale carries its facts: who sent the PPV it bought, who else wrote to the fan
  * in 48 hours. Two shifts that overlap (ari-1, 00:00–02:00) both show the sale;
  * each chatter marks it.
@@ -181,6 +173,8 @@ function reportPagesOf(principal: HumanAuthPrincipal): "all" | readonly number[]
 interface CallerShift {
   userId: number;
   work: ComputedWork;
+  /** What its report lists (sale-rule.ts `reportSalesOf`), oldest first. */
+  sales: ShiftSale[];
   visit: boolean;
   startedAt: Date;
   endedAt: Date;
@@ -193,12 +187,13 @@ interface CallerShift {
   pageLabels: string[];
 }
 
-/** The caller's shifts and visits, the newest first; a report lists a visit only for a sale it holds. */
+/** The caller's shifts and visits with their sales, the newest first; a report lists a visit only for a sale it holds. */
 async function callerShifts(app: AppContext, userId: number, pages: "all" | readonly number[], days: number, now: Date): Promise<CallerShift[]> {
-  // A day more than asked, so a shift that began before the window is whole.
-  const person = (await readPeopleWork(app.db, { from: new Date(now.getTime() - (days + 1) * DAY_MS), to: now, now, pages, userId })).get(userId);
-  if (person === undefined) return [];
   const since = now.getTime() - days * DAY_MS;
+  // Everyone's work and sales around the window (a shift that began before it is whole), settled by sale-rule.ts.
+  const team = await readTeamSales(app.db, { from: new Date(since), to: now, now, pages });
+  const person = team.people.get(userId);
+  if (person === undefined) return [];
   return person.work
     .filter((shift) => shift.endedAt > since)
     .map((shift) => {
@@ -206,6 +201,7 @@ async function callerShifts(app: AppContext, userId: number, pages: "all" | read
       return {
         userId,
         work: shift,
+        sales: reportSalesOf(team, { userId, work: shift }),
         visit: shift.kind === "visit",
         startedAt: new Date(shift.startedAt),
         endedAt: new Date(shift.endedAt),
@@ -216,10 +212,6 @@ async function callerShifts(app: AppContext, userId: number, pages: "all" | read
       };
     })
     .sort((a, b) => b.startedAt.getTime() - a.startedAt.getTime());
-}
-
-async function shiftSales(app: AppContext, shift: CallerShift): Promise<ShiftSale[]> {
-  return salesHeldBy(app.db, { userId: shift.userId, work: shift.work, pageIds: shift.pageIdOf });
 }
 
 function saleOf(sale: ShiftSale, facts: SaleFacts | undefined, marks: readonly ShiftMarkRow[], userId: number, confirmed: boolean): ShiftReportSale {
@@ -261,7 +253,7 @@ export async function readAccountShiftReport(
   const userId = principal.user.id;
   const pages = reportPagesOf(principal);
   const worked = await callerShifts(app, userId, pages, input.days, now);
-  const salesOfWorked = await Promise.all(worked.map((shift) => shiftSales(app, shift)));
+  const salesOfWorked = worked.map((shift) => shift.sales);
   const listed = worked.flatMap((shift, index) => (shift.visit && salesOfWorked[index]!.length === 0 ? [] : [{ shift, sales: salesOfWorked[index]! }]));
   const shifts = listed.map((one) => one.shift);
   const salesByShift = listed.map((one) => one.sales);
@@ -329,7 +321,7 @@ export async function markAccountShiftSale(
   const saleId = Number(body.saleRef);
   let sale: ShiftSale | undefined;
   for (const candidate of await callerShifts(app, userId, pages, SHIFT_REPORT_MAX_DAYS, now)) {
-    sale = (await shiftSales(app, candidate)).find((one) => one.transactionId === saleId);
+    sale = candidate.sales.find((one) => one.transactionId === saleId);
     if (sale !== undefined) break;
   }
   if (sale === undefined) {
@@ -372,7 +364,7 @@ export async function confirmAccountShiftReport(
     .find((one) => one.startedAt.getTime() === startedAt.getTime());
   if (shift === undefined) throw new NotFoundError("The shift was not found");
   if (shift.ongoing) throw new ConflictError("The shift is still going", { reason: "ongoing" });
-  const sales = await shiftSales(app, shift);
+  const { sales } = shift;
   const { recorded, unmarked } = await confirmShiftReport(app.db, {
     userId,
     startedAt: shift.startedAt,
@@ -524,24 +516,22 @@ export async function readTeamShiftExport(
   const disputedOpen = new Set(disputes.filter((dispute) => dispute.resolution === null).map((dispute) => dispute.transactionId)).size;
   const { cells, ownAmounts } = exportCellsOf(credits);
 
+  // Everyone's work and sales around the window's days (a shift of its days is whole and is not taken for one of its
+  // own), settled by sale-rule.ts: the visits holding a sale, and the общак.
+  const team = await readTeamSales(app.db, { from, to, now, pages });
+  const common = team.settled.flatMap(({ sale, home }) => {
+    const day = moscowDayOf(sale.occurredAt.getTime());
+    return home.kind === "common" && day >= input.from && day <= input.to ? [{ sale, source: home.source }] : [];
+  });
+
   // The shifts of the window's days not confirmed yet, or still going, and the visits holding a sale: their credits are not written yet.
-  // A day more on each side, so a shift of the window's days is whole and is not taken for one of its own.
-  const read = { from: new Date(from.getTime() - DAY_MS), to: new Date(Math.min(to.getTime() + DAY_MS, now.getTime())) };
-  const people = await readPeopleWork(app.db, { ...read, now, pages });
   const unconfirmed: TeamShiftExportResponse["unconfirmed"] = [];
-  for (const [userId, person] of people) {
+  for (const [userId, person] of team.people) {
     const ofDays = person.work.filter((shift) => dayOfWork(shift) >= input.from && dayOfWork(shift) <= input.to);
     if (ofDays.length === 0) continue;
     const reports = await listConfirmedReports(app.db, { userId, since: new Date(from.getTime() - DAY_MS) });
-    // A visit's sales (chatter-shifts.ts `salesHeldBy`), read for all of the person's visits at once.
-    const visits = ofDays.filter((shift) => shift.kind === "visit");
-    const sales = visits.length === 0 ? [] : await listShiftSales(app.db, { pageIds: [...person.pageIds.values()], ...read });
-    const inVisits = sales.filter((sale) => visits.some((visit) => workHoldsSale(visit, { pageLabel: sale.pageLabel, at: sale.occurredAt.getTime() })));
-    const writers = inVisits.length === 0 ? new Map<number, number>() : await listSaleLastWriters(app.db, { hours: SALE_LAST_WRITER_HOURS, sales: lastWriterQuery(inVisits) });
-    const visitHoldsSale = (visit: ComputedWork) => inVisits.some((sale) => writers.get(sale.transactionId) === userId
-      && workHoldsSale(visit, { pageLabel: sale.pageLabel, at: sale.occurredAt.getTime() }));
     for (const shift of ofDays) {
-      if (shift.kind === "visit" && !visitHoldsSale(shift)) continue;
+      if (shift.kind === "visit" && reportSalesOf(team, { userId, work: shift }).length === 0) continue;
       if (!shift.ongoing && reports.some((report) => report.startedAt.getTime() < shift.endedAt && report.endedAt.getTime() > shift.startedAt)) continue;
       unconfirmed.push({
         username: person.username, startedAt: new Date(shift.startedAt).toISOString(), endedAt: new Date(shift.endedAt).toISOString(), ongoing: shift.ongoing,
@@ -560,6 +550,13 @@ export async function readTeamShiftExport(
       username: change.username, pageLabel: change.pageLabel, saleRef: String(change.transactionId), occurredAt: change.occurredAt.toISOString(),
       payDay: change.payDay, creditedMills: change.creditedMills, change: change.change, at: change.at.toISOString(),
     })),
+    common: {
+      netMills: common.reduce((sum, one) => sum + one.sale.netMills, 0),
+      sales: common.map(({ sale, source }) => ({
+        saleRef: String(sale.transactionId), occurredAt: sale.occurredAt.toISOString(), pageLabel: sale.pageLabel, platform: sale.platform,
+        fanName: sale.fanName, source, netMills: sale.netMills,
+      })),
+    },
     serverNow: now.toISOString(),
   };
 }

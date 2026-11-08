@@ -245406,6 +245406,72 @@
                         "additionalProperties": false
                       }
                     },
+                    "common": {
+                      "type": "object",
+                      "properties": {
+                        "netMills": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "sales": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "saleRef": {
+                                "type": "string",
+                                "pattern": "^[1-9]\\d{0,29}$"
+                              },
+                              "occurredAt": {
+                                "type": "string"
+                              },
+                              "pageLabel": {
+                                "type": "string"
+                              },
+                              "platform": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 64
+                              },
+                              "fanName": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "source": {
+                                "type": "string",
+                                "enum": [
+                                  "post_tip",
+                                  "campaign"
+                                ]
+                              },
+                              "netMills": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              }
+                            },
+                            "required": [
+                              "saleRef",
+                              "occurredAt",
+                              "pageLabel",
+                              "platform",
+                              "fanName",
+                              "source",
+                              "netMills"
+                            ],
+                            "additionalProperties": false
+                          }
+                        }
+                      },
+                      "required": [
+                        "netMills",
+                        "sales"
+                      ],
+                      "additionalProperties": false
+                    },
                     "serverNow": {
                       "type": "string"
                     }
@@ -245418,6 +245484,7 @@
                     "ownAmounts",
                     "unconfirmed",
                     "lateChanges",
+                    "common",
                     "serverNow"
                   ],
                   "additionalProperties": false
@@ -246064,7 +246131,8 @@
                               "mine",
                               "both",
                               "theirs",
-                              "none"
+                              "none",
+                              "common"
                             ]
                           },
                           "holderName": {
@@ -246197,7 +246265,8 @@
                               "mine",
                               "both",
                               "theirs",
-                              "none"
+                              "none",
+                              "common"
                             ]
                           },
                           "holderName": {
@@ -246330,7 +246399,8 @@
                               "mine",
                               "both",
                               "theirs",
-                              "none"
+                              "none",
+                              "common"
                             ]
                           },
                           "holderName": {
@@ -247118,6 +247188,16 @@
                           "minimum": -9007199254740991,
                           "maximum": 9007199254740991
                         },
+                        "commonNetMills": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "waitingNetMills": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
                         "daily": {
                           "type": "array",
                           "items": {
@@ -247136,12 +247216,24 @@
                                 "type": "integer",
                                 "minimum": -9007199254740991,
                                 "maximum": 9007199254740991
+                              },
+                              "commonNetMills": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "waitingNetMills": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
                               }
                             },
                             "required": [
                               "date",
                               "visitsNetMills",
-                              "nobodyNetMills"
+                              "nobodyNetMills",
+                              "commonNetMills",
+                              "waitingNetMills"
                             ],
                             "additionalProperties": false
                           }
@@ -247163,12 +247255,24 @@
                                 "type": "integer",
                                 "minimum": -9007199254740991,
                                 "maximum": 9007199254740991
+                              },
+                              "commonNetMills": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "waitingNetMills": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
                               }
                             },
                             "required": [
                               "pageLabel",
                               "visitsNetMills",
-                              "nobodyNetMills"
+                              "nobodyNetMills",
+                              "commonNetMills",
+                              "waitingNetMills"
                             ],
                             "additionalProperties": false
                           }
@@ -247209,6 +247313,21 @@
                                   "string",
                                   "null"
                                 ]
+                              },
+                              "home": {
+                                "type": "string",
+                                "enum": [
+                                  "visit",
+                                  "nobody",
+                                  "common",
+                                  "waiting"
+                                ]
+                              },
+                              "waitingFor": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
                               }
                             },
                             "required": [
@@ -247217,7 +247336,9 @@
                               "fanName",
                               "kind",
                               "netMills",
-                              "visitBy"
+                              "visitBy",
+                              "home",
+                              "waitingFor"
                             ],
                             "additionalProperties": false
                           }
@@ -247226,6 +247347,8 @@
                       "required": [
                         "visitsNetMills",
                         "nobodyNetMills",
+                        "commonNetMills",
+                        "waitingNetMills",
                         "daily",
                         "pages",
                         "sales"

@@ -1,38 +1,39 @@
-import type { TeamShiftSalesQuery, TeamShiftSalesResponse } from "@agency_hub_core/contracts";
-import { listFirstChatterActivities, listSaleLastWriters, listShiftSales, type ShiftSale } from "@agency_hub_core/db";
+import type { OUTSIDE_SALE_HOMES, TeamShiftSalesQuery, TeamShiftSalesResponse } from "@agency_hub_core/contracts";
+import { listFirstChatterActivities, type ShiftSale } from "@agency_hub_core/db";
 import { addUtcDays, startOfBusinessDay } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
 import { requireDashboardUser, type AuthPrincipal } from "./auth.ts";
 import {
-  SALE_LAST_WRITER_HOURS,
   dayOfWork,
-  lastWriterQuery,
   middleOfWork,
   moscowDayOf,
-  readPeopleWork,
   teamReadPages,
   teamShiftOf,
   workHoldsSale,
   type ComputedWork,
 } from "./chatter-shifts.ts";
-import { perHour, saleKindOf, settleSale } from "./chatter-stats.ts";
+import { perHour, saleKindOf } from "./chatter-stats.ts";
+import { homesOfSales, moneyOfPieces, readTeamSales, type SettledHome } from "./sale-rule.ts";
 
 /**
  * «Команда → Смены» (`teamShiftSales`): every chatter's shifts of the window
  * with their money, in one read for the whole team, and the window of the same
  * length before it. Contract: packages/contracts chatter-stats.ts.
  *
- * The shifts and whose a sale is are the chatter statistics' (chatter-stats.ts),
- * for everyone at once, so a chatter's row here is the money of their own
- * screen: a sale two chatters' shifts hold is the one's who last wrote to its
- * fan; neither wrote — it counts for both (`overlapNetMills`). The team's own
- * totals count every sale once. Database only and read-only; a guide, not a
- * basis for pay.
+ * The shifts are the chatter statistics' (chatter-stats.ts) and whose a sale is
+ * sale-rule.ts's, for everyone at once, so a chatter's row here is the money of
+ * their own screen: a sale two chatters' shifts hold is the one's who last wrote
+ * to its fan; neither wrote — it counts for both (`overlapNetMills`); from
+ * SALE_RULE_SINCE_DAY a chatter's PPV is its sender's, in the shift it came in or
+ * their next one, and a post tip or a Campaign contribution the общак. The
+ * team's own totals count every sale once. Database only and read-only; a
+ * guide, not a basis for pay.
  *
- * The window's sales no shift holds are listed apart (`outside`), never in the
- * money above: a look-in's when its person last wrote to the fan, the rest
- * nobody's. Shifts, look-ins and nobody add up to every sale of the pages.
+ * The window's sales in no shift's money are listed apart (`outside`), never in
+ * the money above: a look-in's when its person last wrote to the fan, the
+ * общак, a chatter's PPV waiting for their next shift, the rest nobody's.
+ * Shifts and these add up to every sale of the pages.
  */
 
 const DAY_MS = 86_400_000;
@@ -47,6 +48,8 @@ export interface HeldShift {
   /** The sales the shift holds (`workHoldsSale`), oldest first. */
   held: readonly ShiftSale[];
 }
+
+type OutsideHome = (typeof OUTSIDE_SALE_HOMES)[number];
 
 /** The index of the first sale at `at` or later, in sales sorted by time. Pure. */
 function firstAtOrAfter(sales: readonly ShiftSale[], at: number): number {
@@ -72,88 +75,49 @@ export function salesOfWork(work: ComputedWork, sales: readonly ShiftSale[]): Sh
   return held;
 }
 
-/** Who holds each sale: the people whose shifts do. Pure. */
-function holdersOf(shifts: readonly HeldShift[]): Map<number, Set<number>> {
-  const holders = new Map<number, Set<number>>();
-  for (const shift of shifts) {
-    for (const sale of shift.held) {
-      const known = holders.get(sale.transactionId) ?? new Set<number>();
-      known.add(shift.userId);
-      holders.set(sale.transactionId, known);
-    }
-  }
-  return holders;
-}
-
-/** The sales two people's shifts hold: whose they are needs who last wrote to the fan. Pure. */
-export function contestedSales(shifts: readonly HeldShift[]): ShiftSale[] {
-  const holders = holdersOf(shifts);
-  const seen = new Set<number>();
-  const out: ShiftSale[] = [];
-  for (const shift of shifts) {
-    for (const sale of shift.held) {
-      if ((holders.get(sale.transactionId)?.size ?? 0) < 2 || seen.has(sale.transactionId)) continue;
-      seen.add(sale.transactionId);
-      out.push(sale);
-    }
-  }
-  return out;
-}
-
 const netOf = (sales: readonly ShiftSale[]) => sales.reduce((sum, sale) => sum + sale.netMills, 0);
 
-export interface PersonPiece {
-  userId: number;
-  username: string;
-  work: ComputedWork;
+export interface OutsideSale {
+  sale: ShiftSale;
+  home: OutsideHome;
+  /** `visit` — the look-in's person; `waiting` — the chatter whose PPV it is. */
+  who: string | null;
 }
 
-/** The sales of [from, to) no shift holds, oldest first: `shifts` — everyone's, with what each holds. Pure. */
-export function salesNoShiftHolds(input: { from: number; to: number; sales: readonly ShiftSale[]; shifts: readonly HeldShift[] }): ShiftSale[] {
-  const held = new Set(input.shifts.flatMap((shift) => shift.held.map((sale) => sale.transactionId)));
-  return input.sales.filter((sale) => sale.occurredAt.getTime() >= input.from && sale.occurredAt.getTime() < input.to && !held.has(sale.transactionId));
-}
-
-/** The look-ins whose pages and time hold the sale (`workHoldsSale`); it is theirs only if its person last wrote to the fan. Pure. */
-export function visitsAround(visits: readonly PersonPiece[], sale: ShiftSale): PersonPiece[] {
-  return visits.filter((visit) => workHoldsSale(visit.work, { pageLabel: sale.pageLabel, at: sale.occurredAt.getTime() }));
-}
-
-/**
- * Where a sale no shift holds went: to a look-in whose person was the last to
- * write to the fan (as a visit's sales, `salesHeldBy`; of several, the
- * earliest), or nobody. `lastWriters` — of the sales a look-in is around. Pure.
- */
-export function settleOutsideShifts(
-  sales: readonly ShiftSale[],
-  visits: readonly PersonPiece[],
-  lastWriters: ReadonlyMap<number, number>,
-): Array<{ sale: ShiftSale; visit: PersonPiece | null }> {
-  return sales.map((sale) => ({
-    sale,
-    visit: visitsAround(visits, sale).find((visit) => lastWriters.get(sale.transactionId) === visit.userId) ?? null,
-  }));
+/** The sales of [from, to) in no shift's money, oldest first, and where each went (sale-rule.ts). Pure. */
+export function salesOutsideShifts(settled: readonly SettledHome[], window: { from: number; to: number }): OutsideSale[] {
+  return settled.flatMap(({ sale, home }): OutsideSale[] => {
+    const at = sale.occurredAt.getTime();
+    if (at < window.from || at >= window.to) return [];
+    if (home.kind === "pieces") return home.pieces[0]!.work.kind === "visit" ? [{ sale, home: "visit", who: home.pieces[0]!.username }] : [];
+    if (home.kind === "common") return [{ sale, home: "common", who: null }];
+    if (home.kind === "waiting") return [{ sale, home: "waiting", who: home.username }];
+    return [{ sale, home: "nobody", who: null }];
+  });
 }
 
 /** The window's money outside shifts, by Moscow day of the sale and by page, and each sale. Pure. */
-export function outsideMoney(settled: ReadonlyArray<{ sale: ShiftSale; visit: PersonPiece | null }>, dates: readonly string[]): TeamShiftSalesResponse["outside"] {
-  const of = (list: typeof settled) => ({
-    visitsNetMills: netOf(list.filter((one) => one.visit !== null).map((one) => one.sale)),
-    nobodyNetMills: netOf(list.filter((one) => one.visit === null).map((one) => one.sale)),
-  });
-  const labels = [...new Set(settled.map((one) => one.sale.pageLabel))];
+export function outsideMoney(outside: readonly OutsideSale[], dates: readonly string[]): TeamShiftSalesResponse["outside"] {
+  const of = (list: readonly OutsideSale[]) => {
+    const sum = (home: OutsideHome) => netOf(list.filter((one) => one.home === home).map((one) => one.sale));
+    return { visitsNetMills: sum("visit"), nobodyNetMills: sum("nobody"), commonNetMills: sum("common"), waitingNetMills: sum("waiting") };
+  };
+  const total = (money: ReturnType<typeof of>) => money.visitsNetMills + money.nobodyNetMills + money.commonNetMills + money.waitingNetMills;
+  const labels = [...new Set(outside.map((one) => one.sale.pageLabel))];
   return {
-    ...of(settled),
-    daily: dates.map((date) => ({ date, ...of(settled.filter((one) => moscowDayOf(one.sale.occurredAt.getTime()) === date)) })),
-    pages: labels.map((pageLabel) => ({ pageLabel, ...of(settled.filter((one) => one.sale.pageLabel === pageLabel)) }))
-      .sort((a, b) => b.visitsNetMills + b.nobodyNetMills - (a.visitsNetMills + a.nobodyNetMills) || a.pageLabel.localeCompare(b.pageLabel)),
-    sales: settled.map((one) => ({
+    ...of(outside),
+    daily: dates.map((date) => ({ date, ...of(outside.filter((one) => moscowDayOf(one.sale.occurredAt.getTime()) === date)) })),
+    pages: labels.map((pageLabel) => ({ pageLabel, ...of(outside.filter((one) => one.sale.pageLabel === pageLabel)) }))
+      .sort((a, b) => total(b) - total(a) || a.pageLabel.localeCompare(b.pageLabel)),
+    sales: outside.map((one) => ({
       at: one.sale.occurredAt.toISOString(),
       pageLabel: one.sale.pageLabel,
       fanName: one.sale.fanName,
       kind: saleKindOf(one.sale.kind),
       netMills: one.sale.netMills,
-      visitBy: one.visit?.username ?? null,
+      visitBy: one.home === "visit" ? one.who : null,
+      home: one.home,
+      waitingFor: one.home === "waiting" ? one.who : null,
     })),
   };
 }
@@ -185,7 +149,9 @@ export function shiftSalesWindow(input: { days: number; now: Date; until?: strin
  * The team's money from its shifts in the window (`shiftSalesWindow`) and the one
  * before. `shifts` — everyone's shifts read since a day before the window before,
  * any order; `lastWriters` — who last wrote to the fan of each contested sale;
- * `firstActivity` — everyone's first minute Hub has. Pure.
+ * `firstActivity` — everyone's first minute Hub has; `settled` — every sale read
+ * with its home (sale-rule.ts `readTeamSales`, its pieces' works those of
+ * `shifts`); without it, the sales the shifts hold by the old rule. Pure.
  */
 export function teamShiftMoney(input: {
   days: number;
@@ -194,15 +160,21 @@ export function teamShiftMoney(input: {
   shifts: readonly HeldShift[];
   lastWriters: ReadonlyMap<number, number>;
   firstActivity: ReadonlyMap<number, Date>;
+  settled?: readonly SettledHome[];
 }): Omit<TeamShiftSalesResponse, "serverNow" | "outside"> {
   const window = shiftSalesWindow(input);
   const { previousFrom, previousTo, dates } = window;
-  const holders = holdersOf(input.shifts);
-  const settled = (userId: number, sale: ShiftSale) => settleSale(
-    userId,
-    [...(holders.get(sale.transactionId) ?? [])].filter((other) => other !== userId),
-    input.lastWriters.get(sale.transactionId) ?? null,
-  );
+  const settled = input.settled ?? homesOfSales({
+    sales: [...new Map(input.shifts.flatMap((shift) => shift.held).map((sale) => [sale.transactionId, sale])).values()]
+      .sort((a, b) => a.occurredAt.getTime() - b.occurredAt.getTime() || a.transactionId - b.transactionId),
+    shifts: input.shifts,
+    visits: [],
+    lastWriters: input.lastWriters,
+    facts: new Map(),
+    now: input.now.getTime(),
+  });
+  const moneyOf = moneyOfPieces(settled);
+  const overlap = new Set(settled.flatMap(({ sale, home }) => (home.kind === "pieces" && home.pieces.length > 1 ? [sale.transactionId] : [])));
   // As the chatter's own screen: their first shift began before Hub heard of them, so its start dates it.
   const dayOf = (userId: number, work: ComputedWork) => {
     const first = input.firstActivity.get(userId);
@@ -215,14 +187,14 @@ export function teamShiftMoney(input: {
     .filter((shift) => inWindow(shift.work) || inPrevious(shift.work))
     .sort((a, b) => a.work.startedAt - b.work.startedAt || a.userId - b.userId)
     .map((shift) => {
-      const own = shift.held.filter((sale) => settled(shift.userId, sale) !== "theirs");
+      const own = moneyOf.get(shift.work) ?? [];
       return {
         ...shift,
         current: inWindow(shift.work),
         date: dayOf(shift.userId, shift.work),
         own,
         salesNetMills: netOf(own),
-        overlapNetMills: netOf(own.filter((sale) => settled(shift.userId, sale) === "both")),
+        overlapNetMills: netOf(own.filter((sale) => overlap.has(sale.transactionId))),
       };
     });
   type Money = (typeof money)[number];
@@ -301,31 +273,20 @@ export async function readTeamShiftSales(
   const { days, until } = input.query;
   const pages = await teamReadPages(app, principal, { pageLabel: input.query.pageLabel, pageScope: input.pageScope });
   const window = shiftSalesWindow({ days, now, until });
-  // A day on each side, so a shift the window's edge cuts is whole.
-  const readFrom = new Date(window.previousFrom - DAY_MS);
-  const readTo = new Date(Math.min(now.getTime(), window.to + DAY_MS));
 
-  const [people, firstActivity] = await Promise.all([
-    readPeopleWork(app.db, { from: readFrom, to: readTo, now, pages }),
+  // Everyone's work and every sale of the pages around both windows (a shift the windows' edge cuts is whole), each
+  // sale settled (sale-rule.ts).
+  const [team, firstActivity] = await Promise.all([
+    readTeamSales(app.db, { from: new Date(window.previousFrom), to: new Date(window.to), now, pages }),
     listFirstChatterActivities(app.db),
   ]);
-  const pieces = (kind: ComputedWork["kind"]) => [...people].flatMap(([userId, person]) => person.work
-    .filter((work) => work.kind === kind)
-    .map((work) => ({ userId, username: person.username, work })));
-  const shifts = pieces("shift");
-  const visits = pieces("visit");
-  const pageIds = pages === "all" ? [...new Set([...people.values()].flatMap((person) => [...person.pageIds.values()]))] : pages;
-  const sales = shifts.length + visits.length === 0 ? [] : await listShiftSales(app.db, { pageIds, from: readFrom, to: readTo });
-  const held = shifts.map((shift) => ({ ...shift, held: salesOfWork(shift.work, sales) }));
-  // The window's sales no shift holds: a look-in's when its person last wrote to the fan, else nobody's.
-  const outside = salesNoShiftHolds({ from: window.from, to: window.to, sales, shifts: held });
-  const lastWriters = await listSaleLastWriters(app.db, {
-    hours: SALE_LAST_WRITER_HOURS,
-    sales: lastWriterQuery([...contestedSales(held), ...outside.filter((sale) => visitsAround(visits, sale).length > 0)]),
-  });
+  const sales = team.settled.map((one) => one.sale);
+  const held = team.shifts.map((shift) => ({ ...shift, held: salesOfWork(shift.work, sales) }));
+  // Without anyone's work around the windows Hub knows nothing of their shifts: no sale of them is outside one.
+  const seen = [...team.shifts, ...team.visits].some((one) => one.work.endedAt > window.previousFrom - DAY_MS && one.work.startedAt < window.to + DAY_MS);
   return {
-    ...teamShiftMoney({ days, now, until, shifts: held, lastWriters, firstActivity }),
-    outside: outsideMoney(settleOutsideShifts(outside, visits, lastWriters), window.dates),
+    ...teamShiftMoney({ days, now, until, shifts: held, lastWriters: team.lastWriters, firstActivity, settled: team.settled }),
+    outside: outsideMoney(seen ? salesOutsideShifts(team.settled, window) : [], window.dates),
     serverNow: now.toISOString(),
   };
 }

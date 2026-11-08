@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { ShiftSale } from "@agency_hub_core/db";
 import type { ComputedWork } from "../apps/runtime/src/services/chatter-shifts.ts";
 import { saleOriginOf } from "../apps/runtime/src/services/chatter-stats.ts";
+import { homesOfSales, type Piece, type SaleRuleFacts } from "../apps/runtime/src/services/sale-rule.ts";
 import { heldNetMills, pagesWithAllFans, settleShiftSales } from "../apps/runtime/src/services/shift-review.ts";
 import { salesOfWork, teamShiftMoney } from "../apps/runtime/src/services/team-shift-sales.ts";
 
@@ -20,6 +21,13 @@ function work(startedAt: string, endedAt: string, page = "ari-1", salesFrom = st
     kind: "shift", startedAt: start, endedAt: end, ongoing: false, workedMinutes: Math.round((end - start) / 60_000), pauses: [], lastInputAt: end, lastBeatAt: end,
     pages: new Map([[page, 60]]), messages: new Map([[page, 60]]), salesSince: new Map([[page, Date.parse(salesFrom)]]),
   };
+}
+
+const NOW = Date.parse("2026-11-04T12:00:00Z");
+
+/** Every sale's home among these pieces (sale-rule.ts), as the review reads them. */
+function homesOf(sales: readonly ShiftSale[], shifts: readonly Piece[], lastWriters: ReadonlyMap<number, number>, visits: readonly Piece[] = [], facts = new Map<number, SaleRuleFacts>()) {
+  return new Map(homesOfSales({ sales, shifts, visits, lastWriters, facts, now: NOW }).map((one) => [one.sale.transactionId, one.home]));
 }
 
 let nextId = 1;
@@ -46,9 +54,9 @@ describe("settleShiftSales", () => {
   const sales = [before, nikitaWrote, nobodyWrote, iWrote, onLora, alone];
   // I took ari-1 over at 21:10: the sale at 21:05 is not mine. lora-1 is not my page at all.
   const shift = { ...mine, salesSince: new Map([["ari-1", Date.parse("2026-11-02T21:10:00Z")]]) };
-  const held = new Set(salesOfWork(shift, sales).map((one) => one.transactionId));
   const lastWriters = new Map([[nikitaWrote.transactionId, NIKITA], [iWrote.transactionId, ME]]);
-  const settled = settleShiftSales({ userId: ME, kind: "shift", sales, held, colleagues, lastWriters });
+  const homes = homesOf(sales, [{ userId: ME, username: "me", work: shift }, ...colleagues], lastWriters);
+  const settled = settleShiftSales({ work: shift, sales, homes, lastWriters });
   const of = (one: ShiftSale) => settled.find((row) => row.sale.transactionId === one.transactionId)!;
 
   it("gives a sale both shifts hold to the one who last wrote, and to both when neither did", () => {
@@ -61,7 +69,8 @@ describe("settleShiftSales", () => {
   it("names whose shift holds a sale this one does not, or nobody", () => {
     expect(of(onLora)).toMatchObject({ held: false, verdict: "theirs", holder: "Sofia" });
     expect(of(before)).toMatchObject({ held: false, verdict: "theirs", holder: "Nikita" });
-    const night = settleShiftSales({ userId: ME, kind: "shift", sales: [before], held: new Set(), colleagues: [], lastWriters: new Map() });
+    const alone = homesOf([before], [{ userId: ME, username: "me", work: shift }], new Map());
+    const night = settleShiftSales({ work: shift, sales: [before], homes: alone, lastWriters: new Map() });
     expect(night[0]).toMatchObject({ held: false, verdict: "none", holder: null });
   });
 
@@ -82,8 +91,26 @@ describe("settleShiftSales", () => {
   });
 
   it("leaves a look-in its own sales", () => {
-    const visit = settleShiftSales({ userId: ME, kind: "visit", sales: [nikitaWrote], held: new Set([nikitaWrote.transactionId]), colleagues, lastWriters });
+    const look = { ...work("2026-11-03T08:00:00Z", "2026-11-03T09:00:00Z"), kind: "visit" as const };
+    const tip = sale("2026-11-03T08:30:00Z", 9_000);
+    const writers = new Map([[tip.transactionId, ME]]);
+    const visit = settleShiftSales({ work: look, sales: [tip], homes: homesOf([tip], [], writers, [{ userId: ME, username: "me", work: look }]), lastWriters: writers });
     expect(visit[0]).toMatchObject({ held: true, verdict: "mine" });
+  });
+
+  // The owner, 2026-11-08: from 02.11 a PPV is its sender's, a tip under a post the общак.
+  it("gives a colleague's PPV to its sender and keeps the общак out of the header", () => {
+    const ppv = sale("2026-11-03T02:30:00Z", 31_200);
+    const postTip = { ...sale("2026-11-03T03:00:00Z", 40_000), kind: "tip" };
+    const facts = new Map<number, SaleRuleFacts>([
+      [ppv.transactionId, { ppvSender: { userId: SOFIA, username: "Sofia" }, common: null }],
+      [postTip.transactionId, { ppvSender: null, common: "post_tip" }],
+    ]);
+    const list = [ppv, postTip];
+    const ruled = settleShiftSales({ work: shift, sales: list, homes: homesOf(list, [{ userId: ME, username: "me", work: shift }, ...colleagues], new Map(), [], facts), lastWriters: new Map() });
+    expect(ruled[0]).toMatchObject({ held: true, verdict: "theirs", holder: "Sofia" });
+    expect(ruled[1]).toMatchObject({ held: true, verdict: "common", holder: null });
+    expect(heldNetMills(ruled)).toBe(0);
   });
 });
 

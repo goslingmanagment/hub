@@ -14,8 +14,6 @@ import {
   listConfirmedShiftCredits,
   listPpvFacts,
   listReplyDelayCounts,
-  listSaleLastWriters,
-  listShiftSales,
   listUserPageAssignments,
   type AuthoredSendRow,
   type Database,
@@ -26,18 +24,11 @@ import { addUtcDays, startOfBusinessDay } from "@agency_hub_core/shared";
 import type { AppContext } from "../bootstrap.ts";
 import { requireDashboardUser, requireSessionUser, type AuthPrincipal } from "./auth.ts";
 import { revenueOfShifts } from "./chatter-numbers.ts";
-import {
-  SALE_LAST_WRITER_HOURS,
-  dayOfWork,
-  lastWriterQuery,
-  middleOfWork,
-  moscowDayOf,
-  readPeopleWork,
-  workHoldsSale,
-  type ComputedWork,
-  type PersonWork,
-} from "./chatter-shifts.ts";
+import { dayOfWork, middleOfWork, moscowDayOf, type ComputedWork } from "./chatter-shifts.ts";
+import { readTeamSales, reportSalesOf } from "./sale-rule.ts";
 import { DELAY_BOUNDS, byDelayOf, byPriceOf } from "./team-sales.ts";
+
+export { settleSale } from "./sale-rule.ts";
 
 /**
  * A chatter's statistics: the cabinet's «Статистика» (`accountChatterStats`,
@@ -48,12 +39,13 @@ import { DELAY_BOUNDS, byDelayOf, byPriceOf } from "./team-sales.ts";
  * on the pages the chatter works now. The money here is the shifts': a visit
  * is listed apart.
  *
- * A SALE TWO SHIFTS HOLD (two chatters on a page, as at a handover) is the money
- * of who last wrote to its fan on that page (`settleSale`). Neither wrote: it
- * counts for both and is marked (`overlap`, `together`), Hub does not split it.
- * Checked against the payout sheet for the first week: of $2,131 two shifts held,
- * $96 stayed with both, and the sheet's cells came closer. A visit's sales are
- * chatter-shifts.ts's (`salesHeldBy`), here read for all of them at once.
+ * WHOSE A SALE IS — sale-rule.ts, as «Заработок» settles it. A sale two shifts
+ * hold (two chatters on a page, as at a handover) is the money of who last wrote
+ * to its fan on that page (`settleSale`). Neither wrote: it counts for both and is
+ * marked (`overlap`, `together`), Hub does not split it. Checked against the
+ * payout sheet for the first week: of $2,131 two shifts held, $96 stayed with
+ * both, and the sheet's cells came closer. From SALE_RULE_SINCE_DAY a chatter's
+ * PPV is its sender's and a post tip or a Campaign contribution the общак.
  *
  * A guide, not a basis for pay — what a sale pays whom is the confirmed shift
  * report's (services/shift-report.ts), shown beside it.
@@ -85,16 +77,6 @@ function push<K, V>(map: Map<K, V[]>, key: K, value: V) {
   const known = map.get(key);
   if (known === undefined) map.set(key, [value]);
   else known.push(value);
-}
-
-/**
- * Whose a sale of the chatter's shift is, by who else's shifts hold it and who
- * last wrote to its fan (null — nobody we know of): the chatter's, a colleague's,
- * or both of theirs. Pure.
- */
-export function settleSale(userId: number, others: readonly number[], lastWriter: number | null): "mine" | "theirs" | "both" {
-  if (others.length === 0 || lastWriter === userId) return "mine";
-  return lastWriter !== null && others.includes(lastWriter) ? "theirs" : "both";
 }
 
 /**
@@ -188,7 +170,6 @@ function fansOf(shift: { endedAt: number }, sends: readonly AuthoredSendRow[], s
 }
 
 const netOf = (sales: readonly ShiftSale[]) => sales.reduce((sum, sale) => sum + sale.netMills, 0);
-const holds = (work: ComputedWork, sale: ShiftSale) => workHoldsSale(work, { pageLabel: sale.pageLabel, at: sale.occurredAt.getTime() });
 
 export async function computeChatterStats(
   db: Database,
@@ -203,18 +184,15 @@ export async function computeChatterStats(
   // A day more, so a shift of the window's first day that began the evening before is whole.
   const readFrom = new Date(previousFrom.getTime() - DAY_MS);
 
-  const [activitySince, people] = await Promise.all([
+  // Everyone's work and sales on the chatter's pages, settled as «Заработок» (sale-rule.ts), the chatter's own pieces among them.
+  const [activitySince, team] = await Promise.all([
     findFirstChatterActivity(db, userId),
-    readPeopleWork(db, { from: readFrom, to: now, now, pages: pageIds, userId }),
+    readTeamSales(db, { from: readFrom, to: now, now, pages: pageIds }),
   ]);
-  const work = (people.get(userId)?.work ?? []).filter((one) => middleOfWork(one) >= previousFrom.getTime());
-  const sales = work.length === 0 ? [] : await listShiftSales(db, { pageIds, from: readFrom, to: now });
-  const held = work.map((one) => ({ work: one, sales: sales.filter((sale) => holds(one, sale)) }));
-  const heldSales = held.flatMap((one) => one.sales);
+  const work = (team.people.get(userId)?.work ?? []).filter((one) => middleOfWork(one) >= previousFrom.getTime());
+  const sales = team.settled.map((one) => one.sale);
 
-  const [team, sendsRead, ppvRows, replyRows, reports] = await Promise.all([
-    // Whose shifts hold these sales too.
-    heldSales.length === 0 ? Promise.resolve(new Map<number, PersonWork>()) : readPeopleWork(db, { from: readFrom, to: now, now, pages: pageIds }),
+  const [sendsRead, ppvRows, replyRows, reports] = await Promise.all([
     listAuthoredSends(db, { userId, pageIds, from: new Date(from.getTime() - DAY_MS), to: now }),
     listPpvFacts(db, { from, to: now, pages: pageIds, burstMinFans: MASS_SEND_MIN_CHATS }),
     repliesTo <= from
@@ -222,27 +200,17 @@ export async function computeChatterStats(
       : listReplyDelayCounts(db, { from, to: repliesTo, pages: pageIds, burstMinFans: MASS_SEND_MIN_CHATS, delayBounds: DELAY_BOUNDS }),
     listConfirmedShiftCredits(db, { userId, since: new Date(from.getTime() - DAY_MS), pageIds }),
   ]);
-  const othersOf = new Map<number, number[]>();
-  const usernames = new Map<number, string>();
-  for (const [otherId, other] of team) {
-    if (otherId === userId) continue;
-    usernames.set(otherId, other.username);
-    const shifts = other.work.filter((one) => one.kind === "shift");
-    for (const sale of heldSales) if (shifts.some((one) => holds(one, sale))) push(othersOf, sale.transactionId, otherId);
-  }
-  const visitSales = new Set(held.filter((one) => one.work.kind === "visit").flatMap((one) => one.sales.map((sale) => sale.transactionId)));
-  const lastWriters = await listSaleLastWriters(db, {
-    hours: SALE_LAST_WRITER_HOURS,
-    sales: lastWriterQuery(heldSales.filter((sale) => othersOf.has(sale.transactionId) || visitSales.has(sale.transactionId))),
-  });
-  const settled = (sale: ShiftSale) => settleSale(userId, othersOf.get(sale.transactionId) ?? [], lastWriters.get(sale.transactionId) ?? null);
+  // The other people a sale counts for too: two shifts held it and neither person last wrote to the fan.
+  const alsoFor = (sale: ShiftSale): string[] => {
+    const home = team.homeOf.get(sale.transactionId);
+    return home?.kind === "pieces" ? home.pieces.filter((piece) => piece.userId !== userId).map((piece) => piece.username) : [];
+  };
 
   // The chatter's first shift Hub has began before Hub heard of them, so most of what Hub saw says nothing of its day.
   const dayOfShift = (shift: ComputedWork) => (activitySince !== null && shift.startedAt - activitySince.getTime() < HOUR_MS ? moscowDayOf(shift.startedAt) : dayOfWork(shift));
-  const withSales = held.map((one) => ({
-    work: one.work,
-    sales: one.sales.filter((sale) => (one.work.kind === "shift" ? settled(sale) !== "theirs" : lastWriters.get(sale.transactionId) === userId)),
-  }));
+  // Each shift's money by the rule: its held sales less a colleague's, plus the chatter's PPVs it brings in; a look-in's
+  // sales as its report lists them.
+  const withSales = work.map((one) => ({ work: one, sales: one.kind === "shift" ? team.moneyOf(one) : reportSalesOf(team, { userId, work: one }) }));
   const inWindow = (one: { work: ComputedWork }) => middleOfWork(one.work) >= from.getTime();
   const counted = withSales.filter((one) => one.work.kind === "shift");
   const current = counted.filter(inWindow);
@@ -251,7 +219,8 @@ export async function computeChatterStats(
   const currentSales = current.flatMap((one) => one.sales);
   const together = new Map<number, string[]>();
   for (const sale of currentSales) {
-    if (settled(sale) === "both") together.set(sale.transactionId, othersOf.get(sale.transactionId)!.map((otherId) => usernames.get(otherId)!));
+    const others = alsoFor(sale);
+    if (others.length > 0) together.set(sale.transactionId, others);
   }
   const sends = sendsRead.filter((send) => send.at >= from);
   const salesByFan = new Map<string, ShiftSale[]>();

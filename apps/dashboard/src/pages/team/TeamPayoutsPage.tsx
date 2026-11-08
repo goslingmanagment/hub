@@ -2,7 +2,13 @@ import { useMemo, useState, type ReactNode } from "react";
 import { useLocation, useSearchParams } from "react-router";
 import { ChevronRight } from "lucide-react";
 import { toast } from "sonner";
-import { SHIFT_REPORT_EXPORT_MAX_DAYS, SHIFT_REPORT_MAX_DAYS, type TeamShiftDisputesResponse, type TeamShiftExportResponse } from "@agency_hub_core/contracts";
+import {
+  SALE_RULE_SINCE_DAY,
+  SHIFT_REPORT_EXPORT_MAX_DAYS,
+  SHIFT_REPORT_MAX_DAYS,
+  type TeamShiftDisputesResponse,
+  type TeamShiftExportResponse,
+} from "@agency_hub_core/contracts";
 import { sumMills } from "@agency_hub_core/shared";
 import { useAuthMe } from "@/api/queries";
 import { KernelApiError } from "@/api/sdk";
@@ -16,7 +22,7 @@ import { Notice } from "@/components/ui/Notice";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Segmented } from "@/components/ui/Segmented";
 import { StatusBadge } from "@/components/ui/StatusBadge";
-import { formatDateTime, formatDayRange, formatMills } from "@/lib/format";
+import { formatDateTime, formatDay, formatDayRange, formatMills } from "@/lib/format";
 import { ruPlural } from "@/lib/plural";
 import { TEAM_STATUS } from "@/lib/statusWords";
 import { useScrollToAnchor } from "@/lib/useScrollToAnchor";
@@ -380,6 +386,54 @@ function OwnAmounts({ data }: { data: TeamShiftExportResponse }) {
   );
 }
 
+const COMMON_SOURCES: Readonly<Record<string, string>> = { post_tip: "чаевые под постом", campaign: "взнос в Campaign" };
+
+/** The общак of the window's days: one line of its own, never a chatter's row nor the sheet's copy. */
+function CommonLine({ data }: { data: TeamShiftExportResponse }) {
+  const { common } = data;
+  if (data.to < SALE_RULE_SINCE_DAY) return null;
+  return (
+    <>
+      <div className="team-card-inner payout-common">
+        <span className="payout-common-label">Общак</span>
+        <span className="payout-common-money">{formatMills(common.netMills)}</span>
+        <span className="team-muted">
+          чаевые под постами и взносы в OnlyFans Campaign за эти дни (с {formatDay(SALE_RULE_SINCE_DAY)}) — ни в чью смену, в копию для таблицы не входят
+        </span>
+      </div>
+      {common.sales.length > 0 && (
+        <details className="help team-card-fold">
+          <summary>Из чего общак ({common.sales.length})</summary>
+          <div className="table-wrap">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th scope="col">Когда</th>
+                  <th scope="col">Страница</th>
+                  <th scope="col">Фан</th>
+                  <th scope="col">Что</th>
+                  <th scope="col" className="num">Сумма</th>
+                </tr>
+              </thead>
+              <tbody>
+                {common.sales.map((sale) => (
+                  <tr key={sale.saleRef}>
+                    <td className="whitespace-nowrap">{formatDateTime(sale.occurredAt)}</td>
+                    <td><PageLink label={sale.pageLabel} /></td>
+                    <td>{sale.fanName ?? "—"}</td>
+                    <td>{COMMON_SOURCES[sale.source] ?? sale.source}</td>
+                    <td className="num">{formatMills(sale.netMills)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </details>
+      )}
+    </>
+  );
+}
+
 function LateChanges({ data }: { data: TeamShiftExportResponse }) {
   const count = data.lateChanges.length;
   if (count === 0) return null;
@@ -473,6 +527,7 @@ function ExportCard({ from, to, query, problem }: {
             </div>
           )
           : <SheetTable data={data} days={current ? days : daysOf(data.from, data.to)} />}
+        <CommonLine data={data} />
         <OwnAmounts data={data} />
         <LateChanges data={data} />
       </div>
@@ -587,6 +642,11 @@ export function TeamPayoutsPage() {
           записывается один раз, когда он подтверждает смену, — на день его смены (тот, на который пришлась большая её часть,
           как в таблице выплат), и потом не переезжает; «делим» — пополам, на день первого подтверждения; решение спора
           заменяет прежние суммы продажи.
+        </p>
+        <p>
+          С {formatDay(SALE_RULE_SINCE_DAY)} купленный PPV — того, кто его отправил («долёт отправителю»): он попадает в отчёт
+          его смены, а не того, в чью смену его купили. Чаевые под постами и взносы в OnlyFans Campaign — общак: ни в чей
+          отчёт, отдельной строкой «Общак». Разовую договорённость (например, 50/50 одной продажи) чаттер вписывает своей суммой.
         </p>
         <p>Показаны споры за {TEAM_SHIFT_DISPUTE_DAYS} день. Утренний отчёт в Telegram считает все нерешённые.</p>
         <p>Выгрузка всегда по всем страницам: фильтр страницы и выбор одного чаттера её не меняют.</p>

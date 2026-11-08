@@ -5,6 +5,8 @@ import {
   CHATTER_SHIFT_MIN_WORKED_MINUTES,
   CHATTER_SHIFT_PAGE_MIN_MESSAGES,
   CHATTER_SHIFTS_MAX_WINDOW_DAYS,
+  SALE_RULE_SINCE_DAY,
+  SALE_RULE_WAIT_DAYS,
   type KernelOperationResponse,
   type TeamShift,
 } from "@agency_hub_core/contracts";
@@ -118,7 +120,7 @@ function TeamStatsOf({ data, mode }: { data: Data; mode: Mode }) {
   const { team, previous } = data;
   const { versusShort: versus, waiting } = useVersus(data, mode);
   const ongoing = data.shifts.filter((shift) => shift.ongoing);
-  const outside = data.outside.visitsNetMills + data.outside.nobodyNetMills;
+  const outside = outsideNetMills(data.outside);
   const compare = (current: number | null, before: number | null | undefined): ReactNode =>
     previous === null ? (waiting ? "Сравнения пока нет" : undefined) : <Delta value={change(current ?? 0, before)} label={versus} />;
   return (
@@ -148,13 +150,22 @@ function TeamStatsOf({ data, mode }: { data: Data; mode: Mode }) {
   );
 }
 
-/** What «вне смен» holds: in look-ins, nobody's, by page. */
+type OutsideMoney = Pick<Data["outside"], "visitsNetMills" | "nobodyNetMills" | "commonNetMills" | "waitingNetMills">;
+
+/** Everything «вне смен» holds. */
+function outsideNetMills(money: OutsideMoney): number {
+  return money.visitsNetMills + money.nobodyNetMills + money.commonNetMills + money.waitingNetMills;
+}
+
+/** What «вне смен» holds: in look-ins, the общак, PPVs waiting for their sender's next shift, nobody's, by page. */
 function outsideTitle(outside: Data["outside"]): string {
   const parts = [
-    "Продажи страниц в эти дни, которые не держала ни одна смена: в «Продажи за смены» и «Заработок» они не входят",
+    "Продажи страниц в эти дни не в деньгах ни одной смены: в «Продажи за смены» и «Заработок» они не входят",
     outside.visitsNetMills > 0 ? `в заходах (чаттер писал фану последним) ${formatMills(outside.visitsNetMills)}` : null,
+    outside.commonNetMills > 0 ? `общак (чаевые под постами, Campaign) ${formatMills(outside.commonNetMills)}` : null,
+    outside.waitingNetMills > 0 ? `PPV ждут следующей смены отправителя ${formatMills(outside.waitingNetMills)}` : null,
     outside.nobodyNetMills > 0 ? `ничьи ${formatMills(outside.nobodyNetMills)}` : null,
-    `по страницам: ${outside.pages.map((page) => `${page.pageLabel} ${formatMills(page.visitsNetMills + page.nobodyNetMills)}`).join(", ")}`,
+    `по страницам: ${outside.pages.map((page) => `${page.pageLabel} ${formatMills(outsideNetMills(page))}`).join(", ")}`,
   ];
   return parts.filter((part) => part !== null).join("; ");
 }
@@ -558,6 +569,13 @@ function HowItCounts({ page }: { page: string | null }) {
         Продажи смены — деньги после комиссии на страницах, где чаттер в смену писал (от {CHATTER_SHIFT_PAGE_MIN_MESSAGES} сообщений),
         с его первого действия на странице до конца смены. Если страницу вели двое, продажа у того, кто последним писал этому
         фану; если никто из них не писал, она видна у обоих («на двоих»). В итогах команды каждая продажа одна.
+      </p>
+      <p>
+        С {formatDay(SALE_RULE_SINCE_DAY)} — по правилу команды. Купленный PPV — того, кто его отправил, в чьей бы смене его ни
+        купили («долёт отправителю»): в его смене, которая шла в момент покупки, а если он не работал — в его следующей смене
+        (ждёт её до {SALE_RULE_WAIT_DAYS} дней). Чаевые под постами и взносы в OnlyFans Campaign — общак, ни в чью смену; сумма
+        общака — в «Выплатах». Остальное, и автопродление, — как выше. Недели до {formatDay(SALE_RULE_SINCE_DAY)} считаются
+        по-старому.
       </p>
       <p>
         «В час работы» — продажи, делённые на отработанное время без пауз. Проценты сравнивают с таким же периодом прямо

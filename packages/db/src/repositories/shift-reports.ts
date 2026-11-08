@@ -61,8 +61,8 @@ export async function listShiftSales(
 
 export interface SaleFacts {
   transactionId: number;
-  /** Who sent the PPV the fan bought, when Hub can tell (its message has an author). */
-  ppvSender: { userId: number; username: string } | null;
+  /** Who sent the PPV the fan bought, when Hub can tell (its message has an author), and their role now. */
+  ppvSender: { userId: number; username: string; role: string } | null;
   /** The PPV message was found but has no author (sent from a phone, another browser, an old client). */
   ppvWithoutAuthor: boolean;
   /** When the PPV message the fan bought was sent; null — not a PPV, or its message not found. */
@@ -71,9 +71,9 @@ export interface SaleFacts {
   postTip: boolean;
   /** An OnlyFans tip that is a contribution to the page's Campaign: the fan's message «… $X to your Campaign» with it. */
   campaign: boolean;
-  /** Who wrote to the fan on the page in the 48 hours before the sale, most messages first. */
+  /** Who wrote to the fan on the page in the 48 hours before the sale, most messages first; empty when read `lean`. */
   writers: Array<{ userId: number; username: string; messages: number }>;
-  /** Personal messages to the fan in those 48 hours with no author. */
+  /** Personal messages to the fan in those 48 hours with no author; 0 when read `lean`. */
   withoutAuthor: number;
 }
 
@@ -88,8 +88,10 @@ export interface SaleFacts {
  */
 const CAMPAIGN_TEXT_MINUTES = 2;
 
-export async function listSaleFacts(db: Database, input: { transactionIds: readonly number[] }): Promise<SaleFacts[]> {
+/** `lean` — only what decides whose a sale is (the PPV's sender, a post tip, a Campaign contribution): no writers. */
+export async function listSaleFacts(db: Database, input: { transactionIds: readonly number[]; lean?: boolean }): Promise<SaleFacts[]> {
   if (input.transactionIds.length === 0) return [];
+  const lean = input.lean === true;
   const ofPurchases = await db.execute<{ id: string | number; page_id: string | number; fan_ref: string; occurred_at: Date | string }>(sql`
     select t.id, t.platform_account_id as page_id, f.platform_user_id as fan_ref, t.occurred_at
     from transactions t
@@ -105,7 +107,7 @@ export async function listSaleFacts(db: Database, input: { transactionIds: reado
   const ofLinks = unlocks.filter((match) => input.transactionIds.includes(match.transactionId));
   const result = await db.execute<{
     id: string | number; ppv_user_id: string | number | null; ppv_username: string | null; ppv_message_ref: string | null;
-    ppv_sent_at: Date | string | null; post_tip: boolean; campaign: boolean;
+    ppv_role: string | null; ppv_sent_at: Date | string | null; post_tip: boolean; campaign: boolean;
     writers: Array<{ user_id: number; username: string; messages: number }> | null; written: string | number; outgoing: string | number;
   }>(sql`
     with of_links as (
@@ -135,21 +137,28 @@ export async function listSaleFacts(db: Database, input: { transactionIds: reado
           when s.kind <> 'message_purchase' then null
           -- Fansly: the page's message that carried the bought media or bundle to
           -- the fan. Before the purchase the projection files the offer under the
-          -- model's id, not the buyer's: the fan's chat finds it then.
-          when s.platform = 'fansly' then (
-            select mo.message_ref from message_media_offers mo
-            where mo.page_id = s.page_id
-              and (mo.fan_platform_user_id = s.fan_ref or mo.conversation_ref = any(c.refs))
-              and (mo.media_offer_ref = s.correlation_id or mo.bundle_ref = s.correlation_id)
-              and coalesce(mo.message_created_at, s.occurred_at) <= s.occurred_at
-            order by (mo.fan_platform_user_id = s.fan_ref) desc, mo.message_created_at desc nulls last limit 1)
+          -- model's id, not the buyer's: the fan's chat finds it then. By the
+          -- offer's media id (indexed) first; a bundle id is that too in every
+          -- row so far, so the bundle look-up (no index: the page's offers one by
+          -- one) runs only when the first finds nothing.
+          when s.platform = 'fansly' then coalesce(
+            (select mo.message_ref from message_media_offers mo
+              where mo.page_id = s.page_id and mo.media_offer_ref = s.correlation_id
+                and (mo.fan_platform_user_id = s.fan_ref or mo.conversation_ref = any(c.refs))
+                and coalesce(mo.message_created_at, s.occurred_at) <= s.occurred_at
+              order by (mo.fan_platform_user_id = s.fan_ref) desc, mo.message_created_at desc nulls last limit 1),
+            (select mo.message_ref from message_media_offers mo
+              where mo.page_id = s.page_id and mo.bundle_ref = s.correlation_id
+                and (mo.fan_platform_user_id = s.fan_ref or mo.conversation_ref = any(c.refs))
+                and coalesce(mo.message_created_at, s.occurred_at) <= s.occurred_at
+              order by (mo.fan_platform_user_id = s.fan_ref) desc, mo.message_created_at desc nulls last limit 1))
           -- OnlyFans: the unlock paired with this purchase, one to one.
           else (select l.ref from of_links l where l.id = s.id)
         end as message_ref
       from sales s
       join chats c on c.id = s.id
     )
-    select s.id, a.user_id as ppv_user_id, u.username as ppv_username, ppv.message_ref as ppv_message_ref,
+    select s.id, a.user_id as ppv_user_id, u.username as ppv_username, u.role::text as ppv_role, ppv.message_ref as ppv_message_ref,
       (select pm.occurred_at from message_archive pm
         where pm.account_id = s.page_id and pm.platform = s.platform and pm.message_ref = ppv.message_ref) as ppv_sent_at,
       (s.kind = 'tip' and s.correlation_id is not null and exists (select 1 from creator_post_tips pt
@@ -159,7 +168,7 @@ export async function listSaleFacts(db: Database, input: { transactionIds: reado
           and m.occurred_at between s.occurred_at - make_interval(mins => ${CAMPAIGN_TEXT_MINUTES})
             and s.occurred_at + make_interval(mins => ${CAMPAIGN_TEXT_MINUTES})
           and m.text_plain ~* '\\mto your campaign\\M')) as campaign,
-      (
+      ${lean ? sql`null` : sql`(
         select json_agg(json_build_object('user_id', w.user_id, 'username', w.username, 'messages', w.messages) order by w.messages desc)
         from (
           select x.user_id, xu.username, count(*)::int as messages
@@ -168,21 +177,21 @@ export async function listSaleFacts(db: Database, input: { transactionIds: reado
             and x.observed_at > s.occurred_at - interval '48 hours' and x.observed_at <= s.occurred_at
           group by 1, 2
         ) w
-      ) as writers,
-      (select count(*) from client_send_attributions x
+      )`} as writers,
+      ${lean ? sql`0` : sql`(select count(*) from client_send_attributions x
         where x.page_id = s.page_id and x.fan_ref = s.fan_ref
-          and x.observed_at > s.occurred_at - interval '48 hours' and x.observed_at <= s.occurred_at) as written,
-      (select count(*) from message_archive m, chats c
+          and x.observed_at > s.occurred_at - interval '48 hours' and x.observed_at <= s.occurred_at)`} as written,
+      ${lean ? sql`0` : sql`(select count(*) from message_archive m, chats c
         where c.id = s.id and m.account_id = s.page_id and m.conversation_ref = any(c.refs)
           and m.is_sent_by_me and coalesce(m.message_type, 1) <> 2
-          and m.occurred_at > s.occurred_at - interval '48 hours' and m.occurred_at <= s.occurred_at) as outgoing
+          and m.occurred_at > s.occurred_at - interval '48 hours' and m.occurred_at <= s.occurred_at)`} as outgoing
     from sales s
     left join ppv on ppv.id = s.id
     left join client_send_attributions a on a.page_id = s.page_id and a.platform = s.platform and a.platform_message_id = ppv.message_ref
     left join users u on u.id = a.user_id`);
   return result.rows.map((row) => ({
     transactionId: Number(row.id),
-    ppvSender: row.ppv_user_id === null ? null : { userId: Number(row.ppv_user_id), username: row.ppv_username ?? "" },
+    ppvSender: row.ppv_user_id === null ? null : { userId: Number(row.ppv_user_id), username: row.ppv_username ?? "", role: row.ppv_role ?? "" },
     ppvWithoutAuthor: row.ppv_message_ref !== null && row.ppv_user_id === null,
     ppvSentAt: row.ppv_sent_at === null ? null : new Date(row.ppv_sent_at),
     postTip: row.post_tip === true,

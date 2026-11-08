@@ -476,6 +476,7 @@ function exportOf(request: DemoRequest, scope: readonly string[], fromDay: strin
       });
     }
   }
+  const common = commonOf(scope, fromDay, toDay, now.getTime());
   const order = new Map(DEMO_USERS.map((user, index) => [user.username, index]));
   const pageOrder = new Map(DEMO_PAGES.map((page, index) => [page.label, index]));
   const rows = [...cells.values()].sort((left, right) => (order.get(left.username)! - order.get(right.username)!)
@@ -489,8 +490,33 @@ function exportOf(request: DemoRequest, scope: readonly string[], fromDay: strin
     ownAmounts,
     unconfirmed: unconfirmed.sort((left, right) => left.startedAt.localeCompare(right.startedAt)),
     lateChanges,
+    common: { netMills: common.reduce((sum, sale) => sum + sale.netMills, 0), sales: common },
     serverNow: now.toISOString(),
   };
+}
+
+/** The общак of the days: a tip under a post now and then, on OnlyFans a Campaign contribution — as the server, by the sale's day. */
+function commonOf(scope: readonly string[], fromDay: string, toDay: string, to: number): KernelOperationResponse<"teamShiftExport">["common"]["sales"] {
+  const sales: KernelOperationResponse<"teamShiftExport">["common"]["sales"] = [];
+  for (let day = fromDay; day <= toDay; day = addDays(day, 1)) {
+    const random = rng(`common:${day}`);
+    for (let index = intBetween(random, 0, 2); index > 0; index -= 1) {
+      const page = demoPage(scope[intBetween(random, 0, scope.length - 1)] ?? "");
+      const fans = page === undefined ? [] : demoFans(page.label);
+      const at = mskMidnight(day) + intBetween(random, 1, 22) * HOUR + intBetween(random, 0, 59) * MIN;
+      if (page === undefined || fans.length === 0 || at >= to) continue;
+      sales.push({
+        saleRef: `${9_100_000 + sales.length}`,
+        occurredAt: isoAt(at),
+        pageLabel: page.label,
+        platform: page.platform,
+        fanName: fans[intBetween(random, 0, fans.length - 1)]!.displayName,
+        source: page.platform === "onlyfans" && random() < 0.5 ? "campaign" : "post_tip",
+        netMills: [4_000, 8_000, 16_000, 40_000][intBetween(random, 0, 3)]!,
+      });
+    }
+  }
+  return sales.sort((left, right) => left.occurredAt.localeCompare(right.occurredAt));
 }
 
 const BUSINESS_DATE = /^\d{4}-\d{2}-\d{2}$/;

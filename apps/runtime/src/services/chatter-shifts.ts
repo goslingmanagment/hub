@@ -21,8 +21,6 @@ import {
   countAuthoredSendsByMinute,
   findPageSummaryByLabel,
   listChatterActivityMinutes,
-  listSaleLastWriters,
-  listShiftSales,
   recordChatterActivityBeat,
   type Database,
   type ShiftSale,
@@ -83,7 +81,7 @@ import { BadRequestError, ForbiddenError, NotFoundError } from "./errors.ts";
  *   colleague at 02:20 is the person's money from 02:20. Worked is
  *   CHATTER_SHIFT_PAGE_MIN_MESSAGES messages there; a tab looked at is not. A
  *   visit holds those on the pages it wrote on, to a fan the person was the last
- *   to write to (`salesHeldBy`).
+ *   to write to. Whose each one is, the old rule and the team's, is sale-rule.ts's.
  *
  * Database only: nothing here asks a platform or queues work.
  */
@@ -376,26 +374,6 @@ export function workHoldsSale(work: Pick<ComputedWork, "salesSince" | "endedAt">
 
 /** How far back a message to a fan says who sold to them: as the facts of a sale in the shift report. */
 export const SALE_LAST_WRITER_HOURS = 48;
-
-/**
- * The sales a piece of work of `userId` holds, oldest first: a shift's by
- * `workHoldsSale`; a visit's, of those, only the ones to a fan the person was
- * the last to write to. `pageIds` — the page ids by label.
- */
-export async function salesHeldBy(
-  db: Database,
-  input: { userId: number; work: ComputedWork; pageIds: ReadonlyMap<string, number> },
-): Promise<ShiftSale[]> {
-  const { work } = input;
-  const pageIds = [...work.salesSince.keys()].flatMap((label) => input.pageIds.get(label) ?? []);
-  if (pageIds.length === 0) return [];
-  const from = new Date(Math.min(...work.salesSince.values()));
-  const held = (await listShiftSales(db, { pageIds, from, to: new Date(work.endedAt) }))
-    .filter((sale) => workHoldsSale(work, { pageLabel: sale.pageLabel, at: sale.occurredAt.getTime() }));
-  if (work.kind === "shift" || held.length === 0) return held;
-  const writers = await listSaleLastWriters(db, { hours: SALE_LAST_WRITER_HOURS, sales: lastWriterQuery(held) });
-  return held.filter((sale) => writers.get(sale.transactionId) === input.userId);
-}
 
 /** The sales with a fan, as `listSaleLastWriters` asks for them. Pure. */
 export function lastWriterQuery(sales: readonly ShiftSale[]): Array<{ transactionId: number; pageId: number; fanRef: string; at: Date }> {

@@ -1,5 +1,6 @@
 import {
   MASS_SEND_MIN_CHATS,
+  SALE_RULE_WAIT_DAYS,
   SHIFT_REVIEW_AI_LOOKBACK_MINUTES,
   SHIFT_REVIEW_AI_SHARE,
   SHIFT_REVIEW_BROADCAST_OWN_WORDS,
@@ -38,11 +39,13 @@ import {
 import type { AppContext } from "../bootstrap.ts";
 import { requireOwner, type AuthPrincipal } from "./auth.ts";
 import {
-  SALE_LAST_WRITER_HOURS, lastWriterQuery, readPeopleWork, salesHeldBy, workHoldsSale, type ComputedWork, type PersonWork,
+  SALE_LAST_WRITER_HOURS, lastWriterQuery, readPeopleWork, workHoldsSale, type ComputedWork,
 } from "./chatter-shifts.ts";
-import { saleKindOf, saleOriginOf, settleSale } from "./chatter-stats.ts";
+import { saleKindOf, saleOriginOf } from "./chatter-stats.ts";
 import { NotFoundError } from "./errors.ts";
-import { salesNoShiftHolds, salesOfWork, settleOutsideShifts } from "./team-shift-sales.ts";
+import {
+  SALE_RULE_SINCE, homesOfSales, piecesOf, readTeamSales, reportSalesOf, saleRuleFactsOf, samePiece, type SaleHome, type TeamSales,
+} from "./sale-rule.ts";
 
 /**
  * Команда → «Разбор смены» (`teamShiftReview`, owner, 2026-11-06): one
@@ -378,7 +381,7 @@ export interface ColleagueWork {
 
 export interface SettledSale {
   sale: ShiftSale;
-  /** The shift holds it (`salesHeldBy`). */
+  /** In the shift's money, or on its pages within it (`workHoldsSale`). */
   held: boolean;
   verdict: ShiftReviewSale["verdict"];
   /** `theirs` — the colleague whose it is; `both` — the colleague it counts for too. */
@@ -388,78 +391,66 @@ export interface SettledSale {
 }
 
 /**
- * Whose each sale on the shift's pages within it is, as «Смены → Заработок»
- * settles it. Of the sales the shift holds (`held`), one another person's
- * overlapping shift holds too is theirs when they were the last to write to the
- * fan, both of theirs when neither was; a look-in's are its own. A sale the
- * shift does not hold is the colleague's whose shift holds it (of several, the
- * one who last wrote), or nobody's. Pure.
+ * Whose each sale is for the reviewed piece of work, as «Смены → Заработок» settles it: `homes` — sale-rule.ts's, of
+ * everyone's work (`work` among it). The piece's money is `mine` (`both` when it counts for a colleague too) — for a
+ * look-in, `own`: its sales as its report lists them (sale-rule.ts `reportSalesOf`); a sale another's piece has is
+ * `theirs` (of several, the one who last wrote to the fan), a chatter's PPV waiting for their next shift too; the
+ * общак `common`; the rest `none`. Pure.
  */
 export function settleShiftSales(input: {
-  userId: number;
-  kind: ComputedWork["kind"];
+  work: ComputedWork;
   sales: readonly ShiftSale[];
-  held: ReadonlySet<number>;
-  colleagues: readonly ColleagueWork[];
+  homes: ReadonlyMap<number, SaleHome>;
   lastWriters: ReadonlyMap<number, number>;
+  own?: ReadonlySet<number>;
 }): SettledSale[] {
   return input.sales.map((sale) => {
-    const holders = holdersOfSale(input.colleagues, sale);
+    const home = input.homes.get(sale.transactionId) ?? { kind: "nobody" as const, bySender: false };
     const lastWriter = input.lastWriters.get(sale.transactionId) ?? null;
-    const named = (userId: number | null) => holders.find((one) => one.userId === userId) ?? holders[0];
-    if (input.held.has(sale.transactionId)) {
-      if (input.kind !== "shift") return { sale, held: true, verdict: "mine", holder: null, lastWriter };
-      const verdict = settleSale(input.userId, holders.map((one) => one.userId), lastWriter);
-      return { sale, held: true, verdict, holder: verdict === "mine" ? null : named(lastWriter)?.username ?? null, lastWriter };
+    const onPages = workHoldsSale(input.work, { pageLabel: sale.pageLabel, at: sale.occurredAt.getTime() });
+    if (input.own?.has(sale.transactionId) && !(home.kind === "pieces" && home.pieces.some((piece) => piece.work === input.work))) {
+      return { sale, held: true, verdict: "mine", holder: null, lastWriter };
     }
-    return holders.length === 0
-      ? { sale, held: false, verdict: "none", holder: null, lastWriter }
-      : { sale, held: false, verdict: "theirs", holder: named(lastWriter)!.username, lastWriter };
+    if (home.kind === "pieces") {
+      const others = home.pieces.filter((piece) => piece.work !== input.work);
+      const named = others.find((piece) => piece.userId === lastWriter) ?? others[0];
+      if (others.length < home.pieces.length) {
+        return { sale, held: true, verdict: others.length > 0 ? "both" : "mine", holder: named?.username ?? null, lastWriter };
+      }
+      return { sale, held: onPages, verdict: "theirs", holder: named!.username, lastWriter };
+    }
+    if (home.kind === "common") return { sale, held: onPages, verdict: "common", holder: null, lastWriter };
+    if (home.kind === "waiting") return { sale, held: onPages, verdict: "theirs", holder: home.username, lastWriter };
+    return { sale, held: onPages, verdict: "none", holder: null, lastWriter };
   });
 }
 
-/** The shift's sales, net, as «Смены → Заработок» counts them: the ones it holds that are not a colleague's. Pure. */
+/** The shift's sales, net, as «Смены → Заработок» counts them: its money, a colleague's share of an overlap too. Pure. */
 export function heldNetMills(settled: readonly SettledSale[]): number {
-  return settled.reduce((sum, one) => sum + (one.held && one.verdict !== "theirs" ? one.sale.netMills : 0), 0);
-}
-
-/** The colleagues whose shifts hold the sale. Pure. */
-function holdersOfSale(colleagues: readonly ColleagueWork[], sale: ShiftSale): ColleagueWork[] {
-  return colleagues.filter((other) => workHoldsSale(other.work, { pageLabel: sale.pageLabel, at: sale.occurredAt.getTime() }));
+  return settled.reduce((sum, one) => sum + (one.verdict === "mine" || one.verdict === "both" ? one.sale.netMills : 0), 0);
 }
 
 /**
- * The sales on the shift's pages within it, settled (`settleShiftSales`): the
- * ones it holds as `salesHeldBy` reads them, and the rest of [from, to).
+ * The sales on the shift's pages within it and the ones in its money (a chatter's PPV it brings in from elsewhere),
+ * settled (`settleShiftSales`), and everyone's work and sales around it (sale-rule.ts `readTeamSales`).
  */
 async function shiftSales(
   app: AppContext,
-  input: { userId: number; shift: ComputedWork; personPageIds: ReadonlyMap<string, number>; pageIds: readonly number[]; from: Date; to: Date; now: Date },
-): Promise<SettledSale[]> {
+  input: { userId: number; shift: ComputedWork; pageIds: readonly number[]; from: Date; to: Date; now: Date },
+): Promise<{ settled: SettledSale[]; team: TeamSales; work: ComputedWork | null }> {
   const { shift } = input;
-  const [held, inWindow] = await Promise.all([
-    salesHeldBy(app.db, { userId: input.userId, work: shift, pageIds: input.personPageIds }),
-    listShiftSales(app.db, { pageIds: input.pageIds, from: input.from, to: input.to }),
-  ]);
-  const heldIds = new Set(held.map((sale) => sale.transactionId));
-  const read = new Set(inWindow.map((sale) => sale.transactionId));
-  const sales = [...inWindow, ...held.filter((sale) => !read.has(sale.transactionId))]
-    .sort((a, b) => a.occurredAt.getTime() - b.occurredAt.getTime() || a.transactionId - b.transactionId);
-  if (sales.length === 0) return [];
-  const people = await readPeopleWork(app.db, {
-    from: new Date(shift.startedAt - DAY_MS), to: new Date(Math.min(shift.endedAt + DAY_MS, input.now.getTime())), now: input.now, pages: "all",
-  });
-  const colleagues = [...people].flatMap(([id, person]) => (id === input.userId ? [] : person.work
-    .filter((work) => work.kind === "shift" && work.startedAt < shift.endedAt && work.endedAt > shift.startedAt)
-    .map((work) => ({ userId: id, username: person.username, work }))));
-  // Who last wrote decides a sale two shifts hold, names the colleague of a sale several hold, and says where each came from.
+  const team = await readTeamSales(app.db, { from: input.from, to: input.to, now: input.now, pages: "all" });
+  const work = samePiece(team.people, input.userId, shift);
+  // A shift's money; a look-in's sales as its report lists them.
+  const own = work === null ? [] : work.kind === "visit" ? reportSalesOf(team, { userId: input.userId, work }) : team.moneyOf(work);
+  const money = new Set(own.map((sale) => sale.transactionId));
+  const pageIds = new Set(input.pageIds);
+  const sales = team.settled.map((one) => one.sale).filter((sale) => money.has(sale.transactionId)
+    || (pageIds.has(sale.pageId) && sale.occurredAt >= input.from && sale.occurredAt < input.to));
+  if (sales.length === 0 || work === null) return { settled: [], team, work };
+  // Who last wrote names the colleague of a sale several hold, and says where each came from.
   const lastWriters = await listSaleLastWriters(app.db, { hours: SALE_LAST_WRITER_HOURS, sales: lastWriterQuery(sales) });
-  return settleShiftSales({ userId: input.userId, kind: shift.kind, sales, held: heldIds, colleagues, lastWriters });
-}
-
-function piecesOf(people: ReadonlyMap<number, PersonWork>, kind: ComputedWork["kind"]): ColleagueWork[] {
-  return [...people].flatMap(([id, person]) => person.work
-    .filter((work) => work.kind === kind).map((work) => ({ userId: id, username: person.username, work })));
+  return { settled: settleShiftSales({ work, sales, homes: team.homeOf, lastWriters, own: money }), team, work };
 }
 
 /**
@@ -482,25 +473,25 @@ export function pagesWithAllFans(shift: ComputedWork, colleagues: readonly Colle
 }
 
 /**
- * Before the shift, no shift's: the sales on its pages from the person's
- * previous shift's end (a day back at most) to its start that no shift or
- * look-in holds (as «Смены» puts them outside shifts), to a fan the person sent
- * the bought PPV to or was the last to write to. With their facts.
+ * Before the shift, no shift's: the sales on its pages from the person's previous shift's end (a day back at most) to
+ * its start in no one's money (as «Смены» puts them outside shifts), to a fan the person sent the bought PPV to or was
+ * the last to write to. With their facts. From SALE_RULE_SINCE_DAY the person's own PPVs bought then are this shift's.
  */
 async function salesBeforeShift(
   app: AppContext,
-  input: { userId: number; start: number; previousEnd: number | null; pageIds: readonly number[]; now: Date },
+  input: { userId: number; start: number; previousEnd: number | null; pageIds: readonly number[]; team: TeamSales },
 ): Promise<{ sales: SettledSale[]; facts: SaleFacts[] }> {
-  const { userId, start, now } = input;
+  const { userId, start } = input;
   const from = Math.max(input.previousEnd ?? 0, start - DAY_MS);
-  const read = from < start ? await listShiftSales(app.db, { pageIds: input.pageIds, from: new Date(from), to: new Date(start) }) : [];
-  if (read.length === 0) return { sales: [], facts: [] };
-  const people = await readPeopleWork(app.db, { from: new Date(from - DAY_MS), to: new Date(Math.min(now.getTime(), start + DAY_MS)), now, pages: "all" });
-  const shifts = piecesOf(people, "shift").map((one) => ({ ...one, held: salesOfWork(one.work, read) }));
-  const unheld = salesNoShiftHolds({ from, to: start, sales: read, shifts });
-  const lastWriters = await listSaleLastWriters(app.db, { hours: SALE_LAST_WRITER_HOURS, sales: lastWriterQuery(unheld) });
-  const nobodys = settleOutsideShifts(unheld, piecesOf(people, "visit"), lastWriters).filter((one) => one.visit === null).map((one) => one.sale);
-  const facts = await listSaleFacts(app.db, { transactionIds: nobodys.map((sale) => sale.transactionId) });
+  const pageIds = new Set(input.pageIds);
+  const nobodys = input.team.settled
+    .filter(({ sale, home }) => home.kind === "nobody" && pageIds.has(sale.pageId) && sale.occurredAt.getTime() >= from && sale.occurredAt.getTime() < start)
+    .map((one) => one.sale);
+  if (nobodys.length === 0) return { sales: [], facts: [] };
+  const [lastWriters, facts] = await Promise.all([
+    listSaleLastWriters(app.db, { hours: SALE_LAST_WRITER_HOURS, sales: lastWriterQuery(nobodys) }),
+    listSaleFacts(app.db, { transactionIds: nobodys.map((sale) => sale.transactionId) }),
+  ]);
   const sentBy = new Map(facts.map((fact) => [fact.transactionId, fact.ppvSender?.userId ?? null]));
   const lastWriterOf = (sale: ShiftSale) => lastWriters.get(sale.transactionId) ?? null;
   return {
@@ -512,9 +503,9 @@ async function salesBeforeShift(
 }
 
 /**
- * After the shift: the person's PPVs sent in it that `ppvFans` bought after it,
- * within SHIFT_REVIEW_LATER_SALES_DAYS, and the shift that held each (of
- * several, the one whose person last wrote to the fan). With their facts.
+ * After the shift: the person's PPVs sent in it that `ppvFans` bought after it, within SHIFT_REVIEW_LATER_SALES_DAYS,
+ * and the shift that held each (of several, the one whose person last wrote to the fan); from SALE_RULE_SINCE_DAY
+ * the person's own (`mine`): sale-rule.ts puts each in their piece at or after the purchase. With their facts.
  */
 async function salesAfterShift(
   app: AppContext,
@@ -538,19 +529,36 @@ async function salesAfterShift(
   if (mine.length === 0) return { sales: [], facts };
   const times = mine.map((sale) => sale.occurredAt.getTime());
   const [people, lastWriters] = await Promise.all([
-    readPeopleWork(app.db, { from: new Date(Math.min(...times) - DAY_MS), to: new Date(Math.min(now.getTime(), Math.max(...times) + DAY_MS)), now, pages: "all" }),
+    readPeopleWork(app.db, {
+      from: new Date(Math.min(...times) - DAY_MS),
+      to: new Date(Math.min(now.getTime(), Math.max(...times) + (SALE_RULE_WAIT_DAYS + 1) * DAY_MS)),
+      now,
+      pages: "all",
+    }),
     listSaleLastWriters(app.db, { hours: SALE_LAST_WRITER_HOURS, sales: lastWriterQuery(mine) }),
   ]);
   const shifts = piecesOf(people, "shift");
+  const ruled = new Map(mine.filter((sale) => sale.occurredAt.getTime() >= SALE_RULE_SINCE)
+    .map((sale) => [sale.transactionId, saleRuleFactsOf(factOf.get(sale.transactionId)!)]));
+  const homes = new Map(homesOfSales({ sales: mine, shifts, visits: piecesOf(people, "visit"), lastWriters, facts: ruled, now: now.getTime() })
+    .map((one) => [one.sale.transactionId, one.home]));
   return {
     sales: mine.map((sale) => {
       const lastWriter = lastWriters.get(sale.transactionId) ?? null;
+      const home = homes.get(sale.transactionId);
+      const bySender = home !== undefined && ((home.kind === "pieces" && home.bySender) || home.kind === "waiting");
+      if (bySender) return { sale, held: false, verdict: "mine", holder: null, lastWriter };
       const holders = holdersOfSale(shifts, sale);
       const holder = holders.find((one) => one.userId === lastWriter) ?? holders[0];
       return { sale, held: false, verdict: holder === undefined ? "none" : "theirs", holder: holder?.username ?? null, lastWriter };
     }),
     facts,
   };
+}
+
+/** The pieces that hold the sale (`workHoldsSale`). Pure. */
+function holdersOfSale(pieces: readonly ColleagueWork[], sale: ShiftSale): ColleagueWork[] {
+  return pieces.filter((other) => workHoldsSale(other.work, { pageLabel: sale.pageLabel, at: sale.occurredAt.getTime() }));
 }
 
 export async function readTeamShiftReview(
@@ -599,7 +607,7 @@ export async function readTeamShiftReview(
   const workedPageIds = pages.filter((page) => allFans.has(page.label)).map((page) => page.id);
   const labelOf = new Map(pages.map((page) => [page.id, page.label]));
 
-  const [rows, sends, generations, autoTexts, minutes, sales, before] = await Promise.all([
+  const [rows, sends, generations, autoTexts, minutes, settledSales] = await Promise.all([
     listShiftReviewMessages(app.db, {
       userId: query.userId, pageIds, workedPageIds, from, to, horizonHours: SHIFT_REVIEW_WAIT_HORIZON_HOURS, burstMinChats: MASS_SEND_MIN_CHATS,
       deletedUnseenSeconds: SHIFT_REVIEW_DELETED_UNSEEN_SECONDS, broadcastOwnWords: SHIFT_REVIEW_BROADCAST_OWN_WORDS,
@@ -610,11 +618,12 @@ export async function readTeamShiftReview(
     }),
     listAllAutomatedTexts(app.db),
     listChatterActivityMinutes(app.db, { from, to, pages: pageIds, userId: query.userId }),
-    shiftSales(app, { userId: query.userId, shift, personPageIds: person.pageIds, pageIds, from, to, now }),
-    shift.kind === "shift"
-      ? salesBeforeShift(app, { userId: query.userId, start, previousEnd: found.previous?.endedAt ?? null, pageIds, now })
-      : Promise.resolve({ sales: [], facts: [] }),
+    shiftSales(app, { userId: query.userId, shift, pageIds, from, to, now }),
   ]);
+  const sales = settledSales.settled;
+  const before = shift.kind === "shift"
+    ? await salesBeforeShift(app, { userId: query.userId, start, previousEnd: found.previous?.endedAt ?? null, pageIds, team: settledSales.team })
+    : { sales: [], facts: [] };
   const links = await listSentGenerationLinks(app.db, {
     refs: sends.map((send) => send.ref), from: new Date(start - 5 * MINUTE_MS), to: new Date(end + 60 * MINUTE_MS),
   });

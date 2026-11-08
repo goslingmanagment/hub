@@ -12,6 +12,7 @@ import {
   CHAT_KINDS,
   CHAT_SHOWS,
   CHAT_SORTS,
+  COMMON_NAME,
   GAP_MINUTES,
   REPLY_NORM_SECONDS,
   aiButton,
@@ -230,7 +231,7 @@ const OTHERS_TITLE = "Продажи этому фану в смену, кото
 
 /** The fan's money in the shift that is not the chatter's: «ещё $303.20 продал Nikita». */
 function othersText(summary: ChatSummary): string {
-  const parts = summary.others.map((one) => `${formatMills(one.netMills)} ${one.name === null ? "ни в чьей смене" : `продал ${one.name}`}`);
+  const parts = summary.others.map((one) => `${formatMills(one.netMills)} ${one.name === null ? "ни в чьей смене" : one.name === COMMON_NAME ? "в общак" : `продал ${one.name}`}`);
   return `${summary.heldNetMills > 0 ? "ещё " : ""}${parts.join(", ")}`;
 }
 

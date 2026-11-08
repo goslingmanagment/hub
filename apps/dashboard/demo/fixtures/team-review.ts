@@ -351,17 +351,17 @@ function reviewOf(shift: DemoShift, now: number): Response {
       sell(chat, Date.parse(chat.messages.at(-1)!.at) + 2 * MIN, "tip", 16_000, { origin: "own", lastWriter: me });
     } else if (!carried && mine.length >= 2) {
       carried = true;
+      // The team's rule (from 2026-11-02): a colleague's PPV bought in the shift is the colleague's.
       sell(chat, Date.parse(mine[0]!.at) + 6 * MIN, "ppv", 31_200,
-        { origin: "colleague_ppv", ppvSender: "sofia", ppvSentAt: new Date(start - 5 * 60 * MIN).toISOString(), lastWriter: me });
+        { origin: "colleague_ppv", verdict: "theirs", holderName: "sofia", ppvSender: "sofia", ppvSentAt: new Date(start - 5 * 60 * MIN).toISOString(), lastWriter: me });
     }
   }
   const kept = colleagueChat === null ? undefined : chats.find((chat) => chat.key === colleagueChat!.key);
   if (kept && colleagueChat) sell(kept, colleagueChat.at, "tip", 32_000, { origin: "other_wrote", verdict: "theirs", holderName: "sofia", lastWriter: "sofia" });
   if (withoutChat) {
     sell(null, start + Math.round(minutes * 0.3) * MIN, "subscription", 8_000, { origin: "nobody_wrote_48h" });
-    sell(null, start + Math.round(minutes * 0.6) * MIN, "tip", 40_000, { origin: "post_tip" });
+    sell(null, start + Math.round(minutes * 0.6) * MIN, "tip", 40_000, { origin: "post_tip", verdict: "common" });
   }
-  sales.sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
   // Around the shift: a renewal before it from a fan the chatter wrote to last, no shift's; a PPV of the shift not bought
   // in it, bought the next morning in a colleague's shift.
   const around = (chat: ShiftReviewChat, at: number, kind: Sale["kind"], netMills: number, facts: Partial<Sale>): Sale => ({
@@ -372,13 +372,18 @@ function reviewOf(shift: DemoShift, now: number): Response {
   const beforeSales: Sale[] = [];
   const laterSales: Sale[] = [];
   const talked = chats.find((chat) => chat.messages.some((message) => message.mine !== null && message.mine.composedWith !== "hi"));
-  if (talked) beforeSales.push(around(talked, start - 40 * MIN, "subscription", 12_000, {}));
+  if (talked) {
+    beforeSales.push(around(talked, start - 40 * MIN, "subscription", 12_000, {}));
+    // The chatter's PPV of an earlier shift, bought while they were off: the rule brings it to this shift.
+    sales.push(around(talked, start - 150 * MIN, "ppv", 24_000, { verdict: "mine", ppvSender: me, ppvSentAt: new Date(start - 20 * 60 * MIN).toISOString() }));
+  }
+  sales.sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
   const unsold = chats.flatMap((chat) => chat.messages.filter((message) => message.mine !== null && message.priceMills !== null && message.bought !== true)
     .map((message) => ({ chat, message })))[0];
   if (unsold && !shift.ongoing && end + 9 * 60 * MIN < now) {
     unsold.message.bought = true;
     laterSales.push(around(unsold.chat, end + 9 * 60 * MIN, "ppv", Math.round(unsold.message.priceMills! * 0.8), {
-      verdict: "theirs", holderName: "sofia", ppvSender: me, ppvSentAt: unsold.message.at,
+      verdict: "mine", ppvSender: me, ppvSentAt: unsold.message.at,
     }));
   }
 
@@ -403,7 +408,7 @@ function reviewOf(shift: DemoShift, now: number): Response {
           && one.startedAt < end && (one.ongoing ? now : one.endedAt) > start
           && one.pages.some((other) => other.pageLabel === page.pageLabel && other.messages >= 10)),
       })),
-      salesNetMills: sales.reduce((sum, sale) => sum + (sale.verdict === "theirs" ? 0 : sale.netMills), 0),
+      salesNetMills: sales.reduce((sum, sale) => sum + (sale.verdict === "mine" || sale.verdict === "both" ? sale.netMills : 0), 0),
     },
     previousAt: position > 0 ? new Date(others[position - 1]!.startedAt).toISOString() : null,
     nextAt: position >= 0 && position < others.length - 1 ? new Date(others[position + 1]!.startedAt).toISOString() : null,
