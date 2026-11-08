@@ -129,12 +129,33 @@ describe("workOfMinutes", () => {
     ]);
   });
 
-  it("keeps the piece next to the shift's end, under 30 minutes from it, whatever its messages, and its sales", () => {
+  it("keeps the piece next to the shift's end, under 30 minutes from it, with one message at least, and its sales", () => {
     // Two last answers 16 minutes after the night.
     const work = workOfMinutes(minutes(0, 450, [...range(0, 420), ...range(435, 437)]), [...sends(0, 420, 300), ...sends(435, 437, 2)], FAR_LATER);
     expect(bounds(work)).toEqual([["shift", at(0), at(446)]]);
     expect(totalMessages(work[0]!)).toBe(302);
     expect(workHoldsSale(work[0]!, { pageLabel: "ari-1", at: at(440) })).toBe(true);
+    // One answer is enough.
+    const one = workOfMinutes(minutes(0, 450, [...range(0, 420), 435]), [...sends(0, 420, 300), ...sends(435, 436, 1)], FAR_LATER);
+    expect(bounds(one)).toEqual([["shift", at(0), at(445)]]);
+  });
+
+  it("leaves a piece next to the shift with none of the person's messages out of it, and the sales after the shift's own end with it", () => {
+    // The night ends at 419 (its work to 429); a tab looked at 12 minutes later, no message: the shift does not stretch to it.
+    const end = workOfMinutes(minutes(0, 450, [...range(0, 420), 431]), sends(0, 420, 300), FAR_LATER);
+    expect(bounds(end)).toEqual([
+      ["shift", at(0), at(429)],
+      ["visit", at(431), at(441)],
+    ]);
+    expect(workHoldsSale(end[0]!, { pageLabel: "ari-1", at: at(428) })).toBe(true);
+    // A colleague's sale in the minutes after it is not this shift's.
+    expect(workHoldsSale(end[0]!, { pageLabel: "ari-1", at: at(430) })).toBe(false);
+    // The same at the start: a glance 15 minutes before the shift is no part of it.
+    const start = workOfMinutes(minutes(0, 450, [0, ...range(25, 450)]), sends(25, 450, 300), FAR_LATER);
+    expect(bounds(start)).toEqual([
+      ["visit", at(0), at(10)],
+      ["shift", at(25), at(450)],
+    ]);
   });
 
   it("keeps the pieces beyond in a block of five messages, and cuts a block with fewer", () => {
@@ -142,10 +163,11 @@ describe("workOfMinutes", () => {
     const active = [...range(0, 420), 430, ...range(470, 472), ...range(487, 489)];
     const kept = workOfMinutes(minutes(0, 500, active), [...sends(0, 420, 300), ...sends(470, 472, 3), ...sends(487, 489, 2)], FAR_LATER);
     expect(bounds(kept)).toEqual([["shift", at(0), at(498)]]);
+    // With fewer the block is cut, and the minute with no message next to the night with it.
     const cut = workOfMinutes(minutes(0, 500, active), [...sends(0, 420, 300), ...sends(470, 472, 3), ...sends(487, 488, 1)], FAR_LATER);
     expect(bounds(cut)).toEqual([
-      ["shift", at(0), at(440)],
-      ["visit", at(470), at(498)],
+      ["shift", at(0), at(429)],
+      ["visit", at(430), at(498)],
     ]);
   });
 
