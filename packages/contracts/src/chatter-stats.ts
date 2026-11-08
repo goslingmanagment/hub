@@ -236,6 +236,26 @@ export const teamShiftSalesResponseSchema = z.object({
     overlapNetMills: mills,
     sales: count,
   })),
+  /**
+   * The window's sales no shift holds, outside the money above: `visits` — a look-in's, its person the last to write to
+   * the fan (as a visit's sales); `nobody` — the rest. By the Moscow day of the sale (one per day of the window, the
+   * oldest first) and by page (the most first), and each sale, the oldest first.
+   */
+  outside: z.object({
+    visitsNetMills: mills,
+    nobodyNetMills: mills,
+    daily: z.array(z.object({ date: businessDate, visitsNetMills: mills, nobodyNetMills: mills })),
+    pages: z.array(z.object({ pageLabel: z.string(), visitsNetMills: mills, nobodyNetMills: mills })),
+    sales: z.array(z.object({
+      at: isoTimestamp,
+      pageLabel: z.string(),
+      fanName: z.string().nullable(),
+      kind: z.enum(CHATTER_SALE_KINDS),
+      netMills: mills,
+      /** The look-in's person; null — nobody's. */
+      visitBy: z.string().nullable(),
+    })),
+  }),
   serverNow: isoTimestamp,
 });
 

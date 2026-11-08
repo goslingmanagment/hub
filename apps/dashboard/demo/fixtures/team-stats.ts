@@ -4,8 +4,8 @@
  */
 import type { KernelOperationResponse } from "@agency_hub_core/contracts";
 
-import { type DemoRequest } from "../core.ts";
-import { DEMO_CHATTERS, demoPage, type DemoUser } from "../world.ts";
+import { intBetween, pick, rng, type DemoRequest } from "../core.ts";
+import { DEMO_CHATTERS, demoFans, demoPage, type DemoUser } from "../world.ts";
 import {
   DAY,
   addDays,
@@ -396,7 +396,44 @@ export function teamShiftSales(request: DemoRequest, scope: readonly string[], d
         sales: sales.length,
       };
     }),
+    outside: outsideOf(world, scope, dayList, to),
     serverNow: now.toISOString(),
+  };
+}
+
+/**
+ * The sales no shift held: the look-ins' and, between shifts, a renewal or a PPV bought at night or before a shift
+ * starts — nobody's. By the sale's day and page, as the server.
+ */
+function outsideOf(world: ReturnType<typeof teamWorld>, scope: readonly string[], dayList: readonly string[], to: number): ShiftSalesResponse["outside"] {
+  type Sale = ShiftSalesResponse["outside"]["sales"][number];
+  const sales: Sale[] = world.visits
+    .flatMap((visit) => visit.sales.map((sale) => ({ sale, by: visit.user.username })))
+    .filter(({ sale }) => scope.includes(sale.pageLabel) && dayList.includes(mskDay(sale.at)) && sale.at < to)
+    .map(({ sale, by }) => ({ at: isoAt(sale.at), pageLabel: sale.pageLabel, fanName: sale.fan.displayName, kind: sale.kind, netMills: sale.netMills, visitBy: by }));
+  for (const day of dayList) {
+    const random = rng(`outside:${day}`);
+    for (let index = intBetween(random, 0, 3); index > 0; index -= 1) {
+      const pageLabel = pick(random, scope);
+      const fans = demoFans(pageLabel);
+      const at = mskMidnightOf(day) + intBetween(random, 2, 10) * 3_600_000 + intBetween(random, 0, 59) * 60_000;
+      if (fans.length === 0 || at >= to) continue;
+      const kind = pick(random, ["ppv", "subscription", "tip"] as const);
+      sales.push({ at: isoAt(at), pageLabel, fanName: pick(random, fans).displayName, kind, netMills: pick(random, [8_000, 12_000, 19_200, 31_200, 40_000]), visitBy: null });
+    }
+  }
+  sales.sort((left, right) => left.at.localeCompare(right.at));
+  const of = (list: readonly Sale[]) => ({
+    visitsNetMills: list.filter((sale) => sale.visitBy !== null).reduce((sum, sale) => sum + sale.netMills, 0),
+    nobodyNetMills: list.filter((sale) => sale.visitBy === null).reduce((sum, sale) => sum + sale.netMills, 0),
+  });
+  const labels = [...new Set(sales.map((sale) => sale.pageLabel))];
+  return {
+    ...of(sales),
+    daily: dayList.map((date) => ({ date, ...of(sales.filter((sale) => mskDay(Date.parse(sale.at)) === date)) })),
+    pages: labels.map((pageLabel) => ({ pageLabel, ...of(sales.filter((sale) => sale.pageLabel === pageLabel)) }))
+      .sort((left, right) => right.visitsNetMills + right.nobodyNetMills - (left.visitsNetMills + left.nobodyNetMills)),
+    sales,
   };
 }
 
