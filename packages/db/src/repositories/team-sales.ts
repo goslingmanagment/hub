@@ -2,6 +2,7 @@ import { sql } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
 import { listOnlyfansUnlockMatches } from "./onlyfans-unlocks.ts";
+import { ppvBoughtSql } from "./shift-sql.ts";
 
 // Chat Memory week 6 «Продажи» (docs/plans/2026-10-24-chat-memory/week-6.md, А):
 // every personal PPV of the window — a priced message the page sent that is not
@@ -80,14 +81,7 @@ export async function listPpvFacts(
     ),
     facts as (
       select x.*,
-        case x.platform
-          when 'fansly' then
-            exists (select 1 from message_media_offers mo where mo.page_id = x.page_id and mo.message_ref = x.message_ref and mo.purchase_state = 'purchased')
-            or exists (select 1 from media_orders o where o.page_id = x.page_id and o.message_ref = x.message_ref)
-          else exists (
-            select 1 from page_dm_messages d
-            where d.platform_account_id = x.page_id and d.platform_message_id = x.message_ref and d.purchased_at is not null)
-        end as bought,
+        ${ppvBoughtSql({ pageId: "x.page_id", platform: "x.platform", ref: "x.message_ref", conv: "x.conversation_ref", at: "x.occurred_at" })} as bought,
         case x.platform
           when 'fansly' then (
             select sum(t.creator_net_amount_mills)

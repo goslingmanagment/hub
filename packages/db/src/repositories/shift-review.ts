@@ -1,7 +1,7 @@
 import { sql } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
-import { notOwnAccountMessageSql } from "./shift-sql.ts";
+import { notOwnAccountMessageSql, ppvBoughtSql } from "./shift-sql.ts";
 
 // The reads of Команда → «Разбор смены» (apps/runtime services/shift-review.ts):
 // the chats a chatter's shift touched with their messages, who sent each page
@@ -111,11 +111,7 @@ export async function listShiftReviewMessages(
           and b.shape = md5(coalesce(p.text_plain, '') || '|' || coalesce(p.price_mills, 0)::text || '|' || p.media::text))) as mass,
       a.user_id as author_id, u.username as author_name,
       case when not (p.sent and coalesce(p.price_mills, 0) > 0) then null
-        when p.platform = 'fansly' then (
-          exists (select 1 from message_media_offers mo where mo.page_id = p.page_id and mo.message_ref = p.ref and mo.purchase_state = 'purchased')
-          or exists (select 1 from media_orders o where o.page_id = p.page_id and o.message_ref = p.ref))
-        else exists (
-          select 1 from page_dm_messages d where d.platform_account_id = p.page_id and d.platform_message_id = p.ref and d.purchased_at is not null)
+        else ${ppvBoughtSql({ pageId: "p.page_id", platform: "p.platform", ref: "p.ref", conv: "p.conv", at: "p.at" })}
       end as bought
     from picked p
     left join client_send_attributions a on p.sent and a.page_id = p.page_id and a.platform = p.platform and a.platform_message_id = p.ref
