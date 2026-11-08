@@ -415,8 +415,8 @@ export async function startWorkerServices(
   // Files of publications (wall posts PR 3): delete the bytes 7 days after
   // their last post finished, or 7 days after an upload no post used. Our own
   // upload cache on disk, never a collected fact; the rows stay.
-  // Chat Memory: once a day, a history request for each Fansly page's chats
-  // where the fan wrote in the last day and the history is not proven full.
+  // Chat Memory: every 15 minutes, a history request for each Fansly page's
+  // chats where the fan wrote in the last day and the history is not proven full.
   await ensureChatHistoryTopUpQueue(boss, createdQueues);
   await boss.work(CHAT_HISTORY_TOP_UP_QUEUE, CRON_SWEEP_WORK_OPTIONS, async () => {
     await runChatHistoryTopUp(app);
