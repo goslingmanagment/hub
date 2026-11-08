@@ -28,6 +28,7 @@ import { requireDashboardUser, requireSessionUser, type AuthPrincipal } from "./
 import { revenueOfShifts } from "./chatter-numbers.ts";
 import {
   SALE_LAST_WRITER_HOURS,
+  dayOfShift,
   dayOfWork,
   lastWriterQuery,
   middleOfWork,
@@ -65,7 +66,6 @@ import { DELAY_BOUNDS, byDelayOf, byPriceOf } from "./team-sales.ts";
  */
 
 const DAY_MS = 86_400_000;
-const HOUR_MS = 3_600_000;
 const TOP_FANS = 5;
 
 const KIND_OF: Readonly<Record<string, ChatterSaleKind>> = {
@@ -237,8 +237,7 @@ export async function computeChatterStats(
   });
   const settled = (sale: ShiftSale) => settleSale(userId, othersOf.get(sale.transactionId) ?? [], lastWriters.get(sale.transactionId) ?? null);
 
-  // The chatter's first shift Hub has began before Hub heard of them, so most of what Hub saw says nothing of its day.
-  const dayOfShift = (shift: ComputedWork) => (activitySince !== null && shift.startedAt - activitySince.getTime() < HOUR_MS ? moscowDayOf(shift.startedAt) : dayOfWork(shift));
+  const dayOf = (shift: ComputedWork) => dayOfShift(shift, activitySince?.getTime());
   const withSales = held.map((one) => ({
     work: one.work,
     sales: one.sales.filter((sale) => (one.work.kind === "shift" ? settled(sale) !== "theirs" : lastWriters.get(sale.transactionId) === userId)),
@@ -271,7 +270,7 @@ export async function computeChatterStats(
     const overlapping = own.filter((sale) => together.has(sale.transactionId));
     const confirmation = confirmations[index]!;
     return {
-      date: dayOfShift(shift),
+      date: dayOf(shift),
       startedAt: iso(shift.startedAt),
       endedAt: iso(shift.endedAt),
       ongoing: shift.ongoing,
@@ -360,7 +359,7 @@ export async function computeChatterStats(
   const bestShift = shifts.reduce<(typeof shifts)[number] | null>((best, shift) => (shift.salesNetMills > (best?.salesNetMills ?? 0) ? shift : best), null);
   const bestDay = daily.reduce<(typeof daily)[number] | null>((best, day) => (day.salesNetMills > (best?.salesNetMills ?? 0) ? day : best), null);
   const biggest = currentSales.reduce<ShiftSale | null>((best, sale) => (sale.netMills > (best?.netMills ?? 0) ? sale : best), null);
-  const streaks = streaksOf(new Set(counted.map((one) => dayOfShift(one.work))), moscowDayOf(now.getTime()));
+  const streaks = streaksOf(new Set(counted.map((one) => dayOf(one.work))), moscowDayOf(now.getTime()));
 
   return {
     user: { userId, username: input.username },

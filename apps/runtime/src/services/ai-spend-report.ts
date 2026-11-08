@@ -11,20 +11,21 @@ import {
   listAiSpendConversations,
   listAiSpendFeatureUse,
   listAiSpendTopCalls,
+  listFirstChatterActivities,
   sumAiSpendBetween,
   type AiSpendCell,
   type AiSpendDimension,
 } from "@agency_hub_core/db";
-import { MOSCOW_TIME_ZONE, aiUsageLedgerFeatures, businessDateToUtcStart, nextBusinessDate } from "@agency_hub_core/shared";
+import { MOSCOW_TIME_ZONE, addUtcDays, aiUsageLedgerFeatures, businessDateToUtcStart, nextBusinessDate, startOfBusinessDay } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
 import { aiGatewayModelRates } from "./ai-gateway-pricing.ts";
-import { readPeopleWork } from "./chatter-shifts.ts";
+import { dayOfShift, moscowDayOf, readPeopleWork } from "./chatter-shifts.ts";
 import { BadRequestError } from "./errors.ts";
 
 /** The longest period one report reads. */
 export const AI_SPEND_MAX_DAYS = 92;
-/** Shift costs read the period's last days only (the shift reader's own cap). */
+/** Shift costs read the period's last Moscow days only (the shift reader's own cap). */
 const AI_SPEND_SHIFT_DAYS = 7;
 /** Spend compared before and after a setting change, each side. */
 const SETTING_EFFECT_HOURS = 72;
@@ -223,19 +224,37 @@ export function attributeShiftSpend(
   };
 }
 
+/**
+ * The shifts of the Moscow days of [from, to) with their AI spend. A shift is the window's when its day is
+ * (`dayOfShift`, as «Заработок» dates it) and counts whole, its hours and its spend: work is read a day more on each
+ * side, so a night the window's edge cuts is never a shift of its own. Spend outside every shift is the window's
+ * minutes only; a minute of another day's shift is that day's.
+ */
 async function readShiftSpend(app: Pick<AppContext, "db">, window: { from: Date; to: Date }, now: Date) {
-  const [people, minuteCosts] = await Promise.all([
-    readPeopleWork(app.db, { from: window.from, to: window.to, now: new Date(Math.min(now.getTime(), window.to.getTime())), pages: "all" }),
-    listAiSpendByChatterMinute(app.db, { from: window.from, toExclusive: window.to }),
+  const readFrom = new Date(window.from.getTime() - DAY_MS);
+  const readTo = new Date(Math.min(window.to.getTime() + DAY_MS, now.getTime()));
+  const [people, firstActivity, minuteCosts] = await Promise.all([
+    readPeopleWork(app.db, { from: readFrom, to: readTo, now, pages: "all" }),
+    listFirstChatterActivities(app.db),
+    listAiSpendByChatterMinute(app.db, { from: readFrom, toExclusive: readTo }),
   ]);
-  const shifts: ShiftWindow[] = [];
+  const firstDay = moscowDayOf(window.from.getTime());
+  const lastDay = moscowDayOf(window.to.getTime() - 1);
+  const ofWindow: ShiftWindow[] = [];
+  const ofOtherDays: ShiftWindow[] = [];
   for (const [userId, person] of people) {
     for (const shift of person.work) {
       if (shift.kind !== "shift") continue;
-      shifts.push({ userId, username: person.username, startedAt: shift.startedAt, endedAt: shift.endedAt, workedMinutes: shift.workedMinutes });
+      const day = dayOfShift(shift, firstActivity.get(userId)?.getTime());
+      (day >= firstDay && day <= lastDay ? ofWindow : ofOtherDays)
+        .push({ userId, username: person.username, startedAt: shift.startedAt, endedAt: shift.endedAt, workedMinutes: shift.workedMinutes });
     }
   }
-  return { from: window.from.toISOString(), to: window.to.toISOString(), ...attributeShiftSpend(shifts, minuteCosts) };
+  const within = (shifts: readonly ShiftWindow[], cost: { userId: number; minute: Date }) =>
+    shifts.some((shift) => shift.userId === cost.userId && cost.minute.getTime() >= shift.startedAt && cost.minute.getTime() < shift.endedAt);
+  const costs = minuteCosts.filter((cost) => within(ofWindow, cost)
+    || (cost.minute >= window.from && cost.minute < window.to && !within(ofOtherDays, cost)));
+  return { from: window.from.toISOString(), to: window.to.toISOString(), ...attributeShiftSpend(ofWindow, costs) };
 }
 
 export function resolveAiSpendRange(query: AdminAiSpendQuery, now: Date) {
@@ -254,7 +273,8 @@ export async function getAdminAiSpendReport(
 ): Promise<AdminAiSpendResponse> {
   const { from, toExclusive, until } = resolveAiSpendRange(query, now);
   const range = { from, toExclusive, timeZone: MOSCOW_TIME_ZONE };
-  const shiftFrom = new Date(Math.max(from.getTime(), until.getTime() - AI_SPEND_SHIFT_DAYS * DAY_MS));
+  // The period's last Moscow days, whole.
+  const shiftFrom = new Date(Math.max(from.getTime(), addUtcDays(startOfBusinessDay(new Date(until.getTime() - 1)), 1 - AI_SPEND_SHIFT_DAYS).getTime()));
   const [cells, featureUse, topCalls, conversations, changes, shifts] = await Promise.all([
     listAiSpendCells(app.db, range),
     listAiSpendFeatureUse(app.db, range),

@@ -368,6 +368,19 @@ export function dayOfWork(work: { startedAt: number; endedAt: number }): string 
   return moscowDayOf(middleOfWork(work));
 }
 
+const HOUR_MS = 3_600_000;
+
+/**
+ * The Moscow day a person's shift is counted on, on every screen: the day holding most of it (`dayOfWork`); the
+ * person's first shift Hub has, begun within an hour of the first minute Hub heard of them (`firstActivityAt`), by its
+ * start — it began before Hub heard of them, so most of what Hub saw says nothing of its day. Pure.
+ */
+export function dayOfShift(work: { startedAt: number; endedAt: number }, firstActivityAt: number | null | undefined): string {
+  return firstActivityAt !== null && firstActivityAt !== undefined && work.startedAt - firstActivityAt < HOUR_MS
+    ? moscowDayOf(work.startedAt)
+    : dayOfWork(work);
+}
+
 /** Whether a sale is in this piece of work's money. Pure. */
 export function workHoldsSale(work: Pick<ComputedWork, "salesSince" | "endedAt">, sale: { pageLabel: string; at: number }): boolean {
   const since = work.salesSince.get(sale.pageLabel);
