@@ -152,6 +152,9 @@ for (const file of [
   "routes-ai-openers.ts",
   // The owner's AI spend analytics (`/api/v1/admin/ai/spend…`, #915): routes.ts spreads them in.
   "routes-ai-spend.ts",
+  // The owner's shift review and the model questionnaires: routes.ts spreads them in, the barrel re-exports both.
+  "routes-shift-review.ts",
+  "routes-model-applications.ts",
   "routes-ofapi-marketing.ts",
   "ofapi-smart-links.ts",
   "ofapi-extended-commands.ts",

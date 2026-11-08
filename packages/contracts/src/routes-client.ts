@@ -1921,6 +1921,30 @@ export const clientFanslyProxiesResponseSchema = z.object({
 /** The most deleted messages of one fan `clientDeletedMessages` answers, the latest deleted first. */
 export const CLIENT_DELETED_MESSAGES_MAX = 50;
 
+export const clientDeletedMessagesQuerySchema = z.object({
+  /**
+   * The open chat (Fansly's group id): the answer then carries the chat's
+   * length (`chat`). One read when a chat opens, so the length costs no request
+   * of its own (owner, 2026-11-08: «без лишних запросов и точно»).
+   */
+  conversationRef: clientConversationRefSchema.optional(),
+}).strict();
+
+/**
+ * The length of the fan's chat with the page, for the chat header: how many
+ * messages it ever had and since when. Exact or nothing: both stay null until
+ * Hub holds the chat from its very first message (the sync's chain proved
+ * `complete`); then `messages` is the proven chain and what the page's socket
+ * brought after its head, both sides, deleted ones included.
+ */
+export const clientChatLengthSchema = z.object({
+  conversationRef: clientConversationRefSchema,
+  /** Every message of the chat, both sides; null while its history is not proven complete. */
+  messages: z.number().int().nonnegative().nullable(),
+  /** When its first message was sent; null while its history is not proven complete. */
+  firstMessageAt: isoTimestamp.nullable(),
+});
+
 export const clientDeletedMessagesResponseSchema = z.object({
   pageLabel: z.string(),
   fanRef: clientFanRefSchema,
@@ -1940,6 +1964,11 @@ export const clientDeletedMessagesResponseSchema = z.object({
     /** When the page's socket said it was deleted. */
     deletedAt: isoTimestamp,
   })).max(CLIENT_DELETED_MESSAGES_MAX),
+  /**
+   * Only when the request named `conversationRef`: the chat's length; null
+   * when the page holds no thread of that group with this fan.
+   */
+  chat: clientChatLengthSchema.nullable().optional(),
   serverNow: isoTimestamp,
 });
 
@@ -3919,8 +3948,12 @@ export const clientRouteSchemas = {
       + "deleted message as an empty row, this read serves its text: a Fansly deletion is a fact about the message, "
       + "not an erasure (owner, 2026-09-28), and the chat extension shows the fan's deleted messages to the chatters "
       + "of the page (owner, 2026-11-03). Fansly only: on another platform's page the list is empty. `fanRef` is "
-      + "the fan's account id on Fansly.",
+      + "the fan's account id on Fansly. With `conversationRef` (the open chat's group id) the answer also carries "
+      + "`chat`: how many messages that chat ever had (both sides, deleted ones included) and when its first was "
+      + "sent, both null until Hub holds the chat from its first message; null for a group that is not this fan's "
+      + "chat with the page.",
     params: clientPageFanParamsSchema,
+    querystring: clientDeletedMessagesQuerySchema,
     response: {
       200: clientDeletedMessagesResponseSchema,
       400: errorResponseSchema,
@@ -4874,6 +4907,8 @@ export type ClientNoteAttributionsResponse = z.infer<typeof clientNoteAttributio
 export type ClientFanNoteAttributionsResponse = z.infer<typeof clientFanNoteAttributionsResponseSchema>;
 export type ClientMessageAuthorsResponse = z.infer<typeof clientMessageAuthorsResponseSchema>;
 export type ClientDeletedMessagesResponse = z.infer<typeof clientDeletedMessagesResponseSchema>;
+export type ClientDeletedMessagesQuery = z.infer<typeof clientDeletedMessagesQuerySchema>;
+export type ClientChatLength = z.infer<typeof clientChatLengthSchema>;
 export type ClientFanslyProxiesResponse = z.infer<typeof clientFanslyProxiesResponseSchema>;
 export type ClientNoteAttributionWho = z.infer<typeof clientNoteAttributionWhoSchema>;
 export type ClientAudienceNewQuery = z.infer<typeof clientAudienceNewQuerySchema>;

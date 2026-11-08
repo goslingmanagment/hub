@@ -20,6 +20,7 @@ export function registerClientDeletedMessageRoutes(server: ApiServer, ctx: ApiMo
     return readClientDeletedMessages(appContext, principal, {
       pageLabel: request.params.pageLabel,
       fanRef: request.params.fanRef,
+      ...(request.query.conversationRef === undefined ? {} : { conversationRef: request.query.conversationRef }),
     });
   });
 }
