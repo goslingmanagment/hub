@@ -149,11 +149,18 @@ export async function listShiftReviewMessages(
       group by 1, 2, 3
       having count(distinct conv) >= ${input.burstMinChats}
     ),
-    ${broadcastCtesSql("page_msgs", { minChats: input.burstMinChats, ownWords: input.broadcastOwnWords })},
     picked as materialized (
       select pm.* from page_msgs pm
       where (pm.page_id, pm.conv) in (select page_id, conv from chats)
-    )
+    ),
+    -- A broadcast is told within the sends of one file set at one price on a page (and one sender): only the sets the
+    -- chats shown sent can make one of their messages mass, so only those sets' sends are weighed — every chat of theirs.
+    broadcast_msgs as materialized (
+      select pm.* from page_msgs pm
+      where pm.sent and pm.media_key <> '' and (pm.page_id, pm.media_key, coalesce(pm.price_mills, 0)) in (
+        select q.page_id, q.media_key, coalesce(q.price_mills, 0) from picked q where q.sent and q.media_key <> '')
+    ),
+    ${broadcastCtesSql("broadcast_msgs", { minChats: input.burstMinChats, ownWords: input.broadcastOwnWords })}
     select p.page_id, p.platform, p.conv, p.ref, p.at, p.sent,
       case when ${allTexts}::boolean or (p.sent and a.user_id is null) then left(p.text_plain, 2000) end as text,
       case when p.sent and p.price_mills > 0 then p.price_mills end as price_mills,
