@@ -49,7 +49,7 @@ export const REPLY_NORM_SECONDS = 10 * 60;
 export const PICK_MINUTES = 10;
 /** A silence this long inside a chat gets a line of its own in the transcript. */
 export const GAP_MINUTES = 15;
-/** A fan quiet this long inside a wait, who then wrote again, came back (see `cameBack`). */
+/** A fan quiet this long inside a wait, who then wrote again, came back (see `fanReturnOf`). */
 export const FAN_QUIET_SECONDS = 15 * 60;
 
 /**
@@ -174,10 +174,11 @@ export interface ReviewWait {
   inherited: boolean;
   /** The fan wrote within the shift while waiting. */
   fanWrote: boolean;
-  /** The fan's latest message before the wait ended, ms. */
-  lastFanAt: number;
-  /** The fan's longest silence between two of their messages inside the wait, seconds; 0 — one message. */
-  fanQuietSeconds: number;
+  /**
+   * The fan came back: their first message in the counted part of the wait (from the shift's start for a wait from
+   * before it) that broke a silence of FAN_QUIET_SECONDS, when, and how long they had been quiet, seconds.
+   */
+  fanBack: { at: number; quietSeconds: number } | null;
   /** How long, seconds: a wait from before the shift counts from its start (the approved definition). */
   seconds: number;
   /** The reviewed chatter's (see the file's head). */
@@ -223,8 +224,7 @@ export function reviewWaits(data: TeamShiftReviewResponse): ReviewWait[] {
       heldBy,
       inherited: since < start,
       fanWrote: timed.some((one) => isFans(one.message) && one.message.inShift && one.at >= since && one.at <= to),
-      lastFanAt: fanAts.at(-1) ?? since,
-      fanQuietSeconds: fanAts.reduce((longest, one, index) => (index === 0 ? 0 : Math.max(longest, one - fanAts[index - 1]!)), 0) / 1000,
+      fanBack: fanBackOf(fanAts, Math.max(since, start)),
       seconds: (to - Math.max(since, start)) / 1000,
       his: wait.by === "me" || heldByMe || (heldBy === null && !answeredOnTheirWatch),
     };
@@ -232,14 +232,102 @@ export function reviewWaits(data: TeamShiftReviewResponse): ReviewWait[] {
 }
 
 /**
- * A long wait whose fan went quiet and wrote again just before the answer: a
- * «goodnight», then a «good morning» answered in minutes. Worth saying beside
- * the wait, which still counts from its start. A fan who kept writing all the
- * while did not come back: they waited.
+ * The fan's first message from `counted` on that broke a silence of
+ * FAN_QUIET_SECONDS. The first, not the longest silence's or the last: a fan
+ * who came back, got nothing and wrote again an hour later waited that hour,
+ * and the line must not say otherwise.
  */
-export function cameBack(waitSeconds: number, lastFanGapSeconds: number, fanQuietSeconds: number): boolean {
-  return waitSeconds > REPLY_NORM_SECONDS && lastFanGapSeconds <= REPLY_NORM_SECONDS && waitSeconds - lastFanGapSeconds >= 15 * 60
-    && fanQuietSeconds >= FAN_QUIET_SECONDS;
+function fanBackOf(fanAts: readonly number[], counted: number): ReviewWait["fanBack"] {
+  const index = fanAts.findIndex((one, at) => at > 0 && one >= counted && one - fanAts[at - 1]! >= FAN_QUIET_SECONDS * 1000);
+  return index < 0 ? null : { at: fanAts[index]!, quietSeconds: (fanAts[index]! - fanAts[index - 1]!) / 1000 };
+}
+
+/** A long wait whose fan went quiet and wrote again: «молчал 5 ч, снова написал в 10:33, ответ через 4 мин». */
+export interface FanReturn {
+  quietSeconds: number;
+  at: number;
+  /**
+   * From the fan's return to the answer. Within REPLY_NORM_SECONDS the silence
+   * explains the long wait; past it the fan waited after coming back too.
+   */
+  answerSeconds: number;
+}
+
+/**
+ * A long answered wait whose fan went quiet and came back: a «goodnight», then
+ * a «good morning» answered in minutes. Said beside the wait, which still
+ * counts from its start (the owner, 2026-11-08: the wait is not cut at the
+ * silence, so a fan asked about a custom and ignored for hours stays seen). A
+ * fan who kept writing all the while did not come back: they waited.
+ */
+export function fanReturnOf(wait: ReviewWait): FanReturn | null {
+  if (wait.by === null || wait.fanBack === null || wait.seconds <= REPLY_NORM_SECONDS) return null;
+  return { quietSeconds: wait.fanBack.quietSeconds, at: wait.fanBack.at, answerSeconds: (wait.to - wait.fanBack.at) / 1000 };
+}
+
+/**
+ * What a fan's message was, for the last one of a wait left open. A goodbye, an
+ * «ok» or «спасибо» and an emoji need no answer (the owner, 2026-11-08): such a
+ * chat stays «без ответа» and in its number, but is not a strong reason to look
+ * at it. Only a short message counts so, and only all of it: «ok i will wait»,
+ * «goodnight, text me tomorrow» and anything asked are not a goodbye.
+ */
+export type FanLastKind = "farewell" | "thanks" | "emoji" | "media" | "question" | "other";
+
+/** A goodbye anywhere in a short message: «Goodnight ma'am, sleep well 🫶», «talk to you tomorrow». */
+const FAREWELL_RE = new RegExp([
+  String.raw`go+d\s*-?\s*ni+(gh)?t`, String.raw`\bhave\s+an?\s+(\p{L}+\s+)?(night|day|evening|weekend)\b`, String.raw`\benjoy\s+your\s+(night|evening|day)\b`, String.raw`\bgn\b`, String.raw`\bnighty?\s*night\b`, String.raw`sweet\s*dreams`, String.raw`\bsleep\s+(well|tight)\b`,
+  String.raw`\b(going|off|heading|gonna\s+go)\s+(to\s+)?(bed|sleep)\b`, String.raw`\b(good\s*)?bye+\b`, String.raw`\bcya\b`, String.raw`\bsee\s+ya\b`,
+  String.raw`\bsee\s+(you|u)\s+(later|soon|tomorrow|tmrw|another\s+day|next\s+time)\b`, String.raw`\btalk\s+((to\s+(you|u)|more)\s+)?(later|tomorrow|tmrw|soon)\b`,
+  String.raw`\bttyl\b`, "спокойной\\s+ночи", "сладких\\s+снов", "до\\s+завтра", "споки",
+].join("|"), "iu");
+/** «пока» is a goodbye only at the start of a few words of goodbye: «пока, милая», not «пока не знаю». */
+const SHORT_BYES = new Set(["пока", "покеда", "бай"]);
+/** Words that ask for something or keep the talk going: a goodbye with them still wants an answer. */
+const WANTS_RE = new RegExp([
+  String.raw`\b(wait|waiting|custom|send|show\s+me|reply|respond|answer|tell\s+me|let\s+me\s+know|text\s+me|message\s+me|write\s+me|dm\s+me|call\s+me|buy|pay|price|how\s+much|want|wanna|need|please|pls|plz|can\s+(you|u|i)|could\s+(you|u)|will\s+(you|u)|would\s+(you|u)|but|don'?t\s+(go|leave|sleep)|not\s+yet)\b`,
+  String.raw`good\s*morning`, "(?<!\\p{L})(жд[уаё]|ответ|напиш|кастом|пришли|скинь|покажи|хочу|можешь|пожалуйста|сколько|но(?!\\p{L})|доброе\\s+утро)",
+].join("|"), "iu");
+const THANKS_WORDS = new Set([
+  "ok", "okay", "okey", "okie", "oki", "okk", "k", "kk", "alright", "aight", "cool", "nice", "great", "perfect", "sure", "np", "yw",
+  "thanks", "thank", "thx", "ty", "tysm", "lol", "haha", "hahaha", "hehe", "lmao", "ок", "окей", "оки", "хорошо", "ладно", "спасибо", "понял", "поняла", "ясно",
+]);
+/** Said beside an «ok» or thanks without making it more: «thank you so much babe». */
+const FILLER_WORDS = new Set([
+  "you", "u", "so", "much", "very", "too", "babe", "baby", "love", "honey", "hun", "dear", "darling", "sweetie", "sweetheart", "beautiful", "gorgeous",
+  "ma'am", "maam", "mistress", "queen", "xx", "xoxo", "doki", "доки", "большое", "тебе", "вам", "милая",
+]);
+const PICTURE = String.raw`\p{Extended_Pictographic}|[♡♥❣]|<3|[:;=]-?[)(DPp3*]|xD|\^\^`;
+const EMOJI_ONLY_RE = new RegExp(String.raw`^(?:${PICTURE}|[\p{Emoji_Modifier}\p{Regional_Indicator}\u200d\ufe0f\s.!,])+$`, "u");
+const PICTURE_RE = new RegExp(PICTURE, "u");
+
+/** A file or a tip — «media» — wants an answer, whatever its words. */
+export function fanLastKind(message: Pick<ShiftReviewMessage, "text" | "media" | "tipMills">): FanLastKind {
+  if (message.media > 0 || (message.tipMills ?? 0) > 0) return "media";
+  const text = message.text.trim();
+  if (text === "") return "other";
+  if (/[?¿]/.test(text)) return "question";
+  if (EMOJI_ONLY_RE.test(text) && PICTURE_RE.test(text)) return "emoji";
+  const words = text.toLowerCase().replace(new RegExp(PICTURE, "gu"), " ").match(/[\p{L}\p{N}']+/gu) ?? [];
+  const shortBye = words.length <= 3 && SHORT_BYES.has(words[0] ?? "") && words.slice(1).every((word) => FILLER_WORDS.has(word));
+  if (!WANTS_RE.test(text) && (shortBye || (words.length <= 20 && FAREWELL_RE.test(text)))) return "farewell";
+  if (words.length <= 6 && words.some((word) => THANKS_WORDS.has(word)) && words.every((word) => THANKS_WORDS.has(word) || FILLER_WORDS.has(word))) return "thanks";
+  return "other";
+}
+
+/** A fan's last word that needs no answer: a goodbye, an «ok» or thanks, an emoji. */
+export function needsNoAnswer(kind: FanLastKind | null): boolean {
+  return kind === "farewell" || kind === "thanks" || kind === "emoji";
+}
+
+/**
+ * A wait left open whose fan's last word needs no answer, and who asked
+ * nothing and sent nothing in it before: «сколько за кастом?», then «goodnight»
+ * hours later, is a fan left without an answer.
+ */
+function openNeedsNoAnswer(fanMessages: readonly ShiftReviewMessage[]): boolean {
+  const kinds = fanMessages.map(fanLastKind);
+  return kinds.length > 0 && needsNoAnswer(kinds.at(-1)!) && !kinds.some((kind) => kind === "question" || kind === "media");
 }
 
 /** A wait the chatter left without an answer at the end: the fan wrote in the shift, or began waiting in it. */
@@ -488,6 +576,8 @@ export interface ShiftTotals {
   /** Of them, waiting since before the shift too; and who began waiting in the last REPLY_NORM_SECONDS of it. */
   unansweredInherited: number;
   unansweredLate: number;
+  /** Of them, whose fan's last word needed no answer: a goodbye, an «ok» or thanks, an emoji (`openNoNeed`). */
+  unansweredNoNeed: number;
   /** Fans waiting since before the shift who did not write in it and got no answer in it. */
   waitingSilently: number;
   /** Chats colleagues kept, who, and their fans left without an answer. */
@@ -536,6 +626,7 @@ export function totalsOf(data: TeamShiftReviewResponse, mine: readonly MyMessage
     unanswered: unanswered.length,
     unansweredInherited: unanswered.filter((wait) => wait.inherited).length,
     unansweredLate: unanswered.filter((wait) => wait.since >= end - REPLY_NORM_SECONDS * 1000).length,
+    unansweredNoNeed: summaries.filter((summary) => summary.unansweredInShift && summary.openNoNeed).length,
     waitingSilently: waits.filter(waitingSilently).length,
     colleagueChats: colleagueSummaries.length,
     colleagues: [...new Set(colleagueSummaries.flatMap((summary) => summary.colleagues.map((one) => one.name)))],
@@ -598,8 +689,8 @@ export interface ChatSummary {
   longestWaitInherited: boolean;
   /** A colleague ended it. */
   longestWaitAnsweredBy: string | null;
-  /** The fan wrote again this long before the answer, when that is well inside the wait, seconds. */
-  longestWaitLastFanSeconds: number | null;
+  /** The fan of that wait went quiet and came back (see `fanReturnOf`). */
+  longestWaitReturn: FanReturn | null;
   /** The chatter's fan without an answer at the end: how long (from the shift's start for a wait from before it), since when. */
   openWaitSeconds: number | null;
   openSince: number | null;
@@ -611,6 +702,10 @@ export interface ChatSummary {
   waitingSinceBefore: boolean;
   /** The colleague whose wait the fan left without an answer at the end is. */
   openHeldBy: string | null;
+  /** The fan's last message in the chatter's wait left open at the end: what it was (see `fanLastKind`), its text, when. */
+  openLast: { kind: FanLastKind; text: string; at: number } | null;
+  /** That wait needs no answer: the fan's last word was a goodbye, an «ok» or an emoji, and they asked nothing in it. */
+  openNoNeed: boolean;
   repeated: number;
   marked: number;
   ppv: number;
@@ -655,7 +750,9 @@ export function summariesOf(data: TeamShiftReviewResponse, allWaits: readonly Re
       : fan.length > 0 || answered.length > 0 || mine.some((message) => message.mine!.replySeconds !== null) ? "dialog"
         : mine.length > 0 ? "touch"
           : "waiting";
-    const lastFanGap = longest === null ? null : (longest.to - longest.lastFanAt) / 1000;
+    const openFan = openHis === null ? []
+      : chat.messages.filter((message) => isFans(message) && Date.parse(message.at) >= openHis.since && Date.parse(message.at) <= openHis.to);
+    const openLast = openFan.at(-1);
     return {
       chat,
       kind,
@@ -674,13 +771,15 @@ export function summariesOf(data: TeamShiftReviewResponse, allWaits: readonly Re
       longestWaitSeconds: longest?.seconds ?? null,
       longestWaitInherited: longest?.inherited ?? false,
       longestWaitAnsweredBy: longest?.by === "other" ? longest.byName ?? "коллега" : null,
-      longestWaitLastFanSeconds: longest !== null && lastFanGap !== null && cameBack(longest.seconds, lastFanGap, longest.fanQuietSeconds) ? lastFanGap : null,
+      longestWaitReturn: longest === null ? null : fanReturnOf(longest),
       openWaitSeconds: openHis?.seconds ?? null,
       openSince: openHis?.since ?? null,
       unansweredInShift: openHis !== null && unansweredInShift(openHis),
       unansweredLate: openHis !== null && unansweredInShift(openHis) && openHis.since >= end - REPLY_NORM_SECONDS * 1000,
       waitingSinceBefore: openHis !== null && waitingSilently(openHis),
       openHeldBy: open !== null && !open.his ? open.heldBy ?? colleagues[0]?.name ?? "коллега" : null,
+      openLast: openLast === undefined ? null : { kind: fanLastKind(openLast), text: openLast.text, at: Date.parse(openLast.at) },
+      openNoNeed: openNeedsNoAnswer(openFan),
       repeated: mine.filter((message) => message.mine!.repeats > 0).length,
       marked: mine.filter((message) => message.mine!.marks.length > 0).length,
       ppv: mine.filter((message) => message.priceMills !== null).length,
@@ -721,7 +820,8 @@ export function sortSummaries(list: readonly ChatSummary[], sort: ChatSort): Cha
     switch (sort) {
       case "messages": return [-(summary.mine + summary.fan), summary.openSince ?? Number.MAX_SAFE_INTEGER];
       case "time": return [summary.first ?? summary.openSince ?? Number.MAX_SAFE_INTEGER, 0];
-      case "wait": return [-Math.max(summary.longestWaitSeconds ?? -1, summary.openWaitSeconds ?? -1), summary.openSince ?? Number.MAX_SAFE_INTEGER];
+      // A goodbye left without an answer is not a long wait to look at first.
+      case "wait": return [-Math.max(summary.longestWaitSeconds ?? -1, summary.openNoNeed ? -1 : summary.openWaitSeconds ?? -1), summary.openSince ?? Number.MAX_SAFE_INTEGER];
       case "money": return [-summary.heldNetMills, -summary.ppv];
     }
   };

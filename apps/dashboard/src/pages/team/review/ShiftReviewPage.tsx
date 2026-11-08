@@ -382,6 +382,7 @@ function ShiftReview({ userId, at }: { userId: number; at: string }) {
             фанов, писавших в смену
             {totals.unansweredInherited > 0 && <>, из них ждали ещё с прошлых смен {formatCount(totals.unansweredInherited)}</>}
             {totals.unansweredLate > 0 && <> · написали за последние {REPLY_NORM_SECONDS / 60} мин смены: {formatCount(totals.unansweredLate)}</>}
+            {totals.unansweredNoNeed > 0 && <> · последним было прощание, «ok» или эмодзи: {formatCount(totals.unansweredNoNeed)}</>}
             {totals.handedOverUnanswered > 0 && <> · ещё {formatCount(totals.handedOverUnanswered)} без ответа после сообщения коллеги — не в счёте</>}
           </>}
         />
