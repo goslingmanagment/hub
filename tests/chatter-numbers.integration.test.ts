@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { createFanslyPage, createModel, readShiftNumbers, upsertTransaction } from "@agency_hub_core/db";
+import { createFanslyPage, createModel, listShiftReviewMessages, readShiftNumbers, upsertTransaction } from "@agency_hub_core/db";
 
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import { createUserAccount } from "../apps/runtime/src/services/auth.ts";
@@ -180,5 +180,46 @@ describe("the numbers of a chatter's shift", () => {
     expect(offScope.chatters).toEqual([]);
     const someoneElse = await readTeamChatterNumbers(app, lead, { ...window, userId: vanya, pageScope: [a] });
     expect(someoneElse.chatters).toEqual([]);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("takes a PPV whose offer is stuck at 'unknown' for bought by this chat's fan's purchase after it, not another fan's", async (context) => {
+    if (!testDb) return context.skip();
+    // One offer sent to two fans (offers are reused); the platform never moved it past 'unknown'. Fan A bought it after his
+    // message; fan B bought the same offer before his — neither is a purchase of B's message.
+    const model = await createModel(app.db, { slug: "stuck", name: "Stuck" });
+    const page = (await createFanslyPage(app.db, { modelId: model!.id, label: "stuck-1" }))!.id;
+    const fans = [["7500000001", "8950000001", "9500000001", 40], ["7500000002", "8950000002", "9500000002", 35]] as const;
+    const fanIds: number[] = [];
+    for (const [fanRef, chat, ref, minutesBeforeEnd] of fans) {
+      const fanId = Number((await q("insert into fans (platform, platform_user_id, username) values ('fansly', $1, $1) returning id", [fanRef])).rows[0].id);
+      fanIds.push(fanId);
+      await q(`insert into page_dm_threads (platform_account_id, fan_id, platform_conversation_id, partner_platform_user_id) values ($1, $2, $3, $4)`,
+        [page, fanId, chat, fanRef]);
+      await q(`insert into message_archive (account_id, platform, conversation_ref, message_ref, sender_role, is_sent_by_me, occurred_at, text_plain,
+                 media_metadata, price_mills, message_type)
+               values ($1, 'fansly', $2, $3, 'model', true, $4, 'just for you', '[{"type":"video"}]'::jsonb, 30000, 1)`,
+        [page, chat, ref, at(minutesBeforeEnd)]);
+      await q(`insert into client_send_attributions (platform, page_id, platform_message_id, fan_ref, user_id, source, priced, with_media, observed_at, composed_with)
+               values ('fansly', $1, $2, $3, $4, 'fansly-extension', false, true, $5, 'hand')`, [page, ref, fanRef, vanya, at(minutesBeforeEnd)]);
+      await q(`insert into message_media_offers (page_id, platform, message_ref, offer_ordinal, media_offer_ref, conversation_ref, fan_platform_user_id,
+                 message_created_at, offer_type, mime_type, duration_ms, price_mills, purchase_state, first_observed_at, last_observed_at,
+                 content_hash, source_event_id, source_observation_id, source_account_seq)
+               values ($1, 'fansly', $2, 0, 'offer-stuck', $3, $4, $5, 1, 'video/mp4', 1000, 30000, 'unknown', now(), now(), $6, 1, 1, 1)`,
+        [page, ref, chat, fanRef, at(minutesBeforeEnd), "b".repeat(64)]);
+    }
+    for (const [name, fanId, minutesBeforeEnd] of [["stuck-a", fanIds[0]!, 20], ["stuck-b", fanIds[1]!, 50]] as const) {
+      await upsertTransaction(app.db, {
+        platformAccountId: page, source: "fansly:rest", fanId, transactionId: name, rawType: "7001", canonicalType: "message_purchase",
+        transactionState: "posted", rawStatus: "ok", grossAmountMills: 30_000n, sourceDestinationAmountMills: 30_000n, creatorNetAmountMills: 24_000n,
+        occurredAt: at(minutesBeforeEnd), correlationId: "offer-stuck",
+      });
+    }
+
+    const row = await readShiftNumbers(app.db, { userId: vanya, pageIds: [page], from: at(45), to: end, burstMinChats: 5 });
+    expect(row).toMatchObject({ ppvSent: 2, ppvBought: 1, boughtPrices: [30_000] });
+    const review = await listShiftReviewMessages(app.db, {
+      userId: vanya, pageIds: [page], workedPageIds: [], from: at(45), to: end, horizonHours: 72, burstMinChats: 5,
+    });
+    expect(review.map((message) => [message.ref, message.bought])).toEqual([["9500000001", true], ["9500000002", false]]);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 });

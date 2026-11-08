@@ -1,6 +1,7 @@
 import { sql, type SQL } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
+import { ppvBoughtSql } from "./shift-sql.ts";
 
 // Chat Memory week 6, «Покрытие» (docs/plans/2026-10-24-chat-memory/week-6.md
 // §В–Г): read-only analytics over what Hub already holds. Money is net
@@ -375,12 +376,7 @@ export async function listBroadcasts(
             and t.occurred_at >= c.at and t.occurred_at < c.at + interval '7 days'
         ) as bought,
         coalesce(c.price_mills, 0) > 0 and (
-          (c.platform = 'fansly' and (
-            exists (select 1 from message_media_offers mo where mo.page_id = c.page_id and mo.message_ref = c.message_ref and mo.purchase_state = 'purchased')
-            or exists (select 1 from media_orders mo where mo.page_id = c.page_id and mo.message_ref = c.message_ref)))
-          or (c.platform = 'onlyfans' and exists (
-            select 1 from page_dm_messages d
-            where d.platform_account_id = c.page_id and d.platform_message_id = c.message_ref and d.purchased_at is not null))
+          ${ppvBoughtSql({ pageId: "c.page_id", platform: "c.platform", ref: "c.message_ref", conv: "c.conv", at: "c.at" })}
           or exists (
             select 1 from page_dm_threads th
             join transactions t on t.fan_id = th.fan_id and t.platform_account_id = th.platform_account_id

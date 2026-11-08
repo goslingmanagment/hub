@@ -1,7 +1,7 @@
 import { sql } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
-import { notOwnAccountMessageSql } from "./shift-sql.ts";
+import { notOwnAccountMessageSql, ppvBoughtSql } from "./shift-sql.ts";
 
 // The numbers of one chatter's shift (Chat Memory week 5, 0305/0306/0311,
 // docs/plans/2026-10-24-chat-memory/week-5.md §1). Only messages with this
@@ -76,13 +76,7 @@ export async function readShiftNumbers(
     bought as (
       select x.ref, x.price_mills
       from mine x
-      where x.priced and (
-        (x.platform = 'fansly' and (
-          exists (select 1 from message_media_offers mo where mo.page_id = x.page_id and mo.message_ref = x.ref and mo.purchase_state = 'purchased')
-          or exists (select 1 from media_orders o where o.page_id = x.page_id and o.message_ref = x.ref)))
-        or (x.platform = 'onlyfans' and exists (
-          select 1 from page_dm_messages d where d.platform_account_id = x.page_id and d.platform_message_id = x.ref and d.purchased_at is not null))
-      )
+      where x.priced and ${ppvBoughtSql({ pageId: "x.page_id", platform: "x.platform", ref: "x.ref", conv: "x.conv", at: "x.at" })}
     ),
     written as (
       select page_id, fan_ref, min(observed_at) as first_at from mine where fan_ref is not null group by 1, 2
