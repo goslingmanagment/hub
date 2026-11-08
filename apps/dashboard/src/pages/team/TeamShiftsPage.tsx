@@ -1,9 +1,15 @@
 import { useState, type CSSProperties, type ReactNode } from "react";
 import { Link, useLocation, useNavigate, useSearchParams } from "react-router";
 import {
+  CHATTER_SHIFT_CLOSED_GRACE_MINUTES,
+  CHATTER_SHIFT_CLOSED_SILENT_MINUTES,
+  CHATTER_SHIFT_EDGE_NEAR_MINUTES,
+  CHATTER_SHIFT_IDLE_PAUSE_MINUTES,
+  CHATTER_SHIFT_LOOK_IN_JOIN_MINUTES,
   CHATTER_SHIFT_MIN_MESSAGES,
   CHATTER_SHIFT_MIN_WORKED_MINUTES,
   CHATTER_SHIFT_PAGE_MIN_MESSAGES,
+  CHATTER_SHIFT_PIECE_MIN_MESSAGES,
   CHATTER_SHIFTS_MAX_WINDOW_DAYS,
   type KernelOperationResponse,
   type TeamShift,
@@ -570,18 +576,25 @@ function HowItCounts({ page }: { page: string | null }) {
       </p>
       <p>
         Сменой считается работа от {formatDuration(CHATTER_SHIFT_MIN_WORKED_MINUTES)} и {CHATTER_SHIFT_MIN_MESSAGES} сообщений.
-        Меньше — работа вне смены, в этом списке её нет. Пара сообщений до начала смены или после её конца — тоже работа вне смены,
-        а не часть смены.
+        Меньше — работа вне смены, в этом списке её нет. Кусок работы рядом со сменой, ближе {formatDuration(CHATTER_SHIFT_EDGE_NEAR_MINUTES)} к ней,
+        — её часть, если в нём есть хотя бы одно сообщение; куски дальше — её часть, только если в них вместе от {CHATTER_SHIFT_PIECE_MIN_MESSAGES} сообщений,
+        иначе это работа вне смены. Заход до смены с {CHATTER_SHIFT_PIECE_MIN_MESSAGES} и больше сообщениями, закончившийся не раньше чем
+        за {formatDuration(CHATTER_SHIFT_LOOK_IN_JOIN_MINUTES)} до неё, — её начало, а промежуток — пауза; такой же заход после смены остаётся работой вне смены.
       </p>
-      <p>Первые 10 минут без действий — работа (читает чат, ждёт ответа фана); дальше — пауза до следующего действия. «Отработано» — смена без пауз.</p>
+      <p>
+        Первые {CHATTER_SHIFT_IDLE_PAUSE_MINUTES} минут без действий — работа (читает чат, ждёт ответа фана); дальше — пауза до следующего действия.
+        Если расширение при этом закрыто ({CHATTER_SHIFT_CLOSED_SILENT_MINUTES} минут и больше от него ни слова), работа кончается
+        через {CHATTER_SHIFT_CLOSED_GRACE_MINUTES} минуты после того, как его закрыли. «Отработано» — смена без пауз.
+      </p>
       <p>
         «Сообщения» — сколько сообщений за смену Hub записал на чаттера, всего и по страницам; сообщения с телефона и из
         браузера без расширения сюда не попадают. Страницы, где чаттер ничего не написал, а только заглядывал, не показаны.
         Серым — страница, где меньше {CHATTER_SHIFT_PAGE_MIN_MESSAGES} сообщений: её продажи в смену не идут.
       </p>
       <p>
-        С выбранной страницей смена собирается только из работы на ней{page ? ` (${page})` : ""}, и продажи — только её:
-        чаттер, у которого на этой странице меньше {formatDuration(CHATTER_SHIFT_MIN_WORKED_MINUTES)} и {CHATTER_SHIFT_MIN_MESSAGES} сообщений, не показан.
+        С выбранной страницей{page ? ` (${page})` : ""} смена та же — её начало, конец и отработанное время из всей работы чаттера, —
+        а сообщения и продажи только этой страницы. Смена видна, если в ней от {CHATTER_SHIFT_PAGE_MIN_MESSAGES} сообщений на этой странице;
+        идущая — сразу.
       </p>
       <p>
         Автор сообщения — чаттер, из чьего браузера с расширением ChatGoose оно ушло. Hub узнаёт его из запроса, который

@@ -3446,7 +3446,10 @@ export const teamShiftExportResponseSchema = z.object({
 /** Chat Memory week 5: the longest window of the chatter numbers. */
 export const CHATTER_NUMBERS_MAX_DAYS = 31;
 
-/** The eight numbers of a shift or a week (week-5.md §1); only messages with the chatter as their author count. */
+/**
+ * The eight numbers of a shift or a week (week-5.md §1); only messages with the chatter as their author count. The
+ * messages, replies, their median and the fans left without an answer are «Разбор смены»'s (shift-review-rules.ts).
+ */
 export const chatterNumbersSchema = z.object({
   workedMinutes: count,
   /** Credited by confirmed shift reports; null — not confirmed (a week: the confirmed shifts only). */
@@ -3456,18 +3459,23 @@ export const chatterNumbersSchema = z.object({
   fansWritten: count,
   /** Of `fansWritten`: paid on the page after the chatter's first message to them in the shift, before its end. */
   fansPaid: count,
+  /** The chatter's personal messages the fans could see; mass ones are not among them. */
   messages: count,
   ppvSent: count,
   ppvBought: count,
   ppvAveragePriceMills: mills.nullable(),
-  /** `ppvSent / messages`; null without messages. */
+  /** `ppvSent` of all the chatter's messages, mass ones too; null without messages. */
   ppvShare: z.number().nullable(),
   /** The chatter's messages that answered a fan who was waiting. */
   replies: count,
   replyMedianSeconds: count.nullable(),
   repliesWithinHour: count,
-  /** Fans whose last message at the shift's end was theirs (a week: the average per shift). */
+  /**
+   * «Без ответа к концу смены»: the chatter's fans who wrote in the shift (or began waiting in it) and got no answer
+   * before its end — not a colleague's, not one waiting silently since a past shift (a week: the average per shift).
+   */
   waitingAtEnd: count,
+  /** How the chatter's messages, mass ones too, were written: the extension's word on each. */
   composed: z.object({ hand: count, reply: count, fix: count, other: count }),
 });
 

@@ -10,8 +10,9 @@ import { PageLink } from "./teamLinks.js";
 
 /**
  * «Подробно по сменам» on a chatter's screen: the numbers that take long to
- * count, shift by shift (`teamChatterNumbers` for this one person). Read only
- * at the first opening; `from` is the Moscow midnight the window starts at.
+ * count, shift by shift (`teamChatterNumbers` for this one person), counted as
+ * «Разбор смены» counts them. Read only at the first opening; `from` is the
+ * Moscow midnight the window starts at.
  */
 
 function share(part: number, whole: number): string {
@@ -27,6 +28,8 @@ export function replyOf(numbers: Pick<ChatterNumbers, "replies" | "replyMedianSe
 
 function Cells({ numbers, average }: { numbers: ChatterNumbers; average?: boolean }) {
   const { composed } = numbers;
+  // Of all the chatter's messages, mass ones too.
+  const written = composed.hand + composed.reply + composed.fix + composed.other;
   return (
     <>
       <td className="num">{formatCount(numbers.ppvSent)} / {formatCount(numbers.ppvBought)}</td>
@@ -38,9 +41,9 @@ function Cells({ numbers, average }: { numbers: ChatterNumbers; average?: boolea
         {average && <span className="team-sub">в среднем</span>}
       </td>
       <td className="num">
-        {numbers.messages === 0
+        {written === 0
           ? "—"
-          : `${share(composed.hand, numbers.messages)} / ${share(composed.reply, numbers.messages)} / ${share(composed.fix, numbers.messages)}`}
+          : `${share(composed.hand, written)} / ${share(composed.reply, written)} / ${share(composed.fix, written)}`}
       </td>
     </>
   );
@@ -72,7 +75,7 @@ function Numbers({ userId, from }: { userId: number; from: string }) {
             <th scope="col" className="num">Средняя цена</th>
             <th scope="col" className="num">Доля платных</th>
             <th scope="col" className="num">Ответ: медиана, за час</th>
-            <th scope="col" className="num">Ждали ответа в конце смены</th>
+            <th scope="col" className="num">Без ответа к концу смены</th>
             <th scope="col" className="num">Руками / Reply / Fix</th>
           </tr>
         </thead>
@@ -104,7 +107,7 @@ export function ChatterShiftNumbers({ userId, firstDay }: { userId: number; firs
     <DisclosureCard
       lazy
       title="Подробно по сменам"
-      description="Цена и доля платных сообщений, ответ, кто ждал в конце смены. Считается дольше: при открытии."
+      description="Цена и доля платных сообщений, ответ, кто остался без ответа к концу смены — так же, как в «Разборе смены». Считается дольше: при открытии."
     >
       <Numbers userId={userId} from={from} />
     </DisclosureCard>

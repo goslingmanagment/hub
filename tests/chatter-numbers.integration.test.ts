@@ -1,20 +1,24 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { createFanslyPage, createModel, listShiftReviewMessages, readShiftNumbers, upsertTransaction } from "@agency_hub_core/db";
+import { createFanslyPage, createModel, listShiftReviewMessages, upsertTransaction } from "@agency_hub_core/db";
 
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import { createUserAccount } from "../apps/runtime/src/services/auth.ts";
-import { numbersOf, readTeamChatterNumbers } from "../apps/runtime/src/services/chatter-numbers.ts";
+import { numbersOf, readShiftNumbers, readTeamChatterNumbers } from "../apps/runtime/src/services/chatter-numbers.ts";
 import { startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 import { INTEGRATION_TEST_TIMEOUT_MS } from "./helpers/timeouts.ts";
 import { fixtureUserId } from "./helpers/user-identity.ts";
 
-// The numbers of a chatter's shift (Chat Memory week 5, week-5.md §1): only
-// the chatter's authored messages count; a reply is the chatter's message to
-// a fan who wrote after the page's last personal message; a mass message
-// (Fansly's, or one text to 5+ chats in an hour) answers nobody; a fan whose
-// last message is theirs at the end is waiting; a PPV is priced in the archive.
+// The numbers of a chatter's shift (Chat Memory week 5, week-5.md §1), read
+// and counted as «Разбор смены» does: only the chatter's authored messages
+// count, and of them the personal ones are «Сообщения»; a reply is the
+// chatter's message to a fan who wrote after the page's last personal message;
+// a mass message (Fansly's, or one text to 5+ chats in an hour) answers nobody;
+// a fan who wrote and got no answer is the chatter's unless a colleague kept
+// the chat; a page the shift did not keep shows only its chats the chatter
+// wrote in; a chat with another page of ours is no fan's; a PPV is priced in
+// the archive.
 
 let testDb: StartedTestDatabase | null = null;
 let app: AppContext;
@@ -40,6 +44,14 @@ async function authored(ref: string, input: { minutesBeforeEnd: number; priced: 
   await q(`insert into client_send_attributions (platform, page_id, platform_message_id, fan_ref, user_id, source, priced, with_media, observed_at, composed_with)
            values ('fansly', $1, $2, '7000000001', $3, 'fansly-extension', $4, $4, $5, $6)`,
     [pageId, ref, vanya, input.priced, at(input.minutesBeforeEnd), input.composedWith]);
+}
+
+/** Ваня's numbers on one page from `fromMinutesBeforeEnd` to the end, every fan of it in. */
+function shiftNumbers(page: number, fromMinutesBeforeEnd: number) {
+  return readShiftNumbers(app, {
+    userId: vanya, username: "vanya", pages: [{ id: page, label: `page-${page}` }], allFansPageIds: [page],
+    start: at(fromMinutesBeforeEnd).getTime(), end: end.getTime(), openings: [],
+  });
 }
 
 describe("the numbers of a chatter's shift", () => {
@@ -84,9 +96,10 @@ describe("the numbers of a chatter's shift", () => {
 
   it("counts the chatter's messages, replies, PPV, payers and who waits at the end", async (context) => {
     if (!testDb) return context.skip();
-    const row = await readShiftNumbers(app.db, { userId: vanya, pageIds: [pageId], from: at(60), to: end, burstMinChats: 5, deletedUnseenSeconds: 60, broadcastOwnWords: 4 });
+    const row = await shiftNumbers(pageId, 60);
     expect(row).toEqual({
       messages: 2,
+      massMessages: 0,
       ppvSent: 1,
       ppvBought: 1,
       boughtPrices: [25_000],
@@ -121,8 +134,9 @@ describe("the numbers of a chatter's shift", () => {
                values ('fansly', $1, $2, $3, $4, 'fansly-extension', false, false, $5, 'hand')`,
         [page, String(9300000010 + index), String(7300000001 + index), vanya, at(20)]);
     }
-    const row = await readShiftNumbers(app.db, { userId: vanya, pageIds: [page], from: at(60), to: end, burstMinChats: 5, deletedUnseenSeconds: 60, broadcastOwnWords: 4 });
-    expect(row).toMatchObject({ messages: 5, replyDelays: [], waitingAtEnd: 1 });
+    // His five are mass messages: not «Сообщения», as in the review, and none answers the fan.
+    const row = await shiftNumbers(page, 60);
+    expect(row).toMatchObject({ messages: 0, massMessages: 5, replyDelays: [], waitingAtEnd: 1 });
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("takes a broadcast with names for a mass message, but not its message with a live answer", async (context) => {
@@ -157,11 +171,9 @@ describe("the numbers of a chatter's shift", () => {
       await archive(ref, String(8970000001 + index), false, 55 - index * 12, text, media);
       await sent(ref, String(7700000001 + index), 55 - index * 12);
     }
-    const row = await readShiftNumbers(app.db, {
-      userId: vanya, pageIds: [page], from: at(60), to: end, burstMinChats: 5, deletedUnseenSeconds: 60, broadcastOwnWords: 4,
-    });
-    // Only the live answer replied (the second fan waited 15 minutes); the first fan still waits.
-    expect(row).toMatchObject({ messages: 5, ppvSent: 5, replyDelays: [15 * 60], waitingAtEnd: 1 });
+    const row = await shiftNumbers(page, 60);
+    // Only the live answer replied (the second fan waited 15 minutes) and is a personal message; the first fan still waits.
+    expect(row).toMatchObject({ messages: 1, massMessages: 4, ppvSent: 5, replyDelays: [15 * 60], waitingAtEnd: 1 });
     const review = await listShiftReviewMessages(app.db, {
       userId: vanya, pageIds: [page], workedPageIds: [page], from: at(60), to: end, horizonHours: 72, burstMinChats: 5, deletedUnseenSeconds: 60,
       broadcastOwnWords: 4,
@@ -190,10 +202,8 @@ describe("the numbers of a chatter's shift", () => {
                values ('fansly', $1, $2, $3, $4, 'fansly-extension', false, true, $5, 'hi')`,
         [page, ref, String(7800000001 + index), vanya, at(20)]);
     }
-    const row = await readShiftNumbers(app.db, {
-      userId: vanya, pageIds: [page], from: at(60), to: end, burstMinChats: 5, deletedUnseenSeconds: 60, broadcastOwnWords: 4,
-    });
-    expect(row).toMatchObject({ messages: 5, replyDelays: [10 * 60], waitingAtEnd: 0 });
+    const row = await shiftNumbers(page, 60);
+    expect(row).toMatchObject({ messages: 5, massMessages: 0, replyDelays: [10 * 60], waitingAtEnd: 0 });
     const review = await listShiftReviewMessages(app.db, {
       userId: vanya, pageIds: [page], workedPageIds: [page], from: at(60), to: end, horizonHours: 72, burstMinChats: 5, deletedUnseenSeconds: 60,
       broadcastOwnWords: 4,
@@ -291,7 +301,7 @@ describe("the numbers of a chatter's shift", () => {
       });
     }
 
-    const row = await readShiftNumbers(app.db, { userId: vanya, pageIds: [page], from: at(45), to: end, burstMinChats: 5, deletedUnseenSeconds: 60, broadcastOwnWords: 4 });
+    const row = await shiftNumbers(page, 45);
     expect(row).toMatchObject({ ppvSent: 2, ppvBought: 1, boughtPrices: [30_000] });
     const review = await listShiftReviewMessages(app.db, {
       userId: vanya, pageIds: [page], workedPageIds: [], from: at(45), to: end, horizonHours: 72, burstMinChats: 5, deletedUnseenSeconds: 60, broadcastOwnWords: 4,
@@ -330,7 +340,7 @@ describe("the numbers of a chatter's shift", () => {
     await archive("9600000007", false, 8, 300, true);
     await sent("9600000007", 8);
 
-    const row = await readShiftNumbers(app.db, { userId: vanya, pageIds: [page], from: at(60), to: end, burstMinChats: 5, deletedUnseenSeconds: 60, broadcastOwnWords: 4 });
+    const row = await shiftNumbers(page, 60);
     expect(row).toMatchObject({ messages: 3, replyDelays: [360], composed: { hand: 3, reply: 0, fix: 0, other: 0 }, waitingAtEnd: 0 });
     const review = await listShiftReviewMessages(app.db, {
       userId: vanya, pageIds: [page], workedPageIds: [page], from: at(60), to: end, horizonHours: 72, burstMinChats: 5, deletedUnseenSeconds: 60, broadcastOwnWords: 4,
@@ -338,5 +348,69 @@ describe("the numbers of a chatter's shift", () => {
     expect(review.map((message) => [message.ref, message.deletedAt === null ? null : (message.deletedAt.getTime() - message.at.getTime()) / 1000]))
       .toEqual([["9600000001", 1800], ["9600000002", 6], ["9600000003", null], ["9600000004", 40], ["9600000005", null], ["9600000007", 300]]);
     expect(review[0]!.text).toBe("text 9600000001");
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("counts the fans of a page a colleague kept only in the chats the chatter wrote in, and no chat with another page of ours", async (context) => {
+    if (!testDb) return context.skip();
+    // The audit of 2026-11-08: «Смены» took every fan of every page the shift had a minute on — 92 of 131 «waiting» were a
+    // page a colleague kept for hours, where the chatter wrote 4 messages — and a chat lora-2 → lora-3 came out a fan.
+    const model = await createModel(app.db, { slug: "kept", name: "Kept" });
+    const [mine, kept, ours] = [
+      (await createFanslyPage(app.db, { modelId: model!.id, label: "kept-1" }))!.id,
+      (await createFanslyPage(app.db, { modelId: model!.id, label: "kept-2" }))!.id,
+      (await createFanslyPage(app.db, { modelId: model!.id, label: "kept-3" }))!.id,
+    ];
+    await q("update pages set external_page_id = '7990000003' where id = $1", [ours]);
+    await createUserAccount(app, { username: "petya", role: "chatter" }, { source: "cli" });
+    await createUserAccount(app, { username: "masha", role: "chatter" }, { source: "cli" });
+    const [petya, masha] = [await fixtureUserId(app, "petya"), await fixtureUserId(app, "masha")];
+    const start = new Date(Math.floor((Date.now() - 6 * 60 * MIN) / MIN) * MIN);
+    const minute = (offset: number) => new Date(start.getTime() + offset * MIN);
+    const minutes = (user: number, page: number, fromMin: number, toMin: number) => q(
+      `insert into chatter_activity_minutes (user_id, page_id, minute, input)
+       select $1, $2, minute, true from generate_series($3::timestamptz, $4::timestamptz, interval '1 minute') minute`,
+      [user, page, minute(fromMin), minute(toMin)]);
+    const sends = (user: number, page: number, firstRef: number, count: number, fromMin: number, fan: string) => q(
+      `insert into client_send_attributions (platform, page_id, platform_message_id, fan_ref, user_id, source, priced, with_media, observed_at, composed_with)
+       select 'fansly', $1, ($2::bigint + n)::text, $3, $4, 'fansly-extension', false, false, $5::timestamptz + interval '1 minute' * n, 'hand'
+       from generate_series(0, $6::int - 1) n`, [page, firstRef, fan, user, minute(fromMin), count]);
+    const archive = (page: number, chat: string, ref: string, fromFan: boolean, offset: number, fanNative: string | null = null) => q(
+      `insert into message_archive (account_id, platform, conversation_ref, message_ref, sender_role, is_sent_by_me, occurred_at, text_plain,
+         media_metadata, message_type, fan_native_id)
+       values ($1, 'fansly', $2, $3, $4, $5, $6, 'hey', '[]'::jsonb, 1, $7)`,
+      [page, chat, ref, fromFan ? "fan" : "model", !fromFan, minute(offset), fanNative]);
+    // Петя works kept-1 three hours and writes 3 messages on kept-2, which Маша's shift keeps all along.
+    await minutes(petya, mine, 0, 179);
+    await minutes(petya, kept, 100, 105);
+    await sends(petya, mine, 9910000000, 60, 0, "7910000001");
+    await sends(petya, kept, 9920000000, 3, 100, "7920000001");
+    await minutes(masha, kept, 0, 179);
+    await sends(masha, kept, 9930000000, 60, 0, "7930000001");
+    // kept-1: a fan Петя answered in 5 minutes, and one he left without an answer.
+    await archive(mine, "8910000001", "9940000001", true, 120);
+    await archive(mine, "8910000001", "9940000002", false, 125);
+    await q(`insert into client_send_attributions (platform, page_id, platform_message_id, fan_ref, user_id, source, priced, with_media, observed_at, composed_with)
+             values ('fansly', $1, '9940000002', '7910000004', $2, 'fansly-extension', false, false, $3, 'hand')`, [mine, petya, minute(125)]);
+    await archive(mine, "8910000002", "9940000003", true, 150);
+    // kept-2: Маша's fan without an answer, a chat Петя never wrote in.
+    await archive(kept, "8920000001", "9940000004", true, 160);
+    // kept-1 ↔ kept-3: Петя's message to our own page (the thread names it; the page's row does not), and its reply.
+    await q(`insert into page_dm_threads (platform_account_id, platform_conversation_id, partner_platform_user_id) values ($1, '8910000003', '7990000003')`, [mine]);
+    await archive(mine, "8910000003", "9940000005", false, 140);
+    await q(`insert into client_send_attributions (platform, page_id, platform_message_id, conversation_ref, fan_ref, user_id, source, priced, with_media, observed_at, composed_with)
+             values ('fansly', $1, '9940000005', '8910000003', '7990000003', $2, 'fansly-extension', false, false, $3, 'hand')`, [mine, petya, minute(140)]);
+    await archive(mine, "8910000003", "9940000006", true, 145, "7990000003");
+
+    const response = await readTeamChatterNumbers(app, { authMethod: "session", user: { id: petya, role: "owner" } } as never, {
+      from: minute(-1).toISOString(), to: new Date().toISOString(), userId: petya, pageScope: undefined,
+    });
+    const [shift] = response.chatters[0]!.shifts;
+    // Two fans of kept-1 and one of kept-2 written to; our own page is none.
+    expect(shift!.numbers).toMatchObject({ messages: 1, replies: 1, replyMedianSeconds: 300, waitingAtEnd: 1, fansWritten: 3 });
+    const review = await listShiftReviewMessages(app.db, {
+      userId: petya, pageIds: [mine], workedPageIds: [mine], from: minute(0), to: minute(180), horizonHours: 72, burstMinChats: 5,
+      deletedUnseenSeconds: 60, broadcastOwnWords: 4,
+    });
+    expect(review.some((message) => message.conv === "8910000003")).toBe(false);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 });
