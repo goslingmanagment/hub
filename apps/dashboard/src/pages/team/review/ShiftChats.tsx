@@ -322,7 +322,7 @@ function Bubble({ message, picked, showDraft, answered, shiftStart, username }: 
           {message.media > 0 && <span>{formatCount(message.media)} {ruPlural(message.media, "файл", "файла", "файлов")}</span>}
           {message.priceMills !== null && <span>PPV {formatMills(message.priceMills)} · {message.bought ? "куплено" : "покупки не видно"}</span>}
           {message.tipMills !== null && <span>чаевые {formatMills(message.tipMills)}</span>}
-          {message.mass && <span>рассылка</span>}
+          {message.mass && <span title={MASS_TITLE}>рассылка</span>}
           {author && <span>{author}</span>}
           {deletedAfter !== null && (
             <span className="sr-deleted" title={fan ? DELETED_FAN_TITLE : DELETED_PAGE_TITLE}>
@@ -353,6 +353,9 @@ function Bubble({ message, picked, showDraft, answered, shiftStart, username }: 
 
 const DELETED_FAN_TITLE = "Фан удалил сообщение после отправки. Удалённое через минуту и позже чаттер мог увидеть: оно в ожиданиях и ответах. Удалённое быстрее — нет";
 const DELETED_PAGE_TITLE = "Сообщение удалили после отправки. Удалённое быстрее минуты фан скорее всего не видел: оно не ответ и не в числах смены. Удалённое позже — в счёте, как отправленное";
+
+const MASS_TITLE = "Рассылка — не ответ фану: рассылка Fansly, один текст в 5+ чатов за час или одно медиа с одной ценой от одного "
+  + "отправителя в 5+ чатов за час, хоть тексты и имена разные. Сообщение такой рассылки с живым ответом (4+ своих слова сверх шаблона) — личное";
 
 function OriginLegend() {
   return (

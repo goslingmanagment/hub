@@ -36,6 +36,58 @@ export function seenMessageSql(alias: string, unseenSeconds: number): SQL {
   return sql`(${m}.deleted_at is null or ${m}.deleted_at >= ${m}.occurred_at + make_interval(secs => ${unseenSeconds}))`;
 }
 
+/**
+ * The files of the page's message_archive row aliased `alias` as one key: their platform ids, sorted; '' — none, or not
+ * the page's. Two sends of one file set carry one key (a Fansly or OnlyFans media id is the file's, not the message's).
+ */
+export function sentMediaKeySql(alias: string): SQL {
+  const m = tableOf(alias);
+  return sql`(case when ${m}.is_sent_by_me and jsonb_typeof(${m}.media_metadata) = 'array' and jsonb_array_length(${m}.media_metadata) > 0
+    then coalesce((select string_agg(e->>'id', ',' order by e->>'id') from jsonb_array_elements(${m}.media_metadata) e), '')
+    else '' end)`;
+}
+
+/**
+ * A broadcast with names (owner, 2026-11-08): one file set at one price (none — 0) from one sender (the reported
+ * author; no author — one unknown sender) to `minChats` chats of a page or more within an hour is a mass message, the
+ * texts and names in it different or not. A message of it stays personal when it carries a live answer: `ownWords`
+ * words or more of its own beyond the broadcast's template — words no other message of the broadcast within an hour
+ * of it has (letters and digits, two or more). A Fansly mass message (type 2) is one already.
+ *
+ * The CTEs `broadcast_sends`, `broadcast_openers` and `broadcast_refs` (page_id, ref of each such mass message), to
+ * follow a CTE `source` with page_id, platform, conv, ref, at, sent, message_type, text_plain, price_mills and
+ * media_key (`sentMediaKeySql`). An hour is any 60 minutes: one opens at each send of the file set.
+ */
+export function broadcastCtesSql(source: string, input: { minChats: number; ownWords: number }): SQL {
+  const pm = tableOf(source);
+  const same = sql`o.page_id = s.page_id and o.media_key = s.media_key and o.price = s.price and o.author is not distinct from s.author`;
+  return sql`
+    broadcast_sends as materialized (
+      select pm.page_id, pm.conv, pm.ref, pm.at, coalesce(pm.price_mills, 0) as price, pm.media_key, a.user_id as author,
+        array(select distinct w from regexp_split_to_table(lower(coalesce(pm.text_plain, '')), '[^[:alnum:]]+') w where length(w) >= 2) as words
+      from ${pm} pm
+      left join client_send_attributions a on a.page_id = pm.page_id and a.platform = pm.platform and a.platform_message_id = pm.ref
+      where pm.sent and pm.media_key <> '' and coalesce(pm.message_type, 1) <> 2
+    ),
+    broadcast_openers as materialized (
+      select s.page_id, s.media_key, s.price, s.author, s.at
+      from broadcast_sends s
+      where (select count(distinct o.conv) from broadcast_sends o where ${same} and o.at >= s.at and o.at < s.at + interval '1 hour') >= ${input.minChats}
+    ),
+    broadcast_refs as materialized (
+      select s.page_id, s.ref
+      from broadcast_sends s
+      where exists (
+          select 1 from broadcast_openers o where ${same} and s.at >= o.at and s.at < o.at + interval '1 hour')
+        and cardinality(array(
+          select unnest(s.words)
+          except
+          select unnest(o.words) from broadcast_sends o
+          where ${same} and o.ref <> s.ref and o.at > s.at - interval '1 hour' and o.at < s.at + interval '1 hour'
+        )) < ${input.ownWords}
+    )`;
+}
+
 function columnOf(column: string): SQL {
   if (!/^[a-z_][a-z0-9_]*\.[a-z_][a-z0-9_]*$/.test(column)) throw new Error(`Invalid SQL column: ${column}`);
   return sql.raw(column);
