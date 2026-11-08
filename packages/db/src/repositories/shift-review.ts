@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
+import { notOwnAccountMessageSql } from "./shift-sql.ts";
 
 // The reads of Команда → «Разбор смены» (apps/runtime services/shift-review.ts):
 // the chats a chatter's shift touched with their messages, who sent each page
@@ -37,7 +38,8 @@ export interface ShiftReviewMessageRow {
  * the shift's pages where, within [from, to), `userId` sent, and — on the pages
  * the shift worked (`workedPageIds`) — where the fan wrote or the fan's message
  * was the last one before `from`. A tab only looked at brings in the chats the
- * person wrote in, not the whole page a colleague kept. Oldest first.
+ * person wrote in, not the whole page a colleague kept. A chat with another page
+ * of ours is no fan's and is left out. Oldest first.
  */
 export async function listShiftReviewMessages(
   db: Database,
@@ -63,6 +65,7 @@ export async function listShiftReviewMessages(
       from message_archive m
       where m.account_id = any(${pages}) and m.conversation_ref is not null and m.deleted_at is null
         and m.occurred_at > ${horizon} and m.occurred_at < ${to}
+        and ${notOwnAccountMessageSql("m")}
     ),
     mine as materialized (
       select a.page_id, a.platform, a.platform_message_id as ref
@@ -107,7 +110,7 @@ export async function listShiftReviewMessages(
         where b.page_id = p.page_id and b.hour = date_trunc('hour', p.at)
           and b.shape = md5(coalesce(p.text_plain, '') || '|' || coalesce(p.price_mills, 0)::text || '|' || p.media::text))) as mass,
       a.user_id as author_id, u.username as author_name,
-      case when not (p.sent and p.price_mills > 0) then null
+      case when not (p.sent and coalesce(p.price_mills, 0) > 0) then null
         when p.platform = 'fansly' then (
           exists (select 1 from message_media_offers mo where mo.page_id = p.page_id and mo.message_ref = p.ref and mo.purchase_state = 'purchased')
           or exists (select 1 from media_orders o where o.page_id = p.page_id and o.message_ref = p.ref))
@@ -203,7 +206,7 @@ export async function listShiftReviewFans(
       select * from unnest(${pageIds}::bigint[], ${convs}::text[]) as w(page_id, conv)
     )
     select w.page_id, w.conv, t.fan_id, coalesce(t.partner_platform_user_id, f.platform_user_id) as fan_ref,
-      coalesce(t.partner_username, f.username) as username, coalesce(f.display_name, t.partner_display_name) as display_name,
+      coalesce(f.username, t.partner_username) as username, coalesce(f.display_name, t.partner_display_name) as display_name,
       l.creator_net_amount_mills as lifetime_net,
       (select sum(x.creator_net_amount_mills) from transactions x
         where x.platform_account_id = w.page_id and x.fan_id = t.fan_id and x.is_active and x.gross_amount_mills > 0
