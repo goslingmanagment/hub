@@ -344,11 +344,15 @@ function ShiftReview({ userId, at }: { userId: number; at: string }) {
           {shift.pages.map((page, index) => (
             <span key={page.pageLabel}>
               {index > 0 && ", "}<PageLink label={page.pageLabel} /> {formatCount(page.messages)}
-              {!page.worked && shift.kind === "shift" && (
-                <span className="team-faint" title={`Меньше ${CHATTER_SHIFT_PAGE_MIN_MESSAGES} сообщений: продажи страницы не в этой смене, в разборе — только чаты, где писал чаттер`}>
+              {!page.worked && shift.kind === "shift" && (page.allFans ? (
+                <span className="team-faint" title={`Меньше ${CHATTER_SHIFT_PAGE_MIN_MESSAGES} сообщений: продажи страницы не в этой смене. Но страницу в смену больше никто не вёл — в разборе все её фаны, как на отработанной`}>
+                  {" "}(меньше {CHATTER_SHIFT_PAGE_MIN_MESSAGES} — продажи не в смене, фаны все: больше никто не вёл)
+                </span>
+              ) : (
+                <span className="team-faint" title={`Меньше ${CHATTER_SHIFT_PAGE_MIN_MESSAGES} сообщений, и страницу в смену вёл коллега: продажи страницы не в этой смене, в разборе — только чаты, где писал чаттер`}>
                   {" "}(меньше {CHATTER_SHIFT_PAGE_MIN_MESSAGES} — продажи не в смене)
                 </span>
-              )}
+              ))}
             </span>
           ))}
         </p>

@@ -398,6 +398,10 @@ function reviewOf(shift: DemoShift, now: number): Response {
       lastBeatAt: new Date(shift.lastBeatAt).toISOString(),
       pages: [...pages].sort((a, b) => b.messages - a.messages).map((page) => ({
         pageLabel: page.pageLabel, platform: demoPage(page.pageLabel)?.platform ?? "fansly", messages: page.messages, worked: page.messages >= 10,
+        // Fewer than 10, but nobody else's shift kept the page then: all its fans are the chatter's to see.
+        allFans: page.messages >= 10 || !teamWorld(new Date(now)).shifts.some((one) => one.user.id !== shift.user.id
+          && one.startedAt < end && (one.ongoing ? now : one.endedAt) > start
+          && one.pages.some((other) => other.pageLabel === page.pageLabel && other.messages >= 10)),
       })),
       salesNetMills: sales.reduce((sum, sale) => sum + (sale.verdict === "theirs" ? 0 : sale.netMills), 0),
     },
