@@ -82,9 +82,14 @@ export function hiGreetingSql(columns: { pageId: string; platform: string; ref: 
  * of it has (letters and digits, two or more). A Fansly mass message (type 2) is one already; a Hi greeting
  * (`hiGreetingSql`) never is.
  *
- * The CTEs `broadcast_sends`, `broadcast_openers` and `broadcast_refs` (page_id, ref of each such mass message), to
- * follow a CTE `source` with page_id, platform, conv, ref, at, sent, message_type, text_plain, price_mills, media_key
- * (`sentMediaKeySql`) and hi (`hiGreetingSql`). An hour is any 60 minutes: one opens at each send of the file set.
+ * The CTEs `broadcast_sends`, `broadcast_openers`, `broadcast_held`, `broadcast_words`, `broadcast_live` and
+ * `broadcast_refs` (page_id, ref of each such mass message), to follow a CTE `source` with page_id, platform, conv, ref,
+ * at, sent, message_type, text_plain, price_mills, media_key (`sentMediaKeySql`) and hi (`hiGreetingSql`); page_id and
+ * ref name one send. An hour is any 60 minutes: one opens at each send of the file set.
+ *
+ * A word is a send's own when the file set's sends nearest in time that have it too (`lag`, `lead` over the set's sends
+ * of that word) are an hour away or more: the words of the sets that hold a broadcast are unnested and sorted once,
+ * instead of every send's words set against all of its neighbours' (288 sends: 0.73 s). A send's words are distinct.
  */
 export function broadcastCtesSql(source: string, input: { minChats: number; ownWords: number }): SQL {
   const pm = tableOf(source);
@@ -102,17 +107,30 @@ export function broadcastCtesSql(source: string, input: { minChats: number; ownW
       from broadcast_sends s
       where (select count(distinct o.conv) from broadcast_sends o where ${same} and o.at >= s.at and o.at < s.at + interval '1 hour') >= ${input.minChats}
     ),
+    broadcast_held as materialized (
+      select s.page_id, s.media_key, s.price, s.author, s.ref
+      from broadcast_sends s
+      where exists (select 1 from broadcast_openers o where ${same} and s.at >= o.at and s.at < o.at + interval '1 hour')
+    ),
+    broadcast_words as materialized (
+      select o.page_id, o.ref, o.at,
+        lag(o.at) over same_word as before, lead(o.at) over same_word as after
+      from broadcast_sends o
+      cross join unnest(o.words) as w(word)
+      where exists (select 1 from broadcast_held s where ${same})
+      window same_word as (partition by o.page_id, o.media_key, o.price, o.author, w.word order by o.at)
+    ),
+    broadcast_live as materialized (
+      select page_id, ref
+      from broadcast_words
+      where not coalesce(before > at - interval '1 hour', false) and not coalesce(after < at + interval '1 hour', false)
+      group by page_id, ref
+      having count(*) >= ${input.ownWords}
+    ),
     broadcast_refs as materialized (
       select s.page_id, s.ref
-      from broadcast_sends s
-      where exists (
-          select 1 from broadcast_openers o where ${same} and s.at >= o.at and s.at < o.at + interval '1 hour')
-        and cardinality(array(
-          select unnest(s.words)
-          except
-          select unnest(o.words) from broadcast_sends o
-          where ${same} and o.ref <> s.ref and o.at > s.at - interval '1 hour' and o.at < s.at + interval '1 hour'
-        )) < ${input.ownWords}
+      from broadcast_held s
+      where not exists (select 1 from broadcast_live l where l.page_id = s.page_id and l.ref = s.ref)
     )`;
 }
 
