@@ -255,7 +255,7 @@ export async function computeChatterStats(
   const sends = sendsRead.filter((send) => send.at >= from);
   const salesByFan = new Map<string, ShiftSale[]>();
   for (const sale of sales) if (sale.fanRef !== null) push(salesByFan, `${sale.pageId}:${sale.fanRef}`, sale);
-  const confirmations = revenueOfShifts(current.map((one) => one.work), reports);
+  const confirmations = revenueOfShifts(work, current.map((one) => one.work), reports);
 
   const written = new Set<string>();
   const paid = new Set<string>();
