@@ -7,6 +7,7 @@ import { PersonLink } from "@/shared/links";
 import { Tiles, TilesSkeleton, type Tile } from "@/shared/Tiles";
 import type { TeamLedgerPayoutPerson } from "@agency_hub_core/contracts";
 import type { LedgerRow, LedgerView, StripDay } from "./ledger";
+import { PayoutBrief } from "./PayoutBrief";
 
 /**
  * Выплаты from the agency ledger, the screen's first block: four numbers, then
@@ -231,6 +232,8 @@ export function LedgerPersonDrawer({ row, view, onClose }: { row: LedgerRow; vie
             { label: "Выплачено", value: <Money mills={row.paidMills} /> },
           ]}
         />
+
+        <PayoutBrief slug={person.slug} name={person.name} />
 
         {owedDays.length > 0 && (
           <section className="payouts-block">

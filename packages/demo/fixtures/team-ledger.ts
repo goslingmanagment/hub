@@ -136,4 +136,55 @@ function teamLedgerPayouts(request: DemoRequest): Answer | ReturnType<typeof dem
   };
 }
 
-export const teamLedgerHandlers: DemoHandlers = { teamLedgerPayouts };
+/** One person's payout brief (ledger L5) in the invented agency: the unpaid days as the message's lines. */
+function teamLedgerPayoutPrepare(request: DemoRequest): KernelOperationResponse<"teamLedgerPayoutPrepare"> | ReturnType<typeof demoError> {
+  if (request.role !== "owner") return demoError(403, "Forbidden", "Выплаты из ledger видит только владелец.");
+  const slug = queryString(request, "person") ?? "";
+  const card = PEOPLE.find((one) => one.slug === slug);
+  if (!card) return demoError(404, "Not Found", "У человека нет вкладки выплат в ledger.");
+  const now = request.now.getTime();
+  const today = mskDay(now);
+  const person = personOf(card, addDays(today, -6), today, today, addDays(today, -HISTORY_DAYS));
+  const generatedAt = new Date(now - 4_000).toISOString();
+  if (person.balanceMills <= 0) {
+    return { slug, name: card.name, generatedAt, amountMills: person.balanceMills, nothing: person.balanceMills < 0 ? "выплачено вперёд: платить нечего" : "долга нет: платить нечего", toPayMills: person.toPayMills, period: null, lines: [], flags: [], blockers: 0, suggestion: null, message: null, placeholder: null };
+  }
+  const dollars = (mills: number) => (mills / 1000).toFixed(2).replace(/\.00$/, "");
+  const days = person.unpaidDays.filter((day) => day.kind === "day");
+  const opening = person.unpaidDays.find((day) => day.kind === "opening");
+  const lines = [
+    ...(opening ? [{ kind: "opening", model: null, text: `старый долг: +${dollars(opening.unpaidMills)} — дни до ${opening.date.slice(8)}.${opening.date.slice(5, 7)}`, shownMills: opening.unpaidMills }] : []),
+    ...(days.length > 0 ? [{
+      kind: "week",
+      model: card.model,
+      text: `${days[0]!.date.slice(8)}–${days[days.length - 1]!.date.slice(8)}.${days[days.length - 1]!.date.slice(5, 7)}: ${days.map((day) => dollars(day.unpaidMills * 4)).join("+")} = ${dollars(days.reduce((sum, day) => sum + day.unpaidMills * 4, 0))} × 25% = ${dollars(days.reduce((sum, day) => sum + day.unpaidMills, 0))}`,
+      shownMills: days.reduce((sum, day) => sum + day.unpaidMills, 0),
+    }] : []),
+  ];
+  const flags = [
+    ...(card.unentered.days > 0 ? [{ kind: "unentered", blocker: true, text: `не занесено ${card.unentered.days} дн. (${card.model}): хаб видит продажи в смене, в таблице пусто` }] : []),
+    ...(card.sheetDriftCents !== 0 ? [{ kind: "to_pay", blocker: true, text: `долг ≠ «К выплате» вкладки на ${dollars(card.sheetDriftCents * 10)} — сначала понять, откуда` }] : []),
+    ...(card.unentered.unknown > 0 ? [{ kind: "unentered_unknown", blocker: false, text: "не занесено? 1 день: хаб не доказал продажи" }] : []),
+  ];
+  const transfer = Math.ceil(person.balanceMills / 1000) * 1000;
+  const from = person.unpaidDays[0]?.date ?? today;
+  const message = ["закинул зп, {перевод} usdt", `период ${from.slice(8)}.${from.slice(5, 7)}–${today.slice(8)}.${today.slice(5, 7)}`, "", card.model.toLowerCase(),
+    ...lines.map((line) => line.text), "", `итого ${dollars(person.balanceMills)} → {перевод}`, "", "чекни что дошло"].join("\n");
+  return {
+    slug,
+    name: card.name,
+    generatedAt,
+    amountMills: person.balanceMills,
+    nothing: null,
+    toPayMills: person.toPayMills,
+    period: { from, to: today },
+    lines,
+    flags,
+    blockers: flags.filter((flag) => flag.blocker).length,
+    suggestion: { transferMills: transfer, aboveTableMills: transfer - person.balanceMills, note: transfer === person.balanceMills ? "сумма ровная" : `до доллара вверх на ${dollars(transfer - person.balanceMills)}: в журнал отдельной строкой {сверх таблицы}` },
+    message,
+    placeholder: "{перевод}",
+  };
+}
+
+export const teamLedgerHandlers: DemoHandlers = { teamLedgerPayouts, teamLedgerPayoutPrepare };

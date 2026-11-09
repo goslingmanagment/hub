@@ -318,4 +318,64 @@
       width: 8px;
     }
   }
+
+  /* ------------------------------------------------- A person's payout brief */
+
+  .payouts-transfer {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .payouts-transfer__label {
+    color: var(--ui-text-3);
+    font-size: var(--ui-fs-13);
+    line-height: var(--ui-lh-13);
+  }
+
+  .payouts-transfer__value {
+    font-size: 22px;
+    line-height: 28px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .payouts-transfer__value .ui-money {
+    font-weight: inherit;
+  }
+
+  .payouts-flags {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin: 0;
+    padding-left: 18px;
+  }
+
+  .payouts-flags--quiet {
+    color: var(--ui-text-2);
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+  }
+
+  /* The chatter's message as it will be sent: their lower case, their line breaks. */
+  .payouts-message {
+    margin: 0;
+    padding: 12px 14px;
+    overflow-x: auto;
+    border: 1px solid var(--ui-line);
+    border-radius: var(--ui-radius-md, 8px);
+    background: var(--ui-surface);
+    color: var(--ui-text);
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 12.5px;
+    line-height: 19px;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .payouts-message__actions {
+    display: flex;
+  }
 }
