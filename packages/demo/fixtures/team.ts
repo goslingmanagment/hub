@@ -311,12 +311,12 @@ type Numbers = KernelOperationResponse<"teamChatterNumbers">["chatters"][number]
  * A shift's numbers. The three of its quality — the reply median, the fans left
  * without an answer at the end, the AI's texts sent unedited — are its review's
  * (team-review.ts, by the review's rules), so one shift shows one set of
- * numbers on every screen (spec §3 r2). `composed` is laid out so that
- * `qualityOfChatterNumbers` reads that very share back: `reply` — the AI's
- * texts sent as they were, `fix` — the chatter's drafts the AI fixed, `hand` —
- * the other texts, `other` — the rest of the shift's messages (Hi greetings,
- * messages without words). In the demo the Reply button's texts are exactly the
- * unedited ones, so these are also the counts by button.
+ * numbers on every screen (spec §3 r2): `textMessages` and `aiUnedited` are
+ * the review's, as Hub counts them. `composed` is the buttons: `reply` — the
+ * AI's texts sent as they were (in the demo the Reply button's texts are
+ * exactly the unedited ones), `fix` — the chatter's drafts the AI fixed,
+ * `hand` — the other texts, `other` — the rest of the shift's messages (Hi
+ * greetings, messages without words).
  */
 function numbersOf(shift: DemoShift, disputed: ReadonlySet<string>, now: Date): { numbers: Numbers; quality: ShiftQuality } {
   const review = shiftReviewNumbers(shift, now.getTime());
@@ -346,6 +346,8 @@ function numbersOf(shift: DemoShift, disputed: ReadonlySet<string>, now: Date): 
       // The parts add up to the shift's messages, as Hub's do.
       other: Math.max(0, shift.messages - review.textMessages),
     },
+    textMessages: review.textMessages,
+    aiUnedited: review.aiUnedited,
   };
   return { numbers, quality };
 }
@@ -380,6 +382,8 @@ function weekOf(rows: ReadonlyArray<{ numbers: Numbers; confirmed: boolean; qual
       fix: sum((numbers) => numbers.composed.fix),
       other: sum((numbers) => numbers.composed.other),
     },
+    textMessages: sum((numbers) => numbers.textMessages),
+    aiUnedited: sum((numbers) => numbers.aiUnedited),
     shifts: rows.length,
     unconfirmedShifts: rows.filter((row) => !row.confirmed).length,
   };

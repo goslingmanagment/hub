@@ -3477,6 +3477,12 @@ export const chatterNumbersSchema = z.object({
   waitingAtEnd: count,
   /** How the chatter's messages, mass ones too, were written: the extension's word on each. */
   composed: z.object({ hand: count, reply: count, fix: count, other: count }),
+  /**
+   * «ИИ без правки», as «Разбор смены» counts it (shift-review-rules.ts `shiftReviewAiCounts`): of the chatter's personal
+   * messages, the texts with words (Hi greetings left out), and of them the AI's sent as they were. A week: the sums.
+   */
+  textMessages: count,
+  aiUnedited: count,
 });
 
 export const teamChatterNumbersQuerySchema = z.object({

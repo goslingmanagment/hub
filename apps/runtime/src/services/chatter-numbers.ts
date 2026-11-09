@@ -1,9 +1,11 @@
 import {
   CHATTER_NUMBERS_MAX_DAYS,
   MASS_SEND_MIN_CHATS,
+  SHIFT_REVIEW_AI_LOOKBACK_MINUTES,
   SHIFT_REVIEW_BROADCAST_OWN_WORDS,
   SHIFT_REVIEW_DELETED_UNSEEN_SECONDS,
   SHIFT_REVIEW_WAIT_HORIZON_HOURS,
+  shiftReviewAiCounts,
   shiftReviewCounts,
   shiftReviewMedian,
   shiftReviewMine,
@@ -15,10 +17,13 @@ import {
   listAllAutomatedTexts,
   listConfirmedShiftCredits,
   listPagesByLabels,
+  listSentGenerationLinks,
+  listShiftReviewGenerations,
   listShiftReviewMessages,
   listShiftReviewSends,
   readShiftFans,
   type ShiftFansRow,
+  type ShiftReviewGenerationRow,
   type ShiftReviewMessageRow,
   type ShiftReviewSendRow,
 } from "@agency_hub_core/db";
@@ -28,7 +33,18 @@ import { requireDashboardUser, type AuthPrincipal } from "./auth.ts";
 import { middleOfWork, readPeopleWork } from "./chatter-shifts.ts";
 import { BadRequestError } from "./errors.ts";
 import { reportsOfShifts } from "./shift-report.ts";
-import { autoOpenings, pagesWithAllFans, piecesOf, shiftChatsOf, shiftNeedsColleagues, shiftPageLabels, shiftRuleDataOf } from "./shift-review.ts";
+import {
+  SENDABLE_FEATURES,
+  autoOpenings,
+  chatGenerationsOf,
+  chatOriginsOf,
+  pagesWithAllFans,
+  piecesOf,
+  shiftChatsOf,
+  shiftNeedsColleagues,
+  shiftPageLabels,
+  shiftRuleDataOf,
+} from "./shift-review.ts";
 
 /**
  * Chat Memory week 5 (docs/plans/2026-10-24-chat-memory/week-5.md §1): the
@@ -36,9 +52,10 @@ import { autoOpenings, pagesWithAllFans, piecesOf, shiftChatsOf, shiftNeedsColle
  *
  * A shift is services/chatter-shifts.ts's, of the window when the day it belongs
  * to is. Its messages, replies, their median and the fans left without an
- * answer at its end are «Разбор смены»'s, to the one: the review's reads of the
- * shift (its pages, the pages whose every fan it answers for, `shiftChatsOf`)
- * counted by the review's rules (`shiftReviewWaits`, `shiftReviewCounts` in
+ * answer at its end, and «ИИ без правки», are «Разбор смены»'s, to the one: the
+ * review's reads of the shift (its pages, the pages whose every fan it answers
+ * for, `shiftChatsOf`; its AI texts, `chatOriginsOf`) counted by the review's
+ * rules (`shiftReviewWaits`, `shiftReviewCounts`, `shiftReviewAiCounts` in
  * packages/contracts). Only messages with the chatter as their author are the
  * chatter's — a message without an author is nobody's; revenue only from the
  * confirmed shift report (week 4), and for a team lead only its lines on the
@@ -68,6 +85,9 @@ export interface ShiftNumbersRow {
   composed: { hand: number; reply: number; fix: number; other: number };
   /** The chatter's fans who wrote in the shift (or began waiting in it) and got no answer before its end. */
   waitingAtEnd: number;
+  /** Of the personal messages, the texts with words (Hi aside) and of them the AI's sent as they were: «ИИ без правки». */
+  textMessages: number;
+  aiUnedited: number;
 }
 
 interface ShiftInput {
@@ -91,6 +111,9 @@ export function shiftNumbersOf(input: {
   openings: readonly string[];
   start: number;
   end: number;
+  /** The shift's AI texts and the extension's links of sent messages to them, as the review reads them. */
+  generations?: readonly ShiftReviewGenerationRow[];
+  links?: ReadonlyMap<string, string>;
 }): ShiftNumbersRow {
   const { start, end } = input;
   const chats = shiftChatsOf({ rows: input.rows, sends: input.sends, userId: input.userId, username: input.username, openings: input.openings, start, end });
@@ -98,13 +121,28 @@ export function shiftNumbersOf(input: {
   const counts = shiftReviewCounts(data, shiftReviewWaits(data));
   const composedWith = new Map(input.sends.map((send) => [`${send.pageId}:${send.ref}`, send.composedWith]));
   const composed = { hand: 0, reply: 0, fix: 0, other: 0 };
-  chats.forEach((chat, index) => data.chats[index]!.messages.forEach((message, at) => {
-    if (!shiftReviewMine(message)) return;
-    const shown = chat.shown[at]!;
-    const how = composedWith.get(`${shown.pageId}:${shown.ref}`);
-    if (how === "hand" || how === "reply" || how === "fix") composed[how] += 1;
-    else composed.other += 1;
-  }));
+  const generations = input.generations ?? [];
+  const links = input.links ?? new Map<string, string>();
+  const sendByRef = new Map(input.sends.map((send) => [`${send.pageId}:${send.ref}`, send]));
+  const personal: Array<NonNullable<ReturnType<typeof chatOriginsOf>[number]>> = [];
+  chats.forEach((chat, index) => {
+    const messages = data.chats[index]!.messages;
+    // The review's fan of the chat as its messages name them, for the AI texts made for the fan (`chatGenerationsOf`).
+    const fanRef = chat.messages.find((message) => !message.sent && message.fanNativeId !== null)?.fanNativeId ?? null;
+    const origins = chatOriginsOf({
+      chat, mine: (at) => messages[at]!.mine !== null, sendByRef, generations, chatGenerations: chatGenerationsOf(generations, chat, fanRef), links,
+    });
+    messages.forEach((message, at) => {
+      if (!shiftReviewMine(message)) return;
+      const shown = chat.shown[at]!;
+      const how = composedWith.get(`${shown.pageId}:${shown.ref}`);
+      if (how === "hand" || how === "reply" || how === "fix") composed[how] += 1;
+      else composed.other += 1;
+      const origin = origins[at];
+      if (!message.mass && origin) personal.push(origin);
+    });
+  });
+  const ai = shiftReviewAiCounts(personal);
   return {
     messages: counts.messages,
     massMessages: counts.massMessages,
@@ -116,6 +154,8 @@ export function shiftNumbersOf(input: {
     replyDelays: counts.replyDelays,
     composed,
     waitingAtEnd: counts.unanswered,
+    textMessages: ai.textMessages,
+    aiUnedited: ai.aiUnedited,
   };
 }
 
@@ -141,8 +181,15 @@ export async function readShiftNumbers(
   });
   const sends = await listShiftReviewSends(app.db, { userId, pageIds, from, to });
   const fans = await readShiftFans(app.db, { userId, pageIds, from, to, deletedUnseenSeconds: SHIFT_REVIEW_DELETED_UNSEEN_SECONDS });
+  // The AI texts and links the review weighs each message against: «ИИ без правки» is the review's.
+  const generations = await listShiftReviewGenerations(app.db, {
+    userId, pageIds, from: new Date(start - SHIFT_REVIEW_AI_LOOKBACK_MINUTES * 60_000), to, features: SENDABLE_FEATURES,
+  });
+  const links = await listSentGenerationLinks(app.db, {
+    refs: sends.map((send) => send.ref), from: new Date(start - 5 * 60_000), to: new Date(end + 60 * 60_000),
+  });
   const labelOf = new Map(input.pages.map((page) => [page.id, page.label]));
-  return shiftNumbersOf({ rows, sends, fans, userId, username: input.username, labelOf, openings: input.openings, start, end });
+  return shiftNumbersOf({ rows, sends, fans, userId, username: input.username, labelOf, openings: input.openings, start, end, generations, links });
 }
 
 function averagePrice(prices: readonly number[]): number | null {
@@ -206,6 +253,8 @@ export function numbersOf(shifts: readonly ShiftInput[]): ChatterNumbers {
       fix: sum((row) => row.composed.fix),
       other: sum((row) => row.composed.other),
     },
+    textMessages: sum((row) => row.textMessages),
+    aiUnedited: sum((row) => row.aiUnedited),
   };
 }
 

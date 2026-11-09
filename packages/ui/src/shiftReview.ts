@@ -1,8 +1,11 @@
 import {
   SHIFT_REVIEW_FAN_QUIET_SECONDS,
+  SHIFT_REVIEW_AI_UNEDITED_MIN_SHARE,
   SHIFT_REVIEW_REPLY_NORM_SECONDS,
+  shiftReviewAiUnedited,
   shiftReviewCounts,
   shiftReviewFansMessage,
+  shiftReviewHi,
   shiftReviewMedian,
   shiftReviewMine,
   shiftReviewSeen,
@@ -565,29 +568,18 @@ export function aiButton(composedWith: string | null): boolean {
 
 type MineFacts = NonNullable<ShiftReviewMessage["mine"]>;
 
-/** A greeting to a new follower by the Hi button: an AI text, but not a reply in a conversation. */
-export function isHi(mine: Pick<MineFacts, "composedWith" | "aiFeature">): boolean {
-  return mine.composedWith === "hi" || mine.aiFeature === "hi-greeting";
-}
+/** A greeting to a new follower by the Hi button: an AI text, but not a reply in a conversation (`shiftReviewHi`). */
+export const isHi = shiftReviewHi;
 
 function isPing(mine: Pick<MineFacts, "composedWith" | "aiFeature">): boolean {
   return mine.composedWith === "ping" || mine.aiFeature === "ping";
 }
 
 /** An AI text whose words match the sent text at least this much went out as it was. */
-export const AI_UNEDITED_MIN_SHARE = 0.98;
+export const AI_UNEDITED_MIN_SHARE = SHIFT_REVIEW_AI_UNEDITED_MIN_SHARE;
 
-/**
- * «ИИ без правки»: the AI's text went to the fan as it was. Not a Hi greeting,
- * not a Fix of a command («скажи…» — the transcript's «ИИ по команде»), not
- * changed after it was put in (the extension saw no edit, and at least 98 % of
- * the sent words are the AI's). The transcript's quiet mark of a message and
- * the shift's share are this one rule.
- */
-export function aiUnedited(mine: Pick<MineFacts, "origin" | "composedWith" | "aiFeature" | "edited" | "aiShare">): boolean {
-  return mine.origin === "ai" && !isHi(mine) && mine.aiFeature !== "improve-draft"
-    && mine.edited !== true && (mine.aiShare ?? 1) >= AI_UNEDITED_MIN_SHARE;
-}
+/** «ИИ без правки» (contracts' `shiftReviewAiUnedited`): the transcript's quiet mark of a message and the shift's share are this one rule. */
+export const aiUnedited = shiftReviewAiUnedited;
 
 // ── The three numbers of a shift's quality (spec §3 r2: one definition per metric) ──
 
@@ -621,26 +613,25 @@ export function reviewQuality(data: TeamShiftReviewResponse): ShiftQuality {
   return shiftQuality(totalsOf(data, myMessages(data), summaries, waits));
 }
 
-/** The fields of a shift's numbers in `teamChatterNumbers` the stand-in below reads. */
+/** The fields of a shift's numbers in `teamChatterNumbers` its quality reads. */
 export interface ChatterNumbersLike {
   replies: number;
   replyMedianSeconds: number | null;
   waitingAtEnd: number;
-  composed: { hand: number; reply: number; fix: number };
+  textMessages: number;
+  aiUnedited: number;
 }
 
 /**
- * A shift's quality from `teamChatterNumbers`. Hub counts the reply median and
- * «без ответа к концу» by the review's rules (shift-review-rules.ts), so those
- * two agree with the shift's «Разбор смены» to the second. «ИИ без правки» is
- * still near: Hub's `composed.reply` is the Reply button, edited or not.
+ * A shift's quality from `teamChatterNumbers`. Hub counts all three by the
+ * review's rules (shift-review-rules.ts): the reply median, «без ответа к
+ * концу» and «ИИ без правки» agree with the shift's «Разбор смены» to the one.
  */
 export function qualityOfChatterNumbers(numbers: ChatterNumbersLike): ShiftQuality {
-  const texts = numbers.composed.hand + numbers.composed.reply + numbers.composed.fix;
   return {
     replyMedianSeconds: numbers.replies === 0 ? null : numbers.replyMedianSeconds,
     unansweredAtEnd: numbers.waitingAtEnd,
-    aiUneditedShare: texts === 0 ? null : numbers.composed.reply / texts,
+    aiUneditedShare: numbers.textMessages === 0 ? null : numbers.aiUnedited / numbers.textMessages,
   };
 }
 
