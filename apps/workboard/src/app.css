@@ -366,6 +366,23 @@
     }
   }
 
+  /* A phone: two numbers a row, so a sum in dollars and cents is never cut. */
+  @media (max-width: 640px) {
+    .wb-tiles {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .wb-tiles > :nth-child(3n + 1) .wb-tile {
+      padding-left: 16px;
+      border-left: 1px solid var(--ui-line-soft);
+    }
+
+    .wb-tiles > :nth-child(2n + 1) .wb-tile {
+      padding-left: 0;
+      border-left: 0;
+    }
+  }
+
   /* ------------------------------------------------------------ The screen */
 
   /*
