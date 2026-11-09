@@ -137,3 +137,17 @@ export function useLedgerPayouts(period: ResolvedPeriod) {
     loading: isOwner && problem === null && !current && (query.isLoading || query.isFetching),
   };
 }
+
+/**
+ * One person's payout brief from the ledger (L5 `payout prepare`), for the open panel only: the transfer, what
+ * blocks it, and the chatter's message. Read-only; the owner sends the message himself.
+ */
+export function usePayoutPrepare(slug: string | null) {
+  const { isOwner } = useMe();
+  return useQuery({
+    queryKey: ["payouts", "ledger-prepare", slug] as const,
+    queryFn: () => kernel.teamLedgerPayoutPrepare({ query: { person: slug! } }),
+    enabled: isOwner && slug !== null,
+    staleTime: 60_000,
+  });
+}

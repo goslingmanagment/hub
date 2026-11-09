@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { readLedgerPayouts } from "../apps/runtime/src/services/ledger-payouts.ts";
+import { readLedgerPayoutPrepare, readLedgerPayouts } from "../apps/runtime/src/services/ledger-payouts.ts";
 
 /** Money from the agency ledger: micro-dollars in, mills out, never a wrong sum on a changed answer. */
 
@@ -103,5 +103,31 @@ describe("readLedgerPayouts", () => {
 
   it("refuses a window past the ledger's 62 days before asking", async () => {
     await expect(readLedgerPayouts(app(), { from: "2026-09-01", to: "2026-11-08" }, { fetchImpl: fetchReturning(200, ledgerAnswer()) })).rejects.toMatchObject({ statusCode: 400 });
+  });
+});
+
+describe("readLedgerPayoutPrepare", () => {
+  it("passes one person's brief on in mills, the message untouched", async () => {
+    const seen: { url?: string; auth?: string | undefined } = {};
+    const brief = {
+      ok: true, slug: "alex", name: "Алекс", status: "active", generatedAt: "2026-11-09T10:00:00+03:00", accrualFrom: "2026-09-01",
+      amountMicros: 45_670_000, toPayMicros: 45_670_000, period: { from: "2026-11-03", to: "2026-11-03" },
+      lines: [{ kind: "week", model: "Mia", tab: "Алекс", week: "2026-11-02", from: "2026-11-03", to: "2026-11-03", payMicros: 45_670_000, shownMicros: 45_670_000, text: "03.11: 182.68 × 25% = 45.67" }],
+      blocks: [], flags: [{ kind: "unentered", blocker: true, text: "не занесено 04.11" }], blockers: 1,
+      suggestion: { transferMicros: 46_000_000, aboveTableMicros: 330_000, note: "до доллара вверх на 0.33" },
+      message: "закинул зп, {перевод} usdt\nитого 45.67 → {перевод}", placeholder: "{перевод}",
+      checks: { stale: false, lastSheetsCollectAt: null, lastRebuildAt: null },
+    };
+    const result = await readLedgerPayoutPrepare(app(), { person: "alex" }, { fetchImpl: fetchReturning(200, brief, seen) });
+    expect(seen.url).toBe("https://ledger.test/v1/payouts/prepare?person=alex");
+    expect(result).toMatchObject({
+      amountMills: 45_670, nothing: null, lines: [{ kind: "week", model: "Mia", shownMills: 45_670 }], blockers: 1,
+      suggestion: { transferMills: 46_000, aboveTableMills: 330 }, message: brief.message, placeholder: "{перевод}",
+    });
+  });
+
+  it("is a 404 for a person without a tab and a 503 on a changed answer", async () => {
+    await expect(readLedgerPayoutPrepare(app(), { person: "nobody" }, { fetchImpl: fetchReturning(404, { error: "no" }) })).rejects.toMatchObject({ statusCode: 404 });
+    await expect(readLedgerPayoutPrepare(app(), { person: "alex" }, { fetchImpl: fetchReturning(200, { slug: "alex" }) })).rejects.toMatchObject({ statusCode: 503 });
   });
 });

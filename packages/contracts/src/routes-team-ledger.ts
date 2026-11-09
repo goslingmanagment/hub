@@ -78,7 +78,35 @@ export const teamLedgerPayoutsResponseSchema = z.object({
   serverNow: isoTimestamp,
 });
 
+export const teamLedgerPayoutPrepareQuerySchema = z.object({
+  /** The ledger's code of the person. */
+  person: z.string().regex(/^[a-z0-9][a-z0-9-]{0,62}$/),
+});
+
+/** One person's payout brief (ledger L5 `payout prepare`): read-only, nothing is recorded or sent. */
+export const teamLedgerPayoutPrepareResponseSchema = z.object({
+  slug: z.string(),
+  name: z.string(),
+  generatedAt: isoTimestamp,
+  /** What the agency owes now; ≤ 0 — nothing to pay (`nothing` says why). */
+  amountMills: mills,
+  nothing: z.string().nullable(),
+  toPayMills: mills.nullable(),
+  period: z.object({ from: businessDate, to: businessDate }).nullable(),
+  /** The message's lines: a week of a tab «дд–дд.мм: a+b = база × ставка% = зп», an opening debt, a remainder. */
+  lines: z.array(z.object({ kind: z.string(), model: z.string().nullable(), text: z.string(), shownMills: mills })),
+  /** What the owner should know before paying; a blocker stops the payout until it is understood. */
+  flags: z.array(z.object({ kind: z.string(), blocker: z.boolean(), text: z.string() })),
+  blockers: z.number().int().nonnegative(),
+  /** The transfer the owner usually makes (rounded to a dollar), what goes above the table, and a note. */
+  suggestion: z.object({ transferMills: mills, aboveTableMills: mills, note: z.string() }).nullable(),
+  /** The chatter's message; `placeholder` stands where the transferred amount goes after the transfer. */
+  message: z.string().nullable(),
+  placeholder: z.string().nullable(),
+});
+
 export type TeamLedgerPayoutsResponse = z.infer<typeof teamLedgerPayoutsResponseSchema>;
+export type TeamLedgerPayoutPrepareResponse = z.infer<typeof teamLedgerPayoutPrepareResponseSchema>;
 export type TeamLedgerPayoutPerson = z.infer<typeof teamLedgerPayoutPersonSchema>;
 
 export const teamLedgerRouteSchemas = {
@@ -94,6 +122,22 @@ export const teamLedgerRouteSchemas = {
       400: errorResponseSchema,
       401: errorResponseSchema,
       403: errorResponseSchema,
+      503: errorResponseSchema,
+    },
+  },
+  teamLedgerPayoutPrepare: {
+    auth: { kind: "owner-session" },
+    tags: ["admin"],
+    summary: "One person's payout brief from the agency ledger: the transfer, the lines, the blockers, the message",
+    description: "Read from the ledger's GET /v1/payouts/prepare with Hub's payouts key. Read-only: nothing is recorded "
+      + "or sent. 404 — the ledger has no payout tab of the person; 503 — the ledger is not connected or did not answer.",
+    querystring: teamLedgerPayoutPrepareQuerySchema,
+    response: {
+      200: teamLedgerPayoutPrepareResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
       503: errorResponseSchema,
     },
   },

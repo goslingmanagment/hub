@@ -1,11 +1,11 @@
 import { z } from "zod";
 
-import { TEAM_LEDGER_PAYOUTS_MAX_DAYS, type TeamLedgerPayoutsResponse } from "@agency_hub_core/contracts";
+import { TEAM_LEDGER_PAYOUTS_MAX_DAYS, type TeamLedgerPayoutPrepareResponse, type TeamLedgerPayoutsResponse } from "@agency_hub_core/contracts";
 import { listUsers } from "@agency_hub_core/db";
 import { microUsdFromDbInt, microUsdToMills, millsToNumber } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
-import { BadRequestError, ServiceUnavailableError } from "./errors.ts";
+import { BadRequestError, NotFoundError, ServiceUnavailableError } from "./errors.ts";
 
 /**
  * Workboard «Выплаты» from the agency ledger (ledger release 2, H2): Hub's
@@ -75,20 +75,16 @@ function checkWindow(from: string, to: string) {
 
 type LedgerApp = Pick<AppContext, "db" | "config" | "logger">;
 
-export async function readLedgerPayouts(
-  app: LedgerApp,
-  query: { from: string; to: string },
-  options: { fetchImpl?: typeof fetch; now?: Date } = {},
-): Promise<TeamLedgerPayoutsResponse> {
-  checkWindow(query.from, query.to);
+/**
+ * One GET of the ledger with Hub's payouts key: the answer's JSON, or a 503 when the ledger is not connected, does
+ * not answer or refuses; its 404 is a 404 here (an unknown person).
+ */
+async function ledgerGet(app: LedgerApp, path: string, params: Record<string, string>, options: { fetchImpl?: typeof fetch }): Promise<unknown> {
   const key = app.config.ledgerPayoutsKey ?? null;
   if (key === null) throw new ServiceUnavailableError("The ledger is not connected: LEDGER_PAYOUTS_KEY is not set");
   const fetchImpl = options.fetchImpl ?? globalThis.fetch;
-  const url = new URL("/v1/payouts", app.config.ledgerUrl ?? "https://ledger.gosling-agency.ru");
-  url.searchParams.set("from", query.from);
-  url.searchParams.set("to", query.to);
-
-  let body: unknown;
+  const url = new URL(path, app.config.ledgerUrl ?? "https://ledger.gosling-agency.ru");
+  for (const [name, value] of Object.entries(params)) url.searchParams.set(name, value);
   try {
     const response = await fetchImpl(url, {
       headers: { authorization: `Bearer ${key}`, accept: "application/json", "user-agent": "agency-hub/workboard-payouts" },
@@ -96,13 +92,23 @@ export async function readLedgerPayouts(
     });
     if (!response.ok) {
       await response.body?.cancel().catch(() => undefined);
-      throw new ServiceUnavailableError(`The ledger answered GET /v1/payouts with ${response.status}`);
+      if (response.status === 404) throw new NotFoundError("The ledger has no payout tab of this person");
+      throw new ServiceUnavailableError(`The ledger answered GET ${path} with ${response.status}`);
     }
-    body = await response.json();
+    return await response.json();
   } catch (error) {
-    if (error instanceof ServiceUnavailableError) throw error;
-    throw new ServiceUnavailableError(`The ledger did not answer GET /v1/payouts (${error instanceof Error ? error.name : "error"})`);
+    if (error instanceof ServiceUnavailableError || error instanceof NotFoundError) throw error;
+    throw new ServiceUnavailableError(`The ledger did not answer GET ${path} (${error instanceof Error ? error.name : "error"})`);
   }
+}
+
+export async function readLedgerPayouts(
+  app: LedgerApp,
+  query: { from: string; to: string },
+  options: { fetchImpl?: typeof fetch; now?: Date } = {},
+): Promise<TeamLedgerPayoutsResponse> {
+  checkWindow(query.from, query.to);
+  const body = await ledgerGet(app, "/v1/payouts", { from: query.from, to: query.to }, options);
   const parsed = ledgerPayoutsSchema.safeParse(body);
   if (!parsed.success) {
     app.logger.warn({ issues: parsed.error.issues.slice(0, 5).map((issue) => `${issue.path.join(".")}: ${issue.message}`) }, "ledger payouts: unexpected answer");
@@ -144,5 +150,58 @@ export async function readLedgerPayouts(
     })),
     checks: ledger.checks,
     serverNow: (options.now ?? new Date()).toISOString(),
+  };
+}
+
+const ledgerPrepareSchema = z.object({
+  slug: z.string(),
+  name: z.string(),
+  generatedAt: z.string(),
+  amountMicros: micros,
+  nothing: z.string().optional(),
+  toPayMicros: micros.nullable(),
+  period: z.object({ from: z.string(), to: z.string() }).nullable(),
+  lines: list(z.object({ kind: z.string(), model: z.string().optional(), text: z.string(), shownMicros: micros })),
+  flags: list(z.object({ kind: z.string(), blocker: z.boolean(), text: z.string() })),
+  blockers: z.number().int().nonnegative(),
+  suggestion: z.object({ transferMicros: micros, aboveTableMicros: micros, note: z.string() }).nullable(),
+  message: z.string().optional(),
+  placeholder: z.string().optional(),
+});
+
+/**
+ * One person's payout brief from the ledger (L5 `payout prepare`): what to transfer, the lines, what blocks it, and
+ * the chatter's message with the transfer left as a placeholder. Read-only: nothing is recorded or sent.
+ */
+export async function readLedgerPayoutPrepare(
+  app: LedgerApp,
+  query: { person: string },
+  options: { fetchImpl?: typeof fetch } = {},
+): Promise<TeamLedgerPayoutPrepareResponse> {
+  const body = await ledgerGet(app, "/v1/payouts/prepare", { person: query.person }, options);
+  const parsed = ledgerPrepareSchema.safeParse(body);
+  if (!parsed.success) {
+    app.logger.warn({ issues: parsed.error.issues.slice(0, 5).map((issue) => `${issue.path.join(".")}: ${issue.message}`) }, "ledger payout prepare: unexpected answer");
+    throw new ServiceUnavailableError("The ledger's GET /v1/payouts/prepare answered in a shape Hub does not know");
+  }
+  const brief = parsed.data;
+  return {
+    slug: brief.slug,
+    name: brief.name,
+    generatedAt: brief.generatedAt,
+    amountMills: millsOf(brief.amountMicros),
+    nothing: brief.nothing ?? null,
+    toPayMills: brief.toPayMicros === null ? null : millsOf(brief.toPayMicros),
+    period: brief.period,
+    lines: brief.lines.map((line) => ({ kind: line.kind, model: line.model ?? null, text: line.text, shownMills: millsOf(line.shownMicros) })),
+    flags: brief.flags,
+    blockers: brief.blockers,
+    suggestion: brief.suggestion === null ? null : {
+      transferMills: millsOf(brief.suggestion.transferMicros),
+      aboveTableMills: millsOf(brief.suggestion.aboveTableMicros),
+      note: brief.suggestion.note,
+    },
+    message: brief.message ?? null,
+    placeholder: brief.placeholder ?? null,
   };
 }
