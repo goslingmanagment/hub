@@ -9,6 +9,7 @@ import {
   SHIFT_REVIEW_NEIGHBOUR_DAYS,
   SHIFT_REVIEW_SEAM_MINUTES,
   SHIFT_REVIEW_WAIT_HORIZON_HOURS,
+  shiftReviewHi,
   type ShiftReviewChat,
   type ShiftReviewMessage,
   type ShiftReviewMine,
@@ -64,7 +65,7 @@ const MINUTE_MS = 60_000;
 const DAY_MS = 86_400_000;
 const TEXT_LIMIT = 2000;
 /** The features a chatter sends a text from. */
-const SENDABLE_FEATURES = ["fast-reply", "improve-draft", "coach-chat", "ping", "hi-greeting"] as const;
+export const SENDABLE_FEATURES = ["fast-reply", "improve-draft", "coach-chat", "ping", "hi-greeting"] as const;
 /** What the extension reports for a text put in by one of our AI buttons. */
 const AI_BUTTONS = new Set(["reply", "fix", "hi", "ping", "coach"]);
 /** A text of this many words or fewer is the chatter's unless an AI button put it there: «haha» is in every AI text. */
@@ -276,6 +277,64 @@ export function marksOf(text: string, fanWritesRussian: boolean): ShiftReviewMin
  */
 export function seenMessage(message: Pick<ShiftReviewMessageRow, "at" | "deletedAt">): boolean {
   return message.deletedAt === null || message.deletedAt.getTime() - message.at.getTime() >= SHIFT_REVIEW_DELETED_UNSEEN_SECONDS * 1000;
+}
+
+/** A chatter's message of the shift, where its text came from: the review's `mine` but the reply time, repeats and marks. */
+export type ChatMineOrigin = Omit<MineOrigin, "generationRef"> & Pick<ShiftReviewMine, "composedWith" | "edited"> & { part?: number };
+
+/** The AI texts of one chat: its page's, made in its conversation or for its fan. Pure. */
+export function chatGenerationsOf(
+  generations: readonly ShiftReviewGenerationRow[],
+  chat: { pageId: number; conv: string },
+  fanRef: string | null,
+): ShiftReviewGenerationRow[] {
+  return generations.filter((generation) => generation.pageId === chat.pageId
+    && (generation.conv === chat.conv || (fanRef !== null && generation.fanRef === fanRef)));
+}
+
+/**
+ * Where each of a chat's shown messages of the chatter came from, oldest first (null for the rest): the AI texts made in
+ * the SHIFT_REVIEW_AI_LOOKBACK_MINUTES before it (and the one the extension linked it to), the button it was sent with,
+ * and a later part of an AI text a button put in ([NEXT], within PART_WITHIN_MINUTES). «Разбор смены» shows it, «Смены»
+ * counts «ИИ без правки» from it. Pure.
+ */
+export function chatOriginsOf(input: {
+  chat: Pick<ShiftChat, "shown">;
+  /** Of `chat.shown`, the chatter's messages of the shift (the rules' `mine`). */
+  mine: (index: number) => boolean;
+  sendByRef: ReadonlyMap<string, ShiftReviewSendRow>;
+  /** The shift's AI texts, and of them this chat's (`chatGenerationsOf`). */
+  generations: readonly ShiftReviewGenerationRow[];
+  chatGenerations: readonly ShiftReviewGenerationRow[];
+  /** The AI text the extension linked each sent message to, by the message's ref. */
+  links: ReadonlyMap<string, string>;
+}): Array<ChatMineOrigin | null> {
+  // The AI texts this chat's earlier messages of the shift were sent from by a button, for the later parts of one.
+  const byButton: Array<{ generationRef: string; composedWith: string; at: number }> = [];
+  return input.chat.shown.map((message, index): ChatMineOrigin | null => {
+    if (!input.mine(index)) return null;
+    const atMs = message.at.getTime();
+    const send = input.sendByRef.get(`${message.pageId}:${message.ref}`);
+    const nearby = input.chatGenerations.filter((generation) => {
+      const made = generation.createdAt.getTime();
+      return made >= atMs - SHIFT_REVIEW_AI_LOOKBACK_MINUTES * MINUTE_MS && made <= atMs + MINUTE_MS;
+    });
+    const linked = input.links.get(message.ref) ?? null;
+    const linkedRow = linked === null ? undefined : input.generations.find((generation) => generation.generationRef === linked);
+    const candidates = linkedRow === undefined || nearby.includes(linkedRow) ? nearby : [...nearby, linkedRow];
+    const composedWith = send?.composedWith ?? null;
+    const { generationRef, ...origin } = originOf({ text: message.text, at: atMs, composedWith, linkedGeneration: linked }, candidates);
+    // The second part of a Reply ([NEXT]) the extension saw typed: the part of a text a button put in.
+    const parts = generationRef === null || origin.origin === "own" || (composedWith !== null && AI_BUTTONS.has(composedWith)) ? []
+      : byButton.filter((one) => one.generationRef === generationRef && one.at >= atMs - PART_WITHIN_MINUTES * MINUTE_MS);
+    if (generationRef !== null && composedWith !== null && AI_BUTTONS.has(composedWith)) byButton.push({ generationRef, composedWith, at: atMs });
+    return {
+      composedWith: parts[0]?.composedWith ?? composedWith,
+      ...(parts.length === 0 ? {} : { part: parts.length + 1 }),
+      edited: send?.edited ?? null,
+      ...origin,
+    };
+  });
 }
 
 export interface ChatMessage extends ShiftReviewMessageRow {
@@ -796,14 +855,14 @@ export async function readTeamShiftReview(
     const fan = fanOf.get(key);
     const fanRef = fan?.fanRef ?? chat.messages.find((message) => !message.sent && message.fanNativeId !== null)?.fanNativeId ?? null;
     waits.push(...waitRowsOf(chat, pageLabel, start, end));
-    const chatGenerations = generations.filter((generation) => generation.pageId === chat.pageId
-      && (generation.conv === chat.conv || (fanRef !== null && generation.fanRef === fanRef)));
+    const facts = chat.shown.map((message) => ruleMessageOf(message, chat, start, end));
+    const origins = chatOriginsOf({
+      chat, mine: (index) => facts[index]!.mine !== null, sendByRef, generations, chatGenerations: chatGenerationsOf(generations, chat, fanRef), links,
+    });
 
     const fanKey = fan === undefined || fan.fanId === null ? null : `${chat.pageId}:${fan.fanId}`;
     if (fanKey !== null && !chatOfFan.has(fanKey)) chatOfFan.set(fanKey, chatKey(pageLabel, chat.conv));
     const fanWritesRussian = wroteRussian.has(key) || chat.messages.some((message) => !message.sent && CYRILLIC_RE.test(message.text));
-    // The AI texts this chat's earlier messages of the shift were sent from by a button, for the later parts of one.
-    const byButton: Array<{ generationRef: string; composedWith: string; at: number }> = [];
     out.push({
       key: chatKey(pageLabel, chat.conv),
       pageLabel,
@@ -815,39 +874,21 @@ export async function readTeamShiftReview(
       fanLifetimeNetMills: fan?.lifetimeNetMills ?? null,
       shiftNetMills: fan?.shiftNetMills ?? 0,
       earlierHidden: chat.earlierHidden,
-      messages: chat.shown.map((message): ShiftReviewMessage => {
-        const atMs = message.at.getTime();
-        const facts = ruleMessageOf(message, chat, start, end);
+      messages: chat.shown.map((message, index): ShiftReviewMessage => {
+        const fact = facts[index]!;
+        const origin = origins[index] ?? null;
         let mine: ShiftReviewMine | null = null;
-        if (facts.mine !== null) {
-          const send = sendByRef.get(`${message.pageId}:${message.ref}`);
-          const nearby = chatGenerations.filter((generation) => {
-            const made = generation.createdAt.getTime();
-            return made >= atMs - SHIFT_REVIEW_AI_LOOKBACK_MINUTES * MINUTE_MS && made <= atMs + MINUTE_MS;
-          });
-          const linked = links.get(message.ref) ?? null;
-          const linkedRow = linked === null ? undefined : generations.find((generation) => generation.generationRef === linked);
-          const candidates = linkedRow === undefined || nearby.includes(linkedRow) ? nearby : [...nearby, linkedRow];
-          const text = normalized(message.text);
-          const composedWith = send?.composedWith ?? null;
-          const { generationRef, ...origin } = originOf({ text: message.text, at: atMs, composedWith, linkedGeneration: linked }, candidates);
-          // The second part of a Reply ([NEXT]) the extension saw typed: the part of a text a button put in.
-          const parts = generationRef === null || origin.origin === "own" || (composedWith !== null && AI_BUTTONS.has(composedWith)) ? []
-            : byButton.filter((one) => one.generationRef === generationRef && one.at >= atMs - PART_WITHIN_MINUTES * MINUTE_MS);
-          if (generationRef !== null && composedWith !== null && AI_BUTTONS.has(composedWith)) byButton.push({ generationRef, composedWith, at: atMs });
-          const hi = composedWith === "hi" || origin.aiFeature === "hi-greeting";
+        if (fact.mine !== null && origin !== null) {
+          const hi = shiftReviewHi(origin);
           mine = {
-            composedWith: parts[0]?.composedWith ?? composedWith,
-            ...(parts.length === 0 ? {} : { part: parts.length + 1 }),
-            edited: send?.edited ?? null,
             ...origin,
-            replySeconds: facts.mine.replySeconds,
-            repeats: hi ? 0 : Math.max(0, (mineText.get(text)?.size ?? 1) - 1),
+            replySeconds: fact.mine.replySeconds,
+            repeats: hi ? 0 : Math.max(0, (mineText.get(normalized(message.text))?.size ?? 1) - 1),
             marks: marksOf(message.text, fanWritesRussian),
           };
         }
         // The facts the shift's numbers read (`ruleMessageOf`), its text and where it came from.
-        return { ...facts, ref: message.ref, text: message.text, tipMills: message.tipMills, media: message.media, unarchived: message.unarchived, mine };
+        return { ...fact, ref: message.ref, text: message.text, tipMills: message.tipMills, media: message.media, unarchived: message.unarchived, mine };
       }),
     });
   }

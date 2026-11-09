@@ -241777,6 +241777,16 @@
                                 ],
                                 "additionalProperties": false
                               },
+                              "textMessages": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "aiUnedited": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
                               "shifts": {
                                 "type": "integer",
                                 "minimum": 0,
@@ -241804,6 +241814,8 @@
                               "repliesWithinHour",
                               "waitingAtEnd",
                               "composed",
+                              "textMessages",
+                              "aiUnedited",
                               "shifts",
                               "unconfirmedShifts"
                             ],
@@ -241965,6 +241977,16 @@
                                         "other"
                                       ],
                                       "additionalProperties": false
+                                    },
+                                    "textMessages": {
+                                      "type": "integer",
+                                      "minimum": 0,
+                                      "maximum": 9007199254740991
+                                    },
+                                    "aiUnedited": {
+                                      "type": "integer",
+                                      "minimum": 0,
+                                      "maximum": 9007199254740991
                                     }
                                   },
                                   "required": [
@@ -241982,7 +242004,9 @@
                                     "replyMedianSeconds",
                                     "repliesWithinHour",
                                     "waitingAtEnd",
-                                    "composed"
+                                    "composed",
+                                    "textMessages",
+                                    "aiUnedited"
                                   ],
                                   "additionalProperties": false
                                 }

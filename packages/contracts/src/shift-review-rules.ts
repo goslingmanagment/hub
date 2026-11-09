@@ -51,6 +51,45 @@ export interface ShiftReviewRuleData {
   waits: TeamShiftReviewResponse["waits"];
 }
 
+/** An AI text whose words match the sent text at least this much went out as it was («ИИ без правки»). */
+export const SHIFT_REVIEW_AI_UNEDITED_MIN_SHARE = 0.98;
+
+/** Where a chatter's message came from, as `teamShiftReview` says it: what «ИИ без правки» reads. */
+export type ShiftReviewOriginFacts = Pick<ShiftReviewMine, "origin" | "composedWith" | "aiFeature" | "edited" | "aiShare">;
+
+/** A greeting to a new follower by the Hi button: an AI text, but not a reply in a conversation. */
+export function shiftReviewHi(mine: Pick<ShiftReviewMine, "composedWith" | "aiFeature">): boolean {
+  return mine.composedWith === "hi" || mine.aiFeature === "hi-greeting";
+}
+
+/** A text of the chatter's with words, Hi greetings left out: what «ИИ без правки» is a share of. */
+export function shiftReviewTextMessage(mine: Pick<ShiftReviewMine, "origin" | "composedWith" | "aiFeature">): boolean {
+  return mine.origin !== null && !(mine.origin === "ai" && shiftReviewHi(mine));
+}
+
+/**
+ * «ИИ без правки»: the AI's text went to the fan as it was. Not a Hi greeting,
+ * not a Fix of a command («скажи…»), not changed after it was put in (the
+ * extension saw no edit, and at least SHIFT_REVIEW_AI_UNEDITED_MIN_SHARE of the
+ * sent words are the AI's). The review's mark of a message, the shift's share
+ * on every screen and «Смены» are this one rule.
+ */
+export function shiftReviewAiUnedited(mine: ShiftReviewOriginFacts): boolean {
+  return mine.origin === "ai" && !shiftReviewHi(mine) && mine.aiFeature !== "improve-draft"
+    && mine.edited !== true && (mine.aiShare ?? 1) >= SHIFT_REVIEW_AI_UNEDITED_MIN_SHARE;
+}
+
+/** Of the chatter's personal messages (seen, not mass): the texts with words and, of them, the AI's sent as they were. */
+export function shiftReviewAiCounts(mines: Iterable<ShiftReviewOriginFacts>): { textMessages: number; aiUnedited: number } {
+  let textMessages = 0;
+  let aiUnedited = 0;
+  for (const mine of mines) {
+    if (shiftReviewTextMessage(mine)) textMessages += 1;
+    if (shiftReviewAiUnedited(mine)) aiUnedited += 1;
+  }
+  return { textMessages, aiUnedited };
+}
+
 /** The other side could see the message: not deleted, or deleted SHIFT_REVIEW_DELETED_UNSEEN_SECONDS after it was sent or later. */
 export function shiftReviewSeen(message: Pick<ShiftReviewMessage, "at" | "deletedAt">): boolean {
   return message.deletedAt === undefined || Date.parse(message.deletedAt) - Date.parse(message.at) >= SHIFT_REVIEW_DELETED_UNSEEN_SECONDS * 1000;

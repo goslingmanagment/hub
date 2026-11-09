@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { ShiftReviewMessageRow, ShiftReviewSendRow } from "@agency_hub_core/db";
+import type { ShiftReviewGenerationRow, ShiftReviewMessageRow, ShiftReviewSendRow } from "@agency_hub_core/db";
 import { revenueOfShifts, shiftNumbersOf } from "../apps/runtime/src/services/chatter-numbers.ts";
 import { autoOpenings } from "../apps/runtime/src/services/shift-review.ts";
 
@@ -70,6 +70,36 @@ describe("the numbers of a shift, by the review's rules", () => {
     expect(numbers(rows, [send("52", at, "reply")])).toMatchObject({
       messages: 1, replyDelays: [0], waitingAtEnd: 0, composed: { hand: 0, reply: 1, fix: 0, other: 0 },
     });
+  });
+});
+
+describe("«ИИ без правки» of a shift, by the review's rule", () => {
+  // The journal showed 0 % beside the review's 3 % for one shift (2026-11-09): it counted the Reply button, not the text.
+  const ai = (ref: string, conv: string, at: number, feature: string, completion: string): ShiftReviewGenerationRow => ({
+    generationRef: ref, feature, pageId: 2, conv, fanRef: null, createdAt: new Date(at), completion, draft: null,
+  });
+  const PASTED = "that sounds amazing honestly tell me more about your day";
+  const EDITED = "you always know how to make me smile babe";
+  const HI = "hiii thanks for the follow, how is your day going";
+
+  it("counts an AI text pasted by hand as sent unedited, not a Reply the chatter edited, and leaves a Hi out of the texts", () => {
+    const t = START + 30 * MIN;
+    const rows = [
+      row("600", "61", t, "fan"), row("600", "62", t + 2 * MIN, "page", USER, PASTED),
+      row("700", "71", t, "fan"), row("700", "72", t + 3 * MIN, "page", USER, EDITED),
+      row("800", "81", t + 4 * MIN, "page", USER, HI),
+    ];
+    const sends = [send("62", t + 2 * MIN, "hand"), { ...send("72", t + 3 * MIN, "reply"), edited: true }, send("81", t + 4 * MIN, "hi")];
+    const generations = [
+      ai("g1", "600", t + MIN, "fast-reply", PASTED),
+      ai("g2", "700", t + 2 * MIN, "fast-reply", EDITED),
+      ai("g3", "800", t + 3 * MIN, "hi-greeting", HI),
+    ];
+    const result = shiftNumbersOf({
+      rows, sends, fans: { writtenFans: [], paidFans: [] }, userId: USER, username: "Мирон", labelOf: new Map([[2, "lora-2"]]), openings: [],
+      start: START, end: END, generations, links: new Map(),
+    });
+    expect(result).toMatchObject({ messages: 3, textMessages: 2, aiUnedited: 1, composed: { hand: 1, reply: 1, fix: 0, other: 1 } });
   });
 });
 
