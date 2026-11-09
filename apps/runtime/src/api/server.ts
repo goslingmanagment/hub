@@ -76,6 +76,7 @@ import { registerOpsRoutes } from "../modules/ops/index.ts";
 import { registerSyncEngineRoutes } from "../modules/sync-engine/index.ts";
 import { registerPageBrowserRoutes } from "../modules/page-browser/index.ts";
 import { registerPublicationRoutes } from "../modules/publications/index.ts";
+import { registerAgentTeamRoutes } from "../modules/agent-team/index.ts";
 import { registerFanQueueRoutes } from "../modules/fan-queues/index.ts";
 import { registerOutreachRoutes } from "../modules/outreach/index.ts";
 import { registerPublicationFileRoutes } from "../modules/publication-files/index.ts";
@@ -690,6 +691,7 @@ export async function buildApiServer(appContext: AppContext) {
   registerPublicationRoutes(server, moduleContext);
   // Fan queues: the agent's preview, create and changes, the extension's portions.
   registerFanQueueRoutes(server, moduleContext);
+  registerAgentTeamRoutes(server, moduleContext);
   // «Рассылки» kept by Hub: the page's outreaches, shared by its team, and each fan's send claimed once.
   registerOutreachRoutes(server, moduleContext);
   // Their files: the upload streams raw bytes to disk (its own body-parser scope).

@@ -55,6 +55,14 @@ export const AGENT_CAPABILITIES = [
    * money. The ContentOps key's narrow right (owner 2026-10-29).
    */
   "read:content",
+  /**
+   * The team's work and the facts of every sale on the key's pages: who held
+   * the page, the bought PPV's sender, post tips and Campaign, the last
+   * writer, the chatters' marks and the owner's split (`agentTeamSales`).
+   * The agency ledger's right (ledger release 2, owner 2026-11-09): whose a
+   * sale is and what anyone is paid is the ledger's. Needs read:money too.
+   */
+  "read:team",
 ] as const;
 
 export type AgentCapability = (typeof AGENT_CAPABILITIES)[number];

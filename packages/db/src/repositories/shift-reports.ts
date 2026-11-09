@@ -237,6 +237,29 @@ export async function listShiftMarks(db: Database, input: { transactionIds: read
   }));
 }
 
+/** The owner's split of each of these sales that has one (`resolveShiftSale`): percent per person. */
+export async function listShiftResolutions(
+  db: Database,
+  input: { transactionIds: readonly number[] },
+): Promise<Map<number, Array<{ userId: number; percent: number }>>> {
+  if (input.transactionIds.length === 0) return new Map();
+  const result = await db.execute<{ transaction_id: string | number; shares: Array<{ userId: number; percent: number }> }>(sql`
+    select transaction_id, shares from shift_report_resolutions
+    where transaction_id = any(${sql.param(input.transactionIds.map(String))}::bigint[])`);
+  return new Map(result.rows.map((row) => [
+    Number(row.transaction_id),
+    row.shares.map((share) => ({ userId: Number(share.userId), percent: Number(share.percent) })),
+  ]));
+}
+
+/** The role of each of these people. */
+export async function listUserRoles(db: Database, userIds: readonly number[]): Promise<Map<number, string>> {
+  if (userIds.length === 0) return new Map();
+  const result = await db.execute<{ id: string | number; role: string }>(sql`
+    select id, role from users where id = any(${sql.param(userIds.map(String))}::bigint[])`);
+  return new Map(result.rows.map((row) => [Number(row.id), row.role]));
+}
+
 /**
  * Lock order: a chatter's lock first, then sales' locks in ascending id. A
  * chatter's mark and confirmation serialize on the first (a mark never lands
