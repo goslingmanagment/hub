@@ -35,6 +35,7 @@ const MONEY_TOKEN = `${AGENT_KEY_TOKEN_PREFIX}gates-money-only-token`;
 const BARE_MESSAGES_TOKEN = `${AGENT_KEY_TOKEN_PREFIX}gates-bare-messages-token`;
 const BARE_MONEY_TOKEN = `${AGENT_KEY_TOKEN_PREFIX}gates-bare-money-token`;
 const CONTENT_TOKEN = `${AGENT_KEY_TOKEN_PREFIX}gates-content-only-token`;
+const TEAM_TOKEN = `${AGENT_KEY_TOKEN_PREFIX}gates-team-money-token`;
 
 let testDb: StartedTestDatabase | null = null;
 let server: Awaited<ReturnType<typeof buildApiServer>> | null = null;
@@ -145,6 +146,14 @@ beforeEach(async (context) => {
     keyPrefix: CONTENT_TOKEN.slice(0, AGENT_KEY_TOKEN_PREFIX.length + 6),
     keyDigest: sha256Hex(CONTENT_TOKEN),
     capabilities: ["read:content"],
+  });
+  // The agency ledger's key: the team's sale facts (ledger release 2).
+  await insertAgentKey(testDb.db, {
+    ...common,
+    name: "team-money",
+    keyPrefix: TEAM_TOKEN.slice(0, AGENT_KEY_TOKEN_PREFIX.length + 6),
+    keyDigest: sha256Hex(TEAM_TOKEN),
+    capabilities: ["read:team", "read:money"],
   });
 
   await seedTwoFans();
@@ -737,3 +746,23 @@ describe("[sync-critical] agent read plane: read:content", () => {
     expect(proven.items[0]!.fields.lastFullWalkAt).toBe("2026-02-03T00:00:00.000Z");
   });
 });
+
+describe("[sync-critical] agent read plane: read:team", () => {
+  // The first call on production answered 500: its audit summary used keys the audit refuses (hub#1102).
+  const window = { from: "2026-01-01T00:00:00Z", to: "2026-01-31T00:00:00Z" };
+
+  it("answers the team's work and the sales of the key's pages, and audits the read", async () => {
+    const response = await post("/api/v1/agent/team/sales", window, TEAM_TOKEN);
+    expect(response.statusCode, response.body).toBe(200);
+    const body = response.json() as { pages: string[]; works: unknown[]; sales: unknown[] };
+    expect(body.pages.length).toBeGreaterThan(0);
+    expect(Array.isArray(body.works)).toBe(true);
+    expect(Array.isArray(body.sales)).toBe(true);
+  });
+
+  it("refuses a key without read:team, money or not", async () => {
+    expect((await post("/api/v1/agent/team/sales", window, MONEY_TOKEN)).statusCode).toBe(403);
+    expect((await post("/api/v1/agent/team/sales", window, FULL_TOKEN)).statusCode).toBe(403);
+  });
+});
+

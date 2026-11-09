@@ -33,7 +33,8 @@ export function registerAgentTeamRoutes(server: ApiServer, ctx: ApiModuleContext
         operation: "agentTeamSales",
         pageIds: pages.map((page) => page.id),
         verbatimText: false,
-        requestSummary: { from: result.from, to: result.to, works: result.works.length, sales: result.sales.length },
+        // The audit's closed vocabulary (agent-read-audit.ts): the window and how many sales went out.
+        requestSummary: { windowFrom: result.from, windowTo: result.to, returned: result.sales.length },
       });
       delivered = result.sales.length;
       return result;
