@@ -51,6 +51,9 @@ const ledgerPayoutsSchema = z.object({
       model: z.string().nullable().optional(),
       unpaidMicros: micros,
     })),
+    // A ledger before «не занесено» in /v1/payouts answers without it: none known.
+    unentered: z.object({ days: z.number().int().nonnegative(), shareMicros: micros, unknown: z.number().int().nonnegative() })
+      .default({ days: 0, shareMicros: 0, unknown: 0 }),
   })),
   checks: z.object({
     stale: z.boolean(),
@@ -137,6 +140,7 @@ export async function readLedgerPayouts(
       toPayMills: person.toPayMicros === null ? null : millsOf(person.toPayMicros),
       oldestUnpaidDate: person.oldestUnpaidDate,
       unpaidDays: person.unpaidDays.map((day) => ({ date: day.date, kind: day.kind, model: day.model ?? null, unpaidMills: millsOf(day.unpaidMicros) })),
+      unentered: { days: person.unentered.days, shareMills: millsOf(person.unentered.shareMicros), unknown: person.unentered.unknown },
     })),
     checks: ledger.checks,
     serverNow: (options.now ?? new Date()).toISOString(),

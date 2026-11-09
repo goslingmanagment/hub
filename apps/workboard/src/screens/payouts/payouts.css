@@ -291,10 +291,10 @@
     display: flex;
   }
 
-  /* The ledger's four numbers stay one row down to a phone (the app's 3-a-row would leave the fourth alone). */
+  /* The ledger's four or five numbers stay one row down to a phone (the app's 3-a-row would leave one alone). */
   @media (max-width: 1100px) and (min-width: 641px) {
     .payouts-ledger .wb-tiles {
-      grid-template-columns: repeat(4, minmax(0, 1fr));
+      grid-template-columns: repeat(var(--payouts-tiles, 4), minmax(0, 1fr));
     }
 
     .payouts-ledger .wb-tiles > :nth-child(3n + 1) .wb-tile {
@@ -309,7 +309,7 @@
   }
 
   /* A month of days fits a narrower table. */
-  @media (max-width: 1300px) {
+  @media (max-width: 1500px) {
     .payouts-strip {
       gap: 2px;
     }

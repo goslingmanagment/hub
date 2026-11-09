@@ -56,6 +56,9 @@ export const teamLedgerPayoutPersonSchema = z.object({
     model: z.string().nullable(),
     unpaidMills: mills,
   })),
+  /** «Не занесено» now: the tab's empty days on which Hub shows money in the person's scheduled shift — pay the sheet
+   *  has not got yet, so not in the debt. shareMills is an estimate at the tab's rate; unknown — days Hub did not prove. */
+  unentered: z.object({ days: z.number().int().nonnegative(), shareMills: mills, unknown: z.number().int().nonnegative() }),
 });
 
 export const teamLedgerPayoutsResponseSchema = z.object({

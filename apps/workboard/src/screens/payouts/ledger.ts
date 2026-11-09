@@ -28,6 +28,9 @@ export interface LedgerRow {
   sheetDiffMills: Mills | null;
   /** Days the oldest unpaid day has waited, today included; null — nothing owed. */
   waitingDays: number | null;
+  /** «Не занесено»: the sheet's empty days with Hub's money in the person's shift, and their share at the tab's rate (an estimate). */
+  unenteredDays: number;
+  unenteredMills: Mills;
   strip: StripDay[];
 }
 
@@ -40,6 +43,9 @@ export interface LedgerView {
   owedPeople: number;
   accruedMills: Mills;
   paidMills: Mills;
+  /** «Не занесено» of everyone, and of how many people. */
+  unenteredMills: Mills;
+  unenteredPeople: number;
   /** Whose unpaid day is the oldest. */
   oldest: { row: LedgerRow; date: string } | null;
   checks: TeamLedgerPayoutsResponse["checks"];
@@ -69,6 +75,8 @@ export function buildLedger(data: TeamLedgerPayoutsResponse, today: string = mos
       paidMills: millsFromInteger(person.paidMills),
       sheetDiffMills: sheetDiff === 0n ? null : sheetDiff,
       waitingDays: person.oldestUnpaidDate === null || owedMills <= 0n ? null : daysInRange(person.oldestUnpaidDate, today),
+      unenteredDays: person.unentered.days,
+      unenteredMills: millsFromInteger(person.unentered.shareMills),
       strip: window.map((day) => ({
         day,
         state: day > today ? "future" : !accrued.has(day) ? "none" : owed.has(day) ? "owed" : "paid",
@@ -76,7 +84,7 @@ export function buildLedger(data: TeamLedgerPayoutsResponse, today: string = mos
     };
   })
     // A person with nothing in the period and nothing owed is not on the screen.
-    .filter((row) => row.owedMills !== 0n || row.accruedMills !== 0n || row.paidMills !== 0n)
+    .filter((row) => row.owedMills !== 0n || row.accruedMills !== 0n || row.paidMills !== 0n || row.unenteredDays > 0)
     .sort((left, right) => (left.owedMills === right.owedMills ? left.person.name.localeCompare(right.person.name) : left.owedMills > right.owedMills ? -1 : 1));
 
   const owing = rows.filter((row) => row.owedMills > 0n);
@@ -92,6 +100,8 @@ export function buildLedger(data: TeamLedgerPayoutsResponse, today: string = mos
     owedPeople: owing.length,
     accruedMills: sumMills(rows.map((row) => row.accruedMills)),
     paidMills: sumMills(rows.map((row) => row.paidMills)),
+    unenteredMills: sumMills(rows.map((row) => row.unenteredMills)),
+    unenteredPeople: rows.filter((row) => row.unenteredDays > 0).length,
     oldest: oldest ? { row: oldest, date: oldest.person.oldestUnpaidDate! } : null,
     checks: data.checks,
   };
