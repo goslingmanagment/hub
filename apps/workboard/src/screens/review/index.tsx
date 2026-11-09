@@ -1,16 +1,16 @@
 import { ChevronDown, RotateCw, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { useLocation, useNavigate, useParams } from "react-router";
+import { Link, useLocation, useNavigate, useParams } from "react-router";
 import { hubErrorStatus } from "@agency_hub_core/ui/hubClient";
-import { Button, EmptyState, ErrorState, Facts, LinkButton, Menu, Money, SearchInput, Segmented, Skeleton, Spinner, Tooltip, collidingFanNames, cx, type FactItem, type MenuEntry } from "@agency_hub_core/ui";
+import { Button, EmptyState, ErrorState, LinkButton, Menu, Money, SearchInput, Segmented, Skeleton, Spinner, Tooltip, collidingFanNames, cx, type MenuEntry } from "@agency_hub_core/ui";
 import { formatAgo, formatCount, formatDay, formatMills, formatPercent, formatTimeOfDay, formatWeekdayDay } from "@agency_hub_core/ui/format";
 import { mondayOf } from "@agency_hub_core/ui/moscow";
 import { withPeriod } from "@agency_hub_core/ui/period";
 import { ruPlural } from "@agency_hub_core/ui/plural";
 import { CHATTER_SHIFT_PAGE_MIN_MESSAGES } from "@agency_hub_core/contracts";
 import { REPLY_FAST_SECONDS, REPLY_NORM_SECONDS, shiftQuality } from "@agency_hub_core/ui/shiftReview";
-import { shiftDurationHint, shiftWhen, type ShiftWhen } from "@agency_hub_core/ui/shiftWhen";
-import { carryParams, parseShiftKey, personPath, shiftPath, useBackTarget, type BackTarget } from "@/shared/links";
+import { shiftWhen, type ShiftWhen } from "@agency_hub_core/ui/shiftWhen";
+import { carryParams, parseShiftKey, personPath, shiftPath, useBackState, useBackTarget, type BackTarget } from "@/shared/links";
 import { METRICS, UNANSWERED_NOW_LABEL, formatAiUnedited, formatReplyMedian, formatUnanswered } from "@/shared/metrics";
 import { ScreenHeader } from "@/shared/ScreenHeader";
 import { usePeriod } from "@/shared/usePeriod";
@@ -23,20 +23,21 @@ import { Pulse } from "./Pulse.js";
 import { ShiftStepper } from "./ShiftStepper.js";
 import { Transcript } from "./Transcript.js";
 import { useReviewParams, type ReviewChange, type ReviewParams } from "./useReviewParams.js";
-import { OWN_WORDS } from "./words.js";
 import "./review.css";
 
 /**
  * Разбор смены (spec §4.2): one chatter's shift opened up, the core of
- * Workboard. One line names the shift, one line of facts under it; then one
- * sheet down to the window's bottom: the pulse of its minutes, the list's
- * filters, the chats and the conversation — and the evidence of a message as a
- * third column beside them (D7). Everything chosen is in the address; ↑ ↓ (J K)
- * step through the chats.
+ * Workboard. The page scrolls: the title bar (it sticks), the shift's numbers
+ * as a row of tiles and its pulse on one quiet sheet; then the working sheet —
+ * the list's filters, the chats, the conversation and the evidence of a message
+ * as a third column (D7) — as tall as the window under the bar: the wheel over
+ * it first docks it under the bar, then scrolls inside. Everything chosen is in
+ * the address; ↑ ↓ (J K) step through the chats.
  *
- * Two scopes, each said where it is (spec r3, E1): «Вся смена» — the facts and
- * the pulse, never narrowed; «Чаты» — the list, narrowed by the page, the
- * minutes picked on the pulse and the search, its counts following them.
+ * Two scopes (spec r3, E1): the tiles and the pulse are the whole shift, never
+ * narrowed; the list is narrowed by the page, the minutes picked on the pulse
+ * and the search, its counts following them. `?font=system` shows the screen
+ * in the system's font (for comparing pictures).
  */
 
 const MINUTE_MS = 60_000;
@@ -50,12 +51,11 @@ const FILTER_WORDS: Record<ReviewFilter, string> = {
 };
 
 const FILTER_HINTS: Record<ReviewFilter, string> = {
-  look: `До ${LOOK.max} чатов с самыми сильными причинами: без ответа к концу смены, ожидание от ${LOOK.waitSeconds / 60} мин, `
-    + `покупки от ${formatMills(LOOK.paidMills)}, ИИ без правки во всём чате или ${LOOK.aiRunMin} подряд, один текст ${LOOK.repeatFans} фанам и больше, `
-    + `служебный текст ИИ. И ${LOOK.samples} обычных диалога для сравнения`,
-  unanswered: "Фан писал в смену, ответа чаттера до конца смены не было",
-  waited: `Фан ждал ответа дольше ${REPLY_NORM_SECONDS / 60} мин: с ответом в смену или без него`,
-  paid: "Платные сообщения, чаевые или продажи этому фану в смену",
+  look: `До ${LOOK.max} чатов с сильными причинами: без ответа, ожидание от ${LOOK.waitSeconds / 60} мин, покупки от ${formatMills(LOOK.paidMills)}, `
+    + `ИИ без правки подряд, один текст многим. И ${LOOK.samples} обычных для сравнения`,
+  unanswered: "Фан писал в смену и не дождался ответа",
+  waited: `Фан ждал ответа дольше ${REPLY_NORM_SECONDS / 60} мин`,
+  paid: "Платные сообщения, чаевые или продажи в смену",
   all: "Все чаты смены по времени",
 };
 
@@ -73,86 +73,82 @@ function whenOf(shift: ReviewShift): ShiftWhen {
   return shiftWhen({ startedAt: shift.startedAt, endedAt: shift.endedAt, ongoing: shift.ongoing, workedMinutes: shift.workedMinutes });
 }
 
+interface Tile {
+  label: string;
+  value: ReactNode;
+  /** The definition, 1–2 short sentences on hover. */
+  hint: string;
+}
+
 /**
- * The three numbers of the shift are the review's rules and the app's words (D1): the journal and the card say the same.
- * Only those three terms carry a definition under a dotted label (D14); the plain counts say their notes on hover, without a line.
+ * The shift's numbers (D1): the same three quality numbers as the journal and the card, the sales, the messages and
+ * the time worked. A number and its label; its definition only on hover.
  */
-function factsOf(index: ReviewIndex): FactItem[] {
+function tilesOf(index: ReviewIndex, when: ShiftWhen): Tile[] {
   const { shift, totals } = index;
   const quality = shiftQuality(totals);
-  const notMine = totals.handedOverUnanswered + totals.colleagueUnanswered;
   const late = shift.ongoing ? 0 : totals.unansweredLate;
+  const percent = (part: number) => formatPercent((100 * part) / Math.max(1, totals.replies));
   return [
     {
       label: "Продажи",
-      strong: true,
-      value: <Money mills={shift.salesNetMills} strong />,
-      title: (
-        <>
-          Продажи на страницах смены после комиссии, пока она их держала, как в «Сменах».
-          {shift.chatsNetMills !== shift.salesNetMills && <> В чатах ниже — {formatMills(shift.chatsNetMills)}: остальное купили фаны без переписки в эту смену.</>}
-          {totals.ppvSent > 0 && <> Платных сообщений куплено {formatCount(totals.ppvBought)} из {formatCount(totals.ppvSent)}.</>}
-        </>
-      ),
+      value: <Money mills={shift.salesNetMills} />,
+      hint: [
+        "Продажи страниц смены после комиссии, пока она их держала.",
+        totals.ppvSent > 0 ? `Платных куплено ${formatCount(totals.ppvBought)} из ${formatCount(totals.ppvSent)}.` : "",
+      ].join(" ").trim(),
     },
     {
       label: "Сообщений",
-      value: <>{formatCount(totals.messages)}{totals.massMessages > 0 && <span className="review-facts__quiet"> +{formatCount(totals.massMessages)} рассылкой</span>}</>,
-      title: <>Личные сообщения фанам{totals.perHour !== null && <>, {totals.perHour.toLocaleString("ru-RU", { maximumFractionDigits: 0 })} в час без пауз</>}.{totals.massMessages > 0 && <> Рассылки ({formatCount(totals.massMessages)}) никому не отвечают — их здесь не считаем.</>}</>,
-    },
-    {
-      // Not «Все» of the list: that one holds the fans who only waited and the colleagues' chats too.
-      label: "Чатов",
-      value: formatCount(totals.chats),
-      title: <>Чаты, где чаттер писал в смену{totals.chatsFanSilent > 0 && <>; в {formatCount(totals.chatsFanSilent)} из них фан в смену не писал (приветствия, первые сообщения)</>}. В списке «Все» есть и чаты, где фаны только ждали.</>,
+      value: formatCount(totals.messages),
+      hint: [
+        `Личные сообщения фанам${totals.perHour !== null ? `, ${totals.perHour.toLocaleString("ru-RU", { maximumFractionDigits: 0 })} в час` : ""}.`,
+        totals.massMessages > 0 ? `Рассылки (${formatCount(totals.massMessages)}) не в счёте.` : "",
+      ].join(" ").trim(),
     },
     {
       label: METRICS.reply.label,
       value: formatReplyMedian(quality.replyMedianSeconds),
-      hint: (
-        <>
-          {METRICS.reply.hint}
-          {totals.replies > 0 && (
-            <> В эту смену {formatCount(totals.replies)} {ruPlural(totals.replies, "ответ", "ответа", "ответов")}: до {REPLY_FAST_SECONDS / 60} мин — {formatPercent((100 * totals.repliesWithinFast) / totals.replies)}, до {REPLY_NORM_SECONDS / 60} мин — {formatPercent((100 * totals.repliesWithinNorm) / totals.replies)}.</>
-          )}
-        </>
-      ),
+      hint: totals.replies > 0
+        ? `Половина ответов быстрее, половина медленнее. До ${REPLY_FAST_SECONDS / 60} мин — ${percent(totals.repliesWithinFast)}, до ${REPLY_NORM_SECONDS / 60} мин — ${percent(totals.repliesWithinNorm)}.`
+        : "Половина ответов быстрее, половина медленнее. Ответов в смену не было.",
     },
     {
       label: shift.ongoing ? UNANSWERED_NOW_LABEL : METRICS.unanswered.label,
-      value: (
-        <>
-          {formatUnanswered(quality.unansweredAtEnd)}
-          {late > 0 && <span className="review-facts__quiet"> · {formatCount(late)} в конце смены</span>}
-        </>
-      ),
-      hint: (
-        <>
-          {METRICS.unanswered.hint}
-          {totals.unansweredInherited > 0 && <> Из них ждали ещё с прошлых смен: {formatCount(totals.unansweredInherited)}.</>}
-          {late > 0 && <> Написали в последние {REPLY_NORM_SECONDS / 60} мин смены: {formatCount(late)} — ответить было почти некогда, но в счёте они есть.</>}
-          {totals.waitingSilently > 0 && <> Ещё {formatCount(totals.waitingSilently)} ждали с прошлых смен и в смену не писали — не в счёте.</>}
-          {notMine > 0 && <> Ещё {formatCount(notMine)} без ответа после сообщения коллеги — не в счёте.</>}
-        </>
-      ),
+      value: formatUnanswered(quality.unansweredAtEnd),
+      hint: [
+        "Фаны, которые писали в смену и не дождались ответа до её конца.",
+        late > 0 ? `${formatCount(late)} из них — в последние ${REPLY_NORM_SECONDS / 60} мин.` : "",
+      ].join(" ").trim(),
     },
     {
       label: METRICS.aiUnedited.label,
       value: formatAiUnedited(quality.aiUneditedShare),
-      hint: (
-        <>
-          {METRICS.aiUnedited.hint}
-          {totals.textMessages > 0 && (
-            <>
-              {" "}В эту смену {formatCount(totals.aiUnedited)} из {formatCount(totals.textMessages)}. ИИ с правкой — {formatCount(totals.origin.ai - totals.aiUnedited)},
-              свой черновик через ИИ — {formatCount(totals.origin.fix)}, {OWN_WORDS} — {formatCount(totals.origin.own)}.
-              {totals.origin.hi > 0 && <> Приветствий Hi — {formatCount(totals.origin.hi)}.</>}
-            </>
-          )}
-        </>
-      ),
+      hint: totals.textMessages > 0
+        ? `Текст ИИ ушёл фану как есть: ${formatCount(totals.aiUnedited)} из ${formatCount(totals.textMessages)} сообщений с текстом. Hi не в счёте.`
+        : "Текст ИИ ушёл фану как есть. Hi не в счёте.",
+    },
+    {
+      label: "Отработано",
+      value: when.worked ?? "—",
+      hint: [when.withPauses ? `${when.withPauses}.` : "", shift.pauseMinutes > 0 ? "Паузы — серые полосы на пульсе." : ""].join(" ").trim() || "Время работы без пауз.",
     },
   ];
+}
+
+function Tiles({ tiles }: { tiles: readonly Tile[] }) {
+  return (
+    <div className="review-tiles" role="list" aria-label="Смена в цифрах">
+      {tiles.map((tile) => (
+        <Tooltip key={tile.label} content={tile.hint} align="start" side="bottom" className="review-tile__tip">
+          <div className="review-tile" role="listitem">
+            <span className="review-tile__label">{tile.label}</span>
+            <span className="review-tile__value">{tile.value}</span>
+          </div>
+        </Tooltip>
+      ))}
+    </div>
+  );
 }
 
 /**
@@ -176,29 +172,13 @@ function LiveRefresh({ updatedAt, onRefresh, refreshing }: { updatedAt: number; 
   );
 }
 
-/** «7 ч 28 мин · mia-1, mia-2» after the title: the time worked (pauses on hover, no line: a value, not a term), and the pages. */
-function TitleExtra({ shift, when }: { shift: ReviewShift; when: ShiftWhen }) {
-  const hint = [shiftDurationHint(when), shift.pauseMinutes > 0 ? "Паузы — серые полосы на пульсе." : null].filter(Boolean).join(". ");
-  return (
-    <span className="review-title__extra">
-      {when.worked !== null && (
-        <>
-          <Tooltip content={hint} align="start" side="bottom"><span>{when.worked}</span></Tooltip>
-          <span aria-hidden> · </span>
-        </>
-      )}
-      <span className="review-page-text">{shift.pages.map((one) => one.pageLabel).join(", ")}</span>
-    </span>
-  );
-}
-
 /**
  * The page filter of a shift with several pages: one menu in the list's row (the app's page filter, `?page=`).
- * It says that it narrows the chats only (E1): «Чаты: все страницы», «Чаты: mia-1».
+ * It narrows the chats only (E1): the tiles and the pulse stay the whole shift — said in its hint.
  */
 function PageMenu({ shift, page, onPage }: { shift: ReviewShift; page: string | null; onPage: (page: string | null) => void }) {
   const items: MenuEntry[] = [
-    { label: "Чаты всех страниц смены", checked: page === null, onSelect: () => onPage(null) },
+    { label: "Все страницы", checked: page === null, onSelect: () => onPage(null) },
     { separator: true },
     ...shift.pages.map((one): MenuEntry => ({
       label: one.pageLabel,
@@ -218,15 +198,15 @@ function PageMenu({ shift, page, onPage }: { shift: ReviewShift; page: string | 
       items={items}
       align="start"
       renderTrigger={({ ref, ...trigger }) => page === null ? (
-        <button ref={ref} type="button" className="ui-chip ui-chip--md" {...trigger}>
-          <span className="ui-chip__text">Чаты: все страницы</span>
-          <ChevronDown size={16} strokeWidth={1.75} aria-hidden />
+        <button ref={ref} type="button" className="ui-chip ui-chip--md review-pick" {...trigger}>
+          <span className="ui-chip__text">Все страницы</span>
+          <ChevronDown size={14} strokeWidth={1.75} aria-hidden />
         </button>
       ) : (
-        <span className="ui-chip ui-chip--md ui-chip--selected">
+        <span className="ui-chip ui-chip--md ui-chip--selected review-pick">
           <button ref={ref} type="button" className="ui-chip__main" aria-label={`Только чаты ${page}. Выбрать другую страницу`} {...trigger}>
-            <span className="ui-chip__text">Чаты: <span className="review-page-text">{page}</span></span>
-            <ChevronDown size={16} strokeWidth={1.75} aria-hidden />
+            <span className="ui-chip__text review-page-text">{page}</span>
+            <ChevronDown size={14} strokeWidth={1.75} aria-hidden />
           </button>
           <button type="button" className="ui-chip__remove" aria-label="Чаты всех страниц смены" onClick={() => onPage(null)}>
             <X size={14} strokeWidth={2} aria-hidden />
@@ -237,36 +217,37 @@ function PageMenu({ shift, page, onPage }: { shift: ReviewShift; page: string | 
   );
 }
 
+/** `?font=system`: the screen in the system's font, for comparing pictures. */
+function useFontClass(): string | null {
+  const location = useLocation();
+  return new URLSearchParams(location.search).get("font") === "system" ? "review-content--system" : null;
+}
+
 function Loading({ back }: { back: BackTarget }) {
+  const font = useFontClass();
   return (
     <>
-      <ScreenHeader
-        fill
-        title={<Skeleton width={420} height={28} radius={6} />}
-        documentTitle="Разбор смены"
-        back={back}
-        meta={(
-          <span className="review-meta__facts">
-            <span className="review-scope">Вся смена:</span>
-            <span className="review-facts review-facts--loading">
-              {Array.from({ length: 6 }, (_, index) => <Skeleton key={index} width={index === 0 ? 140 : 120} height={20} radius={6} />)}
-            </span>
-          </span>
-        )}
-      />
-      <div className="wb-content review-content" aria-busy="true">
-        <div className="review-panes">
-          <div className="review-pulse"><Skeleton height={74} radius={6} /></div>
-          <div className="review-toolbar"><Skeleton width={640} height={36} radius={8} /></div>
+      <ScreenHeader title={<Skeleton width={320} height={24} radius={6} />} documentTitle="Разбор смены" back={back} />
+      <div className={cx("wb-content review-content", font)} aria-busy="true">
+        <section className="review-overview">
+          <div className="review-tiles">
+            {Array.from({ length: 6 }, (_, index) => (
+              <div key={index} className="review-tile"><Skeleton width={72} height={14} radius={4} /><Skeleton width={96} height={24} radius={6} /></div>
+            ))}
+          </div>
+          <div className="review-pulse"><Skeleton height={281} radius={6} /></div>
+        </section>
+        <div className="review-sheet">
+          <div className="review-toolbar"><Skeleton width={560} height={32} radius={8} /></div>
           <div className="review-split">
             <div className="review-chats review-chats--loading">
               {Array.from({ length: 7 }, (_, index) => (
-                <div key={index} className="review-chat-skeleton"><Skeleton width="60%" height={18} radius={4} /><Skeleton width="85%" height={16} radius={4} /></div>
+                <div key={index} className="review-chat-skeleton"><Skeleton width="60%" height={16} radius={4} /><Skeleton width="80%" height={14} radius={4} /></div>
               ))}
             </div>
             <div className="review-transcript review-transcript--loading">
               {[220, 320, 180, 360, 260].map((width, index) => (
-                <div key={index} className={index % 2 === 0 ? "review-skeleton-msg" : "review-skeleton-msg review-skeleton-msg--page"}><Skeleton width={width} height={56} radius={12} /></div>
+                <div key={index} className={index % 2 === 0 ? "review-skeleton-msg" : "review-skeleton-msg review-skeleton-msg--page"}><Skeleton width={width} height={48} radius={12} /></div>
               ))}
             </div>
           </div>
@@ -298,7 +279,7 @@ function Problem({ back, kind, retry, retrying, userId, at }: {
   const when = `${formatWeekdayDay(at)}, ${formatTimeOfDay(at)}`;
   const title = (
     <span className="review-title">
-      <span>{name ?? "Разбор смены"}</span>
+      <span className="review-title__name">{name ?? "Разбор смены"}</span>
       <span className="review-title__when">{when}</span>
     </span>
   );
@@ -494,8 +475,8 @@ function Loaded({ model, params, update, back, updatedAt, refreshing, onRefresh 
   const closeEvidence = () => {
     const ref = cursor.current.msg;
     if (active) go(active.key, null);
-    // The focus goes back to the line that opened it.
-    if (ref !== null) requestAnimationFrame(() => document.querySelector<HTMLElement>(`[data-ref="${CSS.escape(ref)}"] .review-origin`)?.focus());
+    // The focus goes back to the bubble that opened it.
+    if (ref !== null) requestAnimationFrame(() => document.querySelector<HTMLElement>(`[data-ref="${CSS.escape(ref)}"] .review-bubble`)?.focus());
   };
 
   const setSpan = (span: { from: number; to: number } | null) => update({
@@ -507,56 +488,45 @@ function Loaded({ model, params, update, back, updatedAt, refreshing, onRefresh 
     msg: null,
   });
   const narrowed = query.trim() !== "" || params.span !== null || pageOn;
-  const pageWords = shift.pages.length === 2 ? "обе страницы" : "все страницы";
   const showAll = () => {
     search("");
     update({ span: null, page: null, show: "all", chat: null, msg: null });
   };
   const empty = emptyOf({ narrowed, query: query.trim(), span: spanMs, page: pageOn ? params.page : null, show, inBase: base.length, onClearSearch: () => search(""), onShowAll: showAll, onAll: () => update({ show: "all", chat: null, msg: null }) });
+  const ownMessages = transcript?.chat.messages.filter((message) => message.mine !== null) ?? [];
+  const font = useFontClass();
+  const sheet = useDockingSheet();
+  const toPerson = useBackState(`${shift.username}, ${when.days}`);
 
   const title = (
     <span className="review-title">
-      <span>{shift.username}</span>
-      <span className="review-title__when">{when.days} · {when.time}</span>
-      <TitleExtra shift={shift} when={when} />
+      <Link className="review-title__name review-title__link" to={personPath(shift.userId, location.search)} state={toPerson}>{shift.username}</Link>
+      <span className="review-title__when">{when.days} {when.time}</span>
     </span>
   );
+  // Rare honest notes: the archive does not hold every message yet, or a visit, not a shift.
   const notes: string[] = [];
   if (shift.kind === "visit") notes.push("это заход, а не смена");
-  if (shift.unarchived > 0) notes.push(`${formatCount(shift.unarchived)} сообщ. чаттера ещё нет в архиве — их нет и здесь`);
-  if (shift.deleted > 0) notes.push(`${formatCount(shift.deleted)} сообщ. удалены после отправки — их здесь нет`);
-  const meta = (
-    <span className="review-meta">
-      <span className="review-meta__facts">
-        {/* The scope of these numbers (E1): the whole shift, whatever narrows the chats below. */}
-        <Tooltip content="Итоги всей смены, все её страницы. Страница, время на пульсе и поиск сужают только список чатов ниже." align="start" side="bottom">
-          <span className="review-scope">Вся смена:</span>
-        </Tooltip>
-        <Facts items={factsOf(index)} className="review-facts" label="Вся смена в цифрах" />
-      </span>
-      {notes.length > 0 && <span className="review-meta__quiet">{notes.join(" · ")}</span>}
-    </span>
-  );
+  if (shift.unarchived > 0) notes.push(`${formatCount(shift.unarchived)} сообщ. ещё нет в архиве`);
+  if (shift.deleted > 0) notes.push(`${formatCount(shift.deleted)} сообщ. удалены после отправки`);
 
   return (
     <>
       <ScreenHeader
-        fill
         title={title}
         documentTitle={`${shift.username}, ${formatDay(shift.start)} — Разбор смены`}
         back={back}
         actions={(
           <span className="review-actions">
-            {/* A finished shift is read once and does not change; one going on is read every 2 min and can be read now —
-                said in the title's row, so the facts keep their one line. */}
             {shift.ongoing && <LiveRefresh updatedAt={updatedAt} onRefresh={onRefresh} refreshing={refreshing} />}
             <ShiftStepper shift={shift} />
           </span>
         )}
-        meta={meta}
       />
-      <div className="wb-content review-content">
-        <div className="review-panes">
+      <div className={cx("wb-content review-content", font)}>
+        <section className="review-overview" aria-label="Вся смена">
+          <Tiles tiles={tilesOf(index, when)} />
+          {notes.length > 0 && <p className="review-notes">{notes.join(" · ")}</p>}
           <Pulse
             minutes={index.minutes}
             sales={index.sales}
@@ -565,10 +535,10 @@ function Loaded({ model, params, update, back, updatedAt, refreshing, onRefresh 
             end={shift.end}
             ongoing={shift.ongoing}
             span={spanMs}
-            silences={index.silences}
-            scope={pageOn ? { words: "пульс — все страницы", hint: `Пульс, как и цифры над ним, — за всю смену, ${pageWords}. Чаты ниже — только ${params.page}.` } : null}
             onSpan={setSpan}
           />
+        </section>
+        <div ref={sheet} className="review-sheet">
           <div className="review-toolbar">
             <Segmented
               label="Какие чаты"
@@ -577,6 +547,14 @@ function Loaded({ model, params, update, back, updatedAt, refreshing, onRefresh 
               options={(Object.keys(FILTER_WORDS) as ReviewFilter[]).map((value) => ({ value, label: FILTER_WORDS[value], count: counts[value], hint: FILTER_HINTS[value] }))}
             />
             {shift.pages.length > 1 && <PageMenu shift={shift} page={pageOn ? params.page : null} onPage={(page) => update({ page, chat: null, msg: null })} />}
+            {spanMs && (
+              <span className="ui-chip ui-chip--md ui-chip--selected review-pick review-span">
+                <span className="ui-chip__text">{formatTimeOfDay(spanMs.from)}–{formatTimeOfDay(spanMs.to)}</span>
+                <button type="button" className="ui-chip__remove" aria-label="Вся смена" onClick={() => setSpan(null)}>
+                  <X size={14} strokeWidth={2} aria-hidden />
+                </button>
+              </span>
+            )}
             <span className="review-toolbar__search">
               <SearchInput value={query} onChange={search} placeholder="Фан или слово" slashShortcut width={200} />
             </span>
@@ -592,7 +570,6 @@ function Loaded({ model, params, update, back, updatedAt, refreshing, onRefresh 
                 show={show}
                 activeKey={active.key}
                 outsideKey={outside?.key ?? null}
-                showPage={shift.pages.length > 1 && !pageOn}
                 ongoing={shift.ongoing}
                 shiftStart={shift.start}
                 colliding={colliding}
@@ -617,9 +594,9 @@ function Loaded({ model, params, update, back, updatedAt, refreshing, onRefresh 
                 <Evidence
                   transcript={transcript}
                   message={evidenceMessage}
-                  username={shift.username}
                   shiftStart={shift.start}
-                  onPick={(ref) => go(active.key, ref)}
+                  position={{ index: ownMessages.findIndex((message) => message.ref === evidenceMessage.ref), count: ownMessages.length }}
+                  onStep={stepMessage}
                   onClose={closeEvidence}
                 />
               )}
@@ -629,6 +606,29 @@ function Loaded({ model, params, update, back, updatedAt, refreshing, onRefresh 
       </div>
     </>
   );
+}
+
+/**
+ * The working sheet is as tall as the window under the title bar. The wheel over it first brings it up under the bar
+ * (the page scrolls), then scrolls the list or the conversation inside it; in a narrow window the page scrolls as usual.
+ */
+function useDockingSheet() {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const sheet = ref.current;
+    if (!sheet) return undefined;
+    const onWheel = (event: WheelEvent) => {
+      if (event.deltaY <= 0 || event.ctrlKey || window.innerWidth <= 1100) return;
+      const bar = Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--wb-bar")) || 72;
+      const left = sheet.getBoundingClientRect().top - bar;
+      if (left <= 1) return;
+      event.preventDefault();
+      window.scrollBy({ top: Math.min(left, event.deltaMode === 1 ? event.deltaY * 16 : event.deltaY) });
+    };
+    sheet.addEventListener("wheel", onWheel, { passive: false });
+    return () => sheet.removeEventListener("wheel", onWheel);
+  }, []);
+  return ref;
 }
 
 /**

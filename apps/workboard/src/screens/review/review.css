@@ -1,36 +1,91 @@
 /*
- * Разбор смены. The screen fills the window (ScreenHeader `fill`): the title
- * line, one line of facts, then one sheet — the pulse, the list's filters, the
- * chats, the conversation and, when open, the evidence beside it — down to the
- * window's bottom; the list, the conversation and the evidence scroll inside
- * it, the page does not. Values come only from the design system's tokens.
+ * Разбор смены. The page scrolls: the title bar sticks; under it one quiet
+ * sheet with the shift's numbers and its pulse, then the working sheet — the
+ * filters, the chats, the conversation and the evidence — as tall as the
+ * window under the bar, scrolling inside. Values come from the design system's
+ * tokens; this screen sets its own type scale on them (below), the other
+ * screens keep theirs for now.
  */
 @layer components {
+  /* ------------------------------------------------- This screen's type */
+
+  /*
+   * Body 14/20, secondary 13/18, labels 12–13, numbers 22/28, the name 20/28; weights 400 and 600 only. Set on the
+   * screen's main column, so the title bar is in it too; the sidebar and the floating hints keep the app's.
+   */
+  .wb-main:has(> .review-content) {
+    --ui-fs-16: 14px;
+    --ui-lh-16: 20px;
+    --ui-fs-15: 14px;
+    --ui-lh-15: 20px;
+    --ui-fs-14: 13px;
+    --ui-lh-14: 18px;
+    --ui-lh-read: 20px;
+    --ui-fs-24: 20px;
+    --ui-lh-24: 28px;
+    --review-pace: var(--ui-series-1);
+    --review-reply: var(--ui-series-4);
+    --review-wait: var(--ui-warn);
+    /* The origin of a chatter's text, as a bubble's edge. */
+    --review-raw: var(--ui-series-4);
+    --review-edited: color-mix(in srgb, var(--ui-series-4) 38%, var(--ui-surface));
+    --review-fix: var(--ui-series-3);
+    font-family: var(--ui-font);
+    font-size: 14px;
+    line-height: 20px;
+  }
+
+  /* The same screen in the system's font, for comparing pictures (`?font=system`). */
+  .wb-main:has(> .review-content--system) {
+    --ui-font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
+  }
+
+  .wb-main:has(> .review-content) :is(.ui-seg__item, .ui-chip, .wb-back, .ui-kbd) {
+    font-weight: 400;
+  }
+
+  .wb-main:has(> .review-content) .wb-back {
+    height: var(--ui-control-sm);
+    border-color: var(--ui-line);
+    font-size: 14px;
+  }
+
   /* ------------------------------------------------------------ The title */
 
   .review-title {
     display: inline-flex;
     align-items: baseline;
-    gap: 16px;
+    gap: 12px;
     min-width: 0;
   }
 
-  .review-title__when {
-    color: var(--ui-text-2);
-    font-size: var(--ui-fs-20);
-    line-height: var(--ui-lh-20);
-    font-weight: 400;
-    letter-spacing: 0;
-    font-variant-numeric: tabular-nums;
+  .review-title__link {
+    color: inherit;
+    text-decoration: none;
   }
 
-  .review-title__extra {
+  .review-title__link:hover {
+    text-decoration: underline;
+    text-decoration-color: var(--ui-line);
+    text-underline-offset: 4px;
+  }
+
+  .review-title__name {
+    font-size: 20px;
+    line-height: 28px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+  }
+
+  .review-title__when {
+    overflow: hidden;
     color: var(--ui-text-3);
-    font-size: var(--ui-fs-15);
-    line-height: var(--ui-lh-15);
+    font-size: 14px;
+    line-height: 20px;
     font-weight: 400;
     letter-spacing: 0;
     font-variant-numeric: tabular-nums;
+    text-overflow: ellipsis;
   }
 
   /* A page's name is a word, not a number: «mia-1», never the spaced «mia - 1» of tabular figures (M5). */
@@ -38,31 +93,22 @@
     font-variant-numeric: normal;
   }
 
-  /* The title row's right end: «Обновлено …» of a shift going on, then the shift stepper. */
   .review-actions {
     display: inline-flex;
     align-items: center;
-    gap: 16px;
-  }
-
-  /* Under the title: the facts of the shift, then quiet notes. */
-  .review-meta {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: baseline;
-    gap: 8px 32px;
+    gap: 12px;
   }
 
   .review-live {
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    padding: 4px 6px;
+    padding: 4px 8px;
     border: 0;
     border-radius: var(--ui-radius-sm);
     background: transparent;
     color: var(--ui-text-3);
-    font: 400 var(--ui-fs-14) / var(--ui-lh-14) var(--ui-font);
+    font: 400 13px / 18px var(--ui-font);
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
     cursor: pointer;
@@ -74,66 +120,12 @@
     color: var(--ui-text);
   }
 
-  /*
-   * «Вся смена:» and its facts (E1): the scope said before the numbers, quieter than them. One row: the facts wrap
-   * inside their own box, the scope stays in front of them.
-   */
-  .review-meta__facts {
-    display: flex;
-    align-items: baseline;
-    gap: 14px;
-    min-width: 0;
-  }
-
-  .review-meta__facts > .review-facts {
-    flex: 0 1 auto;
-    min-width: 0;
-  }
-
-  .review-scope {
-    flex: none;
-    color: var(--ui-text-3);
-    font-size: var(--ui-fs-14);
-    line-height: var(--ui-lh-14);
-    font-weight: 500;
-    white-space: nowrap;
-    cursor: default;
-  }
-
-  .review-meta__quiet {
-    color: var(--ui-text-3);
-    font-size: var(--ui-fs-14);
-    line-height: var(--ui-lh-14);
-  }
-
-  .review-facts {
-    gap: 8px 20px;
-  }
-
-  @media (min-width: 1680px) {
-    .review-facts {
-      gap: 8px 28px;
-    }
-  }
-
-  .review-facts--loading {
-    display: inline-flex;
-    gap: 32px;
-  }
-
-  .review-facts__quiet {
-    color: var(--ui-text-3);
-    font-size: var(--ui-fs-14);
-    font-weight: 400;
-  }
-
-  /* ------------------------------------------------- The shift stepper */
-
+  /* ‹ Другая смена › */
   .review-stepper {
     display: inline-flex;
     align-items: center;
-    height: var(--ui-control);
-    border: 1px solid var(--ui-line-strong);
+    height: var(--ui-control-sm);
+    border: 1px solid var(--ui-line);
     border-radius: var(--ui-radius);
     background: var(--ui-surface);
   }
@@ -141,12 +133,12 @@
   .review-stepper__arrow {
     display: grid;
     place-items: center;
-    width: 34px;
-    height: 34px;
+    width: 30px;
+    height: 30px;
     border: 0;
     border-radius: 7px;
     background: transparent;
-    color: var(--ui-text-2);
+    color: var(--ui-text-3);
     cursor: pointer;
     transition: background-color var(--ui-fast), color var(--ui-fast);
   }
@@ -163,28 +155,29 @@
 
   .review-stepper__arrow:disabled:hover {
     background: transparent;
-    color: var(--ui-text-2);
+    color: var(--ui-text-3);
   }
 
   .review-stepper__pick {
     display: inline-flex;
     align-items: center;
     align-self: stretch;
-    gap: 6px;
-    padding: 0 10px 0 12px;
+    gap: 4px;
+    padding: 0 8px 0 12px;
     border: 0;
-    border-right: 1px solid var(--ui-line);
-    border-left: 1px solid var(--ui-line);
+    border-right: 1px solid var(--ui-line-soft);
+    border-left: 1px solid var(--ui-line-soft);
     background: transparent;
-    color: var(--ui-text);
-    font: 500 var(--ui-fs-15) / var(--ui-lh-15) var(--ui-font);
+    color: var(--ui-text-2);
+    font: 400 14px / 20px var(--ui-font);
     white-space: nowrap;
     cursor: pointer;
-    transition: background-color var(--ui-fast);
+    transition: background-color var(--ui-fast), color var(--ui-fast);
   }
 
   .review-stepper__pick:hover {
     background: var(--ui-hover);
+    color: var(--ui-text);
   }
 
   .review-stepper__arrow:focus-visible,
@@ -192,19 +185,320 @@
     outline-offset: -2px;
   }
 
-  /* --------------------------------------------------------- The sheet */
+  /* --------------------------------------------------------- The page */
 
   .review-content {
-    padding-top: 8px;
+    gap: 16px;
+    padding-top: 0;
+    /* The page ends where the docked sheet ends: no scroll past it. */
+    padding-bottom: 16px;
   }
 
-  .review-panes {
-    /* Fans waiting past the norm: a calmer orange than the warning itself. */
-    --review-long: color-mix(in srgb, var(--ui-warn) 62%, var(--ui-surface));
+  /* The whole shift: the numbers, then the pulse. One quiet sheet, no frames inside. */
+  .review-overview {
     display: flex;
-    flex: 1 1 auto;
     flex-direction: column;
-    min-height: 0;
+    gap: 16px;
+    padding: 20px 24px 12px;
+    border: 1px solid var(--ui-line);
+    border-radius: var(--ui-radius-lg);
+    background: var(--ui-surface);
+  }
+
+  .review-notes {
+    margin: -8px 0 0;
+    color: var(--ui-text-3);
+    font-size: 13px;
+    line-height: 18px;
+  }
+
+  /* ---------------------------------------------------------- The tiles */
+
+  .review-tiles {
+    display: grid;
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    margin: 0;
+  }
+
+  .review-tile__tip {
+    display: block;
+    min-width: 0;
+  }
+
+  .review-tile {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+    padding: 0 16px;
+    border-left: 1px solid var(--ui-line-soft);
+    cursor: default;
+  }
+
+  .review-tiles > :first-child .review-tile,
+  .review-tiles > .review-tile:first-child {
+    padding-left: 0;
+    border-left: 0;
+  }
+
+  .review-tile__label {
+    overflow: hidden;
+    color: var(--ui-text-3);
+    font-size: 13px;
+    line-height: 18px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .review-tile__value {
+    margin: 0;
+    color: var(--ui-text);
+    font-size: 22px;
+    line-height: 28px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+
+  .review-tile__value .ui-money {
+    font-weight: inherit;
+  }
+
+  /* ---------------------------------------------------------- The pulse */
+
+  /* Under the numbers, a hairline; the line of the hovered minute keeps its place above the tracks. */
+  .review-pulse {
+    margin-top: 4px;
+    padding-top: 16px;
+    border-top: 1px solid var(--ui-line-soft);
+    user-select: none;
+  }
+
+  /* «Темп» on the left; the minute under the pointer on the right, one line that keeps its height. */
+  .review-pulse__head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    height: 20px;
+    margin-bottom: 4px;
+  }
+
+  .review-pulse__name {
+    flex: none;
+    color: var(--ui-text-2);
+    font-size: 12px;
+    line-height: 16px;
+  }
+
+  .review-pulse__readout {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    min-width: 0;
+    margin: 0;
+    overflow: hidden;
+    color: var(--ui-text-2);
+    font-size: 13px;
+    line-height: 18px;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+
+  .review-pulse__readout strong {
+    color: var(--ui-text);
+    font-weight: 600;
+  }
+
+  .review-pulse__readout > span {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .review-pulse__warm {
+    color: var(--ui-mark-text);
+  }
+
+  .review-pulse__quiet {
+    color: var(--ui-text-3);
+  }
+
+  .review-key {
+    display: inline-block;
+    flex: none;
+    width: 8px;
+    height: 8px;
+    border-radius: 2px;
+  }
+
+  .review-key--pace {
+    background: var(--review-pace);
+  }
+
+  .review-key--reply {
+    background: var(--review-reply);
+  }
+
+  .review-key--wait {
+    background: var(--review-wait);
+  }
+
+  .review-key--sale {
+    border-radius: 50%;
+    background: var(--ui-good);
+  }
+
+  .review-pulse__plot {
+    position: relative;
+    width: 100%;
+  }
+
+  .review-pulse__plot svg {
+    display: block;
+    overflow: visible;
+  }
+
+  .review-pulse__pause {
+    fill: var(--ui-track);
+    fill-opacity: 0.75;
+  }
+
+  .review-pulse__span {
+    fill: var(--ui-accent-soft);
+    fill-opacity: 0.85;
+    stroke: var(--ui-accent-line);
+    stroke-width: 1;
+  }
+
+  .review-pulse__base {
+    stroke: var(--ui-line-soft);
+  }
+
+  .review-pulse__axis {
+    stroke: var(--ui-line);
+  }
+
+  .review-pulse__pace-area {
+    fill: var(--review-pace);
+    fill-opacity: 0.1;
+  }
+
+  .review-pulse__pace {
+    fill: none;
+    stroke: var(--review-pace);
+    stroke-width: 1.5;
+    stroke-linejoin: round;
+  }
+
+  .review-pulse__average {
+    stroke: var(--ui-series-compare);
+    stroke-dasharray: 3 3;
+  }
+
+  .review-pulse__on {
+    fill: var(--review-pace);
+    fill-opacity: 0.38;
+  }
+
+  .review-pulse__open {
+    fill: var(--review-pace);
+    fill-opacity: 0.12;
+  }
+
+  .review-pulse__sale {
+    fill: var(--ui-good);
+    stroke: var(--ui-surface);
+    stroke-width: 1;
+  }
+
+  .review-pulse__norm {
+    fill: var(--ui-series-compare);
+    fill-opacity: 0.13;
+  }
+
+  .review-pulse__reply {
+    fill: none;
+    stroke: var(--review-reply);
+    stroke-width: 1.5;
+    stroke-linejoin: round;
+  }
+
+  .review-pulse__wait {
+    fill: var(--review-wait);
+    fill-opacity: 0.22;
+  }
+
+  .review-pulse__wait-open {
+    fill: var(--review-wait);
+    fill-opacity: 0.8;
+  }
+
+  /* A track's name, small, at its top left; a halo of the sheet keeps it legible over a line. */
+  .review-pulse__label {
+    fill: var(--ui-text-2);
+    font: 400 12px var(--ui-font);
+    paint-order: stroke;
+    stroke: var(--ui-surface);
+    stroke-width: 4px;
+    stroke-linejoin: round;
+  }
+
+  .review-pulse__label--end {
+    fill: var(--ui-text-3);
+  }
+
+  /* The value scale in the gutter and a hairline at each track's top: quiet, read only when wanted. */
+  .review-pulse__tick {
+    fill: var(--ui-text-3);
+    font: 400 11px var(--ui-font);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .review-pulse__grid {
+    stroke: var(--ui-line-soft);
+    stroke-dasharray: 2 3;
+  }
+
+  .review-pulse__hour {
+    fill: var(--ui-text-3);
+    font: 400 12px var(--ui-font);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .review-pulse__cursor line {
+    stroke: var(--ui-text-2);
+    stroke-width: 1;
+  }
+
+  .review-pulse__dot {
+    stroke: var(--ui-surface);
+    stroke-width: 1.5;
+  }
+
+  .review-pulse__dot--pace {
+    fill: var(--review-pace);
+  }
+
+  .review-pulse__dot--reply {
+    fill: var(--review-reply);
+  }
+
+  .review-pulse__hit {
+    fill: transparent;
+    cursor: crosshair;
+    touch-action: none;
+  }
+
+  /* ---------------------------------------------------- The working sheet */
+
+  .review-sheet {
+    display: flex;
+    flex: none;
+    flex-direction: column;
+    height: calc(100dvh - var(--wb-bar) - 16px);
+    min-height: 560px;
     border: 1px solid var(--ui-line);
     border-radius: var(--ui-radius-lg);
     background: var(--ui-surface);
@@ -215,10 +509,38 @@
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    gap: 8px 12px;
-    padding: 12px 16px;
-    border-top: 1px solid var(--ui-line-soft);
+    gap: 8px;
+    padding: 10px 12px;
     border-bottom: 1px solid var(--ui-line);
+  }
+
+  .review-toolbar .ui-seg {
+    height: var(--ui-control-sm);
+  }
+
+  .review-toolbar .ui-seg__item {
+    height: 28px;
+    padding: 0 10px;
+  }
+
+  .review-toolbar .ui-seg__item[aria-pressed="true"] .ui-seg__count {
+    color: var(--ui-text-2);
+  }
+
+  .review-toolbar .ui-chip--md {
+    height: var(--ui-control-sm);
+    padding: 0 10px;
+    border-color: var(--ui-line);
+    font-size: 14px;
+    line-height: 20px;
+  }
+
+  .review-toolbar .ui-chip--selected {
+    border-color: var(--ui-accent-line);
+  }
+
+  .review-span .ui-chip__text {
+    font-variant-numeric: tabular-nums;
   }
 
   .review-toolbar__search {
@@ -226,54 +548,50 @@
     margin-left: auto;
   }
 
+  .review-toolbar .ui-search .ui-input {
+    height: var(--ui-control-sm);
+    font-size: 14px;
+  }
+
   .review-split {
     display: grid;
     flex: 1 1 auto;
-    grid-template-columns: clamp(320px, 30%, 440px) minmax(0, 1fr);
+    grid-template-columns: clamp(280px, 28%, 360px) minmax(0, 1fr);
     min-height: 0;
   }
 
   .review-split--empty {
-    display: grid;
     grid-template-columns: minmax(0, 1fr);
     place-items: center;
   }
 
   /* The evidence: a third column beside the conversation (D7). */
   .review-split.has-evidence {
-    grid-template-columns: clamp(320px, 26%, 400px) minmax(0, 1fr) 400px;
+    grid-template-columns: clamp(260px, 24%, 340px) minmax(0, 1fr) 380px;
   }
 
-  /* In the sheet the panel is a column of it: a hairline on its left, not a card of its own. */
   .review-split > .review-evidence-panel {
     border-width: 0 0 0 1px;
     border-radius: 0;
+    animation: none;
   }
 
-  /*
-   * Not room for three (1440): the list narrows to the fan and the first reason, two short lines, it never goes
-   * away; the evidence takes 360 px; the conversation keeps the rest (~520 px) and its bubbles grow to it.
-   */
+  /* Not room for three (1440): the list keeps the fan and the reason, the evidence takes 360 px. */
   @media (max-width: 1679px) {
     .review-split.has-evidence {
-      grid-template-columns: 248px minmax(0, 1fr) 360px;
+      grid-template-columns: 240px minmax(0, 1fr) 360px;
     }
 
-    .review-split.has-evidence .review-chat {
-      padding: 8px 12px 8px 16px;
-    }
-
-    .review-split.has-evidence .review-chat__when,
-    .review-split.has-evidence .review-chat__page {
+    .review-split.has-evidence .review-chat__when {
       display: none;
     }
 
     .review-split.has-evidence .review-transcript {
-      --review-inline: 16px;
+      --review-inline: 20px;
     }
 
     .review-split.has-evidence .review-transcript__scroll {
-      padding-inline: 16px;
+      padding-inline: 20px;
     }
 
     .review-split.has-evidence .review-msg {
@@ -281,207 +599,19 @@
     }
   }
 
-  /* A smaller window still (not a target width): every column gives a little; the pulse's how-to goes (M12). */
   @media (max-width: 1359px) {
     .review-split.has-evidence {
-      grid-template-columns: 216px minmax(0, 1fr) 320px;
-    }
-
-    .review-pulse__hint {
-      display: none;
+      grid-template-columns: 208px minmax(0, 1fr) 320px;
     }
   }
 
-  /* --------------------------------------------------------- The pulse */
-
-  .review-pulse {
-    padding: 6px 16px 2px;
-    user-select: none;
-  }
-
-  .review-pulse__caption {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 16px;
-    height: 20px;
-    margin-bottom: 2px;
-    color: var(--ui-text-2);
-    font-size: var(--ui-fs-14);
-    line-height: var(--ui-lh-14);
-    font-variant-numeric: tabular-nums;
-    white-space: nowrap;
-  }
-
-  .review-pulse__legend {
-    display: inline-flex;
-    flex: none;
-    gap: 16px;
-    color: var(--ui-text-2);
-  }
-
-  .review-pulse__legend > span {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-  }
-
-  .review-pulse__side {
-    display: inline-flex;
-    gap: 16px;
-    min-width: 0;
-    overflow: hidden;
-  }
-
-  .review-pulse__scope,
-  .review-pulse__silences,
-  .review-pulse__hint {
-    overflow: hidden;
-    color: var(--ui-text-3);
-    text-overflow: ellipsis;
-  }
-
-  .review-pulse__scope {
-    flex: none;
-  }
-
-  .review-pulse__picked {
-    display: inline-flex;
-    align-items: center;
-    gap: 12px;
-    color: var(--ui-text);
-    font-weight: 500;
-  }
-
-  .review-pulse__clear {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    font-weight: 400;
-  }
-
-  .review-key {
-    display: inline-block;
-    width: 10px;
-    height: 10px;
-    border-radius: 2px;
-  }
-
-  .review-key--sent {
-    background: var(--ui-text-3);
-  }
-
-  .review-key--wait {
-    background: var(--ui-warn-line);
-  }
-
-  .review-key--long {
-    background: var(--review-long);
-  }
-
-  .review-key--sale {
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    background: var(--ui-good);
-  }
-
-  .review-key--pause {
-    background: var(--ui-track);
-    box-shadow: inset 0 0 0 1px var(--ui-line);
-  }
-
-  .review-key--on {
-    width: 14px;
-    height: 3px;
-    border-radius: 0;
-    background: var(--ui-text-2);
-  }
-
-  .review-pulse__plot {
-    position: relative;
-    width: 100%;
-    height: 58px;
-  }
-
-  .review-pulse__plot svg {
-    display: block;
-    overflow: visible;
-  }
-
-  .review-pulse__pause {
-    fill: var(--ui-track);
-  }
-
-  .review-pulse__pause-label {
-    fill: var(--ui-text-3);
-    font: 400 var(--ui-fs-13) var(--ui-font);
-  }
-
-  .review-pulse__span {
-    fill: var(--ui-accent-soft);
-    stroke: var(--ui-accent-line);
-    stroke-width: 1;
-  }
-
-  .review-pulse__sent {
-    fill: var(--ui-text-3);
-  }
-
-  .review-pulse__col.is-hover .review-pulse__sent {
-    fill: var(--ui-text);
-  }
-
-  .review-pulse__wait {
-    fill: var(--ui-warn-line);
-  }
-
-  .review-pulse__long {
-    fill: var(--review-long);
-  }
-
-  .review-pulse__on {
-    fill: var(--ui-text-2);
-  }
-
-  .review-pulse__open {
-    fill: var(--ui-line-strong);
-  }
-
-  .review-pulse__sale {
-    fill: var(--ui-good);
-    stroke: var(--ui-surface);
-    stroke-width: 1.5;
-  }
-
-  .review-pulse__cursor {
-    stroke: var(--ui-text-3);
-    stroke-width: 1;
-    stroke-dasharray: 2 2;
-  }
-
-  .review-pulse__tick {
-    stroke: var(--ui-line-strong);
-  }
-
-  .review-pulse__hour {
-    fill: var(--ui-text-3);
-    font: 400 var(--ui-fs-13) var(--ui-font);
-    font-variant-numeric: tabular-nums;
-  }
-
-  .review-pulse__hit {
-    fill: transparent;
-    cursor: crosshair;
-    touch-action: none;
-  }
-
+  /* A word that acts: «ещё 3 до смены». */
   .review-linkish {
     padding: 0;
     border: 0;
     border-radius: 2px;
     background: transparent;
-    color: var(--ui-text-2);
+    color: inherit;
     font: inherit;
     text-decoration: underline;
     text-decoration-color: var(--ui-line-strong);
@@ -504,7 +634,6 @@
     border-right: 1px solid var(--ui-line);
     list-style: none;
     overflow-y: auto;
-    overscroll-behavior: contain;
   }
 
   .review-chat {
@@ -528,7 +657,7 @@
 
   .review-chat.is-active {
     background: var(--ui-accent-soft);
-    box-shadow: inset 3px 0 0 var(--ui-accent);
+    box-shadow: inset 2px 0 0 var(--ui-accent);
   }
 
   .review-chat:focus-visible {
@@ -538,7 +667,7 @@
   .review-chat__top {
     display: flex;
     align-items: baseline;
-    gap: 8px;
+    gap: 12px;
     min-width: 0;
   }
 
@@ -546,35 +675,38 @@
     flex: 1 1 auto;
     min-width: 0;
     overflow: hidden;
-    font-size: var(--ui-fs-15);
-    line-height: var(--ui-lh-15);
-    font-weight: 500;
+    font-size: 14px;
+    line-height: 20px;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 
-  .review-chat__page,
+  .review-chat__name,
+  .review-chat__name .ui-fan__name {
+    font-weight: 600;
+  }
+
   .review-chat__when {
     flex: none;
     color: var(--ui-text-3);
-    font-size: var(--ui-fs-14);
-    line-height: var(--ui-lh-14);
+    font-size: 13px;
+    line-height: 18px;
     font-variant-numeric: tabular-nums;
   }
 
-  .review-chat__page {
-    font-variant-numeric: normal;
-  }
-
-  /* The second line is one line: the reasons that fit (measured), «…» on the last, «+N» never cut (M2). */
   .review-chat__why {
     display: flex;
     align-items: baseline;
     min-width: 0;
     color: var(--ui-text-2);
-    font-size: var(--ui-fs-14);
-    line-height: var(--ui-lh-14);
+    font-size: 13px;
+    line-height: 18px;
     white-space: nowrap;
+  }
+
+  .review-chat__tip {
+    flex: 0 1 auto;
+    min-width: 0;
   }
 
   .review-chat__line {
@@ -584,29 +716,22 @@
     text-overflow: ellipsis;
   }
 
-  .review-chat__outside,
-  .review-why--more {
-    flex: none;
-  }
-
-  /* A strong reason (it put the chat in the selection): in ink; a fan left without an answer, the AI's service text: the outlier's colour. */
-  .review-why--strong {
-    color: var(--ui-text);
-  }
-
-  .review-why--mark {
-    color: var(--ui-mark-text);
-    font-weight: 500;
-  }
-
-  .review-why--note,
-  .review-why--more,
   .review-chat__outside {
+    flex: none;
     color: var(--ui-text-3);
   }
 
-  .review-chat__snippet {
-    color: var(--ui-text-2);
+  /* Only a fan left without an answer is warm. */
+  .review-why--mark {
+    color: var(--ui-mark-text);
+  }
+
+  .review-why--note {
+    color: var(--ui-text-3);
+  }
+
+  .review-why__tip {
+    display: block;
   }
 
   .review-chats--loading {
@@ -617,15 +742,15 @@
   .review-chat-skeleton {
     display: flex;
     flex-direction: column;
-    gap: 8px;
-    padding: 14px 16px;
+    gap: 6px;
+    padding: 12px 16px;
   }
 
   /* -------------------------------------------------- The conversation */
 
   .review-transcript {
-    /* The head and the note line up with the messages' column (920 px at most, centred). */
-    --review-inline: max(24px, calc((100% - 920px) / 2));
+    /* The head lines up with the messages' column (760 px at most, centred). */
+    --review-inline: max(24px, calc((100% - 760px) / 2));
     display: flex;
     flex-direction: column;
     min-width: 0;
@@ -637,7 +762,8 @@
     align-items: center;
     justify-content: space-between;
     gap: 16px;
-    padding: 12px var(--review-inline);
+    min-height: 56px;
+    padding: 8px var(--review-inline);
     border-bottom: 1px solid var(--ui-line-soft);
   }
 
@@ -648,71 +774,115 @@
   .review-transcript__fan {
     margin: 0;
     overflow: hidden;
-    font-size: var(--ui-fs-16);
-    line-height: var(--ui-lh-16);
+    font-size: 14px;
+    line-height: 20px;
     font-weight: 600;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 
-  /* Wraps rather than cuts: on a narrow pane the money is the last words and must not be lost. */
+  .review-transcript__fan .ui-fan__name {
+    font-weight: 600;
+  }
+
   .review-transcript__about {
     margin: 0;
+    overflow: hidden;
+    color: var(--ui-text-3);
+    font-size: 13px;
+    line-height: 18px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .review-transcript__about .ui-money {
     color: var(--ui-text-2);
-    font-size: var(--ui-fs-14);
-    line-height: var(--ui-lh-14);
+    font-weight: 400;
   }
 
   .review-transcript__nobody {
-    color: var(--ui-text);
+    color: var(--ui-text-2);
+  }
+
+  .review-transcript__side {
+    display: flex;
+    flex: none;
+    align-items: center;
+    gap: 16px;
   }
 
   .review-transcript__nav {
     display: inline-flex;
-    flex: none;
     align-items: center;
-    gap: 8px;
+    gap: 2px;
   }
 
   .review-transcript__pos {
-    min-width: 64px;
-    color: var(--ui-text-2);
-    font-size: var(--ui-fs-14);
+    min-width: 48px;
+    color: var(--ui-text-3);
+    font-size: 13px;
     text-align: center;
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
+  }
+
+  /* What a bubble's edge means: one quiet line. */
+  .review-legend {
+    display: inline-flex;
+    gap: 12px;
+    color: var(--ui-text-3);
+    font-size: 12px;
+    line-height: 16px;
+    white-space: nowrap;
+  }
+
+  .review-legend span {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    cursor: default;
+  }
+
+  .review-edge {
+    display: inline-block;
+    width: 3px;
+    height: 12px;
+    border-radius: 2px;
+  }
+
+  .review-edge--raw {
+    background: var(--review-raw);
+  }
+
+  .review-edge--edited {
+    background: var(--review-edited);
+  }
+
+  .review-edge--fix {
+    background: var(--review-fix);
+  }
+
+  /* The conversation is narrow beside the evidence (1440): the legend steps back. */
+  @media (max-width: 1679px) {
+    .review-split.has-evidence .review-legend {
+      display: none;
+    }
   }
 
   .review-transcript__scroll {
     position: relative;
     flex: 1 1 auto;
     min-height: 0;
-    padding: 8px 24px 24px;
+    padding: 12px 24px 24px;
     overflow-y: auto;
-    overscroll-behavior: contain;
   }
 
   .review-transcript__messages {
     display: flex;
     flex-direction: column;
-    gap: 10px;
-    max-width: 920px;
+    gap: 8px;
+    max-width: 760px;
     margin: 0 auto;
-  }
-
-  .review-transcript__note {
-    margin: 0;
-    padding: 12px var(--review-inline);
-    border-top: 1px solid var(--ui-line-soft);
-    background: var(--ui-bg);
-    color: var(--ui-text-2);
-    font-size: var(--ui-fs-15);
-    line-height: var(--ui-lh-15);
-  }
-
-  .review-transcript__note--open {
-    background: var(--ui-mark-soft);
-    color: var(--ui-mark-text);
   }
 
   .review-transcript--loading {
@@ -728,46 +898,38 @@
     justify-content: flex-end;
   }
 
+  /* «тишина 54 мин»: a quiet word, no line. */
   .review-divider {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    margin: 6px 0;
+    margin: 4px 0;
     color: var(--ui-text-3);
-    font-size: var(--ui-fs-14);
-    line-height: var(--ui-lh-14);
+    font-size: 12px;
+    line-height: 16px;
     font-variant-numeric: tabular-nums;
     text-align: center;
   }
 
-  .review-divider::before,
-  .review-divider::after {
-    content: "";
-    flex: 1 1 0;
-    height: 1px;
-    background: var(--ui-line-soft);
-  }
-
-  .review-divider > span {
-    max-width: 80%;
-  }
-
+  /* «Начало смены», «Конец смены»: a hairline through. */
   .review-divider--strong {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin: 8px 0;
     color: var(--ui-text-2);
-    font-weight: 500;
   }
 
   .review-divider--strong::before,
   .review-divider--strong::after {
-    background: var(--ui-line-strong);
+    content: "";
+    flex: 1 1 0;
+    height: 1px;
+    background: var(--ui-line);
   }
 
-  /* A message: the fan on the left, the page on the right. */
   .review-msg {
     display: flex;
     flex-direction: column;
     align-items: flex-start;
-    max-width: min(76%, 640px);
+    max-width: min(78%, 560px);
   }
 
   .review-msg--page {
@@ -776,59 +938,79 @@
   }
 
   .review-msg--before {
-    opacity: 0.6;
+    opacity: 0.55;
   }
 
-  /* Whose a page message is when it is not the reviewed chatter's: a colleague, a mass message, an automated one. */
   .review-msg__author {
     margin: 0 4px 2px;
-    color: var(--ui-text-2);
-    font-size: var(--ui-fs-14);
-    line-height: var(--ui-lh-14);
-    font-weight: 500;
+    color: var(--ui-text-3);
+    font-size: 12px;
+    line-height: 16px;
   }
 
   .review-bubble {
-    padding: 8px 14px;
-    border: 1px solid transparent;
-    border-radius: 14px;
+    --edge: transparent;
+    --frame: transparent;
+    --ring: 0 0 0 0 transparent;
+    padding: 7px 12px 6px;
+    border-radius: 12px;
     background: var(--ui-track);
-    transition: box-shadow var(--ui-fast);
+    box-shadow: inset 3px 0 0 var(--edge), inset 0 0 0 1px var(--frame), var(--ring);
+    transition: box-shadow var(--ui-fast), background-color var(--ui-fast);
   }
 
   .review-msg--page .review-bubble {
-    border-color: var(--ui-line);
+    --frame: var(--ui-line);
     background: var(--ui-surface);
   }
 
-  /* A page message that is not the reviewed chatter's own: the ground's colour, a dashed frame, no edge. */
+  /* A page message that is not the reviewed chatter's own: the ground's colour, no edge. */
   .review-msg--page:not(.review-msg--mine) .review-bubble {
-    border: 1px dashed var(--ui-line-strong);
+    --frame: var(--ui-line-soft);
     background: var(--ui-bg);
   }
 
-  /* Only «ИИ без правки» marks the bubble's edge (M15); every other origin is said in words under it. */
-  .review-msg[data-origin="ai-raw"] .review-bubble {
-    border-left: 3px solid var(--ui-series-4);
+  .review-msg--mine .review-bubble {
+    cursor: pointer;
+  }
+
+  .review-msg--mine .review-bubble:hover {
+    background: var(--ui-hover-soft);
+  }
+
+  .review-msg--mine .review-bubble:focus-visible {
+    outline-offset: 2px;
+  }
+
+  .review-msg[data-edge="raw"] .review-bubble {
+    --edge: var(--review-raw);
+  }
+
+  .review-msg[data-edge="edited"] .review-bubble {
+    --edge: var(--review-edited);
+  }
+
+  .review-msg[data-edge="fix"] .review-bubble {
+    --edge: var(--review-fix);
   }
 
   .review-msg.is-span .review-bubble {
-    box-shadow: 0 0 0 3px var(--ui-accent-soft);
+    --ring: 0 0 0 3px var(--ui-accent-soft);
   }
 
   /* The place of the chat's reason, lit for a moment when the chat opens. */
   .review-msg.is-focus .review-bubble {
-    box-shadow: 0 0 0 3px var(--ui-accent-line);
+    --ring: 0 0 0 3px var(--ui-accent-line);
   }
 
   .review-msg.is-open .review-bubble {
-    box-shadow: 0 0 0 2px var(--ui-accent);
+    --ring: 0 0 0 2px var(--ui-accent);
   }
 
   .review-bubble__text {
     margin: 0;
-    font-size: var(--ui-fs-16);
-    line-height: var(--ui-lh-read);
+    font-size: 14px;
+    line-height: 20px;
     white-space: pre-wrap;
     overflow-wrap: anywhere;
   }
@@ -840,67 +1022,36 @@
   .review-bubble__meta {
     margin: 2px 0 0;
     color: var(--ui-text-3);
-    font-size: var(--ui-fs-14);
-    line-height: var(--ui-lh-14);
+    font-size: 12px;
+    line-height: 16px;
     font-variant-numeric: tabular-nums;
   }
 
   .review-bubble__meta .ui-money {
     color: var(--ui-text-2);
+    font-weight: 400;
   }
 
-  .review-origin-row {
-    display: flex;
-    flex-wrap: wrap;
-    justify-content: flex-end;
-    gap: 4px 8px;
-    margin-top: 2px;
-  }
-
-  .review-origin {
-    display: inline-flex;
-    flex-wrap: wrap;
-    align-items: center;
-    justify-content: flex-end;
-    gap: 0 6px;
-    padding: 2px 4px 2px 6px;
-    border: 0;
-    border-radius: var(--ui-radius-sm);
-    background: transparent;
-    color: var(--ui-text-2);
-    font: 400 var(--ui-fs-14) / var(--ui-lh-14) var(--ui-font);
+  /* A wait past the norm, under the answer. */
+  .review-msg__wait {
+    margin: 4px 4px 0;
+    color: var(--ui-mark-text);
+    font-size: 12px;
+    line-height: 16px;
     font-variant-numeric: tabular-nums;
-    cursor: pointer;
-    transition: background-color var(--ui-fast), color var(--ui-fast);
   }
 
-  .review-origin:hover,
-  .review-origin[aria-expanded="true"] {
-    background: var(--ui-hover);
-    color: var(--ui-text);
-  }
-
-  .review-origin > span {
-    white-space: nowrap;
-  }
-
-  .review-origin__wait {
+  /* A fan left without an answer at the end, on the fan's side. */
+  .review-open {
+    margin: -2px 4px 0;
     color: var(--ui-text-3);
+    font-size: 12px;
+    line-height: 16px;
+    font-variant-numeric: tabular-nums;
   }
 
-  .review-origin__wait.is-long {
+  .review-open.is-long {
     color: var(--ui-mark-text);
-  }
-
-  .review-tag {
-    display: inline-flex;
-    align-items: center;
-    padding: 1px 6px;
-    border-radius: var(--ui-radius-sm);
-    background: var(--ui-mark-soft);
-    color: var(--ui-mark-text);
-    font-size: var(--ui-fs-14);
-    line-height: var(--ui-lh-14);
   }
 
   /* Found words: the ink's soft ground — a search is not an outlier, so not the warm colour (M14). */
@@ -914,72 +1065,123 @@
 
   /* ------------------------------------------------------ The evidence */
 
+  .review-evidence-panel .ui-drawer__head {
+    align-items: center;
+    min-height: 56px;
+    padding: 8px 8px 8px 20px;
+  }
+
+  .review-evidence-panel .ui-drawer__titles {
+    padding-top: 0;
+  }
+
+  .review-evidence-panel .ui-drawer__title {
+    font-size: 14px;
+    line-height: 20px;
+    font-weight: 600;
+    letter-spacing: 0;
+  }
+
+  .review-evidence-panel .ui-drawer__body {
+    padding: 16px 20px 24px;
+  }
+
+  .review-evidence__nav {
+    display: inline-flex;
+    gap: 2px;
+  }
+
   .review-evidence {
     display: flex;
     flex-direction: column;
     gap: 20px;
   }
 
-  .review-evidence__lead {
+  .review-evidence__fan {
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    align-items: flex-start;
+    gap: 4px;
+    margin: 0;
   }
 
-  .review-evidence__verdict {
+  .review-evidence__fan figcaption,
+  .review-evidence__label {
     margin: 0;
-    font-size: var(--ui-fs-16);
-    line-height: var(--ui-lh-16);
-  }
-
-  .review-evidence__known {
-    margin: 0;
-    color: var(--ui-text-2);
-    font-size: var(--ui-fs-14);
-    line-height: var(--ui-lh-14);
+    color: var(--ui-text-3);
+    font-size: 12px;
+    line-height: 16px;
+    font-weight: 400;
     font-variant-numeric: tabular-nums;
+  }
+
+  .review-evidence__fan blockquote {
+    display: -webkit-box;
+    max-width: 100%;
+    margin: 0;
+    padding: 6px 10px;
+    overflow: hidden;
+    border-radius: 10px;
+    background: var(--ui-track);
+    font-size: 13px;
+    line-height: 18px;
+    overflow-wrap: anywhere;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 3;
+  }
+
+  .review-evidence__fan blockquote.is-empty {
+    color: var(--ui-text-3);
+  }
+
+  .review-evidence__flow {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
   }
 
   .review-evidence__block {
     display: flex;
     flex-direction: column;
-    gap: 8px;
-  }
-
-  .review-evidence__label {
-    margin: 0;
-    color: var(--ui-text-2);
-    font-size: var(--ui-fs-14);
-    line-height: var(--ui-lh-14);
-    font-weight: 600;
+    gap: 4px;
   }
 
   .review-evidence__text {
     margin: 0;
-    padding: 12px 14px;
+    padding: 10px 12px;
     border-radius: var(--ui-radius);
     background: var(--ui-bg);
-    font-size: var(--ui-fs-16);
-    line-height: var(--ui-lh-read);
+    font-size: 14px;
+    line-height: 20px;
     white-space: pre-wrap;
     overflow-wrap: anywhere;
   }
 
-  .review-evidence__text--draft {
+  .review-evidence__text--quiet {
     color: var(--ui-text-2);
   }
 
-  .review-evidence__hint {
-    margin: 0;
+  .review-evidence__arrow {
+    margin-left: 12px;
     color: var(--ui-text-3);
-    font-size: var(--ui-fs-14);
-    line-height: var(--ui-lh-14);
+  }
+
+  .review-evidence__facts {
+    margin: 0;
+    color: var(--ui-text-2);
+    font-size: 13px;
+    line-height: 18px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .review-evidence__warm {
+    color: var(--ui-mark-text);
   }
 
   .review-diff--added {
     border-radius: 3px;
     background: var(--ui-accent-soft);
-    color: var(--ui-text);
+    box-shadow: inset 0 -1px 0 var(--ui-accent-line);
   }
 
   .review-diff--dropped {
@@ -988,177 +1190,37 @@
     text-decoration-color: var(--ui-text-3);
   }
 
-  /* The fan's message the text answered: a small fan bubble, three lines at most. */
-  .review-evidence__quote {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 4px;
-    margin: 0;
-  }
-
-  .review-evidence__quote-head {
-    color: var(--ui-text-3);
-    font-size: var(--ui-fs-14);
-    line-height: var(--ui-lh-14);
-    font-variant-numeric: tabular-nums;
-  }
-
-  .review-evidence__quote-text {
-    display: -webkit-box;
-    max-width: 100%;
-    margin: 0;
-    padding: 8px 12px;
-    overflow: hidden;
-    border-radius: 12px;
-    background: var(--ui-track);
-    font-size: var(--ui-fs-15);
-    line-height: var(--ui-lh-15);
-    overflow-wrap: anywhere;
-    -webkit-box-orient: vertical;
-    -webkit-line-clamp: 3;
-  }
-
-  .review-evidence__quote-text.is-empty {
-    color: var(--ui-text-3);
-  }
-
-  /* Every message of the chatter in this chat: the picture of the chat, and the way to the next one. */
-  .review-mine {
-    gap: 6px;
-    padding-top: 20px;
-    border-top: 1px solid var(--ui-line-soft);
-  }
-
-  .review-mine__head {
-    display: flex;
-    align-items: baseline;
-    justify-content: space-between;
-    gap: 12px;
-  }
-
-  .review-mine__keys {
-    flex: none;
-    color: var(--ui-text-3);
-    font-weight: 400;
-    cursor: default;
-  }
-
-  .review-mine__list {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    margin: 0 -12px;
-    padding: 0;
-    list-style: none;
-  }
-
-  .review-mine__item {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    width: 100%;
-    padding: 8px 12px;
-    border: 0;
-    border-radius: var(--ui-radius);
-    background: transparent;
-    color: var(--ui-text);
-    font: inherit;
-    text-align: left;
-    cursor: pointer;
-    transition: background-color var(--ui-fast);
-  }
-
-  .review-mine__item:hover {
-    background: var(--ui-hover-soft);
-  }
-
-  .review-mine__item.is-current {
-    background: var(--ui-accent-soft);
-    box-shadow: inset 3px 0 0 var(--ui-accent);
-  }
-
-  .review-mine__item:focus-visible {
-    outline-offset: -2px;
-  }
-
-  .review-mine__top {
-    display: flex;
-    align-items: baseline;
-    gap: 10px;
-    min-width: 0;
-    font-size: var(--ui-fs-14);
-    line-height: var(--ui-lh-14);
-    white-space: nowrap;
-  }
-
-  .review-mine__at {
-    flex: none;
-    color: var(--ui-text-2);
-    font-variant-numeric: tabular-nums;
-  }
-
-  .review-mine__origin {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  /* «ИИ без правки»: the bubble's own mark, a dot of its edge colour. */
-  .review-mine__item.is-raw .review-mine__origin::before {
-    content: "";
-    display: inline-block;
-    width: 7px;
-    height: 7px;
-    margin-right: 6px;
-    border-radius: 50%;
-    background: var(--ui-series-4);
-    vertical-align: 1px;
-  }
-
-  .review-mine__wait {
-    flex: none;
-    margin-left: auto;
-    color: var(--ui-mark-text);
-    font-variant-numeric: tabular-nums;
-  }
-
-  .review-mine__text {
-    overflow: hidden;
-    color: var(--ui-text-2);
-    font-size: var(--ui-fs-14);
-    line-height: var(--ui-lh-14);
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .review-mine__text.is-empty {
-    color: var(--ui-text-3);
-  }
-
-  /* ---------------------------------------------- Narrow windows: scroll */
+  /* ---------------------------------------------- Narrow windows */
 
   @media (max-width: 1100px) {
-    .review-panes {
-      flex: none;
+    .review-tiles {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 16px 0;
+    }
+
+    .review-tiles > :nth-child(3n + 1) .review-tile {
+      padding-left: 0;
+      border-left: 0;
+    }
+
+    .review-sheet {
       height: 720px;
     }
 
     .review-split {
-      grid-template-columns: 280px minmax(0, 1fr);
+      grid-template-columns: 260px minmax(0, 1fr);
     }
 
     /* A small window only: the evidence takes the list's place, the conversation stays. */
     .review-split.has-evidence {
-      grid-template-columns: minmax(0, 1fr) 340px;
+      grid-template-columns: minmax(0, 1fr) 320px;
     }
 
     .review-split.has-evidence .review-chats {
       display: none;
     }
 
-    .review-title__when,
-    .review-title__extra {
+    .review-title__when {
       display: none;
     }
   }

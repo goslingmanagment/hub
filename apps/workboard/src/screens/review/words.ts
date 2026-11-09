@@ -7,15 +7,14 @@ import { aiButton, aiUnedited, isHi } from "@agency_hub_core/ui/shiftReview";
 /**
  * The screen's words for a message: where its text came from, who wrote it,
  * and the word-by-word difference between what was sent and the AI's text. Plain
- * Russian, no button jargon in the first words; the button's name is in the
- * evidence panel, where it is a fact.
+ * Russian; the button's name is in the evidence column, where it is a fact.
  */
 
 type Mine = NonNullable<ReviewMessage["mine"]>;
 
 /**
- * The origin of the chatter's text. Only «ИИ без правки» colours the bubble's
- * left edge; every other origin is said in words under the bubble.
+ * The origin of the chatter's text: the evidence's title (`ORIGIN_TITLES`) and
+ * the bubble's edge (`edgeOf`).
  *
  * `own` is what Hub could NOT tie to an AI text of the chat — not proof that the
  * chatter wrote it (the AI may have been outside Hub): its word is the neutral
@@ -25,9 +24,9 @@ export type OriginKey = "ai-raw" | "ai-edited" | "ai-hi" | "ai-command" | "fix" 
 
 export interface Origin {
   key: OriginKey;
-  /** One quiet line under the bubble: «ИИ без правки, вставлен вручную». */
+  /** In words: «ИИ без правки, вставлен вручную». */
   label: string;
-  /** The same without how it got into the composer, for a narrow list: «ИИ без правки». */
+  /** The same without how it got into the composer: «ИИ без правки». */
   short: string;
 }
 
@@ -53,6 +52,54 @@ export function originOf(message: ReviewMessage): Origin | null {
     : { key: "ai-edited", label: `ИИ с правкой${byHand}`, short: "ИИ с правкой" };
 }
 
+/**
+ * The bubble's edge in the conversation: the AI's text as it came, the AI's text
+ * edited, the chatter's own draft through Fix; none where Hub found no AI text
+ * or there are no words. A Hi greeting is the AI's text as it came; a command
+ * («скажи…») steered the AI, so it reads as edited.
+ */
+export type Edge = "raw" | "edited" | "fix";
+
+export function edgeOf(message: ReviewMessage): Edge | null {
+  const origin = originOf(message);
+  if (origin === null) return null;
+  switch (origin.key) {
+    case "ai-raw": return "raw";
+    case "ai-hi": return aiUnedited(message.mine!) ? "raw" : "edited";
+    case "ai-edited":
+    case "ai-command": return "edited";
+    case "fix": return "fix";
+    case "own":
+    case "none": return null;
+  }
+}
+
+/** The evidence's title: the kind of origin, short. */
+export const ORIGIN_TITLES: Record<OriginKey, string> = {
+  "ai-raw": "ИИ без правки",
+  "ai-edited": "ИИ с правкой",
+  "ai-hi": "Приветствие ИИ",
+  "ai-command": "ИИ по команде",
+  fix: "ИИ поправил черновик",
+  own: OWN_WORDS,
+  none: "Сообщение без слов",
+};
+
+const BUTTON_WORDS: Record<string, string> = {
+  reply: "Reply",
+  fix: "Fix",
+  hi: "Hi",
+  ping: "Ping",
+  coach: "Coach",
+  hand: "без кнопки",
+  unknown: "кнопка неизвестна",
+};
+
+/** The button in a word, for the evidence's one line of facts: «Reply», «без кнопки». */
+export function buttonWord(mine: Mine): string {
+  return BUTTON_WORDS[mine.composedWith ?? ""] ?? mine.composedWith ?? "кнопка неизвестна";
+}
+
 const FEATURE_WORDS: Record<string, string> = {
   "fast-reply": "Reply",
   "improve-draft": "Fix",
@@ -63,24 +110,6 @@ const FEATURE_WORDS: Record<string, string> = {
 
 export function featureWord(feature: string | null): string {
   return FEATURE_WORDS[feature ?? ""] ?? feature ?? "ИИ";
-}
-
-const COMPOSED_WORDS: Record<string, string> = {
-  reply: "кнопка Reply",
-  fix: "кнопка Fix",
-  hi: "кнопка Hi",
-  ping: "кнопка Ping",
-  coach: "кнопка Coach",
-  hand: "без кнопки — набрано или вставлено вручную",
-  unknown: "кнопка неизвестна",
-};
-
-/** What the extension said about how the text got into the composer. */
-export function composedWords(mine: Mine): string {
-  const how = COMPOSED_WORDS[mine.composedWith ?? ""] ?? mine.composedWith ?? "кнопка неизвестна: старое расширение";
-  if (mine.edited === true) return `${how}, после вставки текст правили`;
-  if (mine.edited === false && aiButton(mine.composedWith)) return `${how}, без правки`;
-  return how;
 }
 
 const LOOKBACK = `${SHIFT_REVIEW_AI_LOOKBACK_MINUTES} мин`;
