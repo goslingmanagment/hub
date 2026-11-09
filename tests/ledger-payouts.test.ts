@@ -60,7 +60,7 @@ function ledgerAnswer(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function fetchReturning(status: number, body: unknown, seen: { url?: string; auth?: string } = {}) {
+function fetchReturning(status: number, body: unknown, seen: { url?: string; auth?: string | undefined } = {}) {
   return (async (input: URL, init?: RequestInit) => {
     seen.url = String(input);
     seen.auth = new Headers(init?.headers).get("authorization") ?? undefined;
@@ -70,7 +70,7 @@ function fetchReturning(status: number, body: unknown, seen: { url?: string; aut
 
 describe("readLedgerPayouts", () => {
   it("passes the ledger's money on in mills, empty lists and the Hub user filled in", async () => {
-    const seen: { url?: string; auth?: string } = {};
+    const seen: { url?: string; auth?: string | undefined } = {};
     const result = await readLedgerPayouts(app(), { from: "2026-11-02", to: "2026-11-08" }, { fetchImpl: fetchReturning(200, ledgerAnswer(), seen), now: new Date("2026-11-09T10:00:01Z") });
 
     expect(seen.url).toBe("https://ledger.test/v1/payouts?from=2026-11-02&to=2026-11-08");
