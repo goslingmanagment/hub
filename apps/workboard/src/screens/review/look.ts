@@ -1,7 +1,7 @@
 import type { ShiftReviewChat, ShiftReviewMessage } from "@agency_hub_core/contracts";
 import { formatCount, formatMills, formatOf, unbreakable } from "@agency_hub_core/ui/format";
 import { ruPlural } from "@agency_hub_core/ui/plural";
-import { REPLY_NORM_SECONDS, aiUnedited, isHi, waitText, type ChatSummary, type ReviewWait } from "@agency_hub_core/ui/shiftReview";
+import { REPLY_NORM_SECONDS, aiUnedited, isHi, waitText, type ChatSummary, type FanLastKind, type ReviewWait } from "@agency_hub_core/ui/shiftReview";
 import type { ChatReason, ReasonKind, ReviewChatRow, ReviewFilter, ReviewShift } from "./data.js";
 
 /**
@@ -70,6 +70,9 @@ function longestRun(texts: readonly ShiftReviewMessage[]): { length: number; fir
 
 const words = (text: string) => text.toLowerCase().replace(/\s+/g, " ").trim();
 
+/** A fan's last word that needs no answer (a goodbye, an «ok», an emoji): said quietly beside «без ответа». */
+const NO_NEED_WORDS: Partial<Record<FanLastKind, string>> = { farewell: "фан попрощался", thanks: "фан ответил коротко", emoji: "фан ответил эмодзи" };
+
 /**
  * One chat of the shift as a row of the index: its reasons — strong ones
  * first — where each of them is in the conversation, and in which lists it
@@ -86,12 +89,15 @@ export function rowOf(summary: ChatSummary, shift: ReviewShift, waits: readonly 
   const boughtMills = bought.reduce((sum, message) => sum + Number(message.priceMills ?? 0), 0);
   const tips = inShift.filter((message) => message.side === "fan" && Number(message.tipMills ?? 0) > 0);
   const tipMills = tips.reduce((sum, message) => sum + Number(message.tipMills ?? 0), 0);
-  const paidMills = Math.max(Number(chat.shiftNetMills), boughtMills + tipMills);
+  // The chat's money is the shift's share as the server settled it (`sales`); a colleague's sale to the fan is said apart.
+  const paidMills = summary.heldNetMills;
   const firstWith = (test: (message: ShiftReviewMessage) => boolean) => personal.find(test) ?? null;
   const repeated = personal.reduce<ShiftReviewMessage | null>((best, message) => (message.mine!.repeats > (best?.mine!.repeats ?? 0) ? message : best), null);
   const marks = new Set(personal.flatMap((message) => message.mine!.marks));
   const longest = waits.filter((wait) => wait.his && wait.by !== null).reduce<ReviewWait | null>((best, wait) => (best === null || wait.seconds > best.seconds ? wait : best), null);
-  const cameBack = summary.longestWaitLastFanSeconds !== null;
+  // A fan who went quiet and came back, answered within the norm: the silence explains the long wait.
+  const back = summary.longestWaitReturn;
+  const explained = back !== null && back.answerSeconds <= REPLY_NORM_SECONDS;
 
   const reasons: ChatReason[] = [];
   const add = (reason: ChatReason) => reasons.push({ ...reason, text: unbreakable(reason.text) });
@@ -107,6 +113,10 @@ export function rowOf(summary: ChatSummary, shift: ReviewShift, waits: readonly 
     } else if (summary.unansweredLate) {
       // Wrote in the last minutes: still «без ответа к концу», but nothing could be done about it — said quietly.
       add({ kind: "unanswered", look: false, text: `без ответа: написал за ${waitText(summary.openWaitSeconds)} до конца смены`, focus, weight });
+    } else if (summary.openNoNeed) {
+      // The fan's last word needs no answer: in «Без ответа» and its number, but not a reason to look.
+      const said = summary.openLast === null ? undefined : NO_NEED_WORDS[summary.openLast.kind];
+      add({ kind: "unanswered", look: false, text: `без ответа ${waitText(summary.openWaitSeconds)}${said ? ` · ${said}` : ""}`, focus, weight });
     } else {
       add({ kind: "unanswered", look: true, tone: "mark", text: `без ответа ${waitText(summary.openWaitSeconds)}${fromStart}`, focus, weight });
     }
@@ -114,9 +124,9 @@ export function rowOf(summary: ChatSummary, shift: ReviewShift, waits: readonly 
   if (summary.longestWaitSeconds !== null && summary.longestWaitSeconds > REPLY_NORM_SECONDS) {
     add({
       kind: "waited",
-      // A fan who went quiet and wrote again just before the answer did not wait all that time.
-      look: summary.longestWaitSeconds >= LOOK.waitSeconds && !cameBack,
-      text: `ждал ${waitText(summary.longestWaitSeconds)}${summary.longestWaitInherited ? " с начала смены" : ""}${summary.longestWaitAnsweredBy !== null ? `, ответ от ${summary.longestWaitAnsweredBy}` : ""}${cameBack ? ", перед ответом снова написал" : ""}`,
+      look: summary.longestWaitSeconds >= LOOK.waitSeconds && !explained,
+      text: `ждал ${waitText(summary.longestWaitSeconds)}${summary.longestWaitInherited ? " с начала смены" : ""}${summary.longestWaitAnsweredBy !== null ? `, ответ от ${summary.longestWaitAnsweredBy}` : ""}`
+        + (back === null ? "" : ` · молчал ${waitText(back.quietSeconds)}, ответ через ${waitText(back.answerSeconds)} после`),
       focus: fanMessageAt(chat, longest?.since ?? null),
       weight: summary.longestWaitSeconds,
     });
@@ -148,7 +158,7 @@ export function rowOf(summary: ChatSummary, shift: ReviewShift, waits: readonly 
       group: words(repeated.text),
     });
   }
-  if (summary.ppv > 0 || paidMills > 0) {
+  if (summary.ppv > 0 || paidMills > 0 || boughtMills + tipMills > 0) {
     const parts: string[] = [];
     if (summary.ppv === 1) parts.push(summary.bought > 0 ? `платное ${formatMills(boughtMills)} куплено` : "платное не куплено");
     else if (summary.ppv > 1) {
@@ -160,7 +170,7 @@ export function rowOf(summary: ChatSummary, shift: ReviewShift, waits: readonly 
       if (boughtMills > 0) parts.push(`чаевые ${formatMills(tipMills)}`);
       else parts.unshift(`чаевые ${formatMills(tipMills)}`);
     }
-    if (boughtMills + tipMills === 0 && Number(chat.shiftNetMills) > 0) parts.push(`принёс в смену ${formatMills(chat.shiftNetMills)}`);
+    if (boughtMills + tipMills === 0 && paidMills > 0) parts.push(`принёс в смену ${formatMills(paidMills)}`);
     // A paid message nobody bought is ordinary work: in «Платные», not a reason to look.
     add({
       kind: paidMills > 0 ? "paid" : "offer",
@@ -179,6 +189,9 @@ export function rowOf(summary: ChatSummary, shift: ReviewShift, waits: readonly 
   else if (summary.mine === 0 && summary.colleagues.length > 0) add({ kind: "note", look: false, text: `в чате только сообщения ${colleagues}`, focus: null });
   else if (summary.openHeldBy !== null) add({ kind: "note", look: false, text: `без ответа после сообщения ${summary.openHeldBy} — не в счёте`, focus: null });
   if (summary.waitingSinceBefore) add({ kind: "note", look: false, text: "ждал ещё до смены, в смену не писал", focus: null });
+  for (const other of summary.others) {
+    add({ kind: "note", look: false, text: `${formatMills(other.netMills)} ${other.name === null ? "ни в чьей смене" : `продал ${other.name}`}`, focus: null });
+  }
 
   const waitSeconds = Math.max(summary.longestWaitSeconds ?? -1, summary.unansweredInShift ? summary.openWaitSeconds ?? -1 : -1);
   const row: ReviewChatRow = {
@@ -189,10 +202,12 @@ export function rowOf(summary: ChatSummary, shift: ReviewShift, waits: readonly 
     fanUsername: chat.fanUsername,
     fanDisplayName: chat.fanDisplayName,
     lifetimeNetMills: chat.fanLifetimeNetMills === null ? null : Number(chat.fanLifetimeNetMills),
-    shiftNetMills: Number(chat.shiftNetMills),
+    shiftNetMills: paidMills,
+    othersNetMills: summary.others.reduce((sum, one) => sum + one.netMills, 0),
     kind: summary.kind,
     mine: summary.mine,
     fan: summary.fan,
+    fanDeleted: summary.fanDeleted,
     colleagues: summary.colleagues,
     firstAt: summary.first,
     lastAt: summary.last,
@@ -203,7 +218,7 @@ export function rowOf(summary: ChatSummary, shift: ReviewShift, waits: readonly 
       unanswered: summary.unansweredInShift,
       // Long waits answered in the shift and those still open at its end: both waited past the norm.
       waited: waitSeconds > REPLY_NORM_SECONDS,
-      paid: summary.ppv > 0 || paidMills > 0,
+      paid: summary.ppv > 0 || paidMills > 0 || boughtMills + tipMills > 0,
       all: true,
     },
     tier: 9,

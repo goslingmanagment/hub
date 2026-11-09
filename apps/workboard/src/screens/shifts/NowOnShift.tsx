@@ -110,12 +110,20 @@ function NowRow({ shift }: { shift: NowShift }) {
         <Person name={shift.username} status="working" hint={shift.pages.length > 0 ? shift.pages.join(", ") : "—"} />
       </span>
       <span className="shifts-now__since">
-        с <TimeMsk at={shift.startedAt} show="time" />
-        <span className="shifts-now__sep" aria-hidden>·</span>
-        {/* D12: the time worked so far; with the pauses only on hover. */}
-        <Tooltip content={shiftDurationHint(shift.when) ?? shift.when.label} align="start">
-          <span className="ui-muted">{shift.when.worked} работы</span>
-        </Tooltip>
+        <span className="shifts-now__line">
+          с <TimeMsk at={shift.startedAt} show="time" />
+          <span className="shifts-now__sep" aria-hidden>·</span>
+          {/* D12: the time worked so far; with the pauses only on hover. */}
+          <Tooltip content={shiftDurationHint(shift.when) ?? shift.when.label} align="start">
+            <span className="ui-muted">{shift.when.worked} работы</span>
+          </Tooltip>
+        </span>
+        {shift.idle !== null && (
+          <Tooltip content={`${shift.idle}. ${shift.idleHint}`} align="start">
+            {/* One word on the line — «нет связи» (the extension closed) says more than «без действий»; both in the hint. */}
+            <span className="shifts-now__idle">{shift.idle.split(" · ").find((part) => part.startsWith("нет связи")) ?? shift.idle.split(" · ")[0]}</span>
+          </Tooltip>
+        )}
       </span>
       <span className="shifts-now__fact">
         <Money mills={shift.salesNetMills} strong />

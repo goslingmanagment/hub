@@ -188,6 +188,9 @@
   }
 
   .shifts-now__since {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
   }
@@ -490,5 +493,53 @@
     color: var(--ui-text-2);
     font-size: var(--ui-fs-15);
     line-height: var(--ui-lh-read);
+  }
+
+  /* ------------------------------------------- Вне смен, простой идущей смены */
+
+  .shifts-outside {
+    color: var(--ui-text-3);
+    font-size: var(--ui-fs-14);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    text-decoration: underline dotted var(--ui-line-strong);
+    text-underline-offset: 4px;
+    cursor: default;
+  }
+
+  .shifts-outside .ui-money {
+    color: var(--ui-text-2);
+  }
+
+  .shifts-outside__hint {
+    display: grid;
+    gap: 2px;
+    max-width: 300px;
+  }
+
+  .shifts-outside__hint > :first-child {
+    margin-bottom: 6px;
+  }
+
+  .shifts-outside__row {
+    display: flex;
+    justify-content: space-between;
+    gap: 16px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .shifts-outside__row--page {
+    color: var(--ui-text-3);
+  }
+
+  /* Under the time, its own line, so the facts keep their columns. */
+  .shifts-now__idle {
+    display: block;
+    max-width: 100%;
+    overflow: hidden;
+    color: var(--ui-warn-text);
+    font-size: var(--ui-fs-13);
+    line-height: var(--ui-lh-13);
+    text-overflow: ellipsis;
   }
 }

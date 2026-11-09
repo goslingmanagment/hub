@@ -35,7 +35,7 @@ function plainLine(row: ReviewChatRow): string {
   if (row.kind === "touch") return row.fan === 0 ? "написал первым, фан молчит" : "написал первым";
   if (row.kind === "waiting") return "в смену не писали";
   if (row.kind === "colleague") return "вела коллега";
-  return `чаттер ${row.mine}, фан ${row.fan}`;
+  return `чаттер ${row.mine}, фан ${row.fan}${row.fanDeleted > 0 ? ` (удалил ${row.fanDeleted})` : ""}`;
 }
 
 /** The reasons a list is about come first on its cards: «Платные» shows the money before a repeat. */

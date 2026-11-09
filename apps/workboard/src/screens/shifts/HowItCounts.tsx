@@ -1,11 +1,14 @@
 import { Disclosure } from "@agency_hub_core/ui";
 import { formatDuration } from "@agency_hub_core/ui/format";
 import {
+  CHATTER_SHIFT_CLOSED_GRACE_MINUTES,
+  CHATTER_SHIFT_EDGE_NEAR_MINUTES,
   CHATTER_SHIFT_END_IDLE_MINUTES,
   CHATTER_SHIFT_IDLE_PAUSE_MINUTES,
   CHATTER_SHIFT_MIN_MESSAGES,
   CHATTER_SHIFT_MIN_WORKED_MINUTES,
   CHATTER_SHIFT_PAGE_MIN_MESSAGES,
+  CHATTER_SHIFT_PIECE_MIN_MESSAGES,
 } from "@agency_hub_core/contracts";
 import { METRICS } from "@/shared/metrics";
 import { OUTLIER } from "./data.js";
@@ -28,12 +31,16 @@ export function HowItCounts({ page }: { page: string | null }) {
           <b>Смена</b> — по расширению ChatGoose: от первого действия чаттера на странице (клавиша, клик, прокрутка) до
           {" "}{formatDuration(CHATTER_SHIFT_END_IDLE_MINUTES)} без действий. Сменой считается работа от
           {" "}{formatDuration(CHATTER_SHIFT_MIN_WORKED_MINUTES)} и {CHATTER_SHIFT_MIN_MESSAGES} сообщений, меньше — заход, его здесь нет.
-          Первые {CHATTER_SHIFT_IDLE_PAUSE_MINUTES} минут без действий — работа, дальше пауза. «Отработал» — смена без пауз.
+          Кусок работы ближе {formatDuration(CHATTER_SHIFT_EDGE_NEAR_MINUTES)} к смене — её часть, если в нём есть сообщение; заход до смены
+          от {CHATTER_SHIFT_PIECE_MIN_MESSAGES} сообщений — её начало.
+          Первые {CHATTER_SHIFT_IDLE_PAUSE_MINUTES} минут без действий — работа, дальше пауза; с закрытым расширением работа кончается
+          через {CHATTER_SHIFT_CLOSED_GRACE_MINUTES} мин после закрытия. «Отработал» — смена без пауз.
           Смена относится к дню, на который приходится большая её часть, как в таблице выплат.
         </p>
         <p>
           <b>Продажи</b> — деньги после комиссии на страницах, где чаттер за смену написал от {CHATTER_SHIFT_PAGE_MIN_MESSAGES} сообщений.
-          Если страницу вели двое, продажа у того, кто последним писал фану; если никто из них не писал — у обоих. В строке
+          Если страницу вели двое, продажа у того, кто последним писал фану; если никто из них не писал — у обоих. Продажи,
+          которые не держала ни одна смена, — «вне смен» у заголовка сетки. В строке
           «Вся команда» каждая продажа одна. «В час» — продажи на отработанное время без пауз. Проценты — к такому же
           периоду прямо перед выбранным; у идущей недели — к прошлой на это же время.
         </p>

@@ -42,7 +42,7 @@ export function originOf(message: ReviewMessage): Origin | null {
   const one = (key: OriginKey, label: string): Origin => ({ key, label, short: label });
   if (mine.origin === null) return one("none", message.text.trim() !== "" ? "без слов" : "без текста");
   if (mine.origin === "own") return one("own", OWN_WORDS);
-  if (mine.origin === "fix") return one("fix", "свой черновик, ИИ поправил");
+  if (mine.origin === "fix") return one("fix", mine.fixExpanded ? "свой черновик, ИИ дописал" : "свой черновик, ИИ поправил");
   if (isHi(mine)) return one("ai-hi", "приветствие ИИ");
   if (mine.aiFeature === "improve-draft") return one("ai-command", "ИИ по команде");
   const byHand = mine.composedWith === "hand" ? ", вставлен вручную" : "";
@@ -129,17 +129,26 @@ export function originSentence(message: ReviewMessage): string {
       return "В сообщении нет слов (файл, смайл): сравнивать с ИИ не с чем.";
     case "own": {
       if (share === null || mine.aiText === null) return `В Hub нет текстов ИИ этого чата за ${LOOKBACK} до сообщения — сравнивать не с чем.`;
-      if (aiButton(mine.composedWith) && share === 0) return `Нажата кнопка ИИ, но ни один текст ИИ этого чата за ${LOOKBACK} с отправленным не совпал.`;
+      if (aiButton(mine.composedWith) && share === 0) {
+        return mine.aiText !== null
+          ? "Нажата кнопка ИИ, но чаттер заменил его текст целиком: ни одно слово не совпало."
+          : `Нажата кнопка ИИ, но ни один текст ИИ этого чата за ${LOOKBACK} с отправленным не совпал.`;
+      }
       const short = message.text.trim().split(/\s+/).length <= SHORT_WORDS;
       return short
         ? `Совпало ${percent} слов, но текст короткий (до ${SHORT_WORDS} слов): такие Hub относит к ИИ, только если их вставила кнопка ИИ.`
         : `С ближайшим текстом ИИ совпало ${percent} слов — меньше порога ${THRESHOLD}.`;
     }
     case "fix":
-      return "Черновик набрал чаттер (обычно по-русски), кнопка Fix перевела и поправила его — черновик ниже.";
+      return mine.fixExpanded
+        ? "Черновик набрал чаттер, кнопка Fix сделала из него текст в разы длиннее: большая часть слов — ИИ. Черновик ниже."
+        : "Черновик набрал чаттер (обычно по-русски), кнопка Fix перевела и поправила его — черновик ниже.";
     case "ai":
       if (isHi(mine)) return "Приветствие новому подписчику, написанное ИИ по кнопке Hi.";
       if (mine.aiFeature === "improve-draft") return "Черновик был командой («скажи…», «спроси…»), текст написал ИИ.";
+      if (mine.part !== undefined) {
+        return `Часть ${mine.part} текста ИИ (${featureWord(mine.aiFeature)}), отправленного по кускам: расширение допечатало её само.`;
+      }
       return aiUnedited(mine)
         ? `Текст ИИ (${featureWord(mine.aiFeature)}) ушёл фану как есть, слово в слово.`
         : `Текст ИИ (${featureWord(mine.aiFeature)}), чаттер его поправил: совпало ${percent} слов.`;

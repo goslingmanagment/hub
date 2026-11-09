@@ -419,7 +419,7 @@ function outsideOf(world: ReturnType<typeof teamWorld>, scope: readonly string[]
   const sales: Sale[] = world.visits
     .flatMap((visit) => visit.sales.map((sale) => ({ sale, by: visit.user.username })))
     .filter(({ sale }) => scope.includes(sale.pageLabel) && dayList.includes(mskDay(sale.at)) && sale.at < to)
-    .map(({ sale, by }) => ({ at: isoAt(sale.at), pageLabel: sale.pageLabel, fanName: sale.fan.displayName, kind: sale.kind, netMills: sale.netMills, visitBy: by }));
+    .map(({ sale, by }) => ({ at: isoAt(sale.at), pageLabel: sale.pageLabel, fanName: fanNameOf(sale.fan), kind: sale.kind, netMills: sale.netMills, visitBy: by }));
   for (const day of dayList) {
     const random = rng(`outside:${day}`);
     for (let index = intBetween(random, 0, 3); index > 0; index -= 1) {
@@ -428,7 +428,7 @@ function outsideOf(world: ReturnType<typeof teamWorld>, scope: readonly string[]
       const at = mskMidnightOf(day) + intBetween(random, 2, 10) * 3_600_000 + intBetween(random, 0, 59) * 60_000;
       if (fans.length === 0 || at >= to) continue;
       const kind = pick(random, ["ppv", "subscription", "tip"] as const);
-      sales.push({ at: isoAt(at), pageLabel, fanName: pick(random, fans).displayName, kind, netMills: pick(random, [8_000, 12_000, 19_200, 31_200, 40_000]), visitBy: null });
+      sales.push({ at: isoAt(at), pageLabel, fanName: fanNameOf(pick(random, fans)), kind, netMills: pick(random, [8_000, 12_000, 19_200, 31_200, 40_000]), visitBy: null });
     }
   }
   sales.sort((left, right) => left.at.localeCompare(right.at));

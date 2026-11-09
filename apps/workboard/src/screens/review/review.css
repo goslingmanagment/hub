@@ -1224,4 +1224,89 @@
       display: none;
     }
   }
+
+  /* ------------------------------------------------- Deleted, idle, money */
+
+  /* Deleted after it was sent: a fan's pale, the page's struck through (the meta says when). */
+  .review-msg--deleted.review-msg--fan .review-bubble {
+    opacity: 0.55;
+  }
+
+  .review-msg--deleted.review-msg--page .review-bubble__text {
+    text-decoration: line-through;
+    text-decoration-color: var(--ui-text-3);
+  }
+
+  .review-bubble__deleted {
+    color: var(--ui-text-2);
+  }
+
+  /* A shift going on with no action for a while: one warm word beside the time. */
+  .review-title__idle {
+    color: var(--ui-warn-text);
+    font-size: 13px;
+    line-height: 20px;
+    white-space: nowrap;
+  }
+
+  /* The sales by where they came from: a hairline bar under the value, the rows in its hint. */
+  .review-tile__bar {
+    display: flex;
+    gap: 2px;
+    height: 3px;
+    margin-top: 2px;
+    overflow: hidden;
+    border-radius: 2px;
+  }
+
+  .review-tile__bar > i {
+    min-width: 3px;
+    border-radius: 2px;
+  }
+
+  .review-money {
+    display: grid;
+    gap: 8px;
+    min-width: 240px;
+    max-width: 320px;
+  }
+
+  .review-money__rows {
+    display: grid;
+    gap: 2px;
+  }
+
+  .review-money__head {
+    color: var(--ui-text-3);
+  }
+
+  .review-money__row {
+    display: grid;
+    grid-template-columns: 10px minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 6px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .review-money__rows--around .review-money__row {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .review-money__key {
+    width: 8px;
+    height: 8px;
+    border-radius: 2px;
+  }
+
+  .review-money__key--own { background: var(--ui-series-1); }
+  .review-money__key--colleague { background: var(--ui-series-3); }
+  .review-money__key--noauthor { background: var(--ui-text-3); }
+  .review-money__key--other { background: var(--ui-series-4); }
+  .review-money__key--nobody { background: var(--ui-line-strong); }
+  .review-money__key--post { background: var(--ui-series-2); }
+  .review-money__key--campaign { background: var(--ui-series-5); }
+
+  .review-money__note {
+    color: var(--ui-text-3);
+  }
 }

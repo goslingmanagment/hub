@@ -1,6 +1,7 @@
 import { queryOptions, useQuery, type QueryClient } from "@tanstack/react-query";
 import { useMemo } from "react";
 import type { ShiftReviewChat, ShiftReviewMessage, TeamShiftReviewResponse } from "@agency_hub_core/contracts";
+import { shiftSettling } from "@agency_hub_core/ui/shiftLive";
 import { kernel } from "@/shared/hub";
 import {
   chatBusyIn,
@@ -8,12 +9,16 @@ import {
   myMessages,
   pulseOf,
   reviewWaits,
+  salesByOrigin,
+  salesSplit,
   silences,
   summariesOf,
   totalsOf,
   type ChatKind,
   type PulseMinute,
   type ReviewWait,
+  type SalesByOrigin,
+  type SalesSplit,
   type ShiftTotals,
   type Silence,
 } from "@agency_hub_core/ui/shiftReview";
@@ -29,7 +34,7 @@ import { rowOf, selectLook } from "./look.js";
  * The totals, the waits' owner, the reasons (look.ts) and the pulse are then Hub's definitions (`@agency_hub_core/ui/shiftReview`).
  *
  * Phase 1 adapter: one `teamShiftReview { userId, at }` (owner only) carries everything; this file derives the
- * index and the transcripts from it. A finished shift does not change; one going on is read again every 2 min.
+ * index and the transcripts from it. A shift going on or just ended is read again every 2 min; an older one does not change.
  * Query keys start with "review".
  */
 
@@ -73,12 +78,16 @@ export interface ReviewChatRow {
   fanDisplayName: string | null;
   /** The fan's net on this page, all time; null — Hub knows none. */
   lifetimeNetMills: number | null;
-  /** The fan's net on this page within the shift (any author's sale). */
+  /** The fan's sales in the shift that count for the chatter (`mine`, `both`), net. */
   shiftNetMills: number;
+  /** The fan's sales in the shift a colleague's shift or no shift holds, net. */
+  othersNetMills: number;
   kind: ChatKind;
   /** The chatter's messages and the fan's, within the shift. */
   mine: number;
   fan: number;
+  /** Of the fan's, deleted by the fan later. */
+  fanDeleted: number;
   colleagues: Array<{ name: string; messages: number }>;
   /** First and last message within the shift; a fan only waiting: since when. */
   firstAt: number | null;
@@ -104,12 +113,13 @@ export interface ReviewShift {
   end: number;
   ongoing: boolean;
   workedMinutes: number;
+  /** The start of the last minute with an action, and of the last one the extension beat in (a shift going on: idle, offline). */
+  lastInputAt: string;
+  lastBeatAt: string;
   pauses: Array<{ from: number; to: number }>;
   pauseMinutes: number;
   pages: TeamShiftReviewResponse["shift"]["pages"];
   salesNetMills: number;
-  /** The same sales in the chats below (a sale to a fan without a chat here is in the first only). */
-  chatsNetMills: number;
   previousAt: string | null;
   nextAt: string | null;
   /** The chatter's messages the archive does not hold yet, and those deleted after sending: not on the screen. */
@@ -126,10 +136,21 @@ export interface ReviewSale {
   kind: "bought" | "tip";
 }
 
+/** The shift's money beside its sales: where they came from, and what is near it but not its. */
+export interface ReviewMoney {
+  origins: SalesByOrigin;
+  split: SalesSplit;
+  /** Before the shift, no shift's: sales to the chatter's fans from the last shift's end to this one's start. */
+  beforeNetMills: number;
+  /** The chatter's PPVs of the shift bought after it, by the shift that held each purchase (null — none). */
+  later: Array<{ holder: string | null; netMills: number }>;
+}
+
 /** `teamShiftReviewIndex` (phase 2). */
 export interface ReviewIndex {
   shift: ReviewShift;
   totals: ShiftTotals;
+  money: ReviewMoney;
   minutes: PulseMinute[];
   sales: ReviewSale[];
   silences: Silence[];
@@ -156,7 +177,11 @@ export function reviewQuery(userId: number, at: string) {
     queryKey: ["review", "shift", userId, at] as const,
     queryFn: () => kernel.teamShiftReview({ query: { userId, at } }),
     staleTime: 60_000,
-    refetchInterval: (query) => (query.state.data?.shift.ongoing ? 120_000 : false),
+    // Going on, or ended under an hour ago (its last messages and sales still coming in): read again every 2 min.
+    refetchInterval: (query) => {
+      const data = query.state.data;
+      return data !== undefined && shiftSettling(data.shift, data.serverNow) ? 120_000 : false;
+    },
   });
 }
 
@@ -180,11 +205,12 @@ export function indexOf(data: TeamShiftReviewResponse, waits: readonly ReviewWai
     end,
     ongoing: data.shift.ongoing,
     workedMinutes: data.shift.workedMinutes,
+    lastInputAt: data.shift.lastInputAt,
+    lastBeatAt: data.shift.lastBeatAt,
     pauses,
     pauseMinutes: pauses.reduce((sum, pause) => sum + Math.round((pause.to - pause.from) / MINUTE_MS), 0),
     pages: data.shift.pages,
     salesNetMills: Number(data.shift.salesNetMills),
-    chatsNetMills: data.chats.reduce((sum, chat) => sum + Number(chat.shiftNetMills), 0),
     previousAt: data.previousAt,
     nextAt: data.nextAt,
     unarchived: data.unarchived,
@@ -215,7 +241,15 @@ export function indexOf(data: TeamShiftReviewResponse, waits: readonly ReviewWai
     .sort((a, b) => (b.minutes - b.pauseMinutes) - (a.minutes - a.pauseMinutes))
     .slice(0, 3)
     .sort((a, b) => a.from - b.from);
-  return { shift, totals, minutes, sales: sales.sort((a, b) => a.at - b.at), silences: silent, chats: rows };
+  const later = new Map<string | null, number>();
+  for (const sale of data.laterSales) later.set(sale.holderName, (later.get(sale.holderName) ?? 0) + Number(sale.netMills));
+  const money: ReviewMoney = {
+    origins: salesByOrigin(data),
+    split: salesSplit(data),
+    beforeNetMills: data.beforeSales.reduce((sum, sale) => sum + Number(sale.netMills), 0),
+    later: [...later].map(([holder, netMills]) => ({ holder, netMills })),
+  };
+  return { shift, totals, money, minutes, sales: sales.sort((a, b) => a.at - b.at), silences: silent, chats: rows };
 }
 
 /** One chat as it went, with its waits (phase 2: its own request). */

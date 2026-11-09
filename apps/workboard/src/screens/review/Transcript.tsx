@@ -4,7 +4,7 @@ import { Fan, IconButton, Money, Tooltip, fanNameCollides } from "@agency_hub_co
 import { formatCount, formatDateTime, formatTimeOfDay } from "@agency_hub_core/ui/format";
 import { ruPlural } from "@agency_hub_core/ui/plural";
 import { SHIFT_REVIEW_WAIT_HORIZON_HOURS } from "@agency_hub_core/contracts";
-import { REPLY_NORM_SECONDS, waitText } from "@agency_hub_core/ui/shiftReview";
+import { REPLY_NORM_SECONDS, deletedAfterSeconds, fanReturnOf, seen, waitText } from "@agency_hub_core/ui/shiftReview";
 import { consoleFanHref } from "@/shared/links";
 import type { ReviewChatRow, ReviewMessage, ReviewShift, ReviewTranscript, ReviewWait } from "./data.js";
 import { fanTitle } from "./ChatList.js";
@@ -78,10 +78,28 @@ function Bubble({ message, username, shiftStart, answered, query, inSpan, open, 
   if (message.priceMills !== null) meta.push(<span key="price"><Money mills={message.priceMills} /> {message.bought ? "куплено" : "не куплено"}</span>);
   if (message.tipMills !== null && Number(message.tipMills) > 0) meta.push(<span key="tip">чаевые <Money mills={message.tipMills} /></span>);
   if (message.media > 0) meta.push(<span key="media">{formatCount(message.media)} {ruPlural(message.media, "файл", "файла", "файлов")}</span>);
+  // Deleted after it was sent: a fan's pale, the page's struck through; one deleted within a minute is not counted.
+  const deletedAfter = deletedAfterSeconds(message);
+  if (deletedAfter !== null) {
+    meta.push(
+      <Tooltip key="deleted" content={seen(message) ? DELETED_SEEN : fan ? DELETED_FAN_UNSEEN : DELETED_PAGE_UNSEEN}>
+        <span className="review-bubble__deleted">{fan ? "фан удалил" : "удалено"} через {waitText(deletedAfter)}{!seen(message) && ", не в счёте"}</span>
+      </Tooltip>,
+    );
+  }
+  if (message.unarchived) {
+    meta.push(
+      <Tooltip key="socket" content="Fansly не отдал это сообщение в архив Hub: текст и время — из сокета страницы, цены нет.">
+        <span>не из архива</span>
+      </Tooltip>,
+    );
+  }
 
   const waited = mine?.replySeconds ?? null;
+  const back = answered === null ? null : fanReturnOf(answered);
   const long = waited !== null && waited > REPLY_NORM_SECONDS
-    ? answered !== null && answered.inherited ? `ждал с ${momentText(answered.since, shiftStart)}` : `ждал ${waitText(waited)}`
+    ? `${answered !== null && answered.inherited ? `ждал с ${momentText(answered.since, shiftStart)}` : `ждал ${waitText(waited)}`}`
+      + (back === null ? "" : ` · молчал ${waitText(back.quietSeconds)}, вернулся ${formatTimeOfDay(back.at)}, ответ через ${waitText(back.answerSeconds)}`)
     : null;
 
   const classes = [
@@ -89,6 +107,7 @@ function Bubble({ message, username, shiftStart, answered, query, inSpan, open, 
     fan ? "review-msg--fan" : "review-msg--page",
     mine ? "review-msg--mine" : "",
     !message.inShift ? "review-msg--before" : "",
+    deletedAfter !== null ? "review-msg--deleted" : "",
     inSpan ? "is-span" : "",
     open ? "is-open" : "",
   ].filter(Boolean).join(" ");
@@ -113,6 +132,10 @@ function Bubble({ message, username, shiftStart, answered, query, inSpan, open, 
     </div>
   );
 }
+
+const DELETED_SEEN = "Удалено после отправки, но через минуту и позже: другая сторона успела увидеть — в счёте, как отправленное.";
+const DELETED_FAN_UNSEEN = "Фан удалил быстрее минуты: чаттер скорее всего не видел — не в ожиданиях.";
+const DELETED_PAGE_UNSEEN = "Удалено быстрее минуты: фан скорее всего не видел — не ответ и не в числах смены.";
 
 /** The origin edges, one quiet line: what each colour of a bubble's edge means. */
 function Legend() {
@@ -263,6 +286,13 @@ export function Transcript({ shift, transcript, row, colliding, position, onStep
   const about: ReactNode[] = [<span key="page" className="review-page-text">{chat.pageLabel}</span>];
   if (row.lifetimeNetMills !== null) about.push(row.lifetimeNetMills > 0 ? <span key="life">всего <Money mills={row.lifetimeNetMills} /></span> : <span key="life">не платил</span>);
   if (row.shiftNetMills > 0) about.push(<span key="shift">в смену <Money mills={row.shiftNetMills} /></span>);
+  if (row.othersNetMills > 0) {
+    about.push(
+      <Tooltip key="others" content="Продажи этому фану в смену, которые засчитаны не этой смене: коллеге, который писал фану последним или держал страницу, или ни одной смене.">
+        <span className="review-transcript__nobody">ещё <Money mills={row.othersNetMills} /> не в смене</span>
+      </Tooltip>,
+    );
+  }
   if (row.colleagues.length > 0) {
     const colleagues = row.colleagues.map((one) => `${one.name} (${formatCount(one.messages)})`).join(", ");
     about.push(<span key="colleagues" className={row.mine === 0 ? "review-transcript__nobody" : undefined}>{row.mine === 0 ? `только ${colleagues}` : `ещё ${colleagues}`}</span>);

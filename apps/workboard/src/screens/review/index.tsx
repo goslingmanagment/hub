@@ -7,8 +7,9 @@ import { formatAgo, formatCount, formatDay, formatMills, formatPercent, formatTi
 import { mondayOf } from "@agency_hub_core/ui/moscow";
 import { withPeriod } from "@agency_hub_core/ui/period";
 import { ruPlural } from "@agency_hub_core/ui/plural";
-import { CHATTER_SHIFT_PAGE_MIN_MESSAGES } from "@agency_hub_core/contracts";
+import { CHATTER_SHIFT_END_IDLE_MINUTES, CHATTER_SHIFT_PAGE_MIN_MESSAGES } from "@agency_hub_core/contracts";
 import { REPLY_FAST_SECONDS, REPLY_NORM_SECONDS, shiftQuality } from "@agency_hub_core/ui/shiftReview";
+import { shiftIdleText, shiftIdleTitle, shiftSettling } from "@agency_hub_core/ui/shiftLive";
 import { shiftWhen, type ShiftWhen } from "@agency_hub_core/ui/shiftWhen";
 import { carryParams, parseShiftKey, personPath, shiftPath, useBackState, useBackTarget, type BackTarget } from "@/shared/links";
 import { METRICS, UNANSWERED_NOW_LABEL, formatAiUnedited, formatReplyMedian, formatUnanswered } from "@/shared/metrics";
@@ -76,8 +77,51 @@ function whenOf(shift: ReviewShift): ShiftWhen {
 interface Tile {
   label: string;
   value: ReactNode;
-  /** The definition, 1–2 short sentences on hover. */
-  hint: string;
+  /** The definition, 1–2 short sentences on hover; the sales' a few rows of money. */
+  hint: ReactNode;
+  /** Under the value: what it is made of, as one thin bar (the sales by where they came from). */
+  bar?: ReadonlyArray<{ key: string; mills: number }>;
+}
+
+/** The sales' hint: one row per source with its money, then what is near the shift but not its. */
+function salesHint(index: ReviewIndex): { hint: ReactNode; bar: Array<{ key: string; mills: number }> } {
+  const { money, totals } = index;
+  const { origins } = money;
+  const sum = (list: ReadonlyArray<{ netMills: number }>) => list.reduce((total, one) => total + one.netMills, 0);
+  const names = (list: ReadonlyArray<{ name: string }>) => list.map((one) => one.name).join(", ");
+  const rows: Array<{ key: string; label: string; mills: number }> = [
+    { key: "own", label: "свои", mills: origins.own },
+    { key: "colleague", label: `PPV коллег${origins.colleaguePpv.length > 0 ? ` (${names(origins.colleaguePpv)})` : ""}`, mills: sum(origins.colleaguePpv) },
+    { key: "noauthor", label: "PPV без автора", mills: origins.noAuthorPpv },
+    { key: "other", label: `последним писал другой${origins.otherWrote.length > 0 ? ` (${names(origins.otherWrote)})` : ""}`, mills: sum(origins.otherWrote) },
+    { key: "nobody", label: "фану 48 ч никто не писал", mills: origins.nobodyWrote },
+    { key: "post", label: "чаевые под постом", mills: origins.postTip },
+    { key: "campaign", label: "Campaign", mills: origins.campaign },
+  ].filter((row) => row.mills > 0);
+  const around = [
+    money.beforeNetMills > 0 ? { key: "before", label: "до смены, ничьи", mills: money.beforeNetMills } : null,
+    ...money.later.map((one) => ({ key: `later-${one.holder ?? ""}`, label: `PPV смены куплены позже${one.holder === null ? ", ничьи" : `, у ${one.holder}`}`, mills: one.netMills })),
+  ].filter((row) => row !== null);
+  const hint = (
+    <span className="review-money">
+      <span className="review-money__lead">Продажи страниц смены после комиссии, пока она их держала{totals.ppvSent > 0 ? `; платных куплено ${formatCount(totals.ppvBought)} из ${formatCount(totals.ppvSent)}` : ""}.</span>
+      {rows.length > 0 && (
+        <span className="review-money__rows">
+          {rows.map((row) => (
+            <span key={row.key} className="review-money__row"><i className={`review-money__key review-money__key--${row.key}`} />{row.label}<Money mills={row.mills} /></span>
+          ))}
+        </span>
+      )}
+      {money.split.bothNetMills > 0 && <span className="review-money__note">Из них <Money mills={money.split.bothNetMills} /> засчитано и коллеге.</span>}
+      {around.length > 0 && (
+        <span className="review-money__rows review-money__rows--around">
+          <span className="review-money__head">Не в продажах смены</span>
+          {around.map((row) => <span key={row.key} className="review-money__row">{row.label}<Money mills={row.mills} /></span>)}
+        </span>
+      )}
+    </span>
+  );
+  return { hint, bar: rows.length > 1 ? rows.map((row) => ({ key: row.key, mills: row.mills })) : [] };
 }
 
 /**
@@ -89,14 +133,13 @@ function tilesOf(index: ReviewIndex, when: ShiftWhen): Tile[] {
   const quality = shiftQuality(totals);
   const late = shift.ongoing ? 0 : totals.unansweredLate;
   const percent = (part: number) => formatPercent((100 * part) / Math.max(1, totals.replies));
+  const sales = salesHint(index);
   return [
     {
       label: "Продажи",
       value: <Money mills={shift.salesNetMills} />,
-      hint: [
-        "Продажи страниц смены после комиссии, пока она их держала.",
-        totals.ppvSent > 0 ? `Платных куплено ${formatCount(totals.ppvBought)} из ${formatCount(totals.ppvSent)}.` : "",
-      ].join(" ").trim(),
+      hint: sales.hint,
+      bar: sales.bar,
     },
     {
       label: "Сообщений",
@@ -144,6 +187,11 @@ function Tiles({ tiles }: { tiles: readonly Tile[] }) {
           <div className="review-tile" role="listitem">
             <span className="review-tile__label">{tile.label}</span>
             <span className="review-tile__value">{tile.value}</span>
+            {tile.bar && tile.bar.length > 0 && (
+              <span className="review-tile__bar" aria-hidden>
+                {tile.bar.map((part) => <i key={part.key} className={`review-money__key--${part.key}`} style={{ flexGrow: part.mills }} />)}
+              </span>
+            )}
           </div>
         </Tooltip>
       ))}
@@ -183,10 +231,12 @@ function PageMenu({ shift, page, onPage }: { shift: ReviewShift; page: string | 
     ...shift.pages.map((one): MenuEntry => ({
       label: one.pageLabel,
       hint: !one.worked && shift.kind === "shift"
-        ? "мало сообщений"
+        ? one.allFans ? "мало сообщений, фаны все" : "мало сообщений"
         : `${formatCount(one.messages)} ${ruPlural(one.messages, "сообщение", "сообщения", "сообщений")}`,
       title: !one.worked && shift.kind === "shift"
-        ? `Меньше ${CHATTER_SHIFT_PAGE_MIN_MESSAGES} сообщений: продажи страницы не в этой смене, здесь только чаты, где писал чаттер`
+        ? one.allFans
+          ? `Меньше ${CHATTER_SHIFT_PAGE_MIN_MESSAGES} сообщений: продажи страницы не в этой смене. Но страницу в смену больше никто не вёл — здесь все её фаны`
+          : `Меньше ${CHATTER_SHIFT_PAGE_MIN_MESSAGES} сообщений, и страницу вёл коллега: продажи не в этой смене, здесь только чаты, где писал чаттер`
         : "Сообщений чаттера на странице за смену, рассылки тоже",
       checked: page === one.pageLabel,
       onSelect: () => onPage(one.pageLabel),
@@ -498,17 +548,24 @@ function Loaded({ model, params, update, back, updatedAt, refreshing, onRefresh 
   const sheet = useDockingSheet();
   const toPerson = useBackState(`${shift.username}, ${when.days}`);
 
+  const idle = shiftIdleText(shift, shift.serverNow);
   const title = (
     <span className="review-title">
       <Link className="review-title__name review-title__link" to={personPath(shift.userId, location.search)} state={toPerson}>{shift.username}</Link>
       <span className="review-title__when">{when.days} {when.time}</span>
+      {idle !== null && (
+        <Tooltip content={shiftIdleTitle(shift)} align="start">
+          <span className="review-title__idle">{idle}</span>
+        </Tooltip>
+      )}
     </span>
   );
-  // Rare honest notes: the archive does not hold every message yet, or a visit, not a shift.
+  // Rare honest notes: the numbers may still move, the archive does not hold every message yet, a visit, not a shift.
   const notes: string[] = [];
   if (shift.kind === "visit") notes.push("это заход, а не смена");
+  if (!shift.ongoing && shiftSettling(shift, shift.serverNow)) notes.push(`числа предварительные до ${formatTimeOfDay(shift.end + CHATTER_SHIFT_END_IDLE_MINUTES * MINUTE_MS)}`);
   if (shift.unarchived > 0) notes.push(`${formatCount(shift.unarchived)} сообщ. ещё нет в архиве`);
-  if (shift.deleted > 0) notes.push(`${formatCount(shift.deleted)} сообщ. удалены после отправки`);
+  if (shift.deleted > 0) notes.push(deletedNote(model, shift.deleted));
 
   return (
     <>
@@ -646,6 +703,16 @@ function useWeekOfShift(payDay: string) {
     const next = withPeriod(new URLSearchParams(location.search), { kind: "week", monday: mondayOf(payDay) });
     void navigate({ search: `?${next.toString()}` }, { replace: true, state: location.state });
   }, [inside, payDay, location.search, location.state, navigate]);
+}
+
+/** The chatter's messages deleted after sending: struck through in the chats; the quick ones without a text are only counted. */
+function deletedNote(model: ReviewModel, deleted: number): string {
+  let shown = 0;
+  for (const row of model.index.chats) {
+    for (const message of model.transcript(row.key)?.chat.messages ?? []) if (message.by === "me" && message.inShift && message.deletedAt !== undefined) shown += 1;
+  }
+  const missing = Math.max(0, deleted - shown);
+  return `${formatCount(deleted)} сообщ. удалены после отправки — зачёркнуты${missing > 0 ? `, у ${formatCount(missing)} нет текста` : ""}`;
 }
 
 /** What an empty list says: what narrowed it, and the one way back. */

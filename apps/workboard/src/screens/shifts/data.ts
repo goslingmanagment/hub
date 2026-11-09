@@ -21,6 +21,7 @@
  * Query keys start with "shifts". Polls only while the tab is visible (queryClient's default):
  * a minute for «now» and a current period, never for a closed one.
  */
+import { shiftIdleText, shiftIdleTitle } from "@agency_hub_core/ui/shiftLive";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { CHATTER_SHIFT_PAGE_MIN_MESSAGES, type KernelOperationResponse } from "@agency_hub_core/contracts";
 import { addDays, daysInRange, moscowDayEnd, moscowDayOf, moscowDayStart, type MoscowDay } from "@agency_hub_core/ui/moscow";
@@ -159,6 +160,8 @@ export interface ShiftsModel {
   /** The team's usual numbers for the period, to spot an outlier. */
   norms: TeamNorms;
   today: MoscowDay;
+  /** The period's sales no shift held: in look-ins and nobody's, by page («вне смен»). */
+  outside: SalesResponse["outside"];
 }
 
 /** «Сейчас на смене» (`teamNow`). */
@@ -175,6 +178,9 @@ export interface NowShift {
   messages: number;
   /** Fans waiting for an answer now; undefined — still counting; null — not known. */
   waitingNow: number | null | undefined;
+  /** «без действий 25 мин · нет связи 20 мин»: a break or an end not yet known; null — at work now. */
+  idle: string | null;
+  idleHint: string;
 }
 
 export interface NowState {
@@ -406,7 +412,7 @@ export function buildModel(sales: SalesResponse, numbers: NumbersResponse | unde
   }));
   // Who worked first (Hub's order: the most money first); who did not, below.
   chatters.sort((left, right) => Number(left.gone) - Number(right.gone));
-  return { window, columns, team, chatters, journal, comparable, knownSince, norms: normsOf(numbers, window), today };
+  return { window, columns, team, chatters, journal, comparable, knownSince, norms: normsOf(numbers, window), today, outside: sales.outside };
 }
 
 // ─────────────────────────────────────────────────────────── Reads
@@ -491,6 +497,8 @@ export function useNowOnShift(page: string | null) {
           salesNetMills: shift.salesNetMills,
           messages: shift.authoredMessages,
           waitingNow: waiting.data ? (found ? qualityOfChatterNumbers(found.numbers).unansweredAtEnd : null) : waiting.isError ? null : undefined,
+          idle: shiftIdleText(shift, sales.data!.serverNow),
+          idleHint: shiftIdleTitle(shift),
         };
       })
       .sort((left, right) => left.startedAt.localeCompare(right.startedAt));

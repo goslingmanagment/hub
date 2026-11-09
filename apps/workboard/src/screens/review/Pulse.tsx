@@ -13,7 +13,9 @@ import type { PulseMinute, ReviewSale } from "./data.js";
  * through all three are pauses; green dots are money. The minute under the
  * pointer is read in one line over the tracks, right of the pace's name; the
  * line keeps its height. A click
- * picks ±10 minutes, a drag a span: the chats below narrow to it.
+ * picks ±10 minutes, a drag a span: the chats below narrow to it. The pace
+ * and its average are without Hi greetings: a pack to new followers is not
+ * the pace of the chats (said in the readout as «+N Hi»).
  */
 
 const MINUTE_MS = 60_000;
@@ -33,6 +35,8 @@ const AXIS = 22;
 const GUTTER = 30;
 /** A sale within this many px of the pointer is read with its minute. */
 const SALE_NEAR_PX = 5;
+/** The pace as the track draws it: without Hi greetings. */
+const chatPace = (minute: PulseMinute) => minute.pace - minute.paceHi;
 
 function useWidth<T extends HTMLElement>(): [React.RefObject<T | null>, number] {
   const ref = useRef<T | null>(null);
@@ -72,8 +76,14 @@ function Head({ minute, paused, sale, ongoing }: { minute: PulseMinute | null; p
     const waited = minute.waiting + minute.waitingOpen;
     parts.push(
       <strong key="at">{formatTimeOfDay(minute.at)}</strong>,
-      <span key="pace"><i className="review-key review-key--pace" />темп {formatCount(minute.pace)}</span>,
-      <span key="reply"><i className="review-key review-key--reply" />{minute.replyMedianSeconds === null ? "ответов нет" : `ответ ${waitText(minute.replyMedianSeconds)}`}</span>,
+      <span key="pace">
+        <i className="review-key review-key--pace" />темп {formatCount(chatPace(minute))}
+        {minute.paceHi > 0 && <span className="review-pulse__quiet"> +{formatCount(minute.paceHi)} Hi</span>}
+      </span>,
+      <span key="reply">
+        <i className="review-key review-key--reply" />{minute.replyMedianSeconds === null ? "ответов нет" : `ответ ${waitText(minute.replyMedianSeconds)}`}
+        {minute.tailReplies > 0 && <span className="review-pulse__quiet"> +{formatCount(minute.tailReplies)} с прошлых смен</span>}
+      </span>,
       <span key="wait">
         <i className="review-key review-key--wait" />
         <span>
@@ -115,12 +125,12 @@ export function Pulse({ minutes, sales, pauses, start, end, ongoing, span, onSpa
   const atOf = (px: number) => start + (Math.min(Math.max(px - GUTTER, 0), plotWidth) / plotWidth) * duration;
 
   const scales = useMemo(() => {
-    const pace = niceTop(Math.max(4, ...minutes.map((minute) => minute.pace)));
+    const pace = niceTop(Math.max(4, ...minutes.map(chatPace)));
     const replies = minutes.flatMap((minute) => (minute.replyMedian === null ? [] : [minute.replyMedian])).sort((a, b) => a - b);
     const high = replies[Math.floor(replies.length * 0.97)] ?? 0;
     const reply = niceTop(Math.min(60, Math.max(REPLY_NORM_SECONDS / 60 + 5, high)));
     const wait = niceTop(Math.max(3, ...minutes.map((minute) => minute.waiting + minute.waitingOpen)));
-    const sent = minutes.reduce((sum, minute) => sum + minute.sent, 0);
+    const sent = minutes.reduce((sum, minute) => sum + minute.sent - minute.sentHi, 0);
     const average = minutes.length === 0 ? 0 : (sent * PACE_WINDOW_MINUTES) / minutes.length;
     return { pace, reply, wait, average };
   }, [minutes]);
@@ -133,7 +143,7 @@ export function Pulse({ minutes, sales, pauses, start, end, ongoing, span, onSpa
   const paths = useMemo(() => {
     if (width === 0 || minutes.length === 0) return null;
     const mid = (minute: PulseMinute) => x(minute.at + MINUTE_MS / 2).toFixed(1);
-    const pace = minutes.map((minute, index) => `${index === 0 ? "M" : "L"}${mid(minute)},${yPace(minute.pace).toFixed(1)}`).join("");
+    const pace = minutes.map((minute, index) => `${index === 0 ? "M" : "L"}${mid(minute)},${yPace(chatPace(minute)).toFixed(1)}`).join("");
     const first = mid(minutes[0]!);
     const last = mid(minutes.at(-1)!);
     const paceArea = `${pace}L${last},${PACE_H}L${first},${PACE_H}Z`;
@@ -234,7 +244,7 @@ export function Pulse({ minutes, sales, pauses, start, end, ongoing, span, onSpa
             {cursor !== null && minute !== null && !drag && (
               <g className="review-pulse__cursor">
                 <line x1={cursor} x2={cursor} y1={0} y2={PLOT} />
-                <circle className="review-pulse__dot review-pulse__dot--pace" cx={cursor} cy={yPace(minute.pace)} r={3} />
+                <circle className="review-pulse__dot review-pulse__dot--pace" cx={cursor} cy={yPace(chatPace(minute))} r={3} />
                 {minute.replyMedian !== null && <circle className="review-pulse__dot review-pulse__dot--reply" cx={cursor} cy={yReply(minute.replyMedian)} r={3} />}
               </g>
             )}

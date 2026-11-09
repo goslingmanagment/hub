@@ -1,4 +1,19 @@
-import type { ShiftReviewChat, ShiftReviewMessage, TeamShiftReviewResponse } from "@agency_hub_core/contracts";
+import {
+  SHIFT_REVIEW_FAN_QUIET_SECONDS,
+  SHIFT_REVIEW_REPLY_NORM_SECONDS,
+  shiftReviewCounts,
+  shiftReviewFansMessage,
+  shiftReviewMedian,
+  shiftReviewMine,
+  shiftReviewSeen,
+  shiftReviewUnanswered,
+  shiftReviewWaitingSilently,
+  shiftReviewWaits,
+  type ShiftReviewChat,
+  type ShiftReviewMessage,
+  type ShiftReviewWait,
+  type TeamShiftReviewResponse,
+} from "@agency_hub_core/contracts";
 import { formatDuration } from "./format.js";
 
 /**
@@ -7,19 +22,18 @@ import { formatDuration } from "./format.js";
  * shift minute by minute for the pulse, the totals, what each chat shows in the
  * list — and the three numbers of a shift's quality every screen shows
  * («Ответ, медиана», «Без ответа к концу», «ИИ без правки», see `shiftQuality`).
- * Pure; the server sends facts, this file counts them. Phase 2: Hub counts the
- * same numbers by these rules for the shift journal and the people (spec §3 r2).
- * The console's apps/dashboard/src/pages/team/review/shiftReviewView.ts
- * re-exports this file.
+ * Pure; the server sends facts, this file counts them. The console's
+ * apps/dashboard/src/pages/team/review/shiftReviewView.ts re-exports this file.
  *
- * Whose a wait is (2026-11-07): a page can be worked by two people at once, or
- * handed over within a shift. A fan's wait is the reviewed chatter's when the
- * chatter answered it or wrote last before it began. It is a colleague's when
- * the colleague wrote last before it, within the shift, and was still writing
- * on that page when it ended; or when a colleague answered it who was writing
- * on that page as it began. Anything else on the chatter's watch is theirs. A
- * chat with only colleagues' waits, where the chatter wrote nothing, is a
- * colleague's chat (the console's «Вели другие»); its waits are counted apart.
+ * The shift's numbers — the chatter's messages, the replies and their median,
+ * the fans left without an answer, whose a wait is, what a deleted message
+ * counts for — are packages/contracts' shift-review-rules.ts: «Смены» counts
+ * them by the same rules. A chat with only colleagues' waits, where the chatter
+ * wrote nothing, is under «Вели другие»; its waits are counted apart.
+ *
+ * Whose a chat's money is: the server settles each sale as the header does
+ * (`sales`). A chat shows the fan's sales that count for the chatter, and the
+ * colleague's beside them; the list's money filter and order go by the first.
  */
 
 const MINUTE_MS = 60_000;
@@ -27,17 +41,19 @@ const MINUTE_MS = 60_000;
 export const PACE_WINDOW_MINUTES = 10;
 /** The reply time is the median of the replies of the last this many minutes. */
 export const REPLY_WINDOW_MINUTES = 30;
-/**
- * The reply norm is a band, not a line: the owner put it at «5-10 минут»
- * (2026-11-07); the job description says «до 10 минут». Past the upper end a
- * wait counts as long.
- */
+/** The median's line is drawn from this many replies in its window: one or two replies are not a pace. */
+export const REPLY_LINE_MIN_REPLIES = 5;
+/** Minutes without a word from the extension, this many at most between two it reported, count as open: a lost beat. */
+const ACTIVITY_HOLE_MINUTES = 2;
+/** The reply norm is a band, «5-10 минут» (owner, 2026-11-07): its lower end and its upper one, past which a wait is long. */
 export const REPLY_FAST_SECONDS = 5 * 60;
-export const REPLY_NORM_SECONDS = 10 * 60;
+export const REPLY_NORM_SECONDS = SHIFT_REVIEW_REPLY_NORM_SECONDS;
 /** A click on the pulse picks this many minutes on each side. */
 export const PICK_MINUTES = 10;
 /** A silence this long inside a chat gets a line of its own in the transcript. */
 export const GAP_MINUTES = 15;
+/** A fan quiet this long inside a wait, who then wrote again, came back (see `fanReturnOf`). */
+export const FAN_QUIET_SECONDS = SHIFT_REVIEW_FAN_QUIET_SECONDS;
 
 /**
  * A wait as the screen writes it. Under 20 minutes to the second, so 9 мин 49 с
@@ -61,14 +77,20 @@ export interface PulseMinute {
   at: number;
   /** The chatter's personal messages in this minute. */
   sent: number;
+  /** Of them, Hi greetings: a pack to new followers is many at once, and is not the pace of the chats. */
+  sentHi: number;
   /** In the last PACE_WINDOW_MINUTES. */
   pace: number;
-  /** The median reply of the last REPLY_WINDOW_MINUTES, seconds; null — no reply then. */
+  /** Of the pace, Hi greetings. */
+  paceHi: number;
+  /** The median reply of the last REPLY_WINDOW_MINUTES, seconds; null — no reply then. Replies to fans from past shifts are apart. */
   replyMedianSeconds: number | null;
-  /** The same in minutes, for the chart. */
+  /** The same in minutes, for the chart; null under REPLY_LINE_MIN_REPLIES replies. */
   replyMedian: number | null;
   /** Replies in that window. */
   replies: number;
+  /** Replies in that window to fans waiting since before the shift: their wait counts from its start, so off the median. */
+  tailReplies: number;
   /** The chatter's fans waiting at this minute who got an answer later in the shift: the queue the chatter worked through. */
   waiting: number;
   /** The chatter's fans waiting at this minute who got no answer before the shift's end. */
@@ -77,6 +99,8 @@ export interface PulseMinute {
   waitingLong: number;
   /** Fans waiting since before the shift who did not write in it and got no answer in it. */
   waitingInherited: number;
+  /** Fans waiting since before the shift who did not write in it and got an answer in it: the tail the chatter worked through. */
+  waitingTail: number;
   /** The fans' messages in this minute. */
   fanMessages: number;
   activity: ActivityState;
@@ -88,27 +112,29 @@ export interface MyMessage {
   at: number;
 }
 
+/** The other side could see the message (`shiftReviewSeen`). */
+export const seen = shiftReviewSeen;
+
+/** How long after it was sent the message was deleted, seconds; null — not deleted. */
+export function deletedAfterSeconds(message: Pick<ShiftReviewMessage, "at" | "deletedAt">): number | null {
+  return message.deletedAt === undefined ? null : Math.max(0, (Date.parse(message.deletedAt) - Date.parse(message.at)) / 1000);
+}
+
+/** The chatter's messages of the shift the fans could see. */
 export function myMessages(data: TeamShiftReviewResponse): MyMessage[] {
   const out: MyMessage[] = [];
   for (const chat of data.chats) {
     for (const message of chat.messages) {
-      if (message.mine !== null) out.push({ chat, message: message as MyMessage["message"], at: Date.parse(message.at) });
+      if (shiftReviewMine(message)) out.push({ chat, message: message as MyMessage["message"], at: Date.parse(message.at) });
     }
   }
   return out.sort((a, b) => a.at - b.at);
 }
 
-export function median(values: readonly number[]): number | null {
-  if (values.length === 0) return null;
-  const sorted = [...values].sort((a, b) => a - b);
-  const middle = Math.floor(sorted.length / 2);
-  return sorted.length % 2 === 1 ? sorted[middle]! : (sorted[middle - 1]! + sorted[middle]!) / 2;
-}
+export const median = shiftReviewMedian;
 
-/** A page message that answers a fan: not a mass message, not an automated one. */
-function isPersonal(message: ShiftReviewMessage): boolean {
-  return message.side === "page" && !message.mass && message.by !== "auto";
-}
+/** A fan's message the chatter could see. */
+const isFans = shiftReviewFansMessage;
 
 /** Who else wrote in the chat within the shift, by name, most first. */
 function colleaguesIn(chat: ShiftReviewChat): Array<{ name: string; messages: number }> {
@@ -122,145 +148,175 @@ function colleaguesIn(chat: ShiftReviewChat): Array<{ name: string; messages: nu
 }
 
 
-export interface ReviewWait {
-  chat: string;
-  /** When the fan began waiting, ms; `from` — the same, cut to the shift's start. */
-  since: number;
-  from: number;
-  to: number;
-  by: "me" | "other" | "none" | null;
-  /** The colleague who ended it. */
-  byName: string | null;
-  /** The colleague whose wait it is: who wrote last before it within the shift and was still writing on the page at its end. */
-  heldBy: string | null;
-  /** The fan began waiting before the shift. */
-  inherited: boolean;
-  /** The fan wrote within the shift while waiting. */
-  fanWrote: boolean;
-  /** The fan's latest message before the wait ended, ms. */
-  lastFanAt: number;
-  /** How long, seconds: a wait from before the shift counts from its start (the approved definition). */
-  seconds: number;
-  /** The reviewed chatter's (see the file's head). */
-  his: boolean;
-}
+export type ReviewWait = ShiftReviewWait;
 
-export function reviewWaits(data: TeamShiftReviewResponse): ReviewWait[] {
-  const start = Date.parse(data.shift.startedAt);
-  const norm = REPLY_NORM_SECONDS * 1000;
-  const chats = new Map(data.chats.map((chat) => [chat.key, chat]));
-  // When each colleague wrote on each page within the shift.
-  const colleagueAt = new Map<string, number[]>();
-  for (const chat of data.chats) {
-    for (const message of chat.messages) {
-      if (!message.inShift || message.by !== "other" || message.mass) continue;
-      const key = `${chat.pageLabel}|${message.byName ?? ""}`;
-      const list = colleagueAt.get(key);
-      if (list) list.push(Date.parse(message.at));
-      else colleagueAt.set(key, [Date.parse(message.at)]);
-    }
-  }
-  const writingOn = (page: string, name: string | null, at: number) => (colleagueAt.get(`${page}|${name ?? ""}`) ?? [])
-    .some((one) => one <= at && one >= at - norm);
-  // A chat's messages with their instants, parsed once per chat (a long shift has thousands of waits).
-  const timedOf = new Map<string, Array<{ message: ShiftReviewMessage; at: number }>>();
-  const timedFor = (key: string) => {
-    let timed = timedOf.get(key);
-    if (!timed) {
-      timed = (chats.get(key)?.messages ?? []).map((message) => ({ message, at: Date.parse(message.at) }));
-      timedOf.set(key, timed);
-    }
-    return timed;
-  };
-  return data.waits.map((wait) => {
-    const since = Date.parse(wait.since);
-    const from = Date.parse(wait.from);
-    const to = Date.parse(wait.to);
-    const page = chats.get(wait.chat)?.pageLabel ?? "";
-    const timed = timedFor(wait.chat);
-    const before = timed.filter((one) => isPersonal(one.message) && one.at < since).at(-1);
-    const heldByMe = before?.message.by === "me";
-    const holder = before && before.message.inShift && before.message.by === "other" ? before.message.byName : undefined;
-    const heldBy = holder !== undefined && (wait.by === "other" || writingOn(page, holder, to)) ? holder ?? "коллега" : null;
-    const answer = wait.by === "other" ? timed.find((one) => one.at === to && one.message.by === "other") : undefined;
-    const answeredOnTheirWatch = answer !== undefined && writingOn(page, answer.message.byName, from);
-    const fanAts = timed.filter((one) => one.message.side === "fan" && one.at >= since && one.at <= to).map((one) => one.at);
-    return {
-      chat: wait.chat,
-      since,
-      from,
-      to,
-      by: wait.by,
-      byName: answer?.message.byName ?? null,
-      heldBy,
-      inherited: since < start,
-      fanWrote: timed.some((one) => one.message.side === "fan" && one.message.inShift && one.at >= since && one.at <= to),
-      lastFanAt: fanAts.at(-1) ?? since,
-      seconds: (to - Math.max(since, start)) / 1000,
-      his: wait.by === "me" || heldByMe || (heldBy === null && !answeredOnTheirWatch),
-    };
-  });
+/** The shift's waits and whose each is (`shiftReviewWaits`). */
+export const reviewWaits = shiftReviewWaits;
+
+/** A long wait whose fan went quiet and wrote again: «молчал 5 ч, снова написал в 10:33, ответ через 4 мин». */
+export interface FanReturn {
+  quietSeconds: number;
+  at: number;
+  /**
+   * From the fan's return to the answer. Within REPLY_NORM_SECONDS the silence
+   * explains the long wait; past it the fan waited after coming back too.
+   */
+  answerSeconds: number;
 }
 
 /**
- * A long wait whose fan went quiet and wrote again just before the answer: a
- * «goodnight», then a «good morning» answered in minutes. Worth saying beside
- * the wait, which still counts from its start.
+ * A long answered wait whose fan went quiet and came back: a «goodnight», then
+ * a «good morning» answered in minutes. Said beside the wait, which still
+ * counts from its start (the owner, 2026-11-08: the wait is not cut at the
+ * silence, so a fan asked about a custom and ignored for hours stays seen). A
+ * fan who kept writing all the while did not come back: they waited.
  */
-export function cameBack(waitSeconds: number, lastFanGapSeconds: number): boolean {
-  return waitSeconds > REPLY_NORM_SECONDS && lastFanGapSeconds <= REPLY_NORM_SECONDS && waitSeconds - lastFanGapSeconds >= 15 * 60;
+export function fanReturnOf(wait: ReviewWait): FanReturn | null {
+  if (wait.by === null || wait.fanBack === null || wait.seconds <= REPLY_NORM_SECONDS) return null;
+  return { quietSeconds: wait.fanBack.quietSeconds, at: wait.fanBack.at, answerSeconds: (wait.to - wait.fanBack.at) / 1000 };
 }
 
-/** A wait the chatter left without an answer at the end: the fan wrote in the shift, or began waiting in it. */
-export function unansweredInShift(wait: ReviewWait): boolean {
-  return wait.his && wait.by === null && (!wait.inherited || wait.fanWrote);
+/**
+ * What a fan's message was, for the last one of a wait left open. A goodbye, an
+ * «ok» or «спасибо» and an emoji need no answer (the owner, 2026-11-08): such a
+ * chat stays «без ответа» and in its number, but is not a strong reason to look
+ * at it. Only a short message counts so, and only all of it: «ok i will wait»,
+ * «goodnight, text me tomorrow» and anything asked are not a goodbye.
+ */
+export type FanLastKind = "farewell" | "thanks" | "emoji" | "media" | "question" | "other";
+
+/** A goodbye anywhere in a short message: «Goodnight ma'am, sleep well 🫶», «talk to you tomorrow». */
+const FAREWELL_RE = new RegExp([
+  String.raw`go+d\s*-?\s*ni+(gh)?t`, String.raw`\bhave\s+an?\s+(\p{L}+\s+)?(night|day|evening|weekend)\b`, String.raw`\benjoy\s+your\s+(night|evening|day)\b`, String.raw`\bgn\b`, String.raw`\bnighty?\s*night\b`, String.raw`sweet\s*dreams`, String.raw`\bsleep\s+(well|tight)\b`,
+  String.raw`\b(going|off|heading|gonna\s+go)\s+(to\s+)?(bed|sleep)\b`, String.raw`\b(good\s*)?bye+\b`, String.raw`\bcya\b`, String.raw`\bsee\s+ya\b`,
+  String.raw`\bsee\s+(you|u)\s+(later|soon|tomorrow|tmrw|another\s+day|next\s+time)\b`, String.raw`\btalk\s+((to\s+(you|u)|more)\s+)?(later|tomorrow|tmrw|soon)\b`,
+  String.raw`\bttyl\b`, "спокойной\\s+ночи", "сладких\\s+снов", "до\\s+завтра", "споки",
+].join("|"), "iu");
+/** «пока» is a goodbye only at the start of a few words of goodbye: «пока, милая», not «пока не знаю». */
+const SHORT_BYES = new Set(["пока", "покеда", "бай"]);
+/** Words that ask for something or keep the talk going: a goodbye with them still wants an answer. */
+const WANTS_RE = new RegExp([
+  String.raw`\b(wait|waiting|custom|send|show\s+me|reply|respond|answer|tell\s+me|let\s+me\s+know|text\s+me|message\s+me|write\s+me|dm\s+me|call\s+me|buy|pay|price|how\s+much|want|wanna|need|please|pls|plz|can\s+(you|u|i)|could\s+(you|u)|will\s+(you|u)|would\s+(you|u)|but|don'?t\s+(go|leave|sleep)|not\s+yet)\b`,
+  String.raw`good\s*morning`, "(?<!\\p{L})(жд[уаё]|ответ|напиш|кастом|пришли|скинь|покажи|хочу|можешь|пожалуйста|сколько|но(?!\\p{L})|доброе\\s+утро)",
+].join("|"), "iu");
+const THANKS_WORDS = new Set([
+  "ok", "okay", "okey", "okie", "oki", "okk", "k", "kk", "alright", "aight", "cool", "nice", "great", "perfect", "sure", "np", "yw",
+  "thanks", "thank", "thx", "ty", "tysm", "lol", "haha", "hahaha", "hehe", "lmao", "ок", "окей", "оки", "хорошо", "ладно", "спасибо", "понял", "поняла", "ясно",
+]);
+/** Said beside an «ok» or thanks without making it more: «thank you so much babe». */
+const FILLER_WORDS = new Set([
+  "you", "u", "so", "much", "very", "too", "babe", "baby", "love", "honey", "hun", "dear", "darling", "sweetie", "sweetheart", "beautiful", "gorgeous",
+  "ma'am", "maam", "mistress", "queen", "xx", "xoxo", "doki", "доки", "большое", "тебе", "вам", "милая",
+]);
+const PICTURE = String.raw`\p{Extended_Pictographic}|[♡♥❣]|<3|[:;=]-?[)(DPp3*]|xD|\^\^`;
+const EMOJI_ONLY_RE = new RegExp(String.raw`^(?:${PICTURE}|[\p{Emoji_Modifier}\p{Regional_Indicator}\u200d\ufe0f\s.!,])+$`, "u");
+const PICTURE_RE = new RegExp(PICTURE, "u");
+
+/** A file or a tip — «media» — wants an answer, whatever its words. */
+export function fanLastKind(message: Pick<ShiftReviewMessage, "text" | "media" | "tipMills">): FanLastKind {
+  if (message.media > 0 || (message.tipMills ?? 0) > 0) return "media";
+  const text = message.text.trim();
+  if (text === "") return "other";
+  if (/[?¿]/.test(text)) return "question";
+  if (EMOJI_ONLY_RE.test(text) && PICTURE_RE.test(text)) return "emoji";
+  const words = text.toLowerCase().replace(new RegExp(PICTURE, "gu"), " ").match(/[\p{L}\p{N}']+/gu) ?? [];
+  const shortBye = words.length <= 3 && SHORT_BYES.has(words[0] ?? "") && words.slice(1).every((word) => FILLER_WORDS.has(word));
+  if (!WANTS_RE.test(text) && (shortBye || (words.length <= 20 && FAREWELL_RE.test(text)))) return "farewell";
+  if (words.length <= 6 && words.some((word) => THANKS_WORDS.has(word)) && words.every((word) => THANKS_WORDS.has(word) || FILLER_WORDS.has(word))) return "thanks";
+  return "other";
 }
 
-/** A fan waiting since before the shift who did not write in it, and got no answer in it. */
-export function waitingSilently(wait: ReviewWait): boolean {
-  return wait.his && wait.by === null && wait.inherited && !wait.fanWrote;
+/** A fan's last word that needs no answer: a goodbye, an «ok» or thanks, an emoji. */
+export function needsNoAnswer(kind: FanLastKind | null): boolean {
+  return kind === "farewell" || kind === "thanks" || kind === "emoji";
 }
 
-/** The shift minute by minute, from its first minute to its last. */
+/**
+ * A wait left open whose fan's last word needs no answer, and who asked
+ * nothing and sent nothing in it before: «сколько за кастом?», then «goodnight»
+ * hours later, is a fan left without an answer.
+ */
+function openNeedsNoAnswer(fanMessages: readonly ShiftReviewMessage[]): boolean {
+  const kinds = fanMessages.map(fanLastKind);
+  return kinds.length > 0 && needsNoAnswer(kinds.at(-1)!) && !kinds.some((kind) => kind === "question" || kind === "media");
+}
+
+/** A wait the chatter left without an answer at the end (`shiftReviewUnanswered`). */
+export const unansweredInShift = shiftReviewUnanswered;
+/** A fan waiting since before the shift who did not write in it (`shiftReviewWaitingSilently`). */
+export const waitingSilently = shiftReviewWaitingSilently;
+
+/**
+ * The shift minute by minute, from its first minute to its last. The queue is
+ * the shift's own: a fan from a past shift who did not write in this one and
+ * got an answer is the tail the chatter worked through, apart from the queue,
+ * and replies to fans from past shifts are apart from the median, since their
+ * wait counts from the shift's start. Hi greetings are apart from the pace. A
+ * minute with a personal send is a minute of input, whatever the extension
+ * reported for it.
+ */
 export function pulseOf(data: TeamShiftReviewResponse, waits: readonly ReviewWait[]): PulseMinute[] {
   const start = Math.floor(Date.parse(data.shift.startedAt) / MINUTE_MS) * MINUTE_MS;
   const end = Date.parse(data.shift.endedAt);
   const count = Math.max(1, Math.ceil((end - start) / MINUTE_MS));
   const index = (at: number) => Math.min(count - 1, Math.max(0, Math.floor((at - start) / MINUTE_MS)));
 
+  const tailAnswers = new Set(waits.filter((wait) => wait.inherited && wait.by === "me").map((wait) => `${wait.chat}|${wait.to}`));
   const sent = new Array<number>(count).fill(0);
+  const sentHi = new Array<number>(count).fill(0);
   const fans = new Array<number>(count).fill(0);
   const replyAt: Array<number[]> = Array.from({ length: count }, () => []);
+  const tailAt = new Array<number>(count).fill(0);
   for (const chat of data.chats) {
     for (const message of chat.messages) {
       if (!message.inShift) continue;
       const at = Date.parse(message.at);
-      if (message.side === "fan") fans[index(at)]! += 1;
-      if (message.mine === null || message.mass) continue;
+      if (isFans(message)) fans[index(at)]! += 1;
+      if (message.mine === null || message.mass || !seen(message)) continue;
       sent[index(at)]! += 1;
-      if (message.mine.replySeconds !== null) replyAt[index(at)]!.push(message.mine.replySeconds);
+      if (isHi(message.mine)) sentHi[index(at)]! += 1;
+      if (message.mine.replySeconds === null) continue;
+      if (tailAnswers.has(`${chat.key}|${at}`)) tailAt[index(at)]! += 1;
+      else replyAt[index(at)]!.push(message.mine.replySeconds);
     }
   }
 
   const activity = new Map(data.activity.map((minute) => [Date.parse(minute.at), minute.input]));
+  const reported = Array.from({ length: count }, (_, minute) => activity.get(start + minute * MINUTE_MS));
+  // A short hole between two reported minutes: the minute's beat was lost, the extension was open.
+  const lostBeat = new Array<boolean>(count).fill(false);
+  for (let minute = 0; minute < count; minute += 1) {
+    if (reported[minute] !== undefined || minute === 0 || reported[minute - 1] === undefined) continue;
+    let next = minute;
+    while (next < count && reported[next] === undefined) next += 1;
+    if (next < count && next - minute <= ACTIVITY_HOLE_MINUTES) lostBeat.fill(true, minute, next);
+  }
   const shiftStart = Date.parse(data.shift.startedAt);
   const queue = waits.filter((wait) => wait.his).map((wait) => ({
     ...wait,
-    kind: wait.by !== null ? "answered" as const : waitingSilently(wait) ? "inherited" as const : "open" as const,
+    kind: wait.by === null ? (waitingSilently(wait) ? "inherited" as const : "open" as const)
+      : wait.inherited && !wait.fanWrote ? "tail" as const : "answered" as const,
   }));
 
   const out: PulseMinute[] = [];
   let pace = 0;
+  let paceHi = 0;
   for (let minute = 0; minute < count; minute += 1) {
     const at = start + minute * MINUTE_MS;
     pace += sent[minute]!;
-    if (minute >= PACE_WINDOW_MINUTES) pace -= sent[minute - PACE_WINDOW_MINUTES]!;
-    const recent = replyAt.slice(Math.max(0, minute - REPLY_WINDOW_MINUTES + 1), minute + 1).flat();
+    paceHi += sentHi[minute]!;
+    if (minute >= PACE_WINDOW_MINUTES) {
+      pace -= sent[minute - PACE_WINDOW_MINUTES]!;
+      paceHi -= sentHi[minute - PACE_WINDOW_MINUTES]!;
+    }
+    const windowFrom = Math.max(0, minute - REPLY_WINDOW_MINUTES + 1);
+    const recent = replyAt.slice(windowFrom, minute + 1).flat();
     const middle = median(recent);
     let waiting = 0;
     let waitingOpen = 0;
     let waitingLong = 0;
     let waitingInherited = 0;
+    let waitingTail = 0;
     // The middle of the minute; the last minute of a shift going on ends at `end`, mid-minute.
     const probe = Math.min(at + MINUTE_MS / 2, end - 1);
     for (const wait of queue) {
@@ -269,24 +325,32 @@ export function pulseOf(data: TeamShiftReviewResponse, waits: readonly ReviewWai
         waitingInherited += 1;
         continue;
       }
+      if (wait.kind === "tail") {
+        waitingTail += 1;
+        continue;
+      }
       if (wait.kind === "answered") waiting += 1;
       else waitingOpen += 1;
       if (probe - Math.max(wait.since, shiftStart) > REPLY_NORM_SECONDS * 1000) waitingLong += 1;
     }
-    const input = activity.get(at);
+    const input = reported[minute];
     out.push({
       at,
       sent: sent[minute]!,
+      sentHi: sentHi[minute]!,
       pace,
+      paceHi,
       replyMedianSeconds: middle,
-      replyMedian: middle === null ? null : Math.round((middle / 60) * 10) / 10,
+      replyMedian: middle === null || recent.length < REPLY_LINE_MIN_REPLIES ? null : Math.round((middle / 60) * 10) / 10,
       replies: recent.length,
+      tailReplies: tailAt.slice(windowFrom, minute + 1).reduce((sum, one) => sum + one, 0),
       waiting,
       waitingOpen,
       waitingLong,
       waitingInherited,
+      waitingTail,
       fanMessages: fans[minute]!,
-      activity: input === undefined ? "closed" : input ? "input" : "open",
+      activity: sent[minute]! > 0 || input === true ? "input" : input === false || lostBeat[minute] ? "open" : "closed",
     });
   }
   return out;
@@ -336,6 +400,71 @@ export function silences(pulse: readonly PulseMinute[], pauses: ReadonlyArray<{ 
   });
 }
 
+type Sale = TeamShiftReviewResponse["sales"][number];
+
+/** A sale that counts for the chatter: theirs alone, or theirs and a colleague's. */
+function counts(sale: Sale): boolean {
+  return sale.verdict === "mine" || sale.verdict === "both";
+}
+
+export interface SalesSplit {
+  /** The sales that count for the chatter: `salesNetMills`. */
+  netMills: number;
+  /** Of them, counted for a colleague too. */
+  bothNetMills: number;
+  /** Of them, to fans without a chat in the review. */
+  withoutChatNetMills: number;
+}
+
+export function salesSplit(data: TeamShiftReviewResponse): SalesSplit {
+  const own = data.sales.filter(counts);
+  const sum = (list: readonly Sale[]) => list.reduce((total, sale) => total + sale.netMills, 0);
+  return {
+    netMills: sum(own),
+    bothNetMills: sum(own.filter((sale) => sale.verdict === "both")),
+    withoutChatNetMills: sum(own.filter((sale) => sale.chatKey === null)),
+  };
+}
+
+export interface SalesByOrigin {
+  /** The chatter's PPV, or the chatter wrote to the fan last. */
+  own: number;
+  /** Colleagues' PPVs, by sender, most first. */
+  colleaguePpv: Array<{ name: string; netMills: number }>;
+  /** PPVs sent without an author: old or mass ones. */
+  noAuthorPpv: number;
+  /** Another person wrote to the fan last, by them, most first. */
+  otherWrote: Array<{ name: string; netMills: number }>;
+  /** Nobody with an author wrote to the fan in the 48 hours before. */
+  nobodyWrote: number;
+  postTip: number;
+  campaign: number;
+}
+
+/** Where the sales that count for the chatter came from (`sales[].origin`): the parts add up to `salesNetMills`. */
+export function salesByOrigin(data: TeamShiftReviewResponse): SalesByOrigin {
+  const out: SalesByOrigin = { own: 0, colleaguePpv: [], noAuthorPpv: 0, otherWrote: [], nobodyWrote: 0, postTip: 0, campaign: 0 };
+  const add = (list: Array<{ name: string; netMills: number }>, name: string, netMills: number) => {
+    const known = list.find((one) => one.name === name);
+    if (known) known.netMills += netMills;
+    else list.push({ name, netMills });
+  };
+  for (const sale of data.sales.filter(counts)) {
+    switch (sale.origin) {
+      case "own": out.own += sale.netMills; break;
+      case "colleague_ppv": add(out.colleaguePpv, sale.ppvSender ?? "коллега", sale.netMills); break;
+      case "no_author_ppv": out.noAuthorPpv += sale.netMills; break;
+      case "other_wrote": add(out.otherWrote, sale.lastWriter ?? "коллега", sale.netMills); break;
+      case "nobody_wrote_48h": out.nobodyWrote += sale.netMills; break;
+      case "post_tip": out.postTip += sale.netMills; break;
+      case "campaign": out.campaign += sale.netMills; break;
+    }
+  }
+  out.colleaguePpv.sort((a, b) => b.netMills - a.netMills);
+  out.otherWrote.sort((a, b) => b.netMills - a.netMills);
+  return out;
+}
+
 export interface ShiftTotals {
   messages: number;
   massMessages: number;
@@ -353,6 +482,8 @@ export interface ShiftTotals {
   /** Of them, waiting since before the shift too; and who began waiting in the last REPLY_NORM_SECONDS of it. */
   unansweredInherited: number;
   unansweredLate: number;
+  /** Of them, whose fan's last word needed no answer: a goodbye, an «ok» or thanks, an emoji (`openNoNeed`). */
+  unansweredNoNeed: number;
   /** Fans waiting since before the shift who did not write in it and got no answer in it. */
   waitingSilently: number;
   /** Chats colleagues kept, who, and their fans left without an answer. */
@@ -375,8 +506,10 @@ export interface ShiftTotals {
 }
 
 export function totalsOf(data: TeamShiftReviewResponse, mine: readonly MyMessage[], summaries: readonly ChatSummary[], waits: readonly ReviewWait[]): ShiftTotals {
+  // The numbers «Смены» shows too, by the one definition (`shiftReviewCounts`).
+  const counts = shiftReviewCounts(data, waits);
   const personal = mine.filter((one) => !one.message.mass);
-  const delays = personal.flatMap((one) => (one.message.mine.replySeconds === null ? [] : [one.message.mine.replySeconds]));
+  const delays = counts.replyDelays;
   const end = Date.parse(data.shift.endedAt);
   const inheritedAnswers = new Set(waits.filter((wait) => wait.inherited && wait.by === "me").map((wait) => `${wait.chat}|${wait.to}`));
   const origin = { ai: 0, hi: 0, copied: 0, fix: 0, own: 0, none: 0 };
@@ -395,8 +528,8 @@ export function totalsOf(data: TeamShiftReviewResponse, mine: readonly MyMessage
   const theirOpen = waits.filter((wait) => !wait.his && wait.by === null && (!wait.inherited || wait.fanWrote));
   const minutes = data.shift.workedMinutes;
   return {
-    messages: personal.length,
-    massMessages: mine.length - personal.length,
+    messages: counts.messages,
+    massMessages: counts.massMessages,
     chats: summaries.filter((summary) => summary.mine > 0).length,
     chatsFanSilent: summaries.filter((summary) => summary.mine > 0 && summary.fan === 0).length,
     replies: delays.length,
@@ -404,10 +537,11 @@ export function totalsOf(data: TeamShiftReviewResponse, mine: readonly MyMessage
     repliesWithinFast: delays.filter((delay) => delay <= REPLY_FAST_SECONDS).length,
     repliesWithinNorm: delays.filter((delay) => delay <= REPLY_NORM_SECONDS).length,
     repliesToInherited: personal.filter((one) => one.message.mine.replySeconds !== null && inheritedAnswers.has(`${one.chat.key}|${one.at}`)).length,
-    unanswered: unanswered.length,
+    unanswered: counts.unanswered,
     unansweredInherited: unanswered.filter((wait) => wait.inherited).length,
     unansweredLate: unanswered.filter((wait) => wait.since >= end - REPLY_NORM_SECONDS * 1000).length,
-    waitingSilently: waits.filter(waitingSilently).length,
+    unansweredNoNeed: summaries.filter((summary) => summary.unansweredInShift && summary.openNoNeed).length,
+    waitingSilently: counts.waitingSilently,
     colleagueChats: colleagueSummaries.length,
     colleagues: [...new Set(colleagueSummaries.flatMap((summary) => summary.colleagues.map((one) => one.name)))],
     colleagueUnanswered: theirOpen.filter((wait) => colleagueKeys.has(wait.chat)).length,
@@ -417,9 +551,9 @@ export function totalsOf(data: TeamShiftReviewResponse, mine: readonly MyMessage
     aiUnedited: unedited,
     dialogs: summaries.filter((summary) => summary.kind === "dialog").length,
     touches: summaries.filter((summary) => summary.kind === "touch").length,
-    ppvSent: mine.filter((one) => one.message.priceMills !== null).length,
-    ppvBought: mine.filter((one) => one.message.bought === true).length,
-    perHour: minutes === 0 ? null : (personal.length * 60) / minutes,
+    ppvSent: counts.ppvSent,
+    ppvBought: counts.ppvBought,
+    perHour: minutes === 0 ? null : (counts.messages * 60) / minutes,
   };
 }
 
@@ -495,11 +629,10 @@ export interface ChatterNumbersLike {
 }
 
 /**
- * A shift's quality from `teamChatterNumbers` — the prototype's stand-in until
- * Hub answers the three numbers by these rules (phase 2: `teamShiftJournal`
- * `replyMedianSeconds` · `unansweredAtEnd` · `aiUneditedShare`). The demo's
- * numbers are made by the review's rules, so there the two agree to the
- * second; on today's Hub `composed.reply` is the Reply button, edited or not.
+ * A shift's quality from `teamChatterNumbers`. Hub counts the reply median and
+ * «без ответа к концу» by the review's rules (shift-review-rules.ts), so those
+ * two agree with the shift's «Разбор смены» to the second. «ИИ без правки» is
+ * still near: Hub's `composed.reply` is the Reply button, edited or not.
  */
 export function qualityOfChatterNumbers(numbers: ChatterNumbersLike): ShiftQuality {
   const texts = numbers.composed.hand + numbers.composed.reply + numbers.composed.fix;
@@ -542,8 +675,11 @@ export type ChatKind = "dialog" | "touch" | "colleague" | "waiting";
 export interface ChatSummary {
   chat: ShiftReviewChat;
   kind: ChatKind;
+  /** The chatter's and the fan's messages in the shift, the ones the other side could see. */
   mine: number;
   fan: number;
+  /** Of the fan's, deleted by the fan later. */
+  fanDeleted: number;
   /** Colleagues who wrote in the chat within the shift. */
   colleagues: Array<{ name: string; messages: number }>;
   ai: number;
@@ -560,8 +696,8 @@ export interface ChatSummary {
   longestWaitInherited: boolean;
   /** A colleague ended it. */
   longestWaitAnsweredBy: string | null;
-  /** The fan wrote again this long before the answer, when that is well inside the wait, seconds. */
-  longestWaitLastFanSeconds: number | null;
+  /** The fan of that wait went quiet and came back (see `fanReturnOf`). */
+  longestWaitReturn: FanReturn | null;
   /** The chatter's fan without an answer at the end: how long (from the shift's start for a wait from before it), since when. */
   openWaitSeconds: number | null;
   openSince: number | null;
@@ -573,12 +709,20 @@ export interface ChatSummary {
   waitingSinceBefore: boolean;
   /** The colleague whose wait the fan left without an answer at the end is. */
   openHeldBy: string | null;
+  /** The fan's last message in the chatter's wait left open at the end: what it was (see `fanLastKind`), its text, when. */
+  openLast: { kind: FanLastKind; text: string; at: number } | null;
+  /** That wait needs no answer: the fan's last word was a goodbye, an «ok» or an emoji, and they asked nothing in it. */
+  openNoNeed: boolean;
   repeated: number;
   marked: number;
   ppv: number;
   bought: number;
   firstFanText: string | null;
   lastFanText: string | null;
+  /** The fan's sales in the shift that count for the chatter (see the file's head). */
+  heldNetMills: number;
+  /** The rest of the fan's money in the shift: a colleague's, by name, most first; `name` null — no shift's. */
+  others: Array<{ name: string | null; netMills: number }>;
   /** The chatter's first text in the shift: what a first touch said. */
   firstMineText: string | null;
   /** The fan's last text before the shift, when the fan wrote nothing in it: what a waiting fan said. */
@@ -593,10 +737,20 @@ export function summariesOf(data: TeamShiftReviewResponse, allWaits: readonly Re
     if (list) list.push(wait);
     else waitsByChat.set(wait.chat, [wait]);
   }
+  const salesByChat = new Map<string, Sale[]>();
+  for (const sale of data.sales) {
+    if (sale.chatKey === null) continue;
+    const list = salesByChat.get(sale.chatKey);
+    if (list) list.push(sale);
+    else salesByChat.set(sale.chatKey, [sale]);
+  }
   return data.chats.map((chat) => {
+    const sales = salesByChat.get(chat.key) ?? [];
+    const others = new Map<string | null, number>();
+    for (const sale of sales) if (!counts(sale)) others.set(sale.holderName, (others.get(sale.holderName) ?? 0) + sale.netMills);
     const inShift = chat.messages.filter((message) => message.inShift);
-    const mine = inShift.filter((message) => message.mine !== null);
-    const fan = inShift.filter((message) => message.side === "fan");
+    const mine = inShift.filter((message) => message.mine !== null && seen(message));
+    const fan = inShift.filter(isFans);
     const colleagues = colleaguesIn(chat);
     const waits = waitsByChat.get(chat.key) ?? [];
     const answered = waits.filter((wait) => wait.his && wait.by !== null);
@@ -612,12 +766,15 @@ export function summariesOf(data: TeamShiftReviewResponse, allWaits: readonly Re
       : fan.length > 0 || answered.length > 0 || mine.some((message) => message.mine!.replySeconds !== null) ? "dialog"
         : mine.length > 0 ? "touch"
           : "waiting";
-    const lastFanGap = longest === null ? null : (longest.to - longest.lastFanAt) / 1000;
+    const openFan = openHis === null ? []
+      : chat.messages.filter((message) => isFans(message) && Date.parse(message.at) >= openHis.since && Date.parse(message.at) <= openHis.to);
+    const openLast = openFan.at(-1);
     return {
       chat,
       kind,
       mine: mine.length,
       fan: fan.length,
+      fanDeleted: fan.filter((message) => message.deletedAt !== undefined).length,
       colleagues,
       ai: mine.filter((message) => isAi(message) && !isHi(message.mine!)).length,
       hi: mine.filter((message) => isAi(message) && isHi(message.mine!)).length,
@@ -630,21 +787,25 @@ export function summariesOf(data: TeamShiftReviewResponse, allWaits: readonly Re
       longestWaitSeconds: longest?.seconds ?? null,
       longestWaitInherited: longest?.inherited ?? false,
       longestWaitAnsweredBy: longest?.by === "other" ? longest.byName ?? "коллега" : null,
-      longestWaitLastFanSeconds: longest !== null && lastFanGap !== null && cameBack(longest.seconds, lastFanGap) ? lastFanGap : null,
+      longestWaitReturn: longest === null ? null : fanReturnOf(longest),
       openWaitSeconds: openHis?.seconds ?? null,
       openSince: openHis?.since ?? null,
       unansweredInShift: openHis !== null && unansweredInShift(openHis),
       unansweredLate: openHis !== null && unansweredInShift(openHis) && openHis.since >= end - REPLY_NORM_SECONDS * 1000,
       waitingSinceBefore: openHis !== null && waitingSilently(openHis),
       openHeldBy: open !== null && !open.his ? open.heldBy ?? colleagues[0]?.name ?? "коллега" : null,
+      openLast: openLast === undefined ? null : { kind: fanLastKind(openLast), text: openLast.text, at: Date.parse(openLast.at) },
+      openNoNeed: openNeedsNoAnswer(openFan),
       repeated: mine.filter((message) => message.mine!.repeats > 0).length,
       marked: mine.filter((message) => message.mine!.marks.length > 0).length,
       ppv: mine.filter((message) => message.priceMills !== null).length,
       bought: mine.filter((message) => message.bought === true).length,
+      heldNetMills: sales.filter(counts).reduce((sum, sale) => sum + sale.netMills, 0),
+      others: [...others].map(([name, netMills]) => ({ name, netMills })).sort((a, b) => b.netMills - a.netMills),
       firstFanText: textOf(firstFan),
       lastFanText: lastFan === firstFan ? null : textOf(lastFan),
       firstMineText: textOf(mine.find((message) => message.text.trim() !== "")),
-      lastFanBeforeText: fan.length > 0 ? null : textOf([...chat.messages].reverse().find((message) => !message.inShift && message.side === "fan" && message.text.trim() !== "")),
+      lastFanBeforeText: fan.length > 0 ? null : textOf([...chat.messages].reverse().find((message) => !message.inShift && isFans(message) && message.text.trim() !== "")),
     };
   });
 }
@@ -665,7 +826,7 @@ export function showPasses(summary: ChatSummary, show: ChatShow): boolean {
     case "all": return true;
     case "waited": return summary.longestWaitSeconds !== null && summary.longestWaitSeconds > REPLY_NORM_SECONDS;
     case "unanswered": return summary.unansweredInShift;
-    case "money": return summary.ppv > 0 || summary.chat.shiftNetMills > 0;
+    case "money": return summary.ppv > 0 || summary.heldNetMills > 0;
   }
 }
 
@@ -675,8 +836,9 @@ export function sortSummaries(list: readonly ChatSummary[], sort: ChatSort): Cha
     switch (sort) {
       case "messages": return [-(summary.mine + summary.fan), summary.openSince ?? Number.MAX_SAFE_INTEGER];
       case "time": return [summary.first ?? summary.openSince ?? Number.MAX_SAFE_INTEGER, 0];
-      case "wait": return [-Math.max(summary.longestWaitSeconds ?? -1, summary.openWaitSeconds ?? -1), summary.openSince ?? Number.MAX_SAFE_INTEGER];
-      case "money": return [-summary.chat.shiftNetMills, -summary.ppv];
+      // A goodbye left without an answer is not a long wait to look at first.
+      case "wait": return [-Math.max(summary.longestWaitSeconds ?? -1, summary.openNoNeed ? -1 : summary.openWaitSeconds ?? -1), summary.openSince ?? Number.MAX_SAFE_INTEGER];
+      case "money": return [-summary.heldNetMills, -summary.ppv];
     }
   };
   return list.map((summary, index) => ({ summary, index, key: key(summary) }))

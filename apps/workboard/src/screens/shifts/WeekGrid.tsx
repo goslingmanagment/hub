@@ -261,7 +261,7 @@ export function WeekGrid({ model, isOwner, versus, loading = false, refreshing =
   ].filter(Boolean).join(" ");
 
   return (
-    <Section title={byChunk ? "Продажи по 7 дней" : "Продажи по дням"} description={description}>
+    <Section title={byChunk ? "Продажи по 7 дней" : "Продажи по дням"} description={description} actions={model ? <Outside outside={model.outside} /> : undefined}>
       <Table
         label={byChunk ? "Продажи за смены по 7 дней" : "Продажи за смены по дням"}
         className="shifts-grid"
@@ -279,5 +279,31 @@ export function WeekGrid({ model, isOwner, versus, loading = false, refreshing =
         skeletonLines={2}
       />
     </Section>
+  );
+}
+
+/**
+ * «вне смен»: the period's sales no shift held — in look-ins (the chatter wrote to the fan last) and nobody's. Not in
+ * the grid's money; one quiet figure beside its title, by page on hover.
+ */
+function Outside({ outside }: { outside: ShiftsModel["outside"] }) {
+  const total = outside.visitsNetMills + outside.nobodyNetMills;
+  if (total <= 0) return null;
+  const hint = (
+    <span className="shifts-outside__hint">
+      <span>Продажи страниц, которые не держала ни одна смена: в продажи за смены и в выплаты они не входят.</span>
+      {outside.visitsNetMills > 0 && <span className="shifts-outside__row">в заходах<Money mills={outside.visitsNetMills} /></span>}
+      {outside.nobodyNetMills > 0 && <span className="shifts-outside__row">ничьи<Money mills={outside.nobodyNetMills} /></span>}
+      {outside.pages.map((page) => (
+        <span key={page.pageLabel} className="shifts-outside__row shifts-outside__row--page">
+          <span>{page.pageLabel}</span><Money mills={page.visitsNetMills + page.nobodyNetMills} />
+        </span>
+      ))}
+    </span>
+  );
+  return (
+    <Tooltip content={hint} align="end">
+      <span className="shifts-outside">вне смен ещё <Money mills={total} /></span>
+    </Tooltip>
   );
 }
