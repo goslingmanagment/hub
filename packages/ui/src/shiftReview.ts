@@ -209,7 +209,8 @@ const FILLER_WORDS = new Set([
   "ma'am", "maam", "mistress", "queen", "xx", "xoxo", "doki", "доки", "большое", "тебе", "вам", "милая",
 ]);
 const PICTURE = String.raw`\p{Extended_Pictographic}|[♡♥❣]|<3|[:;=]-?[)(DPp3*]|xD|\^\^`;
-const EMOJI_ONLY_RE = new RegExp(String.raw`^(?:${PICTURE}|[\p{Emoji_Modifier}\p{Regional_Indicator}\u200d\ufe0f\s.!,])+$`, "u");
+// The joiner and the variation selector stand apart from the class: inside it they read as one combined character.
+const EMOJI_ONLY_RE = new RegExp(String.raw`^(?:${PICTURE}|\u200d|\ufe0f|[\p{Emoji_Modifier}\p{Regional_Indicator}\s.!,])+$`, "u");
 const PICTURE_RE = new RegExp(PICTURE, "u");
 
 /** A file or a tip — «media» — wants an answer, whatever its words. */
