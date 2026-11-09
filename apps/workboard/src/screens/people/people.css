@@ -233,74 +233,10 @@
     text-underline-offset: 3px;
   }
 
-  /* ------------------------------------------------- The verdict: one line, then one quiet line */
+  /* ------------------------------------------------- The verdict: the app's row of tiles */
 
   .people-verdict {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-  }
-
-  /* Money, then how the person works: two groups that share a line on a wide screen and break between them on a narrower one. */
-  .people-verdict__line {
-    display: flex;
-    flex-wrap: wrap;
-    column-gap: 32px;
-    row-gap: 4px;
-    margin: 0;
-    color: var(--ui-text-2);
-    font-size: var(--ui-fs-16);
-    line-height: var(--ui-lh-16);
-    font-variant-numeric: tabular-nums;
-  }
-
-  .people-verdict__line b {
-    color: var(--ui-text);
-    font-weight: 600;
-  }
-
-  .people-verdict__line b .ui-money {
-    font-weight: 600;
-  }
-
-  .people-verdict__group {
-    white-space: nowrap;
-  }
-
-  .people-verdict__part {
-    white-space: nowrap;
-  }
-
-  .people-verdict__line .ui-skel {
-    display: inline-block;
-    vertical-align: -2px;
-  }
-
-  .people-verdict__sep {
-    color: var(--ui-text-3);
-  }
-
-  .people-verdict__page {
-    color: var(--ui-text);
-    font-variant-numeric: normal;
-  }
-
-  .people-verdict__change {
-    margin-left: 6px;
-    color: var(--ui-text-2);
-  }
-
-  .people-verdict__change .ui-delta {
-    font-size: inherit;
-    line-height: inherit;
-  }
-
-  .people-verdict__note {
-    max-width: 960px;
-    margin: 0;
-    color: var(--ui-text-3);
-    font-size: var(--ui-fs-14);
-    line-height: var(--ui-lh-14);
+    padding: 4px 0 8px;
   }
 
   .people-ribbon-skeleton {

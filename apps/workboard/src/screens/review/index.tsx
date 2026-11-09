@@ -14,6 +14,7 @@ import { shiftWhen, type ShiftWhen } from "@agency_hub_core/ui/shiftWhen";
 import { carryParams, parseShiftKey, personPath, shiftPath, useBackState, useBackTarget, type BackTarget } from "@/shared/links";
 import { METRICS, UNANSWERED_NOW_LABEL, formatAiUnedited, formatReplyMedian, formatUnanswered } from "@/shared/metrics";
 import { ScreenHeader } from "@/shared/ScreenHeader";
+import { Tiles, TilesSkeleton, type Tile } from "@/shared/Tiles";
 import { usePeriod } from "@/shared/usePeriod";
 import { useMe } from "@/shared/useMe";
 import { ChatList } from "./ChatList.js";
@@ -74,17 +75,8 @@ function whenOf(shift: ReviewShift): ShiftWhen {
   return shiftWhen({ startedAt: shift.startedAt, endedAt: shift.endedAt, ongoing: shift.ongoing, workedMinutes: shift.workedMinutes });
 }
 
-interface Tile {
-  label: string;
-  value: ReactNode;
-  /** The definition, 1–2 short sentences on hover; the sales' a few rows of money. */
-  hint: ReactNode;
-  /** Under the value: what it is made of, as one thin bar (the sales by where they came from). */
-  bar?: ReadonlyArray<{ key: string; mills: number }>;
-}
-
 /** The sales' hint: one row per source with its money, then what is near the shift but not its. */
-function salesHint(index: ReviewIndex): { hint: ReactNode; bar: Array<{ key: string; mills: number }> } {
+function salesHint(index: ReviewIndex): { hint: ReactNode; bar: NonNullable<Tile["bar"]> } {
   const { money, totals } = index;
   const { origins } = money;
   const sum = (list: ReadonlyArray<{ netMills: number }>) => list.reduce((total, one) => total + one.netMills, 0);
@@ -121,7 +113,7 @@ function salesHint(index: ReviewIndex): { hint: ReactNode; bar: Array<{ key: str
       )}
     </span>
   );
-  return { hint, bar: rows.length > 1 ? rows.map((row) => ({ key: row.key, mills: row.mills })) : [] };
+  return { hint, bar: rows.length > 1 ? rows.map((row) => ({ key: row.key, size: row.mills, className: `review-money__key--${row.key}` })) : [] };
 }
 
 /**
@@ -177,26 +169,6 @@ function tilesOf(index: ReviewIndex, when: ShiftWhen): Tile[] {
       hint: [when.withPauses ? `${when.withPauses}.` : "", shift.pauseMinutes > 0 ? "Паузы — серые полосы на пульсе." : ""].join(" ").trim() || "Время работы без пауз.",
     },
   ];
-}
-
-function Tiles({ tiles }: { tiles: readonly Tile[] }) {
-  return (
-    <div className="review-tiles" role="list" aria-label="Смена в цифрах">
-      {tiles.map((tile) => (
-        <Tooltip key={tile.label} content={tile.hint} align="start" side="bottom" className="review-tile__tip">
-          <div className="review-tile" role="listitem">
-            <span className="review-tile__label">{tile.label}</span>
-            <span className="review-tile__value">{tile.value}</span>
-            {tile.bar && tile.bar.length > 0 && (
-              <span className="review-tile__bar" aria-hidden>
-                {tile.bar.map((part) => <i key={part.key} className={`review-money__key--${part.key}`} style={{ flexGrow: part.mills }} />)}
-              </span>
-            )}
-          </div>
-        </Tooltip>
-      ))}
-    </div>
-  );
 }
 
 /**
@@ -280,11 +252,7 @@ function Loading({ back }: { back: BackTarget }) {
       <ScreenHeader title={<Skeleton width={320} height={24} radius={6} />} documentTitle="Разбор смены" back={back} />
       <div className={cx("wb-content review-content", font)} aria-busy="true">
         <section className="review-overview">
-          <div className="review-tiles">
-            {Array.from({ length: 6 }, (_, index) => (
-              <div key={index} className="review-tile"><Skeleton width={72} height={14} radius={4} /><Skeleton width={96} height={24} radius={6} /></div>
-            ))}
-          </div>
+          <TilesSkeleton />
           <div className="review-pulse"><Skeleton height={281} radius={6} /></div>
         </section>
         <div className="review-sheet">
@@ -582,7 +550,7 @@ function Loaded({ model, params, update, back, updatedAt, refreshing, onRefresh 
       />
       <div className={cx("wb-content review-content", font)}>
         <section className="review-overview" aria-label="Вся смена">
-          <Tiles tiles={tilesOf(index, when)} />
+          <Tiles tiles={tilesOf(index, when)} label="Смена в цифрах" />
           {notes.length > 0 && <p className="review-notes">{notes.join(" · ")}</p>}
           <Pulse
             minutes={index.minutes}

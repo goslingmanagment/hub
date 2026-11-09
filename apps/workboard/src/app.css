@@ -275,12 +275,130 @@
     line-height: var(--ui-lh-14);
   }
 
+  /* ---------------------------------------------------------- Tiles: a screen's numbers in one row */
+
+  .wb-tiles {
+    display: grid;
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    margin: 0;
+  }
+
+  .wb-tile__tip {
+    display: block;
+    min-width: 0;
+  }
+
+  .wb-tile {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+    padding: 0 16px;
+    border-left: 1px solid var(--ui-line-soft);
+    cursor: default;
+  }
+
+  .wb-tiles > :first-child .wb-tile,
+  .wb-tiles > .wb-tile:first-child {
+    padding-left: 0;
+    border-left: 0;
+  }
+
+  .wb-tile__label {
+    overflow: hidden;
+    color: var(--ui-text-3);
+    font-size: var(--ui-fs-13);
+    line-height: var(--ui-lh-13);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .wb-tile__value {
+    margin: 0;
+    color: var(--ui-text);
+    font-size: 22px;
+    line-height: 28px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+
+  .wb-tile__value .ui-money {
+    font-weight: inherit;
+  }
+
+  /* The sales by where they came from: a hairline bar under the value, the rows in its hint. */
+  .wb-tile__bar {
+    display: flex;
+    gap: 2px;
+    height: 3px;
+    margin-top: 2px;
+    overflow: hidden;
+    border-radius: 2px;
+  }
+
+  .wb-tile__bar > i {
+    min-width: 3px;
+    border-radius: 2px;
+  }
+
+  /* A change or a second fact under the value: «−36 %», «41 ч 24 мин». */
+  .wb-tile__sub {
+    overflow: hidden;
+    color: var(--ui-text-3);
+    font-size: var(--ui-fs-13);
+    line-height: var(--ui-lh-13);
+    font-variant-numeric: tabular-nums;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  @media (max-width: 1100px) {
+    .wb-tiles {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 16px 0;
+    }
+
+    .wb-tiles > :nth-child(3n + 1) .wb-tile {
+      padding-left: 0;
+      border-left: 0;
+    }
+  }
+
   /* ------------------------------------------------------------ The screen */
 
+  /*
+   * The working column's type (owner, 2026-11-08: «шрифты говно, куча текста»): body 14/20, secondary 13/18, the
+   * screen's title 20/28, a number 22/28; weights 400 and 600, 500 only on controls. The design system's sizes are
+   * remapped here, so every screen and every component in it takes the same scale; the sidebar keeps its own.
+   */
   .wb-main {
+    --ui-fs-16: 14px;
+    --ui-lh-16: 20px;
+    --ui-fs-15: 14px;
+    --ui-lh-15: 20px;
+    --ui-fs-14: 13px;
+    --ui-lh-14: 18px;
+    --ui-lh-read: 20px;
+    --ui-fs-24: 20px;
+    --ui-lh-24: 28px;
+    --ui-fs-20: 16px;
+    --ui-lh-20: 24px;
     display: flex;
     flex-direction: column;
     min-width: 0;
+    font-size: 14px;
+    line-height: 20px;
+  }
+
+  .wb-main :is(.ui-seg__item, .ui-chip, .wb-back, .ui-kbd) {
+    font-weight: 400;
+  }
+
+  .wb-main .wb-back {
+    height: var(--ui-control-sm);
+    border-color: var(--ui-line);
   }
 
   /* The bar with the title and the controls sticks; a hairline appears under it once the page has scrolled. */

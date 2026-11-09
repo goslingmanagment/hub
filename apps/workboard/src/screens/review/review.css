@@ -9,20 +9,8 @@
 @layer components {
   /* ------------------------------------------------- This screen's type */
 
-  /*
-   * Body 14/20, secondary 13/18, labels 12–13, numbers 22/28, the name 20/28; weights 400 and 600 only. Set on the
-   * screen's main column, so the title bar is in it too; the sidebar and the floating hints keep the app's.
-   */
+  /* The app's type scale is on .wb-main (app.css); here the screen's own colours. */
   .wb-main:has(> .review-content) {
-    --ui-fs-16: 14px;
-    --ui-lh-16: 20px;
-    --ui-fs-15: 14px;
-    --ui-lh-15: 20px;
-    --ui-fs-14: 13px;
-    --ui-lh-14: 18px;
-    --ui-lh-read: 20px;
-    --ui-fs-24: 20px;
-    --ui-lh-24: 28px;
     --review-pace: var(--ui-series-1);
     --review-reply: var(--ui-series-4);
     --review-wait: var(--ui-warn);
@@ -30,9 +18,6 @@
     --review-raw: var(--ui-series-4);
     --review-edited: color-mix(in srgb, var(--ui-series-4) 38%, var(--ui-surface));
     --review-fix: var(--ui-series-3);
-    font-family: var(--ui-font);
-    font-size: 14px;
-    line-height: 20px;
   }
 
   /* The same screen in the system's font, for comparing pictures (`?font=system`). */
@@ -40,15 +25,6 @@
     --ui-font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
   }
 
-  .wb-main:has(> .review-content) :is(.ui-seg__item, .ui-chip, .wb-back, .ui-kbd) {
-    font-weight: 400;
-  }
-
-  .wb-main:has(> .review-content) .wb-back {
-    height: var(--ui-control-sm);
-    border-color: var(--ui-line);
-    font-size: 14px;
-  }
 
   /* ------------------------------------------------------------ The title */
 
@@ -210,59 +186,6 @@
     color: var(--ui-text-3);
     font-size: 13px;
     line-height: 18px;
-  }
-
-  /* ---------------------------------------------------------- The tiles */
-
-  .review-tiles {
-    display: grid;
-    grid-template-columns: repeat(6, minmax(0, 1fr));
-    margin: 0;
-  }
-
-  .review-tile__tip {
-    display: block;
-    min-width: 0;
-  }
-
-  .review-tile {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    min-width: 0;
-    padding: 0 16px;
-    border-left: 1px solid var(--ui-line-soft);
-    cursor: default;
-  }
-
-  .review-tiles > :first-child .review-tile,
-  .review-tiles > .review-tile:first-child {
-    padding-left: 0;
-    border-left: 0;
-  }
-
-  .review-tile__label {
-    overflow: hidden;
-    color: var(--ui-text-3);
-    font-size: 13px;
-    line-height: 18px;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .review-tile__value {
-    margin: 0;
-    color: var(--ui-text);
-    font-size: 22px;
-    line-height: 28px;
-    font-weight: 600;
-    letter-spacing: -0.01em;
-    font-variant-numeric: tabular-nums;
-    white-space: nowrap;
-  }
-
-  .review-tile__value .ui-money {
-    font-weight: inherit;
   }
 
   /* ---------------------------------------------------------- The pulse */
@@ -1193,16 +1116,6 @@
   /* ---------------------------------------------- Narrow windows */
 
   @media (max-width: 1100px) {
-    .review-tiles {
-      grid-template-columns: repeat(3, minmax(0, 1fr));
-      gap: 16px 0;
-    }
-
-    .review-tiles > :nth-child(3n + 1) .review-tile {
-      padding-left: 0;
-      border-left: 0;
-    }
-
     .review-sheet {
       height: 720px;
     }
@@ -1249,21 +1162,7 @@
     white-space: nowrap;
   }
 
-  /* The sales by where they came from: a hairline bar under the value, the rows in its hint. */
-  .review-tile__bar {
-    display: flex;
-    gap: 2px;
-    height: 3px;
-    margin-top: 2px;
-    overflow: hidden;
-    border-radius: 2px;
-  }
-
-  .review-tile__bar > i {
-    min-width: 3px;
-    border-radius: 2px;
-  }
-
+  /* The sales by where they came from: the rows of the tile's hint (the bar under the value is the app's tile). */
   .review-money {
     display: grid;
     gap: 8px;

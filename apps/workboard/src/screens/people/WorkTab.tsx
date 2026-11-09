@@ -2,7 +2,7 @@ import { useMemo, type ReactNode } from "react";
 import { Link, useLocation } from "react-router";
 import { CHATTER_SHIFT_MIN_MESSAGES, CHATTER_SHIFT_MIN_WORKED_MINUTES, SHIFT_REPORT_MAX_DAYS } from "@agency_hub_core/contracts";
 import { millsToNumber, sumMills } from "@agency_hub_core/shared";
-import { Button, Card, Delta, Disclosure, Duration, EmptyState, Hint, LinkButton, Money, Section, Skeleton, Tooltip, readDelta } from "@agency_hub_core/ui";
+import { Button, Card, Delta, Disclosure, Duration, EmptyState, LinkButton, Money, Section, Skeleton, readDelta } from "@agency_hub_core/ui";
 import { formatDuration, formatMills, formatPercent } from "@agency_hub_core/ui/format";
 import { addDays } from "@agency_hub_core/ui/moscow";
 import { ruPlural } from "@agency_hub_core/ui/plural";
@@ -14,8 +14,9 @@ import { useMe } from "@/shared/useMe";
 import { usePersonStats, type PeriodQuality, type PeriodWork, type PersonCard } from "./data.js";
 import { ShiftRibbon } from "./ShiftRibbon.js";
 import { ShiftTable } from "./ShiftTable.js";
+import { Tiles, TilesSkeleton, type Tile } from "@/shared/Tiles";
 import { SlowFailed } from "./SlowFailed.js";
-import { capitalized, dayWords, periodWords, sentence, versusTitle } from "./words.js";
+import { capitalized, dayWords, periodWords, versusTitle } from "./words.js";
 
 /**
  * «Работа» (spec §4.4, D2): the period's verdict in one line — money and its
@@ -74,12 +75,11 @@ export function WorkTab({ card, userId }: { card: PersonCard; userId: number }) 
 }
 
 /**
- * The verdict of the period (spec §4.4): one line, 16 px — money with its
- * change, per hour, and how the person answers and writes, the average per
- * shift by the review's rules. Under it one quiet line: what the change is
- * against. D14: only the three terms that need a definition are dotted; the
- * note about the money is a plain hint on the sum. E1: under a page filter the
- * money says its page and the averages say they are of every page.
+ * The verdict of the period (spec §4.4) as the review's row of numbers: money
+ * and per hour with their change under them, the shifts and the time worked,
+ * then how the person answers and writes — the average per shift by the
+ * review's rules. Each definition, what the change is against and the page
+ * filter's caveat are in the tile's hint, not on the page.
  */
 function Verdict({ work, quality, failed, username }: { work: PeriodWork; quality: PeriodQuality | null | undefined; failed: boolean; username: string }) {
   const { period } = usePeriod();
@@ -87,57 +87,62 @@ function Verdict({ work, quality, failed, username }: { work: PeriodWork; qualit
   const versus = versusTitle(period);
   /** The one rule of a change (D13): calm better / worse colours, «было $X» / «впервые» at a small base. `base`: the money behind a rate. */
   const change = (current: number | null, previous: number | null | undefined, base?: number | null) => {
-    if (work.previous === null || previous === null || previous === undefined) return null;
-    if (readDelta(current ?? 0, previous, { base }).kind === "none") return null;
-    return <span className="people-verdict__change">(<Delta current={current ?? 0} previous={previous} base={base} title={versus} />)</span>;
+    if (work.previous === null || previous === null || previous === undefined) return undefined;
+    if (readDelta(current ?? 0, previous, { base }).kind === "none") return undefined;
+    return <Delta current={current ?? 0} previous={previous} base={base} title={versus} />;
   };
   const pending = quality === undefined && !failed;
-  const number = (text: string) => (pending ? <Skeleton width={56} height={16} /> : <b>{text}</b>);
-  const term = (key: "reply" | "unanswered" | "aiUnedited", words: string) => <Hint content={<>{METRICS[key].hint} {PER_SHIFT_HINT}</>}>{words}</Hint>;
+  const number = (text: string) => (pending ? <Skeleton width={72} height={24} radius={6} /> : text);
   const within = quality && quality.replies > 0 ? quality.repliesWithinHour / quality.replies : null;
-  const money = <b><Money mills={work.salesNetMills} /></b>;
-  const sales = work.overlapNetMills > 0
-    ? <Tooltip content={`Из них ${formatMills(work.overlapNetMills)} видны и у коллег: страницу вели двое, а этим фанам никто из них не писал.`}><span>{money}</span></Tooltip>
-    : money;
-
-  const notes = [
-    work.previous === null
-      ? `Сравнить не с чем: за ${period.previousLabel} у Hub нет всей работы ${username}.`
-      : sentence(`В скобках — изменение ${versus}`),
-    // «99 % быстрее часа» says nothing; only a slip is news.
-    within !== null && within < 0.95 ? `${formatPercent(within * 100)} ответов — быстрее часа.` : null,
-  ].filter(Boolean).join(" ");
-
+  const against = work.previous === null ? `Сравнить не с чем: за ${period.previousLabel} у Hub нет всей работы ${username}.` : `Под числом — изменение ${versus}.`;
+  const allPages = page ? " По всей смене, на всех её страницах." : "";
+  const tiles: Tile[] = [
+    {
+      label: page ? `Продажи, ${page}` : "Продажи",
+      value: <Money mills={work.salesNetMills} />,
+      sub: change(work.salesNetMills, work.previous?.salesNetMills),
+      hint: [
+        "Продажи после комиссии на страницах, где человек писал в смену.",
+        work.overlapNetMills > 0 ? `Из них ${formatMills(work.overlapNetMills)} видны и у коллег: страницу вели двое, а этим фанам никто из них не писал.` : "",
+        against,
+      ].filter(Boolean).join(" "),
+    },
+    {
+      label: "В час",
+      value: <Money mills={work.perHourMills} />,
+      sub: change(work.perHourMills, work.previous?.perHourMills, work.previous?.salesNetMills),
+      hint: `Продажи на отработанное время без пауз. ${against}`,
+    },
+    {
+      label: "Смен",
+      value: String(work.shifts),
+      sub: <Duration minutes={work.workedMinutes} />,
+      hint: "Смены периода и время работы в них без пауз.",
+    },
+    {
+      label: METRICS.reply.label,
+      value: number(quality ? formatReplyMedian(quality.replyMedianSeconds) : "—"),
+      sub: "в среднем за смену",
+      hint: [METRICS.reply.hint, PER_SHIFT_HINT, within !== null && within < 0.95 ? `${formatPercent(within * 100)} ответов — быстрее часа.` : "", allPages].filter(Boolean).join(" "),
+    },
+    {
+      label: METRICS.unanswered.label,
+      value: number(quality ? formatUnanswered(quality.unansweredAtEnd, { average: true }) : "—"),
+      sub: "в среднем за смену",
+      hint: [METRICS.unanswered.hint, PER_SHIFT_HINT, allPages].filter(Boolean).join(" "),
+    },
+    {
+      label: METRICS.aiUnedited.label,
+      value: number(quality ? formatAiUnedited(quality.aiUneditedShare) : "—"),
+      sub: "в среднем за смену",
+      hint: [METRICS.aiUnedited.hint, PER_SHIFT_HINT, allPages].filter(Boolean).join(" "),
+    },
+  ];
   return (
     <section className="people-verdict" aria-label={`Итог ${periodWords(period)}`}>
-      <p className="people-verdict__line">
-        <span className="people-verdict__group">
-          <span className="people-verdict__part">
-            {sales}
-            {change(work.salesNetMills, work.previous?.salesNetMills)}
-            {" "}за {work.shifts} {ruPlural(work.shifts, "смену", "смены", "смен")}{page ? <> на <span className="people-verdict__page">{page}</span></> : null}, <Duration minutes={work.workedMinutes} />
-          </span>
-          <Sep />
-          <span className="people-verdict__part">
-            <b><Money mills={work.perHourMills} /></b> в час{change(work.perHourMills, work.previous?.perHourMills, work.previous?.salesNetMills)}
-          </span>
-        </span>
-        <span className="people-verdict__group">
-          {page ? "В среднем за смену, по всем страницам: " : "В среднем за смену: "}
-          <span className="people-verdict__part">{term("reply", METRICS.reply.label.toLowerCase())} {number(quality ? formatReplyMedian(quality.replyMedianSeconds) : "—")}</span>
-          <Sep />
-          <span className="people-verdict__part">{term("unanswered", METRICS.unanswered.label.toLowerCase())} {number(quality ? formatUnanswered(quality.unansweredAtEnd, { average: true }) : "—")}</span>
-          <Sep />
-          <span className="people-verdict__part">{term("aiUnedited", METRICS.aiUnedited.label)} {number(quality ? formatAiUnedited(quality.aiUneditedShare) : "—")}</span>
-        </span>
-      </p>
-      {notes && <p className="people-verdict__note">{notes}</p>}
+      <Tiles tiles={tiles} label={`Итог ${periodWords(period)}`} />
     </section>
   );
-}
-
-function Sep(): ReactNode {
-  return <span className="people-verdict__sep" aria-hidden> · </span>;
 }
 
 /** Under the table: work outside shifts; what the shift reports confirmed, once anyone confirms; the page filter's caveat. */
@@ -248,8 +253,7 @@ function WorkSkeleton({ card, userId, canOpen }: { card: PersonCard; userId: num
   return (
     <>
       <section className="people-verdict" aria-busy>
-        <p className="people-verdict__line"><Skeleton width={720} height={20} /></p>
-        <p className="people-verdict__note"><Skeleton width={480} /></p>
+        <TilesSkeleton sub />
       </section>
       <Section title="Смены по часам" description="Время московское.">
         <Card>
