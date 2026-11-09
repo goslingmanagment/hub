@@ -113,7 +113,7 @@ export function InviteModal({ create, onClose, onCreated, onOpenExisting }: {
               autoComplete="off"
               spellCheck={false}
               disabled={pending}
-              placeholder="например, grisha"
+              placeholder="например, anna.k"
               onChange={(event) => {
                 setUsername(event.target.value);
                 setSubmissionFailed(false);
