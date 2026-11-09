@@ -1,0 +1,201 @@
+/* Выплаты: what the shared components do not say themselves. Tokens only. */
+@layer components {
+  .payouts-sub {
+    display: block;
+    color: var(--ui-text-2);
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+  }
+
+  .payouts-note {
+    margin: 0;
+    color: var(--ui-text-2);
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+  }
+
+  /* A chatter's pages with their sums: «mia-1 $820.00   mia-2 $250.15», wrapping. */
+  .payouts-pages {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 20px;
+  }
+
+  .payouts-page {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 8px;
+    white-space: nowrap;
+  }
+
+
+  .payouts-notices,
+  .payouts-folds {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .payouts-notices:empty {
+    display: none;
+  }
+
+  .payouts-folds {
+    gap: 16px;
+  }
+
+  .payouts-fold > .ui-disclosure__body {
+    padding-top: 12px;
+  }
+
+  .payouts-empty {
+    padding: 64px 24px;
+    border: 1px solid var(--ui-line);
+    border-radius: var(--ui-radius-lg);
+    background: var(--ui-surface);
+  }
+
+  /* ------------------------------------------------------ A chatter's panel */
+
+  .payouts-drawer {
+    display: flex;
+    flex-direction: column;
+    gap: 28px;
+  }
+
+  .payouts-block {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .payouts-block__title {
+    margin: 0;
+    color: var(--ui-text);
+    font-size: var(--ui-fs-16);
+    line-height: var(--ui-lh-16);
+    font-weight: 600;
+  }
+
+  .payouts-shifts {
+    display: flex;
+    flex-direction: column;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    border-top: 1px solid var(--ui-line-soft);
+  }
+
+  .payouts-shifts li {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 12px 0;
+    border-bottom: 1px solid var(--ui-line-soft);
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* ----------------------------------------------------------- Round 1 */
+
+  /* «Итого» under the first column of a table. */
+  .payouts-total {
+    color: var(--ui-text);
+    font-weight: 600;
+  }
+
+  .payouts-strong {
+    color: var(--ui-text);
+    font-weight: 600;
+  }
+
+  /* «2 своих суммы» under a confirmed sum: quiet, but not grey on grey. */
+  .payouts-own {
+    color: var(--ui-text-2);
+  }
+
+  /* The «›» of a row that opens the chatter's panel. */
+  .payouts-go {
+    display: block;
+    margin-left: auto;
+    color: var(--ui-text-3);
+    transition: color var(--ui-fast);
+  }
+
+  .ui-table tr:hover .payouts-go,
+  .ui-table tr:focus-within .payouts-go,
+  .ui-table tr[aria-selected="true"] .payouts-go {
+    color: var(--ui-text);
+  }
+
+  /* What is left out of the copy: one notice, a line each with its own way on. */
+  .payouts-warnings {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .payouts-warnings li {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 4px 16px;
+  }
+
+  .payouts-notice-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--ui-text);
+    font: inherit;
+    font-weight: 600;
+    text-decoration: underline;
+    text-decoration-color: var(--ui-line-strong);
+    text-underline-offset: 3px;
+    white-space: nowrap;
+    cursor: pointer;
+    border-radius: var(--ui-radius-sm);
+  }
+
+  .payouts-notice-link:hover {
+    text-decoration-color: currentColor;
+  }
+
+  .payouts-notice-link:focus-visible {
+    outline: var(--ui-focus);
+    outline-offset: 2px;
+  }
+
+  /* «Что изменилось» comes into view below the sticky header. */
+  .payouts-anchor {
+    scroll-margin-top: 96px;
+  }
+
+  /* A new chatter's block in the export: a firmer line above it, as the sheet's blocks part. */
+  .ui-table tr.payouts-block-start > td {
+    border-top: 1px solid var(--ui-line);
+  }
+
+  /* ----------------------------------------------------------- Round 2 */
+
+  /* The notices over the table end where a fitted table ends (В-н6); a full-width table leaves them full width. */
+  .payouts-main.ui-section--fit > .payouts-notices {
+    max-width: var(--ui-section-fit);
+  }
+
+  /* «нет данных»: the sales of the shifts were not read — quiet words with a hint, never a zero or a dash (В-н5). */
+  .payouts-unknown {
+    color: var(--ui-text-2);
+  }
+
+  /* «без alex.k» under a total: the total is bold, its note is not. */
+  .ui-table tfoot .payouts-sub {
+    font-weight: 400;
+  }
+}

@@ -9,6 +9,9 @@
     "tests/**/*.ts"
   ],
   "exclude": [
-    "apps/dashboard"
+    "apps/dashboard",
+    "apps/workboard",
+    "packages/ui",
+    "packages/demo"
   ]
 }

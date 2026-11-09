@@ -1,0 +1,565 @@
+/* Смены (spec §4.1): only what packages/ui does not have. Values are tokens. */
+@layer components {
+  /* ------------------------------------------------------ «Ждут решения» */
+
+  /* The two status lines on top: what waits for a decision, who is on a shift. */
+  /* Two status lines (36 px each) read as one block: no air between them beyond their own. */
+  .shifts-top {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+  }
+
+  /* People on a shift: a block of its own, as far from the line above as the blocks below are. */
+  .shifts-top > .ui-section:not(:first-child) {
+    margin-top: 20px;
+  }
+
+  .shifts-waiting {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 16px;
+    min-height: 36px;
+    font-size: var(--ui-fs-15);
+    line-height: var(--ui-lh-15);
+  }
+
+  .shifts-waiting__label {
+    display: inline-flex;
+    align-items: center;
+    gap: 12px;
+    color: var(--ui-text);
+    font-weight: 500;
+  }
+
+  .shifts-waiting__dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--ui-accent);
+  }
+
+  .shifts-waiting__parts {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 10px;
+    min-width: 0;
+  }
+
+  .shifts-waiting__sep {
+    color: var(--ui-text-3);
+  }
+
+  .shifts-waiting__link {
+    color: var(--ui-text);
+    text-decoration: underline;
+    text-decoration-color: var(--ui-line-strong);
+    text-underline-offset: 3px;
+  }
+
+  .shifts-waiting__link:hover {
+    text-decoration-color: currentColor;
+  }
+
+  /* What waits on the other pages, a queue that did not answer: said, quieter than what waits here. */
+  .shifts-waiting__link--quiet {
+    color: var(--ui-text-2);
+  }
+
+  .shifts-waiting__link--quiet:hover {
+    color: var(--ui-text);
+  }
+
+  .shifts-waiting__failed {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--ui-text-2);
+  }
+
+  /* Nothing waits here: no accent, the hollow dot of «никто не на смене»; the label reads on into its tail. */
+  .shifts-waiting--quiet {
+    column-gap: 10px;
+  }
+
+  .shifts-waiting--quiet .shifts-waiting__label {
+    color: var(--ui-text-2);
+    font-weight: 400;
+  }
+
+  .shifts-waiting--quiet .shifts-waiting__dot {
+    border: 1.5px solid var(--ui-text-3);
+    background: transparent;
+  }
+
+  /* ---------------------------------------------------- «Сейчас на смене» */
+
+  .shifts-now-line {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 12px;
+    min-height: 36px;
+    margin: 0;
+    color: var(--ui-text-2);
+    font-size: var(--ui-fs-15);
+    line-height: var(--ui-lh-15);
+  }
+
+  .shifts-now-line__dot {
+    flex: none;
+    width: 8px;
+    height: 8px;
+    border: 1.5px solid var(--ui-text-3);
+    border-radius: 50%;
+  }
+
+  .shifts-now-line__sep {
+    margin: 0 8px;
+    color: var(--ui-text-3);
+  }
+
+  /* The last shift opens its review: a quiet underline says so. */
+  .shifts-now-line__link {
+    color: var(--ui-text-2);
+    text-decoration: underline;
+    text-decoration-color: var(--ui-line-strong);
+    text-underline-offset: 3px;
+  }
+
+  .shifts-now-line__link:hover {
+    color: var(--ui-text);
+    text-decoration-color: currentColor;
+  }
+
+  .shifts-card-note {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--ui-text-3);
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+    white-space: nowrap;
+  }
+
+  .shifts-now {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .shifts-now > li + li {
+    border-top: 1px solid var(--ui-line-soft);
+  }
+
+  .shifts-now__row {
+    display: grid;
+    grid-template-columns: minmax(180px, 1.4fr) minmax(210px, 1.2fr) repeat(3, minmax(150px, 1fr)) 20px;
+    align-items: center;
+    gap: 24px;
+    min-height: 64px;
+    padding: 10px 20px 10px 24px;
+    color: var(--ui-text);
+    font-size: var(--ui-fs-15);
+    line-height: var(--ui-lh-15);
+    text-decoration: none;
+    transition: background-color var(--ui-fast);
+  }
+
+  .shifts-now > li:last-child .shifts-now__row {
+    border-radius: 0 0 var(--ui-radius-lg) var(--ui-radius-lg);
+  }
+
+  .shifts-now__row:hover {
+    background: var(--ui-hover-soft);
+  }
+
+  .shifts-now__row:hover .ui-person__name {
+    text-decoration: underline;
+    text-decoration-color: var(--ui-line-strong);
+    text-underline-offset: 3px;
+  }
+
+  .shifts-now__who,
+  .shifts-now__since {
+    min-width: 0;
+  }
+
+  .shifts-now__since {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+
+  .shifts-now__sep {
+    margin: 0 8px;
+    color: var(--ui-text-3);
+  }
+
+  .shifts-now__fact {
+    display: inline-flex;
+    align-items: baseline;
+    justify-content: flex-end;
+    gap: 6px;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+
+  .shifts-now__unit {
+    color: var(--ui-text-2);
+    font-size: var(--ui-fs-14);
+  }
+
+  .shifts-now__waiting {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 6px;
+  }
+
+  .shifts-now__go {
+    color: var(--ui-text-3);
+  }
+
+  /* A narrower window: the columns shrink, each fact's word goes under its number. */
+  @media (max-width: 1320px) {
+    .shifts-now__row {
+      grid-template-columns: minmax(0, 1.2fr) minmax(0, 1.4fr) repeat(3, minmax(0, 1fr)) 20px;
+      gap: 16px;
+    }
+
+    .shifts-now__fact,
+    .shifts-now__waiting {
+      flex-direction: column;
+      align-items: flex-end;
+      gap: 0;
+    }
+
+    .shifts-now__unit {
+      font-size: var(--ui-fs-13);
+      line-height: var(--ui-lh-13);
+    }
+  }
+
+  .shifts-now__row:hover .shifts-now__go {
+    color: var(--ui-text);
+  }
+
+  /* ---------------------------------------------------------- The grid */
+
+  /*
+   * The day columns (all but the name and the last two, «За неделю» and «В час»)
+   * stand a little closer: a past week of four-figure days fits 1440 whole.
+   */
+  .shifts-grid :is(th, td):not(:first-child):nth-last-child(n + 3) {
+    padding-right: 12px;
+    padding-left: 12px;
+  }
+
+  .shifts-grid__head {
+    display: inline-flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 0;
+    line-height: var(--ui-lh-14);
+    white-space: nowrap;
+  }
+
+  .shifts-grid__head-sub {
+    color: var(--ui-text-3);
+    font-weight: 400;
+  }
+
+  .shifts-grid__head--today,
+  .shifts-grid__head--today .shifts-grid__head-sub {
+    color: var(--ui-text);
+    font-weight: 600;
+  }
+
+  .shifts-grid__none {
+    color: var(--ui-text-3);
+  }
+
+  .shifts-grid__team {
+    display: inline-flex;
+    flex-direction: column;
+    min-width: 0;
+  }
+
+  .shifts-grid__team-name {
+    color: var(--ui-text);
+    font-weight: 600;
+  }
+
+  .shifts-grid__team-hint {
+    color: var(--ui-text-2);
+    font-weight: 400;
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+    white-space: nowrap;
+  }
+
+  /* A cell that opens a shift: the number itself is the button, a quiet ground on hover. */
+  .shifts-cell {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin: -6px -8px;
+    padding: 6px 8px;
+    border: 0;
+    border-radius: var(--ui-radius-sm);
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    font-variant-numeric: tabular-nums;
+    text-decoration: none;
+    cursor: pointer;
+    transition: background-color var(--ui-fast);
+  }
+
+  .shifts-cell:hover,
+  .shifts-cell[aria-expanded="true"] {
+    background: var(--ui-active);
+  }
+
+  .shifts-stack {
+    display: inline-flex;
+    flex-direction: column;
+    align-items: flex-end;
+  }
+
+  .shifts-stack__sub {
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+  }
+
+  /* ------------------------------------------------------- The journal */
+
+  /* The shift's day on the name's line, its hours under it, like the pages under the name. */
+  .shifts-journal__when {
+    display: inline-flex;
+    flex-direction: column;
+    white-space: nowrap;
+  }
+
+  .shifts-journal__day {
+    color: var(--ui-text);
+  }
+
+  .shifts-journal__span {
+    color: var(--ui-text-2);
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .shifts-journal__span--now {
+    color: var(--ui-good-text);
+  }
+
+  .shifts-journal__pages {
+    white-space: nowrap;
+  }
+
+  .shifts-journal__page--quiet {
+    color: var(--ui-text-3);
+  }
+
+  /* Sales another chatter's shift holds too: a dotted line says there is more on hover. */
+  .shifts-journal__shared {
+    text-decoration: underline dotted;
+    text-decoration-color: var(--ui-line-strong);
+    text-underline-offset: 4px;
+  }
+
+  .shifts-skeleton-cell {
+    display: inline-flex;
+    align-items: center;
+    height: 24px;
+  }
+
+  .shifts-more {
+    display: flex;
+    justify-content: center;
+    padding-top: 12px;
+  }
+
+  /* ------------------------------------------------- The foot of the screen */
+
+  .shifts-foot {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .shifts-authors {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 12px;
+    margin: 0;
+    color: var(--ui-text-2);
+    font-size: var(--ui-fs-15);
+    line-height: var(--ui-lh-15);
+  }
+
+  .shifts-authors__dot {
+    flex: none;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--ui-text-3);
+  }
+
+  .shifts-authors--warn {
+    color: var(--ui-text);
+  }
+
+  .shifts-authors--warn .shifts-authors__dot {
+    background: var(--ui-warn);
+  }
+
+  .shifts-authors__more {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: var(--ui-text);
+    font: inherit;
+    text-decoration: underline;
+    text-decoration-color: var(--ui-line-strong);
+    text-underline-offset: 3px;
+    cursor: pointer;
+  }
+
+  .shifts-authors__more:hover {
+    text-decoration-color: currentColor;
+  }
+
+  .shifts-authors__cell {
+    display: inline-flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 8px;
+  }
+
+  /* One author a line, always. */
+  .shifts-authors__who {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .shifts-authors__author {
+    white-space: nowrap;
+  }
+
+  .shifts-drawer {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+  }
+
+  .shifts-drawer__lead {
+    margin: 0;
+    color: var(--ui-text-2);
+    font-size: var(--ui-fs-15);
+    line-height: var(--ui-lh-15);
+  }
+
+  .shifts-drawer__hint {
+    margin: 0;
+    color: var(--ui-text-3);
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+  }
+
+  .shifts-drawer__title {
+    margin: 0 0 12px;
+    color: var(--ui-text);
+    font-size: var(--ui-fs-16);
+    line-height: var(--ui-lh-16);
+    font-weight: 600;
+  }
+
+  .shifts-how p {
+    margin: 0 0 12px;
+    color: var(--ui-text-2);
+    font-size: var(--ui-fs-15);
+    line-height: var(--ui-lh-read);
+  }
+
+  .shifts-how p:last-child {
+    margin-bottom: 0;
+  }
+
+  .shifts-how b {
+    color: var(--ui-text);
+    font-weight: 500;
+  }
+
+  /* The three quality numbers: one definition a line. */
+  .shifts-how__terms {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin: -4px 0 12px;
+    padding: 0;
+    list-style: none;
+    color: var(--ui-text-2);
+    font-size: var(--ui-fs-15);
+    line-height: var(--ui-lh-read);
+  }
+
+  /* ------------------------------------------- Вне смен, простой идущей смены */
+
+  .shifts-outside {
+    color: var(--ui-text-3);
+    font-size: var(--ui-fs-14);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    text-decoration: underline dotted var(--ui-line-strong);
+    text-underline-offset: 4px;
+    cursor: default;
+  }
+
+  .shifts-outside .ui-money {
+    color: var(--ui-text-2);
+  }
+
+  .shifts-outside__hint {
+    display: grid;
+    gap: 2px;
+    max-width: 300px;
+  }
+
+  .shifts-outside__hint > :first-child {
+    margin-bottom: 6px;
+  }
+
+  .shifts-outside__row {
+    display: flex;
+    justify-content: space-between;
+    gap: 16px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .shifts-outside__row--page {
+    color: var(--ui-text-3);
+  }
+
+  /* Under the time, its own line, so the facts keep their columns. */
+  .shifts-now__idle {
+    display: block;
+    max-width: 100%;
+    overflow: hidden;
+    color: var(--ui-warn-text);
+    font-size: var(--ui-fs-13);
+    line-height: var(--ui-lh-13);
+    text-overflow: ellipsis;
+  }
+}

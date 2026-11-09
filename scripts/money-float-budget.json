@@ -10,6 +10,26 @@
     "apps/runtime/src/services/telegram-report.ts": 1,
     "apps/runtime/src/sync/fansly/lib/dm-normalize.ts": 1,
     "packages/db/src/repositories/ai-usage.ts": 1,
-    "packages/db/src/repositories/message-archive.ts": 1
+    "packages/db/src/repositories/message-archive.ts": 1,
+    "packages/demo/core.ts": 1,
+    "packages/demo/fixtures/account-model.ts": 1,
+    "packages/demo/fixtures/account-stats.ts": 1,
+    "packages/demo/fixtures/account.ts": 1,
+    "packages/demo/fixtures/costs-attention-ai.ts": 12,
+    "packages/demo/fixtures/costs-attention-anthropic.ts": 1,
+    "packages/demo/fixtures/money-creator-stats.ts": 15,
+    "packages/demo/fixtures/money-insights.ts": 1,
+    "packages/demo/fixtures/money-ledger.ts": 3,
+    "packages/demo/fixtures/page-fans.ts": 2,
+    "packages/demo/fixtures/page-insights.ts": 2,
+    "packages/demo/fixtures/page-world.ts": 2,
+    "packages/demo/fixtures/settings-collection.ts": 1,
+    "packages/demo/fixtures/system-dev.ts": 1,
+    "packages/demo/fixtures/system-ofapi.ts": 4,
+    "packages/demo/fixtures/team-extra.ts": 2,
+    "packages/demo/fixtures/team-review.ts": 5,
+    "packages/demo/fixtures/team-stats.ts": 2,
+    "packages/demo/fixtures/team-world.ts": 5,
+    "packages/demo/fixtures/team.ts": 7
   }
 }

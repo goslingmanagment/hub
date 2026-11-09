@@ -1,0 +1,390 @@
+/* Решения: the few things the shared components do not say themselves. Tokens only. */
+@layer components {
+  /* A section an anchor lands on (`/decisions#held`): its title shows below the sticky header. */
+  .decisions-section {
+    scroll-margin-top: 96px;
+  }
+
+  /* The number of a queue next to its title: quiet, the same size. */
+  .decisions-count {
+    margin-left: 8px;
+    color: var(--ui-text-3);
+    font-weight: 500;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* «Ждут вашего решения: 1 спор · …»: each part goes to its section. */
+  .decisions-jump {
+    color: inherit;
+    text-decoration: underline;
+    text-decoration-color: var(--ui-line-strong);
+    text-underline-offset: 3px;
+    border-radius: var(--ui-radius-sm);
+  }
+
+  .decisions-jump:hover {
+    color: var(--ui-text);
+    text-decoration-color: currentColor;
+  }
+
+  .decisions-jump:focus-visible {
+    outline: var(--ui-focus);
+    outline-offset: 2px;
+  }
+
+  /* A quiet second line inside a cell («nova-1 · Fansly», «без отчёта 28 ч»). */
+  .decisions-sub {
+    display: block;
+    color: var(--ui-text-2);
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+  }
+
+  .decisions-fan {
+    display: block;
+    min-width: 0;
+  }
+
+  .decisions-nowrap {
+    white-space: nowrap;
+  }
+
+  /* Text a person wrote (what was ordered, why it was decided): wraps, never cut. */
+  .decisions-text {
+    display: block;
+    max-width: 72ch;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+
+  /* The «›» of a row that opens a panel: quiet, ink under the pointer and on the open row. */
+  .decisions-go {
+    display: block;
+    margin-left: auto;
+    color: var(--ui-text-3);
+    transition: color var(--ui-fast), transform var(--ui-fast);
+  }
+
+  .ui-table tr:hover .decisions-go,
+  .ui-table tr:focus-within .decisions-go,
+  .ui-table tr[aria-selected="true"] .decisions-go {
+    color: var(--ui-text);
+  }
+
+  .decisions-note {
+    margin: 0;
+    color: var(--ui-text-2);
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+  }
+
+  .decisions-fold > .ui-disclosure__body {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding-top: 12px;
+  }
+
+  .decisions-history {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  .decisions-history:empty {
+    display: none;
+  }
+
+  .decisions-empty {
+    padding: 64px 24px;
+    border: 1px solid var(--ui-line);
+    border-radius: var(--ui-radius-lg);
+    background: var(--ui-surface);
+  }
+
+  .decisions-error {
+    border: 1px solid var(--ui-line);
+    border-radius: var(--ui-radius-lg);
+    background: var(--ui-surface);
+  }
+
+  .decisions-pager {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    color: var(--ui-text-2);
+    font-size: var(--ui-fs-14);
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* ----------------------------------------------------- A dispute's panel */
+
+  .decisions-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 28px;
+  }
+
+  .decisions-panel__title {
+    margin: 0 0 8px;
+    color: var(--ui-text);
+    font-size: var(--ui-fs-15);
+    line-height: var(--ui-lh-15);
+    font-weight: 600;
+  }
+
+  /* Who claims what, and beside each one their conversation with the fan in their shift. */
+  .decisions-marks {
+    display: flex;
+    flex-direction: column;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    border-top: 1px solid var(--ui-line-soft);
+  }
+
+  .decisions-marks li {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px 16px;
+    min-height: 60px;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--ui-line-soft);
+  }
+
+  .decisions-marks__who {
+    min-width: 0;
+  }
+
+  .decisions-evidence {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--ui-accent);
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+    font-weight: 500;
+    text-decoration: none;
+    white-space: nowrap;
+    border-radius: var(--ui-radius-sm);
+  }
+
+  a.decisions-evidence:hover {
+    text-decoration: underline;
+  }
+
+  a.decisions-evidence:focus-visible {
+    outline: var(--ui-focus);
+    outline-offset: 2px;
+  }
+
+  .decisions-evidence--none {
+    color: var(--ui-text-2);
+    font-weight: 400;
+  }
+
+  /* Answers to choose from: a whole row is the target, the picked one in ink. */
+  .decisions-choices {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    min-width: 0;
+  }
+
+  .decisions-choices legend {
+    margin-bottom: 8px;
+    padding: 0;
+    color: var(--ui-text);
+    font-size: var(--ui-fs-15);
+    line-height: var(--ui-lh-15);
+    font-weight: 600;
+  }
+
+  /* Two answers side by side (a held send's resolve): the window stays short. */
+  .decisions-choices--pair {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 12px;
+  }
+
+  .decisions-choice {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 12px 16px;
+    border: 1px solid var(--ui-line-strong);
+    border-radius: var(--ui-radius);
+    background: var(--ui-surface);
+    cursor: pointer;
+    transition: background-color var(--ui-fast), border-color var(--ui-fast);
+  }
+
+  .decisions-choice:hover {
+    background: var(--ui-hover-soft);
+  }
+
+  .decisions-choice[data-picked] {
+    border-color: var(--ui-accent);
+    background: var(--ui-accent-soft);
+  }
+
+  .decisions-choice input {
+    flex: none;
+    width: 16px;
+    height: 16px;
+    margin: 3px 0 0;
+    accent-color: var(--ui-accent);
+  }
+
+  .decisions-choices:disabled .decisions-choice {
+    cursor: not-allowed;
+    opacity: 0.6;
+  }
+
+  .decisions-choice__title {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 4px 12px;
+    color: var(--ui-text);
+    font-size: var(--ui-fs-15);
+    line-height: var(--ui-lh-15);
+    font-weight: 500;
+  }
+
+  .decisions-choice__now {
+    color: var(--ui-accent);
+    font-size: var(--ui-fs-14);
+    font-weight: 500;
+  }
+
+  .decisions-choice__hint {
+    display: block;
+    margin-top: 2px;
+    color: var(--ui-text-2);
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+  }
+
+  /* ----------------------------------------------- A held send's resolve */
+
+  .decisions-resolve {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  /* The send in two columns: label over value, three short rows instead of six. */
+  .decisions-summary {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 12px 24px;
+    margin: 0;
+    padding: 16px;
+    border: 1px solid var(--ui-line-soft);
+    border-radius: var(--ui-radius);
+    background: var(--ui-hover-soft);
+  }
+
+  .decisions-summary__item {
+    min-width: 0;
+  }
+
+  .decisions-summary dt {
+    color: var(--ui-text-2);
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+  }
+
+  .decisions-summary dd {
+    margin: 2px 0 0;
+    color: var(--ui-text);
+    font-size: var(--ui-fs-15);
+    line-height: var(--ui-lh-15);
+  }
+
+  .decisions-intro {
+    margin: 0;
+    color: var(--ui-text);
+    font-size: var(--ui-fs-15);
+    line-height: var(--ui-lh-15);
+  }
+
+  .decisions-warning-line {
+    margin: 4px 0 0;
+  }
+
+  .decisions-mono {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: var(--ui-fs-14);
+    overflow-wrap: anywhere;
+  }
+
+  .decisions-missing {
+    margin-right: auto;
+    color: var(--ui-text-2);
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+  }
+
+  /* ----------------------------------------------------------- Round 2 */
+
+  /* Who claims a sale in a row: the people side by side, why it is a dispute under them. */
+  .decisions-claimants {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+  }
+
+  .decisions-people {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 20px;
+  }
+
+  /* A claimant's way to the conversation at the sale: the link, and under it which shift it opens. */
+  .decisions-evidence-box {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 2px;
+    text-align: right;
+  }
+
+  .decisions-oneside {
+    margin-top: 12px;
+  }
+
+  /* A held send's resolve takes the focus on its words, not on an answer: a stray Space picks nothing (Р-н7). */
+  .decisions-resolve:focus {
+    outline: none;
+  }
+
+  /*
+   * The first load of the queues: the rows' shape without a person's circle (the queues start with a fan or a time) and
+   * nothing in the arrow's column (Р-н5). Table draws the circle for every two-line skeleton; here it is not there.
+   */
+  .decisions-skeleton .ui-table__skeleton > .ui-skel:first-child:not(:only-child) {
+    display: none;
+  }
+
+  .decisions-skeleton td:last-child .ui-table__skeleton {
+    visibility: hidden;
+  }
+
+  /* «ещё 4 на других страницах»: a link-like button in the header's line, quiet like the line itself. */
+  .decisions-elsewhere {
+    padding: 0;
+    border: 0;
+    background: none;
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+  }
+}

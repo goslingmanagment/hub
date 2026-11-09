@@ -1,0 +1,678 @@
+/*
+ * Workboard's styles: Tailwind for layout only, on the shared design system.
+ *
+ * Tailwind's default theme is NOT loaded: no stock palette (`bg-blue-500`), no
+ * stock sizes (`text-xs` = 12 px). Only the tokens below exist, so a screen can
+ * use layout utilities (flex, grid, gap-4, p-6, w-full…) but cannot leave the
+ * design system: colours, type and radii come from packages/ui.
+ */
+@layer theme, base, ui, components, utilities;
+@import "tailwindcss/preflight.css" layer(base);
+@import "tailwindcss/utilities.css" layer(utilities);
+@import "../../../packages/ui/src/styles.css";
+
+@theme {
+  --spacing: 4px;
+
+  --breakpoint-sm: 640px;
+  --breakpoint-md: 768px;
+  --breakpoint-lg: 1024px;
+  --breakpoint-xl: 1280px;
+  --breakpoint-2xl: 1600px;
+  --breakpoint-3xl: 1880px;
+
+  --font-sans: var(--ui-font);
+  --font-weight-normal: 400;
+  --font-weight-medium: 500;
+  --font-weight-semibold: 600;
+
+  /* The scale: 13 (axes and keys only), 14 secondary, 15 body, 16 reading, 20, 24, 32. */
+  --text-13: 13px;
+  --text-13--line-height: 18px;
+  --text-14: 14px;
+  --text-14--line-height: 20px;
+  --text-15: 15px;
+  --text-15--line-height: 22px;
+  --text-16: 16px;
+  --text-16--line-height: 24px;
+  --text-20: 20px;
+  --text-20--line-height: 28px;
+  --text-24: 24px;
+  --text-24--line-height: 32px;
+  --text-32: 32px;
+  --text-32--line-height: 40px;
+
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-full: 9999px;
+
+  /* Colours: the design system's tokens under short names (text-ink-2, bg-surface, border-line…). */
+  --color-bg: var(--ui-bg);
+  --color-surface: var(--ui-surface);
+  --color-raised: var(--ui-raised);
+  --color-hover: var(--ui-hover);
+  --color-hover-soft: var(--ui-hover-soft);
+  --color-active: var(--ui-active);
+  --color-line: var(--ui-line);
+  --color-line-soft: var(--ui-line-soft);
+  --color-line-strong: var(--ui-line-strong);
+  --color-ink: var(--ui-text);
+  --color-ink-2: var(--ui-text-2);
+  --color-ink-3: var(--ui-text-3);
+  --color-accent: var(--ui-accent);
+  --color-accent-soft: var(--ui-accent-soft);
+  --color-good: var(--ui-good);
+  --color-good-text: var(--ui-good-text);
+  --color-warn: var(--ui-warn);
+  --color-warn-text: var(--ui-warn-text);
+  --color-warn-soft: var(--ui-warn-soft);
+  --color-bad: var(--ui-bad);
+  --color-bad-text: var(--ui-bad-text);
+  --color-bad-soft: var(--ui-bad-soft);
+  --color-up: var(--ui-up);
+  --color-down: var(--ui-down);
+  --color-mark: var(--ui-mark-text);
+  --color-mark-soft: var(--ui-mark-soft);
+  --color-series-1: var(--ui-series-1);
+  --color-series-2: var(--ui-series-2);
+  --color-series-3: var(--ui-series-3);
+  --color-series-4: var(--ui-series-4);
+  --color-series-5: var(--ui-series-5);
+  --color-series-6: var(--ui-series-6);
+  --color-series-compare: var(--ui-series-compare);
+  --color-transparent: transparent;
+  --color-current: currentColor;
+}
+
+/* --------------------------------------------------------------- The frame */
+
+@layer components {
+  :root {
+    --wb-side: 240px;
+    --wb-gutter: 32px;
+    --wb-bar: 72px;
+    /* A table's header sticks right under the screen's bar. */
+    --ui-sticky-top: var(--wb-bar);
+  }
+
+  @media (min-width: 1600px) {
+    :root {
+      --wb-gutter: 48px;
+    }
+  }
+
+  .wb-app {
+    display: grid;
+    grid-template-columns: var(--wb-side) minmax(0, 1fr);
+    min-height: 100vh;
+  }
+
+  /* The sidebar: the ground's colour, a hairline, full height, sticky. */
+  .wb-side {
+    position: sticky;
+    top: 0;
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    padding: 16px 12px 12px;
+    border-right: 1px solid var(--ui-line);
+    background: var(--ui-bg);
+    overflow-y: auto;
+  }
+
+  .wb-brand {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    height: 40px;
+    margin: 0 0 24px;
+    padding: 0 12px;
+    border-radius: var(--ui-radius);
+    color: var(--ui-text);
+    font-size: var(--ui-fs-16);
+    line-height: var(--ui-lh-16);
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    text-decoration: none;
+  }
+
+  .wb-brand__mark {
+    flex: none;
+    width: 24px;
+    height: 24px;
+    fill: var(--ui-text);
+  }
+
+  .wb-brand__bar {
+    fill: var(--ui-bg);
+  }
+
+  .wb-nav {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .wb-nav__item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    height: 40px;
+    padding: 0 12px;
+    border-radius: var(--ui-radius);
+    color: var(--ui-text-2);
+    font-size: var(--ui-fs-15);
+    line-height: var(--ui-lh-15);
+    font-weight: 500;
+    text-decoration: none;
+    transition: background-color var(--ui-fast), color var(--ui-fast);
+  }
+
+  .wb-nav__item:hover {
+    background: var(--ui-hover);
+    color: var(--ui-text);
+  }
+
+  .wb-nav__item[aria-current="page"] {
+    background: var(--ui-active);
+    color: var(--ui-text);
+  }
+
+  .wb-nav__icon {
+    flex: none;
+    color: var(--ui-text-3);
+  }
+
+  .wb-nav__item[aria-current="page"] .wb-nav__icon {
+    color: var(--ui-accent);
+  }
+
+  .wb-nav__label {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .wb-nav__count {
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    gap: 6px;
+  }
+
+  /* A queue of Решения that did not answer: a quiet question, not an alarm (D17). */
+  .wb-nav__unknown {
+    display: inline-grid;
+    place-items: center;
+    width: 22px;
+    height: 22px;
+    border: 1px dashed var(--ui-line-strong);
+    border-radius: 11px;
+    color: var(--ui-text-3);
+    font-size: var(--ui-fs-13);
+    line-height: 1;
+  }
+
+  .wb-nav__tip-line {
+    display: block;
+  }
+
+  .wb-nav__sep {
+    height: 1px;
+    margin: 12px 12px;
+    background: var(--ui-line);
+  }
+
+  .wb-side__foot {
+    margin-top: auto;
+    padding-top: 12px;
+    border-top: 1px solid var(--ui-line);
+  }
+
+  .wb-account {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 4px 4px 4px 12px;
+  }
+
+  .wb-account__avatar {
+    display: grid;
+    flex: none;
+    place-items: center;
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    background: var(--ui-active);
+    color: var(--ui-text-2);
+    font-size: var(--ui-fs-13);
+    font-weight: 600;
+  }
+
+  .wb-account__text {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    min-width: 0;
+  }
+
+  .wb-account__name {
+    overflow: hidden;
+    color: var(--ui-text);
+    font-size: var(--ui-fs-15);
+    line-height: var(--ui-lh-15);
+    font-weight: 500;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .wb-account__role {
+    color: var(--ui-text-3);
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+  }
+
+  /* ---------------------------------------------------------- Tiles: a screen's numbers in one row */
+
+  .wb-tiles {
+    display: grid;
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    margin: 0;
+  }
+
+  .wb-tile__tip {
+    display: block;
+    min-width: 0;
+  }
+
+  .wb-tile {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+    padding: 0 16px;
+    border-left: 1px solid var(--ui-line-soft);
+    cursor: default;
+  }
+
+  .wb-tiles > :first-child .wb-tile,
+  .wb-tiles > .wb-tile:first-child {
+    padding-left: 0;
+    border-left: 0;
+  }
+
+  .wb-tile__label {
+    overflow: hidden;
+    color: var(--ui-text-3);
+    font-size: var(--ui-fs-13);
+    line-height: var(--ui-lh-13);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .wb-tile__value {
+    margin: 0;
+    color: var(--ui-text);
+    font-size: 22px;
+    line-height: 28px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+
+  .wb-tile__value .ui-money {
+    font-weight: inherit;
+  }
+
+  /* The sales by where they came from: a hairline bar under the value, the rows in its hint. */
+  .wb-tile__bar {
+    display: flex;
+    gap: 2px;
+    height: 3px;
+    margin-top: 2px;
+    overflow: hidden;
+    border-radius: 2px;
+  }
+
+  .wb-tile__bar > i {
+    min-width: 3px;
+    border-radius: 2px;
+  }
+
+  /* A change or a second fact under the value: «−36 %», «41 ч 24 мин». */
+  .wb-tile__sub {
+    overflow: hidden;
+    color: var(--ui-text-3);
+    font-size: var(--ui-fs-13);
+    line-height: var(--ui-lh-13);
+    font-variant-numeric: tabular-nums;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  @media (max-width: 1100px) {
+    .wb-tiles {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 16px 0;
+    }
+
+    .wb-tiles > :nth-child(3n + 1) .wb-tile {
+      padding-left: 0;
+      border-left: 0;
+    }
+  }
+
+  /* ------------------------------------------------------------ The screen */
+
+  /*
+   * The working column's type (owner, 2026-11-08: «шрифты говно, куча текста»): body 14/20, secondary 13/18, the
+   * screen's title 20/28, a number 22/28; weights 400 and 600, 500 only on controls. The design system's sizes are
+   * remapped here, so every screen and every component in it takes the same scale; the sidebar keeps its own.
+   */
+  .wb-main {
+    --ui-fs-16: 14px;
+    --ui-lh-16: 20px;
+    --ui-fs-15: 14px;
+    --ui-lh-15: 20px;
+    --ui-fs-14: 13px;
+    --ui-lh-14: 18px;
+    --ui-lh-read: 20px;
+    --ui-fs-24: 20px;
+    --ui-lh-24: 28px;
+    --ui-fs-20: 16px;
+    --ui-lh-20: 24px;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    font-size: 14px;
+    line-height: 20px;
+  }
+
+  .wb-main :is(.ui-seg__item, .ui-chip, .wb-back, .ui-kbd) {
+    font-weight: 400;
+  }
+
+  .wb-main .wb-back {
+    height: var(--ui-control-sm);
+    border-color: var(--ui-line);
+  }
+
+  /* The bar with the title and the controls sticks; a hairline appears under it once the page has scrolled. */
+  .wb-header {
+    position: sticky;
+    top: 0;
+    z-index: var(--ui-z-header);
+    background: var(--ui-bg);
+    padding: 0 var(--wb-gutter);
+    animation: wb-header-line linear both;
+    animation-timeline: scroll(root);
+    animation-range: 0 16px;
+  }
+
+  @keyframes wb-header-line {
+    from {
+      box-shadow: 0 1px 0 transparent;
+    }
+    to {
+      box-shadow: 0 1px 0 var(--ui-line);
+    }
+  }
+
+  .wb-header__bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px 24px;
+    min-height: var(--wb-bar);
+    padding: 16px 0;
+  }
+
+  .wb-header__titles {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    min-width: 0;
+  }
+
+  .wb-header__title {
+    margin: 0;
+    overflow: hidden;
+    color: var(--ui-text);
+    font-size: var(--ui-fs-24);
+    line-height: var(--ui-lh-24);
+    font-weight: 600;
+    letter-spacing: -0.015em;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .wb-header__controls {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 12px;
+  }
+
+  /*
+   * The page filter's place at the right end (D15): never narrower than the closed filter (the unseen
+   * PageFilterSlot under it), its content — the filter, or the action of a screen without one — at its right edge.
+   */
+  .wb-header__slot {
+    display: inline-grid;
+    align-items: center;
+    justify-items: end;
+    /* A verb and an icon («Скопировать», «Пригласить») fit as well as the filter: the period does not move for them. */
+    min-width: 160px;
+  }
+
+  .wb-header__slot > * {
+    grid-area: 1 / 1;
+  }
+
+  /* The page filter's place on a screen without one (PageFilterSlot): kept, never seen. */
+  .wb-filter-slot {
+    display: inline-flex;
+    visibility: hidden;
+    pointer-events: none;
+  }
+
+  .wb-back {
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    gap: 6px;
+    height: var(--ui-control);
+    padding: 0 12px 0 8px;
+    border: 1px solid var(--ui-line-strong);
+    border-radius: var(--ui-radius);
+    background: var(--ui-surface);
+    color: var(--ui-text-2);
+    font-size: var(--ui-fs-15);
+    line-height: var(--ui-lh-15);
+    font-weight: 500;
+    text-decoration: none;
+    transition: background-color var(--ui-fast), color var(--ui-fast);
+  }
+
+  .wb-back:hover {
+    background: var(--ui-hover);
+    color: var(--ui-text);
+  }
+
+  .wb-meta {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px 24px;
+    padding: 0 var(--wb-gutter) 16px;
+    color: var(--ui-text-2);
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .wb-meta__left {
+    min-width: 0;
+  }
+
+  .wb-meta__quiet {
+    color: var(--ui-text-3);
+  }
+
+  .wb-fresh {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--ui-text-3);
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+    white-space: nowrap;
+  }
+
+  .wb-fresh--stale {
+    color: var(--ui-warn-text);
+  }
+
+  .wb-fresh--button {
+    margin: -4px -8px;
+    padding: 4px 8px;
+    border: 0;
+    border-radius: var(--ui-radius-sm);
+    background: transparent;
+    font: inherit;
+    cursor: pointer;
+    transition: background-color var(--ui-fast), color var(--ui-fast);
+  }
+
+  .wb-fresh--button:hover {
+    background: var(--ui-hover);
+    color: var(--ui-text);
+  }
+
+  .wb-tabs {
+    padding: 0 var(--wb-gutter);
+  }
+
+  .wb-content {
+    display: flex;
+    flex-direction: column;
+    gap: 32px;
+    width: 100%;
+    max-width: 2400px;
+    padding: 24px var(--wb-gutter) 48px;
+  }
+
+  /* A working screen that fills the window (ScreenHeader `fill`): the frame is
+     the window's height, the content takes the rest, its panes scroll inside. */
+  @media (min-width: 1101px) {
+    :root[data-ui-full-window] .wb-main {
+      height: 100dvh;
+      min-height: 640px;
+      overflow: hidden;
+    }
+
+    :root[data-ui-full-window] .wb-main > .wb-content {
+      flex: 1 1 auto;
+      min-height: 0;
+      padding-bottom: 24px;
+    }
+  }
+
+  .wb-tabs + .wb-content {
+    padding-top: 24px;
+  }
+
+  /* Long reading (a conversation, an explanation): never wider than a comfortable line. */
+  .wb-readable {
+    max-width: var(--ui-measure);
+  }
+
+  .wb-fallback {
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+    padding: 24px var(--wb-gutter);
+  }
+
+  .wb-gate {
+    display: grid;
+    place-items: center;
+    gap: 8px;
+    min-height: 100vh;
+    padding: 24px;
+    color: var(--ui-text-2);
+  }
+
+  .wb-gate[role="status"] {
+    display: flex;
+    justify-content: center;
+    gap: 12px;
+  }
+
+  /* Narrow windows: the sidebar becomes a strip on top (phones are 0 % of team work; it must only not break). */
+  @media (max-width: 960px) {
+    :root {
+      --wb-gutter: 16px;
+      --ui-sticky-top: 0px;
+    }
+
+    .wb-app {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .wb-side {
+      position: static;
+      flex-direction: row;
+      align-items: center;
+      gap: 8px;
+      height: auto;
+      padding: 8px 16px;
+      border-right: 0;
+      border-bottom: 1px solid var(--ui-line);
+      overflow-x: auto;
+    }
+
+    .wb-brand {
+      margin: 0;
+    }
+
+    .wb-brand span {
+      display: none;
+    }
+
+    .wb-nav {
+      flex-direction: row;
+    }
+
+    .wb-nav__sep {
+      width: 1px;
+      height: 24px;
+      margin: 8px 4px;
+    }
+
+    .wb-side__foot {
+      margin: 0 0 0 auto;
+      padding: 0;
+      border: 0;
+    }
+
+    .wb-account__text {
+      display: none;
+    }
+
+    .wb-header {
+      position: static;
+    }
+
+    .wb-filter-slot {
+      display: none;
+    }
+  }
+}

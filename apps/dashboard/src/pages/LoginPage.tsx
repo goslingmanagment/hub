@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useNavigate, Navigate, useSearchParams } from "react-router";
 import { useLogin, useLogout, useAuthMe } from "@/api/queries";
 import { KernelApiError } from "@/api/sdk";
-import { resolveLoginReturnPath, resolveRoleHome } from "@/lib/navigation";
+import { isWorkboardPath, resolveLoginReturnPath, resolveRoleHome } from "@/lib/navigation";
 import { clearDashboardSession } from "@/lib/queryClient";
 import { CHATTER_SITE_ORIGIN, isChatterSite, isConsoleSite } from "@/lib/sites";
 
@@ -13,6 +13,18 @@ function Wordmark() {
   return isChatterSite()
     ? <><span>Chat</span>Goose</>
     : <><span>Agency</span>Hub</>;
+}
+
+/** Back to Workboard after the sign-in: another app on this host, so a page load. */
+function LeaveFor({ href }: { href: string }) {
+  useEffect(() => {
+    window.location.replace(href);
+  }, [href]);
+  return (
+    <div className="entry-screen">
+      <div role="status" className="text-sm text-text-secondary">Открываем Workboard…</div>
+    </div>
+  );
 }
 
 export function LoginPage() {
@@ -51,7 +63,8 @@ export function LoginPage() {
   }
 
   if (auth?.user && !authQuery.isError && !turnedAway) {
-    return <Navigate to={resolveRoleHome(auth.user.role, returnTo)} replace />;
+    const home = resolveRoleHome(auth.user.role, returnTo);
+    return isWorkboardPath(home) ? <LeaveFor href={home} /> : <Navigate to={home} replace />;
   }
 
   function handleSubmit(e: FormEvent) {
@@ -65,7 +78,9 @@ export function LoginPage() {
           // Turned away above, once the session it has just made is read back.
           if (isConsoleSite() && state.user.role === "chatter") return;
           setWasTurnedAway(false);
-          navigate(resolveRoleHome(state.user.role, returnTo), { replace: true });
+          const home = resolveRoleHome(state.user.role, returnTo);
+          if (isWorkboardPath(home)) window.location.replace(home);
+          else navigate(home, { replace: true });
         },
         onSettled: () => { submitting.current = false; },
       },

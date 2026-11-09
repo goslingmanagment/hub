@@ -7,10 +7,11 @@ const apiProxyTarget = process.env.VITE_API_PROXY_TARGET ?? "http://127.0.0.1:30
 
 export default defineConfig(({ mode }) => {
   // `vite --mode demo` (pnpm dev:demo): the console with invented data and no
-  // hub behind it — see demo/core.ts. Imported lazily so no other mode loads it.
+  // hub behind it — see packages/demo/core.ts (one harness and one set of
+  // fixtures with Workboard). Imported lazily so no other mode loads it.
   const demo = mode === "demo";
   const plugins: PluginOption[] = [react(), tailwindcss()];
-  if (demo) plugins.push(import("./demo/plugin.ts").then((module) => module.demoApi()));
+  if (demo) plugins.push(import("../../packages/demo/plugin.ts").then((module) => module.demoApi()));
 
   return {
     plugins,
@@ -20,6 +21,8 @@ export default defineConfig(({ mode }) => {
         "@agency_hub_core/shared": resolve(__dirname, "../../packages/shared/src/browser.ts"),
         "@agency_hub_core/contracts": resolve(__dirname, "../../packages/contracts/src/index.ts"),
         "@kernel/sdk": resolve(__dirname, "../../packages/sdk/src/index.ts"),
+        // The shared design system and helpers (packages/ui): format, plural, theme, the Hub client.
+        "@agency_hub_core/ui": resolve(__dirname, "../../packages/ui/src"),
       },
     },
     server: {

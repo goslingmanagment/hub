@@ -14,6 +14,8 @@ DEPENDENCY_MANIFEST_FILES=(
   packages/fansly/package.json
   packages/platform-core/package.json
   packages/shared/package.json
+  apps/workboard/package.json
+  packages/ui/package.json
 )
 
 calculate_dependency_checksum() (

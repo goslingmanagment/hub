@@ -207,6 +207,17 @@ export function resolveLoginReturnPath(value: string | null | undefined): string
   return value;
 }
 
+/**
+ * Workboard: another app on this host (`/workboard/`, served by Hub beside the
+ * console). Its sign-in is this one, and a `next` into it is opened with a page
+ * load: the console's router has no such route. Only these paths, and only
+ * after `resolveLoginReturnPath` has checked they are paths of this host.
+ */
+export function isWorkboardPath(path: string): boolean {
+  const pathname = path.split(/[?#]/)[0] ?? "";
+  return pathname === "/workboard" || pathname.startsWith("/workboard/");
+}
+
 export function buildLoginRoute(returnTo: string): string {
   const target = resolveLoginReturnPath(returnTo);
   return target === "/" ? "/login" : `/login?${new URLSearchParams({ next: target }).toString()}`;
