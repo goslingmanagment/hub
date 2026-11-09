@@ -11,16 +11,20 @@ import { ScreenHeader } from "@/shared/ScreenHeader";
 import { copySheet } from "./copy";
 import { rangeWords } from "./range";
 import { PayoutDrawer, SheetDayTable } from "./PayoutDrawer";
+import { LedgerPayouts, LedgerPersonDrawer, LedgerSkeleton } from "./LedgerPayouts";
+import { useLedgerPayouts } from "./ledger";
 import { usePayouts, CONFIRM_MAX_DAYS, EXPORT_MAX_DAYS, type PayoutChatter, type PayoutsView } from "./data";
 import "./payouts.css";
 
 /**
- * Выплаты (spec §4.7): confirmed sales per chatter for the payout sheet, for
- * the app's one period; who has not confirmed, with the sales at stake. Every
- * page, on purpose: the export is never cut by a page filter (the console's
- * rule, TeamPayoutsPage.tsx:28-33), so this screen has none. A row opens the
- * chatter's panel (`?chatter=`): their days, their block to copy, their shifts
- * without a confirmation, their own amounts.
+ * Выплаты (spec §4.7). For the owner, first the agency ledger's numbers (ledger
+ * release 2): what each person accrued and was paid in the period and what the
+ * agency owes them now (`?person=` opens one). Then, folded, the payout sheet's
+ * export from the shift reports — the screen's whole content for a team lead,
+ * or while the ledger does not answer: confirmed sales per chatter, who has not
+ * confirmed, with the sales at stake. Every page, on purpose: the export is
+ * never cut by a page filter (the console's rule, TeamPayoutsPage.tsx:28-33),
+ * so this screen has none. A row opens the chatter's panel (`?chatter=`).
  */
 
 /** «3 строки» */
@@ -155,7 +159,22 @@ export function PayoutsScreen() {
   const { spec, period, setPeriod } = usePeriod();
   const [search, setSearch] = useSearchParams();
   const payouts = usePayouts(period);
+  const ledger = useLedgerPayouts(period);
   const { view, exported, problem } = payouts;
+  // The ledger's numbers lead; the shift reports fold under them.
+  const ledgerFirst = ledger.asked && !ledger.unavailable;
+  const personSlug = search.get("person");
+  const openPerson = ledger.view?.rows.find((row) => row.person.slug === personSlug) ?? null;
+  const setPerson = (slug: string | null) => setSearch((current) => {
+    const next = new URLSearchParams(current);
+    if (slug === null) next.delete("person");
+    else next.set("person", slug);
+    return next;
+  });
+  const refreshAll = () => {
+    payouts.refetch();
+    if (ledger.asked) void ledger.query.refetch();
+  };
   const chatterName = search.get("chatter");
   const openChatter = view?.chatters.find((chatter) => chatter.username === chatterName) ?? null;
   const setChatter = (username: string | null) => setSearch((current) => {
@@ -202,110 +221,129 @@ export function PayoutsScreen() {
     },
   ].filter((one) => one !== false) : [];
 
+  // A verb and an icon (D15): what is copied is in the hint.
+  const copyButton = (
+    <Tooltip content={why ?? "Скопировать для таблицы выплат: блок на чаттера, дни столбцами, Fansly до цента, OnlyFans целыми долларами"} align="end">
+      <Button variant={ledgerFirst ? "secondary" : "primary"} icon={Copy} disabled={why !== null} onClick={copyAll}>
+        Скопировать
+      </Button>
+    </Tooltip>
+  );
+
+  const reports = problem !== null ? (
+      <EmptyState
+        title={problem}
+        className="payouts-empty"
+        action={<Button onClick={() => setPeriod({ kind: "days", days: 30 })}>Показать последние 30 дней</Button>}
+      >
+        Таблица выплат берёт до {EXPORT_MAX_DAYS} дня подряд: неделя, 14 и 30 дней подходят всегда.
+      </EmptyState>
+    ) : view === null ? (
+      payouts.loading
+        ? <Table label="Выплаты по чаттерам" columns={SKELETON_COLUMNS} rows={[]} rowKey={() => ""} loading skeletonRows={5} skeletonLines={2} />
+        : <ErrorState onRetry={payouts.refetch} retrying={exported.isFetching} />
+    ) : (
+      <>
+        {/*
+          The notices and the table as one block: a fitted table (Table «fit») makes the block's notices end where the table
+          ends (`--ui-section-fit`), so a notice never runs 500 px past the table it is about (В-н6).
+        */}
+        <div className="ui-section payouts-main">
+          <div className="payouts-notices">
+            {exported.isError && <Notice tone="warning" role="alert" action={<Button size="sm" onClick={payouts.refetch}>Повторить</Button>}>Не удалось обновить: показаны прежние суммы, копировать их нельзя.</Notice>}
+            {/* Two things left out of the copy, one notice: each line with its own way on (В4). */}
+            {warnings.length > 0 && (
+              <Notice tone="warning">
+                <ul className="payouts-warnings">
+                  {warnings.map((one) => <li key={one.key}><span>{one.text}</span>{one.action}</li>)}
+                </ul>
+              </Notice>
+            )}
+            {confirmedNone && (
+              <Notice title="Ни одной подтверждённой смены">
+                Копировать пока нечего: продажи смен ждут подтверждения чаттеров.
+              </Notice>
+            )}
+          </div>
+
+          {view.chatters.length === 0 ? (
+            <EmptyState title="За эти дни смен нет" className="payouts-empty">
+              Ни подтверждённых отчётов, ни смен без подтверждения за {formatDayRange(view.from, view.to)}.
+            </EmptyState>
+          ) : (
+            <SummaryTable view={view} onOpen={setChatter} selected={openChatter?.username ?? null} />
+          )}
+        </div>
+
+        <div className="payouts-folds">
+          {view.sheet.length > 0 && (
+            <Disclosure size="md" summary="Вся выгрузка по дням" hint={`${linesWord(view.sheet.length)} · по дням, как в таблице выплат`} className="payouts-fold">
+              <SheetDayTable sheet={view.sheet} days={view.days} withChatter />
+            </Disclosure>
+          )}
+          {ownAll.length > 0 && (
+            <Disclosure size="md" summary="Своя сумма вместо суммы Hub" hint={String(ownAll.length)} className="payouts-fold">
+              <p className="payouts-note">Чаттер записал продажу «моё» с суммой меньше, чем у Hub. В выгрузку идёт его сумма.</p>
+              <OwnAmountsTable own={ownAll} />
+            </Disclosure>
+          )}
+          {view.lateChanges.length > 0 && (
+            <div ref={lateRef} className="payouts-anchor">
+              <Disclosure size="md" summary="Что изменилось" hint={String(view.lateChanges.length)} className="payouts-fold" open={lateOpen} onOpenChange={setLateOpen}>
+                <LateChangesTable changes={view.lateChanges} />
+              </Disclosure>
+            </div>
+          )}
+          <Disclosure summary="Как это считается">
+            <p>
+              Чаттеры отмечают продажи своих смен в кабинете («моё», «делим», «не моё») и подтверждают отчёт. Сумма чаттеру
+              записывается один раз, когда он подтверждает смену, — на день его смены (тот, на который пришлась большая её часть,
+              как в таблице выплат), и потом не переезжает; «делим» — пополам, на день первого подтверждения; решение спора
+              заменяет прежние суммы продажи.
+            </p>
+            <p>
+              «Ждут подтверждения» — продажи смен без подтверждения по данным Hub, до отметок чаттера: столько стоит на кону, в
+              выгрузку они не входят. Подтвердить смену можно {CONFIRM_MAX_DAYS} дней.
+            </p>
+            <p>Выгрузка всегда по всем страницам: фильтр страницы её не меняет. Fansly — до цента, OnlyFans — целыми долларами.</p>
+          </Disclosure>
+        </div>
+      </>
+  );
+
   return (
     <>
       <ScreenHeader
         title="Выплаты"
         period
-        actions={(
-          // A verb and an icon in the filter's place (D15): the period stands where it stands on every screen; what is copied is in the
-          // line under the title and in the hint.
-          <Tooltip content={why ?? "Скопировать для таблицы выплат: блок на чаттера, дни столбцами, Fansly до цента, OnlyFans целыми долларами"} align="end">
-            <Button variant="primary" icon={Copy} disabled={why !== null} onClick={copyAll}>
-              Скопировать
-            </Button>
-          </Tooltip>
-        )}
-        meta={words
-          ? <>Подтверждённые продажи за {words.range}{words.note}, все страницы. Копируется в формате таблицы выплат.</>
-          : <>Подтверждённые продажи за {period.label}, все страницы. Копируется в формате таблицы выплат.</>}
-        updatedAt={exported.dataUpdatedAt}
-        onRefresh={payouts.refetch}
-        refreshing={exported.isFetching}
+        actions={ledgerFirst ? undefined : copyButton}
+        meta={ledgerFirst ? undefined : words
+          ? <>Подтверждённые продажи за {words.range}{words.note}, все страницы</>
+          : <>Подтверждённые продажи за {period.label}, все страницы</>}
+        updatedAt={ledgerFirst ? ledger.query.dataUpdatedAt : exported.dataUpdatedAt}
+        onRefresh={refreshAll}
+        refreshing={exported.isFetching || ledger.query.isFetching}
       />
       <div className="wb-content">
-        {problem !== null ? (
-          <EmptyState
-            title={problem}
-            className="payouts-empty"
-            action={<Button onClick={() => setPeriod({ kind: "days", days: 30 })}>Показать последние 30 дней</Button>}
-          >
-            Таблица выплат берёт до {EXPORT_MAX_DAYS} дня подряд: неделя, 14 и 30 дней подходят всегда.
-          </EmptyState>
-        ) : view === null ? (
-          payouts.loading
-            ? <Table label="Выплаты по чаттерам" columns={SKELETON_COLUMNS} rows={[]} rowKey={() => ""} loading skeletonRows={5} skeletonLines={2} />
-            : <ErrorState onRetry={payouts.refetch} retrying={exported.isFetching} />
-        ) : (
-          <>
-            {/*
-              The notices and the table as one block: a fitted table (Table «fit») makes the block's notices end where the table
-              ends (`--ui-section-fit`), so a notice never runs 500 px past the table it is about (В-н6).
-            */}
-            <div className="ui-section payouts-main">
-              <div className="payouts-notices">
-                {exported.isError && <Notice tone="warning" role="alert" action={<Button size="sm" onClick={payouts.refetch}>Повторить</Button>}>Не удалось обновить: показаны прежние суммы, копировать их нельзя.</Notice>}
-                {/* Two things left out of the copy, one notice: each line with its own way on (В4). */}
-                {warnings.length > 0 && (
-                  <Notice tone="warning">
-                    <ul className="payouts-warnings">
-                      {warnings.map((one) => <li key={one.key}><span>{one.text}</span>{one.action}</li>)}
-                    </ul>
-                  </Notice>
-                )}
-                {confirmedNone && (
-                  <Notice title="Чаттеры ещё не подтвердили ни одной смены за эти дни">
-                    Копировать пока нечего. Продажи их смен по данным Hub — в столбце «Ждут подтверждения»; в выгрузку они попадут, когда чаттер
-                    подтвердит смену в кабинете.
-                  </Notice>
-                )}
-              </div>
-
-              {view.chatters.length === 0 ? (
-                <EmptyState title="За эти дни смен нет" className="payouts-empty">
-                  Ни подтверждённых отчётов, ни смен без подтверждения за {formatDayRange(view.from, view.to)}.
-                </EmptyState>
-              ) : (
-                <SummaryTable view={view} onOpen={setChatter} selected={openChatter?.username ?? null} />
-              )}
+        {ledger.asked && (
+          ledger.view ? (
+            <div className="payouts-ledger">
+              <LedgerPayouts view={ledger.view} selected={openPerson?.person.slug ?? null} onOpen={setPerson} />
             </div>
-
-            <div className="payouts-folds">
-              {view.sheet.length > 0 && (
-                <Disclosure size="md" summary="Вся выгрузка по дням" hint={`${linesWord(view.sheet.length)} · по дням, как в таблице выплат`} className="payouts-fold">
-                  <SheetDayTable sheet={view.sheet} days={view.days} withChatter />
-                </Disclosure>
-              )}
-              {ownAll.length > 0 && (
-                <Disclosure size="md" summary="Своя сумма вместо суммы Hub" hint={String(ownAll.length)} className="payouts-fold">
-                  <p className="payouts-note">Чаттер записал продажу «моё» с суммой меньше, чем у Hub. В выгрузку идёт его сумма.</p>
-                  <OwnAmountsTable own={ownAll} />
-                </Disclosure>
-              )}
-              {view.lateChanges.length > 0 && (
-                <div ref={lateRef} className="payouts-anchor">
-                  <Disclosure size="md" summary="Что изменилось" hint={String(view.lateChanges.length)} className="payouts-fold" open={lateOpen} onOpenChange={setLateOpen}>
-                    <LateChangesTable changes={view.lateChanges} />
-                  </Disclosure>
-                </div>
-              )}
-              <Disclosure summary="Как это считается">
-                <p>
-                  Чаттеры отмечают продажи своих смен в кабинете («моё», «делим», «не моё») и подтверждают отчёт. Сумма чаттеру
-                  записывается один раз, когда он подтверждает смену, — на день его смены (тот, на который пришлась большая её часть,
-                  как в таблице выплат), и потом не переезжает; «делим» — пополам, на день первого подтверждения; решение спора
-                  заменяет прежние суммы продажи.
-                </p>
-                <p>
-                  «Ждут подтверждения» — продажи смен без подтверждения по данным Hub, до отметок чаттера: столько стоит на кону, в
-                  выгрузку они не входят. Подтвердить смену можно {CONFIRM_MAX_DAYS} дней.
-                </p>
-                <p>Выгрузка всегда по всем страницам: фильтр страницы её не меняет. Fansly — до цента, OnlyFans — целыми долларами.</p>
-              </Disclosure>
-            </div>
-          </>
+          ) : ledger.loading ? <div className="payouts-ledger"><LedgerSkeleton /></div>
+            : ledger.unavailable ? <Notice tone="warning">Ledger не ответил: ниже — только отчёты смен.</Notice>
+              : ledger.query.isError ? <ErrorState onRetry={() => void ledger.query.refetch()} retrying={ledger.query.isFetching} /> : null
         )}
+        {ledgerFirst ? (
+          <Disclosure size="md" summary="Отчёты смен" hint={rows > 0 ? `выгрузка для таблицы, ${linesWord(rows)}` : "выгрузка для таблицы выплат"} className="payouts-fold payouts-reports">
+            <div className="payouts-reports__body">
+              <div className="payouts-reports__actions">{copyButton}</div>
+              {reports}
+            </div>
+          </Disclosure>
+        ) : reports}
       </div>
+      {openPerson && ledger.view && <LedgerPersonDrawer key={openPerson.person.slug} row={openPerson} view={ledger.view} onClose={() => setPerson(null)} />}
       {openChatter && view && words && (
         <PayoutDrawer
           key={openChatter.username}

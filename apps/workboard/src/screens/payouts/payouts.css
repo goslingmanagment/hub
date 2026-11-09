@@ -198,4 +198,124 @@
   .ui-table tfoot .payouts-sub {
     font-weight: 400;
   }
+
+  /* ------------------------------------------------------ From the ledger */
+
+  /* A person's days of the period, a cell each: paid — quiet ink, owed — amber, nothing — a hairline box. */
+  .payouts-strip {
+    display: inline-flex;
+    flex-wrap: nowrap;
+    gap: 3px;
+    max-width: 100%;
+    vertical-align: middle;
+  }
+
+  .payouts-strip__day {
+    display: inline-block;
+    width: 10px;
+    height: 18px;
+    border-radius: 3px;
+    background: var(--ui-line-soft);
+    box-shadow: inset 0 0 0 1px var(--ui-line);
+  }
+
+  .payouts-strip__day--paid {
+    background: var(--ui-text-3);
+    box-shadow: none;
+  }
+
+  .payouts-strip__day--owed {
+    background: var(--ui-warn);
+    box-shadow: none;
+  }
+
+  .payouts-strip__day--future {
+    background: transparent;
+    box-shadow: inset 0 0 0 1px var(--ui-line-soft);
+  }
+
+  .payouts-legend {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 20px;
+    margin: 0;
+    color: var(--ui-text-2);
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+  }
+
+  .payouts-legend > span {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .payouts-legend .payouts-strip__day {
+    width: 8px;
+    height: 12px;
+  }
+
+  .payouts-legend__fresh {
+    margin-left: auto;
+  }
+
+  /* A debt waiting more than a week, and the sheet that disagrees with the ledger. */
+  .payouts-late {
+    color: var(--ui-warn-text);
+    font-weight: 600;
+  }
+
+  .payouts-drift {
+    color: var(--ui-warn-text);
+  }
+
+  .payouts-ledger {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  .payouts-reports {
+    margin-top: 16px;
+  }
+
+  .payouts-reports__body {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    padding-top: 4px;
+  }
+
+  .payouts-reports__actions {
+    display: flex;
+  }
+
+  /* The ledger's four numbers stay one row down to a phone (the app's 3-a-row would leave the fourth alone). */
+  @media (max-width: 1100px) and (min-width: 641px) {
+    .payouts-ledger .wb-tiles {
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+
+    .payouts-ledger .wb-tiles > :nth-child(3n + 1) .wb-tile {
+      padding-left: 16px;
+      border-left: 1px solid var(--ui-line-soft);
+    }
+
+    .payouts-ledger .wb-tiles > :first-child .wb-tile {
+      padding-left: 0;
+      border-left: 0;
+    }
+  }
+
+  /* A month of days fits a narrower table. */
+  @media (max-width: 1300px) {
+    .payouts-strip {
+      gap: 2px;
+    }
+
+    .payouts-strip .payouts-strip__day {
+      width: 8px;
+    }
+  }
 }
