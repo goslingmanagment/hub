@@ -67,7 +67,7 @@ const AROUND_TITLE = "До неё, без смены — продажи стра
 function deletedNote(data: TeamShiftReviewResponse): string {
   const shown = data.chats.reduce((sum, chat) => sum + chat.messages.filter((message) => message.by === "me" && message.inShift && message.deletedAt !== undefined).length, 0);
   const missing = Math.max(0, data.deleted - shown);
-  return `${formatCount(data.deleted)} сообщ. чаттера удалены после отправки — они зачёркнуты${missing > 0 ? `, у ${formatCount(missing)} нет текста, их здесь нет` : ""}; удалённые быстрее минуты не в счёте.`;
+  return `${formatCount(data.deleted)} удалены после отправки — зачёркнуты${missing > 0 ? `, у ${formatCount(missing)} нет текста` : ""}.`;
 }
 
 export function reviewHref(userId: number, at: string, keep?: URLSearchParams): string {
@@ -282,11 +282,15 @@ function ShiftReview({ userId, at }: { userId: number; at: string }) {
       ? `PPV этой смены, купленные позже ${formatMills(sum(data.laterSales))} (${[...laterBy].map(([where, net]) => `${where} ${formatMills(net)}`).join(", ")})`
       : null,
   ].filter((part) => part !== null);
+  // Everything about the money is the hint of «продажи смены»: on the page only the sum (owner, 2026-11-09: «месиво из текста»).
   const salesHint = [
-    "Продажи на страницах смены, пока смена их держала, как в «Заработке»; продажа фану, которому последним писал коллега на своей смене, — его",
-    split.bothNetMills > 0 ? `из них ${formatMills(split.bothNetMills)} засчитано и коллеге: его смена тоже держала страницу, а последним фану писал не он и не чаттер` : null,
-    split.withoutChatNetMills > 0 ? `${formatMills(split.withoutChatNetMills)} — от фанов, чьих чатов в разборе нет` : null,
-  ].filter((part) => part !== null).join("; ");
+    "Продажи на страницах смены, пока смена их держала, как в «Заработке»; продажа фану, которому последним писал коллега на своей смене, — его.",
+    totals.ppvSent > 0 ? `PPV куплено ${formatCount(totals.ppvBought)} из ${formatCount(totals.ppvSent)}.` : null,
+    split.bothNetMills > 0 ? `Из них ${formatMills(split.bothNetMills)} засчитано и коллеге: его смена тоже держала страницу, а последним фану писал не он и не чаттер.` : null,
+    split.withoutChatNetMills > 0 ? `${formatMills(split.withoutChatNetMills)} — от фанов, чьих чатов в разборе нет.` : null,
+    originParts.length > 0 ? `\nИз чего: ${originParts.join(" · ")}.` : null,
+    aroundParts.length > 0 ? `\nНе в продажах смены: ${aroundParts.join(" · ")}.` : null,
+  ].filter((part) => part !== null).join(" ");
   // Hi greetings are not replies in a conversation: the share is of the rest.
   const withText = totals.origin.ai + totals.origin.fix + totals.origin.own;
   const ongoing = shift.ongoing;
@@ -323,23 +327,12 @@ function ShiftReview({ userId, at }: { userId: number; at: string }) {
           )}
           {" · "}отработано {formatDuration(shift.workedMinutes)}
           {pauseMinutes > 0 && <> · паузы {formatDuration(pauseMinutes)}</>}
-          {totals.ppvSent > 0 && <> · PPV куплено {formatCount(totals.ppvBought)} из {formatCount(totals.ppvSent)}</>}
           {shift.salesNetMills > 0 && (
-            <span title={salesHint}>{" · "}продажи смены {formatMills(shift.salesNetMills)}</span>
+            <>{" · "}<span title={salesHint} className="sr-hinted">продажи смены {formatMills(shift.salesNetMills)}</span></>
           )}
           {shift.kind === "visit" && " · это заход, не смена"}
         </p>
-        {shift.salesNetMills > 0 && originParts.length > 0 && (
-          <p className="sr-who-line" title={ORIGIN_TITLE}>
-            <span className="team-faint">Из чего продажи смены: </span>{originParts.join(" · ")}
-          </p>
-        )}
-        {aroundParts.length > 0 && (
-          <p className="sr-who-line" title={AROUND_TITLE}>
-            <span className="team-faint">Не в продажах смены: </span>{aroundParts.join(" · ")}
-          </p>
-        )}
-        <p className="sr-who-line sr-who-pages">
+        {(shift.pages.length > 1 || shift.pages.some((page) => !page.worked)) && <p className="sr-who-line sr-who-pages">
           <span className="team-faint">Сообщений по страницам: </span>
           {shift.pages.map((page, index) => (
             <span key={page.pageLabel}>
@@ -355,60 +348,87 @@ function ShiftReview({ userId, at }: { userId: number; at: string }) {
               ))}
             </span>
           ))}
-        </p>
+        </p>}
       </div>
 
       <StatGrid>
         <Stat
           label="Сообщений фанам"
           value={formatCount(totals.messages)}
-          meta={<>
-            в {formatCount(totals.chats)} {ruPlural(totals.chats, "чате", "чатах", "чатах")}
-            {totals.chatsFanSilent > 0 && <>, из них в {formatCount(totals.chatsFanSilent)} фан в смену не писал</>}
-            {totals.perHour !== null && <> · {totals.perHour.toLocaleString("ru-RU", { maximumFractionDigits: 0 })} в час без пауз</>}
-            {totals.massMessages > 0 && <> · рассылкой ещё {formatCount(totals.massMessages)}</>}
-          </>}
+          meta={(
+            <span
+              className="sr-hinted"
+              title={[
+                totals.chatsFanSilent > 0 ? `В ${formatCount(totals.chatsFanSilent)} чатах фан в смену не писал.` : "",
+                totals.massMessages > 0 ? `Рассылкой ещё ${formatCount(totals.massMessages)} — они не в счёте.` : "",
+                "В час — на время без пауз.",
+              ].filter(Boolean).join(" ")}
+            >
+              в {formatCount(totals.chats)} {ruPlural(totals.chats, "чате", "чатах", "чатах")}
+              {totals.perHour !== null && <> · {totals.perHour.toLocaleString("ru-RU", { maximumFractionDigits: 0 })} в час</>}
+            </span>
+          )}
         />
         <Stat
           label="Ответ фану, медиана"
           value={totals.replyMedianSeconds === null ? "—" : waitText(totals.replyMedianSeconds)}
           meta={totals.replies === 0 ? "ответов не было" : (
-            <>
-              {formatCount(totals.replies)} {ruPlural(totals.replies, "ответ", "ответа", "ответов")}: до {REPLY_FAST_SECONDS / 60} мин — {formatPercent((100 * totals.repliesWithinFast) / totals.replies)}, до {REPLY_NORM_SECONDS / 60} мин — {formatPercent((100 * totals.repliesWithinNorm) / totals.replies)}
-              {totals.repliesToInherited > 0 && <> · {formatCount(totals.repliesToInherited)} — ждавшим с прошлых смен, их ожидание — с начала смены</>}
-            </>
+            <span
+              className="sr-hinted"
+              title={[
+                `${formatCount(totals.replies)} ${ruPlural(totals.replies, "ответ", "ответа", "ответов")}: до ${REPLY_FAST_SECONDS / 60} мин — ${formatPercent((100 * totals.repliesWithinFast) / totals.replies)}, до ${REPLY_NORM_SECONDS / 60} мин — ${formatPercent((100 * totals.repliesWithinNorm) / totals.replies)}.`,
+                totals.repliesToInherited > 0 ? `${formatCount(totals.repliesToInherited)} — ждавшим с прошлых смен, их ожидание — с начала смены.` : "",
+              ].filter(Boolean).join(" ")}
+            >
+              до {REPLY_NORM_SECONDS / 60} мин — {formatPercent((100 * totals.repliesWithinNorm) / totals.replies)}
+            </span>
           )}
         />
         <Stat
           label={ongoing ? "Ждут ответа сейчас" : "Без ответа к концу смены"}
           value={formatCount(totals.unanswered)}
-          meta={<>
-            фанов, писавших в смену
-            {totals.unansweredInherited > 0 && <>, из них ждали ещё с прошлых смен {formatCount(totals.unansweredInherited)}</>}
-            {totals.unansweredLate > 0 && <> · написали за последние {REPLY_NORM_SECONDS / 60} мин смены: {formatCount(totals.unansweredLate)}</>}
-            {totals.unansweredNoNeed > 0 && <> · последним было прощание, «ok» или эмодзи: {formatCount(totals.unansweredNoNeed)}</>}
-            {totals.handedOverUnanswered > 0 && <> · ещё {formatCount(totals.handedOverUnanswered)} без ответа после сообщения коллеги — не в счёте</>}
-          </>}
+          meta={(
+            <span
+              className="sr-hinted"
+              title={[
+                "Фаны, которые писали в смену и не дождались ответа до её конца.",
+                totals.unansweredInherited > 0 ? `Из них ждали ещё с прошлых смен: ${formatCount(totals.unansweredInherited)}.` : "",
+                totals.unansweredLate > 0 ? `Написали за последние ${REPLY_NORM_SECONDS / 60} мин смены: ${formatCount(totals.unansweredLate)}.` : "",
+                totals.unansweredNoNeed > 0 ? `Последним было прощание, «ok» или эмодзи: ${formatCount(totals.unansweredNoNeed)}.` : "",
+                totals.handedOverUnanswered > 0 ? `Ещё ${formatCount(totals.handedOverUnanswered)} без ответа после сообщения коллеги — не в счёте.` : "",
+              ].filter(Boolean).join(" ")}
+            >
+              фанов, писавших в смену
+            </span>
+          )}
         />
         <Stat
           label="Текст из ИИ, без Hi"
           value={withText === 0 ? "—" : formatPercent((100 * totals.origin.ai) / withText)}
-          meta={<>
-            {formatCount(totals.origin.ai)} из {formatCount(withText)} сообщ. с текстом{totals.origin.copied > 0 && <>, из них без кнопки {formatCount(totals.origin.copied)}</>}
-            {" · "}Fix своего {formatCount(totals.origin.fix)} · с ИИ не совпало {formatCount(totals.origin.own)}
-            {totals.origin.hi > 0 && <> · Hi ещё {formatCount(totals.origin.hi)}</>}
-          </>}
+          meta={(
+            <span
+              className="sr-hinted"
+              title={[
+                totals.origin.copied > 0 ? `Из текстов ИИ без кнопки вставлено ${formatCount(totals.origin.copied)}.` : "",
+                `Fix своего черновика ${formatCount(totals.origin.fix)}, с ИИ не совпало ${formatCount(totals.origin.own)}.`,
+                totals.origin.hi > 0 ? `Hi ещё ${formatCount(totals.origin.hi)} — не в доле.` : "",
+              ].filter(Boolean).join(" ")}
+            >
+              {formatCount(totals.origin.ai)} из {formatCount(withText)} сообщ. с текстом
+            </span>
+          )}
         />
       </StatGrid>
 
       <section className="card team-anchor" aria-labelledby="review-chats-title" id="review-chats">
         <header className="card-header">
           <h2 id="review-chats-title" className="card-title">Чаты смены</h2>
-          <p className="card-description">
-            ← и → — соседний чат.
-            {data.unarchived > 0 && ` ${formatCount(data.unarchived)} сообщ. чаттера ещё нет в архиве — их нет и здесь.`}
-            {data.deleted > 0 && ` ${deletedNote(data)}`}
-          </p>
+          {(data.unarchived > 0 || data.deleted > 0) && (
+            <p className="card-description" title="← и → — соседний чат">
+              {data.unarchived > 0 && `${formatCount(data.unarchived)} сообщ. чаттера ещё нет в архиве. `}
+              {data.deleted > 0 && deletedNote(data)}
+            </p>
+          )}
         </header>
         <div className="card-body">
           <ShiftChats
