@@ -34,7 +34,7 @@ function Strip({ strip }: { strip: readonly StripDay[] }) {
 
 function PersonCell({ row }: { row: LedgerRow }) {
   const { person } = row;
-  const hint = person.status === "left" ? "не работает" : person.hubUser === null ? "нет в Hub" : null;
+  const hint = person.status === "left" ? "не работает" : person.hubUser === null ? "не связан с Hub" : null;
   return <Person name={person.name} status={person.status === "left" ? "disabled" : "away"} hint={hint} />;
 }
 
@@ -42,7 +42,9 @@ function OwedCell({ row }: { row: LedgerRow }) {
   if (row.owedMills === 0n) return <span className="text-ink-3">—</span>;
   return (
     <span>
-      <Money mills={row.owedMills} strong />
+      <Money mills={row.owedMills} strong={row.owedMills > 0n} muted={row.owedMills < 0n} />
+      {/* A minus: paid ahead of the accruals, the agency owes nothing. */}
+      {row.owedMills < 0n && <span className="payouts-sub">выплачено вперёд</span>}
       {row.sheetDiffMills !== null && (
         <span className="payouts-sub payouts-drift">
           <Tooltip content="«К выплате» в таблице выплат не совпадает с подсчётом ledger: проверьте вкладку человека." align="end">
