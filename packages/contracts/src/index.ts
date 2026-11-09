@@ -15,6 +15,7 @@ export * from "./publications.ts";
 export * from "./routes-publications.ts";
 export * from "./fan-queues.ts";
 export * from "./routes-fan-queues.ts";
+export * from "./agent-team.ts";
 // «Рассылки» kept by Hub (outreach-store-v1), spread by routes.ts.
 export * from "./outreach.ts";
 export * from "./routes-outreach.ts";
