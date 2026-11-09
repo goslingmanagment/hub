@@ -224,6 +224,26 @@
     color: var(--ui-text-3);
   }
 
+  /* A narrower window: the columns shrink, each fact's word goes under its number. */
+  @media (max-width: 1320px) {
+    .shifts-now__row {
+      grid-template-columns: minmax(0, 1.2fr) minmax(0, 1.4fr) repeat(3, minmax(0, 1fr)) 20px;
+      gap: 16px;
+    }
+
+    .shifts-now__fact,
+    .shifts-now__waiting {
+      flex-direction: column;
+      align-items: flex-end;
+      gap: 0;
+    }
+
+    .shifts-now__unit {
+      font-size: var(--ui-fs-13);
+      line-height: var(--ui-lh-13);
+    }
+  }
+
   .shifts-now__row:hover .shifts-now__go {
     color: var(--ui-text);
   }
