@@ -252,6 +252,15 @@ export async function listShiftResolutions(
   ]));
 }
 
+/** Which chatters' marks of these sales their confirmed shift reports hold (`<userId>:<transactionId>`): only those are credited. */
+export async function listConfirmedMarkKeys(db: Database, input: { transactionIds: readonly number[] }): Promise<Set<string>> {
+  if (input.transactionIds.length === 0) return new Set();
+  const result = await db.execute<{ user_id: string | number; transaction_id: string | number }>(sql`
+    select r.user_id, l.transaction_id from shift_report_lines l join shift_reports r on r.id = l.report_id
+    where l.transaction_id = any(${sql.param(input.transactionIds.map(String))}::bigint[])`);
+  return new Set(result.rows.map((row) => `${Number(row.user_id)}:${Number(row.transaction_id)}`));
+}
+
 /** The role of each of these people. */
 export async function listUserRoles(db: Database, userIds: readonly number[]): Promise<Map<number, string>> {
   if (userIds.length === 0) return new Map();

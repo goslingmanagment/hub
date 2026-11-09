@@ -84,6 +84,8 @@ const agentTeamSaleSchema = z.object({
     shareWithUserId: intId.nullable(),
     /** «моё» with the chatter's own (lower) amount, mills. */
     amountMills: mills.nullable(),
+    /** The chatter's confirmed shift report holds it: only a confirmed mark is credited (a draft changes nothing). */
+    confirmed: z.boolean(),
   })),
   /** The owner's split of a disputed sale, percent per person; null — none. */
   resolution: z.array(z.object({ userId: intId, percent: z.number().int().min(0).max(100) })).nullable(),
