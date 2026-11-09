@@ -168,7 +168,15 @@ function SummaryRow({ summary, active, showPage, outside, shiftStart, ongoing, o
     : summary.openSince !== null ? `${ongoing ? "ждёт" : "ждал"} с ${momentText(summary.openSince, shiftStart)}` : "";
   return (
     <li>
-      <button type="button" className={`sr-chat${active ? " sr-chat-active" : ""}`} onClick={onPick} aria-current={active ? "true" : undefined} data-chat={chat.key}>
+      <button
+        type="button"
+        className={`sr-chat${active ? " sr-chat-active" : ""}`}
+        onClick={onPick}
+        aria-current={active ? "true" : undefined}
+        data-chat={chat.key}
+        // What the chatter's texts were made of: on hover, not a line of every card (owner, 2026-11-09).
+        title={made !== "" ? `Тексты чаттера: ${made}` : undefined}
+      >
         <span className="sr-chat-top">
           <span className="sr-chat-name">{fanName(chat)}</span>
           <span className="sr-chat-time">{slot}</span>
@@ -190,12 +198,11 @@ function SummaryRow({ summary, active, showPage, outside, shiftStart, ongoing, o
         {summary.lastFanBeforeText !== null && summary.firstMineText === null && (
           <span className="sr-chat-quote">до смены: «{clip(summary.lastFanBeforeText)}»</span>
         )}
-        {made !== "" && <span className="sr-chat-made">{made}</span>}
         <span className="sr-chat-tags">
           {summary.longestWaitSeconds !== null && summary.longestWaitSeconds > REPLY_NORM_SECONDS && (
-            <span className="sr-tag">
+            <span className="sr-tag" title={summary.longestWaitReturn !== null ? returnText(summary.longestWaitReturn, shiftStart) : undefined}>
               ждал ответа {waitText(summary.longestWaitSeconds)}{summary.longestWaitInherited && " с начала смены"}
-              {summary.longestWaitReturn !== null && ` · ${returnText(summary.longestWaitReturn, shiftStart)}`}
+              {summary.longestWaitReturn !== null && " · вернулся"}
               {summary.longestWaitAnsweredBy !== null && ` · ответил ${summary.longestWaitAnsweredBy}`}
             </span>
           )}

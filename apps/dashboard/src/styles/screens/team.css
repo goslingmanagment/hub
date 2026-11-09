@@ -448,6 +448,8 @@
   .sr-who { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 16px; margin-bottom: -8px; }
   .sr-who-name { font-size: 22px; font-weight: 600; line-height: 28px; }
   .sr-who-line { font-size: 15px; line-height: 22px; color: var(--color-text-secondary); }
+  /* A short word with the rest in its hint: dotted, as the other defined terms. */
+  .sr-hinted { text-decoration: underline dotted var(--color-text-muted); text-underline-offset: 3px; cursor: help; }
   .sr-who-pages { flex-basis: 100%; font-size: 14px; line-height: 20px; }
   .sr-bar-who { align-self: center; margin-right: 4px; font-size: 14px; line-height: 20px; color: var(--color-text-secondary); white-space: nowrap; }
   .sr-pick-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; }
@@ -517,7 +519,6 @@
     font-size: 13px; line-height: 18px; color: var(--color-text-primary);
   }
   .sr-chat-quote-mine { color: var(--color-text-secondary); }
-  .sr-chat-made { font-size: 12px; line-height: 16px; color: var(--color-text-muted); font-variant-numeric: tabular-nums; }
   .sr-chat-tags, .sr-facts { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
   .sr-chat-tags:empty { display: none; }
   .sr-tag {
