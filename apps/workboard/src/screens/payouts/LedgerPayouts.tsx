@@ -1,3 +1,4 @@
+import type { CSSProperties } from "react";
 import { ChevronRight } from "lucide-react";
 import { Button, Drawer, Facts, Money, Notice, Person, Table, Tooltip, type Column } from "@agency_hub_core/ui";
 import { formatAgo, formatDay, formatDayRange, formatTimeOfDay, formatWeekdayDay } from "@agency_hub_core/ui/format";
@@ -38,11 +39,26 @@ function PersonCell({ row }: { row: LedgerRow }) {
   return <Person name={person.name} status={person.status === "left" ? "disabled" : "away"} hint={hint} />;
 }
 
+const UNENTERED_HINT = "Дни, когда Hub видит продажи в смене человека по графику, а в его вкладке таблицы выплат пусто. В долг не входят, пока их не занесут; сумма — оценка по ставке вкладки.";
+
+/** «не занесено ≈ $648» under the debt: pay the sheet has not got yet (the days are in the hint and the panel). */
+function Unentered({ row }: { row: LedgerRow }) {
+  if (row.unenteredDays === 0) return null;
+  return (
+    <span className="payouts-sub payouts-drift">
+      <Tooltip content={<>{row.unenteredDays} дн. · {UNENTERED_HINT}</>} align="end">
+        <span>не занесено ≈ <Money mills={row.unenteredMills} /></span>
+      </Tooltip>
+    </span>
+  );
+}
+
 function OwedCell({ row }: { row: LedgerRow }) {
-  if (row.owedMills === 0n) return <span className="text-ink-3">—</span>;
+  if (row.owedMills === 0n) return row.unenteredDays > 0 ? <span><span className="text-ink-3">—</span><Unentered row={row} /></span> : <span className="text-ink-3">—</span>;
   return (
     <span>
       <Money mills={row.owedMills} strong={row.owedMills > 0n} muted={row.owedMills < 0n} />
+      <Unentered row={row} />
       {/* A minus: paid ahead of the accruals, the agency owes nothing. */}
       {row.owedMills < 0n && <span className="payouts-sub">выплачено вперёд</span>}
       {row.sheetDiffMills !== null && (
@@ -93,6 +109,12 @@ function tilesOf(view: LedgerView): Tile[] {
       sub: range,
       hint: "Выплаты, записанные в ledger на дни периода.",
     },
+    ...(view.unenteredMills > 0n ? [{
+      label: "Не занесено",
+      value: <>≈ <Money mills={view.unenteredMills} /></>,
+      sub: `${view.unenteredPeople} ${ruPlural(view.unenteredPeople, "человек", "человека", "человек")}`,
+      hint: UNENTERED_HINT,
+    }] : []),
     {
       label: "Дольше всех ждёт",
       value: view.oldest ? formatDay(view.oldest.date) : "—",
@@ -133,6 +155,7 @@ export function LedgerPayouts({ view, selected, onOpen }: { view: LedgerView; se
     { key: "go", header: <span className="ui-sr-only">Открыть</span>, width: 44, cell: () => <ChevronRight size={18} strokeWidth={1.75} aria-hidden className="payouts-go" /> },
   ];
   const collected = view.checks.lastSheetsCollectAt;
+  const tiles = tilesOf(view);
   return (
     <>
       {view.checks.stale && (
@@ -140,7 +163,10 @@ export function LedgerPayouts({ view, selected, onOpen }: { view: LedgerView; se
           Ledger давно не обновлялся{collected ? `: таблицы собраны в ${formatTimeOfDay(Date.parse(collected))}, ${formatAgo(Date.parse(collected), Date.now())}` : ""}. Суммы могут отставать.
         </Notice>
       )}
-      <Tiles tiles={tilesOf(view)} label="Выплаты за период" />
+      {/* The ledger's four or five numbers stay one row down to a phone (payouts.css). */}
+      <div style={{ "--payouts-tiles": tiles.length } as CSSProperties}>
+        <Tiles tiles={tiles} label="Выплаты за период" />
+      </div>
       {view.rows.length === 0 ? (
         <p className="payouts-note">За {formatDayRange(view.from, view.to)} ни начислений, ни долгов.</p>
       ) : (
@@ -200,6 +226,7 @@ export function LedgerPersonDrawer({ row, view, onClose }: { row: LedgerRow; vie
             { label: "Долг сейчас", value: <Money mills={row.owedMills} />, strong: true },
             ...(row.waitingDays !== null && person.oldestUnpaidDate !== null ? [{ label: "Ждёт с", value: formatDay(person.oldestUnpaidDate) }] : []),
             ...(row.sheetDiffMills !== null ? [{ label: "В таблице", value: <Money mills={row.owedMills + row.sheetDiffMills} /> }] : []),
+            ...(row.unenteredDays > 0 ? [{ label: "Не занесено", value: <>≈ <Money mills={row.unenteredMills} /></>, meta: `${row.unenteredDays} дн.`, hint: UNENTERED_HINT }] : []),
             { label: "Начислено", value: <Money mills={row.accruedMills} /> },
             { label: "Выплачено", value: <Money mills={row.paidMills} /> },
           ]}

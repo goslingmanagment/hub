@@ -32,6 +32,8 @@ interface LedgerPerson {
   openingCents: number;
   /** «К выплате» of the tab minus the ledger's debt. */
   sheetDriftCents: number;
+  /** «Не занесено»: empty days of the tab with Hub's money in the shift, their share in cents, days Hub did not prove. */
+  unentered: { days: number; cents: number; unknown: number };
 }
 
 function modelOf(pages: readonly string[]): string {
@@ -50,9 +52,10 @@ const PEOPLE: readonly LedgerPerson[] = [
     skippedPaydays: user.username === "den.s" ? 2 : 0,
     openingCents: user.username === "ivan.p" ? 4_250 : 0,
     sheetDriftCents: user.username === "kate.v" ? 1_250 : 0,
+    unentered: user.username === "olya.m" ? { days: 3, cents: 9_640, unknown: 0 } : { days: 0, cents: 0, unknown: 0 },
   })),
   // A person of the payout sheets who has no Hub login.
-  { slug: "vika", name: "Вика", aliases: [], status: "active", model: "Mia", skippedPaydays: 0, openingCents: 0, sheetDriftCents: 0 },
+  { slug: "vika", name: "Вика", aliases: [], status: "active", model: "Mia", skippedPaydays: 0, openingCents: 0, sheetDriftCents: 0, unentered: { days: 2, cents: 5_310, unknown: 1 } },
 ];
 
 const cents = (value: number) => millsToNumber(millsFromCents(value));
@@ -105,6 +108,7 @@ function personOf(person: LedgerPerson, from: string, to: string, today: string,
     toPayMills: cents(balanceCents + person.sheetDriftCents),
     oldestUnpaidDate: unpaid[0]?.date ?? null,
     unpaidDays: unpaid,
+    unentered: { days: person.unentered.days, shareMills: cents(person.unentered.cents), unknown: person.unentered.unknown },
   };
 }
 

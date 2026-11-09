@@ -40,6 +40,7 @@ function ledgerAnswer(overrides: Record<string, unknown> = {}) {
           { date: "2026-09-01", kind: "opening", unpaidMicros: 100_000_000 },
           { date: "2026-11-03", kind: "day", model: "Mia", unpaidMicros: 45_670_000 },
         ],
+        unentered: { days: 3, shareMicros: 64_120_000, unknown: 1 },
       },
       {
         slug: "kate.v",
@@ -86,9 +87,10 @@ describe("readLedgerPayouts", () => {
         { date: "2026-09-01", kind: "opening", model: null, unpaidMills: 100_000 },
         { date: "2026-11-03", kind: "day", model: "Mia", unpaidMills: 45_670 },
       ],
+      unentered: { days: 3, shareMills: 64_120, unknown: 1 },
     });
     // The slug matches a username case aside; Go's null slices are empty lists; a paid-ahead balance stays negative.
-    expect(kate).toMatchObject({ hubUser: { userId: 5, username: "Kate.V" }, aliases: [], days: [], unpaidDays: [], paidMills: 12_340, balanceMills: -1_500, toPayMills: null });
+    expect(kate).toMatchObject({ hubUser: { userId: 5, username: "Kate.V" }, aliases: [], days: [], unpaidDays: [], unentered: { days: 0, shareMills: 0, unknown: 0 }, paidMills: 12_340, balanceMills: -1_500, toPayMills: null });
     expect(result.serverNow).toBe("2026-11-09T10:00:01.000Z");
   });
 

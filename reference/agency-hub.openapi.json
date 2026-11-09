@@ -244766,6 +244766,32 @@
                               ],
                               "additionalProperties": false
                             }
+                          },
+                          "unentered": {
+                            "type": "object",
+                            "properties": {
+                              "days": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "shareMills": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "unknown": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              }
+                            },
+                            "required": [
+                              "days",
+                              "shareMills",
+                              "unknown"
+                            ],
+                            "additionalProperties": false
                           }
                         },
                         "required": [
@@ -244780,7 +244806,8 @@
                           "balanceMills",
                           "toPayMills",
                           "oldestUnpaidDate",
-                          "unpaidDays"
+                          "unpaidDays",
+                          "unentered"
                         ],
                         "additionalProperties": false
                       }
