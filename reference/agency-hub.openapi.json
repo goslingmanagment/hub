@@ -154282,13 +154282,17 @@
                                       "type": "null"
                                     }
                                   ]
+                                },
+                                "confirmed": {
+                                  "type": "boolean"
                                 }
                               },
                               "required": [
                                 "userId",
                                 "mark",
                                 "shareWithUserId",
-                                "amountMills"
+                                "amountMills",
+                                "confirmed"
                               ],
                               "additionalProperties": false
                             }

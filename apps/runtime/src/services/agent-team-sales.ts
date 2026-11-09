@@ -6,6 +6,7 @@ import {
   type AgentTeamWork,
 } from "@agency_hub_core/contracts";
 import {
+  listConfirmedMarkKeys,
   listSaleFacts,
   listSaleLastWriters,
   listShiftMarks,
@@ -71,17 +72,21 @@ export async function readAgentTeamSales(
     pageIds.length === 0 ? Promise.resolve([] as ShiftSale[]) : listShiftSales(db, { pageIds, from, to }),
   ]);
   const ids = sales.map((sale) => sale.transactionId);
-  const [facts, lastWriters, marks, resolutions] = await Promise.all([
+  const [facts, lastWriters, marks, confirmed, resolutions] = await Promise.all([
     listSaleFacts(db, { transactionIds: ids }),
     listSaleLastWriters(db, { hours: SALE_LAST_WRITER_HOURS, sales: lastWriterQuery(sales) }),
     listShiftMarks(db, { transactionIds: ids }),
+    listConfirmedMarkKeys(db, { transactionIds: ids }),
     listShiftResolutions(db, { transactionIds: ids }),
   ]);
   const factOf = new Map(facts.map((fact) => [fact.transactionId, fact]));
   const marksOf = new Map<number, AgentTeamSale["marks"]>();
   for (const mark of marks) {
     const list = marksOf.get(mark.transactionId) ?? [];
-    list.push({ userId: mark.userId, mark: mark.mark, shareWithUserId: mark.shareWithUserId, amountMills: mark.amountMills });
+    list.push({
+      userId: mark.userId, mark: mark.mark, shareWithUserId: mark.shareWithUserId, amountMills: mark.amountMills,
+      confirmed: confirmed.has(`${mark.userId}:${mark.transactionId}`),
+    });
     marksOf.set(mark.transactionId, list);
   }
 
