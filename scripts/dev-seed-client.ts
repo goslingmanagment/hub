@@ -149,6 +149,8 @@ export const DEV_SEED_BLANKED_ENV: readonly string[] = [
   "TG_READER_SESSION",
   // The always-on ChatSpace tab's screen: the seed opens no screen.
   "CHATSPACE_BROWSER_SCREEN_PASSWORD",
+  // The agency ledger's payouts key: the seed reads no ledger.
+  "LEDGER_PAYOUTS_KEY",
 ];
 
 /** Blanks DEV_SEED_BLANKED_ENV in `env`, after loadConfig merged .env into
