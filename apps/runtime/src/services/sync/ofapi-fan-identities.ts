@@ -30,7 +30,12 @@ import type { AppContext } from "../../bootstrap.ts";
 import { loadEffectiveConfig } from "../effective-config.ts";
 import { idToString } from "../ofapi-payloads.ts";
 import { resolveOfapiListNextOffset } from "../ofapi-list-pagination.ts";
-import type { OfapiClient, OfapiListPage, OfapiRequestContext } from "../ofapi.ts";
+import {
+  OFAPI_TRIAL_LINK_SUBSCRIBERS_PAGE_LIMIT,
+  type OfapiClient,
+  type OfapiListPage,
+  type OfapiRequestContext,
+} from "../ofapi.ts";
 import type { ResolvedPageContext } from "../page-context.ts";
 import { composeRequestObservers, type SyncChunkBudget } from "./chunk-budget.ts";
 import {
@@ -154,6 +159,8 @@ type LinkUsersTarget = {
   list: "subscribers" | "spenders";
   journal: LinkPageJournal;
   pathname: string;
+  /** What the walk asks for and steps by: the route's own page size. */
+  pageLimit: number;
   fetchPage: GuardedFetch;
 };
 
@@ -506,6 +513,7 @@ export async function syncOfapiFanIdentities(
         list: kind,
         journal: LINK_USERS_JOURNAL[`tracking:${kind}`],
         pathname: `/${encodeURIComponent(ofapiAccountId)}/tracking-links/${encodeURIComponent(linkId)}/${kind}`,
+        pageLimit: USERS_PAGE_LIMIT,
         fetchPage: (offset, limit) =>
           client.listTrackingLinkUsers!(requestContext, ofapiAccountId, linkId, kind, {
             limit,
@@ -522,6 +530,8 @@ export async function syncOfapiFanIdentities(
       list: "subscribers",
       journal: LINK_USERS_JOURNAL["trial:subscribers"],
       pathname: `/${encodeURIComponent(ofapiAccountId)}/trial-links/${encodeURIComponent(linkId)}/subscribers`,
+      // Not USERS_PAGE_LIMIT: this route gives 20 positions a page, see the constant.
+      pageLimit: OFAPI_TRIAL_LINK_SUBSCRIBERS_PAGE_LIMIT,
       fetchPage: (offset, limit) =>
         client.listTrialLinkSubscribers!(requestContext, ofapiAccountId, linkId, {
           limit,
@@ -586,7 +596,7 @@ export async function syncOfapiFanIdentities(
           activeOffset: offset,
         });
       }
-      const pageLimit = USERS_PAGE_LIMIT;
+      const pageLimit = target.pageLimit;
       const page = await target.fetchPage(offset, pageLimit);
       await guard.recordResponse(page);
       stats.requestsUsed += 1;

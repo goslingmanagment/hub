@@ -43,6 +43,14 @@ const OFAPI_BACKGROUND_SLOT_MAX_WAIT_MS = 10_000;
 const OFAPI_OBSERVED_RETRIES = 3;
 // fans/active hard-caps limit at 20 per the OpenAPI validation text.
 const OFAPI_FANS_PAGE_LIMIT = 20;
+/** A trial link's subscribers come 20 OnlyFans positions to a page whatever
+ * `limit` asks (the docs name no maximum), and the vendor leaves some of the
+ * 20 out: a page of 6–19 items with more to come is normal. The offset counts
+ * positions, not items received, so the step is 20 (on the 2026-10-31 backup,
+ * 768 page turns: stepping by items received only ever re-read the tail of
+ * the previous 20). Asking for 100 and stepping by 100 skipped positions
+ * 20–99 of every hundred. */
+export const OFAPI_TRIAL_LINK_SUBSCRIBERS_PAGE_LIMIT = 20;
 
 /** GETs/HEADs documented as free: they skip the accounting-readiness gate
  * (a pending receipt must not block a request that cannot charge). The media
@@ -2417,7 +2425,10 @@ export function createOfapiClient(input: {
       });
     },
     async listTrialLinkSubscribers(context, accountId, trialLinkId, params) {
-      const limit = Math.min(params.limit ?? 100, 100);
+      const limit = Math.min(
+        params.limit ?? OFAPI_TRIAL_LINK_SUBSCRIBERS_PAGE_LIMIT,
+        OFAPI_TRIAL_LINK_SUBSCRIBERS_PAGE_LIMIT,
+      );
       return observedListRequest({
         context,
         operation: "ofapi_trial_link_subscribers",
