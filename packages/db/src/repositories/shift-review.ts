@@ -70,14 +70,16 @@ export async function listShiftReviewMessages(
     /** A broadcast's message with this many words of its own or more is personal. */
     broadcastOwnWords: number;
     /**
-     * `authorless` — the text only of a page message without an author (an automated one is told by it), '' for the rest:
-     * the shift's numbers read no other text. Absent — every text.
+     * `authorless` — the text only of a page message without an author (an automated one is told by it), '' for the rest;
+     * `mine` — those and the person's own (where each came from: «ИИ без правки»): the shift's numbers read no other
+     * text. Absent — every text.
      */
-    texts?: "all" | "authorless";
+    texts?: "all" | "authorless" | "mine";
   },
 ): Promise<ShiftReviewMessageRow[]> {
   if (input.pageIds.length === 0) return [];
-  const allTexts = input.texts !== "authorless";
+  const allTexts = input.texts === undefined || input.texts === "all";
+  const mineTexts = input.texts === "mine";
   const pages = sql`${sql.param(input.pageIds.map(String))}::bigint[]`;
   const worked = sql`${sql.param(input.workedPageIds.map(String))}::bigint[]`;
   const from = sql`${input.from.toISOString()}::timestamptz`;
@@ -162,7 +164,8 @@ export async function listShiftReviewMessages(
     ),
     ${broadcastCtesSql("broadcast_msgs", { minChats: input.burstMinChats, ownWords: input.broadcastOwnWords })}
     select p.page_id, p.platform, p.conv, p.ref, p.at, p.sent,
-      case when ${allTexts}::boolean or (p.sent and a.user_id is null) then left(p.text_plain, 2000) end as text,
+      case when ${allTexts}::boolean or (p.sent and a.user_id is null) or (${mineTexts}::boolean and p.sent and a.user_id = ${input.userId})
+        then left(p.text_plain, 2000) end as text,
       case when p.sent and p.price_mills > 0 then p.price_mills end as price_mills,
       case when not p.sent and p.is_tip and p.tip_amount_mills > 0 then p.tip_amount_mills end as tip_mills,
       p.media, p.fan_native_id,

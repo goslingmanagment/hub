@@ -108,6 +108,9 @@ describe("the numbers of a chatter's shift", () => {
       replyDelays: [600],
       composed: { hand: 1, reply: 1, fix: 0, other: 0 },
       waitingAtEnd: 1,
+      // Both are the chatter's own texts («hi»): no AI text of the shift to match them.
+      textMessages: 2,
+      aiUnedited: 0,
     });
     const numbers = numbersOf([{ row, workedMinutes: 60, revenueMills: 20_000 }]);
     expect(numbers).toMatchObject({

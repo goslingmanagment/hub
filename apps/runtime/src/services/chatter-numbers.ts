@@ -177,7 +177,7 @@ export async function readShiftNumbers(
   // One query after another: the shifts are read side by side instead.
   const rows = await listShiftReviewMessages(app.db, {
     userId, pageIds, workedPageIds: input.allFansPageIds, from, to, horizonHours: SHIFT_REVIEW_WAIT_HORIZON_HOURS, burstMinChats: MASS_SEND_MIN_CHATS,
-    deletedUnseenSeconds: SHIFT_REVIEW_DELETED_UNSEEN_SECONDS, broadcastOwnWords: SHIFT_REVIEW_BROADCAST_OWN_WORDS, texts: "authorless",
+    deletedUnseenSeconds: SHIFT_REVIEW_DELETED_UNSEEN_SECONDS, broadcastOwnWords: SHIFT_REVIEW_BROADCAST_OWN_WORDS, texts: "mine",
   });
   const sends = await listShiftReviewSends(app.db, { userId, pageIds, from, to });
   const fans = await readShiftFans(app.db, { userId, pageIds, from, to, deletedUnseenSeconds: SHIFT_REVIEW_DELETED_UNSEEN_SECONDS });
