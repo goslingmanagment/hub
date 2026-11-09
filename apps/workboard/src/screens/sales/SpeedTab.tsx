@@ -259,6 +259,7 @@ export function SpeedTab() {
       <SalesHeader
         {...(lastDayOut ? { meta: `Ответы ${label}: последние сутки ещё не считаются` } : {})}
         updatedAt={query.dataUpdatedAt}
+        stale={query.isRefetchError}
         onRefresh={() => void query.refetch()}
         refreshing={query.isFetching}
       />

@@ -536,6 +536,10 @@
     white-space: nowrap;
   }
 
+  .wb-fresh--stale {
+    color: var(--ui-warn-text);
+  }
+
   .wb-fresh--button {
     margin: -4px -8px;
     padding: 4px 8px;

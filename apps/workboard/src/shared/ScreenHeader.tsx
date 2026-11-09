@@ -30,6 +30,8 @@ export interface ScreenHeaderProps {
   updatedAt?: number;
   onRefresh?: () => void;
   refreshing?: boolean;
+  /** The screen's last read again failed: «Не обновилось — данные на 23:41». */
+  stale?: boolean;
   /** Below the header line, still above the content: tabs of the screen. */
   tabs?: ReactNode;
   /**
@@ -47,7 +49,7 @@ export interface ScreenHeaderProps {
  * screen has no filter (D15), so the period stands in one spot on every screen.
  * The bar sticks while the page scrolls; the dates and «Обновлено …» stand under it.
  */
-export function ScreenHeader({ title, documentTitle, back, period = false, pageFilter = false, actions, meta, updatedAt, onRefresh, refreshing, tabs, fill = false }: ScreenHeaderProps) {
+export function ScreenHeader({ title, documentTitle, back, period = false, pageFilter = false, actions, meta, updatedAt, onRefresh, refreshing, stale = false, tabs, fill = false }: ScreenHeaderProps) {
   const { spec, period: resolved, today, setPeriod } = usePeriod();
   useFullWindow(fill);
   const name = documentTitle ?? (typeof title === "string" ? title : undefined);
@@ -90,7 +92,7 @@ export function ScreenHeader({ title, documentTitle, back, period = false, pageF
       {(meta !== undefined || dates !== null || updatedAt) && (
         <div className="wb-meta">
           <div className="wb-meta__left">{meta ?? dates}</div>
-          <Freshness updatedAt={updatedAt} {...(onRefresh ? { onRefresh } : {})} refreshing={refreshing ?? false} />
+          <Freshness updatedAt={updatedAt} {...(onRefresh ? { onRefresh } : {})} refreshing={refreshing ?? false} stale={stale} />
         </div>
       )}
       {tabs !== undefined && <div className="wb-tabs">{tabs}</div>}

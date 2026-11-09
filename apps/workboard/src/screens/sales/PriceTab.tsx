@@ -315,7 +315,7 @@ export function PriceTab() {
   const firstBestValue = firstBest ? perMessageMills(firstBest) : null;
   return (
     <>
-      <SalesHeader updatedAt={query.dataUpdatedAt} onRefresh={() => void query.refetch()} refreshing={query.isFetching} />
+      <SalesHeader updatedAt={query.dataUpdatedAt} stale={query.isRefetchError} onRefresh={() => void query.refetch()} refreshing={query.isFetching} />
       <div className="wb-content">
         <WindowNotice window={window} maxDays={MAX_DAYS.sales} {...(label ? { shown: label } : {})} />
         {body}

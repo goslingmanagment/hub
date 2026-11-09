@@ -55,11 +55,13 @@ export function useSalesParams() {
  * nothing when the numbers cover the period on screen (X6), the words of an
  * other window when they do not («Ответы до 7 нояб. 01:20: последние сутки…»).
  */
-export function SalesHeader({ meta, updatedAt, onRefresh, refreshing }: {
+export function SalesHeader({ meta, updatedAt, onRefresh, refreshing, stale = false }: {
   meta?: ReactNode;
   updatedAt: number | undefined;
   onRefresh: () => void;
   refreshing: boolean;
+  /** The tab's last read again failed. */
+  stale?: boolean;
 }) {
   const location = useLocation();
   const carried = carryParams(location.search);
@@ -77,6 +79,7 @@ export function SalesHeader({ meta, updatedAt, onRefresh, refreshing }: {
       {...(updatedAt ? { updatedAt } : {})}
       onRefresh={onRefresh}
       refreshing={refreshing}
+      stale={stale}
       tabs={<Tabs label="Разделы" items={TABS.map((item) => ({ to: { pathname: `/sales/${item.tab}`, search: search ? `?${search}` : "" }, label: item.label }))} />}
     />
   );

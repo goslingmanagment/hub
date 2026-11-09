@@ -45,6 +45,7 @@ export function PeopleScreen() {
         pageFilter
         meta={list.comparable ? undefined : <NothingToCompare knownSince={list.knownSince} />}
         updatedAt={list.updatedAt}
+        stale={list.stale}
         onRefresh={list.refresh}
         refreshing={list.refreshing}
       />

@@ -532,6 +532,7 @@ export function WinBackTab() {
     <>
       <SalesHeader
         updatedAt={query.dataUpdatedAt}
+        stale={query.isRefetchError}
         onRefresh={() => {
           void query.refetch();
           if (isOwner) void approaches.refetch();

@@ -100,6 +100,8 @@ export function useDecisions(options: { owner: boolean; page: string | null }) {
     loading: reads.some((query) => query.isLoading),
     fetching: reads.some((query) => query.isFetching),
     updatedAt: Math.max(0, ...reads.map((query) => query.dataUpdatedAt)),
+    /** A read again failed: what the screen shows is the last good answer. */
+    stale: reads.some((query) => query.isRefetchError),
     refetch: () => {
       for (const query of [...reads, heldAll]) if (query.isEnabled ?? true) void query.refetch();
     },

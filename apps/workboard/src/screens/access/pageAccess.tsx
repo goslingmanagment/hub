@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Button, Confirm, toast } from "@agency_hub_core/ui";
+import { Confirm, toast } from "@agency_hub_core/ui";
 import { ruPlural } from "@agency_hub_core/ui/plural";
 import { useAssignPage, useUnassignPage, type AdminPage } from "./data";
 
@@ -10,8 +10,9 @@ import { useAssignPage, useUnassignPage, type AdminPage } from "./data";
  * goes at once, as the console's «Назначить» did. Removing always asks first
  * (spec §6: «Снять» had no question), and so does a whole model: several
  * pages, one request each, in order, stopping at the first refusal — never
- * repeated by itself. A page opened by one press can be taken back from its
- * toast at once (Д1: a slip in a dense grid), and its cell glows for a moment.
+ * repeated by itself. A page opened by one press says so in a toast and its
+ * cell glows for a moment; taking it back is «Снять» with its question, as
+ * every removal (no «Отменить» in the toast: that would remove unasked).
  */
 
 interface Person {
@@ -96,30 +97,11 @@ export function usePageAccess(onChanged?: () => void): PageAccess {
     }
   }
 
-  function said(change: Change, undo?: () => void) {
+  function said(change: Change) {
     glow(change);
     const one = change.add[0] ?? change.remove[0];
     if (change.add.length + change.remove.length === 1 && one) {
-      const text = change.add.length === 1 ? `Страница ${one.label} назначена ${change.person.username}` : `Страница ${one.label} снята с ${change.person.username}`;
-      if (!undo) {
-        toast.success(text);
-        return;
-      }
-      const id = toast.success(text, {
-        duration: 8000,
-        action: (
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={() => {
-              toast.dismiss(id);
-              undo();
-            }}
-          >
-            Отменить
-          </Button>
-        ),
-      });
+      toast.success(change.add.length === 1 ? `Страница ${one.label} назначена ${change.person.username}` : `Страница ${one.label} снята с ${change.person.username}`);
     } else {
       toast.success(change.add.length > 0
         ? `${change.person.username}: открыто ${pagesWord(change.add.length)} ${change.model ?? ""}`.trim()
@@ -140,15 +122,7 @@ export function usePageAccess(onChanged?: () => void): PageAccess {
         toast.error(failed);
         return;
       }
-      // The one way back from a slip: the same person, the same page, the console's own «Снять» request, at once —
-      // it takes back only what this very press did.
-      said(change, () => {
-        const back = { person, add: [], remove: [page] };
-        void run(back).then((undone) => {
-          if (undone === null) said(back);
-          else toast.error(undone);
-        });
-      });
+      said(change);
     });
   };
 

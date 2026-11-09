@@ -2,7 +2,7 @@ import { useMemo, type ReactNode } from "react";
 import { Link, useLocation } from "react-router";
 import { CHATTER_SHIFT_MIN_MESSAGES, CHATTER_SHIFT_MIN_WORKED_MINUTES, SHIFT_REPORT_MAX_DAYS } from "@agency_hub_core/contracts";
 import { millsToNumber, sumMills } from "@agency_hub_core/shared";
-import { Button, Card, Delta, Disclosure, Duration, EmptyState, LinkButton, Money, Section, Skeleton, readDelta } from "@agency_hub_core/ui";
+import { Button, Card, Delta, Disclosure, Duration, EmptyState, LinkButton, Money, Section, Skeleton, Tooltip, readDelta } from "@agency_hub_core/ui";
 import { formatDuration, formatMills, formatPercent } from "@agency_hub_core/ui/format";
 import { addDays } from "@agency_hub_core/ui/moscow";
 import { ruPlural } from "@agency_hub_core/ui/plural";
@@ -157,8 +157,9 @@ function Below({ card, userId }: { card: PersonCard; userId: number }) {
     const minutes = card.visits.reduce((sum, visit) => sum + visit.workedMinutes, 0);
     lines.push(
       <p key="visits" className="people-note">
-        Вне смен: {card.visits.length} {ruPlural(card.visits.length, "раз", "раза", "раз")}, {formatDuration(minutes)}. Это меньше смены
-        (от {formatDuration(CHATTER_SHIFT_MIN_WORKED_MINUTES)} и {CHATTER_SHIFT_MIN_MESSAGES} сообщений): в таблицу и в продажи не входит.
+        <Tooltip content={`Работа меньше смены (от ${formatDuration(CHATTER_SHIFT_MIN_WORKED_MINUTES)} и ${CHATTER_SHIFT_MIN_MESSAGES} сообщений): в таблицу и в продажи не входит. На ленте — тонкая линия.`} align="start">
+          <span>Вне смен: {card.visits.length} {ruPlural(card.visits.length, "раз", "раза", "раз")}, {formatDuration(minutes)}</span>
+        </Tooltip>
       </p>,
     );
   }
@@ -170,14 +171,16 @@ function Below({ card, userId }: { card: PersonCard; userId: number }) {
     const now = Date.now();
     const waiting = reported.filter((shift) => !shift.ongoing && shift.confirmedNetMills === null && now - Date.parse(shift.startedAt) <= SHIFT_REPORT_MAX_DAYS * 86_400_000).length;
     const sum = millsToNumber(sumMills(confirmed.map((shift) => shift.confirmedNetMills ?? 0)));
-    const params = carryParams(location.search).toString();
+    // The payouts open on this person (`?chatter=`), in the same period.
+    const params = carryParams(location.search);
+    params.set("chatter", card.person?.username ?? "");
     lines.push(
       <div key="reports" className="people-idle">
         <span>
           Подтверждено к выплате{page ? " по всем страницам" : ""}: <span className="people-meta__strong">{formatMills(sum)}</span> за {confirmed.length} {ruPlural(confirmed.length, "смену", "смены", "смен")}
           {waiting > 0 && <> · ждут подтверждения: {waiting}</>}
         </span>
-        <Link className="people-link" to={`/payouts${params ? `?${params}` : ""}`}>Открыть выплаты →</Link>
+        <Link className="people-link" to={`/payouts?${params.toString()}`}>Открыть выплаты →</Link>
       </div>,
     );
   }

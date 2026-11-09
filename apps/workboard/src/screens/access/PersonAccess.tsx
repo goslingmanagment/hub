@@ -309,8 +309,8 @@ function LinksBlock({ user, variant, onAsk }: { user: AdminUser; variant: "page"
                 {LINK_KIND_LABEL[link.kind]}
                 <span className="access-hint">{linkStateLabel(link, whenWords)} · создана {whenWords(link.createdAt)}</span>
               </span>
-              {/* The invite's link is not revoked by itself (З3): «Отправить заново» replaces it, «Отменить приглашение» ends it. */}
-              {!disabled && status !== "invited" && <Button size="sm" variant="ghost" onClick={() => onAsk({ kind: "link", link })}>Отозвать ссылку</Button>}
+              {/* An invite's link too, as the console had it: the link stops working, the person stays invited («Отправить заново» makes a new one). */}
+              {!disabled && <Button size="sm" variant="ghost" onClick={() => onAsk({ kind: "link", link })}>Отозвать ссылку</Button>}
             </li>
           ))}
         </ul>

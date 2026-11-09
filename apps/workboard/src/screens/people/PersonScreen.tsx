@@ -70,6 +70,7 @@ export function PersonScreen() {
         pageFilter
         meta={person ? <PersonMeta person={person} periodLabel={periodShort(period)} statusKnown={card.nowKnown} /> : <Skeleton width={320} />}
         updatedAt={card.updatedAt}
+        stale={card.stale}
         onRefresh={card.refresh}
         refreshing={card.refreshing}
         tabs={(

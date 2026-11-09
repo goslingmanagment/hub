@@ -439,6 +439,7 @@ export function GreetingsTab() {
     <>
       <SalesHeader
         updatedAt={Number.isFinite(updatedAt) ? updatedAt : undefined}
+        stale={greetings.isRefetchError || hours.isRefetchError}
         onRefresh={() => {
           void greetings.refetch();
           void hours.refetch();

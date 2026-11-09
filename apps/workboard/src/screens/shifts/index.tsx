@@ -130,6 +130,7 @@ export function ShiftsScreen() {
         pageFilter
         meta={meta}
         updatedAt={sales.dataUpdatedAt}
+        stale={sales.isRefetchError}
         onRefresh={refresh}
         refreshing={sales.isFetching}
       />

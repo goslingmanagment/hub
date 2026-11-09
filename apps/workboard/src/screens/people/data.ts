@@ -389,6 +389,8 @@ export interface PeopleList {
   tooLong: boolean;
   refreshing: boolean;
   updatedAt: number;
+  /** The last read again failed: the numbers are of `updatedAt`. */
+  stale: boolean;
   refresh: () => void;
   retryQuality: () => void;
 }
@@ -473,6 +475,7 @@ export function usePeopleList(period: ResolvedPeriod, page: string | null): Peop
     tooLong: salesWindow(period) === null,
     refreshing: sales.isPlaceholderData || (sales.isFetching && sales.data !== undefined),
     updatedAt: sales.dataUpdatedAt,
+    stale: sales.isRefetchError,
     refresh: () => {
       void sales.refetch();
       void numbers.refetch();
@@ -505,6 +508,8 @@ export interface PersonCard {
   tooLong: boolean;
   refreshing: boolean;
   updatedAt: number;
+  /** The last read again failed: the numbers are of `updatedAt`. */
+  stale: boolean;
   refresh: () => void;
   retryQuality: () => void;
 }
@@ -621,6 +626,7 @@ export function usePersonCard(userId: number, period: ResolvedPeriod, page: stri
     tooLong: salesWindow(period) === null,
     refreshing: sales.isPlaceholderData || (sales.isFetching && sales.data !== undefined),
     updatedAt: sales.dataUpdatedAt,
+    stale: sales.isRefetchError,
     refresh: () => {
       void sales.refetch();
       void numbers.refetch();

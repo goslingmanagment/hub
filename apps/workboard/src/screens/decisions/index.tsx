@@ -131,6 +131,7 @@ export function DecisionsScreen() {
         </>
       )}
       updatedAt={decisions.updatedAt}
+      stale={decisions.stale}
       onRefresh={decisions.refetch}
       refreshing={decisions.fetching}
     />
