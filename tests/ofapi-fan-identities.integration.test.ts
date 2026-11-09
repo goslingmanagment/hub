@@ -540,6 +540,64 @@ describe("OFAPI fan identities (tracking/trial links)", () => {
     ]);
   });
 
+  // OnlyFans gives a trial link's subscribers 20 positions a page and the
+  // vendor leaves some of them out, so pages are short with more to come. The
+  // walk used to ask for 100 and step by 100: positions 20–99 of every
+  // hundred were never read (prod, until 2026-11-10).
+  it("walks a trial link's subscribers 20 positions a page, short pages included", async () => {
+    const page = await seedMappedPage("links-trial-step-of");
+    const positions = Array.from({ length: 45 }, (_, index) =>
+      linkUser(600000 + index, `trial${index}`, `Trial ${index}`)
+    );
+    // The vendor's page: 20 positions from the offset, every third left out.
+    const leftOut = (_item: unknown, index: number) => index % 3 === 2;
+    const calls: string[] = [];
+    appContext = {
+      ...appContext,
+      ofapi: {
+        listTrackingLinks: async () => listPage([]),
+        listTrialLinks: async () => listPage([{ id: 7 }]),
+        listTrackingLinkUsers: async () => listPage([]),
+        listTrialLinkSubscribers: async (
+          _context: unknown,
+          _accountId: string,
+          _linkId: string,
+          options: { offset?: number; limit?: number },
+        ) => {
+          const offset = options.offset ?? 0;
+          calls.push(`${offset}:${options.limit}`);
+          const window = positions.slice(offset, offset + 20);
+          return listPage(window.filter((item, index) => !leftOut(item, index)), offset + 20 < positions.length);
+        },
+      } as unknown as OfapiClient,
+    };
+
+    const result = await syncOfapiFanIdentities(appContext, await buildInput(page));
+
+    expect(result.satisfied).toBe(true);
+    expect(calls).toEqual(["0:20", "20:20", "40:20"]);
+    const listed = positions.filter((item, index) => !leftOut(item, index % 20)).map((item) => String(item.id));
+    expect(listed).toHaveLength(32);
+    const fans = await testDb!.pool.query<{ platform_user_id: string }>(
+      "select platform_user_id from fans order by platform_user_id",
+    );
+    expect(fans.rows.map((row) => row.platform_user_id)).toEqual(listed);
+    // The link ↔ fan projection reads the step from the journaled request: one
+    // unbroken walk read to the end, every listed fan on the link.
+    const walks = await testDb!.pool.query(
+      `select api_pages, items, broken_reason, finished_at is not null as finished
+         from page_link_fan_walks where platform_account_id = $1 and link_kind = 'trial'`,
+      [page.id],
+    );
+    expect(walks.rows).toEqual([{ api_pages: 3, items: 32, broken_reason: null, finished: true }]);
+    const linkFans = await testDb!.pool.query<{ n: number }>(
+      `select count(*)::int as n from page_link_fans
+        where platform_account_id = $1 and link_kind = 'trial' and platform_link_id = '7'`,
+      [page.id],
+    );
+    expect(linkFans.rows).toEqual([{ n: 32 }]);
+  });
+
   it("journals every list page with its link and request, untrimmed", async () => {
     const page = await seedMappedPage("links-journal-of");
     const trackingLinks = [{ id: 42, campaignName: "IG Bio", subscribersCount: 101 }];
@@ -612,7 +670,7 @@ describe("OFAPI fan identities (tracking/trial links)", () => {
       }],
       ["link_fans_tracking_spenders", { ...context, link: link42, list: "spenders", offset: 0, items: spenders }],
       ["link_fans_trial_subscribers", {
-        ...context, link: { kind: "trial", id: "7" }, list: "subscribers", offset: 0, items: trialSubscribers,
+        ...context, limit: 20, link: { kind: "trial", id: "7" }, list: "subscribers", offset: 0, items: trialSubscribers,
       }],
     ]);
     expect(journal.rows.map((row) => row.request_params)).toEqual([
@@ -621,7 +679,7 @@ describe("OFAPI fan identities (tracking/trial links)", () => {
       { limit: 100, offset: 0, path: "/:accountId/tracking-links/:trackingLinkId/subscribers" },
       { limit: 100, offset: 100, path: "/:accountId/tracking-links/:trackingLinkId/subscribers" },
       { limit: 100, offset: 0, path: "/:accountId/tracking-links/:trackingLinkId/spenders" },
-      { limit: 100, offset: 0, path: "/:accountId/trial-links/:trialLinkId/subscribers" },
+      { limit: 20, offset: 0, path: "/:accountId/trial-links/:trialLinkId/subscribers" },
     ]);
 
     // The observation half of the same dual-write carries the same body.
