@@ -27,7 +27,7 @@
     "packages/demo/fixtures/system-dev.ts": 1,
     "packages/demo/fixtures/system-ofapi.ts": 4,
     "packages/demo/fixtures/team-extra.ts": 2,
-    "packages/demo/fixtures/team-review.ts": 4,
+    "packages/demo/fixtures/team-review.ts": 5,
     "packages/demo/fixtures/team-stats.ts": 2,
     "packages/demo/fixtures/team-world.ts": 5,
     "packages/demo/fixtures/team.ts": 7

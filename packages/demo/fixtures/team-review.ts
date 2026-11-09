@@ -1,4 +1,5 @@
 import type { KernelOperationResponse, ShiftReviewChat, ShiftReviewMessage } from "@agency_hub_core/contracts";
+import { millsFromDollars, millsPercentOf, millsToNumber } from "@agency_hub_core/shared";
 import { myMessages, reviewWaits, shiftQuality, summariesOf, totalsOf, type ShiftQuality } from "@agency_hub_core/ui/shiftReview";
 
 import { demoError, intBetween, pick, queryNumber, queryString, rng, type DemoReply, type DemoRequest } from "../core.ts";
@@ -246,7 +247,7 @@ function inventedReviewOf(shift: DemoShift, now: number): Response {
       waits.push({ chat: key, since: iso(fanAt), from: iso(fanAt), to: iso(replyAt), by: "me" });
       messages.push(myMessage(random, texts, `${key}:n${step}`, replyAt, Math.round((replyAt - fanAt) / 1000)));
     }
-    return { ...chatShell(pageLabel, platform, fan), fanLifetimeNetMills: Math.round(fan.totalSpent * 1000), earlierHidden: intBetween(random, 0, 40), messages };
+    return { ...chatShell(pageLabel, platform, fan), fanLifetimeNetMills: millsToNumber(millsFromDollars(fan.totalSpent)), earlierHidden: intBetween(random, 0, 40), messages };
   };
   const personalOf = (chat: ShiftReviewChat) => chat.messages.filter((message) => message.mine !== null && message.inShift && !message.mass).length;
 
@@ -319,7 +320,7 @@ function inventedReviewOf(shift: DemoShift, now: number): Response {
     const used = new Set(chats.map((chat) => chat.key));
     const free = demoFans(firstPage.pageLabel).filter((fan) => !used.has(`${firstPage.pageLabel}:${fan.platformUserId}`));
     const chatOf = (fan: (typeof free)[number], messages: ShiftReviewMessage[]): ShiftReviewChat => ({
-      ...chatShell(firstPage.pageLabel, platform, fan), fanLifetimeNetMills: Math.round(fan.totalSpent * 1000), earlierHidden: 0, messages,
+      ...chatShell(firstPage.pageLabel, platform, fan), fanLifetimeNetMills: millsToNumber(millsFromDollars(fan.totalSpent)), earlierHidden: 0, messages,
     });
     const colleague = free[0];
     if (colleague) {
@@ -631,7 +632,7 @@ function withMoney(review: Response, shift: DemoShift, now: number): Response {
     .map((message) => ({ chat, message })))[0];
   if (unsold && !shift.ongoing && end + 9 * 60 * MIN < now) {
     unsold.message.bought = true;
-    review.laterSales.push(entry(unsold.chat, end + 9 * 60 * MIN, "ppv", Math.round(unsold.message.priceMills! * 0.8), {
+    review.laterSales.push(entry(unsold.chat, end + 9 * 60 * MIN, "ppv", millsToNumber(millsPercentOf(unsold.message.priceMills!, 80)), {
       verdict: "theirs", holderName: "sofia", ppvSender: me, ppvSentAt: unsold.message.at, lastWriter: "sofia",
     }));
   }
