@@ -15,7 +15,7 @@ import { listUsers } from "@agency_hub_core/db";
 import type { AppContext } from "../bootstrap.ts";
 import { ServiceUnavailableError } from "./errors.ts";
 import { checkWindow, hubUsersOf, ledgerGet, list, micros, millsOf } from "./ledger-payouts.ts";
-import { accountReportOf, parseLedgerReports, type LedgerReport } from "./ledger-reports.ts";
+import { accountReportOf, draftPages, parseLedgerReportDays, parseLedgerReports, reportPageOf } from "./ledger-reports.ts";
 
 /**
  * Workboard «Выплаты → Отчёты» and the reports' part of «Решения» (the owner's): every chatter's shift reports of
@@ -32,24 +32,6 @@ import { accountReportOf, parseLedgerReports, type LedgerReport } from "./ledger
 /** A text the ledger may leave out or null. */
 const text = z.string().nullish().transform((value) => value ?? "");
 const nullable = <T extends z.ZodTypeAny>(item: T) => item.nullish().transform((value): z.output<T> | null => value ?? null);
-
-const ledgerDaysSchema = z.object({
-  from: z.string(),
-  to: z.string(),
-  days: list(z.object({
-    person: z.string(),
-    report_date: businessDate,
-    page: z.string(),
-    model: text,
-    posted_micros: nullable(micros),
-    draft_micros: nullable(micros),
-    diff_micros: nullable(micros),
-    state: z.string(),
-    posted_at: nullable(z.string()),
-    report_id: nullable(z.number().int().positive()),
-    post_id: nullable(z.number().int().positive()),
-  })),
-});
 
 const ledgerPostsSchema = z.object({
   from: z.string(),
@@ -134,7 +116,7 @@ export async function readTeamLedgerReports(
     ledgerGet(app, "/v1/report-posts", { ...window, flagged: "1" }, { ...read, absentOn: [403, 404] }),
   ]);
   const drafts = parseLedgerReports(app, reportsBody).reports;
-  const days = checked(app, ledgerDaysSchema, daysBody, "/v1/report-days", "ledger report days").days;
+  const days = parseLedgerReportDays(app, daysBody);
   const postsRead = postsBody !== undefined;
   if (!postsRead && !postsClosedSaid) {
     postsClosedSaid = true;
@@ -169,18 +151,7 @@ export async function readTeamLedgerReports(
   // The pay base, page by page.
   for (const day of days) {
     const group = groupOf(dayKey(day.person, day.report_date), day.person, day.report_date);
-    const posted = day.posted_micros === null ? null : millsOf(day.posted_micros);
-    const draft = day.draft_micros === null ? null : millsOf(day.draft_micros);
-    const diff = day.diff_micros !== null ? millsOf(day.diff_micros) : posted !== null && draft !== null ? posted - draft : null;
-    group.pages.push({
-      pageLabel: day.page,
-      model: day.model,
-      postedMills: posted,
-      draftMills: draft,
-      diffMills: diff === 0 ? null : diff,
-      state: day.state,
-      postedAt: day.posted_at,
-    });
+    group.pages.push(reportPageOf(day));
     if (group.draftId === null && day.report_id !== null && draftById.has(day.report_id)) group.draftId = day.report_id;
   }
   // Each draft on its day: by the pay base's report id, else by its person and day; a draft of nobody the ledger
@@ -235,22 +206,4 @@ export async function readTeamLedgerReports(
   })).sort((left, right) => right.postedAt.localeCompare(left.postedAt) || right.id - left.id);
 
   return { from: window.from, to: window.to, reports, posts: flagged, postsRead, serverNow: (options.now ?? new Date()).toISOString() };
-}
-
-/** A draft's own pages in the pay base's words, when the pay base has none of its day. */
-function draftPages(draft: LedgerReport): TeamLedgerReportPage[] {
-  return draft.pages.map((page) => {
-    const amount = millsOf(page.amount_micros);
-    const posted = page.posted_micros === null ? null : millsOf(page.posted_micros);
-    const diff = posted === null ? null : posted - amount;
-    return {
-      pageLabel: page.page,
-      model: page.model,
-      postedMills: posted,
-      draftMills: amount,
-      diffMills: diff === 0 ? null : diff,
-      state: page.post_state !== "" ? page.post_state : posted === null ? "draft_only" : diff === 0 ? "posted_equal" : "posted_changed",
-      postedAt: posted === null ? null : draft.posted_at,
-    };
-  });
 }
