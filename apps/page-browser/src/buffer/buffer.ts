@@ -31,9 +31,12 @@
 //   4. and the page may start again (`onRoom`).
 //
 // The space acknowledged records leave is given back to the disk in bounded
-// steps for as long as SQLite holds free pages (store.ts `reclaim`); a
-// commit that failed (a full disk) is tried again with a growing pause, so
-// an acknowledgement is never lost to one failed deletion.
+// steps (store.ts `reclaim`) once it is worth a megabyte, or at once while
+// the buffer is full: below that SQLite reuses the free pages for the next
+// records, and a step costs three fsyncs and a truncation of the WAL — after
+// every acknowledgement that was half of all the operator wrote (prod,
+// 2026-11-10). A commit that failed (a full disk) is tried again with a
+// growing pause, so an acknowledgement is never lost to one failed deletion.
 //
 // A buffer that cannot be opened — locked by another process, a failing
 // disk, a corrupt file, a format newer than this operator — does not take
@@ -176,6 +179,8 @@ export interface BufferOptions {
   /** Free pages given back per step, and the pause between steps. */
   reclaimPages?: number;
   reclaimEveryMs?: number;
+  /** Free pages worth giving back while the buffer is not full. */
+  reclaimMinPages?: number;
   /** The buffer stopped taking writes: the page must stop (spec §5, 2). */
   onFull?: (reason: FullReason, alarm: BufferAlarm, detail: string) => void;
   /** Room again, the gap written: the page may start again (spec §5, 4). */
@@ -221,6 +226,10 @@ const RETRY_MS: readonly number[] = [100, 200, 500, 1000, 2000, 5000];
 /** 1024 pages of 4 KiB: a few milliseconds of the event loop per step. */
 const RECLAIM_PAGES = 1024;
 const RECLAIM_EVERY_MS = 10;
+/** 256 pages of 4 KiB, 1 MiB: fewer free pages stay in the file for the next
+ *  records. Giving them back means a checkpoint and a truncated WAL — three
+ *  fsyncs, each a commit of the disk's own journal. */
+const RECLAIM_MIN_PAGES = 256;
 /** Hub attempts are forgotten a day after their outcome's resultAck, and a
  *  week after they came whatever they are; looked at every 10 minutes. */
 const ATTEMPT_ACKED_KEEP_MS = 24 * 3600_000;
@@ -337,6 +346,7 @@ export class EventBuffer {
   readonly #retryMs: readonly number[];
   readonly #reclaimPages: number;
   readonly #reclaimEveryMs: number;
+  readonly #reclaimMinPages: number;
   readonly #onFull: NonNullable<BufferOptions["onFull"]>;
   readonly #onRoom: NonNullable<BufferOptions["onRoom"]>;
   readonly #onAlarm: NonNullable<BufferOptions["onAlarm"]>;
@@ -407,6 +417,7 @@ export class EventBuffer {
     this.#retryMs = options.retryMs ?? RETRY_MS;
     this.#reclaimPages = options.reclaimPages ?? RECLAIM_PAGES;
     this.#reclaimEveryMs = options.reclaimEveryMs ?? RECLAIM_EVERY_MS;
+    this.#reclaimMinPages = Math.max(1, Math.floor(options.reclaimMinPages ?? RECLAIM_MIN_PAGES));
     this.#onFull = options.onFull ?? (() => undefined);
     this.#onRoom = options.onRoom ?? (() => undefined);
     this.#onAlarm = options.onAlarm ?? (() => undefined);
@@ -950,14 +961,11 @@ export class EventBuffer {
       this.#freeDisk = Number.POSITIVE_INFINITY;
       this.#log("disk.unknown", { error: errorMessage(error) });
     }
-    // Space SQLite holds and the disk could have: given back now (a delete
-    // whose reclaim was cut short, a file from before this operator), and
-    // the WAL truncated while the buffer is full.
-    try {
-      if (store.freePages() > 0 || (this.#full !== null && this.#walDirty)) this.#maintain();
-    } catch (error) {
-      this.#log("reclaim.unknown", { error: errorMessage(error) });
-    }
+    // Space SQLite holds and the disk could have: given back once it is
+    // worth a step (a delete whose reclaim was cut short, a file from before
+    // this operator) — and every page of it, with the WAL truncated, while
+    // the buffer is full.
+    if (this.#reclaimDue(store)) this.#maintain();
     if (this.#now() - this.#lastPurge >= ATTEMPT_PURGE_EVERY_MS && !this.#purgeDue) {
       this.#purgeDue = true;
       this.#schedule();
@@ -1037,6 +1045,21 @@ export class EventBuffer {
   }
 
   // ── giving space back ──────────────────────────────────────────────────
+
+  /** Space worth a step of giving back: a megabyte of free pages — or,
+   *  while the buffer is full, any free page and a WAL written since its
+   *  last truncation (the disk may need exactly that). Fewer free pages
+   *  wait in the file: the next records take them first. */
+  #reclaimDue(store: BufferStore): boolean {
+    try {
+      const free = store.freePages();
+      if (this.#full !== null) return free > 0 || this.#walDirty;
+      return free >= this.#reclaimMinPages;
+    } catch (error) {
+      this.#log("reclaim.unknown", { error: errorMessage(error) });
+      return false;
+    }
+  }
 
   /** Free pages out of the file and the WAL truncated, one bounded step at
    *  a time, with a pause between steps: for as long as free pages remain,
@@ -1217,8 +1240,9 @@ export class EventBuffer {
     // The alarms as soon as a batch crosses a threshold, not at the next check.
     this.#raiseAlarms(this.#level());
     const deleted = committed.deletedEvents > 0 || committed.deletedOutcomes > 0;
-    // The space of what was deleted goes back to the disk, step by step.
-    if (deleted) this.#maintain();
+    // The space of what was deleted goes back to the disk, step by step,
+    // once it is worth one (`#reclaimDue`).
+    if (deleted && this.#reclaimDue(store)) this.#maintain();
     // A long acknowledged backlog: the next step soon.
     if (this.#firstSeq !== null && this.#firstSeq <= this.#ackedUpTo) this.#schedule();
     // Room made by the engine's acks is seen at once, not at the next check.

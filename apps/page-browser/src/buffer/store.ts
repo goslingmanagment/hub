@@ -16,6 +16,10 @@
 //   pages remain — and truncates the WAL after each, so the disk gets the
 //   space back, not only SQLite.
 // - journal_size_limit: the WAL file shrinks back after a checkpoint.
+// - wal_autocheckpoint (SQLite's own default, said aloud): between the
+//   steps of `reclaim` the WAL is checkpointed by SQLite every 1000 pages
+//   and written again from its start, in place — about 4 MiB of file that
+//   stays, and no fsync but the commit's own.
 // - The open does not wait for a lock (busy_timeout 0): a buffer another
 //   process holds is reported at once and opened again later, not waited
 //   for on the event loop.
@@ -274,6 +278,7 @@ export class BufferStore {
       if (mode !== "wal") throw new Error(`the buffer could not enter WAL mode (${String(mode)})`);
       db.exec("PRAGMA synchronous = FULL");
       db.exec(`PRAGMA journal_size_limit = ${WAL_LIMIT_BYTES}`);
+      db.exec("PRAGMA wal_autocheckpoint = 1000");
       if (options.maxPages !== undefined) db.exec(`PRAGMA max_page_count = ${Math.max(1, Math.floor(options.maxPages))}`);
       this.schema = migrate(db, options.migrations ?? MIGRATIONS, options.operatorVersion, options.now);
       // A database made now gets an id made now: its numbers start again,
