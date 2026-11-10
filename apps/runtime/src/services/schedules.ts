@@ -56,6 +56,7 @@ import {
   ensureTelegramDailyReportSchedule,
   reconcileQueueRetention,
   retireRemovedQueues,
+  type SyncQueueLifecycleClient,
 } from "./sync-queue.ts";
 
 // The ONE place cron registrations live. Called from the
@@ -69,14 +70,17 @@ export interface ScheduleRegistrationLogger {
   warn(obj: Record<string, unknown>, msg: string): void;
 }
 
-export async function registerAllSchedules(
-  boss: Pick<
-    PgBoss,
-    "schedule" | "createQueue" | "getQueue" | "updateQueue" | "unschedule" | "deleteQueue"
-  >,
-  logger?: ScheduleRegistrationLogger,
+/**
+ * Every queue a worker consumes and the scheduler schedules into — the ONE
+ * list, run by both roles (the api creates only the three it sends to).
+ * Idempotent: `createQueue` is INSERT ... ON CONFLICT DO NOTHING and
+ * `createdQueues` skips a name already created by this process. A role calls
+ * `reconcileQueueRetention` only after this returns.
+ */
+export async function ensureAllQueues(
+  boss: SyncQueueLifecycleClient,
+  createdQueues: Set<string>,
 ): Promise<void> {
-  const createdQueues = new Set<string>();
   await ensureSyncQueues(boss, createdQueues);
   await ensureOfapiQueues(boss, createdQueues);
   await ensureOfapiCreditQueues(boss, createdQueues);
@@ -112,6 +116,16 @@ export async function registerAllSchedules(
   await ensureFanslyBlocklistQueue(boss, createdQueues);
   await ensureModelApplicationAbandonSweepQueue(boss, createdQueues);
   await ensureClientSendArchiveSweepQueue(boss, createdQueues);
+}
+
+export async function registerAllSchedules(
+  boss: Pick<
+    PgBoss,
+    "schedule" | "createQueue" | "getQueue" | "updateQueue" | "unschedule" | "deleteQueue"
+  >,
+  logger?: ScheduleRegistrationLogger,
+): Promise<void> {
+  await ensureAllQueues(boss, new Set<string>());
   // Retired cron + queue rows of removed jobs (RETIRED_SCHEDULES). Best
   // effort: a stale queue row costs nothing, so a failure here must never keep
   // the live schedules below from registering.
