@@ -163,6 +163,15 @@ const POSTED_MS = sql`case when s.backfill_cursor ->> 'postedAtMs' ~ '^[0-9]+$' 
  * views). Its deletion is kept as `deletedAtMs`, also on a row queued before
  * it; the walk reads it to the end and then rests. Idempotent; returns the
  * rows queued or newly marked deleted.
+ *
+ * Only the rows it would queue or mark are offered to the insert (`q`): a row
+ * that conflicts is locked by `on conflict do update` before its `where` is
+ * looked at, and a lock is a write — its page dirtied, a WAL record, a
+ * full-page image after each checkpoint. Offered the whole queue every time,
+ * a seed that changed nothing locked some 1 800 rows a page: on production
+ * (2026-11-10) 9 % of all the pages the cluster dirtied, for 875 rows changed
+ * in a month. The conflict clause stays for a row another writer queues
+ * between the read and the insert.
  */
 export async function seedCreatorStatsMediaQueue(db: Database, input: { pageId: number; now: Date }): Promise<number> {
   const result = await db.execute(sql`
@@ -176,8 +185,16 @@ export async function seedCreatorStatsMediaQueue(db: Database, input: { pageId: 
         on m.page_id = s.page_id
        and m.platform = 'fansly'
        and m.media_offer_ref = s.subject_ref
+      left join subject_refresh_state q
+        on q.page_id = s.page_id
+       and q.plane = ${CREATOR_STATS_MEDIA_PLANE}
+       and q.subject_ref = s.subject_ref
      where s.page_id = ${input.pageId}
        and s.plane = 'media_stats'
+       and (
+         q.subject_ref is null
+         or (m.deleted_at_platform is not null and not (q.backfill_cursor ? 'deletedAtMs'))
+       )
     on conflict (page_id, plane, subject_ref) do update
       set backfill_cursor = subject_refresh_state.backfill_cursor
             || jsonb_build_object('deletedAtMs', excluded.backfill_cursor -> 'deletedAtMs'),
