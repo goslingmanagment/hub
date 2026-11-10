@@ -241,9 +241,12 @@ describe("readAccountReports: the posts in «Отчётность»", () => {
     expect(other.reports.map((one) => one.source)).toEqual(["draft"]);
     expect(warnings).toHaveLength(2);
 
-    // Without a draft to compare with, one person's rows are the caller's (the ledger filtered them by the caller).
+    // Without a draft to compare with, one person's rows are the caller's (the ledger filtered them by the caller)…
     const alone = await read([], daysAnswer([day({ person: "kate", draft_micros: null, state: "post_only", report_id: null })]));
     expect(alone).toMatchObject({ postsRead: true, reports: [{ source: "post", totalMills: 31_520 }] });
+    // …unless they are of the person a draft of someone else in the answer is of.
+    const theirs = await read([report({ hub_user_id: 5, hub_username: "kate.v", person: "kate" })], daysAnswer([day({ person: "kate", draft_micros: null, state: "post_only", report_id: null })]));
+    expect(theirs).toMatchObject({ postsRead: false, reports: [] });
   });
 
   it("serves the drafts when the posts alone fail: an error, no answer, another shape — and says so", async () => {

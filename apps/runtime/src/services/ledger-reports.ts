@@ -339,11 +339,13 @@ export async function readAccountReports(
   const dropped = answer.reports.length - own.length;
   if (dropped > 0) app.logger.warn({ userId: user.id, dropped }, "ledger reports: the answer held reports of another user, dropped");
 
-  // The day rows carry no Hub user id: they are kept only as one person's, the one the caller's drafts are of.
+  // The day rows carry no Hub user id: they are kept only as one person's, the one the caller's drafts are of — and
+  // never a person a draft of someone else in the answer is of.
   let days = readDays;
   if (days !== null && days.length > 0) {
     const persons = new Set([...days.map((day) => day.person), ...own.flatMap((report) => (report.person === null ? [] : [report.person]))]);
-    if (persons.size > 1) {
+    const others = new Set(answer.reports.filter((report) => !belongsTo(report, user)).flatMap((report) => (report.person === null ? [] : [report.person])));
+    if (persons.size > 1 || [...persons].some((person) => others.has(person))) {
       app.logger.warn({ userId: user.id, persons: persons.size }, "ledger report days: the answer held more than one person, dropped; the drafts alone are served");
       days = null;
     }
