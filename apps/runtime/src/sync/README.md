@@ -236,7 +236,7 @@ the Fansly Sync Engine, and by nothing else: no surface reads its `page_sync_sta
 
 The lever map is the registry's (`fansly/registry.ts`, `FANSLY_LEVER_STREAMS`): each line names a stream — a
 `sync_stream` value, because the API contracts carry these names — and the registry keys that answer to it. A key in no
-line (`FANSLY_KEYS_WITHOUT_LEVER`: the identity checks, the socket and its repair, live deletions, the alias backfill,
+line (the identity checks, the socket and its repair, live deletions, the alias backfill,
 the probes, media download) is addressed by its own name. `services/sync-status-engine.ts` says which lever streams
 each Settings block shows and moves (`ENGINE_BLOCK_STREAMS`), `services/sync-engine-levers.ts` which ones a "sync now"
 scope names (`FANSLY_ENGINE_SCOPE_STREAMS`). tests/sync-lever-map.test.ts pins the three and that every registry key is
