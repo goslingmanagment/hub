@@ -15,7 +15,7 @@ import {
 import type { AppContext } from "../bootstrap.ts";
 import { sampleSyncEngineMetrics, syncMetricsDue } from "../sync/engine/metrics.ts";
 import { createFanslyRegistry } from "../sync/fansly/registry.ts";
-import { loadEffectiveConfig } from "./effective-config.ts";
+import { loadEffectiveConfigField } from "./effective-config.ts";
 import { fanslyWsLivePayloadResolver } from "./fansly-ws/live-apply.ts";
 import {
   computeHealthFloorBacklogMs,
@@ -449,7 +449,7 @@ export async function runGoldenSignalSample(
     try {
       samples.push(...await sampleSyncEngineMetrics(app.db, {
         registry: createFanslyRegistry(),
-        settingMs: (await loadEffectiveConfig(app.db, app.config)).fanslyDefaultDelayMs,
+        settingMs: await loadEffectiveConfigField(app.db, app.config, "fanslyDefaultDelayMs"),
         resolvePayload: fanslyWsLivePayloadResolver(app),
       }));
     } catch (error) {

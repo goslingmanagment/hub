@@ -12,7 +12,7 @@ import {
 } from "@agency_hub_core/db";
 import type { AppConfig } from "@agency_hub_core/shared";
 
-import { loadEffectiveConfig } from "../effective-config.ts";
+import { loadEffectiveConfigField } from "../effective-config.ts";
 import {
   FanslySendGuardRegistry,
   type FanslySendGuardClock,
@@ -92,7 +92,7 @@ export function createFanslySendGuards(input: CreateFanslySendGuardsInput): Fans
   return new FanslySendGuardRegistry({
     store: createPgFanslySendGuardStore(input.db),
     readSettingMs: input.readSettingMs
-      ?? (async () => (await loadEffectiveConfig(input.db, input.config)).fanslyDefaultDelayMs),
+      ?? (() => loadEffectiveConfigField(input.db, input.config, "fanslyDefaultDelayMs")),
     identity: () => {
       identity ??= buildFanslySendHolderIdentity(probe, input.role);
       return identity;

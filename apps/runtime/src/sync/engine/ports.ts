@@ -12,7 +12,7 @@ import type {
 } from "@agency_hub_core/fansly";
 import type { AppConfig } from "@agency_hub_core/shared";
 
-import { loadEffectiveConfig } from "../../services/effective-config.ts";
+import { loadEffectiveConfig, loadEffectiveConfigField } from "../../services/effective-config.ts";
 import type { RequestPlan } from "./resource.ts";
 
 // The ports of the Fansly Sync Engine (design §3.2): everything the engine
@@ -75,14 +75,14 @@ export interface PauseSource {
 
 /**
  * The step-1 send guard's reader, so both engines always pace by the same S:
- * one `getConfigOverrides` read layered over the boot config. An override
+ * one read of its `config_settings` row layered over the boot config. An override
  * that fails validation is skipped (the env value stays); a database error
  * throws, which closes admission until the next read succeeds.
  */
 export function createEffectiveConfigPauseSource(db: Database, rawConfig: AppConfig): PauseSource {
   return {
     async readSettingMs() {
-      return (await loadEffectiveConfig(db, rawConfig)).fanslyDefaultDelayMs;
+      return loadEffectiveConfigField(db, rawConfig, "fanslyDefaultDelayMs");
     },
   };
 }

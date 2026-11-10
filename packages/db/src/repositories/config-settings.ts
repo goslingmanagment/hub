@@ -48,6 +48,29 @@ export async function getConfigOverrides(
   return overrides;
 }
 
+/** One override row of a scope (default: global) by its config key, or null when
+ *  the key has none. The same row `getConfigOverrides` would put under `key`, read
+ *  through the unique (scope_type, scope_id, key) index. */
+export async function getConfigOverride(
+  db: Database,
+  key: string,
+  scope?: { scopeType?: string; scopeId?: number },
+): Promise<ConfigOverrideRecord | null> {
+  const scopeType = scope?.scopeType ?? DEFAULT_SCOPE_TYPE;
+  const scopeId = scope?.scopeId ?? DEFAULT_SCOPE_ID;
+
+  const row = await db.query.configSettings.findFirst({
+    columns: { value: true, version: true },
+    where: and(
+      eq(configSettings.scopeType, scopeType),
+      eq(configSettings.scopeId, scopeId),
+      eq(configSettings.key, key),
+    ),
+  });
+
+  return row === undefined ? null : { value: row.value, version: row.version };
+}
+
 /** Optimistic-lock conflict raised when expectedVersion does not match the row's
  *  current version (or a concurrent writer won the race for a brand-new key). */
 export class ConfigOverrideVersionConflictError extends Error {

@@ -37,7 +37,7 @@ import {
 } from "@agency_hub_core/db";
 import type { AppConfig } from "@agency_hub_core/shared";
 
-import { loadEffectiveConfig } from "../services/effective-config.ts";
+import { loadEffectiveConfigField } from "../services/effective-config.ts";
 import { readPageBrowserStatuses } from "./browser-status.ts";
 import { holdSetOf, type RouteAdmissionView } from "./engine/admission.ts";
 import { SYNC_DECODE_DEBT_WINDOW_MS } from "./engine/alerts.ts";
@@ -143,7 +143,7 @@ async function readPageRoutes(
 
 /** S as the actor reads it (the live owner key, I4). */
 export async function readPauseSettingMs(db: Database, rawConfig: AppConfig): Promise<number> {
-  return (await loadEffectiveConfig(db, rawConfig)).fanslyDefaultDelayMs;
+  return loadEffectiveConfigField(db, rawConfig, "fanslyDefaultDelayMs");
 }
 
 /** The status of several pages, S read once (`sync page status`, the owner
