@@ -9,11 +9,12 @@ import { useMe } from "./useMe.js";
 
 /**
  * What waits for the owner's decision (spec §4.6), from the operations Hub has
- * today: the shift reports' questions, customs paid and not delivered, held
- * sends. One set of query keys for the sidebar's count, the «Ждут решения» line
- * on Смены and the Решения screen itself: a decision made there moves the count
- * at once. Read at most once a minute (the ledger's, every five) and only while
- * the tab is visible.
+ * today: the questions «whose is this sale» the chat agent asked him, the shift
+ * reports' questions, customs paid and not delivered, held sends. One set of
+ * query keys for the sidebar's count, the «Ждут решения» line on Смены and the
+ * Решения screen itself: a decision made there moves the count at once. Read at
+ * most once a minute (the ledger's, every five) and only while the tab is
+ * visible.
  *
  * A queue that did not answer is not a zero (spec r3, D17): the counts say which
  * failed (`failed`), and the words for it are here (`decisionsFailedText`).
@@ -47,6 +48,21 @@ export function reportChangesQuery(today: string = moscowToday()) {
   });
 }
 
+/**
+ * The open questions «whose is this sale» the team's chat agent asked (`teamLedgerQuestions`, the owner's only, the
+ * agency ledger's through Hub): those that wait for the owner are decisions, the chatters' own are information.
+ */
+export const saleQuestionsQuery = queryOptions({
+  queryKey: ["decisions", "sale-questions"] as const,
+  queryFn: () => kernel.teamLedgerQuestions(),
+  staleTime: MINUTE,
+});
+
+/** A question's page: one with no page known is every page's (as a report post of no known page). */
+export function questionOnPage(question: { pageLabel: string }, page: string | null): boolean {
+  return page === null || question.pageLabel === "" || question.pageLabel === page;
+}
+
 /** Open customs of the viewer's pages (`teamCustoms`). */
 export const customsQuery = queryOptions({
   queryKey: ["decisions", "customs"] as const,
@@ -63,11 +79,20 @@ export function heldSendsQuery(params: { limit: number; offset: number; pageLabe
   });
 }
 
-/** The three queues of Решения, in the screen's order; each is a section there (`#reports`, `#customs`, `#held`). */
-export const DECISION_QUEUES = ["reports", "customs", "held"] as const;
+/**
+ * The queues of Решения, in the screen's order; each is a section there (`#questions`, `#reports`, `#customs`,
+ * `#held`). The questions come first: the oldest kind of waiting.
+ */
+export const DECISION_QUEUES = ["questions", "reports", "customs", "held"] as const;
 export type DecisionQueue = (typeof DECISION_QUEUES)[number];
 
 export interface DecisionCounts {
+  /**
+   * The questions «whose is this sale» that wait for the owner's word, on the
+   * chosen page (a question of no known page is every page's); the chatters' own
+   * never count. null: not read (failed, still loading, or not the owner's to see).
+   */
+  questions: number | null;
   /**
    * The reports' questions — posts the ledger could not use on the chosen page
    * (`page`; a post of no known page is every page's), of the days it accrues
@@ -92,7 +117,7 @@ export interface DecisionCounts {
   loading: boolean;
   /**
    * Every queue has answered (or failed): only then are the numbers shown. Until
-   * then all three are null and `total` is 0, so the sidebar's badge and the
+   * then all of them are null and `total` is 0, so the sidebar's badge and the
    * «Ждут решения» line never show a partial sum that grows a moment later.
    */
   settled: boolean;
@@ -113,8 +138,9 @@ export function useDecisionCounts(options: { page?: string | null } = {}): Decis
   const page = options.page ?? null;
   const { isOwner, user } = useMe();
   const signedIn = user !== undefined;
-  const [posts, changes, customs, held, heldOnPage] = useQueries({
+  const [questions, posts, changes, customs, held, heldOnPage] = useQueries({
     queries: [
+      { ...saleQuestionsQuery, enabled: isOwner, refetchInterval: LEDGER_EVERY },
       { ...reportPostsQuery(), enabled: isOwner, refetchInterval: LEDGER_EVERY },
       { ...reportChangesQuery(), enabled: isOwner, refetchInterval: LEDGER_EVERY },
       { ...customsQuery, enabled: signedIn, refetchInterval: MINUTE },
@@ -124,14 +150,14 @@ export function useDecisionCounts(options: { page?: string | null } = {}): Decis
     ],
   });
   const heldRead = page === null ? held : heldOnPage;
-  const loading = posts.isLoading || changes.isLoading || customs.isLoading || held.isLoading || (page !== null && heldOnPage.isLoading);
+  const loading = questions.isLoading || posts.isLoading || changes.isLoading || customs.isLoading || held.isLoading || (page !== null && heldOnPage.isLoading);
   const retry = () => {
-    for (const query of [posts, changes, customs, held, heldOnPage]) if (query.isError) void query.refetch();
+    for (const query of [questions, posts, changes, customs, held, heldOnPage]) if (query.isError) void query.refetch();
   };
   // Not signed in yet: the queues are not even asked, nothing is settled.
   const settled = signedIn && !loading;
   if (!settled) {
-    return { reports: null, reportParts: null, customs: null, held: null, total: 0, page, elsewhere: 0, loading, settled: false, failed: [], complete: false, retry };
+    return { questions: null, reports: null, reportParts: null, customs: null, held: null, total: 0, page, elsewhere: 0, loading, settled: false, failed: [], complete: false, retry };
   }
   const onPage = (label: string) => page === null || label === page;
   // Whether a post waits depends on the payouts' answer too (`reportsFrom`): without both, no count.
@@ -139,21 +165,25 @@ export function useDecisionCounts(options: { page?: string | null } = {}): Decis
   const pending = changes.data ? pendingChangesOf(changes.data) : undefined;
   const paidCustoms = customs.data?.customs.filter((custom) => custom.state === "paid");
   const reportParts = unparsed && pending ? { posts: unparsed.filter((post) => postOnPage(post, page)).length, changes: pending.length } : null;
+  // Only the questions that wait for the owner: the chatters' own are not his decision.
+  const ownerQuestions = questions.data?.owner;
   const counts = {
+    questions: ownerQuestions ? ownerQuestions.filter((question) => questionOnPage(question, page)).length : null,
     reports: reportParts === null ? null : reportParts.posts + reportParts.changes,
     customs: paidCustoms ? paidCustoms.filter((custom) => onPage(custom.pageLabel)).length : null,
     held: heldRead.data ? heldRead.data.total : null,
   };
-  const elsewhere = page === null ? 0 : (unparsed && reportParts ? unparsed.length - reportParts.posts : 0)
+  const elsewhere = page === null ? 0 : (ownerQuestions ? ownerQuestions.length - (counts.questions ?? 0) : 0)
+    + (unparsed && reportParts ? unparsed.length - reportParts.posts : 0)
     + (paidCustoms ? paidCustoms.length - (counts.customs ?? 0) : 0)
     + (held.data && counts.held !== null ? Math.max(0, held.data.total - counts.held) : 0);
-  // Only a read that was asked and broke is a failure: a team lead's reports are simply not theirs.
-  const broke = { reports: posts.isError || changes.isError, customs: customs.isError, held: heldRead.isError };
+  // Only a read that was asked and broke is a failure: a team lead's questions and reports are simply not theirs.
+  const broke = { questions: questions.isError, reports: posts.isError || changes.isError, customs: customs.isError, held: heldRead.isError };
   const failed = DECISION_QUEUES.filter((queue) => broke[queue] && counts[queue] === null);
   return {
     ...counts,
     reportParts,
-    total: (counts.reports ?? 0) + (counts.customs ?? 0) + (counts.held ?? 0),
+    total: (counts.questions ?? 0) + (counts.reports ?? 0) + (counts.customs ?? 0) + (counts.held ?? 0),
     page,
     elsewhere,
     loading,
@@ -170,20 +200,21 @@ export interface DecisionPart {
   key: string;
   queue: DecisionQueue;
   count: number;
-  /** «1 пост не разобран» · «1 выплаченный день изменён» · «2 кастома оплачены и не отданы» · «3 отправки зависли». */
+  /** «2 вопроса чья продажа» · «1 пост не разобран» · «1 выплаченный день изменён» · «2 кастома оплачены и не отданы» · «3 отправки зависли». */
   text: string;
   /** `/decisions?week=…&page=…#customs`: Решения with this period and page, at the section. */
   to: string;
 }
 
 /** The queues that wait (zero ones left out), in the screen's order, each with its words and its link. */
-export function decisionParts(counts: Pick<DecisionCounts, "reportParts" | "customs" | "held">, search: URLSearchParams | string): DecisionPart[] {
+export function decisionParts(counts: Pick<DecisionCounts, "questions" | "reportParts" | "customs" | "held">, search: URLSearchParams | string): DecisionPart[] {
   const carried = carryParams(search).toString();
   const to = (queue: DecisionQueue) => `/decisions${carried ? `?${carried}` : ""}#${queue}`;
   const parts: DecisionPart[] = [];
   const add = (queue: DecisionQueue, count: number | null, words: (n: number) => string, kind = "") => {
     if (count) parts.push({ key: kind ? `${queue}:${kind}` : queue, queue, count, text: `${formatCount(count)} ${words(count)}`, to: to(queue) });
   };
+  add("questions", counts.questions, (n) => ruPlural(n, "вопрос чья\u00a0продажа", "вопроса чья\u00a0продажа", "вопросов чья\u00a0продажа"));
   add("reports", counts.reportParts?.posts ?? null, (n) => ruPlural(n, "пост не разобран", "поста не разобраны", "постов не разобраны"), "posts");
   add("reports", counts.reportParts?.changes ?? null, (n) => ruPlural(n, "выплаченный день изменён", "выплаченных дня изменены", "выплаченных дней изменены"), "changes");
   add("customs", counts.customs, (n) => ruPlural(n, "кастом оплачен и не отдан", "кастома оплачены и не отданы", "кастомов оплачены и не отданы"));
@@ -191,13 +222,13 @@ export function decisionParts(counts: Pick<DecisionCounts, "reportParts" | "cust
   return parts;
 }
 
-const FAILED_WORD: Record<DecisionQueue, string> = { reports: "отчёты", customs: "кастомы", held: "зависшие отправки" };
+const FAILED_WORD: Record<DecisionQueue, string> = { questions: "вопросы «чья\u00a0продажа»", reports: "отчёты", customs: "кастомы", held: "зависшие отправки" };
 
 /**
  * «Не удалось проверить решения» when nothing answered; «Не удалось проверить
  * споры и кастомы» when only some did. null when nothing failed.
  */
-export function decisionsFailedText(counts: Pick<DecisionCounts, "failed" | "reports" | "customs" | "held">): string | null {
+export function decisionsFailedText(counts: Pick<DecisionCounts, "failed" | "questions" | "reports" | "customs" | "held">): string | null {
   if (counts.failed.length === 0) return null;
   const answered = DECISION_QUEUES.filter((queue) => counts[queue] !== null).length;
   if (answered === 0) return "Не удалось проверить решения";

@@ -352,4 +352,67 @@
     outline: var(--ui-focus);
     outline-offset: 2px;
   }
+
+  /* ------------------------------------------------------- Чья продажа */
+
+  /* The question is the row's words: the agent's note under it, quieter. Both wrap within a line length, never cut. */
+  .decisions-question {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+    max-width: 76ch;
+  }
+
+  .decisions-question__text {
+    margin: 0;
+    color: var(--ui-text);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+
+  /* «Открыть сообщение ↗» right after the question's last word (the gap is the text's own spaces: they hang at a wrap). */
+  .decisions-question__link {
+    vertical-align: baseline;
+    white-space: nowrap;
+  }
+
+  .decisions-question__note-block {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .decisions-question__note {
+    margin: 0;
+    color: var(--ui-text-2);
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+
+  .decisions-question__note--cut {
+    display: -webkit-box;
+    overflow: hidden;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+  }
+
+  /* «Читать целиком»: the app's disclosure lifts the note's cut in place; it has no body of its own. */
+  .decisions-question__more > summary {
+    padding: 2px 0 0;
+  }
+
+  .decisions-question__more > .ui-disclosure__body {
+    display: none;
+  }
+
+  /* The ledger did not answer: the section's quiet sentence and its «Повторить». */
+  .decisions-question__failed {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 12px;
+  }
 }
