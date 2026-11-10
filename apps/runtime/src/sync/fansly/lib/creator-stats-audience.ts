@@ -1,4 +1,5 @@
-import { DAY_MS, utcDayStart, wholeNumber, type CreatorStatsWindow } from "./creator-stats.ts";
+import { utcDayStart, wholeNumber, type CreatorStatsWindow, records } from "./creator-stats.ts";
+import { DAY_MS, HOUR_MS, isoDay, recordOrNull as recordOf } from "./values.ts";
 
 // Fansly's creator statistics of 2026-10, the audience plane (map:
 // reference/fansly-creator-stats §5.5–5.9): the windows the
@@ -11,8 +12,6 @@ import { DAY_MS, utcDayStart, wholeNumber, type CreatorStatsWindow } from "./cre
 // the rows are kept under the window the server served (`afterBucket`,
 // `beforeBucket`, both UTC days, `before` included). A counter the answer does
 // not carry is null, never 0. Ratios and averages are kept as decimal text.
-
-export const HOUR_MS = 3_600_000;
 
 /** The surfaces the official client asks for (map §4: 0 For You, 1 Timeline, 4 Other). */
 export const AUDIENCE_SOURCES = [0, 1, 4] as const;
@@ -74,14 +73,6 @@ export function previousMonth(afterMs: number, floorMs: number): CreatorStatsWin
 
 // ── values ───────────────────────────────────────────────────────────────────
 
-function recordOf(value: unknown): Record<string, unknown> | null {
-  return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : null;
-}
-
-function records(value: unknown): Record<string, unknown>[] {
-  return Array.isArray(value) ? value.map(recordOf).filter((row): row is Record<string, unknown> => row !== null) : [];
-}
-
 function count(value: unknown): number | null {
   const parsed = wholeNumber(value);
   return parsed !== null && parsed >= 0 ? parsed : null;
@@ -98,10 +89,6 @@ function id(value: unknown): string | null {
   if (typeof value === "string" && value.length > 0) return value;
   if (typeof value === "number" && Number.isSafeInteger(value)) return String(value);
   return null;
-}
-
-function isoDay(ms: number): string {
-  return new Date(ms).toISOString().slice(0, 10);
 }
 
 /** The window an answer echoes; null when it echoes none. */

@@ -2,6 +2,7 @@ import { PAYOUT_REQUESTS_PAGE_SIZE } from "@agency_hub_core/fansly";
 
 import { isProcessedPayoutStatus } from "../../../services/canonicalize/fansly-payouts.ts";
 import { classifyFanslyResponse } from "./lane.ts";
+import { int as asNullableInt, text as asNullableString } from "./values.ts";
 
 // The payouts rules of the Sync Engine's `payouts.*` resources
 // (resources/payouts.ts): the request-history walk's stop and catch-up rules,
@@ -54,14 +55,6 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
     : null;
-}
-
-function asNullableInt(value: unknown): number | null {
-  return typeof value === "number" && Number.isSafeInteger(value) ? value : null;
-}
-
-function asNullableString(value: unknown): string | null {
-  return typeof value === "string" && value.length > 0 ? value : null;
 }
 
 // ── shape helpers over the journaled bodies ──────────────────────────────────

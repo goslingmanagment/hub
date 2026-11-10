@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 
 import type { FanslyWireId } from "@agency_hub_core/fansly";
 import { formatUsdFromMills, millsFromInteger, sanitizePostgresTextDeep } from "@agency_hub_core/shared";
+import { recordOrNull as recordOf } from "./values.ts";
 
 // The page's settings and standing on Fansly (0338), read once a day by
 // `page-settings.daily`: what the creator's settings screens show and Hub
@@ -37,10 +38,6 @@ export interface PageSettingsAnswer {
   body: unknown;
   bodySha256: string;
   summary: string;
-}
-
-function recordOf(value: unknown): Record<string, unknown> | null {
-  return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : null;
 }
 
 function list(value: unknown): Record<string, unknown>[] {

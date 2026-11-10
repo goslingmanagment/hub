@@ -17,6 +17,8 @@ import { truncateUtf16Safe } from "@agency_hub_core/shared";
 
 import type { ApplyInput, ApplyResult, LocalApplyInput, PlanContext, ResourceModule, StepPlan } from "../../engine/resource.ts";
 import { readFanslyPageFacts } from "../lib/page-facts.ts";
+import { idOf } from "./answers.ts";
+import { isRecord } from "../lib/values.ts";
 
 // Hub's reads of its own Fansly posts (wall posts PR 9, spec §3.6, §8.2, §9):
 //
@@ -55,16 +57,6 @@ export const FANSLY_VERIFY_GIVE_UP_MS = 2 * 60 * MINUTE_MS;
  *  the OnlyFans twin: 2,502 snapshots refused). */
 const TEXT_HEAD = 500;
 const CAPTION_HEAD = 300;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function idOf(value: unknown): string | null {
-  if (typeof value === "string" && value.trim() !== "") return value;
-  if (typeof value === "number" && Number.isSafeInteger(value) && value > 0) return String(value);
-  return null;
-}
 
 /** Fansly's instants: seconds on a post (`createdAt`), milliseconds on the
  *  schedule and the publishing bodies (FBuddy's map) — read either way. */

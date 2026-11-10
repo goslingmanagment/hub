@@ -22,6 +22,7 @@ import type {
   FanslyWireParams,
   FanslyWireSpecFor,
 } from "./types.ts";
+import { isRecord } from "./guards.ts";
 
 // One spec per Fansly route the engine reads. Each query is the web app's own
 // for the same read (bundle main.2e6b96097a4bb73b, 2026-10-08; the 2026-08-19
@@ -187,10 +188,6 @@ function statsWindow(p: FanslyStatsWindow): { after: string; before: string } {
     throw new RangeError(`Fansly statistics window is reversed (afterMs ${p.afterMs} > beforeMs ${p.beforeMs})`);
   }
   return { after: count("afterMs", p.afterMs), before: count("beforeMs", p.beforeMs) };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function accepted<R>(value: R): FanslyContractResult<R> {

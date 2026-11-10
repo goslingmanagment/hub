@@ -1,4 +1,5 @@
 import { classifyFanslyResponse } from "./lane.ts";
+import { text as asString } from "./values.ts";
 
 // The purchase-history rules of the Sync Engine's `purchases.targets`
 // resource (resources/purchases.ts): the media target a money fact names and
@@ -53,10 +54,6 @@ function asRecord(value: unknown): JsonRecord | null {
   return typeof value === "object" && value !== null && !Array.isArray(value)
     ? value as JsonRecord
     : null;
-}
-
-function asString(value: unknown): string | null {
-  return typeof value === "string" && value.length > 0 ? value : null;
 }
 
 function purchaseHistoryTargetKindFromRawType(

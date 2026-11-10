@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 
 import { millsFromInteger, sanitizePostgresText, type Mills } from "@agency_hub_core/shared";
+import { int, recordOrNull as recordOf } from "./values.ts";
 
 // The page's own profile on Fansly, read out of `/account/me` (0337): what a
 // creator sees on her profile and in its editor — the display name, the bio,
@@ -103,10 +104,6 @@ export interface PageProfileAnswer {
   counters: PageProfileCounters;
 }
 
-function recordOf(value: unknown): Record<string, unknown> | null {
-  return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : null;
-}
-
 function text(value: unknown): string | null {
   return typeof value === "string" ? sanitizePostgresText(value) : null;
 }
@@ -116,10 +113,6 @@ function ref(value: unknown): string | null {
   if (typeof value === "string" && value.length > 0) return value;
   if (typeof value === "number" && Number.isSafeInteger(value)) return String(value);
   return null;
-}
-
-function int(value: unknown): number | null {
-  return typeof value === "number" && Number.isSafeInteger(value) ? value : null;
 }
 
 function count(value: unknown): number | null {

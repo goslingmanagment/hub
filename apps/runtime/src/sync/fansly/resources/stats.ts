@@ -55,6 +55,7 @@ import {
 } from "../../engine/resource.ts";
 import { readFanslyPageFacts } from "../lib/page-facts.ts";
 import { fanslyResourceSpec } from "../registry.ts";
+import { DAY_MS, HOUR_MS, int, recordOf, text } from "../lib/values.ts";
 
 // `stats.daily`, `stats.hourly`, `stats.backfill` (plan §5, design §5.19):
 // the account statistics, journaled under the legacy kinds and turned into
@@ -82,23 +83,9 @@ import { fanslyResourceSpec } from "../registry.ts";
 // The params `{"only":"earnings"}` walk the earnings windows alone.
 
 const HOURLY_KEY = "stats.hourly";
-const DAY_MS = 86_400_000;
-const HOUR_MS = 3_600_000;
 const DAILY_PERIOD_MS = 86_400_000;
 const HOURLY_PERIOD_MS = 3_600_000;
 const ALL_TIME_AFTER_MS = Date.UTC(2015, 0, 1);
-
-function recordOf(value: unknown): Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : {};
-}
-
-function text(value: unknown): string | null {
-  return typeof value === "string" && value.length > 0 ? value : null;
-}
-
-function int(value: unknown): number | null {
-  return typeof value === "number" && Number.isSafeInteger(value) ? value : null;
-}
 
 function params(request: RequestPlan): Record<string, unknown> {
   return recordOf(request.params);

@@ -12,6 +12,7 @@ import { millsFromInteger } from "@agency_hub_core/shared";
 
 import { ApplyQuarantine } from "../../engine/commit.ts";
 import type { ApplyInput, ApplyResult, LocalApplyInput, RequestPlan, ResourceModule, StepPlan } from "../../engine/resource.ts";
+import { DAY_MS, recordOf } from "../lib/values.ts";
 
 // `tracking-links.daily` (0339): each live tracking link's days, as its stats
 // screen shows them — `/trackinglinks/stats` (clicks, claims, follows,
@@ -30,7 +31,6 @@ import type { ApplyInput, ApplyResult, LocalApplyInput, RequestPlan, ResourceMod
 // too, also in a sweep already under way. A pass is a `local` step: no
 // request, the cursor moves on.
 
-const DAY_MS = 86_400_000;
 /** The daily re-read: Fansly corrects recent days for a while. */
 const RECENT_DAYS = 14;
 /** A link with no known creation is read this far back the first time. */
@@ -57,10 +57,6 @@ interface Cursor {
   sweep: Sweep | null;
   /** Links whose whole history has been read. */
   historyRead: string[];
-}
-
-function recordOf(value: unknown): Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
 
 function int(value: unknown): number | null {

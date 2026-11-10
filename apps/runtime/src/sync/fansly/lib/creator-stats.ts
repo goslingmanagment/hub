@@ -1,5 +1,7 @@
 import { millsFromInteger, type Mills } from "@agency_hub_core/shared";
 
+import { DAY_MS, int, recordOf, recordOrNull } from "./values.ts";
+
 // Fansly's creator statistics of 2026-10 (`/account/stats/*`, map:
 // reference/fansly-creator-stats): the windows the `creator-stats.*`
 // resources ask for and the typed rows of the account plane's answers.
@@ -11,7 +13,6 @@ import { millsFromInteger, type Mills } from "@agency_hub_core/shared";
 // `series`, numbers in `summary`. Money is mills. A counter the answer does
 // not carry is null, never 0; a row exists only for a bucket with activity.
 
-export const DAY_MS = 86_400_000;
 /** The longest span `series` and `summary` serve (map §4). */
 export const CREATOR_STATS_MAX_SPAN_DAYS = 400;
 /** The oldest month `series` revenue reaches (map §4: 2019-06-25). */
@@ -46,14 +47,22 @@ export function previousSpan(afterMs: number, floorMs: number): CreatorStatsWind
   return { afterMs: Math.max(floor, beforeMs - (CREATOR_STATS_MAX_SPAN_DAYS - 1) * DAY_MS), beforeMs };
 }
 
-// ── values ───────────────────────────────────────────────────────────────────
-
-function recordOf(value: unknown): Record<string, unknown> | null {
-  return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : null;
+/** The window a cursor or a step's parameters carry; null when it is none. */
+export function windowOf(value: unknown): CreatorStatsWindow | null {
+  const record = recordOf(value);
+  const afterMs = int(record.afterMs);
+  const beforeMs = int(record.beforeMs);
+  return afterMs === null || beforeMs === null || afterMs > beforeMs ? null : { afterMs, beforeMs };
 }
 
-function records(value: unknown): Record<string, unknown>[] {
-  return Array.isArray(value) ? value.map(recordOf).filter((row): row is Record<string, unknown> => row !== null) : [];
+export function sameWindow(a: CreatorStatsWindow, b: CreatorStatsWindow): boolean {
+  return a.afterMs === b.afterMs && a.beforeMs === b.beforeMs;
+}
+
+// ── values ───────────────────────────────────────────────────────────────────
+
+export function records(value: unknown): Record<string, unknown>[] {
+  return Array.isArray(value) ? value.map(recordOrNull).filter((row): row is Record<string, unknown> => row !== null) : [];
 }
 
 /** A whole number as served: a JSON number or a decimal string. */
@@ -248,7 +257,7 @@ export function parseSeriesAnswer(
   family: CreatorStatsFamily,
   granularity: CreatorStatsGranularity,
 ): SeriesAnswer | null {
-  const body = recordOf(response);
+  const body = recordOrNull(response);
   if (body === null || !Array.isArray(body.rows)) return null;
   if (body.family !== undefined && body.family !== family) return null;
   if (body.granularity !== undefined && body.granularity !== granularity) return null;
@@ -323,7 +332,7 @@ function totalsOf(section: Record<string, unknown>, scope: string, ref: string, 
   const out: WindowTotalRow[] = [];
   for (const [metric, value] of Object.entries(section)) {
     if (skip.has(metric)) continue;
-    const pair = recordOf(value);
+    const pair = recordOrNull(value);
     if (pair !== null && ("value" in pair || "previous" in pair)) {
       out.push({ scope, ref, metric, value: decimal(pair.value), previous: decimal(pair.previous) });
     } else if (typeof value === "number") {
@@ -349,8 +358,8 @@ const DIMENSION_KEYS = new Set(["source", "productType", "tierId", "series", "le
 
 /** The typed rows of one `/account/stats/summary` answer; null when it is not one. */
 export function parseSummaryAnswer(response: unknown): SummaryAnswer | null {
-  const body = recordOf(response);
-  if (body === null || (!Array.isArray(body.levels) && !Array.isArray(body.views) && recordOf(body.revenue) === null)) return null;
+  const body = recordOrNull(response);
+  if (body === null || (!Array.isArray(body.levels) && !Array.isArray(body.views) && recordOrNull(body.revenue) === null)) return null;
   const levels: LevelsRow[] = [];
   for (const point of records(body.levels)) {
     const at = bucket(point.bucket);
@@ -359,7 +368,7 @@ export function parseSummaryAnswer(response: unknown): SummaryAnswer | null {
 
   const windowTotals: WindowTotalRow[] = [];
   for (const metric of ["followerCount", "subscriberCount"]) {
-    const pair = recordOf(body[metric]);
+    const pair = recordOrNull(body[metric]);
     if (pair !== null) windowTotals.push({ scope: "account", ref: "", metric, value: decimal(pair.value), previous: decimal(pair.previous) });
   }
 
@@ -368,7 +377,7 @@ export function parseSummaryAnswer(response: unknown): SummaryAnswer | null {
     if (source !== null) windowTotals.push(...totalsOf(row, "views", String(source), DIMENSION_KEYS));
   }
 
-  const profile = recordOf(body.profile);
+  const profile = recordOrNull(body.profile);
   if (profile !== null) {
     windowTotals.push(...totalsOf(profile, "profile", "", DIMENSION_KEYS));
     for (const row of records(profile.bySource)) {
@@ -377,10 +386,10 @@ export function parseSummaryAnswer(response: unknown): SummaryAnswer | null {
     }
   }
 
-  const follows = recordOf(body.follows);
+  const follows = recordOrNull(body.follows);
   if (follows !== null) windowTotals.push(...totalsOf(follows, "follows", "", DIMENSION_KEYS));
 
-  const revenue = recordOf(body.revenue);
+  const revenue = recordOrNull(body.revenue);
   if (revenue !== null) {
     windowTotals.push(...totalsOf(revenue, "revenue", "", DIMENSION_KEYS));
     for (const row of records(revenue.byProductType)) {
@@ -391,7 +400,7 @@ export function parseSummaryAnswer(response: unknown): SummaryAnswer | null {
 
   const tiers: TierRow[] = [];
   const tierLevels: TierLevelsRow[] = [];
-  const subscriptions = recordOf(body.subscriptions);
+  const subscriptions = recordOrNull(body.subscriptions);
   if (subscriptions !== null) {
     windowTotals.push(...totalsOf(subscriptions, "subscriptions", "", DIMENSION_KEYS));
     for (const row of records(subscriptions.byTier)) {
@@ -413,17 +422,17 @@ export function parseSummaryAnswer(response: unknown): SummaryAnswer | null {
   }
 
   const engagement: EngagementRow[] = [];
-  const engage = recordOf(body.engagement);
+  const engage = recordOrNull(body.engagement);
   if (engage !== null) {
     windowTotals.push(...totalsOf(engage, "engagement", "", DIMENSION_KEYS));
-    const series = recordOf(engage.series);
+    const series = recordOrNull(engage.series);
     for (const point of pointsOf(series?.comments)) engagement.push({ ...point, metric: "comments", source: -1 });
     for (const point of pointsOf(series?.postLikes)) engagement.push({ ...point, metric: "post_likes", source: -1 });
     for (const row of records(engage.mediaLikes)) {
       const source = wholeNumber(row.source);
       if (source === null) continue;
       windowTotals.push(...totalsOf(row, "engagement", String(source), DIMENSION_KEYS));
-      for (const point of pointsOf(recordOf(row.series)?.likes)) engagement.push({ ...point, metric: "media_likes", source });
+      for (const point of pointsOf(recordOrNull(row.series)?.likes)) engagement.push({ ...point, metric: "media_likes", source });
     }
   }
 

@@ -1,3 +1,4 @@
+import { int as intOf, recordOrNull as recordOf } from "./values.ts";
 // Fan marks (2026-10-27): the pure rules of `fan-lists.poll` — which lists it
 // walks, and how it reads the two answers. The resource is
 // ../resources/fan-lists.ts; the marks read is services/client-fan-marks.ts.
@@ -31,18 +32,10 @@ export interface FanListItemServed {
   sortId: string;
 }
 
-function recordOf(value: unknown): Record<string, unknown> | null {
-  return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : null;
-}
-
 /** An id as Fansly serves it: a nonblank string of digits (a number is taken as its digits). */
-function idOf(value: unknown): string | null {
+export function idOf(value: unknown): string | null {
   if (typeof value === "number" && Number.isSafeInteger(value) && value >= 0) return String(value);
   return typeof value === "string" && /^\d{1,30}$/.test(value) ? value : null;
-}
-
-function intOf(value: unknown): number | null {
-  return typeof value === "number" && Number.isSafeInteger(value) ? value : null;
 }
 
 /** The lists answer, or null when it is not an array of lists with an id and a label. */

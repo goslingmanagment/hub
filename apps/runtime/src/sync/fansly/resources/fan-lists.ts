@@ -16,6 +16,7 @@ import {
   parseFanListsAnswer,
 } from "../lib/fan-lists-rules.ts";
 import { lookupFollowups, partitionLookupIds } from "./fan-profiles.ts";
+import { count, recordOf, text } from "../lib/values.ts";
 
 // `fan-lists.poll` (fan marks, 2026-10-27): the page's Fansly user lists every
 // 6 hours, for the «💩 Бомж» mark in the chat header. One request a step, the
@@ -62,18 +63,6 @@ export interface FanListsCursor {
 }
 
 type Step = { phase: "lists" } | { phase: "items"; listRef: string; after: string | null };
-
-function recordOf(value: unknown): Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : {};
-}
-
-function count(value: unknown): number | null {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
-}
-
-function text(value: unknown): string | null {
-  return typeof value === "string" && value.length > 0 ? value : null;
-}
 
 function parseWalk(value: unknown): FanListsWalk | null {
   const record = recordOf(value);

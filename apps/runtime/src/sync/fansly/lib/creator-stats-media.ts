@@ -1,4 +1,5 @@
-import { CREATOR_STATS_MAX_SPAN_DAYS, DAY_MS, utcDayStart, wholeNumber, type CreatorStatsWindow } from "./creator-stats.ts";
+import { CREATOR_STATS_MAX_SPAN_DAYS, utcDayStart, wholeNumber, type CreatorStatsWindow, records } from "./creator-stats.ts";
+import { DAY_MS, recordOrNull as recordOf } from "./values.ts";
 
 // Fansly's creator statistics of 2026-10, the media plane (map:
 // reference/fansly-creator-stats §5.3–5.4): the typed rows of
@@ -21,14 +22,6 @@ export type MediaSurface = -1 | 0 | 1 | 4;
 export const MEDIA_SURFACE_AGE_DAYS = 93;
 
 // ── values ───────────────────────────────────────────────────────────────────
-
-function recordOf(value: unknown): Record<string, unknown> | null {
-  return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : null;
-}
-
-function records(value: unknown): Record<string, unknown>[] {
-  return Array.isArray(value) ? value.map(recordOf).filter((row): row is Record<string, unknown> => row !== null) : [];
-}
 
 function count(value: unknown): number | null {
   const parsed = wholeNumber(value);

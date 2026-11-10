@@ -20,6 +20,7 @@ import type {
 import { listHeadInstant } from "../lib/conversation-list.ts";
 import { readFanslyPageFacts, waitForPageIdentity } from "../lib/page-facts.ts";
 import { applyListPage } from "./dm-conversations.ts";
+import { count, iso, recordOf } from "../lib/values.ts";
 
 // `repair.ws-gap` (live only, step 3; design S3-04 item 5, §5.21, G17, E19):
 // what the socket may have missed while it was down is read again, once per
@@ -92,18 +93,6 @@ export interface RepairCursor {
 interface RepairStep {
   pass: RepairPass;
   offset: number;
-}
-
-function recordOf(value: unknown): Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : {};
-}
-
-function count(value: unknown): number | null {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
-}
-
-function iso(value: unknown): string | null {
-  return typeof value === "string" && !Number.isNaN(Date.parse(value)) ? value : null;
 }
 
 function parsePass(value: unknown): RepairPass | null {

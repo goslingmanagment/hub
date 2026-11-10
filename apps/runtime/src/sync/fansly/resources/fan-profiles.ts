@@ -20,6 +20,7 @@ import type {
   ResourceModule,
   StepPlan,
 } from "../../engine/resource.ts";
+import { recordOf } from "../lib/values.ts";
 
 // `fan-profiles.lookup`, `.probe`, `.alias-backfill` (plan §5, design §5.13):
 // `GET /account?ids=<≤100>`, journaled as `account_lookup` (raw-only, CDN
@@ -52,10 +53,6 @@ const BATCH = FANSLY_ACCOUNT_LOOKUP_BATCH_SIZE;
 function stringIds(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   return value.filter((id): id is string => typeof id === "string" && id.length > 0);
-}
-
-function recordOf(value: unknown): Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
 
 /** The fan ids a batch work was asked for (`params.ids`). */

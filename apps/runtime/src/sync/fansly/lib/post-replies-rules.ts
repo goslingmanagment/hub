@@ -1,4 +1,5 @@
 import { classifyFanslyResponse } from "./lane.ts";
+import { text as asNullableString } from "./values.ts";
 
 // The post-replies rules of the Sync Engine's `post-replies.*` resources
 // (resources/post-replies.ts): the route's pagination modes and the reads of a
@@ -12,10 +13,6 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
     : null;
-}
-
-function asNullableString(value: unknown): string | null {
-  return typeof value === "string" && value.length > 0 ? value : null;
 }
 
 // ── shape helpers over the journaled bodies ──────────────────────────────────

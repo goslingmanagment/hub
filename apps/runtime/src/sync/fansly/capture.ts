@@ -64,6 +64,7 @@ import {
   JOURNAL_NUL_REPLACED_MAPPER_SUFFIX,
   replaceJournalUnstorableText,
 } from "./lib/journal-lone-surrogates.ts";
+import { recordOrNull as recordOf } from "./lib/values.ts";
 
 /** The part of a wire spec this needs: the observation kind it journals
  *  under (`FanslyWireSpec.kind`). */
@@ -197,10 +198,6 @@ export function prepareJournalBody(spec: FanslyJournalSpec, served: FanslyServed
     loneSurrogatesReplaced: unstorable.loneSurrogates,
     nulReplaced: unstorable.nul,
   };
-}
-
-function recordOf(value: unknown): Record<string, unknown> | null {
-  return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : null;
 }
 
 /** The reply walk a `post.replies` request serves (its post is in the path). */

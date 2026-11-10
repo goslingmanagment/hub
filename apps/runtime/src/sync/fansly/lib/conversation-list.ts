@@ -23,6 +23,7 @@ import {
 import { resolveDmSenderRole } from "./dm-normalize.ts";
 import { truncateDmPreview } from "./dm-preview.ts";
 import { normalizeFanslyTimestamp } from "./timestamp.ts";
+import { int, text as nonEmpty } from "./values.ts";
 
 // The conversation list's rules, without I/O (plan §7 p.3, §6.2; design §5.3):
 // what one listed chat says about its thread, whether a page of them ends a
@@ -125,16 +126,8 @@ export interface ResolveListItemInput {
 const EARLIEST_PLAUSIBLE_MS = Date.UTC(2010, 0, 1);
 const LATEST_PLAUSIBLE_AHEAD_MS = 24 * 60 * 60 * 1000;
 
-function nonEmpty(value: unknown): string | null {
-  return typeof value === "string" && value.length > 0 ? value : null;
-}
-
 function text(value: unknown): string | null {
   return typeof value === "string" ? value : null;
-}
-
-function int(value: unknown): number | null {
-  return typeof value === "number" && Number.isSafeInteger(value) ? value : null;
 }
 
 /** A Fansly message time (seconds or ms) as a Date, or null when absent. */

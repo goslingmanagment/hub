@@ -13,23 +13,10 @@ import { CAPTURE_COVERAGE_PLANES } from "@agency_hub_core/shared";
 import { parseFanslyMetadataAccountCreatedAt } from "../../../services/fansly.ts";
 import { ApplyQuarantine } from "../../engine/commit.ts";
 import type { ApplyInput, ApplyResult, RequestPlan, ResourceModule, StepPlan } from "../../engine/resource.ts";
-import {
-  CREATOR_STATS_FAMILIES,
-  CREATOR_STATS_MAX_SPAN_DAYS,
-  CREATOR_STATS_REVENUE_FLOOR_MS,
-  DAY_MS,
-  parseSeriesAnswer,
-  parseSummaryAnswer,
-  previousSpan,
-  trailingDays,
-  utcDayStart,
-  type CreatorStatsFamily,
-  type CreatorStatsGranularity,
-  type CreatorStatsWindow,
-  type SeriesAnswer,
-} from "../lib/creator-stats.ts";
+import { CREATOR_STATS_FAMILIES, CREATOR_STATS_MAX_SPAN_DAYS, CREATOR_STATS_REVENUE_FLOOR_MS, parseSeriesAnswer, parseSummaryAnswer, previousSpan, trailingDays, utcDayStart, type CreatorStatsFamily, type CreatorStatsGranularity, type CreatorStatsWindow, type SeriesAnswer, windowOf, sameWindow } from "../lib/creator-stats.ts";
 import { writeFanslyLaneCoverage } from "../lib/lane.ts";
 import { readFanslyPageFacts } from "../lib/page-facts.ts";
+import { DAY_MS, int, isoDay, recordOf } from "../lib/values.ts";
 
 // `creator-stats.account` and `creator-stats.history`: the account plane of
 // Fansly's creator statistics of 2026-10 (`/account/stats/series` and
@@ -77,29 +64,6 @@ type HistoryPhase = (typeof HISTORY_PHASES)[number];
 
 /** Hourly rows Fansly keeps at account level (map §5.2). */
 const HOURLY_KEPT_DAYS = 14;
-
-function recordOf(value: unknown): Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : {};
-}
-
-function int(value: unknown): number | null {
-  return typeof value === "number" && Number.isSafeInteger(value) ? value : null;
-}
-
-function windowOf(value: unknown): CreatorStatsWindow | null {
-  const record = recordOf(value);
-  const afterMs = int(record.afterMs);
-  const beforeMs = int(record.beforeMs);
-  return afterMs === null || beforeMs === null || afterMs > beforeMs ? null : { afterMs, beforeMs };
-}
-
-function sameWindow(a: CreatorStatsWindow, b: CreatorStatsWindow): boolean {
-  return a.afterMs === b.afterMs && a.beforeMs === b.beforeMs;
-}
-
-function isoDay(ms: number): string {
-  return new Date(ms).toISOString().slice(0, 10);
-}
 
 /** What a step asks: a series family at a granularity, or the summary. */
 type Ask = { kind: "series"; family: CreatorStatsFamily; granularity: CreatorStatsGranularity } | { kind: "summary" };

@@ -1,6 +1,7 @@
+import { DAY_MS } from "./values.ts";
+
 // Fansly earnings/stats caps aggregate rows but ignores offset. Split on UTC
 // business-day boundaries; every type belonging to one day stays together.
-const DAY_MS = 86_400_000;
 export const FANSLY_EARNINGS_ROW_LIMIT = 100;
 
 export interface EarningsWindow {

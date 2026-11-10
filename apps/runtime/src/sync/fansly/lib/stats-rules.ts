@@ -4,6 +4,7 @@ import {
 } from "../../../services/canonicalize/fansly-stats.ts";
 import { parseEarningsWindow, type EarningsWindowWalk } from "./earnings-window.ts";
 import { classifyFanslyResponse, type FanslyResponseClass } from "./lane.ts";
+import { asInt, int as asNullableInt, text as asNullableString } from "./values.ts";
 
 // The account-statistics rules of the Sync Engine's `stats.*` resources
 // (resources/stats.ts): the `stats_snapshot` cursor with its backfill walks'
@@ -195,18 +196,6 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
     : null;
-}
-
-function asInt(value: unknown, fallback: number): number {
-  return typeof value === "number" && Number.isSafeInteger(value) ? value : fallback;
-}
-
-function asNullableString(value: unknown): string | null {
-  return typeof value === "string" && value.length > 0 ? value : null;
-}
-
-function asNullableInt(value: unknown): number | null {
-  return typeof value === "number" && Number.isSafeInteger(value) ? value : null;
 }
 
 /** A cursor written before the guard existed parses as a lane that has asked

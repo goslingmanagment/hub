@@ -17,6 +17,7 @@ import {
 import type { RequestPlan } from "../../engine/resource.ts";
 import { fanslyDispatchKindOfStep, FANSLY_WRITE_STEP_ROUTES } from "./commands.ts";
 import { answeredPart, fanslyAlbumCardsOf, fanslyCardName, fanslyReadIndexOf, fanslyUploadFailed, subItemOf } from "./uploads.ts";
+import { isRecord } from "../lib/values.ts";
 
 export { subItemOf } from "./uploads.ts";
 
@@ -106,10 +107,6 @@ export interface ApprovedForm {
   /** A vault album's album on Fansly as approved (0323); null: its create makes one. */
   albumRef: string | null;
   media: ApprovedFormMedia[];
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function strings(value: unknown): string[] | null {

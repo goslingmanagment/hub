@@ -1,6 +1,7 @@
 import { FANSLY_NOTIFICATION_DECLARED_TYPE_CODES, FANSLY_NOTIFICATION_TYPE_GROUPS } from "@agency_hub_core/shared";
 
 import { classifyFanslyResponse } from "./lane.ts";
+import { text as asNullableString } from "./values.ts";
 
 // The notifications rules of the Sync Engine's `notifications.*` resources
 // (resources/notifications.ts): the `type` filter forms, and the reads of a
@@ -14,10 +15,6 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
     : null;
-}
-
-function asNullableString(value: unknown): string | null {
-  return typeof value === "string" && value.length > 0 ? value : null;
 }
 
 // ── shape helpers over the journaled bodies ──────────────────────────────────

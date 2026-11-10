@@ -12,12 +12,11 @@ import { CAPTURE_COVERAGE_PLANES } from "@agency_hub_core/shared";
 import { parseFanslyMetadataAccountCreatedAt } from "../../../services/fansly.ts";
 import { ApplyQuarantine } from "../../engine/commit.ts";
 import type { ApplyInput, ApplyResult, RequestPlan, ResourceModule, StepPlan } from "../../engine/resource.ts";
-import { CREATOR_STATS_MAX_SPAN_DAYS, DAY_MS, previousSpan, utcDayStart, type CreatorStatsWindow } from "../lib/creator-stats.ts";
+import { CREATOR_STATS_MAX_SPAN_DAYS, previousSpan, utcDayStart, type CreatorStatsWindow, windowOf, sameWindow } from "../lib/creator-stats.ts";
 import {
   AUDIENCE_ROWS_LIMIT,
   AUDIENCE_SETTLE_MS,
   AUDIENCE_SOURCES,
-  HOUR_MS,
   daysEndingWith,
   lastFullHour,
   lastSettledDay,
@@ -34,6 +33,7 @@ import {
 } from "../lib/creator-stats-audience.ts";
 import { writeFanslyLaneCoverage } from "../lib/lane.ts";
 import { readFanslyPageFacts } from "../lib/page-facts.ts";
+import { DAY_MS, HOUR_MS, int, isoDay, recordOf } from "../lib/values.ts";
 
 // The audience plane of Fansly's creator statistics of 2026-10 (map:
 // reference/fansly-creator-stats §5.5–5.9; plan: 8-docs
@@ -85,27 +85,8 @@ type Ask =
   | { route: "tags"; source: AudienceSource; kind: 1 | 2; window: CreatorStatsWindow }
   | { route: "media_shown"; endHourMs: number; hours: number };
 
-function recordOf(value: unknown): Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : {};
-}
-
-function int(value: unknown): number | null {
-  return typeof value === "number" && Number.isSafeInteger(value) ? value : null;
-}
-
-function windowOf(value: unknown): CreatorStatsWindow | null {
-  const record = recordOf(value);
-  const afterMs = int(record.afterMs);
-  const beforeMs = int(record.beforeMs);
-  return afterMs === null || beforeMs === null || afterMs > beforeMs ? null : { afterMs, beforeMs };
-}
-
 function sourceOf(value: unknown): AudienceSource | null {
   return AUDIENCE_SOURCES.find((source) => source === value) ?? null;
-}
-
-function isoDay(ms: number): string {
-  return new Date(ms).toISOString().slice(0, 10);
 }
 
 function requestFor(ask: Ask, step: Record<string, unknown>): RequestPlan {
@@ -158,10 +139,6 @@ function scopeOf(ask: Ask): string {
     default:
       return `${ask.route}:${ask.source}`;
   }
-}
-
-function sameWindow(a: CreatorStatsWindow, b: CreatorStatsWindow): boolean {
-  return a.afterMs === b.afterMs && a.beforeMs === b.beforeMs;
 }
 
 /** One ask as text: what a step planned and what its request sent compare equal. */

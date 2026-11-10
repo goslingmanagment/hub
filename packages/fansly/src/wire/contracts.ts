@@ -17,6 +17,7 @@ import type {
   FanslySubscribersPageContract,
   FanslyWireReadSpec,
 } from "./types.ts";
+import { isRecord } from "./guards.ts";
 
 // The response contracts of the Fansly API: the envelope every route answers
 // in, and the container/identity contracts of the routes whose bodies a writer
@@ -34,10 +35,6 @@ export type FanslyEnvelope<T = unknown> = {
     [key: string]: unknown;
   } | null;
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function isApiError(value: unknown): value is NonNullable<FanslyEnvelope["error"]> {
   return isRecord(value) &&

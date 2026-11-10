@@ -16,7 +16,7 @@ import { CAPTURE_COVERAGE_PLANES } from "@agency_hub_core/shared";
 
 import { ApplyQuarantine } from "../../engine/commit.ts";
 import type { ApplyInput, ApplyResult, DemandSignal, LocalApplyInput, RequestPlan, ResourceModule, StepPlan } from "../../engine/resource.ts";
-import { DAY_MS, trailingDays, utcDayStart, type CreatorStatsWindow } from "../lib/creator-stats.ts";
+import { trailingDays, utcDayStart, windowOf } from "../lib/creator-stats.ts";
 import {
   mediaAgeDays,
   mediaTierIndex,
@@ -31,6 +31,7 @@ import {
 import { writeFanslyLaneCoverage } from "../lib/lane.ts";
 import { clearQueueSubjectBlocks, recordQueueSubjectFailures } from "../lib/subject-queue.ts";
 import { fanslyResourceSpec } from "../registry.ts";
+import { DAY_MS, HOUR_MS, int, isoDay, recordOf, text } from "../lib/values.ts";
 
 // `creator-stats.media-top` and `creator-stats.media`: the media plane of
 // Fansly's creator statistics of 2026-10 (`/account/stats/media/top` and
@@ -63,8 +64,6 @@ import { fanslyResourceSpec } from "../registry.ts";
 // subject ladder), never the walk's.
 
 export const MEDIA_WALK_KEY = "creator-stats.media";
-
-const HOUR_MS = 3_600_000;
 const TOP_SOURCES = [0, 1, 4] as const;
 const TOP_RECENT_DAYS = 7;
 /** The longest window `media/top` serves (map §4). */
@@ -79,29 +78,6 @@ const SEED_EVERY_MS = HOUR_MS;
 const VISIT_MAX_AGE_MS = DAY_MS;
 /** A deleted media read past its deletion's day is due again this long after. */
 const DELETED_RECHECK_MS = 365 * DAY_MS;
-
-function recordOf(value: unknown): Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : {};
-}
-
-function int(value: unknown): number | null {
-  return typeof value === "number" && Number.isSafeInteger(value) ? value : null;
-}
-
-function text(value: unknown): string | null {
-  return typeof value === "string" && value.length > 0 ? value : null;
-}
-
-function isoDay(ms: number): string {
-  return new Date(ms).toISOString().slice(0, 10);
-}
-
-function windowOf(value: unknown): CreatorStatsWindow | null {
-  const record = recordOf(value);
-  const afterMs = int(record.afterMs);
-  const beforeMs = int(record.beforeMs);
-  return afterMs === null || beforeMs === null || afterMs > beforeMs ? null : { afterMs, beforeMs };
-}
 
 function lineageOf(input: ApplyInput): CreatorStatsLineage {
   return { pageId: input.pageId, observationId: input.observation.id, capturedAt: input.observation.receivedAt };

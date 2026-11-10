@@ -35,6 +35,7 @@ import { offsetPageDone } from "../lib/offset-walk.ts";
 import { fanEarningsRosterFollowups } from "./fan-earnings.ts";
 import { lookupFollowups, partitionLookupIds } from "./fan-profiles.ts";
 import { purchaseTargetFollowups, purchaseTargetsOfTransactions } from "./purchases.ts";
+import { count, DAY_MS, iso, recordOf } from "../lib/values.ts";
 
 // `transactions.head`, `.insurance`, `.rescan`, `.backfill` (plan §5, §7 p.5;
 // design §5.6): the wallet earnings ledger from
@@ -83,7 +84,6 @@ export const TRANSACTIONS_HEAD_LIMIT = 20;
 export const TRANSACTIONS_SCAN_LIMIT = 100;
 /** [D6] A head walk that reaches this offset hands over to the rescan. */
 export const TRANSACTIONS_HEAD_ESCALATE_OFFSET = 200;
-const DAY_MS = 86_400_000;
 /** The rescan window (registry parameters: the lookback and the rescan cap the
  *  legacy engine ran with in production when it was retired). */
 export const TRANSACTIONS_LOOKBACK_MS = 7 * DAY_MS;
@@ -122,18 +122,6 @@ export interface TransactionsCursor {
   restartCount: number;
   /** The receipt of the last finished walk. */
   last: Record<string, unknown> | null;
-}
-
-function recordOf(value: unknown): Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : {};
-}
-
-function count(value: unknown): number | null {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
-}
-
-function iso(value: unknown): string | null {
-  return typeof value === "string" && !Number.isNaN(Date.parse(value)) ? value : null;
 }
 
 function strings(value: unknown): string[] {

@@ -3,6 +3,7 @@ import { VAULT_MEDIA_HEAD_CURSOR } from "@agency_hub_core/fansly";
 import { classifyFanslyResponse } from "./lane.ts";
 import { parseVaultHeadBasis, parseVaultHeadFallback, type VaultHeadBasis, type VaultHeadFallback } from "./vault-head-walk.ts";
 import { parseVaultWalkProof, type VaultWalkProof } from "./vault-walk-proof.ts";
+import { asInt, text as asNullableString } from "./values.ts";
 
 // The catalog rules of the Sync Engine's `catalog.*` resources
 // (resources/catalog.ts): the observation kind of each catalog route, the
@@ -72,14 +73,6 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
     : null;
-}
-
-function asInt(value: unknown, fallback: number): number {
-  return typeof value === "number" && Number.isSafeInteger(value) ? value : fallback;
-}
-
-function asNullableString(value: unknown): string | null {
-  return typeof value === "string" && value.length > 0 ? value : null;
 }
 
 export function parseAlbumWalk(value: unknown): VaultAlbumWalkState | null {
