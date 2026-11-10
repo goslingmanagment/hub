@@ -104,7 +104,6 @@ import {
 } from "./services/ai-media-describe/sweep.ts";
 import { startAiMediaDescribeLoop } from "./services/ai-media-describe/loop.ts";
 import { runDmCorrectionsReconcile } from "./services/dm-corrections-reconciler.ts";
-import { runOfapiDmReadthroughReconcile } from "./services/ofapi-dm-readthrough.ts";
 import { runOfapiCaptureMaterialization } from "./services/ofapi-capture-materialization.ts";
 import { runAiAcceptanceProjection } from "./services/projections/ai-acceptance.ts";
 import {
@@ -532,17 +531,11 @@ export async function startWorkerServices(
     }
   });
 
-  // Defect 2026-08-22: these three used to run at the END of the canonicalize
+  // Defect 2026-08-22: these used to run at the END of the canonicalize
   // sweep's handler, which meant a sweep killed at the queue's expiration
   // never reached them at all. Same minutely cadence, its own job — the ONLY
   // thing they ever shared with the sweep was the tick.
   await boss.work(DM_RECONCILE_SWEEP_QUEUE, CRON_SWEEP_WORK_OPTIONS, async () => {
-    // PR4: the readthrough reconcile projector (it is NOT a canonicalizer
-    // family — see ofapi-dm-readthrough).
-    const readthrough = await runOfapiDmReadthroughReconcile(app);
-    if (readthrough.scanned > 0) {
-      app.logger.info(readthrough, "Readthrough reconcile sweep complete");
-    }
     const captureMaterialization = await runOfapiCaptureMaterialization(app);
     if (captureMaterialization.scanned > 0) {
       app.logger.info(captureMaterialization, "OFAPI capture materialization sweep complete");

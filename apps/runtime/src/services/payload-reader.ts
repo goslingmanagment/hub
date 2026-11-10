@@ -102,7 +102,6 @@
 //   services/canonicalize-driver.ts               catch → skippedUnavailable
 //   services/ofapi-capture-transport.ts           catch → unavailable
 //   services/ofapi-capture-materialization.ts     propagate (per-row catch)
-//   services/ofapi-dm-readthrough.ts              propagate (per-row catch)
 //   services/ofapi-capture-jobs.ts                propagate (leased job retries)
 //   services/projections/ai-acceptance.ts         propagate (watermark unmoved)
 //   services/domain-events-enrich.ts              propagate (caller serves a

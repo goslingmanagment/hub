@@ -572,7 +572,6 @@ describe("OFAPI webhook admin flow", () => {
       updateWebhook: vi.fn(async () => ({ id: "wh_created" })),
       listAccounts: vi.fn(async () => []),
       listChats: vi.fn(async () => ({ items: [], hasNextPage: false, meta: null })),
-      listChatMessages: vi.fn(async () => ({ items: [], hasNextPage: false, meta: null })),
       listActiveFans: vi.fn(async () => ({ items: [], hasNextPage: false, meta: null })),
       pingBalance: vi.fn(async () => ({ items: [], hasNextPage: false, meta: null })),
       ...overrides,

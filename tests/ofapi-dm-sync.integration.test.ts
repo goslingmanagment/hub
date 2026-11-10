@@ -98,20 +98,16 @@ function fakeOfapiClient(pages: FakePages) {
     }
     return page;
   });
-  const listChatMessages = vi.fn(async () => {
-    throw new Error("List Chats must not invoke the retired per-chat history crawler");
-  });
 
   const client: OfapiClient = {
     createWebhook: vi.fn(async () => ({ id: "wh" })),
     updateWebhook: vi.fn(async () => ({ id: "wh" })),
     listAccounts: vi.fn(async () => []),
     listChats: listChats as never,
-    listChatMessages: listChatMessages as never,
     listActiveFans: vi.fn(async () => ({ items: [], hasNextPage: false, meta: null })),
     pingBalance: vi.fn(async () => ({ items: [], hasNextPage: false, meta: null })),
   };
-  return { client, listChats, listChatMessages };
+  return { client, listChats };
 }
 
 function fakeTelemetry() {

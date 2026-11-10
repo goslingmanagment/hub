@@ -578,8 +578,6 @@ describe("erasure drill (Stage 28 Task 4)", () => {
       await import("../apps/runtime/src/services/ofapi-dm-archive.ts");
     const { sweepOfapiDmProjections } =
       await import("../apps/runtime/src/services/ofapi-dm-projection.ts");
-    const { runOfapiDmReadthroughReconcile } =
-      await import("../apps/runtime/src/services/ofapi-dm-readthrough.ts");
     const { OFAPI_READTHROUGH_OBSERVATION_KIND } =
       await import("../apps/runtime/src/services/health-floors.ts");
 
@@ -728,36 +726,6 @@ describe("erasure drill (Stage 28 Task 4)", () => {
     );
     expect(claimedRow).toMatchObject({ archive_status: "pending" });
 
-    // A v2 readthrough RE-capture of pre-erasure material (post-erasure
-    // observation, old createdAt) drops fenced items but still stamps —
-    // the backlog floor never latches over rows that can never project.
-    const postObs = await insertObservation(testDb.db, {
-      source: "readthrough",
-      producer: "read-gateway",
-      platform: "onlyfans",
-      accountId: page.id,
-      kind: OFAPI_READTHROUGH_OBSERVATION_KIND,
-      payload: {
-        ofapiAccountId: "acct_fence",
-        chatId: FAN_F,
-        conversationRef: FAN_F,
-        cursors: {},
-        body: { data: [{ id: 40004, text: "old rest again", isSentByMe: false, createdAt: "2026-07-01T10:03:00+00:00" }] },
-      },
-      payloadHash: Buffer.alloc(32),
-      idempotencyKey: "fence-rt-post",
-    });
-    const reconcile = await runOfapiDmReadthroughReconcile(fenceStub());
-    expect(reconcile.drops).toBe(1);
-    expect(reconcile.stamped).toBe(1);
-    expect(await count(`dm_message_archive where platform_message_id = '40004'`)).toBe(0);
-    const { OFAPI_READTHROUGH_HEALTH_FLOOR } =
-      await import("../apps/runtime/src/services/health-floors.ts");
-    const stampedObs = await one<{ parse_version: number }>(
-      `select parse_version from observations where id = ${postObs.observationId}`,
-    );
-    expect(stampedObs.parse_version).toBe(OFAPI_READTHROUGH_HEALTH_FLOOR.version);
-
     // Tombstone-first-then-REST: the delete webhook carries no fan refs, so
     // the stub is UNREACHABLE by fan-scope predicates in both stores — the
     // DOCUMENTED CONTENTLESS SURVIVOR (message id only, no content). The
@@ -778,24 +746,6 @@ describe("erasure drill (Stage 28 Task 4)", () => {
       retainUntil: new Date("2126-01-01T00:00:00Z"),
     });
     expect(stub.status).toBe("written");
-    await insertObservation(testDb.db, {
-      source: "readthrough",
-      producer: "read-gateway",
-      platform: "onlyfans",
-      accountId: page.id,
-      kind: OFAPI_READTHROUGH_OBSERVATION_KIND,
-      payload: {
-        ofapiAccountId: "acct_fence",
-        chatId: FAN_F,
-        conversationRef: FAN_F,
-        cursors: {},
-        body: { data: [{ id: 40005, text: "content for the stub", isSentByMe: true, createdAt: "2026-07-01T10:04:00+00:00" }] },
-      },
-      payloadHash: Buffer.alloc(32),
-      idempotencyKey: "fence-rt-stub",
-    });
-    const hydrate = await runOfapiDmReadthroughReconcile(fenceStub());
-    expect(hydrate.drops).toBe(1);
     const survivor = await one<{ text_plain: string; created_null: boolean; deleted: boolean }>(
       `select text_plain, message_created_at is null as created_null, deleted_at is not null as deleted
        from dm_message_archive where platform_message_id = '40005'`,

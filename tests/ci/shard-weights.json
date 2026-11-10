@@ -88,7 +88,6 @@
     "tests/ofapi-command-outbox.integration.test.ts": 4.5,
     "tests/ofapi-credit-ledger.integration.test.ts": 1.3,
     "tests/ofapi-dm-projection.integration.test.ts": 2.2,
-    "tests/ofapi-dm-readthrough.integration.test.ts": 1,
     "tests/ofapi-dm-sync.integration.test.ts": 1.1,
     "tests/ofapi-fan-identities.integration.test.ts": 2,
     "tests/ofapi-flag-flip-hardening.integration.test.ts": 1.3,

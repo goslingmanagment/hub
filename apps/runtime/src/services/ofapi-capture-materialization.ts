@@ -18,8 +18,31 @@ import {
   parseOfapiMessageMaterial,
   parseStrictOfapiMessagePage,
 } from "./ofapi-capture-contract.ts";
-import type { ReadthroughReconcileRunResult } from "./ofapi-dm-readthrough.ts";
 import { serveOfapiMessageMaterialPage } from "./ofapi-message-material-serving.ts";
+
+/** The non-sentinel conflict classes Wave 1 deliberately keeps (amendment 3:
+ * "conflicts barely exist" must become a measured number). */
+export type ReadthroughConflictField =
+  | "text"
+  | "price"
+  | "direction"
+  | "timestamp"
+  | "reply"
+  | "media";
+
+export interface ReadthroughReconcileRunResult {
+  scanned: number;
+  stamped: number;
+  upserts: number;
+  noops: number;
+  /** Items dropped permanently (erasure-fenced). */
+  drops: number;
+  parseSkips: number;
+  /** Observations deferred behind the erasure fence lock (retry next run). */
+  deferred: number;
+  errored: number;
+  conflicts: Record<ReadthroughConflictField, number>;
+}
 
 export const OFAPI_CAPTURE_MATERIALIZER_VERSION = 3;
 // v2 stamped valid ascending tails without storing them. Repair those through

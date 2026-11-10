@@ -24,7 +24,6 @@ import {
   listRunnableOfapiCapturePages,
   listOfapiBalanceObservationsAfter,
   listOfapiOperationBreakdownBetween,
-  sumOfapiRestCreditsForOperationsBetween,
   markOfapiAttemptDispatching,
   markOfapiAttemptIndeterminate,
   OfapiCaptureInvariantError,
@@ -1021,9 +1020,6 @@ describe("OFAPI capture correctness repository", () => {
       restCredits: actualCredits, totalEstimatedCredits: actualCredits,
       netRestCredits: actualCredits, netTotalEstimatedCredits: actualCredits,
     });
-    expect(await sumOfapiRestCreditsForOperationsBetween(testDb.db, {
-      operations: ["list_messages"], from: NOW, to: reportAt,
-    })).toBe(actualCredits);
   });
 
   it("counts one physical dispatch when an indeterminate job receives a late response", async () => {

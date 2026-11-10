@@ -135,10 +135,6 @@ export function capturePayloadResponse(payload: unknown): {
   return null;
 }
 
-export function capturePayloadBodyBytes(payload: unknown): Buffer | null {
-  return capturePayloadResponse(payload)?.bodyBytes ?? null;
-}
-
 export type StrictOfapiMessagePage =
   | {
     accepted: true;

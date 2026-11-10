@@ -19,7 +19,7 @@ import {
   reserveOfapiDayCredits,
   setPageOfapiAccountId,
   settleOfapiDayCreditReservation,
-  sumOfapiCreditsSpentSince,
+  sumOfapiCreditsSpentBetween,
   upsertFanPages,
   upsertFans,
   upsertPageDmConversation,
@@ -409,8 +409,9 @@ describe("ofapi flag-flip hardening (audit session 4)", () => {
       // Non-refill spend counts the webhook component exactly once:
       // 10 + 5 + 2 REST credits plus the 3-credit accrual (stamped at the
       // accrued day's UTC midnight, so the window reaches well past it).
-      expect(await sumOfapiCreditsSpentSince(appContext.db, {
-        since: new Date(dayStart.getTime() - 72 * 60 * 60 * 1000),
+      expect(await sumOfapiCreditsSpentBetween(appContext.db, {
+        from: new Date(dayStart.getTime() - 72 * 60 * 60 * 1000),
+        to: new Date("9999-12-31T23:59:59.999Z"),
       })).toBe(20);
     }, INTEGRATION_TEST_TIMEOUT_MS);
   });

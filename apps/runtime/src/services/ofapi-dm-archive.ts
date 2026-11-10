@@ -114,7 +114,7 @@ function mediaDimension(item: Record<string, unknown>, key: "width" | "height") 
   return null;
 }
 
-export function normalizeArchiveMediaItem(value: unknown): DmMessageArchiveMediaItem | null {
+function normalizeArchiveMediaItem(value: unknown): DmMessageArchiveMediaItem | null {
   const media = asRecord(value);
   const id = idToString(media?.id);
   if (!media || !id) {

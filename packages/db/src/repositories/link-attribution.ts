@@ -1,6 +1,5 @@
 import { sql } from "drizzle-orm";
 import {
-  LINK_ATTRIBUTION_RULE,
   spenderAnalyticsTransactionTypes,
   type TrafficLinkKind,
 } from "@agency_hub_core/shared";
@@ -34,8 +33,6 @@ import { settledTransactionStateSql, settledTransactionStateText } from "./trans
 // whole one. Shares are integer mills: the remainder of the division goes one
 // mill at a time to the recipients in link order (kind, then link number), so
 // for every transaction the shares plus the unallocated part equal its amount.
-
-export const HUB_LINK_MONEY_RULE = LINK_ATTRIBUTION_RULE;
 
 const TRANSACTION_TYPES_SQL = sql.join(
   spenderAnalyticsTransactionTypes.map((type) => sql`${type}::transaction_type`),

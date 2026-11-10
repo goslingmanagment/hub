@@ -206,16 +206,6 @@ describe("OFAPI request audit regressions", () => {
     },
   );
 
-  it("R4 refuses legacy gateway success when accounting rejects and blocks its next egress", async () => {
-    const fetch = vi.fn(async () => response(paid({ id: "1" }))); vi.stubGlobal("fetch", fetch);
-    const client = createOfapiClient({ apiKey: "test", restDelayMs: 0, onCreditSpend: () => false });
-    const read = () => client.proxyRead!({}, { operation: "test", pathname: `/${ACCOUNT}/users/1`,
-      query: {}, fallbackCredits: 1, fallbackEstimated: true });
-    await expect(read()).rejects.toThrow("accounting unavailable");
-    await expect(read()).rejects.toBeInstanceOf(OfapiCreditAccountingUnavailableError);
-    expect(fetch).toHaveBeenCalledTimes(1);
-  });
-
   it("R5 preserves every accepted media identifier at the safe integer boundary", async () => {
     const fetch = vi.fn(async (_url: string, _init?: RequestInit) => response(paid({ id: "123" }))); vi.stubGlobal("fetch", fetch);
     const client = createOfapiClient({ apiKey: "test", restDelayMs: 0 });
