@@ -2071,14 +2071,21 @@ export async function readAgentPostSnapshotParseDebt(
     return false;
   }
   const result = await db.execute<{ parse_debt: boolean }>(sql`
+    -- One equality probe per older version so the health-floor index applies
+    -- (same shape and parse_version >= 0 assumption as services/health-floors.ts).
     select exists (
       select 1
-      from observations o
-      where o.account_id in ${pageIdList(input.pageIds)}
-        and o.source = 'pull'
-        and o.platform = 'fansly'
-        and o.kind = 'posts'
-        and o.parse_version < ${input.parserVersion}
+      from generate_series(0, ${input.parserVersion - 1}::integer) as below_floor(parse_version)
+      cross join lateral (
+        select 1
+        from observations o
+        where o.parse_version = below_floor.parse_version
+          and o.source = 'pull'
+          and o.kind = 'posts'
+          and o.platform = 'fansly'
+          and o.account_id in ${pageIdList(input.pageIds)}
+        limit 1
+      ) hit
     ) as parse_debt
   `);
   return result.rows[0]?.parse_debt === true;
@@ -2104,14 +2111,21 @@ export async function readAgentPostTipParseDebt(
     rejected_items: boolean;
   }>(sql`
     select
+      -- One equality probe per older version so the health-floor index applies
+      -- (same shape and parse_version >= 0 assumption as services/health-floors.ts).
       exists (
         select 1
-        from observations o
-        where o.account_id in ${pages}
-          and o.source = 'pull'
-          and o.platform = 'fansly'
-          and o.kind = 'post_tips'
-          and o.parse_version < ${input.parserVersion}
+        from generate_series(0, ${input.parserVersion - 1}::integer) as below_floor(parse_version)
+        cross join lateral (
+          select 1
+          from observations o
+          where o.parse_version = below_floor.parse_version
+            and o.source = 'pull'
+            and o.kind = 'post_tips'
+            and o.platform = 'fansly'
+            and o.account_id in ${pages}
+          limit 1
+        ) hit
       ) as top_level,
       exists (
         select 1
