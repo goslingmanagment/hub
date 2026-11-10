@@ -23,7 +23,9 @@ import {
   insertObservation,
   isUniqueViolation,
   listActiveDeviceTokensForUser,
+  listDeviceTokenLastUseForUsers,
   listUserPageAssignments,
+  listUserPageAssignmentsForUsers,
   listUsers,
   lockUserForDeviceTokenMutation,
   markUserDeleted,
@@ -280,6 +282,14 @@ export async function getAdminUserById(app: AppContext, userId: number) {
     roleCanUseSession(user.role) ? listDeviceTokensForUser(app.db, user.id) : Promise.resolve([]),
   ]);
 
+  return adminUserDetailOf(user, assignedPages, userDeviceTokens);
+}
+
+function adminUserDetailOf(
+  user: NonNullable<Awaited<ReturnType<typeof findUserById>>>,
+  assignedPages: Awaited<ReturnType<typeof listUserPageAssignments>>,
+  userDeviceTokens: ReadonlyArray<{ lastUsedAt: Date | null }>,
+) {
   // Honest activity signal: the freshest use across every device token, live or
   // revoked — a revoked row can still hold the most recent real activity.
   const lastActiveMs = Math.max(
@@ -393,18 +403,35 @@ async function recordFailedLoginAuditBestEffort(
   }
 }
 
-export async function listUsersDetailed(app: AppContext) {
+/** Three statements for the whole list (users, their pages, their device
+ * tokens' last use) — the same result `getAdminUserById` gives per user. */
+export async function listUsersDetailed(app: AppContext): Promise<AdminUserDetailed[]> {
   const users = await listUsers(app.db);
-  const result: AdminUserDetailed[] = [];
+  const userIds = users.map((user) => user.id);
+  const sessionUserIds = users.filter((user) => roleCanUseSession(user.role)).map((user) => user.id);
+  const [pageRows, tokenRows] = await Promise.all([
+    listUserPageAssignmentsForUsers(app.db, userIds),
+    listDeviceTokenLastUseForUsers(app.db, sessionUserIds),
+  ]);
 
-  for (const user of users) {
-    const detailed = await getAdminUserById(app, user.id);
-    if (detailed) {
-      result.push(detailed);
-    }
+  const pagesByUser = new Map<number, typeof pageRows>();
+  for (const row of pageRows) {
+    const list = pagesByUser.get(row.userId);
+    if (list) list.push(row);
+    else pagesByUser.set(row.userId, [row]);
+  }
+  const tokensByUser = new Map<number, typeof tokenRows>();
+  for (const row of tokenRows) {
+    const list = tokensByUser.get(row.userId);
+    if (list) list.push(row);
+    else tokensByUser.set(row.userId, [row]);
   }
 
-  return result;
+  return users.map((user) => adminUserDetailOf(
+    user,
+    pagesByUser.get(user.id) ?? [],
+    tokensByUser.get(user.id) ?? [],
+  ));
 }
 
 /** Two concurrent creates of the same login (any case) race

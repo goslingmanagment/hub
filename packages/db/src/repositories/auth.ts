@@ -1,4 +1,4 @@
-import { and, eq, gt, isNull, ne, sql } from "drizzle-orm";
+import { and, eq, gt, inArray, isNull, ne, sql } from "drizzle-orm";
 
 import type { UserRole } from "@agency_hub_core/shared";
 
@@ -124,6 +124,24 @@ export async function listUserPageAssignments(db: Database, userId: number) {
     .innerJoin(models, eq(models.id, pages.modelId))
     .where(eq(userPageAssignments.userId, userId))
     .orderBy(models.slug, pages.label);
+}
+
+/** `listUserPageAssignments` for many users in one statement: the same rows,
+ * each user's in the same (model slug, page label) order. */
+export async function listUserPageAssignmentsForUsers(db: Database, userIds: number[]) {
+  if (userIds.length === 0) return [];
+  return db.select({
+    userId: userPageAssignments.userId,
+    pageId: pages.id,
+    label: pages.label,
+    platform: pages.platform,
+    modelSlug: models.slug,
+    modelName: models.name,
+  }).from(userPageAssignments)
+    .innerJoin(pages, eq(pages.id, userPageAssignments.platformAccountId))
+    .innerJoin(models, eq(models.id, pages.modelId))
+    .where(inArray(userPageAssignments.userId, userIds))
+    .orderBy(userPageAssignments.userId, models.slug, pages.label);
 }
 
 export async function createAuthSession(db: Database, input: CreateAuthSessionInput) {
@@ -367,6 +385,16 @@ export async function listDeviceTokensForUser(db: Database, userId: number) {
     where: eq(deviceTokens.userId, userId),
     orderBy: (table, { desc }) => [desc(table.createdAt)],
   });
+}
+
+/** Every device token's last use (live or revoked) for many users in one statement. */
+export async function listDeviceTokenLastUseForUsers(db: Database, userIds: number[]) {
+  if (userIds.length === 0) return [];
+  return db.select({
+    userId: deviceTokens.userId,
+    lastUsedAt: deviceTokens.lastUsedAt,
+  }).from(deviceTokens)
+    .where(inArray(deviceTokens.userId, userIds));
 }
 
 /** The caller's live devices for the account page: not revoked, not expired. */
