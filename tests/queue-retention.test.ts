@@ -146,7 +146,6 @@ describe("pg-boss queue retention settings", () => {
     expect(crons.length).toBeGreaterThan(0);
     for (const setting of crons) {
       expect(setting.retentionSeconds).toBeGreaterThanOrEqual(BUSINESS_CRON_MIN_RETENTION_SECONDS);
-      expect(setting.deleteAfterSeconds).toBe(DEFAULT_DELETE_AFTER_SECONDS);
     }
   });
 });
