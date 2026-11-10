@@ -31,7 +31,6 @@ const runtimeExternal = [
   "drizzle-orm",
   "fastify",
   "fastify-type-provider-zod",
-  "openapi-typescript",
   "pg",
   "pg-boss",
   "pino",
@@ -118,9 +117,9 @@ await buildPackage("packages/db/dist", {
   migrate: "packages/db/src/migrate.ts",
 }, nodeBundledPackageOptions);
 
+// Production runs only `startup.js <role>` and `cli.js`; `src/api.ts` and
+// `src/worker.ts` are local dev entry points (`pnpm api`, `pnpm worker`).
 await buildPackage("apps/runtime/dist", {
-  api: "apps/runtime/src/api.ts",
   cli: "apps/runtime/src/cli.ts",
   startup: "apps/runtime/src/startup.ts",
-  worker: "apps/runtime/src/worker.ts",
 });

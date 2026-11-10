@@ -380,7 +380,6 @@ deploy.
 For local development:
 
 - `.env.example` is for running services directly on the host
-- `.env.docker.example` is for local Docker-based development
 - `docker-compose.yml` remains the dev-only compose stack and is unchanged by the production release path
 
 ## Local Development
