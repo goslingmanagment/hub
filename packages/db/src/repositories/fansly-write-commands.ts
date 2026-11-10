@@ -38,9 +38,6 @@ export type FanslyWriteStep = (typeof FANSLY_WRITE_STEPS)[number];
 export const FANSLY_WRITE_STATES = ["queued", "sending", "answered", "rejected", "unknown", "refused"] as const;
 export type FanslyWriteState = (typeof FANSLY_WRITE_STATES)[number];
 
-/** The ends a command never leaves. */
-export const FANSLY_WRITE_FINAL_STATES: readonly FanslyWriteState[] = ["answered", "rejected", "unknown", "refused"];
-
 export type FanslyWritePriority = "background" | "urgent";
 
 /** What an admission sent, as recorded before the send. */

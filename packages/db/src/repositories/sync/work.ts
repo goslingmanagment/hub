@@ -1405,27 +1405,6 @@ export async function openWorkIdsForSubjects(
   return new Map(result.rows.map((row) => [row.subject, Number(row.id)]));
 }
 
-/** The newest row (open or closed) of each subject among a resource file's
- *  keys: the subject breaker a new demand would meet. */
-export async function latestWorkForSubjects(
-  db: Database,
-  input: { pageId: number; resourceFile: string; subjects: readonly string[] },
-): Promise<Map<string, SyncWorkRow>> {
-  if (!SYNC_RESOURCE_FILE_PATTERN.test(input.resourceFile)) throw new Error(`Not a resource file: ${input.resourceFile}`);
-  const subjects = [...new Set(input.subjects)];
-  if (subjects.length === 0) return new Map();
-  const result = await db.execute<WorkSqlRow>(sql`
-    select distinct on (w.subject) ${workColumns}
-      from sync_work w
-     where w.page_id = ${input.pageId}
-       and not w.shadow
-       and w.resource like ${`${input.resourceFile}.%`}
-       and w.subject = any(${textArrayParam(subjects)})
-     order by w.subject, w.id desc
-  `);
-  return new Map(result.rows.map((row) => [row.subject, normalizeWorkRow(row)]));
-}
-
 /** Lock several work rows in id order (the lock order of §3.7). */
 export async function lockWorkRows(db: Database, ids: readonly number[]): Promise<SyncWorkRow[]> {
   if (ids.length === 0) return [];

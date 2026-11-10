@@ -622,14 +622,6 @@ export async function countFanQueueAvailable(
   return out;
 }
 
-/** Fans per person in a people queue: who has untouched (pending) items. */
-export async function countFanQueueAssignees(db: Database, queueId: number): Promise<Map<number, number>> {
-  const result = await db.execute<{ user_id: string | number; n: string | number }>(sql`
-    select assignee_user_id as user_id, count(*) as n from fan_queue_items
-    where queue_id = ${queueId} and state = 'pending' and assignee_user_id is not null group by 1`);
-  return new Map(result.rows.map((row) => [Number(row.user_id), Number(row.n)]));
-}
-
 /** Hands a person's untouched items to another person (`toUserId`) or to the pool (null). */
 export async function moveFanQueueItems(
   db: Database,

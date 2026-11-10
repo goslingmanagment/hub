@@ -231,29 +231,6 @@ export async function listVisibleModels(db: Database, pageIds?: number[]) {
     .orderBy(models.sortOrder, models.slug);
 }
 
-export async function findVisibleModel(db: Database, modelSlug: string, pageIds?: number[]) {
-  if (pageIds !== undefined && pageIds.length === 0) {
-    return null;
-  }
-
-  const clauses = [eq(models.slug, modelSlug)];
-  if (pageIds !== undefined) {
-    clauses.push(inArray(pages.id, pageIds));
-  }
-
-  const [row] = await db.select({
-    id: models.id,
-    slug: models.slug,
-    name: models.name,
-    pageCount: sql<number>`count(${pages.id})::int`,
-  }).from(models)
-    .innerJoin(pages, and(eq(pages.modelId, models.id), eq(pages.status, "active")))
-    .where(and(...clauses))
-    .groupBy(models.id, models.slug, models.name);
-
-  return row ?? null;
-}
-
 function buildTransactionScopeClauses(
   input: {
     pageIds?: number[];

@@ -152,7 +152,6 @@ const SANCTIONED_DELETER_FILES = [
   "packages/db/src/repositories/capture-payload-erasure.ts",
   "packages/db/src/repositories/catalog.ts",
   "packages/db/src/repositories/config-settings.ts",
-  "packages/db/src/repositories/dm-analytics.ts",
   "packages/db/src/repositories/fan-metadata.ts",
   // M11: an owner-run queue repair, never scheduled, dry-run by default (a
   // READ ONLY transaction). deleteForeignMediaStatsQueueRows removes only

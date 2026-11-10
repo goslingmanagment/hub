@@ -1,7 +1,7 @@
 import { and, eq, gt, isNull, sql } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
-import { agentKeys, type agentKeyUsageDaily } from "../schema.ts";
+import { agentKeys } from "../schema.ts";
 
 /**
  * Agent Read Plane keys and their daily budget counters.
@@ -92,7 +92,6 @@ function rethrowAsConstraintError(error: unknown): never {
 }
 
 export type AgentKeyRow = typeof agentKeys.$inferSelect;
-export type AgentKeyUsageRow = typeof agentKeyUsageDaily.$inferSelect;
 
 /** Sliding lifetime granted on each successful authentication. */
 export const AGENT_KEY_SLIDING_TTL_DAYS = 90;

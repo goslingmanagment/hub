@@ -329,29 +329,6 @@ export async function listPageDmThreadIdsStampedWithGeneration(
   return result.rows.map((row) => String(row.platform_conversation_id));
 }
 
-/** The whole generation set as ids. G2 slice 2 read it once per completed
- *  sweep to digest against the array; with the array gone the live sweep needs
- *  only the count, and this stays as the ops/replay reader for asking WHICH
- *  threads a generation holds. Ordered by the qualified column so the ORDER BY
- *  cannot bind to a select alias (the trap that shipped twice here). */
-export async function listPageDmThreadIdsByGeneration(
-  db: Database,
-  input: {
-    platformAccountId: number;
-    generation: number;
-  },
-) {
-  const result = await db.execute<{ platform_conversation_id: string }>(sql`
-    select t.platform_conversation_id
-    from page_dm_threads t
-    where t.platform_account_id = ${input.platformAccountId}
-      and t.last_seen_generation = ${input.generation}
-    order by t.platform_conversation_id asc
-  `);
-
-  return result.rows.map((row) => String(row.platform_conversation_id));
-}
-
 export interface PageDmConversationRow {
   id: number;
   platformAccountId: number;
@@ -538,47 +515,6 @@ export async function upsertPageDmMessages(
         syncedAt: sql`excluded.synced_at`,
       },
     });
-}
-
-export interface PageDmMessageLookupRow {
-  id: number;
-  conversationId: number;
-  platformMessageId: string;
-  senderRole: DmSenderRole;
-  totalTipAmountCents: number;
-  purchasedAt: Date | null;
-}
-
-/**
- * Looks up a stored DM message by platform message id within one page. Used by
- * the OFAPI projection for by-message events (messages.deleted, ppv.unlocked,
- * tips.received) whose payloads do not carry the conversation id.
- */
-export async function findPageDmMessageByPlatformMessageId(
-  db: Database,
-  input: {
-    platformAccountId: number;
-    platformMessageId: string;
-  },
-): Promise<PageDmMessageLookupRow | null> {
-  const row = await db.query.pageDmMessages.findFirst({
-    where: and(
-      eq(pageDmMessages.platformAccountId, input.platformAccountId),
-      eq(pageDmMessages.platformMessageId, input.platformMessageId),
-      isNull(pageDmMessages.deletedAt),
-    ),
-  });
-
-  return row
-    ? {
-      id: row.id,
-      conversationId: row.conversationId,
-      platformMessageId: row.platformMessageId,
-      senderRole: row.senderRole,
-      totalTipAmountCents: row.totalTipAmountCents,
-      purchasedAt: row.purchasedAt,
-    }
-    : null;
 }
 
 /** Tombstones a stored DM message; returns its conversation id when a live row was removed.

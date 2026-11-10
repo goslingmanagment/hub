@@ -1,4 +1,4 @@
-import { and, eq, gte, inArray, notInArray, or, sql } from "drizzle-orm";
+import { and, eq, gte, inArray, or, sql } from "drizzle-orm";
 
 import {
   FANSLY_EXTERNAL_PRESENCE_SOURCE_FOLLOWERS_LAST_SEEN,
@@ -14,7 +14,6 @@ import {
   pages,
   pageSubscriptions,
 } from "../schema.ts";
-import { rebuildSpenderProjections } from "./spenders.ts";
 
 export interface UpsertFanInput {
   platform: "fansly" | "onlyfans";
@@ -439,91 +438,6 @@ export async function upsertFanPages(
   }
 }
 
-export async function upsertFanPage(
-  db: Database,
-  input: UpsertFanPageInput,
-) {
-  const lastSeenAt = new Date();
-  const patch = {
-    isFollower: input.isFollower ?? false,
-    followerSince: input.followerSince ?? null,
-    isSubscriber: input.isSubscriber ?? false,
-    subscriberSince: input.subscriberSince ?? null,
-    subscriptionExpiresAt: input.subscriptionExpiresAt ?? null,
-    autoRenew: input.autoRenew ?? null,
-    autoRenewOffDetectedAt: input.autoRenewOffDetectedAt ?? (
-      input.autoRenew === false ? lastSeenAt : null
-    ),
-    pageAlias: input.pageAlias ?? null,
-    pageAliasSource: input.pageAliasSource ?? null,
-    pageAliasSourceNoteId: input.pageAliasSourceNoteId ?? null,
-    pageAliasSyncedAt: input.pageAliasSyncedAt ?? null,
-    lastSeenAt,
-  };
-
-  const updateSet: Record<string, unknown> = {
-    lastSeenAt: patch.lastSeenAt,
-  };
-
-  if (input.isFollower !== undefined) {
-    updateSet.isFollower = input.isFollower;
-  }
-  if (input.followerSince !== undefined) {
-    updateSet.followerSince = input.followerSince;
-  }
-  if (input.isSubscriber !== undefined) {
-    updateSet.isSubscriber = input.isSubscriber;
-  }
-  if (input.subscriberSince !== undefined) {
-    updateSet.subscriberSince = input.subscriberSince;
-  }
-  if (input.subscriptionExpiresAt !== undefined) {
-    updateSet.subscriptionExpiresAt = input.subscriptionExpiresAt;
-  }
-  if (input.autoRenew !== undefined) {
-    updateSet.autoRenew = input.autoRenew;
-    updateSet.autoRenewOffDetectedAt = sql`
-      case
-        when excluded.auto_renew is false then
-          case
-            when ${fanPages.autoRenew} is distinct from false then excluded.auto_renew_off_detected_at
-            else coalesce(${fanPages.autoRenewOffDetectedAt}, excluded.auto_renew_off_detected_at)
-          end
-        when excluded.auto_renew is true then null
-        else ${fanPages.autoRenewOffDetectedAt}
-      end
-    `;
-  } else if (input.autoRenewOffDetectedAt !== undefined) {
-    updateSet.autoRenewOffDetectedAt = input.autoRenewOffDetectedAt;
-  }
-  if (input.pageAlias !== undefined) {
-    updateSet.pageAlias = input.pageAlias;
-  }
-  if (input.pageAliasSource !== undefined) {
-    updateSet.pageAliasSource = input.pageAliasSource;
-  }
-  if (input.pageAliasSourceNoteId !== undefined) {
-    updateSet.pageAliasSourceNoteId = input.pageAliasSourceNoteId;
-  }
-  if (input.pageAliasSyncedAt !== undefined) {
-    updateSet.pageAliasSyncedAt = input.pageAliasSyncedAt;
-  }
-
-  const [fanPage] = await db
-    .insert(fanPages)
-    .values({
-      fanId: input.fanId,
-      platformAccountId: input.platformAccountId,
-      ...patch,
-    })
-    .onConflictDoUpdate({
-      target: [fanPages.fanId, fanPages.platformAccountId],
-      set: updateSet,
-    })
-    .returning();
-  return fanPage;
-}
-
 export async function upsertFanPageExternalPresences(
   db: Database,
   inputs: UpsertFanPageExternalPresenceInput[],
@@ -830,33 +744,6 @@ export async function upsertPageFollows(db: Database, inputs: UpsertPageFollowIn
     });
 }
 
-export async function upsertPageFollow(
-  db: Database,
-  input: UpsertPageFollowInput,
-) {
-  const lastSeenAt = new Date();
-  const [pageFollow] = await db
-    .insert(pageFollows)
-    .values({
-      platformAccountId: input.platformAccountId,
-      fanId: input.fanId,
-      platformFollowId: input.platformFollowId,
-      followedAt: input.followedAt,
-      lastSeenGeneration: input.lastSeenGeneration ?? null,
-      lastSeenAt,
-    })
-    .onConflictDoUpdate({
-      target: [pageFollows.platformAccountId, pageFollows.platformFollowId],
-      set: {
-        lastSeenAt,
-        isActive: true,
-        lastSeenGeneration: monotonicPageFollowGeneration(),
-      },
-    })
-    .returning();
-  return pageFollow;
-}
-
 export async function countActivePageFollows(db: Database, platformAccountId: number) {
   const result = await db.execute<{ count: number }>(sql`
     select count(*)::int as count
@@ -1075,34 +962,6 @@ export async function readPageFollowDeactivationGenerationBuckets(
   }));
 }
 
-export async function deactivatePageFollowsMissingFromSnapshot(
-  db: Database,
-  platformAccountId: number,
-  activeFollowIds: string[],
-) {
-  if (activeFollowIds.length === 0) {
-    await db
-      .update(pageFollows)
-      .set({
-        isActive: false,
-        lastSeenAt: new Date(),
-      })
-      .where(eq(pageFollows.platformAccountId, platformAccountId));
-    return;
-  }
-
-  await db
-    .update(pageFollows)
-    .set({
-      isActive: false,
-      lastSeenAt: new Date(),
-    })
-    .where(and(
-      eq(pageFollows.platformAccountId, platformAccountId),
-      notInArray(pageFollows.platformFollowId, activeFollowIds),
-    ));
-}
-
 /**
  * The page's follower flags from its active follows. Writes only rows whose
  * flags change (and stamps `last_seen_at` on them). It does not refresh
@@ -1139,36 +998,6 @@ export async function refreshFanPageFollowerState(db: Database, platformAccountI
         or fp.follower_since is distinct from resolved.active_followed_at
       )
   `);
-}
-
-export async function setPageSubscriptionsCurrentFlag(
-  db: Database,
-  platformAccountId: number,
-  activeIds: string[],
-) {
-  if (activeIds.length === 0) {
-    await db
-      .update(pageSubscriptions)
-      .set({
-        isCurrent: false,
-        lastSeenAt: new Date(),
-      })
-      .where(eq(pageSubscriptions.platformAccountId, platformAccountId));
-    return;
-  }
-
-  await db
-    .update(pageSubscriptions)
-    .set({
-      isCurrent: false,
-      lastSeenAt: new Date(),
-    })
-    .where(
-      and(
-        eq(pageSubscriptions.platformAccountId, platformAccountId),
-        notInArray(pageSubscriptions.platformSubscriptionId, activeIds),
-      ),
-    );
 }
 
 export async function upsertPageSubscription(
@@ -1666,10 +1495,6 @@ export async function refreshFanPageSubscriberState(db: Database, platformAccoun
         or auto_renew_off_detected_at is not null
       )
   `);
-}
-
-export async function recalculateFanPageSpend(db: Database, platformAccountId: number) {
-  await rebuildSpenderProjections(db, platformAccountId);
 }
 
 export async function getFanSpendByIdentifier(

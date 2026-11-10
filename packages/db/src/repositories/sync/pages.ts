@@ -662,56 +662,6 @@ export async function createLiveSyncPage(
   if ((guard.rowCount ?? 0) === 0) throw new LiveSyncPageRefusedError(input.pageId, ["send_guard_exists"]);
 }
 
-/**
- * The session and proxy rows of a page's stored-credentials digest
- * (`readFanslyPageGeneration`), locked for a save the engine will trust (step
- * 3b ruling 5: the candidate save is a CAS on the exact verified
- * session+proxy pair): no other writer changes either half until the save
- * commits. The engine row first — the lock order of every actor transaction —
- * so an apply that writes the page between them never waits in a cycle with
- * the save; the page row itself is not locked (the WS capture holds it FOR
- * SHARE before the session rows; the trusted digest is read at the save's end
- * either way).
- */
-export async function lockFanslyCredentialsForSave(db: Database, pageId: number): Promise<void> {
-  await db.execute(sql`select sp.page_id from sync_pages sp where sp.page_id = ${pageId} for no key update`);
-  await db.execute(sql`select c.platform_account_id from page_credentials c where c.platform_account_id = ${pageId} for update`);
-  await db.execute(sql`select e.id from egress_endpoints e where e.platform_account_id = ${pageId} for update`);
-}
-
-/**
- * The engine trusts the page's stored credentials (`credentials_generation`,
- * G1): written by the credentials and proxy flows in the transaction that
- * stored the pair an identity check proved to be this page's account
- * (`lockFanslyCredentialsForSave` first). `verifiedAt` is when that check was
- * sent: `identity_checked_at` keeps the newest proof's send instant, so an
- * older answer applied late never overwrites it (`recordSyncPageIdentityProof`).
- * Trusting a digest lifts no hold: a credentials hold clears only by the
- * apply of a proof sent after its latest refusal — the verify of the new
- * digest, which runs under the hold (A3). Not an actor write (no generation
- * fence); wakes the page's actor.
- */
-export async function trustSyncPageCredentials(
-  db: Database,
-  input: { pageId: number; generation: string; accountId: string; verifiedAt: Date },
-): Promise<boolean> {
-  if (!/^[0-9a-f]{64}$/.test(input.generation)) {
-    throw new Error("A credentials generation is a sha256 hex digest");
-  }
-  if (input.accountId.length === 0) throw new Error("An identity account id is non-empty");
-  const result = await db.execute(sql`
-    update sync_pages
-       set credentials_generation = ${input.generation},
-           identity_account_id = ${input.accountId},
-           identity_checked_at = greatest(identity_checked_at, ${input.verifiedAt}::timestamptz),
-           updated_at = clock_timestamp()
-     where page_id = ${input.pageId}
-  `);
-  if ((result.rowCount ?? 0) === 0) return false;
-  await db.execute(sql`select pg_notify('fansly_sync_work', ${String(input.pageId)})`);
-  return true;
-}
-
 // ── ownership ─────────────────────────────────────────────────────────────────
 
 export interface LockedSyncPage {

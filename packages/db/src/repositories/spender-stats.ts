@@ -816,32 +816,3 @@ export async function listPageSpenderAwaitingReply(
     };
   }, READ_SNAPSHOT);
 }
-
-async function explain(db: Database, query: SQL, options: { analyze?: boolean } = {}): Promise<string> {
-  const head = options.analyze ? sql`explain (analyze, buffers, format text)` : sql`explain (format text)`;
-  const result = await db.execute<{ "QUERY PLAN": string }>(sql`${head} ${query}`);
-  return result.rows.map((row) => row["QUERY PLAN"]).join("\n");
-}
-
-/**
- * EXPLAIN of the exact silence statement (the H-8 perf gate), for the source
- * named (`archive` by default). `analyze` runs it and adds the buffers: the
- * measurement that decides whether the stores need a partial index for fan
- * messages; on production, run it inside a read-only transaction.
- */
-export function explainPageSpenderSilenceQuery(
-  db: Database,
-  input: { pageId: number; asOf: Date; messageSource?: SpenderStatsMessageSource },
-  options: { analyze?: boolean } = {},
-) {
-  return explain(db, buildSilenceQuery({ ...input, messageSource: input.messageSource ?? "archive" }), options);
-}
-
-/** EXPLAIN of the exact window statement for the window ending at `asOf`. */
-export function explainPageSpenderWindowQuery(
-  db: Database,
-  input: { pageId: number; timeZone: string; asOf: Date },
-) {
-  const windows = resolveSpenderStatsWindows({ asOf: input.asOf, timeZone: input.timeZone });
-  return explain(db, buildWindowDaysQuery(windowScope(input.pageId, windows)));
-}

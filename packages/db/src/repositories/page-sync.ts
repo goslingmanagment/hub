@@ -1182,13 +1182,6 @@ interface PageSyncDependencyContext {
   ofapiAccountId: string | null;
 }
 
-export function getSyncStreamDependenciesForPlatform(
-  platform: Platform,
-  stream: SyncStream,
-): SyncStream[] {
-  return getSyncStreamDependenciesForPage({ platform, stream });
-}
-
 export function getSyncStreamDependenciesForPage(input: {
   platform: Platform;
   stream: SyncStream;
@@ -2148,41 +2141,6 @@ export async function blockPageSync(
     updated: updated !== null,
     blocked: updated?.status === "blocked" && updated.blockerKind === input.blockerKind,
   };
-}
-
-export async function markPageSyncAuthBlocked(
-  db: Database,
-  input: {
-    pageId: number;
-    errorCode: string | null;
-    errorSummary: string;
-    now?: Date;
-  },
-) {
-  const now = input.now ?? new Date();
-  await db.execute(sql`
-    update ${pageSyncStates}
-    set status = 'blocked',
-        retry_kind = null,
-        retry_at = null,
-        blocker_kind = 'auth',
-        blocker_code = ${input.errorCode ?? "auth_blocked"},
-        blocker_message = ${input.errorSummary},
-        blocked_at = coalesce(blocked_at, ${now}),
-        finished_at = ${now},
-        failed_at = ${now},
-        consecutive_failures = consecutive_failures + 1,
-        last_error_code = ${input.errorCode},
-        last_error_summary = ${input.errorSummary},
-        lease_owner = null,
-        lease_token = null,
-        leased_seq = null,
-        lease_heartbeat_at = null,
-        lease_expires_at = null,
-        updated_at = ${now}
-    where page_id = ${input.pageId}
-      and status <> 'paused'
-  `);
 }
 
 /**

@@ -98,11 +98,6 @@ export const AGENT_READ_AUDIT_SUMMARY_SHAPES = {
 
 export type AgentReadAuditSummaryKey = keyof typeof AGENT_READ_AUDIT_SUMMARY_SHAPES;
 
-/** Derived. Anything that needs "which keys are allowed" reads THIS. */
-export const AGENT_READ_AUDIT_SUMMARY_KEYS = Object.keys(
-  AGENT_READ_AUDIT_SUMMARY_SHAPES,
-) as readonly AgentReadAuditSummaryKey[];
-
 export type AgentReadAuditSummary = Partial<
   Record<AgentReadAuditSummaryKey, AgentReadAuditSummaryValue>
 >;

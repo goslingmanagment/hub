@@ -467,14 +467,3 @@ export async function countAgentTranscript(
   const value = Number(result.rows[0]?.count ?? 0);
   return value > probeMax ? { value: probeMax + 1, exact: false } : { value, exact: true };
 }
-
-/** Perf-gate seam: EXPLAIN over the EXACT statement the reader runs. */
-export async function explainAgentTranscript(
-  db: Database,
-  input: AgentTranscriptInput,
-): Promise<string> {
-  const result = await db.execute<{ "QUERY PLAN": string }>(
-    sql`explain (format text) ${buildUnionQuery(input, Math.min(input.limit, AGENT_TRANSCRIPT_UNION_MAX_ROWS))}`,
-  );
-  return result.rows.map((row) => row["QUERY PLAN"]).join("\n");
-}
