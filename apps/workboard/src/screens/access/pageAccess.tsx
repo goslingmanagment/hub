@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Confirm, toast } from "@agency_hub_core/ui";
+import { Confirm, platformWord, toast } from "@agency_hub_core/ui";
 import { ruPlural } from "@agency_hub_core/ui/plural";
 import { useAssignPage, useUnassignPage, type AdminPage } from "./data";
 
@@ -27,8 +27,6 @@ interface Change {
   /** «Mia Hart»: the change is a whole model. */
   model?: string;
 }
-
-const PLATFORM: Readonly<Record<string, string>> = { fansly: "Fansly", onlyfans: "OnlyFans", telegram: "Telegram" };
 
 function labels(pages: readonly AdminPage[]): string {
   return pages.map((page) => page.label).join(", ");
@@ -158,7 +156,7 @@ export function usePageAccess(onChanged?: () => void): PageAccess {
         facts={[
           { label: "Кому", value: name },
           single
-            ? { label: "Страница", value: `${single.label} · ${PLATFORM[single.platform] ?? single.platform} · ${single.modelName}` }
+            ? { label: "Страница", value: `${single.label} · ${platformWord(single.platform) ?? single.platform} · ${single.modelName}` }
             : { label: removing ? "Снимаем" : "Открываем", value: `${labels(pages)} (${pagesWord(pages.length)})` },
           ...(single ? [] : [{ label: "Если Hub откажет", value: "Дальше не пойдём и скажем, какие страницы успели." }]),
         ]}

@@ -349,36 +349,6 @@ export async function readConversationHistoryState(
   return result.rows[0]?.historyState ?? null;
 }
 
-/**
- * Drop a thread's chain (a new epoch, nothing proven): the state goes back to
- * `unverified` when the hub holds messages of the thread, else `none`.
- * Request anchors of the old epoch are then cleared by the caller (§7.1.6).
- */
-export async function resetThreadChain(tx: Database, threadId: number): Promise<{ epoch: number } | null> {
-  const result = await tx.execute<{ epoch: number }>(sql`
-    update page_dm_threads t
-       set head_confirmed_id = null,
-           head_confirmed_at = null,
-           contiguous_oldest_id = null,
-           contiguous_oldest_at = null,
-           contiguous_count = 0,
-           chain_upward_count = 0,
-           chain_epoch = t.chain_epoch + 1,
-           history_state = case when t.stored_message_count > 0 then 'unverified' else 'none' end,
-           history_proof = null,
-           history_proven_at = null,
-           history_proof_observation_id = null,
-           history_proof_observation_received_at = null,
-           history_proof_raw_payload_id = null,
-           chain_source = null,
-           chain_journal_watermark = 0
-     where t.id = ${threadId}
-    returning t.chain_epoch as epoch
-  `);
-  const row = result.rows[0];
-  return row ? { epoch: Number(row.epoch) } : null;
-}
-
 // ── stored facts (read only) ──────────────────────────────────────────────────
 
 const NUMERIC_MESSAGE_ID = sql.raw(`'^[0-9]{1,30}$'`);

@@ -3,7 +3,6 @@ import { useState } from "react";
 import { Link, useLocation } from "react-router";
 import { Badge, Button, Confirm, Disclosure, Drawer, Fan, KeyValue, Money, Person, Section, Skeleton, Table, TimeMsk, Tooltip, toast, type Column } from "@agency_hub_core/ui";
 import { formatDateTime, formatMills, formatTimeOfDay } from "@agency_hub_core/ui/format";
-import { ruPlural } from "@agency_hub_core/ui/plural";
 import { shiftWhen } from "@agency_hub_core/ui/shiftWhen";
 import { consoleFanHref, PersonLink, shiftPath, useBackState } from "@/shared/links";
 import { FanCell, collidingIn, goColumn, pageWords } from "./FanCell";
@@ -352,9 +351,4 @@ function ResolveConfirm({ dispute, shares, onClose, onDone }: { dispute: Dispute
       onClose={close}
     />
   );
-}
-
-/** «2 спора» for the header line. */
-export function disputesWord(count: number): string {
-  return `${count} ${ruPlural(count, "спор", "спора", "споров")}`;
 }

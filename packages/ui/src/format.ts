@@ -90,14 +90,6 @@ export function formatAiUnitPrice(microUsd: number): string {
   return realMinus(AI_UNIT_PRICE.format(microUsdFromDbInt(microUsd) / 1_000_000));
 }
 
-export function formatDelta(pct: number | null): { text: string; direction: "up" | "down" | "neutral" } {
-  if (pct === null) return { text: "—", direction: "neutral" };
-  const rounded = Math.abs(Math.round(pct * 10) / 10);
-  if (pct > 0) return { text: `↑ ${rounded}%`, direction: "up" };
-  if (pct < 0) return { text: `↓ ${rounded}%`, direction: "down" };
-  return { text: "0%", direction: "neutral" };
-}
-
 export function formatDate(iso: string, options?: { includeYear?: boolean }): string {
   if (!iso) return "—";
   const d = new Date(iso);
@@ -143,21 +135,6 @@ export function formatRelativeTime(iso: string): string {
   return formatAgo(iso);
 }
 
-export function formatRelativeTimeCompact(iso: string): string {
-  const diff = Date.now() - new Date(iso).getTime();
-  const mins = Math.floor(diff / 60_000);
-  if (mins < 1) return "сейчас";
-  if (mins < 60) return `${mins} мин`;
-  const hours = Math.floor(mins / 60);
-  if (hours < 24) return `${hours} ч`;
-  const days = Math.floor(hours / 24);
-  return `${days} дн`;
-}
-
-export function daysAgo(iso: string): number {
-  return Math.floor((Date.now() - new Date(iso).getTime()) / 86_400_000);
-}
-
 const TYPE_LABELS: Record<string, string> = {
   subscription: "Подписка",
   tip: "Чаевые",
@@ -169,17 +146,6 @@ const TYPE_LABELS: Record<string, string> = {
   payout_reversal: "Отмена выплаты",
   other: "Прочее",
 };
-
-const STATE_LABELS: Record<string, string> = {
-  posted: "Проведена",
-  pending: "Ожидает",
-  unknown: "Неизвестно",
-};
-
-/** A transaction's state in words. */
-export function transactionStateLabel(state: string): string {
-  return STATE_LABELS[state] ?? state;
-}
 
 export function transactionTypeLabel(type: string): string {
   return TYPE_LABELS[type] ?? type;

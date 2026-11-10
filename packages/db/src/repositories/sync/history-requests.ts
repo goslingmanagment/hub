@@ -42,7 +42,6 @@ export type HistoryInputKind = (typeof HISTORY_INPUT_KINDS)[number];
 
 export const HISTORY_ITEM_STATES = ["refused", "queued", "loading", "ready", "blocked", "cancelled"] as const;
 export type HistoryItemState = (typeof HISTORY_ITEM_STATES)[number];
-export type HistoryItemOpenState = (typeof HISTORY_ITEM_OPEN_STATES)[number];
 
 export const HISTORY_ITEM_REFUSALS = ["not_found", "excluded", "page_erased", "duplicate"] as const;
 export type HistoryItemRefusal = (typeof HISTORY_ITEM_REFUSALS)[number];
@@ -437,18 +436,6 @@ export async function getHistoryRequestByRef(
   `);
   const row = result.rows[0];
   return row ? normalizeRequestRow(row) : null;
-}
-
-export async function getHistoryRequestsByIds(db: Database, ids: readonly number[]): Promise<HistoryRequestRow[]> {
-  if (ids.length === 0) return [];
-  const result = await db.execute<RequestSqlRow>(sql`
-    select ${requestColumns}
-      from history_requests r
-      join pages p on p.id = r.page_id
-     where r.id = any(${idsParam(ids)})
-     order by r.id
-  `);
-  return result.rows.map(normalizeRequestRow);
 }
 
 /**

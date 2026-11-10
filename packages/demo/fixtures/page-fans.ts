@@ -21,7 +21,7 @@ import {
   type DemoReply,
   type DemoRequest,
 } from "../core.ts";
-import { DEMO_OFAPI_OFF_DAY, DEMO_PAGES, DEMO_USERS, demoFanProfile, demoPage, type DemoPage } from "../world.ts";
+import { DEMO_OFAPI_OFF_DAY, DEMO_PAGES, DEMO_USERS, demoFanProfile, type DemoPage } from "../world.ts";
 import {
   DAY_MS,
   FAN_LINES,
@@ -1208,10 +1208,3 @@ export const pageFanHandlers: DemoHandlers = {
     };
   },
 };
-
-/** The richest fan of a page, for the screenshots' fan card. */
-export function richestFanId(label: string): string | undefined {
-  const page = demoPage(label);
-  if (!page) return undefined;
-  return pagePopulation(page)[0]?.fan.platformUserId;
-}

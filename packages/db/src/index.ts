@@ -1,7 +1,6 @@
 export * from "./repositories/fansly-ws.ts";
 export * from "./repositories/fansly-ws-deletions.ts";
 export * from "./repositories/sync/live-messages.ts";
-export * from "./repositories/fan-earnings-targets.ts";
 export * from "./client.ts";
 export * from "./repositories/follower-outreach.ts";
 // chat-extension greeting lease and send custody (0241, H-7a).
@@ -162,7 +161,6 @@ export * from "./repositories/conversation-feed.ts";
 export * from "./repositories/erasure-fence.ts";
 export * from "./repositories/catalog.ts";
 export * from "./repositories/config-settings.ts";
-export * from "./repositories/dm-analytics.ts";
 export * from "./repositories/dm-material-fingerprint.ts";
 export * from "./repositories/dm-message-candidate.ts";
 export * from "./repositories/dm-message-archive.ts";
@@ -265,7 +263,6 @@ export * from "./repositories/sync/dm-exclusions.ts";
 export * from "./repositories/sync/observability.ts";
 // The alert evaluator's proof of work (0262, bug hunt Д11).
 export * from "./repositories/sync/alert-evaluations.ts";
-export * from "./repositories/sync/subject-queue.ts";
 // The chat-unavailability episodes (0251, arena "vanished chat" plan §2).
 export * from "./repositories/sync/chat-unavailability.ts";
 export * from "./repositories/spenders.ts";

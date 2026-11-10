@@ -20,20 +20,12 @@ export type SyncPageHoldKind = (typeof SYNC_PAGE_HOLD_KINDS)[number];
 
 /** A route of a page after a 429: its hold, and its durable slowdown state. */
 export const SYNC_ROUTE_HOLD_KINDS = ["route_hold", "route_budget"] as const;
-export type SyncRouteHoldKind = (typeof SYNC_ROUTE_HOLD_KINDS)[number];
 
 /** A resource file's breaker. */
 export const SYNC_RESOURCE_HOLD_KIND = "resource_breaker";
 
 export const SYNC_HOLD_KINDS = [...SYNC_PAGE_HOLD_KINDS, ...SYNC_ROUTE_HOLD_KINDS, SYNC_RESOURCE_HOLD_KIND] as const;
 export type SyncHoldKind = (typeof SYNC_HOLD_KINDS)[number];
-
-/** The kinds each scope admits (the table's `sync_holds_scope_kind_check`). */
-export const SYNC_HOLD_KINDS_BY_SCOPE: Readonly<Record<SyncHoldScope, readonly SyncHoldKind[]>> = {
-  page: SYNC_PAGE_HOLD_KINDS,
-  route: SYNC_ROUTE_HOLD_KINDS,
-  resource: [SYNC_RESOURCE_HOLD_KIND],
-};
 
 /** `sync_holds.key` of a page-scope row. */
 export const SYNC_PAGE_HOLD_KEY = "";

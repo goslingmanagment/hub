@@ -5,7 +5,7 @@ import { kernel } from "@/shared/hub";
 
 /**
  * Доступ — the data layer (spec §4.8, and the «Доступ» tab of Человек §4.4 through
- * src/shared/PersonAccessPanel.tsx). The screen and the panel read only this file.
+ * src/screens/access/PersonAccess.tsx). The screen and the panel read only this file.
  *
  * Reads (the owner's only; Hub refuses everyone else): `adminListUsers`,
  * `adminPages`, `adminListDeviceTokens`, `adminListAccountLinks`,

@@ -484,43 +484,9 @@ export async function getSpenderMoneyAsOf(
   return asOf;
 }
 
-export async function listVisibleScopePages(
-  db: Database,
-  input: {
-    platform: Platform;
-    pageIds?: number[];
-    modelSlug?: string;
-  },
-) {
-  if (input.pageIds !== undefined && input.pageIds.length === 0) {
-    return [];
-  }
-
-  const clauses = [eq(pages.platform, input.platform), eq(pages.status, "active")];
-  if (input.pageIds !== undefined) {
-    clauses.push(inArray(pages.id, input.pageIds));
-  }
-  if (input.modelSlug) {
-    clauses.push(eq(models.slug, input.modelSlug));
-  }
-
-  return db.select({
-    id: pages.id,
-    label: pages.label,
-    platform: pages.platform,
-    modelSlug: models.slug,
-    modelName: models.name,
-    username: pages.username,
-    displayName: pages.displayName,
-  }).from(pages)
-    .innerJoin(models, eq(models.id, pages.modelId))
-    .where(and(...clauses))
-    .orderBy(models.slug, pages.label);
-}
-
 /** W7.2 (A33): spender/revenue scope resolution reads ALL
  * pages — a retired page's fans keep their lifetime spend in Top Spenders
- * and the agency rollups. Navigation keeps listVisibleScopePages. */
+ * and the agency rollups. */
 export async function listRevenueScopePages(
   db: Database,
   input: {
@@ -1940,56 +1906,6 @@ export async function searchFansInScope(
   return {
     total: countRow?.total ?? 0,
     items,
-  };
-}
-
-export async function getUnattributedRevenueForScope(
-  db: Database,
-  input: {
-    pageIds: number[];
-    fromBusinessDate?: string | null;
-    toBusinessDateExclusive?: string | null;
-  },
-) {
-  if (input.pageIds.length === 0) {
-    return {
-      grossAmountMills: 0n,
-      creatorNetAmountMills: 0n,
-    };
-  }
-
-  const revenueClauses = [inArray(dailyRevenue.platformAccountId, input.pageIds)];
-  const attributedClauses = [inArray(spenderDailyFacts.platformAccountId, input.pageIds)];
-  revenueClauses.push(inArray(
-    dailyRevenue.canonicalType,
-    spenderAnalyticsTransactionTypes as Array<typeof dailyRevenue.$inferSelect.canonicalType>,
-  ));
-
-  if (input.fromBusinessDate) {
-    revenueClauses.push(gte(dailyRevenue.businessDate, input.fromBusinessDate));
-    attributedClauses.push(gte(spenderDailyFacts.businessDate, input.fromBusinessDate));
-  }
-  if (input.toBusinessDateExclusive) {
-    revenueClauses.push(lt(dailyRevenue.businessDate, input.toBusinessDateExclusive));
-    attributedClauses.push(lt(spenderDailyFacts.businessDate, input.toBusinessDateExclusive));
-  }
-
-  const [revenueRow] = await db.select({
-    grossAmountMills: sql<bigint>`coalesce(sum(${dailyRevenue.grossAmountMills}), 0)::bigint`,
-    creatorNetAmountMills: sql<bigint>`coalesce(sum(${dailyRevenue.creatorNetAmountMills}), 0)::bigint`,
-  }).from(dailyRevenue)
-    .where(and(...revenueClauses));
-
-  const [attributedRow] = await db.select({
-    grossAmountMills: sql<bigint>`coalesce(sum(${spenderDailyFacts.grossAmountMills}), 0)::bigint`,
-    creatorNetAmountMills: sql<bigint>`coalesce(sum(${spenderDailyFacts.creatorNetAmountMills}), 0)::bigint`,
-  }).from(spenderDailyFacts)
-    .where(and(...attributedClauses));
-
-  return {
-    grossAmountMills: (revenueRow?.grossAmountMills ?? 0n) - (attributedRow?.grossAmountMills ?? 0n),
-    creatorNetAmountMills:
-      (revenueRow?.creatorNetAmountMills ?? 0n) - (attributedRow?.creatorNetAmountMills ?? 0n),
   };
 }
 

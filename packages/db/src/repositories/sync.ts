@@ -176,24 +176,6 @@ function normalizeTriggerToSource(trigger: string | null | undefined): SyncReque
   }
 }
 
-function computeNextDueAt(state: {
-  cadenceSeconds: number;
-  slotOffsetSeconds: number;
-  lastScheduledSlot: number;
-}) {
-  return new Date(((state.lastScheduledSlot + 1) * state.cadenceSeconds + state.slotOffsetSeconds) * 1000);
-}
-
-export function computeSyncStreamNextDueAt(
-  input: {
-    cadenceSeconds: number;
-    slotOffsetSeconds: number;
-    lastScheduledSlot: number;
-  },
-) {
-  return computeNextDueAt(input);
-}
-
 function streamArraySql(streams: readonly SyncStream[]) {
   if (streams.length === 0) {
     return sql`ARRAY[]::sync_stream[]`;

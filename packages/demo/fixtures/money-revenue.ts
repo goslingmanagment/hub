@@ -12,7 +12,6 @@ import {
   HISTORY_DAYS,
   LEDGER_BUCKET,
   LEDGER_TYPES,
-  addTx,
   daysBetween,
   deltaPct,
   emptyTotals,
@@ -361,28 +360,6 @@ function dailySeries(request: DemoRequest, pages: readonly DemoPage[]): KernelOp
   return { series };
 }
 
-function overviewRevenueByModel(request: DemoRequest): KernelOperationResponse<"overviewRevenueByModel"> {
-  const pages = visiblePages(request);
-  return {
-    models: DEMO_MODELS
-      .map((model) => {
-        const own = pages.filter((page) => page.modelSlug === model.slug);
-        if (own.length === 0) return null;
-        const { series } = dailySeries({ ...request, query: { ...request.query, groupByType: "false" } }, own);
-        return {
-          modelSlug: model.slug,
-          modelName: model.name,
-          pageCount: own.length,
-          totalNetAmountMills: series.reduce((sum, point) => sum + point.netAmountMills, 0),
-          transactionCount: series.reduce((sum, point) => sum + point.transactionCount, 0),
-          series: series.map(({ businessDate, netAmountMills, transactionCount }) => ({ businessDate, netAmountMills, transactionCount })),
-        };
-      })
-      .filter((item) => item !== null)
-      .sort((left, right) => right.totalNetAmountMills - left.totalNetAmountMills),
-  };
-}
-
 // --- Operations across pages ---
 
 const ALL_TYPES = new Set<string>(LEDGER_TYPES);
@@ -456,7 +433,6 @@ export const revenueHandlers: DemoHandlers = {
   overview,
   overviewRevenue,
   overviewRevenueDaily: (request) => dailySeries(request, visiblePages(request)),
-  overviewRevenueByModel,
   pageRevenueDaily: (request) => {
     const page = visiblePages(request).find((item) => item.label === request.params.pageLabel);
     if (!page) return demoError(404, "not_found", `Страница ${request.params.pageLabel ?? ""} не найдена`);

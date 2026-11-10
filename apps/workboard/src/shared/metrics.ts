@@ -1,12 +1,12 @@
 import { formatPercent } from "@agency_hub_core/ui/format";
-import { REPLY_NORM_SECONDS, waitText } from "@agency_hub_core/ui/shiftReview";
+import { waitText } from "@agency_hub_core/ui/shiftReview";
 
 /**
  * The words of a shift's three quality numbers, one place for every screen
  * (spec §3 r2, D1): the journal, the people, the person's card and the review
  * say the same label, the same definition and format the same way. The numbers
  * themselves come from the review's rules (`@agency_hub_core/ui/shiftReview`:
- * `shiftQuality`, `reviewQuality`, `qualityOfChatterNumbers`, `averageQuality`).
+ * `shiftQuality`, `qualityOfChatterNumbers`, `averageQuality`).
  *
  *   import { METRICS, formatReplyMedian } from "@/shared/metrics";
  *   <th>{METRICS.reply.label}</th>                      «Ответ, медиана»
@@ -49,8 +49,6 @@ export const METRICS = {
   },
 } as const satisfies Record<string, MetricWords>;
 
-export type MetricKey = keyof typeof METRICS;
-
 /** The live label of «Без ответа к концу» while the shift goes on. */
 export const UNANSWERED_NOW_LABEL = "Ждут ответа сейчас";
 
@@ -74,13 +72,15 @@ export function formatAiUnedited(share: number | null | undefined): string {
   return share === null || share === undefined ? "—" : formatPercent(100 * share);
 }
 
-/** The owner's reply norm, minutes (5–10 мин; past the upper end a wait is long). */
-export const REPLY_NORM_MINUTES = REPLY_NORM_SECONDS / 60;
+/** Money per worked hour, floored like Hub's (services/chatter-stats.ts `perHour`); null without worked time. */
+export function perHourMills(netMills: number, minutes: number): number | null {
+  if (minutes <= 0) return null;
+  return Number((BigInt(netMills) * 60n) / BigInt(minutes));
+}
 
 export {
   averageQuality,
   qualityOfChatterNumbers,
-  reviewQuality,
   shiftQuality,
   type PeriodQuality,
   type ShiftQuality,

@@ -586,35 +586,6 @@ export async function updatePageByLabel(
 }
 
 /**
- * Destruction-door guard: reports whether the page still holds business
- * facts (transactions, DM messages) so a delete can be refused. A
- * handler-level check that predates the soft-delete standard, which made the
- * fact FKs RESTRICT.
- */
-export async function getPageBusinessFactPresence(db: Database, label: string) {
-  const result = await db.execute<{
-    id: number;
-    has_transactions: boolean;
-    has_dm_messages: boolean;
-  }>(sql`
-    select p.id::int as id,
-           exists(select 1 from transactions t where t.platform_account_id = p.id) as has_transactions,
-           exists(select 1 from page_dm_messages m where m.platform_account_id = p.id) as has_dm_messages
-    from pages p
-    where p.label = ${label}
-  `);
-  const row = result.rows[0];
-  if (!row) {
-    return null;
-  }
-  return {
-    id: row.id,
-    hasTransactions: row.has_transactions,
-    hasDmMessages: row.has_dm_messages,
-  };
-}
-
-/**
  * Soft-delete standard: "delete" is a tombstone UPDATE — the row and
  * every fact hanging off it remain; operational listings exclude it via
  * status. A raw DELETE on a fact-bearing page is refused at the FK level
@@ -806,26 +777,4 @@ export async function updateOnlyFansPageIdentityFromOfapi(
     })
     .where(eq(pages.id, platformAccountId))
     .returning(), "updateOnlyFansPageIdentityFromOfapi");
-}
-
-export async function mergePageMetadata(
-  db: Database,
-  platformAccountId: number,
-  metadataPatch: Record<string, unknown>,
-) {
-  const now = new Date();
-  const patchJson = JSON.stringify(metadataPatch);
-
-  const result = await db.execute(sql`
-    update pages
-    set metadata = coalesce(metadata, '{}'::jsonb) || ${patchJson}::jsonb,
-        updated_at = ${now}
-    where id = ${platformAccountId}
-    returning metadata
-  `);
-
-  const metadata = result.rows[0]?.metadata;
-  return typeof metadata === "object" && metadata !== null && !Array.isArray(metadata)
-    ? metadata as Record<string, unknown>
-    : null;
 }

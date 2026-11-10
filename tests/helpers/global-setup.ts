@@ -38,6 +38,17 @@ async function waitForDatabaseReady(pool: ReturnType<typeof createPool>) {
 export default async function setup({ provide }: {
   provide: (key: string, value: unknown) => void;
 }) {
+  // HUB_TEST_POSTGRES=off (`pnpm test:unit` sets it): no file of that run
+  // opens a database, so no cluster and no migration chain. Provides what the
+  // "Docker unavailable" branch below provides, so a unit-named test that does
+  // need a database fails with "no test Postgres was provided" (in CI always:
+  // helpers/prerequisites.ts never skips there) instead of passing.
+  if (process.env.HUB_TEST_POSTGRES === "off") {
+    provide("testDbContainerId", null);
+    provide(TEST_DB_ADMIN_URL_KEY, null);
+    return async () => undefined;
+  }
+
   let container: StartedTestContainer | null = null;
   provide("testDbContainerId", null);
 

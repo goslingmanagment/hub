@@ -152,7 +152,6 @@ const SANCTIONED_DELETER_FILES = [
   "packages/db/src/repositories/capture-payload-erasure.ts",
   "packages/db/src/repositories/catalog.ts",
   "packages/db/src/repositories/config-settings.ts",
-  "packages/db/src/repositories/dm-analytics.ts",
   "packages/db/src/repositories/fan-metadata.ts",
   // Arena "vanished chat" R5: the owner's `sync public-lookup proxy remove`
   // deletes the one row of `fansly_public_egress` — the public reader's proxy

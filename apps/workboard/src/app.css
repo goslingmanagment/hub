@@ -539,10 +539,6 @@
     min-width: 0;
   }
 
-  .wb-meta__quiet {
-    color: var(--ui-text-3);
-  }
-
   .wb-fresh {
     display: inline-flex;
     align-items: center;

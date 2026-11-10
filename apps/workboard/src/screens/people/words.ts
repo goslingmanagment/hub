@@ -55,13 +55,6 @@ export function shareOf(part: number, whole: number): number | null {
   return whole > 0 ? part / whole : null;
 }
 
-/** What a change is against, short (beside a number): «к прошлой неделе». */
-export function versusShort(period: ResolvedPeriod): string {
-  if (period.spec.kind === "week") return "к прошлой неделе";
-  if (period.spec.kind === "days") return `к прошлым ${period.days} ${ruPlural(period.days, "дню", "дням", "дням")}`;
-  return "к прошлому периоду";
-}
-
 /** What a change is against, exact (on hover): «к 26 окт. – 1 нояб., на то же время». */
 export function versusTitle(period: ResolvedPeriod): string {
   return period.current ? `к ${period.previousLabel}, на то же время` : `к ${period.previousLabel}`;
@@ -110,11 +103,6 @@ export const DELAY_WORDS: Readonly<Record<string, string>> = {
 /** «сб, 7 нояб.» of a Moscow day. A shift is said by `shiftWhen` (D12), never by its day and clock glued together. */
 export function dayWords(day: string): string {
   return formatWeekdayDay(day);
-}
-
-/** A sentence that may end on an abbreviation («…1 нояб.») gets no second full stop. */
-export function sentence(text: string): string {
-  return text.endsWith(".") ? text : `${text}.`;
 }
 
 /** «за эту неделю» → «За эту неделю». */

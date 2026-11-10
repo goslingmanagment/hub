@@ -51,5 +51,3 @@ export function Person({ name, status = "away", hint, size = "md", className, ti
     </span>
   );
 }
-
-export { STATUS_WORD as PERSON_STATUS_WORD };

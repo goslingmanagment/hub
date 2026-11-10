@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
-  claimFanEarningsRotation, countFanEarningsRecoveryDebt, markFanEarningsDirty, renewFanEarningsClaim,
+  claimFanEarningsRotation, markFanEarningsDirty, renewFanEarningsClaim,
   settleFanEarningsReceipt,
   withOwnedPageSyncTransaction,
   type FanEarningsClaim,
@@ -216,7 +216,21 @@ describe("Fansly earnings revision and endpoint receipts", () => {
 
   it("counts recovery debt until each endpoint holds a fresh observed receipt", async () => {
     const hour = 3_600_000;
-    const debt = (seconds: number) => countFanEarningsRecoveryDebt(db.db, f.page.id, at(seconds), hour);
+    // The recovery-debt count over the receipts (the reader left Hub with the
+    // legacy roster; the receipts' states it reads are what this case pins).
+    const debt = async (seconds: number) => {
+      const result = await db.pool.query<{ count: string }>(
+        `select count(*)::text count from subject_refresh_state
+         where page_id = $1 and (
+           (plane in ('fan_earnings_lifetime','fan_earnings_monthly') and (
+             last_checked_at is null or last_checked_at <= $2
+             or requested_revision > applied_revision or claim_token is not null
+             or last_refresh_outcome is distinct from 'observed'))
+           or (plane = 'fan_earnings_attribution' and requested_revision > applied_revision))`,
+        [f.page.id, new Date(at(seconds).getTime() - hour)],
+      );
+      return Number(result.rows[0]!.count);
+    };
     await settle(await claim(), "a");
     expect(await debt(2)).toBe(0);
     const monthly = await claim(2, "monthly");
