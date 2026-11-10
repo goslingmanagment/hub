@@ -17,7 +17,7 @@ import {
   syncStreamOrderIndex,
   type SyncDomain,
   type SyncStream,
-  type SyncMonitorStreamRow,
+  type SyncStatusStreamRow,
 } from "@agency_hub_core/db";
 
 import type { AppContext } from "../bootstrap.ts";
@@ -208,7 +208,7 @@ function emptyRecentCounters(): SyncStatusSnapshot["recentCounters"] {
   };
 }
 
-function recentCountersFor(rows: SyncMonitorStreamRow[]): SyncStatusSnapshot["recentCounters"] {
+function recentCountersFor(rows: SyncStatusStreamRow[]): SyncStatusSnapshot["recentCounters"] {
   return rows.reduce<SyncStatusSnapshot["recentCounters"]>((acc, row) => {
     acc.failedRuns += row.recentFailedCount;
     acc.http429s += row.recent429Count;
@@ -1003,7 +1003,7 @@ function deriveDomainState(
   block: SyncDomainBlockKey,
   page: Awaited<ReturnType<typeof listVisiblePages>>[number],
   tasks: SyncTaskReadStatus[],
-  monitorRows: SyncMonitorStreamRow[],
+  monitorRows: SyncStatusStreamRow[],
 ): SyncDomainBlockStatus {
   const policy = SYNC_DOMAIN_POLICY[block];
   const supportedTasks = tasks;
@@ -1414,8 +1414,9 @@ export async function getSyncStatusSnapshot(
         windowStart: new Date(now.getTime() - 24 * 60 * 60 * 1000),
         now,
         streams: monitorStreams,
+        pageCounts: "status",
       })
-      : Promise.resolve([] as SyncMonitorStreamRow[]),
+      : Promise.resolve([] as SyncStatusStreamRow[]),
     enginePageIds.length > 0 ? loadEffectiveConfig(app.db, app.config) : Promise.resolve(null),
   ]);
   // The record rows of a legacy page (OnlyFans's retired dm_messages) are no

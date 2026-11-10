@@ -1,7 +1,7 @@
 import { type SQL, and, eq, inArray, is, sql } from "drizzle-orm";
 import { PgTransaction } from "drizzle-orm/pg-core";
 
-import { FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY, type Platform } from "@agency_hub_core/shared";
+import { type Platform } from "@agency_hub_core/shared";
 
 import { deriveRawPayloadTipsSlice } from "../capture-queryable-fields.ts";
 import type { Database } from "../client.ts";
@@ -182,10 +182,6 @@ function streamArraySql(streams: readonly SyncStream[]) {
   }
 
   return sql`ARRAY[${sql.join(streams.map((stream) => sql`${stream}::sync_stream`), sql`, `)}]::sync_stream[]`;
-}
-
-function dmMessageSyncEligibleSql(alias: string) {
-  return sql`coalesce(${sql.raw(alias)}.metadata ->> ${FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY}, '') = ''`;
 }
 
 export async function startSyncRun(
@@ -1447,9 +1443,6 @@ export interface SyncMonitorStreamRow {
   transactionCount: number;
   dmConversationCount: number;
   dmMessageCount: number;
-  dmEligibleConversationCount: number;
-  dmBackfillCompleteConversationCount: number;
-  dmLaggingConversationCount: number;
   stream: SyncStream;
   status: PageSyncStatus | null;
   blockerKind: string | null;
@@ -1503,8 +1496,13 @@ export interface SyncMonitorStreamRow {
   last429At: Date | null;
   last5xxAt: Date | null;
   providerNextAvailableAt: Date | null;
-  providerMinSpacingMs: number | null;
 }
+
+/** The counts only the monitor screen shows; the status read leaves them out. */
+type SyncMonitorPageOnlyCount = "fanCount" | "followerCount" | "subscriberCount" | "dmMessageCount";
+
+/** A monitor row of the status read (`pageCounts: "status"`): no monitor-only counts. */
+export type SyncStatusStreamRow = Omit<SyncMonitorStreamRow, SyncMonitorPageOnlyCount>;
 
 export interface SyncMonitorRecentEventRow {
   id: number;
@@ -1522,6 +1520,16 @@ export interface SyncMonitorRecentEventRow {
 
 function normalizeSyncMonitorStreamRow(row: Record<string, unknown>): SyncMonitorStreamRow {
   return {
+    ...normalizeSyncStatusStreamRow(row),
+    fanCount: normalizeNumber(row.fanCount as NumericValue, "fanCount"),
+    followerCount: normalizeNumber(row.followerCount as NumericValue, "followerCount"),
+    subscriberCount: normalizeNumber(row.subscriberCount as NumericValue, "subscriberCount"),
+    dmMessageCount: normalizeNumber(row.dmMessageCount as NumericValue, "dmMessageCount"),
+  };
+}
+
+function normalizeSyncStatusStreamRow(row: Record<string, unknown>): SyncStatusStreamRow {
+  return {
     pageId: normalizeNumber(row.pageId as NumericValue, "pageId"),
     pageLabel: String(row.pageLabel ?? ""),
     platform: normalizePlatformValue(row.platform, "platform"),
@@ -1529,15 +1537,8 @@ function normalizeSyncMonitorStreamRow(row: Record<string, unknown>): SyncMonito
     modelName: String(row.modelName ?? ""),
     username: typeof row.username === "string" ? row.username : null,
     displayName: typeof row.displayName === "string" ? row.displayName : null,
-    fanCount: normalizeNumber(row.fanCount as NumericValue, "fanCount"),
-    followerCount: normalizeNumber(row.followerCount as NumericValue, "followerCount"),
-    subscriberCount: normalizeNumber(row.subscriberCount as NumericValue, "subscriberCount"),
     transactionCount: normalizeNumber(row.transactionCount as NumericValue, "transactionCount"),
     dmConversationCount: normalizeNumber(row.dmConversationCount as NumericValue, "dmConversationCount"),
-    dmMessageCount: normalizeNumber(row.dmMessageCount as NumericValue, "dmMessageCount"),
-    dmEligibleConversationCount: normalizeNumber(row.dmEligibleConversationCount as NumericValue, "dmEligibleConversationCount"),
-    dmBackfillCompleteConversationCount: normalizeNumber(row.dmBackfillCompleteConversationCount as NumericValue, "dmBackfillCompleteConversationCount"),
-    dmLaggingConversationCount: normalizeNumber(row.dmLaggingConversationCount as NumericValue, "dmLaggingConversationCount"),
     stream: asSyncStream(String(row.stream ?? "")),
     status: row.status ? row.status as PageSyncStatus : null,
     blockerKind: typeof row.blockerKind === "string" ? row.blockerKind : null,
@@ -1606,7 +1607,6 @@ function normalizeSyncMonitorStreamRow(row: Record<string, unknown>): SyncMonito
     last429At: parseTimestamp(row.last429At as TimestampValue, "last429At"),
     last5xxAt: parseTimestamp(row.last5xxAt as TimestampValue, "last5xxAt"),
     providerNextAvailableAt: parseTimestamp(row.providerNextAvailableAt as TimestampValue, "providerNextAvailableAt"),
-    providerMinSpacingMs: normalizeNullableNumber(row.providerMinSpacingMs as NumericValue, "providerMinSpacingMs"),
   };
 }
 
@@ -1711,16 +1711,32 @@ export async function listSyncMonitorRecentRequests(
   });
 }
 
+interface SyncMonitorStreamRowsInput {
+  pageIds?: number[];
+  pageLabel?: string;
+  windowStart?: Date;
+  now?: Date;
+  streams?: SyncStream[];
+}
+
+/**
+ * The legacy executor's per page/stream monitor rows. `pageCounts: "status"`
+ * (the status snapshot) leaves out the counts only the monitor screen shows —
+ * fans, followers, subscribers, DM messages — and their scans; the rows it
+ * returns have no such fields.
+ */
 export async function listSyncMonitorStreamRows(
   db: Database,
-  input?: {
-    pageIds?: number[];
-    pageLabel?: string;
-    windowStart?: Date;
-    now?: Date;
-    streams?: SyncStream[];
-  },
-) {
+  input: SyncMonitorStreamRowsInput & { pageCounts: "status" },
+): Promise<SyncStatusStreamRow[]>;
+export async function listSyncMonitorStreamRows(
+  db: Database,
+  input?: SyncMonitorStreamRowsInput & { pageCounts?: "all" },
+): Promise<SyncMonitorStreamRow[]>;
+export async function listSyncMonitorStreamRows(
+  db: Database,
+  input?: SyncMonitorStreamRowsInput & { pageCounts?: "all" | "status" },
+): Promise<SyncMonitorStreamRow[] | SyncStatusStreamRow[]> {
   if (
     (input?.pageIds !== undefined && input.pageIds.length === 0) ||
     (input?.streams !== undefined && input.streams.length === 0)
@@ -1753,6 +1769,53 @@ export async function listSyncMonitorStreamRows(
     }),
     sql` `,
   );
+
+  const monitorCounts = (input?.pageCounts ?? "all") === "all";
+  const monitorCountCtes = monitorCounts
+    ? sql`
+    fan_counts as (
+      select fp.platform_account_id as "pageId",
+             count(distinct fp.fan_id)::int as "fanCount"
+      from ${fanPages} fp
+      inner join visible_pages vp on vp."pageId" = fp.platform_account_id
+      group by fp.platform_account_id
+    ),
+    follower_counts as (
+      select pf.platform_account_id as "pageId",
+             count(*) filter (where pf.is_active = true)::int as "followerCount"
+      from ${pageFollows} pf
+      inner join visible_pages vp on vp."pageId" = pf.platform_account_id
+      group by pf.platform_account_id
+    ),
+    subscriber_counts as (
+      select ps.platform_account_id as "pageId",
+             count(*) filter (where ps.is_current = true)::int as "subscriberCount"
+      from ${pageSubscriptions} ps
+      inner join visible_pages vp on vp."pageId" = ps.platform_account_id
+      group by ps.platform_account_id
+    ),
+    dm_message_counts as (
+      select m.platform_account_id as "pageId",
+             count(*)::int as "dmMessageCount"
+      from ${pageDmMessages} m
+      inner join visible_pages vp on vp."pageId" = m.platform_account_id
+      group by m.platform_account_id
+    ),`
+    : sql``;
+  const monitorCountColumns = monitorCounts
+    ? sql`
+           coalesce(fc."fanCount", 0)::int as "fanCount",
+           coalesce(foc."followerCount", 0)::int as "followerCount",
+           coalesce(scnt."subscriberCount", 0)::int as "subscriberCount",
+           coalesce(dmc."dmMessageCount", 0)::int as "dmMessageCount",`
+    : sql``;
+  const monitorCountJoins = monitorCounts
+    ? sql`
+    left join fan_counts fc on fc."pageId" = ps."pageId"
+    left join follower_counts foc on foc."pageId" = ps."pageId"
+    left join subscriber_counts scnt on scnt."pageId" = ps."pageId"
+    left join dm_message_counts dmc on dmc."pageId" = ps."pageId"`
+    : sql``;
 
   const result = await db.execute<Record<string, unknown>>(sql`
     with visible_pages as (
@@ -1787,27 +1850,7 @@ export async function listSyncMonitorStreamRows(
         end
       ) as s(stream)
     ),
-    fan_counts as (
-      select fp.platform_account_id as "pageId",
-             count(distinct fp.fan_id)::int as "fanCount"
-      from ${fanPages} fp
-      inner join visible_pages vp on vp."pageId" = fp.platform_account_id
-      group by fp.platform_account_id
-    ),
-    follower_counts as (
-      select pf.platform_account_id as "pageId",
-             count(*) filter (where pf.is_active = true)::int as "followerCount"
-      from ${pageFollows} pf
-      inner join visible_pages vp on vp."pageId" = pf.platform_account_id
-      group by pf.platform_account_id
-    ),
-    subscriber_counts as (
-      select ps.platform_account_id as "pageId",
-             count(*) filter (where ps.is_current = true)::int as "subscriberCount"
-      from ${pageSubscriptions} ps
-      inner join visible_pages vp on vp."pageId" = ps.platform_account_id
-      group by ps.platform_account_id
-    ),
+${monitorCountCtes}
     transaction_counts as (
       select t.platform_account_id as "pageId",
              count(*)::int as "transactionCount"
@@ -1817,41 +1860,10 @@ export async function listSyncMonitorStreamRows(
     ),
     dm_conversation_counts as (
       select c.platform_account_id as "pageId",
-             count(*) filter (where c.is_visible = true)::int as "dmConversationCount",
-             count(*) filter (
-               where c.is_visible = true
-                 and c.fan_id is not null
-                 and ${dmMessageSyncEligibleSql("c")}
-             )::int as "dmEligibleConversationCount",
-             count(*) filter (
-               where c.is_visible = true
-                 and c.fan_id is not null
-                 and ${dmMessageSyncEligibleSql("c")}
-                 and c.message_coverage_status in (
-                   'complete'::dm_message_coverage_status,
-                   'partial_window'::dm_message_coverage_status
-                 )
-             )::int as "dmBackfillCompleteConversationCount",
-             count(*) filter (
-               where c.is_visible = true
-                 and c.fan_id is not null
-                 and ${dmMessageSyncEligibleSql("c")}
-                 and c.last_message_id is distinct from c.newest_stored_message_id
-                 and (
-                   c.last_message_sync_at is null
-                   or (c.last_message_at is not null and c.last_message_sync_at < c.last_message_at)
-                 )
-             )::int as "dmLaggingConversationCount"
+             count(*) filter (where c.is_visible = true)::int as "dmConversationCount"
       from ${pageDmConversations} c
       inner join visible_pages vp on vp."pageId" = c.platform_account_id
       group by c.platform_account_id
-    ),
-    dm_message_counts as (
-      select m.platform_account_id as "pageId",
-             count(*)::int as "dmMessageCount"
-      from ${pageDmMessages} m
-      inner join visible_pages vp on vp."pageId" = m.platform_account_id
-      group by m.platform_account_id
     ),
     running_runs as (
       select ranked.*,
@@ -2014,8 +2026,7 @@ export async function listSyncMonitorStreamRows(
     provider_rate_limits as (
       select rl.provider as "platform",
              rl.egress_key as "egressKey",
-             max(rl.next_available_at) as "providerNextAvailableAt",
-             max(rl.min_spacing_ms)::int as "providerMinSpacingMs"
+             max(rl.next_available_at) as "providerNextAvailableAt"
       from ${syncRateLimits} rl
       group by rl.provider, rl.egress_key
     )
@@ -2025,16 +2036,9 @@ export async function listSyncMonitorStreamRows(
            ps."modelSlug" as "modelSlug",
            ps."modelName" as "modelName",
            ps."username" as "username",
-           ps."displayName" as "displayName",
-           coalesce(fc."fanCount", 0)::int as "fanCount",
-           coalesce(foc."followerCount", 0)::int as "followerCount",
-           coalesce(scnt."subscriberCount", 0)::int as "subscriberCount",
+           ps."displayName" as "displayName",${monitorCountColumns}
            coalesce(tc."transactionCount", 0)::int as "transactionCount",
            coalesce(dcc."dmConversationCount", 0)::int as "dmConversationCount",
-           coalesce(dmc."dmMessageCount", 0)::int as "dmMessageCount",
-           coalesce(dcc."dmEligibleConversationCount", 0)::int as "dmEligibleConversationCount",
-           coalesce(dcc."dmBackfillCompleteConversationCount", 0)::int as "dmBackfillCompleteConversationCount",
-           coalesce(dcc."dmLaggingConversationCount", 0)::int as "dmLaggingConversationCount",
            ps."stream" as "stream",
            st.status as "status",
            st.blocker_kind as "blockerKind",
@@ -2087,8 +2091,7 @@ export async function listSyncMonitorStreamRows(
            pah."lastPhysicalSuccessAt" as "lastPhysicalSuccessAt",
            rac."last429At" as "last429At",
            rac."last5xxAt" as "last5xxAt",
-           prl."providerNextAvailableAt" as "providerNextAvailableAt",
-           prl."providerMinSpacingMs" as "providerMinSpacingMs"
+           prl."providerNextAvailableAt" as "providerNextAvailableAt"
     from page_streams ps
     left join ${pageSyncStates} st
       on st.page_id = ps."pageId"
@@ -2113,17 +2116,15 @@ export async function listSyncMonitorStreamRows(
      and pah."stream" = ps."stream"
     left join provider_rate_limits prl
       on prl."platform" = ps."platform"
-     and prl."egressKey" = ps."egressKey"
-    left join fan_counts fc on fc."pageId" = ps."pageId"
-    left join follower_counts foc on foc."pageId" = ps."pageId"
-    left join subscriber_counts scnt on scnt."pageId" = ps."pageId"
+     and prl."egressKey" = ps."egressKey"${monitorCountJoins}
     left join transaction_counts tc on tc."pageId" = ps."pageId"
     left join dm_conversation_counts dcc on dcc."pageId" = ps."pageId"
-    left join dm_message_counts dmc on dmc."pageId" = ps."pageId"
     order by ps."pageLabel" asc, ${syncStreamOrderSql('ps."stream"')} asc
   `);
 
-  return result.rows.map((row) => normalizeSyncMonitorStreamRow(row));
+  return monitorCounts
+    ? result.rows.map((row) => normalizeSyncMonitorStreamRow(row))
+    : result.rows.map((row) => normalizeSyncStatusStreamRow(row));
 }
 
 export async function listSyncMonitorRecentEvents(

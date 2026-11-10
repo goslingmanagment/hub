@@ -1216,9 +1216,12 @@ async function loadViewInputs(
   ctx: HistoryServiceContext,
   requests: readonly HistoryRequestRow[],
   items: readonly HistoryItemRow[],
+  known?: ReadonlyMap<number, PageEtaContext>,
 ): Promise<ViewInputs> {
   const pages = new Map<number, PageEtaContext>();
-  for (const pageId of new Set(requests.map((request) => request.pageId))) pages.set(pageId, await pageEtaContext(ctx, pageId));
+  for (const pageId of new Set(requests.map((request) => request.pageId))) {
+    pages.set(pageId, known?.get(pageId) ?? await pageEtaContext(ctx, pageId));
+  }
   return {
     facts: await readHistoryThreadFacts(
       ctx.db,
@@ -1235,14 +1238,22 @@ export async function historyRequestViews(
   ctx: HistoryServiceContext,
   requests: readonly HistoryRequestRow[],
 ): Promise<HistoryRequestView[]> {
-  if (requests.length === 0) return [];
+  return (await historyRequestViewsWithPages(ctx, requests)).views;
+}
+
+/** The request views and the page ETA contexts they were computed from. */
+async function historyRequestViewsWithPages(
+  ctx: HistoryServiceContext,
+  requests: readonly HistoryRequestRow[],
+): Promise<{ views: HistoryRequestView[]; pages: ReadonlyMap<number, PageEtaContext> }> {
+  if (requests.length === 0) return { views: [], pages: new Map() };
   const counts = await countHistoryItems(ctx.db, requests.map((request) => request.id));
   const openItems = new Map<number, OpenHistoryItem[]>();
   for (const request of requests) {
     openItems.set(request.id, request.state === "open" ? await listOpenHistoryItems(ctx.db, { requestId: request.id }) : []);
   }
   const inputs = await loadViewInputs(ctx, requests, [...openItems.values()].flat());
-  return requests.map((request) => {
+  const views = requests.map((request): HistoryRequestView => {
     const eta = inputs.pages.get(request.pageId)!;
     const now = eta.page?.dbNow ?? new Date();
     const open = openItems.get(request.id) ?? [];
@@ -1303,6 +1314,7 @@ export async function historyRequestViews(
       estimateAtSubmit: request.estimateAtSubmit,
     };
   });
+  return { views, pages: inputs.pages };
 }
 
 /** One request with a page of its fans (ordinal order, after `afterOrdinal`). */
@@ -1319,8 +1331,9 @@ export async function historyRequestDocument(
     ...(options.states === undefined ? {} : { states: options.states }),
   });
   const page = rows.slice(0, limit);
-  const [view] = await historyRequestViews(ctx, [request]);
-  const inputs = await loadViewInputs(ctx, [request], page);
+  // One ETA context of the page serves the request view and the item views.
+  const { views: [view], pages } = await historyRequestViewsWithPages(ctx, [request]);
+  const inputs = await loadViewInputs(ctx, [request], page, pages);
   const now = inputs.pages.get(request.pageId)?.page?.dbNow ?? new Date();
   return {
     request: view!,
