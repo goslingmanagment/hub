@@ -20,8 +20,7 @@ import type {
 
 /** The observation kinds the specs journal under: today's kinds, unchanged —
  *  the canonicalizer families, replay, the agent scrub and the AI describer
- *  read them by these names. Each one is registered in
- *  `apps/runtime/src/services/observation-kinds.ts` (pinned by a test). */
+ *  read them by these names. */
 export type FanslyObservationKind =
   | "account_lists"
   | "account_lookup"

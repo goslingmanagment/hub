@@ -263,11 +263,6 @@ export async function reconcileDmRepairRow(
  * enough: a worker restart costs one head pass. */
 let sweepCursor: number | null = null;
 
-/** Test hook: start the next sweep from the signal head. */
-export function resetDmCorrectionsSweepCursor() {
-  sweepCursor = null;
-}
-
 /** The minutely bounded sweep. Keyset-paged; per-row fault isolation
  * (one poison row costs its own pass, never the sweep). */
 export async function runDmCorrectionsReconcile(

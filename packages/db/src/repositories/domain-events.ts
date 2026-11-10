@@ -581,46 +581,6 @@ export async function listDomainEventAccountBounds(
   return bounds;
 }
 
-/** Accounts whose requested gapless replay interval contains an internal hot-
- * ledger hole. `min(account_seq)` only detects a removed prefix; tiering
- * detaches partitions by occurred_at, so a backfilled old event can disappear
- * between two retained sequence numbers. */
-export async function listDomainEventReplayContinuityGaps(
-  db: Database,
-  intervals: ReadonlyArray<{
-    accountId: number;
-    afterSeq: number;
-    throughSeq: number;
-  }>,
-): Promise<Set<number>> {
-  if (intervals.length === 0) {
-    return new Set();
-  }
-  const requestedRows = sql.join(
-    intervals.map((interval) => sql`(
-      ${interval.accountId}::bigint,
-      ${interval.afterSeq}::bigint,
-      ${interval.throughSeq}::bigint
-    )`),
-    sql`, `,
-  );
-  const result = await db.execute<{ account_id: string | number }>(sql`
-    with requested(account_id, after_seq, through_seq) as (
-      values ${requestedRows}
-    )
-    select requested.account_id
-    from requested
-    left join domain_events event
-      on event.account_id = requested.account_id
-     and event.account_seq > requested.after_seq
-     and event.account_seq <= requested.through_seq
-    group by requested.account_id, requested.after_seq, requested.through_seq
-    having count(distinct event.account_seq)::bigint
-      <> greatest(requested.through_seq - requested.after_seq, 0)
-  `);
-  return new Set(result.rows.map((row) => Number(row.account_id)));
-}
-
 /**
  * Returns the last sequence that can be replayed contiguously from each
  * interval's `afterSeq`. This lets the stream drain a retained prefix before

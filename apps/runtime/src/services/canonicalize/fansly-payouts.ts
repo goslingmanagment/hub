@@ -101,8 +101,7 @@ import { contentHash, millsString, recordArray } from "./sync-pull.ts";
 export const FANSLY_PAYOUTS_CANONICALIZER_VERSION = 1;
 const SCHEMA_VERSION = 1;
 
-/** The `observations.kind` values this family claims. Registered in
- *  `observation-kinds.ts`. */
+/** The `observations.kind` values this family claims. */
 export const FANSLY_PAYOUTS_CANONICALIZED_KINDS = [
   "payout_methods",
   "payout_requests",

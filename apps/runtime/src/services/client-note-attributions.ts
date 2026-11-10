@@ -75,7 +75,7 @@ export const CLIENT_NOTE_ATTRIBUTION_ADMISSIONS: Readonly<Partial<Record<Platfor
   onlyfans: ["chatspace-extension"],
 };
 
-/** The capture journal's kind of one reported fact (observation-kinds.ts). */
+/** The capture journal's kind of one reported fact. */
 export const NOTE_ATTRIBUTION_OBSERVATION_KIND = "client.note_attribution.v1";
 
 /** The source as the table stores it, when the page's platform takes it; null otherwise. Pure. */

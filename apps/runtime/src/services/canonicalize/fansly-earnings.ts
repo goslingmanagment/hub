@@ -152,11 +152,3 @@ export function parseFanslyEarningsObservation(
 export function canonicalizeFanslyEarningsObservation(observation: CanonicalizableObservation) {
   return parseFanslyEarningsObservation(observation).events;
 }
-
-export function canParseFanslyEarningsObservation(observation: CanonicalizableObservation) {
-  return parseFanslyEarningsObservation(observation).rejection === null;
-}
-
-export function diagnoseFanslyEarningsRejection(observation: CanonicalizableObservation) {
-  return parseFanslyEarningsObservation(observation).rejection;
-}

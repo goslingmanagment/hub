@@ -78,7 +78,7 @@ export const CLIENT_SEND_ATTRIBUTION_ADMISSIONS: Readonly<Partial<Record<Platfor
 /** The sources whose facts name their chat (`conversationRef`): Fansly's chats have ids of their own. */
 export const CLIENT_SEND_ATTRIBUTION_CHAT_SOURCES: ReadonlySet<ClientSendAttributionSource> = new Set(["fansly-extension"]);
 
-/** The capture journal's kind of one reported fact (observation-kinds.ts). */
+/** The capture journal's kind of one reported fact. */
 export const SEND_ATTRIBUTION_OBSERVATION_KIND = "client.send_attribution.v1";
 
 /** How the text was written, as the table stores it: null when the client does not say, `unknown` for a value the hub does not know. Pure. */

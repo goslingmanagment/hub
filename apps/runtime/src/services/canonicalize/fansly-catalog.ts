@@ -105,8 +105,7 @@ import {
 export const FANSLY_CATALOG_CANONICALIZER_VERSION = 3;
 const SCHEMA_VERSION = 1;
 
-/** The `observations.kind` values this family claims. Registered in
- *  `observation-kinds.ts`. */
+/** The `observations.kind` values this family claims. */
 export const FANSLY_CATALOG_CANONICALIZED_KINDS = [
   "vault_albums",
   "uservault_albums",
