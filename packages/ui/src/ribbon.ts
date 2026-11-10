@@ -4,18 +4,25 @@
  * (Moscow) that starts where the person's shifts leave it free, so a shift is
  * one bar in the row of its day — an evening over midnight too. Pure; no React.
  */
-import { moscowDayOf, moscowDayStart } from "./moscow.js";
-
 const DAY_MINUTES = 1440;
 const MINUTE_MS = 60_000;
 const HOUR_MS = 3_600_000;
+/** Moscow has no DST: UTC+3. Plain arithmetic, no `Intl`: the ribbon asks this for every sale of the period. */
+const MSK_OFFSET_MS = 3 * HOUR_MS;
 /** The hour marks are this far apart; a row starts on one. */
 export const RIBBON_STEP_HOURS = 3;
 
-/** The Moscow day of an instant and its minute in that day. */
+/** The Moscow day (`YYYY-MM-DD`) of an instant and its minute in that day. */
 function moscowMinute(at: number): { day: string; minute: number } {
-  const day = moscowDayOf(at);
-  return { day, minute: Math.floor((at - Date.parse(moscowDayStart(day))) / MINUTE_MS) };
+  const shifted = at + MSK_OFFSET_MS;
+  const day = new Date(shifted).toISOString().slice(0, 10);
+  const midnight = Date.parse(`${day}T00:00:00Z`);
+  return { day, minute: Math.floor((shifted - midnight) / MINUTE_MS) };
+}
+
+/** The start of a Moscow day, as an instant. */
+function moscowMidnight(day: string): number {
+  return Date.parse(`${day}T00:00:00Z`) - MSK_OFFSET_MS;
 }
 
 /** Where a row of the clock starts, and which day names a row. */
@@ -60,11 +67,11 @@ export function ribbonClock(shifts: ReadonlyArray<{ startedAt: string; endedAt: 
 export function ribbonRowOf(at: number, clock: RibbonClock): string {
   const intoRow = (moscowMinute(at).minute - clock.startHour * 60 + DAY_MINUTES) % DAY_MINUTES;
   const rowStart = Math.floor(at / MINUTE_MS) * MINUTE_MS - intoRow * MINUTE_MS;
-  return moscowDayOf(rowStart + clock.labelAt * MINUTE_MS);
+  return moscowMinute(rowStart + clock.labelAt * MINUTE_MS).day;
 }
 
 /** The instant a row starts. */
 export function ribbonRowStart(day: string, clock: RibbonClock): number {
   const sameDay = clock.startHour * 60 + clock.labelAt < DAY_MINUTES;
-  return Date.parse(moscowDayStart(day)) + (clock.startHour - (sameDay ? 0 : 24)) * HOUR_MS;
+  return moscowMidnight(day) + (clock.startHour - (sameDay ? 0 : 24)) * HOUR_MS;
 }
