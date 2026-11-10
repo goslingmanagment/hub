@@ -24,20 +24,6 @@ export const CAPTURE_COVERAGE_PLANES = Object.freeze({
 export type CaptureCoveragePlane =
   typeof CAPTURE_COVERAGE_PLANES[keyof typeof CAPTURE_COVERAGE_PLANES];
 
-/** Required capture evidence for each Analytics panel. */
-export const ANALYTICS_COVERAGE_PLANES = Object.freeze({
-  traffic: Object.freeze([CAPTURE_COVERAGE_PLANES.statsAccountDaily]),
-  fyp: Object.freeze([CAPTURE_COVERAGE_PLANES.statsAccountDaily]),
-  topMedia: Object.freeze([CAPTURE_COVERAGE_PLANES.mediaStats]),
-  topTags: Object.freeze([CAPTURE_COVERAGE_PLANES.statsAccountDaily]),
-  revenue: Object.freeze([CAPTURE_COVERAGE_PLANES.statsEarnings]),
-  contentPerformance: Object.freeze([
-    CAPTURE_COVERAGE_PLANES.catalog,
-    CAPTURE_COVERAGE_PLANES.mediaStats,
-  ]),
-  comments: Object.freeze([CAPTURE_COVERAGE_PLANES.postReplies]),
-} as const);
-
 /** Maximum acceptable lag behind the selected window's head. */
 export const CAPTURE_COVERAGE_HEAD_TOLERANCE_MS: Readonly<
   Partial<Record<CaptureCoveragePlane, number>>

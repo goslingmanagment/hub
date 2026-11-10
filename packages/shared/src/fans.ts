@@ -68,10 +68,6 @@ function onlyFansUserLabel(platformUserId: string) {
   return `@u${platformUserId}`;
 }
 
-export function resolveFanLabel(input: FanLabelInput): ResolvedFanLabel {
-  return resolveFanLabelForScope(input, "global");
-}
-
 export function resolveFanLabelForScope(
   input: FanLabelInput,
   scope: "page" | "global",

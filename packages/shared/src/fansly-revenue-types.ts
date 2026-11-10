@@ -105,8 +105,3 @@ export function fanslyRevenueTypeEra(code: number): FanslyRevenueTypeEra | null 
   }
   return ROWS_BY_CODE.get(code)?.era ?? null;
 }
-
-/** True when this label version can NAME the code. */
-export function isKnownFanslyRevenueType(code: number): boolean {
-  return !fanslyRevenueTypeLabel(code).startsWith("unmapped:");
-}

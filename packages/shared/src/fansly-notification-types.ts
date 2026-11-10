@@ -275,9 +275,6 @@ export const FANSLY_NOTIFICATION_DECLARED_TYPE_CODES: readonly number[] = Object
   45012,
 ]);
 
-export const FANSLY_NOTIFICATION_DECLARED_TYPE_CSV = FANSLY_NOTIFICATION_DECLARED_TYPE_CODES
-  .join(",");
-
 /**
  * The declared set, split into the client's filter groups. The handler iterates
  * these only when even the full CSV comes back visibly filtered — one group per

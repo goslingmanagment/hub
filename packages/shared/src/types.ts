@@ -191,20 +191,6 @@ export interface FanslySessionBundle {
   routeChecks?: Partial<Record<FanslyClientCheckRoute, string>>;
 }
 
-export interface OnlyMonsterTokenBundle {
-  token: string;
-}
-
-export type StoredPlatformCredentialBundle =
-  | {
-    platform: "fansly";
-    session: FanslySessionBundle;
-  }
-  | {
-    platform: "onlyfans";
-    auth: OnlyMonsterTokenBundle;
-  };
-
 export interface ProxyConfig {
   url: string;
   username?: string | null;
@@ -213,9 +199,6 @@ export interface ProxyConfig {
 
 export const syncHealthStates = ["healthy", "degraded", "suspicious", "failed"] as const;
 export type SyncHealth = (typeof syncHealthStates)[number];
-
-export const httpRequestStates = ["started", "success", "retry", "failed"] as const;
-export type HttpRequestState = (typeof httpRequestStates)[number];
 
 export const httpRequestFailureKinds = ["timeout", "transport", "http", "provider", "policy"] as const;
 export type HttpRequestFailureKind = (typeof httpRequestFailureKinds)[number];

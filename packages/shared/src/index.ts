@@ -29,7 +29,6 @@ export * from "./name-spelling.ts";
 export * from "./page-allowlist.ts";
 export * from "./platform-sync.ts";
 export * from "./password-policy.ts";
-export * from "./auth/password-blacklist.ts";
 export * from "./proxy.ts";
 export * from "./publications.ts";
 export * from "./publication-files.ts";

@@ -105,9 +105,6 @@ export function canTransitionPublication(
   return PUBLICATION_TRANSITIONS[from][to]?.includes(actor) === true;
 }
 
-/** Statuses whose content may still change (an edit of an approved one returns it to draft). */
-export const PUBLICATION_EDITABLE_STATUSES: readonly PublicationStatus[] = ["draft", "approved"];
-
 /**
  * Statuses in which a publication occupies its media and its day on the page:
  * approved and on the way, on the platform, or possibly on it (unknown).
@@ -166,10 +163,8 @@ export const PUBLICATION_FINDING_CODES = [
    *  not see the whole schedule. Warning. */
   "platform_schedule_incomplete",
 ] as const;
-export type PublicationFindingCode = (typeof PUBLICATION_FINDING_CODES)[number];
 
 export const PUBLICATION_FINDING_SEVERITIES = ["blocking", "warning", "info"] as const;
-export type PublicationFindingSeverity = (typeof PUBLICATION_FINDING_SEVERITIES)[number];
 
 /** Defaults of a page's publishing settings (a page without a settings row has these). */
 export const PUBLICATION_DEFAULT_REPOST_THRESHOLD_DAYS = 30;

@@ -30,7 +30,6 @@
  * stacking" rule).
  */
 export const LINK_ATTRIBUTION_RULE = "ofapi_subscription_period_equal_split.v1" as const;
-export type LinkAttributionRule = typeof LINK_ATTRIBUTION_RULE;
 
 /** The sweep's journal kinds the projection applies, one per vendor route. */
 export const LINK_FAN_JOURNAL_ENDPOINTS = [
@@ -38,13 +37,11 @@ export const LINK_FAN_JOURNAL_ENDPOINTS = [
   "link_fans_tracking_spenders",
   "link_fans_trial_subscribers",
 ] as const;
-export type LinkFanJournalEndpoint = (typeof LINK_FAN_JOURNAL_ENDPOINTS)[number];
 
 export const linkFanListKinds = ["subscribers", "spenders"] as const;
 export type LinkFanListKind = (typeof linkFanListKinds)[number];
 
 export type LinkFanPeriodStartSource = "before_floor" | "hub_subscription_event" | "first_seen";
-export type LinkFanPeriodCloseReason = "not_active" | "absent";
 
 /** Which link kind and list a journal kind carries. */
 export function linkFanJournalEndpointShape(endpoint: string): {

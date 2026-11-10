@@ -75,20 +75,6 @@ export function parsePeriod(value: string): Period {
   );
 }
 
-export function isSpenderPeriod(value: string): value is SpenderPeriod {
-  return (SPENDER_PERIOD_OPTIONS as readonly string[]).includes(value);
-}
-
-export function parseSpenderPeriod(value: string): SpenderPeriod {
-  if (isSpenderPeriod(value)) {
-    return value;
-  }
-
-  throw new Error(
-    `Unsupported period "${value}". Valid options: ${SPENDER_PERIOD_OPTIONS.join(", ")}.`,
-  );
-}
-
 function getDateParts(date: Date, timeZone: string): DateParts {
   const formatter = new Intl.DateTimeFormat("en-CA", {
     timeZone,
@@ -464,20 +450,6 @@ function resolveSpenderPeriodBounds(
   }
 
   return resolveCustomPeriodBounds(custom, timeZone);
-}
-
-export function resolveSpenderPeriodBoundsForPlatform(
-  platform: Platform,
-  period: SpenderPeriod,
-  now = new Date(),
-  custom?: { from: string; to: string },
-): PeriodBounds {
-  return resolveSpenderPeriodBounds(
-    period,
-    now,
-    custom,
-    resolveBusinessTimeZone(platform),
-  );
 }
 
 export function resolveSpenderComparisonPeriodBoundsForPlatform(
