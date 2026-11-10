@@ -45,33 +45,62 @@ function report(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function fetchReturning(status: number, body: unknown, seen: { url?: string; auth?: string | undefined } = {}) {
+/** One page of a report day, as GET /v1/report-days serves it: posted as drafted by default. */
+function day(overrides: Record<string, unknown> = {}) {
+  return {
+    person: "alex", report_date: "2026-11-08", page: "page-a", model: "model-a", posted_micros: 31_520_000, draft_micros: 31_520_000,
+    diff_micros: null, state: "posted_equal", posted_at: "2026-11-09T00:20:00+03:00", report_id: 12, post_id: 301,
+    ...overrides,
+  };
+}
+
+type Answer = { status: number; body: unknown } | "unreachable";
+interface Seen { urls: URL[]; auth: Array<string | undefined> }
+
+/**
+ * A fake ledger: GET /v1/reports answers `reports`, GET /v1/report-days answers `days` (by default: none of the
+ * caller's days posted — an empty list).
+ */
+function ledger(reports: Answer, days: Answer = { status: 200, body: { from: "2026-10-28", to: "2026-11-10", days: [] } }, seen: Seen = { urls: [], auth: [] }) {
   return (async (input: URL, init?: RequestInit) => {
-    seen.url = String(input);
-    seen.auth = new Headers(init?.headers).get("authorization") ?? undefined;
-    return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+    const url = new URL(String(input));
+    seen.urls.push(url);
+    seen.auth.push(new Headers(init?.headers).get("authorization") ?? undefined);
+    const answer = url.pathname === "/v1/reports" ? reports : url.pathname === "/v1/report-days" ? days : { status: 404, body: { error: "no" } };
+    if (answer === "unreachable") throw new TypeError("fetch failed");
+    return new Response(JSON.stringify(answer.body), { status: answer.status, headers: { "content-type": "application/json" } });
   }) as unknown as typeof fetch;
 }
 
+const fetchReturning = (status: number, body: unknown) => ledger({ status, body });
+
 const now = new Date("2026-11-10T09:00:00Z");
 const answer = (reports: unknown[]) => ({ from: "2026-10-28", to: "2026-11-10", reports });
+const daysAnswer = (days: unknown[]) => ({ status: 200, body: { from: "2026-10-28", to: "2026-11-10", days } });
+const read = (reports: unknown[], days: Answer) => readAccountReports(app(), principal, {}, { fetchImpl: ledger({ status: 200, body: answer(reports) }, days), now });
 
 describe("readAccountReports", () => {
   it("asks the ledger for the session's user and passes the report on in mills, without what the screen does not need", async () => {
-    const seen: { url?: string; auth?: string | undefined } = {};
-    const result = await readAccountReports(app(), principal, {}, { fetchImpl: fetchReturning(200, answer([report()]), seen), now });
+    const seen: Seen = { urls: [], auth: [] };
+    const result = await readAccountReports(app(), principal, {}, { fetchImpl: ledger({ status: 200, body: answer([report()]) }, undefined, seen), now });
 
-    const url = new URL(seen.url!);
-    expect(url.origin + url.pathname).toBe("https://ledger.test/v1/reports");
-    expect(Object.fromEntries(url.searchParams)).toEqual({ from: "2026-10-28", to: "2026-11-10", hub_user_id: "4", hub_username: "Alex.K" });
-    expect(seen.auth).toBe("Bearer test-payouts-key");
+    // Both reads — the drafts and the posts — for the session's user, with Hub's key.
+    expect(seen.urls.map((url) => url.origin + url.pathname).sort()).toEqual(["https://ledger.test/v1/report-days", "https://ledger.test/v1/reports"]);
+    for (const url of seen.urls) {
+      expect(Object.fromEntries(url.searchParams)).toEqual({ from: "2026-10-28", to: "2026-11-10", hub_user_id: "4", hub_username: "Alex.K" });
+    }
+    expect(seen.auth).toEqual(["Bearer test-payouts-key", "Bearer test-payouts-key"]);
     expect(result.from).toBe("2026-10-28");
     expect(result.to).toBe("2026-11-10");
+    expect(result.postsRead).toBe(true);
     const [only] = result.reports;
     expect(only).toMatchObject({
-      id: 12, reportDate: "2026-11-08", version: 2, versions: 2, status: "draft", totalMills: 31_520,
-      savedAt: "2026-11-08T23:54:10+03:00", cutAt: "2026-11-08T23:53:00+03:00",
-      pages: [{ pageLabel: "page-a", amountMills: 31_520 }, { pageLabel: "page-b", amountMills: 0 }],
+      source: "draft", id: 12, reportDate: "2026-11-08", version: 2, versions: 2, status: "draft", totalMills: 31_520, draftTotalMills: 31_520,
+      savedAt: "2026-11-08T23:54:10+03:00", cutAt: "2026-11-08T23:53:00+03:00", postedAt: null,
+      pages: [
+        { pageLabel: "page-a", amountMills: 31_520, draftMills: 31_520, postedMills: null, postState: "draft_only" },
+        { pageLabel: "page-b", amountMills: 0, draftMills: 0, postedMills: null, postState: "draft_only" },
+      ],
     });
     expect(only!.lines).toEqual([
       { n: 1, pageLabel: "page-a", fanRef: "fan-1", fanName: "nick", kind: "message_purchase", occurredAt: "2026-11-08T17:28:00+03:00", netMills: 28_000, counted: true, added: false, what: "", flags: [], notes: ["text"], ppvAuthor: "alex.k", ppvSentAt: "08.11 17:26" },
@@ -113,8 +142,7 @@ describe("readAccountReports", () => {
     await expect(readAccountReports(app(), principal, {}, { fetchImpl: fetchReturning(404, { error: "no" }), now })).rejects.toMatchObject({ statusCode: 503 });
     const changed = answer([report({ total_micros: "31.52" })]);
     await expect(readAccountReports(app(), principal, {}, { fetchImpl: fetchReturning(200, changed), now })).rejects.toMatchObject({ statusCode: 503 });
-    const unreachable = (async () => { throw new TypeError("fetch failed"); }) as unknown as typeof fetch;
-    await expect(readAccountReports(app(), principal, {}, { fetchImpl: unreachable, now })).rejects.toMatchObject({ statusCode: 503 });
+    await expect(readAccountReports(app(), principal, {}, { fetchImpl: ledger("unreachable"), now })).rejects.toMatchObject({ statusCode: 503 });
   });
 
   it("refuses a window past 62 days or backwards before asking", async () => {
@@ -123,6 +151,112 @@ describe("readAccountReports", () => {
     await expect(readAccountReports(app(), principal, { from: "2026-09-01", to: "2026-11-08" }, { fetchImpl, now })).rejects.toMatchObject({ statusCode: 400 });
     await expect(readAccountReports(app(), principal, { from: "2026-11-09", to: "2026-11-08" }, { fetchImpl, now })).rejects.toMatchObject({ statusCode: 400 });
     expect(asked).toBe(false);
+  });
+});
+
+describe("readAccountReports: the posts in «Отчётность»", () => {
+  it("serves a post written without the agent as a report of its own: its pages, no sales, the posted sum", async () => {
+    const result = await read([], daysAnswer([
+      day({ report_date: "2026-11-07", page: "page-a", posted_micros: 40_000_000, draft_micros: null, state: "post_only", report_id: null, posted_at: "2026-11-08T01:10:00+03:00" }),
+      day({ report_date: "2026-11-07", page: "page-b", posted_micros: 2_500_000, draft_micros: null, state: "post_only", report_id: null, posted_at: "2026-11-08T01:10:00+03:00" }),
+    ]));
+    expect(result.postsRead).toBe(true);
+    expect(result.reports).toEqual([{
+      source: "post", id: null, reportDate: "2026-11-07", windowFrom: null, windowTo: null, cutAt: null, version: null, versions: null,
+      status: "posted", totalMills: 42_500, draftTotalMills: null, savedAt: null, postedAt: "2026-11-08T01:10:00+03:00",
+      pages: [
+        { pageLabel: "page-a", amountMills: 40_000, draftMills: null, postedMills: 40_000, postState: "post_only" },
+        { pageLabel: "page-b", amountMills: 2_500, draftMills: null, postedMills: 2_500, postState: "post_only" },
+      ],
+      lines: [],
+    }]);
+  });
+
+  it("joins a draft and its post posted as drafted: one report, the posted sum, the sales of the draft", async () => {
+    const result = await read([report()], daysAnswer([day(), day({ page: "page-b", posted_micros: 0, draft_micros: 0 })]));
+    expect(result.reports).toHaveLength(1);
+    expect(result.reports[0]).toMatchObject({
+      source: "both", id: 12, status: "posted", totalMills: 31_520, draftTotalMills: 31_520, postedAt: "2026-11-09T00:20:00+03:00",
+      pages: [
+        { pageLabel: "page-a", amountMills: 31_520, draftMills: 31_520, postedMills: 31_520, postState: "posted_equal" },
+        { pageLabel: "page-b", amountMills: 0, draftMills: 0, postedMills: 0, postState: "posted_equal" },
+      ],
+    });
+    expect(result.reports[0]!.lines).toHaveLength(3);
+  });
+
+  it("makes the posted sum the report's one number when the chatter changed a page, the draft's total beside it", async () => {
+    // Only page-a is in the pay base: the draft's page-b, at zero, keeps its own word. Below the mill is cut.
+    const result = await read([report()], daysAnswer([
+      day({ posted_micros: 39_999_999, diff_micros: 8_479_999, state: "posted_changed", report_id: null }),
+    ]));
+    expect(result.reports).toHaveLength(1);
+    expect(result.reports[0]).toMatchObject({
+      source: "both", id: 12, totalMills: 39_999, draftTotalMills: 31_520,
+      pages: [
+        { pageLabel: "page-a", amountMills: 39_999, draftMills: 31_520, postedMills: 39_999, postState: "posted_changed" },
+        { pageLabel: "page-b", amountMills: 0, draftMills: 0, postedMills: null, postState: "draft_only" },
+      ],
+    });
+  });
+
+  it("counts only the posted pages of a partly posted report: a page left out of the post adds nothing", async () => {
+    const draft = report({
+      total_micros: 31_520_000,
+      pages: [{ page: "page-a", model: "model-a", amount_micros: 20_000_000 }, { page: "page-b", model: "", amount_micros: 11_520_000 }],
+    });
+    const result = await read([draft], daysAnswer([
+      day({ posted_micros: 20_000_000, draft_micros: 20_000_000 }),
+      day({ page: "page-b", posted_micros: null, draft_micros: 11_520_000, state: "draft_only", posted_at: null, post_id: null }),
+    ]));
+    expect(result.reports[0]).toMatchObject({
+      source: "both", status: "posted", totalMills: 20_000, draftTotalMills: 31_520,
+      pages: [
+        { pageLabel: "page-a", amountMills: 20_000, postedMills: 20_000 },
+        { pageLabel: "page-b", amountMills: 0, draftMills: 11_520, postedMills: null, postState: "draft_only" },
+      ],
+    });
+  });
+
+  it("keeps a draft not posted yet as a draft, and a post of another day as a report of its own", async () => {
+    const result = await read([report()], daysAnswer([
+      day({ posted_micros: null, state: "draft_only", posted_at: null, post_id: null }),
+      day({ report_date: "2026-11-06", posted_micros: 15_000_000, draft_micros: null, state: "post_only", report_id: null }),
+    ]));
+    expect(result.reports.map((one) => [one.reportDate, one.source, one.status, one.totalMills])).toEqual([
+      ["2026-11-08", "draft", "draft", 31_520],
+      ["2026-11-06", "post", "posted", 15_000],
+    ]);
+  });
+
+  it("drops the day rows when they hold more than one person, or another person than the drafts: the drafts alone", async () => {
+    warnings.length = 0;
+    const two = await read([report()], daysAnswer([day(), day({ person: "kate", report_date: "2026-11-07", draft_micros: null, state: "post_only", report_id: null })]));
+    expect(two.postsRead).toBe(false);
+    expect(two.reports.map((one) => [one.id, one.source, one.totalMills])).toEqual([[12, "draft", 31_520]]);
+    expect(JSON.stringify(two)).not.toContain("2026-11-07");
+
+    const other = await read([report()], daysAnswer([day({ person: "kate" })]));
+    expect(other.postsRead).toBe(false);
+    expect(other.reports.map((one) => one.source)).toEqual(["draft"]);
+    expect(warnings).toHaveLength(2);
+
+    // Without a draft to compare with, one person's rows are the caller's (the ledger filtered them by the caller)…
+    const alone = await read([], daysAnswer([day({ person: "kate", draft_micros: null, state: "post_only", report_id: null })]));
+    expect(alone).toMatchObject({ postsRead: true, reports: [{ source: "post", totalMills: 31_520 }] });
+    // …unless they are of the person a draft of someone else in the answer is of.
+    const theirs = await read([report({ hub_user_id: 5, hub_username: "kate.v", person: "kate" })], daysAnswer([day({ person: "kate", draft_micros: null, state: "post_only", report_id: null })]));
+    expect(theirs).toMatchObject({ postsRead: false, reports: [] });
+  });
+
+  it("serves the drafts when the posts alone fail: an error, no answer, another shape — and says so", async () => {
+    for (const days of [{ status: 500, body: { error: "boom" } }, "unreachable" as const, { status: 200, body: { days: [{ person: "alex" }] } }]) {
+      const result = await read([report()], days);
+      expect(result.postsRead).toBe(false);
+      expect(result.reports.map((one) => [one.id, one.source, one.totalMills])).toEqual([[12, "draft", 31_520]]);
+    }
+    // Go's null list is no rows, not a failure.
+    expect((await read([report()], { status: 200, body: { from: "2026-10-28", to: "2026-11-10", days: null } })).postsRead).toBe(true);
   });
 });
 

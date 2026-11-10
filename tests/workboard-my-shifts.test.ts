@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { AccountReport } from "@agency_hub_core/contracts";
+import type { AccountShiftReport } from "@agency_hub_core/contracts";
 import { resolvePeriod } from "../packages/ui/src/period.ts";
 import {
   comparisonOf,
@@ -8,12 +8,15 @@ import {
   joinShifts,
   myShiftsWindow,
   previousReportedMills,
+  UNKNOWN_TIME,
   type StatsShift,
 } from "../apps/workboard/src/screens/my-shifts/model.ts";
 
 // Workboard's «Мои смены»: a chatter's shifts (Hub) and their reports (the agency
-// ledger) as one row each. The ledger dates a report by the Moscow day its shift
-// BEGAN, a night's own day is the one holding most of it: the join goes by time.
+// ledger: the agent's draft, the chatter's post in «Отчётность», or both) as one
+// row each. The ledger dates a report by the Moscow day its shift BEGAN, a
+// night's own day is the one holding most of it: the join goes by time, and a
+// post written without the agent — it has no window — by the day its shift began.
 
 const msk = (day: string, time: string) => new Date(`${day}T${time}:00+03:00`).toISOString();
 
@@ -26,10 +29,22 @@ function shift(from: string, to: string, extra: Partial<StatsShift> = {}): Stats
   };
 }
 
-function report(id: number, reportDate: string, from: string, to: string, extra: Partial<AccountReport> = {}): AccountReport {
+/** A draft the chatter posted as it was (the ledger's draft with its post). */
+function report(id: number, reportDate: string, from: string, to: string, extra: Partial<AccountShiftReport> = {}): AccountShiftReport {
+  const totalMills = extra.totalMills ?? 80_000;
   return {
-    id, reportDate, windowFrom: from, windowTo: to, cutAt: to, version: 1, versions: 1, status: "posted", totalMills: 80_000,
-    savedAt: to, pages: [{ pageLabel: "page-a", amountMills: 80_000 }], lines: [], ...extra,
+    source: "both", id, reportDate, windowFrom: from, windowTo: to, cutAt: to, version: 1, versions: 1, status: "posted", totalMills,
+    draftTotalMills: totalMills, savedAt: to, postedAt: to,
+    pages: [{ pageLabel: "page-a", amountMills: totalMills, draftMills: totalMills, postedMills: totalMills, postState: "posted_equal" }], lines: [], ...extra,
+  };
+}
+
+/** A post written without the agent: no window, no draft, no sales. */
+function post(reportDate: string, totalMills: number): AccountShiftReport {
+  return {
+    source: "post", id: null, reportDate, windowFrom: null, windowTo: null, cutAt: null, version: null, versions: null, status: "posted",
+    totalMills, draftTotalMills: null, savedAt: null, postedAt: msk(reportDate, "23:50"),
+    pages: [{ pageLabel: "page-a", amountMills: totalMills, draftMills: null, postedMills: totalMills, postState: "post_only" }], lines: [],
   };
 }
 
@@ -95,7 +110,7 @@ describe("joinShifts", () => {
     const rows = joinShifts({
       shifts: [],
       reports: [
-        report(6, "2026-11-06", msk("2026-11-06", "19:00"), msk("2026-11-06", "23:30"), { status: "draft" }),
+        report(6, "2026-11-06", msk("2026-11-06", "19:00"), msk("2026-11-06", "23:30"), { source: "draft", status: "draft", postedAt: null }),
         // Sunday 1 November, read only because a night of Monday may be dated by it: not this week's.
         report(7, "2026-11-01", msk("2026-11-01", "16:00"), msk("2026-11-01", "23:00")),
       ],
@@ -112,7 +127,7 @@ describe("joinShifts", () => {
     const newer = shift(msk("2026-11-06", "10:00"), msk("2026-11-06", "18:00"));
     const rows = joinShifts({
       shifts: [older, ongoing, newer],
-      reports: [report(8, "2026-11-06", msk("2026-11-06", "10:00"), msk("2026-11-06", "18:00"), { status: "checked" })],
+      reports: [report(8, "2026-11-06", msk("2026-11-06", "10:00"), msk("2026-11-06", "18:00"), { source: "draft", status: "checked", postedAt: null })],
       window: WEEK,
     });
     expect(rows.map((row) => [row.shift?.startedAt, row.state])).toEqual([
@@ -131,6 +146,75 @@ describe("joinShifts", () => {
     });
     expect(rows.map((row) => row.state)).toEqual(["ongoing", "unknown"]);
     expect(factsOf(rows, false)).toMatchObject({ shifts: 2, reportedMills: null, perHourMills: null, withoutReport: 0 });
+  });
+});
+
+describe("joinShifts: the posts in «Отчётность»", () => {
+  it("gives a shift its post written without the agent, by the day: «Отправлен», the posted sum, Hub's figure gone", () => {
+    const day = shift(msk("2026-11-04", "12:00"), msk("2026-11-04", "20:00"));
+    const rows = joinShifts({ shifts: [day], reports: [post("2026-11-04", 64_000)], window: WEEK });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ shift: day, state: "posted", totalMills: 64_000, draftMills: null, hubMills: null });
+    expect(rows[0]!.report?.source).toBe("post");
+  });
+
+  it("puts a night's post on the night that began on its date, not on the night it ends", () => {
+    // Sun 1 → Mon 2 ends on Monday (its pay day); Mon 2 → Tue 3 began on Monday: the post dated Monday is the second's.
+    const first = shift(msk("2026-11-01", "23:00"), msk("2026-11-02", "07:00"));
+    const second = shift(msk("2026-11-02", "23:10"), msk("2026-11-03", "07:05"));
+    const rows = joinShifts({ shifts: [second, first], reports: [post("2026-11-02", 51_000)], window: WEEK });
+    expect(rows.map((row) => [row.shift?.startedAt, row.report?.totalMills ?? null, row.state])).toEqual([
+      [second.startedAt, 51_000, "posted"],
+      [first.startedAt, null, "missing"],
+    ]);
+    // A night alone takes a post dated by the day it ends, too (the pay day).
+    const alone = joinShifts({ shifts: [first], reports: [post("2026-11-02", 51_000)], window: WEEK });
+    expect(alone[0]).toMatchObject({ state: "posted", totalMills: 51_000 });
+  });
+
+  it("keeps a post Hub has no shift for as a row of its own, by its day: no clock is invented", () => {
+    const rows = joinShifts({ shifts: [], reports: [post("2026-11-05", 30_000), post("2026-11-01", 9_000)], window: WEEK });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ key: "post:2026-11-05", shift: null, state: "posted", totalMills: 30_000, pages: ["page-a"] });
+    expect(rows[0]!.when.time).toBe(UNKNOWN_TIME);
+    expect(rows[0]!.when.days).toBe("чт, 5 нояб.");
+  });
+
+  it("says what the draft was where the chatter posted another sum — a changed page or a page left out — and nothing where it is the same", () => {
+    const changed = shift(msk("2026-11-03", "10:00"), msk("2026-11-03", "18:00"));
+    const partial = shift(msk("2026-11-04", "10:00"), msk("2026-11-04", "18:00"));
+    const same = shift(msk("2026-11-05", "10:00"), msk("2026-11-05", "18:00"));
+    const drafted = shift(msk("2026-11-06", "10:00"), msk("2026-11-06", "18:00"));
+    const rows = joinShifts({
+      shifts: [changed, partial, same, drafted],
+      reports: [
+        report(21, "2026-11-03", changed.startedAt, changed.endedAt, { totalMills: 95_000, draftTotalMills: 80_000 }),
+        report(22, "2026-11-04", partial.startedAt, partial.endedAt, { totalMills: 50_000, draftTotalMills: 70_000 }),
+        report(23, "2026-11-05", same.startedAt, same.endedAt),
+        report(24, "2026-11-06", drafted.startedAt, drafted.endedAt, { source: "draft", status: "draft", postedAt: null }),
+      ],
+      window: WEEK,
+    });
+    const of = (one: StatsShift) => rows.find((row) => row.shift === one)!;
+    expect(of(changed)).toMatchObject({ state: "posted", totalMills: 95_000, draftMills: 80_000 });
+    expect(of(partial)).toMatchObject({ state: "posted", totalMills: 50_000, draftMills: 70_000 });
+    expect(of(same)).toMatchObject({ state: "posted", totalMills: 80_000, draftMills: null });
+    expect(of(drafted)).toMatchObject({ state: "draft", totalMills: 80_000, draftMills: null });
+    // «По отчётам» is what was posted, the draft where nothing was.
+    expect(factsOf(rows, true)).toMatchObject({ reportedMills: 95_000 + 50_000 + 80_000 + 80_000, withoutReport: 0, drafts: 1 });
+  });
+
+  it("claims no missing report while the posts did not come: a shift without a draft may have a post", () => {
+    const withDraft = shift(msk("2026-11-03", "10:00"), msk("2026-11-03", "18:00"));
+    const without = shift(msk("2026-11-04", "10:00"), msk("2026-11-04", "18:00"));
+    const rows = joinShifts({
+      shifts: [withDraft, without],
+      reports: [report(25, "2026-11-03", withDraft.startedAt, withDraft.endedAt, { source: "draft", status: "draft", postedAt: null })],
+      postsRead: false,
+      window: WEEK,
+    });
+    expect(rows.map((row) => row.state)).toEqual(["unknown", "draft"]);
+    expect(factsOf(rows, false)).toMatchObject({ withoutReport: 0, reportedMills: null, drafts: 1 });
   });
 });
 

@@ -17,14 +17,6 @@ import {
   InvalidIngestEventError,
 } from "../../services/ingest-observations.ts";
 import {
-  cancelOfapiCommand,
-  createOfapiCommand,
-  getOfapiCommand,
-} from "../../services/ofapi-command-outbox.ts";
-import {
-  sendOfapiCommandExecuteJob,
-} from "../../services/ofapi-command-executor.ts";
-import {
   getOfapiWebhookStatus,
   receiveOfapiWebhook,
   reconcileOfapiWebhookRegistration,
@@ -223,43 +215,5 @@ export async function registerIngestRoutes(server: ApiServer, ctx: ApiModuleCont
   });
   server.post("/api/v1/admin/ofapi/banned-words/refresh", { schema: routeSchemas.ofapiBannedWordsRefresh }, async request => {
     return refreshOfapiBannedWords(appContext, request.body.maxPages);
-  });
-
-  server.post("/api/v1/ofapi/commands", {
-    schema: routeSchemas.createOfapiCommand,
-    config: {
-      rateLimit: {
-        max: 60,
-        timeWindow: "1 minute",
-      },
-    },
-  }, async (request, reply) => {
-    const principal = await requirePrincipal(request);
-    const result = await createOfapiCommand(appContext, principal, request.body);
-    if (result.status === 202 && boss) {
-      try {
-        await sendOfapiCommandExecuteJob(boss, result.command.commandId);
-      } catch (error) {
-        request.log.warn(
-          { err: error, commandId: result.command.commandId },
-          "Failed to enqueue OFAPI command; sweep will retry",
-        );
-      }
-    }
-    return reply.code(result.status).send(result.command);
-  });
-
-  server.get("/api/v1/ofapi/commands/:commandId", {
-    schema: routeSchemas.getOfapiCommand,
-  }, async (request) => {
-    const principal = await requirePrincipal(request);
-    return getOfapiCommand(appContext, principal, request.params.commandId);
-  });
-
-  server.post("/api/v1/ofapi/commands/:commandId/cancel", {
-    schema: routeSchemas.cancelOfapiCommand,
-  }, async (request) => {
-    const principal = await requirePrincipal(request);
-    return cancelOfapiCommand(appContext, principal, request.params.commandId);
   });
 }

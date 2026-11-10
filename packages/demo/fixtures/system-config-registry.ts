@@ -757,21 +757,6 @@ export const DEMO_CONFIG_DESCRIPTORS: readonly DemoConfigDescriptor[] = [
     "destructive": false
   },
   {
-    "key": "ofapiQueuedCommandTtlMs",
-    "envName": "OFAPI_QUEUED_COMMAND_TTL_MS",
-    "configField": "ofapiQueuedCommandTtlMs",
-    "kind": "number",
-    "subsystem": "OFAPI",
-    "label": "OFAPI queued command TTL (ms)",
-    "default": "600000",
-    "editability": "editable",
-    "runtimeApply": "live",
-    "comparable": true,
-    "note": "W3.2: queued-only rows older than this expire to cancelled at each minutely sweep; read live per sweep, no restart.",
-    "costWarning": "Raising re-opens the blind window where the kernel can execute a send the desktop has already stopped watching (desktop auto-stop = 10 min).",
-    "destructive": false
-  },
-  {
     "key": "diskUsageAlertPercent",
     "envName": "DISK_USAGE_ALERT_PERCENT",
     "configField": "diskUsageAlertPercent",

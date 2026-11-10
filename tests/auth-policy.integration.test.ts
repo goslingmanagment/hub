@@ -236,18 +236,20 @@ type MatrixCell = number | "allowed" | "unchecked";
 
 const MODULE_MATRIX: Array<{
   module: string;
+  // GET unless set. The policy answers in onRequest, before body validation,
+  // so a bodyless POST probes the declaration without reaching the handler.
+  method?: "POST";
   url: string;
   cells: Record<"anon" | "chatter" | "lead" | "owner", MatrixCell>;
 }> = [
   { module: "identity", url: "/api/v1/auth/me", cells: { anon: 401, chatter: "allowed", lead: "allowed", owner: "allowed" } },
   { module: "catalog", url: "/api/v1/models", cells: { anon: 401, chatter: 403, lead: "allowed", owner: "allowed" } },
-  { module: "ingest", url: "/api/v1/ofapi/commands/00000000-0000-4000-8000-000000000001", cells: { anon: 401, chatter: "allowed", lead: 403, owner: 403 } },
+  { module: "ingest", method: "POST", url: "/api/v1/ingest/observations", cells: { anon: 401, chatter: "allowed", lead: 403, owner: 403 } },
   { module: "conversations", url: "/api/v1/pages/lana/fans/9000001/profile", cells: { anon: 401, chatter: "allowed", lead: "allowed", owner: "allowed" } },
   { module: "finance", url: "/api/v1/pages/lana/revenue?period=7d", cells: { anon: 401, chatter: 403, lead: "allowed", owner: "allowed" } },
   { module: "audience", url: "/api/v1/pages/lana/subscribers", cells: { anon: 401, chatter: "allowed", lead: "allowed", owner: "allowed" } },
   { module: "ai", url: "/api/v1/admin/usage/chatters", cells: { anon: 401, chatter: 403, lead: 403, owner: "allowed" } },
   { module: "ops", url: "/api/v1/sync/overview", cells: { anon: 401, chatter: 403, lead: "allowed", owner: "allowed" } },
-  { module: "events", url: "/api/v1/events/snapshot?accountId=1&afterSeq=0", cells: { anon: 401, chatter: "unchecked", lead: 403, owner: 403 } },
 ];
 
 describe("per-module role matrix (Stage 19)", () => {
@@ -267,8 +269,9 @@ describe("per-module role matrix (Stage 19)", () => {
     for (const row of MODULE_MATRIX) {
       for (const [who, headers] of Object.entries(principals)) {
         const expected = row.cells[who as keyof typeof row.cells];
-        const viaEnforce = await servers.enforce.inject({ method: "GET", url: row.url, headers });
-        const label = `${row.module} ${row.url} as ${who}`;
+        const method = row.method ?? "GET";
+        const viaEnforce = await servers.enforce.inject({ method, url: row.url, headers });
+        const label = `${row.module} ${method} ${row.url} as ${who}`;
 
         if (typeof expected === "number") {
           expect(viaEnforce.statusCode, label).toBe(expected);

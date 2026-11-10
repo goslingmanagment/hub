@@ -15,8 +15,9 @@ import { shiftReportsOf } from "./account-reports.ts";
  * - the newest ended shift of alex.k and den.s: composed, not posted yet;
  * - kate.v changed an amount by hand (+$12.50 on her newest day), and once after the day was paid — that change waits
  *   for the owner in «Решения»; one of her posts says a total its pages do not add up to (not parsed);
- * - den.s lowered a page (−$8.00) and wrote one report without the agent; alex.k once wrote a page name the
- *   ledger does not know (that line is out);
+ * - den.s lowered a page (−$8.00) and wrote one report without the agent; alex.k raised a page (+$15.00), once wrote a
+ *   page name the ledger does not know (that line is out: the day is posted in part), and once wrote a report by hand
+ *   though the agent had composed one (the post alone counts, the draft is not in the pay base);
  * - olya.m's post carries a date days off the day it was sent (not parsed);
  * - a post from someone the ledger does not know.
  *
@@ -44,7 +45,7 @@ type Twist =
 
 /** Whose report day (by the index of the ended shift, the newest from 0) shows what. Every other day is posted as drafted. */
 const TWISTS: Readonly<Record<string, Readonly<Record<number, Twist>>>> = {
-  "alex.k": { 0: { kind: "draft" }, 4: { kind: "unknown_page" } },
+  "alex.k": { 0: { kind: "draft" }, 1: { kind: "changed", deltaMills: 15_000 }, 4: { kind: "unknown_page" }, 5: { kind: "post_only" } },
   "den.s": { 0: { kind: "draft" }, 2: { kind: "changed", deltaMills: -8_000 }, 3: { kind: "post_only" } },
   "kate.v": { 0: { kind: "changed", deltaMills: 12_500 }, 4: { kind: "blocked", flag: "sum_mismatch" }, 6: { kind: "changed", deltaMills: 20_000, paid: true } },
   "olya.m": { 5: { kind: "blocked", flag: "date_mismatch" } },
@@ -115,10 +116,10 @@ export function demoReportDays(now: Date): DemoReportDay[] {
       const date = mskDay(shift.start);
       const postedAt = Math.min(now.getTime(), shift.end + 24 * MINUTE_MS);
       const msgId = 4000 + (Math.floor(shift.start / 60_000) % 50_000);
-      if (report === null) {
+      if (report === null || twist?.kind === "post_only") {
         if (twist?.kind !== "post_only") continue;
         // Written without the agent: the chatter's own sums of the shift's sales, nothing to compare with.
-        const pages = [...new Set(shift.sales.map((sale) => sale.pageLabel))].map((pageLabel): Page => ({
+        const pages = user.pages.filter((pageLabel) => shift.sales.some((sale) => sale.pageLabel === pageLabel)).map((pageLabel): Page => ({
           pageLabel,
           model: demoModelOf(pageLabel),
           postedMills: cents(shift.sales.filter((sale) => sale.pageLabel === pageLabel).reduce((sum, sale) => sum + sale.netMills, 0)),

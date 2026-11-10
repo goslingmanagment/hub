@@ -169,6 +169,15 @@
     color: var(--ui-text-2);
   }
 
+  /* A sum the chatter changed after the draft: their right, said quietly beside the word — never a mark. */
+  .mys-state__was {
+    color: var(--ui-text-3);
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+
   /* Colour only where something is to be done: a sent report keeps its green mark, its word is plain. */
   .mys-state .ui-badge--success {
     color: var(--ui-text-2);
@@ -256,7 +265,8 @@
       justify-self: end;
     }
 
-    .mys-journal .mys-state__next {
+    .mys-journal .mys-state__next,
+    .mys-journal .mys-state__was {
       grid-column: 1 / -1;
       grid-row: 3;
       margin-top: 4px;

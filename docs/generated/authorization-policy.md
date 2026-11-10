@@ -27,7 +27,7 @@ for at password sign-in (`client: "chat-extension"`): it reaches only the
 61 routes marked "yes", and every route marked "no" refuses it with 403.
 A full device token is not affected.
 
-## Routes (416)
+## Routes (408)
 
 | Method | Path | Route key | Kind | Roles | Page scope | chat-extension token |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -316,11 +316,6 @@ A full device token is not affected.
 | GET | `/api/v1/client/pages/:pageLabel/spenders/stats` | `clientSpenderStats` | `apiKey` | — | page | yes |
 | GET | `/api/v1/client/pages/:pageLabel/win-back` | `clientWinBack` | `apiKey` | — | page | yes |
 | POST | `/api/v1/client/pages/:pageLabel/win-back/attempts` | `clientWinBackAttempt` | `apiKey` | — | page | yes |
-| GET | `/api/v1/events/snapshot` | `eventsSnapshot` | `apiKey` | — | — | no |
-| GET | `/api/v1/events/stream` | `eventsStream` | `apiKey` | — | — | no |
-| GET | `/api/v1/events/v2/facts` | `eventsV2Facts` | `any` | — | — | no |
-| GET | `/api/v1/events/v2/snapshot` | `eventsV2Snapshot` | `any` | — | — | no |
-| GET | `/api/v1/events/v2/stream` | `eventsV2Stream` | `any` | — | — | no |
 | GET | `/api/v1/fans/:platform/:platformUserId` | `crossPageFanDetail` | `session` | — | — | no |
 | PATCH | `/api/v1/fans/:platform/:platformUserId/flags` | `setFanFlags` | `owner-session` | — | — | no |
 | GET | `/api/v1/fans/:platform/:platformUserId/transactions` | `crossPageFanTransactions` | `session` | — | — | no |
@@ -331,9 +326,6 @@ A full device token is not affected.
 | POST | `/api/v1/model-applications/progress` | `modelApplicationProgress` | `public` | — | — | — |
 | GET | `/api/v1/models` | `models` | `session` | — | — | no |
 | GET | `/api/v1/models/:modelSlug/revenue/daily` | `modelRevenueDaily` | `session` | — | — | no |
-| POST | `/api/v1/ofapi/commands` | `createOfapiCommand` | `apiKey` | — | — | no |
-| GET | `/api/v1/ofapi/commands/:commandId` | `getOfapiCommand` | `apiKey` | — | — | no |
-| POST | `/api/v1/ofapi/commands/:commandId/cancel` | `cancelOfapiCommand` | `apiKey` | — | — | no |
 | POST | `/api/v1/ofapi/webhook` | `ofapiWebhookReceive` | `hmac` | — | — | — |
 | GET | `/api/v1/openapi.json` | `openApiJson` | `owner-session` | — | — | no |
 | GET | `/api/v1/ops/live` | `opsLive` | `monitoring` | owner | — | no |
