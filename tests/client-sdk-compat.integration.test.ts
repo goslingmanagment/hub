@@ -39,7 +39,6 @@ import {
   COMPAT_OF_TIP_MILLS,
   COMPAT_OPERATION_EXERCISERS,
   COMPAT_OWNER,
-  COMPAT_RETIRED_OPERATIONS,
   COMPAT_PAGES,
   call,
   checkedAnswer,
@@ -468,7 +467,7 @@ for (const row of CLIENT_SDK_REGISTRY) {
 
       it("serves the operations this row lists", async (context) => {
         if (!ready(context)) return;
-        for (const operation of row.operations.filter((key) => !COMPAT_RETIRED_OPERATIONS.has(key))) {
+        for (const operation of row.operations) {
           const exercise = COMPAT_OPERATION_EXERCISERS[operation];
           expect(exercise, `no exerciser for ${operation}`).toBeDefined();
           await exercise!(ctx);

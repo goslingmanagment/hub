@@ -6,8 +6,8 @@
 // Usage:
 //   node scripts/register-client-sdk.mjs <client-vendor-dir> --client <name>
 //     --version <v>[,<v>...] [--operations <key>[,<key>...]] [--candidate]
-//   e.g. node scripts/register-client-sdk.mjs ../onlyfans-chat/packages/kernel-sdk \
-//          --client onlyfans-chat --version 0.1.64
+//   e.g. node scripts/register-client-sdk.mjs ../chat-extension/vendor/kernel-sdk \
+//          --client chat-extension --version 3.23.1
 //
 // <client-vendor-dir> is the directory scripts/vendor-sdk.mjs wrote in the
 // client repo (kernel-sdk.vendor.json + dist/). The bundle is built from the
@@ -41,7 +41,7 @@ const REGISTRY_FILE = "apps/runtime/src/services/client-sdk-registry.ts";
 const FIXTURE_ROOT = "tests/fixtures/client-sdks";
 const BEGIN_MARKER = "// client-sdk-registry:begin";
 const END_MARKER = "// client-sdk-registry:end";
-const CLIENT_NAMES = new Set(["onlyfans-chat", "fansly-chat", "chat-extension"]);
+const CLIENT_NAMES = new Set(["chat-extension"]);
 const VALUE_OPTIONS = new Set(["--client", "--version", "--operations", "--hub-root"]);
 
 function fail(message) {

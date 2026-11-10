@@ -13,7 +13,7 @@
 // Rows are written by `node scripts/register-client-sdk.mjs` between the
 // markers below, sorted by bundleSha256 — never edit them by hand.
 
-export const CLIENT_SDK_NAMES = ["onlyfans-chat", "fansly-chat", "chat-extension"] as const;
+export const CLIENT_SDK_NAMES = ["chat-extension"] as const;
 export type ClientSdkName = (typeof CLIENT_SDK_NAMES)[number];
 
 export interface ClientSdkRegistryRow {
@@ -146,34 +146,6 @@ export const CLIENT_SDK_REGISTRY: readonly ClientSdkRegistryRow[] = [
     "fixture": "tests/fixtures/client-sdks/1b19619f20e8"
   },
   {
-    "bundleSha256": "1da6e2f4cf2260f14311cb263331cad4e2176f0af8a0675ee83135a1c653f094",
-    "contractHash": "a6f77fbb2ecffe7223855ac8760bfc590bb49cdfd0fc27e760ed06bdf42497b9",
-    "sourceCommit": "a3449f77746e5ea83091330a6388213bedd9ec7f",
-    "vendorDistSha256": "d304cff3eb920b8d1ad5240f0afa9c2772edcccd180a5c1d6c0a5e52b5c6ef89",
-    "zodVersion": "4.4.3",
-    "status": "released",
-    "clients": [
-      {
-        "name": "fansly-chat",
-        "versions": [
-          "2.10.1"
-        ]
-      }
-    ],
-    "operations": [
-      "aiUsageBatch",
-      "authIssueDeviceTokenWithPassword",
-      "authRevokeCurrentDeviceToken",
-      "followerOutreachAttempt",
-      "pageConversationProfile",
-      "pageTopSpenders",
-      "upsertFanProfile",
-      "voiceNoteCreate",
-      "voiceNoteStatus"
-    ],
-    "fixture": "tests/fixtures/client-sdks/1da6e2f4cf22"
-  },
-  {
     "bundleSha256": "278432395e5704da77d88b7c7b36e5b866baa22170018df49993efc0f81bc60c",
     "contractHash": "0cc6c868f5c59aad6e702479b2f010d29fce123adc0569533ae803212eb3caa3",
     "sourceCommit": "3ffb461437963aea6719128fc8d7b386518cbefa",
@@ -301,35 +273,6 @@ export const CLIENT_SDK_REGISTRY: readonly ClientSdkRegistryRow[] = [
     "fixture": "tests/fixtures/client-sdks/5fb9f9bc31bd"
   },
   {
-    "bundleSha256": "64a972fd6222146851797da149e109f53a116eeabd35fb875dac3d48c3288842",
-    "contractHash": "030124539ce7c649519ca0acafe8c6c131e3620025e7b858650857baa7119bbc",
-    "sourceCommit": "6ee3d627e204efd791424b5ae5802b9e4a48b82c",
-    "vendorDistSha256": "bd65e2476a58b208e6f4ffa4797904d0ad9f40acb1d43e993ea0e176eec7e384",
-    "zodVersion": "4.4.3",
-    "status": "released",
-    "clients": [
-      {
-        "name": "fansly-chat",
-        "versions": [
-          "2.8.1",
-          "2.9.0"
-        ]
-      }
-    ],
-    "operations": [
-      "aiUsageBatch",
-      "authIssueDeviceTokenWithPassword",
-      "authRevokeCurrentDeviceToken",
-      "followerOutreachAttempt",
-      "pageConversationProfile",
-      "pageTopSpenders",
-      "upsertFanProfile",
-      "voiceNoteCreate",
-      "voiceNoteStatus"
-    ],
-    "fixture": "tests/fixtures/client-sdks/64a972fd6222"
-  },
-  {
     "bundleSha256": "69580d077960a69378cd4bdbe3bb2dd94f2bcf823635ed73711ed22d164dbd27",
     "contractHash": "d13febdb54f73733f11262552926a9feea7546bcd7543f26577ac02c4c5536ac",
     "sourceCommit": "b5de702d8b4a7461dc87494b6780a45ef3cde374",
@@ -346,49 +289,6 @@ export const CLIENT_SDK_REGISTRY: readonly ClientSdkRegistryRow[] = [
     ],
     "operations": [],
     "fixture": "tests/fixtures/client-sdks/69580d077960"
-  },
-  {
-    "bundleSha256": "6d2ce2a90751df7280891ceb6dcc6c8fe9f99a89ef99fbb040d4734e778d5e5e",
-    "contractHash": "b95b765c12f50905cb8f98c2d9644cf5adc4234299cd6516f0cd649b39235aab",
-    "sourceCommit": "e033e3ec097f913a32433febcf60c6f3615ba071",
-    "vendorDistSha256": "15a0f5f4a2f466abc7ed0fe247ae3f708ee572937f87cf8f2f72e0110e83e1f6",
-    "zodVersion": "4.4.3",
-    "status": "released",
-    "clients": [
-      {
-        "name": "fansly-chat",
-        "versions": [
-          "2.6.0",
-          "2.7.0",
-          "2.7.1"
-        ]
-      },
-      {
-        "name": "onlyfans-chat",
-        "versions": [
-          "0.1.64"
-        ]
-      }
-    ],
-    "operations": [
-      "aiUsageBatch",
-      "authActivateDeviceToken",
-      "authIssueDeviceTokenWithPassword",
-      "authRevokeCurrentDeviceToken",
-      "cancelOfapiCommand",
-      "createOfapiCommand",
-      "eventsV2Facts",
-      "followerOutreachAttempt",
-      "getOfapiCommand",
-      "ofapiCreditsChatterSummary",
-      "pageConversationProfile",
-      "pageFanProfile",
-      "pageTopSpenders",
-      "upsertFanProfile",
-      "voiceNoteCreate",
-      "voiceNoteStatus"
-    ],
-    "fixture": "tests/fixtures/client-sdks/6d2ce2a90751"
   },
   {
     "bundleSha256": "71e5839b10471e2dea2c747aa70abb65b1e3084b90ae263a2d1baf0a5ccdbf6e",
@@ -443,34 +343,6 @@ export const CLIENT_SDK_REGISTRY: readonly ClientSdkRegistryRow[] = [
     ],
     "operations": [],
     "fixture": "tests/fixtures/client-sdks/77ca842c1748"
-  },
-  {
-    "bundleSha256": "7cda29bdc065d274fd0a54b57e004ed237fe33043ea27dcd50172c219e92890a",
-    "contractHash": "19a146c19cee6e7049f8acdc1dc1d221ada5617d91f58bc15161f79652cd119f",
-    "sourceCommit": "879c052272399db018c8528f16a1e151c8b328b9",
-    "vendorDistSha256": "71433692eda98fdca6877e2ce2236fc16cb9e8fe49400d4a48be1bcc30c74fea",
-    "zodVersion": "4.4.3",
-    "status": "released",
-    "clients": [
-      {
-        "name": "fansly-chat",
-        "versions": [
-          "2.14.0"
-        ]
-      }
-    ],
-    "operations": [
-      "aiUsageBatch",
-      "authIssueDeviceTokenWithPassword",
-      "authRevokeCurrentDeviceToken",
-      "followerOutreachAttempt",
-      "pageConversationProfile",
-      "pageTopSpenders",
-      "upsertFanProfile",
-      "voiceNoteCreate",
-      "voiceNoteStatus"
-    ],
-    "fixture": "tests/fixtures/client-sdks/7cda29bdc065"
   },
   {
     "bundleSha256": "83225850e498b852da38a40b2c94364543cdb4d36f2b6c12bcb11aae9d4f1b48",
@@ -654,34 +526,6 @@ export const CLIENT_SDK_REGISTRY: readonly ClientSdkRegistryRow[] = [
     ],
     "operations": [],
     "fixture": "tests/fixtures/client-sdks/bb851b4322bc"
-  },
-  {
-    "bundleSha256": "be440b6237b7e1765d195880c917f64245bc11965166eebf2cbb64f77968400a",
-    "contractHash": "24317a4aa9197be22309884b573e782700ffec6a697a97005ad3b09f02db4284",
-    "sourceCommit": "9f8290082de0adaca3ea19c48c31c48322d06a3e",
-    "vendorDistSha256": "6429f3bebde5eff7f15d39ab55e98f8565a3d1f8eb246ff43cf3b8ce636a73cf",
-    "zodVersion": "4.4.3",
-    "status": "released",
-    "clients": [
-      {
-        "name": "fansly-chat",
-        "versions": [
-          "2.13.1"
-        ]
-      }
-    ],
-    "operations": [
-      "aiUsageBatch",
-      "authIssueDeviceTokenWithPassword",
-      "authRevokeCurrentDeviceToken",
-      "followerOutreachAttempt",
-      "pageConversationProfile",
-      "pageTopSpenders",
-      "upsertFanProfile",
-      "voiceNoteCreate",
-      "voiceNoteStatus"
-    ],
-    "fixture": "tests/fixtures/client-sdks/be440b6237b7"
   },
   {
     "bundleSha256": "c408b33dcc8aa17980b28346ce5aa702a2e8d2cfa6a58d2b9068450e0a8f8f4e",
