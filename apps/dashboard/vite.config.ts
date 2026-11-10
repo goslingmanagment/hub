@@ -3,6 +3,55 @@ import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import { resolve } from "path";
 
+// Long-lived third-party code in chunks of its own, so their file names (content hashes) stay the
+// same across deploys and a returning browser downloads only the app's code again. Without this,
+// React & co. sit in the entry chunk, whose hash changes with every app change, and every lazy chunk
+// that imports it is renamed too. `charts` holds recharts and what only it pulls in — never a package
+// the shell needs as well, or the entry would import the charts chunk eagerly.
+const vendorPackages = new Set([
+  "react",
+  "react-dom",
+  "scheduler",
+  "react-router",
+  "cookie",
+  "set-cookie-parser",
+  "@tanstack/query-core",
+  "@tanstack/react-query",
+  "sonner",
+  "zustand",
+  "zod",
+]);
+const chartsPackages = new Set([
+  "recharts",
+  "victory-vendor",
+  "@reduxjs/toolkit",
+  "redux",
+  "redux-thunk",
+  "react-redux",
+  "reselect",
+  "immer",
+  "es-toolkit",
+  "decimal.js-light",
+  "eventemitter3",
+  "internmap",
+  "tiny-invariant",
+]);
+
+function packageOf(id: string): string | undefined {
+  const at = id.lastIndexOf("/node_modules/");
+  if (at < 0) return undefined;
+  const [scope, name] = id.slice(at + "/node_modules/".length).split("/");
+  return scope?.startsWith("@") ? `${scope}/${name}` : scope;
+}
+
+function manualChunks(id: string): string | undefined {
+  const name = packageOf(id);
+  if (!name) return undefined;
+  if (vendorPackages.has(name)) return "vendor";
+  if (chartsPackages.has(name) || name.startsWith("d3-")) return "charts";
+  return undefined;
+}
+
 const apiProxyTarget = process.env.VITE_API_PROXY_TARGET ?? "http://127.0.0.1:3000";
 
 export default defineConfig(({ mode }) => {
@@ -29,6 +78,7 @@ export default defineConfig(({ mode }) => {
         "@agency_hub_core/ui": resolve(__dirname, "../../packages/ui/src"),
       },
     },
+    build: { rollupOptions: { output: { manualChunks } } },
     server: {
       port: 5173,
       proxy: demo
