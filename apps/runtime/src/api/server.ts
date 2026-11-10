@@ -734,12 +734,26 @@ export async function buildApiServer(appContext: AppContext) {
       // The console's registration decorates reply.sendFile; this one must not again.
       await server.register(fastifyStatic, { root: workboardDist, prefix: WORKBOARD_PREFIX, wildcard: false, decorateReply: !dashboardDist });
     }
+    // A build's file that does not exist (a chunk of another build, asked for
+    // around a deploy or rollback) must not get the app shell: nginx marks
+    // 2xx under /assets/ immutable for a year, and the browser would keep the
+    // HTML as that script. A plain 404 nobody stores instead.
     server.setNotFoundHandler((req, reply) => {
       const path = req.url.split("?")[0] ?? "";
+      const isMissingAsset = (assetsPrefix: string) =>
+        (req.method === "GET" || req.method === "HEAD") && path.startsWith(assetsPrefix);
+      const sendMissingAsset = () =>
+        reply.code(404).header("cache-control", "no-store").type("text/plain; charset=utf-8").send("Not Found\n");
       if (workboardDist && (path === "/workboard" || path.startsWith(WORKBOARD_PREFIX))) {
+        if (isMissingAsset(`${WORKBOARD_PREFIX}assets/`)) {
+          return sendMissingAsset();
+        }
         return reply.sendFile("index.html", workboardDist);
       }
       if (dashboardDist && !req.url.startsWith("/api/") && !req.url.startsWith("/documentation")) {
+        if (isMissingAsset("/assets/")) {
+          return sendMissingAsset();
+        }
         return reply.sendFile("index.html", dashboardDist);
       }
       reply.status(404).send({ error: "Not Found", message: "Route not found", statusCode: 404 });
