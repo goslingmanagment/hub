@@ -29,12 +29,8 @@ import { isCapturePayloadUnavailable, resolveCapturePayloadRow } from "./payload
 const ONLYFANS_CDN_HOST = /^cdn\d*\.onlyfans\.com$/;
 /** OFAPI's own CDN cache: S3-presigned, not bound to an address. */
 export const OFAPI_CACHE_CDN_HOST = "cdn.fansapi.com";
-/** OFAPI's metered streaming host: a hand-out here is paid. */
-export const OFAPI_STREAM_CDN_HOST = "dl.fansapi.com";
 
 const MEDIA_TYPES = new Set(["photo", "video", "gif", "audio"]);
-/** `full` is served for photos in these formats only (owner decision). */
-export const OFAPI_MEDIA_FULL_EXTENSIONS: ReadonlySet<string> = new Set(["jpg", "jpeg", "png", "webp"]);
 
 /** Gateway reads whose bodies carry media file URLs. */
 export const OFAPI_MEDIA_LOCATOR_OPERATIONS: ReadonlySet<string> = new Set([
@@ -301,15 +297,6 @@ export async function recordOfapiWebhookMediaLocators(app: Pick<AppContext, "db"
     }
   }
   return recordLocators(app, ofapiMediaLocatorsFromWebhook(input.envelope, input), { eventId: input.eventId });
-}
-
-/** The read gateway, on both the capture-first and proxy paths, before the response is returned. */
-export async function recordOfapiGatewayMediaLocators(app: Pick<AppContext, "db" | "logger">, input: {
-  operation: string; ofapiAccountId: string; pageId: number; pathname: string; body: unknown; observedAt?: Date;
-}) {
-  if (!OFAPI_MEDIA_LOCATOR_OPERATIONS.has(input.operation)) return 0;
-  return recordLocators(app, ofapiMediaLocatorsFromGatewayBody({ ...input, observedAt: input.observedAt ?? new Date() }),
-    { operation: input.operation, pageId: input.pageId });
 }
 
 const RECOVERY_OBSERVATION_KINDS = ["ofapi.interactive_response.v1", "ofapi.collection_read_response.v1"];

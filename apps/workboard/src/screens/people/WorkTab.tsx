@@ -1,17 +1,16 @@
 import { useMemo, type ReactNode } from "react";
-import { Link, useLocation } from "react-router";
-import { CHATTER_SHIFT_MIN_MESSAGES, CHATTER_SHIFT_MIN_WORKED_MINUTES, SHIFT_REPORT_MAX_DAYS } from "@agency_hub_core/contracts";
-import { millsToNumber, sumMills } from "@agency_hub_core/shared";
+import { useLocation } from "react-router";
+import { CHATTER_SHIFT_MIN_MESSAGES, CHATTER_SHIFT_MIN_WORKED_MINUTES } from "@agency_hub_core/contracts";
 import { Button, Card, Delta, Disclosure, Duration, EmptyState, LinkButton, Money, Section, Skeleton, Tooltip, readDelta } from "@agency_hub_core/ui";
 import { formatDuration, formatMills, formatPercent } from "@agency_hub_core/ui/format";
 import { addDays } from "@agency_hub_core/ui/moscow";
 import { ruPlural } from "@agency_hub_core/ui/plural";
-import { carryParams, personPath } from "@/shared/links";
+import { personPath } from "@/shared/links";
 import { formatAiUnedited, formatReplyMedian, formatUnanswered, METRICS, PER_SHIFT_HINT } from "@/shared/metrics";
 import { usePageFilter } from "@/shared/usePageFilter";
 import { usePeriod } from "@/shared/usePeriod";
 import { useMe } from "@/shared/useMe";
-import { usePersonStats, type PeriodQuality, type PeriodWork, type PersonCard } from "./data.js";
+import { type PeriodQuality, type PeriodWork, type PersonCard } from "./data.js";
 import { ShiftRibbon } from "./ShiftRibbon.js";
 import { ShiftTable } from "./ShiftTable.js";
 import { Tiles, TilesSkeleton, type Tile } from "@/shared/Tiles";
@@ -67,7 +66,7 @@ export function WorkTab({ card, userId }: { card: PersonCard; userId: number }) 
       </Section>
       <Section title="Смены" {...(isOwner ? { description: "Числа каждой смены — те же, что в её разборе." } : {})}>
         <ShiftTable card={card} userId={userId} canOpen={isOwner} />
-        <Below card={card} userId={userId} />
+        <Below card={card} />
       </Section>
       <HowItCounts />
     </>
@@ -145,11 +144,8 @@ function Verdict({ work, quality, failed, username }: { work: PeriodWork; qualit
   );
 }
 
-/** Under the table: work outside shifts; what the shift reports confirmed, once anyone confirms; the page filter's caveat. */
-function Below({ card, userId }: { card: PersonCard; userId: number }) {
-  const { period, today } = usePeriod();
-  const location = useLocation();
-  const { stats, inPeriod } = usePersonStats(userId, period, today);
+/** Under the table: work outside shifts; the page filter's caveat. */
+function Below({ card }: { card: PersonCard }) {
   const { page } = usePageFilter();
   const lines: ReactNode[] = [];
 
@@ -164,26 +160,6 @@ function Below({ card, userId }: { card: PersonCard; userId: number }) {
     );
   }
 
-  // The shift reports (week 4): shown only once someone confirms a shift — today nobody does.
-  const reported = (stats?.shifts ?? []).filter((shift) => inPeriod(shift.date));
-  const confirmed = reported.filter((shift) => shift.confirmedNetMills !== null);
-  if (confirmed.length > 0) {
-    const now = Date.now();
-    const waiting = reported.filter((shift) => !shift.ongoing && shift.confirmedNetMills === null && now - Date.parse(shift.startedAt) <= SHIFT_REPORT_MAX_DAYS * 86_400_000).length;
-    const sum = millsToNumber(sumMills(confirmed.map((shift) => shift.confirmedNetMills ?? 0)));
-    // The payouts open on this person (`?chatter=`), in the same period.
-    const params = carryParams(location.search);
-    params.set("chatter", card.person?.username ?? "");
-    lines.push(
-      <div key="reports" className="people-idle">
-        <span>
-          Подтверждено к выплате{page ? " по всем страницам" : ""}: <span className="people-meta__strong">{formatMills(sum)}</span> за {confirmed.length} {ruPlural(confirmed.length, "смену", "смены", "смен")}
-          {waiting > 0 && <> · ждут подтверждения: {waiting}</>}
-        </span>
-        <Link className="people-link" to={`/payouts?${params.toString()}`}>Открыть выплаты →</Link>
-      </div>,
-    );
-  }
   if (page) {
     lines.push(
       <p key="page" className="people-note">

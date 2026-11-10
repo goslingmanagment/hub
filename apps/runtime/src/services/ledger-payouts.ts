@@ -23,6 +23,26 @@ export const micros = z.number().int();
 /** Go writes an empty slice as null. */
 export const list = <T extends z.ZodTypeAny>(item: T) => z.array(item).nullable().transform((value): Array<z.output<T>> => value ?? []);
 
+/** A paid day whose report changed since: the ledger's camelCase or the reports' snake_case. */
+const pendingChange = z.object({
+  id: z.number().int().positive(),
+  day: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  model: z.string().nullish(),
+  postedMicros: micros.optional(),
+  posted_micros: micros.optional(),
+  newMicros: micros.optional(),
+  new_micros: micros.optional(),
+  reason: z.string().nullish(),
+}).transform((change, context) => {
+  const posted = change.postedMicros ?? change.posted_micros;
+  const fresh = change.newMicros ?? change.new_micros;
+  if (posted === undefined || fresh === undefined) {
+    context.addIssue({ code: "custom", message: "a pending change without its amounts" });
+    return z.NEVER;
+  }
+  return { id: change.id, day: change.day, model: change.model ?? "", postedMicros: posted, newMicros: fresh, reason: change.reason ?? "" };
+});
+
 const ledgerPayoutsSchema = z.object({
   from: z.string(),
   to: z.string(),
@@ -54,7 +74,18 @@ const ledgerPayoutsSchema = z.object({
     // A ledger before «не занесено» in /v1/payouts answers without it: none known.
     unentered: z.object({ days: z.number().int().nonnegative(), shareMicros: micros, unknown: z.number().int().nonnegative() })
       .default({ days: 0, shareMicros: 0, unknown: 0 }),
+    // The Hub user the ledger knows the person as, when it says (it beats the name match below).
+    hubUserId: z.number().int().positive().nullish(),
+    hub_user_id: z.number().int().positive().nullish(),
+    // A ledger before the reports' pay base answers without them: none known. Present, they are read in full.
+    pendingChanges: list(pendingChange).optional(),
+    pending_changes: list(pendingChange).optional(),
   })),
+  // The switches of the accruals (`sheet` before both), in either spelling; absent — not switched or not said.
+  factsFrom: z.string().nullish(),
+  facts_from: z.string().nullish(),
+  reportsFrom: z.string().nullish(),
+  reports_from: z.string().nullish(),
   checks: z.object({
     stale: z.boolean(),
     lastSheetsCollectAt: z.string().nullable(),
@@ -76,6 +107,33 @@ export function checkWindow(from: string, to: string, maxDays: number = TEAM_LED
 
 type LedgerApp = Pick<AppContext, "db" | "config" | "logger">;
 
+const BUSINESS_DAY = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * Which Hub user a ledger person is: the Hub user id the ledger gives, when that user exists; else the user whose
+ * username is one of their names (code, name, an alias; case aside). Built once per answer from the live users.
+ */
+export function hubUsersOf(users: ReadonlyArray<{ id: number; username: string }>) {
+  const byId = new Map<number, { userId: number; username: string }>();
+  const byName = new Map<string, { userId: number; username: string }>();
+  for (const user of users) {
+    const hub = { userId: user.id, username: user.username };
+    byId.set(user.id, hub);
+    byName.set(user.username.toLowerCase(), hub);
+  }
+  return (hubUserId: number | null, names: readonly string[]): { userId: number; username: string } | null => {
+    if (hubUserId !== null) {
+      const user = byId.get(hubUserId);
+      if (user) return user;
+    }
+    for (const name of names) {
+      const user = byName.get(name.trim().toLowerCase());
+      if (user) return user;
+    }
+    return null;
+  };
+}
+
 /** What the ledger's GET helper needs from the app: where the ledger is, its key, a logger. */
 export type LedgerReadApp = Pick<AppContext, "config" | "logger">;
 
@@ -85,13 +143,15 @@ const NO_PAYOUT_TAB = "The ledger has no payout tab of this person";
 /**
  * One GET of the ledger with Hub's payouts key: the answer's JSON, or a 503 when the ledger is not connected, does
  * not answer or refuses. Its 404 is a 404 here only for a caller that names what was not found (`notFound`: an
- * unknown person); for anyone else it is a 503 like every other refusal. `client` names the caller in the user agent.
+ * unknown person); for anyone else it is a 503 like every other refusal — except the statuses a caller lists in
+ * `absentOn`, which answer `undefined` (a read the ledger does not open to Hub yet). `client` names the caller in
+ * the user agent.
  */
 export async function ledgerGet(
   app: LedgerReadApp,
   path: string,
   params: Record<string, string>,
-  options: { fetchImpl?: typeof fetch; notFound?: string; client?: string },
+  options: { fetchImpl?: typeof fetch; notFound?: string; client?: string; absentOn?: readonly number[] },
 ): Promise<unknown> {
   const key = app.config.ledgerPayoutsKey ?? null;
   if (key === null) throw new ServiceUnavailableError("The ledger is not connected: LEDGER_PAYOUTS_KEY is not set");
@@ -106,6 +166,8 @@ export async function ledgerGet(
     if (!response.ok) {
       await response.body?.cancel().catch(() => undefined);
       if (response.status === 404 && options.notFound !== undefined) throw new NotFoundError(options.notFound);
+      // A read the ledger does not open to Hub's key yet (`absentOn`): no answer, for the caller to say so.
+      if (options.absentOn?.includes(response.status)) return undefined;
       throw new ServiceUnavailableError(`The ledger answered GET ${path} with ${response.status}`);
     }
     return await response.json();
@@ -129,29 +191,22 @@ export async function readLedgerPayouts(
   }
   const ledger = parsed.data;
 
-  // A person is the Hub user whose username is their code, name or an alias (case aside).
-  const users = await listUsers(app.db);
-  const byName = new Map<string, { userId: number; username: string }>();
-  for (const user of users) byName.set(user.username.toLowerCase(), { userId: user.id, username: user.username });
-  const hubUserOf = (names: readonly string[]) => {
-    for (const name of names) {
-      const user = byName.get(name.trim().toLowerCase());
-      if (user) return user;
-    }
-    return null;
-  };
+  const hubUserOf = hubUsersOf(await listUsers(app.db));
+  const dayOrNull = (value: string | null | undefined) => (value !== null && value !== undefined && BUSINESS_DAY.test(value) ? value : null);
 
   return {
     from: ledger.from,
     to: ledger.to,
     accrualFrom: ledger.accrualFrom,
+    factsFrom: dayOrNull(ledger.factsFrom ?? ledger.facts_from),
+    reportsFrom: dayOrNull(ledger.reportsFrom ?? ledger.reports_from),
     generatedAt: ledger.generatedAt,
     people: ledger.people.map((person) => ({
       slug: person.slug,
       name: person.name,
       aliases: person.aliases,
       status: person.status,
-      hubUser: hubUserOf([person.slug, person.name, ...person.aliases]),
+      hubUser: hubUserOf(person.hubUserId ?? person.hub_user_id ?? null, [person.slug, person.name, ...person.aliases]),
       days: person.days.map((day) => ({ date: day.date, model: day.model, amountMills: millsOf(day.amountMicros), worked: day.worked, source: day.source })),
       accruedMills: millsOf(person.accruedMicros),
       paidMills: millsOf(person.paidMicros),
@@ -160,6 +215,7 @@ export async function readLedgerPayouts(
       oldestUnpaidDate: person.oldestUnpaidDate,
       unpaidDays: person.unpaidDays.map((day) => ({ date: day.date, kind: day.kind, model: day.model ?? null, unpaidMills: millsOf(day.unpaidMicros) })),
       unentered: { days: person.unentered.days, shareMills: millsOf(person.unentered.shareMicros), unknown: person.unentered.unknown },
+      pendingChanges: (person.pendingChanges ?? person.pending_changes ?? []).map((change) => ({ id: change.id, day: change.day, model: change.model, postedMills: millsOf(change.postedMicros), newMills: millsOf(change.newMicros), reason: change.reason })),
     })),
     checks: ledger.checks,
     serverNow: (options.now ?? new Date()).toISOString(),

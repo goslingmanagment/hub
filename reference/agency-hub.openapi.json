@@ -402,1137 +402,6 @@
         }
       }
     },
-    "/api/v1/account/shift-report": {
-      "get": {
-        "summary": "The caller's draft shift reports: their shifts, the sales on their pages and the facts of each",
-        "tags": [
-          "client"
-        ],
-        "description": "The chatter's cabinet; read-only. Shifts are week 1's actual shifts of the caller in the last `days`; a shift's sales are the money fans paid on the pages the caller was active on during it. Hub credits no sale: the marks are the people's.",
-        "parameters": [
-          {
-            "schema": {
-              "default": 7,
-              "type": "integer",
-              "minimum": 1,
-              "maximum": 14
-            },
-            "in": "query",
-            "name": "days",
-            "required": false
-          }
-        ],
-        "security": [
-          {
-            "cookieAuth": []
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "shifts": {
-                      "type": "array",
-                      "items": {
-                        "type": "object",
-                        "properties": {
-                          "visit": {
-                            "type": "boolean"
-                          },
-                          "startedAt": {
-                            "type": "string"
-                          },
-                          "endedAt": {
-                            "type": "string"
-                          },
-                          "ongoing": {
-                            "type": "boolean"
-                          },
-                          "pages": {
-                            "type": "array",
-                            "items": {
-                              "type": "string"
-                            }
-                          },
-                          "sales": {
-                            "type": "array",
-                            "items": {
-                              "type": "object",
-                              "properties": {
-                                "saleRef": {
-                                  "type": "string",
-                                  "pattern": "^[1-9]\\d{0,29}$"
-                                },
-                                "pageLabel": {
-                                  "type": "string"
-                                },
-                                "platform": {
-                                  "type": "string",
-                                  "minLength": 1,
-                                  "maxLength": 64
-                                },
-                                "kind": {
-                                  "type": "string",
-                                  "minLength": 1,
-                                  "maxLength": 64
-                                },
-                                "fanRef": {
-                                  "anyOf": [
-                                    {
-                                      "type": "string",
-                                      "pattern": "^[1-9]\\d{0,29}$"
-                                    },
-                                    {
-                                      "type": "null"
-                                    }
-                                  ]
-                                },
-                                "fanName": {
-                                  "type": [
-                                    "string",
-                                    "null"
-                                  ]
-                                },
-                                "netMills": {
-                                  "type": "integer",
-                                  "minimum": -9007199254740991,
-                                  "maximum": 9007199254740991
-                                },
-                                "occurredAt": {
-                                  "type": "string"
-                                },
-                                "ppvSender": {
-                                  "type": [
-                                    "string",
-                                    "null"
-                                  ]
-                                },
-                                "ppvWithoutAuthor": {
-                                  "type": "boolean"
-                                },
-                                "writers": {
-                                  "type": "array",
-                                  "items": {
-                                    "type": "object",
-                                    "properties": {
-                                      "username": {
-                                        "type": "string"
-                                      },
-                                      "messages": {
-                                        "type": "integer",
-                                        "minimum": 0,
-                                        "maximum": 9007199254740991
-                                      }
-                                    },
-                                    "required": [
-                                      "username",
-                                      "messages"
-                                    ],
-                                    "additionalProperties": false
-                                  }
-                                },
-                                "withoutAuthor": {
-                                  "type": "integer",
-                                  "minimum": 0,
-                                  "maximum": 9007199254740991
-                                },
-                                "confirmed": {
-                                  "type": "boolean"
-                                },
-                                "myMark": {
-                                  "anyOf": [
-                                    {
-                                      "type": "object",
-                                      "properties": {
-                                        "mark": {
-                                          "type": "string",
-                                          "minLength": 1,
-                                          "maxLength": 64
-                                        },
-                                        "shareWithUserId": {
-                                          "anyOf": [
-                                            {
-                                              "type": "integer",
-                                              "exclusiveMinimum": 0,
-                                              "maximum": 9007199254740991
-                                            },
-                                            {
-                                              "type": "null"
-                                            }
-                                          ]
-                                        },
-                                        "shareWith": {
-                                          "type": [
-                                            "string",
-                                            "null"
-                                          ]
-                                        },
-                                        "amountMills": {
-                                          "anyOf": [
-                                            {
-                                              "type": "integer",
-                                              "minimum": -9007199254740991,
-                                              "maximum": 9007199254740991
-                                            },
-                                            {
-                                              "type": "null"
-                                            }
-                                          ]
-                                        },
-                                        "note": {
-                                          "type": [
-                                            "string",
-                                            "null"
-                                          ]
-                                        }
-                                      },
-                                      "required": [
-                                        "mark",
-                                        "shareWithUserId",
-                                        "shareWith",
-                                        "amountMills",
-                                        "note"
-                                      ],
-                                      "additionalProperties": false
-                                    },
-                                    {
-                                      "type": "null"
-                                    }
-                                  ]
-                                },
-                                "otherMarks": {
-                                  "type": "array",
-                                  "items": {
-                                    "type": "object",
-                                    "properties": {
-                                      "username": {
-                                        "type": "string"
-                                      },
-                                      "mark": {
-                                        "type": "string",
-                                        "minLength": 1,
-                                        "maxLength": 64
-                                      },
-                                      "shareWith": {
-                                        "type": [
-                                          "string",
-                                          "null"
-                                        ]
-                                      }
-                                    },
-                                    "required": [
-                                      "username",
-                                      "mark",
-                                      "shareWith"
-                                    ],
-                                    "additionalProperties": false
-                                  }
-                                }
-                              },
-                              "required": [
-                                "saleRef",
-                                "pageLabel",
-                                "platform",
-                                "kind",
-                                "fanRef",
-                                "fanName",
-                                "netMills",
-                                "occurredAt",
-                                "ppvSender",
-                                "ppvWithoutAuthor",
-                                "writers",
-                                "withoutAuthor",
-                                "confirmed",
-                                "myMark",
-                                "otherMarks"
-                              ],
-                              "additionalProperties": false
-                            }
-                          },
-                          "creditedMills": {
-                            "type": "integer",
-                            "minimum": -9007199254740991,
-                            "maximum": 9007199254740991
-                          },
-                          "unmarked": {
-                            "type": "integer",
-                            "minimum": 0,
-                            "maximum": 9007199254740991
-                          },
-                          "pending": {
-                            "type": "integer",
-                            "minimum": 0,
-                            "maximum": 9007199254740991
-                          },
-                          "confirmedAt": {
-                            "type": [
-                              "string",
-                              "null"
-                            ]
-                          }
-                        },
-                        "required": [
-                          "visit",
-                          "startedAt",
-                          "endedAt",
-                          "ongoing",
-                          "pages",
-                          "sales",
-                          "creditedMills",
-                          "unmarked",
-                          "pending",
-                          "confirmedAt"
-                        ],
-                        "additionalProperties": false
-                      }
-                    },
-                    "sharedWithMe": {
-                      "type": "array",
-                      "items": {
-                        "type": "object",
-                        "properties": {
-                          "saleRef": {
-                            "type": "string",
-                            "pattern": "^[1-9]\\d{0,29}$"
-                          },
-                          "pageLabel": {
-                            "type": "string"
-                          },
-                          "platform": {
-                            "type": "string",
-                            "minLength": 1,
-                            "maxLength": 64
-                          },
-                          "kind": {
-                            "type": "string",
-                            "minLength": 1,
-                            "maxLength": 64
-                          },
-                          "fanRef": {
-                            "anyOf": [
-                              {
-                                "type": "string",
-                                "pattern": "^[1-9]\\d{0,29}$"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          },
-                          "fanName": {
-                            "type": [
-                              "string",
-                              "null"
-                            ]
-                          },
-                          "netMills": {
-                            "type": "integer",
-                            "minimum": -9007199254740991,
-                            "maximum": 9007199254740991
-                          },
-                          "occurredAt": {
-                            "type": "string"
-                          },
-                          "ppvSender": {
-                            "type": [
-                              "string",
-                              "null"
-                            ]
-                          },
-                          "ppvWithoutAuthor": {
-                            "type": "boolean"
-                          },
-                          "writers": {
-                            "type": "array",
-                            "items": {
-                              "type": "object",
-                              "properties": {
-                                "username": {
-                                  "type": "string"
-                                },
-                                "messages": {
-                                  "type": "integer",
-                                  "minimum": 0,
-                                  "maximum": 9007199254740991
-                                }
-                              },
-                              "required": [
-                                "username",
-                                "messages"
-                              ],
-                              "additionalProperties": false
-                            }
-                          },
-                          "withoutAuthor": {
-                            "type": "integer",
-                            "minimum": 0,
-                            "maximum": 9007199254740991
-                          },
-                          "confirmed": {
-                            "type": "boolean"
-                          },
-                          "myMark": {
-                            "anyOf": [
-                              {
-                                "type": "object",
-                                "properties": {
-                                  "mark": {
-                                    "type": "string",
-                                    "minLength": 1,
-                                    "maxLength": 64
-                                  },
-                                  "shareWithUserId": {
-                                    "anyOf": [
-                                      {
-                                        "type": "integer",
-                                        "exclusiveMinimum": 0,
-                                        "maximum": 9007199254740991
-                                      },
-                                      {
-                                        "type": "null"
-                                      }
-                                    ]
-                                  },
-                                  "shareWith": {
-                                    "type": [
-                                      "string",
-                                      "null"
-                                    ]
-                                  },
-                                  "amountMills": {
-                                    "anyOf": [
-                                      {
-                                        "type": "integer",
-                                        "minimum": -9007199254740991,
-                                        "maximum": 9007199254740991
-                                      },
-                                      {
-                                        "type": "null"
-                                      }
-                                    ]
-                                  },
-                                  "note": {
-                                    "type": [
-                                      "string",
-                                      "null"
-                                    ]
-                                  }
-                                },
-                                "required": [
-                                  "mark",
-                                  "shareWithUserId",
-                                  "shareWith",
-                                  "amountMills",
-                                  "note"
-                                ],
-                                "additionalProperties": false
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          },
-                          "otherMarks": {
-                            "type": "array",
-                            "items": {
-                              "type": "object",
-                              "properties": {
-                                "username": {
-                                  "type": "string"
-                                },
-                                "mark": {
-                                  "type": "string",
-                                  "minLength": 1,
-                                  "maxLength": 64
-                                },
-                                "shareWith": {
-                                  "type": [
-                                    "string",
-                                    "null"
-                                  ]
-                                }
-                              },
-                              "required": [
-                                "username",
-                                "mark",
-                                "shareWith"
-                              ],
-                              "additionalProperties": false
-                            }
-                          }
-                        },
-                        "required": [
-                          "saleRef",
-                          "pageLabel",
-                          "platform",
-                          "kind",
-                          "fanRef",
-                          "fanName",
-                          "netMills",
-                          "occurredAt",
-                          "ppvSender",
-                          "ppvWithoutAuthor",
-                          "writers",
-                          "withoutAuthor",
-                          "confirmed",
-                          "myMark",
-                          "otherMarks"
-                        ],
-                        "additionalProperties": false
-                      }
-                    },
-                    "teammates": {
-                      "type": "array",
-                      "items": {
-                        "type": "object",
-                        "properties": {
-                          "userId": {
-                            "type": "integer",
-                            "exclusiveMinimum": 0,
-                            "maximum": 9007199254740991
-                          },
-                          "username": {
-                            "type": "string"
-                          }
-                        },
-                        "required": [
-                          "userId",
-                          "username"
-                        ],
-                        "additionalProperties": false
-                      }
-                    },
-                    "serverNow": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "shifts",
-                    "sharedWithMe",
-                    "teammates",
-                    "serverNow"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    },
-                    "message": {
-                      "type": "string"
-                    },
-                    "statusCode": {
-                      "type": "integer",
-                      "minimum": -9007199254740991,
-                      "maximum": 9007199254740991
-                    },
-                    "reason": {
-                      "type": "string"
-                    },
-                    "statusUrl": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "error",
-                    "message",
-                    "statusCode"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    },
-                    "message": {
-                      "type": "string"
-                    },
-                    "statusCode": {
-                      "type": "integer",
-                      "minimum": -9007199254740991,
-                      "maximum": 9007199254740991
-                    },
-                    "reason": {
-                      "type": "string"
-                    },
-                    "statusUrl": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "error",
-                    "message",
-                    "statusCode"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    },
-                    "message": {
-                      "type": "string"
-                    },
-                    "statusCode": {
-                      "type": "integer",
-                      "minimum": -9007199254740991,
-                      "maximum": 9007199254740991
-                    },
-                    "reason": {
-                      "type": "string"
-                    },
-                    "statusUrl": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "error",
-                    "message",
-                    "statusCode"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/account/shift-report/confirm": {
-      "post": {
-        "summary": "The caller confirms the report of an ended shift: its lines go to the payout export as they stand",
-        "tags": [
-          "client"
-        ],
-        "description": "Every sale must be marked (409 `unmarked`); a going shift cannot be confirmed (409 `ongoing`). Confirming twice answers `changed: false`.",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "startedAt": {
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "startedAt"
-                ],
-                "additionalProperties": false
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "cookieAuth": []
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "changed": {
-                      "type": "boolean"
-                    },
-                    "serverNow": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "changed",
-                    "serverNow"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    },
-                    "message": {
-                      "type": "string"
-                    },
-                    "statusCode": {
-                      "type": "integer",
-                      "minimum": -9007199254740991,
-                      "maximum": 9007199254740991
-                    },
-                    "reason": {
-                      "type": "string"
-                    },
-                    "statusUrl": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "error",
-                    "message",
-                    "statusCode"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    },
-                    "message": {
-                      "type": "string"
-                    },
-                    "statusCode": {
-                      "type": "integer",
-                      "minimum": -9007199254740991,
-                      "maximum": 9007199254740991
-                    },
-                    "reason": {
-                      "type": "string"
-                    },
-                    "statusUrl": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "error",
-                    "message",
-                    "statusCode"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    },
-                    "message": {
-                      "type": "string"
-                    },
-                    "statusCode": {
-                      "type": "integer",
-                      "minimum": -9007199254740991,
-                      "maximum": 9007199254740991
-                    },
-                    "reason": {
-                      "type": "string"
-                    },
-                    "statusUrl": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "error",
-                    "message",
-                    "statusCode"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    },
-                    "message": {
-                      "type": "string"
-                    },
-                    "statusCode": {
-                      "type": "integer",
-                      "minimum": -9007199254740991,
-                      "maximum": 9007199254740991
-                    },
-                    "reason": {
-                      "type": "string"
-                    },
-                    "statusUrl": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "error",
-                    "message",
-                    "statusCode"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    },
-                    "message": {
-                      "type": "string"
-                    },
-                    "statusCode": {
-                      "type": "integer",
-                      "minimum": -9007199254740991,
-                      "maximum": 9007199254740991
-                    },
-                    "reason": {
-                      "type": "string"
-                    },
-                    "statusUrl": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "error",
-                    "message",
-                    "statusCode"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/account/shift-report/marks": {
-      "post": {
-        "summary": "The caller marks a sale of their shift «моё», «делим с …» or «не моё», maybe with their own amount",
-        "tags": [
-          "client"
-        ],
-        "description": "The sale must be of one of the caller's shifts in the last 14 days, or shared with the caller (else 404). A sale of a confirmed shift keeps its mark (409 `confirmed`). `share` needs `shareWithUserId` of `teammates`.",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "saleRef": {
-                    "type": "string",
-                    "pattern": "^[1-9]\\d{0,29}$"
-                  },
-                  "mark": {
-                    "type": "string",
-                    "enum": [
-                      "mine",
-                      "share",
-                      "not_mine"
-                    ]
-                  },
-                  "shareWithUserId": {
-                    "type": "integer",
-                    "exclusiveMinimum": 0,
-                    "maximum": 9007199254740991
-                  },
-                  "amountMills": {
-                    "anyOf": [
-                      {
-                        "type": "integer",
-                        "minimum": 0,
-                        "maximum": 9007199254740991
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "note": {
-                    "anyOf": [
-                      {
-                        "type": "string",
-                        "maxLength": 300
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  }
-                },
-                "required": [
-                  "saleRef",
-                  "mark"
-                ],
-                "additionalProperties": false
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "cookieAuth": []
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "changed": {
-                      "type": "boolean"
-                    },
-                    "serverNow": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "changed",
-                    "serverNow"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    },
-                    "message": {
-                      "type": "string"
-                    },
-                    "statusCode": {
-                      "type": "integer",
-                      "minimum": -9007199254740991,
-                      "maximum": 9007199254740991
-                    },
-                    "reason": {
-                      "type": "string"
-                    },
-                    "statusUrl": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "error",
-                    "message",
-                    "statusCode"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    },
-                    "message": {
-                      "type": "string"
-                    },
-                    "statusCode": {
-                      "type": "integer",
-                      "minimum": -9007199254740991,
-                      "maximum": 9007199254740991
-                    },
-                    "reason": {
-                      "type": "string"
-                    },
-                    "statusUrl": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "error",
-                    "message",
-                    "statusCode"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    },
-                    "message": {
-                      "type": "string"
-                    },
-                    "statusCode": {
-                      "type": "integer",
-                      "minimum": -9007199254740991,
-                      "maximum": 9007199254740991
-                    },
-                    "reason": {
-                      "type": "string"
-                    },
-                    "statusUrl": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "error",
-                    "message",
-                    "statusCode"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    },
-                    "message": {
-                      "type": "string"
-                    },
-                    "statusCode": {
-                      "type": "integer",
-                      "minimum": -9007199254740991,
-                      "maximum": 9007199254740991
-                    },
-                    "reason": {
-                      "type": "string"
-                    },
-                    "statusUrl": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "error",
-                    "message",
-                    "statusCode"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    },
-                    "message": {
-                      "type": "string"
-                    },
-                    "statusCode": {
-                      "type": "integer",
-                      "minimum": -9007199254740991,
-                      "maximum": 9007199254740991
-                    },
-                    "reason": {
-                      "type": "string"
-                    },
-                    "statusUrl": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "error",
-                    "message",
-                    "statusCode"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/api/v1/account/stats": {
       "get": {
         "summary": "The caller's own statistics: the money of their shifts, how they write and sell, their records",
@@ -188033,496 +186902,6 @@
         }
       }
     },
-    "/api/v1/ofapi/banned-words": {
-      "get": {
-        "summary": "Read retained vendor banned-word dictionary with coverage",
-        "tags": [
-          "ingest"
-        ],
-        "security": [
-          {
-            "bearerAuth": []
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "anyOf": [
-                    {
-                      "type": "object",
-                      "properties": {
-                        "version": {
-                          "type": "string"
-                        },
-                        "observedAt": {
-                          "type": "string"
-                        },
-                        "complete": {
-                          "type": "boolean"
-                        },
-                        "pages": {
-                          "type": "integer",
-                          "minimum": -9007199254740991,
-                          "maximum": 9007199254740991
-                        },
-                        "entries": {
-                          "type": "array",
-                          "items": {
-                            "type": "object",
-                            "properties": {
-                              "word": {
-                                "type": "string"
-                              },
-                              "riskLevel": {
-                                "type": "string"
-                              },
-                              "category": {
-                                "type": [
-                                  "string",
-                                  "null"
-                                ]
-                              },
-                              "alternatives": {
-                                "type": [
-                                  "string",
-                                  "null"
-                                ]
-                              }
-                            },
-                            "required": [
-                              "word",
-                              "riskLevel",
-                              "category",
-                              "alternatives"
-                            ],
-                            "additionalProperties": false
-                          }
-                        }
-                      },
-                      "required": [
-                        "version",
-                        "observedAt",
-                        "complete",
-                        "pages",
-                        "entries"
-                      ],
-                      "additionalProperties": false
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    },
-                    "message": {
-                      "type": "string"
-                    },
-                    "statusCode": {
-                      "type": "integer",
-                      "minimum": -9007199254740991,
-                      "maximum": 9007199254740991
-                    },
-                    "reason": {
-                      "type": "string"
-                    },
-                    "statusUrl": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "error",
-                    "message",
-                    "statusCode"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    },
-                    "message": {
-                      "type": "string"
-                    },
-                    "statusCode": {
-                      "type": "integer",
-                      "minimum": -9007199254740991,
-                      "maximum": 9007199254740991
-                    },
-                    "reason": {
-                      "type": "string"
-                    },
-                    "statusUrl": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "error",
-                    "message",
-                    "statusCode"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    },
-                    "message": {
-                      "type": "string"
-                    },
-                    "statusCode": {
-                      "type": "integer",
-                      "minimum": -9007199254740991,
-                      "maximum": 9007199254740991
-                    },
-                    "reason": {
-                      "type": "string"
-                    },
-                    "statusUrl": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "error",
-                    "message",
-                    "statusCode"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    },
-                    "message": {
-                      "type": "string"
-                    },
-                    "statusCode": {
-                      "type": "integer",
-                      "minimum": -9007199254740991,
-                      "maximum": 9007199254740991
-                    },
-                    "reason": {
-                      "type": "string"
-                    },
-                    "statusUrl": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "error",
-                    "message",
-                    "statusCode"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/ofapi/banned-words/preview": {
-      "post": {
-        "summary": "Preview literal banned words locally without altering text",
-        "tags": [
-          "ingest"
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "text": {
-                    "type": "string",
-                    "maxLength": 10000
-                  }
-                },
-                "required": [
-                  "text"
-                ],
-                "additionalProperties": false
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "bearerAuth": []
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "version": {
-                      "type": [
-                        "string",
-                        "null"
-                      ]
-                    },
-                    "observedAt": {
-                      "type": [
-                        "string",
-                        "null"
-                      ]
-                    },
-                    "complete": {
-                      "type": "boolean"
-                    },
-                    "matching": {
-                      "type": "string",
-                      "enum": [
-                        "literal_case_insensitive"
-                      ]
-                    },
-                    "matches": {
-                      "type": "array",
-                      "items": {
-                        "type": "object",
-                        "properties": {
-                          "word": {
-                            "type": "string"
-                          },
-                          "riskLevel": {
-                            "type": "string"
-                          },
-                          "category": {
-                            "type": [
-                              "string",
-                              "null"
-                            ]
-                          },
-                          "alternatives": {
-                            "type": [
-                              "string",
-                              "null"
-                            ]
-                          },
-                          "start": {
-                            "type": "integer",
-                            "minimum": -9007199254740991,
-                            "maximum": 9007199254740991
-                          },
-                          "end": {
-                            "type": "integer",
-                            "minimum": -9007199254740991,
-                            "maximum": 9007199254740991
-                          }
-                        },
-                        "required": [
-                          "word",
-                          "riskLevel",
-                          "category",
-                          "alternatives",
-                          "start",
-                          "end"
-                        ],
-                        "additionalProperties": false
-                      }
-                    }
-                  },
-                  "required": [
-                    "version",
-                    "observedAt",
-                    "complete",
-                    "matching",
-                    "matches"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    },
-                    "message": {
-                      "type": "string"
-                    },
-                    "statusCode": {
-                      "type": "integer",
-                      "minimum": -9007199254740991,
-                      "maximum": 9007199254740991
-                    },
-                    "reason": {
-                      "type": "string"
-                    },
-                    "statusUrl": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "error",
-                    "message",
-                    "statusCode"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    },
-                    "message": {
-                      "type": "string"
-                    },
-                    "statusCode": {
-                      "type": "integer",
-                      "minimum": -9007199254740991,
-                      "maximum": 9007199254740991
-                    },
-                    "reason": {
-                      "type": "string"
-                    },
-                    "statusUrl": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "error",
-                    "message",
-                    "statusCode"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    },
-                    "message": {
-                      "type": "string"
-                    },
-                    "statusCode": {
-                      "type": "integer",
-                      "minimum": -9007199254740991,
-                      "maximum": 9007199254740991
-                    },
-                    "reason": {
-                      "type": "string"
-                    },
-                    "statusUrl": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "error",
-                    "message",
-                    "statusCode"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    },
-                    "message": {
-                      "type": "string"
-                    },
-                    "statusCode": {
-                      "type": "integer",
-                      "minimum": -9007199254740991,
-                      "maximum": 9007199254740991
-                    },
-                    "reason": {
-                      "type": "string"
-                    },
-                    "statusUrl": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "error",
-                    "message",
-                    "statusCode"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/api/v1/ofapi/commands": {
       "post": {
         "summary": "Create or deduplicate a desktop OFAPI command",
@@ -190634,1263 +189013,6 @@
                   ],
                   "additionalProperties": false
                 }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/ofapi/credits/summary": {
-      "get": {
-        "summary": "Get page-scoped OFAPI credit spend visible to the authenticated chatter",
-        "tags": [
-          "ofapi"
-        ],
-        "description": "Bearer chatter-key endpoint for desktop clients. It reports REST spend attributed to the chatter's assigned pages and a webhook credit estimate derived from journaled events for those pages. It intentionally omits owner-only global balance, refills, external drift, and adjustments.",
-        "security": [
-          {
-            "bearerAuth": []
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "enabled": {
-                      "type": "boolean"
-                    },
-                    "scope": {
-                      "type": "object",
-                      "properties": {
-                        "pageIds": {
-                          "type": "array",
-                          "items": {
-                            "type": "integer",
-                            "exclusiveMinimum": 0,
-                            "maximum": 9007199254740991
-                          }
-                        },
-                        "pageCount": {
-                          "type": "integer",
-                          "minimum": 0,
-                          "maximum": 9007199254740991
-                        }
-                      },
-                      "required": [
-                        "pageIds",
-                        "pageCount"
-                      ],
-                      "additionalProperties": false
-                    },
-                    "today": {
-                      "type": "object",
-                      "properties": {
-                        "day": {
-                          "type": "string",
-                          "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
-                        },
-                        "from": {
-                          "type": "string"
-                        },
-                        "to": {
-                          "type": "string"
-                        },
-                        "restCredits": {
-                          "type": "integer",
-                          "minimum": 0,
-                          "maximum": 9007199254740991
-                        },
-                        "webhook": {
-                          "type": "object",
-                          "properties": {
-                            "eventCount": {
-                              "type": "integer",
-                              "minimum": 0,
-                              "maximum": 9007199254740991
-                            },
-                            "estimatedCredits": {
-                              "type": "integer",
-                              "minimum": 0,
-                              "maximum": 9007199254740991
-                            }
-                          },
-                          "required": [
-                            "eventCount",
-                            "estimatedCredits"
-                          ],
-                          "additionalProperties": false
-                        },
-                        "totalEstimatedCredits": {
-                          "type": "integer",
-                          "minimum": 0,
-                          "maximum": 9007199254740991
-                        },
-                        "netRestCredits": {
-                          "type": "integer",
-                          "minimum": -9007199254740991,
-                          "maximum": 9007199254740991
-                        },
-                        "netTotalEstimatedCredits": {
-                          "type": "integer",
-                          "minimum": -9007199254740991,
-                          "maximum": 9007199254740991
-                        }
-                      },
-                      "required": [
-                        "day",
-                        "from",
-                        "to",
-                        "restCredits",
-                        "webhook",
-                        "totalEstimatedCredits"
-                      ],
-                      "additionalProperties": false
-                    },
-                    "last7d": {
-                      "type": "object",
-                      "properties": {
-                        "from": {
-                          "type": "string"
-                        },
-                        "to": {
-                          "type": "string"
-                        },
-                        "restCredits": {
-                          "type": "integer",
-                          "minimum": 0,
-                          "maximum": 9007199254740991
-                        },
-                        "webhook": {
-                          "type": "object",
-                          "properties": {
-                            "eventCount": {
-                              "type": "integer",
-                              "minimum": 0,
-                              "maximum": 9007199254740991
-                            },
-                            "estimatedCredits": {
-                              "type": "integer",
-                              "minimum": 0,
-                              "maximum": 9007199254740991
-                            }
-                          },
-                          "required": [
-                            "eventCount",
-                            "estimatedCredits"
-                          ],
-                          "additionalProperties": false
-                        },
-                        "totalEstimatedCredits": {
-                          "type": "integer",
-                          "minimum": 0,
-                          "maximum": 9007199254740991
-                        },
-                        "netRestCredits": {
-                          "type": "integer",
-                          "minimum": -9007199254740991,
-                          "maximum": 9007199254740991
-                        },
-                        "netTotalEstimatedCredits": {
-                          "type": "integer",
-                          "minimum": -9007199254740991,
-                          "maximum": 9007199254740991
-                        }
-                      },
-                      "required": [
-                        "from",
-                        "to",
-                        "restCredits",
-                        "webhook",
-                        "totalEstimatedCredits"
-                      ],
-                      "additionalProperties": false
-                    },
-                    "limitations": {
-                      "type": "array",
-                      "items": {
-                        "type": "string"
-                      }
-                    }
-                  },
-                  "required": [
-                    "enabled",
-                    "scope",
-                    "today",
-                    "last7d",
-                    "limitations"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    },
-                    "message": {
-                      "type": "string"
-                    },
-                    "statusCode": {
-                      "type": "integer",
-                      "minimum": -9007199254740991,
-                      "maximum": 9007199254740991
-                    },
-                    "reason": {
-                      "type": "string"
-                    },
-                    "statusUrl": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "error",
-                    "message",
-                    "statusCode"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    },
-                    "message": {
-                      "type": "string"
-                    },
-                    "statusCode": {
-                      "type": "integer",
-                      "minimum": -9007199254740991,
-                      "maximum": 9007199254740991
-                    },
-                    "reason": {
-                      "type": "string"
-                    },
-                    "statusUrl": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "error",
-                    "message",
-                    "statusCode"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/ofapi/media/reports": {
-      "post": {
-        "summary": "Report desktop media transfer results (batched, idempotent by resolveId)",
-        "tags": [
-          "ofapi"
-        ],
-        "description": "At most 100 reports per call. A lost report leaves a paid charge unknown, never zero; a report of more bytes than its hand-out allowed is rejected and changes nothing.",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "reports": {
-                    "minItems": 1,
-                    "maxItems": 100,
-                    "type": "array",
-                    "items": {
-                      "type": "object",
-                      "properties": {
-                        "resolveId": {
-                          "type": "string",
-                          "format": "uuid",
-                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-                        },
-                        "result": {
-                          "type": "string",
-                          "enum": [
-                            "ok",
-                            "failed",
-                            "aborted_size",
-                            "timeout",
-                            "http_error"
-                          ]
-                        },
-                        "bytesReceived": {
-                          "anyOf": [
-                            {
-                              "type": "integer",
-                              "minimum": 0,
-                              "maximum": 30000000
-                            },
-                            {
-                              "type": "null"
-                            }
-                          ]
-                        },
-                        "httpStatus": {
-                          "anyOf": [
-                            {
-                              "type": "integer",
-                              "minimum": 100,
-                              "maximum": 599
-                            },
-                            {
-                              "type": "null"
-                            }
-                          ]
-                        }
-                      },
-                      "required": [
-                        "resolveId",
-                        "result",
-                        "bytesReceived",
-                        "httpStatus"
-                      ],
-                      "additionalProperties": false
-                    }
-                  }
-                },
-                "required": [
-                  "reports"
-                ],
-                "additionalProperties": false
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "bearerAuth": []
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "accepted": {
-                      "type": "integer",
-                      "minimum": 0,
-                      "maximum": 9007199254740991
-                    },
-                    "duplicate": {
-                      "type": "integer",
-                      "minimum": 0,
-                      "maximum": 9007199254740991
-                    },
-                    "unknown": {
-                      "type": "integer",
-                      "minimum": 0,
-                      "maximum": 9007199254740991
-                    },
-                    "rejected": {
-                      "type": "integer",
-                      "minimum": 0,
-                      "maximum": 9007199254740991
-                    }
-                  },
-                  "required": [
-                    "accepted",
-                    "duplicate",
-                    "unknown",
-                    "rejected"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    },
-                    "message": {
-                      "type": "string"
-                    },
-                    "statusCode": {
-                      "type": "integer",
-                      "minimum": -9007199254740991,
-                      "maximum": 9007199254740991
-                    },
-                    "reason": {
-                      "type": "string"
-                    },
-                    "statusUrl": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "error",
-                    "message",
-                    "statusCode"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    },
-                    "message": {
-                      "type": "string"
-                    },
-                    "statusCode": {
-                      "type": "integer",
-                      "minimum": -9007199254740991,
-                      "maximum": 9007199254740991
-                    },
-                    "reason": {
-                      "type": "string"
-                    },
-                    "statusUrl": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "error",
-                    "message",
-                    "statusCode"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    },
-                    "message": {
-                      "type": "string"
-                    },
-                    "statusCode": {
-                      "type": "integer",
-                      "minimum": -9007199254740991,
-                      "maximum": 9007199254740991
-                    },
-                    "reason": {
-                      "type": "string"
-                    },
-                    "statusUrl": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "error",
-                    "message",
-                    "statusCode"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    },
-                    "message": {
-                      "type": "string"
-                    },
-                    "statusCode": {
-                      "type": "integer",
-                      "minimum": -9007199254740991,
-                      "maximum": 9007199254740991
-                    },
-                    "reason": {
-                      "type": "string"
-                    },
-                    "statusUrl": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "error",
-                    "message",
-                    "statusCode"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    },
-                    "message": {
-                      "type": "string"
-                    },
-                    "statusCode": {
-                      "type": "integer",
-                      "minimum": -9007199254740991,
-                      "maximum": 9007199254740991
-                    },
-                    "reason": {
-                      "type": "string"
-                    },
-                    "statusUrl": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "error",
-                    "message",
-                    "statusCode"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "429": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    },
-                    "message": {
-                      "type": "string"
-                    },
-                    "statusCode": {
-                      "type": "integer",
-                      "minimum": -9007199254740991,
-                      "maximum": 9007199254740991
-                    },
-                    "reason": {
-                      "type": "string"
-                    },
-                    "statusUrl": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "error",
-                    "message",
-                    "statusCode"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    },
-                    "message": {
-                      "type": "string"
-                    },
-                    "statusCode": {
-                      "type": "integer",
-                      "minimum": -9007199254740991,
-                      "maximum": 9007199254740991
-                    },
-                    "reason": {
-                      "type": "string"
-                    },
-                    "statusUrl": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "error",
-                    "message",
-                    "statusCode"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/ofapi/media/resolve": {
-      "post": {
-        "summary": "Decide how the desktop may fetch one media file (free URL, OFAPI cache or a budgeted paid download)",
-        "tags": [
-          "ofapi"
-        ],
-        "description": "Chatter-key-only, page-scoped like the read gateway. The hub never relays bytes: it returns a URL (or none) and a closed outcome. Paid downloads count against the agency's UTC-day budget; `auto` passes only within it, `click` always passes and is flagged over_cap; `full` is click-only. Idempotent by requestId: a repeat or a concurrent twin gets the same answer, a requestId reused for another file is a 409. Worst case about 35 s.",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "requestId": {
-                    "type": "string",
-                    "format": "uuid",
-                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-                  },
-                  "accountId": {
-                    "type": "string",
-                    "maxLength": 255,
-                    "pattern": "^acct_[A-Za-z0-9]+$"
-                  },
-                  "mediaId": {
-                    "type": "string",
-                    "pattern": "^\\d{1,30}$"
-                  },
-                  "variant": {
-                    "type": "string",
-                    "enum": [
-                      "thumb",
-                      "full"
-                    ]
-                  },
-                  "surface": {
-                    "type": "string",
-                    "enum": [
-                      "thread",
-                      "gallery",
-                      "vault",
-                      "lightbox"
-                    ]
-                  },
-                  "trigger": {
-                    "type": "string",
-                    "enum": [
-                      "auto",
-                      "click"
-                    ]
-                  },
-                  "afterReread": {
-                    "type": "boolean"
-                  }
-                },
-                "required": [
-                  "requestId",
-                  "accountId",
-                  "mediaId",
-                  "variant",
-                  "surface",
-                  "trigger"
-                ],
-                "additionalProperties": false
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "bearerAuth": []
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "resolveId": {
-                      "type": "string",
-                      "format": "uuid",
-                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-                    },
-                    "outcome": {
-                      "type": "string",
-                      "enum": [
-                        "free_url",
-                        "ofapi_cache",
-                        "paid",
-                        "cap_blocked",
-                        "source_expired",
-                        "unavailable",
-                        "refused",
-                        "pending",
-                        "error"
-                      ]
-                    },
-                    "url": {
-                      "type": [
-                        "string",
-                        "null"
-                      ]
-                    },
-                    "urlExpiresAt": {
-                      "type": [
-                        "string",
-                        "null"
-                      ]
-                    },
-                    "contentLength": {
-                      "anyOf": [
-                        {
-                          "type": "integer",
-                          "minimum": 0,
-                          "maximum": 9007199254740991
-                        },
-                        {
-                          "type": "null"
-                        }
-                      ]
-                    },
-                    "maxBytes": {
-                      "anyOf": [
-                        {
-                          "type": "integer",
-                          "exclusiveMinimum": 0,
-                          "maximum": 9007199254740991
-                        },
-                        {
-                          "type": "null"
-                        }
-                      ]
-                    },
-                    "credits": {
-                      "type": "integer",
-                      "minimum": 0,
-                      "maximum": 9007199254740991
-                    },
-                    "overCap": {
-                      "type": "boolean"
-                    },
-                    "reason": {
-                      "type": [
-                        "string",
-                        "null"
-                      ]
-                    },
-                    "retryAfterMs": {
-                      "anyOf": [
-                        {
-                          "type": "integer",
-                          "minimum": 0,
-                          "maximum": 9007199254740991
-                        },
-                        {
-                          "type": "null"
-                        }
-                      ]
-                    },
-                    "retryAt": {
-                      "type": [
-                        "string",
-                        "null"
-                      ]
-                    },
-                    "mediaType": {
-                      "type": [
-                        "string",
-                        "null"
-                      ]
-                    },
-                    "reread": {
-                      "anyOf": [
-                        {
-                          "oneOf": [
-                            {
-                              "type": "object",
-                              "properties": {
-                                "kind": {
-                                  "type": "string",
-                                  "enum": [
-                                    "message"
-                                  ]
-                                },
-                                "chatId": {
-                                  "type": "string"
-                                },
-                                "messageId": {
-                                  "type": "string"
-                                }
-                              },
-                              "required": [
-                                "kind",
-                                "chatId",
-                                "messageId"
-                              ],
-                              "additionalProperties": false
-                            },
-                            {
-                              "type": "object",
-                              "properties": {
-                                "kind": {
-                                  "type": "string",
-                                  "enum": [
-                                    "vault"
-                                  ]
-                                },
-                                "mediaId": {
-                                  "type": "string"
-                                }
-                              },
-                              "required": [
-                                "kind",
-                                "mediaId"
-                              ],
-                              "additionalProperties": false
-                            }
-                          ]
-                        },
-                        {
-                          "type": "null"
-                        }
-                      ]
-                    },
-                    "replayed": {
-                      "type": "boolean"
-                    }
-                  },
-                  "required": [
-                    "resolveId",
-                    "outcome",
-                    "url",
-                    "urlExpiresAt",
-                    "contentLength",
-                    "maxBytes",
-                    "credits",
-                    "overCap",
-                    "reason",
-                    "retryAfterMs",
-                    "retryAt",
-                    "mediaType",
-                    "reread",
-                    "replayed"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    },
-                    "message": {
-                      "type": "string"
-                    },
-                    "statusCode": {
-                      "type": "integer",
-                      "minimum": -9007199254740991,
-                      "maximum": 9007199254740991
-                    },
-                    "reason": {
-                      "type": "string"
-                    },
-                    "statusUrl": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "error",
-                    "message",
-                    "statusCode"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    },
-                    "message": {
-                      "type": "string"
-                    },
-                    "statusCode": {
-                      "type": "integer",
-                      "minimum": -9007199254740991,
-                      "maximum": 9007199254740991
-                    },
-                    "reason": {
-                      "type": "string"
-                    },
-                    "statusUrl": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "error",
-                    "message",
-                    "statusCode"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    },
-                    "message": {
-                      "type": "string"
-                    },
-                    "statusCode": {
-                      "type": "integer",
-                      "minimum": -9007199254740991,
-                      "maximum": 9007199254740991
-                    },
-                    "reason": {
-                      "type": "string"
-                    },
-                    "statusUrl": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "error",
-                    "message",
-                    "statusCode"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    },
-                    "message": {
-                      "type": "string"
-                    },
-                    "statusCode": {
-                      "type": "integer",
-                      "minimum": -9007199254740991,
-                      "maximum": 9007199254740991
-                    },
-                    "reason": {
-                      "type": "string"
-                    },
-                    "statusUrl": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "error",
-                    "message",
-                    "statusCode"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    },
-                    "message": {
-                      "type": "string"
-                    },
-                    "statusCode": {
-                      "type": "integer",
-                      "minimum": -9007199254740991,
-                      "maximum": 9007199254740991
-                    },
-                    "reason": {
-                      "type": "string"
-                    },
-                    "statusUrl": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "error",
-                    "message",
-                    "statusCode"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "429": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    },
-                    "message": {
-                      "type": "string"
-                    },
-                    "statusCode": {
-                      "type": "integer",
-                      "minimum": -9007199254740991,
-                      "maximum": 9007199254740991
-                    },
-                    "reason": {
-                      "type": "string"
-                    },
-                    "statusUrl": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "error",
-                    "message",
-                    "statusCode"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    },
-                    "message": {
-                      "type": "string"
-                    },
-                    "statusCode": {
-                      "type": "integer",
-                      "minimum": -9007199254740991,
-                      "maximum": 9007199254740991
-                    },
-                    "reason": {
-                      "type": "string"
-                    },
-                    "statusUrl": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "error",
-                    "message",
-                    "statusCode"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/ofapi/read/{*}": {
-      "get": {
-        "summary": "Read an allowlisted OFAPI resource through the core custody boundary",
-        "tags": [
-          "ofapi"
-        ],
-        "description": "Chatter-key-only, page-scoped compatibility gateway mounted at `/api/v1/ofapi/read`. It preserves the desktop OFAPI GET paths and JSON shapes, but accepts only the documented desktop read allowlist. `/accounts` is synthesized from assigned core page mappings and `/whoami` is sanitized. The optional `x-agency-hub-read-intent: deep-history-v1` header identifies backward user scrollback that may be served from certified DB history. No POST, DELETE, send, mark-read, typing, or upload operation is exposed.",
-        "parameters": [
-          {
-            "schema": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 1000
-            },
-            "in": "path",
-            "name": "*",
-            "required": true
-          }
-        ],
-        "security": [
-          {
-            "bearerAuth": []
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "400": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "401": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "402": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "403": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "404": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "422": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "429": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "500": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "502": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "503": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "504": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {}
               }
             }
           }
@@ -240841,6 +237963,28 @@
                       "type": "string",
                       "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
                     },
+                    "factsFrom": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "reportsFrom": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
                     "generatedAt": {
                       "type": "string"
                     },
@@ -241019,6 +238163,48 @@
                               "unknown"
                             ],
                             "additionalProperties": false
+                          },
+                          "pendingChanges": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "id": {
+                                  "type": "integer",
+                                  "exclusiveMinimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                "day": {
+                                  "type": "string",
+                                  "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                                },
+                                "model": {
+                                  "type": "string"
+                                },
+                                "postedMills": {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                },
+                                "newMills": {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                },
+                                "reason": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "id",
+                                "day",
+                                "model",
+                                "postedMills",
+                                "newMills",
+                                "reason"
+                              ],
+                              "additionalProperties": false
+                            }
                           }
                         },
                         "required": [
@@ -241034,7 +238220,8 @@
                           "toPayMills",
                           "oldestUnpaidDate",
                           "unpaidDays",
-                          "unentered"
+                          "unentered",
+                          "pendingChanges"
                         ],
                         "additionalProperties": false
                       }
@@ -241073,6 +238260,8 @@
                     "from",
                     "to",
                     "accrualFrom",
+                    "factsFrom",
+                    "reportsFrom",
                     "generatedAt",
                     "people",
                     "checks",
@@ -241544,6 +238733,724 @@
             }
           },
           "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/team/ledger-reports": {
+      "get": {
+        "summary": "Every chatter's shift reports from the agency ledger: posted and drafted by page, the drafts, the posts it could not use",
+        "tags": [
+          "admin"
+        ],
+        "description": "Read from the ledger's GET /v1/reports, /v1/report-days and /v1/report-posts with Hub's payouts key. Report dates are Moscow days, at most 62. While the ledger refuses Hub the posts (403/404), `posts` is empty and `postsRead` false. 503 when the ledger is not connected or did not answer.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            },
+            "in": "query",
+            "name": "from",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            },
+            "in": "query",
+            "name": "to",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "from": {
+                      "type": "string",
+                      "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                    },
+                    "to": {
+                      "type": "string",
+                      "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                    },
+                    "reports": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "key": {
+                            "type": "string"
+                          },
+                          "person": {
+                            "type": "object",
+                            "properties": {
+                              "slug": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "hubUser": {
+                                "anyOf": [
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "userId": {
+                                        "type": "integer",
+                                        "exclusiveMinimum": 0,
+                                        "maximum": 9007199254740991
+                                      },
+                                      "username": {
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": [
+                                      "userId",
+                                      "username"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "name": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "slug",
+                              "hubUser",
+                              "name"
+                            ],
+                            "additionalProperties": false
+                          },
+                          "reportDate": {
+                            "type": "string",
+                            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                          },
+                          "pages": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "pageLabel": {
+                                  "type": "string"
+                                },
+                                "model": {
+                                  "type": "string"
+                                },
+                                "postedMills": {
+                                  "anyOf": [
+                                    {
+                                      "type": "integer",
+                                      "minimum": -9007199254740991,
+                                      "maximum": 9007199254740991
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "draftMills": {
+                                  "anyOf": [
+                                    {
+                                      "type": "integer",
+                                      "minimum": -9007199254740991,
+                                      "maximum": 9007199254740991
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "diffMills": {
+                                  "anyOf": [
+                                    {
+                                      "type": "integer",
+                                      "minimum": -9007199254740991,
+                                      "maximum": 9007199254740991
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "state": {
+                                  "type": "string"
+                                },
+                                "postedAt": {
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
+                                }
+                              },
+                              "required": [
+                                "pageLabel",
+                                "model",
+                                "postedMills",
+                                "draftMills",
+                                "diffMills",
+                                "state",
+                                "postedAt"
+                              ],
+                              "additionalProperties": false
+                            }
+                          },
+                          "postedMills": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "draftMills": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "postedAt": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "draft": {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "id": {
+                                    "type": "integer",
+                                    "exclusiveMinimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "reportDate": {
+                                    "type": "string",
+                                    "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                                  },
+                                  "windowFrom": {
+                                    "type": "string"
+                                  },
+                                  "windowTo": {
+                                    "type": "string"
+                                  },
+                                  "cutAt": {
+                                    "type": "string"
+                                  },
+                                  "version": {
+                                    "type": "integer",
+                                    "exclusiveMinimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "versions": {
+                                    "type": "integer",
+                                    "exclusiveMinimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "status": {
+                                    "type": "string"
+                                  },
+                                  "totalMills": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "savedAt": {
+                                    "type": "string"
+                                  },
+                                  "pages": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "object",
+                                      "properties": {
+                                        "pageLabel": {
+                                          "type": "string"
+                                        },
+                                        "amountMills": {
+                                          "type": "integer",
+                                          "minimum": -9007199254740991,
+                                          "maximum": 9007199254740991
+                                        }
+                                      },
+                                      "required": [
+                                        "pageLabel",
+                                        "amountMills"
+                                      ],
+                                      "additionalProperties": false
+                                    }
+                                  },
+                                  "lines": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "object",
+                                      "properties": {
+                                        "n": {
+                                          "anyOf": [
+                                            {
+                                              "type": "integer",
+                                              "minimum": -9007199254740991,
+                                              "maximum": 9007199254740991
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
+                                        },
+                                        "pageLabel": {
+                                          "type": "string"
+                                        },
+                                        "fanRef": {
+                                          "type": "string"
+                                        },
+                                        "fanName": {
+                                          "type": "string"
+                                        },
+                                        "kind": {
+                                          "type": "string"
+                                        },
+                                        "occurredAt": {
+                                          "type": [
+                                            "string",
+                                            "null"
+                                          ]
+                                        },
+                                        "netMills": {
+                                          "type": "integer",
+                                          "minimum": -9007199254740991,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "counted": {
+                                          "type": "boolean"
+                                        },
+                                        "added": {
+                                          "type": "boolean"
+                                        },
+                                        "what": {
+                                          "type": "string"
+                                        },
+                                        "flags": {
+                                          "type": "array",
+                                          "items": {
+                                            "type": "string"
+                                          }
+                                        },
+                                        "notes": {
+                                          "type": "array",
+                                          "items": {
+                                            "type": "string"
+                                          }
+                                        },
+                                        "ppvAuthor": {
+                                          "type": "string"
+                                        },
+                                        "ppvSentAt": {
+                                          "type": "string"
+                                        }
+                                      },
+                                      "required": [
+                                        "n",
+                                        "pageLabel",
+                                        "fanRef",
+                                        "fanName",
+                                        "kind",
+                                        "occurredAt",
+                                        "netMills",
+                                        "counted",
+                                        "added",
+                                        "what",
+                                        "flags",
+                                        "notes",
+                                        "ppvAuthor",
+                                        "ppvSentAt"
+                                      ],
+                                      "additionalProperties": false
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "id",
+                                  "reportDate",
+                                  "windowFrom",
+                                  "windowTo",
+                                  "cutAt",
+                                  "version",
+                                  "versions",
+                                  "status",
+                                  "totalMills",
+                                  "savedAt",
+                                  "pages",
+                                  "lines"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "postIds": {
+                            "type": "array",
+                            "items": {
+                              "type": "integer",
+                              "exclusiveMinimum": 0,
+                              "maximum": 9007199254740991
+                            }
+                          }
+                        },
+                        "required": [
+                          "key",
+                          "person",
+                          "reportDate",
+                          "pages",
+                          "postedMills",
+                          "draftMills",
+                          "postedAt",
+                          "draft",
+                          "postIds"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "posts": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "integer",
+                            "exclusiveMinimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "postedAt": {
+                            "type": "string"
+                          },
+                          "sender": {
+                            "type": "string"
+                          },
+                          "tag": {
+                            "type": "string"
+                          },
+                          "person": {
+                            "type": "object",
+                            "properties": {
+                              "slug": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "hubUser": {
+                                "anyOf": [
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "userId": {
+                                        "type": "integer",
+                                        "exclusiveMinimum": 0,
+                                        "maximum": 9007199254740991
+                                      },
+                                      "username": {
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": [
+                                      "userId",
+                                      "username"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "name": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "slug",
+                              "hubUser",
+                              "name"
+                            ],
+                            "additionalProperties": false
+                          },
+                          "model": {
+                            "type": "string"
+                          },
+                          "reportDate": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "totalMills": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          },
+                          "pagesMills": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          },
+                          "flags": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "blocking": {
+                            "type": "boolean"
+                          },
+                          "pages": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "name": {
+                                  "type": "string"
+                                },
+                                "pageLabel": {
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
+                                },
+                                "inShift": {
+                                  "type": "boolean"
+                                },
+                                "amountMills": {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                }
+                              },
+                              "required": [
+                                "name",
+                                "pageLabel",
+                                "inShift",
+                                "amountMills"
+                              ],
+                              "additionalProperties": false
+                            }
+                          },
+                          "link": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "postedAt",
+                          "sender",
+                          "tag",
+                          "person",
+                          "model",
+                          "reportDate",
+                          "totalMills",
+                          "pagesMills",
+                          "flags",
+                          "blocking",
+                          "pages",
+                          "link"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "postsRead": {
+                      "type": "boolean"
+                    },
+                    "serverNow": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "from",
+                    "to",
+                    "reports",
+                    "posts",
+                    "postsRead",
+                    "serverNow"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
             "description": "Default Response",
             "content": {
               "application/json": {
@@ -242167,931 +240074,6 @@
                     "to",
                     "pages",
                     "chatters",
-                    "serverNow"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    },
-                    "message": {
-                      "type": "string"
-                    },
-                    "statusCode": {
-                      "type": "integer",
-                      "minimum": -9007199254740991,
-                      "maximum": 9007199254740991
-                    },
-                    "reason": {
-                      "type": "string"
-                    },
-                    "statusUrl": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "error",
-                    "message",
-                    "statusCode"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    },
-                    "message": {
-                      "type": "string"
-                    },
-                    "statusCode": {
-                      "type": "integer",
-                      "minimum": -9007199254740991,
-                      "maximum": 9007199254740991
-                    },
-                    "reason": {
-                      "type": "string"
-                    },
-                    "statusUrl": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "error",
-                    "message",
-                    "statusCode"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    },
-                    "message": {
-                      "type": "string"
-                    },
-                    "statusCode": {
-                      "type": "integer",
-                      "minimum": -9007199254740991,
-                      "maximum": 9007199254740991
-                    },
-                    "reason": {
-                      "type": "string"
-                    },
-                    "statusUrl": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "error",
-                    "message",
-                    "statusCode"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/team/shift-reports/disputes": {
-      "get": {
-        "summary": "Sales of the last days whose marks do not agree, with the owner's decision when made",
-        "tags": [
-          "client"
-        ],
-        "description": "The owner and team leads, for the pages they reach. Two «моё», or «делим с X» that X did not answer with «делим» back.",
-        "parameters": [
-          {
-            "schema": {
-              "default": 14,
-              "type": "integer",
-              "minimum": 1,
-              "maximum": 31
-            },
-            "in": "query",
-            "name": "days",
-            "required": false
-          }
-        ],
-        "security": [
-          {
-            "cookieAuth": []
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "disputes": {
-                      "type": "array",
-                      "items": {
-                        "type": "object",
-                        "properties": {
-                          "saleRef": {
-                            "type": "string",
-                            "pattern": "^[1-9]\\d{0,29}$"
-                          },
-                          "pageLabel": {
-                            "type": "string"
-                          },
-                          "platform": {
-                            "type": "string",
-                            "minLength": 1,
-                            "maxLength": 64
-                          },
-                          "fanRef": {
-                            "anyOf": [
-                              {
-                                "type": "string",
-                                "pattern": "^[1-9]\\d{0,29}$"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          },
-                          "occurredAt": {
-                            "type": "string"
-                          },
-                          "netMills": {
-                            "type": "integer",
-                            "minimum": -9007199254740991,
-                            "maximum": 9007199254740991
-                          },
-                          "reason": {
-                            "type": "string",
-                            "minLength": 1,
-                            "maxLength": 64
-                          },
-                          "marks": {
-                            "type": "array",
-                            "items": {
-                              "type": "object",
-                              "properties": {
-                                "userId": {
-                                  "type": "integer",
-                                  "exclusiveMinimum": 0,
-                                  "maximum": 9007199254740991
-                                },
-                                "username": {
-                                  "type": "string"
-                                },
-                                "mark": {
-                                  "type": "string",
-                                  "minLength": 1,
-                                  "maxLength": 64
-                                },
-                                "shareWithUserId": {
-                                  "anyOf": [
-                                    {
-                                      "type": "integer",
-                                      "exclusiveMinimum": 0,
-                                      "maximum": 9007199254740991
-                                    },
-                                    {
-                                      "type": "null"
-                                    }
-                                  ]
-                                },
-                                "shareWith": {
-                                  "type": [
-                                    "string",
-                                    "null"
-                                  ]
-                                },
-                                "amountMills": {
-                                  "anyOf": [
-                                    {
-                                      "type": "integer",
-                                      "minimum": -9007199254740991,
-                                      "maximum": 9007199254740991
-                                    },
-                                    {
-                                      "type": "null"
-                                    }
-                                  ]
-                                }
-                              },
-                              "required": [
-                                "userId",
-                                "username",
-                                "mark",
-                                "shareWithUserId",
-                                "shareWith",
-                                "amountMills"
-                              ],
-                              "additionalProperties": false
-                            }
-                          },
-                          "people": {
-                            "type": "array",
-                            "items": {
-                              "type": "object",
-                              "properties": {
-                                "userId": {
-                                  "type": "integer",
-                                  "exclusiveMinimum": 0,
-                                  "maximum": 9007199254740991
-                                },
-                                "username": {
-                                  "type": "string"
-                                }
-                              },
-                              "required": [
-                                "userId",
-                                "username"
-                              ],
-                              "additionalProperties": false
-                            }
-                          },
-                          "resolution": {
-                            "anyOf": [
-                              {
-                                "type": "array",
-                                "items": {
-                                  "type": "object",
-                                  "properties": {
-                                    "userId": {
-                                      "type": "integer",
-                                      "exclusiveMinimum": 0,
-                                      "maximum": 9007199254740991
-                                    },
-                                    "username": {
-                                      "type": "string"
-                                    },
-                                    "percent": {
-                                      "type": "integer",
-                                      "minimum": -9007199254740991,
-                                      "maximum": 9007199254740991
-                                    }
-                                  },
-                                  "required": [
-                                    "userId",
-                                    "username",
-                                    "percent"
-                                  ],
-                                  "additionalProperties": false
-                                }
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          }
-                        },
-                        "required": [
-                          "saleRef",
-                          "pageLabel",
-                          "platform",
-                          "fanRef",
-                          "occurredAt",
-                          "netMills",
-                          "reason",
-                          "marks",
-                          "people",
-                          "resolution"
-                        ],
-                        "additionalProperties": false
-                      }
-                    },
-                    "serverNow": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "disputes",
-                    "serverNow"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    },
-                    "message": {
-                      "type": "string"
-                    },
-                    "statusCode": {
-                      "type": "integer",
-                      "minimum": -9007199254740991,
-                      "maximum": 9007199254740991
-                    },
-                    "reason": {
-                      "type": "string"
-                    },
-                    "statusUrl": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "error",
-                    "message",
-                    "statusCode"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    },
-                    "message": {
-                      "type": "string"
-                    },
-                    "statusCode": {
-                      "type": "integer",
-                      "minimum": -9007199254740991,
-                      "maximum": 9007199254740991
-                    },
-                    "reason": {
-                      "type": "string"
-                    },
-                    "statusUrl": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "error",
-                    "message",
-                    "statusCode"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    },
-                    "message": {
-                      "type": "string"
-                    },
-                    "statusCode": {
-                      "type": "integer",
-                      "minimum": -9007199254740991,
-                      "maximum": 9007199254740991
-                    },
-                    "reason": {
-                      "type": "string"
-                    },
-                    "statusUrl": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "error",
-                    "message",
-                    "statusCode"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/team/shift-reports/disputes/{saleRef}": {
-      "post": {
-        "summary": "The owner splits a disputed sale between chatters",
-        "tags": [
-          "client"
-        ],
-        "description": "Owner only. The sale must be disputed (else 409 `not_disputed`); every chatter named must have marked it or be named in a «делим» (else 400). Deciding again replaces the decision. The export takes the split instead of the chatters' lines.",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "shares": {
-                    "minItems": 1,
-                    "maxItems": 5,
-                    "type": "array",
-                    "items": {
-                      "type": "object",
-                      "properties": {
-                        "userId": {
-                          "type": "integer",
-                          "exclusiveMinimum": 0,
-                          "maximum": 9007199254740991
-                        },
-                        "percent": {
-                          "type": "integer",
-                          "minimum": 1,
-                          "maximum": 100
-                        }
-                      },
-                      "required": [
-                        "userId",
-                        "percent"
-                      ]
-                    }
-                  }
-                },
-                "required": [
-                  "shares"
-                ],
-                "additionalProperties": false
-              }
-            }
-          }
-        },
-        "parameters": [
-          {
-            "schema": {
-              "type": "string",
-              "pattern": "^[1-9]\\d{0,29}$"
-            },
-            "in": "path",
-            "name": "saleRef",
-            "required": true
-          }
-        ],
-        "security": [
-          {
-            "cookieAuth": []
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "changed": {
-                      "type": "boolean"
-                    },
-                    "serverNow": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "changed",
-                    "serverNow"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    },
-                    "message": {
-                      "type": "string"
-                    },
-                    "statusCode": {
-                      "type": "integer",
-                      "minimum": -9007199254740991,
-                      "maximum": 9007199254740991
-                    },
-                    "reason": {
-                      "type": "string"
-                    },
-                    "statusUrl": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "error",
-                    "message",
-                    "statusCode"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    },
-                    "message": {
-                      "type": "string"
-                    },
-                    "statusCode": {
-                      "type": "integer",
-                      "minimum": -9007199254740991,
-                      "maximum": 9007199254740991
-                    },
-                    "reason": {
-                      "type": "string"
-                    },
-                    "statusUrl": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "error",
-                    "message",
-                    "statusCode"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    },
-                    "message": {
-                      "type": "string"
-                    },
-                    "statusCode": {
-                      "type": "integer",
-                      "minimum": -9007199254740991,
-                      "maximum": 9007199254740991
-                    },
-                    "reason": {
-                      "type": "string"
-                    },
-                    "statusUrl": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "error",
-                    "message",
-                    "statusCode"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    },
-                    "message": {
-                      "type": "string"
-                    },
-                    "statusCode": {
-                      "type": "integer",
-                      "minimum": -9007199254740991,
-                      "maximum": 9007199254740991
-                    },
-                    "reason": {
-                      "type": "string"
-                    },
-                    "statusUrl": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "error",
-                    "message",
-                    "statusCode"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    },
-                    "message": {
-                      "type": "string"
-                    },
-                    "statusCode": {
-                      "type": "integer",
-                      "minimum": -9007199254740991,
-                      "maximum": 9007199254740991
-                    },
-                    "reason": {
-                      "type": "string"
-                    },
-                    "statusUrl": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "error",
-                    "message",
-                    "statusCode"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/team/shift-reports/export": {
-      "get": {
-        "summary": "The payout export: confirmed shift reports as chatter × page × day → net",
-        "tags": [
-          "client"
-        ],
-        "description": "The owner and team leads, for the pages they reach; read-only. The days are Moscow days the shifts started on, at most 31. Disputed sales count only once the owner decided them.",
-        "parameters": [
-          {
-            "schema": {
-              "type": "string",
-              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
-            },
-            "in": "query",
-            "name": "from",
-            "required": true
-          },
-          {
-            "schema": {
-              "type": "string",
-              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
-            },
-            "in": "query",
-            "name": "to",
-            "required": true
-          }
-        ],
-        "security": [
-          {
-            "cookieAuth": []
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "from": {
-                      "type": "string",
-                      "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
-                    },
-                    "to": {
-                      "type": "string",
-                      "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
-                    },
-                    "rows": {
-                      "type": "array",
-                      "items": {
-                        "type": "object",
-                        "properties": {
-                          "username": {
-                            "type": "string"
-                          },
-                          "pageLabel": {
-                            "type": "string"
-                          },
-                          "platform": {
-                            "type": "string",
-                            "minLength": 1,
-                            "maxLength": 64
-                          },
-                          "shiftDate": {
-                            "type": "string",
-                            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
-                          },
-                          "creditedMills": {
-                            "type": "integer",
-                            "minimum": -9007199254740991,
-                            "maximum": 9007199254740991
-                          }
-                        },
-                        "required": [
-                          "username",
-                          "pageLabel",
-                          "platform",
-                          "shiftDate",
-                          "creditedMills"
-                        ],
-                        "additionalProperties": false
-                      }
-                    },
-                    "disputedOpen": {
-                      "type": "integer",
-                      "minimum": 0,
-                      "maximum": 9007199254740991
-                    },
-                    "ownAmounts": {
-                      "type": "array",
-                      "items": {
-                        "type": "object",
-                        "properties": {
-                          "username": {
-                            "type": "string"
-                          },
-                          "pageLabel": {
-                            "type": "string"
-                          },
-                          "saleRef": {
-                            "type": "string",
-                            "pattern": "^[1-9]\\d{0,29}$"
-                          },
-                          "occurredAt": {
-                            "type": "string"
-                          },
-                          "netMills": {
-                            "type": "integer",
-                            "minimum": -9007199254740991,
-                            "maximum": 9007199254740991
-                          },
-                          "amountMills": {
-                            "type": "integer",
-                            "minimum": -9007199254740991,
-                            "maximum": 9007199254740991
-                          }
-                        },
-                        "required": [
-                          "username",
-                          "pageLabel",
-                          "saleRef",
-                          "occurredAt",
-                          "netMills",
-                          "amountMills"
-                        ],
-                        "additionalProperties": false
-                      }
-                    },
-                    "unconfirmed": {
-                      "type": "array",
-                      "items": {
-                        "type": "object",
-                        "properties": {
-                          "username": {
-                            "type": "string"
-                          },
-                          "startedAt": {
-                            "type": "string"
-                          },
-                          "endedAt": {
-                            "type": "string"
-                          },
-                          "ongoing": {
-                            "type": "boolean"
-                          }
-                        },
-                        "required": [
-                          "username",
-                          "startedAt",
-                          "endedAt",
-                          "ongoing"
-                        ],
-                        "additionalProperties": false
-                      }
-                    },
-                    "lateChanges": {
-                      "type": "array",
-                      "items": {
-                        "type": "object",
-                        "properties": {
-                          "username": {
-                            "type": "string"
-                          },
-                          "pageLabel": {
-                            "type": "string"
-                          },
-                          "saleRef": {
-                            "type": "string",
-                            "pattern": "^[1-9]\\d{0,29}$"
-                          },
-                          "occurredAt": {
-                            "type": "string"
-                          },
-                          "payDay": {
-                            "type": "string",
-                            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
-                          },
-                          "creditedMills": {
-                            "type": "integer",
-                            "minimum": -9007199254740991,
-                            "maximum": 9007199254740991
-                          },
-                          "change": {
-                            "type": "string",
-                            "enum": [
-                              "added",
-                              "removed"
-                            ]
-                          },
-                          "at": {
-                            "type": "string"
-                          }
-                        },
-                        "required": [
-                          "username",
-                          "pageLabel",
-                          "saleRef",
-                          "occurredAt",
-                          "payDay",
-                          "creditedMills",
-                          "change",
-                          "at"
-                        ],
-                        "additionalProperties": false
-                      }
-                    },
-                    "serverNow": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "from",
-                    "to",
-                    "rows",
-                    "disputedOpen",
-                    "ownAmounts",
-                    "unconfirmed",
-                    "lateChanges",
                     "serverNow"
                   ],
                   "additionalProperties": false

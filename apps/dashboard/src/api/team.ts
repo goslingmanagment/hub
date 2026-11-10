@@ -1,4 +1,5 @@
 import { queryOptions, useQuery } from "@tanstack/react-query";
+import { pendingChangesOf, reportQuestionsWindow, unparsedPosts } from "@agency_hub_core/ui/shiftReports";
 
 import { kernel } from "./sdk.js";
 
@@ -43,14 +44,22 @@ export const teamCustomsQueryOptions = queryOptions({
   refetchInterval: 5 * 60_000,
 });
 
-/** The longest window `teamShiftDisputes` takes. */
-const TEAM_SHIFT_DISPUTE_DAYS = 31;
-
-/** Chat Memory week 4: disputed sales of the shift reports (`teamShiftDisputes`), for the count of «Ждут вас». */
-export function teamShiftDisputesQueryOptions(days: number = TEAM_SHIFT_DISPUTE_DAYS) {
+/**
+ * What waits for the owner about the shift reports (Workboard Решения → «Отчёты»): the posts the ledger could not
+ * use and the paid days whose report changed, of the last month — the same reads and window as Workboard's count.
+ * The owner's only; the ledger not answering is «не удалось проверить», never a zero.
+ */
+export function reportQuestionsQueryOptions(today: string) {
+  const window = reportQuestionsWindow(today);
   return queryOptions({
-    queryKey: ["team-shift-disputes", days] as const,
-    queryFn: () => kernel.teamShiftDisputes({ query: { days } }),
+    queryKey: ["report-questions", window] as const,
+    queryFn: async () => {
+      const [reports, payouts] = await Promise.all([
+        kernel.teamLedgerReports({ query: window }),
+        kernel.teamLedgerPayouts({ query: window }),
+      ]);
+      return unparsedPosts(reports).length + pendingChangesOf(payouts).length;
+    },
     meta: { suppressGlobalError: true },
   });
 }

@@ -50,7 +50,7 @@ export function WaitingLine() {
   const quiet = parts.length === 0;
   const label = !quiet ? "Ждут решения" : page && elsewhere ? `На ${page} решений не ждёт` : null;
   const items: ReactNode[] = [
-    ...parts.map((part) => <Link key={part.queue} to={part.to} className="shifts-waiting__link">{part.text}</Link>),
+    ...parts.map((part) => <Link key={part.key} to={part.to} className="shifts-waiting__link">{part.text}</Link>),
     ...tail,
   ];
   return (

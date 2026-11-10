@@ -682,21 +682,6 @@ export const DEMO_CONFIG_DESCRIPTORS: readonly DemoConfigDescriptor[] = [
     "destructive": false
   },
   {
-    "key": "ofapiMediaDailyCapCredits",
-    "envName": "OFAPI_MEDIA_DAILY_CAP_CREDITS",
-    "configField": "ofapiMediaDailyCapCredits",
-    "kind": "number",
-    "subsystem": "OFAPI",
-    "label": "OFAPI media download budget (credits per UTC day)",
-    "default": "100",
-    "editability": "never",
-    "runtimeApply": "none",
-    "comparable": true,
-    "note": "Agency-wide budget for paid OFAPI media downloads (docs/runbooks/ofapi-media.md). Automatic previews pass only while used + price <= the cap; a click always passes and is logged over_cap. Env-only by owner decision: a change needs a redeploy.",
-    "costWarning": "Raising it lets automatic desktop previews spend more OFAPI credits per UTC day; explicit clicks are counted but never blocked.",
-    "destructive": false
-  },
-  {
     "key": "ofapiBurnAlertCreditsPerHour",
     "envName": "OFAPI_BURN_ALERT_CREDITS_PER_HOUR",
     "configField": "ofapiBurnAlertCreditsPerHour",

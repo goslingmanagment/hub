@@ -8,7 +8,7 @@ import { moscowDayOf, type MoscowDay } from "./moscow.js";
  *
  * - The DAY of a shift is the Moscow day holding most of it — Hub's `dayOfWork`
  *   (apps/runtime/src/services/chatter-shifts.ts: the middle of the work), the
- *   day the payout sheet gives it (shift-report.ts `payDay`). A night entered at
+ *   day the payout sheet gives it. A night entered at
  *   23:54 and one entered at 00:08 are one day.
  * - The LABEL says when it really ran: the start's weekday, the dates it touched,
  *   the clock: «пт, 6 нояб. 09:16–18:53», a night «вс, 1–2 нояб. 21:00–05:49»,

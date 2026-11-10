@@ -169,8 +169,6 @@ for (const file of [
   "routes-ofapi-read-collections.ts",
   "routes-ofapi-exports.ts",
     "routes-ofapi-media.ts",
-  // Desktop media images (resolve + reports); routes.ts spreads them in.
-  "routes-ofapi-media-images.ts",
   "ofapi-actions.ts",
   "ofapi-actions-collections.ts",
   "ofapi-actions-publishing.ts",

@@ -63,14 +63,13 @@ function teamReads(chatterId: number): Array<[string, string]> {
     ["teamWinBackResults", "/api/v1/team/win-back/results?days=7"],
     ["teamWinBackApproaches", "/api/v1/team/win-back/approaches"],
     // Решения
-    ["teamShiftDisputes", "/api/v1/team/shift-reports/disputes?days=14"],
     ["teamCustoms", "/api/v1/team/customs"],
     ["clientSendCustodyList", "/api/v1/client-send-custody?state=held"],
     // Разбор смены
     ["teamShiftReview", `/api/v1/team/shift-review?userId=${chatterId}&startedAt=2026-11-08T13:00:00.000Z`],
     // Выплаты
-    ["teamShiftExport", "/api/v1/team/shift-reports/export?from=2026-11-02&to=2026-11-08"],
     ["teamLedgerPayouts", "/api/v1/team/ledger-payouts?from=2026-11-02&to=2026-11-08"],
+    ["teamLedgerReports", "/api/v1/team/ledger-reports?from=2026-11-02&to=2026-11-08"],
     ["teamLedgerPayoutPrepare", "/api/v1/team/ledger-payouts/prepare?person=nikita"],
     // Доступ
     ["adminPages", "/api/v1/admin/pages"],
@@ -83,7 +82,6 @@ function teamReads(chatterId: number): Array<[string, string]> {
 /** And what they write. */
 function teamWrites(chatterId: number): Array<[string, string, object]> {
   return [
-    ["teamShiftResolve", "/api/v1/team/shift-reports/disputes/1", {}],
     ["teamWinBackApproachSave", "/api/v1/team/win-back/approaches", {}],
     ["clientSendCustodyResolve", "/api/v1/pages/page-a/client-send-custody/1/resolve", {}],
     ["adminCreateInvite", "/api/v1/admin/invites", { username: "newcomer", role: "chatter" }],

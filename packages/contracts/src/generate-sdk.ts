@@ -102,7 +102,6 @@ export function buildSdkFiles(input: SdkGenerationInput): Map<string, string> {
     "  // Shared client-side predicate (coach-chat spec §8): apply to a terminal",
     "  // stop reason before committing a coach answer / attaching a recap.",
     "  isOutputExhausted,",
-    "  ofapiRead,",
     "  routeSchemas,",
     "  streamAiFeature,",
     "  streamAiGateway,",

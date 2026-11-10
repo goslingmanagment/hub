@@ -1,4 +1,4 @@
-import type { CSSProperties } from "react";
+import { useState, type CSSProperties } from "react";
 import { ChevronRight } from "lucide-react";
 import { Button, Drawer, Facts, Money, Notice, Person, Table, Tooltip, type Column } from "@agency_hub_core/ui";
 import { formatAgo, formatDay, formatDayRange, formatTimeOfDay, formatWeekdayDay } from "@agency_hub_core/ui/format";
@@ -6,14 +6,18 @@ import { ruPlural } from "@agency_hub_core/ui/plural";
 import { PersonLink } from "@/shared/links";
 import { Tiles, TilesSkeleton, type Tile } from "@/shared/Tiles";
 import type { TeamLedgerPayoutPerson } from "@agency_hub_core/contracts";
-import type { LedgerRow, LedgerView, StripDay } from "./ledger";
+import type { ResolvedPeriod } from "@agency_hub_core/ui/period";
+import { reportOfDay, useLedgerReports, type LedgerRow, type LedgerView, type StripDay } from "./ledger";
 import { PayoutBrief } from "./PayoutBrief";
+import { ReportDetail } from "./ReportDetail";
+import { reportRowOf, sourceWord } from "./reportRows";
 
 /**
- * Выплаты from the agency ledger, the screen's first block: four numbers, then
- * a row per person — what the agency owes them now, since when, the period's
- * days as a strip (paid, owed), accrued and paid. A row opens the person's
- * panel (`?person=`): the days owed and the period's days.
+ * «Выплаты → Долги» from the agency ledger: four numbers, then a row per person
+ * — what the agency owes them now, since when, the period's days as a strip
+ * (paid, owed), accrued and paid. A row opens the person's panel (`?person=`):
+ * the payout, the days owed, and the period's days — each with where its amount
+ * came from, a day with a report opening in place to it.
  */
 
 const daysWord = (count: number) => `${count} ${ruPlural(count, "день", "дня", "дней")}`;
@@ -34,10 +38,27 @@ function Strip({ strip }: { strip: readonly StripDay[] }) {
   );
 }
 
+/** The app's one way to show a person: their Hub login; the ledger's name beside it when it says more. */
 function PersonCell({ row }: { row: LedgerRow }) {
   const { person } = row;
-  const hint = person.status === "left" ? "не работает" : person.hubUser === null ? "не связан с Hub" : null;
-  return <Person name={person.name} status={person.status === "left" ? "disabled" : "away"} hint={hint} />;
+  const name = person.hubUser?.username ?? person.name;
+  const own = person.hubUser !== null && person.name.trim().toLowerCase() !== name.toLowerCase() ? person.name : null;
+  const hint = person.status === "left" ? ["не работает", own].filter(Boolean).join(" · ") : person.hubUser === null ? "не связан с Hub" : own;
+  return <Person name={name} status={person.status === "left" ? "disabled" : "away"} hint={hint} />;
+}
+
+/** «изменён выплаченный день»: a paid day whose report changed since waits for the owner's word. */
+function PendingNote({ row }: { row: LedgerRow }) {
+  const count = row.pendingChanges.length;
+  if (count === 0) return null;
+  const days = row.pendingChanges.map((change) => formatDay(change.day)).join(", ");
+  return (
+    <span className="payouts-sub payouts-drift">
+      <Tooltip content={<>{days}: отчёт изменился после выплаты. Ledger не меняет выплаченный день сам — поправка войдёт в следующую выплату, когда вы её подтвердите.</>} align="end">
+        <span>{count === 1 ? "изменён выплаченный день" : `изменены ${count} ${ruPlural(count, "выплаченный день", "выплаченных дня", "выплаченных дней")}`}</span>
+      </Tooltip>
+    </span>
+  );
 }
 
 const UNENTERED_HINT = "Дни, когда Hub видит продажи в смене человека по графику, а в его вкладке таблицы выплат пусто. В долг не входят, пока их не занесут; сумма — оценка по ставке вкладки.";
@@ -55,11 +76,16 @@ function Unentered({ row }: { row: LedgerRow }) {
 }
 
 function OwedCell({ row }: { row: LedgerRow }) {
-  if (row.owedMills === 0n) return row.unenteredDays > 0 ? <span><span className="text-ink-3">—</span><Unentered row={row} /></span> : <span className="text-ink-3">—</span>;
+  if (row.owedMills === 0n) {
+    return row.unenteredDays > 0 || row.pendingChanges.length > 0
+      ? <span><span className="text-ink-3">—</span><Unentered row={row} /><PendingNote row={row} /></span>
+      : <span className="text-ink-3">—</span>;
+  }
   return (
     <span>
       <Money mills={row.owedMills} strong={row.owedMills > 0n} muted={row.owedMills < 0n} />
       <Unentered row={row} />
+      <PendingNote row={row} />
       {/* A minus: paid ahead of the accruals, the agency owes nothing. */}
       {row.owedMills < 0n && <span className="payouts-sub">выплачено вперёд</span>}
       {row.sheetDiffMills !== null && (
@@ -89,20 +115,29 @@ function WaitingCell({ row }: { row: LedgerRow }) {
   );
 }
 
+/** Where the ledger's days come from: «по таблицам выплат, с 2 нояб. — по фактам Hub, с 9 нояб. — по отправленным отчётам». */
+export function accrualWords(view: Pick<LedgerView, "factsFrom" | "reportsFrom">): string {
+  const parts = ["по таблицам выплат"];
+  if (view.factsFrom !== null && (view.reportsFrom === null || view.factsFrom < view.reportsFrom)) parts.push(`с ${formatDay(view.factsFrom)} — по фактам Hub`);
+  if (view.reportsFrom !== null) parts.push(`с ${formatDay(view.reportsFrom)} — по отправленным отчётам`);
+  return parts.join(", ");
+}
+
 function tilesOf(view: LedgerView): Tile[] {
   const range = formatDayRange(view.from, view.to);
+  const accrual = accrualWords(view);
   return [
     {
       label: "Долг сейчас",
       value: <Money mills={view.owedMills} />,
       sub: view.owedPeople > 0 ? `${view.owedPeople} ${ruPlural(view.owedPeople, "человек", "человека", "человек")}` : "никому",
-      hint: "Сколько агентство должно людям сейчас: начислено по таблицам выплат минус выплаты, по подсчёту ledger.",
+      hint: `Сколько агентство должно людям сейчас: начисленное (${accrual}) минус выплаты, по подсчёту ledger.`,
     },
     {
       label: "Начислено",
       value: <Money mills={view.accruedMills} />,
       sub: range,
-      hint: "Начислено за дни периода по таблицам выплат.",
+      hint: `Начислено за дни периода: ${accrual}.`,
     },
     {
       label: "Выплачено",
@@ -126,6 +161,7 @@ function tilesOf(view: LedgerView): Tile[] {
 }
 
 export function LedgerSkeleton() {
+  // The tiles' row and the table's, without the view's switch: it stands in the header.
   return (
     <>
       <TilesSkeleton count={4} sub />
@@ -186,7 +222,12 @@ export function LedgerPayouts({ view, selected, onOpen }: { view: LedgerView; se
         <span><i className="payouts-strip__day payouts-strip__day--paid" /> выплачено</span>
         <span><i className="payouts-strip__day payouts-strip__day--owed" /> ждёт выплаты</span>
         <span><i className="payouts-strip__day payouts-strip__day--none" /> нет начисления</span>
-        {collected && <span className="payouts-legend__fresh">таблицы собраны {formatAgo(Date.parse(collected), Date.now())}</span>}
+        <span className="payouts-legend__fresh">
+          {[
+            view.reportsFrom !== null ? `с ${formatDay(view.reportsFrom)} начисляют отправленные отчёты` : null,
+            collected ? `таблицы собраны ${formatAgo(Date.parse(collected), Date.now())}` : null,
+          ].filter(Boolean).join(" · ")}
+        </span>
       </p>
     </>
   );
@@ -194,30 +235,52 @@ export function LedgerPayouts({ view, selected, onOpen }: { view: LedgerView; se
 
 type OwedDay = TeamLedgerPayoutPerson["unpaidDays"][number];
 type AccruedDay = TeamLedgerPayoutPerson["days"][number];
+type PendingChange = TeamLedgerPayoutPerson["pendingChanges"][number];
 
-/** One person's pay: what is owed day by day, and the period's accrued days. */
-export function LedgerPersonDrawer({ row, view, onClose }: { row: LedgerRow; view: LedgerView; onClose: () => void }) {
+/**
+ * One person's pay: the payout to make, what is owed day by day, the paid days whose report changed since, and the
+ * period's accrued days — each saying where its amount came from; a day with a report opens in place to it.
+ */
+export function LedgerPersonDrawer({ row, view, period, onClose }: { row: LedgerRow; view: LedgerView; period: ResolvedPeriod; onClose: () => void }) {
   const { person } = row;
   const owedDays = person.unpaidDays;
   const accrued = person.days.filter((day) => day.amountMills !== 0);
   const owedDates = new Set(owedDays.filter((day) => day.kind === "day").map((day) => day.date));
+  const reports = useLedgerReports(period, accrued.length > 0);
+  const [open, setOpen] = useState<ReadonlySet<string>>(() => new Set());
+  const dayKey = (day: AccruedDay) => `${day.date}-${day.model}`;
   const owedColumns: Column<OwedDay>[] = [
     { key: "day", header: "День", nowrap: true, cell: (day) => (day.kind === "opening" ? `до ${formatDay(view.accrualFrom)}` : formatWeekdayDay(day.date)), footer: <span className="payouts-total">Итого</span> },
-    { key: "model", header: "Модель", cell: (day) => day.model ?? (day.kind === "opening" ? "долг до учёта" : "—") },
+    { key: "model", header: "Модель", grow: true, cell: (day) => day.model ?? (day.kind === "opening" ? "долг до учёта" : "—") },
     { key: "sum", header: "Сумма", numeric: true, cell: (day) => <Money mills={day.unpaidMills} />, footer: <Money mills={row.owedMills} strong /> },
   ];
   const dayColumns: Column<AccruedDay>[] = [
     { key: "day", header: "День", nowrap: true, cell: (day) => formatWeekdayDay(day.date) },
     { key: "model", header: "Модель", cell: (day) => day.model },
-    { key: "state", header: "", cell: (day) => (owedDates.has(day.date) ? <span className="payouts-late">ждёт</span> : <span className="text-ink-3">выплачено</span>) },
+    // Where the amount came from, in one quiet word: «таблица», «отчёт», «факты».
+    { key: "source", header: "Откуда", muted: true, nowrap: true, cell: (day) => sourceWord(day.source) },
+    { key: "state", header: "", grow: true, cell: (day) => (owedDates.has(day.date) ? <span className="payouts-late">ждёт</span> : <span className="text-ink-3">выплачено</span>) },
     { key: "sum", header: "Сумма", numeric: true, cell: (day) => <Money mills={day.amountMills} /> },
   ];
+  const pendingColumns: Column<PendingChange>[] = [
+    { key: "day", header: "День", nowrap: true, cell: (change) => formatWeekdayDay(change.day) },
+    { key: "what", header: "Почему", grow: true, cell: (change) => <span>{change.model}{change.reason && <span className="payouts-sub">{change.reason}</span>}</span> },
+    { key: "was", header: "Было", numeric: true, nowrap: true, cell: (change) => <Money mills={change.postedMills} muted /> },
+    { key: "now", header: "Стало", numeric: true, nowrap: true, cell: (change) => <Money mills={change.newMills} strong /> },
+  ];
+  const detailOf = (day: AccruedDay) => {
+    // Until the reports come, no day offers to open: the chevrons appear with them, in their reserved place.
+    if (reports.data === null) return null;
+    const report = reportOfDay(reports.data, person.slug, day.date);
+    return report === null ? null : <ReportDetail row={reportRowOf(report, reports.data)} panel />;
+  };
   return (
     <Drawer
       open
       onClose={onClose}
-      title={person.hubUser ? <PersonLink userId={person.hubUser.userId} name={person.name} backLabel="Выплаты" /> : person.name}
-      subtitle={formatDayRange(view.from, view.to)}
+      size="lg"
+      title={person.hubUser ? <PersonLink userId={person.hubUser.userId} name={person.hubUser.username} backLabel="Выплаты" /> : person.name}
+      subtitle={[person.hubUser && person.name.toLowerCase() !== person.hubUser.username.toLowerCase() ? person.name : null, formatDayRange(view.from, view.to)].filter(Boolean).join(" · ")}
       footer={<Button onClick={onClose}>Закрыть</Button>}
     >
       <div className="payouts-drawer">
@@ -235,17 +298,41 @@ export function LedgerPersonDrawer({ row, view, onClose }: { row: LedgerRow; vie
 
         <PayoutBrief slug={person.slug} name={person.name} />
 
+        {row.pendingChanges.length > 0 && (
+          <section className="payouts-block">
+            <h3 className="payouts-block__title">Изменились выплаченные дни</h3>
+            <p className="payouts-note">Отчёт поменялся после выплаты. Ledger сам выплаченный день не меняет: поправка войдёт в следующую выплату после вашего «да».</p>
+            <Table label={`Изменились выплаченные дни ${person.name}`} columns={pendingColumns} rows={row.pendingChanges} rowKey={(change) => String(change.id)} dense stickyHeader={false} fit={false} />
+          </section>
+        )}
+
         {owedDays.length > 0 && (
           <section className="payouts-block">
             <h3 className="payouts-block__title">Не выплачено</h3>
-            <Table label={`Не выплачено ${person.name}`} columns={owedColumns} rows={owedDays} rowKey={(day) => `${day.kind}-${day.date}-${day.model ?? ""}`} dense stickyHeader={false} />
+            <Table label={`Не выплачено ${person.name}`} columns={owedColumns} rows={owedDays} rowKey={(day) => `${day.kind}-${day.date}-${day.model ?? ""}`} dense stickyHeader={false} fit={false} />
           </section>
         )}
 
         {accrued.length > 0 && (
           <section className="payouts-block">
             <h3 className="payouts-block__title">Начислено за период</h3>
-            <Table label={`Начислено ${person.name} по дням`} columns={dayColumns} rows={accrued} rowKey={(day) => `${day.date}-${day.model}`} dense stickyHeader={false} />
+            <Table
+              label={`Начислено ${person.name} по дням`}
+              columns={dayColumns}
+              rows={accrued}
+              rowKey={dayKey}
+              rowDetail={detailOf}
+              openKeys={open}
+              onOpenChange={(day, next) => setOpen((current) => {
+                const updated = new Set(current);
+                if (next) updated.add(dayKey(day));
+                else updated.delete(dayKey(day));
+                return updated;
+              })}
+              dense
+              stickyHeader={false}
+              fit={false}
+            />
           </section>
         )}
       </div>

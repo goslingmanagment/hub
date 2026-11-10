@@ -1,22 +1,8 @@
 import { createHash } from "node:crypto";
-import { getOfapiBannedDictionary, saveOfapiBannedDictionary, type OfapiBannedDictionary, type OfapiBannedWord } from "@agency_hub_core/db";
+import { saveOfapiBannedDictionary, type OfapiBannedWord } from "@agency_hub_core/db";
 import type { AppContext } from "../bootstrap.ts";
 import { ServiceUnavailableError } from "./errors.ts";
 import { asRecord } from "./ofapi-payloads.ts";
-export function previewOfapiBannedWords(text: string, dictionary: OfapiBannedDictionary | null) {
-  const matches: Array<OfapiBannedWord & { start: number; end: number }> = [];
-  for (const entry of dictionary?.entries ?? []) {
-    // Escape every metacharacter: provider regex_pattern is deliberately never read or executed.
-    const escaped = entry.word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const pattern = new RegExp(escaped, "giu");
-    for (const match of text.matchAll(pattern)) {
-      matches.push({ ...entry, start: match.index, end: match.index + match[0].length });
-      if (matches.length >= 100) break;
-    }
-    if (matches.length >= 100) break;
-  }
-  return { version: dictionary?.version ?? null, observedAt: dictionary?.observedAt ?? null, complete: dictionary?.complete ?? false, matching: "literal_case_insensitive" as const, matches };
-}
 export async function refreshOfapiBannedWords(app: AppContext, maxPages: number) {
   if (!app.ofapi?.getBannedWordsPage) throw new ServiceUnavailableError("OFAPI dictionary client unavailable");
   const entries: OfapiBannedWord[] = []; const observationIds: number[] = []; let complete = false;
@@ -37,4 +23,3 @@ export async function refreshOfapiBannedWords(app: AppContext, maxPages: number)
   await saveOfapiBannedDictionary(app.db, { ...dictionary, observationId: observationIds[0]!, observationIds });
   return dictionary;
 }
-export async function getOfapiBannedWordsPreview(app: AppContext, text: string) { return previewOfapiBannedWords(text, await getOfapiBannedDictionary(app.db)); }

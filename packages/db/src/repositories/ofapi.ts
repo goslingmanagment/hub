@@ -1872,28 +1872,6 @@ export async function sumOfapiSpendBySourceBetween(
   return new Map(rows.map((row) => [row.source as OfapiCreditLedgerSource, row.credits]));
 }
 
-/** Page-scoped REST spend net of attributed corrections for chatter summaries. */
-export async function sumOfapiRestCreditsForPagesBetween(
-  db: Database,
-  input: { pageIds: number[]; from: Date; to: Date },
-): Promise<number> {
-  if (input.pageIds.length === 0) {
-    return 0;
-  }
-
-  const [row] = await db
-    .select({ total: sql<number>`coalesce(sum(${ofapiCreditLedger.credits}), 0)::int` })
-    .from(ofapiCreditLedger)
-    .where(and(
-      inArray(ofapiCreditLedger.source, ["rest", "adjustment"]),
-      inArray(ofapiCreditLedger.pageId, input.pageIds),
-      gte(ofapiCreditLedger.occurredAt, input.from),
-      lt(ofapiCreditLedger.occurredAt, input.to),
-    ));
-
-  return row?.total ?? 0;
-}
-
 export interface OfapiDailySpendRow {
   day: string;
   source: OfapiCreditLedgerSource;

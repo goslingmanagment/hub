@@ -10,17 +10,18 @@ import { usePageFilter } from "@/shared/usePageFilter";
 import { usePages } from "@/shared/usePages";
 import { ScreenHeader } from "@/shared/ScreenHeader";
 import { CustomsFolds, CustomsSection } from "./Customs";
-import { DisputeDrawer, DisputesSection, SettledDisputes } from "./Disputes";
 import { HeldSection, ResolveSendModal, ResolvedJournal } from "./HeldSends";
-import { useDecisions, useFanNames, type Dispute, type FanRefOnPage, type HeldSend } from "./data";
+import { ReportsSection } from "./Reports";
+import { useDecisions, useFanNames, type FanRefOnPage, type HeldSend } from "./data";
 import "./decisions.css";
 
 /**
- * Решения (spec §4.6): what waits for the owner's decision — sale disputes,
+ * Решения (spec §4.6): what waits for the owner's decision — the shift reports'
+ * questions (posts the ledger could not parse, paid days whose report changed),
  * customs paid and not delivered, held sends. Each section is there only while
  * it has rows; nothing at all is «Всё решено». A section whose read failed says
- * so in its place: no answer is not a zero. What is open (a dispute's panel, a
- * send's resolve) is in the address: `?sale=`, `?send=`.
+ * so in its place: no answer is not a zero. A send's resolve, when open, is in
+ * the address: `?send=`.
  */
 export function DecisionsScreen() {
   const { isOwner, role } = useMe();
@@ -38,47 +39,43 @@ export function DecisionsScreen() {
   const userIdOf = (username: string) => users.data?.find((user) => user.username === username && !user.deletedAt)?.id ?? null;
 
   const fans: FanRefOnPage[] = [
-    ...(view.disputes ? [...view.disputes.open, ...view.disputes.settled].flatMap((one) => (one.fanRef === null ? [] : [{ pageLabel: one.pageLabel, fanRef: one.fanRef }])) : []),
     ...(view.customs ? [...view.customs.paid, ...view.customs.ordered, ...view.customs.other] : []),
     ...(view.held ? view.held.items : []),
   ];
   const fanOf = useFanNames(fans);
 
-  const open = (key: "sale" | "send", value: string | null) => setSearch((current) => {
+  const open = (key: "send", value: string | null) => setSearch((current) => {
     const next = new URLSearchParams(current);
     if (value === null) next.delete(key);
     else next.set(key, value);
     return next;
   });
-  const saleRef = search.get("sale");
   const attemptId = search.get("send");
   // What is open stays open while Hub answers: a refused write re-reads the lists, and the row may leave them —
-  // the panel and the window keep the record they were opened with, so their words about the refusal stay readable.
-  const lastDispute = useRef<Dispute | null>(null);
+  // the window keeps the record it was opened with, so its words about the refusal stay readable.
   const lastSend = useRef<HeldSend | null>(null);
-  const foundDispute = saleRef && view.disputes ? [...view.disputes.open, ...view.disputes.settled].find((one) => one.saleRef === saleRef) : undefined;
   const foundSend = attemptId && view.held ? view.held.items.find((one) => one.attemptId === attemptId) : undefined;
-  if (foundDispute) lastDispute.current = foundDispute;
   if (foundSend) lastSend.current = foundSend;
-  const openDispute = foundDispute ?? (saleRef && lastDispute.current?.saleRef === saleRef ? lastDispute.current : undefined);
   const openSend = foundSend ?? (attemptId && lastSend.current?.attemptId === attemptId ? lastSend.current : undefined);
 
   const failed = {
-    disputes: isOwner && decisions.disputes.isError && !view.disputes,
+    reports: isOwner && (decisions.posts.isError || decisions.changes.isError) && !view.reports,
     customs: decisions.customs.isError && !view.customs,
     held: decisions.held.isError && !view.held,
   };
-  const anyFailed = failed.disputes || failed.customs || failed.held;
+  const anyFailed = failed.reports || failed.customs || failed.held;
   // The counts of this page (or of all), in the words the menu and Смены use (D17): a queue that did not answer is
-  // null, never a zero. A team lead has no disputes to read: theirs is a zero, not a failure.
+  // null, never a zero. A team lead has no reports to read: theirs is a zero, not a failure.
+  const reportParts = !isOwner ? { posts: 0, changes: 0 } : view.reports ? { posts: view.reports.posts.length, changes: view.reports.changes.length } : null;
   const counts = {
-    disputes: !isOwner ? 0 : view.disputes ? view.disputes.open.length : null,
+    reports: reportParts === null ? null : reportParts.posts + reportParts.changes,
+    reportParts,
     customs: view.customs ? view.customs.paid.length : null,
     held: view.held ? view.held.total : null,
-    failed: (["disputes", "customs", "held"] as const).filter((queue) => failed[queue]) as DecisionQueue[],
+    failed: (["reports", "customs", "held"] as const).filter((queue) => failed[queue]) as DecisionQueue[],
   };
-  const waiting = (counts.disputes ?? 0) + (counts.customs ?? 0) + (counts.held ?? 0);
-  const elsewhere = (view.disputes?.elsewhere ?? 0) + (view.customs?.elsewhere ?? 0) + (view.held?.elsewhere ?? 0);
+  const waiting = (counts.reports ?? 0) + (counts.customs ?? 0) + (counts.held ?? 0);
+  const elsewhere = (view.reports?.elsewhere ?? 0) + (view.customs?.elsewhere ?? 0) + (view.held?.elsewhere ?? 0);
   // The header's line is the screen's contents: each part jumps to its section (Р2, Р5).
   const parts = decisionParts(counts, location.search);
   const failedText = decisionsFailedText(counts);
@@ -106,7 +103,7 @@ export function DecisionsScreen() {
         <>
           {parts.length > 0 ? "Ждут вашего решения: " : page !== null && !anyFailed ? `На ${page} решений нет` : ""}
           {parts.map((part, index) => (
-            <Fragment key={part.queue}>
+            <Fragment key={part.key}>
               {index > 0 && " · "}
               <a
                 href={`#${part.queue}`}
@@ -149,13 +146,21 @@ export function DecisionsScreen() {
           </Section>
         ) : (
           <>
-            {failed.disputes && (
-              <Section title="Споры по продажам">
-                <ErrorState className="decisions-error" compact onRetry={() => void decisions.disputes.refetch()} retrying={decisions.disputes.isFetching} />
+            {failed.reports && (
+              <Section title="Отчёты">
+                <ErrorState
+                  className="decisions-error"
+                  compact
+                  onRetry={() => {
+                    if (decisions.posts.isError) void decisions.posts.refetch();
+                    if (decisions.changes.isError) void decisions.changes.refetch();
+                  }}
+                  retrying={decisions.posts.isFetching || decisions.changes.isFetching}
+                />
               </Section>
             )}
-            {view.disputes && view.disputes.open.length > 0 && (
-              <DisputesSection open={view.disputes.open} settled={view.disputes.settled} fanOf={fanOf} onOpen={(ref) => open("sale", ref)} selected={openDispute?.saleRef ?? null} />
+            {view.reports && view.reports.posts.length + view.reports.changes.length > 0 && (
+              <ReportsSection posts={view.reports.posts} changes={view.reports.changes} />
             )}
 
             {failed.customs && (
@@ -187,15 +192,12 @@ export function DecisionsScreen() {
             {waiting === 0 && !anyFailed && (
               <EmptyState icon={CircleCheck} title="Всё решено" className="decisions-empty">
                 {page === null
-                  ? "Споров по продажам, оплаченных и не отданных кастомов и зависших отправок нет."
-                  : `На ${page} споров, оплаченных и не отданных кастомов и зависших отправок нет.`}
+                  ? "Неразобранных постов и изменённых выплаченных дней, оплаченных и не отданных кастомов и зависших отправок нет."
+                  : `На ${page} неразобранных постов, оплаченных и не отданных кастомов и зависших отправок нет.`}
               </EmptyState>
             )}
 
             <div className="decisions-history">
-              {view.disputes && view.disputes.open.length === 0 && view.disputes.settled.length > 0 && (
-                <SettledDisputes settled={view.disputes.settled} fanOf={fanOf} onOpen={(ref) => open("sale", ref)} selected={openDispute?.saleRef ?? null} />
-              )}
               {view.customs && view.customs.paid.length === 0 && (
                 <CustomsFolds {...view.customs} platformOf={platformOf} fanOf={fanOf} userIdOf={userIdOf} />
               )}
@@ -205,14 +207,6 @@ export function DecisionsScreen() {
         )}
       </div>
 
-      {openDispute && (
-        <DisputeDrawer
-          key={openDispute.saleRef}
-          dispute={openDispute}
-          fan={openDispute.fanRef === null ? undefined : fanOf({ pageLabel: openDispute.pageLabel, fanRef: openDispute.fanRef })}
-          onClose={() => open("sale", null)}
-        />
-      )}
       {openSend && view.held && (
         <ResolveSendModal
           key={openSend.attemptId}

@@ -104,6 +104,43 @@ describe("readLedgerPayouts", () => {
   it("refuses a window past the ledger's 62 days before asking", async () => {
     await expect(readLedgerPayouts(app(), { from: "2026-09-01", to: "2026-11-08" }, { fetchImpl: fetchReturning(200, ledgerAnswer()) })).rejects.toMatchObject({ statusCode: 400 });
   });
+
+  it("takes the reports' new fields when they come and stays as it was without them", async () => {
+    const window = { from: "2026-11-02", to: "2026-11-08" };
+    // Without them (the ledger of today): no switch dates, no pending changes — not a 503.
+    const before = await readLedgerPayouts(app(), window, { fetchImpl: fetchReturning(200, ledgerAnswer()) });
+    expect({ factsFrom: before.factsFrom, reportsFrom: before.reportsFrom, pending: before.people.map((person) => person.pendingChanges) }).toEqual({ factsFrom: null, reportsFrom: null, pending: [[], []] });
+
+    const [alex, kate] = ledgerAnswer().people;
+    const after = await readLedgerPayouts(app(), window, {
+      fetchImpl: fetchReturning(200, ledgerAnswer({
+        reports_from: "2026-11-05",
+        people: [
+          {
+            ...alex,
+            // A source the screen does not know yet passes as it came; the ledger's Hub user id beats the name.
+            days: [{ ...alex!.days![0], source: "reports" }, { date: "2026-11-04", model: "Mia", amountMicros: 1_000_000, worked: true, source: "posts-v2" }],
+            hub_user_id: 5,
+            pending_changes: [{ id: 7, day: "2026-11-03", model: "Mia", posted_micros: 45_670_000, new_micros: 48_795_000, reason: "пост изменён после выплаты" }],
+          },
+          { ...kate, pendingChanges: [{ id: 8, day: "2026-11-01", postedMicros: 10_000_000, newMicros: 9_000_000 }] },
+        ],
+      })),
+    });
+    expect(after.reportsFrom).toBe("2026-11-05");
+    expect(after.people[0]).toMatchObject({
+      hubUser: { userId: 5, username: "Kate.V" },
+      days: [{ source: "reports" }, { source: "posts-v2", amountMills: 1_000 }],
+      pendingChanges: [{ id: 7, day: "2026-11-03", model: "Mia", postedMills: 45_670, newMills: 48_795, reason: "пост изменён после выплаты" }],
+    });
+    expect(after.people[1]!.pendingChanges).toEqual([{ id: 8, day: "2026-11-01", model: "", postedMills: 10_000, newMills: 9_000, reason: "" }]);
+  });
+
+  it("is a 503 on a pending change it cannot read in full: a decision about money is never half-shown", async () => {
+    const [alex] = ledgerAnswer().people;
+    const broken = ledgerAnswer({ people: [{ ...alex, pending_changes: [{ id: 7, day: "2026-11-03", posted_micros: 45_670_000 }] }] });
+    await expect(readLedgerPayouts(app(), { from: "2026-11-02", to: "2026-11-08" }, { fetchImpl: fetchReturning(200, broken) })).rejects.toMatchObject({ statusCode: 503 });
+  });
 });
 
 describe("readLedgerPayoutPrepare", () => {

@@ -32,7 +32,6 @@ import type { AppContext } from "../bootstrap.ts";
 import { requireDashboardUser, type AuthPrincipal } from "./auth.ts";
 import { middleOfWork, readPeopleWork } from "./chatter-shifts.ts";
 import { BadRequestError } from "./errors.ts";
-import { reportsOfShifts } from "./shift-report.ts";
 import {
   SENDABLE_FEATURES,
   autoOpenings,
@@ -196,6 +195,34 @@ function averagePrice(prices: readonly number[]): number | null {
   if (prices.length === 0) return null;
   const total = prices.reduce((sum, price) => sum + BigInt(price), 0n);
   return Number(total / BigInt(prices.length));
+}
+
+/**
+ * Each confirmed report's shift, by the shift's index: the piece of work it overlaps most (a tie: the one that began
+ * with it). A report is written with its shift's bounds of the day, and a later rule of a shift may move them (#1081
+ * moved the start of 14 closed shifts): the report stays that shift's, not a look-in's beside it. A shift may hold two
+ * when a rule joins two pieces of work. Pure.
+ */
+export function reportsOfShifts<R extends { startedAt: Date; endedAt: Date }>(
+  shifts: ReadonlyArray<{ startedAt: number; endedAt: number }>,
+  reports: readonly R[],
+): Map<number, R[]> {
+  const out = new Map<number, R[]>();
+  for (const report of reports) {
+    const start = report.startedAt.getTime();
+    const end = report.endedAt.getTime();
+    let best = -1;
+    let bestOverlap = 0;
+    shifts.forEach((shift, index) => {
+      const overlap = Math.min(end, shift.endedAt) - Math.max(start, shift.startedAt);
+      if (overlap > bestOverlap || (overlap === bestOverlap && overlap > 0 && shift.startedAt === start)) {
+        best = index;
+        bestOverlap = overlap;
+      }
+    });
+    if (best >= 0) out.set(best, [...(out.get(best) ?? []), report]);
+  }
+  return out;
 }
 
 /**

@@ -20,15 +20,13 @@ export type KernelOperationKey = keyof Schemas & string;
 /**
  * Operations without a plain request/JSON-response shape. The webhook is
  * HMAC-authenticated server intake; the AI gateway stream is SSE (dedicated
- * helper); the read gateway is a wildcard proxy (passthrough helper); the
- * ledger CSV returns text/csv; the voice-note audio route returns binary
+ * helper); the ledger CSV returns text/csv; the voice-note audio route returns binary
  * audio/mpeg (dedicated `fetchVoiceNoteAudio` helper). All remain reachable via
  * `client.raw(...)`.
  */
 export const SDK_EXCLUDED_OPERATIONS = [
   "ofapiWebhookReceive",
   "aiGatewayStream",
-  "ofapiReadGateway",
   "adminOfapiCreditsLedgerCsv",
   "voiceNoteAudio",
   // A page browser's screenshot is image/jpeg; its screen a passthrough of
@@ -616,25 +614,6 @@ export function streamAiGateway(options: KernelClientOptions, input: {
   });
 
   return { done, close: () => abort.abort() };
-}
-
-/**
- * Thin passthrough for the wildcard read gateway (`GET /api/v1/ofapi/read/*`):
- * upstream shapes are proxied verbatim, so no validation — the caller gets the
- * raw Response.
- */
-export async function ofapiRead(options: KernelClientOptions, input: {
-  path: string;
-  query?: Record<string, unknown> | undefined;
-  headers?: Record<string, string> | undefined;
-}): Promise<Response> {
-  const cleanPath = input.path.replace(/^\/+/, "");
-  return executeKernelRequest({
-    def: { method: "GET", path: `/api/v1/ofapi/read/${cleanPath}` },
-    options,
-    query: input.query,
-    headers: input.headers,
-  });
 }
 
 /**

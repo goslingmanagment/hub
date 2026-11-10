@@ -215,7 +215,6 @@ describe("narrow chat-extension device token (H-3)", () => {
       "/api/v1/pages",
       "/api/v1/pages/lora-of/subscribers",
       "/api/v1/ai/personas",
-      "/api/v1/ofapi/read/accounts",
     ]) {
       expectRouteRefused(await call(narrowToken, "GET", url));
       expect((await call(fullToken, "GET", url)).body).not.toContain(CLIENT_TOKEN_ROUTE_REFUSAL_MESSAGE);
