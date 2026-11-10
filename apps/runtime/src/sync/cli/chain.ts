@@ -5,28 +5,13 @@ import { listSyncPages, readThreadChain, type SyncPageRow } from "@agency_hub_co
 import { createAppContext } from "../../bootstrap.ts";
 import { checkEndRule, checkWindow, type EndRulePageReport } from "../fansly/lib/chain-checks.ts";
 import { ScanGovernor } from "../fansly/lib/chain-rebuild.ts";
+import { isoDate, nonNegativeInt, positiveInt } from "./args.ts";
 
 // Owner CLI `pnpm cli sync chain …` (design §8.3): the read-only checks of the
 // DM chains over the legacy journal. JSON reports on stdout, progress on
 // stderr.
 
 const DEFAULT_SINCE = "2026-07-05T00:00:00Z";
-
-function positiveInt(value: string): number {
-  const parsed = Number(value);
-  if (!/^[0-9]+$/.test(value) || !Number.isSafeInteger(parsed) || parsed <= 0) {
-    throw new InvalidArgumentError(`expected a positive integer, got "${value}"`);
-  }
-  return parsed;
-}
-
-function nonNegativeInt(value: string): number {
-  const parsed = Number(value);
-  if (!/^[0-9]+$/.test(value) || !Number.isSafeInteger(parsed)) {
-    throw new InvalidArgumentError(`expected a non-negative integer, got "${value}"`);
-  }
-  return parsed;
-}
 
 /** `90s`, `30m`, `2h`, or plain seconds. */
 export function parseDurationMs(value: string): number {
@@ -36,12 +21,6 @@ export function parseDurationMs(value: string): number {
   const unit = match[2] === "h" ? 3_600_000 : match[2] === "m" ? 60_000 : 1_000;
   if (amount <= 0) throw new InvalidArgumentError("the duration must be positive");
   return amount * unit;
-}
-
-function isoDate(value: string): Date {
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) throw new InvalidArgumentError(`expected an ISO date, got "${value}"`);
-  return parsed;
 }
 
 type AppContext = Awaited<ReturnType<typeof createAppContext>>;

@@ -5,6 +5,7 @@ import { InvalidArgumentError } from "commander";
 
 import { noteUnavailableChat, readUnavailableChats, type UnavailableChatView } from "../chats.ts";
 import { createSyncContext, type SyncContext } from "../context.ts";
+import { json } from "./args.ts";
 
 // The owner's CLI of the chats Fansly does not serve to a page (arena
 // "vanished chat", plan §4; `sync/chats.ts`):
@@ -22,10 +23,6 @@ const defaultDeps: SyncChatsCliDeps = {
   openContext: () => createSyncContext(),
   print: (line) => console.log(line),
 };
-
-function json(value: unknown): string {
-  return JSON.stringify(value, (_key, item: unknown) => (typeof item === "bigint" ? item.toString() : item), 2);
-}
 
 function cliActor(): string {
   return `cli@${hostname()} pid ${process.pid}`;

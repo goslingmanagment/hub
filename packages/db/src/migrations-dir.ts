@@ -37,6 +37,28 @@ async function listMigrationFiles(migrationsDir: string) {
   return validFiles;
 }
 
+/** Two migration files must not share a numeric prefix (the runner and
+ *  the start-up schema guard both refuse it). */
+export function assertUniqueMigrationPrefixes(files: string[]) {
+  const seenPrefixes = new Map<string, string>();
+
+  for (const file of files) {
+    const prefix = file.split("_", 1)[0] ?? "";
+    if (!prefix) {
+      continue;
+    }
+
+    const existing = seenPrefixes.get(prefix);
+    if (existing) {
+      throw new Error(
+        `Duplicate migration prefix "${prefix}" found in "${existing}" and "${file}"`,
+      );
+    }
+
+    seenPrefixes.set(prefix, file);
+  }
+}
+
 export async function resolveMigrationFiles(input?: {
   migrationsDir?: string;
 }) {

@@ -9,6 +9,14 @@ import {
   pages,
 } from "../schema.ts";
 import { egressKeySql } from "./egress.ts";
+import {
+  asPlatform,
+  asSyncStream,
+  normalizeNullableNumber,
+  normalizeNumber,
+  normalizeRecord,
+  streamArraySql,
+} from "./sync-normalize.ts";
 
 type TimestampValue = Date | string | null | undefined;
 type NumericValue = number | bigint | null | undefined;
@@ -405,30 +413,6 @@ export interface PageSyncWakeupRow {
   egressKey: string;
 }
 
-function normalizeNumber(value: NumericValue, field: string) {
-  if (value === null || value === undefined) {
-    throw new Error(`Expected ${field} to be present`);
-  }
-
-  if (typeof value === "bigint") {
-    return Number(value);
-  }
-
-  if (typeof value === "number") {
-    return value;
-  }
-
-  throw new Error(`Expected ${field} to be numeric`);
-}
-
-function normalizeNullableNumber(value: NumericValue, field: string) {
-  if (value === null || value === undefined) {
-    return null;
-  }
-
-  return normalizeNumber(value, field);
-}
-
 function normalizeTimestamp(value: TimestampValue, field: string) {
   if (value === null || value === undefined) {
     return null;
@@ -440,42 +424,6 @@ function normalizeTimestamp(value: TimestampValue, field: string) {
   }
 
   return parsed;
-}
-
-function normalizeRecord(value: unknown, field: string) {
-  if (value === null || value === undefined) {
-    return {};
-  }
-
-  if (typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`Expected ${field} to be an object`);
-  }
-
-  return value as Record<string, unknown>;
-}
-
-function asSyncStream(value: string): SyncStream {
-  if ((SYNC_STREAMS as readonly string[]).includes(value)) {
-    return value as SyncStream;
-  }
-
-  throw new Error(`Unsupported sync stream "${value}"`);
-}
-
-function asPlatform(value: unknown, field: string) {
-  if (value === "fansly" || value === "onlyfans") {
-    return value;
-  }
-
-  throw new Error(`Expected ${field} to be a supported platform`);
-}
-
-function streamArraySql(streams: readonly SyncStream[]) {
-  if (streams.length === 0) {
-    return sql`ARRAY[]::sync_stream[]`;
-  }
-
-  return sql`ARRAY[${sql.join(streams.map((stream) => sql`${stream}::sync_stream`), sql`, `)}]::sync_stream[]`;
 }
 
 /** The platforms a page-sync query serves: the platform registry's

@@ -1,4 +1,4 @@
-import type { SyncHoldRow, SyncRouteSend } from "@agency_hub_core/db";
+import type { SyncHoldRow, SyncRouteSend, SyncRouteStateEntryWrite } from "@agency_hub_core/db";
 import type { FanslyWireId } from "@agency_hub_core/fansly";
 
 import {
@@ -67,6 +67,19 @@ export interface RouteStateEntry {
   last429At: string | null;
   /** Bumped by every write of the entry: a raise is a compare-and-set on it. */
   revision: number;
+}
+
+/** The entry as `writeSyncRouteState` takes it: the instants as dates, no
+ *  revision (the writer stamps it). */
+export function routeStateWriteOf(entry: RouteStateEntry): SyncRouteStateEntryWrite {
+  return {
+    holdUntil: entry.holdUntil === null ? null : new Date(entry.holdUntil),
+    ladderStep: entry.ladderStep,
+    effectivePerMin: entry.effectivePerMin,
+    policyVersion: entry.policyVersion,
+    last429AttemptId: entry.last429AttemptId,
+    last429At: entry.last429At === null ? null : new Date(entry.last429At),
+  };
 }
 
 export interface RouteState {

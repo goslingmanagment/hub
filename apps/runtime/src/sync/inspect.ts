@@ -44,9 +44,10 @@ import { SYNC_DECODE_DEBT_WINDOW_MS } from "./engine/alerts.ts";
 import { demandToUpsert, registryOverrideProblem, type EngineRegistry } from "./engine/resource.ts";
 import { routeAdmissionView, routeJournalLookbackMs, RouteClocks, routeStatusView } from "./engine/route-policy.ts";
 import { auditPagePace } from "./engine/send-audit.ts";
-import { FANSLY_RESOURCE_SPECS, fanslyResourceSpec, type ResourceSpec } from "./fansly/registry.ts";
+import { FANSLY_RESOURCE_SPECS, type ResourceSpec } from "./fansly/registry.ts";
 import { probeRequestOf, type ProbeParams } from "./fansly/resources/probe.ts";
 import { pageRequestProgress } from "./requests/history.ts";
+import { statusPageOf, statusWorkOf } from "./status-rows.ts";
 import {
   buildPageStatus,
   estimateSlotOpensAt,
@@ -55,8 +56,6 @@ import {
   type PageStatus,
   type QueueStatus,
   type RouteStatusView,
-  type StatusPage,
-  type StatusWork,
   type WorkExplanation,
 } from "./engine/status.ts";
 
@@ -92,33 +91,6 @@ export async function findSyncPageByLabel(db: Database, label: string): Promise<
  *  nothing to move there. */
 function runsNoActor(page: Pick<SyncPageRow, "mode">): boolean {
   return page.mode === "off" || page.mode === "shadow";
-}
-
-function statusPage(page: SyncPageRow): StatusPage {
-  return {
-    mode: page.mode,
-    pausedAll: page.pausedAll,
-    pausedRequests: page.pausedRequests,
-    pausedResources: page.pausedResources,
-    holds: holdSetOf(page.holds),
-    owner: page.owner,
-  };
-}
-
-function statusWork(work: Omit<SyncWorkStatusFields, "pageId">): StatusWork {
-  return {
-    id: work.id,
-    resource: work.resource,
-    subject: work.subject,
-    class: work.class,
-    state: work.state,
-    dueAt: work.dueAt,
-    breakerUntil: work.breakerUntil,
-    blockedByVendorAt: work.blockedByVendorAt,
-    waitingReason: work.waitingReason,
-    waitingUntil: work.waitingUntil,
-    http: fanslyResourceSpec(work.resource)?.http !== false,
-  };
 }
 
 /** The page's route clocks as the actor would read them now: its attempt
@@ -198,7 +170,7 @@ export async function readSyncPageStatus(
   const unavailableChats = await listUnavailableChatGroups(db, { pageId: page.pageId });
   return buildPageStatus({
     pageLabel: page.pageLabel,
-    page: { ...statusPage(page), lastSendAt: page.lastSendAt },
+    page: { ...statusPageOf(page), lastSendAt: page.lastSendAt },
     settingMs,
     now,
     runtime: {
@@ -206,7 +178,7 @@ export async function readSyncPageStatus(
       routes: routes.admission,
     },
     routes: routes.status,
-    works: works.map(statusWork),
+    works: works.map(statusWorkOf),
     sends: {
       lastHour,
       minGapLastHourMs: hour.minGapMs,
@@ -243,8 +215,8 @@ export async function readSyncPageQueue(
 ): Promise<QueueStatus> {
   const routes = await readPageRoutes(db, page, now);
   return summarizeQueue(
-    works.map(statusWork),
-    statusPage(page),
+    works.map(statusWorkOf),
+    statusPageOf(page),
     {
       slotOpensAt: estimateSlotOpensAt({ lastSendAt: page.lastSendAt, lastCompletedAt: page.lastCompletedAt, settingMs }),
       routes: routes.admission,
@@ -316,7 +288,7 @@ async function workWhys(
       // What a finished step left (a probe's outcome, a walk's receipt).
       result: work.result,
     },
-    waiting: explainWork(statusWork(work), statusPage(page), runtime, now),
+    waiting: explainWork(statusWorkOf(work), statusPageOf(page), runtime, now),
   }));
 }
 

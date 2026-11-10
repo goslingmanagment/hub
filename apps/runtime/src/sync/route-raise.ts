@@ -1,7 +1,7 @@
 import { getSyncPage, insertAuditEvent, writeSyncRouteState, type Database } from "@agency_hub_core/db";
 
 import { routeRaise } from "./engine/route-holds.ts";
-import { routeStateOfHolds } from "./engine/route-policy.ts";
+import { routeStateOfHolds, routeStateWriteOf } from "./engine/route-policy.ts";
 import { isFanslyRoute, routeBudget } from "./fansly/routes.ts";
 import { findSyncPageByLabel, SyncOwnerLeverError } from "./inspect.ts";
 
@@ -57,14 +57,7 @@ export async function raiseSyncRoute(
       pageId: page.pageId,
       route,
       expectRevision: raise.expectRevision,
-      entry: {
-        holdUntil: entry.holdUntil === null ? null : new Date(entry.holdUntil),
-        ladderStep: entry.ladderStep,
-        effectivePerMin: entry.effectivePerMin,
-        policyVersion: entry.policyVersion,
-        last429AttemptId: entry.last429AttemptId,
-        last429At: entry.last429At === null ? null : new Date(entry.last429At),
-      },
+      entry: routeStateWriteOf(entry),
     });
     if (written.kind === "stale") {
       throw new SyncOwnerLeverError(`${input.pageLabel}: ${route} changed while raising (a new 429): read the evidence again; nothing raised`);

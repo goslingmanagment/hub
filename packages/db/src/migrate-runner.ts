@@ -5,7 +5,7 @@ import { loadConfig } from "@agency_hub_core/shared";
 import type { PoolClient, QueryResult } from "pg";
 
 import { createPool } from "./client.ts";
-import { resolveMigrationFiles } from "./migrations-dir.ts";
+import { assertUniqueMigrationPrefixes, resolveMigrationFiles } from "./migrations-dir.ts";
 
 const MIGRATION_LOCK_KEY_1 = 31415;
 const MIGRATION_LOCK_KEY_2 = 27182;
@@ -25,26 +25,6 @@ function splitNoTransactionMigration(sql: string): string[] {
     );
   }
   return statements;
-}
-
-function assertUniqueMigrationPrefixes(files: string[]) {
-  const seenPrefixes = new Map<string, string>();
-
-  for (const file of files) {
-    const prefix = file.split("_", 1)[0] ?? "";
-    if (!prefix) {
-      continue;
-    }
-
-    const existing = seenPrefixes.get(prefix);
-    if (existing) {
-      throw new Error(
-        `Duplicate migration prefix "${prefix}" found in "${existing}" and "${file}"`,
-      );
-    }
-
-    seenPrefixes.set(prefix, file);
-  }
 }
 
 function assertContiguousAppliedPrefix(files: string[], applied: Set<string>) {

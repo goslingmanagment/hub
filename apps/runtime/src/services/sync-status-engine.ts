@@ -27,8 +27,6 @@ import {
   explainWork,
   ownerRunning,
   routePutOffUntil,
-  type StatusPage,
-  type StatusWork,
   type WaitingReason,
 } from "../sync/engine/status.ts";
 import {
@@ -38,6 +36,7 @@ import {
   fanslyResourceSpec,
   fanslyStreamPollSeconds,
 } from "../sync/fansly/registry.ts";
+import { statusPageOf, statusWorkOf } from "../sync/status-rows.ts";
 import type {
   SyncDomainBlockKey,
   SyncDomainBlockStatus,
@@ -183,33 +182,6 @@ function earliest(values: ReadonlyArray<Date | null | undefined>): Date | null {
     if (value && (best === null || value.getTime() < best.getTime())) best = value;
   }
   return best;
-}
-
-function statusPageOf(page: SyncPageRow, holds: HoldSet): StatusPage {
-  return {
-    mode: page.mode,
-    pausedAll: page.pausedAll,
-    pausedRequests: page.pausedRequests,
-    pausedResources: page.pausedResources,
-    holds,
-    owner: page.owner,
-  };
-}
-
-function statusWorkOf(work: SyncWorkRow): StatusWork {
-  return {
-    id: work.id,
-    resource: work.resource,
-    subject: work.subject,
-    class: work.class,
-    state: work.state,
-    dueAt: work.dueAt,
-    breakerUntil: work.breakerUntil,
-    blockedByVendorAt: work.blockedByVendorAt,
-    waitingReason: work.waitingReason,
-    waitingUntil: work.waitingUntil,
-    http: fanslyResourceSpec(work.resource)?.http !== false,
-  };
 }
 
 // ── what stops a key ─────────────────────────────────────────────────────────

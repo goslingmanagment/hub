@@ -63,12 +63,12 @@ import {
   estimateSlotOpensAt,
   explainWork,
   ownerRunning,
-  type StatusPage,
   type StatusWork,
   type WaitingReason,
 } from "../engine/status.ts";
 import { FANSLY_RESOURCE_SPECS } from "../fansly/registry.ts";
 import { HISTORY_OLDER_REFUSED_REASON, parseDmMessagesCursor } from "../fansly/resources/dm-messages.ts";
+import { statusPageOf } from "../status-rows.ts";
 import {
   budgetUseOf,
   estimateItemReads,
@@ -1074,17 +1074,8 @@ function iso(date: Date | null | undefined): string | null {
   return date === null || date === undefined || isIndefinite(date) ? null : date.toISOString();
 }
 
-function statusPageOf(page: SyncPageRow, holds: HoldSet): StatusPage {
-  return {
-    mode: page.mode,
-    pausedAll: page.pausedAll,
-    pausedRequests: page.pausedRequests,
-    pausedResources: page.pausedResources,
-    holds,
-    owner: page.owner,
-  };
-}
-
+/** Unlike `../status-rows.ts`'s `statusWorkOf`, sets no `http` (absent:
+ *  a key that sends) whatever the work's key. */
 function statusWorkOf(work: SyncWorkRow): StatusWork {
   return {
     id: work.id,

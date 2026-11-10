@@ -107,7 +107,7 @@ import {
   type StepPlan,
   type WorkOutcome,
 } from "./resource.ts";
-import type { RouteAdmissionIntervals } from "./route-policy.ts";
+import { routeStateWriteOf, type RouteAdmissionIntervals } from "./route-policy.ts";
 import { judgePaceGap } from "./send-audit.ts";
 import type { WorkClass } from "./scheduler.ts";
 import { provenSentAt } from "./send-instant.ts";
@@ -1507,14 +1507,7 @@ async function writeOutcomeDecision(
       ...fenced,
       route: routeHold.route,
       expectRevision: routeHold.expectRevision,
-      entry: {
-        holdUntil: entry.holdUntil === null ? null : new Date(entry.holdUntil),
-        ladderStep: entry.ladderStep,
-        effectivePerMin: entry.effectivePerMin,
-        policyVersion: entry.policyVersion,
-        last429AttemptId: entry.last429AttemptId,
-        last429At: entry.last429At === null ? null : new Date(entry.last429At),
-      },
+      entry: routeStateWriteOf(entry),
     });
     // The state was read under this transaction's page lock: another writer
     // in between is a bug, never a race to paper over — the commit retries

@@ -25,6 +25,7 @@ import { SYNC_NOT_NEEDED_SUMMARY } from "./sync-status.ts";
 import {
   buildPageSyncUx,
   buildStreamSyncUx,
+  buildSummary,
   type SyncUxStreamLike,
 } from "./sync-ux.ts";
 
@@ -51,27 +52,6 @@ export interface SyncStatusSummarySnapshot {
 
 function iso(value: Date | null | undefined) {
   return value ? value.toISOString() : null;
-}
-
-function buildSummary(state: SyncUxSummary["state"], input: {
-  label: string;
-  headline: string;
-  detail?: string | null;
-  progressLabel?: string | null;
-  nextRetryAt?: string | null;
-  updatedAt?: string | null;
-  requiresAction?: boolean;
-}): SyncUxSummary {
-  return {
-    state,
-    label: input.label,
-    headline: input.headline,
-    detail: input.detail ?? null,
-    progressLabel: input.progressLabel ?? null,
-    nextRetryAt: input.nextRetryAt ?? null,
-    updatedAt: input.updatedAt ?? null,
-    requiresAction: input.requiresAction ?? false,
-  };
 }
 
 function progressFor(task: LegacyTaskRow): SyncUxStreamLike["progress"] {

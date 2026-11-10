@@ -20,6 +20,7 @@ import {
 } from "../requests/history.ts";
 import type { HistoryFanInput } from "../requests/history-rules.ts";
 import { pageLabel, parseDurationMs } from "./chain.ts";
+import { isoDate, json, nonNegativeInt, positiveInt } from "./args.ts";
 
 // Owner CLI `pnpm cli sync history …` (design §7.6): file, read, cancel and
 // list history requests, and the ETA backtest over the legacy journal. The
@@ -44,32 +45,6 @@ const defaultDeps: SyncHistoryCliDeps = {
 };
 
 const DEFAULT_SINCE = "2026-07-05T00:00:00Z";
-
-function json(value: unknown): string {
-  return JSON.stringify(value, (_key, item: unknown) => (typeof item === "bigint" ? item.toString() : item), 2);
-}
-
-function positiveInt(value: string): number {
-  const parsed = Number(value);
-  if (!/^[0-9]+$/.test(value) || !Number.isSafeInteger(parsed) || parsed <= 0) {
-    throw new InvalidArgumentError(`expected a positive integer, got "${value}"`);
-  }
-  return parsed;
-}
-
-function nonNegativeInt(value: string): number {
-  const parsed = Number(value);
-  if (!/^[0-9]+$/.test(value) || !Number.isSafeInteger(parsed)) {
-    throw new InvalidArgumentError(`expected a non-negative integer, got "${value}"`);
-  }
-  return parsed;
-}
-
-function isoDate(value: string): Date {
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) throw new InvalidArgumentError(`expected an ISO date, got "${value}"`);
-  return parsed;
-}
 
 function collect(value: string, previous: string[] = []): string[] {
   return [...previous, value];
