@@ -123,9 +123,14 @@ export function generationOfFanPredicate(fanRef: string): SQL {
   )!;
 }
 
+/** What the two-slot selection returns of a row: the recap status reads
+ * `createdAt` and `params`, the Coach attach `completion` and `createdAt`.
+ * No prompt block leaves the database for them. */
+export type FreshestRecap = Pick<AiGenerationContentRow, "generationRef" | "createdAt" | "completion" | "params">;
+
 export interface FreshestRecaps {
-  full: AiGenerationContentRow | null;
-  short: AiGenerationContentRow | null;
+  full: FreshestRecap | null;
+  short: FreshestRecap | null;
 }
 
 /**
@@ -206,9 +211,14 @@ export async function getFreshestUsableRecaps(
   db: Database,
   input: FreshestRecapsInput,
 ): Promise<FreshestRecaps> {
-  const pick = async (mode: "full" | "short") => {
+  const pick = async (mode: "full" | "short"): Promise<FreshestRecap | null> => {
     const rows = await db
-      .select()
+      .select({
+        generationRef: aiGenerationContent.generationRef,
+        createdAt: aiGenerationContent.createdAt,
+        completion: aiGenerationContent.completion,
+        params: aiGenerationContent.params,
+      })
       .from(aiGenerationContent)
       .where(recapSlotWhere(input, mode))
       .orderBy(...recapSlotOrder)
