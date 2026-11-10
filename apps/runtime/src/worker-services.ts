@@ -95,7 +95,6 @@ import {
   PROJECTION_TICK_BUDGET_MS,
   runProjectionTick,
 } from "./services/projections/registry.ts";
-import { startDomainEventsSmokeConsumer } from "./services/domain-events-smoke.ts";
 import {
   startOfapiChargebacksWorker,
 } from "./services/ofapi-chargebacks-sync.ts";
@@ -658,8 +657,6 @@ export async function startWorkerServices(
     }
   });
 
-  // The v2 conformance instrument — permanent, read-only (one
-  // checkpoint row), unconditional like the sweeps.
   // Describe within seconds (AI_MEDIA_DESCRIBE_LOOP_ENABLED); shares the
   // minutely job's slot, so still one image at a time from this process.
   const aiMediaDescribeLoop = startAiMediaDescribeLoop(app);
@@ -669,7 +666,6 @@ export async function startWorkerServices(
   // the receipt's demand on pages the Sync Engine owns (I18; a no-op on
   // `off`/`shadow` pages). The pages' sockets run in the `sync` process.
   const fanslyWsLive = startFanslyWsLiveTimer(app, { afterAck: routeFanslyWsReceiptDemand });
-  const domainEventsSmoke = startDomainEventsSmokeConsumer(app);
   await startGoldenSignalWorker(app, boss);
   await startNotificationDeliveryOutboxWorker(app, boss);
   await startNotificationPagingSweepWorker(app, boss);
@@ -756,9 +752,6 @@ export async function startWorkerServices(
       });
       await fanslyWsLive.stop().catch((error) => {
         app.logger.warn({ err: error }, "Fansly live overlay timer failed during shutdown");
-      });
-      await domainEventsSmoke.stop().catch((error) => {
-        app.logger.warn({ err: error }, "v2 smoke consumer failed during shutdown");
       });
       await executorPromise.catch((error) => {
         app.logger.error({ err: error }, "Sync page executor failed during shutdown");
