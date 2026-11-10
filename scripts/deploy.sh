@@ -136,8 +136,7 @@ if [[ -n "$PREV_COMMIT" ]] && git -C "$REPO" cat-file -e "${PREV_COMMIT}^{commit
   while IFS= read -r file; do
     [[ -n "$file" ]] || continue
     name="${file##*/}"
-    if grep -Eq '^-- agency-hub:rollback-compatible([^[:alnum:]_-]|$)' "${TREE}/${file}" \
-      || grep -Fq "\"${name}\"" "${TREE}/scripts/deploy-production.sh"; then
+    if grep -Eq '^-- agency-hub:rollback-compatible([^[:alnum:]_-]|$)' "${TREE}/${file}"; then
       list+=("${name}")
     else
       list+=("${name} (no auto-rollback)")

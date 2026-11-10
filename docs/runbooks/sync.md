@@ -466,9 +466,9 @@ never read a hold from the page row. The release before the drop (S4-32) is a sa
 it reads none of them, and the marker its acquisition used to leave in the row is skipped where the column is gone.
 Every image older than it is NOT a rollback target any more: S4-31 rewrites the dropped columns at every hold write,
 so every hold write fails there and a page can neither take a hold nor lift one while it keeps sending; the hold-set
-release (the one that brought `sync_holds`) and the images before it read them. The deploy refuses to apply the drop
-while a running image is older than S4-32 (`verify_running_images_run_without_old_hold_columns`); deploy S4-32
-first, from a checkout of its commit. Details: `apps/runtime/src/sync/README.md`, "Rollback targets from this
+release (the one that brought `sync_holds`) and the images before it read them. The deploy refused to apply the drop
+while a running image was older than S4-32 (`verify_running_images_run_without_old_hold_columns`, removed
+2026-11-10 once the drop was applied on production); deploy S4-32 first, from a checkout of its commit. Details: `apps/runtime/src/sync/README.md`, "Rollback targets from this
 release on".
 
 **Breakers** stop one subject or one file, never the page:

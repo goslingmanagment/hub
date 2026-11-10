@@ -29,9 +29,6 @@ Options:
   --node-base-image <tag>
                         Canonical Node base image used for full builds.
                         Default: node:22-bookworm-slim
-  --node-base-cache-image <tag>
-                        Deprecated compatibility option; accepted but ignored.
-                        Use --node-base-image instead.
   --allow-unlabeled-dist-base
                         Allow dist-only deploy from the pinned clean full image
                         without agency-hub dependency checksum labels.
@@ -39,13 +36,6 @@ Options:
   --verify-url <url>     Public HTTPS base URL to verify after deploy. Default: remote http://127.0.0.1:<port>
   --identity <path>      SSH identity file
   --ssh-port <port>      SSH port
-  --extension-persona-receipt <path>
-                        Private Extension legacy-persona export used only by
-                        the first desktop-lifecycle-v2 enablement verifier
-  --desktop-persona-receipt <path>
-                        Private Desktop legacy-persona export for first enable
-  --desktop-diagnostics-receipt <path>
-                        Private Desktop diagnostics receipt for first enable
   --drop-client-sdk <sha256>
                         Owner-approved: let this candidate drop one client SDK
                         contract hash or registry build that the running hub
@@ -77,15 +67,11 @@ Environment variable equivalents:
   DEPLOY_PULL_IMAGE
   DEPLOY_RECREATE_SCOPE
   DEPLOY_NODE_BASE_IMAGE
-  DEPLOY_NODE_BASE_CACHE_IMAGE (deprecated; accepted but ignored)
   DEPLOY_ALLOW_UNLABELED_DIST_BASE
   DEPLOY_HTTP_PORT
   DEPLOY_VERIFY_URL
   DEPLOY_IDENTITY_FILE
   DEPLOY_SSH_PORT
-  DEPLOY_EXTENSION_PERSONA_RECEIPT
-  DEPLOY_DESKTOP_PERSONA_RECEIPT
-  DEPLOY_DESKTOP_DIAGNOSTICS_RECEIPT
   DEPLOY_IMAGE_GC
   DEPLOY_SKIP_IMAGE_GC
   DEPLOY_SKIP_HUB_CLI_REBUILD
@@ -110,9 +96,6 @@ fail() {
   if [[ "${STACK_RECREATED:-0}" == "1" ]]; then
     rollback_remote_stack
     dump_remote_diagnostics
-  elif [[ "${LEGACY_SYNC_QUIESCED:-0}" == "1" ]]; then
-    restore_quiesced_sync_services \
-      || log "Unable to restart quiesced sync services; the API remains online and the DB fence remains active"
   fi
   printf '[deploy] error: %s\n' "$*" >&2
   exit 1
@@ -130,14 +113,6 @@ require_command() {
   command -v "$1" >/dev/null 2>&1 || fail "Missing required command: $1"
 }
 
-warn_deprecated_node_base_cache() {
-  if [[ "${DEPRECATED_NODE_BASE_CACHE_WARNING_EMITTED:-0}" == "1" ]]; then
-    return
-  fi
-  log "warning: --node-base-cache-image / DEPLOY_NODE_BASE_CACHE_IMAGE is deprecated and ignored; use --node-base-image / DEPLOY_NODE_BASE_IMAGE"
-  DEPRECATED_NODE_BASE_CACHE_WARNING_EMITTED=1
-}
-
 REMOTE="${DEPLOY_REMOTE:-}"
 APP_DIR="${DEPLOY_APP_DIR:-/opt/agency-hub}"
 IMAGE_TAG="${DEPLOY_IMAGE_TAG:-agency_hub_core/runtime:production}"
@@ -146,10 +121,6 @@ FULL_BUILD_ON="${DEPLOY_FULL_BUILD_ON:-server}"
 PULL_IMAGE="${DEPLOY_PULL_IMAGE:-}"
 RECREATE_SCOPE="${DEPLOY_RECREATE_SCOPE:-apps}"
 NODE_BASE_IMAGE="${DEPLOY_NODE_BASE_IMAGE:-node:22-bookworm-slim}"
-DEPRECATED_NODE_BASE_CACHE_WARNING_EMITTED=0
-if [[ -n "${DEPLOY_NODE_BASE_CACHE_IMAGE+x}" ]]; then
-  warn_deprecated_node_base_cache
-fi
 ALLOW_UNLABELED_DIST_BASE="${DEPLOY_ALLOW_UNLABELED_DIST_BASE:-0}"
 # Default ON (Decision #371 supersedes the default-off of #176/#212): every
 # deploy leaves a candidate, a rollback and, on a dependency change, a 1.4 GB
@@ -197,9 +168,6 @@ HTTP_PORT="${DEPLOY_HTTP_PORT:-3000}"
 VERIFY_URL="${DEPLOY_VERIFY_URL:-}"
 IDENTITY_FILE="${DEPLOY_IDENTITY_FILE:-}"
 SSH_PORT="${DEPLOY_SSH_PORT:-}"
-EXTENSION_PERSONA_RECEIPT="${DEPLOY_EXTENSION_PERSONA_RECEIPT:-}"
-DESKTOP_PERSONA_RECEIPT="${DEPLOY_DESKTOP_PERSONA_RECEIPT:-}"
-DESKTOP_DIAGNOSTICS_RECEIPT="${DEPLOY_DESKTOP_DIAGNOSTICS_RECEIPT:-}"
 DROP_CLIENT_SDKS=()
 
 while [[ $# -gt 0 ]]; do
@@ -237,12 +205,6 @@ while [[ $# -gt 0 ]]; do
     --node-base-image)
       [[ $# -ge 2 ]] || fail "Missing value for $1"
       NODE_BASE_IMAGE="$2"
-      shift 2
-      ;;
-    --node-base-cache-image)
-      [[ $# -ge 2 ]] || fail "Missing value for $1"
-      # Compatibility only: consume the legacy value but never retain or use it.
-      warn_deprecated_node_base_cache
       shift 2
       ;;
     --allow-unlabeled-dist-base)
@@ -283,21 +245,6 @@ while [[ $# -gt 0 ]]; do
     --ssh-port)
       [[ $# -ge 2 ]] || fail "Missing value for $1"
       SSH_PORT="$2"
-      shift 2
-      ;;
-    --extension-persona-receipt)
-      [[ $# -ge 2 ]] || fail "Missing value for $1"
-      EXTENSION_PERSONA_RECEIPT="$2"
-      shift 2
-      ;;
-    --desktop-persona-receipt)
-      [[ $# -ge 2 ]] || fail "Missing value for $1"
-      DESKTOP_PERSONA_RECEIPT="$2"
-      shift 2
-      ;;
-    --desktop-diagnostics-receipt)
-      [[ $# -ge 2 ]] || fail "Missing value for $1"
-      DESKTOP_DIAGNOSTICS_RECEIPT="$2"
       shift 2
       ;;
     --drop-client-sdk)
@@ -399,7 +346,6 @@ if [[ -n "$IDENTITY_FILE" ]]; then
 fi
 
 STACK_RECREATED=0
-LEGACY_SYNC_QUIESCED=0
 APP_DEPENDENCY_CHECKSUM=""
 APP_SOURCE_REVISION=""
 DEPLOY_RUN_ID=""
@@ -419,13 +365,7 @@ ROLLBACK_RELEASE_FILES_CAPTURED=0
 ROLLBACK_RELEASE_FILES_RESTORED=0
 SCHEMA_BASELINE_CAPTURED=0
 ROLLBACK_COMPOSE_RECREATE_FAILED=0
-ROLLBACK_FORBIDDEN=0
-ROLLBACK_FORBIDDEN_REASON=""
-LIFECYCLE_FIRST_ENABLE=0
 LIFECYCLE_CANDIDATE_HAS_CAPABILITY=0
-# Filled only after the exact chatter token inventory is bound and reviewed.
-# This is deliberately deploy-owned rather than supplied by the candidate image.
-APPROVED_DESKTOP_LIFECYCLE_V2_EVIDENCE_SHA256="2285d565034e636fe5aa03290f3d722bce77ae6190390a78a7c0bd0a7fdd38de"
 # Startup owns schema migration. The concurrent observations index can run for
 # ten minutes on production data while every API process correctly stays
 # pre-listen, so health verification must cover that migration window.
@@ -453,98 +393,7 @@ REMOTE_DEPLOY_MARKER_DIR_ESCAPED="$(printf '%q' "$REMOTE_DEPLOY_MARKER_DIR")"
 #   -- agency-hub:rollback-compatible
 # (is_rollback_compatible_migration). Without that line a deploy that applies
 # it still goes ahead, but a failed health check leaves production for a person
-# to roll back. The list below is the frozen record of the migrations through
-# 0290, declared here before the header line existed; do not extend it.
-ROLLBACK_COMPATIBLE_MIGRATIONS=(
-  "0013_backfill_egress_rate_limit_scope_key.sql"
-  "0014_repair_light_trusted_sync_states.sql"
-  "0015_repair_egress_rate_limit_scope_key.sql"
-  "0016_canonical_proxy_egress_key_function.sql"
-  "0017_reapply_egress_rate_limit_scope_key_repair.sql"
-  "0018_notification_incident_recovery_watermarks.sql"
-  "0097_retire_onlyfans_legacy_dm_messages.sql"
-  "0186_ops_metrics_recent_series.sql"
-  "0192_fansly_dm_shadow_material_probe.sql"
-  "0194_fansly_dm_shadow_reader_probe.sql"
-  "0199_account_links.sql"
-  "0200_users_username_lower_uidx.sql"
-  "0201_fan_earnings_content_revision.sql"
-  "0203_drop_workboard_tables.sql"
-  "0204_drop_workboard_enum_types.sql"
-  "0205_notification_incident_paging.sql"
-  "0206_fansly_ws_hint_settlement.sql"
-  "0207_ofapi_webhook_auto_redelivery.sql"
-  "0208_ofapi_webhook_delivery_business_key_idx.sql"
-  "0209_observation_parse_quarantine.sql"
-  "0210_ofapi_media_images.sql"
-  "0211_ai_usage_feature_media_describe.sql"
-  "0212_ai_media_descriptions.sql"
-  "0213_ai_media_accelerator_reads.sql"
-  "0214_ai_media_describe_lease_token.sql"
-  "0215_ai_media_fansly_fast_lane.sql"
-  "0216_ofapi_media_preview_variant.sql"
-  "0223_raw_payload_and_attempt_lookup_indexes.sql"
-  "0224_page_fan_account_lookup_stamps.sql"
-  "0225_fansly_page_send_guards.sql"
-  "0226_fansly_ws_live_overlay.sql"
-  "0227_fansly_send_guard_checks.sql"
-  "0228_sync_engine_core.sql"
-  "0229_send_guard_owner_engine.sql"
-  "0230_tip_context_observation_lineage.sql"
-  "0231_dm_thread_history_chain.sql"
-  "0232_history_requests.sql"
-  "0233_fansly_sync_engine_incident_kind.sql"
-  "0234_sync_media_handoff.sql"
-  "0235_sync_pages_lifted_dm_exclusions.sql"
-  "0236_fansly_thread_summary_from_archive.sql"
-  "0237_sync_attempt_route_intervals.sql"
-  "0238_device_token_client_profile.sql"
-  "0239_retire_fansly_legacy_sync_states.sql"
-  "0241_client_claim_tables.sql"
-  "0242_retire_fansly_legacy_config_overrides.sql"
-  "0244_client_health_rollups.sql"
-  "0245_sync_pages_drop_old_hold_columns.sql"
-  "0246_client_send_custody_fan_index.sql"
-  "0247_dm_live_confirm_wait_reason.sql"
-  "0248_sync_excluded_probe_not_served.sql"
-  "0250_ofapi_webhook_events_transactions_page_received_idx.sql"
-  "0251_page_dm_thread_unavailability.sql"
-  "0254_retire_dm_unresolvable_exclusion.sql"
-  "0255_page_link_stat_runs_attempts.sql"
-  "0256_page_link_stat_snapshots_net_revenue.sql"
-  "0257_traffic_link_bindings.sql"
-  "0258_fansly_public_lookup_egress.sql"
-  "0259_fans_public_lookup.sql"
-  "0260_page_link_fans.sql"
-  "0261_sync_raw_payloads_link_fans_idx.sql"
-  "0262_sync_alert_evaluations.sql"
-  "0263_notification_outbox_reported_in.sql"
-  "0264_sync_work_failing_since.sql"
-  "0265_brin_autosummarize.sql"
-  "0266_dm_archive_repair_signal_by_id.sql"
-  "0267_ops_metric_samples_drop_metric_time_idx.sql"
-  "0268_page_fans_account_probe_unresolved_idx.sql"
-  "0271_sync_attempts_origin.sql"
-  "0270_message_archive_fansly_markers.sql"
-  "0272_sync_attempts_browser_send.sql"
-  "0273_fansly_ws_connections_browser.sql"
-  "0274_observations_source_browser_site.sql"
-  "0275_page_browsers.sql"
-  "0276_page_browser_intake.sql"
-  "0277_sync_pages_transport.sql"
-  "0278_sync_pages_browser_leave.sql"
-  "0279_sync_pages_manual_login.sql"
-  "0280_page_browser_onboarding.sql"
-  "0281_page_browser_visibility.sql"
-  "0282_page_browser_drafts.sql"
-  "0284_drop_redundant_indexes.sql"
-  "0285_storage_relation_daily.sql"
-  "0286_client_send_attributions.sql"
-  "0287_ai_provider_accounts.sql"
-  "0288_page_browser_telemetry.sql"
-  "0289_sync_observed_site_requests.sql"
-  "0290_page_browser_quiet_and_egress.sql"
-)
+# to roll back.
 
 REMOTE_APP_DIR_ESCAPED="$(printf '%q' "$APP_DIR")"
 REMOTE_RUNTIME_IMAGE_ENV="RUNTIME_IMAGE=$(printf '%q' "$IMAGE_TAG")"
@@ -560,7 +409,6 @@ for file in \
   scripts/deploy-metadata.sh \
   scripts/archive-container-logs.sh \
   scripts/deploy-infrastructure.mjs \
-  scripts/verify-desktop-lifecycle-v2-evidence.mjs \
   scripts/verify-client-sdk-retention.mjs
 do
   if [[ -e "${ROOT_DIR}/${file}" ]]; then
@@ -758,16 +606,6 @@ EOF
 
 cleanup_deploy() {
   local exit_status=$?
-
-  # Not keyed on the exit status: bash killed by SIGINT (Ctrl-C) or another
-  # signal while it reads a command substitution — `$(ssh …)`, such as the log
-  # archive right before the recreate — runs this trap with $? = 0. Every exit
-  # that quiesced and never recreated left the scheduler and worker stopped:
-  # fail() restarts them itself (and clears the flag), and success recreates.
-  if [[ "${STACK_RECREATED:-0}" != "1" && "${LEGACY_SYNC_QUIESCED:-0}" == "1" ]]; then
-    restore_quiesced_sync_services \
-      || log "Unable to restart quiesced sync services during deploy cleanup"
-  fi
 
   if [[ -n "${REMOTE_DIST_CONTEXT_DIR:-}" ]]; then
     remove_remote_dist_context || log "Unable to remove remote dist context ${REMOTE_DIST_CONTEXT_DIR}"
@@ -1039,14 +877,8 @@ restore_remote_release_files() {
 
 is_rollback_compatible_migration() {
   local migration="$1"
-  local compatible
-  for compatible in "${ROLLBACK_COMPATIBLE_MIGRATIONS[@]}"; do
-    if [[ "$migration" == "$compatible" ]]; then
-      return 0
-    fi
-  done
 
-  # Newer migrations declare it themselves, in the deployed tree's file.
+  # A migration declares it itself, in the deployed tree's file.
   [[ "$migration" =~ ^[0-9]{4}_[A-Za-z0-9_]+\.sql$ ]] || return 1
   grep -Eq '^-- agency-hub:rollback-compatible([^[:alnum:]_-]|$)' \
     "${ROOT_DIR}/packages/db/migrations/${migration}" 2>/dev/null
@@ -1074,171 +906,12 @@ schema_migration_delta_allows_rollback() {
   return 0
 }
 
-forbid_rollback_for_pending_pre_recreate_migrations() {
-  local migration_path
-  local migration
-  local through="0097_retire_onlyfans_legacy_dm_messages.sql"
-
-  for migration_path in "${ROOT_DIR}"/packages/db/migrations/*.sql; do
-    migration="${migration_path##*/}"
-    [[ "$migration" > "$through" ]] && continue
-    grep -Fxq "$migration" "$SCHEMA_BEFORE_FILE" && continue
-    if ! is_rollback_compatible_migration "$migration"; then
-      ROLLBACK_FORBIDDEN=1
-      ROLLBACK_FORBIDDEN_REASON="pending non-rollback-compatible pre-recreate migration: ${migration}"
-      log "Automatic rollback disabled before migration starts: ${ROLLBACK_FORBIDDEN_REASON}"
-      return 0
-    fi
-  done
-}
-
-# The drop of the old hold columns of sync_pages (step 4, S4-33:
-# *_sync_pages_drop_old_hold_columns.sql) is applied by the new api while the
-# `sync` of the running image still works, and it is in
-# ROLLBACK_COMPATIBLE_MIGRATIONS, so a failed deploy returns to that image.
-# Both are safe under ONE image, the release before the drop (S4-32), and the
-# list cannot say so: that release has no migration of its own. Every image
-# older than it names the columns of the old hold slot in a statement. The one
-# just before it ends every hold write by rewriting them, in the write's
-# transaction: on the migrated table it takes no hold and lifts none (after a
-# 401, a 429, a network failure) while its page keeps sending. It fails open,
-# and every health gate stays green, since a 200 writes no hold.
-#
-# So the running images are asked before anything is migrated. While the drop
-# is not in the schema baseline, the built code of the image of every running
-# app container is searched for the slot's columns, and the deploy stops if
-# one names them: the deploy that would bring S4-32 and the drop at once, and
-# any deploy of this tree after a rollback to an older image.
-#
-# The witness is the three columns of the slot that have no namesake. The
-# resource-hold map, dropped with them, is not part of it: the S4-32 image
-# names it once, in the marker its acquisition leaves there, and that
-# statement goes on where the column is gone
-# (tests/sync-hold-set.integration.test.ts runs it after the drop).
-#
-# Fails closed: a container that cannot be listed or an image that cannot be
-# searched stops the deploy too.
-verify_running_images_run_without_old_hold_columns() {
-  if grep -Eq '^[0-9]{4}_sync_pages_drop_old_hold_columns\.sql$' "$SCHEMA_BEFORE_FILE"; then
-    return 0
-  fi
-
-  local slot_columns='hold_kind|hold_since|hold_detail'
-  local report
-  report="$(run_remote "set -euo pipefail; cd ${REMOTE_APP_DIR_ESCAPED}
-defined=\"\$(${REMOTE_COMPOSE} config --services)\"
-searched=' '
-for service in api worker scheduler sync; do
-  grep -qx \"\$service\" <<<\"\$defined\" || continue
-  containers=\"\$(${REMOTE_COMPOSE} ps -q \"\$service\")\"
-  for container_id in \$containers; do
-    image_id=\"\$(docker inspect -f '{{.Image}}' \"\$container_id\")\"
-    revision=\"\$(docker image inspect -f '{{ index .Config.Labels \"agency-hub.source-revision\" }}' \"\$image_id\")\"
-    case \"\$searched\" in
-      *\" \$image_id=names \"*) verdict=names ;;
-      *\" \$image_id=clean \"*) verdict=clean ;;
-      *)
-        if docker run --rm \"\$image_id\" grep -rqE '${slot_columns}' apps/runtime/dist packages/db/dist; then
-          verdict=names
-        else
-          status=\$?
-          [[ \"\$status\" == 1 ]] || exit \"\$status\"
-          verdict=clean
-        fi
-        searched+=\"\$image_id=\$verdict \"
-        ;;
-    esac
-    printf '%s|%s|%s\\n' \"\$service\" \"\$revision\" \"\$verdict\"
-  done
-done")" \
-    || fail "Unable to search the running images for the old hold slot of sync_pages; its drop is still to be applied and is safe only under the release before it"
-
-  local older=()
-  local containers=0
-  local service
-  local revision
-  local verdict
-  while IFS='|' read -r service revision verdict; do
-    [[ -n "$service" ]] || continue
-    if [[ -z "$revision" || "$revision" == "<no value>" ]]; then
-      revision="unlabelled"
-    fi
-    case "$verdict" in
-      clean)
-        ;;
-      names)
-        older+=("${service} (source revision ${revision})")
-        ;;
-      *)
-        fail "Unreadable answer about the running ${service} image; refusing to drop the old hold columns of sync_pages under it"
-        ;;
-    esac
-    containers=$((containers + 1))
-  done <<<"$report"
-
-  if (( ${#older[@]} > 0 )); then
-    printf '[deploy] The drop of the old hold columns of sync_pages is still to be applied, and these running\n' >&2
-    printf '[deploy] images name the old hold slot in a statement:\n' >&2
-    printf '[deploy]   %s\n' "${older[@]}" >&2
-    printf '[deploy] Such an image does not run on the migrated table. The release just before S4-32 rewrites\n' >&2
-    printf '[deploy] the dropped columns at every hold write: there it takes no hold and lifts none while its\n' >&2
-    printf '[deploy] pages keep sending, and the automatic rollback would return to it. Deploy the release\n' >&2
-    printf '[deploy] before the drop first (S4-32, from a checkout of its commit), let it run its hour, then\n' >&2
-    printf '[deploy] deploy this one (apps/runtime/src/sync/README.md, "Rollback targets from this release on").\n' >&2
-    fail "A running image is older than the release the drop of the old hold columns of sync_pages needs"
-  fi
-
-  if (( containers == 0 )); then
-    log "No app container is running: nothing works on sync_pages while its old hold columns are dropped"
-  else
-    log "No running image names the old hold slot of sync_pages (${containers} running app container(s)); its drop may run under them"
-  fi
-}
-
 read_remote_env_value() {
   local key="$1"
   local escaped_key
   escaped_key="$(printf '%q' "$key")"
 
   run_remote "set -euo pipefail; cd ${REMOTE_APP_DIR_ESCAPED}; awk -v key=${escaped_key} 'function trim(value) { sub(/^[[:space:]]+/, \"\", value); sub(/[[:space:]]+$/, \"\", value); return value } /^[[:space:]]*(#|$)/ { next } { line = \$0; eq = index(line, \"=\"); if (eq == 0) next; name = trim(substr(line, 1, eq - 1)); if (name == key) { value = trim(substr(line, eq + 1)); quote = substr(value, 1, 1); if ((quote == \"\\\"\" || quote == sprintf(\"%c\", 39)) && substr(value, length(value), 1) == quote) value = substr(value, 2, length(value) - 2); print value; exit } }' .env.production"
-}
-
-# The quiesce and the migration run before the recreate exist only to install
-# the permanent DB fence (migrations through 0097) while the old API stays
-# online. Production has long had all of them: with none pending, both are
-# no-ops, and the old scheduler and worker simply run until the recreate.
-pre_recreate_migrations_pending() {
-  local migration_path
-  local migration
-  local through="0097_retire_onlyfans_legacy_dm_messages.sql"
-  for migration_path in "${ROOT_DIR}"/packages/db/migrations/*.sql; do
-    migration="${migration_path##*/}"
-    [[ "$migration" > "$through" ]] && continue
-    grep -Fxq "$migration" "$SCHEMA_BEFORE_FILE" || return 0
-  done
-  return 1
-}
-
-quiesce_remote_legacy_sync_services() {
-  if ! pre_recreate_migrations_pending; then
-    log "Every migration through 0097 is applied: the old scheduler and worker run on until the recreate"
-    return 0
-  fi
-  log "Quiescing the old scheduler and worker before installing the permanent DB fence"
-  # Set before the multi-service stop: compose can stop one service and then
-  # fail on the other, and the deploy cleanup must still restore both.
-  LEGACY_SYNC_QUIESCED=1
-  run_remote "set -euo pipefail; cd ${REMOTE_APP_DIR_ESCAPED}; ${REMOTE_COMPOSE} stop -t 75 scheduler worker"
-}
-
-restore_quiesced_sync_services() {
-  [[ "${LEGACY_SYNC_QUIESCED:-0}" == "1" ]] || return 0
-  log "Restarting the quiesced scheduler and worker behind the permanent DB fence"
-  # Resume the existing containers only. Converging dependencies with `up` here
-  # could recreate PostgreSQL after the infrastructure guard just rejected drift.
-  run_remote "set -euo pipefail; cd ${REMOTE_APP_DIR_ESCAPED}; ${REMOTE_COMPOSE} start scheduler worker" \
-    || return 1
-  LEGACY_SYNC_QUIESCED=0
 }
 
 verify_remote_legacy_onlyfans_dm_messages_retired() {
@@ -1374,11 +1047,6 @@ SQL'")" || return 1
 }
 
 rollback_remote_stack() {
-  if [[ "${ROLLBACK_FORBIDDEN:-0}" == "1" ]]; then
-    log "Rollback skipped; ${ROLLBACK_FORBIDDEN_REASON:-a pre-recreate migration made rollback unsafe}"
-    return 0
-  fi
-
   if [[ "${ROLLBACK_IMAGE_AVAILABLE:-0}" != "1" ]]; then
     log "Rollback skipped; no previous image was captured"
     return 0
@@ -2314,6 +1982,10 @@ build_candidate_image() {
   esac
 }
 
+# Production has advertised desktop-lifecycle-v2 since 2026-07 and released
+# clients gate on it (services/public-capabilities.ts), so a candidate must
+# keep it. Its first enablement, with its release receipts, is history: this
+# script no longer performs it and refuses a running image without it.
 verify_candidate_lifecycle_capability() {
   local running_capabilities
   local candidate_capabilities
@@ -2322,7 +1994,7 @@ verify_candidate_lifecycle_capability() {
     || fail "Unable to interrogate candidate runtime capabilities"
   case "$candidate_capabilities" in
     '[]')
-      LIFECYCLE_CANDIDATE_HAS_CAPABILITY=0
+      fail "Candidate would regress the already-enabled desktop-lifecycle-v2 capability"
       ;;
     '["desktop-lifecycle-v2"]')
       LIFECYCLE_CANDIDATE_HAS_CAPABILITY=1
@@ -2333,95 +2005,23 @@ verify_candidate_lifecycle_capability() {
   esac
 
   if [[ "${ROLLBACK_IMAGE_AVAILABLE:-0}" != "1" ]]; then
-    [[ "$LIFECYCLE_CANDIDATE_HAS_CAPABILITY" == "0" ]] \
-      || fail "Cannot enable desktop-lifecycle-v2 without a captured running image capability baseline"
-    log "No running image capability baseline; candidate keeps desktop-lifecycle-v2 absent"
+    log "No running image to compare capabilities with; candidate keeps desktop-lifecycle-v2"
     return 0
   fi
 
   running_capabilities="$(run_remote "set -euo pipefail; docker run --rm $(printf '%q' "$ROLLBACK_IMAGE_TAG") node apps/runtime/dist/startup.js print-public-capabilities")" \
     || fail "Unable to interrogate running runtime capabilities"
-  case "${running_capabilities}->${candidate_capabilities}" in
-    '[]->[]')
-      log "Candidate keeps desktop-lifecycle-v2 absent"
-      ;;
-    '[]->["desktop-lifecycle-v2"]')
-      LIFECYCLE_FIRST_ENABLE=1
-      [[ -n "$EXTENSION_PERSONA_RECEIPT" && -r "$EXTENSION_PERSONA_RECEIPT" ]] \
-        || fail "First desktop-lifecycle-v2 enablement requires a readable Extension persona receipt"
-      [[ -n "$DESKTOP_PERSONA_RECEIPT" && -r "$DESKTOP_PERSONA_RECEIPT" ]] \
-        || fail "First desktop-lifecycle-v2 enablement requires a readable Desktop persona receipt"
-      [[ -n "$DESKTOP_DIAGNOSTICS_RECEIPT" && -r "$DESKTOP_DIAGNOSTICS_RECEIPT" ]] \
-        || fail "First desktop-lifecycle-v2 enablement requires a readable Desktop diagnostics receipt"
-      run_remote "set -euo pipefail; docker run --rm $(printf '%q' "$IMAGE_CANDIDATE_TAG") node apps/runtime/dist/startup.js print-desktop-lifecycle-v2-evidence" \
-        >"$LIFECYCLE_EVIDENCE_FILE" \
-        || fail "Unable to read desktop-lifecycle-v2 evidence from candidate image"
-      verify_approved_lifecycle_manifest_digest
-      log "Verifying exact Desktop/Extension release evidence"
-      node "$ROOT_DIR/scripts/verify-desktop-lifecycle-v2-evidence.mjs" \
-        "$LIFECYCLE_EVIDENCE_FILE" \
-        "$LIFECYCLE_ARTIFACT_DIR" \
-        "$EXTENSION_PERSONA_RECEIPT" \
-        "$DESKTOP_PERSONA_RECEIPT" \
-        "$DESKTOP_DIAGNOSTICS_RECEIPT" \
-        || fail "Desktop lifecycle v2 external evidence verification failed"
-      verify_candidate_lifecycle_inventory
-      log "First desktop-lifecycle-v2 enablement evidence verified"
-      ;;
-    '["desktop-lifecycle-v2"]->["desktop-lifecycle-v2"]')
+  case "$running_capabilities" in
+    '["desktop-lifecycle-v2"]')
       log "Candidate preserves the already-enabled desktop-lifecycle-v2 capability"
       ;;
-    '["desktop-lifecycle-v2"]->[]')
-      fail "Candidate would regress the already-enabled desktop-lifecycle-v2 capability"
+    '[]')
+      fail "Running image lacks desktop-lifecycle-v2; its first enablement is no longer supported by this script"
       ;;
     *)
       fail "Running image returned an unexpected public capability manifest: ${running_capabilities}"
       ;;
   esac
-}
-
-verify_approved_lifecycle_manifest_digest() {
-  local actual
-  [[ "$APPROVED_DESKTOP_LIFECYCLE_V2_EVIDENCE_SHA256" =~ ^[0-9a-f]{64}$ ]] \
-    || fail "Approved desktop-lifecycle-v2 evidence SHA-256 is not finalized"
-  actual="$(shasum -a 256 "$LIFECYCLE_EVIDENCE_FILE" | awk '{print $1}')" \
-    || fail "Unable to hash desktop-lifecycle-v2 evidence from candidate image"
-  [[ "$actual" == "$APPROVED_DESKTOP_LIFECYCLE_V2_EVIDENCE_SHA256" ]] \
-    || fail "Candidate desktop-lifecycle-v2 evidence does not match the deploy-approved manifest SHA-256"
-  log "Candidate desktop-lifecycle-v2 evidence matches the deploy-approved manifest SHA-256"
-}
-
-verify_candidate_lifecycle_inventory() {
-  local candidate_compose
-  local result
-  candidate_compose="RUNTIME_IMAGE=$(printf '%q' "$IMAGE_CANDIDATE_TAG") docker compose --env-file .env.production -f docker-compose.production.yml"
-  # One-off containers run as `worker`: its image, env file and volumes are
-  # the api's, but it holds no fixed address in pb-control, which the running
-  # api already takes (Project Browser PR 3) — `run api` would fail with
-  # "Address already in use".
-  result="$(run_remote "set -euo pipefail; cd ${REMOTE_APP_DIR_ESCAPED}; ${candidate_compose} run --rm --no-deps worker node apps/runtime/dist/startup.js verify-desktop-lifecycle-v2-inventory")" \
-    || fail "Desktop lifecycle v2 production inventory verification failed"
-  node - "$result" <<'NODE' \
-    || fail "Desktop lifecycle v2 inventory verifier returned an unexpected result"
-const result = JSON.parse(process.argv[2]);
-const keys = Object.keys(result).sort();
-if (JSON.stringify(keys) !== JSON.stringify(["ok", "verified"])) {
-  throw new Error(`unexpected result keys: ${keys.join(",")}`);
-}
-if (result.ok !== true || !Array.isArray(result.verified) || result.verified.length === 0) {
-  throw new Error("inventory verification did not return a non-empty success set");
-}
-for (const item of result.verified) {
-  const itemKeys = Object.keys(item).sort();
-  if (JSON.stringify(itemKeys) !== JSON.stringify(["machineId", "tokenId", "username"])) {
-    throw new Error(`unexpected verified item keys: ${itemKeys.join(",")}`);
-  }
-  if (typeof item.machineId !== "string" || !Number.isSafeInteger(item.tokenId) || typeof item.username !== "string") {
-    throw new Error("invalid verified inventory item");
-  }
-}
-NODE
-  log "Desktop lifecycle v2 production inventory verified"
 }
 
 verify_post_deploy_lifecycle_capability() {
@@ -2473,21 +2073,6 @@ verify_candidate_client_sdks() {
     || fail "Candidate would drop a registered client SDK, or its registry line is unreadable"
 }
 
-run_pre_recreate_safe_migrations() {
-  if ! pre_recreate_migrations_pending; then
-    log "No migration through 0097 to apply before the recreate"
-    return 0
-  fi
-  local candidate_compose
-  candidate_compose="RUNTIME_IMAGE=$(printf '%q' "$IMAGE_CANDIDATE_TAG") docker compose --env-file .env.production -f docker-compose.production.yml"
-  log "Applying rollback-compatible migrations through 0097 while the current API remains online"
-  # This foreground one-shot owns the migration advisory lock. Deployment
-  # cannot enter recreate/rollback handling until it exits and releases it.
-  # As `worker`, not `api`: the running api holds its fixed pb-control address.
-  run_remote "set -euo pipefail; cd ${REMOTE_APP_DIR_ESCAPED}; ${candidate_compose} run --rm --no-deps worker node packages/db/dist/migrate.js --through 0097_retire_onlyfans_legacy_dm_messages.sql" \
-    || fail "Pre-recreate migration through 0097 failed; current API was left running"
-}
-
 if [[ "$BUILD_MODE" != "pull" ]]; then
   require_command docker
 fi
@@ -2499,7 +2084,6 @@ require_command shasum
 require_command git
 require_command gh
 require_command node
-require_command unzip
 require_command cp
 require_command find
 require_command awk
@@ -2514,8 +2098,6 @@ DASHBOARD_FILE="${TEMP_DIR}/dashboard.html"
 SCHEMA_BEFORE_FILE="${TEMP_DIR}/schema-before.txt"
 SCHEMA_AFTER_FILE="${TEMP_DIR}/schema-after.txt"
 ROLLBACK_RELEASE_ARCHIVE="${TEMP_DIR}/rollback-release-files.tar"
-LIFECYCLE_EVIDENCE_FILE="${TEMP_DIR}/desktop-lifecycle-v2-evidence.json"
-LIFECYCLE_ARTIFACT_DIR="${TEMP_DIR}/desktop-lifecycle-v2-artifacts"
 
 initialize_deploy_metadata_and_tags
 validate_pull_checkout || fail "Pull checkout validation failed"
@@ -2558,13 +2140,6 @@ capture_remote_schema_migrations "$SCHEMA_BEFORE_FILE" \
   || fail "Unable to capture remote schema migration state before pre-recreate migration"
 SCHEMA_BASELINE_CAPTURED=1
 log "Captured remote schema migration state for rollback safety"
-# Before anything is quiesced or migrated: a refusal here leaves the running
-# stack as it was.
-verify_running_images_run_without_old_hold_columns
-quiesce_remote_legacy_sync_services \
-  || fail "Unable to quiesce the legacy scheduler and worker"
-forbid_rollback_for_pending_pre_recreate_migrations
-run_pre_recreate_safe_migrations
 verify_remote_legacy_onlyfans_dm_messages_retired \
   || fail "Legacy OnlyFans dm_messages retirement proof failed"
 
@@ -2584,14 +2159,6 @@ SYNC_MONITORING_TOKEN="$(read_remote_env_value "HEALTH_SYNC_MONITORING_TOKEN")" 
 finish_phase release-sync
 start_phase recreate
 log "Recreating the remote production stack"
-if [[ "$LIFECYCLE_FIRST_ENABLE" == "1" ]]; then
-  # The owner binding can be revoked or transferred while a long candidate
-  # build runs. Re-read it at the last safe point before promotion.
-  verify_candidate_lifecycle_inventory
-  ROLLBACK_FORBIDDEN=1
-  ROLLBACK_FORBIDDEN_REASON="desktop-lifecycle-v2 was enabled; capability rollback is unsafe"
-  log "Automatic rollback disabled before the one-way desktop-lifecycle-v2 transition"
-fi
 # The pre-build check is minutes old by now — a full build takes ~6 min and an
 # owner can start a capture:backfill inside that window. THIS is the statement
 # that would kill it, so this is where the question has to be asked again.
@@ -2603,8 +2170,6 @@ validate_pull_checkout || fail_after_release_sync "Pull checkout changed before 
 verify_remote_infrastructure_unchanged "$REMOTE_COMPOSE" || fail_after_release_sync "PostgreSQL/infrastructure changed during deploy; refusing app-only promotion"
 run_remote "set -euo pipefail; docker tag $(printf '%q' "$IMAGE_CANDIDATE_TAG") $(printf '%q' "$IMAGE_TAG")" \
   || fail_after_release_sync "Unable to promote candidate image tag after validation"
-# Before STACK_RECREATED=1: an interrupt during the archive leaves a deploy
-# that recreated nothing, and cleanup_deploy restarts the quiesced services.
 archive_before_stack_recreate
 RECREATE_SERVICES=""
 if [[ "$RECREATE_SCOPE" == "apps" ]]; then
@@ -2615,7 +2180,6 @@ if ! run_remote "set -euo pipefail; cd ${REMOTE_APP_DIR_ESCAPED} && ${REMOTE_COM
   ROLLBACK_COMPOSE_RECREATE_FAILED=1
   fail "docker compose failed while recreating the production stack"
 fi
-LEGACY_SYNC_QUIESCED=0
 finish_phase recreate
 start_phase service-health
 
