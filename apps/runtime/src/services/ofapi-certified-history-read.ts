@@ -10,8 +10,6 @@ import type { OfapiReadGatewayResponse } from "./ofapi-read-gateway.ts";
 
 export const OFAPI_DEEP_HISTORY_READ_INTENT = "deep-history-v1";
 
-export type OfapiHistoryReadMode = "vendor" | "shadow" | "db_fallback";
-
 export type OfapiHistoryFallbackReason =
   | "surface_not_cutover"
   | "no_certificate"

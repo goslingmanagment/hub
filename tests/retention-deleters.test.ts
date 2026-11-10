@@ -190,7 +190,6 @@ const SANCTIONED_DELETER_FILES = [
   // markers expired for an hour. Locators and the decision log are never
   // deleted by schedule (expired locator URLs are only nulled).
   "packages/db/src/repositories/ofapi-media-images.ts",
-  "packages/db/src/repositories/ofapi-message-coverage.ts",
   "packages/db/src/repositories/ops-metrics.ts",
   "packages/db/src/repositories/page-dm.ts",
   "packages/db/src/repositories/runtime-instances.ts",

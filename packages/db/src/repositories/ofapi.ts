@@ -1637,8 +1637,6 @@ export async function getOfapiCreditState(
 
 export type OfapiCreditLedgerSource = (typeof OFAPI_CREDIT_LEDGER_SOURCES)[number];
 
-export type OfapiCreditLedgerRow = typeof ofapiCreditLedger.$inferSelect;
-
 export interface InsertOfapiCreditLedgerEntryInput {
   occurredAt: Date;
   source: OfapiCreditLedgerSource;
@@ -1692,23 +1690,6 @@ export interface RecordOfapiCreditSpendInput {
   details?: Record<string, unknown> | null;
   actorUserId?: number | null;
   budgetScope?: Exclude<OfapiDayBudgetScope, "global"> | null;
-}
-
-/** Rare ambiguous-COMMIT probe for the legacy sink. A logical requestId is
- * shared by HTTP retries, so the physical identity includes attemptNumber. */
-export async function hasOfapiCreditSpendRequestAttempt(
-  db: Database,
-  input: { requestId: string; attemptNumber: number },
-) {
-  const result = await db.execute<{ recorded: boolean }>(sql`
-    select true as recorded
-    from ofapi_credit_ledger
-    where source = 'rest'
-      and request_id = ${input.requestId}
-      and details ->> 'attemptNumber' = ${String(input.attemptNumber)}
-    limit 1
-  `);
-  return result.rows[0]?.recorded === true;
 }
 
 /**
@@ -1942,34 +1923,11 @@ export async function summarizeOfapiSpendWindowBetween(
   };
 }
 
-/**
- * Backwards-compatible unbounded-later helper. New forecast/alerting callers
- * should prefer `summarizeOfapiSpendWindowBetween` and pass their current
- * observation time as `to` so future-dated imports cannot leak into live totals.
- */
-export async function summarizeOfapiSpendWindowSince(
-  db: Database,
-  input: { since: Date },
-): Promise<OfapiSpendWindowStats> {
-  return summarizeOfapiSpendWindowBetween(db, {
-    from: input.since,
-    to: new Date("9999-12-31T23:59:59.999Z"),
-  });
-}
-
 export async function sumOfapiCreditsSpentBetween(
   db: Database,
   input: { from: Date; to: Date },
 ): Promise<number> {
   const { total } = await summarizeOfapiSpendWindowBetween(db, input);
-  return total;
-}
-
-export async function sumOfapiCreditsSpentSince(
-  db: Database,
-  input: { since: Date },
-): Promise<number> {
-  const { total } = await summarizeOfapiSpendWindowSince(db, input);
   return total;
 }
 
@@ -2049,28 +2007,6 @@ export async function sumOfapiSpendBySourceBetween(
     .groupBy(ofapiCreditLedger.source);
 
   return new Map(rows.map((row) => [row.source as OfapiCreditLedgerSource, row.credits]));
-}
-
-/** Spend attributed to specific REST operations over a window (per-stream budgets). */
-export async function sumOfapiRestCreditsForOperationsBetween(
-  db: Database,
-  input: { operations: readonly string[]; from: Date; to: Date },
-): Promise<number> {
-  if (input.operations.length === 0) {
-    return 0;
-  }
-
-  const [row] = await db
-    .select({ total: sql<number>`coalesce(sum(${ofapiCreditLedger.credits}), 0)::int` })
-    .from(ofapiCreditLedger)
-    .where(and(
-      inArray(ofapiCreditLedger.source, ["rest", "adjustment"]),
-      inArray(ofapiCreditLedger.operation, [...input.operations]),
-      gte(ofapiCreditLedger.occurredAt, input.from),
-      lt(ofapiCreditLedger.occurredAt, input.to),
-    ));
-
-  return row?.total ?? 0;
 }
 
 /** Page-scoped REST spend net of attributed corrections for chatter summaries. */

@@ -29,11 +29,6 @@ import { normalizeOnlyFansAvatarUrl } from "./onlyfans.ts";
 const OFAPI_REQUEST_TIMEOUT_MS = 15_000;
 // The free, bounded delivery-history GET can outlast the generic admin deadline.
 const OFAPI_HISTORY_READ_TIMEOUT_MS = 60_000;
-// Live-bug fix (2026-07-05): chat-message history reads scrape OnlyFans
-// server-side and scale with chat size — two prod conversations consistently
-// exceeded the 15 s abort (400 wasted attempts/24 h, zero successes ever on
-// lora-of/lora-vip-of). Slow-lane timeout for that operation only.
-const OFAPI_SLOW_READ_TIMEOUT_MS = 60_000;
 // Default for gateway and governed reads whose caller passes no timeoutMs.
 export const OFAPI_PROXY_READ_TIMEOUT_MS = 60_000;
 const OFAPI_DEFAULT_REST_DELAY_MS = 500;
@@ -154,9 +149,6 @@ export interface OfapiRequestContext {
   // Attributes physical retry spend to a dedicated legacy lane as well as
   // the shared global ceiling. Governed mirror calls use their own plane.
   creditBudgetScope?: "audience" | "backfill" | "link_stats" | null;
-  // A desktop re-read made only to refresh media URLs (read intent
-  // media-context-v1): the ledger row carries it so media spend is separable.
-  ledgerContext?: "media" | null;
 }
 
 // Every OFAPI REST response carries _meta with the remaining credit balance —
@@ -416,23 +408,6 @@ export interface OfapiClient {
       pageIndex?: number;
     },
   ): Promise<OfapiListPage>;
-  listChatMessages(
-    context: OfapiRequestContext,
-    accountId: string,
-    chatId: string,
-    params: {
-      limit?: number;
-      // first_id pagination cursor for order=desc. OFAPI treats it as inclusive
-      // ("include this message ID as the first message in the results"), so
-      // callers must drop the cursor row if it reappears.
-      firstId?: string | null;
-      pageIndex?: number;
-      // Per-request retry override (0 = single attempt). The DM circuit
-      // breaker's adaptive limit probes must not multiply a 60s vendor
-      // timeout by the default retry budget.
-      retries?: number;
-    },
-  ): Promise<OfapiListPage>;
   // GET /api/{account}/fans/active — the audience sweep (docs/ofapi-parity-plan.md
   // Phase 3). The documented hard cap is 20 fans per request.
   listActiveFans(
@@ -541,7 +516,7 @@ export interface OfapiClient {
       // settled here unless `settlement` is "caller": then the response
       // carries `collectionRequestId` and the caller settles or releases it.
       // Returns `location` and `content-length` headers.
-      media?: { method: "GET" | "HEAD"; settlement?: "response" | "caller" };
+      media: { method: "GET" | "HEAD"; settlement?: "response" | "caller" };
     },
   ): Promise<OfapiRawResponse>;
   // Capture-first transport. The caller durably reserves the attempt before
@@ -980,7 +955,6 @@ export function createOfapiClient(input: {
     suppressZeroCredits?: boolean;
     actorUserId?: number | null;
     budgetScope?: "audience" | "backfill" | "link_stats" | null;
-    ledgerContext?: "media" | null;
   }) {
     const meta = parseResponseMeta(report.body, report.headers);
     await input.onCollectionResponse?.(`${report.requestId}:${report.attemptNumber}`, meta?.creditsUsed ?? null);
@@ -1018,7 +992,6 @@ export function createOfapiClient(input: {
         actorUserId: report.actorUserId ?? null,
         receivedAt: new Date().toISOString(),
         ...(report.budgetScope ? { budgetScope: report.budgetScope } : {}),
-        ...(report.ledgerContext ? { ledgerContext: report.ledgerContext } : {}),
     };
     const key = `${observation.requestId}:${observation.attemptNumber}`;
     pendingCreditReceipts.set(key, observation);
@@ -1316,30 +1289,25 @@ export function createOfapiClient(input: {
       fallbackCredits: number;
       fallbackEstimated: boolean;
       timeoutMs?: number;
-      media?: { method: "GET" | "HEAD"; settlement?: "response" | "caller" };
+      media: { method: "GET" | "HEAD"; settlement?: "response" | "caller" };
     },
   ): Promise<OfapiRawResponse> {
-    const media = options.media ?? null;
-    const method = media?.method ?? "GET";
-    const query = new URLSearchParams(options.query);
+    const media = options.media;
+    const method = media.method;
     // A media path already carries the CDN URL with its own query, verbatim:
     // re-serializing it would re-encode the signature.
-    const url = `${baseUrl}${options.pathname}${!media && query.size > 0 ? `?${query.toString()}` : ""}`;
+    const url = `${baseUrl}${options.pathname}`;
     const accountId = options.pathname.split("/")[1]!;
     // The media path embeds a signed CDN URL: errors name only its shape.
-    const pathLabel = media ? `/${accountId}/media/download/{cdnUrl}` : options.pathname;
+    const pathLabel = `/${accountId}/media/download/{cdnUrl}`;
     const requestId = `${options.operation}:${randomUUID()}`;
-    if (media) {
-      // Desktop media transport is paced by the resolve service's own bounded
-      // limiter: it never takes (or waits for) the chat-read slot. A charging
-      // download still needs working credit accounting.
-      if (!OFAPI_FREE_READ_OPERATIONS.has(options.operation)) await assertCreditAccountingReady();
-    } else {
-      await waitForRequestSlot("interactive", !OFAPI_FREE_READ_OPERATIONS.has(options.operation));
-    }
+    // Desktop media transport is paced by the resolve service's own bounded
+    // limiter: it never takes (or waits for) the chat-read slot. A charging
+    // download still needs working credit accounting.
+    if (!OFAPI_FREE_READ_OPERATIONS.has(options.operation)) await assertCreditAccountingReady();
 
     const generation = await input.beforeAccountRequest?.(context.pageId, accountId);
-    await authorizeOperation(options.operation, method, media ? pathLabel : options.pathname);
+    await authorizeOperation(options.operation, method, pathLabel);
     await input.beforeCollectionRequest?.({ operation: options.operation, method, accountId, pageId: context.pageId, requestId: `${requestId}:1`, context: context.collectionContext, interactive: true, reservedCredits: options.fallbackCredits });
     let response: Response;
     try {
@@ -1347,22 +1315,20 @@ export function createOfapiClient(input: {
         method,
         headers: {
           authorization: `Bearer ${input.apiKey}`,
-          accept: media ? "*/*" : "application/json",
+          accept: "*/*",
         },
         signal: AbortSignal.timeout(options.timeoutMs ?? OFAPI_PROXY_READ_TIMEOUT_MS),
         // Media: the Location decides free vs paid, and Authorization must
         // never follow a redirect to a CDN host.
-        ...(media ? { redirect: "manual" as const } : {}),
+        redirect: "manual" as const,
       };
       if (context.dispatcher) {
         init.dispatcher = context.dispatcher;
       }
       response = await fetch(url, init);
-    } catch (error) {
+    } catch {
       throw new OfapiApiError(
-        `OFAPI request failed: ${method} ${pathLabel}: ${
-          media ? "transport" : error instanceof Error ? error.message : String(error)
-        }`,
+        `OFAPI request failed: ${method} ${pathLabel}: transport`,
         null,
         null,
       );
@@ -1370,7 +1336,7 @@ export function createOfapiClient(input: {
 
     let text: string;
     try {
-      if (media && response.status < 400) {
+      if (response.status < 400) {
         // Bytes never pass through the hub: a redirect body is noise and a
         // 2xx body would be the file itself.
         await response.body?.cancel().catch(() => undefined);
@@ -1378,11 +1344,9 @@ export function createOfapiClient(input: {
       } else {
         text = await response.text();
       }
-    } catch (error) {
+    } catch {
       throw new OfapiApiError(
-        `OFAPI response body read failed: ${method} ${pathLabel}: ${
-          media ? "transport" : error instanceof Error ? error.message : String(error)
-        }`,
+        `OFAPI response body read failed: ${method} ${pathLabel}: transport`,
         null,
         null,
       );
@@ -1397,30 +1361,12 @@ export function createOfapiClient(input: {
       }
     }
 
-    if (media) {
-      // The media resolve service writes its own ledger row (it knows the
-      // price and links the row to its decision log); settle only the
-      // collection reservation here, with any provider-reported charge —
-      // or leave it to the caller, who learns where the redirect went.
-      if (media.settlement !== "caller") {
-        await input.onCollectionResponse?.(`${requestId}:1`, parseResponseMeta(body, response.headers)?.creditsUsed ?? null);
-      }
-    } else {
-      const creditAccounted = await reportCreditSpend({
-        operation: options.operation,
-        httpStatus: response.status,
-        headers: response.headers,
-        body,
-        requestId,
-        pageId: context.pageId ?? null,
-        attemptNumber: 1,
-        fallbackCredits: options.fallbackCredits,
-        fallbackEstimated: options.fallbackEstimated,
-        actorUserId: context.actorUserId ?? null,
-        ledgerContext: context.ledgerContext ?? null,
-      });
-
-      if (creditAccounted === false) throw new OfapiApiError("OFAPI read credit accounting unavailable", null, null);
+    // The media resolve service writes its own ledger row (it knows the
+    // price and links the row to its decision log); settle only the
+    // collection reservation here, with any provider-reported charge —
+    // or leave it to the caller, who learns where the redirect went.
+    if (media.settlement !== "caller") {
+      await input.onCollectionResponse?.(`${requestId}:1`, parseResponseMeta(body, response.headers)?.creditsUsed ?? null);
     }
 
     const headers: Record<string, string> = {};
@@ -1435,7 +1381,8 @@ export function createOfapiClient(input: {
       "x-rate-limit-limit-minute",
       // Media only: never forwarded to a gateway client, whose body is
       // re-serialized (a stale content-length would corrupt it).
-      ...(media ? ["location", "content-length"] : []),
+      "location",
+      "content-length",
     ]) {
       const value = response.headers.get(name);
       if (value !== null) {
@@ -1447,7 +1394,7 @@ export function createOfapiClient(input: {
       status: response.status,
       body,
       headers,
-      ...(media?.settlement === "caller" ? { collectionRequestId: `${requestId}:1` } : {}),
+      ...(media.settlement === "caller" ? { collectionRequestId: `${requestId}:1` } : {}),
     };
   }
 
@@ -2239,31 +2186,6 @@ export function createOfapiClient(input: {
           offset,
           order: params.order ?? "recent",
         },
-      });
-    },
-    async listChatMessages(context, accountId, chatId, params) {
-      const limit = params.limit ?? 100;
-      return observedListRequest({
-        context,
-        operation: "ofapi_chat_messages",
-        endpointTemplate: "/:accountId/chats/:chatId/messages",
-        pathname: `/${encodeURIComponent(accountId)}/chats/${encodeURIComponent(chatId)}/messages`,
-        query: {
-          limit: String(limit),
-          order: "desc",
-          first_id: params.firstId ?? undefined,
-        },
-        pageIndex: params.pageIndex ?? 0,
-        cursorPresent: params.firstId != null,
-        requestMetadata: {
-          limit,
-          order: "desc",
-          hasFirstId: params.firstId != null,
-        },
-        // Chat history reads are scraped server-side and scale with chat size;
-        // the default 15 s abort starved the largest chats forever.
-        timeoutMs: OFAPI_SLOW_READ_TIMEOUT_MS,
-        ...(params.retries !== undefined ? { retries: params.retries } : {}),
       });
     },
     async listActiveFans(context, accountId, params) {

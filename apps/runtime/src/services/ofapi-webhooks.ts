@@ -72,18 +72,6 @@ export function buildOfapiWebhookEventSet(groups: readonly (keyof typeof OFAPI_O
   return [...new Set<string>([...OFAPI_WEBHOOK_EVENTS, ...groups.flatMap(group => [...OFAPI_OPTIONAL_WEBHOOK_GROUPS[group]])])];
 }
 
-export async function getOfapiWebhookCollectionState(db: AppContext["db"]) {
-  const config = await getOfapiWebhookConfig(db);
-  const events = config?.events ?? [];
-  return {
-    registrationState: config?.registrationState ?? "unregistered",
-    externalWebhookId: config?.externalWebhookId ?? null,
-    groups: Object.entries(OFAPI_OPTIONAL_WEBHOOK_GROUPS).map(([id, members]) => ({
-      id, events: [...members], enabled: members.every(event => events.includes(event)),
-    })),
-  };
-}
-
 const SIGNATURE_HEX_PATTERN = /^[0-9a-f]{64}$/i;
 const MAX_IDEMPOTENCY_KEY_LENGTH = 255;
 

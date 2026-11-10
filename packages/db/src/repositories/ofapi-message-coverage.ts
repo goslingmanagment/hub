@@ -663,27 +663,3 @@ export async function evaluateOfapiHistoryCoverage(
   }
   return { eligible: true, coverage };
 }
-
-export async function resetOfapiMessageCoverageProjection(
-  db: Database,
-  accountId?: number | null,
-) {
-  if (accountId == null) {
-    await db.transaction(async (tx) => {
-      await tx.execute(sql`delete from ofapi_message_coverage`);
-      await tx.execute(sql`
-        delete from projection_seq_watermarks
-        where projection = ${OFAPI_MESSAGE_COVERAGE_PROJECTION}
-      `);
-    });
-    return;
-  }
-  await db.transaction(async (tx) => {
-    await tx.execute(sql`delete from ofapi_message_coverage where page_id = ${accountId}`);
-    await tx.execute(sql`
-      delete from projection_seq_watermarks
-      where projection = ${OFAPI_MESSAGE_COVERAGE_PROJECTION}
-        and account_id = ${accountId}
-    `);
-  });
-}

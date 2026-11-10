@@ -115,7 +115,6 @@ function fakeAudienceClient(pagesByOffset: Map<number, OfapiListPage>) {
     updateWebhook: vi.fn(async () => ({ id: "wh" })),
     listAccounts: vi.fn(async () => []),
     listChats: vi.fn(async () => ({ items: [], hasNextPage: false, meta: null })),
-    listChatMessages: vi.fn(async () => ({ items: [], hasNextPage: false, meta: null })),
     listActiveFans: listActiveFans as never,
     pingBalance: vi.fn(async () => ({ items: [], hasNextPage: false, meta: null })),
   };

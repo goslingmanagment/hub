@@ -1,4 +1,4 @@
-import { and, eq, gte, inArray, lt, notInArray, sql } from "drizzle-orm";
+import { and, eq, gte, inArray, lt, sql } from "drizzle-orm";
 
 import {
   businessDateToUtcStart,
@@ -301,32 +301,6 @@ export async function countActivePendingTransactionsByIds(
       sql`${settledTransactionState()} = 'pending'::transaction_state`,
     ));
   return rows.length;
-}
-
-export async function markTransactionsScanToken(
-  db: Database,
-  input: {
-    platformAccountId: number;
-    transactionIds: string[];
-    scanToken: string;
-  },
-) {
-  if (input.transactionIds.length === 0) {
-    return;
-  }
-
-  for (let index = 0; index < input.transactionIds.length; index += 1_000) {
-    const batch = input.transactionIds.slice(index, index + 1_000);
-    await db
-      .update(transactions)
-      .set({
-        scanToken: input.scanToken,
-      })
-      .where(and(
-        eq(transactions.platformAccountId, input.platformAccountId),
-        inArray(transactions.transactionId, batch),
-      ));
-  }
 }
 
 export async function rebuildRevenueRollups(
@@ -688,87 +662,6 @@ export async function getRevenueBreakdown(
     netAmountMills: row.creatorNetAmountMills,
     bucket: getTransactionClassification(row.canonicalType).bucket,
   }));
-}
-
-export async function retireTransactionsMissingFromWindow(
-  db: Database,
-  input: {
-    platformAccountId: number;
-    from: Date;
-    to: Date;
-    cleanupMode: "keep_set" | "authoritative_empty" | "scan_token";
-    keepTransactionIds?: string[];
-    scanToken?: string;
-  },
-) {
-  const clauses = [
-    eq(transactions.platformAccountId, input.platformAccountId),
-    gte(transactions.occurredAt, input.from),
-    lt(transactions.occurredAt, input.to),
-    eq(transactions.isActive, true),
-  ];
-
-  if (input.cleanupMode === "keep_set") {
-    const keepTransactionIds = input.keepTransactionIds ?? [];
-    if (keepTransactionIds.length === 0) {
-      return;
-    }
-    clauses.push(notInArray(transactions.transactionId, keepTransactionIds));
-  } else if (input.cleanupMode === "scan_token") {
-    if (!input.scanToken) {
-      throw new Error("scanToken is required for scan_token cleanup");
-    }
-
-    clauses.push(sql`${transactions.scanToken} is distinct from ${input.scanToken}`);
-  }
-
-  await db
-    .update(transactions)
-    .set({
-      isActive: false,
-      inactiveReason: "missing_from_sync_window",
-      inactivatedAt: new Date(),
-    })
-    .where(and(...clauses));
-}
-
-export const deleteTransactionsMissingFromWindow = retireTransactionsMissingFromWindow;
-
-/**
- * Counts active in-window transactions, splitting the total from the subset
- * that a `scan_token` retire would deactivate (rows whose scanToken does not
- * match the current scan). Used as a defensive guard so a provider that
- * under-returns a window cannot mass-deactivate otherwise-valid rows.
- */
-export async function countActiveInWindowTransactionsByScanToken(
-  db: Database,
-  input: {
-    platformAccountId: number;
-    from: Date;
-    to: Date;
-    scanToken: string;
-  },
-) {
-  const baseClauses = [
-    eq(transactions.platformAccountId, input.platformAccountId),
-    gte(transactions.occurredAt, input.from),
-    lt(transactions.occurredAt, input.to),
-    eq(transactions.isActive, true),
-  ];
-
-  const [row] = await db
-    .select({
-      total: sql<number>`count(*)::int`,
-      staleScanToken:
-        sql<number>`count(*) filter (where ${transactions.scanToken} is distinct from ${input.scanToken})::int`,
-    })
-    .from(transactions)
-    .where(and(...baseClauses));
-
-  return {
-    total: row?.total ?? 0,
-    staleScanToken: row?.staleScanToken ?? 0,
-  };
 }
 
 /**

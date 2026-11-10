@@ -91,8 +91,6 @@ describe("OFAPI effective collection control", () => {
       attemptId: randomUUID(), operation: "ofapi_capture_posts", method: "GET", pathname: "/acct_test/posts", priorityClass: "bulk", deadlineAt: new Date(Date.now() + 10000), beforeDispatch: fence,
     })).rejects.toMatchObject({ phase: "pre_dispatch" });
     expect(fence).not.toHaveBeenCalled(); expect(fetch).not.toHaveBeenCalled();
-    await expect(client.proxyRead!({ pageId, collectionContext: { category: "posts_comments", purpose: "interactive" } }, { operation: "ofapi_gateway_posts", pathname: "/acct_test/posts", query: {}, fallbackCredits: 1, fallbackEstimated: true })).rejects.toThrow("collection_off");
-    expect(fetch).not.toHaveBeenCalled();
   });
   it("page override dominates default and an unavailable policy store does not revive baseline", async () => {
     await applyOfapiCollectionPolicy(app.db, { expectedRevision: 0, changes: [settings({ pageId: null })] }, 1);
