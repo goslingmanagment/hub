@@ -32,7 +32,7 @@ export const INTEGRATION_PATHS = [
   { test: file => /^tests\/(?:.+\/)?[^/]+\.integration\.test\.ts$/.test(file), reason: "integration test" },
   { test: file => ["tests/schema-guard.test.ts", "tests/http-client.test.ts"].includes(file), reason: "integration test" },
   { test: file => file.startsWith("tests/helpers/") || file.startsWith("tests/fixtures/") || file.startsWith("tests/ci/"), reason: "integration harness" },
-  { test: file => ["vitest.config.ts", "docker-compose.test.yml"].includes(file), reason: "integration harness" },
+  { test: file => file === "vitest.config.ts", reason: "integration harness" },
   // Toolchain: dependencies, patches and the CI that runs the shards.
   { test: file => file === "package.json" || file.endsWith("/package.json"), reason: "dependencies" },
   { test: file => ["pnpm-lock.yaml", "pnpm-workspace.yaml"].includes(file) || file.startsWith("patches/"), reason: "dependencies" },
