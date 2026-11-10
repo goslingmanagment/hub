@@ -10,6 +10,7 @@ import {
   egressEndpoints,
   pages,
   spenderProjectionWatermarks,
+  syncPages,
 } from "../schema.ts";
 
 function defaultCommissionRateForPlatform(platform: Platform) {
@@ -321,6 +322,33 @@ export async function findPageByLabel(db: Database, label: string) {
 
 export async function findPageById(db: Database, platformAccountId: number) {
   return findActivePage(db, eq(pages.id, platformAccountId));
+}
+
+/** What a browser page's credentials generation is made of (the sync engine's
+ * `readBrowserCredentialsGeneration`), in ONE statement and so one snapshot:
+ * the active page, its egress row (unique per page; null when absent, as in
+ * `findPageById`) and its engine row's verified generation (null when there
+ * is no `sync_pages` row). Null: no active page. Read fresh on every call. */
+export async function readBrowserCredentialsSnapshot(db: Database, pageId: number) {
+  const [row] = await db
+    .select({
+      platform: pages.platform,
+      platformAccountId: pages.platformAccountId,
+      proxy: {
+        id: egressEndpoints.id,
+        url: egressEndpoints.url,
+        encryptedAuth: egressEndpoints.encryptedAuth,
+        keyVersion: egressEndpoints.keyVersion,
+        rateLimitScopeKey: egressEndpoints.rateLimitScopeKey,
+      },
+      verified: syncPages.credentialsGeneration,
+    })
+    .from(pages)
+    .leftJoin(egressEndpoints, eq(egressEndpoints.platformAccountId, pages.id))
+    .leftJoin(syncPages, eq(syncPages.pageId, pages.id))
+    .where(and(eq(pages.id, pageId), eq(pages.status, "active")))
+    .limit(1);
+  return row ?? null;
 }
 
 /** Active pages among `labels` in one statement, each with its egress row (the
