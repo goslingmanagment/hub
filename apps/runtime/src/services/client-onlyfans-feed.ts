@@ -47,10 +47,9 @@ import {
   type FeedMoneySightingInput,
 } from "./client-onlyfans-feed-money.ts";
 import { loadClientSwitches, requireClientFeatureOnLabel, type ClientFeatureRequest } from "./client-switches.ts";
-import { clientTokenIngestProducer } from "./client-token-profile.ts";
 import { clientVersionOf } from "./client-send-attributions.ts";
 import { ClientFeatureDisabledError, ServiceUnavailableError } from "./errors.ts";
-import { ingestProducerForClientVersion } from "./ingest-observations.ts";
+import { clientCaptureProducer } from "./ingest-observations.ts";
 import {
   projectDmMessageDeletedInTransaction,
   projectDmMessageInTransaction,
@@ -409,9 +408,7 @@ export async function applyClientOnlyfansFeed(
   await requireBoundAccount(app, page, input.body);
 
   const clientVersion = clientVersionOf(request.headers["x-client-version"]);
-  const producer = principal.clientProfile === undefined
-    ? ingestProducerForClientVersion(clientVersion ?? "unknown")
-    : clientTokenIngestProducer(principal.clientProfile, clientVersion);
+  const producer = clientCaptureProducer(principal, clientVersion);
   const now = new Date();
   const writer = (await getPageTransactionsWriterInfo(app.db, page.id))?.transactionsWriter ?? null;
   const counts = { taken: 0, duplicates: 0, held: 0, outOfRange: 0 };

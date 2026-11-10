@@ -33,8 +33,9 @@ import {
   lastWriterQuery,
   middleOfWork,
   moscowDayOf,
+  netOf,
   readPeopleWork,
-  workHoldsSale,
+  workHoldsShiftSale,
   type ComputedWork,
   type PersonWork,
 } from "./chatter-shifts.ts";
@@ -187,9 +188,6 @@ function fansOf(shift: { endedAt: number }, sends: readonly AuthoredSendRow[], s
   return { written: [...firstTo.keys()], paid: [...paid] };
 }
 
-const netOf = (sales: readonly ShiftSale[]) => sales.reduce((sum, sale) => sum + sale.netMills, 0);
-const holds = (work: ComputedWork, sale: ShiftSale) => workHoldsSale(work, { pageLabel: sale.pageLabel, at: sale.occurredAt.getTime() });
-
 export async function computeChatterStats(
   db: Database,
   input: { userId: number; username: string; pages: readonly StatsPage[]; days: number; now: Date },
@@ -209,7 +207,7 @@ export async function computeChatterStats(
   ]);
   const work = (people.get(userId)?.work ?? []).filter((one) => middleOfWork(one) >= previousFrom.getTime());
   const sales = work.length === 0 ? [] : await listShiftSales(db, { pageIds, from: readFrom, to: now });
-  const held = work.map((one) => ({ work: one, sales: sales.filter((sale) => holds(one, sale)) }));
+  const held = work.map((one) => ({ work: one, sales: sales.filter((sale) => workHoldsShiftSale(one, sale)) }));
   const heldSales = held.flatMap((one) => one.sales);
 
   const [team, sendsRead, ppvRows, replyRows, reports] = await Promise.all([
@@ -228,7 +226,7 @@ export async function computeChatterStats(
     if (otherId === userId) continue;
     usernames.set(otherId, other.username);
     const shifts = other.work.filter((one) => one.kind === "shift");
-    for (const sale of heldSales) if (shifts.some((one) => holds(one, sale))) push(othersOf, sale.transactionId, otherId);
+    for (const sale of heldSales) if (shifts.some((one) => workHoldsShiftSale(one, sale))) push(othersOf, sale.transactionId, otherId);
   }
   const visitSales = new Set(held.filter((one) => one.work.kind === "visit").flatMap((one) => one.sales.map((sale) => sale.transactionId)));
   const lastWriters = await listSaleLastWriters(db, {
@@ -288,7 +286,7 @@ export async function computeChatterStats(
       sales: own.map((sale) => ({
         at: sale.occurredAt.toISOString(),
         netMills: sale.netMills,
-        kind: KIND_OF[sale.kind] ?? "tip",
+        kind: saleKindOf(sale.kind),
         pageLabel: sale.pageLabel,
         fanName: sale.fanName,
         overlap: together.has(sale.transactionId),
@@ -298,7 +296,7 @@ export async function computeChatterStats(
 
   const sum = (pick: (shift: (typeof shifts)[number]) => number) => shifts.reduce((total, shift) => total + pick(shift), 0);
   const byKind = emptyByKind();
-  for (const sale of currentSales) byKind[KIND_OF[sale.kind] ?? "tip"] += sale.netMills;
+  for (const sale of currentSales) byKind[saleKindOf(sale.kind)] += sale.netMills;
   const workedMinutes = sum((shift) => shift.workedMinutes);
   const salesNetMills = sum((shift) => shift.salesNetMills);
 
@@ -418,7 +416,7 @@ export async function computeChatterStats(
       biggestSale: biggest === null ? null : {
         at: biggest.occurredAt.toISOString(),
         netMills: biggest.netMills,
-        kind: KIND_OF[biggest.kind] ?? "tip",
+        kind: saleKindOf(biggest.kind),
         pageLabel: biggest.pageLabel,
         fanName: biggest.fanName,
       },

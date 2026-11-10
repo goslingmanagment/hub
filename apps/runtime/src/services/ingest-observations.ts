@@ -23,6 +23,7 @@ import type {
 import { CLIENT_HEALTH_INGEST_KIND, type ClientTokenProfile } from "@agency_hub_core/contracts";
 
 import type { AppContext } from "../bootstrap.ts";
+import type { HumanAuthPrincipal } from "./auth.ts";
 import { clientHealthIngestEnabled, intakeClientHealthReports } from "./client-health-intake.ts";
 import { clientTokenIngestKinds, clientTokenIngestProducer } from "./client-token-profile.ts";
 import { stampOnlyParseVersion } from "./canonicalize/index.ts";
@@ -75,6 +76,18 @@ export function ingestProducerForClientVersion(clientVersion: string) {
   return chatExtension
     ? `chat-extension@${chatExtension[1]}`
     : `desktop@${clientVersion}`;
+}
+
+/**
+ * The producer a client route's captures journal under: a narrow token's by its
+ * profile (`clientTokenIngestProducer`), a full token's by the header
+ * (`ingestProducerForClientVersion`, `unknown` without one). `clientVersion` is
+ * the header as the caller reads it.
+ */
+export function clientCaptureProducer(principal: HumanAuthPrincipal, clientVersion: string | null): string {
+  return principal.clientProfile === undefined
+    ? ingestProducerForClientVersion(clientVersion ?? "unknown")
+    : clientTokenIngestProducer(principal.clientProfile, clientVersion);
 }
 
 export { isHarvestProducer };

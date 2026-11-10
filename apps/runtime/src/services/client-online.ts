@@ -38,10 +38,9 @@ import type { AppContext } from "../bootstrap.ts";
 import { requireApiKeyUser, type HumanAuthPrincipal } from "./auth.ts";
 import { decideOnline, greetingNameOf, onlineRank, ONLINE_RULES, ONLINE_TEMPLATES, type OthersTalking } from "./client-online-rules.ts";
 import { inConversationOf } from "./client-in-conversation.ts";
-import { clientTokenIngestProducer } from "./client-token-profile.ts";
 import { requireClientFeatureOnLabel, requireClientGrantedPage, type ClientFeatureRequest } from "./client-switches.ts";
 import { ClientFeatureDisabledError, ConflictError } from "./errors.ts";
-import { ingestProducerForClientVersion } from "./ingest-observations.ts";
+import { clientCaptureProducer } from "./ingest-observations.ts";
 import { stampOnlyParseVersion } from "./canonicalize/index.ts";
 
 /**
@@ -76,10 +75,7 @@ const iso = (date: Date | null): string | null => (date === null ? null : date.t
 
 function producerOf(request: { headers: Record<string, string | string[] | undefined> }, principal: HumanAuthPrincipal) {
   const header = request.headers["x-client-version"];
-  const clientVersion = typeof header === "string" ? header : null;
-  return principal.clientProfile === undefined
-    ? ingestProducerForClientVersion(clientVersion ?? "unknown")
-    : clientTokenIngestProducer(principal.clientProfile, clientVersion);
+  return clientCaptureProducer(principal, typeof header === "string" ? header : null);
 }
 
 export async function readClientOnline(

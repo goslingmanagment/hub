@@ -50,9 +50,8 @@ import { normalizeDmMessageText } from "@agency_hub_core/shared";
 import type { AppContext } from "../bootstrap.ts";
 import { requireApiKeyUser, type HumanAuthPrincipal } from "./auth.ts";
 import { requireClientGrantedPage } from "./client-switches.ts";
-import { clientTokenIngestProducer } from "./client-token-profile.ts";
 import { BadRequestError, ConflictError, NotFoundError } from "./errors.ts";
-import { ingestProducerForClientVersion } from "./ingest-observations.ts";
+import { clientCaptureProducer } from "./ingest-observations.ts";
 import { stampOnlyParseVersion } from "./canonicalize/index.ts";
 
 /**
@@ -341,10 +340,7 @@ export async function saveClientOutreach(
 
 function producerOf(request: { headers: Record<string, string | string[] | undefined> }, principal: HumanAuthPrincipal): string {
   const header = request.headers["x-client-version"];
-  const clientVersion = typeof header === "string" ? header : null;
-  return principal.clientProfile === undefined
-    ? ingestProducerForClientVersion(clientVersion ?? "unknown")
-    : clientTokenIngestProducer(principal.clientProfile, clientVersion);
+  return clientCaptureProducer(principal, typeof header === "string" ? header : null);
 }
 
 function sendRequestOf(body: ClientOutreachSendBody, me: number, now: Date): OutreachSendRequest {

@@ -26,10 +26,9 @@ import { addUtcDays, startOfBusinessDay } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
 import { requireApiKeyUser, requireDashboardUser, requireOwner, type AuthPrincipal, type HumanAuthPrincipal } from "./auth.ts";
-import { clientTokenIngestProducer } from "./client-token-profile.ts";
 import { requireClientGrantedPage } from "./client-switches.ts";
 import { ConflictError, NotFoundError } from "./errors.ts";
-import { ingestProducerForClientVersion } from "./ingest-observations.ts";
+import { clientCaptureProducer } from "./ingest-observations.ts";
 import { stampOnlyParseVersion } from "./canonicalize/index.ts";
 
 /**
@@ -106,10 +105,7 @@ export async function recordClientWinBackAttempt(
   if (candidate === undefined) throw new ConflictError("The fan is not on the win-back list", { reason: "not_listed" });
 
   const header = request.headers["x-client-version"];
-  const clientVersion = typeof header === "string" ? header : null;
-  const producer = principal.clientProfile === undefined
-    ? ingestProducerForClientVersion(clientVersion ?? "unknown")
-    : clientTokenIngestProducer(principal.clientProfile, clientVersion);
+  const producer = clientCaptureProducer(principal, typeof header === "string" ? header : null);
   const attemptId = await app.db.transaction(async (transaction) => {
     const tx = transaction as unknown as Database;
     const payload = {

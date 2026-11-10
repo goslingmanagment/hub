@@ -47,7 +47,7 @@ import {
   moscowDayOf,
   readPeopleWork,
   salesHeldBy,
-  workHoldsSale,
+  workHoldsShiftSale,
   type ComputedWork,
 } from "./chatter-shifts.ts";
 import { BadRequestError, ConflictError, NotFoundError } from "./errors.ts";
@@ -575,10 +575,10 @@ export async function readTeamShiftExport(
     // A visit's sales (chatter-shifts.ts `salesHeldBy`), read for all of the person's visits at once.
     const visits = ofDays.filter((shift) => shift.kind === "visit");
     const sales = visits.length === 0 ? [] : await listShiftSales(app.db, { pageIds: [...person.pageIds.values()], ...read });
-    const inVisits = sales.filter((sale) => visits.some((visit) => workHoldsSale(visit, { pageLabel: sale.pageLabel, at: sale.occurredAt.getTime() })));
+    const inVisits = sales.filter((sale) => visits.some((visit) => workHoldsShiftSale(visit, sale)));
     const writers = inVisits.length === 0 ? new Map<number, number>() : await listSaleLastWriters(app.db, { hours: SALE_LAST_WRITER_HOURS, sales: lastWriterQuery(inVisits) });
     const visitHoldsSale = (visit: ComputedWork) => inVisits.some((sale) => writers.get(sale.transactionId) === userId
-      && workHoldsSale(visit, { pageLabel: sale.pageLabel, at: sale.occurredAt.getTime() }));
+      && workHoldsShiftSale(visit, sale));
     for (const shift of ofDays) {
       if (shift.kind === "visit" && !visitHoldsSale(shift)) continue;
       if (!shift.ongoing && reports.some((report) => report.startedAt.getTime() < shift.endedAt && report.endedAt.getTime() > shift.startedAt)) continue;

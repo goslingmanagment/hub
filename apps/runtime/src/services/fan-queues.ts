@@ -76,7 +76,6 @@ import { requireApiKeyUser, type HumanAuthPrincipal } from "./auth.ts";
 import { decideOnline, greetingNameOf, ONLINE_TEMPLATES, type OthersTalking } from "./client-online-rules.ts";
 import { inConversationOf } from "./client-in-conversation.ts";
 import { requireClientGrantedPage } from "./client-switches.ts";
-import { clientTokenIngestProducer } from "./client-token-profile.ts";
 import { ConflictError, ForbiddenError, NotFoundError } from "./errors.ts";
 import {
   describeFanQueueList,
@@ -90,7 +89,7 @@ import {
   fanQueueWhy,
   judgeFanQueueItem,
 } from "./fan-queue-rules.ts";
-import { ingestProducerForClientVersion } from "./ingest-observations.ts";
+import { clientCaptureProducer } from "./ingest-observations.ts";
 import { stampOnlyParseVersion } from "./canonicalize/index.ts";
 
 /**
@@ -471,10 +470,7 @@ async function upkeep(db: Database, queue: FanQueueRow, now: Date): Promise<FanQ
 
 function producerOf(request: { headers: Record<string, string | string[] | undefined> }, principal: HumanAuthPrincipal) {
   const header = request.headers["x-client-version"];
-  const clientVersion = typeof header === "string" ? header : null;
-  return principal.clientProfile === undefined
-    ? ingestProducerForClientVersion(clientVersion ?? "unknown")
-    : clientTokenIngestProducer(principal.clientProfile, clientVersion);
+  return clientCaptureProducer(principal, typeof header === "string" ? header : null);
 }
 
 async function clientPage(app: AppContext, principal: HumanAuthPrincipal, pageLabel: string): Promise<FanQueuePage> {
