@@ -46,7 +46,32 @@ async function pageExists(db: Database, pageId: number) {
 async function effective(db: Database, category: OfapiCollectionCategory, pageId: number, current: State) {
   const rows = await db.execute<PolicyRow>(sql`select page_id,category,settings,revision from ofapi_collection_policies
     where category=${category} and scope_key in ('default',${`page:${pageId}`}) order by page_id nulls last limit 1`);
-  const row = rows.rows[0];
+  return effectiveFromRow(rows.rows[0], category, pageId, current);
+}
+/** The policy rows of many pages at once (every default row plus the pages'
+ * own), for callers that judge many (page, category) pairs in one pass. */
+async function loadPolicyRows(db: Database, pageIds: number[]) {
+  const scopes = sql.join(["default", ...pageIds.map(id => `page:${id}`)].map(scope => sql`${scope}`), sql`,`);
+  return (await db.execute<PolicyRow & { scope_key: string }>(sql`select scope_key,page_id,category,settings,revision from ofapi_collection_policies
+    where scope_key in (${scopes})`)).rows;
+}
+/** What `effective`'s query returns for one pair out of `loadPolicyRows`:
+ * the default or page row of the category, a row with a page first. */
+function pickPolicyRow(rows: Array<PolicyRow & { scope_key: string }>, category: OfapiCollectionCategory, pageId: number) {
+  const candidates = rows.filter(row => row.category === category && (row.scope_key === "default" || row.scope_key === `page:${pageId}`));
+  return candidates.find(row => row.page_id !== null) ?? candidates[0];
+}
+/** The state and every policy row of the given pages, read once; judge a
+ * pair with `effectiveOfapiCollectionPolicyFrom`. */
+export async function loadOfapiCollectionPolicyContext(db: Database, pageIds: number[]) {
+  return { state: await state(db), rows: await loadPolicyRows(db, pageIds) };
+}
+export type OfapiCollectionPolicyContext = Awaited<ReturnType<typeof loadOfapiCollectionPolicyContext>>;
+/** `getEffectiveOfapiCollectionPolicy` over an already read context. */
+export function effectiveOfapiCollectionPolicyFrom(context: OfapiCollectionPolicyContext, category: OfapiCollectionCategory, pageId: number) {
+  return effectiveFromRow(pickPolicyRow(context.rows, category, pageId), category, pageId, context.state);
+}
+function effectiveFromRow(row: PolicyRow | undefined, category: OfapiCollectionCategory, pageId: number, current: State) {
   const settings = row?.settings ?? baselineSettings(category, pageId);
   if (!OFAPI_COLLECTION_REGISTRY.find(item => item.id === category)?.modes.some(mode => mode === settings.mode)) throw new OfapiCollectionPolicyError("invalid_policy");
   if (!Number.isSafeInteger(settings.dailyCreditLimit) || settings.dailyCreditLimit < 1 || !Number.isSafeInteger(settings.maxCallsPerRun) || settings.maxCallsPerRun < 1 || !Number.isSafeInteger(settings.intervalMinutes) || settings.intervalMinutes < 15 || typeof settings.includeDetails !== "boolean") throw new OfapiCollectionPolicyError("invalid_policy");
@@ -527,9 +552,10 @@ export async function listOfapiCollectionScheduleHealth(db: Database, now = new 
   const pages = (await db.execute<{ id: string; label: string }>(sql`select id,label from pages where platform='onlyfans' and deleted_at is null order by label`)).rows
     .map(row => ({ id: Number(row.id), label: row.label }));
   const facts = await loadScheduleFacts(db, pages.map(page => page.id));
+  const policyRows = await loadPolicyRows(db, pages.map(page => page.id));
   const result: Array<{ pageId: number; pageLabel: string; category: OfapiCollectionCategory; health: OfapiCollectionScheduleHealth }> = [];
   for (const page of pages) for (const category of OFAPI_SCHEDULED_READ_COLLECTION_CATEGORIES) {
-    const policy = await effective(db, category, page.id, current);
+    const policy = effectiveFromRow(pickPolicyRow(policyRows, category, page.id), category, page.id, current);
     const k = facts.key(page.id, category);
     const health = judgeOfapiCollectionSchedule({ ...policy, category, now,
       lastCompletedAt: facts.lastCompleted.get(k) ?? null, policyChangedAt: facts.policyChanged.get(k) ?? null, lastRun: facts.lastRun.get(k) ?? null });
@@ -555,19 +581,29 @@ export async function getOfapiCollectionSnapshot(db: Database, allowedPageIds: n
   const pages = pageRows.rows.map(row => ({ id: Number(row.id), label: row.label, accountId: row.ofapi_account_id }));
   const policies = [];
   const facts = await loadScheduleFacts(db, pages.map(page => page.id));
-  for (const page of pages) for (const category of OFAPI_COLLECTION_REGISTRY) {
-    const policy = await effective(db, category.id, page.id, current);
-    const k = facts.key(page.id, category.id);
-    const scheduleHealth = judgeOfapiCollectionSchedule({ ...policy, category: category.id, now,
-      lastCompletedAt: facts.lastCompleted.get(k) ?? null, policyChangedAt: facts.policyChanged.get(k) ?? null, lastRun: facts.lastRun.get(k) ?? null });
-    const usage = await db.execute<{ calls: string; reserved: string; actual: string | null; month_credits: string; captured: Date | null; inflight: string }>(sql`
-      select count(*) filter(where created_at >= date_trunc('day',now() at time zone 'UTC') at time zone 'UTC')::text calls,
+  const policyRows = await loadPolicyRows(db, pages.map(page => page.id));
+  type UsageRow = { calls: string; reserved: string; actual: string | null; month_credits: string; captured: Date | null; inflight: string };
+  // One grouped read for every pair; a pair without requests gets what the
+  // aggregate returns over an empty set.
+  const emptyUsage: UsageRow = { calls: "0", reserved: "0", actual: null, month_credits: "0", captured: null, inflight: "0" };
+  const usageByPair = new Map<string, UsageRow>();
+  if (pages.length) {
+    const usage = await db.execute<UsageRow & { page_id: string; category: string }>(sql`
+      select page_id,category,count(*) filter(where created_at >= date_trunc('day',now() at time zone 'UTC') at time zone 'UTC')::text calls,
       coalesce(sum(reserved_credits) filter(where created_at >= date_trunc('day',now() at time zone 'UTC') at time zone 'UTC'),0)::text reserved,
       sum(actual_credits) filter(where created_at >= date_trunc('day',now() at time zone 'UTC') at time zone 'UTC')::text actual,
       coalesce(sum(greatest(reserved_credits,coalesce(actual_credits,0))),0)::text month_credits,max(captured_at) captured,
       count(*) filter(where state='reserved')::text inflight
-      from ofapi_collection_requests where state<>'released' and page_id=${page.id} and category=${category.id} and created_at>now()-interval '30 days'`);
-    const row = usage.rows[0]!;
+      from ofapi_collection_requests where state<>'released' and page_id in (${sql.join(pages.map(page => sql`${page.id}`), sql`,`)}) and created_at>now()-interval '30 days'
+      group by page_id,category`);
+    for (const row of usage.rows) usageByPair.set(facts.key(row.page_id, row.category), row);
+  }
+  for (const page of pages) for (const category of OFAPI_COLLECTION_REGISTRY) {
+    const policy = effectiveFromRow(pickPolicyRow(policyRows, category.id, page.id), category.id, page.id, current);
+    const k = facts.key(page.id, category.id);
+    const scheduleHealth = judgeOfapiCollectionSchedule({ ...policy, category: category.id, now,
+      lastCompletedAt: facts.lastCompleted.get(k) ?? null, policyChangedAt: facts.policyChanged.get(k) ?? null, lastRun: facts.lastRun.get(k) ?? null });
+    const row = usageByPair.get(k) ?? emptyUsage;
     policies.push({ ...policy, usage: { callsToday: Number(row.calls), reservedCreditsToday: Number(row.reserved), actualCreditsToday: row.actual === null ? null : Number(row.actual), credits30d: Number(row.month_credits) }, lastCapturedAt: row.captured ? new Date(row.captured).toISOString() : null, inFlight: Number(row.inflight), scheduleHealth });
   }
   const ids = pages.map(page => page.id);
