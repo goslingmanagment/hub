@@ -25,10 +25,9 @@ import type { Platform } from "@agency_hub_core/shared";
 import type { AppContext } from "../bootstrap.ts";
 import { requireApiKeyUser, type HumanAuthPrincipal } from "./auth.ts";
 import { requireClientGrantedPage, type ClientFeatureRequest } from "./client-switches.ts";
-import { clientTokenIngestProducer } from "./client-token-profile.ts";
 import { BadRequestError, ClientFeatureDisabledError } from "./errors.ts";
 import { countOwnSendsInFanQueues } from "./fan-queues.ts";
-import { ingestProducerForClientVersion } from "./ingest-observations.ts";
+import { clientCaptureProducer } from "./ingest-observations.ts";
 import { stampOnlyParseVersion } from "./canonicalize/index.ts";
 
 /**
@@ -143,9 +142,7 @@ export async function applyClientSendAttributions(
   });
 
   const clientVersion = clientVersionOf(request.headers["x-client-version"]);
-  const producer = principal.clientProfile === undefined
-    ? ingestProducerForClientVersion(clientVersion ?? "unknown")
-    : clientTokenIngestProducer(principal.clientProfile, clientVersion);
+  const producer = clientCaptureProducer(principal, clientVersion);
   const now = new Date();
 
   const taken: ClientSendAttributionFactInput[] = [];

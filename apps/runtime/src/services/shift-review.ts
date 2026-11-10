@@ -42,7 +42,7 @@ import {
 import type { AppContext } from "../bootstrap.ts";
 import { requireOwner, type AuthPrincipal } from "./auth.ts";
 import {
-  SALE_LAST_WRITER_HOURS, lastWriterQuery, readPeopleWork, salesHeldBy, workHoldsSale, type ComputedWork, type PersonWork,
+  SALE_LAST_WRITER_HOURS, lastWriterQuery, readPeopleWork, salesHeldBy, workHoldsShiftSale, type ComputedWork, type PersonPiece, type PersonWork,
 } from "./chatter-shifts.ts";
 import { saleKindOf, saleOriginOf, settleSale } from "./chatter-stats.ts";
 import { NotFoundError } from "./errors.ts";
@@ -553,12 +553,6 @@ export function shiftAround(work: readonly ComputedWork[], at: number): { shift:
   return { shift, previous, next };
 }
 
-export interface ColleagueWork {
-  userId: number;
-  username: string;
-  work: ComputedWork;
-}
-
 export interface SettledSale {
   sale: ShiftSale;
   /** The shift holds it (`salesHeldBy`). */
@@ -583,7 +577,7 @@ export function settleShiftSales(input: {
   kind: ComputedWork["kind"];
   sales: readonly ShiftSale[];
   held: ReadonlySet<number>;
-  colleagues: readonly ColleagueWork[];
+  colleagues: readonly PersonPiece[];
   lastWriters: ReadonlyMap<number, number>;
 }): SettledSale[] {
   return input.sales.map((sale) => {
@@ -607,8 +601,8 @@ export function heldNetMills(settled: readonly SettledSale[]): number {
 }
 
 /** The colleagues whose shifts hold the sale. Pure. */
-function holdersOfSale(colleagues: readonly ColleagueWork[], sale: ShiftSale): ColleagueWork[] {
-  return colleagues.filter((other) => workHoldsSale(other.work, { pageLabel: sale.pageLabel, at: sale.occurredAt.getTime() }));
+function holdersOfSale(colleagues: readonly PersonPiece[], sale: ShiftSale): PersonPiece[] {
+  return colleagues.filter((other) => workHoldsShiftSale(other.work, sale));
 }
 
 /**
@@ -642,7 +636,7 @@ async function shiftSales(
 }
 
 /** Everyone's pieces of work of one kind, with whose each is. Pure. */
-export function piecesOf(people: ReadonlyMap<number, PersonWork>, kind: ComputedWork["kind"]): ColleagueWork[] {
+export function piecesOf(people: ReadonlyMap<number, PersonWork>, kind: ComputedWork["kind"]): PersonPiece[] {
   return [...people].flatMap(([id, person]) => person.work
     .filter((work) => work.kind === kind).map((work) => ({ userId: id, username: person.username, work })));
 }
@@ -654,7 +648,7 @@ export function piecesOf(people: ReadonlyMap<number, PersonWork>, kind: Computed
  * SHIFT_REVIEW_SEAM_MINUTES of [start, end] — the seam of two shifts — did not keep it. Its sales stay out of the shift.
  * A look-in shows none. Pure.
  */
-export function pagesWithAllFans(shift: ComputedWork, colleagues: readonly ColleagueWork[], start: number, end: number): Set<string> {
+export function pagesWithAllFans(shift: ComputedWork, colleagues: readonly PersonPiece[], start: number, end: number): Set<string> {
   if (shift.kind !== "shift") return new Set();
   const out = new Set(shift.salesSince.keys());
   for (const [label, messages] of shift.messages) {

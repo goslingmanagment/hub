@@ -388,6 +388,12 @@ export function workHoldsSale(work: Pick<ComputedWork, "salesSince" | "endedAt">
   return since !== undefined && sale.at >= since && sale.at < work.endedAt;
 }
 
+/** Whether a sale is in this piece of work's money: `workHoldsSale` on the sale's page and time. Pure. */
+export const workHoldsShiftSale = (work: ComputedWork, sale: ShiftSale) => workHoldsSale(work, { pageLabel: sale.pageLabel, at: sale.occurredAt.getTime() });
+
+/** The sales' net, mills. Pure. */
+export const netOf = (sales: readonly ShiftSale[]) => sales.reduce((sum, sale) => sum + sale.netMills, 0);
+
 /** How far back a message to a fan says who sold to them: as the facts of a sale in the shift report. */
 export const SALE_LAST_WRITER_HOURS = 48;
 
@@ -405,7 +411,7 @@ export async function salesHeldBy(
   if (pageIds.length === 0) return [];
   const from = new Date(Math.min(...work.salesSince.values()));
   const held = (await listShiftSales(db, { pageIds, from, to: new Date(work.endedAt) }))
-    .filter((sale) => workHoldsSale(work, { pageLabel: sale.pageLabel, at: sale.occurredAt.getTime() }));
+    .filter((sale) => workHoldsShiftSale(work, sale));
   if (work.kind === "shift" || held.length === 0) return held;
   const writers = await listSaleLastWriters(db, { hours: SALE_LAST_WRITER_HOURS, sales: lastWriterQuery(held) });
   return held.filter((sale) => writers.get(sale.transactionId) === input.userId);
@@ -414,6 +420,13 @@ export async function salesHeldBy(
 /** The sales with a fan, as `listSaleLastWriters` asks for them. Pure. */
 export function lastWriterQuery(sales: readonly ShiftSale[]): Array<{ transactionId: number; pageId: number; fanRef: string; at: Date }> {
   return sales.flatMap((sale) => (sale.fanRef === null ? [] : [{ transactionId: sale.transactionId, pageId: sale.pageId, fanRef: sale.fanRef, at: sale.occurredAt }]));
+}
+
+/** One person's piece of work, with whose it is. */
+export interface PersonPiece {
+  userId: number;
+  username: string;
+  work: ComputedWork;
 }
 
 export interface PersonWork {

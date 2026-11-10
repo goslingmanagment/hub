@@ -1,4 +1,4 @@
-import { microUsdFromDbInt, type MicroUsd } from "@agency_hub_core/shared";
+import { microUsdFromDbInt, type AI_SETTINGS_MODELS, type MicroUsd } from "@agency_hub_core/shared";
 export interface AiGatewayCostUsage {
   inputTokens: number;
   outputTokens: number;
@@ -24,6 +24,8 @@ interface AnthropicGatewayPricing {
   cacheReadUsdPerMillion: number;
 }
 
+// The models the owner's settings offer (AI_SETTINGS_MODELS) are exactly the
+// ones priced here: `satisfies` fails the typecheck on a model missing either way.
 const ANTHROPIC_PRICING: Record<string, AnthropicGatewayPricing> = {
   // https://platform.claude.com/docs/en/models/opus-5-5/overview
   "anthropic:claude-opus-5-5": {
@@ -103,7 +105,7 @@ const ANTHROPIC_PRICING: Record<string, AnthropicGatewayPricing> = {
     cacheReadUsdPerMillion: 0.1,
     outputUsdPerMillion: 5,
   },
-};
+} satisfies Record<(typeof AI_SETTINGS_MODELS)[number], AnthropicGatewayPricing>;
 
 // Models Anthropic can bill Hub for that Hub never asks for itself: the
 // targets a refusal fallback (`fallbacks: "default"`) may hand an answer to

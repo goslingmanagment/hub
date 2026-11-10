@@ -10,11 +10,13 @@ import {
   lastWriterQuery,
   middleOfWork,
   moscowDayOf,
+  netOf,
   readPeopleWork,
   teamReadPages,
   teamShiftOf,
-  workHoldsSale,
+  workHoldsShiftSale,
   type ComputedWork,
+  type PersonPiece,
 } from "./chatter-shifts.ts";
 import { perHour, saleKindOf, settleSale } from "./chatter-stats.ts";
 
@@ -39,10 +41,7 @@ const DAY_MS = 86_400_000;
 
 type Totals = Omit<TeamShiftSalesResponse["team"], "daily">;
 
-export interface HeldShift {
-  userId: number;
-  username: string;
-  work: ComputedWork;
+export interface HeldShift extends PersonPiece {
   /** The sales the shift holds (`workHoldsSale`), oldest first. */
   held: readonly ShiftSale[];
 }
@@ -66,7 +65,7 @@ export function salesOfWork(work: ComputedWork, sales: readonly ShiftSale[]): Sh
   for (let at = firstAtOrAfter(sales, Math.min(...work.salesSince.values())); at < sales.length; at += 1) {
     const sale = sales[at]!;
     if (sale.occurredAt.getTime() >= work.endedAt) break;
-    if (workHoldsSale(work, { pageLabel: sale.pageLabel, at: sale.occurredAt.getTime() })) held.push(sale);
+    if (workHoldsShiftSale(work, sale)) held.push(sale);
   }
   return held;
 }
@@ -99,14 +98,6 @@ export function contestedSales(shifts: readonly HeldShift[]): ShiftSale[] {
   return out;
 }
 
-const netOf = (sales: readonly ShiftSale[]) => sales.reduce((sum, sale) => sum + sale.netMills, 0);
-
-export interface PersonPiece {
-  userId: number;
-  username: string;
-  work: ComputedWork;
-}
-
 /** The sales of [from, to) no shift holds, oldest first: `shifts` — everyone's, with what each holds. Pure. */
 export function salesNoShiftHolds(input: { from: number; to: number; sales: readonly ShiftSale[]; shifts: readonly HeldShift[] }): ShiftSale[] {
   const held = new Set(input.shifts.flatMap((shift) => shift.held.map((sale) => sale.transactionId)));
@@ -115,7 +106,7 @@ export function salesNoShiftHolds(input: { from: number; to: number; sales: read
 
 /** The look-ins whose pages and time hold the sale (`workHoldsSale`); it is theirs only if its person last wrote to the fan. Pure. */
 export function visitsAround(visits: readonly PersonPiece[], sale: ShiftSale): PersonPiece[] {
-  return visits.filter((visit) => workHoldsSale(visit.work, { pageLabel: sale.pageLabel, at: sale.occurredAt.getTime() }));
+  return visits.filter((visit) => workHoldsShiftSale(visit.work, sale));
 }
 
 /**
