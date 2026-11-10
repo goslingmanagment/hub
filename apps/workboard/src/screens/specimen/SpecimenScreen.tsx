@@ -647,7 +647,7 @@ export function SpecimenScreen() {
             <div className="grid gap-3">
               <Notice tone="warning" title="Не удалось обновить. Показаны данные на 23:15." action={<Button size="sm">Повторить</Button>} />
               <Notice tone="danger" title="nova-1: Fansly просит войти заново" action={<Button size="sm">Войти в Fansly</Button>} />
-              <Notice tone="off">Подтверждение смен чаттерами пока не включено: выплаты появятся, когда первый чаттер подтвердит смену.</Notice>
+              <Notice tone="off">Ledger ещё не прислал отчёты за эти дни: они появятся, когда чаттеры отправят их в «Отчётность».</Notice>
               <div className="max-w-[420px]">
                 <Notice tone="warning" title="Ссылка входа истекла" actionPlacement="below" action={<><Button size="sm" variant="primary">Сделать новую ссылку</Button><Button size="sm" variant="ghost">Позже</Button></>}>
                   В узкой панели кнопки встают под текст, и слова не сжимаются.

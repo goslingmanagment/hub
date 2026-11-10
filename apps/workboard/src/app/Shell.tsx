@@ -36,7 +36,8 @@ const WORK: readonly NavItem[] = [
   { to: "/people", label: "Люди", icon: Users, roles: TEAM },
   { to: "/sales", label: "Что продаёт", icon: TrendingUp, roles: TEAM },
   { to: "/decisions", label: "Решения", icon: Inbox, roles: TEAM },
-  { to: "/payouts", label: "Выплаты", icon: Banknote, roles: TEAM },
+  // People's pay is the owner's alone (the ledger's answer reaches no other session).
+  { to: "/payouts", label: "Выплаты", icon: Banknote, roles: OWNER },
 ];
 
 const ADMIN: readonly NavItem[] = [

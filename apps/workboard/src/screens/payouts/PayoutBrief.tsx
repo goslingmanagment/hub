@@ -3,7 +3,7 @@ import type { TeamLedgerPayoutPrepareResponse } from "@agency_hub_core/contracts
 import { millsToDollarsNumber } from "@agency_hub_core/shared";
 import { Button, Money, Notice, Skeleton, Tooltip } from "@agency_hub_core/ui";
 import { formatDay, formatDayRange } from "@agency_hub_core/ui/format";
-import { copySheet } from "./copy";
+import { copyText } from "./copy";
 import { usePayoutPrepare } from "./ledger";
 
 /**
@@ -75,7 +75,7 @@ export function PayoutBrief({ slug, name }: { slug: string; name: string }) {
               <Button
                 variant={blockers.length > 0 ? "secondary" : "primary"}
                 icon={Copy}
-                onClick={() => void copySheet(message, `Скопировано: сообщение ${name}`)}
+                onClick={() => void copyText(message, `Скопировано: сообщение ${name}`)}
               >
                 Скопировать сообщение
               </Button>

@@ -1,6 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { RotateCw } from "lucide-react";
-import { useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
+import { useMemo, useRef, useState, type ReactNode } from "react";
 import { useLocation } from "react-router";
 import {
   Badge,
@@ -27,6 +27,7 @@ import { currentWeek, stepWeek, withPeriod, type ResolvedPeriod } from "@agency_
 import { ruPlural } from "@agency_hub_core/ui/plural";
 import { REPORT_DRAFT_NEXT, reportStatusWord } from "@agency_hub_core/ui/shiftReports";
 import { shiftDurationHint, shiftWhen } from "@agency_hub_core/ui/shiftWhen";
+import { ReportBody, useReportEdge } from "@/shared/ReportBody";
 import { ScreenHeader } from "@/shared/ScreenHeader";
 import { usePeriod } from "@/shared/usePeriod";
 import {
@@ -43,7 +44,6 @@ import {
   type MyShiftsFacts,
   type StatsShift,
 } from "./data";
-import { ReportBody } from "./Report";
 import "./my-shifts.css";
 
 /**
@@ -253,29 +253,6 @@ function NowRow({ shift }: { shift: StatsShift }) {
   );
 }
 
-/**
- * Where the total column ends, from the table's left edge: an opened report's
- * amounts end there too, right under the row's total (one right edge). Set as
- * `--mys-total-edge` on the journal; measured again whenever the table resizes.
- */
-function useTotalEdge(box: RefObject<HTMLDivElement | null>, columnIndex: number) {
-  useLayoutEffect(() => {
-    const element = box.current;
-    if (!element || typeof ResizeObserver === "undefined") return;
-    const update = () => {
-      const table = element.querySelector("table");
-      const head = table?.querySelectorAll(":scope > thead > tr > th")[columnIndex];
-      if (!table || !head) return;
-      const edge = Math.round(head.getBoundingClientRect().right - table.getBoundingClientRect().left);
-      if (edge > 0) element.style.setProperty("--mys-total-edge", `${edge}px`);
-    };
-    update();
-    const observer = new ResizeObserver(update);
-    observer.observe(element);
-    return () => observer.disconnect();
-  });
-}
-
 // ───────────────────────────────────────────────────────────── The screen
 
 export function MyShiftsScreen() {
@@ -287,7 +264,7 @@ export function MyShiftsScreen() {
   const previous = usePreviousReports(window);
   const [open, setOpen] = useState<ReadonlySet<string>>(() => new Set());
   const journal = useRef<HTMLDivElement>(null);
-  useTotalEdge(journal, COLUMNS.findIndex((column) => column.key === "total"));
+  useReportEdge(journal, COLUMNS.findIndex((column) => column.key === "total"));
 
   const data = read.data;
   const reports = data?.reports?.reports ?? null;

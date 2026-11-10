@@ -38,8 +38,8 @@ export const WORKBOARD_SCREENS: ReadonlyArray<{ path: string; label: string; key
   { path: "shifts", label: "Смены", keywords: "команда заработок кто работал на смене неделя журнал разбор смены без автора" },
   { path: "people", label: "Люди", keywords: "чаттеры сотрудники кабинет чаттера числа" },
   { path: "sales/price", label: "Что продаёт", keywords: "продажи цена скорость ответа ppv платные возврат фанов подходы приветствия кто ждал пустые часы рассылки" },
-  { path: "decisions", label: "Решения", keywords: "споры по продажам кастомы проверить отправки зависшие" },
-  { path: "payouts", label: "Выплаты", keywords: "отчёты смен выгрузка таблица выплат кто не подтвердил" },
+  { path: "decisions", label: "Решения", keywords: "отчёты посты не разобраны оплаченный день изменён кастомы проверить отправки зависшие" },
+  { path: "payouts", label: "Выплаты", keywords: "долги начислено выплачено отчёты смен отчётность сумма изменена пост не разобран", ownerOnly: true },
   { path: "access", label: "Доступ", keywords: "сотрудники приглашение пользователи устройства логины страницы", ownerOnly: true },
 ];
 
@@ -170,8 +170,9 @@ export function teamToWorkboard(url: string, today: MoscowDay = moscowToday()): 
     }
     case "payouts":
     case "shift-reports": {
-      if (hash === "#disputes") return workboardHref("decisions", "", "disputes");
-      for (const name of ["from", "to", "chatter"]) {
+      // Hub's sale disputes are gone with its marks: what waits about the reports is Решения' «Отчёты».
+      if (hash === "#disputes") return workboardHref("decisions", "", "reports");
+      for (const name of ["from", "to"]) {
         const value = old.get(name);
         if (value) query.set(name, value);
       }
