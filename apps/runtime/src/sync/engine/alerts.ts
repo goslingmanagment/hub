@@ -43,7 +43,7 @@ import {
   type SyncEngineIncidentSubKey,
 } from "../../services/notification-incidents.ts";
 import { FANSLY_ROUTES, routeBudget, type FanslyRoute } from "../fansly/routes.ts";
-import { moneyFramesMissing, readMoneyFrames } from "../fansly/ws/money-frames.ts";
+import { createMoneyFrameWindow, moneyFramesMissing, readMoneyFrames, type MoneyFrameWindow } from "../fansly/ws/money-frames.ts";
 import { heldByScope, holdSetOf, pageHoldsInForce, type HoldSet } from "./admission.ts";
 import { evaluateBrowserAlerts, type SyncBrowserAlertCondition } from "./browser-alerts.ts";
 import type { SyncLogger } from "./commit.ts";
@@ -689,18 +689,21 @@ export async function collectPageAlerts(
   return evaluatePageAlerts(await readPageAlertFacts(db, input), input.registry);
 }
 
-/** The money frames of the pages in the trailing window, missing per page. */
+/** The money frames of the pages in the trailing window, missing per page.
+ *  `window`: a caller's moving window (`createMoneyFrameWindow`, the same
+ *  frames), else one full read. */
 export async function readMissingMoneyFrames(
   db: Database,
-  input: { pageIds: readonly number[]; now: Date; resolvePayload?: FanslyWsLivePayloadResolver },
+  input: { pageIds: readonly number[]; now: Date; resolvePayload?: FanslyWsLivePayloadResolver; window?: MoneyFrameWindow },
 ): Promise<Map<number, { count: number; oldestReceivedAt: Date }>> {
   if (input.pageIds.length === 0) return new Map();
-  const frames = await readMoneyFrames(db, {
+  const read = {
     from: new Date(input.now.getTime() - SYNC_MONEY_LOOKBACK_MS),
     to: new Date(input.now.getTime() - SYNC_MONEY_FRAME_MS),
     pageIds: input.pageIds,
     ...(input.resolvePayload === undefined ? {} : { resolvePayload: input.resolvePayload }),
-  });
+  };
+  const frames = input.window === undefined ? await readMoneyFrames(db, read) : await input.window.read(db, read);
   return moneyFramesMissing(frames, input.now, SYNC_MONEY_FRAME_MS);
 }
 
@@ -857,6 +860,8 @@ export class SyncAlertEvaluator {
   readonly #o: SyncAlertEvaluatorOptions;
   readonly #app: IncidentApp;
   readonly #paceAuditedTo = new Map<number, Date>();
+  /** Alert 3's money read, receipt by receipt once (`createMoneyFrameWindow`). */
+  readonly #moneyWindow = createMoneyFrameWindow();
   /** The failures the log last said, by `<pageId>:<rule>` (`pass`: the pass). */
   #reported: ReadonlyMap<string, ReportedFailure> = new Map();
   #timer: ReturnType<typeof setInterval> | null = null;
@@ -946,6 +951,7 @@ export class SyncAlertEvaluator {
         pageIds: owned.map((page) => page.pageId),
         now,
         ...(this.#o.resolvePayload === undefined ? {} : { resolvePayload: this.#o.resolvePayload }),
+        window: this.#moneyWindow,
       });
     } catch (error) {
       money = { error };
