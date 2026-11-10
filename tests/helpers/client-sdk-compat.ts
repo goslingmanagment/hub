@@ -235,215 +235,8 @@ export interface ClientLane {
   harvest: boolean;
 }
 
-/** The desktop's and the Fansly extension's shared reads, as the suite has always sent them. */
-function fullTokenSharedReads(platform: "onlyfans" | "fansly") {
-  return (persona: CompatPersona) => ({
-    aiRecapStatus: { pageLabel: COMPAT_PAGES[platform], conversationRef: COMPAT_FANS[platform], personaDefinitionId: persona.definitionId },
-    spenders: { scope: "page", pageLabel: COMPAT_PAGES[platform], period: "30d", limit: 10, offset: 0 },
-  });
-}
-
-// ── Desktop 0.1.64 (onlyfans-chat apps/desktop/src/main/hub/ai-feature-gateway.ts) ──
-// It sends refs only: on the OnlyFans lane the hub assembles the context from
-// its own archive. Tone rides Reply, the Split mode Reply and Fix; the New
-// Followers queue asks hi-greeting for one variant with fanRef = chat id.
-
-function desktopRequest(persona: CompatPersona, extra: Record<string, unknown> = {}): Record<string, unknown> {
-  return {
-    clientRequestId: randomUUID(),
-    pageLabel: COMPAT_PAGES.onlyfans,
-    platform: "onlyfans",
-    conversationRef: COMPAT_FANS.onlyfans,
-    personaKey: persona.key,
-    expectedPersonaDefinitionId: persona.definitionId,
-    isRegeneration: false,
-    ...extra,
-  };
-}
-
 const ARCHIVE_MARKER = `${COMPAT_ARCHIVE.onlyfans} 35`;
 const FOLLOWER_MARKER = `${COMPAT_ARCHIVE.onlyfansFollower} 3`;
-
-const desktopLane: ClientLane = {
-  platform: "onlyfans",
-  clientVersion: (version) => version,
-  signInMode: "pending",
-  tokenClient: null,
-  refusedSharedOperations: [],
-  ownerSwitches: null,
-  sharedReads: fullTokenSharedReads("onlyfans"),
-  healthEvent: null,
-  calls: [
-    { name: "Reply", feature: "fast-reply", promptMarker: ARCHIVE_MARKER,
-      body: (persona) => desktopRequest(persona, { replyTone: "none", replyMode: "preferSplit" }) },
-    { name: "Fix", feature: "improve-draft", promptMarker: ARCHIVE_MARKER,
-      body: (persona) => desktopRequest(persona, { replyMode: "preferSplit", draftText: "compat draft to fix" }) },
-    { name: "Help", feature: "help-me", promptMarker: ARCHIVE_MARKER, body: (persona) => desktopRequest(persona) },
-    { name: "Recap", feature: "fan-summary", promptMarker: ARCHIVE_MARKER, body: (persona) => desktopRequest(persona) },
-    { name: "Review", feature: "chat-review", promptMarker: ARCHIVE_MARKER, body: (persona) => desktopRequest(persona) },
-    { name: "Ping", feature: "ping", promptMarker: ARCHIVE_MARKER, body: (persona) => desktopRequest(persona) },
-    { name: "Hi", feature: "hi-greeting", promptMarker: FOLLOWER_MARKER,
-      body: (persona) => desktopRequest(persona, { conversationRef: COMPAT_FANS.onlyfansFollower }) },
-    { name: "New-follower Hi", feature: "hi-greeting", promptMarker: FOLLOWER_MARKER,
-      body: (persona) => desktopRequest(persona, {
-        conversationRef: COMPAT_FANS.onlyfansFollower, variantCount: 1, fanRef: COMPAT_FANS.onlyfansFollower,
-      }) },
-  ],
-  // onlyfans-chat apps/desktop/src/main/hub/acceptance-reporter.ts toWireEvent.
-  acceptanceEvent: ({ clientEventId, generationRef, feature }) => ({
-    clientEventId,
-    kind: "ai_acceptance",
-    observedAt: new Date().toISOString(),
-    payload: {
-      operationId: randomUUID(), requestId: generationRef, generationRef, feature, action: "sent",
-      accountId: COMPAT_OF_ACCOUNT, conversationId: COMPAT_FANS.onlyfans, edited: true,
-    },
-  }),
-  producer: ({ header }) => `desktop@${header}`,
-  harvest: true,
-};
-
-// ── Fansly extension 2.7.1 (fansly-chat src/background/operations.ts, kernel-feature-gateway.ts) ──
-// It reads the chat live and sends it as clientContext. Coach and the Recaps
-// use the canonical refs (conversationRef = group, fanRef = fan account);
-// every other feature keeps the legacy shape (conversationRef = fan account,
-// no fanRef). The requested window is top-level messageCount (deep 3000, quick
-// 100, improve 25, Hi 25, short Recap 300); clientContext.messageCount is the
-// kept count.
-
-function fanslyTranscript(lines: number, photo = false): string {
-  return Array.from({ length: lines }, (_, n) =>
-    `[10:${String(n % 60).padStart(2, "0")}] Fan: ${photo && n === 0 ? "[Photo #1] " : ""}compat fansly line ${n}`).join("\n");
-}
-
-function fanslyContext(kept: number, extra: Record<string, unknown> = {}): Record<string, unknown> {
-  return {
-    transcript: fanslyTranscript(kept, extra.media !== undefined),
-    messageCount: kept,
-    fanSpendingData: "Total: $12.00",
-    fanSubscriptionData: "Subscribed: yes",
-    fanDisplayName: "Compat Fan",
-    ...extra,
-  };
-}
-
-const CANONICAL_REFS = { conversationRef: COMPAT_FANS.fanslyGroup, fanRef: COMPAT_FANS.fansly } as const;
-
-function fanslyRequest(persona: CompatPersona, extra: Record<string, unknown>): Record<string, unknown> {
-  return {
-    clientRequestId: randomUUID(),
-    pageLabel: COMPAT_PAGES.fansly,
-    platform: "fansly",
-    conversationRef: COMPAT_FANS.fansly,
-    personaKey: persona.key,
-    expectedPersonaDefinitionId: persona.definitionId,
-    isRegeneration: false,
-    ...extra,
-  };
-}
-
-const fanslyMarker = (kept: number) => `compat fansly line ${kept - 1}`;
-
-/** The voice lane's script request (fansly-chat src/background/voice-service.ts):
- * no persona, no requested window, conversationRef = fanRef = fan account. */
-export function fanslyVoiceScriptBody(): Record<string, unknown> {
-  return {
-    clientRequestId: randomUUID(),
-    pageLabel: COMPAT_PAGES.fansly,
-    platform: "fansly",
-    conversationRef: COMPAT_FANS.fansly,
-    fanRef: COMPAT_FANS.fansly,
-    replyTone: "flirty",
-    draftText: "compat voice draft",
-    isRegeneration: false,
-    clientContext: {
-      transcript: fanslyTranscript(20),
-      messageCount: 20,
-      fanDisplayName: "Compat Fan",
-      fanSpendingData: "",
-      fanSubscriptionData: "",
-    },
-  };
-}
-
-const COMPAT_MEDIA = {
-  groupRef: COMPAT_FANS.fanslyGroup,
-  items: [{
-    n: 1, placement: "inline", messageId: "700000000000000101", sentAt: Date.UTC(2026, 8, 30, 10),
-    sender: "fan", kind: "photo", mediaId: "700000000000000201", paid: false,
-  }],
-};
-
-const fanslyLane: ClientLane = {
-  platform: "fansly",
-  clientVersion: (version) => `chatgoose-extension/${version}`,
-  signInMode: "active",
-  tokenClient: null,
-  refusedSharedOperations: [],
-  ownerSwitches: null,
-  sharedReads: fullTokenSharedReads("fansly"),
-  healthEvent: null,
-  calls: [
-    { name: "Reply", feature: "fast-reply", promptMarker: fanslyMarker(60),
-      body: (persona) => fanslyRequest(persona, {
-        replyTone: "none", replyMode: "preferSplit", messageCount: 100,
-        clientContext: fanslyContext(60, { media: COMPAT_MEDIA }),
-      }) },
-    { name: "Fix", feature: "improve-draft", promptMarker: fanslyMarker(25),
-      body: (persona) => fanslyRequest(persona, {
-        replyMode: "preferSplit", draftText: "compat draft to fix", messageCount: 25, clientContext: fanslyContext(25),
-      }) },
-    { name: "Help", feature: "help-me", promptMarker: fanslyMarker(60),
-      body: (persona) => fanslyRequest(persona, { messageCount: 100, clientContext: fanslyContext(60, { fanBio: "compat bio" }) }) },
-    { name: "Recap", feature: "fan-summary", promptMarker: fanslyMarker(3000),
-      body: (persona) => fanslyRequest(persona, { ...CANONICAL_REFS, messageCount: 3000, clientContext: fanslyContext(3000) }) },
-    { name: "Short Recap", feature: "fan-summary", promptMarker: fanslyMarker(120),
-      body: (persona) => fanslyRequest(persona, {
-        ...CANONICAL_REFS, summaryMode: "short", messageCount: 300,
-        clientContext: fanslyContext(120, { transcriptCoverage: "window" }),
-      }) },
-    { name: "Review", feature: "chat-review", promptMarker: fanslyMarker(400),
-      body: (persona) => fanslyRequest(persona, { messageCount: 3000, clientContext: fanslyContext(400) }) },
-    { name: "Ping", feature: "ping", promptMarker: fanslyMarker(60),
-      body: (persona) => fanslyRequest(persona, {
-        messageCount: 100, clientContext: fanslyContext(60, { pingSegment: "segment-a", fanSilenceDays: 9 }),
-      }) },
-    // 25 messages, 2 personal: the Hi gate counts the personal ones.
-    { name: "Hi", feature: "hi-greeting", promptMarker: fanslyMarker(25),
-      body: (persona) => fanslyRequest(persona, {
-        variantCount: 3, messageCount: 25,
-        clientContext: fanslyContext(25, {
-          fanUsername: "compatfan", fanAvatarUrl: "https://cdn3.fansly.com/compat.jpg", personalMessageCount: 2,
-        }),
-      }) },
-    { name: "Coach", feature: "coach-chat", promptMarker: fanslyMarker(60),
-      body: (persona) => fanslyRequest(persona, {
-        ...CANONICAL_REFS, draftText: "compat coach draft", messageCount: 100,
-        chatterQuestion: "What should I send next?",
-        coachHistory: [{ question: "Is he still interested?", answer: "compat earlier coach answer" }],
-        clientContext: fanslyContext(60, { fanBio: "compat bio", transcriptCoverage: "window" }),
-      }) },
-    { name: "Coach preset", feature: "coach-chat", promptMarker: fanslyMarker(60),
-      body: (persona) => fanslyRequest(persona, {
-        ...CANONICAL_REFS, preset: "situation", messageCount: 100,
-        clientContext: fanslyContext(60, { fanBio: "compat bio", transcriptCoverage: "full-history" }),
-      }) },
-    { name: "Voice script", feature: "voice-script", promptMarker: fanslyMarker(20), body: () => fanslyVoiceScriptBody() },
-  ],
-  // fansly-chat src/background/acceptance-reporter.ts toWireEvent.
-  acceptanceEvent: ({ clientEventId, generationRef, feature }) => ({
-    clientEventId,
-    kind: "ai_acceptance",
-    observedAt: new Date().toISOString(),
-    payload: {
-      operationId: randomUUID(), requestId: generationRef, generationRef, feature, action: "inserted",
-      pageLabel: COMPAT_PAGES.fansly, conversationId: COMPAT_FANS.fansly,
-    },
-  }),
-  // The Fansly extension's header is not a bare version: H-12a left it as it was.
-  producer: ({ header }) => `desktop@${header}`,
-  harvest: false,
-};
 
 // ── chat-extension 0.2.2–0.2.4 and its next release on ChatSpace (OnlyFans) ──
 // chat-extension packages/core/src/domain/ops/request.ts buildStreamRequest,
@@ -607,8 +400,6 @@ const extensionLane: ClientLane = {
 };
 
 export const CLIENT_LANES: Partial<Record<ClientSdkName, ClientLane>> = {
-  "onlyfans-chat": desktopLane,
-  "fansly-chat": fanslyLane,
   // H-3: signed in narrow; client-sdk-registry.test.ts holds its rows'
   // operations inside CLIENT_TOKEN_PROFILES["chat-extension"].
   "chat-extension": extensionLane,
@@ -701,53 +492,6 @@ async function upsertProfile(ctx: CompatContext, pageLabel: string, fan: string,
   expect(saved.body).toBe(body);
 }
 
-interface CommandView {
-  commandId: string;
-  kind: string;
-  state: string;
-  deduplicated: boolean;
-}
-
-/** A send as the desktop queues it (send/engine.ts): never claimed here, since
- * no outbox worker runs in the suite. */
-async function queueText(ctx: CompatContext) {
-  const body = {
-    clientCommandId: randomUUID(),
-    kind: "send_text_message_v1",
-    accountId: COMPAT_OF_ACCOUNT,
-    conversationId: COMPAT_FANS.onlyfans,
-    payload: { text: "compat queued text" },
-    retryOfCommandId: null,
-  };
-  const command = await call<CommandView>(ctx.sdk, ctx.client, "createOfapiCommand", { body });
-  expect(command).toMatchObject({ kind: "send_text_message_v1", state: "queued", deduplicated: false });
-  return { body, command };
-}
-
-interface VoiceNoteView {
-  voiceNoteId: number;
-  state: string;
-}
-
-/** The extension's voice take: a voice-script generation, then a render of it. */
-async function renderVoiceNote(ctx: CompatContext) {
-  const generationRef = generationRefOf(await streamFeature(ctx.sdk, ctx.options, "voice-script", fanslyVoiceScriptBody()));
-  await waitFor("the voice-script generation capture", async () => (await ctx.pool.query(
-    `select 1 from ai_generation_content where generation_ref = $1 and params->>'outcome' = 'completed'`, [generationRef],
-  )).rowCount === 1);
-  const body = {
-    clientRequestId: randomUUID(),
-    conversationRef: COMPAT_FANS.fansly,
-    sourceGenerationRef: generationRef,
-    script: COMPAT_COMPLETION,
-  };
-  const view = await call<VoiceNoteView>(ctx.sdk, ctx.client, "voiceNoteCreate", { params: { pageLabel: COMPAT_PAGES.fansly }, body });
-  expect(view.voiceNoteId).toEqual(expect.any(Number));
-  return { body, view };
-}
-
-let outreachFans = 0;
-
 interface ExtensionBootstrap {
   protocol: number;
   identity: { userId: number; username: string; tokenClient: string | null };
@@ -814,24 +558,10 @@ interface ExtensionClaim {
   greeting: { state: string; messageRef: string | null };
 }
 
-/** Operations some registry rows still list but this hub no longer serves.
- *  Their rows stay as the register script wrote them; each key is retired only
- *  after proof that no client in the field calls it:
- *  - aiUsageBatch (POST /api/v1/ai-usage/batch): the gateway writes the AI
- *    ledger; no client has posted usage since 2026-07-08 (fansly-chat dropped
- *    its last caller in 1.7.0, the desktop has no producer). */
-export const COMPAT_RETIRED_OPERATIONS: ReadonlySet<string> = new Set(["aiUsageBatch"]);
-
 /** One exerciser per operation a registry row lists beyond the shared core. */
 export const COMPAT_OPERATION_EXERCISERS: Record<string, (ctx: CompatContext) => Promise<void>> = {
-  async authActivateDeviceToken(ctx) {
-    const token = await signIn(ctx.sdk, ctx.clientFor(null), ctx.lane, "pending");
-    await call(ctx.sdk, ctx.clientFor(token), "authActivateDeviceToken");
-    expect(await call(ctx.sdk, ctx.clientFor(token), "me")).toMatchObject({ user: { username: COMPAT_CHATTER.username } });
-  },
   async authIssueDeviceTokenWithPassword(ctx) {
     const token = await signIn(ctx.sdk, ctx.clientFor(null), ctx.lane, ctx.lane.signInMode);
-    if (ctx.lane.signInMode === "pending") await call(ctx.sdk, ctx.clientFor(token), "authActivateDeviceToken");
     expect(await call(ctx.sdk, ctx.clientFor(token), "me")).toMatchObject({ user: { username: COMPAT_CHATTER.username } });
   },
   async authRevokeCurrentDeviceToken(ctx) {
@@ -993,56 +723,6 @@ export const COMPAT_OPERATION_EXERCISERS: Record<string, (ctx: CompatContext) =>
     expect(stats.days).toHaveLength(30);
     expect(stats.totals.d30).toMatchObject({ grossMills: Number(COMPAT_OF_TIP_MILLS), payerCount: 1 });
   },
-  async cancelOfapiCommand(ctx) {
-    const { command } = await queueText(ctx);
-    const params = { commandId: command.commandId };
-    expect(await call(ctx.sdk, ctx.client, "cancelOfapiCommand", { params })).toMatchObject({ state: "cancelled" });
-    // The desktop retries a cancel whose answer it lost.
-    expect(await call(ctx.sdk, ctx.client, "cancelOfapiCommand", { params })).toMatchObject({ state: "cancelled" });
-  },
-  async createOfapiCommand(ctx) {
-    const { body, command } = await queueText(ctx);
-    // A resend after a lost answer dedupes to 200 on the same command.
-    expect(await call(ctx.sdk, ctx.client, "createOfapiCommand", { body }))
-      .toMatchObject({ commandId: command.commandId, state: "queued", deduplicated: true });
-    // The other kinds the desktop queues (typing, mark-read, unsend).
-    for (const [kind, payload] of [
-      ["typing_active_v1", {}],
-      ["mark_chat_read_v1", {}],
-      ["unsend_message_v1", { messageId: "5035" }],
-    ] as const) {
-      const queued = await call(ctx.sdk, ctx.client, "createOfapiCommand", {
-        body: { clientCommandId: randomUUID(), kind, accountId: COMPAT_OF_ACCOUNT, conversationId: COMPAT_FANS.onlyfans, payload },
-      });
-      expect(queued).toMatchObject({ kind, state: "queued" });
-    }
-  },
-  async eventsV2Facts(ctx) {
-    // A raw call: the desktop validates the money-facts page itself.
-    const accountId = ctx.pageIds.onlyfans;
-    const response = await raw(ctx.client, "eventsV2Facts", { query: { accountId, afterSeq: 0, limit: 500 } });
-    expect(response.status).toBe(200);
-    const page = await response.json() as unknown;
-    expect(ctx.sdk.routeSchemas.eventsV2Facts!.response[200]!.safeParse(page).success).toBe(true);
-    expect(page).toMatchObject({ accountId, facts: [], hasMore: false });
-  },
-  async followerOutreachAttempt(ctx) {
-    // A fresh fan per run: a fan's greeting custody outlives this exerciser.
-    outreachFans += 1;
-    const result = await call(ctx.sdk, ctx.client, "followerOutreachAttempt", {
-      params: { pageLabel: COMPAT_PAGES.fansly },
-      body: { fanRef: `71000000000000${outreachFans}`, attemptId: randomUUID(), action: "reserve" },
-    });
-    expect(result).toMatchObject({ owned: true, state: "reserved" });
-  },
-  async getOfapiCommand(ctx) {
-    const { command } = await queueText(ctx);
-    expect(await call(ctx.sdk, ctx.client, "getOfapiCommand", { params: { commandId: command.commandId } }))
-      .toMatchObject({ commandId: command.commandId, state: "queued", deduplicated: false });
-  },
-  async ofapiCreditsChatterSummary(ctx) {
-    expect(await call(ctx.sdk, ctx.client, "ofapiCreditsChatterSummary")).toEqual(expect.any(Object));
-  },
   async pageConversationProfile(ctx) {
     const body = `compat conversation dossier ${randomUUID()}`;
     if (ctx.lane.tokenClient === "chat-extension") {
@@ -1068,13 +748,6 @@ export const COMPAT_OPERATION_EXERCISERS: Record<string, (ctx: CompatContext) =>
     });
     expect(result).toMatchObject({ profile: { body } });
   },
-  async pageTopSpenders(ctx) {
-    const result = await call(ctx.sdk, ctx.client, "pageTopSpenders", {
-      params: { pageLabel: COMPAT_PAGES.fansly },
-      query: { window: "lifetime" },
-    });
-    expect(result).toMatchObject({ window: "lifetime" });
-  },
   async pageSpenderAutoLists(ctx) {
     // The Spenders board's shelves, read beside its first page.
     const shelves = await rawChecked<{ metric: string; totalEntries: number; lists: Array<{ key: string; entryCount: number }> }>(
@@ -1096,27 +769,5 @@ export const COMPAT_OPERATION_EXERCISERS: Record<string, (ctx: CompatContext) =>
       expect(detail.metrics.lifetime.scopeGrossAmountMills, period).toBe(Number(COMPAT_OF_TIP_MILLS));
       expect(detail.pages.map((page) => page.pageId), period).toContain(ctx.pageIds.onlyfans);
     }
-  },
-  async upsertFanProfile(ctx) {
-    await upsertProfile(ctx, COMPAT_PAGES[ctx.lane.platform], COMPAT_FANS[ctx.lane.platform], `compat upsert ${randomUUID()}`);
-  },
-  async voiceNoteCreate(ctx) {
-    const { body, view } = await renderVoiceNote(ctx);
-    // A resend of the same take replays the same render.
-    expect(await call(ctx.sdk, ctx.client, "voiceNoteCreate", { params: { pageLabel: COMPAT_PAGES.fansly }, body }))
-      .toMatchObject({ voiceNoteId: view.voiceNoteId });
-  },
-  async voiceNoteStatus(ctx) {
-    const { view } = await renderVoiceNote(ctx);
-    const params = { pageLabel: COMPAT_PAGES.fansly, id: view.voiceNoteId };
-    let state = view.state;
-    await waitFor("the voice render", async () => {
-      state = (await call<VoiceNoteView>(ctx.sdk, ctx.client, "voiceNoteStatus", { params })).state;
-      return state !== "queued" && state !== "dispatched";
-    });
-    expect(state).toBe("completed");
-    const audio = await ctx.sdk.fetchVoiceNoteAudio(ctx.options, params);
-    expect(audio.status).toBe(200);
-    expect((await audio.arrayBuffer()).byteLength).toBeGreaterThan(0);
   },
 };

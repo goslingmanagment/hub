@@ -10,11 +10,10 @@
 // flags never re-litigate core source. Only external dependency: zod.
 //
 // Usage: node scripts/vendor-sdk.mjs <target-dir>
-//   e.g. node scripts/vendor-sdk.mjs ../onlyfans-chat/packages/kernel-sdk
-//        node scripts/vendor-sdk.mjs ../chat-extension/vendor/kernel-sdk
+//   e.g. node scripts/vendor-sdk.mjs ../chat-extension/vendor/kernel-sdk
 //
-// The clients that vendor it: fansly-chat, onlyfans-chat and chat-extension.
-// The script is client-agnostic; each client pins the contract hash it ships.
+// The client that vendors it: chat-extension. The script is client-agnostic;
+// each client pins the contract hash it ships.
 //
 // The output is a generated artifact: regenerate (never hand-edit) after any
 // contracts change, and commit the refresh in the consuming repo. The vendor
