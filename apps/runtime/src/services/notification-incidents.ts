@@ -5,6 +5,7 @@ import {
   listNotificationIncidents,
   openNotificationIncidentWithRecoveryGuard,
   recoverAndResolveNotificationIncident,
+  recoverAndResolveNotificationIncidents,
   type NotificationIncidentKind,
   type SyncStream,
 } from "@agency_hub_core/db";
@@ -1365,6 +1366,39 @@ export async function resolveOfapiGlobalIncident(
     ...(input.recoveredAt === undefined ? {} : { recoveredAt: input.recoveredAt }),
     ...(input.resolution === undefined ? {} : { resolution: input.resolution }),
   });
+}
+
+/** `resolveOfapiGlobalIncident` for several sub-keys of one kind in one
+ *  transaction (the golden-signal sampler's healthy metrics): the same keys,
+ *  tombstones, resolve rule and metadata as one call per sub-key, with one
+ *  recovery instant for the batch. A failure is logged and fails the whole
+ *  batch; the next run retries, as a failed single resolve did. */
+export async function resolveOfapiGlobalIncidents(
+  app: Pick<AppContext, "db" | "logger">,
+  input: {
+    kind: GlobalIncidentKind;
+    subKeys: readonly string[];
+    recoveredAt?: Date;
+  },
+): Promise<void> {
+  if (input.subKeys.length === 0) {
+    return;
+  }
+  const recoveredAt = input.recoveredAt ?? new Date();
+  try {
+    await recoverAndResolveNotificationIncidents(app.db, {
+      incidentKeys: input.subKeys.map((subKey) => incidentKey({ kind: input.kind, platformAccountId: null, subKey })),
+      recoveredAt,
+      processedAt: recoveredAt,
+      metadata: { pageLabel: null, platform: null, stream: null },
+    });
+  } catch (error) {
+    app.logger.warn({
+      platformAccountId: null,
+      incidentKind: input.kind,
+      err: error,
+    }, "Notification incident resolve failed; continuing");
+  }
 }
 
 /** Open a page latch of the OnlyFans link series (the minutely series monitor

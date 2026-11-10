@@ -9,6 +9,7 @@ import {
   leaseNotificationDeliveryOutbox,
   listDeliveryAttempts,
   openNotificationIncident,
+  recoverAndResolveNotificationIncidents,
   updateTelegramSettings,
 } from "@agency_hub_core/db";
 
@@ -114,6 +115,59 @@ describe("durable notification delivery outbox", () => {
     })).rejects.toThrow();
 
     expect(await getNotificationIncidentByKey(testDb.db, incidentKey)).toBeNull();
+    const outboxCount = await testDb.pool.query<{ count: number }>(
+      "select count(*)::int as count from notification_delivery_outbox",
+    );
+    expect(outboxCount.rows[0]?.count).toBe(0);
+  });
+
+  it("batch resolve: tombstones every key, resolves only open latches seen at or before the recovery", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const recoveredAt = new Date("2026-11-10T12:00:00Z");
+    const older = "golden_signal_lag:global:batch-older";
+    const newer = "golden_signal_lag:global:batch-newer";
+    const absent = "golden_signal_lag:global:batch-absent";
+    for (const [incidentKey, at] of [[older, "2026-11-10T11:59:00Z"], [newer, "2026-11-10T12:00:01Z"]] as const) {
+      await openNotificationIncident(testDb.db, {
+        incidentKey,
+        kind: "golden_signal_lag",
+        platformAccountId: null,
+        now: new Date(at),
+      });
+    }
+    // An older tombstone advances; a newer one is kept (greatest).
+    await testDb.pool.query(
+      `insert into notification_incident_recoveries (incident_key, recovered_at, metadata, updated_at)
+       values ($1, '2026-11-10T13:00:00Z', '{}', now())`,
+      [newer],
+    );
+
+    const resolved = await recoverAndResolveNotificationIncidents(testDb.db, {
+      incidentKeys: [older, newer, absent, older],
+      recoveredAt,
+      metadata: { pageLabel: null },
+    });
+
+    expect(resolved.map((row) => row.incidentKey)).toEqual([older]);
+    expect(await getNotificationIncidentByKey(testDb.db, older)).toMatchObject({
+      status: "resolved",
+      resolvedAt: recoveredAt,
+      lastSeenAt: recoveredAt,
+    });
+    expect(await getNotificationIncidentByKey(testDb.db, newer)).toMatchObject({ status: "open", resolvedAt: null });
+    expect(await getNotificationIncidentByKey(testDb.db, absent)).toBeNull();
+    const tombstones = await testDb.pool.query<{ incident_key: string; recovered_at: Date }>(
+      "select incident_key, recovered_at from notification_incident_recoveries order by incident_key",
+    );
+    expect(tombstones.rows.map((row) => [row.incident_key, row.recovered_at.toISOString()])).toEqual([
+      [absent, recoveredAt.toISOString()],
+      [newer, "2026-11-10T13:00:00.000Z"],
+      [older, recoveredAt.toISOString()],
+    ]);
     const outboxCount = await testDb.pool.query<{ count: number }>(
       "select count(*)::int as count from notification_delivery_outbox",
     );

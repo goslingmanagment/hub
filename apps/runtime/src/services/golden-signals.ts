@@ -26,6 +26,7 @@ import {
 import {
   notifyOfapiGlobalIncident,
   resolveOfapiGlobalIncident,
+  resolveOfapiGlobalIncidents,
 } from "./notification-incidents.ts";
 import {
   OFAPI_DELIVERY_HISTORY_AGE_METRIC,
@@ -497,14 +498,7 @@ export async function runGoldenSignalSample(
         : `Golden-signal ${metric} p95 ${Math.round(value ?? 0)}ms over threshold ${threshold}ms`,
     });
   }
-  for (const metric of healthy) {
-    await resolveOfapiGlobalIncident(app, { kind: "golden_signal_lag", subKey: metric });
-  }
-
-  // One-time migration: retire the legacy SHARED latch key
-  // (`golden_signal_lag:global`) so a pre-W5 incident row can't sit open
-  // forever now that nothing ever resolves it. Idempotent no-op afterwards.
-  await resolveOfapiGlobalIncident(app, { kind: "golden_signal_lag" });
+  await resolveOfapiGlobalIncidents(app, { kind: "golden_signal_lag", subKeys: healthy });
 
   const retired = await retireOrphanedMetricLatches(app, failed);
 
