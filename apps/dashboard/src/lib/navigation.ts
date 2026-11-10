@@ -147,14 +147,28 @@ export function buildLoginRoute(returnTo: string): string {
   return target === "/" ? "/login" : `/login?${new URLSearchParams({ next: target }).toString()}`;
 }
 
-/** The chatter's own home. The owner console is not theirs. */
-export const CHATTER_HOME = "/account";
+/**
+ * The account page (`/account`): devices, password, one's own AI spend — of
+ * any role, and on the chatters' site every other role's only page: the
+ * console is not served on that name.
+ */
+export const CABINET_PATH = "/account";
 
 /**
- * Where a chatter is sent from a console page. Their cabinet — except on the
- * console's own production name: no cabinet is served there, a chatter login
- * is not a way in, and the sign-in page ends the session and says where the
- * account is.
+ * A chatter's home: «Мои смены» in Workboard (`/workboard/` opens it), their
+ * shifts with their reports (owner, 2026-11-10). Another app on this host: a
+ * page load, never the console's router.
+ */
+export const CHATTER_HOME = "/workboard/";
+
+/** «Мои смены» itself: where the account page and the cabinet's old tabs lead a chatter. */
+export const CHATTER_SHIFTS = "/workboard/my/shifts";
+
+/**
+ * Where a chatter is sent from a console page. Their home in Workboard —
+ * except on the console's own production name: a chatter login is not a way
+ * in there, and the sign-in page ends the session and says where the account
+ * is.
  */
 export function chatterExit(): string {
   return isConsoleSite() ? "/login" : CHATTER_HOME;
@@ -162,17 +176,38 @@ export function chatterExit(): string {
 
 /**
  * Where a signed-in principal belongs. A chatter has no owner page to return
- * to — every one of them answers 403 — so a remembered `next` never overrides
- * the cabinet for them, with one exception: Workboard, which has a part of
- * their own (owner, 2026-11-10), so a chatter sent to sign in from it goes
- * back there. On the chatters' site the cabinet is every other role's only
- * home: the console is not served on that name. Elsewhere every other role
- * keeps the requested destination. `requested` has passed
- * `resolveLoginReturnPath`: a path of this host.
+ * to — every one of them answers 403 — so a remembered `next` wins only when it
+ * is a place of theirs: Workboard (their part of it, owner 2026-11-10) or the
+ * account page; anything else, or nothing, is their home, «Мои смены». On the
+ * chatters' site the account page is every other role's only home: the console
+ * is not served on that name. Elsewhere every other role keeps the requested
+ * destination. `requested` has passed `resolveLoginReturnPath`: a path of this
+ * host.
  */
 export function resolveRoleHome(role: string, requested: string): string {
-  if (role === "chatter") return opensWorkboard(requested) ? requested : CHATTER_HOME;
-  return isChatterSite() ? CHATTER_HOME : requested;
+  if (role === "chatter") return opensWorkboard(requested) || opensCabinet(requested) ? requested : CHATTER_HOME;
+  return isChatterSite() ? CABINET_PATH : requested;
+}
+
+/**
+ * The cabinet's old addresses of a chatter's shifts — the reports tab
+ * (`/account?tab=report`) and the statistics (`/account?days=7|14|30`) — are
+ * «Мои смены» now, with the window they asked for when Workboard's one period
+ * has it (14 or 30 days). null: the account page itself (`/account`,
+ * `?tab=profile`).
+ */
+export function cabinetRedirect(search: URLSearchParams): string | null {
+  const tab = search.get("tab");
+  const statistics = tab === null && search.has("days");
+  if (tab !== "report" && !statistics) return null;
+  const days = search.get("days");
+  return days === "14" || days === "30" ? `${CHATTER_SHIFTS}?days=${days}` : CHATTER_SHIFTS;
+}
+
+/** The account page, with whatever it carries (`/account?tab=profile`). */
+function opensCabinet(path: string): boolean {
+  if (!isSafeInAppPath(path)) return false;
+  return new URL(path, "https://hub.invalid").pathname.replace(/\/+$/, "") === CABINET_PATH;
 }
 
 /** A path into Workboard as the browser will open it: `/workboard/../settings` is the console's /settings. */

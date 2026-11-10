@@ -638,6 +638,61 @@
     cursor: pointer;
   }
 
+  /*
+   * A row that opens in place (`rowDetail`): the app's one disclosure in a table —
+   * the chevron before the first cell's words turns down while the row is open,
+   * the row and what opened under it share one quiet ground.
+   */
+  .ui-table__toggle {
+    display: inline-flex;
+    align-items: flex-start;
+    gap: 8px;
+    min-width: 0;
+  }
+
+  .ui-table__toggle-words {
+    min-width: 0;
+  }
+
+  .ui-table__chevron,
+  .ui-table__chevron-place {
+    flex: none;
+    width: 16px;
+    height: 16px;
+    /* On the first line of the words (24 px). */
+    margin-top: 4px;
+  }
+
+  .ui-table__chevron {
+    color: var(--ui-text-3);
+    transition: transform var(--ui-fast), color var(--ui-fast);
+  }
+
+  .ui-table tr.ui-table__row--link:hover .ui-table__chevron,
+  .ui-table tr.ui-table__row--open .ui-table__chevron {
+    color: var(--ui-text-2);
+  }
+
+  .ui-table tr.ui-table__row--open .ui-table__chevron {
+    transform: rotate(90deg);
+  }
+
+  .ui-table tr.ui-table__row--open,
+  .ui-table tr.ui-table__row--open:hover,
+  .ui-table tr.ui-table__detail {
+    background: var(--ui-hover-soft);
+  }
+
+  .ui-table tr.ui-table__row--open td {
+    border-bottom-color: transparent;
+  }
+
+  .ui-table tr.ui-table__detail td {
+    height: auto;
+    padding: 0 24px 20px;
+    cursor: auto;
+  }
+
   .ui-table__rowlink:focus-visible {
     outline: none;
   }

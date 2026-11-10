@@ -299,15 +299,6 @@ export async function recordOfapiWebhookMediaLocators(app: Pick<AppContext, "db"
   return recordLocators(app, ofapiMediaLocatorsFromWebhook(input.envelope, input), { eventId: input.eventId });
 }
 
-/** The read gateway, on both the capture-first and proxy paths, before the response is returned. */
-export async function recordOfapiGatewayMediaLocators(app: Pick<AppContext, "db" | "logger">, input: {
-  operation: string; ofapiAccountId: string; pageId: number; pathname: string; body: unknown; observedAt?: Date;
-}) {
-  if (!OFAPI_MEDIA_LOCATOR_OPERATIONS.has(input.operation)) return 0;
-  return recordLocators(app, ofapiMediaLocatorsFromGatewayBody({ ...input, observedAt: input.observedAt ?? new Date() }),
-    { operation: input.operation, pageId: input.pageId });
-}
-
 const RECOVERY_OBSERVATION_KINDS = ["ofapi.interactive_response.v1", "ofapi.collection_read_response.v1"];
 
 /** Maps a captured gateway request path back to its media-bearing operation. */

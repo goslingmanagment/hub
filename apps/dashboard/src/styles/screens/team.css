@@ -63,7 +63,7 @@
     .cabinet-main { padding: 16px 16px 32px; }
   }
   .ac-page { display: flex; flex-direction: column; min-width: 0; }
-  .ac-narrow { display: flex; flex-direction: column; gap: 24px; width: 100%; max-width: 720px; }
+  .ac-narrow { display: flex; flex-direction: column; gap: 24px; width: 100%; max-width: 720px; margin: 0 auto; }
   .ac-login { font-size: 24px; line-height: 32px; font-weight: 600; letter-spacing: -0.01em; word-break: break-all; }
   .ac-role { margin-top: 4px; color: var(--color-text-secondary); }
   .ac-pages { margin-top: 16px; }
@@ -103,80 +103,27 @@
   .ac-feature-calls { color: var(--color-text-secondary); font-variant-numeric: tabular-nums; }
   .ac-feature-cost { text-align: right; font-weight: 500; font-variant-numeric: tabular-nums; }
   .ac-guide { font-size: 15px; }
-
-  /* «Отчёт смены»: each report a card that opens to its sales, up to 720 wide. */
-  .rp-page { display: flex; flex-direction: column; gap: 16px; transition: opacity 0.15s; }
-  .rp-page[data-refreshing] { opacity: 0.6; }
-  .rp-headline { display: grid; gap: 4px; margin-bottom: 8px; }
-  .rp-lead { color: var(--color-text-secondary); }
-  .rp-skeleton { padding: 16px 24px 20px; }
-  .rp-summary {
-    display: grid;
-    gap: 8px;
-    padding: 16px 24px;
-    border-radius: var(--radius-card);
-    cursor: pointer;
-    list-style: none;
-  }
-  .rp-summary::-webkit-details-marker { display: none; }
-  .rp-summary:hover { background: var(--color-hover-alt); }
-  .rp-report[open] > .rp-summary { border-bottom: 1px solid var(--color-border-light); border-radius: var(--radius-card) var(--radius-card) 0 0; }
-  .rp-head { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: 12px 24px; }
-  .rp-date { font-size: 17px; line-height: 24px; font-weight: 600; letter-spacing: -0.005em; color: var(--color-text-primary); }
-  .rp-window { margin-left: 8px; font-weight: 400; color: var(--color-text-secondary); font-variant-numeric: tabular-nums; }
-  .rp-state { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin-top: 4px; font-size: 14px; line-height: 20px; color: var(--color-text-secondary); }
-  .rp-total { display: flex; align-items: center; gap: 12px; }
-  .rp-total-number { font-size: 24px; line-height: 32px; font-weight: 600; letter-spacing: -0.01em; font-variant-numeric: tabular-nums; color: var(--color-text-primary); }
-  .rp-chevron { flex: 0 0 auto; color: var(--color-text-muted); transition: transform 0.15s; }
-  .rp-report[open] .rp-chevron { transform: rotate(180deg); }
-  .rp-pages { display: flex; flex-wrap: wrap; gap: 4px 20px; font-size: 14px; line-height: 20px; }
-  .rp-pages li { display: inline-flex; gap: 6px; }
-  .rp-page-label { color: var(--color-text-secondary); }
-  .rp-page-amount { font-weight: 500; font-variant-numeric: tabular-nums; color: var(--color-text-primary); }
-  .rp-meta { font-size: 13px; line-height: 18px; color: var(--color-text-muted); }
-  .rp-body { padding: 4px 24px 16px; }
-  .rp-lines { display: flex; flex-direction: column; }
-  .rp-line {
-    display: grid;
-    grid-template-columns: 48px minmax(0, 1fr) auto;
-    align-items: baseline;
-    gap: 12px;
-    padding: 10px 0;
-    border-top: 1px solid var(--color-border-light);
-    font-size: 15px;
-    line-height: 22px;
-  }
-  .rp-lines > .rp-line:first-child { border-top: 0; }
-  .rp-line-time { color: var(--color-text-secondary); font-variant-numeric: tabular-nums; }
-  .rp-line-what { color: var(--color-text-primary); overflow-wrap: anywhere; }
-  .rp-added {
-    display: inline-block;
-    margin-left: 8px;
-    padding: 0 6px;
+  /* The page's title, and for a chatter the quiet way back to «Мои смены» above it. */
+  .ac-head { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
+  .ac-back {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 32px;
+    margin-left: -8px;
+    padding: 0 8px;
     border-radius: var(--radius-inner);
-    background: var(--color-hover);
-    font-size: 13px;
-    line-height: 20px;
     color: var(--color-text-secondary);
-    white-space: nowrap;
+    font-size: 14px;
+    line-height: 20px;
+    text-decoration: none;
   }
-  .rp-line-note { margin-top: 2px; font-size: 13px; line-height: 18px; color: var(--color-text-muted); }
-  .rp-line-reason { margin-top: 2px; font-size: 14px; line-height: 20px; color: var(--color-text-secondary); }
-  .rp-line-money { font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--color-text-primary); }
-  .rp-line[data-held] .rp-line-money { font-weight: 500; color: var(--color-text-secondary); }
-  .rp-none { padding: 10px 0; font-size: 14px; color: var(--color-text-secondary); }
-  .rp-held { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--color-border); }
-  .rp-held-title { padding-bottom: 2px; font-size: 15px; line-height: 22px; font-weight: 500; color: var(--color-text-primary); }
-  @media (max-width: 767px) {
-    .rp-summary { padding-inline: 16px; }
-    .rp-body { padding-inline: 16px; }
-    .rp-head { grid-template-columns: minmax(0, 1fr) auto; }
-    .rp-window { display: block; margin-left: 0; }
-    .rp-total-number { font-size: 20px; line-height: 28px; }
-    .rp-line { grid-template-columns: 44px minmax(0, 1fr) auto; gap: 8px; }
-  }
+  .ac-back:hover { background: var(--color-hover-alt); color: var(--color-text-primary); }
+  .ac-title { font-size: 24px; line-height: 32px; font-weight: 600; letter-spacing: -0.01em; color: var(--color-text-primary); }
+
   @media (pointer: coarse) {
     .ac-page .btn { min-height: 44px; height: auto; }
+    .ac-back { min-height: 44px; }
   }
 
   /* ── Sign-in and the invitation: one card in the middle ──────────────── */

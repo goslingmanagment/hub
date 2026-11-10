@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildLoginRoute, resolveLoginReturnPath, resolveRoleHome } from "../apps/dashboard/src/lib/navigation.ts";
+import { buildLoginRoute, cabinetRedirect, resolveLoginReturnPath, resolveRoleHome } from "../apps/dashboard/src/lib/navigation.ts";
 import { CHATTER_SITE_ORIGIN } from "../packages/ui/src/sites.ts";
 
 describe("login recovery", () => {
@@ -15,7 +15,8 @@ describe("login recovery", () => {
 });
 
 // Where the sign-in sends a person back to (LoginPage: `resolveRoleHome(role, resolveLoginReturnPath(next))`).
-// A chatter has a part of Workboard of their own (owner, 2026-11-10): a `next` into it is kept; any other is the cabinet.
+// A chatter's home is Workboard's «Мои смены» (owner, 2026-11-10): a `next` into Workboard or to the account page is
+// kept; any other, or none, is that home.
 describe("the way back after the sign-in", () => {
   const home = (role: string, next: string | null) => resolveRoleHome(role, resolveLoginReturnPath(next));
 
@@ -24,27 +25,35 @@ describe("the way back after the sign-in", () => {
   });
 
   it("takes a chatter back to Workboard", () => {
-    expect(home("chatter", "/workboard/my/reports")).toBe("/workboard/my/reports");
-    expect(home("chatter", "/workboard/my/reports?days=30")).toBe("/workboard/my/reports?days=30");
+    expect(home("chatter", "/workboard/my/shifts")).toBe("/workboard/my/shifts");
+    expect(home("chatter", "/workboard/my/shifts?week=2026-11-02")).toBe("/workboard/my/shifts?week=2026-11-02");
     expect(home("chatter", "/workboard/")).toBe("/workboard/");
   });
 
-  it("takes a chatter without a way back, or with one into the console, to the cabinet", () => {
-    expect(home("chatter", null)).toBe("/account");
-    expect(home("chatter", "")).toBe("/account");
-    expect(home("chatter", "/settings")).toBe("/account");
-    expect(home("chatter", "/workboards")).toBe("/account");
+  it("takes a chatter back to the account page, with what it carried", () => {
+    expect(home("chatter", "/account")).toBe("/account");
+    expect(home("chatter", "/account?tab=profile")).toBe("/account?tab=profile");
+  });
+
+  it("takes a chatter without a way back, or with one into the console, home to «Мои смены»", () => {
+    expect(home("chatter", null)).toBe("/workboard/");
+    expect(home("chatter", "")).toBe("/workboard/");
+    expect(home("chatter", "/settings")).toBe("/workboard/");
+    expect(home("chatter", "/workboards")).toBe("/workboard/");
+    expect(home("chatter", "/accounts")).toBe("/workboard/");
+    expect(home("chatter", "/account/../settings")).toBe("/workboard/");
   });
 
   it.each([
-    "https://evil.example/workboard/my/reports",
-    "//evil.example/workboard/my/reports",
-    "/\\evil.example/workboard/my/reports",
+    "https://evil.example/workboard/my/shifts",
+    "//evil.example/workboard/my/shifts",
+    "/\\evil.example/workboard/my/shifts",
     "/workboard/../settings",
     "/workboard/%2e%2e/settings",
-    "/workboard/my reports",
+    "/workboard/my shifts",
+    "https://evil.example/account",
   ])("refuses a chatter's off-host or malformed way back %s", (next) => {
-    expect(home("chatter", next)).toBe("/account");
+    expect(home("chatter", next)).toBe("/workboard/");
   });
 
   it("leaves the owner and a team lead where they were going", () => {
@@ -56,11 +65,29 @@ describe("the way back after the sign-in", () => {
     }
   });
 
-  it("on the chatters' site, keeps the cabinet the home of every other role and Workboard a chatter's", () => {
+  it("on the chatters' site, keeps the account page the home of every other role and Workboard a chatter's", () => {
     vi.stubGlobal("window", { location: { origin: CHATTER_SITE_ORIGIN } });
-    expect(home("chatter", "/workboard/my/reports")).toBe("/workboard/my/reports");
-    expect(home("chatter", null)).toBe("/account");
+    expect(home("chatter", "/workboard/my/shifts")).toBe("/workboard/my/shifts");
+    expect(home("chatter", null)).toBe("/workboard/");
     expect(home("owner", "/workboard/payouts")).toBe("/account");
     expect(home("team_lead", "/settings")).toBe("/account");
+  });
+});
+
+// The cabinet keeps only the account; its old tabs of a chatter's shifts lead to «Мои смены» (AccountPage).
+describe("the cabinet's old addresses", () => {
+  const left = (search: string) => cabinetRedirect(new URLSearchParams(search));
+
+  it("send the reports tab and the statistics to «Мои смены», with the window the app has", () => {
+    expect(left("tab=report")).toBe("/workboard/my/shifts");
+    expect(left("tab=report&days=30")).toBe("/workboard/my/shifts?days=30");
+    expect(left("days=14")).toBe("/workboard/my/shifts?days=14");
+    expect(left("days=7")).toBe("/workboard/my/shifts");
+  });
+
+  it("keep the account page itself", () => {
+    expect(left("")).toBeNull();
+    expect(left("tab=profile")).toBeNull();
+    expect(left("tab=profile&days=30")).toBeNull();
   });
 });

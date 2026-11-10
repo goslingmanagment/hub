@@ -264,36 +264,6 @@ describe("§7 — page assignments", () => {
       .toBe(200);
   }, 60_000);
 
-  it("row «assigned an OnlyFans page»: the desktop's account list carries the acct_… id", async (context) => {
-    const setup = requireSetup(context);
-    if (!setup) return;
-    await registerChatter(setup.app);
-    const device = await signInDevice(setup.server, "grisha", CHATTER_PASSWORD, "Desktop · kevin");
-    const bearer = { authorization: `Bearer ${device.token}` };
-
-    // Same account, same device token, no OnlyFans page yet: an empty rail.
-    const before = await get(setup.server, "/api/v1/ofapi/read/accounts", bearer);
-    expect(before.statusCode).toBe(200);
-    expect(before.json<unknown[]>()).toEqual([]);
-
-    const ownerCookie = await loginCookie(setup.server, "dmitriy", OWNER_PASSWORD);
-    await assignPage(setup.server, ownerCookie, "grisha", "lora-of");
-
-    const after = await get(setup.server, "/api/v1/ofapi/read/accounts", bearer);
-    expect(after.statusCode).toBe(200);
-    const accounts = after.json<Array<{ id: string; onlyfans_username: string | null }>>();
-    expect(accounts.map((account) => account.id)).toEqual([OF_ACCOUNT_ID]);
-    expect(accounts[0]?.onlyfans_username).toBe("loravie");
-
-    // The desktop's page identity crosses platforms on ONE principal: the same
-    // token that just read an OnlyFans account also reads a Fansly assignment.
-    await assignPage(setup.server, ownerCookie, "grisha", "lora-fansly");
-    expect((await get(setup.server, "/api/v1/pages", bearer))
-      .json<Array<{ label: string; platform: string }>>()
-      .map((page) => `${page.platform}:${page.label}`).sort())
-      .toEqual(["fansly:lora-fansly", "onlyfans:lora-of"]);
-  }, 60_000);
-
   it("row «assignment removed»: the page's operations answer 403/404 and the rails go empty", async (context) => {
     const setup = requireSetup(context);
     if (!setup) return;
@@ -304,8 +274,6 @@ describe("§7 — page assignments", () => {
 
     expect((await get(setup.server, "/api/v1/pages/lora-vip/subscribers", bearer)).statusCode)
       .toBe(200);
-    expect((await get(setup.server, "/api/v1/ofapi/read/accounts", bearer))
-      .json<Array<{ id: string }>>().map((account) => account.id)).toEqual([OF_ACCOUNT_ID]);
 
     await unassignPage(setup.server, ownerCookie, "grisha", "lora-vip");
     await unassignPage(setup.server, ownerCookie, "grisha", "lora-of");
@@ -316,18 +284,6 @@ describe("§7 — page assignments", () => {
       .toBe(403);
     expect((await get(setup.server, "/api/v1/pages/ghost-page/subscribers", bearer)).statusCode)
       .toBe(404);
-
-    // OnlyFans: the account leaves the rail, and every per-account read of it
-    // 404s — before the gateway would have spent a single vendor credit.
-    expect((await get(setup.server, "/api/v1/ofapi/read/accounts", bearer)).json<unknown[]>())
-      .toEqual([]);
-    const perAccount = await get(
-      setup.server,
-      `/api/v1/ofapi/read/${OF_ACCOUNT_ID}/chats?limit=10`,
-      bearer,
-    );
-    expect(perAccount.statusCode).toBe(404);
-    expect(setup.app.ofapi).toBeUndefined();
 
     // The credential itself is untouched: the page they KEPT still works.
     expect((await get(setup.server, "/api/v1/pages/lora-fansly/subscribers", bearer)).statusCode)
@@ -659,14 +615,13 @@ describe("§7 — roles", () => {
     const narrowRefusal = { error: "forbidden", message: "This route is not available to this client", statusCode: 403 };
 
     // Console, dashboard, cabinet, the plain page list, a page route off its
-    // list, the desktop read gateway: one reason-less 403 for all of them.
+    // list: one reason-less 403 for all of them.
     for (const url of [
       "/api/v1/admin/users",
       "/api/v1/models",
       "/api/v1/auth/devices",
       "/api/v1/pages",
       "/api/v1/pages/lora-fansly/subscribers",
-      "/api/v1/ofapi/read/accounts",
       // The cabinet's list of held chat-extension sends (H-7e): the owner's
       // and a team lead's cookie, never the extension's own token.
       "/api/v1/client-send-custody",
