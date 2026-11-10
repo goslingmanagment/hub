@@ -1,6 +1,8 @@
 import { createHash, randomUUID } from "node:crypto";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { insertObservation, upsertOfapiWebhookConfig } from "@agency_hub_core/db";
+import {
+  captureWebhookDeliveryPage, claimWebhookDeliveryScan, createModel, createWebhookDeliveryScan, insertObservation, upsertOfapiWebhookConfig,
+} from "@agency_hub_core/db";
 import { encryptJson } from "@agency_hub_core/shared";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import { createUserAccount } from "../apps/runtime/src/services/auth.ts";
@@ -390,5 +392,26 @@ describe("OFAPI delivery-history collector catch-up", () => {
     // Coverage is fresh again: back to the five-minute cadence.
     await sweepOfapiWebhookDeliveryHistory(app);
     expect(read).toHaveBeenCalledTimes(8);
+  });
+
+  it("skips an attempt created before an erasure of its page and stores the one after it", async () => {
+    const model = await createModel(app.db, { slug: "erased-model", name: "Erased" });
+    const pageId = Number((await testDb.pool.query(`insert into pages(model_id,platform,label,ofapi_account_id)
+      values($1,'onlyfans','erased','acct_erased') returning id`, [model.id])).rows[0].id);
+    await testDb.pool.query(`insert into erasure_log(scope_type,scope_ref,initiated_by,dry_run,plan,started_at)
+      values('page',$1,$2,false,$3,now()-interval '20 minutes')`, [String(pageId), ownerId, JSON.stringify({ resolvedPageIds: [pageId] })]);
+    const id = randomUUID();
+    await createWebhookDeliveryScan(app.db, { id, webhookId: WEBHOOK, credentialFingerprint: "test-fingerprint", observedTeam: "test-team",
+      from: new Date(Date.now() - 60 * MINUTE), to: new Date() });
+    const scan = (await claimWebhookDeliveryScan(app.db, id))!;
+    const attempt = (attemptId: number, minutesAgo: number) => ({ attemptId, deliveryUuid: `erasure-${attemptId}`, eventType: "messages.received",
+      attemptNumber: 1, succeeded: true, statusCode: 200, errorType: null, idempotencyKey: `evt_erasure_${attemptId}`, accountId: "acct_erased",
+      accountRefs: ["acct_erased"], redeliveredFrom: null, createdAt: new Date(Date.now() - minutesAgo * MINUTE) });
+    const inserted = await captureWebhookDeliveryPage(app.db, { scan, attempts: [attempt(501, 30), attempt(502, 10)],
+      observationId, observationReceivedAt, complete: false });
+    expect(inserted).toBe(1);
+    expect((await testDb.pool.query("select attempt_id::int from ofapi_webhook_delivery_attempts order by attempt_id")).rows).toEqual([{ attempt_id: 502 }]);
+    expect((await testDb.pool.query("select next_offset,captured_attempts from ofapi_webhook_delivery_scans where id=$1", [id])).rows[0])
+      .toEqual({ next_offset: 2, captured_attempts: 1 });
   });
 });

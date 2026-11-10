@@ -63,25 +63,58 @@ export async function captureWebhookDeliveryPage(db: Database, input: {
       where id=${input.scan.id} and state='running' and lease_token=${input.scan.lease_token}
         and next_offset=${input.scan.next_offset} for update`);
     if (!locked.rows.length) throw new Error("OFAPI delivery scan lease changed");
-    let inserted = 0;
+    const pagesByRefs = new Map<string, number[]>();
+    const attemptPages: number[][] = [];
     for (const attempt of input.attempts) {
-      const pageRows = attempt.accountRefs.length ? (await tx.execute<{ page_id: number }>(sql`
-        select distinct page_id from ofapi_account_bindings where account_id in ${attempt.accountRefs}
-        union select id as page_id from pages where ofapi_account_id in ${attempt.accountRefs}`)).rows : [];
-      let fenced = false;
-      for (const page of pageRows.sort((a, b) => Number(a.page_id) - Number(b.page_id))) {
-        if (!await tryAcquireDmArchiveWriterFenceLock(tx, Number(page.page_id))) throw new Error("Erasure is in progress");
-        if (await isDmArchiveScopeFenced(tx, { pageId: Number(page.page_id), refs: [], materialAt: attempt.createdAt })) fenced = true;
+      const key = JSON.stringify([...new Set(attempt.accountRefs)].sort());
+      let pages = pagesByRefs.get(key);
+      if (!pages) {
+        pages = attempt.accountRefs.length ? (await tx.execute<{ page_id: number }>(sql`
+          select distinct page_id from ofapi_account_bindings where account_id in ${attempt.accountRefs}
+          union select id as page_id from pages where ofapi_account_id in ${attempt.accountRefs}`)).rows.map(row => Number(row.page_id)) : [];
+        pagesByRefs.set(key, pages);
       }
-      if (fenced) continue;
+      attemptPages.push(pages);
+    }
+    // One fence lock and one fence check per page. With no refs the check is
+    // «an erasure of the page started at or after materialAt», so not fenced at
+    // the page's earliest attempt means not fenced for any of its attempts;
+    // only a fenced page falls back to the check per attempt.
+    const earliestByPage = new Map<number, Date>();
+    attemptPages.forEach((pages, index) => {
+      const createdAt = input.attempts[index]!.createdAt;
+      for (const pageId of pages) {
+        const earliest = earliestByPage.get(pageId);
+        if (!earliest || createdAt < earliest) earliestByPage.set(pageId, createdAt);
+      }
+    });
+    const fencedPages = new Set<number>();
+    for (const [pageId, earliest] of [...earliestByPage].sort(([a], [b]) => a - b)) {
+      if (!await tryAcquireDmArchiveWriterFenceLock(tx, pageId)) throw new Error("Erasure is in progress");
+      if (await isDmArchiveScopeFenced(tx, { pageId, refs: [], materialAt: earliest })) fencedPages.add(pageId);
+    }
+    const kept: WebhookDeliveryAttempt[] = [];
+    for (const [index, attempt] of input.attempts.entries()) {
+      let fenced = false;
+      for (const pageId of attemptPages[index]!) {
+        if (fencedPages.has(pageId)
+          && await isDmArchiveScopeFenced(tx, { pageId, refs: [], materialAt: attempt.createdAt })) fenced = true;
+      }
+      if (!fenced) kept.push(attempt);
+    }
+    let inserted = 0;
+    if (kept.length) {
+      // Rows in page order: a delivery listed twice keeps its first attempt row,
+      // as the insert per attempt did.
       const result = await tx.execute(sql`insert into ofapi_webhook_delivery_attempts
         (webhook_id,attempt_id,delivery_uuid,event_type,attempt_number,succeeded,status_code,error_type,
          idempotency_key,ofapi_account_id,account_refs,redelivered_from,source_created_at,observation_id,observation_received_at)
-        values (${input.scan.webhook_id},${attempt.attemptId},${attempt.deliveryUuid},${attempt.eventType},
+        values ${sql.join(kept.map(attempt => sql`(${input.scan.webhook_id},${attempt.attemptId},${attempt.deliveryUuid},${attempt.eventType},
           ${attempt.attemptNumber},${attempt.succeeded},${attempt.statusCode},${attempt.errorType},
           ${attempt.idempotencyKey},${attempt.accountId},${JSON.stringify(attempt.accountRefs)}::jsonb,${attempt.redeliveredFrom},${attempt.createdAt},
-          ${input.observationId},${input.observationReceivedAt}) on conflict(webhook_id,attempt_id) do nothing returning attempt_id`);
-      inserted += result.rows.length;
+          ${input.observationId},${input.observationReceivedAt})`), sql`,`)}
+        on conflict(webhook_id,attempt_id) do nothing returning attempt_id`);
+      inserted = result.rows.length;
     }
     await tx.execute(sql`update ofapi_webhook_delivery_scans set
       next_offset=next_offset+${input.attempts.length},captured_attempts=captured_attempts+${inserted},
