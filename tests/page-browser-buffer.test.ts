@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
@@ -434,6 +434,36 @@ describe("the caps (spec §5; plan §4.14)", () => {
     expect(gap).toMatchObject({ kind: "gap", seq: count + 1, fromSeq: count, fromWall: lastSaved.atWall, reason: "buffer_full" });
     expect(await seqOf(buffer.append(wsFrame(1)))).toBe(count + 2);
     expect((await buffer.ready()).ok).toBe(true);
+  });
+});
+
+describe("giving space back", () => {
+  it("keeps a few freed pages for the next records, and gives a backlog's megabytes back to the disk", async () => {
+    const root = dir();
+    const buffer = open(root, { reclaimEveryMs: 1 });
+    buffer.start();
+    const file = join(root, "store", DB_FILE);
+    const sizes = () => ({ db: statSync(file).size, wal: statSync(`${file}-wal`).size });
+    const settled = () => new Promise((resolve) => setTimeout(resolve, 60));
+    await settled();
+    // One record and its ack: no checkpoint, no truncated WAL — the pages it
+    // left are the next record's.
+    buffer.acknowledge(await seqOf(buffer.append(wsFrame(1, 6000))));
+    await buffer.flush();
+    await settled();
+    expect(sizes().wal).toBeGreaterThan(0);
+    // A backlog of megabytes, acknowledged: the file is small again.
+    let appended = buffer.append(wsFrame(2, 6000));
+    for (let n = 3; n <= 700; n++) appended = buffer.append(wsFrame(n, 6000));
+    const last = await seqOf(appended);
+    const grown = sizes();
+    expect(grown.db + grown.wal).toBeGreaterThan(4_000_000);
+    buffer.acknowledge(last);
+    await buffer.flush();
+    for (let n = 0; n < 100 && sizes().db > 200_000; n++) await settled();
+    expect(sizes().db).toBeLessThan(200_000);
+    expect(sizes().wal).toBe(0);
+    expect(buffer.stats()).toMatchObject({ events: 0, bytes: 0 });
   });
 });
 
