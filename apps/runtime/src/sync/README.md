@@ -107,9 +107,6 @@ sync/
   chats.ts                   the chats Fansly does not serve: `sync chats unavailable | note` (`cli/chats.ts`), no request
   public-lookup.ts           the public account reader's levers: `sync public-lookup status | queue | enable | disable |
                              resume | recheck-marks | enqueue | proxy` (`cli/public-lookup.ts`), no request
-  parity/                    step 4, owner decision №11: `sync dm-reader-parity` (`cli/dm-reader-parity.ts`), the
-                             read-only DM reader parity of page_dm_messages and message_archive (the readers
-                             serve live pages from the archive: "DM readers on the archive")
   onlyfans/boundary.ts       step 4: where the engine ends — the platform set of the legacy page-sync executor
                              (`services/sync/`, OnlyFans only) and its assertion in the planner and the executor
 ```
@@ -852,22 +849,6 @@ snapshot never shows a deleted message as live. OnlyFans keeps writing the table
 the OnlyFans PPV backfill). `tests/page-dm-messages-boundary.test.ts` pins every file that names the table, every
 write statement on it and every caller of its writers; inside `sync/` the deletion mark is the only one. A revert of
 S4-13 brings the inserts back; the gap since is not refilled, and a live page's readers read the archive anyway.
-
-**Parity.** `pnpm cli sync dm-reader-parity --window 1h --rounds 12 --interval 5m [--page P] [--full] --out <json>`
-compares the two stores reader by reader, read-only (every statement in a READ ONLY transaction, each thread in one
-repeatable-read snapshot; it runs in the worker container on the app connection, which can read these tables). It
-calls the real readers both ways (their `page_dm_messages` default and the archive variant, whatever the page's
-mode): the chat messages (25 and 100) and the preview with the live overlay, the page's coverage, the agent
-transcript with and without its hot arm, the summary columns against the archive, the fold's stored facts and the
-window summary. Each round samples per page the threads active since
-the last round, 50 stratified by stored count, the threads with a pending overlay row and those whose live rows
-differ between the stores; the threads with a deletion, tip, PPV, reply ref or exclusion are spread over the rounds
-(each checked once). Classes (`parity/classify.ts`): `missing_in_archive` fails only when a recheck of both stores
-≥ 2 min later still finds it missing, `field_mismatch` fails, `extra_in_archive` (the archive knows more: the
-September sidecar rows, a deletion first) and `tie_order` are reported. `--full` also judges every Fansly hot row
-against its archive row. The JSON report goes to `--out`; stdout carries the verdict and the archive-only list for
-the owner; exit 1 on a fail. It ran for an hour before the readers moved (S4-08) and again before the Fansly hot
-writes stopped (S4-13); since then every message newer than the freeze is `extra_in_archive`.
 
 ## Invariants
 
