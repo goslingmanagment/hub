@@ -1,6 +1,5 @@
 /**
- * The shift ribbon's clock, for the chatter's cabinet (the console's «Статистика»)
- * and Workboard's person card: the period's days as rows on a 24-hour clock
+ * The shift ribbon's clock, for Workboard's person card: the period's days as rows on a 24-hour clock
  * (Moscow) that starts where the person's shifts leave it free, so a shift is
  * one bar in the row of its day — an evening over midnight too. Pure; no React.
  */

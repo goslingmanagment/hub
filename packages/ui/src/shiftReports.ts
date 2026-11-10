@@ -1,54 +1,23 @@
-import { ACCOUNT_REPORTS_DEFAULT_DAYS, type AccountReport, type AccountReportLine } from "@agency_hub_core/contracts";
-import { addDays, moscowToday, type MoscowDay } from "./moscow.js";
+import type { AccountReport, AccountReportLine } from "@agency_hub_core/contracts";
 
 /**
  * A chatter's own shift reports (`accountReports`, the agency ledger's
- * breakdown of each shift) in words, for both screens that show them: the
- * cabinet's «Отчёт смены» (apps/dashboard) and Workboard's «Мои отчёты». Sales
- * only, no pay. Times are Moscow's. No React here.
+ * breakdown of each shift) in words, for Workboard's «Мои смены», where each
+ * report opens in its shift's row. Sales only, no pay. Times are Moscow's. No
+ * React here.
  */
-
-/** The screens' two windows: the last 14 or 30 Moscow days. */
-export const REPORT_PERIODS = [
-  { days: 14, label: "14 дней" },
-  { days: 30, label: "30 дней" },
-] as const;
-
-/** `?days=14|30` of the address; anything else is the default 14. */
-export function reportPeriodOf(raw: string | null | undefined): number {
-  const value = Number(raw);
-  return REPORT_PERIODS.some((period) => period.days === value) ? value : ACCOUNT_REPORTS_DEFAULT_DAYS;
-}
-
-/** The last `days` Moscow days, today included: the query of `accountReports`. */
-export function reportDates(days: number, now: Date = new Date()): { from: MoscowDay; to: MoscowDay } {
-  const to = moscowToday(now);
-  return { from: addDays(to, -(days - 1)), to };
-}
 
 const MSK_OFFSET_MS = 3 * 3_600_000;
 const DAY_MS = 86_400_000;
 
-const weekday = new Intl.DateTimeFormat("ru-RU", { weekday: "short", timeZone: "UTC" });
 const dayMonth = new Intl.DateTimeFormat("ru-RU", { day: "numeric", month: "long", timeZone: "UTC" });
 const clock = new Intl.DateTimeFormat("ru-RU", { hour: "2-digit", minute: "2-digit", timeZone: "Europe/Moscow" });
-
-/** `сб, 8 ноября` of a Moscow `YYYY-MM-DD`. */
-export function reportDay(day: string): string {
-  const at = new Date(`${day}T12:00:00Z`);
-  return `${weekday.format(at)}, ${dayMonth.format(at)}`;
-}
 
 /** `17:28`, Moscow; an unreadable moment is «—». */
 export function clockOf(iso: string | null): string {
   if (iso === null) return "—";
   const at = Date.parse(iso);
   return Number.isNaN(at) ? "—" : clock.format(new Date(at));
-}
-
-/** The shift's window in Moscow: `16:00–00:00`. */
-export function reportWindow(report: Pick<AccountReport, "windowFrom" | "windowTo">): string {
-  return `${clockOf(report.windowFrom)}–${clockOf(report.windowTo)}`;
 }
 
 function moscowDay(iso: string): string | null {
@@ -95,14 +64,6 @@ const KIND_WORDS: Readonly<Record<string, string>> = {
 /** What a sale is, in the words of the report; an unknown type as it came. */
 export function kindWord(kind: string): string {
   return KIND_WORDS[kind] ?? kind;
-}
-
-/** The fan as the report names them: the nickname, else the platform's id; null — none (an amount added by hand). */
-export function fanOf(line: Pick<AccountReportLine, "fanName" | "fanRef">): string | null {
-  const name = line.fanName.trim();
-  if (name !== "") return name;
-  const ref = line.fanRef.trim();
-  return ref === "" ? null : ref;
 }
 
 /** A reason without the agent's reference to its rules at the end: «… (§4.2)» → «…». */
