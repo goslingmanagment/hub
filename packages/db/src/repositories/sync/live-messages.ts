@@ -453,7 +453,7 @@ export async function listPendingFanslyWsLiveReceipts(
       ${input.pageId === undefined ? sql`` : sql`and page_id = ${input.pageId}`}
       ${input.afterObservationId === undefined ? sql`` : sql`and observation_id > ${input.afterObservationId}`}
       ${input.receivedBefore === undefined ? sql`` : sql`and received_at <= ${input.receivedBefore}`}
-    order by observation_id
+    order by fansly_ws_decode_receipts.observation_id
     limit ${input.limit}
   `);
   return result.rows.map((row) => Number(row.observation_id));
