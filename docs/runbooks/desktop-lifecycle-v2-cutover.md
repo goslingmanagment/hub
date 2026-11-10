@@ -1,5 +1,10 @@
 # Desktop lifecycle v2 production cutover
 
+> Historical. Production has advertised `desktop-lifecycle-v2` since 2026-07; the
+> deploy script no longer performs a first enablement (its receipt options, the
+> evidence verifier and the inventory check were removed on 2026-11-10). A deploy
+> refuses any candidate without the capability.
+
 This is a one-way Core-first cutover. It introduces device-token reserve/activate
 custody, owner-bound harvest capability, the read-only persona catalog, and v2
 snapshot/cursor contracts. Do not publish the corresponding Desktop until this

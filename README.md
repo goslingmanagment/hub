@@ -197,11 +197,8 @@ By default the script uses `--mode full`:
 - after a successful full deploy, the verified candidate is published under a dependency-checksum clean-base tag for future dist-only releases
 - BuildKit keeps native-build and target-runtime pnpm/Corepack caches separate; nested host `node_modules` and built `dist` trees stay out of the Docker context, and CI launches the bundled Chromium Headless Shell from the final runtime image
 
-Older deploy wrappers may still pass `--node-base-cache-image` or set
-`DEPLOY_NODE_BASE_CACHE_IMAGE`. Both forms remain accepted as deprecated
-compatibility shims, emit a warning, and are ignored; only the canonical
-`--node-base-image` / `DEPLOY_NODE_BASE_IMAGE` value can select the image used
-for validation and the Docker build.
+Only `--node-base-image` / `DEPLOY_NODE_BASE_IMAGE` selects the image used for
+validation and the Docker build.
 
 `--mode auto` is available only as an explicit opt-in. In auto mode, if the full build fails before the remote release is modified, the script can fall back to a dist-only overlay build from the clean full image published by the latest successful full deploy for the same dependency checksum. The running production and rollback images are never used as dist bases, so repeated dist-only releases do not accumulate previous artifact layers.
 

@@ -5,11 +5,6 @@ import { runMigrations } from "../../../packages/db/src/migrate-runner.ts";
 import { runApiRuntime } from "./api-runtime.ts";
 import { runSchedulerRuntime } from "./scheduler-runtime.ts";
 import { describeCompatibleClientSdks } from "./services/compatible-client-sdks.ts";
-import {
-  DESKTOP_LIFECYCLE_V2_EVIDENCE,
-  validateDesktopLifecycleV2Evidence,
-  verifyDesktopLifecycleV2Inventory,
-} from "./services/desktop-lifecycle-v2-evidence.ts";
 import { PUBLIC_RUNTIME_CAPABILITIES } from "./services/public-capabilities.ts";
 import { runSyncRuntime } from "./sync/main.ts";
 import { runWorkerRuntime } from "./worker-runtime.ts";
@@ -27,19 +22,6 @@ async function runStartupMigrations() {
   } finally {
     client.release();
     await pool.end().catch(() => undefined);
-  }
-}
-
-async function verifyLifecycleInventory() {
-  // Docker Compose already injects .env.production. Keep this machine-readable
-  // command's stdout free of dotenv's informational banner.
-  const config = loadConfig(process.env, { loadDotEnv: false });
-  const pool = createPool(config.databaseUrl);
-  try {
-    const verified = await verifyDesktopLifecycleV2Inventory(pool);
-    process.stdout.write(`${JSON.stringify({ ok: true, verified })}\n`);
-  } finally {
-    await pool.end();
   }
 }
 
@@ -62,15 +44,6 @@ export async function main() {
   }
   if (process.argv[2] === "print-compatible-client-sdks") {
     process.stdout.write(`${JSON.stringify(describeCompatibleClientSdks())}\n`);
-    return;
-  }
-  if (process.argv[2] === "print-desktop-lifecycle-v2-evidence") {
-    validateDesktopLifecycleV2Evidence();
-    process.stdout.write(`${JSON.stringify(DESKTOP_LIFECYCLE_V2_EVIDENCE)}\n`);
-    return;
-  }
-  if (process.argv[2] === "verify-desktop-lifecycle-v2-inventory") {
-    await verifyLifecycleInventory();
     return;
   }
 
