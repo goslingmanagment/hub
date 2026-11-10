@@ -55,10 +55,3 @@ export function analyzePingSegment(
     latestOverallTextAtMs: latestOverallText ? latestOverallText.createdAtMs : null,
   };
 }
-
-export function resolvePingSegment(
-  messages: readonly TranscriptMessage[],
-  nowMs: number,
-): PingSegment {
-  return analyzePingSegment(messages, nowMs).segment;
-}

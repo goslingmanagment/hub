@@ -280,17 +280,3 @@ export async function getFreshestUsableRecapBodies(
   const [full, short] = await Promise.all([pick("full"), pick("short")]);
   return { full, short };
 }
-
-/** Daily volume guard (DP 6 owner note: monitor, trim later if ever). */
-export async function getAiGenerationContentVolume(db: Database) {
-  const result = await db.execute<{ rows: string; bytes: string }>(sql`
-    select count(*)::text as rows,
-           pg_total_relation_size('ai_generation_content')::text as bytes
-    from ai_generation_content
-  `);
-  const row = result.rows[0];
-  return {
-    rowCount: Number(row?.rows ?? 0),
-    totalBytes: Number(row?.bytes ?? 0),
-  };
-}

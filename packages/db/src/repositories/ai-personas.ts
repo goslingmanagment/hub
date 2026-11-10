@@ -12,14 +12,10 @@ export interface UpsertAiPersonaInput {
   systemBlock: string;
   featureOverrides?: Record<string, unknown>;
   /**
-   * Omitted is the historical last-write-wins form: identical active content
-   * is a no-op; divergent content and archived rows use last-write-wins. No
-   * HTTP route reaches it any more (the legacy bearer write lane is retired);
-   * the owner admin lane always sends a token. `null` is create-only
-   * (including against archived tombstones); a number updates exactly that
-   * active revision.
+   * `null` is create-only (including against archived tombstones); a number
+   * updates exactly that active revision.
    */
-  expectedVersion?: number | null;
+  expectedVersion: number | null;
 }
 
 export const AI_PERSONA_BUNDLED_VERSION_KEY = "__kernelBundledVersion";
@@ -72,61 +68,29 @@ export async function upsertAiPersona(db: Database, input: UpsertAiPersonaInput)
     );
   }
 
-  if (input.expectedVersion !== undefined) {
-    const [updated] = await db.update(aiPersonas).set({
-      displayName: input.displayName,
-      systemBlock: input.systemBlock,
-      // API persona edits do not own kernel seed metadata. Preserve existing
-      // overrides unless an internal caller explicitly supplies a replacement.
-      ...(input.featureOverrides !== undefined
-        ? { featureOverrides: input.featureOverrides }
-        : {}),
-      updatedAt: new Date(),
-      revision: sql`${aiPersonas.revision} + 1`,
-    }).where(and(
-      eq(aiPersonas.key, input.key),
-      isNull(aiPersonas.archivedAt),
-      eq(aiPersonas.revision, input.expectedVersion),
-    )).returning();
-    if (updated !== undefined) {
-      return updated;
-    }
-    throw new AiPersonaVersionConflictError(
-      input.key,
-      input.expectedVersion,
-      await readPersonaVersion(db, input.key),
-    );
+  const [updated] = await db.update(aiPersonas).set({
+    displayName: input.displayName,
+    systemBlock: input.systemBlock,
+    // API persona edits do not own kernel seed metadata. Preserve existing
+    // overrides unless an internal caller explicitly supplies a replacement.
+    ...(input.featureOverrides !== undefined
+      ? { featureOverrides: input.featureOverrides }
+      : {}),
+    updatedAt: new Date(),
+    revision: sql`${aiPersonas.revision} + 1`,
+  }).where(and(
+    eq(aiPersonas.key, input.key),
+    isNull(aiPersonas.archivedAt),
+    eq(aiPersonas.revision, input.expectedVersion),
+  )).returning();
+  if (updated !== undefined) {
+    return updated;
   }
-
-  // Historical last-write-wins form, including resurrection of an archived
-  // key. It served the retired legacy bearer write lane; no HTTP route reaches
-  // it now. Owner dashboard writes never use this form; they send CAS tokens.
-  const [legacyRow] = await db.insert(aiPersonas).values(values)
-    .onConflictDoUpdate({
-      target: aiPersonas.key,
-      set: {
-        displayName: input.displayName,
-        systemBlock: input.systemBlock,
-        ...(input.featureOverrides !== undefined
-          ? { featureOverrides: input.featureOverrides }
-          : {}),
-        updatedAt: new Date(),
-        archivedAt: null,
-        revision: sql`${aiPersonas.revision} + 1`,
-      },
-      setWhere: sql`${aiPersonas.displayName} is distinct from ${input.displayName}
-        or ${aiPersonas.systemBlock} is distinct from ${input.systemBlock}
-        or ${aiPersonas.archivedAt} is not null`,
-    })
-    .returning();
-  if (legacyRow !== undefined) {
-    return legacyRow;
-  }
-  const identical = await readPersonaLifecycle(db, input.key);
-  if (identical === null) {
-    throw new Error(`AI persona "${input.key}" disappeared during legacy replay`);
-  }
-  return identical;
+  throw new AiPersonaVersionConflictError(
+    input.key,
+    input.expectedVersion,
+    await readPersonaVersion(db, input.key),
+  );
 }
 
 /**
@@ -187,38 +151,22 @@ export async function listAiPersonaStates(db: Database) {
 export async function archiveAiPersona(
   db: Database,
   key: string,
-  expectedVersion?: number | null,
+  expectedVersion: number,
 ) {
-  if (expectedVersion === undefined) {
-    // Historical last-write-wins archive of the retired legacy bearer lane; no
-    // HTTP route reaches it now (the admin lane always sends a revision).
-    const [archived] = await db.update(aiPersonas)
-      .set({
-        archivedAt: new Date(),
-        updatedAt: new Date(),
-        revision: sql`${aiPersonas.revision} + 1`,
-      })
-      .where(and(eq(aiPersonas.key, key), isNull(aiPersonas.archivedAt)))
-      .returning();
-    return archived ?? null;
-  }
-
-  if (expectedVersion !== undefined && expectedVersion !== null) {
-    const [updated] = await db.update(aiPersonas)
-      .set({
-        archivedAt: new Date(),
-        updatedAt: new Date(),
-        revision: sql`${aiPersonas.revision} + 1`,
-      })
-      .where(and(
-        eq(aiPersonas.key, key),
-        isNull(aiPersonas.archivedAt),
-        eq(aiPersonas.revision, expectedVersion),
-      ))
-      .returning();
-    if (updated !== undefined) {
-      return updated;
-    }
+  const [updated] = await db.update(aiPersonas)
+    .set({
+      archivedAt: new Date(),
+      updatedAt: new Date(),
+      revision: sql`${aiPersonas.revision} + 1`,
+    })
+    .where(and(
+      eq(aiPersonas.key, key),
+      isNull(aiPersonas.archivedAt),
+      eq(aiPersonas.revision, expectedVersion),
+    ))
+    .returning();
+  if (updated !== undefined) {
+    return updated;
   }
 
   const current = await readPersonaLifecycle(db, key);
@@ -227,7 +175,7 @@ export async function archiveAiPersona(
   }
   throw new AiPersonaVersionConflictError(
     key,
-    expectedVersion ?? null,
+    expectedVersion,
     current.revision,
   );
 }

@@ -192,28 +192,3 @@ export function normalizeTranscriptMessages(
     (left, right) => left.createdAtMs - right.createdAtMs || compareMessageRefs(left.id, right.id),
   );
 }
-
-/** OFAPI list-messages page size (legacy Fansly was 25/page). */
-export const OFAPI_MESSAGES_PAGE_SIZE = 100;
-
-/** Earnings-window fallback when the conversation is empty (legacy constant). */
-export const TRANSCRIPT_EMPTY_WINDOW_MS = 90 * 24 * 60 * 60 * 1000;
-
-export function estimateTargetPages(requestedCount: number): number {
-  return Math.max(1, Math.ceil(requestedCount / OFAPI_MESSAGES_PAGE_SIZE));
-}
-
-/** Pages arrive newest-first; the oldest id on a page is the `id` cursor for the next page. */
-export function extractOldestMessageId(pageMessages: readonly OfapiChatMessage[]): OfapiChatMessage['id'] | null {
-  const last = pageMessages[pageMessages.length - 1];
-  return last ? last.id : null;
-}
-
-/** Start of the window covered by an ascending transcript; 90 days back when empty. */
-export function transcriptWindowStartMs(
-  messages: readonly TranscriptMessage[],
-  nowMs: number,
-): number {
-  const first = messages[0];
-  return first ? first.createdAtMs : nowMs - TRANSCRIPT_EMPTY_WINDOW_MS;
-}

@@ -13,9 +13,6 @@ export type AiMediaVariant = "full" | "poster" | "preview";
 export type AiMediaKind = "photo" | "video" | "gif" | "bundle";
 export type AiMediaSenderRole = "fan" | "model";
 
-/** Statuses the sweep may pick up. */
-export const AI_MEDIA_DUE_STATUSES = ["pending", "budget_deferred"] as const;
-
 /** Terminal statuses: never sent again by the sweep. */
 export const AI_MEDIA_TERMINAL_STATUSES = [
   "described",
