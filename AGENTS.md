@@ -22,7 +22,8 @@ chatters' AI features, the owner's dashboard. Production is `agency-de` (`root@1
 
 ## Checks and PRs
 - Locally only what you touched: `pnpm typecheck`, `pnpm exec eslint <files>`, `pnpm exec vitest run <files>`.
-  Integration tests (`*.integration.test.ts`, need Docker) and the full run are CI's job.
+  Integration tests (`*.integration.test.ts`, need Docker) and the full run are CI's job. Every vitest run starts a
+  test Postgres when Docker is up; `HUB_TEST_POSTGRES=off pnpm exec vitest run <unit files>` skips it.
 - Open the PR ready + `gh pr merge --auto --squash`; wait for CI with one background command
   (`gh pr checks <n> --watch`). Integration runs on a PR by itself when DB/sync/network is touched; main runs everything.
 - CI runs only on GitHub-hosted runners (the repo is public: free, and never on the owner's PC); a full run
