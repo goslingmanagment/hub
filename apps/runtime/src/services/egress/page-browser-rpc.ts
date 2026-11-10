@@ -149,13 +149,13 @@ export const MAX_PENDING_BODIES = 512;
 /** Their bytes together: two of the largest bodies. */
 export const MAX_PENDING_BODY_BYTES = 2 * MAX_BODY_BYTES;
 
-/** The oldest operator protocol minor this engine works with: minor 1 holds
- *  the halt for the owner's decision on its volume, says it (`state.halt`,
- *  `state.lastClearedHaltId`) and takes `clearHalt` (PR 17). */
-export const MIN_OPERATOR_MINOR = 1;
-/** The operator keeps the site's observations until the engine confirms them
- *  (`siteObservedAck`) from this minor. */
-export const SITE_OBSERVED_ACK_MINOR = 6;
+/** The oldest operator protocol minor this engine works with: minor 6 keeps
+ *  the site's observations until the engine confirms them (`siteObservedAck`);
+ *  everything before it (minor 1: the halt for the owner's decision on its
+ *  volume and `clearHalt`, PR 17; minor 3: the `credentials` refusal reason)
+ *  comes with it. Every page's operator has spoken minor 6 or later since
+ *  2026-10-18. */
+export const MIN_OPERATOR_MINOR = 6;
 
 export type LinkStatus =
   | { kind: "idle" }
@@ -541,21 +541,13 @@ export class PageBrowserRpcClient {
    *  asked on it — or nothing could be written. */
   answerSiteAdmit(epoch: number, answer: DistributiveOmit<SiteAdmitResult, "type" | "ownerGeneration">): boolean {
     if (epoch !== this.#epoch) return false;
-    // A minor-1/2 operator's strict HTTP parser does not know credentials.
-    // The decision/metrics retain the actual reason; only its wire changes.
-    const compatible = !answer.admit && answer.reason === "credentials" && (this.#status.kind !== "up" || this.#status.protocol.minor < 3)
-      ? { ...answer, reason: "held" as const } : answer;
-    return this.#write({ ...compatible, type: "siteAdmitResult", ownerGeneration: this.#generation } as SiteAdmitResult);
+    return this.#write({ ...answer, type: "siteAdmitResult", ownerGeneration: this.#generation } as SiteAdmitResult);
   }
 
   /** The answer to a `wsAdmit` asked on the connection of `epoch` (PR 14). */
   answerWsAdmit(epoch: number, answer: DistributiveOmit<WsAdmitResult, "type" | "ownerGeneration">): boolean {
     if (epoch !== this.#epoch) return false;
-    // A minor-1/2 operator's strict HTTP parser does not know credentials.
-    // The decision/metrics retain the actual reason; only its wire changes.
-    const compatible = !answer.admit && answer.reason === "credentials" && (this.#status.kind !== "up" || this.#status.protocol.minor < 3)
-      ? { ...answer, reason: "held" as const } : answer;
-    return this.#write({ ...compatible, type: "wsAdmitResult", ownerGeneration: this.#generation } as WsAdmitResult);
+    return this.#write({ ...answer, type: "wsAdmitResult", ownerGeneration: this.#generation } as WsAdmitResult);
   }
 
   start(): void {
@@ -627,10 +619,9 @@ export class PageBrowserRpcClient {
   /** Variant Б (minor 6): the site's observations committed, by their
    *  delivery numbers, on the connection of `epoch` they came on — the
    *  operator keeps them until then. False: that connection is gone (the
-   *  operator sends them again to the next one), an operator before minor 6
-   *  (it confirms nothing), or nothing could be written. */
+   *  operator sends them again to the next one), or nothing could be written. */
   siteObservedAck(epoch: number, deliverySeqs: readonly number[]): boolean {
-    if (epoch !== this.#epoch || this.#status.kind !== "up" || this.#status.protocol.minor < SITE_OBSERVED_ACK_MINOR || deliverySeqs.length === 0) return false;
+    if (epoch !== this.#epoch || this.#status.kind !== "up" || deliverySeqs.length === 0) return false;
     return this.#write({ type: "siteObservedAck", ownerGeneration: this.#generation, deliverySeqs: deliverySeqs.slice(0, SITE_OBSERVED_ACK_MAX) });
   }
 
@@ -992,11 +983,11 @@ export class PageBrowserRpcClient {
     }
     if (!SUPPORTED_MAJORS.includes(message.protocol.major)) return this.#protocolError(`the operator chose major ${message.protocol.major}`);
     if (message.protocol.minor < MIN_OPERATOR_MINOR) {
-      // An operator before minor 1 holds no halt for the owner on its volume
-      // and takes no clearHalt (Astra round 4): no work goes through it — its
-      // image is updated first.
+      // An operator before minor 6 lacks what this engine relies on (the halt
+      // on its volume, the `credentials` reason, confirmed site observations):
+      // no work goes through it — its image is updated first.
       this.#log.warn({ url: this.#o.url, minor: message.protocol.minor, needed: MIN_OPERATOR_MINOR },
-        "page browser link: the operator speaks an older protocol minor (no halt held on its volume): refused — update its image");
+        "page browser link: the operator speaks an older protocol minor: refused — update its image");
       this.#teardown(`the operator's protocol minor ${message.protocol.minor} is before ${MIN_OPERATOR_MINOR}`);
       this.#setStatus({ kind: "refused", reason: "protocol_minor", supportedMajors: [...SUPPORTED_MAJORS] });
       if (this.#retryTimer !== null) clearTimeout(this.#retryTimer);
