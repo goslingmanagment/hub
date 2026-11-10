@@ -56,7 +56,7 @@ import {
 import { getFanslyDmMessageSyncExcludedReason, isIndefinite, type AppConfig } from "@agency_hub_core/shared";
 
 import { recordAudit } from "../../services/auth.ts";
-import { loadEffectiveConfig } from "../../services/effective-config.ts";
+import { loadEffectiveConfigField } from "../../services/effective-config.ts";
 import { EMPTY_HOLD_SET, heldByScope, holdSetOf, type HoldSet, type RouteAdmissionView } from "../engine/admission.ts";
 import { EMPTY_ROUTE_STATE, routeAdmissionView, routeJournalLookbackMs, RouteClocks } from "../engine/route-policy.ts";
 import {
@@ -411,7 +411,7 @@ interface PageEtaContext {
  */
 async function pageEtaContext(ctx: HistoryServiceContext, pageId: number): Promise<PageEtaContext> {
   const page = await getSyncPage(ctx.db, pageId);
-  const settingMs = (await loadEffectiveConfig(ctx.db, ctx.rawConfig)).fanslyDefaultDelayMs;
+  const settingMs = await loadEffectiveConfigField(ctx.db, ctx.rawConfig, "fanslyDefaultDelayMs");
   const now = page?.dbNow ?? new Date();
   const holds = page === null ? EMPTY_HOLD_SET : holdSetOf(page.holds);
   const read = holds.routes;

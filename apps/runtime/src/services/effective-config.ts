@@ -10,7 +10,7 @@
 // is the single impure entry point and performs exactly one getConfigOverrides read.
 
 import type { ConfigOverrideRecord, Database } from "@agency_hub_core/db";
-import { getConfigOverrides } from "@agency_hub_core/db";
+import { getConfigOverride, getConfigOverrides } from "@agency_hub_core/db";
 import type { AppConfig } from "@agency_hub_core/shared";
 import { CONFIG_DESCRIPTORS, getDescriptor, validateConfigOverride } from "@agency_hub_core/shared";
 
@@ -65,4 +65,26 @@ export function applyEffectiveOverrides(
 export async function loadEffectiveConfig(db: Database, config: AppConfig): Promise<AppConfig> {
   const overrides = await getConfigOverrides(db);
   return applyEffectiveOverrides(config, overrides);
+}
+
+/** One live field of the effective config, read through its single override row
+ *  instead of the whole scope. The row goes through the same pure overlay, so for
+ *  every stored state the result equals `(await loadEffectiveConfig(db, config))[key]`:
+ *  no row → the boot value; a valid row → the validated value; a row the validator
+ *  rejects (an out-of-range Fansly pause) → the boot value. Read fresh on every call,
+ *  no cache; a database error throws. `key` must be a live registry key whose
+ *  `configField` is the same name. */
+export async function loadEffectiveConfigField<K extends keyof AppConfig & string>(
+  db: Database,
+  config: AppConfig,
+  key: K,
+): Promise<AppConfig[K]> {
+  const descriptor = getDescriptor(key);
+  if (!LIVE_CONFIG_KEYS.has(key) || descriptor?.configField !== key) {
+    throw new Error(`loadEffectiveConfigField: "${key}" is not a live config key read into the same field`);
+  }
+  const override = await getConfigOverride(db, key);
+  const overrides = new Map<string, ConfigOverrideRecord>();
+  if (override !== null) overrides.set(key, override);
+  return applyEffectiveOverrides(config, overrides)[key];
 }
