@@ -2,7 +2,6 @@ import type { SyncHoldRow, SyncPageRow } from "@agency_hub_core/db";
 import { INDEFINITE_UNTIL, type FanslyPageHoldKind, type FanslyPageHolds } from "@agency_hub_core/shared";
 
 import { holdSetOf } from "../../apps/runtime/src/sync/engine/admission.ts";
-import type { ResourceHoldEntry } from "../../apps/runtime/src/sync/engine/errors.ts";
 import type { RouteStateEntry } from "../../apps/runtime/src/sync/engine/route-policy.ts";
 import type { FanslyRoute } from "../../apps/runtime/src/sync/fansly/routes.ts";
 
@@ -109,64 +108,6 @@ export async function clearPageHolds(target: TestDatabase, pageId: number, kinds
   );
 }
 
-/** One route's rows: its state (`route_budget`) and, with `holdSeconds`, its
- *  hold until that many seconds from now (null: no hold row). */
-export async function seedRouteState(
-  target: TestDatabase,
-  input: {
-    pageId: number;
-    route: string;
-    holdSeconds: number | null;
-    ladderStep?: number;
-    effectivePerMin?: number | null;
-    policyVersion?: string | null;
-    last429AttemptId?: number | null;
-    /** The newest 429, that many seconds ago (null: none). */
-    last429SecondsAgo?: number | null;
-    revision?: number;
-  },
-): Promise<void> {
-  await target.pool.query(
-    `insert into sync_holds (page_id, scope, key, kind, ladder_step, detail, revision)
-     values ($1, 'route', $2, 'route_budget', $3, jsonb_build_object(
-               'effectivePerMin', $4::float8, 'policyVersion', $5::text, 'last429AttemptId', $6::int,
-               'last429At', case when $7::float8 is null then null else clock_timestamp() - make_interval(secs => $7::float8) end), $8)
-     on conflict (page_id, scope, key, kind) do update
-       set ladder_step = excluded.ladder_step, detail = excluded.detail, revision = excluded.revision`,
-    [
-      input.pageId, input.route, input.ladderStep ?? 1, input.effectivePerMin ?? null, input.policyVersion ?? null,
-      input.last429AttemptId ?? null, input.last429SecondsAgo ?? null, input.revision ?? 1,
-    ],
-  );
-  if (input.holdSeconds === null) {
-    await target.pool.query("delete from sync_holds where page_id = $1 and scope = 'route' and key = $2 and kind = 'route_hold'", [input.pageId, input.route]);
-  } else {
-    await target.pool.query(
-      `insert into sync_holds (page_id, scope, key, kind, until)
-       values ($1, 'route', $2, 'route_hold', clock_timestamp() + make_interval(secs => $3::float8))
-       on conflict (page_id, scope, key, kind) do update set until = excluded.until, revision = sync_holds.revision + 1`,
-      [input.pageId, input.route, input.holdSeconds],
-    );
-  }
-}
-
-/** Replace the page's rows of `scope` by `rows` (built by `routeStateRows`,
- *  `pageHoldRow`, …). */
-export async function replaceHoldRows(target: TestDatabase, pageId: number, scope: string, rows: readonly SyncHoldRow[]): Promise<void> {
-  await target.pool.query("delete from sync_holds where page_id = $1 and scope = $2", [pageId, scope]);
-  for (const row of rows) {
-    await target.pool.query(
-      `insert into sync_holds (page_id, scope, key, kind, until, since, ladder_step, detail, revision)
-       values ($1, $2, $3, $4, $5::timestamptz, $6::timestamptz, $7, $8::jsonb, $9)`,
-      [
-        pageId, row.scope, row.key, row.kind,
-        row.until === null ? null : row.until.getTime() >= INDEFINITE_UNTIL.getTime() ? "infinity" : row.until.toISOString(),
-        row.since.toISOString(), row.ladderStep, JSON.stringify(row.detail), row.revision,
-      ],
-    );
-  }
-}
-
 // ── a page row's hold set, as a test asks about it ─────────────────────────
 
 /** The page's own holds as the engine reads them. */
@@ -185,9 +126,4 @@ export function pageHoldKindOf(page: Pick<SyncPageRow, "holds">): FanslyPageHold
 export function routeEntryOf(page: Pick<SyncPageRow, "holds">, route: FanslyRoute): RouteStateEntry | null {
   const read = holdSetOf(page.holds).routes;
   return read.ok ? read.state.routes[route] ?? null : null;
-}
-
-/** The page's resource breakers by file. */
-export function resourceBreakersOf(page: Pick<SyncPageRow, "holds">): Readonly<Record<string, ResourceHoldEntry>> {
-  return holdSetOf(page.holds).resources;
 }

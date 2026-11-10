@@ -16,10 +16,6 @@ export const SPENDER_RETENTION_INACTIVE_DAYS = 45;
 // $100 — matches the existing VIP tier threshold used by the row badge.
 export const SPENDER_RETENTION_NEEDS_REACTIVATION_LIFETIME_NET_MILLS = 100_000;
 
-export function isSpenderRetentionStatus(value: string): value is SpenderRetentionStatus {
-  return (SPENDER_RETENTION_STATUSES as readonly string[]).includes(value);
-}
-
 export function classifyRetention(input: {
   lifetimeLastTransactionAt: Date | string | null;
   lifetimeCreatorNetAmountMills: number;

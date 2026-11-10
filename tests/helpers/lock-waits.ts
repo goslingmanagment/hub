@@ -73,29 +73,6 @@ export function waitForRowLockWait(
   }, `a lock wait on a statement like ${queryLike.join(" + ")}`, options);
 }
 
-/** Resolves once some backend of THIS database waits for a table lock on the
- * named relation. */
-export function waitForRelationLockWait(
-  pool: Queryable,
-  relation: string,
-  options: LockWaitOptions = {},
-): Promise<void> {
-  return pollUntil(async () => {
-    const { rows } = await pool.query<{ waiting: boolean }>(
-      `select exists (
-         select 1 from pg_locks l
-           join pg_class c on c.oid = l.relation
-          where l.locktype = 'relation'
-            and not l.granted
-            and c.relname = $1
-            and l.database = (select oid from pg_database where datname = current_database())
-       ) as waiting`,
-      [relation],
-    );
-    return rows[0]?.waiting === true;
-  }, `a table lock wait on ${relation}`, options);
-}
-
 /** True when the promise has already settled. A settled promise's reactions
  * run in microtasks, which all drain before the setImmediate macrotask. */
 export async function hasSettled(promise: Promise<unknown>): Promise<boolean> {

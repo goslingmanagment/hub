@@ -318,7 +318,6 @@ describe("DB isolation policy: files sharing a cluster", () => {
     for (const name of integration) expect(files).toContain(`tests/${name}`);
     for (const file of syncCriticalDbFiles()) expect(files).toContain(file);
     expect(files).toContain("tests/helpers/global-setup.ts");
-    expect(files).toContain("tests/helpers/earnings-audit-psql.ts");
   });
 
   it("scopes every pg_locks and pg_stat_activity read to this database or a backend pid", () => {

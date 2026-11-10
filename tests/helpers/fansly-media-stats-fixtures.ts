@@ -2,13 +2,6 @@
 // (fansly-media-stats-lane.integration.test.ts) and its pure-helper unit suite
 // (fansly-media-stats-helpers.test.ts), so both build exactly the same bodies.
 
-export const NOW = new Date("2026-08-22T09:00:00.000Z");
-export const DAY_MS = 24 * 60 * 60 * 1000;
-
-export function ref(n: number): string {
-  return `0009${String(40000000000000 + n).padStart(14, "0")}`;
-}
-
 /**
  * One `/it/moie/statsnew` body, shaped exactly as the wire is: the subject at
  * `dataset.datasetMediaOfferId`, the served bounds at `dateAfter`/`dateBefore`,
@@ -86,16 +79,3 @@ export function allZeroBody(options: {
     aggregationData: { accountMedia: [], accountMediaBundles: [], tags: [] },
   };
 }
-
-/** A per-media backfill cursor already AT its floor. Most cases here are about
- *  the steady round-robin, and a first-sight backfill in front of every item
- *  would make every one of them a walk instead. */
-export const BACKFILL_DONE = {
-  version: 1,
-  nextBeforeMs: 0,
-  emptyStreak: 2,
-  done: true,
-  floorAt: null,
-  stopReason: "seeded_by_test",
-  guard: { spanDays: 31, narrowed: false, lastAfterMs: null, lastBeforeMs: null, lastObservationId: null },
-};

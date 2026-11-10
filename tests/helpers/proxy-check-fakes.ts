@@ -1,5 +1,5 @@
 import { createServer as createHttpServer } from "node:http";
-import { createServer as createTcpServer, type Socket } from "node:net";
+import type { Socket } from "node:net";
 
 import type { FakeSocks } from "./page-browser-fakes.ts";
 import type { ProxyCheckOptions } from "../../apps/runtime/src/services/egress/proxy-check.ts";
@@ -73,35 +73,4 @@ export function localCheckOptions(socks: FakeSocks, ipinfo: FakeService, geojs: 
     wrap: (socket: Socket) => socket,
     timeouts: { connectMs: 2_000, answerMs: 1_000, requestMs: 3_000, totalMs: 10_000 },
   };
-}
-
-/** A TCP server whose every connection `serve` handles (a port speaking
- *  something other than SOCKS5). */
-export async function rawServer(serve: (socket: Socket) => void): Promise<{ port: number; close: () => Promise<void> }> {
-  const sockets = new Set<Socket>();
-  const server = createTcpServer((socket) => {
-    sockets.add(socket);
-    socket.on("close", () => sockets.delete(socket));
-    socket.on("error", () => undefined);
-    serve(socket);
-  });
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
-  const address = server.address();
-  return {
-    port: typeof address === "object" && address ? address.port : 0,
-    close: async () => {
-      for (const socket of sockets) socket.destroy();
-      await new Promise<void>((resolve) => server.close(() => resolve()));
-    },
-  };
-}
-
-/** An HTTP proxy that reads a whole request before it answers: silent to a
- *  SOCKS5 greeting, `407` to a CONNECT. */
-export function httpProxyServing(socket: Socket): void {
-  let seen = "";
-  socket.on("data", (chunk: Buffer) => {
-    seen += chunk.toString("latin1");
-    if (seen.includes("\r\n\r\n")) socket.end("HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic\r\nContent-Length: 0\r\n\r\n");
-  });
 }

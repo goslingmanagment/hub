@@ -357,18 +357,6 @@ export function normalizeProviderStreamFailure(
   );
 }
 
-/** Backward-compatible code-only classifier used by existing callers/tests. */
-export function classifyProviderStreamFailure(
-  error: unknown,
-  input?: {
-    provider?: AiProviderId;
-    failurePhase?: AiProviderFailurePhase;
-    now?: number;
-  },
-): AiProviderFailureCode {
-  return normalizeProviderStreamFailure(error, input).code;
-}
-
 function providerFailureClassification(
   code: AiProviderFailureCode,
   failurePhase: AiProviderFailurePhase,

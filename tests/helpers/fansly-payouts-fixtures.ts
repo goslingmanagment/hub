@@ -2,8 +2,6 @@
 // suite (fansly-payouts-lane.integration.test.ts) and its walk-helper unit
 // suite (fansly-payouts-helpers.test.ts).
 
-export const NOW = new Date("2026-08-22T09:00:00.000Z");
-
 /** The live history: `total = 83`, page size 10, oldest 2025-06-23. */
 export const LIVE_TOTAL = 83;
 export const PAGE_SIZE = 10;

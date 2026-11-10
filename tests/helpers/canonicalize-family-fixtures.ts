@@ -17,8 +17,6 @@ export const FIXTURE_NOW = new Date("2026-08-22T10:00:00.000Z");
 export const FIXTURE_FANSLY_OWN_REF = "fansly-own-1";
 export const FIXTURE_FANSLY_PAGE_ID = 11;
 export const FIXTURE_ONLYFANS_PAGE_ID = 4;
-/** The OnlyFans post ids the governed capture accepted (OF post replay). */
-export const FIXTURE_ACCEPTED_OF_POST_REFS = ["103", "102"] as const;
 
 export interface CanonicalFamilyFixture {
   /** Unique within the list; also the family `source:lane` it targets. */
