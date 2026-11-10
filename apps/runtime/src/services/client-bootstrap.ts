@@ -1,9 +1,14 @@
 import type { ClientBootstrapPage, ClientBootstrapResponse } from "@agency_hub_core/contracts";
-import { getClientConfigRevision, listClientBootstrapPages, type ClientBootstrapPageRow } from "@agency_hub_core/db";
-import type { Platform } from "@agency_hub_core/shared";
+import {
+  getClientConfigRevision,
+  getConfigOverrides,
+  listClientBootstrapPages,
+  type ClientBootstrapPageRow,
+} from "@agency_hub_core/db";
+import type { AppConfig, Platform } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
-import { loadAiTranscriptDeepMaxRows } from "./ai-transcript-depth.ts";
+import { aiTranscriptDeepMaxRowsOf } from "./ai-transcript-depth.ts";
 import { clientBootstrapCapabilities, SERVED_CLIENT_CAPABILITIES } from "./client-capabilities.ts";
 import {
   clientBootstrapFlags,
@@ -13,7 +18,8 @@ import {
   type ClientFeatureSettings,
 } from "./client-features.ts";
 import { CLIENT_BOOTSTRAP_LIMITS } from "./client-limits.ts";
-import { CLIENT_BOOTSTRAP_CONFIG_KEYS, loadClientSwitches } from "./client-switches.ts";
+import { CLIENT_BOOTSTRAP_CONFIG_KEYS, clientSwitchesFrom } from "./client-switches.ts";
+import { applyEffectiveOverrides } from "./effective-config.ts";
 import { loadVoiceLane, type VoiceLanePage } from "./voice-lane.ts";
 
 /** The bootstrap protocol this hub speaks; a client that does not speak it asks the chatter to update. */
@@ -45,9 +51,12 @@ const VOICE_NOTES_LANE: ReadonlySet<ClientFeatureLane> = new Set(["voice-notes"]
  * that fails serves none, so the bootstrap still answers and offers no voice:
  * the same fail-safe as the released clients' hint on GET /api/v1/pages.
  */
-async function loadClientLanes(app: AppContext): Promise<(page: VoiceLanePage) => ReadonlySet<ClientFeatureLane>> {
+async function loadClientLanes(
+  app: AppContext,
+  effective: AppConfig,
+): Promise<(page: VoiceLanePage) => ReadonlySet<ClientFeatureLane>> {
   try {
-    const voice = await loadVoiceLane(app);
+    const voice = await loadVoiceLane(app, effective);
     return (page) => (voice(page) ? VOICE_NOTES_LANE : NO_LANES);
   } catch (error) {
     app.logger.warn({ err: error }, "voice-notes lane lookup failed; the bootstrap offers no voice");
@@ -115,12 +124,16 @@ export async function buildClientBootstrap(
   now: Date = new Date(),
 ): Promise<ClientBootstrapResponse> {
   const configRevision = await getClientConfigRevision(app.db, CLIENT_BOOTSTRAP_CONFIG_KEYS);
-  const switches = await loadClientSwitches(app);
+  // One read of the effective config for the whole request: the switches, the
+  // depth and the lanes all come from it. Never kept past this request.
+  const overrides = await getConfigOverrides(app.db);
+  const effective = applyEffectiveOverrides(app.config, overrides);
+  const switches = clientSwitchesFrom(app, overrides, effective);
   // The depth a full Recap may read: the same value the AI stream hands its
   // transcript readers.
-  const deepMax = await loadAiTranscriptDeepMaxRows(app);
+  const deepMax = aiTranscriptDeepMaxRowsOf(effective);
   const served = SERVED_CLIENT_CAPABILITIES;
-  const lanes = await loadClientLanes(app);
+  const lanes = await loadClientLanes(app, effective);
   const rows = await listClientBootstrapPages(app.db, caller.pageIds);
   return {
     protocol: CLIENT_BOOTSTRAP_PROTOCOL,
