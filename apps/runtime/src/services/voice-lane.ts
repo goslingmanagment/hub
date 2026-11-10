@@ -123,8 +123,11 @@ const SERVES_NO_PAGE = (): boolean => false;
  */
 export async function loadVoiceLane(
   app: Pick<AppContext, "db" | "config" | "voiceTtsProvider">,
+  /** The effective config the caller already read for this request (the
+   *  bootstrap); absent = read it here. */
+  effectiveConfig?: AppConfig,
 ): Promise<(page: VoiceLanePage) => boolean> {
-  const effective = await loadEffectiveConfig(app.db, app.config);
+  const effective = effectiveConfig ?? await loadEffectiveConfig(app.db, app.config);
   // A shortcut, not the rule: with the switch off, no provider or an empty
   // allowlist no page can pass, so no profile is read.
   if (

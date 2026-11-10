@@ -5,6 +5,7 @@ import {
   listClientBootstrapPages,
   lockConfigOverridesForShare,
   type ClientBootstrapPageRow,
+  type ConfigOverrideRecord,
   type Database,
 } from "@agency_hub_core/db";
 import {
@@ -209,7 +210,18 @@ const LOGGED_PROBLEMS_MAX = 100;
  *  longer validates counted as unreadable. */
 export async function loadClientSwitches(app: AppContext): Promise<ClientSwitches> {
   const overrides = await getConfigOverrides(app.db);
-  const effective = applyEffectiveOverrides(app.config, overrides);
+  return clientSwitchesFrom(app, overrides, applyEffectiveOverrides(app.config, overrides));
+}
+
+/** The switches of a config the caller has already read once for its whole
+ *  request (the bootstrap): `overrides` as getConfigOverrides returned them and
+ *  `effective` = applyEffectiveOverrides(app.config, overrides). Pure apart from
+ *  the problem log; the same result loadClientSwitches gives for that read. */
+export function clientSwitchesFrom(
+  app: Pick<AppContext, "logger">,
+  overrides: Map<string, ConfigOverrideRecord>,
+  effective: AppConfig,
+): ClientSwitches {
   const { switches, problems } = readClientSwitches(effective, storedClientSwitchProblems(overrides));
   logClientSwitchProblems(app, problems);
   return switches;
@@ -243,7 +255,7 @@ export async function loadClientSwitchesForSend(app: AppContext, tx: Database): 
   return switches;
 }
 
-function logClientSwitchProblems(app: AppContext, problems: readonly ClientSwitchProblem[]): void {
+function logClientSwitchProblems(app: Pick<AppContext, "logger">, problems: readonly ClientSwitchProblem[]): void {
   for (const problem of problems) {
     const fingerprint = `${problem.key}\u0000${problem.error}`;
     if (loggedProblems.has(fingerprint) || loggedProblems.size >= LOGGED_PROBLEMS_MAX) {
