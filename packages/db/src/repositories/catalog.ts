@@ -303,42 +303,24 @@ export async function deleteProxyConfig(
     .where(eq(egressEndpoints.platformAccountId, platformAccountId));
 }
 
+async function findActivePage(db: Database, match: SQL) {
+  // egress_endpoints.platform_account_id is UNIQUE: the left join adds at most one row.
+  const [row] = await db
+    .select({ page: pages, proxy: egressEndpoints })
+    .from(pages)
+    .leftJoin(egressEndpoints, eq(egressEndpoints.platformAccountId, pages.id))
+    .where(and(match, eq(pages.status, "active")))
+    .limit(1);
+  // proxy stays `undefined` when absent (findFirst's shape): callers test it with `?.` / `=== undefined`.
+  return row ? { page: row.page, proxy: row.proxy ?? undefined } : null;
+}
+
 export async function findPageByLabel(db: Database, label: string) {
-  const page = await db.query.pages.findFirst({
-    where: and(eq(pages.label, label), eq(pages.status, "active")),
-  });
-
-  if (!page) {
-    return null;
-  }
-
-  const credentials = await db.query.pageCredentials.findFirst({
-    where: eq(pageCredentials.platformAccountId, page.id),
-  });
-  const proxy = await db.query.egressEndpoints.findFirst({
-    where: eq(egressEndpoints.platformAccountId, page.id),
-  });
-
-  return { page, credentials, proxy };
+  return findActivePage(db, eq(pages.label, label));
 }
 
 export async function findPageById(db: Database, platformAccountId: number) {
-  const page = await db.query.pages.findFirst({
-    where: and(eq(pages.id, platformAccountId), eq(pages.status, "active")),
-  });
-
-  if (!page) {
-    return null;
-  }
-
-  const credentials = await db.query.pageCredentials.findFirst({
-    where: eq(pageCredentials.platformAccountId, page.id),
-  });
-  const proxy = await db.query.egressEndpoints.findFirst({
-    where: eq(egressEndpoints.platformAccountId, page.id),
-  });
-
-  return { page, credentials, proxy };
+  return findActivePage(db, eq(pages.id, platformAccountId));
 }
 
 /** Page -> platform-native account ref (canonicalizer context).
