@@ -12,7 +12,6 @@ import {
 } from "@agency_hub_core/db";
 
 import { runDmCorrectionsReconcile } from "../apps/runtime/src/services/dm-corrections-reconciler.ts";
-import { buildMessagePayloadEnrichments } from "../apps/runtime/src/services/domain-events-enrich.ts";
 import { runMessageArchiveProjection } from "../apps/runtime/src/services/projections/message-archive.ts";
 import {
   resetIntegrationDatabase,
@@ -211,32 +210,6 @@ describe("DM corrections reconciler (Wave 2)", () => {
       `select text_plain, price_mills::text as price from message_archive where message_ref = '8002'`,
     );
     expect(after.rows[0]).toMatchObject({ text_plain: "original text", price: "6000" });
-
-    // Enrichment builds the frame payload from the HEAD (no observation
-    // envelope lookup for superseding frames).
-    const enriched = await buildMessagePayloadEnrichments(appStub() as never, [{
-      id: Number(superseding.id),
-      accountId: page.id,
-      currentAccountRef: ACCT,
-      accountSeq: Number(superseding.account_seq),
-      type: superseding.type,
-      occurredAt: new Date("2026-07-06T10:00:00Z"),
-      fanIdentityRef: FAN,
-      conversationRef: FAN,
-      messageRef: "8002",
-      transactionRef: null,
-      data: superseding.data,
-      schemaVersion: superseding.schema_version,
-      observationId: 1,
-      dedupKey: superseding.dedup_key,
-      createdAt: new Date(),
-    }]);
-    expect(enriched.get(Number(superseding.id))).toMatchObject({
-      id: "8002",
-      text: "original text",
-      price: 6,
-      isSentByMe: false,
-    });
   });
 
   it("skip-and-counts null-ref stubs (preamble 3) without wedging the sweep", async (context) => {

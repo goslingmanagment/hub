@@ -174,7 +174,6 @@ describe("kernel SDK runtime", () => {
 import {
   streamAiFeature,
   streamAiGateway,
-  subscribeSyncEvents,
 } from "@agency_hub_core/contracts";
 
 function sseFetch(chunks: string[], init?: { status?: number }) {
@@ -295,27 +294,5 @@ describe("AI gateway stream helper (protocol conformance on a fake stream)", () 
       code: "quota_denied",
       message: "ChatMuse AI gateway daily quota exceeded",
     });
-  });
-});
-
-describe("sync events helper (protocol conformance on a fake stream)", () => {
-  it("delivers only event:sync frames with numeric ids, skipping retry/heartbeat noise", async () => {
-    const frames: Array<{ id: number; event: unknown }> = [];
-    const handle = subscribeSyncEvents(
-      {
-        baseUrl: "http://hub",
-        fetch: sseFetch([
-          "retry: 3000\n\n",
-          'id: 7\nevent: sync\ndata: {"type":"typing","accountId":"acct-1","chatId":"9"}\n\n',
-          ": keep-alive\n\n",
-          'id: 8\nevent: sync\ndata: {"type":"typing","accountId":"acct-1","chatId":"9"}\n\n',
-        ]),
-      },
-      { onFrame: (frame) => frames.push(frame) },
-    );
-    await handle.done;
-    expect(frames.map((frame) => frame.id)).toEqual([7, 8]);
-    assert(frames[0] !== undefined, "Expected the first sync frame");
-    expect(frames[0].event).toEqual({ type: "typing", accountId: "acct-1", chatId: "9" });
   });
 });

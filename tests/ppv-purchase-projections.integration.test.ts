@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import {
+  appendDomainEvents,
   appendProjectionOnlyDomainEvents,
   applyDmMessagePurchaseFact,
   computeDmMaterialFingerprint,
@@ -15,6 +16,7 @@ import {
   listDmRepairSignalRows,
   reduceDmMessageCandidate,
   setPageOfapiAccountId,
+  supersessionDedupKey,
   upsertOfapiWebhookConfig,
 } from "@agency_hub_core/db";
 import { encryptJson } from "@agency_hub_core/shared";
@@ -24,7 +26,6 @@ import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import { projectOfapiDmEvent } from "../apps/runtime/src/services/ofapi-dm-projection.ts";
 import { buildMessageArchiveShadow } from "../apps/runtime/src/services/projections/message-archive-rebuild.ts";
 import { processOfapiWebhookEvent } from "../apps/runtime/src/services/ofapi-events.ts";
-import { getOfapiSyncSnapshot } from "../apps/runtime/src/services/ofapi-sync-snapshot.ts";
 import { OFAPI_WEBHOOK_EVENTS } from "../apps/runtime/src/services/ofapi-webhooks.ts";
 import {
   reconcileRecentPpvPurchases,
@@ -232,38 +233,6 @@ async function appendMaterialHead(pageId: number, messageId: string, head: Recor
   }], { occurredAt, observationId: 1, dedupKey: `test:material-checkpoint:${key}` });
 }
 
-type SnapshotMessage = {
-  messageId: string;
-  message: { price: number; isOpened?: boolean | null; media?: unknown[] } | null;
-};
-
-async function legacySnapshotMessage(pageId: number, messageId: string) {
-  const snapshot = await getOfapiSyncSnapshot(appContext, {
-    assignedPageIds: [pageId], accountId: ACCOUNT, afterSeq: 0, pageCursor: 0, limit: 50, messageLimit: 50,
-  });
-  const messages = snapshot.threads.flatMap((thread) => thread.messages as SnapshotMessage[]);
-  return messages.find((entry) => entry.messageId === messageId) ?? null;
-}
-
-async function boundedSnapshotMessage(pageId: number, messageId: string) {
-  const messages: SnapshotMessage[] = [];
-  let stateCursor: string | undefined;
-  for (let page = 0; page < 50; page += 1) {
-    const snapshot = await getOfapiSyncSnapshot(appContext, {
-      assignedPageIds: [pageId], accountId: ACCOUNT, afterSeq: 0, pageCursor: 0, limit: 50,
-      pageMode: "bounded_v1", messageLimit: 50,
-      ...(stateCursor === undefined ? {} : { stateCursor }),
-    });
-    messages.push(...snapshot.threads.flatMap((thread) => thread.messages as SnapshotMessage[]));
-    const next = "nextStateCursor" in snapshot ? snapshot.nextStateCursor : null;
-    if (!next) {
-      break;
-    }
-    stateCursor = next;
-  }
-  return messages.find((entry) => entry.messageId === messageId) ?? null;
-}
-
 describe("PPV purchases in every hub projection (H2, INC-001)", () => {
   it("a live purchase opens both archives and the hot row, and nothing can regress it", async (context) => {
     if (!testDb || !server) {
@@ -441,48 +410,67 @@ describe("PPV purchases in every hub projection (H2, INC-001)", () => {
     expect(rows.rows[0]).toEqual({ ma: 0, dm: 0 });
   });
 
-  it("serves hot-only snapshot rows with price, media and purchase from the archive", async (context) => {
+  // The ledger is append-only: a repair appends a superseding unlock (dedup
+  // key supersedes:<id>) and leaves the original in place. Purchase facts are
+  // read through domainEventNotSupersededSql, so only the repair may open.
+  it("a superseded unlock opens nothing; the repair that supersedes it does", async (context) => {
     if (!testDb || !server) {
       context.skip();
       return;
     }
     const page = await seedPage();
-    const MESSAGE = "2000002";
-    await deliverAndProcess(await sentPpv(MESSAGE));
-    await appendMaterialHead(page.id, MESSAGE, {
-      isOpened: false,
-      media: [
-        { id: "m-video", type: "video", canView: false, isReady: true, duration: 12 },
-        // isReady is boolean-or-null in a material head: missing is NOT false
-        // (a false makes an auto-read desktop poll paid media reads).
-        { id: "m-photo", type: "photo", canView: true, isReady: null, duration: 0 },
-      ],
-    }, "media");
+    const SUPERSEDED = "2000020";
+    const REPAIRED = "2000021";
+    await deliverAndProcess(await sentPpv(SUPERSEDED));
+    await deliverAndProcess(await sentPpv(REPAIRED));
     await runMessageArchiveProjection(appContext, { accountId: page.id });
-    // A hot-only row: the dm_message_archive overlay (which wins wherever it
-    // exists) is absent, so the hot serializer answers alone.
-    await testDb.pool.query("delete from dm_message_archive where platform_message_id = $1", [MESSAGE]);
+    const unbought = { hotPurchasedAt: null, dmIsOpened: false, maIsOpened: null };
+    expect(await stateOf(page.id, SUPERSEDED)).toEqual(unbought);
+    expect(await stateOf(page.id, REPAIRED)).toEqual(unbought);
 
-    const expectedMedia = [
-      { id: "m-video", type: "video", isReady: true, locked: true, durationSeconds: 12 },
-      { id: "m-photo", type: "photo", isReady: true, locked: false, durationSeconds: 0 },
-    ];
-    for (const read of [legacySnapshotMessage, boundedSnapshotMessage]) {
-      const before = await read(page.id, MESSAGE);
-      // Before H2: price 0, media [], isOpened null — a PPV that looked free.
-      expect(before?.message).toMatchObject({ price: 25, isOpened: false, media: expectedMedia });
-    }
+    // The wrong-ref unlock (the creator's own id as the fan), then its repair
+    // naming the fan and the message the notification really linked.
+    const unlockedAt = new Date(Date.now() - 5 * 60_000);
+    const original = await appendDomainEvents(appContext.db, page.id, [{
+      type: "message.ppv_unlocked",
+      occurredAt: unlockedAt,
+      fanIdentityRef: CREATOR,
+      conversationRef: CREATOR,
+      messageRef: SUPERSEDED,
+      data: { amountText: "$25.00", amountUsd: 25 },
+      schemaVersion: 1,
+      observationId: 1,
+      dedupKey: "test:ppv-unlock:superseded",
+    }]);
+    const originalId = original.events[0]!.eventId;
+    const repair = await appendDomainEvents(appContext.db, page.id, [{
+      type: "message.ppv_unlocked",
+      occurredAt: unlockedAt,
+      fanIdentityRef: FAN,
+      conversationRef: FAN,
+      messageRef: REPAIRED,
+      data: {
+        amountText: "$25.00",
+        amountUsd: 25,
+        supersedesEventId: originalId,
+        repair: "ofapi_ppv_conversation_ref",
+      },
+      schemaVersion: 2,
+      observationId: 1,
+      dedupKey: supersessionDedupKey(originalId),
+    }]);
+    expect(repair.appended).toBe(1);
 
-    await deliverAndProcess(ppvUnlock("3000002", MESSAGE));
-    for (const read of [legacySnapshotMessage, boundedSnapshotMessage]) {
-      const after = await read(page.id, MESSAGE);
-      expect(after?.message).toMatchObject({ price: 25, isOpened: true, media: expectedMedia });
-    }
-
-    // With no archive row at all the hot row keeps its old, honest shape.
-    await testDb.pool.query("delete from message_archive where message_ref = $1", [MESSAGE]);
-    await testDb.pool.query("update page_dm_messages set purchased_at = null where platform_message_id = $1", [MESSAGE]);
-    const bare = await legacySnapshotMessage(page.id, MESSAGE);
-    expect(bare?.message).toMatchObject({ price: 0, isOpened: null, media: [] });
+    expect(await reconcileRecentPpvPurchases(appContext, { accountId: page.id })).toEqual({
+      hotPurchasedMarked: 1,
+      messageArchiveOpened: 1,
+      dmArchiveOpened: 1,
+    });
+    expect(await stateOf(page.id, SUPERSEDED)).toEqual(unbought);
+    expect(await stateOf(page.id, REPAIRED)).toEqual({
+      hotPurchasedAt: unlockedAt,
+      dmIsOpened: true,
+      maIsOpened: true,
+    });
   });
 });

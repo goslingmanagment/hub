@@ -47,7 +47,6 @@ import {
   OfapiCollectionRefusedError,
   ProductGateError,
   QuotaDeniedError,
-  SnapshotRestartRequiredError,
   TooManyRequestsError,
   UnauthorizedError,
 } from "../services/errors.ts";
@@ -67,7 +66,6 @@ import { registerCatalogRoutes } from "../modules/catalog/index.ts";
 import { registerClientRoutes } from "../modules/client/index.ts";
 import { registerAiAdminRoutes, registerAiRoutes } from "../modules/ai/index.ts";
 import { registerConversationsRoutes } from "../modules/conversations/index.ts";
-import { registerEventsRoutes } from "../modules/events/index.ts";
 import { registerFinanceRoutes } from "../modules/finance/index.ts";
 import { registerIdentityRoutes } from "../modules/identity/index.ts";
 import { registerIngestRoutes } from "../modules/ingest/index.ts";
@@ -533,17 +531,6 @@ export async function buildApiServer(appContext: AppContext) {
       return;
     }
 
-    if (error instanceof SnapshotRestartRequiredError) {
-      reply.code(error.statusCode).send({
-        error: error.code,
-        message: error.message,
-        statusCode: error.statusCode,
-        replayFloor: error.replayFloor,
-        snapshotPath: error.snapshotPath,
-      });
-      return;
-    }
-
     if (error instanceof OfapiCollectionRefusedError) {
       // Documented structured extension (docs/error-handling.md §3): the
       // machine reason and, for a time-bound cap, the reset advice.
@@ -674,8 +661,6 @@ export async function buildApiServer(appContext: AppContext) {
 
   // --- Phase 4: Dashboard + Admin routes ---
 
-  // --- OFAPI webhook receiver + SSE sync-event fanout (ChatMuse real-time) ---
-
   // --- Insights (WP-S1 endpoints-cover serving: stats/content/money reads) ---
   // (module: apps/runtime/src/modules/insights). READ-ONLY: serving never
   // authorizes capture.
@@ -703,8 +688,7 @@ export async function buildApiServer(appContext: AppContext) {
   // --- Chat extension (client bootstrap) --- (module: apps/runtime/src/modules/client)
   registerClientRoutes(server, moduleContext);
 
-  // --- Events (stream + snapshot) --- (module: apps/runtime/src/modules/events)
-  registerEventsRoutes(server, moduleContext);
+  // --- OFAPI vendor routes --- (module: apps/runtime/src/modules/ofapi-vendor)
   registerOfapiVendorRoutes(server, moduleContext);
 
   // --- The agency site's model questionnaire (public) --- (module: apps/runtime/src/modules/model-applications)
