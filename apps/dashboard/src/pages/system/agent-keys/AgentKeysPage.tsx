@@ -4,13 +4,10 @@ import { toast } from "sonner";
 import { AGENT_CAPABILITIES, type AgentCapability, type AgentKeyItem } from "@agency_hub_core/contracts";
 import {
   useAdminPages,
-  useAdminUsers,
   useAgentKeys,
   useCreateAgentKey,
   useRevokeAgentKey,
-  useSetHarvestCapability,
   useUpdateAgentKeyCapabilities,
-  useUserDevices,
 } from "@/api/queries";
 import { ConfirmModal } from "@/components/shared/ConfirmModal";
 import { Field } from "@/components/shared/Field";
@@ -29,9 +26,8 @@ import { AGENT_KEY_STATUS } from "@/lib/statusWords";
 import { freshOf, platformName, RowChevron } from "../shared.js";
 
 /**
- * «Доступ ИИ-агентов»: agent read keys, their rights, and the binding of a desktop
- * install to one sign-in. The writes are the old tab's (`TechnicalTab`) with their
- * calls unchanged; «Снять привязку» now asks first, and the key's one showing can
+ * «Доступ ИИ-агентов»: agent read keys and their rights. The writes are the old
+ * tab's (`TechnicalTab`) with their calls unchanged; the key's one showing can
  * only be closed by its button (design/screens/system.md §6).
  */
 
@@ -115,7 +111,6 @@ export function AgentKeysPage() {
         fresh={freshOf(keys)}
       />
       <AgentKeysSection creating={creating} onCreating={setCreating} />
-      <HarvestBindingCard />
     </div>
   );
 }
@@ -533,194 +528,5 @@ function TokenRevealModal({
         </button>
       </div>
     </ModalShell>
-  );
-}
-
-/* ------------------------------------------------------------------ */
-/*  Harvest binding                                                    */
-/* ------------------------------------------------------------------ */
-
-const MACHINE_ID_PATTERN = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
-
-/** Mirrors the contract's `z.string().uuid()` so a typo is refused before the
- * round-trip — a mistyped machineId would bind harvest authority to a machine
- * that does not exist. */
-export function isMachineId(value: string): boolean {
-  return MACHINE_ID_PATTERN.test(value.trim());
-}
-
-/**
- * Binds one Desktop install's preserved machineId to one of a person's device
- * tokens, so harvested captures are attributable to a machine the owner chose.
- * Rebinding the same machineId transfers the authority atomically server-side;
- * the UI never has to revoke first.
- *
- * The machineId is technical by nature and lives only here and in the Desktop
- * app's own Diagnostics screen — never in the Team tab.
- */
-function HarvestBindingCard() {
-  const [shown, setShown] = useState(false);
-  return (
-    <section className="card" aria-labelledby="harvest-binding-title">
-      <div className="card-header">
-        <div className="min-w-0">
-          <h2 id="harvest-binding-title" className="card-title">Привязка сбора данных к устройству</h2>
-          <p className="card-description sys-measure">
-            Какой компьютер с настольным приложением может передавать в Hub собранные на нём данные и от имени какого входа сотрудника.
-          </p>
-        </div>
-        {!shown && <button type="button" className="btn" onClick={() => setShown(true)}>Привязать компьютер</button>}
-      </div>
-      {shown && <div className="card-body"><HarvestBindingSection /></div>}
-    </section>
-  );
-}
-
-/**
- * Binds one Desktop install's preserved machineId to one of a person's device
- * tokens, so harvested captures are attributable to a machine the owner chose.
- * Rebinding the same machineId transfers the authority atomically server-side.
- * The machine number lives only here and in the Desktop app's own Diagnostics.
- */
-export function HarvestBindingSection() {
-  const { data: users, isLoading: usersLoading, isError: usersError, refetch: refetchUsers } = useAdminUsers();
-  const [userId, setUserId] = useState<number | null>(null);
-  const [tokenId, setTokenId] = useState<number | null>(null);
-  const [machineId, setMachineId] = useState("");
-  const [unbinding, setUnbinding] = useState(false);
-
-  const candidates = (users ?? []).filter((user) => !user.disabledAt && !user.deletedAt);
-  const selectedUser = candidates.find((user) => user.id === userId) ?? null;
-  const devices = useUserDevices(selectedUser?.id ?? null);
-  const setCapability = useSetHarvestCapability(selectedUser?.id ?? null);
-  const activeDevices = selectedUser ? (devices.data ?? []).filter((device) => device.isActive) : [];
-  const selected = activeDevices.find((device) => device.id === tokenId) ?? null;
-  const machineIdValid = isMachineId(machineId);
-
-  function apply(nextMachineId: string | null) {
-    if (!selectedUser || tokenId === null || !selected || usersError || devices.isError || setCapability.isPending) return;
-    setCapability.mutate({ tokenId, machineId: nextMachineId }, {
-      onSuccess: () => {
-        toast.success(nextMachineId ? "Устройство привязано к этому входу" : "Привязка снята");
-        if (!nextMachineId) setMachineId("");
-        setUnbinding(false);
-      },
-      onError: () => {
-        toast.error("Не удалось сохранить привязку");
-        setUnbinding(false);
-      },
-    });
-  }
-
-  return (
-    <div className="sys-stack sys-harvest">
-      <p className="text-text-secondary sys-measure">
-        Один номер устройства привязывается ровно к одному входу. Номер показывает настольное приложение на экране «Диагностика приложения».
-      </p>
-
-      {usersError && (
-        <Notice tone="warning" role="alert" action={<button type="button" className="btn btn-sm" onClick={() => void refetchUsers()}>Повторить</button>}>
-          Список команды недоступен.
-        </Notice>
-      )}
-      {usersLoading && !users && <p className="text-text-secondary">Загружаем…</p>}
-
-      <div className="sys-harvest-fields">
-        <Field label="Сотрудник">
-          <select
-            value={selectedUser ? String(selectedUser.id) : ""}
-            onChange={(event) => {
-              setUserId(event.target.value === "" ? null : Number(event.target.value));
-              setMachineId("");
-              setTokenId(null);
-            }}
-            className="select"
-          >
-            <option value="">Выберите сотрудника…</option>
-            {candidates.map((user) => (
-              <option key={user.id} value={String(user.id)}>{user.username}</option>
-            ))}
-          </select>
-        </Field>
-
-        <Field label="Вход">
-          <select
-            value={tokenId === null ? "" : String(tokenId)}
-            disabled={!selectedUser || usersError || devices.isError}
-            onChange={(event) => setTokenId(event.target.value === "" ? null : Number(event.target.value))}
-            className="select"
-          >
-            <option value="">Выберите вход…</option>
-            {activeDevices.map((device) => (
-              <option key={device.id} value={String(device.id)}>
-                {device.label}
-                {device.harvestMachineId ? " — привязан" : ""}
-              </option>
-            ))}
-          </select>
-        </Field>
-      </div>
-
-      {devices.isError && (
-        <Notice tone="warning" role="alert" action={<button type="button" className="btn btn-sm" onClick={() => void devices.refetch()}>Повторить</button>}>
-          Входы сотрудника недоступны.
-        </Notice>
-      )}
-      {selectedUser && devices.data && activeDevices.length === 0 && (
-        <p className="text-text-secondary">У сотрудника нет действующих входов.</p>
-      )}
-
-      {selected && (
-        <div className="sys-harvest-bind">
-          <p className="text-text-secondary">
-            Сейчас привязано: {selected.harvestMachineId ? <code className="sys-code">{selected.harvestMachineId}</code> : "ничего"}
-          </p>
-          <div className="sys-harvest-row">
-            <input
-              value={machineId}
-              aria-label="Номер устройства"
-              placeholder="00000000-0000-0000-0000-000000000000"
-              onChange={(event) => setMachineId(event.target.value)}
-              className={`input sys-machine-input${machineId.trim() !== "" && !machineIdValid ? " input-invalid" : ""}`}
-            />
-            <button
-              type="button"
-              disabled={!machineIdValid || usersError || devices.isError || setCapability.isPending}
-              onClick={() => apply(machineId.trim())}
-              className="btn btn-primary"
-            >
-              {setCapability.isPending && !unbinding ? "Сохраняем…" : "Привязать"}
-            </button>
-            {selected.harvestMachineId && (
-              <button
-                type="button"
-                disabled={usersError || devices.isError || setCapability.isPending}
-                onClick={() => setUnbinding(true)}
-                className="btn btn-danger-outline"
-              >
-                Снять привязку
-              </button>
-            )}
-          </div>
-          {machineId.trim() !== "" && !machineIdValid && (
-            <p role="alert" className="sys-error">Номер устройства — это UUID, например 3f2504e0-4f89-11d3-9a0c-0305e82c3301.</p>
-          )}
-        </div>
-      )}
-
-      {unbinding && selected && selectedUser && (
-        <ConfirmModal
-          title="Снять привязку компьютера?"
-          message={`Компьютер ${selected.harvestMachineId ?? ""} перестанет передавать собранные данные от имени входа «${selected.label}» сотрудника ${selectedUser.username}.`}
-          facts={[{ label: "Отменить", value: "можно, привяжите компьютер снова." }]}
-          confirmLabel="Снять привязку"
-          pendingLabel="Снимаем…"
-          tone="primary"
-          isPending={setCapability.isPending}
-          onConfirm={() => apply(null)}
-          onClose={() => setUnbinding(false)}
-        />
-      )}
-    </div>
   );
 }

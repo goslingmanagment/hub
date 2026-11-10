@@ -693,7 +693,7 @@ describe("§7 — AI persona prompts are owner content", () => {
 
   /** Every device token a person can hold, whatever its role or age: a fresh
    * client sign-in (it carries a client version), a legacy token with no
-   * client version or harvest capability at all, the chat-extension's narrow
+   * client version at all, the chat-extension's narrow
    * token, a team lead's and the owner's own. */
   async function everyDeviceToken(activeApp: AppContext, activeServer: NonNullable<typeof server>) {
     await registerChatter(activeApp, ["lora-fansly"]);

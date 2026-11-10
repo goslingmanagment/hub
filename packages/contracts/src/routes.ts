@@ -163,7 +163,6 @@ export const deviceTokenItemSchema = z.object({
   id: intId,
   label: z.string(),
   keyPrefix: z.string(),
-  harvestMachineId: z.string().uuid().nullable(),
   isActive: z.boolean(),
   expiresAt: isoTimestamp,
   lastUsedAt: isoTimestamp.nullable(),
@@ -173,12 +172,6 @@ export const deviceTokenItemSchema = z.object({
   createdAt: isoTimestamp,
   revokedAt: isoTimestamp.nullable(),
   revokedReason: z.string().nullable(),
-});
-
-export const deviceTokenHarvestCapabilityBodySchema = z.object({
-  // null explicitly removes the capability; a UUID binds the token to that
-  // one preserved Desktop database identity.
-  machineId: z.string().uuid().nullable(),
 });
 
 // D116(c) fleet-gate foundation (desktop D19): per active chatter, device-token
@@ -8264,25 +8257,6 @@ const baseRouteSchemas = {
     params: z.object({ userId: z.coerce.number().int().positive().max(Number.MAX_SAFE_INTEGER) }),
     response: {
       200: z.array(deviceTokenItemSchema),
-      401: errorResponseSchema,
-      403: errorResponseSchema,
-      404: errorResponseSchema,
-    },
-  },
-  adminSetDeviceTokenHarvestCapability: {
-    auth: { kind: "owner-session" },
-    tags: ["admin"],
-    summary: "Bind or remove a device token's Desktop harvest capability",
-    description: "Owner-only machine binding. Rebinding one machine atomically "
-      + "transfers its harvest authority from the previous device token.",
-    params: z.object({
-      userId: z.coerce.number().int().positive().max(Number.MAX_SAFE_INTEGER),
-      tokenId: z.coerce.number().int().positive(),
-    }),
-    body: deviceTokenHarvestCapabilityBodySchema,
-    response: {
-      200: deviceTokenItemSchema,
-      400: errorResponseSchema,
       401: errorResponseSchema,
       403: errorResponseSchema,
       404: errorResponseSchema,

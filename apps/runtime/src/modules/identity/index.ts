@@ -34,7 +34,6 @@ import {
   revokeDeviceTokenForUserId,
   revokeOwnDevice,
   revokeDeviceTokensForUserId,
-  setDeviceTokenHarvestCapabilityForUserId,
   terminateAllAccess,
   unassignPageFromUser,
 } from "../../services/auth.ts";
@@ -228,17 +227,6 @@ export function registerIdentityRoutes(server: ApiServer, ctx: ApiModuleContext)
     schema: routeSchemas.adminListDeviceTokens,
   }, async (request) => {
     return listDeviceTokensForUserId(appContext, request.params.userId);
-  });
-
-  server.patch("/api/v1/admin/users/by-id/:userId/device-tokens/:tokenId/harvest-capability", {
-    schema: routeSchemas.adminSetDeviceTokenHarvestCapability,
-  }, async (request) => {
-    const principal = await requirePrincipal(request);
-    return setDeviceTokenHarvestCapabilityForUserId(appContext, {
-      userId: request.params.userId,
-      deviceTokenId: request.params.tokenId,
-      machineId: request.body.machineId,
-    }, auditCtx(principal));
   });
 
   server.delete("/api/v1/admin/users/by-id/:userId/device-tokens", {

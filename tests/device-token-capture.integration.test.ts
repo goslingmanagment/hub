@@ -4,12 +4,10 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import {
   createModel,
   createOnlyFansPage,
-  listEventsSince,
   setPageOfapiAccountId,
 } from "@agency_hub_core/db";
 
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
-import { runCanonicalization } from "../apps/runtime/src/services/canonicalize-driver.ts";
 import {
   assignPageToUser,
   createUserAccount,
@@ -28,7 +26,6 @@ import { createTestAppContext } from "./helpers/runtime.ts";
 vi.mock("argon2", () => import("./helpers/cheap-argon2.ts"));
 
 const MACHINE_ID = "11111111-1111-4111-8111-111111111111";
-const OTHER_MACHINE_ID = "22222222-2222-4222-8222-222222222222";
 
 let testDb: StartedTestDatabase | null = null;
 let app: AppContext | null = null;
@@ -71,20 +68,6 @@ function harvestEvent(input?: {
       },
     },
   };
-}
-
-async function bindHarvestCapability(input: {
-  ownerCookie: string;
-  username: string;
-  tokenId: number;
-  machineId: string | null;
-}) {
-  return server!.inject({
-    method: "PATCH",
-    url: `/api/v1/admin/users/by-id/${await fixtureUserId(app!, input.username)}/device-tokens/${input.tokenId}/harvest-capability`,
-    headers: { cookie: input.ownerCookie },
-    payload: { machineId: input.machineId },
-  });
 }
 
 async function postHarvest(token: string, event: ReturnType<typeof harvestEvent>) {
@@ -158,8 +141,8 @@ beforeEach(async (context) => {
   await resetIntegrationDatabase(testDb.pool);
 });
 
-describe("desktop harvest capability", () => {
-  it("rejects harvest-version spoofing by ordinary device tokens", async (context) => {
+describe("a full device token on the capture lane", () => {
+  it("journals a harvest-* header as an unknown client and keeps the normal lane", async (context) => {
     if (!testDb || !server) {
       context.skip();
       return;
@@ -167,20 +150,29 @@ describe("desktop harvest capability", () => {
     const { aliceKey, aliceToken } = await seedIdentity();
     const event = harvestEvent();
 
-    // Two tokens of the same person, neither carrying the harvest capability.
-    const viaUnboundDevice = await postHarvest(aliceKey.key, event);
-    expect(viaUnboundDevice.statusCode).toBe(403);
+    // The harvest lane is retired: the header claims nothing. Two tokens of the
+    // same person journal one fact under the person's key, as an unknown kind
+    // of the desktop@ producer, unmapped — never a harvest.* kind or a
+    // desktop-harvest@ producer the canonicalizer would mint events from.
+    const viaFirstDevice = await postHarvest(aliceKey.key, event);
+    expect(viaFirstDevice.statusCode).toBe(200);
+    expect(viaFirstDevice.json()).toEqual({ accepted: 1, duplicates: 0 });
+    const viaSecondDevice = await postHarvest(aliceToken.token, event);
+    expect(viaSecondDevice.json()).toEqual({ accepted: 0, duplicates: 1 });
 
-    const viaOrdinaryDevice = await postHarvest(aliceToken.token, event);
-    expect(viaOrdinaryDevice.statusCode).toBe(403);
-
-    const stored = await testDb.pool.query<{ n: string }>(
-      "select count(*)::text as n from observations where kind like 'harvest.%'",
+    const stored = await testDb.pool.query(
+      `select producer, kind, account_id, idempotency_key, harvest_machine_id
+       from observations where source = 'client_capture'`,
     );
-    expect(stored.rows).toEqual([{ n: "0" }]);
+    expect(stored.rows).toEqual([{
+      producer: "desktop@harvest-0.1.41",
+      kind: "desktop.unknown:harvest.messages",
+      account_id: null,
+      idempotency_key: `${await fixtureUserId(app!, "alice")}:${event.clientEventId}`,
+      harvest_machine_id: null,
+    }]);
 
-    // The capability is narrow: an ordinary device token keeps the normal
-    // client-capture lane instead of losing all ingest access.
+    // An ordinary device token keeps the normal client-capture lane.
     const ordinary = await server.inject({
       method: "POST",
       url: "/api/v1/ingest/observations",
@@ -199,134 +191,6 @@ describe("desktop harvest capability", () => {
     });
     expect(ordinary.statusCode).toBe(200);
     expect(ordinary.json()).toEqual({ accepted: 1, duplicates: 0 });
-  });
-
-  it("accepts only the owner-bound token and its exact machine identity", async (context) => {
-    if (!testDb || !server) {
-      context.skip();
-      return;
-    }
-    const { aliceToken, page } = await seedIdentity();
-    const ownerCookie = await loginOwnerCookie();
-
-    // A chatter cannot mint its own capability through the owner route.
-    const unprivilegedGrant = await server.inject({
-      method: "PATCH",
-      url: `/api/v1/admin/users/by-id/${await fixtureUserId(app!, "alice")}/device-tokens/${aliceToken.id}/harvest-capability`,
-      headers: { authorization: `Bearer ${aliceToken.token}` },
-      payload: { machineId: MACHINE_ID },
-    });
-    expect(unprivilegedGrant.statusCode).toBe(403);
-
-    const granted = await bindHarvestCapability({
-      ownerCookie,
-      username: "alice",
-      tokenId: aliceToken.id,
-      machineId: MACHINE_ID,
-    });
-    expect(granted.statusCode).toBe(200);
-    expect(granted.json()).toMatchObject({
-      id: aliceToken.id,
-      harvestMachineId: MACHINE_ID,
-    });
-
-    const accepted = await postHarvest(aliceToken.token, harvestEvent());
-    expect(accepted.statusCode).toBe(200);
-    expect(accepted.json()).toEqual({ accepted: 1, duplicates: 0 });
-
-    await runCanonicalization(app!);
-    const events = await listEventsSince(testDb.db, { accountId: page.id, afterSeq: 0 });
-    expect(events).toHaveLength(1);
-    expect(events[0]).toMatchObject({
-      type: "message.received",
-      messageRef: "message-1",
-    });
-
-    const wrongMachine = await postHarvest(aliceToken.token, harvestEvent({
-      clientEventId: "55555555-5555-4555-8555-555555555555",
-      machineId: OTHER_MACHINE_ID,
-    }));
-    expect(wrongMachine.statusCode).toBe(400);
-    expect(wrongMachine.json()).toMatchObject({ error: "invalid_ingest_event" });
-
-    const stored = await testDb.pool.query<{
-      actor: string;
-      account: string | null;
-      idempotency: string;
-    }>(`
-      select actor_principal_id::text as actor,
-             account_id::text as account,
-             idempotency_key as idempotency
-      from observations where kind = 'harvest.messages'
-    `);
-    expect(stored.rows).toHaveLength(1);
-    expect(stored.rows[0]!.account).not.toBeNull();
-    expect(stored.rows[0]!.idempotency).toBe(
-      `${MACHINE_ID}:33333333-3333-4333-8333-333333333333`,
-    );
-  });
-
-  it("deduplicates a crash-window retry after the machine capability moves principals", async (context) => {
-    if (!testDb || !server) {
-      context.skip();
-      return;
-    }
-    const { aliceToken, bobToken } = await seedIdentity();
-    const ownerCookie = await loginOwnerCookie();
-    const event = harvestEvent();
-
-    expect((await bindHarvestCapability({
-      ownerCookie,
-      username: "alice",
-      tokenId: aliceToken.id,
-      machineId: MACHINE_ID,
-    })).statusCode).toBe(200);
-    expect((await postHarvest(aliceToken.token, event)).json()).toEqual({
-      accepted: 1,
-      duplicates: 0,
-    });
-
-    // Emulate a row accepted by the pre-fix server: its immutable fact and key
-    // were named by principal rather than machine. Rollout compatibility must
-    // still recognize it after this release changes the key strategy.
-    const alice = await testDb.pool.query<{ id: string }>(
-      "select id::text from users where username = 'alice'",
-    );
-    const legacyKey = `${alice.rows[0]!.id}:${event.clientEventId}`;
-    const newKey = `${MACHINE_ID}:${event.clientEventId}`;
-    await testDb.pool.query(
-      "update observation_keys set idempotency_key = $1 where source = 'client_capture' and idempotency_key = $2",
-      [legacyKey, newKey],
-    );
-    await testDb.pool.query(
-      "update observations set idempotency_key = $1 where source = 'client_capture' and idempotency_key = $2",
-      [legacyKey, newKey],
-    );
-
-    // Simulate a new chatter signing into the same preserved Desktop DB. The
-    // owner transfers that machine capability to the new token; the retry is
-    // the identical deterministic event left after Core 2xx/local crash.
-    expect((await bindHarvestCapability({
-      ownerCookie,
-      username: "bob",
-      tokenId: bobToken.id,
-      machineId: MACHINE_ID,
-    })).statusCode).toBe(200);
-    expect((await postHarvest(aliceToken.token, harvestEvent({
-      clientEventId: "66666666-6666-4666-8666-666666666666",
-    }))).statusCode).toBe(403);
-    const retried = await postHarvest(bobToken.token, event);
-    expect(retried.statusCode).toBe(200);
-    expect(retried.json()).toEqual({ accepted: 0, duplicates: 1 });
-
-    const stored = await testDb.pool.query<{ n: string; actors: string }>(`
-      select count(*)::text as n,
-             count(distinct actor_principal_id)::text as actors
-      from observations
-      where kind = 'harvest.messages'
-        and payload->>'machineId' = $1
-    `, [MACHINE_ID]);
-    expect(stored.rows).toEqual([{ n: "1", actors: "1" }]);
   });
 
   it("lets only the current device-token bearer revoke exactly itself", async (context) => {

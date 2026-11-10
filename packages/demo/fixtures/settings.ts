@@ -8,7 +8,7 @@ import {
 } from "../core.ts";
 import { DEMO_MODELS, DEMO_PAGES, DEMO_USERS, demoPagesOfModel, type DemoPage, type DemoUser } from "../world.ts";
 import { collectionHandlers } from "./settings-collection.ts";
-import { ownerOnly, prefixFrom, uuidFrom } from "./settings-common.ts";
+import { ownerOnly, prefixFrom } from "./settings-common.ts";
 import { personaHandlers } from "./settings-personas.ts";
 
 /**
@@ -101,7 +101,6 @@ interface DeviceSpec {
   /** Last used this many hours ago; null = never used. */
   usedHours: number | null;
   version: string | null;
-  harvest?: boolean;
   /** Ended this many days ago, with the kernel's reason (null = ran out); absent = live. */
   ended?: { days: number; reason: string | null };
 }
@@ -129,7 +128,7 @@ function deviceSpecs(user: DemoUser): DeviceSpec[] {
       return [{ label: "Firefox · Windows 11", created: 120, usedHours: used, version: EXTENSION }];
     case "olya.m":
       return [
-        { label: "ChatGoose Desktop · Windows", created: 71, usedHours: used, version: DESKTOP, harvest: true },
+        { label: "ChatGoose Desktop · Windows", created: 71, usedHours: used, version: DESKTOP },
         { label: "Firefox · Windows 11", created: 71, usedHours: 54, version: EXTENSION },
       ];
     case "ivan.p":
@@ -170,7 +169,6 @@ function deviceTokens(user: DemoUser, now: Date) {
       id: 400 + user.id * 10 + index,
       label: spec.label,
       keyPrefix: `agency_hub_device_${prefixFrom(seed, 6)}`,
-      harvestMachineId: spec.harvest ? uuidFrom(`machine:${user.username}`) : null,
       isActive: ended === undefined,
       expiresAt: iso(expiresAt),
       lastUsedAt: lastUsedAt ? iso(lastUsedAt) : null,

@@ -41,7 +41,6 @@ import {
   findDeviceTokenForUser,
   listDeviceTokensForUser,
   revokeDeviceTokensForUser,
-  setDeviceTokenHarvestMachine,
   updateDeviceTokenUse,
   updateUserDisabledAt,
 } from "@agency_hub_core/db";
@@ -123,8 +122,6 @@ export interface HumanAuthPrincipal {
   /** Present only for a cookie-session principal; used to revalidate a
    * reserve request after taking the user credential-mutation lock. */
   authSessionId?: number;
-  /** Owner-bound capability carried by this exact device token. */
-  harvestMachineId?: string;
   /**
    * chat-extension H-3: the narrow token's client profile, copied from the
    * token row (never from the request). Present only for such a token: the API
@@ -1210,15 +1207,6 @@ export function requireDeviceTokenUser(principal: AuthPrincipal) {
   return principal.deviceTokenId;
 }
 
-export function requireHarvestDeviceToken(principal: AuthPrincipal) {
-  requireHumanPrincipal(principal);
-  const deviceTokenId = requireDeviceTokenUser(principal);
-  if (!principal.harvestMachineId) {
-    throw new ForbiddenError("This device token has no Desktop harvest capability");
-  }
-  return { deviceTokenId, machineId: principal.harvestMachineId };
-}
-
 /**
  * Chatter-read-scope fix: raw revenue/transaction reads are a
  * dashboard-session-role surface (owner/team_lead) — a leaked chatter bearer
@@ -1436,7 +1424,6 @@ export async function authenticateDeviceToken(
       user,
       assignedPageIds: user.assignedPages.map((page) => page.id),
       deviceTokenId: record.id,
-      ...(record.harvestMachineId ? { harvestMachineId: record.harvestMachineId } : {}),
       ...(isClientTokenProfile(record.clientProfile) ? { clientProfile: record.clientProfile } : {}),
     },
     failure: null,
@@ -1527,7 +1514,6 @@ function deviceTokenResponse(token: Awaited<ReturnType<typeof listDeviceTokensFo
     id: token.id,
     label: token.label,
     keyPrefix: token.keyPrefix,
-    harvestMachineId: token.harvestMachineId ?? null,
     isActive: token.revokedAt === null && token.expiresAt > new Date(),
     expiresAt: token.expiresAt.toISOString(),
     lastUsedAt: token.lastUsedAt?.toISOString() ?? null,
@@ -1536,57 +1522,6 @@ function deviceTokenResponse(token: Awaited<ReturnType<typeof listDeviceTokensFo
     revokedAt: token.revokedAt?.toISOString() ?? null,
     revokedReason: token.revokedReason ?? null,
   };
-}
-
-export async function setDeviceTokenHarvestCapabilityForUserId(
-  app: AppContext,
-  input: { userId: number; deviceTokenId: number; machineId: string | null },
-  audit: AuditContext,
-) {
-
-  return withAuditTransaction(app, async (dbTx) => {
-    const user = await lockExistingUserById(dbTx, input.userId);
-    assertUserNotDeactivated(user);
-    const token = await findDeviceTokenForUser(dbTx, {
-      deviceTokenId: input.deviceTokenId,
-      userId: user.id,
-    });
-    if (!token) {
-      throw new NotFoundError(`Device token ${input.deviceTokenId} not found for "${input.userId}"`);
-    }
-    if (token.revokedAt || token.expiresAt <= new Date()) {
-      throw new BadRequestError("Harvest capability requires an active device token");
-    }
-    if (token.clientProfile !== null) {
-      // chat-extension H-3: the harvest lane journals canonical platform facts;
-      // a narrow client token never carries it.
-      throw new BadRequestError("Harvest capability is not available to a client-profile device token");
-    }
-
-    const changed = await setDeviceTokenHarvestMachine(dbTx, {
-      deviceTokenId: token.id,
-      userId: user.id,
-      machineId: input.machineId,
-    });
-    if (!changed.updated) {
-      throw new BadRequestError("Harvest capability requires an active device token");
-    }
-
-    await recordAudit({ db: dbTx }, {
-      ...audit,
-      eventType: "device_token.harvest_capability_changed",
-      targetUserId: user.id,
-      metadata: {
-        username: user.username,
-        deviceTokenId: token.id,
-        previousMachineId: token.harvestMachineId ?? null,
-        machineId: input.machineId,
-        replacedTokenId: changed.replacedTokenId,
-      },
-    });
-
-    return deviceTokenResponse(changed.updated);
-  });
 }
 
 export async function revokeCurrentDeviceToken(

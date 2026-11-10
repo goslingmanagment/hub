@@ -11,9 +11,7 @@ import { createHash } from "node:crypto";
 
 import {
   findPageByLabel,
-  hasHarvestObservationClientEvent,
   insertObservation,
-  listOfapiMappedPages,
 } from "@agency_hub_core/db";
 
 import type {
@@ -27,7 +25,6 @@ import type { HumanAuthPrincipal } from "./auth.ts";
 import { clientHealthIngestEnabled, intakeClientHealthReports } from "./client-health-intake.ts";
 import { clientTokenIngestKinds, clientTokenIngestProducer } from "./client-token-profile.ts";
 import { stampOnlyParseVersion } from "./canonicalize/index.ts";
-import { HARVEST_PRODUCER_PREFIX, isHarvestProducer } from "./harvest-producer.ts";
 
 // Canonicalizer-backed desktop kinds. Everything else journals as
 // desktop.unknown:<kind>.
@@ -40,26 +37,6 @@ export const INGEST_KIND_ALLOWLIST: ReadonlySet<string> = new Set([
   "data_purge_notice",
 ]);
 
-// The one-time local-DB harvest reuses this lane with
-// kind='harvest.<table>' journaled VERBATIM (the reconciliation script keys
-// on these exact kinds) and x-client-version='harvest-<app version>' →
-// producer='desktop-harvest@<version>' (stage-11 §3 fixed this stamp).
-export const HARVEST_KIND_ALLOWLIST: ReadonlySet<string> = new Set([
-  "harvest.messages",
-  "harvest.fan_transactions",
-  "harvest.outbox",
-  "harvest.message_guard_events",
-  "harvest.usage_events",
-  "harvest.ai_spend_log",
-  "harvest.credit_log",
-]);
-
-const HARVEST_VERSION_PREFIX = "harvest-";
-
-export function isHarvestClientVersion(clientVersion: string) {
-  return clientVersion.startsWith(HARVEST_VERSION_PREFIX);
-}
-
 // The OnlyMonster chat-extension sends x-client-version 'chat-extension/<v>'
 // and journals as its own producer 'chat-extension@<v>', so its facts are
 // attributable apart from the desktop's. Only the producer differs: its kinds
@@ -69,9 +46,6 @@ export function isHarvestClientVersion(clientVersion: string) {
 const CHAT_EXTENSION_CLIENT_VERSION = /^chat-extension\/(.+)$/;
 
 export function ingestProducerForClientVersion(clientVersion: string) {
-  if (isHarvestClientVersion(clientVersion)) {
-    return `${HARVEST_PRODUCER_PREFIX}${clientVersion.slice(HARVEST_VERSION_PREFIX.length)}`;
-  }
   const chatExtension = CHAT_EXTENSION_CLIENT_VERSION.exec(clientVersion);
   return chatExtension
     ? `chat-extension@${chatExtension[1]}`
@@ -90,18 +64,11 @@ export function clientCaptureProducer(principal: HumanAuthPrincipal, clientVersi
     : clientTokenIngestProducer(principal.clientProfile, clientVersion);
 }
 
-export { isHarvestProducer };
-
-// The harvest namespace is producer-gated: harvest.<table> kinds canonicalize
-// into real domain events, so only the harvest uploader (x-client-version
-// 'harvest-*') may journal them verbatim. Any other client sending a
-// harvest.* kind falls into the unknown bucket — captured, never trusted.
-function ingestKindFor(kind: string, producer: string) {
+// A harvest.* kind from any client falls into the unknown bucket like every
+// other kind outside the allowlist — captured, never canonicalized.
+function ingestKindFor(kind: string) {
   if (INGEST_KIND_ALLOWLIST.has(kind)) {
     return `desktop.${kind}`;
-  }
-  if (HARVEST_KIND_ALLOWLIST.has(kind) && isHarvestProducer(producer)) {
-    return kind;
   }
   return `desktop.unknown:${kind}`;
 }
@@ -137,12 +104,10 @@ export async function ingestClientObservations(
      */
     allowedPageIds: readonly number[] | null;
     clientVersion: string;
-    /** Server-derived from the authenticated device-token row, never a header. */
-    authorizedHarvestMachineId: string | null;
     /**
      * chat-extension H-3: the narrow token's profile, from the token row. Set,
      * it admits only the profile's kinds and decides the producer; the header
-     * then names only the version, and the harvest lane is out of reach.
+     * then names only the version.
      */
     clientProfile?: ClientTokenProfile | null;
     events: IngestObservationsBody["events"];
@@ -175,24 +140,6 @@ export async function ingestClientObservations(
   const producer = clientProfile !== null
     ? clientTokenIngestProducer(clientProfile, input.clientVersion)
     : ingestProducerForClientVersion(input.clientVersion);
-  const harvestProducer = isHarvestProducer(producer);
-  if (harvestProducer && !input.authorizedHarvestMachineId) {
-    throw new Error("Harvest producer reached ingest without a server-authorized machine");
-  }
-
-  // The capability is token + machine bound. A capable token cannot use a
-  // second caller-chosen machine id to escape machine-stable deduplication or
-  // inflate reconciliation counts.
-  if (harvestProducer) {
-    for (const [index, event] of input.events.entries()) {
-      if (
-        HARVEST_KIND_ALLOWLIST.has(event.kind) &&
-        event.payload.machineId !== input.authorizedHarvestMachineId
-      ) {
-        throw new InvalidIngestEventError(index, "machineId does not match the device harvest capability");
-      }
-    }
-  }
 
   // Resolve page labels once per batch. An unknown or out-of-scope label
   // journals with a null account (capture-first) — the fact is not lost over
@@ -211,24 +158,6 @@ export async function ingestClientObservations(
     );
   }
 
-  // Harvest events carry no pageLabel — the desktop knows its OFAPI
-  // account id, not core labels. Resolve payload.ofapiAccountId against
-  // pages.ofapi_account_id HERE (the sweep never canonicalizes NULL-account
-  // observations, so ingest is the resolution point). Unmappable or
-  // out-of-scope accounts journal with NULL and surface in reconciliation
-  // (spec assumption 4). The map only exists for the harvest producer — the
-  // live lane resolves by label alone.
-  const hasHarvestEvents = harvestProducer &&
-    input.events.some((event) => HARVEST_KIND_ALLOWLIST.has(event.kind));
-  const pageByOfapiAccount = new Map<string, { id: number; platform: string }>();
-  if (hasHarvestEvents) {
-    for (const page of await listOfapiMappedPages(app.db)) {
-      if (inScope(page.id)) {
-        pageByOfapiAccount.set(page.ofapiAccountId, { id: page.id, platform: page.platform });
-      }
-    }
-  }
-
   // The owner's switch, read only for a batch that carries a health report.
   const healthEnabled = healthEvents.length > 0 && await clientHealthIngestEnabled(app);
 
@@ -239,22 +168,8 @@ export async function ingestClientObservations(
       if (event.kind === CLIENT_HEALTH_INGEST_KIND) {
         continue;
       }
-      const harvestAccountRef = hasHarvestEvents &&
-          HARVEST_KIND_ALLOWLIST.has(event.kind) &&
-          typeof event.payload.ofapiAccountId === "string"
-        ? pageByOfapiAccount.get(event.payload.ofapiAccountId) ?? null
-        : null;
-      const page = harvestAccountRef ??
-        (event.pageLabel ? pageByLabel.get(event.pageLabel) ?? null : null);
-      const kind = ingestKindFor(event.kind, producer);
-      const trustedHarvestEvent = harvestProducer && HARVEST_KIND_ALLOWLIST.has(event.kind);
-      if (trustedHarvestEvent && await hasHarvestObservationClientEvent(tx, {
-        machineId: input.authorizedHarvestMachineId!,
-        clientEventId: event.clientEventId,
-      })) {
-        duplicates += 1;
-        continue;
-      }
+      const page = event.pageLabel ? pageByLabel.get(event.pageLabel) ?? null : null;
+      const kind = ingestKindFor(event.kind);
       const result = await insertObservation(tx, {
         source: "client_capture",
         producer,
@@ -264,9 +179,7 @@ export async function ingestClientObservations(
         parseVersion: stampOnlyParseVersion("client_capture", kind),
         payload: event.payload,
         payloadHash: createHash("sha256").update(JSON.stringify(event.payload)).digest(),
-        idempotencyKey: trustedHarvestEvent
-          ? `${input.authorizedHarvestMachineId}:${event.clientEventId}`
-          : `${input.principalUserId}:${event.clientEventId}`,
+        idempotencyKey: `${input.principalUserId}:${event.clientEventId}`,
         ...(observedAts[index] === undefined ? {} : { observedAt: observedAts[index] }),
         actorPrincipalId: input.principalUserId,
       });

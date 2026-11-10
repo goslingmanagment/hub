@@ -201,17 +201,7 @@
     overflow-wrap: anywhere;
     user-select: all;
   }
-  .sys-harvest-fields { display: grid; gap: 16px; grid-template-columns: repeat(2, minmax(0, 320px)); }
-  .sys-harvest-bind {
-    display: grid;
-    gap: 12px;
-    padding: 16px;
-    border: 1px solid var(--color-border);
-    border-radius: var(--radius-button);
-    background: var(--color-hover-alt);
-  }
   .sys-harvest-row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px 12px; }
-  .input.sys-machine-input { flex: 1 1 320px; min-width: 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 14px; }
 
   /* Folded cards with a heading of their own */
   .sys-fold > summary { list-style: none; }
@@ -299,7 +289,7 @@
     .sys-pause-grid { grid-template-columns: minmax(0, 1fr); gap: 16px; }
     .sys-tiles-3 { grid-template-columns: minmax(0, 1fr); }
     .sys-col-next { display: none; }
-    .sys-harvest-fields, .sys-two-checks { grid-template-columns: minmax(0, 1fr); }
+    .sys-two-checks { grid-template-columns: minmax(0, 1fr); }
     .sys-indent { padding-left: 0; }
   }
 }

@@ -48,7 +48,6 @@ const cliMocks = vi.hoisted(() => {
     PgBossMock,
     bossBehavior,
     bossInstances,
-    countHarvestObservations: vi.fn(),
     createAppContext: vi.fn(),
     findPageByLabel: vi.fn(),
     findUserById: vi.fn(),
@@ -56,7 +55,6 @@ const cliMocks = vi.hoisted(() => {
     handleSuccessfulPageVerificationRecovery: vi.fn(),
     insertDeliveryAttempt: vi.fn(),
     listPages: vi.fn(),
-    listHarvestTransactionResidue: vi.fn(),
     onboardOnlyFansPage: vi.fn(),
     request: vi.fn(),
     requestPageSync: vi.fn(),
@@ -78,12 +76,10 @@ vi.mock("@agency_hub_core/db", async (importOriginal) => {
 
   return {
     ...actual,
-    countHarvestObservations: cliMocks.countHarvestObservations,
     findPageByLabel: cliMocks.findPageByLabel,
     findUserById: cliMocks.findUserById,
     findUserByUsername: cliMocks.findUserByUsername,
     insertDeliveryAttempt: cliMocks.insertDeliveryAttempt,
-    listHarvestTransactionResidue: cliMocks.listHarvestTransactionResidue,
   };
 });
 
@@ -165,12 +161,10 @@ describe("CLI parsing", () => {
     cliMocks.bossBehavior.sendResult = "job-1";
     cliMocks.bossInstances.length = 0;
     cliMocks.createAppContext.mockReset();
-    cliMocks.countHarvestObservations.mockReset();
     cliMocks.findPageByLabel.mockReset();
     cliMocks.findUserById.mockReset();
     cliMocks.findUserByUsername.mockReset();
     cliMocks.listPages.mockReset();
-    cliMocks.listHarvestTransactionResidue.mockReset();
     cliMocks.onboardOnlyFansPage.mockReset();
     cliMocks.request.mockReset();
     cliMocks.requestPageSync.mockReset();
@@ -206,8 +200,6 @@ describe("CLI parsing", () => {
       proxy: null,
     });
     cliMocks.listPages.mockResolvedValue([]);
-    cliMocks.countHarvestObservations.mockResolvedValue(0);
-    cliMocks.listHarvestTransactionResidue.mockResolvedValue({ total: 0, sample: [] });
     cliMocks.request.mockResolvedValue({
       statusCode: 200,
       body: {
