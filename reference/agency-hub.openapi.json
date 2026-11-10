@@ -5065,6 +5065,21 @@
                                     "type": "integer",
                                     "minimum": 0,
                                     "maximum": 9007199254740991
+                                  },
+                                  "payers": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "payersGrossMills": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "topPayerGrossMills": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
                                   }
                                 },
                                 "required": [
@@ -5074,7 +5089,10 @@
                                   "replied",
                                   "talked",
                                   "maturedPaid",
-                                  "paid"
+                                  "paid",
+                                  "payers",
+                                  "payersGrossMills",
+                                  "topPayerGrossMills"
                                 ],
                                 "additionalProperties": false
                               },
@@ -5115,6 +5133,21 @@
                                     "type": "integer",
                                     "minimum": 0,
                                     "maximum": 9007199254740991
+                                  },
+                                  "payers": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "payersGrossMills": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "topPayerGrossMills": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
                                   }
                                 },
                                 "required": [
@@ -5124,7 +5157,10 @@
                                   "replied",
                                   "talked",
                                   "maturedPaid",
-                                  "paid"
+                                  "paid",
+                                  "payers",
+                                  "payersGrossMills",
+                                  "topPayerGrossMills"
                                 ],
                                 "additionalProperties": false
                               },
@@ -5165,6 +5201,21 @@
                                     "type": "integer",
                                     "minimum": 0,
                                     "maximum": 9007199254740991
+                                  },
+                                  "payers": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "payersGrossMills": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "topPayerGrossMills": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
                                   }
                                 },
                                 "required": [
@@ -5174,7 +5225,10 @@
                                   "replied",
                                   "talked",
                                   "maturedPaid",
-                                  "paid"
+                                  "paid",
+                                  "payers",
+                                  "payersGrossMills",
+                                  "topPayerGrossMills"
                                 ],
                                 "additionalProperties": false
                               },
@@ -5215,6 +5269,21 @@
                                     "type": "integer",
                                     "minimum": 0,
                                     "maximum": 9007199254740991
+                                  },
+                                  "payers": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "payersGrossMills": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "topPayerGrossMills": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
                                   }
                                 },
                                 "required": [
@@ -5224,7 +5293,10 @@
                                   "replied",
                                   "talked",
                                   "maturedPaid",
-                                  "paid"
+                                  "paid",
+                                  "payers",
+                                  "payersGrossMills",
+                                  "topPayerGrossMills"
                                 ],
                                 "additionalProperties": false
                               }
@@ -5562,6 +5634,21 @@
                                     "type": "integer",
                                     "minimum": 0,
                                     "maximum": 9007199254740991
+                                  },
+                                  "payers": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "payersGrossMills": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "topPayerGrossMills": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
                                   }
                                 },
                                 "required": [
@@ -5571,7 +5658,10 @@
                                   "replied",
                                   "talked",
                                   "maturedPaid",
-                                  "paid"
+                                  "paid",
+                                  "payers",
+                                  "payersGrossMills",
+                                  "topPayerGrossMills"
                                 ],
                                 "additionalProperties": false
                               },
@@ -5612,6 +5702,21 @@
                                     "type": "integer",
                                     "minimum": 0,
                                     "maximum": 9007199254740991
+                                  },
+                                  "payers": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "payersGrossMills": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "topPayerGrossMills": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
                                   }
                                 },
                                 "required": [
@@ -5621,7 +5726,10 @@
                                   "replied",
                                   "talked",
                                   "maturedPaid",
-                                  "paid"
+                                  "paid",
+                                  "payers",
+                                  "payersGrossMills",
+                                  "topPayerGrossMills"
                                 ],
                                 "additionalProperties": false
                               },
@@ -5662,6 +5770,21 @@
                                     "type": "integer",
                                     "minimum": 0,
                                     "maximum": 9007199254740991
+                                  },
+                                  "payers": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "payersGrossMills": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "topPayerGrossMills": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
                                   }
                                 },
                                 "required": [
@@ -5671,7 +5794,10 @@
                                   "replied",
                                   "talked",
                                   "maturedPaid",
-                                  "paid"
+                                  "paid",
+                                  "payers",
+                                  "payersGrossMills",
+                                  "topPayerGrossMills"
                                 ],
                                 "additionalProperties": false
                               },
@@ -5712,6 +5838,21 @@
                                     "type": "integer",
                                     "minimum": 0,
                                     "maximum": 9007199254740991
+                                  },
+                                  "payers": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "payersGrossMills": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "topPayerGrossMills": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
                                   }
                                 },
                                 "required": [
@@ -5721,7 +5862,10 @@
                                   "replied",
                                   "talked",
                                   "maturedPaid",
-                                  "paid"
+                                  "paid",
+                                  "payers",
+                                  "payersGrossMills",
+                                  "topPayerGrossMills"
                                 ],
                                 "additionalProperties": false
                               }
@@ -6062,6 +6206,21 @@
                                     "type": "integer",
                                     "minimum": 0,
                                     "maximum": 9007199254740991
+                                  },
+                                  "payers": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "payersGrossMills": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "topPayerGrossMills": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
                                   }
                                 },
                                 "required": [
@@ -6071,7 +6230,10 @@
                                   "replied",
                                   "talked",
                                   "maturedPaid",
-                                  "paid"
+                                  "paid",
+                                  "payers",
+                                  "payersGrossMills",
+                                  "topPayerGrossMills"
                                 ],
                                 "additionalProperties": false
                               },
@@ -6112,6 +6274,21 @@
                                     "type": "integer",
                                     "minimum": 0,
                                     "maximum": 9007199254740991
+                                  },
+                                  "payers": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "payersGrossMills": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "topPayerGrossMills": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
                                   }
                                 },
                                 "required": [
@@ -6121,7 +6298,10 @@
                                   "replied",
                                   "talked",
                                   "maturedPaid",
-                                  "paid"
+                                  "paid",
+                                  "payers",
+                                  "payersGrossMills",
+                                  "topPayerGrossMills"
                                 ],
                                 "additionalProperties": false
                               },
@@ -6162,6 +6342,21 @@
                                     "type": "integer",
                                     "minimum": 0,
                                     "maximum": 9007199254740991
+                                  },
+                                  "payers": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "payersGrossMills": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "topPayerGrossMills": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
                                   }
                                 },
                                 "required": [
@@ -6171,7 +6366,10 @@
                                   "replied",
                                   "talked",
                                   "maturedPaid",
-                                  "paid"
+                                  "paid",
+                                  "payers",
+                                  "payersGrossMills",
+                                  "topPayerGrossMills"
                                 ],
                                 "additionalProperties": false
                               },
@@ -6212,6 +6410,21 @@
                                     "type": "integer",
                                     "minimum": 0,
                                     "maximum": 9007199254740991
+                                  },
+                                  "payers": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "payersGrossMills": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "topPayerGrossMills": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
                                   }
                                 },
                                 "required": [
@@ -6221,7 +6434,10 @@
                                   "replied",
                                   "talked",
                                   "maturedPaid",
-                                  "paid"
+                                  "paid",
+                                  "payers",
+                                  "payersGrossMills",
+                                  "topPayerGrossMills"
                                 ],
                                 "additionalProperties": false
                               }

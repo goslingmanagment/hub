@@ -18,6 +18,7 @@ import { TableSkeleton } from "@/components/shared/TableSkeleton";
 import { Disclosure } from "@/components/ui/Disclosure";
 import { Segmented } from "@/components/ui/Segmented";
 import { Switch } from "@/components/ui/Switch";
+import { formatMills } from "@/lib/format";
 import { isUnknownOutcome, UNKNOWN_OUTCOME } from "../settingsFeedback.js";
 
 // Hi's first messages of a persona (hub 0320, owner 2026-10-25): the texts Hi
@@ -82,6 +83,34 @@ function Share({ part, whole, range = false }: { part: number; whole: number; ra
   );
 }
 
+/** The fans who paid after the greeting: how many, and how many per 100 sent. */
+function Payers({ outcome }: { outcome: AdminAiPersonaOpenerOutcome }) {
+  if (outcome.sent === 0) return <span className="muted">—</span>;
+  return (
+    <>
+      <div className="tabular-nums">{outcome.payers}</div>
+      {outcome.payers > 0 && (
+        <div className="settings-second whitespace-nowrap tabular-nums" title="Плательщиков на 100 отправок">
+          {((outcome.payers / outcome.sent) * 100).toFixed(1).replace(".", ",")} на 100
+        </div>
+      )}
+    </>
+  );
+}
+
+/** What they paid, and under it the largest fan's part: a sum one fan made says little about the text. */
+function PayersMoney({ outcome }: { outcome: AdminAiPersonaOpenerOutcome }) {
+  if (outcome.payers === 0) return <span className="muted">—</span>;
+  return (
+    <>
+      <div className="whitespace-nowrap tabular-nums">{formatMills(outcome.payersGrossMills)}</div>
+      <div className="settings-second whitespace-nowrap tabular-nums" title="Сколько из суммы дал один самый крупный фан">
+        {outcome.payers === 1 ? "от одного фана" : `один фан ${formatMills(outcome.topPayerGrossMills)}`}
+      </div>
+    </>
+  );
+}
+
 function rateOf(outcome: AdminAiPersonaOpenerOutcome) {
   return outcome.matured === 0 ? -1 : outcome.replied / outcome.matured;
 }
@@ -129,7 +158,7 @@ export function PersonaOpeners({ persona }: { persona: AdminAiPersona }) {
 
   let table;
   if (isLoading && !data) {
-    table = <div className="card"><TableSkeleton rows={4} columns={6} /></div>;
+    table = <div className="card"><TableSkeleton rows={4} columns={8} /></div>;
   } else if (isError && !data) {
     table = (
       <StatusPanel
@@ -159,6 +188,8 @@ export function PersonaOpeners({ persona }: { persona: AdminAiPersona }) {
                 <th className="num">Ответили за 72 ч</th>
                 <th className="num">Разговорились</th>
                 <th className="num">Оплатили за 14 дней</th>
+                <th className="num">Плательщики</th>
+                <th className="num">Деньги</th>
               </tr>
             </thead>
             <tbody>
@@ -187,6 +218,8 @@ export function PersonaOpeners({ persona }: { persona: AdminAiPersona }) {
                     <td className="num"><Share part={outcome.replied} whole={outcome.matured} range /></td>
                     <td className="num"><Share part={outcome.talked} whole={outcome.matured} /></td>
                     <td className="num"><Share part={outcome.paid} whole={outcome.maturedPaid} /></td>
+                    <td className="num"><Payers outcome={outcome} /></td>
+                    <td className="num"><PayersMoney outcome={outcome} /></td>
                   </tr>
                 );
               })}
@@ -206,6 +239,7 @@ export function PersonaOpeners({ persona }: { persona: AdminAiPersona }) {
         <p>Hi на пустом чате вытягивает один из включённых текстов по жребию. Фану без имени, фото и био текст уходит как есть, остальным ИИ добавляет имя или деталь профиля.</p>
         <p>Ответы считаются через 72 часа после отправки, оплаты через 14 дней. Под долей — её разброс: с вероятностью 95 % настоящая доля лежит в этих пределах.</p>
         <p>«Разговорились»: фан написал, страница ответила, фан написал снова.</p>
+        <p>«Плательщики» и «Деньги» считаются без ожидания, за всё время после приветствия: сколько фанов, получивших этот текст первым приветствием, потом заплатили странице (и сколько это на 100 отправок), и сколько они заплатили грязными. Фан считается один раз. Под суммой видно, сколько из неё дал один самый крупный фан: когда это почти вся сумма, её сделал один человек, и о тексте она говорит мало.</p>
         <p>Текст нельзя изменить или удалить, только выключить и добавить новый: так цифры остаются за своими словами.</p>
       </Disclosure>
 

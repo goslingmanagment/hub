@@ -8,7 +8,7 @@
  */
 import { z } from "zod";
 
-import { errorResponseSchema, intId, isoTimestamp } from "./primitives.ts";
+import { errorResponseSchema, intId, isoTimestamp, mills } from "./primitives.ts";
 
 const count = z.number().int().nonnegative();
 
@@ -28,7 +28,8 @@ export const adminAiPersonaOpenerHoursSchema = z.object({
 }).strict();
 
 /** The greetings sent with one text, and how the fans answered. A greeting
- *  counts toward an answer once 72 hours passed, toward money once 14 days. */
+ *  counts toward an answer once 72 hours passed, toward `paid` once 14 days.
+ *  The payers and their money wait for nothing: everything since the greeting. */
 export const adminAiPersonaOpenerOutcomeSchema = z.object({
   sent: count,
   /** Sent with a text other than the generation's. */
@@ -43,6 +44,13 @@ export const adminAiPersonaOpenerOutcomeSchema = z.object({
   maturedPaid: count,
   /** Of `maturedPaid`: the fan paid the page within 14 days. */
   paid: count,
+  /** Fans whose first greeting this was and who paid the page after it, at
+   *  any time since. A fan counts once. */
+  payers: count,
+  /** What those fans paid the page after the greeting, gross. */
+  payersGrossMills: mills.nonnegative(),
+  /** Of it, the fan who paid the most: one whale can be the whole sum. */
+  topPayerGrossMills: mills.nonnegative(),
 }).strict();
 
 export const adminAiPersonaOpenerSchema = z.object({

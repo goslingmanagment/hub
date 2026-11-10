@@ -11,6 +11,7 @@ import {
   setAiPersonaOpenerEnabled,
   type AiPersonaOpenerOutcome,
 } from "@agency_hub_core/db";
+import { millsToNumber } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../../bootstrap.ts";
 import { recordAudit, withAuditTransaction, type AuditContext } from "../../services/auth.ts";
@@ -30,6 +31,9 @@ const ZERO: AdminAiPersonaOpenerOutcome = {
   talked: 0,
   maturedPaid: 0,
   paid: 0,
+  payers: 0,
+  payersGrossMills: 0,
+  topPayerGrossMills: 0,
 };
 
 function add(a: AdminAiPersonaOpenerOutcome, b: AiPersonaOpenerOutcome): AdminAiPersonaOpenerOutcome {
@@ -41,6 +45,10 @@ function add(a: AdminAiPersonaOpenerOutcome, b: AiPersonaOpenerOutcome): AdminAi
     talked: a.talked + b.talked,
     maturedPaid: a.maturedPaid + b.maturedPaid,
     paid: a.paid + b.paid,
+    payers: a.payers + b.payers,
+    payersGrossMills: a.payersGrossMills + millsToNumber(b.payersGrossMills),
+    // A fan sits in one row (their first greeting), so the largest of the rows is the largest fan.
+    topPayerGrossMills: Math.max(a.topPayerGrossMills, millsToNumber(b.topPayerGrossMills)),
   };
 }
 

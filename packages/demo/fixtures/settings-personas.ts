@@ -1,4 +1,4 @@
-import { between, daysAgo, demoError, hoursAgo, iso, rng, type DemoHandlers } from "../core.ts";
+import { between, daysAgo, demoError, hoursAgo, iso, mills, rng, type DemoHandlers } from "../core.ts";
 import { ownerOnly } from "./settings-common.ts";
 
 /**
@@ -157,6 +157,9 @@ interface Outcome {
   talked: number;
   maturedPaid: number;
   paid: number;
+  payers: number;
+  payersGrossMills: number;
+  topPayerGrossMills: number;
 }
 
 /** One fan group's numbers for a text drawn `activeDays` days, the last of
@@ -176,13 +179,25 @@ function groupOutcome(random: () => number, perDay: number, activeDays: number, 
   const talked = Math.min(replied, Math.round(replied * between(random, 0.38, 0.62)));
   const paid = Math.min(maturedPaid, Math.round(maturedPaid * pull * between(random, 0.12, 0.3)));
   const edited = Math.min(sent, Math.round(sent * between(random, 0.02, 0.1)));
-  return { sent, edited, matured, replied, talked, maturedPaid, paid };
+  // Everyone who paid since the greeting, not only within 14 days; one of them is far above the rest.
+  const payers = Math.min(sent, paid + Math.round(sent * pull * between(random, 0, 0.04)));
+  const spends = Array.from({ length: payers }, (_, index) =>
+    mills(Math.round(between(random, 5, 60) * (index === 0 ? between(random, 3, 14) : 1))));
+  const payersGrossMills = spends.reduce((total, spend) => total + spend, 0);
+  const topPayerGrossMills = Math.max(0, ...spends);
+  return { sent, edited, matured, replied, talked, maturedPaid, paid, payers, payersGrossMills, topPayerGrossMills };
 }
 
 function sum(parts: Outcome[]): Outcome {
-  const total: Outcome = { sent: 0, edited: 0, matured: 0, replied: 0, talked: 0, maturedPaid: 0, paid: 0 };
+  const total: Outcome = {
+    sent: 0, edited: 0, matured: 0, replied: 0, talked: 0, maturedPaid: 0, paid: 0,
+    payers: 0, payersGrossMills: 0, topPayerGrossMills: 0,
+  };
   for (const part of parts) {
-    for (const field of Object.keys(total) as (keyof Outcome)[]) total[field] += part[field];
+    for (const field of Object.keys(total) as (keyof Outcome)[]) {
+      // The largest fan of the groups together is the largest of the groups' largest.
+      total[field] = field === "topPayerGrossMills" ? Math.max(total[field], part[field]) : total[field] + part[field];
+    }
   }
   return total;
 }
