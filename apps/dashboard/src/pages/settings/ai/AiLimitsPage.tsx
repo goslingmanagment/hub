@@ -5,6 +5,7 @@ import { MOSCOW_TIME_ZONE, previousBusinessDate, toBusinessDate } from "@agency_
 import { useAdminAiChatterLimits } from "@/api/adminAiSpend";
 import { StatusPanel } from "@/components/shared/StatusPanel";
 import { TableSkeleton, StatCardSkeleton } from "@/components/shared/TableSkeleton";
+import { workboardPersonHref } from "@/lib/workboard";
 import { Disclosure } from "@/components/ui/Disclosure";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { DayNav } from "@/components/ui/PeriodStepper";
@@ -150,7 +151,7 @@ export function AiLimitsPage() {
                       <tr key={person.userId} id={`person-${person.userId}`} className={lit === person.userId ? "settings-row-flash" : undefined}>
                         <td>
                           <div className="settings-person">
-                            <Link to={`/team/people/${person.userId}`} className="settings-link font-medium">{person.username}</Link>
+                            <a href={workboardPersonHref(person.userId, false)} className="settings-link font-medium">{person.username}</a>
                             {badge && <StatusBadge status={badge} />}
                           </div>
                           <div className="settings-second">{ROLE_WORDS[person.role] ?? person.role}</div>

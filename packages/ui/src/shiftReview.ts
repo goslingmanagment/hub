@@ -20,13 +20,12 @@ import {
 import { formatDuration } from "./format.js";
 
 /**
- * The rules of «Разбор смены», one copy for the console and Workboard: what a
+ * The rules of «Разбор смены» (Workboard): what a
  * screen derives from `teamShiftReview` — the waits and whose they are, the
  * shift minute by minute for the pulse, the totals, what each chat shows in the
  * list — and the three numbers of a shift's quality every screen shows
  * («Ответ, медиана», «Без ответа к концу», «ИИ без правки», see `shiftQuality`).
- * Pure; the server sends facts, this file counts them. The console's
- * apps/dashboard/src/pages/team/review/shiftReviewView.ts re-exports this file.
+ * Pure; the server sends facts, this file counts them.
  *
  * The shift's numbers — the chatter's messages, the replies and their median,
  * the fans left without an answer, whose a wait is, what a deleted message

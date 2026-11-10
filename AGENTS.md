@@ -14,7 +14,9 @@ chatters' AI features, the owner's dashboard. Production is `agency-de` (`root@1
   (typed by the contracts: `pnpm --dir apps/dashboard typecheck:demo`). A new screen or API field gets its fixture there.
 - Workboard (`apps/workboard`, the owner's team control, served by Hub at `/workboard/`; design system `packages/ui`):
   `pnpm dev:workboard:demo` → http://localhost:5190/workboard/ on the same demo data (`/workboard/__specimen` — every
-  component). Against a local API: `pnpm dev:workboard` (proxies `/api` to :3000).
+  component). Against a local API: `pnpm dev:workboard` (proxies `/api` to :3000). The console's «Команда» is Workboard
+  (every old `/team/*` address redirects there, `apps/dashboard/src/lib/workboard.ts`; only «Анкеты» stay in the console);
+  the console's dev servers proxy `/workboard` to Workboard's (5190 for `dev:demo`, 5191 for `dev:dashboard`), run it beside.
 - API: `curl localhost:3000/api/v1/health`; the token and sample requests — `docs/runbooks/client-dev-hub.md`.
 - AI without spending money: `pnpm dev:fake-ai` + the variables from the same runbook.
 

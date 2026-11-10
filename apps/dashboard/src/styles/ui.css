@@ -88,6 +88,8 @@
   }
   .nav-item svg { flex-shrink: 0; color: var(--color-text-muted); }
   .nav-item[aria-current="page"] svg { color: var(--color-accent); }
+  /* An item that leaves the console (Workboard): a quiet arrow at the end. */
+  .nav-item .nav-away { margin-left: auto; opacity: 0.7; }
   .nav-count {
     margin-left: auto;
     min-width: 24px;
@@ -427,12 +429,6 @@
     height: 2px;
     background: var(--color-accent);
   }
-  .section-tab-count {
-    font-size: 14px;
-    color: var(--color-text-muted);
-    font-variant-numeric: tabular-nums;
-  }
-
   /* The second row inside a tab: quieter, so two rows do not read as equals. */
   .section-subnav {
     display: flex;
@@ -745,8 +741,6 @@
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
   }
-  /* A number with a line of words under it: the words may wrap before the table scrolls. */
-  .data-table .num-wrap { white-space: normal; }
   .data-table .muted { color: var(--color-text-secondary); }
   .data-table .btn-sm { margin-block: -4px; }
   .data-table-dense td { padding-block: 8px; }

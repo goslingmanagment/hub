@@ -2,7 +2,7 @@ import { Suspense, useLayoutEffect, useMemo, useState, type ReactNode } from "re
 import { ChevronRight } from "lucide-react";
 import { Link, Outlet, useLocation, useNavigate, useSearchParams } from "react-router";
 import { useAuthMe } from "@/api/queries";
-import { useOfapiStatus, useTeamTabCounts } from "@/api/waiting";
+import { useOfapiStatus } from "@/api/waiting";
 import { Notice } from "@/components/ui/Notice";
 import { SectionTabs, type SectionTabItem } from "@/components/ui/SectionTabs";
 import { ScreenFrameContext, type ScreenFrame as ScreenFrameValue } from "@/components/ui/screenFrame";
@@ -55,9 +55,9 @@ function Crumbs({ crumbs }: { crumbs: readonly Crumb[] }) {
 }
 
 /** A small words-only row of the screens inside a tab. */
-function SubRow({ sectionTab, role, screen, search, counts = {} }: { sectionTab: SectionTab; role: Role; screen: Screen; search: URLSearchParams; counts?: Readonly<Record<string, number>> }) {
+function SubRow({ sectionTab, role, screen, search }: { sectionTab: SectionTab; role: Role; screen: Screen; search: URLSearchParams }) {
   const row = tabRow(sectionTab, role);
-  const items: SectionTabItem[] = row.map((item) => ({ to: linkTo(item, search), label: item.label, count: counts[item.id] || undefined }));
+  const items: SectionTabItem[] = row.map((item) => ({ to: linkTo(item, search), label: item.label }));
   const current = row.findIndex((item) => item.id === screen.id);
   return <SectionTabs sub label={sectionTab.label} items={items} current={current >= 0 ? items[current]?.to : undefined} />;
 }
@@ -65,17 +65,12 @@ function SubRow({ sectionTab, role, screen, search, counts = {} }: { sectionTab:
 function SectionRow({ section, role, screen, search }: { section: Section; role: Role; screen: Screen; search: URLSearchParams }) {
   const tabs = visibleSectionTabs(section, role);
   const currentTab = tabOfScreen(section, screen.id);
-  // A queue's number stands on the tab that opens it, and only when it is that queue.
-  const counts = useTeamTabCounts(section.id === "team");
-  const items: SectionTabItem[] = tabs.map((item) => {
-    const row = tabRow(item, role);
-    return { to: linkTo(row[0]!, search), label: item.label, count: row.length === 1 ? counts[row[0]!.id] || undefined : undefined };
-  });
+  const items: SectionTabItem[] = tabs.map((item) => ({ to: linkTo(tabRow(item, role)[0]!, search), label: item.label }));
   const current = tabs.findIndex((item) => item.id === currentTab?.id);
   return (
     <>
       <SectionTabs label={section.title} items={items} current={current >= 0 ? items[current]?.to : undefined} />
-      {currentTab && <SubRow sectionTab={currentTab} role={role} screen={screen} search={search} counts={counts} />}
+      {currentTab && <SubRow sectionTab={currentTab} role={role} screen={screen} search={search} />}
     </>
   );
 }

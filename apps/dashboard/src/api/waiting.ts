@@ -5,6 +5,7 @@ import type { NotificationsIncidentItem, SyncBlocksPage } from "@agency_hub_core
 
 import { isOfapiOffFailure } from "@/lib/failures";
 import { buildPageSectionRoute } from "@/lib/navigation";
+import { workboardHref } from "@/lib/workboard";
 import type { OfapiStatus } from "@/lib/statusWords";
 import { enginePageStatus } from "@/pages/settings/engine/enginePageSummary";
 import { engineStatusState } from "@/pages/settings/engine/engineDisplay";
@@ -27,7 +28,8 @@ import { teamCustomsQueryOptions, teamShiftDisputesQueryOptions } from "./team.j
  * once. Read every minute, only while the tab is visible.
  *
  * A row's link carries `?page=all`: it counts over every page, so it opens every
- * page, whatever filter is remembered (lib/pageParam.ts).
+ * page, whatever filter is remembered (lib/pageParam.ts). Workboard's rows need
+ * none: without `?page=` it shows every page.
  */
 export interface WaitingRow {
   id: "drafts" | "unknown" | "disputes" | "customs" | "held" | "login" | "failures" | "extension" | "history";
@@ -172,11 +174,11 @@ export function useWaitingCounts(role: string): WaitingCounts {
     const draftCount = failedOr(drafts, (data) => data.publications.length);
     push({ id: "drafts", label: "Посты на утверждение", count: draftCount, capped: draftCount === LIST_LIMIT, to: "/publications?status=draft&window=all&page=all" });
     push({ id: "unknown", label: "Публикации: исход неизвестен", count: failedOr(unknown, (data) => data.publications.length), to: "/publications?status=unknown&window=all&page=all" });
-    push({ id: "disputes", label: "Споры по продажам", count: failedOr(disputes, (data) => data.disputes.filter((dispute) => dispute.resolution === null).length), to: "/team/payouts#disputes" });
+    push({ id: "disputes", label: "Споры по продажам", count: failedOr(disputes, (data) => data.disputes.filter((dispute) => dispute.resolution === null).length), to: workboardHref("decisions", "", "disputes") });
   }
   const customsCount = failedOr(customs, (data) => data.customs.filter((custom) => custom.state === "paid").length);
-  push({ id: "customs", label: "Кастомы оплачены, не отданы", count: customsCount, capped: customsCount === CUSTOMS_LIMIT, to: "/team/customs?page=all" });
-  push({ id: "held", label: "Проверить отправки", count: failedOr(held, (data) => data.total), to: "/team/held-sends?page=all" });
+  push({ id: "customs", label: "Кастомы оплачены, не отданы", count: customsCount, capped: customsCount === CUSTOMS_LIMIT, to: workboardHref("decisions", "", "customs") });
+  push({ id: "held", label: "Проверить отправки", count: failedOr(held, (data) => data.total), to: workboardHref("decisions", "", "held") });
   if (owner) {
     // Either read missing leaves the login state unknown: a page that was found is
     // shown, and finding none is «could not check», never a quiet zero.
@@ -224,26 +226,6 @@ export function useWaitingCounts(role: string): WaitingCounts {
     loading,
     loginPages,
     refetchAll,
-  };
-}
-
-/**
- * The numbers on the tabs of Команда, by screen: what waits in that queue. A read
- * that failed has no number; the same keys as the count above, so a write there
- * moves them at once.
- */
-export function useTeamTabCounts(enabled: boolean): Readonly<Record<string, number>> {
-  const [disputes, customs, held] = useQueries({
-    queries: [
-      { ...teamShiftDisputesQueryOptions(), enabled },
-      { ...teamCustomsQueryOptions, enabled },
-      { ...clientHeldSendsQueryOptions({ state: "held", limit: 1, offset: 0 }), enabled },
-    ],
-  });
-  return {
-    "team-payouts": disputes.data?.disputes.filter((dispute) => dispute.resolution === null).length ?? 0,
-    "team-customs": customs.data?.customs.filter((custom) => custom.state === "paid").length ?? 0,
-    "team-held-sends": held.data?.total ?? 0,
   };
 }
 

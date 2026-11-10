@@ -14,7 +14,8 @@ import { publicationsRoutes } from "./routes/screens/publications.js";
 import { settingsRoutes } from "./routes/screens/settings.js";
 import { statsRoutes } from "./routes/screens/stats.js";
 import { systemRoutes } from "./routes/screens/system.js";
-import { teamRoutes } from "./routes/screens/team.js";
+import { applicationsRoutes } from "./routes/screens/applications.js";
+import { ToWorkboard } from "./routes/ToWorkboard.js";
 
 const LoginPage = lazy(() => import("./pages/LoginPage.js").then((m) => ({ default: m.LoginPage })));
 const JoinPage = lazy(() => import("./pages/account/JoinPage.js").then((m) => ({ default: m.JoinPage })));
@@ -33,6 +34,10 @@ export function App() {
           {/* /join has no session yet — it is the page that
               creates the credential — so it sits outside ProtectedLayout. */}
           <Route path="/join" element={<JoinPage />} />
+          {/* «Команда» is Workboard now: every old address of it leaves for its screen there
+              (lib/workboard.ts), before any frame of the console loads. «Анкеты» stay below. */}
+          <Route path="/team/*" element={<ToWorkboard />} />
+          <Route path="/held-sends" element={<ToWorkboard />} />
           <Route element={<ChatterLayout />}>
             <Route path="/account" element={<AccountPage />} />
           </Route>
@@ -44,7 +49,7 @@ export function App() {
                 {fansRoutes()}
                 {statsRoutes()}
                 {publicationsRoutes()}
-                {teamRoutes()}
+                {applicationsRoutes()}
                 {settingsRoutes()}
                 {systemRoutes()}
               </Route>

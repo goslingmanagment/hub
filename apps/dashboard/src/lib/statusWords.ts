@@ -159,14 +159,6 @@ export const TEAM_STATUS = {
   customDelivered: status("Отдан", "good"),
 } as const satisfies Record<string, StatusWord>;
 
-/** «Просрочен на N дней». */
-export function customOverdue(days: number): StatusWord {
-  const mod10 = days % 10;
-  const mod100 = days % 100;
-  const word = mod10 === 1 && mod100 !== 11 ? "день" : mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14) ? "дня" : "дней";
-  return status(`Просрочен на ${days} ${word}`, "attention");
-}
-
 /** «Модели и страницы» → «Незавершённые подключения». */
 export const CONNECT_STATUS = {
   waitingServer: status("Ждёт создания на сервере", "moving"),

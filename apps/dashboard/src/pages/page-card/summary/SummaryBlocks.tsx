@@ -18,6 +18,7 @@ import { RevenueDailyCard } from "@/components/money/RevenueDailyCard";
 import { NoAnswerPanel, StatusPanel } from "@/components/shared/StatusPanel";
 import { TransactionState } from "@/components/shared/TransactionsPreviewPanel";
 import { TableSkeleton } from "@/components/shared/TableSkeleton";
+import { workboardHref, workboardPersonHref } from "@/lib/workboard";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { StatusBadge } from "@/components/ui/StatusBadge";
@@ -294,17 +295,17 @@ export function PeopleBlock({ page }: { page: SummaryPage }) {
       {!staff.data ? (
         <div className="card-body">{staff.isError ? <NoAnswerPanel retry={staff.refetch} /> : <Skeleton width="60%" />}</div>
       ) : sorted.length === 0 ? (
-        <div className="card-body"><p className="fan-muted-line">На этой странице никого не назначили. <Link className="link" to="/team/people">Сотрудники</Link></p></div>
+        <div className="card-body"><p className="fan-muted-line">На этой странице никого не назначили. <a className="link" href={workboardHref("access")}>Доступ</a></p></div>
       ) : (
         <ul className="summary-rows">
           {sorted.map((user) => {
             const shift = onShift.get(user.id);
-            const to = user.role === "chatter" ? `/team/chatters/${user.id}` : `/team/people/${user.id}`;
+            const href = workboardPersonHref(user.id, user.role === "chatter");
             return (
               <li key={user.id}>
                 <div className="summary-row">
                   <span>
-                    <Link className="fan-link" to={to}>{user.username}</Link>
+                    <a className="fan-link" href={href}>{user.username}</a>
                     <span className="summary-row-note">
                       {user.role === "chatter" ? "чаттер" : "тимлид"}
                       {user.registrationState === "invited" && ` · ${STAFF_STATUS.invited!.word}`}

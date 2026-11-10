@@ -6,7 +6,6 @@ export interface SectionTabItem {
   label: string;
   /** Extra path prefixes that also mark this tab current. */
   match?: readonly string[];
-  count?: number | undefined;
 }
 
 /** A row of sibling screens that read as one section. Links, not buttons: each
@@ -41,7 +40,6 @@ export function SectionTabs({ items, label, sub = false, current: currentTo }: {
           className={sub ? "section-subtab" : "section-tab"}
         >
           {item.label}
-          {item.count != null && <span className="section-tab-count">{item.count}</span>}
         </Link>
       ))}
     </nav>

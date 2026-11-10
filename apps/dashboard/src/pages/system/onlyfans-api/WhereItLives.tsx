@@ -2,6 +2,8 @@ import { Link } from "react-router";
 import { useAdminOfapiWebhookStatus } from "@/api/queries";
 import { buildPageSectionRoute } from "@/lib/navigation";
 import type { OfapiStatus } from "@/lib/statusWords";
+import { AppLink } from "@/components/shared/AppLink";
+import { workboardHref } from "@/lib/workboard";
 
 interface Place {
   what: string;
@@ -13,7 +15,7 @@ interface Place {
 const PLACES: readonly Place[] = [
   { what: "Доход и операции страниц OnlyFans", now: "Лента ChatSpace", where: { label: "Операции", to: "/money/transactions" } },
   { what: "Переписка, подписки замеченных фанов, траты фанов", now: "Лента ChatSpace", where: { label: "Фаны", to: "/fans" } },
-  { what: "Смены, продажи, споры, кастомы, проверка отправок", now: "Расширение и лента", where: { label: "Команда", to: "/team/shifts" } },
+  { what: "Смены, продажи, споры, кастомы, проверка отправок", now: "Расширение и лента", where: { label: "Команда", to: workboardHref("shifts") } },
   { what: "Число платных и бесплатных подписок страницы", now: "По 1 ноября", where: { label: "Подписчики", to: "/fans/subscribers" } },
   { what: "Кредиты, баланс, журнал операций", now: "По 1 ноября", where: { label: "Расходы → OnlyFans API", to: "/money/costs/onlyfans-api" } },
   { what: "Ссылки OnlyFans", now: "По 1 ноября", where: "promo" },
@@ -64,7 +66,7 @@ export function WhereItLives({ ofapi }: { ofapi: OfapiStatus }) {
                         </span>
                       )
                   ) : (
-                    <Link className="link" to={place.where.to}>{place.where.label}</Link>
+                    <AppLink className="link" to={place.where.to}>{place.where.label}</AppLink>
                   )}
                 </td>
               </tr>

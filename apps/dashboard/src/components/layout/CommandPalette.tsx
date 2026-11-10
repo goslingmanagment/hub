@@ -7,6 +7,7 @@ import { kernel } from "@/api/sdk";
 import { buildCommands, fanCommands, groupCommands, searchCommands, type Command, type CommandSetting } from "@/lib/commands";
 import { PALETTE_SHORTCUT } from "@/lib/paletteShortcut";
 import { useThemeStore } from "@/lib/theme";
+import { isWorkboardHref } from "@/lib/workboard";
 import { CONFIG_COPY_RU } from "@/pages/settings/configCopyRu";
 import { useDashboardShell } from "./DashboardShellContext.js";
 
@@ -59,6 +60,8 @@ export function CommandPalette({ role, onClose }: { role: string; onClose: () =>
   function open(command: Command) {
     onClose();
     if (command.theme) setTheme(command.theme);
+    // Workboard is another app: the browser goes there, the console's router cannot.
+    else if (isWorkboardHref(command.to)) window.location.assign(command.to);
     else navigate(command.to, command.state ? { state: command.state } : undefined);
   }
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { daysOf, pivotOf, sheetCell, sheetText } from "../apps/dashboard/src/pages/team/payoutSheet.ts";
+import { daysOf, pivotOf, sheetCell, sheetText } from "../packages/ui/src/payoutSheet.ts";
 
 // The payout sheet the owner pastes into the payout table: money, so its format
 // is pinned. The expectations were taken from the code before it moved out of
