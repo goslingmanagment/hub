@@ -41,6 +41,7 @@ import {
   isDmArchiveScopeFenced,
   tryAcquireDmArchiveWriterFenceLock,
 } from "./erasure-fence.ts";
+import { millsParam, textArrayLiteralParam as textArrayParam } from "./projection-sql.ts";
 
 export type PostCommentPlatform = "fansly" | "onlyfans";
 
@@ -71,24 +72,6 @@ function newerWins() {
 function pick(column: string): SQL {
   const name = sql.identifier(column);
   return sql`case when ${newerWins()} then excluded.${name} else post_comments.${name} end`;
-}
-
-function millsParam(value: bigint | null): SQL {
-  return value === null ? sql`null` : sql`${value.toString()}::bigint`;
-}
-
-/**
- * ONE bound parameter carrying a Postgres array literal, then cast.
- *
- * Not `sql`${array}`` — drizzle expands an array chunk into a comma-separated
- * parameter LIST, so an EMPTY array expands to nothing and the statement
- * becomes a syntax error at runtime on exactly the common case. An empty roster
- * is not an edge case here: it is precisely what a post whose comments were all
- * deleted serves, and it is the case `missing_since` exists for.
- */
-function textArrayParam(values: readonly string[]): SQL {
-  const literal = `{${values.map((value) => `"${value.replace(/(["\\])/g, "\\$1")}"`).join(",")}}`;
-  return sql`${literal}::text[]`;
 }
 
 export interface UpsertPostCommentInput extends PostCommentLineage {

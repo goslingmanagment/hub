@@ -68,6 +68,7 @@ import {
   asNumber,
   asString,
   isRecord,
+  pageRefOf,
   type CanonicalEventDraft,
   type CanonicalizableObservation,
 } from "./types.ts";
@@ -163,10 +164,6 @@ function accountIndex(response: unknown): Map<string, Record<string, unknown>> {
     }
   }
   return index;
-}
-
-function pageRefOf(observation: CanonicalizableObservation): string {
-  return String(observation.accountId);
 }
 
 export function canParseFanslyCommentsObservation(

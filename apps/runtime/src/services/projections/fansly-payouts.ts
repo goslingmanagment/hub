@@ -61,10 +61,10 @@ import {
   type PagePayoutPlatform,
   type PayoutStatusConfidence,
 } from "@agency_hub_core/db";
-import { millsFromInteger, type Mills } from "@agency_hub_core/shared";
 import { sql } from "drizzle-orm";
 
 import type { AppContext } from "../../bootstrap.ts";
+import { asInt, asText, eventData, isoDate, millsOrNull, stringArray } from "./event-fields.ts";
 
 export const FANSLY_PAYOUTS_PROJECTION = "fansly_payouts";
 
@@ -91,55 +91,6 @@ export interface FanslyPayoutsProjectionResult extends Record<string, unknown> {
   payouts: number;
   markedMissing: number;
   clearedMissing: number;
-}
-
-function eventData(value: unknown): Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : {};
-}
-
-function asText(value: unknown): string | null {
-  return typeof value === "string" && value.length > 0 ? value : null;
-}
-
-function asInt(value: unknown): number | null {
-  return typeof value === "number" && Number.isSafeInteger(value) ? value : null;
-}
-
-function stringArray(value: unknown): string[] {
-  return Array.isArray(value)
-    ? value.filter((item): item is string => typeof item === "string" && item.length > 0)
-    : [];
-}
-
-/**
- * Event mills travel as decimal STRINGS (JSON cannot carry a bigint, and a
- * float would re-open the 1000x footgun). Constructed through the named
- * already-mills constructor `millsFromInteger` — never a hand-rolled
- * `BigInt(...)`.
- *
- * The shape guards in FRONT of it are not decoration: the constructor THROWS on
- * a non-digit string and on a non-finite number, and a projector must skip a
- * malformed money field rather than crash the sweep. Digits only ⇒ no sign, no
- * fraction, no exponent.
- */
-function millsOrNull(value: unknown): Mills | null {
-  if (typeof value === "string" && /^\d+$/.test(value)) {
-    return millsFromInteger(value);
-  }
-  if (typeof value === "number" && Number.isSafeInteger(value) && value >= 0) {
-    return millsFromInteger(value);
-  }
-  return null;
-}
-
-function isoDate(value: unknown): Date | null {
-  if (typeof value !== "string" || value.length === 0) {
-    return null;
-  }
-  const parsed = new Date(value);
-  return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
 
 function statusConfidence(value: unknown): PayoutStatusConfidence {

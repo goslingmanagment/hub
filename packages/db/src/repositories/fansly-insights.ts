@@ -18,9 +18,10 @@
  *    here and reconstructed by the shared money constructors at the boundary.
  */
 
-import { sql, type SQL } from "drizzle-orm";
+import { sql } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
+import { textArrayLiteralParam as textArrayParam } from "./projection-sql.ts";
 
 function date(value: unknown): Date | null {
   return value == null ? null : new Date(value as string | Date);
@@ -48,21 +49,6 @@ function text(value: unknown): string | null {
 
 function bool(value: unknown): boolean | null {
   return value == null ? null : Boolean(value);
-}
-
-/**
- * ONE bound parameter carrying a Postgres array literal, then cast.
- *
- * NOT `sql`${array}`` — drizzle expands an array chunk into a comma-separated
- * PARAMETER LIST, so `= any($1, $2, $3)` is a syntax error and an EMPTY array
- * expands to nothing at all. The same trap is documented in
- * `fansly-stats.ts:textArrayParam`; this is the read side of it.
- */
-function textArrayParam(values: readonly string[]): SQL {
-  const literal = `{${
-    values.map((value) => `"${value.replace(/(["\\])/g, "\\$1")}"`).join(",")
-  }}`;
-  return sql`${literal}::text[]`;
 }
 
 // ── traffic buckets ──────────────────────────────────────────────────────────

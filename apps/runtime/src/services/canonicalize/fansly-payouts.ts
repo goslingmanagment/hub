@@ -91,7 +91,9 @@
 import {
   asNumber,
   asString,
+  envelopeArray,
   isRecord,
+  pageRefOf,
   type CanonicalEventDraft,
   type CanonicalizableObservation,
   type CanonicalizeRunContext,
@@ -313,10 +315,6 @@ export function decodePayoutMethodMetadata(
   }
 }
 
-function pageRefOf(observation: CanonicalizableObservation): string {
-  return String(observation.accountId);
-}
-
 /**
  * MILLISECOND instants, strictly. `createdAt` and `updatedAt` are 13-digit Unix
  * ms on both payout routes and this family has no seconds field anywhere, so a
@@ -330,23 +328,6 @@ function msInstantIso(value: unknown): string | null {
   }
   const parsed = new Date(raw);
   return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
-}
-
-/** The rows of an array-shaped response, or of the first array-valued key of an
- *  object-shaped one. `/payments/payoutmethods` serves a BARE ARRAY once the
- *  `{success, response}` envelope is unwrapped. */
-function envelopeArray(payload: unknown): Record<string, unknown>[] {
-  if (Array.isArray(payload)) {
-    return payload.filter(isRecord);
-  }
-  if (isRecord(payload)) {
-    for (const value of Object.values(payload)) {
-      if (Array.isArray(value)) {
-        return value.filter(isRecord);
-      }
-    }
-  }
-  return [];
 }
 
 /**

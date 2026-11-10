@@ -50,10 +50,10 @@ import {
   type MediaPlanePlatform,
   type MessageMediaOfferPurchaseState,
 } from "@agency_hub_core/db";
-import { millsFromInteger, type Mills } from "@agency_hub_core/shared";
 import { sql } from "drizzle-orm";
 
 import type { AppContext } from "../../bootstrap.ts";
+import { asInt, asRecordArray, asText, eventData, isoDate, millsOrNull, stringArray } from "./event-fields.ts";
 
 export const MEDIA_PLANE_PROJECTION = "media_plane";
 
@@ -76,62 +76,6 @@ export interface MediaPlaneProjectionResult extends Record<string, unknown> {
   orders: number;
   offers: number;
   locations: number;
-}
-
-function eventData(value: unknown): Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : {};
-}
-
-function asRecordArray(value: unknown): Record<string, unknown>[] {
-  return Array.isArray(value)
-    ? value.filter((item): item is Record<string, unknown> =>
-      typeof item === "object" && item !== null && !Array.isArray(item))
-    : [];
-}
-
-function asText(value: unknown): string | null {
-  return typeof value === "string" && value.length > 0 ? value : null;
-}
-
-function asInt(value: unknown): number | null {
-  return typeof value === "number" && Number.isSafeInteger(value) ? value : null;
-}
-
-/** Event mills travel as decimal STRINGS (JSON cannot carry a bigint, and a
- *  float would re-open the 1000x footgun). Anything else is not money.
- *
- *  Constructed through `millsFromInteger` — the named already-mills constructor,
- *  never a hand-rolled `BigInt(...)`. The shape guards stay in
- *  FRONT of it and are not decoration: the constructor THROWS on a non-digit
- *  string (SyntaxError) and on a non-finite number (RangeError), and a
- *  projector must skip a malformed money field, never crash the sweep. Digits
- *  only ⇒ no sign, no fraction, no exponent; safe non-negative integers only on
- *  the number path, so the constructor's truncation can never silently move a
- *  value. */
-function millsOrNull(value: unknown): Mills | null {
-  if (typeof value === "string" && /^\d+$/.test(value)) {
-    return millsFromInteger(value);
-  }
-  if (typeof value === "number" && Number.isSafeInteger(value) && value >= 0) {
-    return millsFromInteger(value);
-  }
-  return null;
-}
-
-function isoDate(value: unknown): Date | null {
-  if (typeof value !== "string" || value.length === 0) {
-    return null;
-  }
-  const parsed = new Date(value);
-  return Number.isNaN(parsed.getTime()) ? null : parsed;
-}
-
-function stringArray(value: unknown): string[] {
-  return Array.isArray(value)
-    ? value.filter((item): item is string => typeof item === "string" && item.length > 0)
-    : [];
 }
 
 /** Sale counters are NULL when the platform served no saleStats — never 0. */

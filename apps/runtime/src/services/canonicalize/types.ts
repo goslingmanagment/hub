@@ -128,3 +128,40 @@ export function asFanslyTimestamp(value: unknown, fallback: Date): Date {
   }
   return asDate(value, fallback);
 }
+
+// ── helpers the Fansly canonicalizers share (W4-05, A07-07) ─────────────────
+// One copy each of bodies that were written out verbatim in several family
+// files. `fansly-payouts.ts` keeps its own strict `msInstantIso`.
+
+export function pageRefOf(observation: CanonicalizableObservation): string {
+  return String(observation.accountId);
+}
+
+/**
+ * MILLISECOND instants (with the seconds-or-ms heuristic of
+ * `asFanslyTimestamp`). Null stays null — a missing timestamp must never
+ * become 1970.
+ */
+export function msInstantIso(value: unknown): string | null {
+  const raw = asNumber(value);
+  if (raw === null || raw <= 0) {
+    return null;
+  }
+  return asFanslyTimestamp(raw, new Date(0)).toISOString();
+}
+
+/** The rows of an array-shaped response, or of the first array-valued key of an
+ *  object-shaped one (tolerant: unknown keys stay in the journal either way). */
+export function envelopeArray(payload: unknown): Record<string, unknown>[] {
+  if (Array.isArray(payload)) {
+    return payload.filter(isRecord);
+  }
+  if (isRecord(payload)) {
+    for (const value of Object.values(payload)) {
+      if (Array.isArray(value)) {
+        return value.filter(isRecord);
+      }
+    }
+  }
+  return [];
+}
