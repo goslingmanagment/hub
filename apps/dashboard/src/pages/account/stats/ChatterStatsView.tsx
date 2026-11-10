@@ -134,10 +134,10 @@ function Hero({ stats, self, reportTo }: Pick<StatsViewProps, "stats" | "self" |
         <div className="cs-hero-side">
           <h2 className="cs-hero-label">Подтверждено к выплате</h2>
           <p className="cs-hero-second">{money(totals.confirmedNetMills)}</p>
-          {waiting > 0 && (
+          {waiting > 0 && !self && (
             <p className="cs-hero-note">
               {waiting} {ruPlural(waiting, "смена ждёт", "смены ждут", "смен ждут")} подтверждения.{" "}
-              <Link to={reportTo(window.from, window.to)} className="link">{self ? "Подтвердить" : "Выплаты"}</Link>
+              <Link to={reportTo(window.from, window.to)} className="link">Выплаты</Link>
             </p>
           )}
           {late > 0 && (
@@ -270,7 +270,7 @@ function ReportCell({ shift, now, self, reportTo }: { shift: StatsShift; now: nu
     return <StatusBadge tone="good">{`Подтверждён, ${money(shift.confirmedNetMills)}`}</StatusBadge>;
   }
   if (tooOld(shift, now)) return <StatusBadge tone="off" bare>Срок прошёл</StatusBadge>;
-  if (self) return <Link to={reportTo(shift.date, shift.date)} className="link">Подтвердить</Link>;
+  if (self) return <Link to={reportTo(shift.date, shift.date)} className="link">Отчёт</Link>;
   return (
     <Link to={reportTo(shift.date, shift.date)} className="team-link" title="Открыть в выплатах">
       <StatusBadge status={TEAM_STATUS.reportNotConfirmed} bare />
@@ -333,7 +333,7 @@ function HowItCounts({ stats, self }: { stats: Stats; self: boolean }) {
         с {self ? "твоего" : "его"} первого действия на странице. Если страницу в это время вели двое, продажа у того, кто
         последним писал этому фану; если никто из них не писал, она видна у обоих.
       </p>
-      <p>Подтверждено к выплате — суммы из подтверждённых отчётов смен. Подтвердить отчёт можно {SHIFT_REPORT_MAX_DAYS} дней.</p>
+      <p>Подтверждено к выплате — суммы из подтверждённых отчётов смен.{!self && <> Подтвердить отчёт можно {SHIFT_REPORT_MAX_DAYS} дней.</>}</p>
       <p>
         {self
           ? "Это ориентир, а не расчёт зарплаты: к выплате идут подтверждённые отчёты смен и таблица."
