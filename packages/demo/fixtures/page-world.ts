@@ -23,7 +23,7 @@ import {
   type DemoReply,
   type DemoRequest,
 } from "../core.ts";
-import { DEMO_PAGES, demoFans, demoPage, demoUserByRole, type DemoFan, type DemoPage } from "../world.ts";
+import { demoFans, demoPage, demoUserByRole, type DemoFan, type DemoPage } from "../world.ts";
 
 export const HOUR_MS = 60 * 60 * 1000;
 export const DAY_MS = 24 * HOUR_MS;
@@ -563,16 +563,3 @@ export function queryBool(request: DemoRequest, key: string): boolean | undefine
   return undefined;
 }
 
-export function pagesOfPlatform(platform: string): DemoPage[] {
-  return DEMO_PAGES.filter((page) => page.platform === platform);
-}
-
-/** A share of a window's net per transaction type: every page sells its own way. */
-export function revenueMix(page: DemoPage): Record<"subscription" | "tip" | "message_purchase" | "post_purchase" | "stream_tip", number> {
-  const random = rng(`mix:${page.label}`);
-  const sub = page.platform === "onlyfans" ? between(random, 0.3, 0.4) : between(random, 0.14, 0.24);
-  const tip = between(random, 0.22, 0.32);
-  const post = between(random, 0.03, 0.07);
-  const stream = page.platform === "fansly" ? between(random, 0.005, 0.02) : 0;
-  return { subscription: sub, tip, post_purchase: post, stream_tip: stream, message_purchase: Math.max(0, 1 - sub - tip - post - stream) };
-}

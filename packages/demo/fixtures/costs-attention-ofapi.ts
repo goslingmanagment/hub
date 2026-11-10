@@ -103,7 +103,7 @@ const OPERATION_MIX: ReadonlyArray<{ operation: string; share: number; perReques
   { operation: "ofapi_admin_accounts", share: 0.002, perRequest: 1, page: false },
 ];
 
-function operationsOf(day: string, rest: number): Array<{ operation: string; credits: number; perRequest: number; page: boolean }> {
+function operationsOf(rest: number): Array<{ operation: string; credits: number; perRequest: number; page: boolean }> {
   if (rest <= 0) return [];
   const items = OPERATION_MIX.map((mix) => ({ operation: mix.operation, credits: Math.floor(rest * mix.share), perRequest: mix.perRequest, page: mix.page }));
   const placed = items.reduce((sum, item) => sum + item.credits, 0);
@@ -206,7 +206,7 @@ export function adminOfapiCreditsDaily(request: DemoRequest): KernelOperationRes
   const operations = new Map<string, { requests: number; credits: number }>();
   const pageCredits = new Map<string, number>();
   for (const day of days) {
-    for (const item of operationsOf(day, daySources(day, now).rest)) {
+    for (const item of operationsOf(daySources(day, now).rest)) {
       const entry = operations.get(item.operation) ?? { requests: 0, credits: 0 };
       entry.credits += item.credits;
       entry.requests += Math.round(item.credits / item.perRequest);
@@ -270,7 +270,7 @@ function ledgerRows(now: Date): LedgerRow[] {
     const end = Math.min(start + DAY_MS, now.getTime());
     const sources = daySources(day, now);
     const random = rng(`ledger:${day}`);
-    for (const item of operationsOf(day, sources.rest)) {
+    for (const item of operationsOf(sources.rest)) {
       const requests = Math.max(1, Math.round(item.credits / item.perRequest));
       let left = item.credits;
       for (let index = 0; index < requests; index += 1) {

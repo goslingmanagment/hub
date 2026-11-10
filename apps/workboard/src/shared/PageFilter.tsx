@@ -1,9 +1,7 @@
 import { ChevronDown, X } from "lucide-react";
-import { Menu, type MenuEntry } from "@agency_hub_core/ui";
+import { Menu, platformWord, type MenuEntry } from "@agency_hub_core/ui";
 import { usePageFilter } from "./usePageFilter.js";
 import { groupPagesByModel, usePages } from "./usePages.js";
-
-const PLATFORM_WORD: Record<string, string> = { fansly: "Fansly", onlyfans: "OnlyFans", telegram: "Telegram" };
 
 /**
  * The header's page filter: «Все страницы» or one page. A chosen page is an ink
@@ -23,7 +21,7 @@ export function PageFilter() {
       { group: group.modelName },
       ...group.pages.map((item): MenuEntry => ({
         label: item.label,
-        hint: PLATFORM_WORD[item.platform] ?? item.platform,
+        hint: platformWord(item.platform) ?? item.platform,
         checked: page === item.label,
         onSelect: () => setPage(item.label),
       })),

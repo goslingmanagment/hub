@@ -14,7 +14,7 @@
  */
 import type { KernelOperationResponse } from "@agency_hub_core/contracts";
 
-import { between, demoError, hashString, intBetween, iso, queryNumber, queryString, rng, type DemoReply, type DemoRequest } from "../core.ts";
+import { between, demoError, hashString, intBetween, queryNumber, queryString, rng, type DemoReply, type DemoRequest } from "../core.ts";
 import { DEMO_OFAPI_OFF_AT, DEMO_PAGES, demoPage, type DemoPage } from "../world.ts";
 
 type BlocksPage = KernelOperationResponse<"syncOverview">["pages"][number];

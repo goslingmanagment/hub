@@ -374,12 +374,6 @@ export function demoSyncRunDetail(request: DemoRequest): RunDetail | DemoReply {
   };
 }
 
-/** The newest run of the log, for a link that opens a run. */
-export function demoLatestRunId(now: Date): number {
-  const run = runsBetween(now.getTime() - 2 * HOUR, now.getTime(), now.getTime()).find((item) => item.page.label === "mia-of");
-  return run?.runId ?? 0;
-}
-
 // ── the job queue (pg-boss) ──────────────────────────────────────────────────
 
 interface JobPlan {
@@ -470,7 +464,7 @@ const JOBS: readonly JobPlan[] = [
 ];
 
 /** A page's engine work that the worker hands to the sync process, queued by an owner's «Синк сейчас». */
-function syncExecuteJob(at: number, random: () => number): Pick<QueueJob, "data" | "output"> {
+function syncExecuteJob(random: () => number): Pick<QueueJob, "data" | "output"> {
   return { data: { pageLabel: pick(random, fanslyLabels), resources: ["transactions"] }, output: { bumped: intBetween(random, 1, 3) } };
 }
 
@@ -483,7 +477,7 @@ function job(plan: JobPlan | null, at: number, now: number): QueueJob {
   const completed = started + runMs;
   const failure = plan?.fail?.(random, at) ?? null;
   const id = `${(hashHex(`${name}:${at}`))}`;
-  const content = plan ? { data: plan.data(random, at), output: plan.output(random, at) } : syncExecuteJob(at, random);
+  const content = plan ? { data: plan.data(random, at), output: plan.output(random, at) } : syncExecuteJob(random);
   let state: string;
   if (now < started) state = "created";
   else if (now < completed) state = "active";

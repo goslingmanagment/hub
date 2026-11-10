@@ -5,7 +5,6 @@
     "moduleResolution": "Bundler",
     "strict": true,
     "noEmit": true,
-    "baseUrl": ".",
     "paths": {
       "@agency_hub_core/shared": ["../shared/src/browser.ts"],
       "@agency_hub_core/contracts": ["../contracts/src/index.ts"],

@@ -7,7 +7,7 @@
 import type { KernelOperationResponse } from "@agency_hub_core/contracts";
 import { between, demoError, hashString, intBetween, isoDay, pick, queryNumber, queryString, rng, type DemoHandlers, type DemoReply, type DemoRequest } from "../core.ts";
 import { demoFans, type DemoPage } from "../world.ts";
-import { TAGS, dayStats, demoMedia, mediaDay, mediaSales, reachOf, soldInMessages, type DemoMedia } from "./money-creator-stats.ts";
+import { TAGS, demoMedia, mediaDay, mediaSales, reachOf, soldInMessages, type DemoMedia } from "./money-creator-stats.ts";
 import { DAY_MS, ledgerDay, ownerOnly, pageOr404, startOfDayMs, type LedgerType } from "./money-ledger.ts";
 
 type CoverageRow = KernelOperationResponse<"statsCoverage">["planes"][number];
@@ -44,11 +44,6 @@ function iso(ms: number): string {
 
 function day(ms: number): string {
   return isoDay(new Date(ms));
-}
-
-/** The page's Fansly account id, as subjectRef carries it. */
-function accountRef(page: DemoPage): string {
-  return `4${String(hashString(`account:${page.label}`)).padStart(10, "0")}2048`;
 }
 
 /** First day Hub holds the page's account statistics. */
@@ -138,13 +133,6 @@ function coverageFor(page: DemoPage, now: Date, planes: readonly string[]): Cove
 
 type TrafficRow = KernelOperationResponse<"statsTraffic">["rows"][number];
 
-const FAMILIES: ReadonlyArray<{ family: number; label: string; profileSources: readonly number[] }> = [
-  { family: 10000, label: "direct_timeline", profileSources: [1, 4] },
-  { family: 44000, label: "fyp_promotion", profileSources: [0] },
-  { family: 44010, label: "suggestions", profileSources: [2] },
-  { family: 44030, label: "search", profileSources: [3] },
-];
-
 function trafficRow(subjectKind: string, subjectRef: string, bucket: number, now: Date, fields: Partial<TrafficRow> & Pick<TrafficRow, "sourceCode" | "sourceLabel">): TrafficRow {
   return {
     subjectKind,
@@ -168,80 +156,6 @@ function trafficRow(subjectKind: string, subjectRef: string, bucket: number, now
     revisionCount: bucket + DAY_MS > now.getTime() - DAY_MS ? 3 : 1,
     lastObservedAt: iso(Math.min(now.getTime() - 20 * 60_000, bucket + DAY_MS + 2 * 3_600_000)),
     ...fields,
-  };
-}
-
-function statsTraffic(request: DemoRequest): KernelOperationResponse<"statsTraffic"> | DemoReply {
-  const page = ownerPage(request);
-  if (isReply(page)) return page;
-  const window = instantWindow(request);
-  if (isReply(window)) return window;
-  const now = request.now;
-  const subjectKind = queryString(request, "subjectKind") ?? "account_profile";
-  const subjectRef = accountRef(page);
-  const rows: TrafficRow[] = [];
-  if (page.platform === "fansly") {
-    const first = historyStartMs(page, now);
-    for (const bucket of bucketsOf(window.fromMs, window.toMs, now)) {
-      if (bucket < first) continue;
-      const stats = dayStats(page, day(bucket));
-      const random = rng(`traffic:${page.label}:${bucket}`);
-      if (subjectKind === "account_media") {
-        const fyp = stats.views[0]!;
-        const direct = stats.views.slice(1).reduce((acc, item) => ({
-          views: acc.views + item.views, unique: acc.unique + item.unique, video: acc.video + item.video,
-          watchMs: acc.watchMs + item.watchMs, pct: acc.pct + item.watchPctSum,
-        }), { views: 0, unique: 0, video: 0, watchMs: 0, pct: 0 });
-        for (const [code, label, source] of [
-          ["0", "fyp", { views: fyp.views, unique: fyp.unique, video: fyp.video, watchMs: fyp.watchMs, pct: fyp.watchPctSum }],
-          ["1", "direct", direct],
-        ] as const) {
-          const preview = Math.round(source.views * between(random, 0.25, 0.4));
-          rows.push(trafficRow(subjectKind, subjectRef, bucket, now, {
-            sourceCode: code,
-            sourceLabel: label,
-            views: source.views,
-            previewViews: preview,
-            uniqueViewers: source.unique,
-            previewUniqueViewers: Math.round(preview * 0.8),
-            videoViews: source.video,
-            previewVideoViews: Math.round(preview * 0.7),
-            interactionTimeMs: source.watchMs,
-            previewInteractionTimeMs: Math.round(preview * 3_100),
-            // A sum over views in percent; the screen divides it by video views.
-            videoPercentWatchedSum: String(Math.round(source.pct / 100)),
-            previewVideoPercentWatchedSum: null,
-          }));
-        }
-      } else {
-        for (const family of FAMILIES) {
-          // Fansly lists only the sources that had traffic that day.
-          if (family.family === 44010 && random() < 0.4) continue;
-          const visits = family.profileSources.reduce((sum, source) => sum + stats.profile[source]!.visits, 0);
-          const unique = family.profileSources.reduce((sum, source) => sum + stats.profile[source]!.unique, 0);
-          const dwell = family.profileSources.reduce((sum, source) => sum + stats.profile[source]!.watchMs, 0);
-          const base = { family: String(family.family), familyLabel: family.label };
-          rows.push(
-            trafficRow(subjectKind, subjectRef, bucket, now, {
-              ...base, sourceCode: String(family.family + 1), sourceLabel: `${family.label}_visits`, measure: "visits",
-              views: visits, uniqueViewers: unique, interactionTimeMs: 0,
-            }),
-            trafficRow(subjectKind, subjectRef, bucket, now, {
-              ...base, sourceCode: String(family.family), sourceLabel: `${family.label}_dwell`, measure: "dwell",
-              views: Math.round(visits * between(random, 1.15, 1.45)), uniqueViewers: Math.round(unique * 1.1), interactionTimeMs: dwell,
-            }),
-          );
-        }
-      }
-    }
-  }
-  const page_ = paged(rows, request, 500);
-  return {
-    page: { label: page.label, platform: page.platform },
-    window: { from: window.from, to: window.to, periodMs: queryNumber(request, "periodMs", DAY_MS), subjectKind, subjectRef: queryString(request, "subjectRef") ?? null },
-    rows: page_.rows,
-    coverage: coverageFor(page, now, ["stats_account_daily"]),
-    nextCursor: page_.nextCursor,
   };
 }
 
@@ -755,7 +669,6 @@ function statsHoldings(request: DemoRequest): KernelOperationResponse<"statsHold
 }
 
 export const insightsHandlers: DemoHandlers = {
-  statsTraffic,
   statsMedia,
   statsTags,
   statsCoverage,

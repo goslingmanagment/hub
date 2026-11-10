@@ -208,8 +208,3 @@ export function consoleHref(path: string): string {
 export function consoleFanHref(pageLabel: string, platform: string, fanRef: string): string {
   return consoleHref(`/fans/${encodeURIComponent(pageLabel)}/${encodeURIComponent(platform)}/${encodeURIComponent(fanRef)}`);
 }
-
-/** The console's card of a page. */
-export function consolePageHref(pageLabel: string): string {
-  return consoleHref(`/pages/${encodeURIComponent(pageLabel)}`);
-}

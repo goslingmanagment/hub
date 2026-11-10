@@ -46,10 +46,11 @@ import type { KernelOperationResponse } from "@agency_hub_core/contracts";
 import { millsToNumber, sumMills } from "@agency_hub_core/shared";
 import { addDays, daysInRange, moscowDayEnd, moscowDayOf } from "@agency_hub_core/ui/moscow";
 import type { ResolvedPeriod } from "@agency_hub_core/ui/period";
+import { median } from "@agency_hub_core/ui/shiftReview";
 import { CHATTER_SHIFTS_MAX_WINDOW_DAYS } from "@agency_hub_core/contracts";
 import { kernel } from "@/shared/hub";
 import { MAX_DAYS, MIN_SAMPLE, priceView, readWindow, speedView, useSalesPpv, useSalesReplies, type ReadWindow } from "@/screens/sales/data";
-import { averageQuality, qualityOfChatterNumbers, type PeriodQuality as AveragedQuality, type ShiftQuality } from "@/shared/metrics";
+import { averageQuality, perHourMills, qualityOfChatterNumbers, type PeriodQuality as AveragedQuality, type ShiftQuality } from "@/shared/metrics";
 import { useMe } from "@/shared/useMe";
 
 const MINUTE = 60_000;
@@ -205,17 +206,6 @@ export function statsDays(period: ResolvedPeriod, today: string): number | null 
 }
 
 // ─────────────────────────────────────────────── Small pure helpers
-
-function perHour(netMills: number, minutes: number): number | null {
-  if (minutes <= 0) return null;
-  return Number((BigInt(netMills) * 60n) / BigInt(minutes));
-}
-
-/** A change in percent; null when there is nothing to compare with. */
-export function changePct(current: number | null | undefined, previous: number | null | undefined): number | null {
-  if (current === null || current === undefined || previous === null || previous === undefined || previous <= 0) return null;
-  return ((current - previous) / previous) * 100;
-}
 
 function shiftNumbersOf(block: NumbersBlock): ShiftNumbers {
   return {
@@ -393,13 +383,6 @@ export interface PeopleList {
   stale: boolean;
   refresh: () => void;
   retryQuality: () => void;
-}
-
-function median(values: readonly number[]): number | null {
-  if (values.length === 0) return null;
-  const sorted = [...values].sort((a, b) => a - b);
-  const middle = Math.floor(sorted.length / 2);
-  return sorted.length % 2 === 1 ? sorted[middle]! : (sorted[middle - 1]! + sorted[middle]!) / 2;
 }
 
 export function usePeopleList(period: ResolvedPeriod, page: string | null): PeopleList {
@@ -600,7 +583,7 @@ export function usePersonCard(userId: number, period: ResolvedPeriod, page: stri
         salesNetMills: shift.salesNetMills,
         overlapNetMills: shift.overlapNetMills,
         sales: shift.sales,
-        perHourMills: perHour(shift.salesNetMills, shift.workedMinutes),
+        perHourMills: perHourMills(shift.salesNetMills, shift.workedMinutes),
         numbers: qualityState !== "ready" ? undefined : block ? shiftNumbersOf(block) : null,
         saleList,
       };

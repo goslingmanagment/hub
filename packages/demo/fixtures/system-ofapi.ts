@@ -10,7 +10,7 @@
 import type { KernelOperationResponse } from "@agency_hub_core/contracts";
 import { OFAPI_READ_CATALOG } from "@agency_hub_core/shared";
 
-import { between, demoError, hashString, intBetween, mills, pick, queryNumber, queryString, rng, type DemoReply, type DemoRequest } from "../core.ts";
+import { between, demoError, intBetween, mills, queryNumber, queryString, rng, type DemoReply, type DemoRequest } from "../core.ts";
 import { DEMO_OFAPI_OFF_AT, DEMO_PAGES, demoFans, type DemoPage } from "../world.ts";
 
 const MINUTE = 60_000;

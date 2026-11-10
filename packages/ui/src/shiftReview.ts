@@ -1,6 +1,4 @@
 import {
-  SHIFT_REVIEW_FAN_QUIET_SECONDS,
-  SHIFT_REVIEW_AI_UNEDITED_MIN_SHARE,
   SHIFT_REVIEW_REPLY_NORM_SECONDS,
   shiftReviewAiUnedited,
   shiftReviewCounts,
@@ -52,10 +50,6 @@ export const REPLY_FAST_SECONDS = 5 * 60;
 export const REPLY_NORM_SECONDS = SHIFT_REVIEW_REPLY_NORM_SECONDS;
 /** A click on the pulse picks this many minutes on each side. */
 export const PICK_MINUTES = 10;
-/** A silence this long inside a chat gets a line of its own in the transcript. */
-export const GAP_MINUTES = 15;
-/** A fan quiet this long inside a wait, who then wrote again, came back (see `fanReturnOf`). */
-export const FAN_QUIET_SECONDS = SHIFT_REVIEW_FAN_QUIET_SECONDS;
 
 /**
  * A wait as the screen writes it. Under 20 minutes to the second, so 9 мин 49 с
@@ -574,9 +568,6 @@ function isPing(mine: Pick<MineFacts, "composedWith" | "aiFeature">): boolean {
   return mine.composedWith === "ping" || mine.aiFeature === "ping";
 }
 
-/** An AI text whose words match the sent text at least this much went out as it was. */
-export const AI_UNEDITED_MIN_SHARE = SHIFT_REVIEW_AI_UNEDITED_MIN_SHARE;
-
 /** «ИИ без правки» (contracts' `shiftReviewAiUnedited`): the transcript's quiet mark of a message and the shift's share are this one rule. */
 export const aiUnedited = shiftReviewAiUnedited;
 
@@ -603,13 +594,6 @@ export function shiftQuality(totals: Pick<ShiftTotals, "replyMedianSeconds" | "u
     unansweredAtEnd: totals.unanswered,
     aiUneditedShare: totals.textMessages === 0 ? null : totals.aiUnedited / totals.textMessages,
   };
-}
-
-/** The quality of a whole review answer: waits, summaries, totals, then `shiftQuality`. */
-export function reviewQuality(data: TeamShiftReviewResponse): ShiftQuality {
-  const waits = reviewWaits(data);
-  const summaries = summariesOf(data, waits);
-  return shiftQuality(totalsOf(data, myMessages(data), summaries, waits));
 }
 
 /** The fields of a shift's numbers in `teamChatterNumbers` its quality reads. */
@@ -799,42 +783,6 @@ export function summariesOf(data: TeamShiftReviewResponse, allWaits: readonly Re
       lastFanBeforeText: fan.length > 0 ? null : textOf([...chat.messages].reverse().find((message) => !message.inShift && isFans(message) && message.text.trim() !== "")),
     };
   });
-}
-
-export const CHAT_KINDS = ["dialog", "touch", "colleague", "waiting", "all"] as const;
-export type ChatKindFilter = (typeof CHAT_KINDS)[number];
-export const CHAT_SHOWS = ["all", "waited", "unanswered", "money"] as const;
-export type ChatShow = (typeof CHAT_SHOWS)[number];
-export const CHAT_SORTS = ["messages", "time", "wait", "money"] as const;
-export type ChatSort = (typeof CHAT_SORTS)[number];
-
-export function kindPasses(summary: ChatSummary, kind: ChatKindFilter): boolean {
-  return kind === "all" || summary.kind === kind;
-}
-
-export function showPasses(summary: ChatSummary, show: ChatShow): boolean {
-  switch (show) {
-    case "all": return true;
-    case "waited": return summary.longestWaitSeconds !== null && summary.longestWaitSeconds > REPLY_NORM_SECONDS;
-    case "unanswered": return summary.unansweredInShift;
-    case "money": return summary.ppv > 0 || summary.heldNetMills > 0;
-  }
-}
-
-/** The list in the chosen order; ties keep the server's order (by the first message in the shift). */
-export function sortSummaries(list: readonly ChatSummary[], sort: ChatSort): ChatSummary[] {
-  const key = (summary: ChatSummary): [number, number] => {
-    switch (sort) {
-      case "messages": return [-(summary.mine + summary.fan), summary.openSince ?? Number.MAX_SAFE_INTEGER];
-      case "time": return [summary.first ?? summary.openSince ?? Number.MAX_SAFE_INTEGER, 0];
-      // A goodbye left without an answer is not a long wait to look at first.
-      case "wait": return [-Math.max(summary.longestWaitSeconds ?? -1, summary.openNoNeed ? -1 : summary.openWaitSeconds ?? -1), summary.openSince ?? Number.MAX_SAFE_INTEGER];
-      case "money": return [-summary.heldNetMills, -summary.ppv];
-    }
-  };
-  return list.map((summary, index) => ({ summary, index, key: key(summary) }))
-    .sort((a, b) => a.key[0] - b.key[0] || a.key[1] - b.key[1] || a.index - b.index)
-    .map((one) => one.summary);
 }
 
 /**

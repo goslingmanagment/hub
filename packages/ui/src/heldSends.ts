@@ -36,11 +36,6 @@ function onPlatform(platform: string | null | undefined): string {
   return word ? `на ${word}` : "там, где вы работаете с этой страницей";
 }
 
-/** «там, где вы работаете с Fansly»; without a known platform — with this page. */
-function whereYouWork(platform: string | null | undefined): string {
-  return `там, где вы работаете с ${platformWord(platform) ?? "этой страницей"}`;
-}
-
 const PURPOSE_LABELS: Readonly<Record<string, string>> = {
   greeting: "Приветствие",
   "preview-reply": "Ответ из превью",
@@ -118,13 +113,6 @@ export function greetingCell(item: Pick<Item, "purpose" | "greeting">, formatAt:
     };
   }
   return { label: "Есть", hint: how === "" ? null : `${how}${when}`, sentByHand: false };
-}
-
-/** What the resolver does before answering, for the send's platform (the console's words, the platform named). */
-export function resolveIntro(platform: string | null | undefined): string {
-  return "Расширение отправило это сообщение из превью и не сообщило, чем кончилось. Hub не знает, ушло ли оно, "
-    + `и сам не узнает. Откройте чат с этим фаном ${whereYouWork(platform)}, и найдите исходящее сообщение около `
-    + "указанного времени. На этой странице текста нет: Hub не знает, какой текст ушёл, это знает сотрудник.";
 }
 
 /** The label of the optional message id, for the send's platform. */

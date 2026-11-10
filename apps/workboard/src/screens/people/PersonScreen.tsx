@@ -3,7 +3,7 @@ import { useLocation, useNavigate, useParams } from "react-router";
 import { Badge, Card, EmptyState, ErrorState, LinkButton, Money, Skeleton, StatusDot, Tabs, Tooltip } from "@agency_hub_core/ui";
 import { ruPlural } from "@agency_hub_core/ui/plural";
 import { carryParams, personPath, ShiftLink, useBackTarget, type PersonTab } from "@/shared/links";
-import { PersonAccessPanel } from "@/shared/PersonAccessPanel";
+import { PersonAccess } from "@/screens/access/PersonAccess";
 import { ScreenHeader } from "@/shared/ScreenHeader";
 import { usePageFilter } from "@/shared/usePageFilter";
 import { usePages } from "@/shared/usePages";
@@ -86,7 +86,7 @@ export function PersonScreen() {
       />
       <div className="wb-content">
         {current === "access" ? (
-          <PersonAccessPanel userId={id} variant="page" onChanged={card.refresh} />
+          <PersonAccess userId={id} variant="page" onChanged={card.refresh} />
         ) : card.tooLong ? (
           <Card>
             <EmptyState title="Период длиннее 31 дня">Hub считает смены не больше чем за 31 день. Выберите период короче.</EmptyState>
