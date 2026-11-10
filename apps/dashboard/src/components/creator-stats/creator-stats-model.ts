@@ -1,4 +1,5 @@
 import type { CreatorStatsOverviewResponse } from "@agency_hub_core/contracts";
+import { addDays } from "@agency_hub_core/ui/moscow";
 
 import { businessDateRange } from "@/components/charts/scale";
 import { formatBusinessDateShort, formatDuration, formatSeconds } from "@/lib/format";
@@ -160,10 +161,8 @@ export function windowDays(stats: { window: { fromDay: string; toDay: string } }
   return businessDateRange(stats.window.fromDay, stats.window.toDay);
 }
 
-/** The UTC day `days` before or after `day`. */
-export function shiftDay(day: string, days: number): string {
-  return new Date(Date.parse(`${day}T00:00:00Z`) + days * DAY_MS).toISOString().slice(0, 10);
-}
+/** The UTC day `days` before or after `day`: calendar arithmetic, the same for a UTC and a Moscow day. */
+export const shiftDay = addDays;
 
 export interface StatsWindow {
   fromDay: string;

@@ -6,6 +6,7 @@
  *   @agency_hub_core/ui/format    money, counts, percents, durations, Moscow dates
  *   @agency_hub_core/ui/plural    Russian plural forms
  *   @agency_hub_core/ui/moscow    Moscow days: today, Monday, ranges, instants
+ *   @agency_hub_core/ui/ribbon    the shift ribbon's clock: where its rows start, which row an instant is in
  *   @agency_hub_core/ui/period    the period model (week · 14 · 30 · own range) and its address
  *   @agency_hub_core/ui/theme     light / dark / as the system, shared by both apps
  *   @agency_hub_core/ui/hubClient the Hub API client on the cookie session
