@@ -1252,91 +1252,90 @@ export async function listRankedSpenders(
     .where(inArray(spenderLifetimePage.platformAccountId, input.pageIds))
     .groupBy(spenderLifetimePage.fanId)
     .as("lifetime_metrics");
-  const primaryConversations = db.select({
-    fanId: pageDmConversations.fanId,
-    platformConversationId: pageDmConversations.platformConversationId,
-    unreadCount: pageDmConversations.unreadCount,
-    lastMessageAt: pageDmConversations.lastMessageAt,
-    lastFanMessageAt: pageDmConversations.lastFanMessageAt,
-    lastModelMessageAt: pageDmConversations.lastModelMessageAt,
-    lastMessagePreview: pageDmConversations.lastMessagePreview,
-    storedMessageCount: pageDmConversations.storedMessageCount,
-    messageCoverageStatus: pageDmConversations.messageCoverageStatus,
-    messageBackfillComplete: pageDmConversations.messageBackfillComplete,
-    rn: sql<number>`row_number() over (
-      partition by ${pageDmConversations.fanId}
-      order by ${pageDmConversations.lastMessageAt} desc nulls last,
-               ${pageDmConversations.platformConversationId} desc
-    )`.as("rn"),
-  }).from(pageDmConversations)
-    .where(and(
-      inArray(pageDmConversations.platformAccountId, input.pageIds),
-      eq(pageDmConversations.isVisible, true),
-      sql`${pageDmConversations.fanId} is not null`,
-    ))
-    .as("primary_conversations");
-  const latestTransactions = db.select({
-    fanId: transactions.fanId,
-    canonicalType: transactions.canonicalType,
-    transactionState: settledTransactionState().as("transaction_state"),
-    grossAmountMills: transactions.grossAmountMills,
-    creatorNetAmountMills: transactions.creatorNetAmountMills,
-    occurredAt: transactions.occurredAt,
-    rn: sql<number>`row_number() over (
-      partition by ${transactions.fanId}
-      order by ${transactions.occurredAt} desc,
-               ${transactions.id} desc
-    )`.as("rn"),
-  }).from(transactions)
-    .where(and(
-      inArray(transactions.platformAccountId, input.pageIds),
-      eq(transactions.isActive, true),
-      sql`${transactions.fanId} is not null`,
-      inArray(
-        transactions.canonicalType,
-        spenderAnalyticsTransactionTypes as Array<typeof transactions.$inferSelect.canonicalType>,
-      ),
-    ))
-    .as("latest_transactions");
+  const lifetimeMetricFields = {
+    grossAmountMills: qualifiedSubqueryColumn<bigint>("lifetime_metrics", "lifetime_gross_amount_mills"),
+    creatorNetAmountMills: qualifiedSubqueryColumn<bigint>("lifetime_metrics", "lifetime_creator_net_amount_mills"),
+    lastTransactionAt: qualifiedSubqueryColumn<Date | null>("lifetime_metrics", "lifetime_last_transaction_at"),
+  };
 
+  const baseQueryClause = buildSpenderQueryClause(input.query, input);
+  const retentionClause = buildRetentionFilterSql(
+    input.retentionStatus,
+    lifetimeMetricFields.lastTransactionAt,
+    lifetimeMetricFields.creatorNetAmountMills,
+    now,
+    { fanId: fans.id, pageIds: input.pageIds },
+  );
+  const whereClause = retentionClause ? and(baseQueryClause, retentionClause)! : baseQueryClause;
+  const singlePageId = input.pageIds.length === 1 ? input.pageIds[0]! : null;
+
+  // The ranking runs over the metrics and `fans` only: filter, sort and cut the
+  // page there, then look up the newest thread, the newest transaction and the
+  // page link for the returned fans alone (A12-06). Every sort key comes from
+  // the metrics or `fans`, and the last key (fans.id) is unique, so the cut
+  // and the order are the same as when the lookups were joined first.
+  const rankedSelection = (
+    metrics: {
+      grossAmountMills: SQL<bigint>;
+      creatorNetAmountMills: SQL<bigint>;
+      postedGrossAmountMills: SQL<bigint>;
+      pendingGrossAmountMills: SQL<bigint>;
+      unknownGrossAmountMills: SQL<bigint>;
+      postedCreatorNetAmountMills: SQL<bigint>;
+      pendingCreatorNetAmountMills: SQL<bigint>;
+      unknownCreatorNetAmountMills: SQL<bigint>;
+      transactionCount: SQL<number>;
+      lastTransactionAt: SQL<Date | null>;
+      lifetimeGrossAmountMills: SQL<bigint>;
+      lifetimeCreatorNetAmountMills: SQL<bigint>;
+      lifetimeLastTransactionAt: SQL<Date | null>;
+    },
+    sortField: SQLWrapper,
+  ) => ({
+    total: sql<number>`count(*) over()::int`.as("ranked_total"),
+    fanId: fans.id,
+    platform: fans.platform,
+    platformUserId: fans.platformUserId,
+    username: fans.username,
+    displayName: fans.displayName,
+    createdAtExternal: fans.createdAtExternal,
+    grossAmountMills: sql<bigint>`${metrics.grossAmountMills}`.as("ranked_gross_amount_mills"),
+    creatorNetAmountMills: sql<bigint>`${metrics.creatorNetAmountMills}`.as("ranked_creator_net_amount_mills"),
+    postedGrossAmountMills: sql<bigint>`${metrics.postedGrossAmountMills}`.as("ranked_posted_gross_amount_mills"),
+    pendingGrossAmountMills: sql<bigint>`${metrics.pendingGrossAmountMills}`.as("ranked_pending_gross_amount_mills"),
+    unknownGrossAmountMills: sql<bigint>`${metrics.unknownGrossAmountMills}`.as("ranked_unknown_gross_amount_mills"),
+    postedCreatorNetAmountMills: sql<bigint>`${metrics.postedCreatorNetAmountMills}`.as("ranked_posted_creator_net_amount_mills"),
+    pendingCreatorNetAmountMills: sql<bigint>`${metrics.pendingCreatorNetAmountMills}`.as("ranked_pending_creator_net_amount_mills"),
+    unknownCreatorNetAmountMills: sql<bigint>`${metrics.unknownCreatorNetAmountMills}`.as("ranked_unknown_creator_net_amount_mills"),
+    transactionCount: sql<number>`${metrics.transactionCount}`.as("ranked_transaction_count"),
+    lastTransactionAt: sql<Date | null>`${metrics.lastTransactionAt}`.as("ranked_last_transaction_at"),
+    lifetimeGrossAmountMills: sql<bigint>`${metrics.lifetimeGrossAmountMills}`.as("ranked_lifetime_gross_amount_mills"),
+    lifetimeCreatorNetAmountMills: sql<bigint>`${metrics.lifetimeCreatorNetAmountMills}`.as("ranked_lifetime_creator_net_amount_mills"),
+    lifetimeLastTransactionAt: sql<Date | null>`${metrics.lifetimeLastTransactionAt}`.as("ranked_lifetime_last_transaction_at"),
+    sortKey: sql`${sortField}`.as("ranked_sort_key"),
+  });
+  const orderByField = (field: SQLWrapper) => input.sortDir === "asc" ? asc(field) : desc(field);
+
+  let ranked;
+  let loadTotal: () => Promise<number>;
   if (input.period === "lifetime") {
-    const baseQueryClause = buildSpenderQueryClause(input.query, input);
-    const retentionClause = buildRetentionFilterSql(
-      input.retentionStatus,
-      qualifiedSubqueryColumn<Date | null>("lifetime_metrics", "lifetime_last_transaction_at"),
-      qualifiedSubqueryColumn<bigint>("lifetime_metrics", "lifetime_creator_net_amount_mills"),
-      now,
-      { fanId: fans.id, pageIds: input.pageIds },
-    );
-    const whereClause = retentionClause ? and(baseQueryClause, retentionClause)! : baseQueryClause;
-    const singlePageId = input.pageIds.length === 1 ? input.pageIds[0]! : null;
-
     const sortFieldMap = {
-      grossAmountMills: lifetimeMetrics.grossAmountMills,
-      creatorNetAmountMills: lifetimeMetrics.creatorNetAmountMills,
-      postedGrossAmountMills: lifetimeMetrics.grossAmountMills,
-      pendingGrossAmountMills: lifetimeMetrics.grossAmountMills,
-      postedCreatorNetAmountMills: lifetimeMetrics.creatorNetAmountMills,
-      pendingCreatorNetAmountMills: lifetimeMetrics.creatorNetAmountMills,
-      lifetimeGrossAmountMills: lifetimeMetrics.grossAmountMills,
-      lifetimeCreatorNetAmountMills: lifetimeMetrics.creatorNetAmountMills,
-      lastTransactionAt: lifetimeMetrics.lastTransactionAt,
+      grossAmountMills: lifetimeMetricFields.grossAmountMills,
+      creatorNetAmountMills: lifetimeMetricFields.creatorNetAmountMills,
+      postedGrossAmountMills: lifetimeMetricFields.grossAmountMills,
+      pendingGrossAmountMills: lifetimeMetricFields.grossAmountMills,
+      postedCreatorNetAmountMills: lifetimeMetricFields.creatorNetAmountMills,
+      pendingCreatorNetAmountMills: lifetimeMetricFields.creatorNetAmountMills,
+      lifetimeGrossAmountMills: lifetimeMetricFields.grossAmountMills,
+      lifetimeCreatorNetAmountMills: lifetimeMetricFields.creatorNetAmountMills,
+      lastTransactionAt: lifetimeMetricFields.lastTransactionAt,
       platformUserId: fans.platformUserId,
       username: fans.username,
       displayName: fans.displayName,
-    } satisfies Record<SpenderSortBy, typeof lifetimeMetrics.grossAmountMills | typeof lifetimeMetrics.lastTransactionAt | typeof fans.platformUserId | typeof fans.username | typeof fans.displayName>;
-
+    } satisfies Record<SpenderSortBy, SQLWrapper>;
     const sortField = sortFieldMap[input.sortBy];
-    const orderBy = input.sortDir === "asc" ? asc(sortField) : desc(sortField);
-    const rows = await db.select({
-      total: sql<number>`count(*) over()::int`,
-      fanId: fans.id,
-      platform: fans.platform,
-      platformUserId: fans.platformUserId,
-      pageAlias: singlePageId === null ? sql<string | null>`null` : fanPages.pageAlias,
-      username: fans.username,
-      displayName: fans.displayName,
-      createdAtExternal: fans.createdAtExternal,
+
+    ranked = db.select(rankedSelection({
       grossAmountMills: sql<bigint>`0::bigint`,
       creatorNetAmountMills: sql<bigint>`0::bigint`,
       postedGrossAmountMills: sql<bigint>`0::bigint`,
@@ -1346,49 +1345,18 @@ export async function listRankedSpenders(
       pendingCreatorNetAmountMills: sql<bigint>`0::bigint`,
       unknownCreatorNetAmountMills: sql<bigint>`0::bigint`,
       transactionCount: sql<number>`0::int`,
-      lastTransactionAt: lifetimeMetrics.lastTransactionAt,
-      lastFanMessageAt: primaryConversations.lastFanMessageAt,
-      conversationPlatformConversationId: primaryConversations.platformConversationId,
-      conversationUnreadCount: sql<number>`coalesce(${primaryConversations.unreadCount}, 0)::int`,
-      conversationLastMessageAt: primaryConversations.lastMessageAt,
-      conversationLastFanMessageAt: primaryConversations.lastFanMessageAt,
-      conversationLastModelMessageAt: primaryConversations.lastModelMessageAt,
-      conversationLastMessagePreview: primaryConversations.lastMessagePreview,
-      conversationStoredMessageCount: sql<number>`coalesce(${primaryConversations.storedMessageCount}, 0)::int`,
-      conversationMessageCoverageStatus: sql<"pending_backfill" | "partial_window" | "complete">`coalesce(${primaryConversations.messageCoverageStatus}, 'pending_backfill'::dm_message_coverage_status)`,
-      conversationMessageBackfillComplete: sql<boolean>`coalesce(${primaryConversations.messageBackfillComplete}, false)`,
-      lastTransactionCanonicalType: latestTransactions.canonicalType,
-      lastTransactionState: latestTransactions.transactionState,
-      lastTransactionGrossAmountMills: latestTransactions.grossAmountMills,
-      lastTransactionCreatorNetAmountMills: latestTransactions.creatorNetAmountMills,
-      lastTransactionOccurredAt: latestTransactions.occurredAt,
-      lifetimeGrossAmountMills: lifetimeMetrics.grossAmountMills,
-      lifetimeCreatorNetAmountMills: lifetimeMetrics.creatorNetAmountMills,
-      lifetimeLastTransactionAt: lifetimeMetrics.lastTransactionAt,
-      accountProbeAt: singlePageId === null ? sql<Date | null>`null` : fanPages.accountProbeAt,
-      accountProbeResolved: singlePageId === null ? sql<boolean | null>`null` : fanPages.accountProbeResolved,
-    }).from(lifetimeMetrics)
+      lastTransactionAt: lifetimeMetricFields.lastTransactionAt,
+      lifetimeGrossAmountMills: lifetimeMetricFields.grossAmountMills,
+      lifetimeCreatorNetAmountMills: lifetimeMetricFields.creatorNetAmountMills,
+      lifetimeLastTransactionAt: lifetimeMetricFields.lastTransactionAt,
+    }, sortField)).from(lifetimeMetrics)
       .innerJoin(fans, eq(fans.id, lifetimeMetrics.fanId))
-      .leftJoin(primaryConversations, and(
-        eq(primaryConversations.fanId, lifetimeMetrics.fanId),
-        eq(qualifiedSubqueryColumn<number>("primary_conversations", "rn"), 1),
-      ))
-      .leftJoin(latestTransactions, and(
-        eq(latestTransactions.fanId, lifetimeMetrics.fanId),
-        eq(qualifiedSubqueryColumn<number>("latest_transactions", "rn"), 1),
-      ))
-      .leftJoin(fanPages, singlePageId === null
-        ? sql`false`
-        : and(
-          eq(fanPages.platformAccountId, singlePageId),
-          eq(fanPages.fanId, lifetimeMetrics.fanId),
-        ))
       .where(whereClause)
-      .orderBy(orderBy, asc(fans.platformUserId), asc(fans.id))
+      .orderBy(orderByField(sortField), asc(fans.platformUserId), asc(fans.id))
       .limit(input.limit)
-      .offset(input.offset);
-
-    const total = await resolvePagedTotal(input, rows, async () => {
+      .offset(input.offset)
+      .as("ranked");
+    loadTotal = async () => {
       const [countRow] = await db.select({
         total: sql<number>`count(*)::int`,
       }).from(lifetimeMetrics)
@@ -1396,154 +1364,178 @@ export async function listRankedSpenders(
         .where(whereClause);
 
       return countRow?.total ?? 0;
-    });
+    };
+  } else {
+    if (!input.fromBusinessDate || !input.toBusinessDateExclusive) {
+      throw new Error("Window spender ranking requires from/to business dates");
+    }
 
-    return {
-      total,
-      items: rows.map(({ total: _total, ...item }) => item),
+    const currentMetrics = db.select({
+      fanId: spenderDailyFacts.fanId,
+      grossAmountMills: sql<bigint>`coalesce(sum(${spenderDailyFacts.grossAmountMills}), 0)::bigint`.as("gross_amount_mills"),
+      creatorNetAmountMills: sql<bigint>`coalesce(sum(${spenderDailyFacts.creatorNetAmountMills}), 0)::bigint`.as("creator_net_amount_mills"),
+      postedGrossAmountMills: sql<bigint>`coalesce(sum(case when ${spenderDailyFacts.transactionState} = 'posted'::transaction_state then ${spenderDailyFacts.grossAmountMills} else 0 end), 0)::bigint`.as("posted_gross_amount_mills"),
+      pendingGrossAmountMills: sql<bigint>`coalesce(sum(case when ${spenderDailyFacts.transactionState} = 'pending'::transaction_state then ${spenderDailyFacts.grossAmountMills} else 0 end), 0)::bigint`.as("pending_gross_amount_mills"),
+      unknownGrossAmountMills: sql<bigint>`coalesce(sum(case when ${spenderDailyFacts.transactionState} = 'unknown'::transaction_state then ${spenderDailyFacts.grossAmountMills} else 0 end), 0)::bigint`.as("unknown_gross_amount_mills"),
+      postedCreatorNetAmountMills: sql<bigint>`coalesce(sum(case when ${spenderDailyFacts.transactionState} = 'posted'::transaction_state then ${spenderDailyFacts.creatorNetAmountMills} else 0 end), 0)::bigint`.as("posted_creator_net_amount_mills"),
+      pendingCreatorNetAmountMills: sql<bigint>`coalesce(sum(case when ${spenderDailyFacts.transactionState} = 'pending'::transaction_state then ${spenderDailyFacts.creatorNetAmountMills} else 0 end), 0)::bigint`.as("pending_creator_net_amount_mills"),
+      unknownCreatorNetAmountMills: sql<bigint>`coalesce(sum(case when ${spenderDailyFacts.transactionState} = 'unknown'::transaction_state then ${spenderDailyFacts.creatorNetAmountMills} else 0 end), 0)::bigint`.as("unknown_creator_net_amount_mills"),
+      transactionCount: sql<number>`coalesce(sum(${spenderDailyFacts.transactionCount}), 0)::int`.as("transaction_count"),
+      lastTransactionAt: sql<Date | null>`max(${spenderDailyFacts.lastTransactionAt})`.as("last_transaction_at"),
+    }).from(spenderDailyFacts)
+      .where(and(
+        inArray(spenderDailyFacts.platformAccountId, input.pageIds),
+        gte(spenderDailyFacts.businessDate, input.fromBusinessDate),
+        lt(spenderDailyFacts.businessDate, input.toBusinessDateExclusive),
+      ))
+      .groupBy(spenderDailyFacts.fanId)
+      .as("current_metrics");
+    const currentMetricFields = {
+      grossAmountMills: qualifiedSubqueryColumn<bigint>("current_metrics", "gross_amount_mills"),
+      creatorNetAmountMills: qualifiedSubqueryColumn<bigint>("current_metrics", "creator_net_amount_mills"),
+      postedGrossAmountMills: qualifiedSubqueryColumn<bigint>("current_metrics", "posted_gross_amount_mills"),
+      pendingGrossAmountMills: qualifiedSubqueryColumn<bigint>("current_metrics", "pending_gross_amount_mills"),
+      unknownGrossAmountMills: qualifiedSubqueryColumn<bigint>("current_metrics", "unknown_gross_amount_mills"),
+      postedCreatorNetAmountMills: qualifiedSubqueryColumn<bigint>("current_metrics", "posted_creator_net_amount_mills"),
+      pendingCreatorNetAmountMills: qualifiedSubqueryColumn<bigint>("current_metrics", "pending_creator_net_amount_mills"),
+      unknownCreatorNetAmountMills: qualifiedSubqueryColumn<bigint>("current_metrics", "unknown_creator_net_amount_mills"),
+      transactionCount: qualifiedSubqueryColumn<number>("current_metrics", "transaction_count"),
+      lastTransactionAt: qualifiedSubqueryColumn<Date | null>("current_metrics", "last_transaction_at"),
+    };
+    const sortFieldMap = {
+      grossAmountMills: currentMetricFields.grossAmountMills,
+      creatorNetAmountMills: currentMetricFields.creatorNetAmountMills,
+      postedGrossAmountMills: currentMetricFields.postedGrossAmountMills,
+      pendingGrossAmountMills: currentMetricFields.pendingGrossAmountMills,
+      postedCreatorNetAmountMills: currentMetricFields.postedCreatorNetAmountMills,
+      pendingCreatorNetAmountMills: currentMetricFields.pendingCreatorNetAmountMills,
+      lifetimeGrossAmountMills: lifetimeMetricFields.grossAmountMills,
+      lifetimeCreatorNetAmountMills: lifetimeMetricFields.creatorNetAmountMills,
+      lastTransactionAt: currentMetricFields.lastTransactionAt,
+      platformUserId: fans.platformUserId,
+      username: fans.username,
+      displayName: fans.displayName,
+    } satisfies Record<SpenderSortBy, SQLWrapper>;
+    const sortField = sortFieldMap[input.sortBy];
+
+    ranked = db.select(rankedSelection({
+      ...currentMetricFields,
+      lifetimeGrossAmountMills: sql<bigint>`coalesce(${lifetimeMetricFields.grossAmountMills}, 0)::bigint`,
+      lifetimeCreatorNetAmountMills: sql<bigint>`coalesce(${lifetimeMetricFields.creatorNetAmountMills}, 0)::bigint`,
+      lifetimeLastTransactionAt: lifetimeMetricFields.lastTransactionAt,
+    }, sortField)).from(currentMetrics)
+      .innerJoin(fans, eq(fans.id, currentMetrics.fanId))
+      .leftJoin(lifetimeMetrics, eq(lifetimeMetrics.fanId, currentMetrics.fanId))
+      .where(whereClause)
+      .orderBy(orderByField(sortField), asc(fans.platformUserId), asc(fans.id))
+      .limit(input.limit)
+      .offset(input.offset)
+      .as("ranked");
+    loadTotal = async () => {
+      const [countRow] = await db.select({
+        total: sql<number>`count(*)::int`,
+      }).from(currentMetrics)
+        .innerJoin(fans, eq(fans.id, currentMetrics.fanId))
+        .leftJoin(lifetimeMetrics, eq(lifetimeMetrics.fanId, currentMetrics.fanId))
+        .where(whereClause);
+
+      return countRow?.total ?? 0;
     };
   }
 
-  if (!input.fromBusinessDate || !input.toBusinessDateExclusive) {
-    throw new Error("Window spender ranking requires from/to business dates");
-  }
-
-  const currentMetrics = db.select({
-    fanId: spenderDailyFacts.fanId,
-    grossAmountMills: sql<bigint>`coalesce(sum(${spenderDailyFacts.grossAmountMills}), 0)::bigint`.as("gross_amount_mills"),
-    creatorNetAmountMills: sql<bigint>`coalesce(sum(${spenderDailyFacts.creatorNetAmountMills}), 0)::bigint`.as("creator_net_amount_mills"),
-    postedGrossAmountMills: sql<bigint>`coalesce(sum(case when ${spenderDailyFacts.transactionState} = 'posted'::transaction_state then ${spenderDailyFacts.grossAmountMills} else 0 end), 0)::bigint`.as("posted_gross_amount_mills"),
-    pendingGrossAmountMills: sql<bigint>`coalesce(sum(case when ${spenderDailyFacts.transactionState} = 'pending'::transaction_state then ${spenderDailyFacts.grossAmountMills} else 0 end), 0)::bigint`.as("pending_gross_amount_mills"),
-    unknownGrossAmountMills: sql<bigint>`coalesce(sum(case when ${spenderDailyFacts.transactionState} = 'unknown'::transaction_state then ${spenderDailyFacts.grossAmountMills} else 0 end), 0)::bigint`.as("unknown_gross_amount_mills"),
-    postedCreatorNetAmountMills: sql<bigint>`coalesce(sum(case when ${spenderDailyFacts.transactionState} = 'posted'::transaction_state then ${spenderDailyFacts.creatorNetAmountMills} else 0 end), 0)::bigint`.as("posted_creator_net_amount_mills"),
-    pendingCreatorNetAmountMills: sql<bigint>`coalesce(sum(case when ${spenderDailyFacts.transactionState} = 'pending'::transaction_state then ${spenderDailyFacts.creatorNetAmountMills} else 0 end), 0)::bigint`.as("pending_creator_net_amount_mills"),
-    unknownCreatorNetAmountMills: sql<bigint>`coalesce(sum(case when ${spenderDailyFacts.transactionState} = 'unknown'::transaction_state then ${spenderDailyFacts.creatorNetAmountMills} else 0 end), 0)::bigint`.as("unknown_creator_net_amount_mills"),
-    transactionCount: sql<number>`coalesce(sum(${spenderDailyFacts.transactionCount}), 0)::int`.as("transaction_count"),
-    lastTransactionAt: sql<Date | null>`max(${spenderDailyFacts.lastTransactionAt})`.as("last_transaction_at"),
-  }).from(spenderDailyFacts)
+  const primaryConversation = db.select({
+    platformConversationId: pageDmConversations.platformConversationId,
+    unreadCount: pageDmConversations.unreadCount,
+    lastMessageAt: pageDmConversations.lastMessageAt,
+    lastFanMessageAt: pageDmConversations.lastFanMessageAt,
+    lastModelMessageAt: pageDmConversations.lastModelMessageAt,
+    lastMessagePreview: pageDmConversations.lastMessagePreview,
+    storedMessageCount: pageDmConversations.storedMessageCount,
+    messageCoverageStatus: pageDmConversations.messageCoverageStatus,
+    messageBackfillComplete: pageDmConversations.messageBackfillComplete,
+  }).from(pageDmConversations)
     .where(and(
-      inArray(spenderDailyFacts.platformAccountId, input.pageIds),
-      gte(spenderDailyFacts.businessDate, input.fromBusinessDate),
-      lt(spenderDailyFacts.businessDate, input.toBusinessDateExclusive),
+      eq(pageDmConversations.fanId, ranked.fanId),
+      inArray(pageDmConversations.platformAccountId, input.pageIds),
+      eq(pageDmConversations.isVisible, true),
     ))
-    .groupBy(spenderDailyFacts.fanId)
-    .as("current_metrics");
+    .orderBy(
+      sql`${pageDmConversations.lastMessageAt} desc nulls last`,
+      desc(pageDmConversations.platformConversationId),
+    )
+    .limit(1)
+    .as("primary_conversations");
+  const latestTransaction = db.select({
+    canonicalType: transactions.canonicalType,
+    transactionState: settledTransactionState().as("transaction_state"),
+    grossAmountMills: transactions.grossAmountMills,
+    creatorNetAmountMills: transactions.creatorNetAmountMills,
+    occurredAt: transactions.occurredAt,
+  }).from(transactions)
+    .where(and(
+      eq(transactions.fanId, ranked.fanId),
+      inArray(transactions.platformAccountId, input.pageIds),
+      eq(transactions.isActive, true),
+      inArray(
+        transactions.canonicalType,
+        spenderAnalyticsTransactionTypes as Array<typeof transactions.$inferSelect.canonicalType>,
+      ),
+    ))
+    .orderBy(desc(transactions.occurredAt), desc(transactions.id))
+    .limit(1)
+    .as("latest_transactions");
 
-  const baseQueryClause = buildSpenderQueryClause(input.query, input);
-  const singlePageId = input.pageIds.length === 1 ? input.pageIds[0]! : null;
-  const currentMetricFields = {
-    grossAmountMills: qualifiedSubqueryColumn<bigint>("current_metrics", "gross_amount_mills"),
-    creatorNetAmountMills: qualifiedSubqueryColumn<bigint>("current_metrics", "creator_net_amount_mills"),
-    postedGrossAmountMills: qualifiedSubqueryColumn<bigint>("current_metrics", "posted_gross_amount_mills"),
-    pendingGrossAmountMills: qualifiedSubqueryColumn<bigint>("current_metrics", "pending_gross_amount_mills"),
-    unknownGrossAmountMills: qualifiedSubqueryColumn<bigint>("current_metrics", "unknown_gross_amount_mills"),
-    postedCreatorNetAmountMills: qualifiedSubqueryColumn<bigint>("current_metrics", "posted_creator_net_amount_mills"),
-    pendingCreatorNetAmountMills: qualifiedSubqueryColumn<bigint>("current_metrics", "pending_creator_net_amount_mills"),
-    unknownCreatorNetAmountMills: qualifiedSubqueryColumn<bigint>("current_metrics", "unknown_creator_net_amount_mills"),
-    transactionCount: qualifiedSubqueryColumn<number>("current_metrics", "transaction_count"),
-    lastTransactionAt: qualifiedSubqueryColumn<Date | null>("current_metrics", "last_transaction_at"),
-  };
-  const lifetimeMetricFields = {
-    grossAmountMills: qualifiedSubqueryColumn<bigint>("lifetime_metrics", "lifetime_gross_amount_mills"),
-    creatorNetAmountMills: qualifiedSubqueryColumn<bigint>("lifetime_metrics", "lifetime_creator_net_amount_mills"),
-    lastTransactionAt: qualifiedSubqueryColumn<Date | null>("lifetime_metrics", "lifetime_last_transaction_at"),
-  };
-  const retentionClause = buildRetentionFilterSql(
-    input.retentionStatus,
-    lifetimeMetricFields.lastTransactionAt,
-    lifetimeMetricFields.creatorNetAmountMills,
-    now,
-    { fanId: fans.id, pageIds: input.pageIds },
-  );
-  const whereClause = retentionClause ? and(baseQueryClause, retentionClause)! : baseQueryClause;
-  const sortFieldMap = {
-    grossAmountMills: currentMetricFields.grossAmountMills,
-    creatorNetAmountMills: currentMetricFields.creatorNetAmountMills,
-    postedGrossAmountMills: currentMetricFields.postedGrossAmountMills,
-    pendingGrossAmountMills: currentMetricFields.pendingGrossAmountMills,
-    postedCreatorNetAmountMills: currentMetricFields.postedCreatorNetAmountMills,
-    pendingCreatorNetAmountMills: currentMetricFields.pendingCreatorNetAmountMills,
-    lifetimeGrossAmountMills: lifetimeMetricFields.grossAmountMills,
-    lifetimeCreatorNetAmountMills: lifetimeMetricFields.creatorNetAmountMills,
-    lastTransactionAt: currentMetricFields.lastTransactionAt,
-    platformUserId: fans.platformUserId,
-    username: fans.username,
-    displayName: fans.displayName,
-  };
-
-  const sortField = sortFieldMap[input.sortBy];
-  const orderBy = input.sortDir === "asc" ? asc(sortField) : desc(sortField);
   const rows = await db.select({
-    total: sql<number>`count(*) over()::int`,
-    fanId: fans.id,
-    platform: fans.platform,
-    platformUserId: fans.platformUserId,
+    total: ranked.total,
+    fanId: ranked.fanId,
+    platform: ranked.platform,
+    platformUserId: ranked.platformUserId,
     pageAlias: singlePageId === null ? sql<string | null>`null` : fanPages.pageAlias,
-    username: fans.username,
-    displayName: fans.displayName,
-    createdAtExternal: fans.createdAtExternal,
-    grossAmountMills: currentMetricFields.grossAmountMills,
-    creatorNetAmountMills: currentMetricFields.creatorNetAmountMills,
-    postedGrossAmountMills: currentMetricFields.postedGrossAmountMills,
-    pendingGrossAmountMills: currentMetricFields.pendingGrossAmountMills,
-    unknownGrossAmountMills: currentMetricFields.unknownGrossAmountMills,
-    postedCreatorNetAmountMills: currentMetricFields.postedCreatorNetAmountMills,
-    pendingCreatorNetAmountMills: currentMetricFields.pendingCreatorNetAmountMills,
-    unknownCreatorNetAmountMills: currentMetricFields.unknownCreatorNetAmountMills,
-    transactionCount: currentMetricFields.transactionCount,
-    lastTransactionAt: currentMetricFields.lastTransactionAt,
-    lastFanMessageAt: primaryConversations.lastFanMessageAt,
-    conversationPlatformConversationId: primaryConversations.platformConversationId,
-    conversationUnreadCount: sql<number>`coalesce(${primaryConversations.unreadCount}, 0)::int`,
-    conversationLastMessageAt: primaryConversations.lastMessageAt,
-    conversationLastFanMessageAt: primaryConversations.lastFanMessageAt,
-    conversationLastModelMessageAt: primaryConversations.lastModelMessageAt,
-    conversationLastMessagePreview: primaryConversations.lastMessagePreview,
-    conversationStoredMessageCount: sql<number>`coalesce(${primaryConversations.storedMessageCount}, 0)::int`,
-    conversationMessageCoverageStatus: sql<"pending_backfill" | "partial_window" | "complete">`coalesce(${primaryConversations.messageCoverageStatus}, 'pending_backfill'::dm_message_coverage_status)`,
-    conversationMessageBackfillComplete: sql<boolean>`coalesce(${primaryConversations.messageBackfillComplete}, false)`,
-    lastTransactionCanonicalType: latestTransactions.canonicalType,
-    lastTransactionState: latestTransactions.transactionState,
-    lastTransactionGrossAmountMills: latestTransactions.grossAmountMills,
-    lastTransactionCreatorNetAmountMills: latestTransactions.creatorNetAmountMills,
-    lastTransactionOccurredAt: latestTransactions.occurredAt,
-    lifetimeGrossAmountMills: sql<bigint>`coalesce(${lifetimeMetricFields.grossAmountMills}, 0)::bigint`.as("lifetime_gross_amount_mills"),
-    lifetimeCreatorNetAmountMills: sql<bigint>`coalesce(${lifetimeMetricFields.creatorNetAmountMills}, 0)::bigint`.as("lifetime_creator_net_amount_mills"),
-    lifetimeLastTransactionAt: lifetimeMetricFields.lastTransactionAt,
+    username: ranked.username,
+    displayName: ranked.displayName,
+    createdAtExternal: ranked.createdAtExternal,
+    grossAmountMills: ranked.grossAmountMills,
+    creatorNetAmountMills: ranked.creatorNetAmountMills,
+    postedGrossAmountMills: ranked.postedGrossAmountMills,
+    pendingGrossAmountMills: ranked.pendingGrossAmountMills,
+    unknownGrossAmountMills: ranked.unknownGrossAmountMills,
+    postedCreatorNetAmountMills: ranked.postedCreatorNetAmountMills,
+    pendingCreatorNetAmountMills: ranked.pendingCreatorNetAmountMills,
+    unknownCreatorNetAmountMills: ranked.unknownCreatorNetAmountMills,
+    transactionCount: ranked.transactionCount,
+    lastTransactionAt: ranked.lastTransactionAt,
+    lastFanMessageAt: primaryConversation.lastFanMessageAt,
+    conversationPlatformConversationId: primaryConversation.platformConversationId,
+    conversationUnreadCount: sql<number>`coalesce(${primaryConversation.unreadCount}, 0)::int`,
+    conversationLastMessageAt: primaryConversation.lastMessageAt,
+    conversationLastFanMessageAt: primaryConversation.lastFanMessageAt,
+    conversationLastModelMessageAt: primaryConversation.lastModelMessageAt,
+    conversationLastMessagePreview: primaryConversation.lastMessagePreview,
+    conversationStoredMessageCount: sql<number>`coalesce(${primaryConversation.storedMessageCount}, 0)::int`,
+    conversationMessageCoverageStatus: sql<"pending_backfill" | "partial_window" | "complete">`coalesce(${primaryConversation.messageCoverageStatus}, 'pending_backfill'::dm_message_coverage_status)`,
+    conversationMessageBackfillComplete: sql<boolean>`coalesce(${primaryConversation.messageBackfillComplete}, false)`,
+    lastTransactionCanonicalType: latestTransaction.canonicalType,
+    lastTransactionState: latestTransaction.transactionState,
+    lastTransactionGrossAmountMills: latestTransaction.grossAmountMills,
+    lastTransactionCreatorNetAmountMills: latestTransaction.creatorNetAmountMills,
+    lastTransactionOccurredAt: latestTransaction.occurredAt,
+    lifetimeGrossAmountMills: ranked.lifetimeGrossAmountMills,
+    lifetimeCreatorNetAmountMills: ranked.lifetimeCreatorNetAmountMills,
+    lifetimeLastTransactionAt: ranked.lifetimeLastTransactionAt,
     accountProbeAt: singlePageId === null ? sql<Date | null>`null` : fanPages.accountProbeAt,
     accountProbeResolved: singlePageId === null ? sql<boolean | null>`null` : fanPages.accountProbeResolved,
-  }).from(currentMetrics)
-    .innerJoin(fans, eq(fans.id, currentMetrics.fanId))
-    .leftJoin(lifetimeMetrics, eq(lifetimeMetrics.fanId, currentMetrics.fanId))
-    .leftJoin(primaryConversations, and(
-      eq(primaryConversations.fanId, currentMetrics.fanId),
-      eq(qualifiedSubqueryColumn<number>("primary_conversations", "rn"), 1),
-    ))
-    .leftJoin(latestTransactions, and(
-      eq(latestTransactions.fanId, currentMetrics.fanId),
-      eq(qualifiedSubqueryColumn<number>("latest_transactions", "rn"), 1),
-    ))
+  }).from(ranked)
+    .leftJoinLateral(primaryConversation, sql`true`)
+    .leftJoinLateral(latestTransaction, sql`true`)
     .leftJoin(fanPages, singlePageId === null
       ? sql`false`
       : and(
         eq(fanPages.platformAccountId, singlePageId),
-        eq(fanPages.fanId, currentMetrics.fanId),
+        eq(fanPages.fanId, ranked.fanId),
       ))
-    .where(whereClause)
-    .orderBy(orderBy, asc(fans.platformUserId), asc(fans.id))
-    .limit(input.limit)
-    .offset(input.offset);
+    .orderBy(orderByField(ranked.sortKey), asc(ranked.platformUserId), asc(ranked.fanId));
 
-  const total = await resolvePagedTotal(input, rows, async () => {
-    const [countRow] = await db.select({
-      total: sql<number>`count(*)::int`,
-    }).from(currentMetrics)
-      .innerJoin(fans, eq(fans.id, currentMetrics.fanId))
-      .leftJoin(lifetimeMetrics, eq(lifetimeMetrics.fanId, currentMetrics.fanId))
-      .where(whereClause);
-
-    return countRow?.total ?? 0;
-  });
+  const total = await resolvePagedTotal(input, rows, loadTotal);
 
   return {
     total,
