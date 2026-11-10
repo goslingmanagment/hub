@@ -12,14 +12,12 @@ import {
   listFanslyWriteCommandsOfDispatch,
   listPublicationQueueSnapshots,
   listPublicationsByPlatformPostRef,
-  transitionPublication,
   upsertDemand,
   type FanslyCheckCandidate,
   type FanslyVerifyWorkFacts,
   type FanslyWriteCommandRecord,
   type PublicationCheckKind,
   type PublicationCheckOutcome,
-  type PublicationRecord,
 } from "@agency_hub_core/db";
 import { FANSLY_PUBLISH_FACTS_VERIFIED, type FanslyPublishFacts } from "@agency_hub_core/fansly";
 import { PUBLICATION_WITHDRAW_MIN_LEAD_MINUTES, type PublicationStatus } from "@agency_hub_core/shared";
@@ -36,8 +34,13 @@ import {
   type FanslyScheduleEntry,
 } from "../sync/fansly/publish/reads.ts";
 import { fanslyResourceSpec } from "../sync/fansly/registry.ts";
-import { notifyPublicationNotPublishedIncident } from "./notification-incidents.ts";
-import { couldBePublication, findPublicationMatch, onlyfansCheckPlan, type PublicationMatchTarget } from "./publications-onlyfans-checks.ts";
+import {
+  couldBePublication,
+  findPublicationMatch,
+  onlyfansCheckPlan,
+  settlePublicationCheck,
+  type PublicationMatchTarget,
+} from "./publications-onlyfans-checks.ts";
 import type { OnlyfansPlatformItem } from "./publications-onlyfans-reads.ts";
 
 // Did the Fansly post go out (docs/plans/2026-10-23-wall-posts, spec §3.6, §4,
@@ -375,7 +378,7 @@ async function checkOne(
   if (record === null || record.status !== c.status) return;
   const kind: PublicationCheckKind = plan.action === "search" ? "search" : "verify";
   if (plan.action === "give_up") {
-    await settle(app, record, kind, conclude("unknown", "reads_failed"), now, report);
+    await settlePublicationCheck(app, record, kind, conclude("unknown", "reads_failed"), now, report, "fansly");
     return;
   }
   const dispatch = await getPublicationDispatch(app.db, record.id, "create");
@@ -402,18 +405,18 @@ async function checkOne(
   const claimed = await listClaimedPlatformPostRefs(app.db, record.pageId, record.id);
   if (plan.action === "search" && !plan.fresh) {
     if (record.kind === "story") {
-      await settle(app, record, kind, notFound("story_not_collected"), now, report);
+      await settlePublicationCheck(app, record, kind, notFound("story_not_collected"), now, report, "fansly");
       return;
     }
     const posts = await listCollectedPostsBetween(app.db, { pageId: record.pageId, from, to });
-    await settle(app, record, kind, concludeFanslyCollected({ target, posts, claimed }), now, report);
+    await settlePublicationCheck(app, record, kind, concludeFanslyCollected({ target, posts, claimed }), now, report, "fansly");
     return;
   }
   const work = currentWork(c, await getLatestFanslyVerifyWork(app.db, { pageId: record.pageId, publicationId: record.id }));
   if (work !== null && work.closedAt === null) {
     // Its reads are under way; one stuck for hours counts as a failed read (retried, twelve → unknown).
     if (now.getTime() - work.createdAt.getTime() > FANSLY_VERIFY_STALL_MS) {
-      await settle(app, record, kind, failed(`reads_stalled:${work.state}`), now, report);
+      await settlePublicationCheck(app, record, kind, failed(`reads_stalled:${work.state}`), now, report, "fansly");
     }
     return;
   }
@@ -425,45 +428,10 @@ async function checkOne(
       : searching
         ? concludeFanslySearch({ target, reads, claimed, now, facts })
         : concludeFanslyVerify({ target, reads, claimed, now, facts });
-    await settle(app, record, kind, { ...conclusion, evidence: { ...conclusion.evidence, ...evidence } }, now, report);
+    await settlePublicationCheck(app, record, kind, { ...conclusion, evidence: { ...conclusion.evidence, ...evidence } }, now, report, "fansly");
     return;
   }
   if (await askVerifyReads(app, { pageId: record.pageId, publicationId: record.id, mode: searching ? "search" : "verify", now })) report.readsAsked += 1;
-}
-
-/** Record the check, then move the publication; a post another publication already claims is not taken twice. */
-async function settle(app: AppContext, record: PublicationRecord, kind: PublicationCheckKind, conclusion: FanslyConclusion, now: Date, report: FanslyChecksReport) {
-  let result = conclusion;
-  if (result.status !== null && result.status !== record.status) {
-    const moved = await transitionPublication(app.db, {
-      id: record.id, from: record.status, to: result.status, actor: { kind: "hub" }, reason: result.reason,
-      ...(result.platformPostRef === undefined || result.platformPostRef === record.platformPostRef ? {} : { platformPostRef: result.platformPostRef }),
-    }).catch(async (error: unknown) => {
-      // publications_page_platform_post_uidx: the post is another publication's.
-      if ((error as { code?: string }).code !== "23505") throw error;
-      result = conclude("unknown", "post_claimed_by_another", { ...result.evidence, postRef: result.platformPostRef ?? null });
-      if (record.status === "unknown") return false;
-      return transitionPublication(app.db, { id: record.id, from: record.status, to: "unknown", actor: { kind: "hub" }, reason: result.reason });
-    });
-    if (!moved) return;
-  }
-  await insertPublicationCheck(app.db, {
-    publicationId: record.id, kind, outcome: result.outcome, reason: result.reason,
-    platformPostRef: result.platformPostRef ?? null, evidence: result.evidence, at: now,
-  });
-  if (result.outcome === "read_failed") report.readFailures += 1;
-  if (result.status === "published") report.published += 1;
-  if (result.status === "unknown" && record.status !== "unknown") report.unknown += 1;
-  if (record.status === "unknown" && result.status !== null && result.status !== "unknown") report.settledUnknown += 1;
-  if (result.status === "not_published") {
-    report.notPublished += 1;
-    await notifyPublicationNotPublishedIncident(app, {
-      pageId: record.pageId, pageLabel: record.pageLabel, platform: "fansly", publicationId: record.id,
-      publishAt: record.publishAt, reason: result.reason ?? "not_published", occurredAt: now,
-    }).catch((error: unknown) => {
-      app.logger?.warn({ error, publicationId: record.id }, "publications: not-published notice failed");
-    });
-  }
 }
 
 // ---------------------------------------------------------------------------

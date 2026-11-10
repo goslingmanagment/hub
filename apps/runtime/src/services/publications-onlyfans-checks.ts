@@ -471,7 +471,7 @@ async function checkOne(app: AppContext, c: OnlyfansCheckCandidate, plan: Exclud
   if (!record || record.status !== c.status) return;
   const kind: PublicationCheckKind = plan.action === "search" ? "search" : "verify";
   if (plan.action === "give_up") {
-    await settle(app, record, kind, conclude("unknown", "reads_failed", {}), now, report);
+    await settlePublicationCheck(app, record, kind, conclude("unknown", "reads_failed", {}), now, report, "onlyfans");
     return;
   }
   const revision = await getPublicationRevision(app.db, c.approvedRevisionId);
@@ -482,11 +482,19 @@ async function checkOne(app: AppContext, c: OnlyfansCheckCandidate, plan: Exclud
     : record.kind === "story"
       ? await verifyStory(ctx, c, record, now, plan.final)
       : await verifyPost(ctx, c, record, now);
-  await settle(app, record, kind, conclusion, now, report);
+  await settlePublicationCheck(app, record, kind, conclusion, now, report, "onlyfans");
 }
 
-/** Record the check, then move the publication; a post another publication already claims is not taken twice. */
-async function settle(app: AppContext, record: PublicationRecord, kind: PublicationCheckKind, conclusion: Conclusion, now: Date, report: OnlyfansChecksReport) {
+/** Record the check, then move the publication; a post another publication already claims is not taken twice. Both platforms' checks settle here. */
+export async function settlePublicationCheck(
+  app: AppContext,
+  record: PublicationRecord,
+  kind: PublicationCheckKind,
+  conclusion: Conclusion,
+  now: Date,
+  report: Pick<OnlyfansChecksReport, "published" | "notPublished" | "unknown" | "settledUnknown" | "readFailures">,
+  platform: "fansly" | "onlyfans",
+) {
   let result = conclusion;
   if (result.status !== null && result.status !== record.status) {
     const moved = await transitionPublication(app.db, {
@@ -512,7 +520,7 @@ async function settle(app: AppContext, record: PublicationRecord, kind: Publicat
   if (result.status === "not_published") {
     report.notPublished += 1;
     await notifyPublicationNotPublishedIncident(app, {
-      pageId: record.pageId, pageLabel: record.pageLabel, platform: "onlyfans", publicationId: record.id,
+      pageId: record.pageId, pageLabel: record.pageLabel, platform, publicationId: record.id,
       publishAt: record.publishAt, reason: result.reason ?? "not_published", occurredAt: now,
     }).catch((error: unknown) => {
       app.logger?.warn({ error, publicationId: record.id }, "publications: not-published notice failed");

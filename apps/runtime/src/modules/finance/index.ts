@@ -36,6 +36,7 @@ import { pageScopeFor } from "../../api/request-auth.ts";
 import {
   canAccessPage,
   enforceRevenueRouteRoleScope,
+  type AuthPrincipal,
 } from "../../services/auth.ts";
 import { listConnectionStatuses } from "../../services/connections.ts";
 import { ForbiddenError, NotFoundError } from "../../services/errors.ts";
@@ -44,6 +45,9 @@ import {
   getPageRevenueReport,
   getPageSummary,
   getPageTransactionsReport,
+  groupPageIdsByPlatform,
+  serializeRawType,
+  summarizeRevenueRows,
 } from "../../services/reporting.ts";
 import {
   getPageSpenderAutoListDetail,
@@ -87,9 +91,35 @@ function pageAudience(
   };
 }
 
+type TransactionCoreRow = Awaited<ReturnType<typeof listFanTransactionsOnPage>>["items"][number];
+
+/** A transaction's money fields on the wire; the raw-type rule reads `platform`. */
+function serializeTransactionCore(platform: Platform, row: TransactionCoreRow) {
+  return {
+    transactionId: row.transactionId,
+    rawType: serializeRawType(platform, row.rawType),
+    canonicalType: row.canonicalType,
+    transactionState: row.transactionState,
+    amountMills: millsToNumber(row.amountMills),
+    destinationAmountMills: millsToNumber(row.destinationAmountMills),
+    netAmountMills: millsToNumber(row.netAmountMills),
+    occurredAt: new Date(row.occurredAt).toISOString(),
+    sourceUpdatedAt: row.sourceUpdatedAt ? new Date(row.sourceUpdatedAt).toISOString() : null,
+  };
+}
+
 export function registerFinanceRoutes(server: ApiServer, ctx: ApiModuleContext) {
   const { appContext } = ctx;
   const { requirePrincipal } = ctx.auth;
+
+  /** 404 for an unknown page first, then 403 for a page outside the principal's scope. */
+  async function requirePageAccess(principal: AuthPrincipal, pageLabel: string) {
+    const page = await getPageSummary(appContext, pageLabel);
+    if (!canAccessPage(principal, page.id)) {
+      throw new ForbiddenError("Page access denied");
+    }
+    return page;
+  }
 
   server.get("/api/v1/overview/revenue", {
     schema: routeSchemas.overviewRevenue,
@@ -112,10 +142,7 @@ export function registerFinanceRoutes(server: ApiServer, ctx: ApiModuleContext) 
     const now = request.query.windowAt ? new Date(request.query.windowAt) : new Date();
     const principal = await requirePrincipal(request);
     const query = request.query;
-    const page = await getPageSummary(appContext, request.params.pageLabel);
-    if (!canAccessPage(principal, page.id)) {
-      throw new ForbiddenError("Page access denied");
-    }
+    await requirePageAccess(principal, request.params.pageLabel);
     enforceRevenueRouteRoleScope(principal);
     return getPageRevenueReport(appContext, request.params.pageLabel, {
       now,
@@ -129,10 +156,7 @@ export function registerFinanceRoutes(server: ApiServer, ctx: ApiModuleContext) 
   }, async (request) => {
     const principal = await requirePrincipal(request);
     const query = request.query;
-    const page = await getPageSummary(appContext, request.params.pageLabel);
-    if (!canAccessPage(principal, page.id)) {
-      throw new ForbiddenError("Page access denied");
-    }
+    await requirePageAccess(principal, request.params.pageLabel);
     enforceRevenueRouteRoleScope(principal);
 
     return getPageTransactionsReport(appContext, request.params.pageLabel, {
@@ -147,10 +171,7 @@ export function registerFinanceRoutes(server: ApiServer, ctx: ApiModuleContext) 
     schema: routeSchemas.pageSpenderAutoLists,
   }, async (request) => {
     const principal = await requirePrincipal(request);
-    const page = await getPageSummary(appContext, request.params.pageLabel);
-    if (!canAccessPage(principal, page.id)) {
-      throw new ForbiddenError("Page access denied");
-    }
+    await requirePageAccess(principal, request.params.pageLabel);
     return getPageSpenderAutoLists(appContext, request.params.pageLabel, request.query);
   });
 
@@ -158,10 +179,7 @@ export function registerFinanceRoutes(server: ApiServer, ctx: ApiModuleContext) 
     schema: routeSchemas.pageSpenderAutoListDetail,
   }, async (request) => {
     const principal = await requirePrincipal(request);
-    const page = await getPageSummary(appContext, request.params.pageLabel);
-    if (!canAccessPage(principal, page.id)) {
-      throw new ForbiddenError("Page access denied");
-    }
+    await requirePageAccess(principal, request.params.pageLabel);
     return getPageSpenderAutoListDetail(
       appContext,
       request.params.pageLabel,
@@ -223,16 +241,12 @@ export function registerFinanceRoutes(server: ApiServer, ctx: ApiModuleContext) 
     const statusByPageId = new Map(connectionStatuses.map((c) => [c.id, c]));
 
     // Revenue 7d and 30d
-    const groupedPageIds = new Map<Platform, number[]>();
-    for (const p of pages) {
-      const ids = groupedPageIds.get(p.platform) ?? [];
-      ids.push(p.id);
-      groupedPageIds.set(p.platform, ids);
-    }
+    const groupedPageIds = groupPageIdsByPlatform(pages);
     const now = new Date();
 
-    const rev7d = { revenueMills: 0n, adjustmentMills: 0n, unclassifiedMills: 0n, netEarningsMills: 0n };
-    const rev30d = { revenueMills: 0n, adjustmentMills: 0n, unclassifiedMills: 0n, netEarningsMills: 0n };
+    // Every platform's breakdown rows, summed once below (bigint: the grouping changes no total).
+    const breakdown7d: Awaited<ReturnType<typeof getRevenueBreakdownForScope>> = [];
+    const breakdown30d: Awaited<ReturnType<typeof getRevenueBreakdownForScope>> = [];
     const prevRev7d = { netEarningsMills: 0n };
     const prevRev30d = { netEarningsMills: 0n };
 
@@ -247,20 +261,8 @@ export function registerFinanceRoutes(server: ApiServer, ctx: ApiModuleContext) 
         compBounds7d ? getRevenueBreakdownForScope(appContext.db, { platform, pageIds: ids, period: compBounds7d }) : Promise.resolve([]),
         compBounds30d ? getRevenueBreakdownForScope(appContext.db, { platform, pageIds: ids, period: compBounds30d }) : Promise.resolve([]),
       ]);
-      for (const r of rows7d) {
-        const m = millsFromInteger(r.netAmountMills);
-        if (r.bucket === "revenue") rev7d.revenueMills += m;
-        else if (r.bucket === "adjustment") rev7d.adjustmentMills += m;
-        else if (r.bucket === "unclassified") rev7d.unclassifiedMills += m;
-      }
-      rev7d.netEarningsMills = rev7d.revenueMills + rev7d.adjustmentMills + rev7d.unclassifiedMills;
-      for (const r of rows30d) {
-        const m = millsFromInteger(r.netAmountMills);
-        if (r.bucket === "revenue") rev30d.revenueMills += m;
-        else if (r.bucket === "adjustment") rev30d.adjustmentMills += m;
-        else if (r.bucket === "unclassified") rev30d.unclassifiedMills += m;
-      }
-      rev30d.netEarningsMills = rev30d.revenueMills + rev30d.adjustmentMills + rev30d.unclassifiedMills;
+      breakdown7d.push(...rows7d);
+      breakdown30d.push(...rows30d);
       for (const r of compRows7d) {
         prevRev7d.netEarningsMills += millsFromInteger(r.netAmountMills);
       }
@@ -268,6 +270,8 @@ export function registerFinanceRoutes(server: ApiServer, ctx: ApiModuleContext) 
         prevRev30d.netEarningsMills += millsFromInteger(r.netAmountMills);
       }
     }
+    const rev7d = summarizeRevenueRows(breakdown7d);
+    const rev30d = summarizeRevenueRows(breakdown30d);
 
     function computeDeltaPct(current: bigint, previous: bigint): number | null {
       if (previous === 0n) return null;
@@ -416,12 +420,7 @@ export function registerFinanceRoutes(server: ApiServer, ctx: ApiModuleContext) 
         })),
       };
     }
-    const groupedPageIds = new Map<Platform, number[]>();
-    for (const page of pages) {
-      const ids = groupedPageIds.get(page.platform) ?? [];
-      ids.push(page.id);
-      groupedPageIds.set(page.platform, ids);
-    }
+    const groupedPageIds = groupPageIdsByPlatform(pages);
 
     const mergedResults = new Map<string, {
       businessDate: string;
@@ -437,59 +436,30 @@ export function registerFinanceRoutes(server: ApiServer, ctx: ApiModuleContext) 
         now,
         custom,
       );
-      if (query.groupByType) {
-        const rows = await listRevenueDailyForPages(appContext.db, {
-          pageIds: ids,
-          fromBusinessDate: range.from,
-          toBusinessDate: range.toExclusive,
-          groupByType: true,
-        }) as Array<{
-          businessDate: string;
-          canonicalType: RevenueDailyCanonicalType;
-          netAmountMills: bigint;
-          transactionCount: number;
-        }>;
-
-        for (const row of rows) {
-          const key = `${row.businessDate}:${row.canonicalType}`;
-          const current = mergedResults.get(key);
-          if (current) {
-            current.netAmountMills += row.netAmountMills;
-            current.transactionCount += row.transactionCount;
-            continue;
-          }
-
-          mergedResults.set(key, {
-            businessDate: row.businessDate,
-            canonicalType: row.canonicalType,
-            netAmountMills: row.netAmountMills,
-            transactionCount: row.transactionCount,
-          });
-        }
-        continue;
-      }
-
       const rows = await listRevenueDailyForPages(appContext.db, {
         pageIds: ids,
         fromBusinessDate: range.from,
         toBusinessDate: range.toExclusive,
-        groupByType: false,
+        groupByType: query.groupByType,
       }) as Array<{
         businessDate: string;
+        canonicalType?: RevenueDailyCanonicalType;
         netAmountMills: bigint;
         transactionCount: number;
       }>;
 
       for (const row of rows) {
-        const current = mergedResults.get(row.businessDate);
+        const key = query.groupByType ? `${row.businessDate}:${row.canonicalType}` : row.businessDate;
+        const current = mergedResults.get(key);
         if (current) {
           current.netAmountMills += row.netAmountMills;
           current.transactionCount += row.transactionCount;
           continue;
         }
 
-        mergedResults.set(row.businessDate, {
+        mergedResults.set(key, {
           businessDate: row.businessDate,
+          ...(query.groupByType ? { canonicalType: row.canonicalType } : {}),
           netAmountMills: row.netAmountMills,
           transactionCount: row.transactionCount,
         });
@@ -532,10 +502,7 @@ export function registerFinanceRoutes(server: ApiServer, ctx: ApiModuleContext) 
   }, async (request) => {
     const now = request.query.windowAt ? new Date(request.query.windowAt) : new Date();
     const principal = await requirePrincipal(request);
-    const page = await getPageSummary(appContext, request.params.pageLabel);
-    if (!canAccessPage(principal, page.id)) {
-      throw new ForbiddenError("Page access denied");
-    }
+    const page = await requirePageAccess(principal, request.params.pageLabel);
     enforceRevenueRouteRoleScope(principal);
     return getRevenueDailySeries([page], request.query, now);
   });
@@ -578,17 +545,7 @@ export function registerFinanceRoutes(server: ApiServer, ctx: ApiModuleContext) 
 
     return {
       items: result.items.map((row) => ({
-        transactionId: row.transactionId,
-        rawType: row.platform === "fansly" && /^-?\d+$/.test(row.rawType)
-          ? Number.parseInt(row.rawType, 10)
-          : row.rawType,
-        canonicalType: row.canonicalType,
-        transactionState: row.transactionState,
-        amountMills: millsToNumber(row.amountMills),
-        destinationAmountMills: millsToNumber(row.destinationAmountMills),
-        netAmountMills: millsToNumber(row.netAmountMills),
-        occurredAt: new Date(row.occurredAt).toISOString(),
-        sourceUpdatedAt: row.sourceUpdatedAt ? new Date(row.sourceUpdatedAt).toISOString() : null,
+        ...serializeTransactionCore(row.platform, row),
         fan: row.fanPlatformUserId
           ? { platformUserId: row.fanPlatformUserId, username: row.fanUsername, displayName: row.fanDisplayName }
           : null,
@@ -615,10 +572,7 @@ export function registerFinanceRoutes(server: ApiServer, ctx: ApiModuleContext) 
     schema: routeSchemas.pageFanTransactions,
   }, async (request) => {
     const principal = await requirePrincipal(request);
-    const page = await getPageSummary(appContext, request.params.pageLabel);
-    if (!canAccessPage(principal, page.id)) {
-      throw new ForbiddenError("Page access denied");
-    }
+    const page = await requirePageAccess(principal, request.params.pageLabel);
     enforceRevenueRouteRoleScope(principal);
     const fan = await findPlatformFan(appContext.db, page.platform, request.params.platformUserId);
     if (!fan) {
@@ -632,17 +586,7 @@ export function registerFinanceRoutes(server: ApiServer, ctx: ApiModuleContext) 
     });
     return {
       items: result.items.map((row) => ({
-        transactionId: row.transactionId,
-        rawType: page.platform === "fansly" && /^-?\d+$/.test(row.rawType)
-          ? Number.parseInt(row.rawType, 10)
-          : row.rawType,
-        canonicalType: row.canonicalType,
-        transactionState: row.transactionState,
-        amountMills: millsToNumber(row.amountMills),
-        destinationAmountMills: millsToNumber(row.destinationAmountMills),
-        netAmountMills: millsToNumber(row.netAmountMills),
-        occurredAt: new Date(row.occurredAt).toISOString(),
-        sourceUpdatedAt: row.sourceUpdatedAt ? new Date(row.sourceUpdatedAt).toISOString() : null,
+        ...serializeTransactionCore(page.platform, row),
       })),
       limit: request.query.limit,
       offset: request.query.offset,
@@ -672,17 +616,7 @@ export function registerFinanceRoutes(server: ApiServer, ctx: ApiModuleContext) 
     });
     return {
       items: result.items.map((row) => ({
-        transactionId: row.transactionId,
-        rawType: row.platform === "fansly" && /^-?\d+$/.test(row.rawType)
-          ? Number.parseInt(row.rawType, 10)
-          : row.rawType,
-        canonicalType: row.canonicalType,
-        transactionState: row.transactionState,
-        amountMills: millsToNumber(row.amountMills),
-        destinationAmountMills: millsToNumber(row.destinationAmountMills),
-        netAmountMills: millsToNumber(row.netAmountMills),
-        occurredAt: new Date(row.occurredAt).toISOString(),
-        sourceUpdatedAt: row.sourceUpdatedAt ? new Date(row.sourceUpdatedAt).toISOString() : null,
+        ...serializeTransactionCore(row.platform, row),
         pageLabel: row.pageLabel,
         platform: row.platform,
       })),
