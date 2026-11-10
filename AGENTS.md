@@ -55,6 +55,7 @@ chatters' AI features, the owner's dashboard. Production is `agency-de` (`root@1
 - Migrations are forward-only, numbered with the next free number. If the old image runs on the new schema
   unchanged (a new table, a nullable column, an index), the migration's header carries the line
   `-- agency-hub:rollback-compatible — <why>`: then a failed deploy rolls itself back. List it nowhere else.
+- `schema.ts` holds only the tables the query builder uses; a table used through raw SQL is defined by its migration alone.
 - After an API contract change — `pnpm contracts:generate` (CI compares). A client that needs the new API
   re-vendors the SDK: `node scripts/vendor-sdk.mjs ../<client>/<path to kernel-sdk>`.
 - The money, deletion, erasure and test-DB isolation guards say in their error message which file and line
