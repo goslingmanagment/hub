@@ -80,13 +80,32 @@ export async function hasFreshInstanceHeartbeat(
   input: { role: string; ttlMs?: number },
 ): Promise<boolean> {
   const cutoff = new Date(Date.now() - (input.ttlMs ?? INSTANCE_STALE_TTL_MS));
-  const row = await db.query.runtimeInstances.findFirst({
-    where: and(
+  const rows = await db
+    .select({ role: runtimeInstances.role })
+    .from(runtimeInstances)
+    .where(and(
       eq(runtimeInstances.role, input.role),
       gte(runtimeInstances.lastSeenAt, cutoff),
-    ),
-  });
-  return row !== undefined;
+    ))
+    .limit(1);
+  return rows.length > 0;
+}
+
+export type InstanceLivenessRow = Pick<RuntimeInstanceRow, "role" | "instanceId" | "startedAt" | "lastSeenAt">;
+
+/** Every instance row (active and stale) as `listAllInstances` orders them, but
+ *  only the liveness columns: the operator screen, polled every 2 s, needs no
+ *  `running` snapshot (~11 KB of JSON per row). */
+export async function listInstanceLiveness(db: Database): Promise<InstanceLivenessRow[]> {
+  return db
+    .select({
+      role: runtimeInstances.role,
+      instanceId: runtimeInstances.instanceId,
+      startedAt: runtimeInstances.startedAt,
+      lastSeenAt: runtimeInstances.lastSeenAt,
+    })
+    .from(runtimeInstances)
+    .orderBy(asc(runtimeInstances.role), asc(runtimeInstances.instanceId));
 }
 
 /** Every instance row (active and stale), ordered by role then instance id. The

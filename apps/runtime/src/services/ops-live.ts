@@ -22,7 +22,7 @@ import type { OpsLiveAttempt, OpsLivePage, OpsLiveResponse } from "@agency_hub_c
 import {
   ENGINE_OWNED_SYNC_PAGE_MODES,
   INSTANCE_STALE_TTL_MS,
-  listAllInstances,
+  listInstanceLiveness,
   listNotificationIncidents,
   listOpenWorkOfAllPages,
   listOpsLiveAttempts,
@@ -409,7 +409,7 @@ export function createOpsLiveReader(
   // One connection at a time: four short reads in a row, not four at once.
   const state = cachedRead<OpsLiveState>(async () => {
     const pages = await readPages(app);
-    const processes = opsLiveProcessesOf(await listAllInstances(app.db), new Date());
+    const processes = opsLiveProcessesOf(await listInstanceLiveness(app.db), new Date());
     const incidents = await readIncidents(app);
     const queue = await readOpsLiveQueueNow(app.db);
     return { pages, processes, incidents, queue };
