@@ -154,7 +154,13 @@ for (const file of [
   "routes-ai-spend.ts",
   // The owner's shift review and the model questionnaires: routes.ts spreads them in, the barrel re-exports both.
   "routes-shift-review.ts",
+  // The shift review's pure rules; the barrel re-exports them.
+  "shift-review-rules.ts",
   "routes-model-applications.ts",
+  // The team's work and sale facts for the agency ledger (`read:team`, #1100) and the ledger's
+  // payout reads (#1103): routes.ts spreads both in, the barrel re-exports both.
+  "agent-team.ts",
+  "routes-team-ledger.ts",
   "routes-ofapi-marketing.ts",
   "ofapi-smart-links.ts",
   "ofapi-extended-commands.ts",
