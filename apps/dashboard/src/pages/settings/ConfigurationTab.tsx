@@ -13,7 +13,7 @@ import { CONFIG_MODE_CHOICES, humanConfigValue } from "./configurationChoices.js
 
 import { ConfigEditor, BooleanConfigEditor, liveEditorKind } from "./ConfigurationEditors.js";
 import { CONFIG_FILTERS, CONFIG_SUBSYSTEM_LABELS, configRiskBadges, configSubsystemOrder, matchesConfigFilter, matchesConfigSearch, runningDiffersFromDefault, type ConfigFilter } from "./configurationView.js";
-export { booleanPatchBody, liveEditorKind, resolveBooleanToggle } from "./ConfigurationEditors.js";
+export { resolveBooleanToggle } from "./ConfigurationEditors.js";
 
 function formatScalar(value: string | number | boolean | null): string {
   if (value === null) return "—";

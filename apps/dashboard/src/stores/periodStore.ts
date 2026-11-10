@@ -13,9 +13,6 @@ export type Period = "today" | "7d" | "14d" | "30d" | "90d" | "180d" | "365d" | 
 /** The periods the revenue reports (Главная, a page's summary) answer for. */
 export type PeriodOption = "today" | "7d" | "30d" | "all";
 
-/** The periods the spender reports (fans, auto-lists, a fan) answer for. */
-export type SpenderPeriodOption = "today" | "7d" | "30d" | "90d" | "180d" | "all";
-
 interface PeriodState {
   period: Period;
   setPeriod: (period: Period) => void;

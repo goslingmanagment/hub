@@ -24,7 +24,7 @@ import { NoAnswerPanel, StatusPanel } from "@/components/shared/StatusPanel";
 import { Disclosure } from "@/components/ui/Disclosure";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Skeleton, Spinner } from "@/components/ui/Skeleton";
-import { buildPageRoute, buildSettingsRoute } from "@/lib/navigation";
+import { buildPageRoute } from "@/lib/navigation";
 import { ServerAdminCommand } from "@/components/shared/ServerAdminCommand";
 import { Card, Chip, LiveScreenshot, LoginForm, OpenLoginDialog, ToneChip } from "./loginParts.js";
 import { browserHalted, browserStatusOf, onboardingStepsOf, profileLoginViewOf, stopReasonCode, type StepState } from "./pageBrowserOnboardingView.js";
@@ -454,7 +454,7 @@ export function PageBrowserOnboardingPage() {
           ? <StatusPanel title="Такого браузера нет" description="Профиль удалён или не создавался." />
           : status === 409
             ? <StatusPanel title="Браузер уже привязан к странице" description="Вход в него открывается с карточки страницы."
-                action={<Link to={buildSettingsRoute("pages")} className="btn btn-sm">К моделям и страницам</Link>} />
+                action={<Link to="/settings/pages" className="btn btn-sm">К моделям и страницам</Link>} />
             : <NoAnswerPanel retry={onboarding.refetch} />}
       </div>
     );

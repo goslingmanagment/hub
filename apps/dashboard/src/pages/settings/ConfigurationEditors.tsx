@@ -507,7 +507,7 @@ function saveFailureReason(error: unknown): string | null {
 }
 
 export function BooleanConfigEditor({ item, alwaysConfirm = false }: { item: ConfigItem; alwaysConfirm?: boolean }) {
-  const { mutations, receipt, confirm, setConfirm, current, needsConfirm, conflict, staleConfirmation, needsReview, pending, reset, toggle, revert } = useBooleanConfigToggle(item, { alwaysConfirm });
+  const { mutations, receipt, confirm, current, conflict, needsReview, pending, reset, toggle, revert } = useBooleanConfigToggle(item, { alwaysConfirm });
   const label = CONFIG_COPY_RU[item.key]?.title ?? item.label;
 
   return (

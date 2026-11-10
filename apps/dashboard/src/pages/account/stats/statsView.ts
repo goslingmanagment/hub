@@ -7,7 +7,6 @@ import { formatDuration, formatMills, formatPercent } from "@/lib/format";
 export type Stats = ChatterStats;
 export type StatsShift = Stats["shifts"][number];
 export type StatsSale = StatsShift["sales"][number];
-export type StatsVisit = Stats["visits"][number];
 
 /** The kinds of a sale in their fixed order and hue (the validated chart order: blue · orange · aqua · violet). */
 export const KINDS: ReadonlyArray<{ key: ChatterSaleKind; label: string; color: string }> = [
@@ -58,11 +57,6 @@ export function money(mills: number): string {
   return formatMills(mills);
 }
 
-/** The same; kept for the tooltips that ask for it by name. */
-export function moneyExact(mills: number): string {
-  return formatMills(mills);
-}
-
 export function count(value: number): string {
   return countFormat.format(value);
 }
@@ -80,16 +74,6 @@ export function share(part: number, whole: number): number | null {
 /** A share as `30 %`; no share is «—». */
 export function percent(value: number | null): string {
   return value === null ? "—" : formatPercent(value * 100);
-}
-
-/** The Russian plural of a count: plural(5, ["смена", "смены", "смен"]). */
-export function plural(value: number, forms: readonly [string, string, string]): string {
-  const tens = value % 100;
-  const ones = value % 10;
-  if (tens >= 11 && tens <= 14) return forms[2];
-  if (ones === 1) return forms[0];
-  if (ones >= 2 && ones <= 4) return forms[1];
-  return forms[2];
 }
 
 /** The change against the window before, as a signed share; null when there is nothing to compare with. */

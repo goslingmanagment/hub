@@ -1,12 +1,8 @@
 import type { SyncBlockStatus } from "@agency_hub_core/contracts";
 import {
-  getBlockTone,
-  getBlockLabel,
-  getBlockStateLabel,
   getBlockProgressFillClass,
   getBlockProgressBarMode,
   getBlockProgressPercent,
-  formatBlockSummary,
   formatBlockProgressCaption,
 } from "./syncBlockDisplay.js";
 
@@ -32,25 +28,3 @@ export function SyncBlockProgress({ block, width = "max-w-[200px]" }: { block: S
   );
 }
 
-/** A block at a glance (a page's card of the list). */
-export function SyncBlockRow({ block }: { block: SyncBlockStatus }) {
-  const tone = getBlockTone(block);
-  const isNA = block.state === "not_available";
-
-  return (
-    <div className="grid grid-cols-[7rem_minmax(0,1fr)] items-baseline gap-x-3 py-1 text-sm sm:grid-cols-[8.5rem_minmax(0,1fr)]" data-sync-block={block.block}>
-      <span className="flex items-center gap-2 font-medium text-text-secondary">
-        <span className={tone.dot} />
-        {getBlockLabel(block.block)}
-      </span>
-      <div className="min-w-0 space-y-1">
-        <span className={`break-words ${isNA ? "text-text-muted" : tone.text}`}>{formatBlockSummary(block)}</span>
-        <SyncBlockProgress block={block} width="max-w-[180px]" />
-      </div>
-    </div>
-  );
-}
-
-export function SyncBlockBadge({ block }: { block: SyncBlockStatus }) {
-  return <span className={getBlockTone(block).badge} data-sync-state={block.state}>{getBlockStateLabel(block)}</span>;
-}

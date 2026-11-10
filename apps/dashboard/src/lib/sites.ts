@@ -4,7 +4,7 @@
 // packages/ui/src/sites.ts.
 import { CHATTER_SITE_ORIGIN, CONSOLE_ORIGIN } from "@agency_hub_core/ui/sites";
 
-export { CHATTER_SITE_ORIGIN, CONSOLE_ORIGIN, LEGACY_CONSOLE_ORIGIN, chatterSiteOriginFor } from "@agency_hub_core/ui/sites";
+export { CHATTER_SITE_ORIGIN } from "@agency_hub_core/ui/sites";
 
 /** What the browser tab is called there; index.html names the console. */
 export const CHATTER_SITE_TITLE = "ChatGoose";

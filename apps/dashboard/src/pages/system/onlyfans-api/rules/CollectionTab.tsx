@@ -6,7 +6,6 @@ import { ChevronRight } from "lucide-react";
 import {
   useAdminOfapiCollection,
   useAdminOfapiCollectionJobs,
-  useAdminOfapiWebhookStatus,
   useOfapiCollectionApply,
   useOfapiCollectionJobCreate,
   useOfapiCollectionJobResume,
@@ -42,8 +41,6 @@ import {
   PRICE_UNIT_LABELS_RU,
   prerequisiteLabel,
   sourceLabel,
-  webhookOperationLabel,
-  webhookStateLabel,
 } from "./collectionCopyRu.js";
 import {
   buildCategoryViews,
@@ -62,7 +59,6 @@ import {
   fmtCredits,
   formatBytes,
   groupCategoryViews,
-  groupWebhookEvents,
   INTERVAL_OPTIONS_MINUTES,
   intervalLabel,
   jobProgress,
@@ -70,7 +66,6 @@ import {
   jobsFor,
   localDateTime,
   localDateTimeToIso,
-  maskWebhookId,
   parseSelection,
   relativeAge,
   restoreDraft,
@@ -84,7 +79,6 @@ import {
   stopSummary,
   summarizeAudit,
   usageTotals,
-  utcDateTime,
   type ApplyPhase,
   type CategoryGroup,
   type CategoryView,

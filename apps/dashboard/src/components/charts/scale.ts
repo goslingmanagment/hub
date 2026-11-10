@@ -119,48 +119,8 @@ export function tickBudget(widthPx: number, spacingPx = 72, max = 10): number {
   return Math.max(2, Math.min(max, Math.floor(widthPx / spacingPx)));
 }
 
-function isoKey(value: string): string | null {
-  const ms = Date.parse(value);
-  return Number.isFinite(ms) ? new Date(ms).toISOString() : null;
-}
-
 /** Above this many buckets the window is not drawn bucket by bucket. */
 const MAX_TIMELINE_BUCKETS = 2_000;
-
-/**
- * Every bucket start in `[from, to)` on the `periodMs` grid (daily buckets sit
- * on UTC midnight, as Fansly's datapoints do), merged with every bucket the
- * response actually served — so a served bucket off the grid is never lost.
- *
- * The axis therefore spans the WINDOW ASKED FOR, not the rows that came back:
- * a day nobody captured is a hole the chart shows, at its place in time.
- */
-export function bucketTimeline(
-  window: { from: string; to: string },
-  periodMs: number,
-  served: Iterable<string>,
-): string[] {
-  const keys = new Set<string>();
-  const from = Date.parse(window.from);
-  const to = Date.parse(window.to);
-  if (
-    Number.isFinite(from)
-    && Number.isFinite(to)
-    && periodMs > 0
-    && (to - from) / periodMs <= MAX_TIMELINE_BUCKETS
-  ) {
-    for (let at = Math.ceil(from / periodMs) * periodMs; at < to; at += periodMs) {
-      keys.add(new Date(at).toISOString());
-    }
-  }
-  for (const start of served) {
-    const key = isoKey(start);
-    if (key !== null) {
-      keys.add(key);
-    }
-  }
-  return [...keys].sort();
-}
 
 /** Every business date from `from` to `to`, both inclusive (`YYYY-MM-DD`). */
 export function businessDateRange(from: string, to: string): string[] {
@@ -174,11 +134,6 @@ export function businessDateRange(from: string, to: string): string[] {
     dates.push(new Date(at).toISOString().slice(0, 10));
   }
   return dates;
-}
-
-/** The key a served bucket is looked up by on a timeline. */
-export function bucketKey(bucketStart: string): string {
-  return isoKey(bucketStart) ?? bucketStart;
 }
 
 /** The largest stacked total (positive side) and the deepest negative one. */

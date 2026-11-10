@@ -2,11 +2,6 @@ import { keepPreviousData, useQuery } from "@tanstack/react-query";
 
 import { kernel } from "./sdk.js";
 
-export type OfLinksSnapshot = Awaited<ReturnType<typeof kernel.ofLinksGet>>;
-export type OfLinkRow = OfLinksSnapshot["links"][number];
-export type OfLinksPage = OfLinksSnapshot["pages"][number];
-export type OfLinksPageKind = OfLinksPage["kinds"][number];
-
 /** «Ссылки OnlyFans»: a local read of the link series (no vendor call). The
  * series is written four times a day, so the table refreshes every five
  * minutes and on the screen's button — never on a short poll. */

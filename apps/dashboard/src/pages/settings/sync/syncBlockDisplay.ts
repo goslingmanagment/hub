@@ -10,42 +10,13 @@ type SyncBlockSubstream = SyncBlockStatus["substreams"][number];
 type SyncReasonCarrier = Pick<SyncBlockStatus, "statusReason" | "error"> |
   Pick<SyncBlockSubstream, "statusReason" | "error">;
 
-export type { SyncBlockKey, SyncBlockState, SyncBlockSubstream };
+export type { SyncBlockKey, SyncBlockState };
 
 // The OnlyFans screen of System («Сбор данных → OnlyFans»): the pages the
 // legacy page-sync executor serves, in the console's language. The server
 // describes a block in English (its reasons, its diagnosis); the words here are
 // chosen from the codes, and only a reason with no code of ours falls back to
 // the server's own text.
-
-interface BlockTone {
-  badge: string;
-  dot: string;
-  text: string;
-}
-
-const NEUTRAL: BlockTone = { badge: "badge", dot: "status-dot", text: "text-text-secondary" };
-const OK: BlockTone = { badge: "badge badge-success", dot: "status-dot status-dot-ok", text: "text-green" };
-const WORKING: BlockTone = { badge: "badge badge-info", dot: "status-dot status-dot-ok", text: "text-text-secondary" };
-const WARN: BlockTone = { badge: "badge badge-warning", dot: "status-dot status-dot-warn", text: "text-warning-dark" };
-const DANGER: BlockTone = { badge: "badge badge-danger", dot: "status-dot status-dot-error", text: "text-danger" };
-const QUIET: BlockTone = { badge: "badge", dot: "status-dot", text: "text-text-muted" };
-
-const BLOCK_STATE_TONES: Record<SyncBlockState, BlockTone> = {
-  not_started: NEUTRAL,
-  scheduled: NEUTRAL,
-  up_to_date: OK,
-  syncing: WORKING,
-  backfilling: WORKING,
-  retrying: WARN,
-  delayed: WARN,
-  failed: DANGER,
-  paused: QUIET,
-  not_available: QUIET,
-  // A block of a Fansly page: the Fansly screen shows it with its own cards
-  // (`engine/EngineBlocks.tsx`); nothing here formats one.
-  engine: { badge: "badge badge-accent", dot: "status-dot", text: "text-text-secondary" },
-};
 
 const BLOCK_STATE_LABELS: Record<SyncBlockState, string> = {
   not_started: "Не запускался",
@@ -72,22 +43,6 @@ const BLOCK_DESCRIPTIONS: Record<SyncBlockKey, string> = {
   audience: "Подписчики и фолловеры страницы.",
   messages_live: "Список чатов: новые чаты и последнее сообщение каждого.",
   messages_history: "Полный текст сообщений каждого чата.",
-};
-
-// English: the analytics Coverage panel's words for a stream (it reads them
-// from here). This screen names streams in Russian (`syncStreamLabel`).
-const COVERAGE_STREAM_LABELS: Record<string, string> = {
-  light: "connection",
-  fan_identities: "fan identities",
-  transactions: "transactions",
-  top_spenders: "top spenders",
-  subscribers: "subscribers",
-  followers: "followers",
-  followers_reconcile: "follower reconcile",
-  dm_conversations: "conversation sync",
-  dm_messages: "message history",
-  media_stats: "media statistics",
-  stats_snapshot: "account statistics",
 };
 
 /** The stream a block's progress belongs to, when it is not the block's own. */
@@ -170,10 +125,6 @@ function getDisplayBlockState(blockOrState: SyncBlockStatus | SyncBlockState): S
   return isHealthyQueueWaitingBlock(blockOrState) ? "up_to_date" : blockOrState.state;
 }
 
-export function getBlockTone(blockOrState: SyncBlockStatus | SyncBlockState): BlockTone {
-  return BLOCK_STATE_TONES[getDisplayBlockState(blockOrState)];
-}
-
 export function getBlockStateLabel(blockOrState: SyncBlockStatus | SyncBlockState): string {
   return BLOCK_STATE_LABELS[getDisplayBlockState(blockOrState)];
 }
@@ -188,11 +139,6 @@ export function getBlockDescription(block: SyncBlockKey): string {
 
 export function getBlockOrder(): SyncBlockKey[] {
   return BLOCK_ORDER;
-}
-
-/** A stream in English, for the analytics Coverage panel (not this screen). */
-export function getStreamLabel(stream: string): string {
-  return COVERAGE_STREAM_LABELS[stream] ?? stream.replaceAll("_", " ");
 }
 
 function getProgressStreamLabel(stream: string | null): string | null {
@@ -366,10 +312,6 @@ export function getBlockProgressBarMode(block: SyncBlockStatus): "hidden" | "det
   }
 
   return "hidden";
-}
-
-export function shouldShowBlockProgressBar(block: SyncBlockStatus): boolean {
-  return getBlockProgressBarMode(block) !== "hidden";
 }
 
 /** The share of a block's progress that is done, for its bar. */
@@ -549,25 +491,6 @@ const BLOCK_METRIC_KEYS: Partial<Record<SyncBlockKey, readonly string[]>> = {
   messages_live: ["visibleConversationCount", "count"],
 };
 
-export function getSubstreamTone(substream: SyncBlockSubstream): BlockTone {
-  if (isHealthyQueueWaitingSubstream(substream)) {
-    return BLOCK_STATE_TONES.up_to_date;
-  }
-  if (isDependencyWait(substream)) {
-    return BLOCK_STATE_TONES.scheduled;
-  }
-  if (substream.state === "delayed") {
-    const code = getReasonCode(substream);
-    if (code === "queue_delayed" || code === "progress_stalled" || code === "stale") {
-      return BLOCK_STATE_TONES.delayed;
-    }
-  }
-  if (substream.state === "scheduled") {
-    return BLOCK_STATE_TONES.scheduled;
-  }
-  return getBlockTone(substream.state);
-}
-
 export function formatSubstreamStateLabel(substream: SyncBlockSubstream): string {
   const code = getReasonCode(substream);
 
@@ -642,14 +565,6 @@ export function formatAttemptsLine(block: SyncBlockStatus): string | null {
   if (stuck > 0) parts.push(`зависших: ${count(stuck)}`);
   if (withoutSuccess > 0) parts.push(`подряд без успеха: ${count(withoutSuccess)}`);
   return parts.length === 0 ? null : parts.join(" · ");
-}
-
-/** Whether the day's HTTP attempts of a block are in trouble (the line is
- *  then in the warning colour). */
-export function attemptsInTrouble(block: SyncBlockStatus): boolean {
-  const stuck = block.metrics.stalePhysicalAttemptCount;
-  const withoutSuccess = block.metrics.maxPhysicalAttemptsSinceLastSuccess;
-  return (typeof stuck === "number" && stuck > 0) || (typeof withoutSuccess === "number" && withoutSuccess > 0);
 }
 
 /** What the reset's confirmation says: the block is read again from the
