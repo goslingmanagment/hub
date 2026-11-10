@@ -1,7 +1,7 @@
-import { ArrowLeft, Banknote, CalendarClock, FileText, Inbox, KeyRound, LogOut, Monitor, Moon, Sun, TrendingUp, Users } from "lucide-react";
+import { ArrowLeft, Banknote, CalendarClock, ChevronsUpDown, Inbox, KeyRound, LogOut, Monitor, Moon, Smartphone, Sun, TrendingUp, Users } from "lucide-react";
 import { Suspense, type ReactNode } from "react";
 import { NavLink, Navigate, Outlet, useLocation, useMatches, type UIMatch } from "react-router";
-import { CountBadge, ErrorState, Menu, Skeleton, Tooltip, type IconComponent } from "@agency_hub_core/ui";
+import { CountBadge, ErrorState, Menu, Skeleton, Tooltip, type IconComponent, type MenuEntry } from "@agency_hub_core/ui";
 import { THEME_OPTIONS, useThemeStore, type ThemePreference } from "@agency_hub_core/ui/theme";
 import { kernel, queryClient, signInHref } from "@/shared/hub";
 import { carryParams } from "@/shared/links";
@@ -27,10 +27,11 @@ interface NavItem {
  * screen that does not need them keeps them in its address and does not show
  * them, so the next screen opens on the same dates. The team (the owner and
  * team leads) and a chatter see their own items only: a chatter's part of
- * Workboard is theirs alone (owner, 2026-11-10).
+ * Workboard is theirs alone (owner, 2026-11-10) — «Мои смены», their shifts
+ * with their reports; their account is in the menu at the bottom.
  */
 const WORK: readonly NavItem[] = [
-  { to: "/my/reports", label: "Мои отчёты", icon: FileText, roles: CHATTER },
+  { to: "/my/shifts", label: "Мои смены", icon: CalendarClock, roles: CHATTER },
   { to: "/shifts", label: "Смены", icon: CalendarClock, roles: TEAM },
   { to: "/people", label: "Люди", icon: Users, roles: TEAM },
   { to: "/sales", label: "Что продаёт", icon: TrendingUp, roles: TEAM },
@@ -42,14 +43,13 @@ const ADMIN: readonly NavItem[] = [
   { to: "/access", label: "Доступ", icon: KeyRound, roles: OWNER },
 ];
 
-/**
- * The way out to the other app on this host (a page load): the console for the
- * team, the cabinet for a chatter — their statistics, devices and password.
- */
+/** The way out to the other app on this host (a page load): the console, for the team. */
 const EXITS: readonly { href: string; label: string; roles: readonly Role[] }[] = [
   { href: "/", label: "Hub", roles: TEAM },
-  { href: "/account", label: "Кабинет", roles: CHATTER },
 ];
+
+/** A chatter's account — devices, password, their AI spend — is the console's page on this host (a page load). */
+const ACCOUNT_HREF = "/account";
 
 const ROLE_WORD: Record<string, string> = { owner: "Владелец", team_lead: "Тимлид", chatter: "Чаттер" };
 const THEME_ICON: Record<ThemePreference, IconComponent> = { system: Monitor, light: Sun, dark: Moon };
@@ -129,45 +129,68 @@ function useScreenKey(): string {
   return `${leaf.id}:${leaf.handle?.screenKey?.(leaf.params) ?? ""}`;
 }
 
+/**
+ * Who is signed in, at the sidebar's foot, and their menu: the theme and the
+ * way out; a chatter's also leads to their account (devices, password). A
+ * chatter's whole row is the menu's button — on a phone it is the strip's
+ * last item, and their only way to the account.
+ */
 function Account() {
   const { user, role } = useMe();
   const theme = useThemeStore((state) => state.theme);
   const setTheme = useThemeStore((state) => state.setTheme);
   if (!user) return null;
   const name = user.username;
+  const chatter = role === "chatter";
+  const items: MenuEntry[] = [
+    ...(chatter ? [{ label: "Аккаунт и устройства", icon: Smartphone, onSelect: () => window.location.assign(ACCOUNT_HREF) }, { separator: true as const }] : []),
+    { group: "Тема" },
+    ...THEME_OPTIONS.map((option) => ({
+      label: option.label,
+      icon: THEME_ICON[option.value],
+      checked: theme === option.value,
+      onSelect: () => setTheme(option.value),
+    })),
+    { separator: true },
+    {
+      label: "Выйти",
+      icon: LogOut,
+      onSelect: () => {
+        void kernel.logout().catch(() => undefined).finally(() => {
+          queryClient.clear();
+          window.location.assign(signInHref(import.meta.env.BASE_URL));
+        });
+      },
+    },
+  ];
+  const avatar = <span className="wb-account__avatar" aria-hidden>{name.slice(0, 1).toUpperCase()}</span>;
+  const text = (
+    <span className="wb-account__text">
+      <span className="wb-account__name">{name}</span>
+      <span className="wb-account__role">{ROLE_WORD[role ?? ""] ?? role}</span>
+    </span>
+  );
+  if (chatter) {
+    return (
+      <Menu
+        label="Аккаунт, тема и выход"
+        align="start"
+        items={items}
+        renderTrigger={({ ref, ...trigger }) => (
+          <button ref={ref} type="button" className="wb-account wb-account--button" aria-label={`${name}: аккаунт, тема и выход`} {...trigger}>
+            {avatar}
+            {text}
+            <ChevronsUpDown size={16} strokeWidth={1.75} aria-hidden className="wb-account__chevron" />
+          </button>
+        )}
+      />
+    );
+  }
   return (
     <div className="wb-account">
-      <span className="wb-account__avatar" aria-hidden>{name.slice(0, 1).toUpperCase()}</span>
-      <span className="wb-account__text">
-        <span className="wb-account__name">{name}</span>
-        <span className="wb-account__role">{ROLE_WORD[role ?? ""] ?? role}</span>
-      </span>
-      <Menu
-        label="Тема и выход"
-        size="sm"
-        align="start"
-        triggerIcon={THEME_ICON[theme]}
-        items={[
-          { group: "Тема" },
-          ...THEME_OPTIONS.map((option) => ({
-            label: option.label,
-            icon: THEME_ICON[option.value],
-            checked: theme === option.value,
-            onSelect: () => setTheme(option.value),
-          })),
-          { separator: true },
-          {
-            label: "Выйти",
-            icon: LogOut,
-            onSelect: () => {
-              void kernel.logout().catch(() => undefined).finally(() => {
-                queryClient.clear();
-                window.location.assign(signInHref(import.meta.env.BASE_URL));
-              });
-            },
-          },
-        ]}
-      />
+      {avatar}
+      {text}
+      <Menu label="Тема и выход" size="sm" align="start" triggerIcon={THEME_ICON[theme]} items={items} />
     </div>
   );
 }
@@ -190,9 +213,8 @@ export function ScreenFallback() {
 export function Shell() {
   const { role } = useMe();
   const location = useLocation();
-  // A bare address opens the period last used in this tab (D3); the address then says it. The team's
-  // period: a chatter's screen keeps its own window in its address, and nothing of the team's is remembered for it.
-  const restored = useRestoredPeriod(role !== "chatter");
+  // A bare address opens the period last used in this tab (D3); the address then says it — a chatter's too.
+  const restored = useRestoredPeriod();
   // «←» comes back to the same place of the page; a new screen opens at its top (D16).
   useScrollMemory();
   const screenKey = useScreenKey();
@@ -204,7 +226,8 @@ export function Shell() {
           {seenBy(WORK, role).map((item) => (
             <NavRow key={item.to} item={item} end={item.to === "/decisions" ? <DecisionsCount /> : undefined} />
           ))}
-          <div className="wb-nav__sep" role="separator" />
+          {/* The line parts work from the rest; with nothing after it (a chatter), there is no line. */}
+          {seenBy(ADMIN, role).length + seenBy(EXITS, role).length > 0 && <div className="wb-nav__sep" role="separator" />}
           {seenBy(ADMIN, role).map((item) => <NavRow key={item.to} item={item} />)}
           {seenBy(EXITS, role).map((exit) => (
             <a key={exit.href} href={exit.href} className="wb-nav__item wb-nav__item--quiet">

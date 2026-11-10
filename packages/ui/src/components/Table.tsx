@@ -1,5 +1,5 @@
-import { ArrowDown, ArrowRight, ArrowUp } from "lucide-react";
-import { useCallback, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent, type ReactNode } from "react";
+import { ArrowDown, ArrowRight, ArrowUp, ChevronRight } from "lucide-react";
+import { Fragment, useCallback, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent, type ReactNode } from "react";
 import { Link, useHref, useNavigate } from "react-router";
 import { ruPlural } from "../plural.js";
 import { cx } from "./cx.js";
@@ -70,6 +70,17 @@ export interface TableProps<Row> {
   rowState?: (row: Row) => unknown;
   /** Instead of an address: a row that opens a panel. */
   onRowClick?: (row: Row) => void;
+  /**
+   * Instead of an address or a panel: a row that opens in place — the app's one
+   * disclosure, in a table (a shift opens to its report). What shows under the
+   * row while it is open, across all its columns; null — the row has nothing to
+   * open. A press on the row opens and closes it; its first cell is the
+   * disclosure's button (a chevron before its words, `aria-expanded`, Enter and
+   * Space). The caller keeps which rows are open: `openKeys`, `onOpenChange`.
+   */
+  rowDetail?: (row: Row) => ReactNode;
+  openKeys?: ReadonlySet<string>;
+  onOpenChange?: (row: Row, open: boolean) => void;
   /** The row that is open now (in a panel next to it): ink ground. */
   selectedKey?: string | null;
   /**
@@ -277,6 +288,9 @@ export function Table<Row>({
   rowHref,
   rowState,
   onRowClick,
+  rowDetail,
+  openKeys,
+  onOpenChange,
   selectedKey,
   rowQuiet,
   rowEmphasis,
@@ -309,6 +323,7 @@ export function Table<Row>({
   const tableRef = useRef<HTMLTableElement>(null);
   const [fitted, setFitted] = useState<Fitted | null>(null);
   const [owner] = useState(() => Symbol("table"));
+  const detailId = useId();
   const sticky = Math.max(0, Math.min(stickyColumns, columns.length - 1));
   // Wider than its place (many columns, a narrow window): scroll sideways inside
   // the frame instead of cutting the last columns. Only then does the header stop sticking.
@@ -596,46 +611,73 @@ export function Table<Row>({
                 : sorted.map((row, rowIndex) => {
                   const key = rowKey(row);
                   const href = rowHref?.(row);
-                  const clickable = href !== undefined || onRowClick !== undefined;
+                  const detail = rowDetail?.(row);
+                  const opens = rowDetail !== undefined && detail !== null && detail !== undefined && detail !== false;
+                  const open = opens && (openKeys?.has(key) ?? false);
+                  const toggle = () => onOpenChange?.(row, !open);
+                  const clickable = href !== undefined || onRowClick !== undefined || opens;
+                  const detailKey = `${detailId}-${rowIndex}`;
                   return (
-                    <tr
-                      key={key}
-                      className={cx(
-                        clickable && "ui-table__row--link",
-                        selectedKey === key && "ui-table__row--selected",
-                        rowQuiet?.(row) && "ui-table__row--quiet",
-                        rowEmphasis?.(row) && "ui-table__row--emphasis",
-                        rowClassName?.(row),
-                      ) || undefined}
-                      aria-selected={selectedKey === undefined ? undefined : selectedKey === key}
-                      onClick={clickable ? (event) => {
-                        if (href !== undefined && (event.metaKey || event.ctrlKey) && !(event.target as Element).closest("a")) {
-                          window.open(`${base}${href}`, "_blank", "noopener");
-                          return;
-                        }
-                        if (!isPlainClick(event) || event.metaKey || event.ctrlKey) return;
-                        if (href !== undefined) navigate(href, rowState ? { state: rowState(row) } : undefined);
-                        else onRowClick?.(row);
-                      } : undefined}
-                      onAuxClick={href !== undefined ? (event) => {
-                        if (event.button === 1 && !(event.target as Element).closest("a")) window.open(`${base}${href}`, "_blank", "noopener");
-                      } : undefined}
-                    >
-                      {columns.map((column, columnIndex) => {
-                        const content = column.cell(row, rowIndex);
-                        return (
-                          <td key={column.key} className={cellClass(column, columnIndex)} style={stickyStyle(columnIndex)}>
-                            {columnIndex === 0 && href !== undefined ? (
-                              <Link to={href} state={rowState?.(row)} className="ui-table__rowlink">{content}</Link>
-                            ) : columnIndex === 0 && onRowClick !== undefined ? (
-                              <button type="button" className="ui-table__rowlink ui-table__rowbutton" onClick={() => onRowClick(row)}>
-                                {content}
-                              </button>
-                            ) : content}
-                          </td>
-                        );
-                      })}
-                    </tr>
+                    <Fragment key={key}>
+                      <tr
+                        className={cx(
+                          clickable && "ui-table__row--link",
+                          open && "ui-table__row--open",
+                          selectedKey === key && "ui-table__row--selected",
+                          rowQuiet?.(row) && "ui-table__row--quiet",
+                          rowEmphasis?.(row) && "ui-table__row--emphasis",
+                          rowClassName?.(row),
+                        ) || undefined}
+                        aria-selected={selectedKey === undefined ? undefined : selectedKey === key}
+                        onClick={clickable ? (event) => {
+                          if (href !== undefined && (event.metaKey || event.ctrlKey) && !(event.target as Element).closest("a")) {
+                            window.open(`${base}${href}`, "_blank", "noopener");
+                            return;
+                          }
+                          if (!isPlainClick(event) || event.metaKey || event.ctrlKey) return;
+                          if (href !== undefined) navigate(href, rowState ? { state: rowState(row) } : undefined);
+                          else if (opens) toggle();
+                          else onRowClick?.(row);
+                        } : undefined}
+                        onAuxClick={href !== undefined ? (event) => {
+                          if (event.button === 1 && !(event.target as Element).closest("a")) window.open(`${base}${href}`, "_blank", "noopener");
+                        } : undefined}
+                      >
+                        {columns.map((column, columnIndex) => {
+                          const content = column.cell(row, rowIndex);
+                          return (
+                            <td key={column.key} className={cellClass(column, columnIndex)} style={stickyStyle(columnIndex)}>
+                              {columnIndex === 0 && href !== undefined ? (
+                                <Link to={href} state={rowState?.(row)} className="ui-table__rowlink">{content}</Link>
+                              ) : columnIndex === 0 && opens ? (
+                                <button
+                                  type="button"
+                                  className="ui-table__rowlink ui-table__rowbutton ui-table__toggle"
+                                  aria-expanded={open}
+                                  aria-controls={open ? detailKey : undefined}
+                                  onClick={toggle}
+                                >
+                                  <ChevronRight size={16} strokeWidth={2} aria-hidden className="ui-table__chevron" />
+                                  <span className="ui-table__toggle-words">{content}</span>
+                                </button>
+                              ) : columnIndex === 0 && rowDetail !== undefined ? (
+                                // Nothing to open: the words stand where the others' words stand, after the chevron's place.
+                                <span className="ui-table__toggle"><span aria-hidden className="ui-table__chevron-place" /><span className="ui-table__toggle-words">{content}</span></span>
+                              ) : columnIndex === 0 && onRowClick !== undefined ? (
+                                <button type="button" className="ui-table__rowlink ui-table__rowbutton" onClick={() => onRowClick(row)}>
+                                  {content}
+                                </button>
+                              ) : content}
+                            </td>
+                          );
+                        })}
+                      </tr>
+                      {open && (
+                        <tr id={detailKey} className="ui-table__detail">
+                          <td colSpan={columns.length}>{detail}</td>
+                        </tr>
+                      )}
+                    </Fragment>
                   );
                 })}
           </tbody>

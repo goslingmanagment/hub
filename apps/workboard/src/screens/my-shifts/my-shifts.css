@@ -1,0 +1,466 @@
+/*
+ * Мои смены: what the shared components do not say themselves. Tokens only.
+ * Chatters look from a phone: at 640 px and below the journal's rows stack —
+ * the day, the report's total and its state on the first line — and nothing is
+ * wider than the screen.
+ */
+@layer components {
+  .mys {
+    gap: 16px;
+  }
+
+  /* ------------------------------------------------------------ The facts line */
+
+  .mys-facts {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 24px;
+    min-height: 28px;
+  }
+
+  .mys-facts .ui-facts {
+    align-items: center;
+    gap: 8px 28px;
+  }
+
+  .mys-facts__money {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 8px;
+  }
+
+  .mys-facts__away {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    color: var(--ui-text-2);
+    font-weight: 400;
+  }
+
+  .mys-facts__mark {
+    cursor: default;
+  }
+
+  /* ------------------------------------------------------ Now, on a shift */
+
+  .mys-now {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 20px;
+    min-height: 56px;
+    padding: 12px 24px;
+    border: 1px solid var(--ui-line);
+    border-radius: var(--ui-radius-lg);
+    background: var(--ui-surface);
+  }
+
+  .mys-now__dot {
+    flex: none;
+    width: 8px;
+    height: 8px;
+    margin-right: -8px;
+    border-radius: 50%;
+    background: var(--ui-good);
+  }
+
+  .mys-now__title {
+    color: var(--ui-text);
+    font-weight: 600;
+  }
+
+  .mys-now__fact {
+    color: var(--ui-text);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+
+  .mys-now__sep {
+    margin: 0 8px;
+    color: var(--ui-text-3);
+  }
+
+  .mys-now__pages {
+    color: var(--ui-text-2);
+  }
+
+  .mys-now__end {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 4px 16px;
+    margin-left: auto;
+  }
+
+  .mys-now__note {
+    color: var(--ui-text-3);
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+  }
+
+  /* --------------------------------------------------------------- The journal */
+
+  /* While it loads: two lines of the day and the clock, as tall as the rows to come — no person's avatar here. */
+  .mys-journal td:first-child > .ui-table__skeleton > .ui-skel:first-child {
+    display: none;
+  }
+
+  .mys-when {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .mys-when__day {
+    color: var(--ui-text);
+    font-weight: 500;
+  }
+
+  .mys-when__time {
+    color: var(--ui-text-2);
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .mys-when__time--now {
+    color: var(--ui-good-text);
+  }
+
+  /* The worked time, pages and Hub's figure under the day: a phone's, not a wide screen's. */
+  .mys-phone {
+    display: none;
+    color: var(--ui-text-2);
+  }
+
+  .mys-pages {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+  }
+
+  .mys-pages__note {
+    color: var(--ui-text-3);
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+  }
+
+  /* Hub's own figure where there is no report: quiet, smaller, never the row's number. */
+  .mys-hub {
+    color: var(--ui-text-3);
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+    white-space: nowrap;
+  }
+
+  .mys-hub .ui-money {
+    color: inherit;
+  }
+
+  .mys-state {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 2px 10px;
+    min-height: 24px;
+  }
+
+  .mys-state__next {
+    color: var(--ui-text-2);
+  }
+
+  /* Colour only where something is to be done: a sent report keeps its green mark, its word is plain. */
+  .mys-state .ui-badge--success {
+    color: var(--ui-text-2);
+  }
+
+  /* ------------------------------------------------- The report, opened */
+
+  /*
+   * From under the first cell's words (past the chevron) to the end of the row's total: the sales' amounts end
+   * where the total ends (`--mys-total-edge`, measured; 24 px of the cell's left padding, 16 of the total's right).
+   */
+  .mys-report {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    width: calc(var(--mys-total-edge, 904px) - 40px);
+    min-width: min(100%, 560px);
+    max-width: 100%;
+    padding: 4px 0 4px 24px;
+  }
+
+  .mys-report__head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 4px 24px;
+  }
+
+  .mys-report__pages {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 24px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .mys-report__page {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 8px;
+    white-space: nowrap;
+  }
+
+  .mys-report__page .ui-page {
+    color: var(--ui-text-2);
+  }
+
+  .mys-report__page--zero .ui-page {
+    color: var(--ui-text-3);
+  }
+
+  .mys-report__saved {
+    margin: 0;
+    color: var(--ui-text-3);
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+  }
+
+  .mys-report__none {
+    margin: 0;
+    color: var(--ui-text-2);
+  }
+
+  .mys-report__groups {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  .mys-report__title {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    margin: 0 0 2px;
+    color: var(--ui-text);
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+    font-weight: 600;
+  }
+
+  .mys-report__count {
+    color: var(--ui-text-3);
+    font-weight: 400;
+  }
+
+  .mys-lines {
+    margin: 0;
+    padding: 0;
+    border-top: 1px solid var(--ui-line-soft);
+    list-style: none;
+  }
+
+  .mys-line {
+    display: grid;
+    grid-template-columns: 48px minmax(0, 1fr) auto;
+    align-items: baseline;
+    gap: 12px;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--ui-line-soft);
+  }
+
+  .mys-line__time {
+    color: var(--ui-text-3);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .mys-line__main {
+    min-width: 0;
+  }
+
+  .mys-line__what {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 2px 12px;
+    margin: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .mys-line__what .ui-page,
+  .mys-line__kind {
+    color: var(--ui-text-2);
+  }
+
+  .mys-line__fan {
+    color: var(--ui-text);
+  }
+
+  .mys-line__added {
+    align-self: center;
+  }
+
+  .mys-line__reason,
+  .mys-line__note {
+    margin: 2px 0 0;
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+  }
+
+  .mys-line__reason {
+    color: var(--ui-text-2);
+  }
+
+  .mys-line__note {
+    color: var(--ui-text-3);
+  }
+
+  .mys-line__money {
+    text-align: right;
+    font-weight: 500;
+  }
+
+  .mys-line--held .mys-line__fan {
+    color: var(--ui-text-2);
+  }
+
+  /* -------------------------------------------------------------- A phone */
+
+  @media (max-width: 640px) {
+    .mys-now {
+      gap: 4px 12px;
+      padding: 12px 16px;
+    }
+
+    .mys-now__end {
+      margin-left: 0;
+      width: 100%;
+    }
+
+    /* The journal's rows stack: the day, the total and the state on the first line; the clock, the worked time and
+       the pages under them; what to do under that. One DOM, the table's own. */
+    .mys-journal .ui-table,
+    .mys-journal .ui-table tbody {
+      display: block;
+    }
+
+    .mys-journal .ui-table colgroup {
+      display: none;
+    }
+
+    .mys-journal .ui-table thead {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip-path: inset(50%);
+      white-space: nowrap;
+    }
+
+    .mys-journal .ui-table tbody tr {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto auto;
+      align-items: start;
+      column-gap: 12px;
+      /* A finger's row: at least 44 px, the whole row is the button. */
+      min-height: 64px;
+      padding: 10px 16px;
+      border-bottom: 1px solid var(--ui-line-soft);
+    }
+
+    .mys-journal .ui-table tbody tr:last-child {
+      border-bottom: 0;
+    }
+
+    .mys-journal .ui-table tbody td,
+    .mys-journal .ui-table tbody td:first-child,
+    .mys-journal .ui-table tbody td:last-child {
+      display: block;
+      height: auto;
+      padding: 0;
+      border: 0;
+    }
+
+    .mys-journal .ui-table td.mys-col-when {
+      grid-column: 1 / -1;
+      grid-row: 1 / span 2;
+    }
+
+    .mys-journal .ui-table td.mys-col-total {
+      grid-column: 2;
+      grid-row: 1;
+    }
+
+    .mys-journal .ui-table td.mys-col-total .mys-hub {
+      display: none;
+    }
+
+    .mys-journal .ui-table tbody td.mys-col-state,
+    .mys-journal .ui-table tbody td.mys-col-state .mys-state {
+      display: contents;
+    }
+
+    .mys-journal .mys-state__badge {
+      grid-column: 3;
+      grid-row: 1;
+      justify-self: end;
+    }
+
+    .mys-journal .mys-state__next {
+      grid-column: 1 / -1;
+      grid-row: 3;
+      margin-top: 4px;
+      padding-left: 24px;
+      font-size: var(--ui-fs-14);
+      line-height: var(--ui-lh-14);
+    }
+
+    .mys-journal .ui-table tbody td.mys-col-pages,
+    .mys-journal .ui-table tbody td.mys-col-worked,
+    .mys-journal .ui-table tbody tr[aria-hidden] td.mys-col-state {
+      display: none;
+    }
+
+    .mys-journal .mys-phone {
+      display: inline;
+    }
+
+    .mys-journal .mys-when__time {
+      white-space: normal;
+    }
+
+    .mys-journal .ui-table tbody tr.ui-table__detail {
+      display: block;
+      min-height: 0;
+      padding: 0 16px 16px;
+    }
+
+    .mys-journal .ui-table tbody tr.ui-table__row--open {
+      border-bottom: 0;
+    }
+
+    .mys-journal .ui-table tbody tr.ui-table__empty {
+      display: block;
+      padding: 0;
+    }
+
+    .mys-report {
+      width: auto;
+      min-width: 0;
+      padding-left: 0;
+    }
+
+    .mys-report__head {
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .mys-line {
+      grid-template-columns: 44px minmax(0, 1fr) auto;
+      gap: 10px;
+    }
+  }
+}

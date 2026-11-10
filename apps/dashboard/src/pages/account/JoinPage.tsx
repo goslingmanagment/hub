@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "rea
 import { useLocation } from "react-router";
 import { useInspectAccountLink, useRedeemAccountLink } from "@/api/queries";
 import { KernelApiError } from "@/api/sdk";
+import { CHATTER_HOME } from "@/lib/navigation";
 import { CHATTER_SITE_ORIGIN } from "@/lib/sites";
 import {
   LINK_UNUSABLE_MESSAGE,
@@ -106,8 +107,8 @@ export function JoinPage() {
           </>
         )}
         <div className="entry-after">
-          <a href={`${CHATTER_SITE_ORIGIN}/account`} className="btn entry-submit">Открыть кабинет</a>
-          <p className="entry-hint">Здесь ты подтверждаешь отчёты смен.</p>
+          <a href={`${CHATTER_SITE_ORIGIN}${CHATTER_HOME}`} className="btn entry-submit">Открыть «Мои смены»</a>
+          <p className="entry-hint">Здесь твои смены и отчёты по ним.</p>
         </div>
         <p className="entry-text mt-6">
           <a href={START_GUIDE_URL} className="link">Как начать</a>

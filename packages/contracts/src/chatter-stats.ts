@@ -29,8 +29,14 @@ export type ChatterSaleKind = (typeof CHATTER_SALE_KINDS)[number];
 const byKindSchema = z.object({ ppv: mills, tip: mills, subscription: mills, post: mills });
 
 export const accountChatterStatsQuerySchema = z.object({
-  /** Whole Moscow days back from today, today included. */
+  /** Whole Moscow days back from the window's last day (`until`, default today), that day included. */
   days: z.coerce.number().int().min(1).max(CHATTER_STATS_MAX_DAYS).default(7),
+  /**
+   * The window's last Moscow day; default today. A past one shows that window
+   * (a calendar week of Workboard's «Мои смены»); a later one keeps today inside
+   * the window and lists the days to come empty — as `teamShiftSales`.
+   */
+  until: businessDate.optional(),
 });
 
 export const teamChatterStatsQuerySchema = accountChatterStatsQuerySchema.extend({

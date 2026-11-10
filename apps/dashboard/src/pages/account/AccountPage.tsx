@@ -5,7 +5,6 @@ import {
   useAuthMe,
   useChangeMyPassword,
   useMyDevices,
-  useMyStats,
   useMyUsage,
   useRevokeMyDevice,
   useRevokeMyDevices,
@@ -14,12 +13,12 @@ import { KernelApiError } from "@/api/sdk";
 import { ChartTable } from "@/components/charts/ChartTable";
 import { StackedBarChart } from "@/components/shared/StackedBarChart";
 import { Field } from "@/components/shared/Field";
-import { Segmented } from "@/components/ui/Segmented";
-import { SectionTabs } from "@/components/ui/SectionTabs";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { Stat, StatGrid } from "@/components/ui/StatGrid";
 import { formatAiUsd, formatCount, formatDay } from "@/lib/format";
+import { CHATTER_SHIFTS, cabinetRedirect } from "@/lib/navigation";
 import { ruPlural } from "@/lib/plural";
+import { LeaveForWorkboard } from "@/routes/ToWorkboard";
 import {
   START_GUIDE_URL,
   USAGE_WINDOW_DAYS,
@@ -31,13 +30,11 @@ import {
   roleLabel,
   usageWindow,
 } from "./accountView.js";
-import { ShiftReports } from "./ShiftReports.js";
-import { ChatterStatsView } from "./stats/ChatterStatsView.js";
-import { PERIODS } from "./stats/statsView.js";
 
-// The cabinet. One person, their own account: their shifts and what they sold,
-// their shift reports, who they are, the devices they are signed in on, their
-// password and what their AI work cost. Every route it calls is any-session and
+// The account page. One person, their own account: who they are, the devices
+// they are signed in on, their password and what their AI work cost. A
+// chatter's shifts and reports are Workboard's «Мои смены» (owner, 2026-11-10);
+// the cabinet's old tabs lead there. Every route it calls is any-session and
 // self-scoped: there is nothing here an owner could not also open about themselves.
 
 function Section({ title, children, aside }: { title: string; children: ReactNode; aside?: ReactNode }) {
@@ -307,110 +304,36 @@ function Spend() {
   );
 }
 
-const TABS = [
-  { tab: null, to: "/account", label: "Статистика" },
-  { tab: "report", to: "/account?tab=report", label: "Отчёт смены" },
-  { tab: "profile", to: "/account?tab=profile", label: "Аккаунт" },
-] as const;
-
-function CabinetTabs({ current }: { current: string | null }) {
-  const items = TABS.map((item) => ({ to: item.to, label: item.label }));
-  return <SectionTabs label="Кабинет" items={items} current={TABS.find((item) => item.tab === current)?.to} />;
-}
-
-/** `?days=7|14|30`; anything else is 7. Kept out of the console's remembered period. */
-function daysOf(raw: string | null): number {
-  const value = Number(raw);
-  return PERIODS.some((period) => period.days === value) ? value : 7;
-}
-
-function MyStats() {
-  const [params, setParams] = useSearchParams();
-  const days = daysOf(params.get("days"));
-  const stats = useMyStats(days);
-  const { data: me } = useAuthMe();
-  const pick = (next: number) => {
-    const query = new URLSearchParams(params);
-    if (next === 7) query.delete("days");
-    else query.set("days", String(next));
-    setParams(query, { replace: true });
-  };
-  const toolbar = (
-    <div className="cs-toolbar">
-      <h1 className="cs-greeting">Привет, {stats.data?.user.username ?? me?.user.username ?? ""}</h1>
-      <Segmented
-        label="Период"
-        value={String(days)}
-        onChange={(value) => pick(Number(value))}
-        options={PERIODS.map((period) => ({ value: String(period.days), label: period.label }))}
-      />
-    </div>
-  );
-  if (stats.isLoading) {
-    return (
-      <div className="cs-page" aria-busy="true">
-        {toolbar}
-        <section className="card cs-hero" aria-hidden="true">
-          <Skeleton width={180} />
-          <div className="mt-4"><Skeleton width={220} className="!h-10" /></div>
-          <div className="mt-4"><Skeleton width="50%" /></div>
-          <div className="mt-8 grid gap-3">{Array.from({ length: 6 }, (_, index) => <Skeleton key={index} width="100%" />)}</div>
-        </section>
-      </div>
-    );
-  }
-  if (stats.isError || !stats.data) {
-    return (
-      <div className="cs-page">
-        {toolbar}
-        <div className="status-panel empty" role="alert">
-          <p className="empty-title">Hub не ответил</p>
-          <p className="empty-text">Числа не пришли. Это не ноль: данные могут быть, просто экран их не получил.</p>
-          <div className="empty-actions">
-            <button type="button" className="btn btn-sm" disabled={stats.isFetching} onClick={() => void stats.refetch()}>Повторить</button>
-          </div>
-        </div>
-      </div>
-    );
-  }
+/** A chatter's way to their shifts, quiet, above the page: «Мои смены» is their home. */
+function ToShifts() {
   return (
-    <div className="cs-page">
-      {toolbar}
-      <ChatterStatsView
-        stats={stats.data}
-        self
-        reportTo={() => "/account?tab=report"}
-        onShowMonth={() => pick(30)}
-        refreshing={stats.isFetching && stats.isPlaceholderData}
-      />
-    </div>
+    <a href={CHATTER_SHIFTS} className="ac-back">
+      <span aria-hidden="true">←</span> Мои смены
+    </a>
   );
 }
 
-// The cabinet's sections are tabs of one address: the chatters' site serves
-// only /account itself (agency-site deploy/server-nginx.sh), so a tab is a query.
+// The chatters' site serves only /account itself (agency-site deploy/server-nginx.sh):
+// the old tabs were queries of it, and those of a chatter's shifts lead to Workboard.
 export function AccountPage() {
   const [params] = useSearchParams();
-  const asked = params.get("tab");
-  const tab = asked === "report" || asked === "profile" ? asked : null;
+  const { data } = useAuthMe();
+  const chatter = data?.user.role === "chatter";
+  const left = chatter ? cabinetRedirect(params) : null;
+  if (left !== null) return <LeaveForWorkboard href={left} />;
   return (
     <div className="ac-page">
-      <CabinetTabs current={tab} />
-      {tab === "report" && (
-        <div className="ac-narrow">
-          <ShiftReports />
-        </div>
-      )}
-      {tab === "profile" && (
-        <div className="ac-narrow">
-          <WhoAmI />
-          <Devices />
-          <ChangePassword />
-          <Spend />
-          <p className="ac-guide"><a href={START_GUIDE_URL} className="link">Как начать</a></p>
-        </div>
-      )}
-      {tab === null && <MyStats />}
+      <div className="ac-narrow">
+        <header className="ac-head">
+          {chatter && <ToShifts />}
+          <h1 className="ac-title">Аккаунт и устройства</h1>
+        </header>
+        <WhoAmI />
+        <Devices />
+        <ChangePassword />
+        <Spend />
+        <p className="ac-guide"><a href={START_GUIDE_URL} className="link">Как начать</a></p>
+      </div>
     </div>
   );
 }

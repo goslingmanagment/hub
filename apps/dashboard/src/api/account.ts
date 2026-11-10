@@ -1,11 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ChangePasswordBody } from "@agency_hub_core/contracts";
-import { reportDates } from "@agency_hub_core/ui/shiftReports";
 
 import { kernel } from "./sdk.js";
 
 // The chatter's own surface — the invitation page (/join, public)
-// and the cabinet (/account, any live session). Everything goes through the
+// and the account page (/account, any live session). Everything goes through the
 // generated SDK, like every other domain module (dashboard-sdk-ban).
 //
 // The invitation secret only ever travels in the POST body: it is passed in as
@@ -66,27 +65,5 @@ export function useMyUsage(params: { from?: string; to?: string } = {}) {
   return useQuery({
     queryKey: ["account", "usage", params],
     queryFn: () => kernel.authMyUsage({ query: params }),
-  });
-}
-
-/** The caller's own shift reports from the agency ledger (`accountReports`): the cabinet's «Отчёт смены». */
-export function useMyReports(days: number) {
-  return useQuery({
-    queryKey: ["account", "reports", days],
-    queryFn: () => kernel.accountReports({ query: reportDates(days) }),
-    placeholderData: (previous) => previous,
-    staleTime: 60_000,
-  });
-}
-
-/** The caller's own statistics (`accountChatterStats`): the cabinet's «Статистика». */
-export function useMyStats(days: number) {
-  return useQuery({
-    queryKey: ["account", "stats", days],
-    queryFn: () => kernel.accountChatterStats({ query: { days } }),
-    placeholderData: (previous) => previous,
-    staleTime: 60_000,
-    // While a shift goes on its numbers move: a fresh read every two minutes.
-    refetchInterval: (query) => (query.state.data?.shifts[0]?.ongoing ? 120_000 : false),
   });
 }

@@ -275,6 +275,35 @@
     line-height: var(--ui-lh-14);
   }
 
+  /* A chatter's account row is their menu's button (account, theme, sign-out): the whole row answers. */
+  .wb-account--button {
+    width: 100%;
+    min-height: 48px;
+    padding: 6px 8px 6px 12px;
+    border: 0;
+    border-radius: var(--ui-radius);
+    background: transparent;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+    transition: background-color var(--ui-fast);
+  }
+
+  .wb-account--button:hover,
+  .wb-account--button[aria-expanded="true"] {
+    background: var(--ui-hover);
+  }
+
+  .wb-account--button:focus-visible {
+    outline: 2px solid var(--ui-focus);
+    outline-offset: -2px;
+  }
+
+  .wb-account__chevron {
+    flex: none;
+    color: var(--ui-text-3);
+  }
+
   /* ---------------------------------------------------------- Tiles: a screen's numbers in one row */
 
   .wb-tiles {
@@ -691,19 +720,80 @@
     }
   }
 
-  /* A chatter looks from a phone: their two items and the menu (theme, sign out) fit the strip. */
-  @media (max-width: 640px) {
+  /*
+   * A chatter looks from a phone: the strip holds «Мои смены» and their menu (the avatar and a chevron), each a
+   * finger's target; the period's arrows and lengths too.
+   */
+  @media (max-width: 960px) {
+    .wb-app[data-part="chatter"] .wb-account--button {
+      width: auto;
+      min-height: 44px;
+      padding: 0 8px;
+      gap: 6px;
+    }
+
     .wb-app[data-part="chatter"] .wb-nav__item {
-      gap: 8px;
+      height: 44px;
+    }
+  }
+
+  @media (max-width: 640px) {
+    .wb-app[data-part="chatter"] .wb-header__controls,
+    .wb-app[data-part="chatter"] .ui-period {
+      width: 100%;
+    }
+
+    .wb-app[data-part="chatter"] .ui-period {
+      flex-wrap: wrap;
+    }
+
+    .wb-app[data-part="chatter"] .ui-period__dates {
+      width: 100%;
+      height: 48px;
+      padding: 1px;
+    }
+
+    .wb-app[data-part="chatter"] .ui-period__arrow {
+      width: 44px;
+      height: 44px;
+    }
+
+    .wb-app[data-part="chatter"] .ui-period__label {
+      flex: 1;
+      align-self: stretch;
+      display: grid;
+      place-items: center;
+    }
+
+    .wb-app[data-part="chatter"] .ui-period .ui-seg {
+      display: flex;
+      width: 100%;
+      height: 48px;
+    }
+
+    .wb-app[data-part="chatter"] .ui-period .ui-seg__item {
+      flex: 1 1 auto;
+      justify-content: center;
+      height: 44px;
       padding: 0 8px;
     }
 
-    .wb-app[data-part="chatter"] .wb-account {
-      padding-left: 0;
+    .wb-app[data-part="chatter"] .ui-period > div:last-child {
+      width: 100%;
     }
 
-    .wb-app[data-part="chatter"] .wb-account__avatar {
-      display: none;
+    /* Buttons, fields and the items of a menu (it opens over the page, outside the app's frame) for a finger too. */
+    .wb-app[data-part="chatter"] .ui-btn,
+    :root:has(.wb-app[data-part="chatter"]) :is(.ui-menu__item, .ui-popover .ui-btn, .ui-popover .ui-input) {
+      min-height: 44px;
     }
+  }
+
+  /*
+   * The page filter's empty place keeps the period in one spot from screen to screen (D15); a chatter has one
+   * screen and no filter, so the empty place would only be a hole at the header's end.
+   */
+  .wb-app[data-part="chatter"] .wb-header__slot:has(> .wb-filter-slot:only-child) {
+    display: none;
   }
 }
