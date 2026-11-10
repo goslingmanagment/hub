@@ -4,9 +4,8 @@ import { sql, type SQL } from "drizzle-orm";
 // owner decision №11): what "a stored message of a thread" means when a
 // reader serves a page from the archive (the engine's live pages). Shared by
 // the archive variants in page-dm.ts and sync/thread-chain.ts, by the thread
-// summary the engine writes from the archive (sync/thread-chain.ts) and by the
-// read-only reader parity (sync/dm-reader-parity.ts), so the parity measures
-// exactly the code that serves. Not exported from the package.
+// summary the engine writes from the archive (sync/thread-chain.ts). Not
+// exported from the package.
 
 /** A stored message in the archive, as the hot-shaped readers count and show
  *  one: no tombstone, not a tombstone-first stub whose content has not
