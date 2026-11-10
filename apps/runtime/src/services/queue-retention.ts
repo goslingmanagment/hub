@@ -100,7 +100,6 @@ export const QUEUE_RETENTION_SETTINGS: readonly QueueRetentionSetting[] = [
   // Every minute; each tick reads the Fansly publications and their commands anew.
   { queue: "publications.fansly", retentionClass: "heartbeat-cron", retentionSeconds: HEARTBEAT_RETENTION_SECONDS, deleteAfterSeconds: HEARTBEAT_RETENTION_SECONDS },
   { queue: "ai.media.describe.sweep", retentionClass: "heartbeat-cron", retentionSeconds: HEARTBEAT_RETENTION_SECONDS, deleteAfterSeconds: HEARTBEAT_RETENTION_SECONDS },
-  { queue: "ofapi.commands.sweep", retentionClass: "heartbeat-cron", retentionSeconds: HEARTBEAT_RETENTION_SECONDS, deleteAfterSeconds: HEARTBEAT_RETENTION_SECONDS },
   { queue: "notifications.paging.sweep", retentionClass: "heartbeat-cron", retentionSeconds: HEARTBEAT_RETENTION_SECONDS, deleteAfterSeconds: HEARTBEAT_RETENTION_SECONDS },
   { queue: "notifications.delivery-outbox.sweep", retentionClass: "heartbeat-cron", retentionSeconds: HEARTBEAT_RETENTION_SECONDS, deleteAfterSeconds: HEARTBEAT_RETENTION_SECONDS },
   { queue: "canonicalize.sweep", retentionClass: "heartbeat-cron", retentionSeconds: HEARTBEAT_RETENTION_SECONDS, deleteAfterSeconds: HEARTBEAT_RETENTION_SECONDS },
@@ -117,7 +116,6 @@ export const QUEUE_RETENTION_SETTINGS: readonly QueueRetentionSetting[] = [
 
   // ---- Class B: real work queues (14d / 7d, pinned defaults) -------------
   { queue: "sync.page.execute", retentionClass: "work", retentionSeconds: DEFAULT_RETENTION_SECONDS, deleteAfterSeconds: DEFAULT_DELETE_AFTER_SECONDS },
-  { queue: "ofapi.commands.execute", retentionClass: "work", retentionSeconds: DEFAULT_RETENTION_SECONDS, deleteAfterSeconds: DEFAULT_DELETE_AFTER_SECONDS },
   { queue: "ofapi.events.process.v2", retentionClass: "work", retentionSeconds: DEFAULT_RETENTION_SECONDS, deleteAfterSeconds: DEFAULT_DELETE_AFTER_SECONDS },
   { queue: "ofapi.link-stats.retry", retentionClass: "work", retentionSeconds: DEFAULT_RETENTION_SECONDS, deleteAfterSeconds: DEFAULT_DELETE_AFTER_SECONDS },
 

@@ -72,11 +72,6 @@ describe("CLIENT_TOKEN_PROFILES[\"chat-extension\"]", () => {
       "aiPersonaUpsert",
       "aiPersonaArchive",
       "aiGatewayStream",
-      "eventsStream",
-      "eventsSnapshot",
-      "eventsV2Stream",
-      "eventsV2Snapshot",
-      "eventsV2Facts",
     ]) {
       expect(key in schemas, key).toBe(true);
       expect(operations, key).not.toContain(key);

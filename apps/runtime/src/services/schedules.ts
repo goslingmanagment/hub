@@ -26,7 +26,6 @@ import { ensureCapturePayloadParityQueue, ensureCapturePayloadParitySchedule } f
 import { ensureOfapiChargebacksQueue, ensureOfapiChargebacksSchedule } from "./ofapi-chargebacks-sync.ts";
 import { ensureOfapiFanAccountCheckQueue, ensureOfapiFanAccountCheckSchedule } from "./ofapi-fan-account-check.ts";
 import { ensureOfapiLinkStatsQueue, ensureOfapiLinkStatsSchedule } from "./ofapi-link-stats-sync.ts";
-import { ensureOfapiCommandQueues, ensureOfapiCommandSchedules } from "./ofapi-command-executor.ts";
 import { ensureOfapiPendingReconcileQueue, ensureOfapiPendingReconcileSchedule } from "./ofapi-pending-reconcile.ts";
 import { ensureOfapiCreditQueues, ensureOfapiCreditSchedules } from "./ofapi-credits.ts";
 import { ensureOfapiQueues, ensureOfapiSchedules } from "./ofapi-events.ts";
@@ -88,7 +87,6 @@ export async function ensureAllQueues(
   await ensureOfapiFanAccountCheckQueue(boss, createdQueues);
   await ensureOfapiLinkStatsQueue(boss, createdQueues);
   await ensureOfapiPendingReconcileQueue(boss, createdQueues);
-  await ensureOfapiCommandQueues(boss, createdQueues);
   await ensureOfapiTypedExportQueue(boss, createdQueues);
   await ensureOfapiMediaQueue(boss, createdQueues);
   await ensureOfapiBindingReconcileQueue(boss, createdQueues);
@@ -147,7 +145,6 @@ export async function registerAllSchedules(
     ensureOfapiFanAccountCheckSchedule(boss),
     ensureOfapiLinkStatsSchedule(boss),
     ensureOfapiPendingReconcileSchedule(boss),
-    ensureOfapiCommandSchedules(boss),
     ensureOfapiTypedExportSchedule(boss),
     ensureOfapiMediaSchedule(boss),
     ensureOfapiBindingReconcileSchedule(boss),

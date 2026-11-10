@@ -155,29 +155,6 @@ export async function createOnlyFansPage(
   });
 }
 
-/**
- * Numeric page id → OFAPI account ref for every mapped page (the v2 event
- * stream stamps frames with the platform-native account ref so OFAPI-keyed
- * clients filter without id translation).
- */
-export async function listPageOfapiAccountRefs(db: Database): Promise<Map<number, string>> {
-  const result = await db.execute<{ id: number; ofapi_account_id: string }>(sql`
-    select id::int as id, ofapi_account_id
-    from pages
-    where ofapi_account_id is not null
-  `);
-  return new Map(result.rows.map((row) => [row.id, row.ofapi_account_id]));
-}
-
-/** H3: every page's platform (tombstoned pages included — their ledger
- * facts remain readable), for the v2 stream's `platform=` narrowing. */
-export async function listPagePlatforms(db: Database): Promise<Map<number, Platform>> {
-  const rows = await db
-    .select({ id: pages.id, platform: pages.platform })
-    .from(pages);
-  return new Map(rows.map((row) => [row.id, row.platform]));
-}
-
 export async function createPlatformPage(
   db: Database,
   input: {

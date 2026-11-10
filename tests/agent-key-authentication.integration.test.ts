@@ -14,7 +14,7 @@ import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import {
   AGENT_KEY_TOKEN_PREFIX,
   authenticateAgentKey,
-  authenticateBearerToken,
+  authenticateBearerCredential,
   isAgentPrincipal,
 } from "../apps/runtime/src/services/auth.ts";
 import {
@@ -172,12 +172,12 @@ describe("authenticateAgentKey", () => {
   });
 });
 
-describe("authenticateBearerToken prefix routing", () => {
+describe("authenticateBearerCredential prefix routing", () => {
   it("routes an agent-prefixed token to the agent lane and nowhere else", async () => {
     const token = `${AGENT_KEY_TOKEN_PREFIX}routed000000000000000`;
     await issueKey({ token });
 
-    const principal = await authenticateBearerToken(appContext, token);
+    const principal = (await authenticateBearerCredential(appContext, token)).principal;
     expect(principal && isAgentPrincipal(principal)).toBe(true);
 
     // The retired api-key table must not carry this digest either: the agent
@@ -201,7 +201,7 @@ describe("authenticateBearerToken prefix routing", () => {
       "not-even-prefixed",
       "",
     ]) {
-      expect(await authenticateBearerToken(appContext, token), token).toBeNull();
+      expect((await authenticateBearerCredential(appContext, token)).principal, token).toBeNull();
     }
   });
 
@@ -219,7 +219,7 @@ describe("authenticateBearerToken prefix routing", () => {
       [user!.id, token.slice(0, 20), sha256Hex(token)],
     );
 
-    expect(await authenticateBearerToken(appContext, token)).toBeNull();
+    expect((await authenticateBearerCredential(appContext, token)).principal).toBeNull();
 
     const rows = await testDb!.pool.query(
       "select revoked_at from api_keys where token_digest = $1",

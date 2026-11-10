@@ -535,6 +535,72 @@ describe("OFAPI event processing", () => {
       limit: 10,
     })).toEqual([]);
   });
+
+  // The frame a family maps to decides whether its row settles processed with
+  // a fanout sequence or skipped "journaled without fanout". Messages and PPV
+  // unlocks are covered above and in ppv-purchase-projections; these are the
+  // other families the mapper fans out.
+  it("settles tips, subscriptions, deletions, presence and auth losses processed, each with its frame and a fanout sequence", async (context) => {
+    if (!testDb || !server) {
+      context.skip();
+      return;
+    }
+
+    const account = "acct_01000000000000000000000000000000";
+    await seedWebhookConfig();
+    const page = await seedOnlyFansPage({ label: "lora-of", ofapiAccountId: account });
+    const fixture = async (name: string, event?: string) => ({
+      ...JSON.parse(await fixtureBody(name)) as Record<string, unknown>,
+      ...(event === undefined ? {} : { event }),
+      account_id: account,
+    });
+    const families: Array<{ envelope: Record<string, unknown>; syncEvent: Record<string, unknown> }> = [
+      {
+        envelope: await fixture("tips_received.json"),
+        syncEvent: { type: "tipReceived", chatId: "310112051", amountUsd: 8 },
+      },
+      { envelope: await fixture("subscriptions_new.json"), syncEvent: { type: "chatListUpdated" } },
+      { envelope: await fixture("unverified_subscriptions_renewed.json"), syncEvent: { type: "chatListUpdated" } },
+      { envelope: await fixture("messages_deleted.json"), syncEvent: { type: "messageDeleted", messageId: "1000001" } },
+      {
+        envelope: await fixture("users_online.json"),
+        syncEvent: { type: "presence", chatId: "1000033", online: true },
+      },
+      {
+        envelope: await fixture("users_online.json", "users.offline"),
+        syncEvent: { type: "presence", chatId: "1000033", online: false },
+      },
+      ...["accounts.authentication_failed", "accounts.otp_code_required", "accounts.face_otp_required"].map((event) => ({
+        envelope: { event, account_id: account, payload: {} },
+        syncEvent: { type: "accountAuthChanged", authenticated: false },
+      })),
+    ];
+
+    const fanoutSeqs: number[] = [];
+    for (const { envelope, syncEvent } of families) {
+      const label = String(envelope.event);
+      const response = await postWebhook({ body: JSON.stringify(envelope) });
+      expect(response.statusCode, label).toBe(200);
+      const { rows } = await testDb.pool.query<{ id: number }>(
+        "select max(id)::int as id from ofapi_webhook_events",
+      );
+      await processOfapiWebhookEvent(appContext, rows[0]!.id);
+
+      const settled = await getOfapiWebhookEventById(appContext.db, rows[0]!.id);
+      expect(settled, label).toMatchObject({
+        eventType: label,
+        status: "processed",
+        platformAccountId: page.id,
+        error: null,
+        syncEvent: { ...syncEvent, accountId: account },
+      });
+      expect(settled?.fanoutSeq, label).toBeGreaterThan(0);
+      fanoutSeqs.push(settled!.fanoutSeq!);
+    }
+    // One fanout sequence per frame, allocated in settle order.
+    expect(new Set(fanoutSeqs).size).toBe(families.length);
+    expect(fanoutSeqs).toEqual([...fanoutSeqs].sort((a, b) => a - b));
+  });
 });
 
 describe("OFAPI webhook admin flow", () => {

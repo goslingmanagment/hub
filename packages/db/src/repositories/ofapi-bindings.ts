@@ -81,24 +81,6 @@ export async function withOfapiBindingLock<T>(db: Database, pageId: number, run:
   });
 }
 
-/** Chat command dispatch of one page: the order lock `(9003012, pageId)` keeps the page's commands one at a
- * time and in turn, and the binding lock is held SHARED, so a publication or owner action in flight on the
- * same page (also shared) never holds a chatter's message back, while a binding change still waits for both.
- * The order lock comes first, so messages queued behind it hold no binding lock a binding change would wait on.
- * A writer called inside `run` with the given transaction (markOfapiBindingUnavailable on "account not found")
- * upgrades to the exclusive lock: Postgres lets the session's own shared hold pass, so it waits only for the
- * other requests in flight. Only this dispatch upgrades inside its hold, one per page at a time; owner actions
- * apply account health after releasing theirs (dispatchOfapiAction), so two holders never upgrade at once.
- * A writer on another connection (app.db) must never run inside `run`: it would wait for this very hold. */
-export async function withOfapiCommandDispatchLock<T>(db: Database, pageId: number, run: (tx: Database) => Promise<T>) {
-  return db.transaction(async tx => {
-    const database = tx as Database;
-    await database.execute(sql`select pg_advisory_xact_lock(9003012, ${pageId}::integer)`);
-    await database.execute(sql`select pg_advisory_xact_lock_shared(9003010, ${pageId}::integer)`);
-    return run(database);
-  });
-}
-
 export const OFAPI_RECOVERABLE_AUTH_BLOCKER_CODES = [
   "ofapi_authentication_failed", "ofapi_otp_code_required", "ofapi_face_otp_required",
   "ofapi_disconnected", "ofapi_account_not_found",

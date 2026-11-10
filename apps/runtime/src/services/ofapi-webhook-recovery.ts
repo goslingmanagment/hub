@@ -16,7 +16,7 @@ import { OfapiApiError, OfapiHistoryRequestError, ofapiSafeErrorDiagnostics, typ
 import { buildOfapiWebhookEventSet, registerOfapiWebhook, resolveOfapiClient } from "./ofapi-webhooks.ts";
 import { runCanonicalization } from "./canonicalize-driver.ts";
 import { processOfapiWebhookEvent } from "./ofapi-events.ts";
-import { localDispatchRefusalFrom } from "./ofapi-command-executor.ts";
+import { localDispatchRefusalFrom } from "./ofapi-local-dispatch-refusal.ts";
 import { assertOfapiConfiguredAccess } from "./ofapi-vendor-usage.ts";
 
 const PAGE_SIZE = 100;

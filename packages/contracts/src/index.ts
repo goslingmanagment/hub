@@ -27,7 +27,6 @@ export * from "./routes-publication-files.ts";
 // Narrow device-token profiles (the chat extension's route allowlist, H-3).
 export * from "./client-token-scopes.ts";
 export * from "./authorization-policy.ts";
-export * from "./domain-event-cursor.ts";
 export * from "./sdk-runtime.ts";
 export * from "./contract-hash.ts";
 // Agent Read Plane vocabulary. Declared once and derived, so a drift between
@@ -69,7 +68,6 @@ export * from "./routes-account-reports.ts";
 // Its quality numbers, one definition for the review's screen and «Смены» (`teamChatterNumbers`).
 export * from "./shift-review-rules.ts";
 
-export * from "./ofapi-extended-commands.ts";
 export * from "./routes-ofapi-banned-words.ts";
 export * from "./routes-model-applications.ts";
 export * from "./routes-ofapi-read-collections.ts";

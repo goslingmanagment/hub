@@ -1510,12 +1510,6 @@ export async function authenticateBearerCredential(
   return { principal: null, failure: null };
 }
 
-/** Prefix-discriminated bearer authentication: device token or agent key — the
- * principal-only view (SSE revalidation and the older callers). */
-export async function authenticateBearerToken(app: AppContext, token: string) {
-  return (await authenticateBearerCredential(app, token)).principal;
-}
-
 export async function listDeviceTokensForUserId(app: AppContext, userId: number) {
   const user = await getExistingUserById(app.db, userId);
   const tokens = await listDeviceTokensForUser(app.db, user.id);
