@@ -53,6 +53,16 @@ export const adminAiPersonaOpenerOutcomeSchema = z.object({
   topPayerGrossMills: mills.nonnegative(),
 }).strict();
 
+/** all: every fan; bare: nothing to hook on (the text went as written);
+ *  named: a name or a chosen username; other: a default username with a
+ *  bio or a picture, or a fan the hub knows no name of. */
+const adminAiPersonaOpenerOutcomesSchema = z.object({
+  all: adminAiPersonaOpenerOutcomeSchema,
+  bare: adminAiPersonaOpenerOutcomeSchema,
+  named: adminAiPersonaOpenerOutcomeSchema,
+  other: adminAiPersonaOpenerOutcomeSchema,
+}).strict();
+
 export const adminAiPersonaOpenerSchema = z.object({
   id: intId,
   body: z.string(),
@@ -63,20 +73,23 @@ export const adminAiPersonaOpenerSchema = z.object({
   hours: adminAiPersonaOpenerHoursSchema.nullable(),
   enabled: z.boolean(),
   createdAt: isoTimestamp,
-  /** all: every fan; bare: nothing to hook on (the text went as written);
-   *  named: a name or a chosen username; other: a default username with a
-   *  bio or a picture, or a fan the hub knows no name of. */
-  outcomes: z.object({
-    all: adminAiPersonaOpenerOutcomeSchema,
-    bare: adminAiPersonaOpenerOutcomeSchema,
-    named: adminAiPersonaOpenerOutcomeSchema,
-    other: adminAiPersonaOpenerOutcomeSchema,
-  }).strict(),
+  outcomes: adminAiPersonaOpenerOutcomesSchema,
 }).strict();
 
 export const adminAiPersonaOpenersResponseSchema = z.object({
   personaKey: z.string(),
   openers: z.array(adminAiPersonaOpenerSchema),
+  /** The greetings of every text together, by what they asked (owner,
+   *  2026-11-10). personal: the fan's profile had a hook (a bio that says
+   *  something, a place or a language, a word in his name that names an
+   *  interest) and the greeting asked about it in place of the text's
+   *  question; none: no hook, the text's own question. The two are different
+   *  fans, so they do not compare. Greetings from before the hub recorded
+   *  hooks are in neither. */
+  questions: z.object({
+    personal: adminAiPersonaOpenerOutcomesSchema,
+    none: adminAiPersonaOpenerOutcomesSchema,
+  }).strict(),
 }).strict();
 
 export const adminAiPersonaOpenersParamsSchema = z.object({

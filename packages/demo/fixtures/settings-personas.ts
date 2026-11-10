@@ -233,6 +233,42 @@ function openers(key: string, now: Date) {
   });
 }
 
+type OutcomeGroups = ReturnType<typeof openers>[number]["outcomes"];
+
+/** The texts' greetings together, by what they asked: about a third of the
+ *  fans with a name have a hook and get a personal question; a fan with a
+ *  bare profile never has one. */
+function questions(key: string, list: ReturnType<typeof openers>): { personal: OutcomeGroups; none: OutcomeGroups } {
+  const random = rng(`opener-questions:${key}`);
+  const part = (outcome: Outcome, share: number, pull: number): Outcome => {
+    const sent = Math.round(outcome.sent * share);
+    const matured = Math.min(sent, Math.round(outcome.matured * share));
+    const replied = Math.min(matured, Math.round(outcome.replied * share * pull));
+    const talked = Math.min(replied, Math.round(outcome.talked * share * pull));
+    const maturedPaid = Math.min(matured, Math.round(outcome.maturedPaid * share));
+    const paid = Math.min(maturedPaid, Math.round(outcome.paid * share * pull));
+    const payers = Math.min(sent, Math.max(paid, Math.round(outcome.payers * share * pull)));
+    const payersGrossMills = payers === 0 ? 0 : Math.round(outcome.payersGrossMills * share * pull);
+    return {
+      sent, edited: Math.min(sent, Math.round(outcome.edited * share)), matured, replied, talked, maturedPaid, paid,
+      payers, payersGrossMills,
+      topPayerGrossMills: payers === 0 ? 0 : Math.min(payersGrossMills, outcome.topPayerGrossMills),
+    };
+  };
+  const zero = sum([]);
+  const groups = (share: (group: "bare" | "named" | "other") => number, pull: number): OutcomeGroups => {
+    const bare = sum(list.map((opener) => part(opener.outcomes.bare, share("bare"), pull)));
+    const named = sum(list.map((opener) => part(opener.outcomes.named, share("named"), pull)));
+    const other = sum(list.map((opener) => part(opener.outcomes.other, share("other"), pull)));
+    return { all: sum([bare, named, other]), bare: share("bare") === 0 ? zero : bare, named, other };
+  };
+  const hooked = between(random, 0.28, 0.36);
+  return {
+    personal: groups((group) => (group === "bare" ? 0 : group === "named" ? hooked : hooked * 0.6), 1.5),
+    none: groups((group) => (group === "bare" ? 1 : group === "named" ? 1 - hooked : 1 - hooked * 0.6), 0.85),
+  };
+}
+
 export const personaHandlers: DemoHandlers = {
   adminAiPersonasList: (request) => ownerOnly(request) ?? {
     personas: PERSONAS.map((spec) => adminPersona(spec, request.now)),
@@ -243,6 +279,7 @@ export const personaHandlers: DemoHandlers = {
     if (refused) return refused;
     const key = request.params.key ?? "";
     if (!personaSpec(key)) return demoError(404, "Not Found", `Персона ${key} не найдена`);
-    return { personaKey: key, openers: openers(key, request.now) };
+    const list = openers(key, request.now);
+    return { personaKey: key, openers: list, questions: questions(key, list) };
   },
 };

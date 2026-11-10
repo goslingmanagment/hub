@@ -316,6 +316,11 @@ export interface AiGatewayStreamInternalOptions {
    * request is recorded as every other one: the ledger row (zero usage) and
    * the restricted record with the prompt it would have read. */
   cannedCompletion?: string;
+  /** Feature-lane-only: the FINISHED completion, read and rewritten without a
+   * model (Hi's hook line, greeting-openers.ts finishGreeting). The stream
+   * holds its content back, see finishedCompletionStream; `manifest` is laid
+   * over the keys of params.contextManifest on the restricted record. */
+  finishCompletion?: (completionText: string) => { text: string; manifest?: Record<string, unknown> };
   /** Feature-lane-only: each whole word of the answer, rewritten as the stream
    * goes (rewriteWordsStream): the fan's names typed plain, as the prompt gave
    * them (prompts/builder.ts fanNameRespeller). The client and the restricted
@@ -591,12 +596,11 @@ export async function prepareAiGatewayStream(
   }
 
   // The answer's frames: the canned text, or the provider's (through the trim
-  // pass when the feature asked for one).
+  // pass when the feature asked for one, and the finishing step when it gave one).
   let rewrittenWords = 0;
-  const answerFrames = (signal: AbortSignal): AsyncIterable<AiGatewayStreamFrame> => {
-    if (internal?.cannedCompletion !== undefined) {
-      return cannedCompletionFrames(internal.cannedCompletion);
-    }
+  let finishedManifest: Record<string, unknown> | undefined;
+  const finishCompletion = internal?.finishCompletion;
+  const providerFrames = (signal: AbortSignal): AsyncIterable<AiGatewayStreamFrame> => {
     const frames = provider.stream({
       requestId,
       principal,
@@ -643,6 +647,19 @@ export async function prepareAiGatewayStream(
         completionTrimRecord = record;
       },
     });
+  };
+  const answerFrames = (signal: AbortSignal): AsyncIterable<AiGatewayStreamFrame> => {
+    if (internal?.cannedCompletion !== undefined) {
+      return cannedCompletionFrames(internal.cannedCompletion);
+    }
+    const provided = providerFrames(signal);
+    return finishCompletion === undefined
+      ? provided
+      : finishedCompletionStream(provided, (text) => {
+        const finished = finishCompletion(text);
+        finishedManifest = finished.manifest;
+        return finished.text;
+      });
   };
 
   return {
@@ -818,8 +835,8 @@ export async function prepareAiGatewayStream(
           ...(rewrittenWords > 0 ? { rewrittenWords } : {}),
           ...(providerStop?.refusalCategory ? { refusalCategory: providerStop.refusalCategory } : {}),
           ...(providerStop?.fallbackModel ? { fallbackModel: providerStop.fallbackModel } : {}),
-          ...(internal?.contextManifest !== undefined
-            ? { contextManifest: internal.contextManifest }
+          ...(internal?.contextManifest !== undefined || finishedManifest !== undefined
+            ? { contextManifest: { ...(internal?.contextManifest ?? {}), ...(finishedManifest ?? {}) } }
             : {}),
           ...(outputStructure !== undefined ? { outputStructure } : {}),
           ...(completionTrimRecord !== undefined ? { completionTrim: completionTrimRecord } : {}),
@@ -1091,6 +1108,61 @@ export function sumAiGatewayUsage(a: AiGatewayUsage, b: AiGatewayUsage): AiGatew
     costMicroUsd: a.costMicroUsd + b.costMicroUsd,
     costApproximate: a.costApproximate || b.costApproximate,
   };
+}
+
+/**
+ * The completion's frames with its content held back until the answer ends:
+ * the client gets the text as `finish` returns it, as one content_delta before
+ * the usage and done frames, the order it would have got them in. Every other
+ * frame goes out as it comes. No model call and no cost. A failed or cut-off
+ * answer goes through `finish` too, so what it cuts never reaches the client;
+ * an answer with no text is left alone, and a `finish` that throws leaves the
+ * text as the model wrote it.
+ */
+export async function* finishedCompletionStream(
+  frames: AsyncIterable<AiGatewayStreamFrame>,
+  finish: (completionText: string) => string,
+  now: () => number = Date.now,
+): AsyncGenerator<AiGatewayStreamFrame> {
+  let lastSentAt = now();
+  let text = "";
+  let flushed = false;
+  function* flush(): Generator<AiGatewayStreamFrame> {
+    if (flushed) return;
+    flushed = true;
+    // An answer that never started has nothing to finish.
+    if (text.trim() === "") return;
+    let finished = text;
+    try {
+      finished = finish(text);
+    } catch {
+      // The answer as the model wrote it.
+    }
+    if (finished !== "") yield { type: "content_delta", text: finished };
+  }
+  try {
+    for await (const frame of frames) {
+      if (flushed) {
+        yield frame;
+      } else if (frame.type === "content_delta") {
+        text += frame.text;
+        if (now() - lastSentAt >= COMPLETION_TRIM_KEEPALIVE_MS) {
+          lastSentAt = now();
+          yield { type: "reasoning_delta", text: "" };
+        }
+      } else if (frame.type === "usage" || frame.type === "done" || frame.type === "error") {
+        yield* flush();
+        yield frame;
+      } else {
+        lastSentAt = now();
+        yield frame;
+      }
+    }
+  } catch (error) {
+    yield* flush();
+    throw error;
+  }
+  yield* flush();
 }
 
 /**

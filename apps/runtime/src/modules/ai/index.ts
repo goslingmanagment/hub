@@ -55,6 +55,17 @@ export {
 } from "./prompt-debug-echo.ts";
 export { personaLocalTime, type PersonaLocalTime } from "./persona-local-time.ts";
 export {
+  asksNameOrNick,
+  finishGreeting,
+  greetingFinisher,
+  greetingOpenersManifest,
+  greetingProfileKey,
+  keepsOpener,
+  readGreetingHookLine,
+  type GreetingFanProfile,
+  type GreetingHook,
+} from "./greeting-openers.ts";
+export {
   NOTES_TRIM_SYSTEM_PROMPT,
   applyNotesTrim,
   buildNotesTrimPrompt,

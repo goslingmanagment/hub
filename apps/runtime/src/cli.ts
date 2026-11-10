@@ -1251,7 +1251,7 @@ export function buildProgram() {
       const app = await createAppContext();
       try {
         const { listPersonaOpeners } = await import("./modules/ai/opener-admin.ts");
-        const { openers } = await listPersonaOpeners(app, options.persona as string);
+        const { openers, questions } = await listPersonaOpeners(app, options.persona as string);
         for (const opener of openers) {
           const all = opener.outcomes.all;
           const hours = opener.hours === null ? "" : ` ${opener.hours.from}-${opener.hours.to} ${opener.hours.timeZone}`;
@@ -1260,6 +1260,14 @@ export function buildProgram() {
               + ` sent=${all.sent} replied=${all.replied}/${all.matured} talked=${all.talked} paid=${all.paid}/${all.maturedPaid}`
               + ` payers=${all.payers} gross=${formatUsdFromMills(all.payersGrossMills)} top=${formatUsdFromMills(all.topPayerGrossMills)}`
               + `\n    ${opener.body}`,
+          );
+        }
+        // Every text together, by what the greeting asked (different fans: the two do not compare).
+        for (const [label, groups] of [["hook, personal question", questions.personal], ["no hook", questions.none]] as const) {
+          const all = groups.all;
+          console.log(
+            `${label}: sent=${all.sent} replied=${all.replied}/${all.matured} talked=${all.talked} paid=${all.paid}/${all.maturedPaid}`
+              + ` payers=${all.payers} gross=${formatUsdFromMills(all.payersGrossMills)} top=${formatUsdFromMills(all.topPayerGrossMills)}`,
           );
         }
       } finally {

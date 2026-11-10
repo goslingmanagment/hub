@@ -110,6 +110,13 @@ export async function setAiPersonaOpenerEnabled(
 /** What the generation's record says the fan was when Hi drew (features: greetingFanKind). */
 export type AiPersonaOpenerFanKind = "bare" | "default" | "named" | "unknown";
 
+/** What the greeting sent asked, by the generation's record: `personal`, a
+ * question about a hook in the fan's profile in place of the opener's;
+ * `none`, the fan had no hook and got the opener's question; null for a
+ * greeting from before the hub recorded hooks (2026-11-10), and for the rare
+ * one whose fan had a hook and still got the opener's question. */
+export type AiPersonaOpenerQuestion = "personal" | "none" | null;
+
 /** How the fans a set of greetings went to answered. A greeting counts toward
  * an outcome only once its window has passed: 72 hours for the answers, 14
  * days for the money. The payers and their money wait for no window: they are
@@ -117,6 +124,7 @@ export type AiPersonaOpenerFanKind = "bare" | "default" | "named" | "unknown";
 export interface AiPersonaOpenerOutcome {
   openerId: number;
   fan: AiPersonaOpenerFanKind;
+  question: AiPersonaOpenerQuestion;
   /** Greetings the chatters sent. */
   sent: number;
   /** Of them, sent with a text other than the generation's. */
@@ -144,6 +152,7 @@ const FAN_KINDS: ReadonlySet<string> = new Set(["bare", "default", "named", "unk
 type OutcomeDbRow = {
   opener_id: bigint;
   fan: string | null;
+  question: string | null;
   sent: bigint;
   edited: bigint;
   matured: bigint;
@@ -159,7 +168,7 @@ type OutcomeDbRow = {
 /**
  * Every greeting a chatter sent that Hi started from one of the persona's
  * openers: the opener of the variant sent (client_greetings.variant, 0 for a
- * one-message Hi), by what the fan was. The answers are the fan's messages in
+ * one-message Hi), by what the fan was and what the greeting asked. The answers are the fan's messages in
  * the generation's conversation (message_archive); the money is any active
  * transaction of the fan on that page. The payers and their money count a fan
  * once, at the first greeting this persona sent them, on that greeting's page.
@@ -176,6 +185,12 @@ export async function listAiPersonaOpenerOutcomes(
              c.conversation_ref, c.completion,
              (c.params->'contextManifest'->'greetingOpeners'->'ids'->>(coalesce(cg.variant, 0)::int))::bigint as opener_id,
              c.params->'contextManifest'->'greetingOpeners'->>'fan' as fan,
+             case
+               when c.params->'contextManifest'->'greetingOpeners'->'questions'->>(coalesce(cg.variant, 0)::int) = 'personal'
+                 then 'personal'
+               when c.params->'contextManifest'->'greetingOpeners' ? 'hook'
+                 and c.params->'contextManifest'->'greetingOpeners'->>'hook' is null then 'none'
+             end as question,
              jsonb_array_length(c.params->'contextManifest'->'greetingOpeners'->'ids') as variants
       from client_greetings cg
       join ai_generation_content c on c.generation_ref = cg.generation_ref
@@ -184,7 +199,7 @@ export async function listAiPersonaOpenerOutcomes(
         and c.params->'contextManifest'->'greetingOpeners'->>'personaKey' = ${input.personaKey}
     ),
     outcome as (
-      select d.opener_id, d.fan, d.confirmed_at,
+      select d.opener_id, d.fan, d.question, d.confirmed_at,
              d.variants = 1 and position('[NEXT]' in d.completion) = 0
                and sent.text_plain is not null and btrim(sent.text_plain) <> btrim(d.completion) as edited,
              first_fan.at is not null as replied,
@@ -224,7 +239,7 @@ export async function listAiPersonaOpenerOutcomes(
       ) paid on true
       where d.opener_id is not null
     )
-    select opener_id, fan,
+    select opener_id, fan, question,
            count(*) as sent,
            count(*) filter (where edited) as edited,
            count(*) filter (where confirmed_at <= ${repliesBy}::timestamptz) as matured,
@@ -236,11 +251,12 @@ export async function listAiPersonaOpenerOutcomes(
            coalesce(sum(gross_mills) filter (where first_greeting), 0)::bigint as payers_gross_mills,
            coalesce(max(gross_mills) filter (where first_greeting), 0)::bigint as top_payer_gross_mills
     from outcome
-    group by opener_id, fan
-    order by opener_id, fan`);
+    group by opener_id, fan, question
+    order by opener_id, fan, question`);
   return result.rows.map((row) => ({
     openerId: Number(row.opener_id),
     fan: row.fan !== null && FAN_KINDS.has(row.fan) ? row.fan as AiPersonaOpenerFanKind : "unknown",
+    question: row.question === "personal" || row.question === "none" ? row.question : null,
     sent: Number(row.sent),
     edited: Number(row.edited),
     matured: Number(row.matured),
@@ -252,4 +268,37 @@ export async function listAiPersonaOpenerOutcomes(
     payersGrossMills: millsFromInteger(row.payers_gross_mills),
     topPayerGrossMills: millsFromInteger(row.top_payer_gross_mills),
   }));
+}
+
+/** The hook a Hi generation's record keeps for its fan (features: finishGreeting). */
+export interface AiGreetingHookRecord {
+  /** bio, place or interest; null: no hook. */
+  hook: string | null;
+  hookQuote: string | null;
+  /** The key of the profile the hook was decided on. */
+  profile: string | null;
+}
+
+/**
+ * The hook the latest Hi generation of a conversation decided, or null when
+ * none did. A generation whose hook line was missing or refused (`hookNote`)
+ * decided nothing, so the next draft decides anew.
+ */
+export async function findAiGreetingHook(
+  db: Database,
+  input: { pageId: number; conversationRef: string },
+): Promise<AiGreetingHookRecord | null> {
+  const result = await db.execute<{ hook: string | null; hook_quote: string | null; profile: string | null }>(sql`
+    select c.params->'contextManifest'->'greetingOpeners'->>'hook' as hook,
+           c.params->'contextManifest'->'greetingOpeners'->>'hookQuote' as hook_quote,
+           c.params->'contextManifest'->'greetingOpeners'->>'profile' as profile
+    from ai_generation_content c
+    where c.page_id = ${input.pageId} and c.conversation_ref = ${input.conversationRef}
+      and c.feature = 'hi-greeting'
+      and c.params->'contextManifest'->'greetingOpeners' ? 'hook'
+      and not (c.params->'contextManifest'->'greetingOpeners' ? 'hookNote')
+    order by c.id desc
+    limit 1`);
+  const row = result.rows[0];
+  return row ? { hook: row.hook, hookQuote: row.hook_quote, profile: row.profile } : null;
 }

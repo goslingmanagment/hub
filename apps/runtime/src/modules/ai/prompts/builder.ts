@@ -157,6 +157,10 @@ export interface PromptBuildInput {
    * its own. They reach ONLY the {greetingTask} slot of the uncached task
    * block; absent or empty, the task is the plain one, byte for byte. */
   greetingOpeners?: readonly string[] | undefined;
+  /** hi-greeting with openers: the fan's hook as an earlier draft of his
+   * greeting decided it (null: no hook), so this draft keeps it. Unset: this
+   * draft decides. Same uncached slot as the openers. */
+  greetingHook?: { kind: 'bio' | 'place' | 'interest'; quote: string } | null | undefined;
   /** The chatter's own saved name for the fan (a Fansly rename, ChatSpace's
    * custom name on OnlyFans). Rendered by the {fanCustomNameLine} slot;
    * templates without it ignore it. */
@@ -877,15 +881,44 @@ const GREETING_SPLIT_TASKS: Record<GreetingVariantCount, string> = {
  * the hub drew one per variant, and each variant starts from its own. The
  * same slot as the plain tasks, so the cached prefix is the one every other
  * Hi request reads. The openers are the owner's text, like the personality,
- * and go in as they are. */
-const GREETING_OPENER_RULE = 'keep its greeting, its joke, its question and its way of writing. Whenever you can read his name (his saved name, or a first name inside his display name or username: "romamai" → "roma"), put it in the opener\'s greeting ("heyy roma, thanks for the follow"); when that name is only your guess from a nick, you may check it lightly instead of the opener\'s question ("your name\'s roma, right?"). If his profile gives one real detail to hook on (his bio, or a word in his name that means something: a job, a hobby, a place, a team; never anything sexual), ask about that detail instead of the opener\'s question and keep the rest as far as it still reads naturally. Only with no name and nothing to hook on, send the opener as written.';
+ * and go in as they are.
+ *
+ * The personal question (owner, 2026-11-10): the opener's question gives way
+ * to one about the fan only when his profile holds a real hook, and the
+ * model names that hook on its first line, which the hub cuts, checks and
+ * records (greeting-openers.ts finishGreeting). Never a question about his
+ * name or about what his nick means: by the numbers those two do not work. */
+const GREETING_HOOK_DECISION = [
+  'First decide his hook from the Fan Profile alone, before you look at the opener: one real thing in it to ask him about.',
+  '- bio: his bio says something about him: what he does, likes, plays or watches, where he is from. Not a hook: an empty bio, the platform\'s own line ("Hey, I am using Fansly."), a bare greeting, emoji, his age, anything sexual.',
+  '- place: a place or a language named in his profile: a city, a country, a region, a flag, a bio written in a language other than English.',
+  '- interest: a word in his display name, username or saved name that names an interest, a team, a job, a game, a car, a band or the like ("djmarko16": dj, "truckerdan": trucker, "lakersfan88": lakers).',
+  '- none: a plain first name, letters and digits, a made-up nick that names no such thing ("sleepyotter77", "NightCrow", "Angry_socks"), an empty profile. His avatar is never a hook. When in doubt, none.',
+  'Your first line is that decision and nothing else: "HOOK: none", or "HOOK: bio: <the exact words copied from his profile>" (the same with place or interest). The message starts on the next line.',
+].join('\n');
+
+const GREETING_OPENER_RULE = 'With a hook: keep the opener\'s greeting and its reaction to his follow word for word, and put ONE personal question about that detail in place of the opener\'s question; keep the rest of the opener as far as it still reads naturally. With no hook: send the opener word for word, its question included. Either way, when you can read his first name (his saved name, or a first name inside his display name or username: "romamai" → "roma"), put it in the opener\'s greeting ("heyy roma, thanks for the follow"), and leave it out when you are not sure it is a name. Never ask about his name (what it is, whether you read it right, which form he goes by) and never ask what his username or nick means or where it comes from.';
+
+function greetingHookDecision(hook: PromptBuildInput['greetingHook']): string {
+  if (hook === undefined) {
+    return GREETING_HOOK_DECISION;
+  }
+  const quote = hook === null ? '' : escapeForPrompt(hook.quote);
+  const decided = hook === null
+    ? 'none, there is nothing in his profile to ask him about'
+    : `${hook.kind}, these words of his profile: ${quote}`;
+  const line = hook === null ? 'HOOK: none' : `HOOK: ${hook.kind}: ${quote}`;
+  return `His hook is already decided, on an earlier draft of this greeting: ${decided}. Your first line is exactly "${line}" and nothing else. The message starts on the next line.`;
+}
 
 function greetingOpenerTask(
   variantCount: GreetingVariantCount,
   splitAll: boolean,
   openers: readonly string[],
+  hook: PromptBuildInput['greetingHook'],
 ): string {
-  const language = 'Output only the message text, in the fan\'s language (English by default).';
+  const language = 'Output only the hook line and the message text, in the fan\'s language (English by default).';
+  const rule = `${greetingHookDecision(hook)}\n\n${GREETING_OPENER_RULE}`;
   if (variantCount === 1) {
     const split = splitAll
       ? ' Split mode is on: deliver the greeting as separate short, text-like sends, separated by [NEXT]. ALWAYS return at least 2 parts, an opening send plus a natural follow-up, and 3 parts only when the greeting genuinely needs the extra send, never more than 3. Keep each part brief and casual, like real back-to-back texts.'
@@ -893,13 +926,13 @@ function greetingOpenerTask(
     const shape = splitAll
       ? 'Write exactly ONE ready-to-send greeting: no labels, no alternatives, no [VARIANT] markers.'
       : 'Write exactly ONE ready-to-send message: no labels, no alternatives, no [VARIANT] or [NEXT] markers.';
-    return `${shape} Start from the opener below, one of the model's own first messages: ${GREETING_OPENER_RULE}${split} ${language}\n\nOpener: ${openers[0] ?? ''}`;
+    return `${shape} Start from the opener below, one of the model's own first messages.\n\n${rule}${split} ${language}\n\nOpener: ${openers[0] ?? ''}`;
   }
   const split = splitAll
     ? ' Split mode is on: deliver every variant as separate short, text-like sends, separated by [NEXT] inside the variant. ALWAYS give each variant at least 2 parts, an opening send plus a natural follow-up, and 3 parts only when the variant genuinely needs the extra send, never more than 3. Keep each part brief and casual, like real back-to-back texts.'
     : '';
   const list = openers.map((opener, index) => `Opener ${index + 1}: ${opener}`).join('\n');
-  return `Write exactly ${variantCount} greeting variants separated by [VARIANT]. The chatter will pick the best one. Start each variant from its own opener below, in the same order, each one of the model's own first messages: ${GREETING_OPENER_RULE}${split} ${language}\n\n${list}`;
+  return `Write exactly ${variantCount} greeting variants separated by [VARIANT]. The chatter will pick the best one. Start each variant from its own opener below, in the same order, each one of the model's own first messages. The hook line comes once, before the first variant, and every variant follows it.\n\n${rule}${split} ${language}\n\n${list}`;
 }
 
 function greetingTask(
@@ -907,13 +940,14 @@ function greetingTask(
   variantCount: GreetingVariantCount | undefined,
   splitAll: boolean,
   openers?: readonly string[],
+  hook?: PromptBuildInput['greetingHook'],
 ): string {
   if (feature !== 'hi-greeting') {
     return '';
   }
   const count = variantCount ?? 3;
   if (openers !== undefined && openers.length === count) {
-    return greetingOpenerTask(count, splitAll, openers);
+    return greetingOpenerTask(count, splitAll, openers, hook);
   }
   return (splitAll ? GREETING_SPLIT_TASKS : GREETING_TASKS)[count];
 }
@@ -1748,7 +1782,7 @@ function templateValues(input: PromptBuildInput): TemplateValues {
     fanCustomNameLine: fanCustomNameLine(input.fanCustomName),
     fanUsernameLine: fanUsernameLine(input.fanUsername, input.fanDisplayName),
     fanNamesSection: fanNamesSection(input),
-    greetingTask: greetingTask(input.feature, input.greetingVariantCount, splitAll, input.greetingOpeners),
+    greetingTask: greetingTask(input.feature, input.greetingVariantCount, splitAll, input.greetingOpeners, input.greetingHook),
     pingSplitInstructions: pingSplitInstructions(input.feature, splitAll),
     coachSplitInstructions: coachSplitInstructions(input.feature, splitAll),
     coachDepthInstructions: coachDepthInstructions(

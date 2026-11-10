@@ -46,7 +46,12 @@ import { notesTrimPass } from "../notes-trim.ts";
 import {
   asWrittenCompletion,
   drawGreetingOpeners,
+  findPriorGreetingHook,
+  greetingFinisher,
   greetingOpenersManifest,
+  greetingProfileKey,
+  type GreetingFanProfile,
+  type GreetingHook,
   type GreetingOpenerDraw,
 } from "../greeting-openers.ts";
 import { isPromptDebugEchoEnabled } from "../prompt-debug-echo.ts";
@@ -1379,31 +1384,44 @@ export async function prepareAiFeatureStream(
   // (greeting-openers.ts, owner 2026-10-25); the record names the ids drawn.
   // Fail-open: a failed read leaves Hi as it was.
   let openerDraw: GreetingOpenerDraw | null = null;
+  // The fan's hook for the personal question (owner, 2026-11-10): what an
+  // earlier draft of this greeting decided on the same profile, so a
+  // regenerated greeting asks about the same thing. Unset: this draft decides.
+  let greetingFan: GreetingFanProfile | undefined;
+  let greetingManifest: Record<string, unknown> | undefined;
+  let priorHook: GreetingHook | null | undefined;
   if (feature === "hi-greeting" && greetingVariantCount !== undefined) {
+    greetingFan = {
+      displayName: contextValues.fanDisplayName,
+      nameKnown: fanNameKnown,
+      username: contextValues.fanUsername,
+      customName: contextValues.fanCustomName,
+      bio: contextValues.fanBio,
+      hasAvatar: fanAvatarUrl !== undefined,
+    };
     try {
       openerDraw = await drawGreetingOpeners(app, {
         personaKey: persona.personality.id,
         variantCount: greetingVariantCount,
         emptyChat: contextValues.messageCount === 0,
         splitAll,
-        fan: {
-          displayName: contextValues.fanDisplayName,
-          nameKnown: fanNameKnown,
-          username: contextValues.fanUsername,
-          customName: contextValues.fanCustomName,
-          bio: contextValues.fanBio,
-          hasAvatar: fanAvatarUrl !== undefined,
-        },
+        fan: greetingFan,
         nowMs: clock.nowMs,
       });
     } catch (error) {
       app.logger.warn({ feature, pageId, error }, "hi opener draw failed");
     }
     if (openerDraw !== null) {
-      contextManifest = {
-        ...(contextManifest ?? {}),
-        greetingOpeners: greetingOpenersManifest(persona.personality.id, openerDraw),
-      };
+      const profile = greetingProfileKey(greetingFan);
+      greetingManifest = greetingOpenersManifest(persona.personality.id, openerDraw, profile);
+      contextManifest = { ...(contextManifest ?? {}), greetingOpeners: greetingManifest };
+      if (!openerDraw.asWritten) {
+        try {
+          priorHook = await findPriorGreetingHook(app, { pageId, conversationRef: body.conversationRef, profile });
+        } catch (error) {
+          app.logger.warn({ feature, pageId, error }, "hi prior hook lookup failed");
+        }
+      }
     }
   }
 
@@ -1464,6 +1482,7 @@ export async function prepareAiFeatureStream(
     fanNames,
     greetingVariantCount,
     greetingOpeners: openerDraw?.openers.map((opener) => opener.body),
+    greetingHook: priorHook,
     fanProfile: fanProfile
       ? { body: fanProfile.body, generatedAt: fanProfile.generatedAt }
       : undefined,
@@ -1772,6 +1791,17 @@ export async function prepareAiFeatureStream(
   // A bare fan's openers go out as written: the stream carries them without
   // the model.
   const cannedCompletion = openerDraw?.asWritten === true ? asWrittenCompletion(openerDraw) : undefined;
+  // The model's greeting from an opener: its hook line is cut and recorded,
+  // and the text is held to the opener where the hook allows no personal
+  // question (greeting-openers.ts finishGreeting).
+  const finishCompletion = openerDraw !== null && !openerDraw.asWritten && greetingFan !== undefined
+    ? greetingFinisher({
+      openers: openerDraw.openers.map((opener) => opener.body),
+      fan: greetingFan,
+      prior: priorHook,
+      manifest: greetingManifest ?? {},
+    })
+    : undefined;
   // The prompt named the fan typed plain; a copy of his name with its marks
   // that the model still takes from the dossier, his bio or his messages goes
   // out typed plain too (owner, 2026-11-01).
@@ -1809,6 +1839,7 @@ export async function prepareAiFeatureStream(
         : {}),
       ...(trimCompletion !== undefined ? { trimCompletion } : {}),
       ...(cannedCompletion !== undefined ? { cannedCompletion } : {}),
+      ...(finishCompletion !== undefined ? { finishCompletion } : {}),
       ...(rewriteWord !== null ? { rewriteWord } : {}),
     },
   );

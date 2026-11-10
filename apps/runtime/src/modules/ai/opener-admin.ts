@@ -64,27 +64,33 @@ export async function listPersonaOpeners(
   ]);
   return {
     personaKey,
-    openers: openers.map((opener) => {
-      const totals = { all: ZERO, bare: ZERO, named: ZERO, other: ZERO };
-      for (const row of outcomes) {
-        if (row.openerId !== opener.id) {
-          continue;
-        }
-        totals.all = add(totals.all, row);
-        const group = row.fan === "bare" ? "bare" : row.fan === "named" ? "named" : "other";
-        totals[group] = add(totals[group], row);
-      }
-      return {
-        id: opener.id,
-        body: opener.body,
-        audience: opener.audience,
-        hours: opener.hours,
-        enabled: opener.enabled,
-        createdAt: opener.createdAt.toISOString(),
-        outcomes: totals,
-      };
-    }),
+    openers: openers.map((opener) => ({
+      id: opener.id,
+      body: opener.body,
+      audience: opener.audience,
+      hours: opener.hours,
+      enabled: opener.enabled,
+      createdAt: opener.createdAt.toISOString(),
+      outcomes: totalsOf(outcomes.filter((row) => row.openerId === opener.id)),
+    })),
+    // Every text together, by what the greeting asked: a personal question
+    // about the fan's hook, or the text's own to a fan with no hook.
+    questions: {
+      personal: totalsOf(outcomes.filter((row) => row.question === "personal")),
+      none: totalsOf(outcomes.filter((row) => row.question === "none")),
+    },
   };
+}
+
+/** Rows summed, all together and by what the fan was. */
+function totalsOf(rows: readonly AiPersonaOpenerOutcome[]) {
+  const totals = { all: ZERO, bare: ZERO, named: ZERO, other: ZERO };
+  for (const row of rows) {
+    totals.all = add(totals.all, row);
+    const group = row.fan === "bare" ? "bare" : row.fan === "named" ? "named" : "other";
+    totals[group] = add(totals[group], row);
+  }
+  return totals;
 }
 
 async function requirePersona(app: Pick<AppContext, "db">, personaKey: string): Promise<void> {

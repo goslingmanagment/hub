@@ -5,6 +5,7 @@ import type {
   AdminAiPersonaOpener,
   AdminAiPersonaOpenerCreateBody,
   AdminAiPersonaOpenerOutcome,
+  AdminAiPersonaOpenersResponse,
 } from "@agency_hub_core/contracts";
 import { toast } from "sonner";
 import {
@@ -111,6 +112,29 @@ function PayersMoney({ outcome }: { outcome: AdminAiPersonaOpenerOutcome }) {
   );
 }
 
+/** The numbers of one row: a text's, or a total's. */
+function OutcomeCells({ outcome }: { outcome: AdminAiPersonaOpenerOutcome }) {
+  return (
+    <>
+      <td className="num">
+        <div>{outcome.sent}</div>
+        {outcome.edited > 0 && <div className="settings-second">правили {outcome.edited}</div>}
+      </td>
+      <td className="num"><Share part={outcome.replied} whole={outcome.matured} range /></td>
+      <td className="num"><Share part={outcome.talked} whole={outcome.matured} /></td>
+      <td className="num"><Share part={outcome.paid} whole={outcome.maturedPaid} /></td>
+      <td className="num"><Payers outcome={outcome} /></td>
+      <td className="num"><PayersMoney outcome={outcome} /></td>
+    </>
+  );
+}
+
+/** What the greetings asked, all texts together (owner, 2026-11-10). */
+const QUESTION_ROWS: readonly { key: keyof AdminAiPersonaOpenersResponse["questions"]; label: string; note: string }[] = [
+  { key: "personal", label: "Есть зацепка, личный вопрос", note: "вместо вопроса текста ИИ спросил о детали профиля" },
+  { key: "none", label: "Зацепки нет", note: "текст ушёл как написан, с именем в обращении или без" },
+];
+
 function rateOf(outcome: AdminAiPersonaOpenerOutcome) {
   return outcome.matured === 0 ? -1 : outcome.replied / outcome.matured;
 }
@@ -211,21 +235,29 @@ export function PersonaOpeners({ persona }: { persona: AdminAiPersona }) {
                         onChange={() => { setEnabled.reset(); setToggling(opener); }}
                       />
                     </td>
-                    <td className="num">
-                      <div>{outcome.sent}</div>
-                      {outcome.edited > 0 && <div className="settings-second">правили {outcome.edited}</div>}
-                    </td>
-                    <td className="num"><Share part={outcome.replied} whole={outcome.matured} range /></td>
-                    <td className="num"><Share part={outcome.talked} whole={outcome.matured} /></td>
-                    <td className="num"><Share part={outcome.paid} whole={outcome.maturedPaid} /></td>
-                    <td className="num"><Payers outcome={outcome} /></td>
-                    <td className="num"><PayersMoney outcome={outcome} /></td>
+                    <OutcomeCells outcome={outcome} />
                   </tr>
                 );
               })}
             </tbody>
+            {data && (
+              <tfoot>
+                {QUESTION_ROWS.map((row) => (
+                  <tr key={row.key}>
+                    <td className="persona-opener-text" colSpan={2}>
+                      <div className="font-medium">{row.label}</div>
+                      <div className="settings-second">{row.note}</div>
+                    </td>
+                    <OutcomeCells outcome={data.questions[row.key][group]} />
+                  </tr>
+                ))}
+              </tfoot>
+            )}
           </table>
         </div>
+        <p className="persona-openers-note">
+          Две нижние строки: все тексты вместе, считаются с 10 ноября 2026. Между собой их не сравнить: это разные фаны.
+        </p>
       </div>
     );
   }
@@ -236,7 +268,8 @@ export function PersonaOpeners({ persona }: { persona: AdminAiPersona }) {
       {table}
       {!archived && <AddOpenerForm persona={persona} />}
       <Disclosure>
-        <p>Hi на пустом чате вытягивает один из включённых текстов по жребию. Фану без имени, фото и био текст уходит как есть, остальным ИИ добавляет имя или деталь профиля.</p>
+        <p>Hi на пустом чате вытягивает один из включённых текстов по жребию. Фану без имени, фото и био текст уходит как есть, остальным ИИ добавляет имя в обращение.</p>
+        <p>Зацепка: в профиле фана есть о чём спросить. Это био, которое что-то о нём говорит, место или язык, слово в нике или имени про интерес, команду, профессию, игру, машину. Тогда вместо вопроса текста ИИ задаёт один личный вопрос об этой детали, привет и отсылка к подписке остаются из текста. Просто имя, набор букв и цифр, ник без смысла и пустой профиль зацепкой не считаются: текст уходит как написан. Об имени и о том, что значит ник, ИИ не спрашивает никогда.</p>
         <p>Ответы считаются через 72 часа после отправки, оплаты через 14 дней. Под долей — её разброс: с вероятностью 95 % настоящая доля лежит в этих пределах.</p>
         <p>«Разговорились»: фан написал, страница ответила, фан написал снова.</p>
         <p>«Плательщики» и «Деньги» считаются без ожидания, за всё время после приветствия: сколько фанов, получивших этот текст первым приветствием, потом заплатили странице (и сколько это на 100 отправок), и сколько они заплатили грязными. Фан считается один раз. Под суммой видно, сколько из неё дал один самый крупный фан: когда это почти вся сумма, её сделал один человек, и о тексте она говорит мало.</p>
