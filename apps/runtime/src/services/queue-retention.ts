@@ -130,16 +130,20 @@ export const QUEUE_RETENTION_SETTINGS: readonly QueueRetentionSetting[] = [
   { queue: "observations.partitions.ensure", retentionClass: "business-cron", retentionSeconds: DEFAULT_RETENTION_SECONDS, deleteAfterSeconds: DEFAULT_DELETE_AFTER_SECONDS },
   { queue: "ofapi.chargebacks.reconcile", retentionClass: "business-cron", retentionSeconds: DEFAULT_RETENTION_SECONDS, deleteAfterSeconds: DEFAULT_DELETE_AFTER_SECONDS },
   { queue: "ofapi.fan-account-check", retentionClass: "business-cron", retentionSeconds: DEFAULT_RETENTION_SECONDS, deleteAfterSeconds: DEFAULT_DELETE_AFTER_SECONDS },
-  { queue: "ofapi.binding.reconcile", retentionClass: "business-cron", retentionSeconds: DEFAULT_RETENTION_SECONDS, deleteAfterSeconds: DEFAULT_DELETE_AFTER_SECONDS },
   { queue: "ofapi.pending.reconcile", retentionClass: "business-cron", retentionSeconds: DEFAULT_RETENTION_SECONDS, deleteAfterSeconds: DEFAULT_DELETE_AFTER_SECONDS },
   { queue: "ofapi.link-stats.reconcile", retentionClass: "business-cron", retentionSeconds: DEFAULT_RETENTION_SECONDS, deleteAfterSeconds: DEFAULT_DELETE_AFTER_SECONDS },
   { queue: "ofapi.events.cleanup", retentionClass: "business-cron", retentionSeconds: DEFAULT_RETENTION_SECONDS, deleteAfterSeconds: DEFAULT_DELETE_AFTER_SECONDS },
   { queue: "db.disk-usage.check", retentionClass: "business-cron", retentionSeconds: DEFAULT_RETENTION_SECONDS, deleteAfterSeconds: DEFAULT_DELETE_AFTER_SECONDS },
   { queue: "capture.payload.parity.verify", retentionClass: "business-cron", retentionSeconds: DEFAULT_RETENTION_SECONDS, deleteAfterSeconds: DEFAULT_DELETE_AFTER_SECONDS },
   { queue: "publications.files.retention", retentionClass: "business-cron", retentionSeconds: DEFAULT_RETENTION_SECONDS, deleteAfterSeconds: DEFAULT_DELETE_AFTER_SECONDS },
-  { queue: "chat-memory.history.top-up", retentionClass: "business-cron", retentionSeconds: DEFAULT_RETENTION_SECONDS, deleteAfterSeconds: DEFAULT_DELETE_AFTER_SECONDS },
-  { queue: "chat-memory.fan-facts", retentionClass: "business-cron", retentionSeconds: DEFAULT_RETENTION_SECONDS, deleteAfterSeconds: DEFAULT_DELETE_AFTER_SECONDS },
   { queue: "ai.provider-reports.sync", retentionClass: "business-cron", retentionSeconds: DEFAULT_RETENTION_SECONDS, deleteAfterSeconds: DEFAULT_DELETE_AFTER_SECONDS },
+  // Frequent business crons (every 1/5/15 min): the 14d retention floor stays for
+  // a tick that has not run yet, but a finished tick is kept a day like the
+  // heartbeats' — nothing reads their finished rows, the lanes keep their own run
+  // records.
+  { queue: "ofapi.binding.reconcile", retentionClass: "business-cron", retentionSeconds: DEFAULT_RETENTION_SECONDS, deleteAfterSeconds: HEARTBEAT_RETENTION_SECONDS },
+  { queue: "chat-memory.history.top-up", retentionClass: "business-cron", retentionSeconds: DEFAULT_RETENTION_SECONDS, deleteAfterSeconds: HEARTBEAT_RETENTION_SECONDS },
+  { queue: "chat-memory.fan-facts", retentionClass: "business-cron", retentionSeconds: DEFAULT_RETENTION_SECONDS, deleteAfterSeconds: HEARTBEAT_RETENTION_SECONDS },
 
   // ---- Class E: pg-boss's cron dispatcher (14d / 24h) ----------------------
   { queue: PG_BOSS_SEND_IT_QUEUE, retentionClass: "cron-dispatch", retentionSeconds: DEFAULT_RETENTION_SECONDS, deleteAfterSeconds: HEARTBEAT_RETENTION_SECONDS },
