@@ -169,6 +169,7 @@ function deviceTokens(user: DemoUser, now: Date) {
       id: 400 + user.id * 10 + index,
       label: spec.label,
       keyPrefix: `agency_hub_device_${prefixFrom(seed, 6)}`,
+      harvestMachineId: null,
       isActive: ended === undefined,
       expiresAt: iso(expiresAt),
       lastUsedAt: lastUsedAt ? iso(lastUsedAt) : null,

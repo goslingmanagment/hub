@@ -1,13 +1,18 @@
+import { createHash } from "node:crypto";
+
 import { fixtureUserId } from "./helpers/user-identity.ts";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   createModel,
   createOnlyFansPage,
+  insertObservation,
+  listEventsSince,
   setPageOfapiAccountId,
 } from "@agency_hub_core/db";
 
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
+import { runCanonicalization } from "../apps/runtime/src/services/canonicalize-driver.ts";
 import {
   assignPageToUser,
   createUserAccount,
@@ -79,6 +84,28 @@ async function postHarvest(token: string, event: ReturnType<typeof harvestEvent>
       "x-client-version": "harvest-0.1.41",
     },
     payload: { events: [event] },
+  });
+}
+
+function guardAuditEvent(input: { clientEventId: string; pageLabel?: string; observedAt?: string }) {
+  return {
+    clientEventId: input.clientEventId,
+    kind: "guard_audit",
+    observedAt: input.observedAt ?? "2026-07-13T10:01:00.000Z",
+    payload: { decision: "allow" },
+    ...(input.pageLabel ? { pageLabel: input.pageLabel } : {}),
+  };
+}
+
+async function postCapture(token: string, events: ReturnType<typeof guardAuditEvent>[]) {
+  return server!.inject({
+    method: "POST",
+    url: "/api/v1/ingest/observations",
+    headers: {
+      authorization: `Bearer ${token}`,
+      "x-client-version": "0.1.41",
+    },
+    payload: { events },
   });
 }
 
@@ -191,6 +218,126 @@ describe("a full device token on the capture lane", () => {
     });
     expect(ordinary.statusCode).toBe(200);
     expect(ordinary.json()).toEqual({ accepted: 1, duplicates: 0 });
+  });
+
+  it("answers an unreadable event with 400 invalid_ingest_event", async (context) => {
+    if (!testDb || !server) {
+      context.skip();
+      return;
+    }
+    const { aliceToken } = await seedIdentity();
+
+    // The status is the contract: chat-extension drops a batch on 400 and
+    // resends it on any other status, so a 500 here would loop forever.
+    const response = await postCapture(aliceToken.token, [guardAuditEvent({
+      clientEventId: "77777777-7777-4777-8777-777777777777",
+      observedAt: "not-a-timestamp",
+    })]);
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toMatchObject({ error: "invalid_ingest_event" });
+  });
+
+  it("maps a capture to a page only inside the token's page scope", async (context) => {
+    if (!testDb || !server) {
+      context.skip();
+      return;
+    }
+    const { aliceToken, page } = await seedIdentity();
+    const otherModel = await createModel(testDb.db, { slug: "other", name: "Other" });
+    if (!otherModel) throw new Error("Failed to create other model");
+    const otherPage = await createOnlyFansPage(testDb.db, { modelId: otherModel.id, label: "other-of" });
+    if (!otherPage) throw new Error("Failed to create other page");
+
+    // Alice is assigned harvest-of only. A label outside her scope is not
+    // refused: the fact journals with no account, so it never canonicalizes.
+    const response = await postCapture(aliceToken.token, [
+      guardAuditEvent({ clientEventId: "88888888-8888-4888-8888-888888888881", pageLabel: "harvest-of" }),
+      guardAuditEvent({ clientEventId: "88888888-8888-4888-8888-888888888882", pageLabel: "other-of" }),
+    ]);
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ accepted: 2, duplicates: 0 });
+
+    const stored = await testDb.pool.query<{ event: string; account: string | null }>(`
+      select split_part(idempotency_key, ':', 2) as event, account_id::text as account
+      from observations where source = 'client_capture'
+      order by event
+    `);
+    expect(stored.rows).toEqual([
+      { event: "88888888-8888-4888-8888-888888888881", account: String(page.id) },
+      { event: "88888888-8888-4888-8888-888888888882", account: null },
+    ]);
+  });
+
+  it("journals each capture under the user of the token that sent it", async (context) => {
+    if (!testDb || !server) {
+      context.skip();
+      return;
+    }
+    const { aliceToken, bobToken } = await seedIdentity();
+
+    // actor_principal_id is the user_id the acceptance projection reads.
+    expect((await postCapture(aliceToken.token, [guardAuditEvent({
+      clientEventId: "99999999-9999-4999-8999-999999999991",
+    })])).statusCode).toBe(200);
+    expect((await postCapture(bobToken.token, [guardAuditEvent({
+      clientEventId: "99999999-9999-4999-8999-999999999992",
+    })])).statusCode).toBe(200);
+
+    const stored = await testDb.pool.query<{ event: string; actor: string | null }>(`
+      select split_part(idempotency_key, ':', 2) as event, actor_principal_id::text as actor
+      from observations where source = 'client_capture'
+      order by event
+    `);
+    expect(stored.rows).toEqual([
+      { event: "99999999-9999-4999-8999-999999999991", actor: String(await fixtureUserId(app!, "alice")) },
+      { event: "99999999-9999-4999-8999-999999999992", actor: String(await fixtureUserId(app!, "bob")) },
+    ]);
+  });
+
+  it("still canonicalizes a stored harvest message row into a received or sent message", async (context) => {
+    if (!testDb || !server) {
+      context.skip();
+      return;
+    }
+    const model = await createModel(testDb.db, { slug: "harvest", name: "Harvest" });
+    if (!model) throw new Error("Failed to create harvest model");
+    const page = await createOnlyFansPage(testDb.db, { modelId: model.id, label: "harvest-of" });
+    if (!page) throw new Error("Failed to create harvest page");
+
+    // The harvest lane no longer accepts uploads, but rows it stored before
+    // stay in the journal and replay through the canonicalizer.
+    for (const [index, sentByMe] of [0, 1].entries()) {
+      const payload = {
+        table: "messages",
+        machineId: MACHINE_ID,
+        ofapiAccountId: "acct_harvest",
+        row: {
+          message_id: `message-${index + 1}`,
+          chat_id: "fan-1",
+          created_at: "2026-07-13T10:00:00.000Z",
+          is_sent_by_me: sentByMe,
+          deleted: 0,
+        },
+      };
+      await insertObservation(testDb.db, {
+        source: "client_capture",
+        producer: "desktop-harvest@0.1.41",
+        platform: page.platform,
+        accountId: page.id,
+        kind: "harvest.messages",
+        payload,
+        payloadHash: createHash("sha256").update(JSON.stringify(payload)).digest(),
+        idempotencyKey: `${MACHINE_ID}:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa${index + 1}`,
+      });
+    }
+
+    await runCanonicalization(app!);
+    const events = await listEventsSince(testDb.db, { accountId: page.id, afterSeq: 0 });
+    expect(events.map(({ type, messageRef }) => ({ type, messageRef }))
+      .sort((a, b) => String(a.messageRef).localeCompare(String(b.messageRef)))).toEqual([
+      { type: "message.received", messageRef: "message-1" },
+      { type: "message.sent", messageRef: "message-2" },
+    ]);
   });
 
   it("lets only the current device-token bearer revoke exactly itself", async (context) => {

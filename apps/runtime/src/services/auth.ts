@@ -1508,6 +1508,9 @@ function deviceTokenResponse(token: Awaited<ReturnType<typeof listDeviceTokensFo
     id: token.id,
     label: token.label,
     keyPrefix: token.keyPrefix,
+    // Kept in the response for tabs opened before the harvest lane's removal:
+    // their schema still requires it. Nothing reads it any more.
+    harvestMachineId: token.harvestMachineId ?? null,
     isActive: token.revokedAt === null && token.expiresAt > new Date(),
     expiresAt: token.expiresAt.toISOString(),
     lastUsedAt: token.lastUsedAt?.toISOString() ?? null,

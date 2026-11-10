@@ -161,6 +161,7 @@ export const deviceTokenItemSchema = z.object({
   id: intId,
   label: z.string(),
   keyPrefix: z.string(),
+  harvestMachineId: z.string().uuid().nullable(),
   isActive: z.boolean(),
   expiresAt: isoTimestamp,
   lastUsedAt: isoTimestamp.nullable(),
