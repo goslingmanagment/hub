@@ -1,11 +1,13 @@
 // The engine ↔ operator protocol as the engine speaks it (Project Browser,
-// plan §4.13; spec §6.1, §6.3). The operator's side is
-// `apps/page-browser/src/rpc/protocol.ts`; this is its mirror, not an import:
-// the engine never loads the page-browser app at runtime (it is built and
-// shipped apart, its image with Chrome). The two are kept the same by
-// `tests/page-browser-protocol-drift.test.ts` — every message type both ways
-// equal as types, the version, the refusals, the body frames. A change of the
-// protocol is made in both files at once, or that test fails.
+// plan §4.13; spec §6.1, §6.3). The protocol's types are the operator's:
+// `apps/page-browser/src/rpc/protocol.ts`, imported here as types only
+// (`import type`, erased at build — the engine never loads the page-browser
+// app at runtime; it is built and shipped apart, its image with Chrome). The
+// values (the version, the minors, the sizes, the lists the parser checks
+// against) and the parser stay the engine's own; the compile-time checks
+// below fail `pnpm typecheck` when a value or a list differs from the
+// operator's. A protocol change is made in the operator's file and in this
+// file's parser.
 //
 // The engine reads every operator message of major 1 (an unknown type or
 // value is a protocol error: the connection closes, spec §6.3 rule 3), and
@@ -15,6 +17,29 @@
 // the site path's and the transport switch's wiring. A write's `send` and the
 // command `setPublishing` (minor 8) go only to an operator that said at hello
 // that it takes writes.
+
+import type * as Operator from "../../../../page-browser/src/rpc/protocol.ts";
+import type {
+  MonoMs, WallMs, Sha256Hex, AttemptId, SiteRequestId, ConnectionId, CommandId, BufferId, BodyId, Step,
+  StopReason, BodyRef, Mode, ResponseSource, Refusal, Admit, FromEngine, OperatorParams, Hello, HelloResult,
+  Publishing, PublishingStopReason, PublishingStop, Quiesced, SelfTestMechanism, HubSendBlock, CrashDumpCount,
+  EgressHostClass, SocksFailureKind, SocksStep, EgressFailures, State, PingPong, Send, Check, HubAdmit,
+  CheckResult, Sent, Result, ResultAck, Recover, RecoverResult, AdmissionCancel, SiteAdmit, SiteAdmitResult,
+  SiteDone, WsAdmit, WsAdmitResult, WsDone, SiteObservedDelivery, SiteSent, SiteEnded, SiteIdentity,
+  SiteObservedAck, EventsSubscribe, Events, Ack, EventsRefused, BufferEvent, CommandKind, Command,
+  CommandResult, AlarmKind, Alarm, LoginScreen, LoginRequest, LoginReply, EngineToOperator, OperatorToEngine,
+} from "../../../../page-browser/src/rpc/protocol.ts";
+
+export type {
+  MonoMs, WallMs, Sha256Hex, AttemptId, SiteRequestId, ConnectionId, CommandId, BufferId, BodyId, Step,
+  StopReason, BodyRef, Mode, ResponseSource, Refusal, Admit, FromEngine, OperatorParams, Hello, HelloResult,
+  Publishing, PublishingStopReason, PublishingStop, Quiesced, SelfTestMechanism, HubSendBlock, CrashDumpCount,
+  EgressHostClass, SocksFailureKind, SocksStep, EgressFailures, State, PingPong, Send, Check, HubAdmit,
+  CheckResult, Sent, Result, ResultAck, Recover, RecoverResult, AdmissionCancel, SiteAdmit, SiteAdmitResult,
+  SiteDone, WsAdmit, WsAdmitResult, WsDone, SiteObservedDelivery, SiteSent, SiteEnded, SiteIdentity,
+  SiteObservedAck, EventsSubscribe, Events, Ack, EventsRefused, BufferEvent, CommandKind, Command,
+  CommandResult, AlarmKind, Alarm, LoginScreen, LoginRequest, LoginReply, EngineToOperator, OperatorToEngine,
+};
 
 // Minor 1 (Project Browser PR 17): the operator holds its halt for the
 // owner's decision on its volume — `state.halt` says it, `clearHalt` clears
@@ -89,20 +114,7 @@ export const UPLOADS_MINOR = 9;
 /** The operator takes a few parts at once beside the page's managed request
  *  from this minor (it says `uploads.parallelParts` at hello). */
 export const PARALLEL_PARTS_MINOR = 10;
-/** A write's body, at most (bytes of its UTF-8): one HTTP/2 DATA frame, the
- *  operator's gate's limit for an API request's body. */
-export const WRITE_BODY_MAX = 16 * 1024 - 9;
 export const SUPPORTED_MAJORS: readonly number[] = [1];
-
-export type MonoMs = number;
-export type WallMs = number;
-export type Sha256Hex = string;
-export type AttemptId = number;
-export type SiteRequestId = string;
-export type ConnectionId = string;
-export type CommandId = string;
-export type BufferId = string;
-export type BodyId = string;
 
 export const STEPS = [
   "exit_closed",
@@ -115,8 +127,7 @@ export const STEPS = [
   "site_loaded",
   "session_confirmed",
   "ready",
-] as const;
-export type Step = (typeof STEPS)[number];
+] as const satisfies readonly Step[];
 
 export const STOP_REASONS = [
   "selftest_failed",
@@ -138,43 +149,11 @@ export const STOP_REASONS = [
   "login_required",
   "halt_unreadable",
   "owner_stop",
-] as const;
-export type StopReason = (typeof STOP_REASONS)[number];
+] as const satisfies readonly StopReason[];
 
-export interface BodyRef {
-  bodyId: BodyId;
-  decodedBytes: number;
-  sha256: Sha256Hex;
-}
-export type Mode = "automation" | "manual_login";
-export type ResponseSource = "network" | "revalidated_304" | "service_worker" | "cache_unconfirmed";
 /** `write_refused` (minor 8): a write the operator would not let go, or one
  *  the engine no longer admits at its check. Only of a write. */
-export const REFUSALS = ["lease_inactive", "lease_used", "send_deadline_passed", "pace", "takeover_floor", "generation_stale", "session_mismatch", "write_refused"] as const;
-export type Refusal = (typeof REFUSALS)[number];
-export interface Admit {
-  admit: true;
-  deadlineMono: MonoMs;
-}
-export interface FromEngine {
-  ownerGeneration: number;
-}
-
-export interface OperatorParams {
-  pingMs: number;
-  linkLossMs: number;
-  cancelMarginMs: number;
-  siteAdmitWaitMs: number;
-  siteRequestLimitMs: number;
-  bufferBatchMs: number;
-  eventBatch: { maxEvents: number; maxBytes: number };
-  exitIpCheckMs: number;
-  bufferCap: { bytes: number; ageMs: number; alarmPercents: number[] };
-  selfTestMaxMs: number;
-  screenshotMs: number;
-  chromeBodyBuffer: { totalBytes: number; perResponseBytes: number };
-  restartBackoffMs: number[];
-}
+export const REFUSALS = ["lease_inactive", "lease_used", "send_deadline_passed", "pace", "takeover_floor", "generation_stale", "session_mismatch", "write_refused"] as const satisfies readonly Refusal[];
 
 /** Spec §8.2 — the parameters the engine hands the operator in its hello. */
 export const DEFAULT_PARAMS: OperatorParams = {
@@ -193,52 +172,12 @@ export const DEFAULT_PARAMS: OperatorParams = {
   restartBackoffMs: [10_000, 30_000, 120_000, 300_000],
 };
 
-// ── the connection ──
-export interface Hello extends FromEngine {
-  type: "hello";
-  protocol: { majors: number[]; minor: number };
-  token: string;
-  pageId: number;
-  expectedAccountId: string;
-  pinnedExitIp: string;
-  params: OperatorParams;
-  socks5: { ip: string; port: number; username: string; password: string };
-  env: { timeZone: string; languages: string[]; geolocation: { latitude: number; longitude: number; accuracyM: number } };
-}
-/** `writes` (minor 8): the operator takes writes, computing the fingerprint
- *  of this version; absent: it takes none. */
-export type HelloResult = { type: "helloResult" } & (
-  | { ok: true; protocol: { major: number; minor: number }; bufferId: BufferId; state: State; writes?: { fingerprint: string }; uploads?: { fingerprint: string; maxPartBytes: number; parallelParts?: number } }
-  | { ok: false; reason: "token" | "protocol_major" | "generation_stale"; supportedMajors: number[] }
-);
-/** The two permissions of Hub's writes (minor 8): `create` — upload, make
- *  media, post, story; `withdraw` — take a scheduled post off the schedule. */
-export interface Publishing {
-  create: boolean;
-  withdraw: boolean;
-}
 /** Why the operator stopped Hub's writes by itself (an addition to minor 8,
  *  wall posts PR 7 part 2; spec §8.3): `login_lost` — Fansly signed the
  *  browser out; `challenge` — a Fansly check (a Cloudflare challenge)
  *  answered a request of the page; `http_401`, `http_403`, `http_429` —
  *  Fansly's answer to one of Hub's writes. */
-export const PUBLISHING_STOP_REASONS = ["login_lost", "challenge", "http_401", "http_403", "http_429"] as const;
-export type PublishingStopReason = (typeof PUBLISHING_STOP_REASONS)[number];
-/** A stop the operator holds until the engine names it in `setPublishing`'s
- *  `clearStop` (it recorded the stop as the page's autostop first): both
- *  permissions stay off meanwhile, whatever the engine sets. */
-export interface PublishingStop {
-  id: string;
-  reason: PublishingStopReason;
-  atWall: WallMs;
-}
-export interface Quiesced {
-  type: "quiesced";
-  previousGeneration: number;
-  lastSendMono: MonoMs | null;
-  lastSendWall: WallMs | null;
-}
-export type SelfTestMechanism = "dnr_never" | "dnr_write" | "proxy_closed" | "os_rules" | "policies";
+export const PUBLISHING_STOP_REASONS = ["login_lost", "challenge", "http_401", "http_403", "http_429"] as const satisfies readonly PublishingStopReason[];
 /** Why a Hub request cannot go now (minor 5), the operator's first: the
  *  transport's own (`client_check` while the site's last fansly-client-check
  *  or fansly-client-ts differed from the operator's; `header_parity` until
@@ -247,408 +186,43 @@ export type SelfTestMechanism = "dnr_never" | "dnr_write" | "proxy_closed" | "os
  *  the manual login, the page not up, its exit IP unknown since a check got
  *  no answer (minor 7), a buffer that takes no writes, the site not in the
  *  work tab, no live session, its new document's template unseen. */
-export const HUB_SEND_BLOCKS = ["client_check", "header_parity", "manual_login", "page_not_up", "exit_ip_unknown", "buffer", "site_not_loaded", "no_session", "no_template"] as const;
-export type HubSendBlock = (typeof HUB_SEND_BLOCKS)[number];
-/** Chrome's crash dumps of one of Crashpad's directories (minor 5). */
-export interface CrashDumpCount {
-  count: number;
-  newestAtWall: WallMs | null;
-}
+export const HUB_SEND_BLOCKS = ["client_check", "header_parity", "manual_login", "page_not_up", "exit_ip_unknown", "buffer", "site_not_loaded", "no_session", "no_template"] as const satisfies readonly HubSendBlock[];
 /** The classes of the operator's map of hosts. */
-export const EGRESS_HOST_CLASSES = ["site", "api", "ws", "cdn", "closed", "third_party", "denied"] as const;
-export type EgressHostClass = (typeof EGRESS_HOST_CLASSES)[number];
+export const EGRESS_HOST_CLASSES = ["site", "api", "ws", "cdn", "closed", "third_party", "denied"] as const satisfies readonly EgressHostClass[];
 /** How the page's SOCKS5 failed a tunnel, and at which step of its exchange. */
-export const SOCKS_FAILURE_KINDS = ["unavailable", "auth", "refused"] as const;
-export type SocksFailureKind = (typeof SOCKS_FAILURE_KINDS)[number];
-export const SOCKS_STEPS = ["greeting", "auth", "connect"] as const;
-export type SocksStep = (typeof SOCKS_STEPS)[number];
+export const SOCKS_FAILURE_KINDS = ["unavailable", "auth", "refused"] as const satisfies readonly SocksFailureKind[];
+export const SOCKS_STEPS = ["greeting", "auth", "connect"] as const satisfies readonly SocksStep[];
 /** Entries of each list at most. */
 export const EGRESS_FAILURE_ENTRIES_MAX = 64;
-/** The exit's refusals since the operator started (`sinceWall`): the page's
- *  SOCKS5 by kind, step, reply (null: none) and the host's class; the rules
- *  extension's blocks by the host's class, the self-test's probes apart. */
-export interface EgressFailures {
-  sinceWall: WallMs;
-  socks: Array<{ kind: SocksFailureKind; step: SocksStep; rep: number | null; cls: EgressHostClass; count: number; lastAtWall: WallMs; lastHost: string }>;
-  dnr: Array<{ cls: EgressHostClass; probe: boolean; count: number; lastAtWall: WallMs; lastHost: string }>;
-}
-export interface State {
-  type: "state";
-  step: Step;
-  stopReason: StopReason | null;
-  retryAtWall: WallMs | null;
-  exitOpen: boolean;
-  mode: Mode;
-  sessionFingerprint: Sha256Hex | null;
-  accountId: string | null;
-  exitIp: string | null;
-  chromeVersion: string;
-  operatorVersion: string;
-  /** `open` (an addition, PR 14): what the buffer holds, said only while it
-   *  is open — its id, the last event number it gave, the outcomes kept for
-   *  their resultAck, and what is written and not yet committed (a batch).
-   *  `null`: the buffer cannot be opened — nothing of it is known, and the
-   *  zero of `bytes` says nothing. Absent: an operator from before the
-   *  addition — unknown. Only `open` with nothing kept is the word that the
-   *  buffer is empty. */
-  buffer: { bytes: number; oldestAgeMs: number; open?: { id: BufferId; lastSeq: number; outcomes: number; pending: number } | null };
-  selfTest: { ok: boolean; atWall: WallMs; failed: SelfTestMechanism | null; notInstalled?: SelfTestMechanism[] } | null;
-  /** (Minor 1, PR 17.) The halt the operator holds for the owner's decision,
-   *  on its volume: it refuses every start and the exit's opening until the
-   *  halt is cleared (`clearHalt` with its id). `null`: none. Absent: an
-   *  operator from before — it holds nothing and takes no `clearHalt`. */
-  halt?: { id: string; reason: StopReason; atWall: WallMs } | null;
-  /** (Minor 1, PR 17.) The id of the last halt cleared — by the owner's
-   *  clearHalt, or by the operator once the expected account was confirmed
-   *  after his login — kept with the halt across restarts. Hub lets its
-   *  mirror of a halt go only on this word. */
-  lastClearedHaltId?: string | null;
-  /** (Minor 5.) Whether a Hub request can go now; blocked: the first reason
-   *  and since when. Absent: an operator from before — unknown. */
-  hubSend?: { allowed: true; reason: null; sinceWall: null } | { allowed: false; reason: HubSendBlock; sinceWall: WallMs };
-  /** (Minor 5.) Chrome's crash dumps on the profile (Crashpad's `completed`
-   *  and `pending`), as counted at Chrome's last start or exit. Null: not
-   *  counted. Absent: an operator from before. */
-  crashDumps?: { completed: CrashDumpCount; pending: CrashDumpCount; countedAtWall: WallMs } | null;
-  /** (An addition, 2026-10-18.) The exit's refusals since the operator
-   *  started. Absent: an operator from before — not counted. */
-  egressFailures?: EgressFailures;
-  /** (Minor 6.) The site's observations the operator keeps for the engine's
-   *  word: how many, the oldest one's instant (null: none), how many it
-   *  dropped unconfirmed since its start. */
-  siteObserved?: { unconfirmed: number; oldestAtWall: WallMs | null; dropped: number };
-  /** (Minor 8.) The permissions of Hub's writes now: what the engine set
-   *  (`setPublishing`; both off until it does), both off while the operator
-   *  holds a stop of its own (`stop`, an addition). */
-  publishing?: Publishing & { stop?: PublishingStop | null };
-}
-export interface PingPong {
-  type: "ping" | "pong";
-  n: number;
-}
-// ── a Hub request ──
-export interface Send extends FromEngine {
-  type: "send";
-  attemptId: AttemptId;
-  route: string;
-  credentialsGeneration: Sha256Hex;
-  sessionFingerprint: Sha256Hex;
-  /** `POST` (minor 8): a write of kind `api`, with its `body` and the
-   *  command's `writeFingerprint`; both absent from a `GET`. `PUT` (minor 9):
-   *  an upload's part, of kind `part`, its bytes in `bodyRef` (their frames
-   *  sent right before) and its `writeFingerprint`. */
-  method: "GET" | "POST" | "PUT";
-  url: string;
-  headers: Record<string, string>;
-  kind: "api" | "image" | "video" | "part";
-  maxBodyBytes: number;
-  sendDeadlineMono: MonoMs;
-  requestDeadlineMono: MonoMs;
-  body?: string;
-  writeFingerprint?: Sha256Hex;
-  bodyRef?: BodyRef;
-}
-export interface Check {
-  type: "check";
-  attemptId: AttemptId;
-  pausedMono: MonoMs;
-  liveSessionFingerprint: Sha256Hex;
-}
-/** A Hub request admitted; `pauseMs` (an addition): the pause the admission
- *  keeps from the page's last send of any origin — the operator releases the
- *  request only after that long a quiet by its own sight (plan-b Б12).
- *  `writeFingerprint` (minor 8): a write's admission names its command's
- *  fingerprint — the command and its approval still stand. */
-export type HubAdmit = Admit & { pauseMs?: number; writeFingerprint?: Sha256Hex };
-export type CheckResult = FromEngine & { type: "checkResult"; attemptId: AttemptId } & (HubAdmit | { admit: false; reason: Refusal });
-export interface Sent {
-  type: "sent";
-  attemptId: AttemptId;
-  sentMono: MonoMs;
-  sentWall: WallMs;
-  connectionReused: boolean;
-  /** (An addition.) When the operator released the operation's first
-   *  request, after its quiet; absent: not known. */
-  releasedMono?: MonoMs;
-}
-export interface Result {
-  type: "result";
-  attemptId: AttemptId;
-  sessionFingerprint: Sha256Hex;
-  outcome:
-    | {
-        kind: "response";
-        status: number;
-        headers: Record<string, string>;
-        body: BodyRef;
-        encodedBytes: number;
-        source: ResponseSource;
-        sentMono: MonoMs | null;
-        sendMark: "transport_reported" | "completion_fallback";
-        bodyOverflow?: boolean;
-        preflight?: boolean;
-      }
-    | { kind: "transport_error" | "timeout"; sent: boolean; message: string }
-    | { kind: "aborted_before_send"; refusal: Refusal };
-}
-export interface ResultAck extends FromEngine {
-  type: "resultAck";
-  attemptId: AttemptId;
-}
-export interface Recover extends FromEngine {
-  type: "recover";
-  attemptIds: AttemptId[];
-}
-export interface RecoverResult {
-  type: "recoverResult";
-  attempts: { attemptId: AttemptId; state: "outcome_resent" | "not_sent" | "unknown" }[];
-}
-// ── the site's requests ──
-/** Withdraw a still-waiting admission on the connection it was asked on.
- *  Once the operator accepted a grant it reports the ordinary end instead:
- *  a cancellation never retracts a possible send. */
-export interface AdmissionCancel {
-  type: "admissionCancel";
-  kind: "site" | "ws";
-  id: string;
-  reason: "request_ended" | "document_replaced" | "wait_expired" | "page_stopped";
-}
-export interface SiteAdmit {
-  type: "siteAdmit";
-  siteRequestId: SiteRequestId;
-  method: string;
-  host: string;
-  path: string;
-  query: string;
-  resourceType: string;
-  route: string;
-  operation: "read" | "login";
-  sessionFingerprint: Sha256Hex | null;
-  pausedMono: MonoMs;
-  waitDeadlineMono: MonoMs;
-}
-export type SiteAdmitResult = FromEngine & { type: "siteAdmitResult"; siteRequestId: SiteRequestId } & (
-    | (Admit & { attemptId: AttemptId })
-    | { admit: false; reason: "paused" | "held" | "credentials" | "mode" | "route_hold" | "site_hour_cap" | "buffer_full" | "session_mismatch" | "wait_expired" }
-  );
-export interface SiteDone {
-  type: "siteDone";
-  siteRequestId: SiteRequestId;
-  attemptId: AttemptId;
-  sent: boolean;
-  sentMono: MonoMs | null;
-  sentWall: WallMs | null;
-  connectionReused: boolean | null;
-  status: number | null;
-  retryAfter: string | null;
-  error: { afterSendStart: boolean; message: string } | null;
-  body: "buffered" | "not_platform_data" | "incomplete";
-}
-// ── the site's socket ──
-export interface WsAdmit {
-  type: "wsAdmit";
-  connectionId: ConnectionId;
-  url: string;
-  context: "page" | "frame" | "worker";
-  sessionFingerprint: Sha256Hex | null;
-  requestedMono: MonoMs;
-  waitDeadlineMono: MonoMs;
-}
-export type WsAdmitResult = FromEngine & { type: "wsAdmitResult"; connectionId: ConnectionId } & (
-    | (Admit & { attemptId: AttemptId })
-    | { admit: false; reason: string; retryNotBeforeWall: WallMs | null }
-  );
-export interface WsDone {
-  type: "wsDone";
-  connectionId: ConnectionId;
-  attemptId: AttemptId;
-  sent: boolean;
-  sentMono: MonoMs | null;
-  status: number | null;
-  error: string | null;
-  fate?: "unknown";
-}
-// ── the site observed, not admitted (variant Б, minor 4) ──
-// An operator of minor 4 lets the site's own requests and socket go as any
-// browser does: nothing of the site waits for the engine or is refused by it.
-// It tells the engine what left and how it ended, so the engine counts the
-// site's sends in the page's pause before its own requests, holds its routes
-// on the site's 429, 401 and 403, and journals the site's traffic. It never
-// sends `siteAdmit` or `wsAdmit`.
-/** (Minor 6.) The request's key (minted by the operator, the same over its
- *  redirects), its hop and the delivery number its ack names. */
-export interface SiteObservedDelivery {
-  requestKey?: string;
-  hop?: number;
-  deliverySeq?: number;
-}
-export interface SiteSent extends SiteObservedDelivery {
-  type: "siteSent";
-  siteRequestId: SiteRequestId;
-  method: string;
-  host: string;
-  /** The path only: a query may carry what the journal must not keep. */
-  path: string;
-  /** The operations map's route, or `ws.upgrade` for the socket's handshake. */
-  route: string;
-  sessionFingerprint: Sha256Hex | null;
-  /** When the operator saw it leave (CLOCK_MONOTONIC). */
-  sentMono: MonoMs;
-}
-export interface SiteEnded extends SiteObservedDelivery {
-  type: "siteEnded";
-  siteRequestId: SiteRequestId;
-  endedMono: MonoMs;
-  status: number | null;
-  retryAfter: string | null;
-  error: string | null;
-}
-/** The site's own `GET /account/me`, answered from the network (not a cache
- *  or a service worker), whole, 200, under the session the operator names:
- *  the account it names. `sentNotBeforeMono` is a lower bound of its send,
- *  on the operator's clock; the engine judges the proof by it. */
-export interface SiteIdentity extends SiteObservedDelivery {
-  type: "siteIdentity";
-  siteRequestId: SiteRequestId;
-  accountId: string;
-  sessionFingerprint: Sha256Hex;
-  sentNotBeforeMono: MonoMs;
-}
-/** (Minor 6.) The observations committed (their `deliverySeq`), on the
- *  connection they came on. */
-export interface SiteObservedAck extends FromEngine {
-  type: "siteObservedAck";
-  deliverySeqs: number[];
-}
 /** A `siteObservedAck` names at most this many. */
 export const SITE_OBSERVED_ACK_MAX = 1_000;
-// ── the event stream ──
-export interface EventsSubscribe extends FromEngine {
-  type: "events.subscribe";
-  bufferId: BufferId;
-  afterSeq: number;
-}
-export interface Events {
-  type: "events";
-  bufferId: BufferId;
-  events: BufferEvent[];
-}
-export interface Ack extends FromEngine {
-  type: "ack";
-  bufferId: BufferId;
-  uptoSeq: number;
-}
-export interface EventsRefused {
-  type: "events.refused";
-  of: "events.subscribe" | "ack";
-  reason: "foreign_buffer" | "ahead" | "not_subscribed" | "beyond_sent" | "unavailable";
-  bufferId: BufferId;
-  givenBufferId: BufferId;
-  givenSeq: number;
-}
-export type BufferEvent = { seq: number; atMono: MonoMs; atWall: WallMs } & (
-  | { kind: "ws.open"; connectionId: ConnectionId; attemptId: AttemptId; sessionFingerprint: Sha256Hex }
-  | { kind: "ws.in"; connectionId: ConnectionId; frame: string }
-  | { kind: "ws.close"; connectionId: ConnectionId; code: number | null; reason: string | null }
-  | { kind: "gap"; fromSeq: number | null; fromWall: WallMs | null; reason: "ws_reconnect" | "operator_start" | "chrome_restart" | "buffer_full" | "disk_full" }
-  | {
-      kind: "site.response";
-      siteRequestId: SiteRequestId;
-      attemptId: AttemptId;
-      route: string;
-      method: string;
-      path: string;
-      query: string;
-      status: number;
-      headers: Record<string, string>;
-      body: BodyRef;
-      complete: boolean;
-      source: ResponseSource;
-      sessionFingerprint: Sha256Hex;
-      /** (Minor 6.) The request's key and hop, as its `siteSent` names them. */
-      requestKey?: string;
-      hop?: number;
-    }
-  /** (Minor 5.) The page's step changed: its stop reason, whether it holds
-   *  until the engine starts it, the next retry, why (IPs masked), the
-   *  versions it ran and Chrome's crash dumps then (null: not counted). */
-  | {
-      kind: "browser.transition";
-      from: Step;
-      to: Step;
-      stopReason: StopReason | null;
-      halted: boolean;
-      retryAtWall: WallMs | null;
-      note: string;
-      chromeVersion: string;
-      operatorVersion: string;
-      crashDumps: number | null;
-    }
-);
 /** A transition's note, at most (minor 5). */
 export const TRANSITION_NOTE_MAX = 1024;
-// ── control ──
-export type CommandKind = "closeExit" | "openExit" | "stopPage" | "restartBrowser" | "selfTest" | "profileSnapshot";
-export interface Command extends FromEngine {
-  type: "command";
-  commandId: CommandId;
-  notAfterMono: MonoMs;
-  /** `setPublishing` (minor 8): only to an operator that said `writes`. */
-  command: { kind: CommandKind } | { kind: "setMode"; mode: Mode } | { kind: "clearHalt"; haltId: string } | ({ kind: "setPublishing"; clearStop?: string } & Publishing);
-}
-export interface CommandResult {
-  type: "commandResult";
-  commandId: CommandId;
-  ok: boolean;
-  detail: string | null;
-}
-/** `exit_ip_unknown`, `journal` and `env_mismatch`: minor 7. */
-export type AlarmKind = "unknown_ws_message" | "header_mismatch" | "selftest_failed" | "overflow" | "cdp_lost" | "fallback_release" | "late_send" | "buffer" | "exit_ip_unknown" | "journal" | "env_mismatch";
-export interface Alarm {
-  type: "alarm";
-  atWall: WallMs;
-  detail: Record<string, string | number | boolean>;
-  kind: AlarmKind;
-}
-// ── the login form: API → operator, its own token (plan §4.8; PR 15) ──
-export type LoginScreen = "landing" | "login" | "code" | "error" | "success" | "unknown";
-export type LoginRequest = { callId: string; token: string } & (
-  | { type: "login.state" }
-  | { type: "login.open" }
-  | { type: "login.screenshot" }
-  | { type: "login.submit"; login: string; password: string }
-  | { type: "login.code"; code: string }
-);
-export type LoginReply = { callId: string } & (
-  // codeFrom (an addition, owner decision 2026-10-15): "email" — the code
-  // asked for is the one Fansly e-mailed for a login from a new device;
-  // absent — the 2FA code, or an operator older than this.
-  | { type: "login.stateResult"; screen: LoginScreen; screenVersion: string; fields: ("login" | "password" | "code")[]; siteError: string | null; codeFrom?: "email" }
-  | { type: "login.screenshotResult"; jpeg: BodyRef }
-  | { type: "login.refused"; reason: "token" | "not_manual_login" | "screen_changed" | "busy" }
-);
-export type EngineToOperator = Hello | (PingPong & FromEngine) | Send | CheckResult | ResultAck | Recover | SiteAdmitResult | WsAdmitResult | EventsSubscribe | Ack | Command | SiteObservedAck;
-export type OperatorToEngine =
-  | HelloResult
-  | Quiesced
-  | State
-  | PingPong
-  | Check
-  | Sent
-  | Result
-  | RecoverResult
-  | AdmissionCancel
-  | SiteAdmit
-  | SiteDone
-  | WsAdmit
-  | WsDone
-  | SiteSent
-  | SiteEnded
-  | SiteIdentity
-  | Events
-  | EventsRefused
-  | CommandResult
-  | Alarm;
+
+/** True only when A and B are the same type (no assignability slack). */
+type Same<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false;
+// The engine's values are the operator's: a difference is a type error here.
+// (`DEFAULT_PARAMS` is the engine's own — it hands them in its hello.)
+const SAME_AS_OPERATOR: [
+  Same<typeof PROTOCOL, typeof Operator.PROTOCOL>,
+  Same<typeof WRITES_MINOR, typeof Operator.WRITES_MINOR>,
+  Same<typeof UPLOADS_MINOR, typeof Operator.UPLOADS_MINOR>,
+  Same<typeof PARALLEL_PARTS_MINOR, typeof Operator.PARALLEL_PARTS_MINOR>,
+  Same<typeof BODY_PART_BYTES, typeof Operator.BODY_PART_BYTES>,
+  Same<typeof SITE_OBSERVED_ACK_MAX, typeof Operator.SITE_OBSERVED_ACK_MAX>,
+  Same<typeof TRANSITION_NOTE_MAX, typeof Operator.TRANSITION_NOTE_MAX>,
+  Same<typeof EGRESS_FAILURE_ENTRIES_MAX, typeof Operator.EGRESS_FAILURE_ENTRIES_MAX>,
+  // Each list names every member of its type (`satisfies` alone lets one miss).
+  Same<(typeof STEPS)[number], Step>,
+  Same<(typeof STOP_REASONS)[number], StopReason>,
+  Same<(typeof REFUSALS)[number], Refusal>,
+  Same<(typeof PUBLISHING_STOP_REASONS)[number], PublishingStopReason>,
+  Same<(typeof HUB_SEND_BLOCKS)[number], HubSendBlock>,
+  Same<(typeof EGRESS_HOST_CLASSES)[number], EgressHostClass>,
+  Same<(typeof SOCKS_FAILURE_KINDS)[number], SocksFailureKind>,
+  Same<(typeof SOCKS_STEPS)[number], SocksStep>,
+] = [true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true];
+void SAME_AS_OPERATOR;
 
 // ── reading the operator's messages ─────────────────────────────────────────
 
