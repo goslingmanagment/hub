@@ -242,7 +242,7 @@ describe("egress resolver (Stage 26)", () => {
       .rejects.toThrow(/not found/);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
-  it("fails closed when the service tuple is absent and allows only Telegram's transition fallback", async (context) => {
+  it("fails closed when the service tuple is absent", async (context) => {
     if (!testDb) {
       context.skip();
       return;
@@ -256,47 +256,6 @@ describe("egress resolver (Stage 26)", () => {
     await expect(resolveEgress(missing, { kind: "vendor", vendor: "elevenlabs" }))
       .rejects.toThrow(/requires the service proxy/);
     await expect(resolveEgress(missing, { kind: "vendor", vendor: "telegram" }))
-      .rejects.toThrow(/no transition legacy page route/);
-
-    await seedFanslyPage(
-      "fake-telegram-legacy",
-      "socks5://legacy-proxy.example.internal:1080",
-    );
-    const transition = createTestAppContext(testDb, {
-      telegramProxyPageLabel: "fake-telegram-legacy",
-      serviceEgressProxyUrl: null,
-      serviceEgressProxyUsername: null,
-      serviceEgressProxyPassword: null,
-    });
-    const legacy = await resolveEgress(transition, {
-      kind: "vendor",
-      vendor: "telegram",
-    });
-    expect(legacy.egressKey).toBe(
-      "legacy-page:socks5://legacy-proxy.example.internal:1080",
-    );
-    expect(legacy.dispatcher).not.toBeNull();
-    await legacy.close();
-    await expect(resolveEgress(transition, {
-      kind: "vendor",
-      vendor: "elevenlabs",
-    })).rejects.toThrow(/requires the service proxy/);
-  }, INTEGRATION_TEST_TIMEOUT_MS);
-
-  it("gives the dedicated tuple strict precedence over a configured legacy label", async (context) => {
-    if (!testDb) {
-      context.skip();
-      return;
-    }
-
-    appContext.config.telegramProxyPageLabel = "page-that-does-not-exist";
-    const telegram = await resolveEgress(appContext, {
-      kind: "vendor",
-      vendor: "telegram",
-    });
-    expect(telegram.egressKey).toBe(
-      "service:socks5://proxy.example.internal:1080",
-    );
-    await telegram.close();
+      .rejects.toThrow(/requires the service proxy/);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 });

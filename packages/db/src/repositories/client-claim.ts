@@ -190,15 +190,6 @@ function lastOwnDispatchQuery(input: { pageId: number; fanRef: string; userId: n
     order by created_at desc limit 1`;
 }
 
-/** The plan of exactly that statement, for the test that holds it to the fan's index. */
-export async function explainClientLastOwnDispatchQuery(
-  db: Database,
-  input: { pageId: number; fanRef: string; userId: number },
-): Promise<string> {
-  const result = await db.execute<{ "QUERY PLAN": string }>(sql`explain (format text) ${lastOwnDispatchQuery(input)}`);
-  return result.rows.map((row) => row["QUERY PLAN"]).join("\n");
-}
-
 /**
  * The sends one rate counts, as a condition on `client_send_custody c`: the
  * user's dispatches (a registered native send is not one) of the rate's

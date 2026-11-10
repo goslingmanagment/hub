@@ -37,7 +37,6 @@ const RUNNING: Readonly<Record<string, Scalar>> = {
   logLevel: "info",
   telegramEnabled: true,
   telegramReportHourUtc: 6,
-  telegramProxyPageLabel: "mia-1",
   ofapiBaseUrl: "https://app.onlyfansapi.com/api",
   ofapiWebhookManagementScope: "team",
   ofapiExpectedTeamSlug: "demo-agency",

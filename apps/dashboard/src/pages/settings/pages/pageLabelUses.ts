@@ -16,7 +16,6 @@ export const PAGE_LABEL_KEYS: readonly { key: string; name: string }[] = [
   { key: "aiMediaDescribePagePolicies", name: "Описание картинок" },
   { key: "crossSpendersLists", name: CONFIG_COPY_RU.crossSpendersLists?.title ?? "Спендеры других страниц" },
   { key: "chatExtensionHostBindings", name: CONFIG_COPY_RU.chatExtensionHostBindings?.title ?? "Привязка аккаунтов расширения" },
-  { key: "telegramProxyPageLabel", name: CONFIG_COPY_RU.telegramProxyPageLabel?.title ?? "Прежний прокси для Telegram" },
 ];
 
 export interface PageLabelUse {

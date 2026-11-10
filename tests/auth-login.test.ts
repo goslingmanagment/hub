@@ -9,7 +9,6 @@ const repoMocks = vi.hoisted(() => ({
   createApiKey: vi.fn(),
   createAuthSession: vi.fn(),
   createUser: vi.fn(),
-  deleteExpiredAuthSessions: vi.fn(),
   findActiveApiKeysForUser: vi.fn(),
   findApiKeyByDigest: vi.fn(),
   findAuthSessionByDigest: vi.fn(),

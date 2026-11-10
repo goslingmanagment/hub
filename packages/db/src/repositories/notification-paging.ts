@@ -15,7 +15,6 @@ import type { NotificationIncidentKind, NotificationIncidentStatus } from "./not
 // detector and the daily digest read.
 
 export type NotificationIncidentPagingRow = typeof notificationIncidentPaging.$inferSelect;
-export type NotificationIncidentCycleRow = typeof notificationIncidentCycles.$inferSelect;
 export type NotificationPagingMode = "immediate" | "sustained" | "flapping";
 
 export interface NotificationPagingCandidate {
@@ -112,17 +111,6 @@ export async function listNotificationPagingCandidates(
     resolution: row.resolution ?? null,
     paging: row.paging ?? null,
   }));
-}
-
-export async function getNotificationIncidentPaging(
-  db: Database,
-  notificationIncidentId: number,
-): Promise<NotificationIncidentPagingRow | null> {
-  const [row] = await db.select()
-    .from(notificationIncidentPaging)
-    .where(eq(notificationIncidentPaging.notificationIncidentId, notificationIncidentId))
-    .limit(1);
-  return row ?? null;
 }
 
 export async function upsertNotificationIncidentPaging(

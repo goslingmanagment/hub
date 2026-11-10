@@ -103,12 +103,6 @@ export async function readPageBrowserPageSettings(
   return { profile, settings: { pinnedExitIp: profile.pinnedExitIp, env } };
 }
 
-/** The page's browser profile and its RPC address (null: the page has none). */
-export async function readPageBrowserAddress(db: Database, pageId: number): Promise<{ profileId: string; url: string } | null> {
-  const row = await findPageBrowserByPage(db, pageId);
-  return row === null ? null : { profileId: row.profileId, url: pageBrowserRpcUrl(row.container) };
-}
-
 /**
  * The settings of one hello of the page's browser (spec §6.1): read anew at
  * every connect, so a changed proxy or token goes in the next hello. The

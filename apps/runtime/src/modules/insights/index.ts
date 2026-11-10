@@ -62,7 +62,6 @@ import {
 } from "@agency_hub_core/db";
 import {
   CAPTURE_COVERAGE_PLANES,
-  FANSLY_MEDIA_STAT_TYPES,
   FANSLY_PROFILE_STAT_FAMILIES,
   FANSLY_REVENUE_LABEL_VERSION,
   fanslyRevenueTypeEra,
@@ -462,22 +461,16 @@ export function registerInsightsRoutes(server: ApiServer, ctx: ApiModuleContext)
     schema: routeSchemas.creatorStatsOverview,
   }, async (request): Promise<CreatorStatsOverviewResponse> => {
     const page = await resolveOwnerPage(request);
-    const days = request.query.days;
-    const todayDay = new Date().toISOString().slice(0, 10);
-    const toDay = request.query.to ?? todayDay;
-    if (toDay > todayDay) throw new BadRequestError("to must not be after today (UTC)");
-    const toMs = Date.parse(`${toDay}T00:00:00Z`);
-    if (!Number.isFinite(toMs)) throw new BadRequestError("to is not a day");
-    const fromDay = new Date(toMs - (days - 1) * 86_400_000).toISOString().slice(0, 10);
+    const window = creatorStatsWindow(request.query);
     const read = await readCreatorStatsOverview(appContext.db, {
       pageId: page.id,
-      fromDay,
-      toDay,
+      fromDay: window.fromDay,
+      toDay: window.toDay,
       hourlyFrom: new Date(Date.now() - 72 * 3_600_000),
     });
     return {
       page: { label: page.label, platform: page.platform },
-      window: { fromDay, toDay, days },
+      window,
       ...read,
       revenue: read.revenue.map((row) => ({ ...row, productLabel: fanslyRevenueTypeLabel(row.productType) })),
     };
@@ -1138,10 +1131,3 @@ export function registerInsightsRoutes(server: ApiServer, ctx: ApiModuleContext)
     };
   });
 }
-
-/** Re-exported for the media-stat label census test: the two label tables this
- *  module reads are the shared ones, not private copies. */
-export const INSIGHTS_LABEL_TABLES = {
-  profileFamilies: FANSLY_PROFILE_STAT_FAMILIES,
-  mediaTypes: FANSLY_MEDIA_STAT_TYPES,
-} as const;

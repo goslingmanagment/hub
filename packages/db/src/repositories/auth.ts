@@ -154,12 +154,6 @@ export async function findAuthSessionByDigest(db: Database, tokenDigest: string)
   });
 }
 
-export async function findAuthSessionById(db: Database, sessionId: number) {
-  return db.query.authSessions.findFirst({
-    where: eq(authSessions.id, sessionId),
-  });
-}
-
 export async function touchAuthSession(db: Database, sessionId: number) {
   const [updated] = await db.update(authSessions).set({
     lastSeenAt: new Date(),
@@ -193,10 +187,6 @@ export async function revokeAuthSessionsForUser(
     eq(authSessions.userId, userId),
     isNull(authSessions.revokedAt),
   )).returning();
-}
-
-export async function deleteExpiredAuthSessions(db: Database, now = new Date()) {
-  return db.delete(authSessions).where(sql`${authSessions.expiresAt} < ${now}`);
 }
 
 export async function insertAuditEvent(db: Database, input: InsertAuditEventInput) {

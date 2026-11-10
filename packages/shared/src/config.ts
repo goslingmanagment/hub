@@ -110,7 +110,6 @@ const envSchema = z.object({
   TELEGRAM_BOT_TOKEN: optionalTrimmedStringSchema,
   TELEGRAM_CHAT_ID: optionalTrimmedStringSchema,
   TELEGRAM_REPORT_HOUR: optionalTelegramHourSchema,
-  TELEGRAM_PROXY_PAGE_LABEL: optionalTrimmedStringSchema,
   SERVICE_EGRESS_PROXY_URL: optionalTrimmedStringSchema,
   SERVICE_EGRESS_PROXY_USERNAME: optionalTrimmedStringSchema,
   SERVICE_EGRESS_PROXY_PASSWORD: optionalTrimmedStringSchema,
@@ -289,13 +288,6 @@ const envSchema = z.object({
   CHAT_EXTENSION_HEALTH_INGEST_ENABLED: booleanSchema.default(false),
 });
 
-// Machine-readable list of every env var the schema understands. Exported so the
-// config registry (config-registry.ts) can be parity-tested against the schema
-// without reaching into Zod internals (see config-registry parity test).
-export const ENV_CONFIG_KEYS = Object.keys(envSchema.shape) as Array<
-  keyof typeof envSchema.shape
->;
-
 /** One Anthropic account's key: `label` names the account in Hub (ledger,
  * usage screen, alerts); the key itself never leaves the config. */
 export interface AnthropicApiKeyEntry {
@@ -404,12 +396,11 @@ export interface AppConfig {
   telegramChatId: string | null;
   telegramEnabled: boolean;
   telegramReportHourUtc: number;
-  // Optional so existing AppConfig literals (tests, codegen) need not enumerate them;
-  // loadConfig always populates them, so production behavior is exact.
-  telegramProxyPageLabel?: string | null;
   serviceEgressProxyUrl: string | null;
   serviceEgressProxyUsername: string | null;
   serviceEgressProxyPassword: string | null;
+  // Optional so existing AppConfig literals (tests, codegen) need not enumerate them;
+  // loadConfig always populates them, so production behavior is exact.
   ofapiBaseUrl?: string;
   ofapiApiKey?: string | null;
   ofapiExpectedTeamSlug?: string | null;
@@ -802,7 +793,6 @@ export function loadConfig(
     telegramChatId,
     telegramEnabled,
     telegramReportHourUtc: parsed.TELEGRAM_REPORT_HOUR ?? 9,
-    telegramProxyPageLabel: parsed.TELEGRAM_PROXY_PAGE_LABEL ?? null,
     serviceEgressProxyUrl: serviceEgressProxy.url,
     serviceEgressProxyUsername: serviceEgressProxy.username,
     serviceEgressProxyPassword: serviceEgressProxy.password,

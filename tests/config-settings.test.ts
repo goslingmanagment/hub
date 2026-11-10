@@ -1,12 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import type { AppConfig } from "@agency_hub_core/shared";
 import {
   applyBootOverrides,
   FANSLY_PAUSE_MAX_MS,
   FANSLY_PAUSE_MIN_MS,
   loadConfig,
-  resolveEffectiveConfig,
   validateConfigOverride,
 } from "@agency_hub_core/shared";
 
@@ -43,18 +41,6 @@ describe("validateConfigOverride", () => {
     expect(validateConfigOverride("databaseUrl", "postgres://x").ok).toBe(false);
     // trustProxy is editability 'never'.
     expect(validateConfigOverride("trustProxy", "true").ok).toBe(false);
-  });
-});
-
-describe("resolveEffectiveConfig", () => {
-  it("never emits secret/never values (no raw secret can leak through it)", () => {
-    const resolved = resolveEffectiveConfig(
-      { databaseUrl: "postgres://secret", sessionTtlDays: 30 } as unknown as AppConfig,
-      new Map(),
-    );
-    expect(resolved.values.databaseUrl).toBeUndefined();
-    expect(resolved.values.trustProxy).toBeUndefined();
-    expect(JSON.stringify(resolved)).not.toContain("secret");
   });
 });
 

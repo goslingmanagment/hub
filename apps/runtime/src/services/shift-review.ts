@@ -160,12 +160,7 @@ function matchingBlockSizes(a: readonly string[], b: readonly string[]): number[
   return sizes;
 }
 
-/** The share of the sent words that come straight from `aiText`: runs of two words or more (one, for a short text). Pure. */
-export function aiShareOf(sentWords: readonly string[], aiText: string): number {
-  return aiMatchOf(sentWords, aiText).share;
-}
-
-/** The share as `aiShareOf` counts it, and the longest run of words the two texts share. Pure. */
+/** The share of the sent words that come straight from `aiText` (runs of two words or more; one, for a short text), and the longest run of words the two texts share. Pure. */
 function aiMatchOf(sentWords: readonly string[], aiText: string): { share: number; longest: number } {
   const aiWords = wordsOf(aiText);
   if (sentWords.length === 0 || aiWords.length === 0) return { share: 0, longest: 0 };

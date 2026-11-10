@@ -411,12 +411,6 @@ const CANONICALIZE_EVERY_RUNS = 5;
 const VOLUME_GAUGES_EVERY_RUNS = 60;
 let cadenceTick = 0;
 
-/** Test hook: make the next run a pruning run that computes every signal. */
-export function resetGoldenSignalPruneTick() {
-  pruneTick = 0;
-  cadenceTick = 0;
-}
-
 /** The minutely job: sample, prune (hourly), and flip per-signal incidents.
  *
  * W5.1 (B8+A25) latch semantics, per metric that carries a threshold:

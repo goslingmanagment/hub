@@ -427,21 +427,6 @@ export const DEMO_CONFIG_DESCRIPTORS: readonly DemoConfigDescriptor[] = [
     "destructive": false
   },
   {
-    "key": "telegramProxyPageLabel",
-    "envName": "TELEGRAM_PROXY_PAGE_LABEL",
-    "configField": "telegramProxyPageLabel",
-    "kind": "string",
-    "subsystem": "Telegram",
-    "label": "Telegram proxy page",
-    "default": "(unset)",
-    "editability": "never",
-    "runtimeApply": "none",
-    "comparable": true,
-    "note": "Deprecated transition-only fallback, used only while the entire dedicated service-egress tuple is absent.",
-    "costWarning": null,
-    "destructive": false
-  },
-  {
     "key": "serviceEgressProxyUrl",
     "envName": "SERVICE_EGRESS_PROXY_URL",
     "configField": "serviceEgressProxyUrl",

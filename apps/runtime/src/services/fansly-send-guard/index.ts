@@ -36,7 +36,6 @@ export {
   FanslyPageSendClosedError,
   FanslySendGuardRegistry,
   FanslySendGuardStoppedError,
-  isFanslyPageOwnedBySyncEngineError,
   systemFanslySendGuardClock,
   type FanslySendGuardClock,
   type FanslySendGuardCounters,

@@ -51,11 +51,3 @@ export function recordClientVersionObservation(input: {
     "Desktop client version observed",
   );
 }
-
-export function snapshotClientVersionObservations(): ClientVersionObservation[] {
-  return Array.from(seen.values()).map((entry) => ({ ...entry }));
-}
-
-export function resetClientVersionObservationsForTests() {
-  seen.clear();
-}

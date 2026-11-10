@@ -4,8 +4,7 @@
 // Keeping it as pure data means the API can serialize it and the dashboard can render generically
 // without hard-coding the flag list.
 //
-// `config.ts` stays the single source of the env schema; a parity test asserts this
-// registry matches ENV_CONFIG_KEYS so the two can never silently drift.
+// `config.ts` stays the single source of the env schema.
 
 import { OFAPI_MIRROR_BUDGET_DEFAULTS, type AppConfig } from "./config.ts";
 import { FANSLY_PAUSE_MAX_MS, FANSLY_PAUSE_MIN_MS } from "./fansly-pause.ts";
@@ -71,7 +70,7 @@ export interface ConfigDescriptor {
    *  it is a unique camelCase id. Used as the key in serialized running values. */
   key: string;
   /** Env var name. For derived entries this is the underlying env hint (e.g.
-   *  NODE_ENV) and is intentionally absent from ENV_CONFIG_KEYS. */
+   *  NODE_ENV) and is intentionally absent from the env schema. */
   envName: string;
   /** The AppConfig field this value lands in. */
   configField: keyof AppConfig | null;
@@ -161,7 +160,6 @@ export const CONFIG_DESCRIPTORS: readonly ConfigDescriptor[] = [
   // stored in telegram_settings and edited in Notifications — keeping it read-only
   // avoids two conflicting sources of truth (same rule as the Telegram secrets).
   { key: "telegramReportHourUtc", envName: "TELEGRAM_REPORT_HOUR", configField: "telegramReportHourUtc", kind: "number", subsystem: "Telegram", label: "Telegram report hour (UTC, default)", default: "9", editability: NEVER, runtimeApply: "none", comparable: true, min: 0, max: 23, note: "Default only; the operational value is managed in Notifications." },
-  { key: "telegramProxyPageLabel", envName: "TELEGRAM_PROXY_PAGE_LABEL", configField: "telegramProxyPageLabel", kind: "string", subsystem: "Telegram", label: "Telegram proxy page", default: "(unset)", editability: NEVER, runtimeApply: "none", comparable: true, note: "Deprecated transition-only fallback, used only while the entire dedicated service-egress tuple is absent." },
   { key: "serviceEgressProxyUrl", envName: "SERVICE_EGRESS_PROXY_URL", configField: "serviceEgressProxyUrl", kind: "complex", subsystem: "Security", label: "Service egress proxy URL", default: "(unset)", editability: NEVER, runtimeApply: "none", comparable: false, note: "SOCKS5 route shared by ElevenLabs and Telegram; all three service-egress values are boot-only and must be configured together." },
   { key: "serviceEgressProxyUsername", envName: "SERVICE_EGRESS_PROXY_USERNAME", configField: "serviceEgressProxyUsername", kind: "secret", subsystem: "Security", label: "Service egress proxy username", default: "(unset)", editability: NEVER, runtimeApply: "none", comparable: false },
   { key: "serviceEgressProxyPassword", envName: "SERVICE_EGRESS_PROXY_PASSWORD", configField: "serviceEgressProxyPassword", kind: "secret", subsystem: "Security", label: "Service egress proxy password", default: "(unset)", editability: NEVER, runtimeApply: "none", comparable: false },
@@ -289,14 +287,9 @@ export const CONFIG_DESCRIPTORS: readonly ConfigDescriptor[] = [
 ] as const;
 
 const DESCRIPTOR_BY_KEY = new Map(CONFIG_DESCRIPTORS.map((d) => [d.key, d]));
-const DESCRIPTOR_BY_ENV = new Map(CONFIG_DESCRIPTORS.map((d) => [d.envName, d]));
 
 export function getDescriptor(key: string): ConfigDescriptor | undefined {
   return DESCRIPTOR_BY_KEY.get(key);
-}
-
-export function getDescriptorByEnv(envName: string): ConfigDescriptor | undefined {
-  return DESCRIPTOR_BY_ENV.get(envName);
 }
 
 /** Keys that left the registry while production still holds a stored override

@@ -143,15 +143,6 @@ export async function createAppContext(options: CreateAppContextOptions = {}): P
     );
   }
 
-  if (!hasServiceEgressProxy(rawConfig) && rawConfig.telegramProxyPageLabel) {
-    logger.warn({
-      component: "service_egress",
-      event: "legacy_route_active",
-      vendor: "telegram",
-      egressKey: "legacy-page",
-    }, "Telegram is using the deprecated transition legacy-page egress route");
-  }
-
   const poolLifetime = poolLifetimeForRole(options.processRole);
   const pool = createPool(rawConfig.databaseUrl, {
     applicationName: `hub-${options.processRole ?? "cli"}`,

@@ -167,20 +167,6 @@ export class FanslyPageOwnedBySyncEngineError extends Error {
   }
 }
 
-/** Whether `error` (or anything in its cause chain) is the refusal of a page
- *  the Fansly Sync Engine owns. Matched by name, so a refusal from another
- *  copy of this module counts. */
-export function isFanslyPageOwnedBySyncEngineError(error: unknown): boolean {
-  const seen = new Set<unknown>();
-  let current: unknown = error;
-  while (current instanceof Error && !seen.has(current)) {
-    if (current.name === "FanslyPageOwnedBySyncEngineError") return true;
-    seen.add(current);
-    current = current.cause;
-  }
-  return false;
-}
-
 /** The process is shutting down: it starts no new Fansly request. */
 export class FanslySendGuardStoppedError extends Error {
   constructor() {
