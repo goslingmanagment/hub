@@ -16,8 +16,6 @@
 export const CLIENT_SDK_NAMES = ["onlyfans-chat", "fansly-chat", "chat-extension"] as const;
 export type ClientSdkName = (typeof CLIENT_SDK_NAMES)[number];
 
-export const CLIENT_SDK_FIXTURE_ROOT = "tests/fixtures/client-sdks";
-
 export interface ClientSdkRegistryRow {
   /** sha256 of `<fixture>/sdk.mjs`: the row key. */
   bundleSha256: string;
@@ -35,7 +33,7 @@ export interface ClientSdkRegistryRow {
   clients: ReadonlyArray<{ name: ClientSdkName; versions: readonly string[] }>;
   /** Operation keys the compat suite exercises beyond its shared core. */
   operations: readonly string[];
-  /** Repo-relative fixture directory: `${CLIENT_SDK_FIXTURE_ROOT}/<bundleSha256 first 12>`. */
+  /** Repo-relative fixture directory: `tests/fixtures/client-sdks/<bundleSha256 first 12>`. */
   fixture: string;
 }
 

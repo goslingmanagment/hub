@@ -1139,33 +1139,6 @@ export async function resolveLegacyStreamIncidentsOfEnginePage(
   }
 }
 
-/**
- * W3.1 (B6+A35): the fail-closed egress guard refused to
- * resolve a Fansly page context because no proxy is stored. Opens
- * immediately — a missing proxy is a config/erasure aftermath, not a
- * transient. Deduped by kind+page until a proxy is assigned and the page
- * verifies or syncs again.
- */
-export async function notifyProxyMissingIncident(
-  app: Pick<AppContext, "config" | "db" | "logger">,
-  input: {
-    platformAccountId: number;
-    pageLabel: string;
-    errorSummary: string;
-    occurredAt?: Date;
-  },
-) {
-  await openIncidentAndNotify(app, {
-    kind: "proxy_missing",
-    platformAccountId: input.platformAccountId,
-    pageLabel: input.pageLabel,
-    platform: "fansly",
-    errorCode: "proxy_missing",
-    errorSummary: input.errorSummary,
-    ...(input.occurredAt ? { occurredAt: input.occurredAt } : {}),
-  });
-}
-
 /** Debounced alert for OFAPI accounts.* auth states (Phase 3). */
 export async function notifyOfapiAuthIncident(
   app: Pick<AppContext, "config" | "db" | "logger">,

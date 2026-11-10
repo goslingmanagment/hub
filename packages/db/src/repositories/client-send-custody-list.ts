@@ -133,12 +133,6 @@ function listQuery(input: ClientSendCustodyListInput, now: Date): SQL {
     order by ${order} limit ${input.limit} offset ${input.offset}`;
 }
 
-/** The plan of the list's own statement, for the test that holds the held read to the open-send index. */
-export async function explainClientSendCustodyListQuery(db: Database, input: ClientSendCustodyListInput): Promise<string> {
-  const result = await db.execute<{ "QUERY PLAN": string }>(sql`explain (format text) ${listQuery(input, new Date())}`);
-  return result.rows.map((row) => row["QUERY PLAN"]).join("\n");
-}
-
 /**
  * One page of the list and its total, read in one read-only snapshot: a send
  * resolved between the two reads cannot be counted and not listed.

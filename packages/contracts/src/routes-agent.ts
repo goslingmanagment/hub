@@ -280,8 +280,6 @@ export const agentDeliverySchema = z.object({
 // §17.0.8 — axis B, capture
 // ---------------------------------------------------------------------------
 
-export const agentPlaneStateEnum = z.enum(["read", "not_applicable", "not_read", "not_indexed"]);
-
 export const agentPlaneReasonEnum = z.enum([
   "not_a_source_for_this_claim",
   "not_queried_by_this_operation",
@@ -2975,30 +2973,6 @@ export const agentCrossSpendersResponseSchema = z.object({
 // ---------------------------------------------------------------------------
 // The route registry. `routes.ts` spreads this into `routeSchemas`.
 // ---------------------------------------------------------------------------
-
-/**
- * POST-as-read: the explicit, reviewed allowlist (§4). These three are idempotent
- * and local; search is POST so the query text never reaches an access log. Every
- * other agentKey route is a GET, and a test pins exactly that.
- */
-export const AGENT_POST_READ_OPERATIONS = [
-  "agentResolve",
-  "agentSearchMessages",
-  "agentDatasetQuery",
-] as const;
-
-/**
- * The plane's MUTATIONS — POSTs that are not reads and are not covered by the
- * allowlist above (§17.15.4 names the hydration two; the Sync Engine's history
- * requests add create and cancel). Enumerated so the method guard stays a
- * closed statement rather than "anything with a body".
- */
-export const AGENT_POST_MUTATION_OPERATIONS = [
-  "agentHydrationRequestCreate",
-  "agentHydrationRequestDecide",
-  "agentHistoryRequestCreate",
-  "agentHistoryRequestCancel",
-] as const;
 
 export const agentRouteSchemas = {
   agentCapabilities: {

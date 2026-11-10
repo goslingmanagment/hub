@@ -1,5 +1,3 @@
-import { isIP } from "node:net";
-
 import { sql } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
@@ -249,13 +247,6 @@ function profileOf(row: SqlRow): OnboardingProfile {
 }
 
 // ── the profile's registration (add-profile) ───────────────────────────────
-
-/** `ip:port` of a SOCKS5 as the container's rules name it. */
-export function socksEndpointOf(ip: string, port: number): string {
-  if (isIP(ip) !== 4) throw new Error(`Not an IPv4 address: ${ip}`);
-  if (!Number.isInteger(port) || port < 1 || port > 65_535) throw new Error(`Not a port: ${port}`);
-  return `${ip}:${port}`;
-}
 
 export class PageBrowserRegistrationError extends Error {
   constructor(readonly reason: "profile_exists" | "profile_forgotten" | "container_taken" | "page_has_browser" | "no_page", message: string) {

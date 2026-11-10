@@ -229,12 +229,6 @@ export function concludeEnvelope(
   return { blockers };
 }
 
-/** Reads the "nothing limits this answer" verdict off a built evidence block.
- *  Exists so no other runtime file has to name a blocker. */
-export function evidenceIsUnrestricted(evidence: AgentEvidence): boolean {
-  return evidence.conclusion.blockers.length === 0;
-}
-
 /**
  * One call per response: build `capture`, list the blockers, and derive the
  * delivery caveats from the same facts so the three can never disagree.

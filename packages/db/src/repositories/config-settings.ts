@@ -4,7 +4,6 @@ import type { ConfigOverrideValue } from "@agency_hub_core/shared";
 import type { Database } from "../client.ts";
 import { configAuditLog, configSettings } from "../schema.ts";
 
-export type ConfigSettingRow = typeof configSettings.$inferSelect;
 export type ConfigAuditLogRow = typeof configAuditLog.$inferSelect;
 
 const DEFAULT_SCOPE_TYPE = "global";

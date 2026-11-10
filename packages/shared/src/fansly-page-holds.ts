@@ -50,10 +50,6 @@ export function isCredentialsHoldKind(kind: string | null): kind is FanslyCreden
   return kind === "auth" || kind === "identity_mismatch";
 }
 
-export function isTimedHoldKind(kind: string | null): kind is FanslyTimedHoldKind {
-  return kind === "network";
-}
-
 /** A page-scope row of a page's hold set, of a kind this core knows. */
 export interface FanslyPageHoldRow {
   kind: FanslyPageHoldKind;

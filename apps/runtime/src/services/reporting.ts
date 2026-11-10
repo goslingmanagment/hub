@@ -25,7 +25,6 @@ import {
   findPageSummaryByLabel,
   findPlatformFan,
   findRevenueModel,
-  getFanSpendByIdentifier,
   getPlatformTotalSpendForFan,
   getRevenueBreakdown,
   getRevenueBreakdownForScope,
@@ -1180,14 +1179,4 @@ export async function getOverviewGrowthReport(
       newSubscribers: subscriberMap.get(page.id) ?? 0,
     })),
   };
-}
-
-export async function getFanSpendSummary(
-  app: AppContext,
-  pageLabel: string,
-  identifier: string,
-) {
-  const page = await getPageSummary(app, pageLabel);
-  const result = await getFanSpendByIdentifier(app.db, page.id, identifier);
-  return result.rows[0] ?? null;
 }

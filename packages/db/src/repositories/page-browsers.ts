@@ -324,17 +324,6 @@ export async function insertPageBrowser(db: Database, input: InsertPageBrowserIn
   return result.rows.length === 1;
 }
 
-/** Bind a profile to a page (plan §3.2, step 4 of a new page). A page has one
- *  profile at most (the unique key refuses a second). */
-export async function bindPageBrowser(db: Database, input: { profileId: string; pageId: number }): Promise<boolean> {
-  const result = await db.execute(sql`
-    update page_browsers set page_id = ${input.pageId}::bigint, updated_at = clock_timestamp()
-     where profile_id = ${input.profileId}::uuid
-    returning profile_id
-  `);
-  return result.rows.length === 1;
-}
-
 export async function findPageBrowserByPage(db: Database, pageId: number): Promise<PageBrowserRow | null> {
   const result = await db.execute<SqlRow>(sql`select ${columns} from page_browsers b where b.page_id = ${pageId}::bigint`);
   const row = result.rows[0];

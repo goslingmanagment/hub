@@ -54,13 +54,6 @@ export class AgentCapturePayloadUnavailableError extends AppError {
   }
 }
 
-/** The `message_archive` rebuild swapped the table under a reader (#134). */
-export class ArchiveRebuildingError extends AppError {
-  constructor(message = "message archive is being rebuilt; retry shortly") {
-    super(message, 503, "archive_rebuilding");
-  }
-}
-
 /**
  * A cursor that is malformed, forged, foreign, or describes a different snapshot.
  *

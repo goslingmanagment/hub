@@ -289,13 +289,6 @@ const envSchema = z.object({
   CHAT_EXTENSION_HEALTH_INGEST_ENABLED: booleanSchema.default(false),
 });
 
-// Machine-readable list of every env var the schema understands. Exported so the
-// config registry (config-registry.ts) can be parity-tested against the schema
-// without reaching into Zod internals (see config-registry parity test).
-export const ENV_CONFIG_KEYS = Object.keys(envSchema.shape) as Array<
-  keyof typeof envSchema.shape
->;
-
 /** One Anthropic account's key: `label` names the account in Hub (ledger,
  * usage screen, alerts); the key itself never leaves the config. */
 export interface AnthropicApiKeyEntry {

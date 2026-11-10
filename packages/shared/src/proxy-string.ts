@@ -60,25 +60,6 @@ export function parseProxyString(raw: string): ProxyConfig | null {
   };
 }
 
-/**
- * Format a human-readable preview of a raw proxy string.
- * Returns e.g. `"socks5://1.2.3.4:12324 (auth)"` or `null` if empty/invalid.
- */
-export function formatProxyPreview(raw: string): string | null {
-  try {
-    const config = parseProxyString(raw);
-    if (!config) {
-      return null;
-    }
-
-    const parsed = new URL(config.url);
-    const hasAuth = config.username !== null || config.password !== null;
-    return `${parsed.protocol}//${parsed.host}${hasAuth ? " (auth)" : ""}`;
-  } catch {
-    return null;
-  }
-}
-
 export function getProxyStringError(raw: string): string | null {
   if (raw.trim().length === 0) {
     return null;

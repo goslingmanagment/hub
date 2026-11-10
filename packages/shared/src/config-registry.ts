@@ -4,8 +4,7 @@
 // Keeping it as pure data means the API can serialize it and the dashboard can render generically
 // without hard-coding the flag list.
 //
-// `config.ts` stays the single source of the env schema; a parity test asserts this
-// registry matches ENV_CONFIG_KEYS so the two can never silently drift.
+// `config.ts` stays the single source of the env schema.
 
 import { OFAPI_MIRROR_BUDGET_DEFAULTS, type AppConfig } from "./config.ts";
 import { FANSLY_PAUSE_MAX_MS, FANSLY_PAUSE_MIN_MS } from "./fansly-pause.ts";
@@ -71,7 +70,7 @@ export interface ConfigDescriptor {
    *  it is a unique camelCase id. Used as the key in serialized running values. */
   key: string;
   /** Env var name. For derived entries this is the underlying env hint (e.g.
-   *  NODE_ENV) and is intentionally absent from ENV_CONFIG_KEYS. */
+   *  NODE_ENV) and is intentionally absent from the env schema. */
   envName: string;
   /** The AppConfig field this value lands in. */
   configField: keyof AppConfig | null;
@@ -289,14 +288,9 @@ export const CONFIG_DESCRIPTORS: readonly ConfigDescriptor[] = [
 ] as const;
 
 const DESCRIPTOR_BY_KEY = new Map(CONFIG_DESCRIPTORS.map((d) => [d.key, d]));
-const DESCRIPTOR_BY_ENV = new Map(CONFIG_DESCRIPTORS.map((d) => [d.envName, d]));
 
 export function getDescriptor(key: string): ConfigDescriptor | undefined {
   return DESCRIPTOR_BY_KEY.get(key);
-}
-
-export function getDescriptorByEnv(envName: string): ConfigDescriptor | undefined {
-  return DESCRIPTOR_BY_ENV.get(envName);
 }
 
 /** Keys that left the registry while production still holds a stored override

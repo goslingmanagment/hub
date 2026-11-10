@@ -1,7 +1,6 @@
 import type { Buffer } from "node:buffer";
 
 import {
-  AGENT_CLAIM_CLASSES,
   agentClaimFieldClass,
   agentClassPlanes,
   type AgentCapability,
@@ -34,7 +33,7 @@ import type { AgentAuthPrincipal } from "../../services/auth.ts";
 import { agentScopeFor } from "../../api/request-auth.ts";
 import type { AgentCursorSigning } from "./cursors.ts";
 import { ServiceUnavailableError } from "../../services/errors.ts";
-import { AgentCapabilityMissingError, AgentPlaneDisabledError } from "./errors.ts";
+import { AgentCapabilityMissingError } from "./errors.ts";
 import { AGENT_PLANE_MODE, type AgentPlaneMode } from "./epistemics.ts";
 
 /**
@@ -346,11 +345,6 @@ export function operationPlanesFor(
   return [...planes];
 }
 
-/** Every claim field of a class, for building `scopeFieldStates` per section. */
-export function claimFieldsOfClass(claimClass: keyof typeof AGENT_CLAIM_CLASSES): string[] {
-  return Object.keys(AGENT_CLAIM_CLASSES[claimClass].fields);
-}
-
 // ---------------------------------------------------------------------------
 // Per-request lifecycle
 // ---------------------------------------------------------------------------
@@ -359,8 +353,6 @@ export interface AgentRequestOptions {
   operation: string;
   /** Capabilities the operation REQUIRES; a missing one is a 403. */
   requiredCapabilities?: readonly AgentCapability[];
-  /** Extra flag the operation is gated by, beyond the plane mode. */
-  extraGate?: { enabled: boolean; reason: string } | undefined;
 }
 
 export interface AgentRequestScope {
@@ -442,8 +434,8 @@ function cursorSigning(appContext: AppContext): AgentCursorSigning {
 }
 
 /**
- * Opens an agent request. Throws before doing any work when an operation's own
- * sub-flag is off or a capability is missing.
+ * Opens an agent request. Throws before doing any work when a capability is
+ * missing.
  */
 export async function beginAgentRequest(
   appContext: AppContext,
@@ -454,10 +446,6 @@ export async function beginAgentRequest(
   const db = appContext.db;
   const config = await loadEffectiveConfig(db, appContext.config);
   const planeMode: AgentPlaneMode = AGENT_PLANE_MODE;
-  if (options.extraGate && !options.extraGate.enabled) {
-    throw new AgentPlaneDisabledError(options.extraGate.reason);
-  }
-
   const granted = new Set(principal.capabilities);
   for (const capability of options.requiredCapabilities ?? []) {
     if (!granted.has(capability)) {

@@ -373,8 +373,8 @@ async function openNotificationIncidentInternal(
           // sharing a millisecond with a resolve is new information, and a
           // silently dropped reopen is a page nobody gets.
           //
-          // Scope, precisely: this rule only ever decides a tie for the
-          // NO-TOMBSTONE resolve primitive (`resolveNotificationIncident`).
+          // Scope, precisely: this rule only ever decides a tie for a resolve
+          // that wrote no recovery tombstone (no code path does one today).
           // Every production producer opens through the recovery guard above,
           // and that guard suppresses at `recovery.recoveredAt >= occurredAt`
           // — so on a real recovery the tombstone wins the tie before this
@@ -536,27 +536,6 @@ async function upsertNotificationIncidentRecovery(
     });
 }
 
-export async function recordNotificationIncidentRecovery(
-  db: Database,
-  input: {
-    incidentKey: string;
-    recoveredAt: Date;
-    metadata?: Record<string, unknown>;
-    now?: Date;
-  },
-) {
-  const now = input.now ?? new Date();
-  await db.transaction(async (tx) => {
-    await lockNotificationIncidentKey(tx as unknown as Database, input.incidentKey);
-    await upsertNotificationIncidentRecovery(tx as unknown as Database, {
-      incidentKey: input.incidentKey,
-      recoveredAt: input.recoveredAt,
-      ...(input.metadata !== undefined ? { metadata: input.metadata } : {}),
-      now,
-    });
-  });
-}
-
 /**
  * Tombstone + conditional resolve + resolved-outbox row in ONE transaction
  * under the same advisory lock the opener takes. Splitting them (the previous
@@ -615,58 +594,4 @@ export async function recoverAndResolveNotificationIncident(
 
     return resolved ?? null;
   });
-}
-
-/**
- * Resolve WITHOUT writing a recovery tombstone. Production recovery paths use
- * `recoverAndResolveNotificationIncident` instead — it commits the tombstone,
- * the resolve and the outbox row together under the incident-key lock. Reach
- * for this one only when there is deliberately no recovery event to record.
- */
-export async function resolveNotificationIncident(
-  db: Database,
-  input: {
-    incidentKey: string;
-    metadata?: Record<string, unknown>;
-    maxLastSeenAt?: Date;
-    outbox?: NotificationDeliveryOutboxRequest;
-    now?: Date;
-  },
-): Promise<NotificationIncidentRow | null> {
-  const now = input.now ?? new Date();
-  const clauses = [
-    eq(notificationIncidents.incidentKey, input.incidentKey),
-    eq(notificationIncidents.status, "open"),
-  ];
-  if (input.maxLastSeenAt) {
-    clauses.push(lte(notificationIncidents.lastSeenAt, input.maxLastSeenAt));
-  }
-
-  const resolveWith = async (connection: Database) => {
-    const [resolved] = await connection.update(notificationIncidents)
-      .set({
-        status: "resolved",
-        resolvedAt: now,
-        lastSeenAt: now,
-        metadata: input.metadata ?? {},
-        updatedAt: now,
-      })
-      .where(and(...clauses))
-      .returning();
-
-    if (resolved && input.outbox) {
-      await enqueueNotificationDeliveryOutbox(connection, {
-        notificationIncidentId: resolved.id,
-        transition: "resolved",
-        transitionAt: now,
-        request: input.outbox,
-        now,
-      });
-    }
-    return resolved ?? null;
-  };
-
-  return input.outbox
-    ? db.transaction((tx) => resolveWith(tx as unknown as Database))
-    : resolveWith(db);
 }

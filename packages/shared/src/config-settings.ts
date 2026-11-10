@@ -2,10 +2,8 @@
 // (Stage B). `validateConfigOverride` is the single server-side gate every write
 // passes through: it consults the descriptor registry so an override can never be
 // accepted for a non-editable key, a wrong type, an out-of-bounds number, or a
-// value outside an enum. `resolveEffectiveConfig` layers the (validated) overrides
-// over the env-loaded AppConfig and tags each value's source. Both are pure so
-// the worker, the API handlers, and tests resolve the effective config
-// identically.
+// value outside an enum. It is pure so the worker, the API handlers, and tests
+// judge an override identically.
 
 import { configStringFormatError } from "./chat-extension-settings.ts";
 import type { AppConfig } from "./config.ts";
@@ -111,68 +109,6 @@ export function collectCostWarnings(keys: readonly string[]): Record<string, str
     if (descriptor?.costWarning) out[key] = descriptor.costWarning;
   }
   return out;
-}
-
-export interface EffectiveConfigValue {
-  value: string | number | boolean | null;
-  source: "env" | "override";
-}
-
-export interface ResolvedEffectiveConfig {
-  values: Record<string, EffectiveConfigValue>;
-}
-
-function overrideEntry(
-  overrides: Map<string, { value: ConfigOverrideValue }> | Record<string, ConfigOverrideValue>,
-  key: string,
-): ConfigOverrideValue | undefined {
-  if (overrides instanceof Map) {
-    return overrides.get(key)?.value;
-  }
-  return Object.prototype.hasOwnProperty.call(overrides, key) ? overrides[key] : undefined;
-}
-
-function toScalar(raw: unknown): string | number | boolean | null {
-  if (raw == null) return null;
-  if (typeof raw === "boolean" || typeof raw === "number" || typeof raw === "string") {
-    return raw;
-  }
-  return String(raw);
-}
-
-/** Layer validated overrides over the env-loaded config and tag each value's
- *  source. For every descriptor: when an editable override exists AND validates,
- *  the effective value is the (clamped) override tagged 'override'; otherwise the
- *  env value from config[configField] tagged 'env'. Pure + framework-free. */
-export function resolveEffectiveConfig(
-  config: AppConfig,
-  overrides: Map<string, { value: ConfigOverrideValue }> | Record<string, ConfigOverrideValue>,
-): ResolvedEffectiveConfig {
-  const source = config as unknown as Record<string, unknown>;
-  const values: Record<string, EffectiveConfigValue> = {};
-
-  for (const descriptor of CONFIG_DESCRIPTORS) {
-    // Only editable keys can ever carry an override, so the effective config differs
-    // from env only for them. Restricting the map to editable keys also keeps secrets
-    // and other never values (and their raw env values) out of this result —
-    // it must never become a channel that serializes a databaseUrl or an API key.
-    if (descriptor.editability !== "editable") continue;
-
-    const envValue = descriptor.configField ? toScalar(source[descriptor.configField as string]) : null;
-    const raw = overrideEntry(overrides, descriptor.key);
-
-    if (raw !== undefined) {
-      const validated = validateConfigOverride(descriptor.key, raw);
-      if (validated.ok) {
-        values[descriptor.key] = { value: validated.value, source: "override" };
-        continue;
-      }
-    }
-
-    values[descriptor.key] = { value: envValue, source: "env" };
-  }
-
-  return { values };
 }
 
 /** Minimal shape of a stored override map entry, declared locally so this module

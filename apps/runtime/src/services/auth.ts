@@ -10,8 +10,6 @@ import {
   createAuthSession,
   createPendingDeviceToken,
   createUser,
-  deleteExpiredAuthSessions,
-  deleteExpiredPendingDeviceTokens,
   deletePendingDeviceTokenById,
   deletePendingDeviceTokensForUser,
   findAgentKeyByDigest,
@@ -877,13 +875,6 @@ export async function deviceTokenAdoptionReport(app: AppContext, now = new Date(
       onFreshTokens: chatters.filter((row) => row.hasFreshDeviceToken).length,
     },
   };
-}
-
-export async function cleanupExpiredSessions(app: AppContext, now = new Date()) {
-  await Promise.all([
-    deleteExpiredAuthSessions(app.db, now),
-    deleteExpiredPendingDeviceTokens(app.db, now),
-  ]);
 }
 
 // Audit B7: the route-level @fastify/rate-limit plugin runs at onRequest where
