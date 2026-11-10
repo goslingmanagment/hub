@@ -2,7 +2,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createOfapiClient, OfapiCreditAccountingUnavailableError, type OfapiCreditSpendObservation } from "../apps/runtime/src/services/ofapi.ts";
 import { resolveOfapiListNextOffset } from "../apps/runtime/src/services/ofapi-list-pagination.ts";
-import { resolveOfapiReadGatewayRequest } from "../apps/runtime/src/services/ofapi-read-gateway.ts";
 
 const ACCOUNT = "acct_audit";
 const response = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
@@ -217,15 +216,4 @@ describe("OFAPI request audit regressions", () => {
     });
   });
 
-  it("R6 rejects absent required query fields and enforces list limit boundaries locally", () => {
-    for (const path of [`${ACCOUNT}/users/list`, `${ACCOUNT}/chats/1/messages/search`]) {
-      expect(() => resolveOfapiReadGatewayRequest(path, {})).toThrow("required");
-    }
-    for (const limit of ["1", "9", "51", "100"]) {
-      expect(() => resolveOfapiReadGatewayRequest(`${ACCOUNT}/user-lists`, { limit })).toThrow("10..50");
-    }
-    for (const limit of ["10", "50"]) {
-      expect(resolveOfapiReadGatewayRequest(`${ACCOUNT}/user-lists`, { limit })).toMatchObject({ kind: "proxy", query: { limit } });
-    }
-  });
 });

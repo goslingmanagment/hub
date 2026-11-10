@@ -62,7 +62,6 @@ import {
   previewFollowersReconcileBlastRadiusOverride,
 } from "../../services/followers-reconcile-override.ts";
 import {
-  getChatterOfapiCreditsSummary,
   getOfapiCreditsDaily,
   getOfapiCreditsLedger,
   getOfapiCreditsLedgerCsv,
@@ -211,16 +210,6 @@ export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
   }, async (request) => {
     await requireSyncHealthAccess(request);
     return getGoldenSignalsReport(appContext);
-  });
-
-  server.get("/api/v1/ofapi/credits/summary", {
-    schema: routeSchemas.ofapiCreditsChatterSummary,
-  }, async (request) => {
-    const principal = await requirePrincipal(request);
-
-    return getChatterOfapiCreditsSummary(appContext, {
-      pageIds: principal.assignedPageIds,
-    });
   });
 
   server.post("/api/v1/admin/ofapi/capture-jobs/seed", {

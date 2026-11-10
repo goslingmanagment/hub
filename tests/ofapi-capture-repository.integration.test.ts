@@ -43,7 +43,6 @@ import {
 import { executeOfapiCaptureJobChunk } from "../apps/runtime/src/services/ofapi-capture-jobs.ts";
 import { onlyfansPostsChunk, PostsCaptureJobBlockedError } from "../apps/runtime/src/services/sync/posts.ts";
 import {
-  getChatterOfapiCreditsSummary,
   getOfapiCreditsDaily,
   getOfapiCreditsSummary,
 } from "../apps/runtime/src/services/ofapi-credit-report.ts";
@@ -1015,11 +1014,6 @@ describe("OFAPI capture correctness repository", () => {
     expect(daily.byPage).toEqual([{
       pageId: seeded.page.id, pageLabel: seeded.page.label, credits: actualCredits, revenueMills: 0,
     }]);
-    const chatter = await getChatterOfapiCreditsSummary(app, { pageIds: [seeded.page.id] }, reportAt);
-    expect(chatter.today).toMatchObject({
-      restCredits: actualCredits, totalEstimatedCredits: actualCredits,
-      netRestCredits: actualCredits, netTotalEstimatedCredits: actualCredits,
-    });
   });
 
   it("counts one physical dispatch when an indeterminate job receives a late response", async () => {
