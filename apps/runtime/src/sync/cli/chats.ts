@@ -1,6 +1,7 @@
 import { hostname } from "node:os";
 
-import { Command, InvalidArgumentError } from "commander";
+import type { Command } from "commander";
+import { InvalidArgumentError } from "commander";
 
 import { noteUnavailableChat, readUnavailableChats, type UnavailableChatView } from "../chats.ts";
 import { createSyncContext, type SyncContext } from "../context.ts";
@@ -48,19 +49,6 @@ async function withContext<T>(deps: SyncChatsCliDeps, body: (ctx: Pick<SyncConte
   } finally {
     await ctx.close();
   }
-}
-
-/** A standalone `sync` group with only these commands; errors throw (tests). */
-export function buildSyncChatsCommandGroup(deps: SyncChatsCliDeps = defaultDeps): Command {
-  const sync = new Command("sync").exitOverride();
-  sync.enablePositionalOptions();
-  registerSyncChatsCommands(sync, deps);
-  const exit = (command: Command) => {
-    command.exitOverride();
-    for (const sub of command.commands) exit(sub);
-  };
-  exit(sync);
-  return sync;
 }
 
 const COLUMNS = [

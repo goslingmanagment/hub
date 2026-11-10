@@ -1,6 +1,7 @@
 import { hostname } from "node:os";
 
-import { Command, InvalidArgumentError } from "commander";
+import type { Command } from "commander";
+import { InvalidArgumentError } from "commander";
 
 import {
   listSyncPages,
@@ -196,18 +197,6 @@ async function withContext<T>(deps: SyncCliDeps, body: (ctx: Pick<SyncContext, "
   } finally {
     await ctx.close();
   }
-}
-
-/** A standalone `sync` group with only the engine's commands; errors throw
- *  instead of exiting (tests and tools). */
-export function buildSyncEngineCommandGroup(deps: SyncCliDeps = defaultDeps): Command {
-  const sync = new Command("sync").exitOverride();
-  registerSyncEngineCommands(sync, deps);
-  for (const command of sync.commands) {
-    command.exitOverride();
-    for (const sub of command.commands) sub.exitOverride();
-  }
-  return sync;
 }
 
 /** Add the engine's commands to the `sync` command group. */

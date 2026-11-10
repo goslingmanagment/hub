@@ -1323,7 +1323,7 @@ a pair not judged for 5 min — from its last judgement or the page's mode chang
 nothing — opens the global latch `evaluator` (`failing`, `unrecorded` or `late`), which resolves once every pair is
 judged again. The `sync` process never writes that latch.
 
-The golden signals (`engine/metrics.ts`) come from the database: `computeSyncMetrics` per page (smallest send gap
+The golden signals (`engine/metrics.ts`) come from the database: `sampleSyncEngineMetrics` over the pages (smallest send gap
 vs the setting, violations, sends by class and resource, holds, breakers, quarantine) and the global families
 (confirmation lag, REST mismatches by field, the DM apply's `not_found` verdicts, money lag from a socket frame to the
 ledger, history requests and the ETA's fact over forecast), and the chats Fansly does not serve to a page

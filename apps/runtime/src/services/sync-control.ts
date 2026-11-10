@@ -20,7 +20,6 @@ import { resolveStoredProxyEgressKey } from "./page-context.ts";
 import { appPlatformRegistry } from "../platforms/registry.ts";
 import { isLegacyExecutorPlatform } from "../sync/onlyfans/boundary.ts";
 import { sendSyncPageWakeup, type SyncTriggerScope } from "./sync-queue.ts";
-import { pageSyncDependencyInput } from "./sync/dependencies.ts";
 import {
   filterOnlyFansAudienceStreams,
   pauseUnmappedOnlyFansAudienceForPage,
@@ -71,7 +70,6 @@ export async function requestPageSync(
     pageLabel: string;
     scope: SyncTriggerScope;
     reason: SyncRequestSource;
-    onlyFansTransactionsStart?: Date | null;
   },
 ) {
   const storedPage = await findPageByLabel(app.db, input.pageLabel);
@@ -101,12 +99,10 @@ export async function requestPageSync(
     storedPage.page,
   );
   const now = new Date();
-  const dependencyInput = pageSyncDependencyInput();
   await ensurePageSyncStates(app.db, {
     pageId: storedPage.page.id,
     onboarding: input.reason === "onboarding",
     now,
-    ...dependencyInput,
   });
   if (storedPage.page.platform === "onlyfans") {
     await pauseUnmappedOnlyFansDmForPage(app, storedPage.page.id, now);
@@ -126,13 +122,6 @@ export async function requestPageSync(
     );
   }
 
-  const requestPayloadByStream = input.onlyFansTransactionsStart
-    ? {
-      transactions: {
-        onlyFansTransactionsStart: input.onlyFansTransactionsStart.toISOString(),
-      },
-    }
-    : undefined;
   if (input.scope === "posts") {
     // The explicit operator request IS the manual action a
     // `manual_action_required` block (e.g. a parked OFAPI capture job) asked
@@ -148,9 +137,7 @@ export async function requestPageSync(
     pageId: storedPage.page.id,
     streams,
     source: input.reason,
-    ...(requestPayloadByStream === undefined ? {} : { requestPayloadByStream: requestPayloadByStream }),
     now,
-    ...dependencyInput,
   });
   if (input.scope === "posts") {
     // requestPageSyncRows intentionally preserves a durable pause. The

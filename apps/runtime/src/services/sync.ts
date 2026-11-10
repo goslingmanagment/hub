@@ -3,7 +3,6 @@ import {
   getCurrentSubscribers,
   getFanSpendByIdentifier,
   getFollowersForPage,
-  getRevenueBreakdown,
   getSyncRun,
   listModelsWithPageCounts,
   listPageSummaries,
@@ -13,7 +12,6 @@ import {
   listSyncRunEvents,
   listTopFansForPage,
 } from "@agency_hub_core/db";
-import { resolveRevenuePeriodBoundsForPlatform } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
 
@@ -155,38 +153,6 @@ export async function listFollowers(app: AppContext, label: string) {
   }
   const result = await getFollowersForPage(app.db, page.page.id);
   return result.rows;
-}
-
-export async function revenueBreakdownForPage(
-  app: AppContext,
-  label: string,
-  period: "today" | "7d" | "30d" | "all" | "custom",
-  custom?: { from: string; to: string },
-) {
-  const page = await findPageByLabel(app.db, label);
-  if (!page) {
-    throw new Error(`Page not found for label "${label}"`);
-  }
-
-  const bounds = resolveRevenuePeriodBoundsForPlatform(
-    page.page.platform,
-    period,
-    new Date(),
-    custom,
-  );
-  const rows = await getRevenueBreakdown(
-    app.db,
-    page.page.id,
-    page.page.platform,
-    bounds.from,
-    bounds.to,
-  );
-
-  return {
-    page: page.page,
-    bounds,
-    rows,
-  };
 }
 
 export async function fanSpendForPage(app: AppContext, label: string, identifier: string) {

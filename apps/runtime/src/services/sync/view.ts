@@ -133,19 +133,6 @@ function formatAge(since: TimestampValue, now = new Date()) {
   return parsed ? formatMs(Math.max(0, now.getTime() - parsed.getTime())) : DATE_PLACEHOLDER;
 }
 
-function formatValue(value: unknown) {
-  if (value === null || value === undefined) {
-    return "";
-  }
-  if (value instanceof Date) {
-    return value.toISOString();
-  }
-  if (typeof value === "object") {
-    return JSON.stringify(value);
-  }
-  return String(value);
-}
-
 function summarizeHealth(stats: Record<string, unknown>) {
   return asString(stats.health) ?? "";
 }
@@ -439,11 +426,4 @@ export function renderWatchEventLine(event: SyncRunEventRow) {
 
 export function renderSyntheticStallLine(run: SyncRunRow, now = new Date()) {
   return `${now.toISOString()} run=${run.runId} page=${run.pageLabel} stream=${run.stream} event=stalled severity=warn No request or event activity for >45s`;
-}
-
-export function formatRows(headers: string[], rows: Array<unknown[]>) {
-  return [
-    headers.join("\t"),
-    ...rows.map((row) => row.map((value) => formatValue(value)).join("\t")),
-  ].join("\n");
 }

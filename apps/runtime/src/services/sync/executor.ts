@@ -45,7 +45,6 @@ import {
   SYNC_PAGE_EXECUTE_RETRY_LIMIT,
   type SyncPageExecutePayload,
 } from "../sync-queue.ts";
-import { pageSyncDependencyInput } from "./dependencies.ts";
 import { buildNormalizedSyncError } from "./errors.ts";
 import { executeStreamChunk, resolveExecutorPageContext } from "./executor-handlers.ts";
 import { SyncChunkBudget } from "./chunk-budget.ts";
@@ -65,7 +64,6 @@ const PAGE_EXECUTOR_IDLE_POLL_MAX_MS = 5_000;
 const PAGE_EXECUTOR_HEARTBEAT_MS = 15_000;
 const SYNC_RUN_HEARTBEAT_MS = 30_000;
 const SYNC_TASK_LEASE_TTL_MS = 120_000;
-const MAX_LOCAL_EXECUTOR_CHUNKS = 500;
 const SYNC_PAGE_EXECUTE_HANDOFF_GUARD_MS = 60_000;
 
 export interface SyncPageChunkResult {
@@ -440,12 +438,11 @@ export async function executeNextSyncPageChunk(
   app: AppContext,
   platformAccountId: number,
 ): Promise<SyncPageChunkResult> {
-  const dependencyInput = pageSyncDependencyInput();
   // Only the platforms whose adapter declares streams (OnlyFans since step 4;
   // `sync/onlyfans/boundary.ts`): a stray wake-up for a Fansly page seeds,
   // repairs and leases nothing of its legacy state and goes idle.
   const platforms = legacyExecutorPlatforms();
-  await ensurePageSyncStates(app.db, { pageId: platformAccountId, platforms, ...dependencyInput });
+  await ensurePageSyncStates(app.db, { pageId: platformAccountId, platforms });
 
   const taskLease = await acquirePageSyncLease(app.db, {
     pageId: platformAccountId,
@@ -568,7 +565,6 @@ export async function executeNextSyncPageChunk(
           phase,
           workClass,
           progress,
-          ...dependencyInput,
         })
         : await completePageSync(app.db, {
           pageId: platformAccountId,
@@ -579,7 +575,6 @@ export async function executeNextSyncPageChunk(
           phase,
           workClass,
           progress,
-          ...dependencyInput,
         });
       if (!applied) {
         return buildLeaseLostResult(telemetry, platformAccountId, run.id);
@@ -1123,26 +1118,4 @@ export async function startSyncPageExecutor(
     }));
 
   await Promise.all(workers);
-}
-
-export async function runSyncPageExecutorUntilIdle(
-  app: AppContext,
-  platformAccountId: number,
-  input?: {
-    maxChunks?: number;
-  },
-) {
-  const maxChunks = input?.maxChunks ?? MAX_LOCAL_EXECUTOR_CHUNKS;
-  for (let index = 0; index < maxChunks; index += 1) {
-    const result = await executeNextPageWorkChunk(app, platformAccountId);
-    if (result.kind === "idle") {
-      return result;
-    }
-
-    if (!result.needsContinuation) {
-      return result;
-    }
-  }
-
-  throw new Error(`Sync page executor exceeded ${maxChunks} local chunks for page ${platformAccountId}`);
 }

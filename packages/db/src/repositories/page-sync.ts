@@ -1039,7 +1039,6 @@ export async function ensurePageSyncStates(
     pageId?: number;
     onboarding?: boolean;
     now?: Date;
-    dependencyOptions?: PageSyncDependencyOptions;
     /** Seed and maintain only these platforms' pages (the planner and the
      *  executor pass the legacy-executor set); every platform the executor
      *  serves when absent. */
@@ -1173,10 +1172,6 @@ const ONLYFANS_DM_DEPENDENCY_EXEMPT_STREAMS: readonly SyncStream[] = [
   "dm_conversations",
 ];
 
-export interface PageSyncDependencyOptions {
-  onlyFansOfapiDmSyncEnabled?: boolean;
-}
-
 interface PageSyncDependencyContext {
   platform: Platform;
   ofapiAccountId: string | null;
@@ -1202,12 +1197,8 @@ export function getSyncStreamDependenciesForPage(input: {
   return base.filter((dependency) => !ONLYFANS_OFAPI_DM_EXCLUDED_DEPENDENCIES.includes(dependency));
 }
 
-function isOnlyFansOfapiDmDependencyEligible(
-  context: PageSyncDependencyContext,
-  options?: PageSyncDependencyOptions,
-) {
-  return options?.onlyFansOfapiDmSyncEnabled === true &&
-    context.platform === "onlyfans" &&
+function isOnlyFansOfapiDmDependencyEligible(context: PageSyncDependencyContext) {
+  return context.platform === "onlyfans" &&
     typeof context.ofapiAccountId === "string" &&
     context.ofapiAccountId.length > 0;
 }
@@ -1246,7 +1237,6 @@ export async function refreshPageSyncDependencies(
   input?: {
     pageId?: number;
     now?: Date;
-    dependencyOptions?: PageSyncDependencyOptions;
     /** Only these platforms' pages; every platform when absent. */
     platforms?: PageSyncPlatformScope;
   },
@@ -1262,7 +1252,7 @@ export async function refreshPageSyncDependencies(
       },
       { lock: true },
     );
-    await refreshLockedPageSyncDependencies(database, rows, now, input?.dependencyOptions);
+    await refreshLockedPageSyncDependencies(database, rows, now);
   });
 }
 
@@ -1270,7 +1260,6 @@ async function refreshLockedPageSyncDependencies(
   db: Database,
   rows: PageSyncState[],
   now: Date,
-  options?: PageSyncDependencyOptions,
 ) {
   const rowsByPage = new Map<number, PageSyncState[]>();
   for (const row of rows) {
@@ -1290,7 +1279,7 @@ async function refreshLockedPageSyncDependencies(
       const dependencies = getSyncStreamDependenciesForPage({
         platform: context.platform,
         stream: row.stream,
-        onlyFansOfapiDmEligible: isOnlyFansOfapiDmDependencyEligible(context, options),
+        onlyFansOfapiDmEligible: isOnlyFansOfapiDmDependencyEligible(context),
       }).filter((dependency) => streamByName.has(dependency));
       if (dependencies.length === 0) {
         if (row.blockerKind !== "dependency" || row.status === "paused") {
@@ -1416,7 +1405,6 @@ export async function scheduleDuePageSync(
   input?: {
     pageId?: number;
     now?: Date;
-    dependencyOptions?: PageSyncDependencyOptions;
     /** Schedule only these platforms' pages (the planner passes the
      *  legacy-executor set); every platform when absent. Rows of other
      *  platforms are neither seeded, reclaimed, requested nor unblocked. */
@@ -1432,7 +1420,6 @@ export async function scheduleDuePageSync(
   await ensurePageSyncStates(db, {
     ...(input?.pageId === undefined ? {} : { pageId: input?.pageId }),
     now,
-    ...(input?.dependencyOptions === undefined ? {} : { dependencyOptions: input?.dependencyOptions }),
     ...(platforms !== undefined ? { platforms } : {}),
   });
   await reclaimExpiredPageSync(db, now, platforms !== undefined ? { platforms } : undefined);
@@ -1508,7 +1495,6 @@ export async function scheduleDuePageSync(
   await refreshPageSyncDependencies(db, {
     ...(input?.pageId === undefined ? {} : { pageId: input?.pageId }),
     now,
-    ...(input?.dependencyOptions === undefined ? {} : { dependencyOptions: input?.dependencyOptions }),
     ...(platforms !== undefined ? { platforms } : {}),
   });
 
@@ -1783,7 +1769,6 @@ export async function completePageSync(
     workClass?: SyncWorkClass | null;
     progress?: Record<string, unknown>;
     now?: Date;
-    dependencyOptions?: PageSyncDependencyOptions;
   },
 ) {
   const now = input.now ?? new Date();
@@ -1828,7 +1813,6 @@ export async function completePageSync(
     await refreshPageSyncDependencies(db, {
       pageId: input.pageId,
       now,
-      ...(input.dependencyOptions === undefined ? {} : { dependencyOptions: input.dependencyOptions }),
     });
   }
 
@@ -1857,7 +1841,6 @@ export async function skipPageSync(
     workClass?: SyncWorkClass | null;
     progress?: Record<string, unknown>;
     now?: Date;
-    dependencyOptions?: PageSyncDependencyOptions;
   },
 ) {
   const now = input.now ?? new Date();
@@ -1894,13 +1877,9 @@ export async function skipPageSync(
 
   const applied = (result.rowCount ?? 0) > 0;
   if (applied) {
-    // Spread rather than `dependencyOptions: input.dependencyOptions`: under
-    // exactOptionalPropertyTypes an explicit `undefined` is not the same as an
-    // absent optional.
     await refreshPageSyncDependencies(db, {
       pageId: input.pageId,
       now,
-      ...(input.dependencyOptions === undefined ? {} : { dependencyOptions: input.dependencyOptions }),
     });
   }
 
@@ -2395,7 +2374,6 @@ export async function requestPageSync(
     source: SyncRequestSource;
     requestPayloadByStream?: Partial<Record<SyncStream, Record<string, unknown> | null>>;
     now?: Date;
-    dependencyOptions?: PageSyncDependencyOptions;
     /** Diagnostic receipt from the same locked row; omitted for ordinary callers. */
     includeQueueState?: boolean;
     /**
@@ -2419,7 +2397,6 @@ export async function requestPageSync(
     pageId: input.pageId,
     onboarding: input.source === "onboarding",
     now,
-    ...(input.dependencyOptions === undefined ? {} : { dependencyOptions: input.dependencyOptions }),
   });
 
   await db.transaction(async (tx) => {
@@ -2544,7 +2521,6 @@ export async function requestPageSync(
       database,
       lockedRows.map((row) => lockedRowsByStream.get(row.stream) ?? row),
       now,
-      input.dependencyOptions,
     );
   });
 

@@ -121,8 +121,6 @@ export type Held =
    *  routes closed; `route_budget`: only their budgets' intervals do. */
   | { scope: "route_hold" | "route_budget"; kind: "route"; until: Date; routes: FanslyRoute[]; held: FanslyRoute[] };
 
-export type HeldScope = Held["scope"];
-
 /** What is asked: a request of the page, and — when it is a piece of work —
  *  its key, its subject's breaker and the route it planned. */
 export interface HeldQuery {

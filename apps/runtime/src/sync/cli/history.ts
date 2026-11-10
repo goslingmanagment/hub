@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 
-import { Command, InvalidArgumentError } from "commander";
+import type { Command } from "commander";
+import { InvalidArgumentError } from "commander";
 
 import { HISTORY_ITEM_STATES, HISTORY_REQUEST_STATES, listSyncPages, type HistoryItemState, type HistoryRequestState } from "@agency_hub_core/db";
 
@@ -118,19 +119,6 @@ async function withContext<T>(
   } finally {
     await ctx.close();
   }
-}
-
-/** A standalone `sync` group with only the history commands; errors throw
- *  instead of exiting (tests). */
-export function buildSyncHistoryCommandGroup(deps: SyncHistoryCliDeps = defaultDeps): Command {
-  const sync = new Command("sync").exitOverride();
-  registerSyncHistoryCommands(sync, deps);
-  const exit = (command: Command) => {
-    command.exitOverride();
-    for (const sub of command.commands) exit(sub);
-  };
-  exit(sync);
-  return sync;
 }
 
 export function registerSyncHistoryCommands(sync: Command, deps: SyncHistoryCliDeps = defaultDeps): void {

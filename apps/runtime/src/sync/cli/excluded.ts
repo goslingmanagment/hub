@@ -1,6 +1,7 @@
 import { hostname } from "node:os";
 
-import { Command, InvalidArgumentError } from "commander";
+import type { Command } from "commander";
+import { InvalidArgumentError } from "commander";
 
 import type { FanslyDmMessageSyncExcludedReason } from "@agency_hub_core/shared";
 
@@ -66,19 +67,6 @@ async function withContext<T>(deps: SyncExcludedCliDeps, body: (ctx: Pick<SyncCo
   } finally {
     await ctx.close();
   }
-}
-
-/** A standalone `sync` group with only these commands; errors throw (tests). */
-export function buildSyncExcludedCommandGroup(deps: SyncExcludedCliDeps = defaultDeps): Command {
-  const sync = new Command("sync").exitOverride();
-  sync.enablePositionalOptions();
-  registerSyncExcludedCommands(sync, deps);
-  const exit = (command: Command) => {
-    command.exitOverride();
-    for (const sub of command.commands) exit(sub);
-  };
-  exit(sync);
-  return sync;
 }
 
 export function registerSyncExcludedCommands(sync: Command, deps: SyncExcludedCliDeps = defaultDeps): void {

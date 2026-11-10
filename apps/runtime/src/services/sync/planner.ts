@@ -16,7 +16,6 @@ import { assertLegacyExecutorPage, legacyExecutorPlatforms } from "../../sync/on
 import { sendSyncPageWakeup } from "../sync-queue.ts";
 import { recoverExpiredOfapiInteractiveResponses } from "../ofapi-capture-transport.ts";
 import { resolveStoredProxyEgressKey } from "../page-context.ts";
-import { pageSyncDependencyInput } from "./dependencies.ts";
 import { pauseUnmappedOnlyFansAudienceForAllPages } from "./ofapi-audience-sync.ts";
 import { pauseUnmappedOnlyFansDmForAllPages } from "./onlyfans-dm-polling.ts";
 import { pauseIneligibleOnlyFansPostsForAllPages } from "./posts.ts";
@@ -51,8 +50,7 @@ export async function runSyncPlannerCycle(
   // rows stay exactly as they are (parked `retired` by migration 0239). This
   // scope is the fence: no query below looks at `sync_pages`.
   const platforms = legacyExecutorPlatforms();
-  const dependencyInput = pageSyncDependencyInput();
-  await ensurePageSyncStates(app.db, { now, platforms, ...dependencyInput });
+  await ensurePageSyncStates(app.db, { now, platforms });
   const retiredOnlyFansDmRows = await retireLegacyOnlyFansDmMessages(app.db, now);
   if (retiredOnlyFansDmRows > 0) {
     app.logger.warn({
@@ -76,7 +74,7 @@ export async function runSyncPlannerCycle(
       pausedOnlyFansPostsPages,
     }, "Paused OnlyFans posts because background capture is disabled or the page is unmapped");
   }
-  await scheduleDuePageSync(app.db, { now, platforms, ...dependencyInput });
+  await scheduleDuePageSync(app.db, { now, platforms });
 
   const runnablePages = await listRunnablePageSync(app.db, now, { platforms });
   const pageWork = new Map<number, {

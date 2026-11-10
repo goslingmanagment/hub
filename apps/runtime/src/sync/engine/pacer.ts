@@ -45,8 +45,6 @@ export const SEND_WINDOW_MS = 15_000;
 /** Total budget of one request: connect and proxy tunnel, headers and the
  *  whole body (`AbortSignal.timeout`), plan §8 SIGTERM budget. */
 export const REQUEST_TIMEOUT_MS = 20_000;
-/** Dispatcher connect timeout (the existing http-client value). */
-export const CONNECT_TIMEOUT_MS = 10_000;
 /** Unfinished attempts older than this cannot still be sending (≫ send window
  *  + request timeout); the takeover floor looks back this far. */
 export const FLOOR_LOOKBACK_MS = 600_000;

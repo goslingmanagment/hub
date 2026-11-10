@@ -4,7 +4,6 @@ import { setTimeout as delay } from "node:timers/promises";
 import type { Database, SyncAttemptRow, SyncWorkRow } from "@agency_hub_core/db";
 import type {
   FanslySendCheck,
-  FanslySendRefusalReason,
   FanslyWireOutcome,
   FanslyWireId,
   FanslyWireRequest,
@@ -171,14 +170,6 @@ export const noopMetrics: Metrics = {
 };
 
 // ── transport ───────────────────────────────────────────────────────────────
-
-/**
- * Why a send check refused a dispatch: the step-1 send-guard vocabulary
- * (`packages/fansly/src/send-guard.ts`), which the engine extends with `pace`
- * and `takeover_floor`. `lease_used` = a second physical request of one
- * admission; `lease_inactive` = ownership lost or the process is stopping.
- */
-export type SendRefusal = FanslySendRefusalReason;
 
 /** The hooks of one admission. `check` is synchronous and runs at undici's
  *  `onRequestStart`, immediately before the request headers are written; a
