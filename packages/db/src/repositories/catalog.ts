@@ -323,6 +323,21 @@ export async function findPageById(db: Database, platformAccountId: number) {
   return findActivePage(db, eq(pages.id, platformAccountId));
 }
 
+/** Active pages among `labels` in one statement, each with its egress row (the
+ * same `proxy` shape `findPageByLabel` returns). Unknown or inactive labels are
+ * absent; the order of the result is unspecified. */
+export async function listActivePagesByLabels(db: Database, labels: readonly string[]) {
+  if (labels.length === 0) {
+    return [];
+  }
+  const rows = await db
+    .select({ id: pages.id, label: pages.label, proxy: egressEndpoints })
+    .from(pages)
+    .leftJoin(egressEndpoints, eq(egressEndpoints.platformAccountId, pages.id))
+    .where(and(inArray(pages.label, [...labels]), eq(pages.status, "active")));
+  return rows.map((row) => ({ id: row.id, label: row.label, proxy: row.proxy ?? undefined }));
+}
+
 /** Page -> platform-native account ref (canonicalizer context).
  * ofapiAccountId rides along because OFAPI webhook observations carry the
  * vendor account ref ("acct_…") as their native_account_ref — OF pages'
