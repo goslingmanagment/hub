@@ -1,4 +1,4 @@
-import { and, count, desc, eq, lte, sql } from "drizzle-orm";
+import { and, count, desc, eq, inArray, lte, sql } from "drizzle-orm";
 
 import type { Platform } from "@agency_hub_core/shared";
 
@@ -593,5 +593,77 @@ export async function recoverAndResolveNotificationIncident(
     }
 
     return resolved ?? null;
+  });
+}
+
+/**
+ * `recoverAndResolveNotificationIncident` for several keys in ONE transaction,
+ * without an outbox row (the policy-delivered kinds; the critical pair keeps
+ * the single-key function). Per key the effect is exactly the single-key
+ * call's at the batch's commit: the same advisory lock is held for every key
+ * (taken in hash order, so two batches can never deadlock, and every other
+ * holder takes one key at a time), the same tombstone upsert
+ * (`greatest(recovered_at)`), the same conditional resolve
+ * (`status = 'open' and last_seen_at <= recoveredAt`). An opener of any of
+ * these keys therefore serializes before or after the batch, as it did before
+ * or after that key's own transaction. Returns the incidents it resolved.
+ */
+export async function recoverAndResolveNotificationIncidents(
+  db: Database,
+  input: {
+    incidentKeys: readonly string[];
+    recoveredAt: Date;
+    metadata?: Record<string, unknown>;
+    processedAt?: Date;
+  },
+): Promise<NotificationIncidentRow[]> {
+  const incidentKeys = [...new Set(input.incidentKeys)];
+  if (incidentKeys.length === 0) {
+    return [];
+  }
+  const processedAt = input.processedAt ?? new Date();
+  const metadata = input.metadata ?? {};
+  const keysArray = sql`array[${sql.join(incidentKeys.map((key) => sql`${key}`), sql`, `)}]::text[]`;
+
+  return db.transaction(async (tx) => {
+    // One statement, the locks taken one row at a time in lock-id order.
+    await tx.execute(sql`
+      select count(pg_advisory_xact_lock(s.lock_id))
+      from (
+        select distinct hashtextextended(k, ${INCIDENT_ADVISORY_LOCK_SEED}) as lock_id
+        from unnest(${keysArray}) as k
+        order by lock_id
+      ) s
+    `);
+    await tx.insert(notificationIncidentRecoveries)
+      .values(incidentKeys.map((incidentKey) => ({
+        incidentKey,
+        recoveredAt: input.recoveredAt,
+        metadata,
+        updatedAt: processedAt,
+      })))
+      .onConflictDoUpdate({
+        target: notificationIncidentRecoveries.incidentKey,
+        set: {
+          recoveredAt: sql`greatest(${notificationIncidentRecoveries.recoveredAt}, excluded.recovered_at)`,
+          metadata,
+          updatedAt: processedAt,
+        },
+      });
+
+    return tx.update(notificationIncidents)
+      .set({
+        status: "resolved",
+        resolvedAt: input.recoveredAt,
+        lastSeenAt: input.recoveredAt,
+        metadata,
+        updatedAt: processedAt,
+      })
+      .where(and(
+        inArray(notificationIncidents.incidentKey, incidentKeys),
+        eq(notificationIncidents.status, "open"),
+        lte(notificationIncidents.lastSeenAt, input.recoveredAt),
+      ))
+      .returning();
   });
 }
