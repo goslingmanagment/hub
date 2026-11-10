@@ -4,7 +4,7 @@ import type { AppConfig } from "@agency_hub_core/shared";
 import { createFanslyWsLiveApplier } from "../../services/fansly-ws/live-apply.ts";
 import {
   pageBrowserRpcUrl,
-  readPageBrowserLinkRevision,
+  readPageBrowserLinkRevisionOfPage,
   readPageBrowserLinkSettings,
   readPageBrowserPageSettings,
 } from "../../services/egress/page-browser-link.ts";
@@ -290,7 +290,14 @@ export async function openBrowserLink(deps: Omit<BrowserPageDeps, "enqueue" | "r
     settings: overrides.settings !== undefined
       ? () => overrides.settings!(pageId)
       : async () => readPageBrowserLinkSettings({ db, config }, pageId, await pageSettings()),
-    ...(overrides.settings !== undefined ? {} : { revision: async () => readPageBrowserLinkRevision({ db }, pageId, await pageSettings()) }),
+    // One statement (the pin and environment from the same row as the rest).
+    ...(overrides.settings !== undefined ? {} : {
+      revision: async () => {
+        const now = await readPageBrowserLinkRevisionOfPage({ db }, pageId);
+        if ("problem" in now) throw new BrowserPageNotReadyError(pageId, now.problem);
+        return now.revision;
+      },
+    }),
     logger,
     ...(overrides.rpcTiming === undefined ? {} : { timing: overrides.rpcTiming }),
   });
