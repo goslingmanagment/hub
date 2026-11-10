@@ -67,18 +67,15 @@ export async function readAgentTeamSales(
   const workTo = new Date(Math.min(now.getTime(), to.getTime() + AGENT_TEAM_SALES_WORK_AFTER_DAYS * DAY_MS));
   const pageIds = input.pages.map((page) => page.id);
 
-  const [people, sales] = await Promise.all([
-    readPeopleWork(db, { from: workFrom, to: workTo, now, pages: "all" }),
-    pageIds.length === 0 ? Promise.resolve([] as ShiftSale[]) : listShiftSales(db, { pageIds, from, to }),
-  ]);
+  // In turn, not Promise.all: `db` is the caller's transaction, one connection.
+  const people = await readPeopleWork(db, { from: workFrom, to: workTo, now, pages: "all" }, { inTurn: true });
+  const sales: ShiftSale[] = pageIds.length === 0 ? [] : await listShiftSales(db, { pageIds, from, to });
   const ids = sales.map((sale) => sale.transactionId);
-  const [facts, lastWriters, marks, confirmed, resolutions] = await Promise.all([
-    listSaleFacts(db, { transactionIds: ids }),
-    listSaleLastWriters(db, { hours: SALE_LAST_WRITER_HOURS, sales: lastWriterQuery(sales) }),
-    listShiftMarks(db, { transactionIds: ids }),
-    listConfirmedMarkKeys(db, { transactionIds: ids }),
-    listShiftResolutions(db, { transactionIds: ids }),
-  ]);
+  const facts = await listSaleFacts(db, { transactionIds: ids });
+  const lastWriters = await listSaleLastWriters(db, { hours: SALE_LAST_WRITER_HOURS, sales: lastWriterQuery(sales) });
+  const marks = await listShiftMarks(db, { transactionIds: ids });
+  const confirmed = await listConfirmedMarkKeys(db, { transactionIds: ids });
+  const resolutions = await listShiftResolutions(db, { transactionIds: ids });
   const factOf = new Map(facts.map((fact) => [fact.transactionId, fact]));
   const marksOf = new Map<number, AgentTeamSale["marks"]>();
   for (const mark of marks) {

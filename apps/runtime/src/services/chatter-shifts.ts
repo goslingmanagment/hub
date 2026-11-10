@@ -445,12 +445,15 @@ export function workOnPages(work: ComputedWork, labels: ReadonlySet<string>): Co
 export async function readPeopleWork(
   db: Database,
   input: { from: Date; to: Date; now: Date; pages: "all" | readonly number[]; userId?: number },
+  options?: { inTurn?: boolean },
 ): Promise<Map<number, PersonWork>> {
   const person = input.userId === undefined ? {} : { userId: input.userId };
-  const [minutes, sends] = await Promise.all([
-    listChatterActivityMinutes(db, { from: input.from, to: input.to, pages: "all", ...person }),
-    countAuthoredSendsByMinute(db, { from: input.from, to: input.to, pages: "all", ...person }),
-  ]);
+  const readMinutes = () => listChatterActivityMinutes(db, { from: input.from, to: input.to, pages: "all", ...person });
+  const readSends = () => countAuthoredSendsByMinute(db, { from: input.from, to: input.to, pages: "all", ...person });
+  // `inTurn`: `db` is the caller's transaction, one connection — no Promise.all on it.
+  const [minutes, sends] = options?.inTurn === true
+    ? [await readMinutes(), await readSends()]
+    : await Promise.all([readMinutes(), readSends()]);
   const scope = input.pages === "all" ? null : new Set(input.pages);
   const labels = new Set<string>();
   const people = new Map<number, { username: string; pageIds: Map<string, number>; minutes: ActivityMinute[]; sent: SentMinute[] }>();
