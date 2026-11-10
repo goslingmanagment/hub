@@ -554,12 +554,22 @@ export async function applyMessageEventsToArchive(
       // tombstone-first stubs (content_pending), never a content row. The
       // stub's deleted_at is deliberately NOT in the SET list — hydration
       // keeps the tombstone.
+      //
+      // Only a message the update below would change is offered to the
+      // insert: a row that conflicts is locked by `on conflict do update`
+      // before its `where` is looked at, and a lock is a write (its page
+      // dirtied, a WAL record, a full-page image after each checkpoint). The
+      // `not exists` is the negation of that `where` (`content_pending`); no
+      // writer turns a complete row back into a stub, so a row seen complete
+      // stays one. On production (2026-11-10) nine calls in ten met a complete
+      // row and changed nothing. The conflict clause stays for a row another
+      // writer inserts between the read and the insert.
       const result = await db.execute(sql`
         insert into ${target} (
           account_id, platform, conversation_ref, message_ref, fan_native_id,
           sender_role, is_sent_by_me, occurred_at, text_plain, price_mills,
           is_tip, tip_amount_mills, source_event_id
-        ) values (
+        ) select
           ${input.accountId},
           ${input.platform},
           ${event.conversationRef},
@@ -573,6 +583,12 @@ export async function applyMessageEventsToArchive(
           ${isTip},
           ${tipMills},
           ${event.id}
+        where not exists (
+          select 1 from ${target} done
+          where done.account_id = ${input.accountId}
+            and done.platform = ${input.platform}
+            and done.message_ref = ${event.messageRef}
+            and done.content_pending is not true
         )
         on conflict (account_id, platform, message_ref) do update set
           conversation_ref = excluded.conversation_ref,
