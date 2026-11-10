@@ -7,7 +7,7 @@ import {
   webhookCollectionPolicyStatus,
 } from "../../services/ofapi-webhook-recovery.ts";
 import { getOfapiBannedDictionary } from "@agency_hub_core/db";
-import { getOfapiBannedWordsPreview, refreshOfapiBannedWords } from "../../services/ofapi-banned-words.ts";
+import { refreshOfapiBannedWords } from "../../services/ofapi-banned-words.ts";
 import { ServiceUnavailableError } from "../../services/errors.ts";
 import { refreshOfapiBinding } from "../../services/ofapi-binding-refresh.ts";
 import { routeSchemas } from "@agency_hub_core/contracts";
@@ -22,7 +22,6 @@ import {
   InvalidIngestEventError,
   isHarvestClientVersion,
 } from "../../services/ingest-observations.ts";
-import { executeOfapiReadGatewayRequest } from "../../services/ofapi-read-gateway.ts";
 import { reportOfapiMediaFetches, resolveOfapiMedia } from "../../services/ofapi-media-resolve.ts";
 import {
   getOfapiWebhookStatus,
@@ -182,24 +181,6 @@ export async function registerIngestRoutes(server: ApiServer, ctx: ApiModuleCont
     return reconcileOfapiWebhookRegistration(appContext, request.body);
   });
 
-  server.get("/api/v1/ofapi/read/*", {
-    schema: routeSchemas.ofapiReadGateway,
-  }, async (request, reply) => {
-    const principal = await requirePrincipal(request);
-
-    const response = await executeOfapiReadGatewayRequest(appContext, principal, {
-      rawPath: request.params["*"],
-      rawQuery: request.query as Record<string, unknown>,
-      readIntent: typeof request.headers["x-agency-hub-read-intent"] === "string"
-        ? request.headers["x-agency-hub-read-intent"]
-        : null,
-    });
-    for (const [name, value] of Object.entries(response.headers)) {
-      reply.header(name, value);
-    }
-    return reply.code(response.status as 200).send(response.body);
-  });
-
   // Desktop media images (docs/runbooks/ofapi-media.md). Authentication runs
   // as a preHandler; the day's media credit budget is the only ceiling.
   const mediaPrincipals = new WeakMap<object, HumanAuthPrincipal>();
@@ -265,12 +246,6 @@ export async function registerIngestRoutes(server: ApiServer, ctx: ApiModuleCont
 
   server.get("/api/v1/admin/ofapi/banned-words", { schema: routeSchemas.ofapiBannedWordsAdminGet }, async () => {
     return getOfapiBannedDictionary(appContext.db);
-  });
-  server.get("/api/v1/ofapi/banned-words", { schema: routeSchemas.ofapiBannedWordsGet }, async () => {
-    return getOfapiBannedDictionary(appContext.db);
-  });
-  server.post("/api/v1/ofapi/banned-words/preview", { schema: routeSchemas.ofapiBannedWordsPreview }, async request => {
-    return getOfapiBannedWordsPreview(appContext, request.body.text);
   });
   server.post("/api/v1/admin/ofapi/banned-words/refresh", { schema: routeSchemas.ofapiBannedWordsRefresh }, async request => {
     return refreshOfapiBannedWords(appContext, request.body.maxPages);

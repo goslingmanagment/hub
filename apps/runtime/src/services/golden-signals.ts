@@ -40,11 +40,6 @@ import { ensureQueueCreated, type QueueCreationClient } from "./sync-queue.ts";
 // 10-minute window) into ops_metric_samples, served at
 // GET /api/v1/ops/metrics, and alerted through the existing incident
 // machinery when a p95 crosses its threshold.
-//
-// EXECUTION INTERPRETATION (recorded): "SSE delivery" is the smoke
-// consumer's checkpoint staleness — append→receipt per frame would need
-// receipt stamps the checkpoint deliberately doesn't keep; staleness bounds
-// the same failure mode (a wedged consumer) with the data we already have.
 
 export const OPS_METRICS_SAMPLE_QUEUE = "ops.metrics.sample";
 const SAMPLE_WINDOW_MINUTES = 10;
@@ -60,7 +55,6 @@ export const GOLDEN_SIGNAL_THRESHOLDS_MS: Record<string, number> = {
   capture: 60_000,
   canonicalize: 180_000,
   projection: 180_000,
-  sse_delivery: 600_000,
   // W5.1 (B8): always-emit wedge gauges. The latency quantiles measure
   // COMPLETED work only — a fully wedged pipeline used to emit no sample and
   // read as healthy. These measure the oldest WAITING row (0 when idle).
@@ -245,21 +239,6 @@ export async function computeGoldenSignals(
   // latch like a breach (a blind spot is never a silent zero).
   const failedProbes: string[] = [];
 
-  // 5. SSE delivery: smoke-consumer checkpoint staleness (see header note).
-  const smoke = await app.db.execute<{ staleness_ms: string | null }>(sql`
-    select extract(epoch from (now() - updated_at)) * 1000 as staleness_ms
-    from domain_events_smoke_checkpoint
-    where id = 1
-  `);
-  const staleness = smoke.rows[0]?.staleness_ms === null || smoke.rows[0]?.staleness_ms === undefined
-    ? null
-    : Number(smoke.rows[0].staleness_ms);
-  // W5.1 (B8): a MISSING checkpoint row used to yield no sample — invisible.
-  // It is a blind spot: latch it via the failed-probe path.
-  if (staleness === null) {
-    failedProbes.push("sse_delivery");
-  }
-
   // W5.1 (B8) always-emit wedge gauges: oldest waiting row per stage, 0 when
   // the queue is empty — "quiet" and "wedged" become distinguishable by
   // construction (quiet reads 0, wedged reads a growing age).
@@ -338,7 +317,6 @@ export async function computeGoldenSignals(
       ...toSamples("capture", capture),
       ...toSamples("canonicalize", canonicalize),
       ...toSamples("projection", projection),
-      ...gaugeSample("sse_delivery", staleness),
       ...gaugeSample("capture_pending_age", capturePendingAge),
       ...gaugeSample("notification_outbox_age", notificationOutboxAge),
       ...gaugeSample("acceptance_events_1h", acceptanceEvents1h),
@@ -548,28 +526,12 @@ export async function getGoldenSignalsReport(
 ): Promise<GoldenSignalsReport> {
   const rows = withoutRetiredGaugeHalves(await listRecentOpsMetricSamples(app.db, { perSeries: 30 }));
   const samples = rows.map((sample) => ({ ...sample, sampledAt: sample.sampledAt.toISOString() }));
-  const smoke = await app.db.execute<{
-    frames_seen: string;
-    gap_count: string;
-    duplicate_count: string;
-    updated_at: Date;
-  }>(sql`
-    select frames_seen::text, gap_count::text, duplicate_count::text, updated_at
-    from domain_events_smoke_checkpoint
-    where id = 1
-  `);
-  const row = smoke.rows[0];
   return {
     samples,
     thresholdsMs: GOLDEN_SIGNAL_THRESHOLDS_MS,
-    smoke: row
-      ? {
-        framesSeen: Number(row.frames_seen),
-        gapCount: Number(row.gap_count),
-        duplicateCount: Number(row.duplicate_count),
-        updatedAt: new Date(row.updated_at).toISOString(),
-      }
-      : null,
+    // The stream verifier that wrote this block is retired; the field stays
+    // nullable in the contract until the stream itself goes.
+    smoke: null,
   };
 }
 

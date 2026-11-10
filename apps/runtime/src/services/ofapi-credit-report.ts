@@ -7,7 +7,6 @@
 import type {
   AdminOfapiCreditsLedgerCsvQuery,
   AdminOfapiCreditsLedgerQuery,
-  OfapiCreditsChatterSummaryResponse,
   OfapiCreditsDailyResponse,
   OfapiCreditsLedgerResponse,
   OfapiCreditsSummaryResponse,
@@ -27,7 +26,6 @@ import {
   listOfapiPageBreakdownBetween,
   listOfapiRefillsBetween,
   summarizeOfapiSpendWindowBetween,
-  sumOfapiRestCreditsForPagesBetween,
   sumOfapiSpendBySourceBetween,
   type OfapiCreditLedgerSource,
 } from "@agency_hub_core/db";
@@ -101,88 +99,6 @@ export function estimateOfapiRunway(input: {
     ? Math.floor(input.lastBalance / avgDailySpend)
     : null;
   return { avgDailySpend, daysLeft };
-}
-
-async function getChatterSpendWindow(
-  app: AppContext,
-  input: {
-    pageIds: number[];
-    from: Date;
-    to: Date;
-  },
-): Promise<Omit<OfapiCreditsChatterSummaryResponse["today"], "day">> {
-  const [netRestCredits, webhookEventCount] = await Promise.all([
-    sumOfapiRestCreditsForPagesBetween(app.db, {
-      pageIds: input.pageIds,
-      from: input.from,
-      to: input.to,
-    }),
-    countOfapiWebhookEventsReceivedBetween(app.db, {
-      pageIds: input.pageIds,
-      from: input.from,
-      to: input.to,
-    }),
-  ]);
-  const estimatedWebhookCredits = webhookAccrualCredits(webhookEventCount);
-  // Installed SDKs require nonnegative legacy fields and a component-sum total.
-  // Preserve exact signed corrections separately for clients that support them.
-  const restCredits = Math.max(0, netRestCredits);
-
-  return {
-    from: input.from.toISOString(),
-    to: input.to.toISOString(),
-    restCredits,
-    webhook: {
-      eventCount: webhookEventCount,
-      estimatedCredits: estimatedWebhookCredits,
-    },
-    totalEstimatedCredits: restCredits + estimatedWebhookCredits,
-    netRestCredits,
-    netTotalEstimatedCredits: netRestCredits + estimatedWebhookCredits,
-  };
-}
-
-export async function getChatterOfapiCreditsSummary(
-  app: AppContext,
-  input: { pageIds: number[] },
-  now = new Date(),
-): Promise<OfapiCreditsChatterSummaryResponse> {
-  const dayStart = utcDayStart(now);
-  const nextDayStart = addUtcDays(dayStart, 1);
-  const sevenDayStart = addUtcDays(nextDayStart, -7);
-
-  const [todayWindow, last7dWindow] = await Promise.all([
-    getChatterSpendWindow(app, {
-      pageIds: input.pageIds,
-      from: dayStart,
-      to: nextDayStart,
-    }),
-    getChatterSpendWindow(app, {
-      pageIds: input.pageIds,
-      from: sevenDayStart,
-      to: nextDayStart,
-    }),
-  ]);
-
-  return {
-    // The ledger always runs; the field stays on the wire for installed clients.
-    enabled: true,
-    scope: {
-      pageIds: input.pageIds,
-      pageCount: input.pageIds.length,
-    },
-    today: {
-      day: isoDay(dayStart),
-      ...todayWindow,
-    },
-    last7d: last7dWindow,
-    limitations: [
-      "webhook credits are estimated from assigned-page journal events",
-      "REST credits include only ledger rows attributed to assigned pages",
-      "legacy credit fields floor negative REST net at zero; signed net fields preserve corrections",
-      "owner-only balance, refills, external drift, and unattributed adjustments are omitted",
-    ],
-  };
 }
 
 export async function getOfapiCreditsSummary(

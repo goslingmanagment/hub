@@ -54,16 +54,15 @@ function remember(params: string): void {
  * remembered one. Returns the search to replace the address with, or null when
  * the address is fine as it is. The shell renders `<Navigate replace>` with it
  * before any screen reads, so a screen never fetches the current week first.
- * `enabled` false (a chatter's part of Workboard): nothing is remembered or restored.
  */
-export function useRestoredPeriod(enabled: boolean = true): string | null {
+export function useRestoredPeriod(): string | null {
   const location = useLocation();
   const search = useMemo(() => new URLSearchParams(location.search), [location.search]);
   const named = hasPeriodParams(search);
   useEffect(() => {
-    if (enabled && named) remember(pickPeriodParams(search).toString());
-  }, [enabled, named, search]);
-  if (!enabled || named) return null;
+    if (named) remember(pickPeriodParams(search).toString());
+  }, [named, search]);
+  if (named) return null;
   const stored = readRemembered();
   if (!stored) return null;
   const restored = new URLSearchParams(stored);

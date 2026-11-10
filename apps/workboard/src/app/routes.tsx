@@ -19,7 +19,7 @@ export interface ScreenHandle {
   screenKey?: (params: Params) => string;
 }
 
-/** `/` is Смены for the team and «Мои отчёты» for a chatter, with whatever the address carried. */
+/** `/` is Смены for the team and «Мои смены» for a chatter, with whatever the address carried. */
 function HomeRedirect() {
   const location = useLocation();
   const { role } = useMe();
@@ -34,6 +34,15 @@ function PersonShiftsRedirect() {
   const location = useLocation();
   const { userId } = useParams();
   return <Navigate to={{ pathname: `/people/${userId ?? ""}`, search: location.search, hash: location.hash }} state={location.state as unknown} replace />;
+}
+
+/**
+ * `/my/reports` (the first chatter screen, «Мои отчёты») is «Мои смены» now: a
+ * shift and its report are one row there. Its `?days=14|30` is the app's period.
+ */
+function MyReportsRedirect() {
+  const location = useLocation();
+  return <Navigate to={{ pathname: "/my/shifts", search: location.search }} replace />;
 }
 
 /** `/sales` opens its first tab. */
@@ -69,9 +78,10 @@ const teamScreens: RouteObject[] = [
   { path: "access", lazy: () => import("../screens/access/index.js").then((m) => ({ Component: m.AccessScreen })) },
 ];
 
-/** A chatter's own part of Workboard (owner, 2026-11-10): their shift reports, sales only — no pay, nobody else's. */
+/** A chatter's own part of Workboard (owner, 2026-11-10): their shifts with their reports, sales only — no pay, nobody else's. */
 const chatterScreens: RouteObject[] = [
-  { path: "my/reports", lazy: () => import("../screens/my-reports/index.js").then((m) => ({ Component: m.MyReportsScreen })) },
+  { path: "my/shifts", lazy: () => import("../screens/my-shifts/index.js").then((m) => ({ Component: m.MyShiftsScreen })) },
+  { path: "my/reports", element: <MyReportsRedirect /> },
 ];
 
 /**
