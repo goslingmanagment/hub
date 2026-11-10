@@ -5,6 +5,7 @@ import { daysInRange } from "@agency_hub_core/ui/moscow";
 import { daysOf, pivotOf, sheetCell, type PivotRow } from "@agency_hub_core/ui/payoutSheet";
 import type { ResolvedPeriod } from "@agency_hub_core/ui/period";
 import { kernel } from "@/shared/hub";
+import { shiftSalesQuery } from "@/shared/reads";
 
 /**
  * Выплаты — the data layer (spec §4.7). The screen reads only this file.
@@ -176,8 +177,7 @@ export function usePayouts(period: ResolvedPeriod) {
   });
   const span = problem === null ? daysInRange(period.from, period.to) : 0;
   const sales = useQuery({
-    queryKey: ["payouts", "shift-sales", { days: span, until: period.to }] as const,
-    queryFn: () => kernel.teamShiftSales({ query: { days: span, until: period.to } }),
+    ...shiftSalesQuery({ days: span, until: period.to }),
     enabled: problem === null,
     staleTime: 2 * 60_000,
   });

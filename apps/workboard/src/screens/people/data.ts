@@ -1,6 +1,6 @@
 /**
  * Люди and Человек — the data layer (spec §4.3, §4.4). The screens read only
- * this file; query keys start with "people".
+ * this file; query keys start with "people", except the shared reads of src/shared/reads.ts.
  *
  * ── The future contract (phase 2, spec §2.7) ───────────────────────────────
  * `teamPeopleSummary { from, to, pageLabel? }` → `{ people: PersonSummary[],
@@ -49,6 +49,7 @@ import type { ResolvedPeriod } from "@agency_hub_core/ui/period";
 import { median } from "@agency_hub_core/ui/shiftReview";
 import { CHATTER_SHIFTS_MAX_WINDOW_DAYS } from "@agency_hub_core/contracts";
 import { kernel } from "@/shared/hub";
+import { shiftSalesQuery, usersQuery } from "@/shared/reads";
 import { MAX_DAYS, MIN_SAMPLE, priceView, readWindow, speedView, useSalesPpv, useSalesReplies, type ReadWindow } from "@/screens/sales/data";
 import { averageQuality, perHourMills, qualityOfChatterNumbers, type PeriodQuality as AveragedQuality, type ShiftQuality } from "@/shared/metrics";
 import { useMe } from "@/shared/useMe";
@@ -272,8 +273,11 @@ function nowOf(
 /** The period's money of everyone (`teamShiftSales`): the table's and the card's. */
 function useShiftSales(period: ResolvedPeriod, page: string | null) {
   const window = salesWindow(period);
-  return useQuery({
-    queryKey: ["people", "sales", window, page] as const,
+  // A period Hub reads is the entry Смены and Выплаты share for the same request; a longer one is never read
+  // by itself and keeps its own key (only «Обновлено» asks for it, as before).
+  const shared = window === null ? null : shiftSalesQuery({ ...window, ...(page ? { pageLabel: page } : {}) });
+  return useQuery<ShiftSales, Error, ShiftSales, readonly unknown[]>({
+    queryKey: shared?.queryKey ?? ["people", "sales", window, page],
     queryFn: () => kernel.teamShiftSales({ query: { ...window!, ...(page ? { pageLabel: page } : {}) } }),
     enabled: window !== null,
     // A period going on moves: a shift earns. A closed one does not change.
@@ -313,8 +317,7 @@ function useNow() {
 /** The accounts (`adminListUsers`): the owner's only. */
 function useAccounts(enabled: boolean) {
   return useQuery({
-    queryKey: ["people", "accounts"] as const,
-    queryFn: () => kernel.adminListUsers(),
+    ...usersQuery,
     enabled,
     staleTime: MINUTE,
   });

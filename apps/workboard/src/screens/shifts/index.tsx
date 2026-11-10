@@ -5,6 +5,7 @@ import { Button, EmptyState, ErrorState, LinkButton, Notice } from "@agency_hub_
 import { formatDay, formatDayRange } from "@agency_hub_core/ui/format";
 import { addDays, daysInRange } from "@agency_hub_core/ui/moscow";
 import { currentWeek, stepWeek, withPeriod, type ResolvedPeriod } from "@agency_hub_core/ui/period";
+import { SHIFT_SALES_KEY, usersQuery } from "@/shared/reads";
 import { ScreenHeader } from "@/shared/ScreenHeader";
 import { usePageFilter } from "@/shared/usePageFilter";
 import { usePeriod } from "@/shared/usePeriod";
@@ -61,7 +62,11 @@ export function ShiftsScreen() {
 
   const refresh = () => {
     void queryClient.invalidateQueries({ queryKey: ["shifts"] });
+    // Every period's shifts with sales, as ["shifts"] covered before they became the entries Люди and Выплаты share.
+    void queryClient.invalidateQueries({ queryKey: SHIFT_SALES_KEY });
     void queryClient.invalidateQueries({ queryKey: ["decisions"] });
+    // Решения's people list, which ["decisions"] covered before it became the shared entry.
+    void queryClient.invalidateQueries({ queryKey: usersQuery.queryKey, exact: true });
   };
 
   let body;

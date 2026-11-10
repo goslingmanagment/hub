@@ -4,6 +4,7 @@ import { hubErrorStatus } from "@agency_hub_core/ui/hubClient";
 import { moscowDayOf, moscowToday } from "@agency_hub_core/ui/moscow";
 import { customsQuery, disputesQuery, heldSendsQuery } from "@/shared/decisions";
 import { kernel } from "@/shared/hub";
+import { SHIFT_SALES_KEY } from "@/shared/reads";
 
 /**
  * Решения — the data layer (spec §4.6). The screen reads only this file.
@@ -216,7 +217,7 @@ export function useSaleShifts(dispute: Pick<Dispute, "saleRef" | "occurredAt">) 
  */
 function isQueueKey(query: { queryKey: readonly unknown[] }): boolean {
   const [area, kind] = query.queryKey;
-  return area === "decisions" && kind !== "fan" && kind !== "users" && kind !== "sale-shifts";
+  return area === "decisions" && kind !== "fan" && kind !== "sale-shifts";
 }
 
 /** The owner's split of a disputed sale: the console's request (`teamShiftResolve`), its refresh widened to Workboard's keys. */
@@ -229,6 +230,8 @@ export function useResolveDispute() {
     onSettled: () => Promise.all([
       qc.invalidateQueries({ predicate: isQueueKey }),
       qc.invalidateQueries({ queryKey: ["payouts"] }),
+      // Выплаты' shifts with sales live in the entry Смены and Люди share for the same request.
+      qc.invalidateQueries({ queryKey: SHIFT_SALES_KEY }),
     ]),
   });
 }
