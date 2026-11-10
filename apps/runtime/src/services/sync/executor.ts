@@ -45,7 +45,6 @@ import {
   SYNC_PAGE_EXECUTE_RETRY_LIMIT,
   type SyncPageExecutePayload,
 } from "../sync-queue.ts";
-import { pageSyncDependencyInput } from "./dependencies.ts";
 import { buildNormalizedSyncError } from "./errors.ts";
 import { executeStreamChunk, resolveExecutorPageContext } from "./executor-handlers.ts";
 import { SyncChunkBudget } from "./chunk-budget.ts";
@@ -439,12 +438,11 @@ export async function executeNextSyncPageChunk(
   app: AppContext,
   platformAccountId: number,
 ): Promise<SyncPageChunkResult> {
-  const dependencyInput = pageSyncDependencyInput();
   // Only the platforms whose adapter declares streams (OnlyFans since step 4;
   // `sync/onlyfans/boundary.ts`): a stray wake-up for a Fansly page seeds,
   // repairs and leases nothing of its legacy state and goes idle.
   const platforms = legacyExecutorPlatforms();
-  await ensurePageSyncStates(app.db, { pageId: platformAccountId, platforms, ...dependencyInput });
+  await ensurePageSyncStates(app.db, { pageId: platformAccountId, platforms });
 
   const taskLease = await acquirePageSyncLease(app.db, {
     pageId: platformAccountId,
@@ -567,7 +565,6 @@ export async function executeNextSyncPageChunk(
           phase,
           workClass,
           progress,
-          ...dependencyInput,
         })
         : await completePageSync(app.db, {
           pageId: platformAccountId,
@@ -578,7 +575,6 @@ export async function executeNextSyncPageChunk(
           phase,
           workClass,
           progress,
-          ...dependencyInput,
         });
       if (!applied) {
         return buildLeaseLostResult(telemetry, platformAccountId, run.id);

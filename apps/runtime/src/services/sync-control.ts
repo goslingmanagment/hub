@@ -20,7 +20,6 @@ import { resolveStoredProxyEgressKey } from "./page-context.ts";
 import { appPlatformRegistry } from "../platforms/registry.ts";
 import { isLegacyExecutorPlatform } from "../sync/onlyfans/boundary.ts";
 import { sendSyncPageWakeup, type SyncTriggerScope } from "./sync-queue.ts";
-import { pageSyncDependencyInput } from "./sync/dependencies.ts";
 import {
   filterOnlyFansAudienceStreams,
   pauseUnmappedOnlyFansAudienceForPage,
@@ -100,12 +99,10 @@ export async function requestPageSync(
     storedPage.page,
   );
   const now = new Date();
-  const dependencyInput = pageSyncDependencyInput();
   await ensurePageSyncStates(app.db, {
     pageId: storedPage.page.id,
     onboarding: input.reason === "onboarding",
     now,
-    ...dependencyInput,
   });
   if (storedPage.page.platform === "onlyfans") {
     await pauseUnmappedOnlyFansDmForPage(app, storedPage.page.id, now);
@@ -141,7 +138,6 @@ export async function requestPageSync(
     streams,
     source: input.reason,
     now,
-    ...dependencyInput,
   });
   if (input.scope === "posts") {
     // requestPageSyncRows intentionally preserves a durable pause. The

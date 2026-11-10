@@ -19,7 +19,6 @@ import type { PgBoss } from "pg-boss";
 import type { AppContext } from "../bootstrap.ts";
 import { BadRequestError, ConflictError, LegacySyncRetiredError, NotFoundError } from "./errors.ts";
 import { resolveStoredProxyEgressKey } from "./page-context.ts";
-import { pageSyncDependencyInput } from "./sync/dependencies.ts";
 import {
   getSyncStatusSnapshot,
   SYNC_DOMAIN_BLOCKS,
@@ -440,7 +439,6 @@ export async function triggerSyncBlock(
   const now = input.now ?? new Date();
   const stored = await getPageOrThrow(app, input.pageLabel);
   assertLegacyOnlyFansHistoryNotRequested(stored.page.platform, input.block);
-  const dependencyInput = pageSyncDependencyInput();
   const engine = await engineOwnedSyncPage(app.db, stored.page.id);
   if (engine !== null) {
     return engineBlockResponse(
@@ -454,14 +452,12 @@ export async function triggerSyncBlock(
   await ensurePageSyncStates(app.db, {
     pageId: stored.page.id,
     now,
-    ...dependencyInput,
   });
   const requests = await requestPageSyncRows(app.db, {
     pageId: stored.page.id,
     streams: tasks,
     source: "manual",
     now,
-    ...dependencyInput,
   });
   await enqueueBlockWakeup(boss, {
     platformAccountId: stored.page.id,
@@ -494,7 +490,6 @@ export async function pauseSyncBlock(
   const now = input.now ?? new Date();
   const stored = await getPageOrThrow(app, input.pageLabel);
   assertLegacyOnlyFansHistoryNotRequested(stored.page.platform, input.block);
-  const dependencyInput = pageSyncDependencyInput();
   const engine = await engineOwnedSyncPage(app.db, stored.page.id);
   if (engine !== null) {
     return engineBlockResponse(
@@ -508,7 +503,6 @@ export async function pauseSyncBlock(
   await ensurePageSyncStates(app.db, {
     pageId: stored.page.id,
     now,
-    ...dependencyInput,
   });
   await pausePageSync(app.db, {
     pageId: stored.page.id,
@@ -536,7 +530,6 @@ export async function resumeSyncBlock(
   const now = input.now ?? new Date();
   const stored = await getPageOrThrow(app, input.pageLabel);
   assertLegacyOnlyFansHistoryNotRequested(stored.page.platform, input.block);
-  const dependencyInput = pageSyncDependencyInput();
   const engine = await engineOwnedSyncPage(app.db, stored.page.id);
   if (engine !== null) {
     return engineBlockResponse(
@@ -550,7 +543,6 @@ export async function resumeSyncBlock(
   await ensurePageSyncStates(app.db, {
     pageId: stored.page.id,
     now,
-    ...dependencyInput,
   });
   const currentStates = await listPageSyncStates(app.db, {
     pageId: stored.page.id,
@@ -573,7 +565,6 @@ export async function resumeSyncBlock(
       streams: resumableTasks,
       source: "manual",
       now,
-      ...dependencyInput,
     })
     : [];
   if (resumableTasks.length > 0) {
@@ -631,13 +622,11 @@ export async function resetSyncBlock(
   }
 
   const now = input.now ?? new Date();
-  const dependencyInput = pageSyncDependencyInput();
   const tasks = legacyBlockTasks(stored.page.platform, input.block);
 
   await ensurePageSyncStates(app.db, {
     pageId: stored.page.id,
     now,
-    ...dependencyInput,
   });
   const requests = await app.db.transaction(async (tx) => {
     const dbTx = tx as typeof app.db;
@@ -661,7 +650,6 @@ export async function resetSyncBlock(
       streams: tasks,
       source: "reset",
       now,
-      ...dependencyInput,
     });
   });
   await enqueueBlockWakeup(boss, {
