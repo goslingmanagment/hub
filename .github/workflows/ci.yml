@@ -153,8 +153,8 @@ jobs:
   # Five parts side by side, each on a 4-vCPU runner of its own:
   #   typecheck  contracts freshness + tsc;
   #   lint       ESLint (family standard + architecture walls);
-  #   unit k/2   half of the reliable unit tests (vitest --shard; a couple
-  #              start a test Postgres);
+  #   unit k/2   half of the reliable unit tests (vitest --shard; no test
+  #              Postgres);
   #   image      the production image build (BuildKit with the GitHub Actions
   #              layer cache) and its smokes — no pnpm install: the image
   #              builds from the checkout.
@@ -181,12 +181,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
-
-      # The unit parts: the test Postgres image downloads while pnpm installs,
-      # instead of after it (tests/helpers/global-setup.ts starts it).
-      - name: Pull the test Postgres image in the background
-        if: startsWith(matrix.part, 'unit')
-        run: nohup docker pull --quiet postgres:16 > "$RUNNER_TEMP/postgres-pull.log" 2>&1 &
 
       # pnpm version comes from package.json "packageManager" — one pin, no
       # drift. The action wipes its install directory first, so it stays in
@@ -239,11 +233,11 @@ jobs:
         if: matrix.part == 'lint'
         run: pnpm lint
 
-      # NOTE: this step still starts Postgres containers — tests/voice-profiles
-      # and tests/voice-notes-sweep are DB-backed despite not being named
-      # *.integration.test.ts, so they are not in the --exclude list. One
-      # worker per vCPU (vitest defaults to CPUs - 1): the part has the
-      # runner to itself.
+      # No test Postgres here: test:unit sets HUB_TEST_POSTGRES=off, and a
+      # unit file that needs a database fails ("no test Postgres was
+      # provided") — DB-backed files are *.integration.test.ts. One worker
+      # per vCPU (vitest defaults to CPUs - 1): the part has the runner to
+      # itself.
       - name: Reliable unit tests (${{ matrix.part }})
         if: startsWith(matrix.part, 'unit')
         env:
