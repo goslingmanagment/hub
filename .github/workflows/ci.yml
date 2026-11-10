@@ -393,7 +393,7 @@ jobs:
   # vitest against Testcontainers Postgres (multi-arch) and never build the
   # amd64 image. Testcontainers rather than a service container: a service
   # starts before the steps anyway, and the pull below already overlaps the
-  # install; tests/helpers/earnings-audit-psql.ts also execs into the cluster.
+  # install.
   #
   # A PR whose change needs no integration (the fingerprint job's
   # integration_needed is 'false', see scripts/ci-integration-scope.mjs) skips

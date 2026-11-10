@@ -1,4 +1,3 @@
-import { spawn } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { createServer, type IncomingHttpHeaders, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { connect, type AddressInfo, type Socket } from "node:net";
@@ -941,10 +940,6 @@ export async function ensureHarnessSettingTable(pool: Pool, settingMs: number): 
   `);
 }
 
-export async function setHarnessSetting(pool: Pool, settingMs: number): Promise<void> {
-  await pool.query("update sync_test_setting set ms = $1 where id = 1", [Math.trunc(settingMs)]);
-}
-
 /** S read fresh per admission, as `loadEffectiveConfig` reads the live key. */
 export function harnessPauseSource(pool: Pool): PauseSource {
   return {
@@ -967,15 +962,6 @@ export function harnessPauseSource(pool: Pool): PauseSource {
 export function harnessRng(seed: number): Rng {
   const random = seededRandom(seed);
   return { next: () => 0.5 + random() / 2 };
-}
-
-/** A clock whose sleeps return `earlyMs` early (timers that fire early). */
-export function earlyWakingClock(base: Clock, earlyMs: number): Clock {
-  return {
-    monoNow: () => base.monoNow(),
-    wallNow: () => base.wallNow(),
-    sleep: (ms, signal) => base.sleep(Math.max(0, ms - earlyMs), signal),
-  };
 }
 
 export interface TakeoverRecord {
@@ -1080,60 +1066,4 @@ export async function runActorUntil(
     made.stop.abort();
     await run;
   }
-}
-
-/** Run an actor for `ms`, then stop it gracefully. */
-export async function runActorFor(
-  made: { actor: { run(signals: { stop: AbortSignal; abort: AbortSignal }): Promise<unknown> }; stop: AbortController; abort: AbortController },
-  ms: number,
-): Promise<void> {
-  const run = made.actor.run({ stop: made.stop.signal, abort: made.abort.signal });
-  await sleep(ms);
-  made.stop.abort();
-  await run;
-}
-
-export interface SyncChild {
-  pid: number;
-  /** Resolves once the child printed "ready <pid>". */
-  ready: Promise<void>;
-  exited: Promise<{ code: number | null; signal: NodeJS.Signals | null }>;
-  stderr(): string;
-  kill(signal: NodeJS.Signals): void;
-}
-
-/**
- * `tests/helpers/sync-engine-child.ts <mode>` as a real process (kill -9,
- * SIGSTOP/SIGCONT, two processes on one page), with `env` added.
- */
-export function spawnSyncChild(mode: string, env: Record<string, string>): SyncChild {
-  const child = spawn(process.execPath, ["--import", "tsx/esm", "tests/helpers/sync-engine-child.ts", mode], {
-    env: { ...process.env, ...env },
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  let stderr = "";
-  child.stderr.on("data", (chunk: Buffer) => {
-    stderr += chunk.toString();
-  });
-  const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
-    child.on("exit", (code, signal) => resolve({ code, signal }));
-  });
-  const ready = new Promise<void>((resolve, reject) => {
-    let stdout = "";
-    child.stdout.on("data", (chunk: Buffer) => {
-      stdout += chunk.toString();
-      if (/^ready \d+/m.test(stdout)) resolve();
-    });
-    void exited.then((exit) => reject(new Error(`sync child exited before ready: ${JSON.stringify(exit)}\n${stderr}`)));
-  });
-  ready.catch(() => undefined);
-  return {
-    pid: child.pid ?? -1,
-    ready,
-    exited,
-    stderr: () => stderr,
-    kill: (signal) => {
-      child.kill(signal);
-    },
-  };
 }

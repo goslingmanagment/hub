@@ -1,6 +1,5 @@
 import {
   bindIdentityAttempt,
-  bindOnboardedProfile,
   findOnboardingProfile,
   recordOnboardingIdentity,
   requestOnboardingIdentity,
@@ -49,10 +48,4 @@ export async function proveOnboardingAccount(db: Database, profileId: string, ac
   }));
   if (!written) throw new Error("the identity was not recorded");
   return { requestId: requested.requestId, onboardingGeneration: profile.onboardingGeneration };
-}
-
-/** The profile proven and bound to `pageId` in one call. */
-export async function bindProvenProfile(db: Database, input: { profileId: string; pageId: number }): Promise<boolean> {
-  const proof = await proveOnboardingAccount(db, input.profileId);
-  return db.transaction((tx) => bindOnboardedProfile(tx as unknown as Database, { ...input, ...proof }));
 }

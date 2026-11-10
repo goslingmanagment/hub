@@ -322,12 +322,6 @@ export interface TestActorOptions {
   routeTimeScale?: number;
 }
 
-/** The route time scale that keeps the production ratio of the route budgets
- *  to the owner's pause (S = 2 500 ms) at a test pause of `settingMs`. */
-export function routeTestScale(settingMs: number): number {
-  return settingMs / 2_500;
-}
-
 /** Acquire the page and build an actor on it with a small test setting. */
 export async function makeTestActor(options: TestActorOptions): Promise<{
   actor: SyncActor;

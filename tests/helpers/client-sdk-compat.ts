@@ -116,31 +116,6 @@ export async function checkedAnswer<T>(sdk: FrozenSdk, operation: string, respon
   return body as T;
 }
 
-/**
- * A route whose manifest path has a literal colon (`/api/v2/spenders:batch`):
- * the SDK's path builder takes `:batch` for a parameter, so chat-extension
- * sends it itself with the manifest's method, auth and headers
- * (packages/hub/src/sdk-transport.ts sendLiteralPath).
- */
-export async function literalPathChecked<T = Record<string, unknown>>(
-  sdk: FrozenSdk,
-  options: FrozenClientOptions,
-  operation: string,
-  body: unknown,
-): Promise<T> {
-  const def = sdk.kernelOperations[operation]!;
-  const response = await fetch(`${options.baseUrl}${def.path}`, {
-    method: def.method,
-    headers: {
-      ...options.headers,
-      ...(options.auth ? { authorization: `Bearer ${options.auth.token()}` } : {}),
-      "content-type": "application/json",
-    },
-    body: JSON.stringify(body),
-  });
-  return await checkedAnswer<T>(sdk, operation, response, 200);
-}
-
 /** Resolves to the KernelApiError the call was expected to raise. */
 export async function failure(sdk: FrozenSdk, pending: Promise<unknown>): Promise<FrozenKernelApiError> {
   const error = await pending.then(() => null, (reason: unknown) => reason);
@@ -202,20 +177,11 @@ export const COMPAT_OWNER = { username: "compat-owner", password: "compat-owner-
 export const COMPAT_ARCHIVE = { onlyfans: "compat archive line", onlyfansFollower: "compat follower line" } as const;
 /** The completion the capturing AI provider streams for every feature. */
 export const COMPAT_COMPLETION = "compat reply";
-/** The features whose prompt the Split toggle changes for a released client
- * (FEATURE_POLICIES.supportsReplyMode): Reply and Fix. */
-export const SPLIT_FEATURES: ReadonlySet<string> = new Set(["fast-reply", "improve-draft"]);
 
 export interface CompatPersona {
   key: string;
   definitionId: string;
 }
-
-/** The operations the suite's shared core calls for every row (the compat
- * test's health, shared-reads, stream and error checks). */
-export const COMPAT_SHARED_OPERATIONS: readonly string[] = [
-  "health", "me", "pages", "aiPersonaCatalog", "aiRecapStatus", "spenders", "ingestObservations", "aiFeatureStream",
-];
 
 /** One AI request exactly as a released client sends it. */
 export interface LaneCall {

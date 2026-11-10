@@ -35,13 +35,6 @@ export function policySignedUrl(path: string, expiresAt: Date) {
     + "&Signature=SYNTHETIC~SIGNATURE__&Key-Pair-Id=SYNTHETICKEYPAIR";
 }
 
-export function fansapiCacheUrl(path: string, signedAt: Date, ttlSeconds = 3600) {
-  const stamp = signedAt.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z");
-  return `https://cdn.fansapi.com/of/cdn2/files/${path}?X-Amz-Algorithm=AWS4-HMAC-SHA256`
-    + `&X-Amz-Credential=SYNTHETIC&X-Amz-Date=${stamp}&X-Amz-Expires=${ttlSeconds}`
-    + "&X-Amz-SignedHeaders=host&X-Amz-Signature=synthetic";
-}
-
 type UrlMaker = (path: string, expiresAt: Date) => string;
 
 export function photoMedia(id: number, sign: UrlMaker, expiresAt: Date, overrides: Record<string, unknown> = {}) {
@@ -111,9 +104,4 @@ export function syntheticChatMediaPage(media: unknown[], messageId = 2000002) {
     },
     _meta: { _credits: { used: 1, balance: 1000 } },
   };
-}
-
-/** A `GET /{acct}/media/vault` page. */
-export function syntheticVaultPage(media: unknown[]) {
-  return { data: { list: media, hasMore: false }, _meta: { _credits: { used: 1, balance: 1000 } } };
 }
