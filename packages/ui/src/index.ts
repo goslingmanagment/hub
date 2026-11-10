@@ -38,7 +38,7 @@ export { Notice, type NoticeTone } from "./components/Notice.js";
 export { PageLabel, PageLabels, platformWord, type PageLabelProps } from "./components/PageLabel.js";
 export { PeriodControl } from "./components/PeriodControl.js";
 export { RateBar, type RateBarProps } from "./components/RateBar.js";
-export { PERSON_STATUS_WORD, Person, type PersonStatus } from "./components/Person.js";
+export { Person, type PersonStatus } from "./components/Person.js";
 export { SearchInput, type SearchInputProps } from "./components/SearchInput.js";
 export { Segmented, type SegmentedOption } from "./components/Segmented.js";
 export { Skeleton, SkeletonText, Spinner } from "./components/Skeleton.js";

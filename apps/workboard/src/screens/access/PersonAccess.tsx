@@ -45,7 +45,9 @@ import "./access.css";
  * the console's request with the console's words; questions are only added —
  * removing a page, ending a device's sign-in, a password reset link, revoking a
  * link — and deleting the account (the owner's stop list) sits at the very
- * bottom, folded, behind typing the login.
+ * bottom, folded, behind typing the login. Shown by «Люди» in the «Доступ» tab
+ * of a person's card and by «Доступ» in its side panel. The owner's only: Hub
+ * refuses everyone else, and the panel says so itself for a team lead.
  */
 
 export interface PersonAccessProps {

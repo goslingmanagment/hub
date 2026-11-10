@@ -300,10 +300,6 @@ export function demoFans(label: string): DemoFan[] {
   return world;
 }
 
-export function demoFan(label: string, platformUserId: string): DemoFan | undefined {
-  return demoFans(label).find((fan) => fan.platformUserId === platformUserId);
-}
-
 // --- Money over time ---
 
 /** What of a day's usual money an OnlyFans page still has: all of it through the

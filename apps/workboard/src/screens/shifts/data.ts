@@ -26,9 +26,10 @@ import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { CHATTER_SHIFT_PAGE_MIN_MESSAGES, type KernelOperationResponse } from "@agency_hub_core/contracts";
 import { addDays, daysInRange, moscowDayEnd, moscowDayOf, moscowDayStart, type MoscowDay } from "@agency_hub_core/ui/moscow";
 import { periodChunks, type ResolvedPeriod } from "@agency_hub_core/ui/period";
+import { median } from "@agency_hub_core/ui/shiftReview";
 import { shiftWhen, type ShiftWhen } from "@agency_hub_core/ui/shiftWhen";
 import { kernel } from "@/shared/hub";
-import { qualityOfChatterNumbers, type ShiftQuality } from "@/shared/metrics";
+import { perHourMills, qualityOfChatterNumbers, type ShiftQuality } from "@/shared/metrics";
 
 type SalesResponse = KernelOperationResponse<"teamShiftSales">;
 type SalesShift = SalesResponse["shifts"][number];
@@ -190,19 +191,6 @@ export interface NowState {
 }
 
 // ─────────────────────────────────────────────────────────── Pure helpers
-
-/** Money per worked hour, floored like Hub's (services/chatter-stats.ts `perHour`); null without worked time. */
-export function perHourMills(netMills: number, minutes: number): number | null {
-  if (minutes <= 0) return null;
-  return Number((BigInt(netMills) * 60n) / BigInt(minutes));
-}
-
-function median(values: readonly number[]): number | null {
-  if (values.length === 0) return null;
-  const sorted = [...values].sort((left, right) => left - right);
-  const middle = Math.floor(sorted.length / 2);
-  return sorted.length % 2 === 1 ? sorted[middle]! : (sorted[middle - 1]! + sorted[middle]!) / 2;
-}
 
 /** What Hub is asked for, for a period of the app. */
 export function shiftsWindow(period: ResolvedPeriod): ShiftsWindow {

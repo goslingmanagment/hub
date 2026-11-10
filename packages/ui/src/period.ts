@@ -159,10 +159,6 @@ export function stepWeek(spec: PeriodSpec, delta: -1 | 1, today: MoscowDay): Per
   return next > mondayOf(today) ? spec : { kind: "week", monday: next };
 }
 
-export function isSamePeriod(left: PeriodSpec, right: PeriodSpec): boolean {
-  return JSON.stringify(periodParams(left)) === JSON.stringify(periodParams(right));
-}
-
 /** A stretch of whole Moscow days inside a period: one column of a week grid over 14 or 30 days. */
 export interface DayChunk {
   from: MoscowDay;

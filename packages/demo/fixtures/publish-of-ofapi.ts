@@ -331,7 +331,7 @@ export function ofapiMarketing(now: Date): Marketing {
 const MEDIA_TOTALS: Readonly<Record<string, number>> = { "mia-of": 186, "mia-vip-of": 74 };
 const PHOTO_NAMES = ["IMG_", "DSC_", "mia_set_", "shoot_"] as const;
 
-function mediaItem(now: Date, page: DemoPage, index: number, observationId: number, observedAt: string): Media["media"][number] {
+function mediaItem(page: DemoPage, index: number, observationId: number, observedAt: string): Media["media"][number] {
   const random = rng(`ofmedia:${page.label}:${index}`);
   const video = random() < 0.28;
   const cdn = index % 23 === 7;
@@ -390,7 +390,7 @@ export function ofapiMedia(now: Date, page: DemoPage, offset: number, limit: num
       upload(2, "cdn", "complete", "completed", null, 54, 6),
     ]
     : [upload(1, "vault", "complete", "completed", null, 76, 11)];
-  const media = Array.from({ length: Math.max(0, Math.min(limit, total - offset)) }, (_, index) => mediaItem(now, page, offset + index, observationId, completedAt));
+  const media = Array.from({ length: Math.max(0, Math.min(limit, total - offset)) }, (_, index) => mediaItem(page, offset + index, observationId, completedAt));
   return {
     pageId: page.id,
     sources,

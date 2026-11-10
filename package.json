@@ -37,7 +37,7 @@
     "test:sync-critical:api": "NODE_OPTIONS=--max-old-space-size=8192 vitest run --no-file-parallelism tests/api.integration.test.ts --testNamePattern \"\\\\[sync-critical\\\\]\"",
     "test:coverage": "NODE_OPTIONS=--max-old-space-size=8192 vitest run --coverage",
     "test:api:full": "NODE_OPTIONS=--max-old-space-size=8192 vitest run --no-file-parallelism tests/api.integration.test.ts",
-    "typecheck": "tsc --noEmit && tsc -p apps/workboard/tsconfig.json",
+    "typecheck": "tsc --noEmit && tsc -p apps/workboard/tsconfig.json && tsc -p packages/demo/tsconfig.json",
     "lint": "eslint .",
     "check": "pnpm typecheck && pnpm lint && pnpm test:unit && pnpm --dir apps/dashboard build",
     "test:watch": "vitest",

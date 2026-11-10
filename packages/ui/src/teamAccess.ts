@@ -68,12 +68,6 @@ export const LINK_KIND_LABEL: Readonly<Record<LinkKind, string>> = {
   password_reset: "Сброс пароля",
 };
 
-/** The same in lower case, as the console's staff card writes it (its LINK_KIND_LABEL). */
-export const LINK_KIND_WORD: Readonly<Record<LinkKind, string>> = {
-  invite: "приглашение",
-  password_reset: "сброс пароля",
-};
-
 const LINK_REVOKED_REASON_LABEL: Readonly<Record<string, string>> = {
   superseded: "заменена новой",
   password_set: "пароль задан",

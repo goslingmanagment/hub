@@ -104,7 +104,7 @@ function slowShare(line: ReplyLine): number | null {
   return line.total.replies > 0 ? repliesIn(line, SLOW).replies / line.total.replies : null;
 }
 
-function lineColumns(lines: readonly ReplyLine[], all: ReplyLine, by: "pages" | "chatters"): Column<ReplyLine>[] {
+function lineColumns(all: ReplyLine, by: "pages" | "chatters"): Column<ReplyLine>[] {
   const fastOf = (line: ReplyLine) => ({ hits: repliesIn(line, FAST).replies, of: line.total.replies });
   const teamFast = share(fastOf(all));
   const teamSlow = slowShare(all);
@@ -213,7 +213,7 @@ export function SpeedTab() {
           </Section>
           {page === null && (
             <Section title={by === "pages" ? "По страницам" : "По чаттерам"} actions={<BySwitch value={by} onChange={setBy} />}>
-              <Table label="Скорость ответа по страницам" columns={skeletonColumns(lineColumns([], EMPTY_LINE, by))} rows={[]} rowKey={(line) => line.key} fit={false} loading skeletonRows={6} />
+              <Table label="Скорость ответа по страницам" columns={skeletonColumns(lineColumns(EMPTY_LINE, by))} rows={[]} rowKey={(line) => line.key} fit={false} loading skeletonRows={6} />
             </Section>
           )}
         </>
@@ -239,7 +239,7 @@ export function SpeedTab() {
           >
             <Table
               label={by === "pages" ? "Скорость ответа по страницам" : "Скорость ответа по чаттерам"}
-              columns={lineColumns(lines, view.all, by)}
+              columns={lineColumns(view.all, by)}
               rows={lines}
               rowKey={(line) => line.key}
               onRowClick={(line) => setOpen(line.key)}

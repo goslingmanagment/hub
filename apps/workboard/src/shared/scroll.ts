@@ -15,11 +15,6 @@ const positions = new Map<string, number>();
 /** The address the scroll events belong to: set in the commit that shows it. */
 let current = "";
 
-/** The scroll remembered for an address (`/shifts?week=2026-11-02`), 0 when none. */
-export function rememberedScroll(address: string): number {
-  return positions.get(address) ?? 0;
-}
-
 /**
  * Scrolls to `y` as soon as the page is tall enough: the screen may still be
  * growing (a list from the cache, a frame leaving the full-window mode). Gives

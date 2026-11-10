@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ShiftReviewChat, ShiftReviewMessage, TeamShiftReviewResponse } from "@agency_hub_core/contracts";
-import { chatBusyIn, fanReturnOf, myMessages, pulseOf, reviewWaits, salesByOrigin, salesSplit, showPasses, sortSummaries, summariesOf, totalsOf } from "@agency_hub_core/ui/shiftReview";
+import { chatBusyIn, fanReturnOf, myMessages, pulseOf, reviewWaits, salesByOrigin, salesSplit, summariesOf, totalsOf } from "@agency_hub_core/ui/shiftReview";
 
 // «Разбор смены»: whose a fan's wait is when a page is shared or handed over (2026-11-07). The first version counted
 // a colleague's chats, waits and money as the reviewed chatter's.
@@ -203,11 +203,6 @@ describe("shift review: whose a chat's money is", () => {
     const split = salesSplit(money);
     expect(split).toEqual({ netMills: 30_000, bothNetMills: 4_000, withoutChatNetMills: 5_000 });
     expect(summaries.reduce((sum, summary) => sum + summary.heldNetMills, 0) + split.withoutChatNetMills).toBe(money.shift.salesNetMills);
-  });
-
-  it("filters and orders by money by the chatter's share, not the colleague's", () => {
-    expect(sortSummaries(summaries, "money").slice(0, 2).map((summary) => summary.chat.key)).toEqual(["a", "b"]);
-    expect(showPasses(of("c"), "money")).toBe(false);
   });
 });
 
