@@ -1,14 +1,9 @@
-import { randomUUID } from "node:crypto";
-
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import {
-  advancePageOfapiAuthStatus,
   createModel,
   createOnlyFansPage,
-  createOrGetOfapiCommand,
   ensurePageSyncStates,
-  getOfapiCommandById,
   listPageSyncStates,
   listRunnablePageSync,
   requestPageSync,
@@ -16,9 +11,7 @@ import {
 } from "@agency_hub_core/db";
 
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
-import { createUserAccount } from "../apps/runtime/src/services/auth.ts";
 import { applyOfapiAccountHealthEvent } from "../apps/runtime/src/services/ofapi-account-health.ts";
-import { executeOfapiCommand } from "../apps/runtime/src/services/ofapi-command-executor.ts";
 import {
   resetIntegrationDatabase,
   startIntegrationTestDatabase,
@@ -152,52 +145,5 @@ describe("auth-dead pause wiring (Stage 26)", () => {
 
     const runnable = await listRunnablePageSync(appContext.db, new Date(), { platforms: EVERY_PLATFORM });
     expect(runnable.map((row) => row.pageId)).toContain(page.id);
-  }, INTEGRATION_TEST_TIMEOUT_MS);
-
-  it("commands fail fast on an auth-dead page without spending the one attempt", async (context) => {
-    if (!testDb) {
-      context.skip();
-      return;
-    }
-
-    const page = await seedMappedPage("lora-of-commands");
-    const chatter = await createUserAccount(appContext, {
-      username: "chatter",
-      role: "chatter",
-    }, { source: "cli" } as never);
-    if (!chatter) {
-      throw new Error("chatter account creation failed");
-    }
-
-    await advancePageOfapiAuthStatus(appContext.db, {
-      pageId: page.id,
-      authStatus: "authentication_failed",
-      changedAt: new Date(),
-    });
-
-    const sendTextMessage = vi.fn(async () => ({ messageId: "should-not-happen" }));
-    appContext.ofapi = { sendTextMessage } as unknown as AppContext["ofapi"];
-
-    const { row } = await createOrGetOfapiCommand(appContext.db, {
-      id: randomUUID(),
-      clientCommandId: randomUUID(),
-      pageId: page.id,
-      chatterUserId: chatter.id,
-      ofapiAccountId: ACCOUNT,
-      conversationId: "1001",
-      kind: "send_text_message_v1",
-      payload: { text: "must never leave" },
-      payloadHash: "a".repeat(64),
-    });
-
-    const result = await executeOfapiCommand(appContext, row.id);
-    expect(result).toMatchObject({ status: "failed_terminal", commandId: row.id });
-    expect(sendTextMessage).not.toHaveBeenCalled();
-
-    const settled = await getOfapiCommandById(appContext.db, { commandId: row.id });
-    expect(settled).toMatchObject({
-      state: "failed_terminal",
-      lastErrorCode: "ofapi_auth_action_required",
-    });
   }, INTEGRATION_TEST_TIMEOUT_MS);
 });

@@ -42,7 +42,6 @@ import {
   runOfapiSubscriptionProjectionForSettledRow,
   sweepOfapiSubscriptionProjections,
 } from "./ofapi-subscription-projection.ts";
-import { verifyOfapiCommandFromSentWebhook } from "./ofapi-command-executor.ts";
 import {
   asRecord,
   idToString,
@@ -104,12 +103,6 @@ type SettledOfapiEventRow = Parameters<typeof runOfapiDmColdArchiveForSettledRow
 async function runPostSettleOfapiProjections(app: AppContext, row: SettledOfapiEventRow) {
   const settledRow = await getOfapiWebhookEventById(app.db, row.id);
   const projectionRow = (settledRow ?? row) as SettledOfapiEventRow;
-  await verifyOfapiCommandFromSentWebhook(app, projectionRow).catch((error) => {
-    app.logger.warn(
-      { err: error, eventId: projectionRow.id },
-      "OFAPI command webhook verification failed; continuing",
-    );
-  });
   await runOfapiDmColdArchiveForSettledRow(app, projectionRow);
   await runOfapiDmProjectionForSettledRow(app, projectionRow);
   await runOfapiSubscriptionProjectionForSettledRow(app, projectionRow);

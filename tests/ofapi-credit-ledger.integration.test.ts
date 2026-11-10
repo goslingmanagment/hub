@@ -272,7 +272,7 @@ describe("ofapi credit ledger integration", () => {
     });
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
-  it("R4 retains confirmed send spend through both accounting failures and restart without resending", async () => {
+  it("R4 retains confirmed paid spend through both accounting failures and restart without resending", async () => {
     const baseUrl = await startScriptedOfapiServer();
     expect(baseUrl).not.toBeNull();
     await testDb!.pool.query(`
@@ -284,13 +284,13 @@ describe("ofapi credit ledger integration", () => {
     try {
       const firstClient = buildClient(baseUrl!, appContext);
       scriptResponse({ status: 200, body: metaBody({ id: "9001" }, { used: 3, balance: 3997 }) });
-      await expect(firstClient.sendTextMessage!({}, "acct_credits", "1", { text: "one attempt" }))
-        .resolves.toEqual({ messageId: "9001", creditAccounting: "pending" });
+      await expect(firstClient.createWebhook({ endpointUrl: "https://hub.test", signingSecret: "test", events: [], accountScope: "global" }))
+        .resolves.toEqual({ id: "9001", creditAccounting: "pending" });
       expect(await listLedgerRows()).toHaveLength(0);
       const receipts = await testDb!.pool.query("select observation, accounted_at from ofapi_credit_receipts");
       expect(receipts.rows).toHaveLength(1);
       expect(receipts.rows[0]).toMatchObject({ accounted_at: null, observation: {
-        credits: 3, estimated: false, balanceAfter: 3997, operation: "ofapi_command_send_text", attemptNumber: 1,
+        credits: 3, estimated: false, balanceAfter: 3997, operation: "ofapi_webhook_crud", attemptNumber: 1,
       } });
       // Fresh client has no process-local latch: the durable receipt alone
       // prevents egress, and a queued provider response remains unconsumed.
