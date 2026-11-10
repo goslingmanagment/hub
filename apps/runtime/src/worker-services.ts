@@ -1,12 +1,11 @@
 import { startFanslyWsLiveTimer } from "./services/fansly-ws/live-apply.ts";
 import { routeFanslyWsReceiptDemand } from "./sync/fansly/ws/route-receipt.ts";
-import { ensureOfapiMediaQueue, OFAPI_MEDIA_SWEEP_QUEUE, runOfapiMediaUploadSweep } from "./services/ofapi-media-worker.ts";
-import { ensureOfapiBindingReconcileQueue, OFAPI_BINDING_RECONCILE_QUEUE, runOfapiBindingReconcile } from "./services/ofapi-binding-reconcile.ts";
-import { ensureOfapiCollectionQueues, startOfapiCollectionWorker } from "./services/ofapi-collection-runner.ts";
+import { OFAPI_MEDIA_SWEEP_QUEUE, runOfapiMediaUploadSweep } from "./services/ofapi-media-worker.ts";
+import { OFAPI_BINDING_RECONCILE_QUEUE, runOfapiBindingReconcile } from "./services/ofapi-binding-reconcile.ts";
+import { startOfapiCollectionWorker } from "./services/ofapi-collection-runner.ts";
 import { ofapiCollectionHandlers } from "./services/ofapi-collection-handlers.ts";
-import { ensureOfapiTypedExportQueue, OFAPI_TYPED_EXPORT_SWEEP_QUEUE, runOfapiTypedExportSweep } from "./services/ofapi-typed-export-worker.ts";
+import { OFAPI_TYPED_EXPORT_SWEEP_QUEUE, runOfapiTypedExportSweep } from "./services/ofapi-typed-export-worker.ts";
 import {
-  ensurePublicationFilesRetentionQueue,
   PUBLICATION_FILES_RETENTION_QUEUE,
   runPublicationFileRetention,
 } from "./services/publication-files.ts";
@@ -26,64 +25,52 @@ import type { AppContext } from "./bootstrap.ts";
 import { writeRuntimeHealthFile } from "./services/runtime-heartbeat.ts";
 import {
   DB_DISK_USAGE_CHECK_QUEUE,
-  ensureDbDiskUsageQueue,
   runDbDiskUsageCheck,
 } from "./services/db-disk-alert.ts";
 import {
   MODEL_APPLICATION_ABANDON_SWEEP_QUEUE,
-  ensureModelApplicationAbandonSweepQueue,
   runModelApplicationAbandonSweep,
 } from "./services/model-application-sessions.ts";
 import {
   CLIENT_SEND_ARCHIVE_SWEEP_QUEUE,
-  ensureClientSendArchiveSweepQueue,
   runClientSendArchiveSweep,
 } from "./services/client-send-custody-archive.ts";
 import {
   OBSERVATIONS_PARTITIONS_QUEUE,
-  ensureObservationsPartitionQueue,
   runObservationsPartitionCheck,
 } from "./services/observations-partitions.ts";
 import {
   CAPTURE_PAYLOAD_PARITY_QUEUE,
-  ensureCapturePayloadParityQueue,
   runCapturePayloadParityCheck,
 } from "./services/capture-payload-parity.ts";
 import {
   CANONICALIZE_SWEEP_BUDGET_MS,
   CANONICALIZE_SWEEP_QUEUE,
   DM_RECONCILE_SWEEP_QUEUE,
-  ensureCanonicalizeQueues,
   runCanonicalization,
 } from "./services/canonicalize-driver.ts";
 import {
   MESSAGE_ARCHIVE_SWEEP_QUEUE,
-  ensureMessageArchiveQueues,
 } from "./services/projections/message-archive.ts";
 import {
   VOICE_NOTES_SWEEP_QUEUE,
-  ensureVoiceNotesSweepQueue,
   runVoiceNotesNightlyRetention,
   runVoiceNotesSweep,
 } from "./services/voice-notes-sweep.ts";
 import {
   VOICE_PROVIDER_HEALTH_QUEUE,
-  ensureVoiceProviderHealthQueue,
   runVoiceProviderHealthCheck,
 } from "./services/voice-provider-health.ts";
 import {
   AI_BALANCE_WATCH_QUEUE,
-  ensureAiBalanceWatchQueue,
   runAiBalanceWatch,
 } from "./services/ai-balance-watch.ts";
 import {
   PUBLICATIONS_ONLYFANS_QUEUE,
-  ensurePublicationsOnlyfansQueue,
   runOnlyfansPublishingTick,
 } from "./services/publications-onlyfans.ts";
 import {
   PUBLICATIONS_ONLYFANS_CHECKS_QUEUE,
-  ensurePublicationsOnlyfansChecksQueue,
   runOnlyfansChecksTick,
 } from "./services/publications-onlyfans-checks.ts";
 import { refreshOnlyfansQueueSnapshots } from "./services/publications-onlyfans-queue.ts";
@@ -92,14 +79,12 @@ import { followFanslyDeletions } from "./services/publications-fansly-delete.ts"
 import { followFanslyWithdrawals } from "./services/publications-fansly-withdraw.ts";
 import {
   PUBLICATIONS_FANSLY_QUEUE,
-  ensurePublicationsFanslyQueue,
   fanslyFollowUntil,
   followFanslyCreates,
   runFanslyPublishingTick,
 } from "./services/publications-fansly.ts";
 import {
   AI_MEDIA_DESCRIBE_SWEEP_QUEUE,
-  ensureAiMediaDescribeSweepQueue,
   runAiMediaDescribeSweepJob,
 } from "./services/ai-media-describe/sweep.ts";
 import { startAiMediaDescribeLoop } from "./services/ai-media-describe/loop.ts";
@@ -112,64 +97,54 @@ import {
 } from "./services/projections/registry.ts";
 import { startDomainEventsSmokeConsumer } from "./services/domain-events-smoke.ts";
 import {
-  ensureOfapiChargebacksQueue,
   startOfapiChargebacksWorker,
 } from "./services/ofapi-chargebacks-sync.ts";
 import {
-  ensureOfapiFanAccountCheckQueue,
   startOfapiFanAccountCheckWorker,
 } from "./services/ofapi-fan-account-check.ts";
 import {
-  ensureOfapiLinkStatsQueue,
   queueOfapiLinkStatsRunsAfterRebind,
   startOfapiLinkStatsWorker,
 } from "./services/ofapi-link-stats-sync.ts";
 import {
-  ensureOfapiPendingReconcileQueue,
   startOfapiPendingReconcileWorker,
 } from "./services/ofapi-pending-reconcile.ts";
 import {
-  ensureOfapiCreditQueues,
   startOfapiCreditWorker,
 } from "./services/ofapi-credits.ts";
 import {
-  ensureOfapiCommandQueues,
   startOfapiCommandWorker,
 } from "./services/ofapi-command-executor.ts";
 import {
-  ensureOfapiQueues,
   startOfapiEventWorker,
 } from "./services/ofapi-events.ts";
 import { sendDailyRevenueTelegramReport } from "./services/telegram-report.ts";
 import {
   AGENT_HYDRATION_QUEUE,
-  ensureAgentHydrationQueue,
   runAgentHydrationCycle,
 } from "./services/agent-hydration.ts";
 import { startSyncPageExecutor } from "./services/sync/executor.ts";
 import { runSyncPlannerCycle } from "./services/sync/planner.ts";
 import {
   CRON_SWEEP_WORK_OPTIONS,
-  ensureSyncQueues,
   reconcileQueueRetention,
   RAW_PAYLOAD_CLEANUP_QUEUE,
   SYNC_PLANNER_QUEUE,
   TELEGRAM_DAILY_REPORT_QUEUE,
 } from "./services/sync-queue.ts";
-import { ensureOpsMetricsQueue, startGoldenSignalWorker } from "./services/golden-signals.ts";
+import { startGoldenSignalWorker } from "./services/golden-signals.ts";
+import { ensureAllQueues } from "./services/schedules.ts";
 import {
-  ensureNotificationDeliveryOutboxQueue,
   startNotificationDeliveryOutboxWorker,
 } from "./services/notification-delivery-outbox.ts";
 import {
-  ensureNotificationPagingSweepQueue,
   startNotificationPagingSweepWorker,
 } from "./services/notification-paging-sweep.ts";
 import { sendScheduledAlertDigest } from "./services/notification-digest.ts";
-import { CHAT_HISTORY_TOP_UP_QUEUE, ensureChatHistoryTopUpQueue, runChatHistoryTopUp } from "./services/chat-history-top-up.ts";
-import { ensureFanslyBlocklistQueue, FANSLY_BLOCKLIST_QUEUE, runFanslyBlocklistRead } from "./services/fansly-blocklist/reader.ts";
-import { FAN_FACTS_QUEUE, ensureFanFactsQueue, resolveFanFactsClientFactory, runFanFactsSweep } from "./services/fan-facts/lane.ts";
-import { AI_PROVIDER_REPORTS_QUEUE, ensureAiProviderReportsQueue, syncAiProviderReports } from "./services/ai-provider-reports.ts";
+import { CHAT_HISTORY_TOP_UP_QUEUE, runChatHistoryTopUp } from "./services/chat-history-top-up.ts";
+import { FANSLY_BLOCKLIST_QUEUE, runFanslyBlocklistRead } from "./services/fansly-blocklist/reader.ts";
+import { FAN_FACTS_QUEUE, resolveFanFactsClientFactory, runFanFactsSweep } from "./services/fan-facts/lane.ts";
+import { AI_PROVIDER_REPORTS_QUEUE, syncAiProviderReports } from "./services/ai-provider-reports.ts";
 
 const WORKER_RESTART_ERROR_SUMMARY = "Worker restarted";
 const WORKER_HEALTH_WRITE_INTERVAL_MS = 30_000;
@@ -229,7 +204,6 @@ export async function startWorkerServices(
     processStartedAt?: Date;
   },
 ) {
-  const createdQueues = new Set<string>();
   const abortController = new AbortController();
   const processStartedAt = input?.processStartedAt ?? new Date();
   const cleanupFinishedAt = new Date();
@@ -255,37 +229,7 @@ export async function startWorkerServices(
   }
 
   await boss.start();
-  await ensureSyncQueues(boss, createdQueues);
-  await ensureOfapiQueues(boss, createdQueues);
-  await ensureOfapiCreditQueues(boss, createdQueues);
-  await ensureOfapiChargebacksQueue(boss, createdQueues);
-  await ensureOfapiFanAccountCheckQueue(boss, createdQueues);
-  await ensureOfapiLinkStatsQueue(boss, createdQueues);
-  await ensureOfapiPendingReconcileQueue(boss, createdQueues);
-  await ensureOfapiCommandQueues(boss, createdQueues);
-  await ensureOfapiTypedExportQueue(boss, createdQueues);
-  await ensureOfapiMediaQueue(boss, createdQueues);
-  await ensureOfapiBindingReconcileQueue(boss, createdQueues);
-  await ensureOfapiCollectionQueues(boss, createdQueues);
-  await ensureDbDiskUsageQueue(boss, createdQueues);
-  await ensureModelApplicationAbandonSweepQueue(boss, createdQueues);
-  await ensureClientSendArchiveSweepQueue(boss, createdQueues);
-  await ensureObservationsPartitionQueue(boss, createdQueues);
-  await ensureCapturePayloadParityQueue(boss, createdQueues);
-  await ensureCanonicalizeQueues(boss, createdQueues);
-  await ensureMessageArchiveQueues(boss, createdQueues);
-  await ensureVoiceNotesSweepQueue(boss, createdQueues);
-  await ensureVoiceProviderHealthQueue(boss, createdQueues);
-  await ensureAiBalanceWatchQueue(boss, createdQueues);
-  await ensurePublicationsOnlyfansQueue(boss, createdQueues);
-  await ensurePublicationsOnlyfansChecksQueue(boss, createdQueues);
-  await ensurePublicationsFanslyQueue(boss, createdQueues);
-  await ensureAiMediaDescribeSweepQueue(boss, createdQueues);
-  await ensureOpsMetricsQueue(boss, createdQueues);
-  await ensureNotificationDeliveryOutboxQueue(boss, createdQueues);
-  await ensureNotificationPagingSweepQueue(boss, createdQueues);
-  await ensureAgentHydrationQueue(boss, createdQueues);
-  await ensurePublicationFilesRetentionQueue(boss, createdQueues);
+  await ensureAllQueues(boss, new Set<string>());
   // S7: LAST, after every queue above exists — updateQueue on a queue that has
   // not been created yet matches zero rows.
   await reconcileQueueRetention(boss);
@@ -416,14 +360,12 @@ export async function startWorkerServices(
   // upload cache on disk, never a collected fact; the rows stay.
   // Chat Memory: every 15 minutes, a history request for each Fansly page's
   // chats where the fan wrote in the last day and the history is not proven full.
-  await ensureChatHistoryTopUpQueue(boss, createdQueues);
   await boss.work(CHAT_HISTORY_TOP_UP_QUEUE, CRON_SWEEP_WORK_OPTIONS, async () => {
     await runChatHistoryTopUp(app);
   });
 
   // Fan marks: every 10 minutes the FANSLY BLOCKLIST group, read-only, with
   // the agency's own Telegram account; off while TG_READER_SESSION is empty.
-  await ensureFanslyBlocklistQueue(boss, createdQueues);
   await boss.work(FANSLY_BLOCKLIST_QUEUE, CRON_SWEEP_WORK_OPTIONS, async () => {
     try {
       await runFanslyBlocklistRead(app);
@@ -436,7 +378,6 @@ export async function startWorkerServices(
 
   // Chat Memory: the facts lane, one AI run per quiet conversation of the listed
   // pages, behind fanFactsEnabled (off by default) and its daily cap.
-  await ensureFanFactsQueue(boss, createdQueues);
   const fanFactsClientFactory = resolveFanFactsClientFactory(app);
   await boss.work(FAN_FACTS_QUEUE, CRON_SWEEP_WORK_OPTIONS, async () => {
     await runFanFactsSweep(app, { clientFactory: fanFactsClientFactory });
@@ -444,7 +385,6 @@ export async function startWorkerServices(
 
   // Anthropic's own reports (Admin API) for the reconciliation on the usage
   // screen: hourly, the last 8 UTC days; idle without ANTHROPIC_ADMIN_KEYS.
-  await ensureAiProviderReportsQueue(boss, createdQueues);
   await boss.work(AI_PROVIDER_REPORTS_QUEUE, CRON_SWEEP_WORK_OPTIONS, async () => {
     if ((app.config.anthropicAdminKeys ?? []).length === 0) return;
     const results = await syncAiProviderReports(app);
