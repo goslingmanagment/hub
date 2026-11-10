@@ -2,6 +2,8 @@ import { createHash } from "node:crypto";
 import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
 
+import { sql } from "drizzle-orm";
+
 import {
   findOnboardingProfile,
   findPageBrowserByPage,
@@ -144,6 +146,75 @@ export async function readPageBrowserLinkSettings(
   };
 }
 
+/** The rows a link revision is made of, read in one statement: the page's
+ *  browser profile (null: none bound), the page's account (null: the page is
+ *  not active) and its proxy row as stored (null: none), with the profile's
+ *  pin and environment as stored. */
+interface LinkRevisionRow {
+  profile: { id: string; container: string; token: string; pinnedExitIp: string | null; env: Record<string, unknown> | null } | null;
+  account: string | null;
+  proxy: { id: number; url: string; auth: string | null; keyVersion: number | null } | null;
+}
+
+async function readLinkRevisionRow(db: Database, pageId: number): Promise<LinkRevisionRow> {
+  // Started from the page id, so a page with no browser profile still reads
+  // its account and proxy (as `findPageBrowserByPage` + `findPageById` did).
+  // egress_endpoints.platform_account_id and page_browsers.page_id are UNIQUE:
+  // the joins add at most one row each.
+  const result = await db.execute<{
+    profileId: string | null;
+    container: string | null;
+    token: string | null;
+    pinnedExitIp: string | null;
+    env: unknown;
+    account: string | null;
+    proxyId: string | null;
+    proxyUrl: string | null;
+    proxyAuth: string | null;
+    proxyKeyVersion: number | null;
+  }>(sql`
+    select b.profile_id::text as "profileId",
+           b.container,
+           b.encrypted_engine_token as "token",
+           b.pinned_exit_ip as "pinnedExitIp",
+           b.env,
+           p.external_page_id as "account",
+           e.id::text as "proxyId",
+           e.url as "proxyUrl",
+           e.encrypted_auth as "proxyAuth",
+           e.key_version as "proxyKeyVersion"
+      from (select ${pageId}::bigint as id) x
+      left join page_browsers b on b.page_id = x.id
+      left join pages p on p.id = x.id and p.status = 'active'
+      left join egress_endpoints e on e.platform_account_id = p.id
+  `);
+  const row = result.rows[0]!;
+  return {
+    profile: row.profileId === null
+      ? null
+      : {
+          id: row.profileId,
+          container: row.container!,
+          token: row.token!,
+          pinnedExitIp: row.pinnedExitIp,
+          env: row.env !== null && typeof row.env === "object" && !Array.isArray(row.env) ? row.env as Record<string, unknown> : null,
+        },
+    account: row.account,
+    proxy: row.proxyId === null
+      ? null
+      : { id: Number(row.proxyId), url: row.proxyUrl!, auth: row.proxyAuth, keyVersion: row.proxyKeyVersion },
+  };
+}
+
+function linkRevisionOf(row: LinkRevisionRow, page: PageBrowserPageSettings): string {
+  return createHash("sha256").update(JSON.stringify({
+    profile: row.profile === null ? null : { id: row.profile.id, container: row.profile.container, token: row.profile.token },
+    account: row.account,
+    proxy: row.proxy,
+    page,
+  })).digest("hex");
+}
+
 /**
  * A cheap revision of what `readPageBrowserLinkSettings` is made of — the
  * profile's token as stored, the page's account, its proxy row as stored and
@@ -156,13 +227,24 @@ export async function readPageBrowserLinkRevision(
   pageId: number,
   page: PageBrowserPageSettings,
 ): Promise<string> {
-  const [browser, stored] = await Promise.all([findPageBrowserByPage(ctx.db, pageId), findPageById(ctx.db, pageId)]);
-  return createHash("sha256").update(JSON.stringify({
-    profile: browser === null ? null : { id: browser.profileId, container: browser.container, token: browser.encryptedEngineToken },
-    account: stored?.page.platformAccountId ?? null,
-    proxy: stored?.proxy == null ? null : { id: stored.proxy.id, url: stored.proxy.url, auth: stored.proxy.encryptedAuth, keyVersion: stored.proxy.keyVersion },
-    page,
-  })).digest("hex");
+  return linkRevisionOf(await readLinkRevisionRow(ctx.db, pageId), page);
+}
+
+/**
+ * The same revision with the caller's settings taken from the profile's own
+ * pin and environment (`readPageBrowserPageSettings`), all in one statement —
+ * or why they cannot be had (the same reasons, in the same order).
+ */
+export async function readPageBrowserLinkRevisionOfPage(
+  ctx: { db: Database },
+  pageId: number,
+): Promise<{ revision: string } | { problem: string }> {
+  const row = await readLinkRevisionRow(ctx.db, pageId);
+  if (row.profile === null) return { problem: "no browser profile is bound to the page" };
+  if (row.profile.pinnedExitIp === null) return { problem: "its browser has no pinned exit IP" };
+  const env = pageBrowserEnvOf(row.profile.env);
+  if (env === null) return { problem: "its browser has no environment (time zone, languages, geolocation)" };
+  return { revision: linkRevisionOf(row, { pinnedExitIp: row.profile.pinnedExitIp, env }) };
 }
 
 async function resolveHost(host: string): Promise<string> {
