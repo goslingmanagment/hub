@@ -218,6 +218,49 @@ export const teamLedgerReportsResponseSchema = z.object({
   serverNow: isoTimestamp,
 });
 
+/**
+ * The open questions «whose is this sale» (Workboard «Решения → Чья продажа», the owner's): when the team's chat agent
+ * cannot tell whose a sale is (a custom two chatters worked on, a subscription one arranged and another closed), it asks
+ * in the chat and the agency ledger keeps the question until the decision is recorded. Read from the ledger's
+ * GET /v1/questions?open=1 with Hub's payouts key; Hub only reads — the owner answers the agent in the chat.
+ */
+export const teamLedgerQuestionSchema = z.object({
+  /** The ledger's id of the question. */
+  id: intId,
+  /** The sale's page; "" — not known (the question is every page's). */
+  pageLabel: z.string(),
+  /** The platform's id of the fan; null — not known. */
+  fanRef: z.string().nullable(),
+  /** The fan's name as the agent wrote it; null — not known. */
+  fanName: z.string().nullable(),
+  /** The sale, when it is known (Hub's transaction reference); null — not known, or not paid yet. */
+  transactionRef: z.string().nullable(),
+  /** The sale's net; null — not known, or not paid yet. */
+  netMills: mills.nullable(),
+  /** When the sale was; null — not known, or not paid yet. */
+  occurredAt: isoTimestamp.nullable(),
+  /** The question itself, as the agent asked it. */
+  question: z.string(),
+  /** Who the question is about or who decides it, as the agent wrote it; "" — not said. */
+  who: z.string(),
+  /** When it was asked. */
+  askedAt: isoTimestamp,
+  /** The message in the chat where it was asked (http/https only); null — none. */
+  sourceLink: z.string().nullable(),
+  /** The agent's note: what it knows of the sale; "" — none. */
+  note: z.string(),
+});
+
+export const teamLedgerQuestionsResponseSchema = z.object({
+  /** The questions that wait for the owner's word, the oldest first. Each is one decision. */
+  owner: z.array(teamLedgerQuestionSchema),
+  /** The questions the chatters settle among themselves, the oldest first: for the owner's information, not his decision. */
+  chatters: z.array(teamLedgerQuestionSchema),
+  /** false — the ledger does not let Hub read the questions yet (403/404): both lists are empty for that, not because there are none. */
+  questionsRead: z.boolean(),
+  serverNow: isoTimestamp,
+});
+
 export type TeamLedgerPayoutsResponse = z.infer<typeof teamLedgerPayoutsResponseSchema>;
 export type TeamLedgerPayoutPrepareResponse = z.infer<typeof teamLedgerPayoutPrepareResponseSchema>;
 export type TeamLedgerPayoutPerson = z.infer<typeof teamLedgerPayoutPersonSchema>;
@@ -227,6 +270,8 @@ export type TeamLedgerReportDay = z.infer<typeof teamLedgerReportDaySchema>;
 export type TeamLedgerReportPage = z.infer<typeof teamLedgerReportPageSchema>;
 export type TeamLedgerReportPost = z.infer<typeof teamLedgerReportPostSchema>;
 export type TeamLedgerReportPerson = z.infer<typeof teamLedgerReportPersonSchema>;
+export type TeamLedgerQuestion = z.infer<typeof teamLedgerQuestionSchema>;
+export type TeamLedgerQuestionsResponse = z.infer<typeof teamLedgerQuestionsResponseSchema>;
 
 export const teamLedgerRouteSchemas = {
   teamLedgerPayouts: {
@@ -271,6 +316,20 @@ export const teamLedgerRouteSchemas = {
     response: {
       200: teamLedgerReportsResponseSchema,
       400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      503: errorResponseSchema,
+    },
+  },
+  teamLedgerQuestions: {
+    auth: { kind: "owner-session" },
+    tags: ["admin"],
+    summary: "The open questions «whose is this sale» from the agency ledger, split by whom they wait for",
+    description: "Read from the ledger's GET /v1/questions?open=1 with Hub's payouts key. Read-only: the owner answers the "
+      + "agent in the chat. While the ledger refuses Hub the questions (403/404), both lists are empty and `questionsRead` "
+      + "false. 503 when the ledger is not connected or did not answer.",
+    response: {
+      200: teamLedgerQuestionsResponseSchema,
       401: errorResponseSchema,
       403: errorResponseSchema,
       503: errorResponseSchema,

@@ -397,6 +397,7 @@ export const kernelOperations = {
   teamGreetings: { method: "GET", path: "/api/v1/team/greetings" },
   teamLedgerPayoutPrepare: { method: "GET", path: "/api/v1/team/ledger-payouts/prepare" },
   teamLedgerPayouts: { method: "GET", path: "/api/v1/team/ledger-payouts" },
+  teamLedgerQuestions: { method: "GET", path: "/api/v1/team/ledger-questions" },
   teamLedgerReports: { method: "GET", path: "/api/v1/team/ledger-reports" },
   teamSalesPpv: { method: "GET", path: "/api/v1/team/sales/ppv" },
   teamSalesReplies: { method: "GET", path: "/api/v1/team/sales/replies" },

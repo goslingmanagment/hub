@@ -16,6 +16,9 @@ import { DAY, addDays, mskDay } from "./team-world.ts";
  * the payout sheets, then (FACTS_FROM_DAYS back) from Hub's facts, then
  * (REPORTS_FROM_DAYS back) from the posted shift reports of team-reports.ts at
  * the tab's rate; one paid day whose post changed since waits for the owner.
+ * The switch falls between the posts the ledger could not parse: the stranger's
+ * (two or three days back) is after it and waits in «Решения», kate.v's and
+ * olya.m's (a week and more back) are before it — history the sheets paid.
  */
 
 type Answer = KernelOperationResponse<"teamLedgerPayouts">;
@@ -26,7 +29,7 @@ const BUSINESS_DATE = /^\d{4}-\d{2}-\d{2}$/;
 const HISTORY_DAYS = 70;
 /** Days back the accruals switched to Hub's facts, then to the posted reports. */
 const FACTS_FROM_DAYS = 16;
-const REPORTS_FROM_DAYS = 9;
+const REPORTS_FROM_DAYS = 5;
 /** The tab's rate on the posted report, percent. */
 const RATE_PERCENT = 25;
 

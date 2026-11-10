@@ -9,6 +9,7 @@ import { shellHandlers } from "./shell.ts";
 import { systemHandlers } from "./system.ts";
 import { teamHandlers } from "./team.ts";
 import { teamLedgerHandlers } from "./team-ledger.ts";
+import { teamQuestionsHandlers } from "./team-questions.ts";
 import { teamReportsHandlers } from "./team-reports.ts";
 import { wbSalesHandlers } from "./wb-sales.ts";
 import { wbAdminHandlers, wbHeldHandlers } from "./wb-admin.ts";
@@ -18,8 +19,9 @@ const AREAS: Readonly<Record<string, DemoHandlers>> = {
   money: moneyHandlers,
   page: pageHandlers,
   // «Что продаёт»: the owner's list of win-back approaches, kept in memory with its write (wb-sales.ts).
-  // Выплаты from the agency ledger: the owner's, read by Hub (team-ledger.ts), and every chatter's reports (team-reports.ts).
-  team: { ...teamHandlers, ...wbSalesHandlers, ...teamLedgerHandlers, ...teamReportsHandlers },
+  // Выплаты from the agency ledger: the owner's, read by Hub (team-ledger.ts), and every chatter's reports (team-reports.ts);
+  // Решения' questions «whose is this sale» the agent keeps in the ledger (team-questions.ts).
+  team: { ...teamHandlers, ...wbSalesHandlers, ...teamLedgerHandlers, ...teamReportsHandlers, ...teamQuestionsHandlers },
   account: accountHandlers,
   "publish-of": publishOfHandlers,
   // Workboard «Решения» and «Доступ»: Fansly held sends over the console's queue, and the access writes (wb-admin.ts).
