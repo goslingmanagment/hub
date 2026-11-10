@@ -4,7 +4,6 @@ import type {
   FanProfileVersionListResponse,
 } from "@agency_hub_core/contracts";
 import {
-  appendFanProfile,
   findFanOnPage,
   findPlatformFan,
   getFanProfileVersion,
@@ -19,16 +18,11 @@ import type { Platform } from "@agency_hub_core/shared";
 import type { AppContext } from "../bootstrap.ts";
 import {
   canAccessPage,
-  requireApiKeyUser,
   requireDashboardUser,
   type AuthPrincipal,
 } from "./auth.ts";
 import { ForbiddenError, NotFoundError } from "./errors.ts";
 import { getPageSummary } from "./reporting.ts";
-
-/** How far into the future a client's generatedAtMs may point before it is
- * treated as a broken clock and clamped to server "now" (#136). */
-const FAN_PROFILE_CLOCK_SKEW_ALLOWANCE_MS = 5 * 60_000;
 
 function serializeTimestamp(value: Date | string | null | undefined) {
   if (!value) {
@@ -108,12 +102,11 @@ async function resolvePageFan(
 
 // Profile writes for OnlyFans must not depend on core's own sync having seen the
 // fan: OnlyMonster coverage is transactions-only, so non-spenders would 404 on the
-// first ChatMuse PUT. Create the fan + page membership on demand instead (idempotent
+// first dossier write. Create the fan + page membership on demand instead (idempotent
 // upserts). Fansly pages keep the strict 404 — their sync covers all DM fans.
 //
-// The fan a dossier write lands on, for every writer: the PUT below and the
-// chat extension's save from a stored generation. The caller has already
-// checked that the page is the principal's.
+// The fan a dossier write lands on: the chat extension's save from a stored
+// generation. The caller has already checked that the page is the principal's.
 export async function resolveOrCreateFanOnPage(
   app: AppContext,
   page: { id: number; label: string; platform: Platform },
@@ -151,16 +144,6 @@ export async function resolveOrCreateFanOnPage(
   return fan;
 }
 
-async function resolveOrCreatePageFan(
-  app: AppContext,
-  principal: AuthPrincipal,
-  pageLabel: string,
-  platformUserId: string,
-) {
-  const page = await resolveAccessiblePage(app, principal, pageLabel);
-  return { page, fan: await resolveOrCreateFanOnPage(app, page, platformUserId) };
-}
-
 export async function getPageFanProfile(
   app: AppContext,
   principal: AuthPrincipal,
@@ -177,39 +160,6 @@ export async function getPageFanProfile(
     fan: serializeFan(fan),
     profile: profile ? serializeProfile(profile) : null,
   };
-}
-
-export async function upsertPageFanProfile(
-  app: AppContext,
-  principal: AuthPrincipal,
-  pageLabel: string,
-  platformUserId: string,
-  body: string,
-  generatedAtMs?: number,
-): Promise<FanProfileDocument> {
-  requireApiKeyUser(principal);
-
-  // A generation stamp from the future is a broken client clock, not a fact:
-  // clamp anything past a small skew allowance to "now" so the dossier can
-  // never be permanently "fresh" for the age policy (#136). Contract-side the
-  // value is already bounded to the representable Date range.
-  const nowMs = Date.now();
-  const clampedGeneratedAtMs =
-    generatedAtMs !== undefined && generatedAtMs > nowMs + FAN_PROFILE_CLOCK_SKEW_ALLOWANCE_MS
-      ? nowMs
-      : generatedAtMs;
-
-  const { page, fan } = await resolveOrCreatePageFan(app, principal, pageLabel, platformUserId);
-  const profile = await appendFanProfile(app.db, {
-    fanId: fan.fanId,
-    platformAccountId: page.id,
-    body,
-    source: "chatmuse",
-    createdByUserId: principal.user.id,
-    sourceGeneratedAt: clampedGeneratedAtMs ? new Date(clampedGeneratedAtMs) : null,
-  });
-
-  return serializeProfile(profile);
 }
 
 export async function listPageFanProfileVersions(

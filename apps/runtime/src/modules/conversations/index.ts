@@ -2,13 +2,9 @@ import { routeSchemas } from "@agency_hub_core/contracts";
 import {
   listArchiveConversationMessages,
   searchArchiveMessages,
-  findPageByLabel,
-  transitionFollowerOutreach,
 } from "@agency_hub_core/db";
 
 import { pageScopeFor } from "../../api/request-auth.ts";
-import { canAccessPage } from "../../services/auth.ts";
-import { BadRequestError, NotFoundError } from "../../services/errors.ts";
 import {
   getPageConversationMessagesReport,
   getPageConversationPreviewReport,
@@ -18,7 +14,6 @@ import {
   getPageFanProfile,
   getPageFanProfileVersion,
   listPageFanProfileVersions,
-  upsertPageFanProfile,
 } from "../../services/fan-profiles.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
 
@@ -30,16 +25,6 @@ export function registerConversationsRoutes(server: ApiServer, ctx: ApiModuleCon
   const { appContext } = ctx;
   const { requirePrincipal } = ctx.auth;
 
-  server.post("/api/v1/pages/:pageLabel/follower-outreach/attempt", {
-    schema: routeSchemas.followerOutreachAttempt,
-  }, async (request) => {
-    const principal = await requirePrincipal(request);
-    const page = await findPageByLabel(appContext.db, request.params.pageLabel);
-    if (!page || !canAccessPage(principal, page.page.id) || page.page.platform !== "fansly") throw new NotFoundError("Page not found");
-    if (request.body.action === "sent" && !request.body.messageRef) throw new BadRequestError("messageRef is required for sent custody");
-    return transitionFollowerOutreach(appContext.db, { ...request.body, pageId: page.page.id, userId: principal.user.id });
-  });
-
   server.get("/api/v1/pages/:pageLabel/fans/:platformUserId/profile", {
     schema: routeSchemas.pageFanProfile,
   }, async (request) => {
@@ -49,20 +34,6 @@ export function registerConversationsRoutes(server: ApiServer, ctx: ApiModuleCon
       principal,
       request.params.pageLabel,
       request.params.platformUserId,
-    );
-  });
-
-  server.put("/api/v1/pages/:pageLabel/fans/:platformUserId/profile", {
-    schema: routeSchemas.upsertFanProfile,
-  }, async (request) => {
-    const principal = await requirePrincipal(request);
-    return upsertPageFanProfile(
-      appContext,
-      principal,
-      request.params.pageLabel,
-      request.params.platformUserId,
-      request.body.body,
-      request.body.generatedAtMs,
     );
   });
 

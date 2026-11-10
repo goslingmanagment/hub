@@ -108,7 +108,6 @@ import {
 } from "../../services/sync-engine-levers.ts";
 import {
   getSyncMonitorRecentRequests,
-  getSyncMonitorSnapshot,
 } from "../../services/sync-monitor.ts";
 import { getGoldenSignalsReport } from "../../services/golden-signals.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
@@ -555,28 +554,6 @@ export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
     schema: routeSchemas.adminOfapiDmColdArchiveStatus,
   }, async () => {
     return getOfapiDmColdArchiveStatus(appContext);
-  });
-
-  server.get("/api/v1/sync/status", {
-    schema: routeSchemas.syncStatus,
-  }, async (request) => {
-    const principal = await requirePrincipal(request);
-    const query = request.query;
-
-    if (query.pageLabel) {
-      const page = await getPageSummary(appContext, query.pageLabel);
-      if (!canAccessPage(principal, page.id)) {
-        throw new ForbiddenError("Page access denied");
-      }
-    }
-
-    const pageIds = pageScopeFor(principal);
-    return await getSyncMonitorSnapshot(appContext, {
-      ...(pageIds === undefined ? {} : { pageIds }),
-      ...(query.pageLabel === undefined ? {} : { pageLabel: query.pageLabel }),
-      windowHours: query.windowHours,
-      eventLimit: query.eventLimit,
-    }) as never;
   });
 
   server.get("/api/v1/sync/requests", {

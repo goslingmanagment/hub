@@ -1818,8 +1818,8 @@ export async function listFanslyBackscrollManifest(
 
 /** v3: upsert one per-fan earnings window row (amounts in mills).
  * The stored 'lifetime' row is the provider's snapshot as served, capped at
- * 100 rows for heavy spenders — not authoritative; the board derives
- * lifetime from the month rows (fanEarningsBoardRows). */
+ * 100 rows for heavy spenders — not authoritative; derive lifetime from
+ * the month rows. */
 export async function upsertFanEarningsStat(
   db: Database,
   input: {
@@ -1857,126 +1857,4 @@ export async function upsertFanEarningsStat(
               and event.occurred_at = fan_earnings_stats.observed_at)
          ))
   `);
-}
-
-// ── Board reads over the projection ──────────────────────────────
-
-export interface TopFanEarningsRow {
-  platformUserId: string;
-  username: string | null;
-  displayName: string | null;
-  grossMills: number;
-  netMills: number | null;
-  currency: string;
-  observedAt: Date;
-  /** First time hydration failed to find this account on the platform
-   * (`fans.deleted_detected_at`); null = the fan is alive. Cleared server side
-   * as soon as any sync sees a name again (see the fans upsert). Deleted fans
-   * are NOT filtered out of the ranking: they still spent the money, and
-   * dropping them would stop the board's totals from adding up. */
-  deletedAt: Date | null;
-}
-
-/** One board row per fan for a page + window: (fan_id, gross_mills,
- * net_mills, currency, observed_at). A month window is its stored row.
- *
- * 'lifetime' is DERIVED from the fan's month rows. The stored lifetime row
- * sums Fansly's per-fan stats answer, which the platform caps at 100 rows
- * (the same cap as FANSLY_EARNINGS_ROW_LIMIT) — a heavy spender's lifetime
- * came back understated and was ranked as if complete. The monthly answer
- * has one row per month, so it stays whole while a fan has under 100
- * spending months. Only month rows from the fan's LATEST monthly
- * observation count: every row of one observation shares observed_at and
- * the upsert only moves it forward, so a month the newest response no longer
- * serves is left out instead of being summed stale (a month poisoned as
- * invalid money there is left out too — understated, never invented). A fan
- * with no month rows falls back to the stored row. */
-function fanEarningsBoardRows(input: { accountId: number; window: string }) {
-  if (input.window !== "lifetime") {
-    return sql`
-      select s.fan_id, s.gross_mills, s.net_mills, s.currency, s.observed_at
-      from fan_earnings_stats s
-      where s.account_id = ${input.accountId} and s."window" = ${input.window}
-    `;
-  }
-  return sql`
-    with month_rows as (
-      select m.fan_id, m.gross_mills, m.net_mills, m.currency, m.observed_at,
-             max(m.observed_at) over (partition by m.fan_id) as latest_at
-      from fan_earnings_stats m
-      where m.account_id = ${input.accountId} and m."window" <> 'lifetime'
-    ), from_months as (
-      select r.fan_id,
-             sum(r.gross_mills)::bigint as gross_mills,
-             -- An unknown month net makes the total net unknown, not smaller.
-             case when count(r.net_mills) = count(*)
-               then sum(r.net_mills)::bigint end as net_mills,
-             min(r.currency) as currency,
-             max(r.observed_at) as observed_at
-      from month_rows r
-      where r.observed_at = r.latest_at
-      group by r.fan_id
-    )
-    select b.fan_id, b.gross_mills, b.net_mills, b.currency, b.observed_at
-    from from_months b
-    union all
-    select s.fan_id, s.gross_mills, s.net_mills, s.currency, s.observed_at
-    from fan_earnings_stats s
-    where s.account_id = ${input.accountId} and s."window" = 'lifetime'
-      and not exists (select 1 from from_months b where b.fan_id = s.fan_id)
-  `;
-}
-
-/** Top spenders for one page + window, spend-descending. Columns qualified
- * throughout (the known bare-column ORDER BY trap). */
-export async function listTopFanEarnings(
-  db: Database,
-  input: { accountId: number; window: string; limit: number },
-): Promise<TopFanEarningsRow[]> {
-  const result = await db.execute(sql`
-    select
-      f.platform_user_id as "platformUserId",
-      f.username as "username",
-      f.display_name as "displayName",
-      s.gross_mills as "grossMills",
-      s.net_mills as "netMills",
-      s.currency as "currency",
-      s.observed_at as "observedAt",
-      f.deleted_detected_at as "deletedAt"
-    from (${fanEarningsBoardRows(input)}) s
-    join fans f on f.id = s.fan_id
-    where s.gross_mills > 0
-    order by s.gross_mills desc, f.platform_user_id asc
-    limit ${input.limit}
-  `);
-  return (result.rows as Array<Record<string, unknown>>).map((row) => ({
-    platformUserId: String(row.platformUserId),
-    username: row.username === null ? null : String(row.username),
-    displayName: row.displayName === null ? null : String(row.displayName),
-    grossMills: Number(row.grossMills),
-    netMills: row.netMills === null ? null : Number(row.netMills),
-    currency: String(row.currency),
-    observedAt: new Date(String(row.observedAt)),
-    deletedAt: row.deletedAt == null ? null : new Date(String(row.deletedAt)),
-  }));
-}
-
-/** Snapshot honesty for the board UI: how many spenders exist in the window
- * and when the freshest row was observed (null = projection empty). */
-export async function getFanEarningsSnapshotMeta(
-  db: Database,
-  input: { accountId: number; window: string },
-): Promise<{ fanCount: number; builtAt: Date | null }> {
-  // The same board rows as listTopFanEarnings, so fanCount vs entries stays a
-  // valid truncation check for the client.
-  const result = await db.execute(sql`
-    select count(*) filter (where s.gross_mills > 0) as "fanCount",
-           max(s.observed_at) as "builtAt"
-    from (${fanEarningsBoardRows(input)}) s
-  `);
-  const row = (result.rows as Array<Record<string, unknown>>)[0];
-  return {
-    fanCount: row ? Number(row.fanCount) : 0,
-    builtAt: row?.builtAt == null ? null : new Date(String(row.builtAt)),
-  };
 }

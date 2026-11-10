@@ -2,7 +2,6 @@ export * from "./repositories/fansly-ws.ts";
 export * from "./repositories/fansly-ws-deletions.ts";
 export * from "./repositories/sync/live-messages.ts";
 export * from "./client.ts";
-export * from "./repositories/follower-outreach.ts";
 // chat-extension greeting lease and send custody (0241, H-7a).
 export * from "./repositories/client-claim.ts";
 export * from "./repositories/client-claim-transition.ts";

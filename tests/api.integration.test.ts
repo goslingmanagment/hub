@@ -52,6 +52,7 @@ import {
 } from "./helpers/device-credentials.ts";
 import { getModelRevenueReport, getPageRevenueReport } from "../apps/runtime/src/services/reporting.ts";
 import { ensureSyncQueues } from "../apps/runtime/src/services/sync-queue.ts";
+import { getSyncMonitorSnapshot } from "../apps/runtime/src/services/sync-monitor.ts";
 import {
   resetIntegrationDatabase,
   startIntegrationTestDatabase,
@@ -3212,21 +3213,9 @@ describe("api integration", () => {
     // A Fansly page's parked legacy rows are records, not monitor rows.
     await seedFormerFanslyRows(testDb.pool, present(fixture.lanaPage, "the fixture page lana").id, new Date());
 
-    const ownerLogin = await server.inject({
-      method: "POST",
-      url: "/api/v1/auth/login",
-      payload: { username: "dima", password: "owner-secret" },
-    });
-    const ownerCookie = sessionCookieFrom(ownerLogin);
-
-    const ownerResponse = await server.inject({
-      method: "GET",
-      url: "/api/v1/sync/status",
-      headers: { cookie: ownerCookie },
-    });
-
-    expect(ownerResponse.statusCode).toBe(200);
-    const ownerBody = ownerResponse.json();
+    // The monitor as `pnpm cli sync status` reads it: every page, no scope.
+    const appContext = createTestAppContext(testDb);
+    const ownerBody = JSON.parse(JSON.stringify(await getSyncMonitorSnapshot(appContext)));
     expect(typeof ownerBody.generatedAt).toBe("string");
     expect(ownerBody.window.hours).toBe(24);
     expect(ownerBody.pages.map((page: { pageLabel: string }) => page.pageLabel)).toEqual(["lana-of", "lily-of"]);
@@ -3373,20 +3362,12 @@ describe("api integration", () => {
       "Transactions backfill slowed by 429s",
     ]);
 
-    const leadLogin = await server.inject({
-      method: "POST",
-      url: "/api/v1/auth/login",
-      payload: { username: "lead", password: "lead-secret" },
-    });
-    const leadCookie = sessionCookieFrom(leadLogin);
-    const leadResponse = await server.inject({
-      method: "GET",
-      url: "/api/v1/sync/status",
-      headers: { cookie: leadCookie },
-    });
-
-    expect(leadResponse.statusCode).toBe(200);
-    const leadBody = leadResponse.json();
+    // Scoped to a team lead's assigned pages.
+    const leadPageIds = (await testDb.pool.query<{ id: string }>(
+      "select platform_account_id::text as id from user_page_assignments where user_id = $1",
+      [await fixtureUserId(appContext, "lead")],
+    )).rows.map((row) => Number(row.id));
+    const leadBody = await getSyncMonitorSnapshot(appContext, { pageIds: leadPageIds });
     // The lead's pages are lana (Fansly: not in the monitor) and lana-of.
     expect(leadBody.pages.map((page: { pageLabel: string }) => page.pageLabel)).toEqual(["lana-of"]);
     expect(leadBody.overall.pages).toBe(1);
@@ -3394,7 +3375,7 @@ describe("api integration", () => {
     expect(leadBody.overall.streams).toBe(7);
   }, 15_000);
 
-  it("enforces sync monitor page scoping and missing-page handling [sync-critical]", async (context) => {
+  it("filters the sync monitor by page label [sync-critical]", async (context) => {
     if (!testDb || !server || !fixture) {
       context.skip();
       return;
@@ -3402,54 +3383,15 @@ describe("api integration", () => {
 
     const { lanaOf } = await seedOnlyFansMonitorPages(testDb, fixture);
     await seedSyncMonitorScenario(testDb, lanaOf.id, new Date());
+    const appContext = createTestAppContext(testDb);
 
-    const leadLogin = await server.inject({
-      method: "POST",
-      url: "/api/v1/auth/login",
-      payload: { username: "lead", password: "lead-secret" },
-    });
-    const leadCookie = sessionCookieFrom(leadLogin);
+    const filtered = await getSyncMonitorSnapshot(appContext, { pageLabel: "lana-of" });
+    expect(filtered.pages.map((page) => page.pageLabel)).toEqual(["lana-of"]);
 
-    for (const label of ["lily-of", "lily1"]) {
-      const forbidden = await server.inject({
-        method: "GET",
-        url: `/api/v1/sync/status?pageLabel=${label}`,
-        headers: { cookie: leadCookie },
-      });
-      expect(forbidden.statusCode, label).toBe(403);
-    }
-
-    const ownerLogin = await server.inject({
-      method: "POST",
-      url: "/api/v1/auth/login",
-      payload: { username: "dima", password: "owner-secret" },
-    });
-    const ownerCookie = sessionCookieFrom(ownerLogin);
-
-    const missing = await server.inject({
-      method: "GET",
-      url: "/api/v1/sync/status?pageLabel=missing-page",
-      headers: { cookie: ownerCookie },
-    });
-    expect(missing.statusCode).toBe(404);
-
-    const filtered = await server.inject({
-      method: "GET",
-      url: "/api/v1/sync/status?pageLabel=lana-of",
-      headers: { cookie: ownerCookie },
-    });
-    expect(filtered.statusCode).toBe(200);
-    expect(filtered.json().pages.map((page: { pageLabel: string }) => page.pageLabel)).toEqual(["lana-of"]);
-
-    // A Fansly page exists and is in scope, and the monitor has no row of it.
-    const fansly = await server.inject({
-      method: "GET",
-      url: "/api/v1/sync/status?pageLabel=lana",
-      headers: { cookie: ownerCookie },
-    });
-    expect(fansly.statusCode).toBe(200);
-    expect(fansly.json().pages).toEqual([]);
-    expect(fansly.json().overall).toMatchObject({ pages: 0, streams: 0 });
+    // A Fansly page exists, and the monitor has no row of it.
+    const fansly = await getSyncMonitorSnapshot(appContext, { pageLabel: "lana" });
+    expect(fansly.pages).toEqual([]);
+    expect(fansly.overall).toMatchObject({ pages: 0, streams: 0 });
   }, 15_000);
 
   it("returns sync block overview rows and keeps OnlyFans legacy history retired [sync-critical]", async (context) => {

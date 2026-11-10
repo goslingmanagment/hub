@@ -418,10 +418,6 @@ export interface CompatContext {
   lane: ClientLane;
   /** The chatter's client, as the released client builds it. */
   client: FrozenClient;
-  /** The same chatter with a full token: only to set up what the client under
-   * test never writes itself (a narrow token is refused those routes). For a
-   * full-token lane it is the same token as `client`. */
-  seed: FrozenClient;
   options: FrozenClientOptions;
   clientFor(token: string | null): FrozenClient;
   /** The persona the client picked from the catalog. */
@@ -484,12 +480,21 @@ export async function signIn(
   return issued.token;
 }
 
-async function upsertProfile(ctx: CompatContext, pageLabel: string, fan: string, body: string) {
-  const saved = await call<{ body: string }>(ctx.sdk, ctx.seed, "upsertFanProfile", {
-    params: { pageLabel, platformUserId: fan },
-    body: { body, generatedAtMs: Date.now() },
-  });
-  expect(saved.body).toBe(body);
+/** The fan's next dossier version on the page, by the chatter: the row the
+ * old clients' profile write left, seeded directly (no living client writes
+ * a dossier except from a stored generation). */
+async function upsertProfile(ctx: CompatContext, platform: keyof typeof COMPAT_PAGES, fan: string, body: string) {
+  const saved = await ctx.pool.query(
+    `insert into fan_profiles (fan_id, platform_account_id, version, body, source, created_by_user_id, source_generated_at)
+     select f.id, pf.platform_account_id,
+            coalesce((select max(p.version) from fan_profiles p
+                      where p.fan_id = f.id and p.platform_account_id = pf.platform_account_id), 0) + 1,
+            $3, 'chatmuse', (select u.id from users u where u.username = $4), now()
+     from fans f join page_fans pf on pf.fan_id = f.id and pf.platform_account_id = $1
+     where f.platform = $5 and f.platform_user_id = $2`,
+    [ctx.pageIds[platform], fan, body, COMPAT_CHATTER.username, platform],
+  );
+  expect(saved.rowCount).toBe(1);
 }
 
 interface ExtensionBootstrap {
@@ -727,14 +732,14 @@ export const COMPAT_OPERATION_EXERCISERS: Record<string, (ctx: CompatContext) =>
     const body = `compat conversation dossier ${randomUUID()}`;
     if (ctx.lane.tokenClient === "chat-extension") {
       // The fan panel's dossier: on OnlyFans the conversation is the fan.
-      await upsertProfile(ctx, COMPAT_PAGES.onlyfans, COMPAT_FANS.onlyfans, body);
+      await upsertProfile(ctx, "onlyfans", COMPAT_FANS.onlyfans, body);
       const result = await rawChecked(ctx.sdk, ctx.client, "pageConversationProfile", {
         params: { pageLabel: COMPAT_PAGES.onlyfans, conversationId: COMPAT_FANS.onlyfans },
       });
       expect(result).toMatchObject({ fan: { platformUserId: COMPAT_FANS.onlyfans }, profile: { body } });
       return;
     }
-    await upsertProfile(ctx, COMPAT_PAGES.fansly, COMPAT_FANS.fansly, body);
+    await upsertProfile(ctx, "fansly", COMPAT_FANS.fansly, body);
     const result = await call(ctx.sdk, ctx.client, "pageConversationProfile", {
       params: { pageLabel: COMPAT_PAGES.fansly, conversationId: COMPAT_FANS.fanslyGroup },
     });
@@ -742,7 +747,7 @@ export const COMPAT_OPERATION_EXERCISERS: Record<string, (ctx: CompatContext) =>
   },
   async pageFanProfile(ctx) {
     const body = `compat fan dossier ${randomUUID()}`;
-    await upsertProfile(ctx, COMPAT_PAGES[ctx.lane.platform], COMPAT_FANS[ctx.lane.platform], body);
+    await upsertProfile(ctx, ctx.lane.platform, COMPAT_FANS[ctx.lane.platform], body);
     const result = await call(ctx.sdk, ctx.client, "pageFanProfile", {
       params: { pageLabel: COMPAT_PAGES[ctx.lane.platform], platformUserId: COMPAT_FANS[ctx.lane.platform] },
     });

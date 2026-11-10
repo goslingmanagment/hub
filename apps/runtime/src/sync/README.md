@@ -273,13 +273,11 @@ a host runs and nothing stops.
 | Connection status (`/admin/connections`, the health page item) | `expired` while the engine holds the page for its credentials, else by the age of the account read the engine stamps on the page (`account.poll`); no legacy run is consulted |
 | Follower reconcile reset / blast-radius override | the quarantined `followers.reconcile` row: reset cancels it and files owner demand (a fresh walk); the override reads the walk from the row's cursor and `result.quarantine`, deactivates exactly the previewed set and closes the row done |
 | Insights coverage (`/api/v1/pages/:pageLabel/stats/coverage`) | an `engine` block: mode, whether a host runs the page (`ownerRunning`), and per lever stream its keys, last applied, next due, its open work (`activeWork`), paused, what stops its keys (`stopped`, `stops`), why the earliest waits (`waiting`: key, reason, until — as data; `reason`: one line), quarantine / vendor block, largest failure count |
-| Top spenders `source` (`/api/v1/pages/:pageLabel/top-spenders`) | `fan_earnings` from `fan-earnings.roster`'s live work: `ramped` unless the owner paused it (`flag_off`), its last applied read, its largest failure count |
 
 A Fansly page the engine does not own (no engine row, or one in `off` / `shadow`) is read by nothing. `/health/sync`
 reports it unhealthy with the one issue `engine:not_live` and no `engine` block; its Settings blocks are `not_available`
 with the reason `fansly_sync_engine_off`; its summary reads "Not syncing"; a block lever, a trigger scope and the
-follower reconcile levers answer 409 `legacy_sync_retired`; the insights `engine` block is `null` and the top-spenders
-source `flag_off`.
+follower reconcile levers answer 409 `legacy_sync_retired`; the insights `engine` block is `null`.
 
 In the dashboard each engine has its Settings tab (S4-28). «Синк» (`?tab=engine`, `pages/settings/engine/`) lists the
 Fansly pages as the engine reads them — owner, holds, socket, the pause and how it was kept, the queue by class with
@@ -303,7 +301,7 @@ nothing did, and a warning when nothing of the block will be sent anyway (no own
 without a running owner does not look live: its mode chip reads `live · нет владельца` in the warning colour. After a
 lever the tab refreshes the engine's status and requests with the blocks.
 
-Not for a Fansly page at all: the legacy monitor (`/api/v1/sync/status`, `pnpm cli sync status` — the rows are the
+Not for a Fansly page at all: the legacy monitor (`pnpm cli sync status` — the rows are the
 legacy executor's pages and streams, the events and `/api/v1/sync/requests` its journal as it stands; `sync page
 status` and `/api/v1/sync/pages` are the engine's) and the agent dataset `sync_streams` (the legacy executor's stream
 rows; the engine's state is `agentSyncStatus` / `agentSyncWhy`).
