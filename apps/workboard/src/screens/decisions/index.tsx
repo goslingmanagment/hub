@@ -4,7 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useLocation, useNavigate, useSearchParams } from "react-router";
 import { EmptyState, ErrorState, Section, Skeleton, Table, type Column } from "@agency_hub_core/ui";
 import { decisionParts, decisionsElsewhereText, decisionsFailedText, type DecisionQueue } from "@/shared/decisions";
-import { kernel } from "@/shared/hub";
+import { usersQuery } from "@/shared/reads";
 import { useMe } from "@/shared/useMe";
 import { usePageFilter } from "@/shared/usePageFilter";
 import { usePages } from "@/shared/usePages";
@@ -32,7 +32,7 @@ export function DecisionsScreen() {
   const decisions = useDecisions({ owner: isOwner, page });
   const { view } = decisions;
   // A login to its id, for the customs' «who wrote it» (the owner's people list; a team lead reads plain names).
-  const users = useQuery({ queryKey: ["decisions", "users"], queryFn: () => kernel.adminListUsers(), enabled: isOwner, staleTime: 5 * 60_000 });
+  const users = useQuery({ ...usersQuery, enabled: isOwner, staleTime: 5 * 60_000 });
 
   const platformOf = (label: string) => pages.data?.find((one) => one.label === label)?.platform;
   const userIdOf = (username: string) => users.data?.find((user) => user.username === username && !user.deletedAt)?.id ?? null;

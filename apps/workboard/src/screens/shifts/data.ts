@@ -29,6 +29,7 @@ import { periodChunks, type ResolvedPeriod } from "@agency_hub_core/ui/period";
 import { median } from "@agency_hub_core/ui/shiftReview";
 import { shiftWhen, type ShiftWhen } from "@agency_hub_core/ui/shiftWhen";
 import { kernel } from "@/shared/hub";
+import { shiftSalesQuery } from "@/shared/reads";
 import { perHourMills, qualityOfChatterNumbers, type ShiftQuality } from "@/shared/metrics";
 
 type SalesResponse = KernelOperationResponse<"teamShiftSales">;
@@ -412,12 +413,13 @@ export interface ShiftsParams {
   current: boolean;
 }
 
-function salesQuery(window: ShiftsWindow, page: string | null) {
-  return {
+/** The period's `teamShiftSales` read: the entry Люди and Выплаты share when they ask for the same. */
+function shiftsSalesQuery(window: ShiftsWindow, page: string | null) {
+  return shiftSalesQuery({
     days: window.days,
     ...(window.until === undefined ? {} : { until: window.until }),
     ...(page === null ? {} : { pageLabel: page }),
-  };
+  });
 }
 
 /**
@@ -425,10 +427,8 @@ function salesQuery(window: ShiftsWindow, page: string | null) {
  * (`teamChatterNumbers`, slower: the journal fills those columns when it answers).
  */
 export function useShiftsPeriod({ window, page, current }: ShiftsParams) {
-  const query = salesQuery(window, page);
   const sales = useQuery({
-    queryKey: ["shifts", "sales", query] as const,
-    queryFn: () => kernel.teamShiftSales({ query }),
+    ...shiftsSalesQuery(window, page),
     placeholderData: keepPreviousData,
     refetchInterval: current ? MINUTE : false,
   });

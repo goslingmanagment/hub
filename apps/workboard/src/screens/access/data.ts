@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tansta
 import type { AdminCreateInviteBody, KernelOperationResponse } from "@agency_hub_core/contracts";
 import { moscowToday } from "@agency_hub_core/ui/moscow";
 import { kernel } from "@/shared/hub";
+import { usersQuery } from "@/shared/reads";
 
 /**
  * Доступ — the data layer (spec §4.8, and the «Доступ» tab of Человек §4.4 through
@@ -33,13 +34,14 @@ export type DeviceItem = KernelOperationResponse<"adminListDeviceTokens">[number
 export type LinkItem = KernelOperationResponse<"adminListAccountLinks">[number];
 type AiLimits = KernelOperationResponse<"adminAiChatterLimits">;
 
-const USERS_KEY = ["access", "users"] as const;
+/** The people list is the entry Люди and Решения read too (src/shared/reads.ts): a write here refreshes them all. */
+const USERS_KEY = usersQuery.queryKey;
 const PAGES_KEY = ["access", "pages"] as const;
 const devicesKey = (userId: number) => ["access", "user", userId, "devices"] as const;
 const linksKey = (userId: number) => ["access", "user", userId, "links"] as const;
 
 export function useAccessUsers(enabled = true) {
-  return useQuery({ queryKey: USERS_KEY, queryFn: () => kernel.adminListUsers(), enabled });
+  return useQuery({ ...usersQuery, enabled });
 }
 
 export function useAccessPages(enabled = true) {
