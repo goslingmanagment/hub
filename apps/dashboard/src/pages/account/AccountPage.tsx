@@ -5,7 +5,6 @@ import {
   useAuthMe,
   useChangeMyPassword,
   useMyDevices,
-  useMyShiftReport,
   useMyStats,
   useMyUsage,
   useRevokeMyDevice,
@@ -32,12 +31,12 @@ import {
   roleLabel,
   usageWindow,
 } from "./accountView.js";
-import { ShiftReport, waitsForConfirmation } from "./ShiftReport.js";
+import { ShiftReports } from "./ShiftReports.js";
 import { ChatterStatsView } from "./stats/ChatterStatsView.js";
 import { PERIODS } from "./stats/statsView.js";
 
 // The cabinet. One person, their own account: their shifts and what they sold,
-// the report to confirm, who they are, the devices they are signed in on, their
+// their shift reports, who they are, the devices they are signed in on, their
 // password and what their AI work cost. Every route it calls is any-session and
 // self-scoped: there is nothing here an owner could not also open about themselves.
 
@@ -315,10 +314,7 @@ const TABS = [
 ] as const;
 
 function CabinetTabs({ current }: { current: string | null }) {
-  // The number on «Отчёт смены»: the shifts waiting for the chatter. No answer, no number.
-  const report = useMyShiftReport();
-  const waiting = report.data?.shifts.filter(waitsForConfirmation).length ?? 0;
-  const items = TABS.map((item) => ({ to: item.to, label: item.label, count: item.tab === "report" && waiting > 0 ? waiting : undefined }));
+  const items = TABS.map((item) => ({ to: item.to, label: item.label }));
   return <SectionTabs label="Кабинет" items={items} current={TABS.find((item) => item.tab === current)?.to} />;
 }
 
@@ -402,7 +398,7 @@ export function AccountPage() {
       <CabinetTabs current={tab} />
       {tab === "report" && (
         <div className="ac-narrow">
-          <ShiftReport />
+          <ShiftReports />
         </div>
       )}
       {tab === "profile" && (

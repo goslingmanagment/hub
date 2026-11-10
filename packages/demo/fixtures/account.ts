@@ -3,11 +3,12 @@ import type { KernelOperationResponse } from "@agency_hub_core/contracts";
 import { between, demoError, hashString, intBetween, iso, queryString, rng, type DemoHandlers, type DemoReply, type DemoRequest } from "../core.ts";
 import { demoUserByRole, type DemoUser } from "../world.ts";
 import { addDays, chatterWorld, creditedMills, dayRange, DAY_MS, MINUTE_MS, type DemoChatterWorld, type DemoSale } from "./account-model.ts";
+import { accountReports } from "./account-reports.ts";
 import { chatterStats } from "./account-stats.ts";
 
 // Demo answers of this area's screens (see demo/core.ts): the cabinet at
-// /account — «Статистика», «Отчёт смены», «Профиль» (devices, AI spend).
-// One chatter's working life (account-model.ts) feeds all three.
+// /account — «Статистика», «Отчёт смены» (the ledger's reports, account-reports.ts),
+// «Профиль» (devices, AI spend). One chatter's working life (account-model.ts) feeds all three.
 
 type ShiftReport = KernelOperationResponse<"accountShiftReport">;
 type MyUsage = KernelOperationResponse<"authMyUsage">;
@@ -251,6 +252,7 @@ export const accountHandlers: DemoHandlers = {
     return chatterStats(worldOf(request), days);
   },
   accountShiftReport: shiftReport,
+  accountReports,
   authListDevices: devices,
   authMyUsage: usage,
 };

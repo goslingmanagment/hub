@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { SHIFT_REPORT_MAX_DAYS, type AccountShiftReportMarkBody, type ChangePasswordBody } from "@agency_hub_core/contracts";
+import type { ChangePasswordBody } from "@agency_hub_core/contracts";
+import { MOSCOW_TIME_ZONE, toBusinessDate } from "@agency_hub_core/shared";
 
 import { kernel } from "./sdk.js";
 
@@ -68,33 +69,22 @@ export function useMyUsage(params: { from?: string; to?: string } = {}) {
   });
 }
 
-/** The caller's draft shift reports (`accountShiftReport`): every shift that can still be confirmed. */
-export function useMyShiftReport(days: number = SHIFT_REPORT_MAX_DAYS) {
+const DAY_MS = 86_400_000;
+
+/** The last `days` Moscow days, today included. */
+function lastDays(days: number): { from: string; to: string } {
+  const to = toBusinessDate(new Date(), MOSCOW_TIME_ZONE);
+  const from = new Date(Date.parse(`${to}T00:00:00Z`) - (days - 1) * DAY_MS).toISOString().slice(0, 10);
+  return { from, to };
+}
+
+/** The caller's own shift reports from the agency ledger (`accountReports`): the cabinet's «Отчёт смены». */
+export function useMyReports(days: number) {
   return useQuery({
-    queryKey: ["account", "shift-report", days],
-    queryFn: () => kernel.accountShiftReport({ query: { days } }),
-  });
-}
-
-/** The key of a mark in flight: the shift's «Подтвердить» waits for it. */
-export const SHIFT_MARK_MUTATION_KEY = ["account", "shift-report", "mark"] as const;
-
-export function useMarkShiftSale() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationKey: SHIFT_MARK_MUTATION_KEY,
-    meta: { suppressGlobalError: true },
-    mutationFn: (body: AccountShiftReportMarkBody) => kernel.accountShiftReportMark({ body }),
-    onSettled: () => qc.invalidateQueries({ queryKey: ["account", "shift-report"] }),
-  });
-}
-
-export function useConfirmShiftReport() {
-  const qc = useQueryClient();
-  return useMutation({
-    meta: { suppressGlobalError: true },
-    mutationFn: (startedAt: string) => kernel.accountShiftReportConfirm({ body: { startedAt } }),
-    onSettled: () => qc.invalidateQueries({ queryKey: ["account", "shift-report"] }),
+    queryKey: ["account", "reports", days],
+    queryFn: () => kernel.accountReports({ query: lastDays(days) }),
+    placeholderData: (previous) => previous,
+    staleTime: 60_000,
   });
 }
 

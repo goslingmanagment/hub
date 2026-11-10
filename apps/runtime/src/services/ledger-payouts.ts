@@ -19,9 +19,9 @@ import { BadRequestError, NotFoundError, ServiceUnavailableError } from "./error
 const LEDGER_TIMEOUT_MS = 20_000;
 const DAY_MS = 86_400_000;
 
-const micros = z.number().int();
+export const micros = z.number().int();
 /** Go writes an empty slice as null. */
-const list = <T extends z.ZodTypeAny>(item: T) => z.array(item).nullable().transform((value): Array<z.output<T>> => value ?? []);
+export const list = <T extends z.ZodTypeAny>(item: T) => z.array(item).nullable().transform((value): Array<z.output<T>> => value ?? []);
 
 const ledgerPayoutsSchema = z.object({
   from: z.string(),
@@ -63,23 +63,36 @@ const ledgerPayoutsSchema = z.object({
 });
 
 /** The ledger's micro-dollars as Hub's mills: pay is kept to the cent, so nothing is lost. */
-function millsOf(value: number): number {
+export function millsOf(value: number): number {
   return millsToNumber(microUsdToMills(microUsdFromDbInt(value)));
 }
 
-function checkWindow(from: string, to: string) {
+/** A window of Moscow days the ledger takes: `from` not after `to`, at most `maxDays` of them; else a 400. */
+export function checkWindow(from: string, to: string, maxDays: number = TEAM_LEDGER_PAYOUTS_MAX_DAYS) {
   if (to < from) throw new BadRequestError("from is after to");
   const days = Math.round((Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / DAY_MS) + 1;
-  if (days > TEAM_LEDGER_PAYOUTS_MAX_DAYS) throw new BadRequestError(`At most ${TEAM_LEDGER_PAYOUTS_MAX_DAYS} days`);
+  if (days > maxDays) throw new BadRequestError(`At most ${maxDays} days`);
 }
 
 type LedgerApp = Pick<AppContext, "db" | "config" | "logger">;
 
+/** What the ledger's GET helper needs from the app: where the ledger is, its key, a logger. */
+export type LedgerReadApp = Pick<AppContext, "config" | "logger">;
+
+/** The payout routes' 404: the ledger knows no payout tab of the person. */
+const NO_PAYOUT_TAB = "The ledger has no payout tab of this person";
+
 /**
  * One GET of the ledger with Hub's payouts key: the answer's JSON, or a 503 when the ledger is not connected, does
- * not answer or refuses; its 404 is a 404 here (an unknown person).
+ * not answer or refuses. Its 404 is a 404 here only for a caller that names what was not found (`notFound`: an
+ * unknown person); for anyone else it is a 503 like every other refusal. `client` names the caller in the user agent.
  */
-async function ledgerGet(app: LedgerApp, path: string, params: Record<string, string>, options: { fetchImpl?: typeof fetch }): Promise<unknown> {
+export async function ledgerGet(
+  app: LedgerReadApp,
+  path: string,
+  params: Record<string, string>,
+  options: { fetchImpl?: typeof fetch; notFound?: string; client?: string },
+): Promise<unknown> {
   const key = app.config.ledgerPayoutsKey ?? null;
   if (key === null) throw new ServiceUnavailableError("The ledger is not connected: LEDGER_PAYOUTS_KEY is not set");
   const fetchImpl = options.fetchImpl ?? globalThis.fetch;
@@ -87,12 +100,12 @@ async function ledgerGet(app: LedgerApp, path: string, params: Record<string, st
   for (const [name, value] of Object.entries(params)) url.searchParams.set(name, value);
   try {
     const response = await fetchImpl(url, {
-      headers: { authorization: `Bearer ${key}`, accept: "application/json", "user-agent": "agency-hub/workboard-payouts" },
+      headers: { authorization: `Bearer ${key}`, accept: "application/json", "user-agent": `agency-hub/${options.client ?? "workboard-payouts"}` },
       signal: AbortSignal.timeout(LEDGER_TIMEOUT_MS),
     });
     if (!response.ok) {
       await response.body?.cancel().catch(() => undefined);
-      if (response.status === 404) throw new NotFoundError("The ledger has no payout tab of this person");
+      if (response.status === 404 && options.notFound !== undefined) throw new NotFoundError(options.notFound);
       throw new ServiceUnavailableError(`The ledger answered GET ${path} with ${response.status}`);
     }
     return await response.json();
@@ -108,7 +121,7 @@ export async function readLedgerPayouts(
   options: { fetchImpl?: typeof fetch; now?: Date } = {},
 ): Promise<TeamLedgerPayoutsResponse> {
   checkWindow(query.from, query.to);
-  const body = await ledgerGet(app, "/v1/payouts", { from: query.from, to: query.to }, options);
+  const body = await ledgerGet(app, "/v1/payouts", { from: query.from, to: query.to }, { ...options, notFound: NO_PAYOUT_TAB });
   const parsed = ledgerPayoutsSchema.safeParse(body);
   if (!parsed.success) {
     app.logger.warn({ issues: parsed.error.issues.slice(0, 5).map((issue) => `${issue.path.join(".")}: ${issue.message}`) }, "ledger payouts: unexpected answer");
@@ -178,7 +191,7 @@ export async function readLedgerPayoutPrepare(
   query: { person: string },
   options: { fetchImpl?: typeof fetch } = {},
 ): Promise<TeamLedgerPayoutPrepareResponse> {
-  const body = await ledgerGet(app, "/v1/payouts/prepare", { person: query.person }, options);
+  const body = await ledgerGet(app, "/v1/payouts/prepare", { person: query.person }, { ...options, notFound: NO_PAYOUT_TAB });
   const parsed = ledgerPrepareSchema.safeParse(body);
   if (!parsed.success) {
     app.logger.warn({ issues: parsed.error.issues.slice(0, 5).map((issue) => `${issue.path.join(".")}: ${issue.message}`) }, "ledger payout prepare: unexpected answer");

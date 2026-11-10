@@ -161,6 +161,8 @@ for (const file of [
   // payout reads (#1103): routes.ts spreads both in, the barrel re-exports both.
   "agent-team.ts",
   "routes-team-ledger.ts",
+  // The chatter's own shift reports from the ledger (cabinet «Отчёт смены»): routes.ts spreads them in.
+  "routes-account-reports.ts",
   "routes-ofapi-marketing.ts",
   "ofapi-smart-links.ts",
   "ofapi-extended-commands.ts",

@@ -36,14 +36,6 @@
     .team-sticky-first tr:hover td:first-child { background: var(--color-hover-alt); }
   }
 
-  /* A chosen mark or decision: the selection's ink, the same size as the rest. */
-  .btn.team-picked,
-  .select.team-picked {
-    border-color: var(--color-accent-border);
-    background: var(--color-accent-soft);
-    color: var(--color-accent);
-  }
-
   /* ── The chatter's cabinet ───────────────────────────────────────────── */
   .cabinet-bar {
     display: flex;
@@ -112,35 +104,79 @@
   .ac-feature-cost { text-align: right; font-weight: 500; font-variant-numeric: tabular-nums; }
   .ac-guide { font-size: 15px; }
 
-  /* The shift report: each shift a sheet of its own, up to 720 wide. */
-  .sr-page { display: flex; flex-direction: column; gap: 24px; }
-  .sr-head { display: grid; gap: 4px; }
-  .sr-lead { color: var(--color-text-secondary); }
-  .sr-group { display: flex; flex-direction: column; gap: 16px; }
-  .sr-done > .sr-group { margin-top: 16px; font-size: 15px; line-height: 22px; color: var(--color-text-primary); }
-  .sr-shift { padding: 16px 24px 8px; }
-  .sr-shift-head { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: 12px 24px; padding-bottom: 12px; }
-  .sr-shift-facts { display: flex; flex-wrap: wrap; gap: 4px 16px; margin-top: 4px; font-size: 14px; line-height: 20px; color: var(--color-text-secondary); }
-  .sr-shift-facts b { font-weight: 600; color: var(--color-text-primary); }
-  .sr-shift-action { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; max-width: 240px; text-align: right; }
-  .sr-why { font-size: 14px; line-height: 20px; color: var(--color-text-secondary); }
-  .sr-none { padding: 12px 0 16px; border-top: 1px solid var(--color-border-light); font-size: 14px; color: var(--color-text-secondary); }
-  .sr-sales { display: flex; flex-direction: column; }
-  .sr-sale { padding: 12px 0; border-top: 1px solid var(--color-border-light); }
-  .sr-sale-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
-  .sr-sale-money { font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
-  .sr-sale-facts { margin-top: 2px; font-size: 14px; line-height: 20px; color: var(--color-text-secondary); }
-  .sr-sale-marks { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 8px; }
-  .sr-share { width: auto; min-height: 32px; height: 32px; padding-block: 0; font-size: 14px; }
-  .sr-amount { display: inline-flex; align-items: center; gap: 8px; font-size: 14px; color: var(--color-text-secondary); }
-  .sr-amount .input { width: 96px; min-height: 32px; height: 32px; }
+  /* «Отчёт смены»: each report a card that opens to its sales, up to 720 wide. */
+  .rp-page { display: flex; flex-direction: column; gap: 16px; transition: opacity 0.15s; }
+  .rp-page[data-refreshing] { opacity: 0.6; }
+  .rp-headline { display: grid; gap: 4px; margin-bottom: 8px; }
+  .rp-lead { color: var(--color-text-secondary); }
+  .rp-skeleton { padding: 16px 24px 20px; }
+  .rp-summary {
+    display: grid;
+    gap: 8px;
+    padding: 16px 24px;
+    border-radius: var(--radius-card);
+    cursor: pointer;
+    list-style: none;
+  }
+  .rp-summary::-webkit-details-marker { display: none; }
+  .rp-summary:hover { background: var(--color-hover-alt); }
+  .rp-report[open] > .rp-summary { border-bottom: 1px solid var(--color-border-light); border-radius: var(--radius-card) var(--radius-card) 0 0; }
+  .rp-head { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: 12px 24px; }
+  .rp-date { font-size: 17px; line-height: 24px; font-weight: 600; letter-spacing: -0.005em; color: var(--color-text-primary); }
+  .rp-window { margin-left: 8px; font-weight: 400; color: var(--color-text-secondary); font-variant-numeric: tabular-nums; }
+  .rp-state { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin-top: 4px; font-size: 14px; line-height: 20px; color: var(--color-text-secondary); }
+  .rp-total { display: flex; align-items: center; gap: 12px; }
+  .rp-total-number { font-size: 24px; line-height: 32px; font-weight: 600; letter-spacing: -0.01em; font-variant-numeric: tabular-nums; color: var(--color-text-primary); }
+  .rp-chevron { flex: 0 0 auto; color: var(--color-text-muted); transition: transform 0.15s; }
+  .rp-report[open] .rp-chevron { transform: rotate(180deg); }
+  .rp-pages { display: flex; flex-wrap: wrap; gap: 4px 20px; font-size: 14px; line-height: 20px; }
+  .rp-pages li { display: inline-flex; gap: 6px; }
+  .rp-page-label { color: var(--color-text-secondary); }
+  .rp-page-amount { font-weight: 500; font-variant-numeric: tabular-nums; color: var(--color-text-primary); }
+  .rp-meta { font-size: 13px; line-height: 18px; color: var(--color-text-muted); }
+  .rp-body { padding: 4px 24px 16px; }
+  .rp-lines { display: flex; flex-direction: column; }
+  .rp-line {
+    display: grid;
+    grid-template-columns: 48px minmax(0, 1fr) auto;
+    align-items: baseline;
+    gap: 12px;
+    padding: 10px 0;
+    border-top: 1px solid var(--color-border-light);
+    font-size: 15px;
+    line-height: 22px;
+  }
+  .rp-lines > .rp-line:first-child { border-top: 0; }
+  .rp-line-time { color: var(--color-text-secondary); font-variant-numeric: tabular-nums; }
+  .rp-line-what { color: var(--color-text-primary); overflow-wrap: anywhere; }
+  .rp-added {
+    display: inline-block;
+    margin-left: 8px;
+    padding: 0 6px;
+    border-radius: var(--radius-inner);
+    background: var(--color-hover);
+    font-size: 13px;
+    line-height: 20px;
+    color: var(--color-text-secondary);
+    white-space: nowrap;
+  }
+  .rp-line-note { margin-top: 2px; font-size: 13px; line-height: 18px; color: var(--color-text-muted); }
+  .rp-line-reason { margin-top: 2px; font-size: 14px; line-height: 20px; color: var(--color-text-secondary); }
+  .rp-line-money { font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--color-text-primary); }
+  .rp-line[data-held] .rp-line-money { font-weight: 500; color: var(--color-text-secondary); }
+  .rp-none { padding: 10px 0; font-size: 14px; color: var(--color-text-secondary); }
+  .rp-held { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--color-border); }
+  .rp-held-title { padding-bottom: 2px; font-size: 15px; line-height: 22px; font-weight: 500; color: var(--color-text-primary); }
   @media (max-width: 767px) {
-    .sr-shift { padding-inline: 16px; }
-    .sr-shift-head { grid-template-columns: minmax(0, 1fr); }
-    .sr-shift-action { align-items: flex-start; max-width: none; text-align: left; }
+    .rp-summary { padding-inline: 16px; }
+    .rp-body { padding-inline: 16px; }
+    .rp-head { grid-template-columns: minmax(0, 1fr) auto; }
+    .rp-window { display: block; margin-left: 0; }
+    .rp-total-number { font-size: 20px; line-height: 28px; }
+    .rp-line { grid-template-columns: 44px minmax(0, 1fr) auto; gap: 8px; }
   }
   @media (pointer: coarse) {
-    .sr-sale-marks .btn, .sr-share, .sr-amount .input, .ac-page .btn { min-height: 44px; height: auto; }
+    .ac-page .btn { min-height: 44px; height: auto; }
   }
 
   /* ── Sign-in and the invitation: one card in the middle ──────────────── */
