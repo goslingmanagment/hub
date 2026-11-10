@@ -5,7 +5,6 @@ import {
   expireAwaitingSourceAiMediaDescriptions,
   finalizeAiGatewayUsageEvent,
   findDescribedAiMediaByContent,
-  findPageByLabel,
   finishAiMediaDescription,
   getSyncPage,
   getAiMediaDescribeDay,
@@ -17,6 +16,7 @@ import {
   isFanslyPageEngineOwned,
   isAiMediaContentRefused,
   isAiMediaRefRefused,
+  listActivePagesByLabels,
   reserveAiGatewayUsageEvent,
   reserveAiMediaDescribeBudget,
   settleAiMediaDescribeBudget,
@@ -191,16 +191,22 @@ async function loadActivePages(
   policiesRaw: string | undefined,
   now: Date,
 ): Promise<ActivePage[]> {
+  const open = [...parseAiMediaDescribePagePolicies(policiesRaw)]
+    .filter(([, policy]) => isAiMediaDescribeWindowOpen(policy, now));
+  if (open.length === 0) {
+    return [];
+  }
+  // One read for every open label; the result keeps the policy map's order.
+  const stored = new Map(
+    (await listActivePagesByLabels(app.db, open.map(([label]) => label))).map((row) => [row.label, row]),
+  );
   const pages: ActivePage[] = [];
-  for (const [label, policy] of parseAiMediaDescribePagePolicies(policiesRaw)) {
-    if (!isAiMediaDescribeWindowOpen(policy, now)) {
+  for (const [label, policy] of open) {
+    const row = stored.get(label);
+    if (!row) {
       continue;
     }
-    const stored = await findPageByLabel(app.db, label);
-    if (!stored) {
-      continue;
-    }
-    pages.push({ id: stored.page.id, label, policy, proxy: resolveStoredProxyConfig(app, stored.proxy) });
+    pages.push({ id: row.id, label, policy, proxy: resolveStoredProxyConfig(app, row.proxy) });
   }
   return pages;
 }
