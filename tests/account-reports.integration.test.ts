@@ -12,8 +12,8 @@ import { listenOnLoopback } from "./helpers/network.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 import { fixtureUserId } from "./helpers/user-identity.ts";
 
-// The cabinet's «Отчёт смены» (owner, 2026-11-10): a chatter reads their own
-// shift reports from the agency ledger. The user is the session's: whatever
+// Workboard «Мои смены» (owner, 2026-11-10): a chatter reads their own
+// shift reports from the agency ledger — the drafts and the posts. The user is the session's: whatever
 // the query says, Hub asks the ledger for the caller, and a report of someone
 // else in the ledger's answer never reaches them.
 
@@ -26,7 +26,7 @@ let ledger: Server | null = null;
 const users: Record<string, number> = {};
 const cookies: Record<string, string> = {};
 /** The ledger's requests, as it saw them. */
-const asked: URLSearchParams[] = [];
+const asked: Array<{ path: string; params: URLSearchParams }> = [];
 
 function ledgerReport(id: number, hubUserId: number | null, hubUsername: string) {
   return {
@@ -54,21 +54,22 @@ describe("the chatter's own shift reports from the ledger", () => {
       await setUserPassword(app, { userId: users[username]!, password: `${username}-password-for-tests` }, { source: "cli" });
     }
 
-    // A fake ledger that answers every reader with Никита's and Ваня's reports: Hub must keep the caller's only.
+    // A fake ledger that answers every reader with Никита's and Ваня's reports: Hub must keep the caller's only. The
+    // posts (report days) it has none of.
     ledger = createServer((request, response) => {
       const url = new URL(request.url ?? "/", "http://ledger.test");
-      asked.push(url.searchParams);
-      if (url.pathname !== "/v1/reports" || request.headers.authorization !== "Bearer test-reports-key") {
+      asked.push({ path: url.pathname, params: url.searchParams });
+      const known = url.pathname === "/v1/reports" || url.pathname === "/v1/report-days";
+      if (!known || request.headers.authorization !== "Bearer test-reports-key") {
         response.writeHead(401, { "content-type": "application/json" });
         response.end(JSON.stringify({ error: "unauthorized" }));
         return;
       }
+      const window = { from: url.searchParams.get("from"), to: url.searchParams.get("to") };
       response.writeHead(200, { "content-type": "application/json" });
-      response.end(JSON.stringify({
-        from: url.searchParams.get("from"),
-        to: url.searchParams.get("to"),
-        reports: [ledgerReport(1, users.nikita!, "nikita"), ledgerReport(2, users.vanya!, "vanya"), ledgerReport(3, null, "Vanya")],
-      }));
+      response.end(JSON.stringify(url.pathname === "/v1/report-days"
+        ? { ...window, days: [] }
+        : { ...window, reports: [ledgerReport(1, users.nikita!, "nikita"), ledgerReport(2, users.vanya!, "vanya"), ledgerReport(3, null, "Vanya")] }));
     });
     const address = await listenOnLoopback(ledger, "the fake agency ledger");
     if (!address) {
@@ -102,10 +103,11 @@ describe("the chatter's own shift reports from the ledger", () => {
     const response = await read("nikita", "?from=2026-11-01&to=2026-11-10");
     expect(response.statusCode, response.body).toBe(200);
     const body = accountReportsResponseSchema.parse(response.json());
-    expect(body).toMatchObject({ from: "2026-11-01", to: "2026-11-10" });
+    expect(body).toMatchObject({ from: "2026-11-01", to: "2026-11-10", postsRead: true });
     expect(body.reports.map((report) => report.id)).toEqual([1]);
-    expect(body.reports[0]).toMatchObject({ totalMills: 42_500, pages: [{ pageLabel: "page-a", amountMills: 42_500 }], lines: [{ netMills: 42_500, flags: [], notes: [] }] });
-    expect(Object.fromEntries(asked[0]!)).toMatchObject({ hub_user_id: String(users.nikita), hub_username: "nikita" });
+    expect(body.reports[0]).toMatchObject({ source: "draft", totalMills: 42_500, pages: [{ pageLabel: "page-a", amountMills: 42_500 }], lines: [{ netMills: 42_500, flags: [], notes: [] }] });
+    expect(asked.map((one) => one.path).sort()).toEqual(["/v1/report-days", "/v1/reports"]);
+    for (const one of asked) expect(Object.fromEntries(one.params)).toMatchObject({ hub_user_id: String(users.nikita), hub_username: "nikita" });
 
     // Ваня gets his two: by id, and the one the ledger has by his name only.
     const vanya = accountReportsResponseSchema.parse((await read("vanya")).json());
@@ -118,9 +120,12 @@ describe("the chatter's own shift reports from the ledger", () => {
     const response = await read("nikita", `?hub_user_id=${users.vanya}&hub_username=vanya&userId=${users.vanya}`);
     expect(response.statusCode, response.body).toBe(200);
     expect(accountReportsResponseSchema.parse(response.json()).reports.map((report) => report.id)).toEqual([1]);
-    expect(asked).toHaveLength(1);
-    expect(asked[0]!.getAll("hub_user_id")).toEqual([String(users.nikita)]);
-    expect(asked[0]!.getAll("hub_username")).toEqual(["nikita"]);
+    // The drafts and the posts, both for the caller.
+    expect(asked).toHaveLength(2);
+    for (const one of asked) {
+      expect(one.params.getAll("hub_user_id")).toEqual([String(users.nikita)]);
+      expect(one.params.getAll("hub_username")).toEqual(["nikita"]);
+    }
   });
 
   it("is a 401 without a session and a 400 past 62 days", async (context) => {

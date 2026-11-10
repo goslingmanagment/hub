@@ -3,7 +3,7 @@ import type { KernelOperationResponse } from "@agency_hub_core/contracts";
 import { between, demoError, hashString, intBetween, iso, queryString, rng, type DemoHandlers, type DemoReply, type DemoRequest } from "../core.ts";
 import { demoUserByRole } from "../world.ts";
 import { addDays, chatterWorld, dayRange, DAY_MS, MINUTE_MS, type DemoChatterWorld } from "./account-model.ts";
-import { accountReports } from "./account-reports.ts";
+import { accountReports } from "./account-shift-reports.ts";
 import { chatterStats } from "./account-stats.ts";
 
 // Demo answers of this area's screens (see demo/core.ts): the cabinet at

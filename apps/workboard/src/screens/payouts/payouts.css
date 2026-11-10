@@ -308,45 +308,6 @@
     color: var(--ui-text-2);
   }
 
-  /* A day opened: the pages as posted and drafted, then the sales. */
-  .payouts-report-head {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-  }
-
-  /* The pages: the name on the left, the amounts in fixed columns ending at the report's right edge. */
-  .payouts-pages {
-    display: flex;
-    flex-direction: column;
-    border-top: 1px solid var(--ui-line-soft);
-  }
-
-  .payouts-pages__row {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) repeat(var(--payouts-page-columns, 1), minmax(96px, max-content));
-    align-items: baseline;
-    column-gap: 24px;
-    padding: 8px 0;
-    border-bottom: 1px solid var(--ui-line-soft);
-    font-variant-numeric: tabular-nums;
-  }
-
-  .payouts-pages__row > :not(:first-child) {
-    text-align: right;
-  }
-
-  .payouts-pages__row--head {
-    padding: 4px 0;
-    color: var(--ui-text-2);
-    font-size: var(--ui-fs-14);
-    line-height: var(--ui-lh-14);
-  }
-
-  .payouts-pages__row .ui-page {
-    color: var(--ui-text);
-  }
-
   .payouts-post {
     display: flex;
     flex-direction: column;
