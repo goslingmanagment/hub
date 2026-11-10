@@ -236,7 +236,7 @@ the Fansly Sync Engine, and by nothing else: no surface reads its `page_sync_sta
 
 The lever map is the registry's (`fansly/registry.ts`, `FANSLY_LEVER_STREAMS`): each line names a stream — a
 `sync_stream` value, because the API contracts carry these names — and the registry keys that answer to it. A key in no
-line (`FANSLY_KEYS_WITHOUT_LEVER`: the identity checks, the socket and its repair, live deletions, the alias backfill,
+line (the identity checks, the socket and its repair, live deletions, the alias backfill,
 the probes, media download) is addressed by its own name. `services/sync-status-engine.ts` says which lever streams
 each Settings block shows and moves (`ENGINE_BLOCK_STREAMS`), `services/sync-engine-levers.ts` which ones a "sync now"
 scope names (`FANSLY_ENGINE_SCOPE_STREAMS`). tests/sync-lever-map.test.ts pins the three and that every registry key is
@@ -805,8 +805,9 @@ a pair the send audit could not judge), `owner_review` (429s on two or more rout
 the runbook reads it there. Its fixtures: tests/sync-live-hour.integration.test.ts.
 
 The switch itself is history. Step 3 took the six pages over with `sync switch` (handover, guard hand-over, legacy stop
-confirmed, final chain rebuild, legacy import, live) and could give one back with its rollback until step 4 S4-10; both
-are deleted with their audit trail's writers (the `admin.sync_switch*` rows stay as records). What they left on a page —
+confirmed, final chain rebuild, legacy import, live) and could give one back with its rollback until step 4 S4-10; they
+and `sync chain rebuild` are deleted with their audit trail's writers (the `admin.sync_switch*` and
+`admin.sync_chain_rebuild` rows stay as records). What they left on a page —
 the import mark, imported cursors, `legacy_import` breaker carriers, converted hydration requests — is ordinary engine
 state.
 

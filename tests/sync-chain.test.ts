@@ -5,7 +5,6 @@ import {
   emptyChain,
   foldChainPage,
   isShortPage,
-  nextChainCursor,
   validateChainPage,
   type ChainPage,
   type ChainVerdict,
@@ -178,7 +177,6 @@ describe("head pages (before absent)", () => {
     expect(fold.segment).toEqual({
       baseHeadId: "500", headId: "530", headAt: at(13), oldestId: "520", oldestCreatedAtMs: expect.any(Number), count: 11,
     });
-    expect(nextChainCursor(fold.chain, fold.segment)).toBe("520");
   });
 });
 
@@ -256,7 +254,6 @@ describe("pages below the chain (before = contiguous_oldest_id)", () => {
     const fold = foldChainPage(partial(500, 480), null, page("480", range(479, 455)), null);
     expect(fold.verdict).toEqual({ kind: "extended_down", added: 25 });
     expect(fold.chain).toMatchObject({ oldestId: "455", count: 46, state: "partial" });
-    expect(nextChainCursor(fold.chain, null)).toBe("455");
   });
 
   it("does not move a chain on any other cursor (not_continuing)", () => {
@@ -348,7 +345,10 @@ describe("model: a chain only claims what it read contiguously", () => {
           const arrivals = 1 + Math.floor(random() * 40);
           for (let index = 0; index < arrivals; index += 1) messages.push((nextId += 1 + Math.floor(random() * 3)));
         }
-        const cursor = random() < 0.25 ? null : nextChainCursor(chain, staged);
+        // The `before` that continues the chain downwards (a staged walk first).
+        const cursor = random() < 0.25
+          ? null
+          : staged !== null ? staged.oldestId : chain.state === "partial" ? chain.oldestId : null;
         const below = cursor === null ? messages : messages.filter((id) => id < Number(cursor));
         const served = below.slice(-limit).reverse();
         const read = page(cursor, served, { limit, at: at(step) });

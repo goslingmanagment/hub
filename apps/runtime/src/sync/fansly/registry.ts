@@ -1,7 +1,6 @@
 import type { SyncStream, UpsertDemandInput } from "@agency_hub_core/db";
-import type { FanslySendSource, FanslyWireId } from "@agency_hub_core/fansly";
+import type { FanslyWireId } from "@agency_hub_core/fansly";
 
-import { FOLLOWERS_RECONCILE_MIN_INTERVAL_MS } from "./lib/audience-rules.ts";
 import { FANSLY_WRITE_OPERATIONS } from "./publish/commands.ts";
 import type { Metrics } from "../engine/ports.ts";
 import {
@@ -14,8 +13,7 @@ import {
 
 // ALL Fansly resources of the Sync Engine (plan §5, design §4.4): one entry
 // per resource variant — trigger, period, class, coalescing, SLO, proof,
-// walk, the wire operations it sends and the legacy streams and senders it
-// replaces (pinned by tests/sync-registry-coverage.test.ts).
+// walk and the wire operations it sends.
 // Every (key, trigger) pair an entry declares has its producer — the code that
 // creates or bumps that key's work for that trigger
 // (tests/sync-registry-coverage.test.ts).
@@ -47,9 +45,6 @@ export type WalkKind =
   | "single" | "snapshot-sequence" | "cursor-walk" | "offset-walk" | "incremental-head" | "subject-queue"
   | "windows" | "composite" | "none";
 
-/** A legacy stream or sender (maps/senders.md §3) an entry takes over. */
-export type LegacyRef = { stream: SyncStream } | { sender: FanslySendSource };
-
 export type { TierSpec } from "../engine/resource.ts";
 
 export interface ResourceSpec extends EngineResourceSpec {
@@ -57,35 +52,17 @@ export interface ResourceSpec extends EngineResourceSpec {
   /** What one work row is about (`command`: a write command's id). */
   subject: "page" | "thread" | "target" | "fan" | "post" | "media" | "command" | "publication";
   triggers: readonly Trigger[];
-  /** A new walk starts at most this long after the previous one started
-   *  (followers reconcile: the owner's daily floor). */
-  minIntervalMs?: number;
   proof: ProofKind;
   walk: WalkKind;
   /** Every wire route its steps send (the route admission's pick-time
    *  check); empty for socket frames, no-HTTP work and the owner's probe. */
   operations: readonly FanslyWireId[];
-  /** `subject_refresh_state` plane of a subject-queue walk (design §4.3). */
-  queuePlane?: string;
-  legacy: readonly LegacyRef[];
-}
-
-/** A legacy stream or sender no entry takes over, and why (design §4.5). */
-export interface LegacyDisposition {
-  ref: LegacyRef;
-  /** `pageless`: a sender of no page at all, which no engine entry can take
-   *  over (the session-less public account reader, arena "vanished chat" R5). */
-  disposition: "retired" | "stays_legacy" | "by_streams" | "pageless";
-  reason: string;
 }
 
 const SECOND = 1_000;
 const MINUTE = 60 * SECOND;
 const HOUR = 60 * MINUTE;
 const DAY = 24 * HOUR;
-
-const stream = (name: SyncStream): LegacyRef => ({ stream: name });
-const sender = (name: FanslySendSource): LegacyRef => ({ sender: name });
 
 const accountModule = (variant: "poll" | "verify") => async (): Promise<ResourceModule> =>
   (await import("./resources/account.ts")).accountModule(variant);
@@ -176,7 +153,6 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     triggers: ["poll"], period: { everyMs: DAY }, slo: { staleAfterMs: 3 * DAY },
     proof: "snapshot", walk: "snapshot-sequence", http: true, evidence: false, fence: "none",
     operations: ["trackinglinks.stats", "trackinglinks.revenuestats"],
-    legacy: [],
     module: trackingLinksModule,
   },
 
@@ -192,7 +168,6 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
       "settings.watermark", "settings.alerts", "referrals.stats", "earnings.overview", "tipgoals.account",
       "discovery.content", "discovery.tags",
     ],
-    legacy: [],
     module: pageSettingsModule,
   },
 
@@ -205,7 +180,6 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     period: { everyMs: HOUR }, slo: { staleAfterMs: 3 * HOUR },
     proof: "snapshot", walk: "single", http: true, evidence: false, fence: "none",
     operations: ["account.me"],
-    legacy: [stream("light")],
     module: accountModule("poll"),
   },
   {
@@ -213,7 +187,6 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     triggers: ["api", "owner"], slo: { resultMs: 30 * SECOND },
     proof: "snapshot", walk: "single", http: true, evidence: false, fence: "none",
     operations: ["account.me"],
-    legacy: [sender("account_me_api"), sender("account_me_cli")],
     module: accountModule("verify"),
   },
 
@@ -224,7 +197,6 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     coalesce: { quietMs: 0, maxMs: SECOND, extendOnSignal: false }, slo: { resultMs: 5 * SECOND },
     proof: "none", walk: "none", http: false, evidence: false, fence: "dm_archive",
     operations: [],
-    legacy: [],
     module: dmLiveDeletionsModule,
   },
 
@@ -234,7 +206,6 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     triggers: ["poll"], period: { everyMs: 30 * MINUTE }, slo: { staleAfterMs: 90 * MINUTE },
     proof: "head_known_item", walk: "offset-walk", http: true, evidence: false, fence: "dm_archive",
     operations: ["messaging.groups"],
-    legacy: [stream("dm_conversations")],
     module: dmConversationsModule("head"),
   },
   {
@@ -242,7 +213,6 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     triggers: ["poll"], period: { everyMs: DAY }, slo: { staleAfterMs: 3 * DAY },
     proof: "offset_stable", walk: "offset-walk", http: true, evidence: false, fence: "dm_archive",
     operations: ["messaging.groups"],
-    legacy: [stream("dm_conversations")],
     module: dmConversationsModule("full"),
   },
   {
@@ -255,7 +225,6 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     coalesce: { quietMs: 0, maxMs: 0, extendOnSignal: false }, slo: { resultMs: 12 * SECOND },
     proof: "snapshot", walk: "single", http: true, planBeforeGate: true, evidence: false, fence: "dm_archive",
     operations: ["messaging.groups", "group.detail"],
-    legacy: [stream("dm_conversations"), sender("ws_hint")],
     module: dmConversationsModule("find"),
   },
   {
@@ -263,7 +232,6 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     triggers: ["apply:dm-conversations.*"], slo: {},
     proof: "snapshot", walk: "single", http: true, evidence: false, fence: "dm_archive",
     operations: ["group.detail"],
-    legacy: [stream("dm_conversations")],
     module: dmConversationsModule("detail"),
   },
   {
@@ -274,7 +242,6 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     triggers: ["ws_lifecycle"], cadence: { everyMs: 30 * SECOND }, slo: { resultMs: 45 * SECOND },
     proof: "head_known_item", walk: "single", http: true, evidence: false, fence: "dm_archive",
     operations: ["messaging.groups"],
-    legacy: [stream("dm_conversations")],
     module: dmConversationsModule("ws-down"),
   },
 
@@ -298,7 +265,6 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     slo: { resultMs: 30 * SECOND },
     proof: "chain_empty_page", walk: "incremental-head", http: true, evidence: true, fence: "dm_archive",
     operations: ["messages.page"],
-    legacy: [stream("dm_messages"), sender("ws_hint"), sender("ai_accelerator"), sender("ai_fast_lane")],
     module: dmMessagesModule("head"),
   },
   {
@@ -307,7 +273,6 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     coalesce: { quietMs: MINUTE, maxMs: 10 * MINUTE, extendOnSignal: true }, slo: { staleAfterMs: 6 * HOUR },
     proof: "chain_empty_page", walk: "incremental-head", http: true, evidence: true, fence: "dm_archive",
     operations: ["messages.page"],
-    legacy: [stream("dm_messages"), stream("dm_conversations")],
     module: dmMessagesModule("catchup"),
   },
   {
@@ -316,7 +281,6 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     triggers: ["request"], slo: {},
     proof: "chain_empty_page", walk: "cursor-walk", http: true, evidence: true, fence: "dm_archive",
     operations: ["messages.page"],
-    legacy: [stream("dm_messages"), sender("targeted_backfill")],
     module: dmMessagesModule("history"),
   },
 
@@ -327,7 +291,6 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     coalesce: { quietMs: 2 * SECOND, maxMs: 2 * SECOND, extendOnSignal: false }, slo: { resultMs: 15 * SECOND },
     proof: "head_known_item", walk: "offset-walk", http: true, evidence: false, fence: "dm_archive",
     operations: ["transactions.page"],
-    legacy: [stream("transactions")],
     module: transactionsModule("head"),
   },
   {
@@ -337,7 +300,6 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     triggers: ["poll"], period: { everyMs: 15 * MINUTE }, slo: { staleAfterMs: 45 * MINUTE },
     proof: "head_known_item", walk: "offset-walk", http: true, evidence: false, fence: "dm_archive",
     operations: ["transactions.page"],
-    legacy: [stream("transactions")],
     module: transactionsModule("insurance"),
   },
   {
@@ -345,7 +307,6 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     triggers: ["poll", "ws:transaction", "apply:transactions.head"], period: { everyMs: HOUR }, slo: { staleAfterMs: 3 * HOUR },
     proof: "offset_stable_total", walk: "offset-walk", http: true, evidence: false, fence: "dm_archive",
     operations: ["transactions.page"],
-    legacy: [stream("transactions")],
     module: transactionsModule("rescan"),
   },
   {
@@ -353,7 +314,6 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     triggers: ["owner", "new_page", "dependency"], slo: {},
     proof: "offset_stable_total", walk: "offset-walk", http: true, evidence: false, fence: "dm_archive",
     operations: ["transactions.page"],
-    legacy: [stream("transactions")],
     module: transactionsModule("backfill"),
   },
 
@@ -364,7 +324,6 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     triggers: ["poll"], period: { everyMs: 6 * HOUR }, slo: { staleAfterMs: 18 * HOUR },
     proof: "snapshot", walk: "single", http: true, evidence: false, fence: "none",
     operations: ["earnings.accounts"],
-    legacy: [stream("top_spenders")],
     module: topSpendersModule("window"),
   },
   {
@@ -374,7 +333,6 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     triggers: ["owner"], slo: {},
     proof: "snapshot", walk: "windows", http: true, evidence: false, fence: "none",
     operations: ["earnings.accounts"],
-    legacy: [stream("top_spenders")],
     module: topSpendersModule("bootstrap"),
   },
 
@@ -389,8 +347,7 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     triggers: ["projection_queue", "poll", "apply:transactions.*"], slo: { staleAfterMs: 3 * DAY },
     proof: "receipt", walk: "subject-queue", http: true, evidence: false, fence: "none",
     operations: ["earnings.stats_accounts", "earnings.monthly_accounts"],
-    terminalStatuses: [400, 404, 410], subjectQueue: true, queuePlane: "fan_earnings_monthly",
-    legacy: [stream("fan_earnings")],
+    terminalStatuses: [400, 404, 410], subjectQueue: true,
     module: fanEarningsModule,
   },
 
@@ -404,7 +361,6 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     proof: "empty_page", walk: "cursor-walk", http: true, evidence: true, fence: "none",
     operations: ["media.order_history"],
     terminalStatuses: [404, 410, 422],
-    legacy: [stream("purchase_history")],
     module: purchasesModule,
   },
 
@@ -414,7 +370,6 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     triggers: ["poll", "ws:payout_request", "ws:transaction"], period: { everyMs: DAY }, slo: { staleAfterMs: 3 * DAY },
     proof: "snapshot", walk: "snapshot-sequence", http: true, evidence: false, fence: "none",
     operations: ["payouts.methods", "payouts.requests"],
-    legacy: [stream("payouts")],
     module: payoutsModule("daily"),
   },
   {
@@ -422,7 +377,6 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     triggers: ["apply:payouts.daily"], slo: {},
     proof: "offset_stable", walk: "offset-walk", http: true, evidence: false, fence: "none",
     operations: ["payouts.requests"],
-    legacy: [stream("payouts")],
     module: payoutsModule("walk"),
   },
 
@@ -432,7 +386,6 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     triggers: ["poll", "ws:subscription", "ws_gap"], period: { everyMs: HOUR }, slo: { staleAfterMs: 3 * HOUR },
     proof: "offset_stable", walk: "offset-walk", http: true, evidence: false, fence: "none",
     operations: ["subscribers.page"],
-    legacy: [stream("subscribers")],
     module: subscribersModule("poll"),
   },
   {
@@ -440,7 +393,6 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     triggers: ["owner", "new_page"], slo: {},
     proof: "offset_stable", walk: "offset-walk", http: true, evidence: false, fence: "none",
     operations: ["subscribers.page"],
-    legacy: [stream("subscribers")],
     module: subscribersModule("history"),
   },
 
@@ -450,18 +402,16 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     triggers: ["poll"], period: { everyMs: HOUR }, slo: { staleAfterMs: 3 * HOUR },
     proof: "head_known_item", walk: "incremental-head", http: true, evidence: false, fence: "none",
     operations: ["followers.page"],
-    legacy: [stream("followers")],
     module: followersModule("head"),
   },
   {
     key: "followers.reconcile", file: "followers", subject: "page", kind: "goal", class: "planned",
-    // One full walk a day after the previous start (#330), the floor both
-    // engines keep.
-    triggers: ["apply:followers.head", "owner"], minIntervalMs: FOLLOWERS_RECONCILE_MIN_INTERVAL_MS,
+    // One full walk a day after the previous start (#330): the module keeps
+    // that floor (`FOLLOWERS_RECONCILE_MIN_INTERVAL_MS`, resources/followers.ts).
+    triggers: ["apply:followers.head", "owner"],
     slo: { staleAfterMs: 3 * DAY },
     proof: "reconcile_membership", walk: "offset-walk", http: true, evidence: false, fence: "none",
     operations: ["account.me", "followers.page"],
-    legacy: [stream("followers_reconcile")],
     module: followersModule("reconcile"),
   },
 
@@ -476,7 +426,6 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     slo: {},
     proof: "snapshot", walk: "subject-queue", http: true, evidence: false, fence: "none",
     operations: ["accounts.by_ids"],
-    legacy: [stream("subscribers"), stream("followers"), stream("followers_reconcile")],
     module: fanProfilesModule("lookup"),
   },
   {
@@ -488,7 +437,6 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     triggers: [], slo: {},
     proof: "snapshot", walk: "single", http: true, evidence: false, fence: "none",
     operations: ["accounts.by_ids"],
-    legacy: [stream("dm_conversations"), stream("dm_messages")],
     module: fanProfilesModule("probe"),
   },
   {
@@ -496,7 +444,6 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     triggers: ["owner"], slo: {},
     proof: "snapshot", walk: "cursor-walk", http: true, evidence: false, fence: "none",
     operations: ["accounts.by_ids"],
-    legacy: [sender("alias_backfill")],
     module: fanProfilesModule("alias-backfill"),
   },
 
@@ -507,7 +454,6 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     triggers: ["poll"], period: { everyMs: 30 * MINUTE }, slo: { staleAfterMs: HOUR },
     proof: "head_known_item", walk: "cursor-walk", http: true, evidence: true, fence: "none",
     operations: ["notifications.page"],
-    legacy: [stream("notifications")],
     module: notificationsModule("forward"),
   },
   {
@@ -515,7 +461,6 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     triggers: ["owner", "new_page"], slo: {},
     proof: "empty_page", walk: "cursor-walk", http: true, evidence: true, fence: "none",
     operations: ["notifications.page"],
-    legacy: [stream("notifications")],
     module: notificationsModule("backfill"),
   },
 
@@ -525,7 +470,6 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     triggers: ["poll"], period: { everyMs: 6 * HOUR }, slo: { staleAfterMs: 18 * HOUR },
     proof: "head_known_item", walk: "cursor-walk", http: true, evidence: false, fence: "none",
     operations: ["posts.timeline", "posts.tips"],
-    legacy: [stream("posts")],
     module: postsModule("refresh"),
   },
   {
@@ -534,7 +478,6 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     triggers: ["owner", "new_page", "apply:posts.refresh"], slo: {},
     proof: "empty_page", walk: "cursor-walk", http: true, evidence: false, fence: "none",
     operations: ["posts.timeline", "posts.tips"],
-    legacy: [stream("posts")],
     module: postsModule("backfill"),
   },
   {
@@ -546,8 +489,7 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     tiers: [{ maxAgeDays: 30, everyMs: DAY }, { maxAgeDays: 180, everyMs: 7 * DAY }, { maxAgeDays: null, everyMs: 30 * DAY }],
     standing: { recheckMs: 6 * HOUR }, slo: { staleAfterMs: 3 * DAY },
     proof: "snapshot", walk: "subject-queue", http: true, evidence: false, fence: "none",
-    operations: ["posts.by_ids"], subjectQueue: true, queuePlane: "post_engagement",
-    legacy: [stream("posts")],
+    operations: ["posts.by_ids"], subjectQueue: true,
     module: postsModule("engagement"),
   },
 
@@ -560,8 +502,7 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     key: "post-replies.walk", file: "post-replies", subject: "page", kind: "goal", class: "planned",
     triggers: ["projection_queue"], standing: { recheckMs: 6 * HOUR }, slo: { staleAfterMs: 3 * DAY },
     proof: "empty_page", walk: "subject-queue", http: true, evidence: true, fence: "none",
-    operations: ["post.replies"], subjectQueue: true, queuePlane: "post_replies",
-    legacy: [stream("post_replies")],
+    operations: ["post.replies"], subjectQueue: true,
     module: postRepliesModule("walk"),
   },
   {
@@ -569,7 +510,6 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     triggers: ["apply:post-replies.walk"], slo: {},
     proof: "snapshot", walk: "single", http: true, evidence: false, fence: "none",
     operations: ["accounts.by_ids"],
-    legacy: [stream("post_replies")],
     module: postRepliesModule("authors"),
   },
 
@@ -579,7 +519,6 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     triggers: ["poll"], period: { everyMs: DAY }, slo: { staleAfterMs: 3 * DAY },
     proof: "snapshot", walk: "snapshot-sequence", http: true, evidence: false, fence: "none", ownerProtected: true,
     operations: ["vault.albums", "uservault.albums", "subscriptions.tiers", "subscriptions.giftcodes", "message.automated", "account.walls"],
-    legacy: [stream("catalog")],
     module: catalogModule("fixed"),
   },
   {
@@ -594,7 +533,6 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     standing: { recheckMs: DAY }, slo: { staleAfterMs: 3 * DAY },
     proof: "vault_walk", walk: "cursor-walk", http: true, evidence: true, fence: "none", ownerProtected: true,
     operations: ["vault.media"],
-    legacy: [stream("catalog")],
     module: catalogModule("vault"),
   },
   {
@@ -602,7 +540,6 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     triggers: ["apply:catalog.*"], slo: {},
     proof: "snapshot", walk: "single", http: true, evidence: false, fence: "none",
     operations: ["account.media_by_ids", "account.bundles_by_ids"],
-    legacy: [stream("catalog")],
     module: catalogModule("hydrate"),
   },
 
@@ -619,8 +556,7 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     pageOverride: "tiers",
     standing: { recheckMs: 6 * HOUR }, slo: { staleAfterMs: 3 * DAY },
     proof: "window_honoured", walk: "subject-queue", http: true, evidence: false, fence: "none", ownerProtected: true,
-    operations: ["media.offer_stats"], subjectQueue: true, queuePlane: "media_stats",
-    legacy: [stream("media_stats")],
+    operations: ["media.offer_stats"], subjectQueue: true,
     module: mediaStatsModule,
   },
 
@@ -630,7 +566,6 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     triggers: ["poll"], period: { everyMs: DAY }, slo: { staleAfterMs: 3 * DAY },
     proof: "snapshot", walk: "snapshot-sequence", http: true, evidence: false, fence: "none",
     operations: STATS_DAILY_OPERATIONS,
-    legacy: [stream("stats_snapshot")],
     module: statsModule("daily"),
   },
   {
@@ -640,7 +575,6 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     triggers: ["poll"], period: { everyMs: 22 * HOUR }, slo: { staleAfterMs: 66 * HOUR },
     proof: "window_honoured", walk: "single", http: true, evidence: false, fence: "none",
     operations: ["account.stats"],
-    legacy: [stream("stats_snapshot")],
     module: statsModule("hourly"),
   },
   {
@@ -648,7 +582,6 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     triggers: ["owner", "new_page"], slo: {},
     proof: "window_honoured", walk: "windows", http: true, evidence: false, fence: "none",
     operations: ["account.stats", "earnings.stats_window"],
-    legacy: [stream("stats_snapshot")],
     module: statsModule("backfill"),
   },
 
@@ -662,7 +595,6 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     triggers: ["poll"], period: { everyMs: 6 * HOUR }, slo: { staleAfterMs: 18 * HOUR },
     proof: "reconcile_membership", walk: "cursor-walk", http: true, evidence: false, fence: "none",
     operations: ["lists.account", "lists.items"],
-    legacy: [],
     module: fanListsModule,
   },
   {
@@ -679,7 +611,6 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     triggers: ["poll"], standing: { recheckMs: 10 * MINUTE }, slo: { staleAfterMs: 18 * HOUR },
     proof: "receipt", walk: "composite", http: true, evidence: true, fence: "none",
     operations: ["lists.account", "lists.items", "lists.create", "lists.add", "lists.remove"],
-    legacy: [],
     module: fanSetListsModule,
   },
 
@@ -692,7 +623,6 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     triggers: ["poll"], period: { everyMs: HOUR }, slo: { staleAfterMs: 6 * HOUR },
     proof: "window_honoured", walk: "snapshot-sequence", http: true, evidence: false, fence: "none",
     operations: ["stats.series", "stats.summary"],
-    legacy: [],
     module: creatorStatsModule("account"),
   },
   {
@@ -702,7 +632,6 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     triggers: ["owner", "new_page"], slo: {},
     proof: "window_honoured", walk: "windows", http: true, evidence: false, fence: "none",
     operations: ["stats.series", "stats.summary"],
-    legacy: [],
     module: creatorStatsModule("history"),
   },
   {
@@ -714,7 +643,6 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     triggers: ["poll"], period: { everyMs: 3 * HOUR }, slo: { staleAfterMs: 12 * HOUR },
     proof: "window_honoured", walk: "snapshot-sequence", http: true, evidence: false, fence: "none",
     operations: ["stats.media_top"],
-    legacy: [],
     module: creatorStatsMediaModule("media-top"),
   },
   {
@@ -733,8 +661,7 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     ],
     standing: { recheckMs: HOUR }, slo: { staleAfterMs: 3 * DAY },
     proof: "window_honoured", walk: "subject-queue", http: true, evidence: false, fence: "none",
-    operations: ["stats.media"], subjectQueue: true, queuePlane: "creator_stats_media",
-    legacy: [],
+    operations: ["stats.media"], subjectQueue: true,
     module: creatorStatsMediaModule("media"),
   },
   {
@@ -746,7 +673,6 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     triggers: ["poll"], period: { everyMs: 6 * HOUR }, slo: { staleAfterMs: 18 * HOUR },
     proof: "window_honoured", walk: "snapshot-sequence", http: true, evidence: false, fence: "none",
     operations: ["stats.geo", "stats.tags"],
-    legacy: [],
     module: creatorStatsAudienceModule("audience"),
   },
   {
@@ -756,7 +682,6 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     triggers: ["poll"], period: { everyMs: DAY }, slo: { staleAfterMs: 3 * DAY },
     proof: "window_honoured", walk: "snapshot-sequence", http: true, evidence: false, fence: "none",
     operations: ["stats.media_benchmarks", "stats.active_hours"],
-    legacy: [],
     module: creatorStatsAudienceModule("daily"),
   },
   {
@@ -766,7 +691,6 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     triggers: ["poll"], period: { everyMs: HOUR }, slo: { staleAfterMs: 6 * HOUR },
     proof: "window_honoured", walk: "snapshot-sequence", http: true, evidence: false, fence: "none",
     operations: ["stats.media_shown"],
-    legacy: [],
     module: creatorStatsAudienceModule("media-shown"),
   },
   {
@@ -777,7 +701,6 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     triggers: ["owner", "new_page"], slo: {},
     proof: "window_honoured", walk: "windows", http: true, evidence: false, fence: "none",
     operations: ["stats.tags", "stats.geo"],
-    legacy: [],
     module: creatorStatsAudienceModule("history"),
   },
 
@@ -791,7 +714,6 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     proof: "snapshot", walk: "single", http: true, evidence: false, fence: "dm_archive",
     subjectScopedAuthStatuses: [401, 403],
     operations: ["cdn.media"],
-    legacy: [sender("media_download")],
     module: mediaDownloadModule,
   },
   {
@@ -800,7 +722,6 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     triggers: ["ws_gap", "ws:invalid"], slo: { resultMs: MINUTE },
     proof: "none", walk: "composite", http: true, evidence: false, fence: "dm_archive",
     operations: ["messaging.groups"],
-    legacy: [],
     module: repairModule,
   },
 
@@ -812,7 +733,6 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     triggers: ["owner"], slo: {},
     proof: "none", walk: "single", http: true, evidence: false, fence: "none",
     operations: [],
-    legacy: [sender("endpoint_probe"), sender("replay_probe")],
     module: probeModule,
   },
   {
@@ -830,7 +750,6 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     subjectScopedAuthStatuses: [403],
     terminalStatuses: [400, 404, 410, 422],
     operations: ["messages.page"],
-    legacy: [],
     module: probeExcludedChatModule,
   },
   // ── publish (wall posts PR 6): the page's write commands ─────────────────
@@ -855,7 +774,6 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     triggers: ["publication"], slo: {},
     proof: "receipt", walk: "single", http: true, evidence: true, fence: "none",
     operations: FANSLY_WRITE_OPERATIONS,
-    legacy: [],
     module: publishModule,
   })),
   {
@@ -869,7 +787,6 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     triggers: ["publication"], slo: {},
     proof: "receipt", walk: "single", http: true, evidence: true, fence: "none",
     operations: ["publish.upload_part"],
-    legacy: [],
     module: publishModule,
   },
   // ── publish (wall posts PR 9): Hub's reads of its own posts ──────────────
@@ -881,7 +798,6 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     triggers: ["poll", "publication"], period: { everyMs: HOUR }, slo: { staleAfterMs: 3 * HOUR },
     proof: "snapshot", walk: "single", http: true, evidence: true, fence: "none",
     operations: ["posts.scheduled"],
-    legacy: [],
     module: publishScheduleModule,
   },
   {
@@ -893,53 +809,7 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     triggers: ["publication"], slo: {},
     proof: "snapshot", walk: "composite", http: true, evidence: true, fence: "none",
     operations: ["posts.by_ids", "posts.scheduled", "posts.timeline", "stories.list"],
-    legacy: [],
     module: publishVerifyModule,
-  },
-];
-
-/**
- * The step-1 overlay apply is the `dm-live.frame` resource (design §5.5): a
- * WS frame applied in the transaction that acks its receipt — not a work row,
- * no request, so not an engine entry.
- */
-export const FANSLY_LIVE_FRAME_RESOURCE = {
-  key: "dm-live.frame",
-  triggers: ["ws:*"] as readonly Trigger[],
-  slo: { visibleP95Ms: 5 * SECOND },
-} as const;
-
-/** Legacy streams and senders no entry takes over (design §4.5). */
-export const FANSLY_LEGACY_UNMAPPED: readonly LegacyDisposition[] = [
-  {
-    ref: stream("fan_identities"),
-    disposition: "retired",
-    reason: "OnlyFans only: Fansly pages never ran the stream",
-  },
-  {
-    ref: sender("sync_stream"),
-    disposition: "by_streams",
-    reason: "the stream chunks themselves: covered stream by stream",
-  },
-  {
-    ref: sender("onboarding"),
-    disposition: "stays_legacy",
-    reason: "no page exists yet: the step-1 no-page guard until step 4 (D4, §11.4)",
-  },
-  {
-    ref: sender("credentials_verify"),
-    disposition: "stays_legacy",
-    reason: "no page: the step-1 no-page guard until step 4 (D4, §11.4)",
-  },
-  {
-    ref: sender("ws_probe"),
-    disposition: "retired",
-    reason: "operator scripts refuse pages in handover or live",
-  },
-  {
-    ref: sender("public_lookup"),
-    disposition: "pageless",
-    reason: "the session-less public account reader (arena R5): no page, no session, its own egress (fansly_public)",
   },
 ];
 
@@ -989,11 +859,11 @@ export function fanslyNewPageWork(
 // are `sync_stream` values because the API contracts carry them; nothing of
 // the legacy engine stands behind them (it ran a lane per name until step 4).
 // A key answers to every stream listed with it; a key in no line answers to
-// no such lever (`FANSLY_KEYS_WITHOUT_LEVER`) and is addressed by its own name
-// (`sync page pause --resource`, `sync work`). The streams of two Settings
-// blocks never share a key (`ENGINE_BLOCK_STREAMS`): a block's buttons move
-// its own keys and no other block's, so a pause of one block is never half
-// undone by a resume of another (tests/sync-lever-map.test.ts).
+// no such lever and is addressed by its own name (`sync page pause
+// --resource`, `sync work`). The streams of two Settings blocks never share a
+// key (`ENGINE_BLOCK_STREAMS`): a block's buttons move its own keys and no
+// other block's, so a pause of one block is never half undone by a resume of
+// another.
 
 /** One line of the lever map. */
 export interface FanslyLeverStream {
@@ -1031,22 +901,6 @@ export const FANSLY_LEVER_STREAMS: readonly FanslyLeverStream[] = [
   { stream: "catalog", keys: ["catalog.fixed", "catalog.vault", "catalog.hydrate"] },
   { stream: "media_stats", keys: ["media-stats.walk"] },
   { stream: "stats_snapshot", keys: ["stats.daily", "stats.hourly", "stats.backfill"] },
-];
-
-/** The keys no lever stream names: the identity checks, the socket and its
- *  repair, live deletions, the owner's alias backfill and probes, and media
- *  download. Listed so a new key is placed deliberately
- *  (tests/sync-lever-map.test.ts). */
-export const FANSLY_KEYS_WITHOUT_LEVER: readonly string[] = [
-  "account.verify", "dm-live.deletions", "fan-profiles.alias-backfill",
-  "media-download.fetch", "repair.ws-gap", "probe.manual", "probe.excluded-chat",
-  // Fan marks: the page's user lists, read for the chat header only.
-  "fan-lists.poll",
-  // Fan set lists: the page's list Hub keeps, by the owner's setting only.
-  "fan-set-lists.sync",
-  // Fansly's statistics pages of 2026-10: no Settings block reads them yet.
-  "creator-stats.account", "creator-stats.history", "creator-stats.media-top", "creator-stats.media",
-  "creator-stats.audience", "creator-stats.audience-daily", "creator-stats.media-shown", "creator-stats.audience-history",
 ];
 
 /** Every stream name of the lever map, in its order. */

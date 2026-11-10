@@ -244,10 +244,6 @@ export function routeOfWireId(id: FanslyWireId): FanslyRoute {
   return id;
 }
 
-export function isFanslySiteRoute(value: unknown): value is FanslySiteRoute {
-  return typeof value === "string" && Object.hasOwn(SITE_ROUTES, value);
-}
-
 /** The route of an attempt's `operation` in sync_attempts: a wire id (an
  *  engine send), or — for a site or login attempt (0271) — any catalogue
  *  route its request matched, a legacy-only endpoint and the site's own

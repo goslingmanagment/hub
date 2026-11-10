@@ -94,8 +94,6 @@ export type WsItem =
    *  for any resource, and not a decoder error. */
   | { kind: "other"; path: number[]; serviceId: number | null; eventType: number | null };
 
-export type WsItemKind = WsItem["kind"];
-
 export interface WsFrameDecode {
   messageDecoderVersion: number;
   routeDecoderVersion: number;
@@ -265,10 +263,4 @@ export function decodeFanslyWsFrame(frame: string, ownRef: string | null): WsFra
 export function socketFrameOf(payload: unknown): string | null {
   const envelope = wsObject(payload);
   return envelope?.codec === FANSLY_WS_CAPTURE_KIND && typeof envelope.frame === "string" ? envelope.frame : null;
-}
-
-/** Items that are business news (not `other`): the denominator of the decode
- *  debt rule (plan §7 p.10 (d)). */
-export function isBusinessWsItem(item: WsItem): boolean {
-  return item.kind !== "other";
 }

@@ -2,8 +2,8 @@ import { fanslySnowflakeToDate } from "@agency_hub_core/shared";
 
 // Fansly Sync Engine (plan §6.2, design §8.1): THE definition of a contiguous
 // DM chain and of a complete history. Pure: the engine's DM apply and the
-// journal rebuild (chain-rebuild.ts) fold the same pages through the same
-// function, so an online chain and a rebuilt one agree by construction.
+// journal checks (chain-rebuild.ts) fold the same pages through the same
+// function, so an online chain and a re-folded one agree by construction.
 //
 // A chain is proven by consecutive vendor pages from a confirmed head:
 //   - a head read (`before` absent) confirms the newest message;
@@ -508,13 +508,6 @@ function foldBelowOldest(chain: ThreadChain, segment: Segment | null, page: Chai
     verdict: { kind: "extended_down", added: page.ids.length },
     reported: [],
   };
-}
-
-/** The `before` of the next read that continues the thread's chain downwards
- *  (a staged walk first), or null for a head read. */
-export function nextChainCursor(chain: ThreadChain, segment: Segment | null): string | null {
-  if (segment !== null) return segment.oldestId;
-  return chain.state === "partial" ? chain.oldestId : null;
 }
 
 /** Creation instant of a Fansly snowflake id in ms, or null for a non-id. */
