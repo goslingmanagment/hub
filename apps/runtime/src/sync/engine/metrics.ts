@@ -1,5 +1,4 @@
 import {
-  countSendsSince,
   gaugeSample,
   listPageBrowsersOfPages,
   listSyncPages,
@@ -34,41 +33,12 @@ import { auditPagePace, type PaceAudit } from "./send-audit.ts";
 // unavailability episodes — their work is not in `sync_blocked_by_vendor`).
 // The per-page families cover the pages the engine owns (`handover`/`live`).
 //
-// `computeSyncMetrics` serves one page (status);
 // `sampleSyncEngineMetrics` is the ops sampler's compact set (aggregates over
 // pages, design §9.4 [A11]): per-page series would double the sample table
 // for figures the page status already shows.
 
-export interface SyncPageMetrics {
-  pageId: number;
-  pageLabel: string | null;
-  mode: SyncPageRow["mode"];
-  window: { since: Date; until: Date };
-  sends: { urgent: number; requests: number; planned: number; total: number; byResource: Record<string, number> };
-  /** `sync_min_send_gap_ms{page}`: the smallest gap before one of Hub's
-   *  recorded sends, to the page's send before it of any origin; null: none. */
-  minSendGapMs: number | null;
-  /** `sync_pace_violations{page}`: Hub's sends closer than their pause, by
-   *  the send audit (the alert evaluator's judgement). */
-  paceViolations: number;
-  /** `sync_site_close_sends{page}`: the site's own requests closer than their
-   *  S to the page's request before them — the site's pace, never a violation. */
-  siteCloseSends: number;
-  /** `sync_holds{page,kind}`: the page's own holds (a credentials hold, a
-   *  network hold — both when both stand) and the resource files held, in
-   *  force at `until`, by the hold evaluator. */
-  holds: { page: FanslyPageHoldKind[]; resources: string[] };
-  breakersOpen: number;
-  /** Open work the vendor blocks; a chat Fansly does not serve to the page is
-   *  counted in `chatsUnavailable` instead. */
-  blockedByVendor: number;
-  quarantined: number;
-  /** `sync_chats_unavailable{page}`: chats Fansly does not serve to the page. */
-  chatsUnavailable: number;
-}
-
 /** The holds of a page in force at `now` (`engine/admission.ts`). */
-function holdsOf(page: SyncPageRow, now: Date): SyncPageMetrics["holds"] {
+function holdsOf(page: SyncPageRow, now: Date): { page: FanslyPageHoldKind[]; resources: string[] } {
   const holds = holdSetOf(page.holds);
   const held = pageHoldsInForce(holds, now);
   return {
@@ -81,39 +51,6 @@ function holdsOf(page: SyncPageRow, now: Date): SyncPageMetrics["holds"] {
 async function readPagePace(db: Database, input: { pageId: number; since: Date; until: Date }): Promise<PaceAudit> {
   const rows = await readFanslySendAudit(db, input);
   return auditPagePace(rows, { start: input.since, until: input.until });
-}
-
-/** One page's families over [now − windowMs, now). */
-export async function computeSyncMetrics(
-  db: Database,
-  input: { page: SyncPageRow; windowMs: number; now?: Date },
-): Promise<SyncPageMetrics> {
-  const until = input.now ?? input.page.dbNow;
-  const since = new Date(until.getTime() - input.windowMs);
-  const [row] = await readSyncJournalMetrics(db, { pageIds: [input.page.pageId], since, until });
-  const pace = await readPagePace(db, { pageId: input.page.pageId, since, until });
-  const counts = await countSendsSince(db, { pageId: input.page.pageId, since });
-  return {
-    pageId: input.page.pageId,
-    pageLabel: input.page.pageLabel,
-    mode: input.page.mode,
-    window: { since, until },
-    sends: {
-      urgent: row?.sends.urgent ?? 0,
-      requests: row?.sends.requests ?? 0,
-      planned: row?.sends.planned ?? 0,
-      total: (row?.sends.urgent ?? 0) + (row?.sends.requests ?? 0) + (row?.sends.planned ?? 0),
-      byResource: counts.byResource,
-    },
-    minSendGapMs: pace.minGapMs,
-    paceViolations: pace.violations.length,
-    siteCloseSends: pace.siteClose,
-    holds: holdsOf(input.page, until),
-    breakersOpen: row?.breakersOpen ?? 0,
-    blockedByVendor: row?.blockedByVendor ?? 0,
-    quarantined: row?.quarantined ?? 0,
-    chatsUnavailable: row?.chatsUnavailable ?? 0,
-  };
 }
 
 /** Nearest-rank quantile of a sample (null when empty). */

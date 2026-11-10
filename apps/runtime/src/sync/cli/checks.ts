@@ -1,6 +1,7 @@
 import { writeFile } from "node:fs/promises";
 
-import { Command, InvalidArgumentError } from "commander";
+import type { Command } from "commander";
+import { InvalidArgumentError } from "commander";
 
 import { acceptanceExitCode, checkLiveHour } from "../checks/live-hour.ts";
 import { createSyncContext, type SyncContext } from "../context.ts";
@@ -81,17 +82,4 @@ export function registerSyncCheckCommands(sync: Command, deps: SyncCheckCliDeps 
         await opened.close();
       }
     });
-}
-
-/** A standalone `sync` group with the check commands; errors throw instead of
- *  exiting (tests and tools). */
-export function buildSyncCheckCommandGroup(deps: SyncCheckCliDeps): Command {
-  const sync = new Command("sync").exitOverride();
-  sync.enablePositionalOptions();
-  registerSyncCheckCommands(sync, deps);
-  for (const command of sync.commands) {
-    command.exitOverride();
-    for (const sub of command.commands) sub.exitOverride();
-  }
-  return sync;
 }

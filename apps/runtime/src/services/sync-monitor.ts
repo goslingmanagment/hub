@@ -476,37 +476,6 @@ function streamItemFor(
   };
 }
 
-export async function getPageStreamSyncUxByStream(
-  app: AppContext,
-  input: {
-    pageId: number;
-    streams: SyncStream[];
-    windowHours?: number;
-    now?: Date;
-  },
-) {
-  if (input.streams.length === 0) {
-    return new Map<SyncStream, SyncUxSummary>();
-  }
-
-  const now = input.now ?? new Date();
-  const windowHours = input.windowHours ?? DEFAULT_WINDOW_HOURS;
-  const windowStart = new Date(now.getTime() - windowHours * 60 * 60 * 1000);
-  const rows = await listSyncMonitorStreamRows(app.db, {
-    pageIds: [input.pageId],
-    streams: input.streams,
-    windowStart,
-    now,
-  });
-
-  return new Map(
-    rows.map((row) => {
-      const stream = streamItemFor(row, now);
-      return [row.stream, stream.syncUx] satisfies [SyncStream, SyncUxSummary];
-    }),
-  );
-}
-
 function comparePages(a: SyncMonitorPageItem, b: SyncMonitorPageItem) {
   const score = (page: SyncMonitorPageItem) =>
     page.summary.stalledStreams * 1000 +

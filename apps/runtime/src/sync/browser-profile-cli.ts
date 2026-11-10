@@ -1,6 +1,7 @@
 import { hostname } from "node:os";
 
-import { Command, InvalidArgumentError } from "commander";
+import type { Command } from "commander";
+import { InvalidArgumentError } from "commander";
 
 import {
   consumePageBrowserDraft,
@@ -482,12 +483,4 @@ export function registerSyncBrowserProfileCommands(sync: Command, deps: BrowserP
     .action(async () => {
       await withContext(async ({ db }) => print((await listUnboundPageBrowsers(db)).map(profileView)));
     });
-}
-
-/** The commands as a group of their own (`sync`), for a caller that runs
- *  them without the whole CLI (tests): errors thrown, never an exit. */
-export function buildSyncBrowserProfileCommandGroup(deps: BrowserProfileCliDeps): Command {
-  const sync = new Command("sync").exitOverride();
-  registerSyncBrowserProfileCommands(sync, deps);
-  return sync;
 }

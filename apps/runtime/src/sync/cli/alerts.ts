@@ -1,6 +1,6 @@
 import { hostname } from "node:os";
 
-import { Command } from "commander";
+import type { Command } from "commander";
 
 import { listSyncPages } from "@agency_hub_core/db";
 
@@ -44,18 +44,6 @@ async function withContext<T>(
   } finally {
     await ctx.close();
   }
-}
-
-/** A standalone `sync` group with only these commands; errors throw (tests). */
-export function buildSyncAlertsCommandGroup(deps: SyncAlertsCliDeps = defaultDeps): Command {
-  const sync = new Command("sync").exitOverride();
-  registerSyncAlertsCommands(sync, deps);
-  const exit = (command: Command) => {
-    command.exitOverride();
-    for (const sub of command.commands) exit(sub);
-  };
-  exit(sync);
-  return sync;
 }
 
 /** Add `sync alerts …` to the `sync` command group. */

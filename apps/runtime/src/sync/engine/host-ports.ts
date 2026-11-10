@@ -4,7 +4,7 @@ import { SYNC_PAGE_OWNERSHIP_LOCK_NAMESPACE, SYNC_WORK_NOTIFY_CHANNEL, type Data
 import { sql } from "drizzle-orm";
 
 import type { SyncLogger } from "./commit.ts";
-import type { Clock, OwnershipSession, Wake } from "./ports.ts";
+import type { OwnershipSession, Wake } from "./ports.ts";
 
 // The stateful ports of the host (design §3.2, §3.6): the ownership session
 // (one dedicated `pg.Client` that holds every page lock of the process) and
@@ -327,14 +327,4 @@ export class PgWake implements Wake {
     this.#reconnectTimer.unref?.();
     this.#reconnectDelayMs = Math.min(this.#reconnectDelayMs * 2, WAKE_RECONNECT_MAX_MS);
   }
-}
-
-/** A wake without LISTEN: every wait runs to its timeout (tests, tools). */
-export function createTimerWake(clock: Clock): Wake {
-  return {
-    async wait(_pageId, ms, signal) {
-      await clock.sleep(ms, signal).catch(() => undefined);
-      return "timeout";
-    },
-  };
 }

@@ -56,10 +56,6 @@ export interface SyncUxStreamLike {
   consecutiveFailures: number;
 }
 
-export interface SyncUxPageLike {
-  syncUx: SyncUxSummary;
-}
-
 function buildSummary(
   state: SyncUxState,
   input: {

@@ -65,7 +65,6 @@ const PAGE_EXECUTOR_IDLE_POLL_MAX_MS = 5_000;
 const PAGE_EXECUTOR_HEARTBEAT_MS = 15_000;
 const SYNC_RUN_HEARTBEAT_MS = 30_000;
 const SYNC_TASK_LEASE_TTL_MS = 120_000;
-const MAX_LOCAL_EXECUTOR_CHUNKS = 500;
 const SYNC_PAGE_EXECUTE_HANDOFF_GUARD_MS = 60_000;
 
 export interface SyncPageChunkResult {
@@ -1123,26 +1122,4 @@ export async function startSyncPageExecutor(
     }));
 
   await Promise.all(workers);
-}
-
-export async function runSyncPageExecutorUntilIdle(
-  app: AppContext,
-  platformAccountId: number,
-  input?: {
-    maxChunks?: number;
-  },
-) {
-  const maxChunks = input?.maxChunks ?? MAX_LOCAL_EXECUTOR_CHUNKS;
-  for (let index = 0; index < maxChunks; index += 1) {
-    const result = await executeNextPageWorkChunk(app, platformAccountId);
-    if (result.kind === "idle") {
-      return result;
-    }
-
-    if (!result.needsContinuation) {
-      return result;
-    }
-  }
-
-  throw new Error(`Sync page executor exceeded ${maxChunks} local chunks for page ${platformAccountId}`);
 }
