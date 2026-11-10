@@ -196,7 +196,7 @@ function fanslyDmMessages(
       // bare asDate treated it as ms → 1970 events in the pre_2024 partition
       // (audit known finding #2). The heuristic conversion matches the
       // hot-table path (normalizeFanslyTimestamp). Historical 1970 events
-      // are healed by the events:repair-fansly-1970 superseding campaign —
+      // were healed by a one-off superseding campaign (2026-07-10) —
       // replay alone cannot heal (the msg dedup key drops re-emissions).
       occurredAt: asFanslyTimestamp(item.createdAt, observation.receivedAt),
       fanIdentityRef: direction === "received" ? senderId : null,

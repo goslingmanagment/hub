@@ -28,7 +28,6 @@ import {
   createUser,
   insertObservation,
   putPayloadObject,
-  startSyncRun,
 } from "@agency_hub_core/db";
 
 import {
@@ -38,11 +37,6 @@ import {
 import { handleAgentObservationPayload } from "../apps/runtime/src/modules/agent-read/index.ts";
 import { runCanonicalization } from "../apps/runtime/src/services/canonicalize-driver.ts";
 import { executeErasure, planErasure } from "../apps/runtime/src/services/erasure/index.ts";
-import {
-  E5_COLLISION_WINDOW,
-  REJOURNAL_PRODUCER,
-  runObservationsRejournal,
-} from "../apps/runtime/src/services/observations-rejournal.ts";
 import {
   getCaptureCasReadCounters,
   loadObservationPayload,
@@ -409,81 +403,6 @@ describe("G5 slice 3c-1 + #223: an unavailable body is never consumed as an empt
     expect(result.appended).toBe(0);
     // THE ASSERTION THE WHOLE FINDING IS ABOUT: still replayable.
     expect(await parseVersionOf(observation!.id)).toBe(0);
-  }, INTEGRATION_TEST_TIMEOUT_MS);
-
-  it("the re-journal ABORTS rather than write an empty observation", async (context) => {
-    if (!testDb) {
-      context.skip();
-      return;
-    }
-    const page = await seedFanslyPage("unavailable-rejournal");
-    const inWindow = new Date(E5_COLLISION_WINDOW.from.getTime() + 60 * 60 * 1000);
-    const payloads = [
-      [{ correlationAccountId: "fan-u-1", type: 2110, totalGross: 10_000, totalNet: 8_000 }],
-      [{ correlationAccountId: "fan-u-1", year: 2026, month: 6, type: 2110, totalGross: 3_000 }],
-    ];
-
-    const run = await startSyncRun(testDb.db, {
-      platformAccountId: page.id,
-      stream: "fan_earnings",
-      trigger: "scheduled",
-    });
-    if (!run) throw new Error("sync run seed failed");
-
-    for (const [index, endpoint] of ["fan_earnings_stats", "fan_earnings_monthly"].entries()) {
-      const object = await putPayloadObject(testDb.db, {
-        representation: "canonical_json",
-        json: payloads[index],
-        captureInstant: new Date(),
-        lane: "platform_capture",
-        platformAccountId: page.id,
-      });
-      await testDb.pool.query(
-        `insert into sync_raw_payloads
-           (page_id, sync_run_id, stream, request_seq, source, endpoint, request_params,
-            response_payload, mapper_version, payload_kind, captured_at, retain_until,
-            payload_bucket_month, payload_object_id)
-         values ($1, $2, 'fan_earnings', 9, 'scheduled', $3, '{}'::jsonb,
-                 null, 'test-mapper', 'mapping_critical', $4, now() + interval '100 years',
-                 $5::date, $6)`,
-        [page.id, run.id, endpoint, inWindow, object.bucketMonth, object.objectId],
-      );
-    }
-    await insertObservation(testDb.db, {
-      source: "pull",
-      producer: "sync:fansly:fan_earnings",
-      platform: "fansly",
-      accountId: page.id,
-      kind: "fan_earnings_stats",
-      payload: payloads[0],
-      payloadHash: Buffer.alloc(32),
-      idempotencyKey: `${page.id}:fan_earnings:${run.id}:9`,
-    });
-
-    await hideCatalogBodies();
-    resetCaptureCasReadForTests();
-
-    await expect(runObservationsRejournal(appStub(), { dryRun: false }))
-      .rejects.toThrow(/unavailable/);
-
-    // NOTHING was written. The alternative is worse than a crash: the insert is
-    // keyed `rejournal:a22:<rawId>`, so an empty observation would be counted a
-    // successful repair AND block the correct one forever.
-    const journaled = await testDb.pool.query<{ n: string }>(
-      "select count(*)::text as n from observations where producer = $1",
-      [REJOURNAL_PRODUCER],
-    );
-    expect(Number(journaled.rows[0]!.n)).toBe(0);
-
-    // Falsification: restore the bodies and the same campaign succeeds, so the
-    // abort is about the unreadable body and nothing else about this fixture.
-    await testDb.pool.query(
-      `insert into capture_json_hot_bodies (bucket_month, object_id, body)
-       select o.bucket_month, o.object_id, '{"restored": true}'::jsonb
-       from capture_payload_objects o`,
-    );
-    const repaired = await runObservationsRejournal(appStub(), { dryRun: false });
-    expect(repaired.totals.rejournaled).toBe(1);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("the agent plane answers 503, not a restricted-class withholding", async (context) => {

@@ -31,8 +31,7 @@
 //
 // Owner-run, never scheduled: dry-run is the DEFAULT and is provably read-only
 // (one READ ONLY transaction, body reads included); `--execute` opts in. It
-// makes no platform call. The older observations:rejournal-collisions campaign
-// cannot reach these rows: it keys on sync_run_id, which they never had.
+// makes no platform call.
 
 import { createHash } from "node:crypto";
 

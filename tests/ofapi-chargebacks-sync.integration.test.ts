@@ -14,10 +14,7 @@ import {
   setPageOfapiAccountId,
   upsertTransaction,
 } from "@agency_hub_core/db";
-import {
-  repairNegationAnomalies,
-  upsertTransactionWithNegationGuards,
-} from "../apps/runtime/src/services/money-negation-guards.ts";
+import { upsertTransactionWithNegationGuards } from "../apps/runtime/src/services/money-negation-guards.ts";
 import { runOfapiPendingReconcile } from "../apps/runtime/src/services/ofapi-pending-reconcile.ts";
 import { notifyWrongTransactionsWriterIncident } from "../apps/runtime/src/services/notification-incidents.ts";
 
@@ -920,55 +917,6 @@ describe("OFAPI chargebacks reconcile", () => {
       is_active: false,
       inactive_reason: "reversal_without_settled_original",
     });
-  });
-
-  it("repair CLI: deactivates census anomalies (orphans + duplicate twins, reversal canonical) and rebuilds", async (context) => {
-    if (!testDb) {
-      context.skip();
-      return;
-    }
-    const page = await seedOfapiPage("cb-repair", "acct_repair");
-    // Pre-guard world: seed an ACTIVE orphan reversal and an ACTIVE
-    // double-negative pair via the plain upsert.
-    const plain = (transactionId: string, net: bigint, canonicalType: "tip" | "refund" | "chargeback", state: "posted" | "pending" = "posted") =>
-      upsertTransaction(appContext.db, {
-        platformAccountId: page.id,
-        source: "ofapi:webhook",
-        transactionId,
-        rawType: "ofapi:tip",
-        canonicalType,
-        transactionState: state,
-        rawStatus: "x",
-        grossAmountMills: net,
-        sourceDestinationAmountMills: net,
-        creatorNetAmountMills: net,
-        senderId: "555001",
-        occurredAt: new Date("2026-06-18T10:00:00.000Z"),
-      });
-    await plain("orphan-1:reversal", -5_000n, "refund");
-    await plain("dup-1", 8_000n, "tip");
-    await plain("dup-1:reversal", -8_000n, "refund");
-    await plain("dup-1:chargeback", -8_000n, "chargeback");
-
-    const dry = await repairNegationAnomalies(appContext, { dryRun: true });
-    expect(dry).toMatchObject({ pairs: 1, deactivated: 0, dryRun: true });
-    expect((await rowState(page.id, "orphan-1:reversal"))!.is_active).toBe(true);
-
-    const real = await repairNegationAnomalies(appContext, { dryRun: false });
-    expect(real.pairs).toBe(1);
-    expect(real.deactivated).toBeGreaterThanOrEqual(2);
-    // Canonical-twin pin: the :reversal stays, the :chargeback deactivates.
-    expect((await rowState(page.id, "dup-1:reversal"))!.is_active).toBe(true);
-    expect(await rowState(page.id, "dup-1:chargeback")).toEqual({
-      is_active: false,
-      inactive_reason: "superseded_duplicate_negation",
-    });
-    expect(await rowState(page.id, "orphan-1:reversal")).toEqual({
-      is_active: false,
-      inactive_reason: "reversal_without_settled_original",
-    });
-    // dup pair nets 0 over active rows; orphan no longer subtracts.
-    expect(await activeNetMills(page.id)).toBe("0");
   });
 
   // ——— W7.4 (A47): pending settle-or-expire ———

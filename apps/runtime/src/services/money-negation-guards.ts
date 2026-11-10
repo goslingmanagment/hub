@@ -20,19 +20,12 @@
 //   upsertTransaction's conflict-set).
 
 import {
-  deactivateTransactionById,
   getTransactionByTransactionId,
-  listActiveNegationAnomalies,
   reactivateSuppressedNegations,
-  rebuildRevenueRollups,
-  rebuildSpenderProjections,
   upsertTransaction,
-  withOfapiSpendTransactionPageLock,
   type Database,
   type UpsertTransactionInput,
 } from "@agency_hub_core/db";
-
-import type { AppContext } from "../bootstrap.ts";
 
 const NEGATION_SUFFIX_RE = /:(reversal|chargeback)$/;
 
@@ -114,95 +107,4 @@ export async function upsertTransactionWithNegationGuards(
     baseTransactionId: input.transactionId,
   });
   return { suppressedAs: null, reactivatedFrom };
-}
-
-export interface NegationRepairResult {
-  pairs: number;
-  orphans: number;
-  deactivated: number;
-  pagesRebuilt: number;
-  dryRun: boolean;
-}
-
-/** W7.3 repair (owner CLI `money:repair-negations`; E6 census 2026-07-11:
- * 0 double pairs, 9 orphan reversals ≈ −$114.95). Deactivates — NEVER
- * deletes — then rebuilds spender projections + revenue rollups per page
- * from the earliest affected row. Canonical-twin pin: the :reversal row
- * (webhook truth path, Audit B2) stays active; the :chargeback twin
- * deactivates as the duplicate. */
-export async function repairNegationAnomalies(
-  app: Pick<AppContext, "db" | "logger">,
-  options: { dryRun?: boolean } = {},
-): Promise<NegationRepairResult> {
-  const dryRun = options.dryRun ?? false;
-  const { pairs, orphans } = await listActiveNegationAnomalies(app.db);
-
-  interface PageWork {
-    deactivate: Array<{ id: number; reason: NegationSuppressionReason }>;
-    dirtyFrom: Date;
-  }
-  const byPage = new Map<number, PageWork>();
-  const add = (
-    pageId: number,
-    id: number,
-    reason: NegationSuppressionReason,
-    occurredAt: Date,
-  ) => {
-    const work = byPage.get(pageId) ?? { deactivate: [], dirtyFrom: occurredAt };
-    work.deactivate.push({ id, reason });
-    if (occurredAt.getTime() < work.dirtyFrom.getTime()) {
-      work.dirtyFrom = occurredAt;
-    }
-    byPage.set(pageId, work);
-  };
-
-  const pairedChargebackIds = new Set<number>();
-  for (const pair of pairs) {
-    pairedChargebackIds.add(pair.chargeback_id);
-    add(
-      pair.platform_account_id,
-      pair.chargeback_id,
-      "superseded_duplicate_negation",
-      new Date(pair.chargeback_occurred_at),
-    );
-  }
-  for (const orphan of orphans) {
-    // A row can be both halves of a pair AND an orphan; the pair reason wins
-    // (it is the sharper diagnosis) — skip re-adding.
-    if (pairedChargebackIds.has(orphan.id)) {
-      continue;
-    }
-    add(
-      orphan.platform_account_id,
-      orphan.id,
-      "reversal_without_settled_original",
-      new Date(orphan.occurred_at),
-    );
-  }
-
-  let deactivated = 0;
-  let pagesRebuilt = 0;
-  if (!dryRun) {
-    for (const [pageId, work] of byPage) {
-      await withOfapiSpendTransactionPageLock(app.db, pageId, async (db) => {
-        for (const row of work.deactivate) {
-          await deactivateTransactionById(db, { id: row.id, reason: row.reason });
-          deactivated += 1;
-        }
-        await rebuildSpenderProjections(db, pageId, work.dirtyFrom);
-        await rebuildRevenueRollups(db, pageId, work.dirtyFrom);
-      });
-      pagesRebuilt += 1;
-    }
-  }
-
-  const result: NegationRepairResult = {
-    pairs: pairs.length,
-    orphans: orphans.length,
-    deactivated,
-    pagesRebuilt,
-    dryRun,
-  };
-  app.logger.info(result, "Negation-anomaly repair complete");
-  return result;
 }
