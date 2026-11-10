@@ -76,8 +76,7 @@ import { contentHash, millsString, nonNegativeCount, recordArray } from "./sync-
 export const FANSLY_COMMENTS_CANONICALIZER_VERSION = 1;
 const SCHEMA_VERSION = 1;
 
-/** The `observations.kind` this family claims. Registered in
- *  `observation-kinds.ts`. */
+/** The `observations.kind` this family claims. */
 export const FANSLY_COMMENTS_CANONICALIZED_KINDS = ["post_replies"] as const;
 
 const CANONICALIZED_KIND_SET: ReadonlySet<string> = new Set(FANSLY_COMMENTS_CANONICALIZED_KINDS);

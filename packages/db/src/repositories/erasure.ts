@@ -1,4 +1,4 @@
-import { and, desc, eq, isNull, lt, sql } from "drizzle-orm";
+import { and, eq, isNull, lt, sql } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
 import { erasureLog } from "../schema.ts";
@@ -112,10 +112,4 @@ export async function completeErasureLogAndSupersedeScope(
       supersededIds: superseded.map((row) => row.id),
     };
   });
-}
-
-export async function listErasureLog(db: Database, input?: { limit?: number }) {
-  return db.select().from(erasureLog)
-    .orderBy(desc(erasureLog.startedAt))
-    .limit(input?.limit ?? 50);
 }

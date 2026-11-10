@@ -240,18 +240,6 @@ async function claimAndJournal(
   return { inserted: true, observationId, receivedAt, payloadRefVanished };
 }
 
-/** Sequential batch insert; observations are small and producers batch lightly. */
-export async function insertObservations(
-  db: Database,
-  inputs: readonly ObservationInsertInput[],
-): Promise<ObservationInsertResult[]> {
-  const results: ObservationInsertResult[] = [];
-  for (const input of inputs) {
-    results.push(await insertObservation(db, input));
-  }
-  return results;
-}
-
 /**
  * Staged-rollout compatibility for harvest rows written before machine-stable
  * idempotency keys. Old rows used <principal>:<clientEventId>; new rows use

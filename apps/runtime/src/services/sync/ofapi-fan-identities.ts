@@ -56,7 +56,7 @@ const OFAPI_LINK_FANS_MAPPER_VERSION = "ofapi-link-fans-v1";
 // the backlog drains this many at a time, oldest first.
 const LINK_FANS_PROJECTION_PAGES_PER_CALL = 25;
 
-// One journal kind per vendor route, registered in observation-kinds.ts.
+// One journal kind per vendor route.
 // `path` is the route template for requestParams; the link id is in the body.
 const LINK_LIST_JOURNAL = {
   tracking: { endpoint: "link_lists_tracking_live", path: "/:accountId/tracking-links" },

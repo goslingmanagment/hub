@@ -14,7 +14,6 @@ import {
   PAYOUT_PROVIDER_LABELS,
 } from "../apps/runtime/src/services/canonicalize/fansly-payouts.ts";
 import { CANONICALIZER_FAMILIES } from "../apps/runtime/src/services/canonicalize/index.ts";
-import { WRITTEN_OBSERVATION_KINDS } from "../apps/runtime/src/services/observation-kinds.ts";
 import type {
   CanonicalEventDraft,
   CanonicalizableObservation,
@@ -118,20 +117,13 @@ function allStrings(value: unknown, out: string[] = []): string[] {
 }
 
 describe("fansly-payouts family registration", () => {
-  it("claims both kinds, emits only registered types, and is projection-only", () => {
+  it("claims both kinds and is projection-only", () => {
     const family = CANONICALIZER_FAMILIES.find((entry) => entry.lane === "payouts");
     expect(family).toBeDefined();
     expect(family?.projectionOnly).toBe(true);
     expect(family?.source).toBe("pull");
     expect([...(family?.kinds ?? [])].sort())
       .toEqual([...FANSLY_PAYOUTS_CANONICALIZED_KINDS].sort());
-
-    // Both kinds are in the coverage registry, so the BL-C3 class of mistake —
-    // a journaled kind nothing ever claims — fails at the PR that makes it.
-    const registered = new Set(WRITTEN_OBSERVATION_KINDS.map((entry) => entry.kind));
-    for (const kind of FANSLY_PAYOUTS_CANONICALIZED_KINDS) {
-      expect(registered.has(kind), kind).toBe(true);
-    }
   });
 
   it("emits nothing outside its declared event types", () => {

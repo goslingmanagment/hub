@@ -34,7 +34,7 @@ import { insertObservation } from "./observations.ts";
 export const CLIENT_SEND_ARCHIVE_PROOF_WINDOW_MS = 30_000;
 /** How long past its ticket a send waits before Hub looks: a late echo of the client wins. */
 export const CLIENT_SEND_ARCHIVE_GRACE_MS = 60_000;
-/** The journal's kind of one close (apps/runtime services/observation-kinds.ts). */
+/** The journal's kind of one close. */
 export const CLIENT_SEND_ARCHIVE_PROOF_KIND = "client.send_custody_archive_proof.v1";
 export const CLIENT_SEND_ARCHIVE_PROOF_PRODUCER = "hub:send-custody-archive";
 

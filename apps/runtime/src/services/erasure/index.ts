@@ -331,7 +331,7 @@ function eventPredSql(scope: ResolvedScope, alias = ""): SQL {
 /** One observation kind a writer journals with no page. */
 export interface PagelessFanObservationKind {
   kind: string;
-  /** The writer, as observation-kinds.ts names it. */
+  /** The writer that journals the kind. */
   writer: string;
 }
 

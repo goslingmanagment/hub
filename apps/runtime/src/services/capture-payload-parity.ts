@@ -1,29 +1,17 @@
-// G5 slice 1 — the periodic parity check over the CAS dual write.
+// G5 slice 1 — the hourly integrity check of the content-addressed capture catalog.
 //
-// The dual write is only trustworthy if something keeps proving it. This job is
-// that proof: once an hour it takes a bounded sample of envelopes that carry a
-// catalog reference, compares the catalog body against the inline authority in
-// full, and reports {checked, matched, mismatched}. A mismatch pages the owner
-// through the incident layer; a clean pass resolves the latch.
+// It runs two censuses that count a DURABLE ROW: the sha256 collision census
+// (#219) and, since #222, the dangling-reference census. Each owns its own
+// subKey and its own lifecycle under the shared `capture_payload_parity` kind.
+// (The sampled inline-vs-catalog comparison it once ran is gone: no writer
+// stores both copies on one row any more, so it compared 0 rows in every pass.)
 //
-// It NEVER repairs and NEVER deletes. The inline column is the fact; if the
-// copy disagrees, the copy is wrong and a human decides what that means. A job
-// that silently reconciled a captured fact with a derived copy of itself would
-// be the exact anti-pattern DP 7 forbids.
-//
-// It also runs two censuses that count a DURABLE ROW rather than a sample: the
-// sha256 collision census (#219) and, since #222, the dangling-reference
-// census. Each owns its own subKey and its own lifecycle under the shared
-// `capture_payload_parity` kind. (The dual-write canary that once gated the
-// sampling is gone since 2026-10-21: every capture writes the catalog.)
+// It NEVER repairs and NEVER deletes.
 
 import {
-  CAPTURE_PAYLOAD_PARITY_DEFAULT_LIMIT,
   type CapturePayloadDanglingRefCensus,
-  type CapturePayloadParityReport,
   censusCapturePayloadDanglingRefs,
   countCapturePayloadCollisions,
-  verifyCapturePayloadParity,
 } from "@agency_hub_core/db";
 
 import type { AppContext } from "../bootstrap.ts";
@@ -70,7 +58,7 @@ export const CAPTURE_PAYLOAD_COLLISION_SUBKEY = "sha256_collision";
  */
 export const CAPTURE_PAYLOAD_DANGLING_REF_SUBKEY = "dangling_reference";
 
-export interface CapturePayloadParityCheckResult extends CapturePayloadParityReport {
+export interface CapturePayloadParityCheckResult {
   /** Catalog objects carrying a non-zero collision_ordinal. */
   collisions: number;
   /** Envelope references pointing at an absent catalog row, over a bounded
@@ -95,21 +83,6 @@ export async function ensureCapturePayloadParitySchedule(boss: QueueCreationClie
   // Hourly at :35 — clear of the :15 disk check, the 02:00/02:30 cleanups and
   // the 03:10 partition job.
   await boss.schedule(CAPTURE_PAYLOAD_PARITY_QUEUE, "35 * * * *", null, { tz: "UTC" });
-}
-
-/** The bounded incident text: counts first, then at most three sample refs.
- *  Same shape discipline as buildDmSweepDualProofAnomalyDetails — an anomaly
- *  payload must stay small even when everything disagrees. */
-function describeMismatches(report: CapturePayloadParityReport) {
-  const samples = report.mismatches.map((entry) =>
-    `${entry.envelope}#${entry.envelopeId}->${entry.bucketMonth}/${entry.objectId} (${entry.reason})`
-  );
-  return [
-    `${report.mismatched} of ${report.checked} sampled capture payload copies disagree`
-    + ` with the inline fact`,
-    ...(samples.length > 0 ? [`samples: ${samples.join("; ")}`] : []),
-    "inline columns are untouched and remain the authority",
-  ].join("; ");
 }
 
 /**
@@ -204,7 +177,7 @@ async function checkCapturePayloadDanglingRefs(
 
 export async function runCapturePayloadParityCheck(
   app: Pick<AppContext, "config" | "db" | "logger">,
-  options?: { now?: Date; limit?: number; scanLimit?: number; danglingScanLimit?: number },
+  options?: { now?: Date; danglingScanLimit?: number },
 ): Promise<CapturePayloadParityCheckResult> {
   const checkedAt = options?.now ?? new Date();
   const collisions = await checkCapturePayloadCollisions(app, checkedAt);
@@ -213,48 +186,19 @@ export async function runCapturePayloadParityCheck(
     checkedAt,
     options?.danglingScanLimit,
   );
-  const report = await verifyCapturePayloadParity(app.db, {
-    limit: options?.limit ?? CAPTURE_PAYLOAD_PARITY_DEFAULT_LIMIT,
-    ...(options?.scanLimit === undefined ? {} : { scanLimit: options.scanLimit }),
-  });
 
   // One telemetry line per pass, carrying the write-side counters AND the G5
-  // slice 2 read-side counters alongside this pass's verdict. Three signals that
-  // must be read together: a rising codecRefused with a clean parity report is a
-  // very different story from a rising mismatched, and a rising serveFellBack
-  // says the catalog is degrading under live reads even while this bounded
-  // sample still passes. Reading them apart in three places invites drawing the
-  // wrong conclusion — and this line is also the ONLY place the read counters
-  // surface, because the read path deliberately owns no alarm of its own.
+  // slice 2 read-side counters beside this pass's censuses. This line is also
+  // the ONLY place the read counters surface, because the read path
+  // deliberately owns no alarm of its own.
   app.logger.info({
-    checked: report.checked,
-    matched: report.matched,
-    mismatched: report.mismatched,
-    skippedNullInline: report.skippedNullInline,
     collisions,
     danglingRefs: danglingRefs.dangling,
     danglingRefsScanned: danglingRefs.referenced,
     danglingRefsScanLimit: danglingRefs.scanLimit,
     writeCounters: getCaptureCasDualWriteCounters(),
     readCounters: getCaptureCasReadCounters(),
-    ...(report.mismatches.length > 0 ? { mismatches: report.mismatches } : {}),
   }, "Capture payload parity check complete");
 
-  if (report.mismatched > 0) {
-    await notifyOfapiGlobalIncident(app, {
-      kind: "capture_payload_parity",
-      errorSummary: describeMismatches(report),
-      occurredAt: checkedAt,
-    });
-  } else if (report.checked > 0) {
-    // Only a pass that actually compared something may clear the latch — and
-    // only THIS latch: the collision subKey has its own lifecycle above and a
-    // clean sample says nothing about whether a digest is unique again.
-    await resolveOfapiGlobalIncident(app, {
-      kind: "capture_payload_parity",
-      recoveredAt: checkedAt,
-    });
-  }
-
-  return { ...report, collisions, danglingRefs, checkedAt };
+  return { collisions, danglingRefs, checkedAt };
 }

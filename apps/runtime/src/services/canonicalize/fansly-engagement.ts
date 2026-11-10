@@ -74,8 +74,7 @@ import { contentHash } from "./sync-pull.ts";
 export const FANSLY_ENGAGEMENT_CANONICALIZER_VERSION = 1;
 const SCHEMA_VERSION = 1;
 
-/** The `observations.kind` values this family claims. Registered in
- *  `observation-kinds.ts`. */
+/** The `observations.kind` values this family claims. */
 export const FANSLY_ENGAGEMENT_CANONICALIZED_KINDS = ["notifications"] as const;
 
 const CANONICALIZED_KIND_SET: ReadonlySet<string> = new Set(

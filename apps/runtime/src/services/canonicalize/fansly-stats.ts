@@ -78,8 +78,7 @@ import {
 export const FANSLY_STATS_CANONICALIZER_VERSION = 2;
 const SCHEMA_VERSION = 1;
 
-/** The `observations.kind` values this family claims. Every one is registered
- *  in `observation-kinds.ts`. */
+/** The `observations.kind` values this family claims. */
 export const FANSLY_STATS_CANONICALIZED_KINDS = [
   "account_stats",
   "media_offer_stats",
