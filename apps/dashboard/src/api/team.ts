@@ -64,3 +64,14 @@ export function reportQuestionsQueryOptions(today: string) {
     meta: { suppressGlobalError: true },
   });
 }
+
+/**
+ * The questions «whose is this sale» the team's chat agent asked the owner (Workboard Решения → «Чья продажа»): those
+ * that wait for his word, not the chatters' own — the same read and rule as Workboard's count. The owner's only; the
+ * ledger not answering is «не удалось проверить», never a zero.
+ */
+export const saleQuestionsQueryOptions = queryOptions({
+  queryKey: ["sale-questions"] as const,
+  queryFn: async () => (await kernel.teamLedgerQuestions()).owner.length,
+  meta: { suppressGlobalError: true },
+});
