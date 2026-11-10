@@ -153,7 +153,6 @@ const envSchema = z.object({
     .default("/var/lib/agency-hub/ofapi-export-artifacts"),
   // W3.2: queued-only outbox rows older than this expire to
   // cancelled. Floor 60s so a typo can't cancel the whole queue instantly.
-  OFAPI_QUEUED_COMMAND_TTL_MS: z.coerce.number().int().min(60_000).default(600_000),
   // Containment for forever-growing fact tables: the worker pages the
   // owner when server disk usage crosses this percentage.
   DISK_USAGE_ALERT_PERCENT: z.coerce.number().int().min(1).max(100).default(80),
@@ -420,7 +419,6 @@ export interface AppConfig {
   /** Arena R5: ids per session-less lookup, 1–100. */
   fanslyPublicLookupBatchSize?: number;
   ofapiRestDelayMs?: number;
-  ofapiQueuedCommandTtlMs?: number;
   /** Requests per sync chunk of the OFAPI DM / audience streams: a chunk,
    *  not a ceiling (the next one is scheduled right away). Not an env setting;
    *  tests shrink it. Unset = 25. */
@@ -808,7 +806,6 @@ export function loadConfig(
     fanslyPublicLookupEnabled: parsed.FANSLY_PUBLIC_LOOKUP_ENABLED,
     fanslyPublicLookupBatchSize: parsed.FANSLY_PUBLIC_LOOKUP_BATCH_SIZE,
     ofapiRestDelayMs: parsed.OFAPI_REST_DELAY_MS,
-    ofapiQueuedCommandTtlMs: parsed.OFAPI_QUEUED_COMMAND_TTL_MS,
     ofapiMirrorGlobalDailyCreditBudget: parsed.OFAPI_MIRROR_GLOBAL_DAILY_CREDIT_BUDGET,
     ofapiMirrorPrincipalDailyCallCap: parsed.OFAPI_MIRROR_PRINCIPAL_DAILY_CALL_CAP,
     ofapiMirrorPrincipalDailyCreditCap: parsed.OFAPI_MIRROR_PRINCIPAL_DAILY_CREDIT_CAP,

@@ -177,19 +177,14 @@ describe("OFAPI request audit regressions", () => {
     expect(fetch).toHaveBeenCalledTimes(2);
   });
 
-  it.each(["text", "media", "typing", "unsend", "markRead", "admin"] as const)(
-    "R4 keeps confirmed %s once, latches later dispatch, and recovers only accounting", async kind => {
+  it.each(["admin"] as const)(
+    "R4 keeps confirmed %s once, latches later dispatch, and recovers only accounting", async () => {
       let accountingAvailable = false;
       const spend = vi.fn((_receipt: OfapiCreditSpendObservation) => accountingAvailable);
       const fetch = vi.fn(async () => response(paid({ id: "123", success: true })));
       vi.stubGlobal("fetch", fetch);
       const client = createOfapiClient({ apiKey: "test", restDelayMs: 0, onCreditSpend: spend });
-      const send = () => kind === "text" ? client.sendTextMessage!({}, ACCOUNT, "1", { text: "test" })
-        : kind === "media" ? client.sendMediaMessage!({}, ACCOUNT, "1", { text: "test", price: 0, mediaFiles: ["1"], previews: [] })
-        : kind === "typing" ? client.startTyping!({}, ACCOUNT, "1")
-        : kind === "unsend" ? client.unsendMessage!({}, ACCOUNT, "1", "123")
-        : kind === "markRead" ? client.markChatRead!({}, ACCOUNT, "1")
-        : client.createWebhook({ endpointUrl: "https://hub.test", signingSecret: "test", events: [], accountScope: "global" });
+      const send = () => client.createWebhook({ endpointUrl: "https://hub.test", signingSecret: "test", events: [], accountScope: "global" });
       const result = await send();
       expect(result).toHaveProperty("creditAccounting", "pending");
       await expect(send()).rejects.toBeInstanceOf(OfapiCreditAccountingUnavailableError);
@@ -205,17 +200,6 @@ describe("OFAPI request audit regressions", () => {
       expect(spend.mock.calls[3]![0]).toEqual(firstReceipt);
     },
   );
-
-  it("R5 preserves every accepted media identifier at the safe integer boundary", async () => {
-    const fetch = vi.fn(async (_url: string, _init?: RequestInit) => response(paid({ id: "123" }))); vi.stubGlobal("fetch", fetch);
-    const client = createOfapiClient({ apiKey: "test", restDelayMs: 0 });
-    const ids = ["9007199254740991", "9007199254740992", "9007199254740993", "123456789012345678901234567890", "ofapi_media_abc"];
-    await client.sendMediaMessage!({}, ACCOUNT, "1", { text: "test", price: 1, mediaFiles: ids, previews: ids.slice(0, 2) });
-    const init = fetch.mock.calls[0]![1] as RequestInit;
-    expect(JSON.parse(String(init.body))).toMatchObject({
-      mediaFiles: [9007199254740991, ...ids.slice(1)], previews: [9007199254740991, ids[1]],
-    });
-  });
 
   it("R6 rejects absent required query fields and enforces list limit boundaries locally", () => {
     for (const path of [`${ACCOUNT}/users/list`, `${ACCOUNT}/chats/1/messages/search`]) {

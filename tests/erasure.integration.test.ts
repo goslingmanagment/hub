@@ -9,7 +9,6 @@ import {
   createFanslyPage,
   createModel,
   createOnlyFansPage,
-  createOrGetOfapiCommand,
   ERASURE_EXECUTION_PROTOCOL,
   insertErasureLog,
   upsertMessageMediaOffer,
@@ -236,17 +235,15 @@ describe("erasure drill (Stage 28 Task 4)", () => {
                'messages.received', 'idem-dm-1', 1, now(), now() + interval '10 years')`,
       [pageId, FAN_A],
     );
-    await createOrGetOfapiCommand(db, {
-      id: randomUUID(),
-      clientCommandId: randomUUID(),
-      pageId,
-      chatterUserId: ownerId,
-      ofapiAccountId: "acct_erasure1",
-      conversationId: FAN_A,
-      kind: "send_text_message_v1",
-      payload: { text: "our side of the conversation" },
-      payloadHash: "b".repeat(64),
-    });
+    await testDb.pool.query(
+      `insert into ofapi_commands (id, client_command_id, page_id, chatter_user_id, ofapi_account_id,
+         binding_generation, conversation_id, kind, payload, payload_hash, dedupe_expires_at)
+       values ($1, $2, $3, $4, 'acct_erasure1',
+               (select ofapi_binding_generation from pages where id = $3), $5, 'send_text_message_v1',
+               $6::jsonb, $7, now() + interval '400 days')`,
+      [randomUUID(), randomUUID(), pageId, ownerId, FAN_A,
+        JSON.stringify({ text: "our side of the conversation" }), "b".repeat(64)],
+    );
 
     // Transactions: A's is anonymized (money stays), B's untouched.
     for (const [fanId, ref, txn] of [[fanAId, FAN_A, "txn-a"], [fanBId, FAN_B, "txn-b"]] as const) {

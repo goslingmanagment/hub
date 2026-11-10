@@ -90,7 +90,6 @@ import {
 import { clientTokenAllowlistApplies } from "@agency_hub_core/contracts";
 import { clientTokenRouteRefusal } from "../services/client-token-profile.ts";
 import { recordClientVersionObservation } from "../services/client-versions.ts";
-import { ensureOfapiCommandQueues } from "../services/ofapi-command-executor.ts";
 import { ensureOfapiQueues } from "../services/ofapi-events.ts";
 
 declare module "fastify" {
@@ -493,7 +492,6 @@ export async function buildApiServer(appContext: AppContext) {
     await boss.start();
     await ensureSyncQueues(boss, createdQueues);
     await ensureOfapiQueues(boss, createdQueues);
-    await ensureOfapiCommandQueues(boss, createdQueues);
     // S7: LAST, after every queue this role creates exists — updateQueue on a
     // queue that has not been created yet matches zero rows.
     await reconcileQueueRetention(boss);

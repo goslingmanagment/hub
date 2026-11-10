@@ -34,15 +34,21 @@ export const TELEGRAM_DAILY_REPORT_QUEUE = "telegram.daily-report";
 // ofapi.dm-analytics.rebuild: the hourly rebuild of dm_message_daily_aggregates,
 //   removed 2026-11-06. Nothing ever read the table, and its source (the OFAPI
 //   DM archive) stopped at 2026-11-01. The table and its rows stay.
+// ofapi.commands.sweep / ofapi.commands.execute: the desktop's OFAPI command
+//   gateway, removed 2026-11-10 with the retired desktop client. The
+//   ofapi_commands table and its rows stay (the client claim path reads them).
 export const RETIRED_SCHEDULES = [
   "projections.debt.sweep",
   "retention-tiering",
   "ofapi.dm-analytics.rebuild",
+  "ofapi.commands.sweep",
 ] as const;
 export const RETIRED_QUEUES = [
   "projections.debt.sweep",
   "retention-tiering",
   "ofapi.dm-analytics.rebuild",
+  "ofapi.commands.sweep",
+  "ofapi.commands.execute",
 ] as const;
 
 // work() options of a queue only its cron fills, once a minute or rarer.

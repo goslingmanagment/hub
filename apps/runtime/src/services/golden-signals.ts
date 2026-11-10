@@ -60,15 +60,11 @@ export const GOLDEN_SIGNAL_THRESHOLDS_MS: Record<string, number> = {
   capture: 60_000,
   canonicalize: 180_000,
   projection: 180_000,
-  command_settle: 300_000,
   sse_delivery: 600_000,
   // W5.1 (B8): always-emit wedge gauges. The latency quantiles measure
   // COMPLETED work only — a fully wedged pipeline used to emit no sample and
   // read as healthy. These measure the oldest WAITING row (0 when idle).
   capture_pending_age: 600_000,
-  // The W3.2 queued-TTL sweep cancels parked sends at 10 min — so a queued
-  // row older than 15 min means the sweep ITSELF is dead (A4 visibility).
-  command_queued_age: 900_000,
   // A durable page that cannot leave the outbox
   // must become an operator-visible queue-age breach rather than disappear.
   notification_outbox_age: 300_000,
@@ -245,15 +241,6 @@ export async function computeGoldenSignals(
     from backlog
   `);
 
-  // 4. Command settle: enqueue → finalize.
-  const commandSettle = await quantiles(app, sql`
-    select
-      percentile_cont(0.5) within group (order by extract(epoch from (attempt_finished_at - created_at)) * 1000) as p50,
-      percentile_cont(0.95) within group (order by extract(epoch from (attempt_finished_at - created_at)) * 1000) as p95
-    from ofapi_commands
-    where attempt_finished_at is not null and attempt_finished_at > ${windowSql}
-  `);
-
   // Failed/blind probes accumulate here; each opens/retains its incident
   // latch like a breach (a blind spot is never a silent zero).
   const failedProbes: string[] = [];
@@ -277,13 +264,6 @@ export async function computeGoldenSignals(
   // the queue is empty — "quiet" and "wedged" become distinguishable by
   // construction (quiet reads 0, wedged reads a growing age).
   const capturePendingAge = await readCapturePendingAgeMs(app.db);
-
-  const queuedCommands = await app.db.execute<{ age_ms: string | null }>(sql`
-    select coalesce(extract(epoch from (now() - min(created_at))) * 1000, 0) as age_ms
-    from ofapi_commands
-    where state = 'queued' and attempt_count = 0
-  `);
-  const commandQueuedAge = Number(queuedCommands.rows[0]?.age_ms ?? 0);
 
   const notificationOutbox = await app.db.execute<{ age_ms: string | null }>(sql`
     select coalesce(extract(epoch from (now() - min(created_at))) * 1000, 0) as age_ms
@@ -358,10 +338,8 @@ export async function computeGoldenSignals(
       ...toSamples("capture", capture),
       ...toSamples("canonicalize", canonicalize),
       ...toSamples("projection", projection),
-      ...toSamples("command_settle", commandSettle),
       ...gaugeSample("sse_delivery", staleness),
       ...gaugeSample("capture_pending_age", capturePendingAge),
-      ...gaugeSample("command_queued_age", commandQueuedAge),
       ...gaugeSample("notification_outbox_age", notificationOutboxAge),
       ...gaugeSample("acceptance_events_1h", acceptanceEvents1h),
       ...gaugeSample("ai_content_rows", aiRows),

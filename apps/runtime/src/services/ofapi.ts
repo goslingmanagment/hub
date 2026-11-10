@@ -1,5 +1,3 @@
-import type { OfapiExtendedCommandKind, OfapiExtendedCommandPayload } from "@agency_hub_core/shared";
-import { buildOfapiSendV2Body, ofapiExtendedAction } from "./ofapi-command-composer.ts";
 import { ofapiResponseEvidence } from "./ofapi-response-evidence.ts";
 import type { OfapiUsageWindow } from "@agency_hub_core/contracts";
 import type { OfapiCollectionContext } from "@agency_hub_core/shared";
@@ -280,33 +278,6 @@ export class OfapiGovernedRequestError extends Error {
   }
 }
 
-export interface OfapiSentMessage {
-  messageId: string;
-  creditAccounting?: "pending";
-}
-
-export interface OfapiMediaMessageInput {
-  text: string;
-  price: number;
-  mediaFiles: string[];
-  previews: string[];
-}
-
-export interface OfapiTypingResult {
-  success: true;
-  creditAccounting?: "pending";
-}
-
-export interface OfapiUnsendResult {
-  success: true;
-  creditAccounting?: "pending";
-}
-
-export interface OfapiMarkReadResult {
-  success: true;
-  creditAccounting?: "pending";
-}
-
 // One credit-spend report per response that reached the server (retry attempts
 // included — OFAPI charged each). Emitted by the client itself on BOTH request
 // paths, so callers cannot forget to account spend (D1).
@@ -382,7 +353,6 @@ export interface OfapiAdminCapture { observationId: number; receivedAt: Date }
 
 export interface OfapiClient {
   getBannedWordsPage?(page: number): Promise<{ body: unknown; evidence: OfapiAdminCapture | null }>;
-  executeExtendedCommand?(context: OfapiRequestContext, accountId: string, conversationId: string, kind: OfapiExtendedCommandKind, payload: OfapiExtendedCommandPayload, providerKey?: string): Promise<{ messageId?: string; creditAccounting?: "pending" }>;
   getCreditUsage?(window: OfapiUsageWindow): Promise<{ body: unknown; evidence: OfapiAdminCapture | null }>;
   createWebhook(input: OfapiWebhookRegistrationInput): Promise<OfapiWebhookRecord>;
   updateWebhook(id: string, input: OfapiWebhookRegistrationInput): Promise<OfapiWebhookRecord>;
@@ -390,8 +360,6 @@ export interface OfapiClient {
   listAccountsSnapshot?(): Promise<{ accounts: OfapiAccountRecord[]; evidence: OfapiAdminCapture | null }>;
   getCredentialPreflight?(): Promise<OfapiCredentialPreflight>;
   assertCredentialReady?(): Promise<void>;
-  /** Drains pending credit receipts; rejects with OfapiCreditAccountingUnavailableError while accounting is unready. */
-  assertCreditAccountingReady?(): Promise<void>;
   getWebhook?(id: string): Promise<Record<string, unknown>>;
   listWebhookEvents?(): Promise<{ body: unknown; capture: OfapiAdminCapture | null }>;
   listWebhooks?(): Promise<Record<string, unknown>[]>;
@@ -543,55 +511,6 @@ export interface OfapiClient {
     },
   ): Promise<OfapiGovernedRawResponse>;
   recordGovernedAccountResponse?(accountId: string, generation: number, status: number, body: string): Promise<void>;
-  // Exactly one text-send attempt. Optional for legacy test
-  // doubles; production createOfapiClient always implements it.
-  sendTextMessage?(
-    context: OfapiRequestContext,
-    accountId: string,
-    conversationId: string,
-    input: { text: string },
-  ): Promise<OfapiSentMessage>;
-  // Exactly one media/PPV send attempt. Payload accepts only
-  // bounded media IDs, preview IDs, price, and optional caption text.
-  sendMediaMessage?(
-    context: OfapiRequestContext,
-    accountId: string,
-    conversationId: string,
-    input: OfapiMediaMessageInput,
-  ): Promise<OfapiSentMessage>;
-  // Exactly one advisory typing beacon. The endpoint is documented
-  // as free, so an absent/non-charging _meta does not create a permanent credit
-  // ledger row; an unexpected provider-reported charge is still recorded.
-  startTyping?(
-    context: OfapiRequestContext,
-    accountId: string,
-    conversationId: string,
-  ): Promise<OfapiTypingResult>;
-  // Exactly one message-unsend attempt. The target message id is
-  // the only payload; no text/media fields are accepted or logged.
-  unsendMessage?(
-    context: OfapiRequestContext,
-    accountId: string,
-    conversationId: string,
-    messageId: string,
-  ): Promise<OfapiUnsendResult>;
-  // Exactly one mark-read attempt. Empty payload; no text/media
-  // fields are accepted or logged.
-  markChatRead?(
-    context: OfapiRequestContext,
-    accountId: string,
-    conversationId: string,
-  ): Promise<OfapiMarkReadResult>;
-}
-
-function wrappedOnlyFansStatus(value: unknown): number | null {
-  const record = asRecord(value);
-  if (record?.error !== "ONLYFANS_COM_ERROR") {
-    return null;
-  }
-  const onlyFansResponse = asRecord(record.onlyfans_response);
-  const status = onlyFansResponse?.status;
-  return typeof status === "number" && Number.isInteger(status) ? status : null;
 }
 
 function asNonEmptyString(value: unknown) {
@@ -1580,405 +1499,6 @@ export function createOfapiClient(input: {
     };
   }
 
-  type OfapiCommandMessageBody = {
-    text: string;
-    price?: number;
-    mediaFiles?: Array<string | number>;
-    previews?: Array<string | number>;
-    lockedText?: boolean;
-    replyToMessageId?: string | number;
-    giphyId?: string;
-    rfTag?: Array<string | number>;
-    rfPartner?: Array<string | number>;
-    rfGuest?: Array<string | number>;
-    blockBannedWords?: string;
-  };
-
-  function toWireMediaId(id: string): string | number {
-    const numeric = /^[0-9]+$/.test(id) ? Number(id) : NaN;
-    return Number.isSafeInteger(numeric) ? numeric : id;
-  }
-
-  async function sendMessageRequest(
-    context: OfapiRequestContext,
-    accountId: string,
-    conversationId: string,
-    operation: "ofapi_command_send_text" | "ofapi_command_send_media" | "ofapi_command_send_v2",
-    body: OfapiCommandMessageBody,
-    providerKey?: string,
-  ): Promise<OfapiSentMessage> {
-    const pathname = `/${encodeURIComponent(accountId)}/chats/${
-      encodeURIComponent(conversationId)
-    }/messages`;
-    const requestId = `${operation}:${randomUUID()}`;
-    await waitForRequestSlot("commands");
-
-    await authorizeOperation(operation, "POST", pathname);
-    let response: Response;
-    try {
-      response = await fetch(`${baseUrl}${pathname}`, {
-        method: "POST",
-        headers: {
-          authorization: `Bearer ${input.apiKey}`,
-          accept: "application/json",
-          "content-type": "application/json",
-          ...(providerKey ? { "Idempotency-Key": providerKey } : {}),
-        },
-        body: JSON.stringify(body),
-        signal: AbortSignal.timeout(OFAPI_REQUEST_TIMEOUT_MS),
-      });
-    } catch {
-      throw new OfapiApiError(
-        `OFAPI command transport failed: POST ${pathname}`,
-        null,
-        null,
-      );
-    }
-
-    const text = await response.text();
-    let captureError: unknown;
-    if (operation === "ofapi_command_send_v2") {
-      try { await input.onAdminResponse?.({ operation, status: response.status, body: text, receivedAt: new Date(), pageId: context.pageId ?? null, accountId,
-        headers: Object.fromEntries(["x-ofapi-credits-used", "x-ofapi-credits-balance", "idempotent-replayed"].flatMap(name => { const value = response.headers.get(name); return value === null ? [] : [[name, value]]; })) }); }
-      catch (error) { captureError = error; }
-    }
-    let responseBody: unknown = null;
-    let bodyIsJson = text.length === 0;
-    if (text.length > 0) {
-      try {
-        responseBody = JSON.parse(text) as unknown;
-        bodyIsJson = true;
-      } catch {
-        bodyIsJson = false;
-      }
-    }
-
-    const creditAccounted = await reportCreditSpend({
-      operation,
-      httpStatus: response.status,
-      headers: response.headers,
-      body: responseBody,
-      requestId,
-      pageId: context.pageId ?? null,
-      attemptNumber: 1,
-    });
-
-    if (captureError) throw new OfapiApiError("OFAPI response capture unavailable after dispatch", null, null);
-    if (!response.ok) {
-      const upstreamStatus = wrappedOnlyFansStatus(responseBody);
-      throw new OfapiApiError(
-        `OFAPI command rejected: POST ${pathname} returned ${response.status}`,
-        response.status,
-        null,
-        upstreamStatus,
-        operation === "ofapi_command_send_v2" && response.status === 422 ? text.slice(0, 4000) : undefined,
-      );
-    }
-    if (!bodyIsJson) {
-      throw new OfapiApiError(
-        `OFAPI command returned non-JSON success: POST ${pathname}`,
-        response.status,
-        null,
-      );
-    }
-
-    const record = asRecord(unwrapData(responseBody));
-    const rawId = record?.id;
-    const messageId = typeof rawId === "string" && rawId.length > 0
-      ? rawId
-      : typeof rawId === "number" && Number.isSafeInteger(rawId)
-        ? String(rawId)
-        : null;
-    if (!messageId) {
-      throw new OfapiApiError(
-        `OFAPI command success omitted message id: POST ${pathname}`,
-        response.status,
-        null,
-      );
-    }
-    return { messageId, ...(creditAccounted === false ? { creditAccounting: "pending" as const } : {}) };
-  }
-
-  async function sendTextMessageRequest(
-    context: OfapiRequestContext,
-    accountId: string,
-    conversationId: string,
-    command: { text: string },
-  ): Promise<OfapiSentMessage> {
-    return sendMessageRequest(
-      context,
-      accountId,
-      conversationId,
-      "ofapi_command_send_text",
-      { text: command.text },
-    );
-  }
-
-  async function sendMediaMessageRequest(
-    context: OfapiRequestContext,
-    accountId: string,
-    conversationId: string,
-    command: OfapiMediaMessageInput,
-  ): Promise<OfapiSentMessage> {
-    const body: OfapiCommandMessageBody = {
-      text: command.text,
-      price: command.price,
-      mediaFiles: command.mediaFiles.map(toWireMediaId),
-    };
-    if (command.previews.length > 0) {
-      body.previews = command.previews.map(toWireMediaId);
-    }
-    if (command.price > 0 && command.text.trim() !== "") {
-      body.lockedText = true;
-    }
-    return sendMessageRequest(
-      context,
-      accountId,
-      conversationId,
-      "ofapi_command_send_media",
-      body,
-    );
-  }
-
-  async function startTypingRequest(
-    context: OfapiRequestContext,
-    accountId: string,
-    conversationId: string,
-  ): Promise<OfapiTypingResult> {
-    const operation = "ofapi_command_typing_active";
-    const pathname = `/${encodeURIComponent(accountId)}/chats/${
-      encodeURIComponent(conversationId)
-    }/typing`;
-    const requestId = `${operation}:${randomUUID()}`;
-    await waitForRequestSlot("commands");
-
-    await authorizeOperation(operation, "POST", pathname);
-    let response: Response;
-    try {
-      response = await fetch(`${baseUrl}${pathname}`, {
-        method: "POST",
-        headers: {
-          authorization: `Bearer ${input.apiKey}`,
-          accept: "application/json",
-        },
-        signal: AbortSignal.timeout(OFAPI_REQUEST_TIMEOUT_MS),
-      });
-    } catch {
-      throw new OfapiApiError(
-        `OFAPI command transport failed: POST ${pathname}`,
-        null,
-        null,
-      );
-    }
-
-    const text = await response.text();
-    let responseBody: unknown = null;
-    let bodyIsJson = text.length === 0;
-    if (text.length > 0) {
-      try {
-        responseBody = JSON.parse(text) as unknown;
-        bodyIsJson = true;
-      } catch {
-        bodyIsJson = false;
-      }
-    }
-
-    const creditAccounted = await reportCreditSpend({
-      operation,
-      httpStatus: response.status,
-      headers: response.headers,
-      body: responseBody,
-      requestId,
-      pageId: context.pageId ?? null,
-      attemptNumber: 1,
-      fallbackCredits: 0,
-      fallbackEstimated: true,
-      suppressZeroCredits: true,
-    });
-
-    if (!response.ok) {
-      throw new OfapiApiError(
-        `OFAPI command rejected: POST ${pathname} returned ${response.status}`,
-        response.status,
-        null,
-      );
-    }
-    if (!bodyIsJson) {
-      throw new OfapiApiError(
-        `OFAPI command returned non-JSON success: POST ${pathname}`,
-        response.status,
-        null,
-      );
-    }
-
-    return { success: true, ...(creditAccounted === false ? { creditAccounting: "pending" as const } : {}) };
-  }
-
-  async function unsendMessageRequest(
-    context: OfapiRequestContext,
-    accountId: string,
-    conversationId: string,
-    messageId: string,
-  ): Promise<OfapiUnsendResult> {
-    const operation = "ofapi_command_unsend_message";
-    const pathname = `/${encodeURIComponent(accountId)}/chats/${
-      encodeURIComponent(conversationId)
-    }/messages/${encodeURIComponent(messageId)}`;
-    const requestId = `${operation}:${randomUUID()}`;
-    await waitForRequestSlot("commands");
-
-    await authorizeOperation(operation, "DELETE", pathname);
-    let response: Response;
-    try {
-      response = await fetch(`${baseUrl}${pathname}`, {
-        method: "DELETE",
-        headers: {
-          authorization: `Bearer ${input.apiKey}`,
-          accept: "application/json",
-        },
-        signal: AbortSignal.timeout(OFAPI_REQUEST_TIMEOUT_MS),
-      });
-    } catch {
-      throw new OfapiApiError(
-        `OFAPI command transport failed: DELETE ${pathname}`,
-        null,
-        null,
-      );
-    }
-
-    const text = await response.text();
-    let responseBody: unknown = null;
-    let bodyIsJson = text.length === 0;
-    if (text.length > 0) {
-      try {
-        responseBody = JSON.parse(text) as unknown;
-        bodyIsJson = true;
-      } catch {
-        bodyIsJson = false;
-      }
-    }
-
-    const creditAccounted = await reportCreditSpend({
-      operation,
-      httpStatus: response.status,
-      headers: response.headers,
-      body: responseBody,
-      requestId,
-      pageId: context.pageId ?? null,
-      attemptNumber: 1,
-    });
-
-    if (!response.ok) {
-      throw new OfapiApiError(
-        `OFAPI command rejected: DELETE ${pathname} returned ${response.status}`,
-        response.status,
-        null,
-      );
-    }
-    if (!bodyIsJson) {
-      throw new OfapiApiError(
-        `OFAPI command returned non-JSON success: DELETE ${pathname}`,
-        response.status,
-        null,
-      );
-    }
-    if (text.length === 0) {
-      return { success: true, ...(creditAccounted === false ? { creditAccounting: "pending" as const } : {}) };
-    }
-
-    const record = asRecord(unwrapData(responseBody));
-    if (record?.success !== true) {
-      throw new OfapiApiError(
-        `OFAPI command success omitted success=true: DELETE ${pathname}`,
-        response.status,
-        null,
-      );
-    }
-    return { success: true, ...(creditAccounted === false ? { creditAccounting: "pending" as const } : {}) };
-  }
-
-  async function markChatReadRequest(
-    context: OfapiRequestContext,
-    accountId: string,
-    conversationId: string,
-  ): Promise<OfapiMarkReadResult> {
-    const operation = "ofapi_command_mark_chat_read";
-    const pathname = `/${encodeURIComponent(accountId)}/chats/${
-      encodeURIComponent(conversationId)
-    }/mark-as-read`;
-    const requestId = `${operation}:${randomUUID()}`;
-    await waitForRequestSlot("commands");
-
-    await authorizeOperation(operation, "POST", pathname);
-    let response: Response;
-    try {
-      response = await fetch(`${baseUrl}${pathname}`, {
-        method: "POST",
-        headers: {
-          authorization: `Bearer ${input.apiKey}`,
-          accept: "application/json",
-        },
-        signal: AbortSignal.timeout(OFAPI_REQUEST_TIMEOUT_MS),
-      });
-    } catch {
-      throw new OfapiApiError(
-        `OFAPI command transport failed: POST ${pathname}`,
-        null,
-        null,
-      );
-    }
-
-    const text = await response.text();
-    let responseBody: unknown = null;
-    let bodyIsJson = text.length === 0;
-    if (text.length > 0) {
-      try {
-        responseBody = JSON.parse(text) as unknown;
-        bodyIsJson = true;
-      } catch {
-        bodyIsJson = false;
-      }
-    }
-
-    const creditAccounted = await reportCreditSpend({
-      operation,
-      httpStatus: response.status,
-      headers: response.headers,
-      body: responseBody,
-      requestId,
-      pageId: context.pageId ?? null,
-      attemptNumber: 1,
-    });
-
-    if (!response.ok) {
-      throw new OfapiApiError(
-        `OFAPI command rejected: POST ${pathname} returned ${response.status}`,
-        response.status,
-        null,
-      );
-    }
-    if (!bodyIsJson) {
-      throw new OfapiApiError(
-        `OFAPI command returned non-JSON success: POST ${pathname}`,
-        response.status,
-        null,
-      );
-    }
-    if (text.length === 0) {
-      return { success: true, ...(creditAccounted === false ? { creditAccounting: "pending" as const } : {}) };
-    }
-
-    const record = asRecord(unwrapData(responseBody));
-    if (record?.success !== true) {
-      throw new OfapiApiError(
-        `OFAPI command success omitted success=true: POST ${pathname}`,
-        response.status,
-        null,
-      );
-    }
-    return { success: true, ...(creditAccounted === false ? { creditAccounting: "pending" as const } : {}) };
-  }
-
   async function requestCaptured(
     operation: string,
     method: string,
@@ -2086,17 +1606,6 @@ export function createOfapiClient(input: {
   }
 
   return {
-    async executeExtendedCommand(context, accountId, conversationId, kind, payload, providerKey) {
-      await assertCredentialReady();
-      if (kind === "send_message_v2") return sendMessageRequest(context, accountId, conversationId, "ofapi_command_send_v2", buildOfapiSendV2Body(payload), providerKey);
-      const action = ofapiExtendedAction(kind, accountId, conversationId, payload);
-      const result = await requestCaptured(`ofapi_command_${kind}`, action.method, action.path, action.body, "commands", context);
-      const record = asRecord(unwrapData(result.body));
-      const success = kind === "set_fan_custom_name_v1" ? String(record?.id ?? "") === conversationId && typeof record?.displayName === "string"
-        : result.body === null || record?.success === true;
-      if (!success) throw new OfapiApiError("OFAPI action response did not confirm the requested result", 200, null);
-      return { ...(result.creditAccounting ? { creditAccounting: result.creditAccounting } : {}) };
-    },
     async getBannedWordsPage(page) {
       const result = await requestCaptured("ofapi_banned_words", "GET", `/banned-words?per_page=100&page=${page}`);
       return { body: result.body, evidence: result.capture };
@@ -2109,7 +1618,6 @@ export function createOfapiClient(input: {
     },
     getCredentialPreflight,
     assertCredentialReady,
-    assertCreditAccountingReady,
     async getWebhook(id) {
       const body = await request("ofapi_webhook_inventory", "GET", `/webhooks/${encodeURIComponent(id)}`);
       const record = asRecord(unwrapData(body));
@@ -2413,26 +1921,6 @@ export function createOfapiClient(input: {
     },
     async recordGovernedAccountResponse(accountId, generation, status, body) {
       await input.onAccountResponse?.(accountId, generation, status, body);
-    },
-    async sendTextMessage(context, accountId, conversationId, command) {
-      await assertCredentialReady();
-      return sendTextMessageRequest(context, accountId, conversationId, command);
-    },
-    async sendMediaMessage(context, accountId, conversationId, command) {
-      await assertCredentialReady();
-      return sendMediaMessageRequest(context, accountId, conversationId, command);
-    },
-    async startTyping(context, accountId, conversationId) {
-      await assertCredentialReady();
-      return startTypingRequest(context, accountId, conversationId);
-    },
-    async unsendMessage(context, accountId, conversationId, messageId) {
-      await assertCredentialReady();
-      return unsendMessageRequest(context, accountId, conversationId, messageId);
-    },
-    async markChatRead(context, accountId, conversationId) {
-      await assertCredentialReady();
-      return markChatReadRequest(context, accountId, conversationId);
     },
   };
 }

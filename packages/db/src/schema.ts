@@ -1,4 +1,3 @@
-import type { OfapiExtendedCommandKind, OfapiExtendedCommandPayload } from "@agency_hub_core/shared";
 import {
   type AnyPgColumn,
   bigserial,
@@ -87,23 +86,6 @@ const jsonbSafe = customType<{ data: unknown; driverData: unknown }>({
     return value;
   },
 });
-
-export type OfapiCommandKind = OfapiExtendedCommandKind
-  | "send_text_message_v1"
-  | "send_media_message_v1"
-  | "typing_active_v1"
-  | "unsend_message_v1"
-  | "mark_chat_read_v1";
-export type OfapiCommandPayload = OfapiExtendedCommandPayload
-  | { text: string }
-  | {
-    text: string;
-    price: number;
-    mediaFiles: string[];
-    previews: string[];
-  }
-  | { messageId: string }
-  | Record<string, never>;
 
 const PLATFORM_KEYS = ["fansly", "onlyfans", "telegram"] as const;
 
@@ -1478,122 +1460,6 @@ export const dmMessageArchive = pgTable(
     `),
     priceNonnegativeCheck: check("dm_message_archive_price_nonnegative_check", sql`
       ${table.priceMills} is null or ${table.priceMills} >= 0
-    `),
-  }),
-);
-
-export const ofapiCommands = pgTable(
-  "ofapi_commands",
-  {
-    id: uuid("id").primaryKey(),
-    clientCommandId: uuid("client_command_id").notNull(),
-    pageId: bigint("page_id", { mode: "number" })
-      .references(() => pages.id, { onDelete: "restrict" })
-      .notNull(),
-    chatterUserId: bigint("chatter_user_id", { mode: "number" })
-      .references(() => users.id, { onDelete: "restrict" })
-      .notNull(),
-    bindingGeneration: integer("binding_generation").notNull().default(1),
-    ofapiAccountId: text("ofapi_account_id").notNull(),
-    conversationId: text("conversation_id").notNull(),
-    outreachPurpose: text("outreach_purpose").$type<"new-follower">(),
-    kind: text("kind").$type<OfapiCommandKind>().notNull(),
-    payload: jsonbSafe("payload").$type<OfapiCommandPayload>().notNull(),
-    payloadHash: text("payload_hash").notNull(),
-    retryOfCommandId: uuid("retry_of_command_id"),
-    state: text("state").$type<
-      | "queued"
-      | "in_flight"
-      | "confirmed"
-      | "failed_retryable"
-      | "failed_terminal"
-      | "indeterminate"
-      | "cancelled"
-    >().default("queued").notNull(),
-    attemptCount: integer("attempt_count").default(0).notNull(),
-    lastErrorCode: text("last_error_code"),
-    lastErrorClass: text("last_error_class"),
-    verifierResult: jsonbSafe("verifier_result").$type<Record<string, unknown>>(),
-    platformMessageId: text("platform_message_id"),
-    attemptStartedAt: timestamp("attempt_started_at", { withTimezone: true }),
-    attemptFinishedAt: timestamp("attempt_finished_at", { withTimezone: true }),
-    payloadRedactedAt: timestamp("payload_redacted_at", { withTimezone: true }),
-    dedupeExpiresAt: timestamp("dedupe_expires_at", { withTimezone: true }).notNull(),
-    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
-  },
-  (table) => ({
-    pageChatterClientUniq: uniqueIndex("ofapi_commands_page_chatter_client_uniq")
-      .on(table.pageId, table.chatterUserId, table.clientCommandId),
-    followerOutreachUniq: uniqueIndex("ofapi_commands_follower_outreach_uniq")
-      .on(table.pageId, table.conversationId)
-      .where(sql`${table.outreachPurpose} = 'new-follower' and case
-        when ${table.state} = 'cancelled' and ${table.attemptCount} = 0 then false
-        when ${table.state} in ('failed_retryable', 'failed_terminal')
-          and coalesce(${table.verifierResult}->>'source', '') in ('local_precondition', 'auth_gate') then false
-        else true end`),
-    outreachPurposeCheck: check("ofapi_commands_outreach_purpose_check", sql`
-      ${table.outreachPurpose} is null or (
-        ${table.outreachPurpose} = 'new-follower'
-        and ${table.conversationId} ~ '^[1-9][0-9]{0,29}$'
-        and ${table.kind} in ('send_text_message_v1', 'send_message_v2')
-      )`),
-    oneInFlightLaneUniq: uniqueIndex("ofapi_commands_one_in_flight_lane_uniq")
-      .on(table.pageId, table.conversationId)
-      .where(sql`${table.state} = 'in_flight'`),
-    chatterCreatedIdx: index("ofapi_commands_chatter_created_idx")
-      .on(table.chatterUserId, table.createdAt.desc()),
-    pageLaneCreatedIdx: index("ofapi_commands_page_lane_created_idx")
-      .on(table.pageId, table.conversationId, table.createdAt),
-    dedupeExpiresIdx: index("ofapi_commands_dedupe_expires_idx").on(table.dedupeExpiresAt),
-    queuedCreatedIdx: index("ofapi_commands_queued_created_idx")
-      .on(table.createdAt)
-      .where(sql`${table.state} = 'queued'`),
-    verifierCandidateIdx: index("ofapi_commands_verifier_candidate_idx")
-      .on(table.ofapiAccountId, table.conversationId, table.attemptStartedAt)
-      .where(sql`${table.state} in ('in_flight', 'indeterminate')`),
-    retryCommandFk: foreignKey({
-      name: "ofapi_commands_retry_of_command_id_fk",
-      columns: [table.retryOfCommandId],
-      foreignColumns: [table.id],
-    }).onDelete("restrict"),
-    kindCheck: check("ofapi_commands_kind_check", sql`
-      ${table.kind} in (
-        'send_text_message_v1',
-        'send_media_message_v1',
-        'typing_active_v1',
-        'unsend_message_v1',
-        'mark_chat_read_v1'
-      )
-    `),
-    stateCheck: check("ofapi_commands_state_check", sql`
-      ${table.state} in (
-        'queued',
-        'in_flight',
-        'confirmed',
-        'failed_retryable',
-        'failed_terminal',
-        'indeterminate',
-        'cancelled'
-      )
-    `),
-    attemptNonnegativeCheck: check("ofapi_commands_attempt_count_nonnegative_check", sql`
-      ${table.attemptCount} >= 0
-    `),
-    attemptMaxOneCheck: check("ofapi_commands_attempt_count_max_one_check", sql`
-      ${table.attemptCount} <= 1
-    `),
-    accountIdCheck: check("ofapi_commands_account_id_check", sql`
-      ${table.ofapiAccountId} ~ '^acct_[A-Za-z0-9]+$'
-    `),
-    conversationIdCheck: check("ofapi_commands_conversation_id_check", sql`
-      ${table.conversationId} ~ '^[0-9]{1,30}$'
-    `),
-    payloadHashCheck: check("ofapi_commands_payload_hash_check", sql`
-      ${table.payloadHash} ~ '^[0-9a-f]{64}$'
-    `),
-    dedupeHorizonCheck: check("ofapi_commands_dedupe_horizon_check", sql`
-      ${table.dedupeExpiresAt} >= ${table.createdAt}
     `),
   }),
 );

@@ -69,7 +69,6 @@ export * from "./routes-account-reports.ts";
 // Its quality numbers, one definition for the review's screen and «Смены» (`teamChatterNumbers`).
 export * from "./shift-review-rules.ts";
 
-export * from "./ofapi-extended-commands.ts";
 export * from "./routes-ofapi-banned-words.ts";
 export * from "./routes-model-applications.ts";
 export * from "./routes-ofapi-read-collections.ts";

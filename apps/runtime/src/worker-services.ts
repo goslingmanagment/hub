@@ -113,9 +113,6 @@ import {
   startOfapiCreditWorker,
 } from "./services/ofapi-credits.ts";
 import {
-  startOfapiCommandWorker,
-} from "./services/ofapi-command-executor.ts";
-import {
   startOfapiEventWorker,
 } from "./services/ofapi-events.ts";
 import { sendDailyRevenueTelegramReport } from "./services/telegram-report.ts";
@@ -680,7 +677,6 @@ export async function startWorkerServices(
   await startOfapiFanAccountCheckWorker(app, boss);
   await startOfapiLinkStatsWorker(app, boss);
   await startOfapiPendingReconcileWorker(app, boss);
-  await startOfapiCommandWorker(app, boss);
   await startOfapiCollectionWorker(app, boss, ofapiCollectionHandlers);
 
   await boss.work(TELEGRAM_DAILY_REPORT_QUEUE, CRON_SWEEP_WORK_OPTIONS, async () => {
