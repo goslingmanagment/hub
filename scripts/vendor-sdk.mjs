@@ -177,7 +177,6 @@ for (const file of [
   "ofapi-actions-account.ts",
   "routes-ofapi-actions.ts",
   "sdk-runtime.ts",
-  "domain-event-cursor.ts",
   "authorization-policy.ts",
   "contract-hash.ts",
   // Agent Read Plane vocabularies. The barrel re-exports all three, and this

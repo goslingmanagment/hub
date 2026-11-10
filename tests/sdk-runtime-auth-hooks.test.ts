@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   createKernelClient,
   fetchVoiceNoteAudio,
-  subscribeSyncEvents,
+  streamAiFeature,
 } from "../packages/contracts/src/sdk-runtime.ts";
 
 // The options contract promises onAuthError on every 401/403, with a null
@@ -75,13 +75,13 @@ describe("onAuthError coverage beyond the typed path", () => {
     expect(onAuthError).not.toHaveBeenCalled();
   });
 
-  it("SSE subscribe notifies the hook before throwing on 401", async () => {
+  it("an SSE stream notifies the hook before throwing on 401", async () => {
     const onAuthError = vi.fn();
-    const handle = subscribeSyncEvents({
+    const handle = streamAiFeature({
       baseUrl: "http://kernel.test",
       onAuthError,
       fetch: (async () => new Response("nope", { status: 401 })) as never,
-    }, { onFrame: () => {} });
+    }, { feature: "fast-reply", body: {} as never, onFrame: () => {} });
 
     await expect(handle.done).rejects.toMatchObject({ category: "auth" });
     expect(onAuthError).toHaveBeenCalledTimes(1);
@@ -137,11 +137,11 @@ describe("the 401 reason survives every transport", () => {
 
   it("reaches the SSE handshake failure instead of being flattened into text", async () => {
     const onAuthError = vi.fn();
-    const handle = subscribeSyncEvents({
+    const handle = streamAiFeature({
       baseUrl: "http://kernel.test",
       onAuthError,
       fetch: (async () => unauthorized("token_revoked")) as never,
-    }, { onFrame: () => {} });
+    }, { feature: "fast-reply", body: {} as never, onFrame: () => {} });
 
     await expect(handle.done).rejects.toMatchObject({
       category: "auth",
@@ -153,10 +153,10 @@ describe("the 401 reason survives every transport", () => {
   });
 
   it("still classifies a 401 with no envelope at all", async () => {
-    const handle = subscribeSyncEvents({
+    const handle = streamAiFeature({
       baseUrl: "http://kernel.test",
       fetch: (async () => new Response("nope", { status: 401 })) as never,
-    }, { onFrame: () => {} });
+    }, { feature: "fast-reply", body: {} as never, onFrame: () => {} });
 
     await expect(handle.done).rejects.toMatchObject({
       category: "auth",

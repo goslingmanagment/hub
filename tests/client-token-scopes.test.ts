@@ -74,11 +74,6 @@ describe("CLIENT_TOKEN_PROFILES[\"chat-extension\"]", () => {
       "aiGatewayStream",
       "followerOutreachAttempt",
       "pageTopSpenders",
-      "eventsStream",
-      "eventsSnapshot",
-      "eventsV2Stream",
-      "eventsV2Snapshot",
-      "eventsV2Facts",
     ]) {
       expect(key in schemas, key).toBe(true);
       expect(operations, key).not.toContain(key);

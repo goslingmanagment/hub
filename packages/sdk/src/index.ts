@@ -22,7 +22,6 @@ export {
 export {
   // The tokens streamAiFeature may advertise (`capabilities` option).
   AI_STREAM_CAPABILITIES,
-  decodeDomainEventCursor,
   fetchVoiceNoteAudio,
   // Shared client-side predicate (coach-chat spec §8): apply to a terminal
   // stop reason before committing a coach answer / attaching a recap.
@@ -31,8 +30,6 @@ export {
   routeSchemas,
   streamAiFeature,
   streamAiGateway,
-  subscribeDomainEvents,
-  subscribeSyncEvents,
   // The feature lane's frames are a SUPERSET of the raw gateway's (#140
   // debug echo): a client handling streamAiFeature must widen to
   // AiFeatureStreamFrame, not AiGatewayStreamFrame.
@@ -41,11 +38,8 @@ export {
   type AiFeatureStreamFrame,
   type AiGatewayStreamFrame,
   type AiStreamCapability,
-  type DomainEventFrame,
-  type DomainEventsSnapshotRequired,
   type KernelStreamHandle,
   type SyncEvent,
-  type SyncSnapshotRequired,
 } from "@agency_hub_core/contracts";
 export { kernelOperations } from "./operations.ts";
 export { KERNEL_CONTRACT_HASH, KERNEL_SDK_VERSION } from "./meta.ts";

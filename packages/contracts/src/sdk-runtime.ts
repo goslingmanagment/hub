@@ -19,16 +19,14 @@ export type KernelOperationKey = keyof Schemas & string;
 
 /**
  * Operations without a plain request/JSON-response shape. The webhook is
- * HMAC-authenticated server intake; the two streams are SSE (dedicated
- * helpers); the read gateway is a wildcard proxy (passthrough helper); the
+ * HMAC-authenticated server intake; the AI gateway stream is SSE (dedicated
+ * helper); the read gateway is a wildcard proxy (passthrough helper); the
  * ledger CSV returns text/csv; the voice-note audio route returns binary
  * audio/mpeg (dedicated `fetchVoiceNoteAudio` helper). All remain reachable via
  * `client.raw(...)`.
  */
 export const SDK_EXCLUDED_OPERATIONS = [
   "ofapiWebhookReceive",
-  "eventsStream",
-  "eventsV2Stream",
   "aiGatewayStream",
   "ofapiReadGateway",
   "adminOfapiCreditsLedgerCsv",
@@ -261,33 +259,6 @@ function notifyAuthError(options: KernelClientOptions, error: KernelApiError) {
   }
 }
 
-/** The error envelope of a non-OK SSE handshake, parsed like the typed path
- * parses it: `body` is the JSON envelope when there is one (so a structured
- * `reason` — token_revoked / token_expired — reaches the
- * client's self-healing), the raw text otherwise, and `code` is its `error`. */
-async function sseHandshakeError(
-  label: string,
-  response: Response,
-): Promise<KernelApiError> {
-  const text = await response.text().catch(() => "");
-  let body: unknown;
-  try {
-    body = text ? JSON.parse(text) : null;
-  } catch {
-    body = text;
-  }
-  const envelope = (body ?? {}) as { error?: unknown; message?: unknown };
-  return new KernelApiError(
-    typeof envelope.message === "string"
-      ? envelope.message
-      : `${label} failed with ${response.status}`,
-    response.status === 401 || response.status === 403 ? "auth" : "server",
-    response.status,
-    typeof envelope.error === "string" ? envelope.error : null,
-    body,
-  );
-}
-
 export function createKernelClient(
   operations: Record<KernelOperationKey, KernelOperationDef>,
   options: KernelClientOptions,
@@ -371,15 +342,8 @@ export function createKernelClient(
 import {
   aiFeatureStreamFrameSchema,
   aiGatewayStreamFrameSchema,
-  domainEventFrameSchema,
-  domainEventsSnapshotRequiredResponseSchema,
-  syncEventSchema,
-  syncSnapshotRequiredResponseSchema,
   type AiFeatureStreamFrame,
   type AiGatewayStreamFrame,
-  type DomainEventFrame,
-  type DomainEventsSnapshotRequired,
-  type SyncEvent,
 } from "./routes.ts";
 import type { z as zod } from "zod";
 
@@ -433,8 +397,6 @@ export interface KernelStreamHandle {
   close: () => void;
 }
 
-export type SyncSnapshotRequired = zod.infer<typeof syncSnapshotRequiredResponseSchema>;
-
 async function openSseResponse(input: {
   options: KernelClientOptions;
   method: string;
@@ -474,75 +436,6 @@ async function openSseResponse(input: {
       null,
     );
   }
-}
-
-/**
- * Subscribe to the v1 sync-event stream (`GET /api/v1/events/stream`).
- * Single connection, no auto-reconnect: the server bounds stream lifetime
- * (~15 min) and v1 clients own their reconnect loop, resuming via
- * `lastEventId`. A 409 becomes `onSnapshotRequired` and ends the stream.
- */
-export function subscribeSyncEvents(options: KernelClientOptions, input: {
-  lastEventId?: number | null;
-  onFrame: (frame: { id: number; event: SyncEvent }) => void;
-  onSnapshotRequired?: (details: SyncSnapshotRequired) => void;
-  signal?: AbortSignal;
-}): KernelStreamHandle {
-  const abort = new AbortController();
-  input.signal?.addEventListener("abort", () => abort.abort(), { once: true });
-
-  const done = (async () => {
-    const response = await openSseResponse({
-      options,
-      method: "GET",
-      path: "/api/v1/events/stream",
-      headers: input.lastEventId != null ? { "last-event-id": String(input.lastEventId) } : undefined,
-      signal: abort.signal,
-    });
-    if (response.status === 409) {
-      const body: unknown = await response.json();
-      const parsed = syncSnapshotRequiredResponseSchema.safeParse(body);
-      if (!parsed.success) {
-        throw new KernelApiError(
-          "events/stream 409 body failed contract validation",
-          "contract",
-          409,
-          "response_validation_failed",
-          body,
-        );
-      }
-      input.onSnapshotRequired?.(parsed.data);
-      return;
-    }
-    if (!response.ok || !response.body) {
-      const error = await sseHandshakeError("events/stream", response);
-      notifyAuthError(options, error);
-      throw error;
-    }
-    for await (const frame of parseSseStream(response.body)) {
-      if (frame.event !== "sync" || frame.data === "") {
-        continue; // retry hints / heartbeats
-      }
-      const parsed = syncEventSchema.safeParse(JSON.parse(frame.data));
-      if (!parsed.success) {
-        throw new KernelApiError(
-          `sync frame failed contract validation: ${parsed.error.message}`,
-          "contract",
-          200,
-          "frame_validation_failed",
-          frame.data,
-        );
-      }
-      input.onFrame({ id: Number(frame.id), event: parsed.data });
-    }
-  })().catch((error: unknown) => {
-    if (abort.signal.aborted) {
-      return; // close() is not an error
-    }
-    throw error;
-  });
-
-  return { done, close: () => abort.abort() };
 }
 
 /**
@@ -776,78 +669,4 @@ export async function fetchVoiceNoteAudio(options: KernelClientOptions, input: {
     ));
   }
   return response;
-}
-
-/**
- * Subscribe to the v2 domain-event stream (`GET /api/v1/events/v2/stream`).
- * The cursor is OPAQUE — persist the last delivered one and hand it back on
- * reconnect. Single connection, no auto-reconnect (same contract as v1: the
- * server bounds stream lifetime; consumers own the loop).
- * A 409 becomes `onSnapshotRequired` with the per-account detail; recover via
- * `client.eventsV2Snapshot(...)` and resubscribe with the fresh cursor.
- * `platform` narrows the stream to one platform's granted accounts; pass the
- * same value to the snapshot and on every resume (its cursors are bound to it).
- */
-export function subscribeDomainEvents(options: KernelClientOptions, input: {
-  cursor?: string | null;
-  platform?: "onlyfans" | "fansly";
-  onFrame: (frame: { cursor: string; event: DomainEventFrame }) => void;
-  onSnapshotRequired?: (details: DomainEventsSnapshotRequired) => void;
-  signal?: AbortSignal;
-}): KernelStreamHandle {
-  const abort = new AbortController();
-  input.signal?.addEventListener("abort", () => abort.abort(), { once: true });
-
-  const done = (async () => {
-    const response = await openSseResponse({
-      options,
-      method: "GET",
-      path: `/api/v1/events/v2/stream${input.platform ? `?platform=${input.platform}` : ""}`,
-      headers: input.cursor ? { "last-event-id": input.cursor } : undefined,
-      signal: abort.signal,
-    });
-    if (response.status === 409) {
-      const body: unknown = await response.json();
-      const parsed = domainEventsSnapshotRequiredResponseSchema.safeParse(body);
-      if (!parsed.success) {
-        throw new KernelApiError(
-          "events/v2/stream 409 body failed contract validation",
-          "contract",
-          409,
-          "response_validation_failed",
-          body,
-        );
-      }
-      input.onSnapshotRequired?.(parsed.data);
-      return;
-    }
-    if (!response.ok || !response.body) {
-      const error = await sseHandshakeError("events/v2/stream", response);
-      notifyAuthError(options, error);
-      throw error;
-    }
-    for await (const frame of parseSseStream(response.body)) {
-      if (frame.event !== "domain" || frame.data === "" || frame.id === null) {
-        continue;
-      }
-      const parsed = domainEventFrameSchema.safeParse(JSON.parse(frame.data));
-      if (!parsed.success) {
-        throw new KernelApiError(
-          `domain frame failed contract validation: ${parsed.error.message}`,
-          "contract",
-          200,
-          "frame_validation_failed",
-          frame.data,
-        );
-      }
-      input.onFrame({ cursor: frame.id, event: parsed.data });
-    }
-  })().catch((error: unknown) => {
-    if (abort.signal.aborted) {
-      return;
-    }
-    throw error;
-  });
-
-  return { done, close: () => abort.abort() };
 }

@@ -3,14 +3,13 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import {
   appendDomainEvents, createFanslyPage, createModel, insertObservation,
-  listDomainEventContiguousReplayEnds, listEventsSince, markObservationParsed,
+  listEventsSince, markObservationParsed,
 } from "@agency_hub_core/db";
 
 import { runCanonicalization } from "../apps/runtime/src/services/canonicalize-driver.ts";
 import {
   rebuildFanEarningsProjection, runFanEarningsProjection,
 } from "../apps/runtime/src/services/projections/fan-earnings.ts";
-import { validateV2DeliverableReplayBatch } from "../apps/runtime/src/services/sse-replay-buffer.ts";
 import { resetIntegrationDatabase, startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 
 let testDb: StartedTestDatabase;
@@ -178,14 +177,6 @@ describe("Fansly earnings ordered snapshot replay", () => {
     expect(visible.map(row => [row.accountSeq, row.type])).toEqual([
       [1, "fan.earnings_observed"], [3, "stream.projection_checkpoint"], [4, "message.received"],
     ]);
-    expect(validateV2DeliverableReplayBatch({ rows: visible, afterSeq: 0, throughSeq: 4, limit: 100 }).ok).toBe(true);
-    const ends = await listDomainEventContiguousReplayEnds(
-      testDb.db, [{ accountId, afterSeq: 0, throughSeq: 4 }], { excludeProjectionOnly: true },
-    );
-    expect(ends.get(accountId)).toBe(4);
-    // A missing legacy business event is still a real gap, not an earnings exception.
-    expect(validateV2DeliverableReplayBatch({ rows: visible.slice(1), afterSeq: 0, throughSeq: 4, limit: 100 }).ok)
-      .toBe(false);
     const stamps = await testDb.pool.query(
       "select kind, parse_version from observations where account_id = $1 order by id", [accountId],
     );
