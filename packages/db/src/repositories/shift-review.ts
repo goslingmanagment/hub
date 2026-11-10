@@ -91,7 +91,15 @@ export async function listShiftReviewMessages(
     mass: boolean; author_id: string | number | null; author_name: string | null; bought: boolean | null; unarchived: boolean;
     deleted_at: Date | string | null;
   }>(sql`
-    with page_msgs as materialized (
+    with unarchived_sends as materialized (
+      select a.page_id, a.platform, a.platform_message_id, a.fan_ref
+      from client_send_attributions a
+      where a.platform = 'fansly' and a.page_id = any(${pages})
+        and a.observed_at > ${horizon} - interval '1 hour' and a.observed_at < ${to} + interval '1 hour'
+        and not exists (
+          select 1 from message_archive m where m.account_id = a.page_id and m.platform = a.platform and m.message_ref = a.platform_message_id)
+    ),
+    page_msgs as materialized (
       select m.account_id as page_id, m.platform, m.conversation_ref as conv, m.message_ref as ref, m.occurred_at as at,
         m.is_sent_by_me as sent, m.message_type, m.text_plain, m.price_mills, m.is_tip, m.tip_amount_mills, m.fan_native_id,
         case when jsonb_typeof(m.media_metadata) = 'array' then jsonb_array_length(m.media_metadata) else 0 end as media,
@@ -111,14 +119,16 @@ export async function listShiftReviewMessages(
         true as unarchived, l.deleted_at,
         l.deleted_at is null or l.deleted_at >= l.created_at + make_interval(secs => ${input.deletedUnseenSeconds}) as seen,
         '' as media_key, ${hiGreetingSql({ pageId: "a.page_id", platform: "a.platform", ref: "a.platform_message_id" })} as hi
-      from client_send_attributions a
-      join dm_live_messages l on l.page_id = a.page_id and l.platform_message_id = a.platform_message_id
-      where a.platform = 'fansly' and a.page_id = any(${pages})
-        and a.observed_at > ${horizon} - interval '1 hour' and a.observed_at < ${to} + interval '1 hour'
-        and l.is_sent_by_page and l.platform_conversation_id is not null
+      from unarchived_sends a
+      -- The socket row of each send by its primary key; "offset 0" keeps the planner from turning this back into a hash
+      -- join over a scan of the whole socket table.
+      cross join lateral (
+        select x.* from dm_live_messages x
+        where x.page_id = a.page_id and x.platform_message_id = a.platform_message_id
+        offset 0
+      ) l
+      where l.is_sent_by_page and l.platform_conversation_id is not null
         and l.created_at > ${horizon} and l.created_at < ${to}
-        and not exists (
-          select 1 from message_archive m where m.account_id = a.page_id and m.platform = a.platform and m.message_ref = a.platform_message_id)
         and ${notOwnAccountChatSql({ pageId: "a.page_id", platform: "a.platform", conv: "l.platform_conversation_id", fan: "a.fan_ref" })}
     ),
     mine as materialized (
