@@ -1226,6 +1226,10 @@ const PENDING_DEVICE_TOKEN_TTL_MS = 10 * 60 * 1000;
 const DEVICE_TOKEN_MAX_LIFETIME_MS = 365 * 24 * 60 * 60 * 1000;
 /** Refresh writes are throttled: bump only when it gains at least a day. */
 const DEVICE_TOKEN_REFRESH_GRANULARITY_MS = 24 * 60 * 60 * 1000;
+/** `last_used_at` is written once a minute at most: a client's every request
+ * authenticates, and what reads the stamp (the «вход … назад» labels, the
+ * fleet's 14-day freshness) counts in minutes and days. */
+const DEVICE_TOKEN_USE_GRANULARITY_MS = 60 * 1000;
 
 export interface PendingDeviceTokenActivationCredential {
   token: string;
@@ -1390,18 +1394,23 @@ export async function authenticateDeviceToken(
 
   // Sliding expiry: each (throttled) use extends the token up to the hard cap;
   // an idle device dies at expires_at. The client version rides the same
-  // statement (Р7): one write per request, never a second.
+  // statement (Р7): one write per request at most, never a second — and none
+  // while the stamp is under a minute old and nothing else changes (a write
+  // per request was 0.7 commits a second on production, 2026-11-10).
   const cap = new Date(record.createdAt.getTime() + DEVICE_TOKEN_MAX_LIFETIME_MS);
   const slid = new Date(Math.min(now.getTime() + DEVICE_TOKEN_TTL_MS, cap.getTime()));
   const worthBumping = slid.getTime() - record.expiresAt.getTime() >= DEVICE_TOKEN_REFRESH_GRANULARITY_MS;
   const clientVersion = options?.clientVersion ?? null;
-  await updateDeviceTokenUse(app.db, record.id, {
-    lastUsedAt: now,
-    ...(worthBumping ? { expiresAt: slid } : {}),
-    ...(clientVersion !== null && clientVersion !== record.lastClientVersion
-      ? { lastClientVersion: clientVersion }
-      : {}),
-  });
+  const versionChanged = clientVersion !== null && clientVersion !== record.lastClientVersion;
+  const stampDue = record.lastUsedAt === null
+    || now.getTime() - record.lastUsedAt.getTime() >= DEVICE_TOKEN_USE_GRANULARITY_MS;
+  if (stampDue || worthBumping || versionChanged) {
+    await updateDeviceTokenUse(app.db, record.id, {
+      lastUsedAt: now,
+      ...(worthBumping ? { expiresAt: slid } : {}),
+      ...(versionChanged ? { lastClientVersion: clientVersion } : {}),
+    });
+  }
 
   return {
     principal: {
