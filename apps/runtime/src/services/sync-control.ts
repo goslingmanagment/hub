@@ -71,7 +71,6 @@ export async function requestPageSync(
     pageLabel: string;
     scope: SyncTriggerScope;
     reason: SyncRequestSource;
-    onlyFansTransactionsStart?: Date | null;
   },
 ) {
   const storedPage = await findPageByLabel(app.db, input.pageLabel);
@@ -126,13 +125,6 @@ export async function requestPageSync(
     );
   }
 
-  const requestPayloadByStream = input.onlyFansTransactionsStart
-    ? {
-      transactions: {
-        onlyFansTransactionsStart: input.onlyFansTransactionsStart.toISOString(),
-      },
-    }
-    : undefined;
   if (input.scope === "posts") {
     // The explicit operator request IS the manual action a
     // `manual_action_required` block (e.g. a parked OFAPI capture job) asked
@@ -148,7 +140,6 @@ export async function requestPageSync(
     pageId: storedPage.page.id,
     streams,
     source: input.reason,
-    ...(requestPayloadByStream === undefined ? {} : { requestPayloadByStream: requestPayloadByStream }),
     now,
     ...dependencyInput,
   });
