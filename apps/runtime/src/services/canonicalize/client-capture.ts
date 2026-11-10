@@ -6,7 +6,7 @@
 // parse_version (the kinds are "seen", not pending), and the version gives
 // its replay hook: bump it and every captured fact re-presents.
 
-import { isHarvestProducer } from "../ingest-observations.ts";
+import { isHarvestProducer } from "../harvest-producer.ts";
 import {
   asDate,
   asNumber,
@@ -62,6 +62,11 @@ export const CLIENT_CAPTURE_CANONICALIZED_KINDS: ReadonlySet<string> = new Set([
   // A fan's send of an outreach (services/client-outreaches.ts): validation only; the route writes its row itself.
   "client.outreach_send.v1",
 ]);
+
+// The only kinds this family can mint events from (the producer-gated
+// harvest messages below). Every other kind of the family is stamp-only
+// (CANONICALIZER_FAMILIES `stampOnly`).
+export const CLIENT_CAPTURE_MINTING_KINDS: readonly string[] = ["harvest.messages"];
 
 // Local desktop `messages` rows (SCHEMA_VERSION 16): message_id is the
 // PLATFORM message id (numeric string — same id space as OFAPI webhook/REST),
@@ -119,7 +124,7 @@ export function canonicalizeClientCaptureObservation(
   // harvest uploader's observations may become message.* events. A
   // harvest-kind row from any other producer stamps forward with zero
   // events instead of minting platform truth.
-  if (observation.kind === "harvest.messages" && isHarvestProducer(observation.producer)) {
+  if (CLIENT_CAPTURE_MINTING_KINDS.includes(observation.kind) && isHarvestProducer(observation.producer)) {
     return harvestMessageEvents(observation);
   }
   // Everything else: validation is the whole job — a payload that is not an

@@ -30,6 +30,7 @@ import { clientTokenIngestProducer } from "./client-token-profile.ts";
 import { requireClientGrantedPage } from "./client-switches.ts";
 import { ConflictError, NotFoundError } from "./errors.ts";
 import { ingestProducerForClientVersion } from "./ingest-observations.ts";
+import { stampOnlyParseVersion } from "./canonicalize/index.ts";
 
 /**
  * Chat Memory week 3 (docs/plans/2026-10-24-chat-memory/week-3.md §2–3): win
@@ -121,6 +122,7 @@ export async function recordClientWinBackAttempt(
       platform: page.platform,
       accountId: page.id,
       kind: WIN_BACK_ATTEMPT_OBSERVATION_KIND,
+      parseVersion: stampOnlyParseVersion("client_capture", WIN_BACK_ATTEMPT_OBSERVATION_KIND),
       payload,
       payloadHash: createHash("sha256").update(JSON.stringify(payload)).digest(),
       idempotencyKey: `${principal.user.id}:winback_attempt:${page.id}:${candidate.fanRef}:${now.toISOString()}`,

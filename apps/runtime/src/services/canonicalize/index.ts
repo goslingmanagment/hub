@@ -27,6 +27,7 @@ import {
   canonicalizeClientCaptureObservation,
   CLIENT_CAPTURE_CANONICALIZED_KINDS,
   CLIENT_CAPTURE_CANONICALIZER_VERSION,
+  CLIENT_CAPTURE_MINTING_KINDS,
 } from "./client-capture.ts";
 import {
   canonicalizeOfapiWebhookObservation,
@@ -136,6 +137,19 @@ interface CanonicalizerFamilyBase {
    * Mutually exclusive with `projectionOnly` (a family is one or the other).
    */
   mixed?: boolean;
+  /**
+   * The family can never mint an event, quarantine or refuse a row of its
+   * kinds (except `exceptKinds`): its sweep visit is nothing but the
+   * parse_version stamp. Writers then stamp such a row at INSERT with the
+   * family's current version (`stampOnlyParseVersion`), so the sweep never
+   * reads it back and never rewrites it with a non-HOT UPDATE. Rows written
+   * without the stamp, and every row below a future version bump, are swept
+   * exactly as before. `exceptKinds` names the kinds the canonicalizer CAN
+   * mint from; they stay at parse_version 0 for the sweep.
+   * Only on a family with no `parse`, no `quarantine`, and whose `canParse`
+   * (if any) every writer of the kinds satisfies by construction.
+   */
+  stampOnly?: { exceptKinds: readonly string[] };
 }
 
 export type CanonicalizerFamily = CanonicalizerFamilyBase & (
@@ -180,6 +194,9 @@ export const CANONICALIZER_FAMILIES: readonly CanonicalizerFamily[] = [
     source: "fansly_ws", lane: "signals", kinds: [FANSLY_WS_CAPTURE_KIND], version: 1,
     canonicalize: () => [], canParse: canParseFanslyWsObservation,
     projectionOnly: true,
+    // Its one writer (captureBrowserWsFrame) builds exactly the shape
+    // canParseFanslyWsObservation accepts.
+    stampOnly: { exceptKinds: [] },
   },
   { source:"ofapi_capture", lane:"read_collections", kinds:["ofapi.collection_read_response.v1"], version:1, canonicalize:canonicalizeOfapiReadObservation, canParse:canParseOfapiReadObservation, projectionOnly:true },
   {
@@ -334,6 +351,7 @@ export const CANONICALIZER_FAMILIES: readonly CanonicalizerFamily[] = [
     kinds: [...CLIENT_CAPTURE_CANONICALIZED_KINDS],
     version: CLIENT_CAPTURE_CANONICALIZER_VERSION,
     canonicalize: canonicalizeClientCaptureObservation,
+    stampOnly: { exceptKinds: CLIENT_CAPTURE_MINTING_KINDS },
   },
 ];
 
@@ -349,4 +367,17 @@ export function familyForObservation(
     }
   }
   return null;
+}
+
+/**
+ * The parse_version a writer stamps at INSERT for an observation its family
+ * would only stamp (see `stampOnly`): the family's CURRENT version, so a later
+ * bump replays it like any sweep-stamped row. Undefined — insert at 0 and let
+ * the sweep decide, as before — for every other family, for a kind the
+ * family can mint from, and for a kind no family claims (desktop.unknown:*).
+ */
+export function stampOnlyParseVersion(source: string, kind: string): number | undefined {
+  const family = familyForObservation({ source, kind });
+  if (family?.stampOnly === undefined || family.stampOnly.exceptKinds.includes(kind)) return undefined;
+  return family.version;
 }

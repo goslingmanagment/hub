@@ -42,6 +42,7 @@ import { clientTokenIngestProducer } from "./client-token-profile.ts";
 import { requireClientFeatureOnLabel, requireClientGrantedPage, type ClientFeatureRequest } from "./client-switches.ts";
 import { ClientFeatureDisabledError, ConflictError } from "./errors.ts";
 import { ingestProducerForClientVersion } from "./ingest-observations.ts";
+import { stampOnlyParseVersion } from "./canonicalize/index.ts";
 
 /**
  * chat-extension «Онлайн»: the page's fans seen online recently, why to write
@@ -194,6 +195,7 @@ export async function recordClientOnlinePresence(
         platform: page.platform,
         accountId: page.id,
         kind: ONLINE_PRESENCE_OBSERVATION_KIND,
+        parseVersion: stampOnlyParseVersion("client_capture", ONLINE_PRESENCE_OBSERVATION_KIND),
         payload,
         payloadHash: createHash("sha256").update(JSON.stringify(payload)).digest(),
         idempotencyKey: `${principal.user.id}:online_presence:${page.id}:${now.toISOString()}`,
@@ -270,6 +272,7 @@ export async function recordClientOnlineAttempt(
       platform: page.platform,
       accountId: page.id,
       kind: ONLINE_ATTEMPT_OBSERVATION_KIND,
+      parseVersion: stampOnlyParseVersion("client_capture", ONLINE_ATTEMPT_OBSERVATION_KIND),
       payload,
       payloadHash: createHash("sha256").update(JSON.stringify(payload)).digest(),
       idempotencyKey: `${principal.user.id}:online_attempt:${page.id}:${fan.platformUserId}:${input.body.action}:${now.toISOString()}`,

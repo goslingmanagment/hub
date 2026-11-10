@@ -91,6 +91,7 @@ import {
   judgeFanQueueItem,
 } from "./fan-queue-rules.ts";
 import { ingestProducerForClientVersion } from "./ingest-observations.ts";
+import { stampOnlyParseVersion } from "./canonicalize/index.ts";
 
 /**
  * Fan queues (docs/plans/2026-10-29-fan-queues/spec.md): an agent previews,
@@ -781,6 +782,7 @@ export async function completeClientFanQueueItem(
       platform: page.platform,
       accountId: page.id,
       kind: FAN_QUEUE_ITEM_OBSERVATION_KIND,
+      parseVersion: stampOnlyParseVersion("client_capture", FAN_QUEUE_ITEM_OBSERVATION_KIND),
       payload,
       payloadHash: createHash("sha256").update(JSON.stringify(payload)).digest(),
       idempotencyKey: `${me}:fan_queue_item:${item.id}:${body.outcome}:${now.toISOString()}`,
