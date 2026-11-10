@@ -116,7 +116,7 @@ function millsToRoundedCents(value: bigint | number | string | null | undefined)
   return Number((mills + (mills >= 0n ? 5n : -5n)) / 10n);
 }
 
-function serializeRawType(
+export function serializeRawType(
   platform: Platform,
   rawType: string,
 ) {
@@ -178,7 +178,7 @@ function serializeRevenueWindow(
   };
 }
 
-function summarizeRevenueRows(rows: RevenueBreakdownRow[]): RevenueSummaryMills {
+export function summarizeRevenueRows(rows: RevenueBreakdownRow[]): RevenueSummaryMills {
   const summary: RevenueSummaryMills = {
     revenueMills: 0n,
     adjustmentMills: 0n,
@@ -322,7 +322,7 @@ function combinePeriodBounds(bounds: PeriodBounds[]): PeriodBounds {
   };
 }
 
-function groupPageIdsByPlatform(
+export function groupPageIdsByPlatform(
   pages: Array<Pick<PageSummaryRow, "id" | "platform">>,
 ) {
   const grouped = new Map<Platform, number[]>();

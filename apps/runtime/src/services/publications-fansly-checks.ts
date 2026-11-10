@@ -18,7 +18,6 @@ import {
   type FanslyWriteCommandRecord,
   type PublicationCheckKind,
   type PublicationCheckOutcome,
-  type PublicationRecord,
 } from "@agency_hub_core/db";
 import { FANSLY_PUBLISH_FACTS_VERIFIED, type FanslyPublishFacts } from "@agency_hub_core/fansly";
 import { PUBLICATION_WITHDRAW_MIN_LEAD_MINUTES, type PublicationStatus } from "@agency_hub_core/shared";
