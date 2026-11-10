@@ -1258,6 +1258,7 @@ export function buildProgram() {
           console.log(
             `#${opener.id} ${opener.enabled ? "on" : "off"} ${opener.audience}${hours}`
               + ` sent=${all.sent} replied=${all.replied}/${all.matured} talked=${all.talked} paid=${all.paid}/${all.maturedPaid}`
+              + ` payers=${all.payers} gross=${formatUsdFromMills(all.payersGrossMills)} top=${formatUsdFromMills(all.topPayerGrossMills)}`
               + `\n    ${opener.body}`,
           );
         }

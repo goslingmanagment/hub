@@ -1,3 +1,4 @@
+import { millsFromInteger, type Mills } from "@agency_hub_core/shared";
 import { sql } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
@@ -111,7 +112,8 @@ export type AiPersonaOpenerFanKind = "bare" | "default" | "named" | "unknown";
 
 /** How the fans a set of greetings went to answered. A greeting counts toward
  * an outcome only once its window has passed: 72 hours for the answers, 14
- * days for the money. */
+ * days for the money. The payers and their money wait for no window: they are
+ * everything since the greeting. */
 export interface AiPersonaOpenerOutcome {
   openerId: number;
   fan: AiPersonaOpenerFanKind;
@@ -129,6 +131,12 @@ export interface AiPersonaOpenerOutcome {
   maturedPaid: number;
   /** Of `maturedPaid`: the fan paid the page within 14 days. */
   paid: number;
+  /** Fans whose first greeting this was and who paid the page after it, at any time since. */
+  payers: number;
+  /** What those fans paid the page after the greeting, gross. */
+  payersGrossMills: Mills;
+  /** Of it, the fan who paid the most: one whale can be the whole sum. */
+  topPayerGrossMills: Mills;
 }
 
 const FAN_KINDS: ReadonlySet<string> = new Set(["bare", "default", "named", "unknown"]);
@@ -143,6 +151,9 @@ type OutcomeDbRow = {
   talked: bigint;
   matured_paid: bigint;
   paid: bigint;
+  payers: bigint;
+  payers_gross_mills: string;
+  top_payer_gross_mills: string;
 };
 
 /**
@@ -150,7 +161,8 @@ type OutcomeDbRow = {
  * openers: the opener of the variant sent (client_greetings.variant, 0 for a
  * one-message Hi), by what the fan was. The answers are the fan's messages in
  * the generation's conversation (message_archive); the money is any active
- * transaction of the fan on that page.
+ * transaction of the fan on that page. The payers and their money count a fan
+ * once, at the first greeting this persona sent them, on that greeting's page.
  */
 export async function listAiPersonaOpenerOutcomes(
   db: Database,
@@ -177,7 +189,9 @@ export async function listAiPersonaOpenerOutcomes(
                and sent.text_plain is not null and btrim(sent.text_plain) <> btrim(d.completion) as edited,
              first_fan.at is not null as replied,
              again.at is not null as talked,
-             paid.at is not null as paid
+             paid.at is not null as paid,
+             row_number() over (partition by d.platform, d.fan_ref order by d.confirmed_at, d.page_id) = 1 as first_greeting,
+             coalesce(paid.gross_mills, 0) as gross_mills
       from drawn d
       left join lateral (
         select m.text_plain from message_archive m
@@ -201,11 +215,12 @@ export async function listAiPersonaOpenerOutcomes(
           and m.occurred_at > answer.at and m.occurred_at <= d.confirmed_at + interval '72 hours'
       ) again on true
       left join lateral (
-        select min(t.occurred_at) as at
+        select min(t.occurred_at) filter (where t.occurred_at <= d.confirmed_at + interval '14 days') as at,
+               sum(t.gross_amount_mills) as gross_mills
         from fans f join transactions t on t.fan_id = f.id
         where f.platform = d.platform and f.platform_user_id = d.fan_ref
           and t.platform_account_id = d.page_id and t.is_active and t.gross_amount_mills > 0
-          and t.occurred_at > d.confirmed_at and t.occurred_at <= d.confirmed_at + interval '14 days'
+          and t.occurred_at > d.confirmed_at
       ) paid on true
       where d.opener_id is not null
     )
@@ -216,7 +231,10 @@ export async function listAiPersonaOpenerOutcomes(
            count(*) filter (where confirmed_at <= ${repliesBy}::timestamptz and replied) as replied,
            count(*) filter (where confirmed_at <= ${repliesBy}::timestamptz and talked) as talked,
            count(*) filter (where confirmed_at <= ${moneyBy}::timestamptz) as matured_paid,
-           count(*) filter (where confirmed_at <= ${moneyBy}::timestamptz and paid) as paid
+           count(*) filter (where confirmed_at <= ${moneyBy}::timestamptz and paid) as paid,
+           count(*) filter (where first_greeting and gross_mills > 0) as payers,
+           coalesce(sum(gross_mills) filter (where first_greeting), 0)::bigint as payers_gross_mills,
+           coalesce(max(gross_mills) filter (where first_greeting), 0)::bigint as top_payer_gross_mills
     from outcome
     group by opener_id, fan
     order by opener_id, fan`);
@@ -230,5 +248,8 @@ export async function listAiPersonaOpenerOutcomes(
     talked: Number(row.talked),
     maturedPaid: Number(row.matured_paid),
     paid: Number(row.paid),
+    payers: Number(row.payers),
+    payersGrossMills: millsFromInteger(row.payers_gross_mills),
+    topPayerGrossMills: millsFromInteger(row.top_payer_gross_mills),
   }));
 }
