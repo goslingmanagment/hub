@@ -5109,40 +5109,6 @@ export const ofapiCreditsSummaryResponseSchema = z.object({
   }).optional(),
 });
 
-const ofapiCreditsChatterWindowSchema = z.object({
-  from: isoTimestamp,
-  to: isoTimestamp,
-  // Compatibility estimates for installed SDKs: REST is floored at zero and
-  // the legacy total remains REST plus the estimated webhook component.
-  restCredits: z.number().int().min(0),
-  webhook: z.object({
-    eventCount: z.number().int().min(0),
-    estimatedCredits: z.number().int().min(0),
-  }),
-  totalEstimatedCredits: z.number().int().min(0),
-  // Exact signed net for upgraded clients. Optional for compatibility with
-  // older Hub versions; a correction can make a bounded window net-negative.
-  netRestCredits: z.number().int().optional(),
-  netTotalEstimatedCredits: z.number().int().optional(),
-});
-
-export const ofapiCreditsChatterSummaryResponseSchema = z.object({
-  enabled: z.boolean(),
-  scope: z.object({
-    pageIds: z.array(intId),
-    pageCount: z.number().int().min(0),
-  }),
-  today: z.object({
-    day: businessDate,
-  }).merge(ofapiCreditsChatterWindowSchema),
-  last7d: ofapiCreditsChatterWindowSchema,
-  limitations: z.array(z.string()),
-});
-
-const ofapiReadGatewayParamsSchema = z.object({
-  "*": z.string().min(1).max(1000),
-});
-
 export const ofapiCommandStateSchema = z.enum([
   "queued",
   "in_flight",
@@ -7126,47 +7092,6 @@ const baseRouteSchemas = {
       403: errorResponseSchema,
       404: errorResponseSchema,
       409: errorResponseSchema,
-    },
-  },
-  ofapiCreditsChatterSummary: {
-    auth: { kind: "apiKey" },
-    tags: ["ofapi"],
-    summary: "Get page-scoped OFAPI credit spend visible to the authenticated chatter",
-    description: "Bearer chatter-key endpoint for desktop clients. It reports REST spend "
-      + "attributed to the chatter's assigned pages and a webhook credit estimate derived "
-      + "from journaled events for those pages. It intentionally omits owner-only global "
-      + "balance, refills, external drift, and adjustments.",
-    response: {
-      200: ofapiCreditsChatterSummaryResponseSchema,
-      401: errorResponseSchema,
-      403: errorResponseSchema,
-    },
-  },
-  ofapiReadGateway: {
-    auth: { kind: "apiKey" },
-    tags: ["ofapi"],
-    summary: "Read an allowlisted OFAPI resource through the core custody boundary",
-    description: "Chatter-key-only, page-scoped compatibility gateway mounted at "
-      + "`/api/v1/ofapi/read`. It preserves the desktop OFAPI GET paths and JSON "
-      + "shapes, but accepts only the documented desktop read allowlist. `/accounts` "
-      + "is synthesized from assigned core page mappings and `/whoami` is sanitized. "
-      + "The optional `x-agency-hub-read-intent: deep-history-v1` header identifies "
-      + "backward user scrollback that may be served from certified DB history. "
-      + "No POST, DELETE, send, mark-read, typing, or upload operation is exposed.",
-    params: ofapiReadGatewayParamsSchema,
-    response: {
-      200: z.unknown(),
-      400: z.unknown(),
-      401: z.unknown(),
-      402: z.unknown(),
-      403: z.unknown(),
-      404: z.unknown(),
-      429: z.unknown(),
-      422: z.unknown(),
-      500: z.unknown(),
-      502: z.unknown(),
-      503: z.unknown(),
-      504: z.unknown(),
     },
   },
   createOfapiCommand: {
@@ -9370,8 +9295,6 @@ export type OfapiExportArtifactCaptureBody =
 export type OfapiExportArtifactCaptureResponse =
   z.infer<typeof ofapiExportArtifactCaptureResponseSchema>;
 export type OfapiCreditsSummaryResponse = z.infer<typeof ofapiCreditsSummaryResponseSchema>;
-export type OfapiCreditsChatterSummaryResponse =
-  z.infer<typeof ofapiCreditsChatterSummaryResponseSchema>;
 export type OfapiCreditsDailyResponse = z.infer<typeof ofapiCreditsDailyResponseSchema>;
 export type AdminOfapiCreditsLedgerQuery = z.infer<typeof adminOfapiCreditsLedgerQuerySchema>;
 export type AdminOfapiCreditsLedgerCsvQuery = z.infer<typeof adminOfapiCreditsLedgerCsvQuerySchema>;

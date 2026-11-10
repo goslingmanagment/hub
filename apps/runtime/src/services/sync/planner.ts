@@ -14,7 +14,6 @@ import type { PgBoss } from "pg-boss";
 import type { AppContext } from "../../bootstrap.ts";
 import { assertLegacyExecutorPage, legacyExecutorPlatforms } from "../../sync/onlyfans/boundary.ts";
 import { sendSyncPageWakeup } from "../sync-queue.ts";
-import { recoverExpiredOfapiInteractiveResponses } from "../ofapi-capture-transport.ts";
 import { resolveStoredProxyEgressKey } from "../page-context.ts";
 import { pauseUnmappedOnlyFansAudienceForAllPages } from "./ofapi-audience-sync.ts";
 import { pauseUnmappedOnlyFansDmForAllPages } from "./onlyfans-dm-polling.ts";
@@ -103,18 +102,6 @@ export async function runSyncPlannerCycle(
   if (recovered.released + recovered.indeterminate + recovered.requeued > 0) {
     app.logger.warn(recovered, "Recovered expired OFAPI capture work");
   }
-  const recoveredInteractive = await recoverExpiredOfapiInteractiveResponses(app, { now });
-  if (
-    recoveredInteractive.terminalized
-    + recoveredInteractive.unavailable
-    + recoveredInteractive.errors > 0
-  ) {
-    app.logger.warn(
-      recoveredInteractive,
-      "Recovered captured OFAPI interactive responses without vendor egress",
-    );
-  }
-
   const capturePages = await listRunnableOfapiCapturePages(app.db, { now });
   for (const capture of capturePages) {
     const existing = pageWork.get(capture.pageId);
