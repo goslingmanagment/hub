@@ -29,12 +29,8 @@ import { isCapturePayloadUnavailable, resolveCapturePayloadRow } from "./payload
 const ONLYFANS_CDN_HOST = /^cdn\d*\.onlyfans\.com$/;
 /** OFAPI's own CDN cache: S3-presigned, not bound to an address. */
 export const OFAPI_CACHE_CDN_HOST = "cdn.fansapi.com";
-/** OFAPI's metered streaming host: a hand-out here is paid. */
-export const OFAPI_STREAM_CDN_HOST = "dl.fansapi.com";
 
 const MEDIA_TYPES = new Set(["photo", "video", "gif", "audio"]);
-/** `full` is served for photos in these formats only (owner decision). */
-export const OFAPI_MEDIA_FULL_EXTENSIONS: ReadonlySet<string> = new Set(["jpg", "jpeg", "png", "webp"]);
 
 /** Gateway reads whose bodies carry media file URLs. */
 export const OFAPI_MEDIA_LOCATOR_OPERATIONS: ReadonlySet<string> = new Set([

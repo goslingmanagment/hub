@@ -38,7 +38,6 @@ export function createTestAppContext(
     ofapiDmReconcileIntervalMinutes?: number;
     ofapiCreditAlertThreshold?: number;
     ofapiWebhookSilenceThresholdMinutes?: number;
-    ofapiMediaDailyCapCredits?: number;
     ofapiBurnAlertCreditsPerHour?: number;
     ofapiCreditMicroUsdPrice?: number;
     ofapiAudienceMaxRequestsPerRun?: number;
@@ -116,7 +115,6 @@ export function createTestAppContext(
       ofapiDmReconcileIntervalMinutes: overrides?.ofapiDmReconcileIntervalMinutes ?? 360,
       ofapiCreditAlertThreshold: overrides?.ofapiCreditAlertThreshold ?? 1000,
       ofapiWebhookSilenceThresholdMinutes: overrides?.ofapiWebhookSilenceThresholdMinutes ?? 720,
-      ofapiMediaDailyCapCredits: overrides?.ofapiMediaDailyCapCredits ?? 100,
       ofapiBurnAlertCreditsPerHour: overrides?.ofapiBurnAlertCreditsPerHour ?? 300,
       ofapiCreditMicroUsdPrice: overrides?.ofapiCreditMicroUsdPrice ?? 0,
       ofapiAudienceMaxRequestsPerRun: overrides?.ofapiAudienceMaxRequestsPerRun ?? 25,
