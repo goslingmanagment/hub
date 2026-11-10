@@ -6,7 +6,6 @@ import {
   listPageSyncStates,
   pausePageSync,
   requestPageSync as requestPageSyncRows,
-  resetPageDmSyncState,
   resetPageSync,
   resolvePageSyncPriority,
   resumePageSync,
@@ -621,9 +620,9 @@ export async function resetSyncBlock(
   }
   assertLegacyExecutorServes(stored.page);
 
-  // Destruction-door guard: the messages_history reset would
-  // hard-delete every stored DM for the page (resetPageDmSyncState) with no
-  // archive to recover from. Disabled until the message archive exists;
+  // Destruction-door guard: a messages_history reset would have to
+  // hard-delete every stored DM for the page with no archive to recover
+  // from. Disabled until the message archive exists;
   // checkpoint/top-spender resets below stay available.
   if (input.block === "messages_history") {
     throw new ConflictError(
@@ -653,9 +652,6 @@ export async function resetSyncBlock(
       streams: tasks,
     });
 
-    if (input.block === "messages_history") {
-      await resetPageDmSyncState(dbTx, stored.page.id);
-    }
     if (input.block === "financials") {
       await deletePageTopSpenders(dbTx, stored.page.id);
     }
