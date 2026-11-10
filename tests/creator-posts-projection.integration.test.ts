@@ -9,9 +9,11 @@ import {
   getProjectionWatermark,
   insertErasureLog,
   insertObservation,
+  readAgentPostTipParseDebt,
   upsertCreatorPost,
 } from "@agency_hub_core/db";
 
+import { POSTS_CANONICALIZER_VERSION } from "../apps/runtime/src/services/canonicalize/posts.ts";
 import { runCanonicalization } from "../apps/runtime/src/services/canonicalize-driver.ts";
 import {
   rebuildCreatorPostsProjection,
@@ -564,7 +566,10 @@ describe("creator posts domain projection", () => {
       "update observations set parse_version = 4 where id = $1",
       [tipObservation.observationId],
     );
+    const tipDebtInput = { pageIds: [page.id], parserVersion: POSTS_CANONICALIZER_VERSION };
+    expect((await readAgentPostTipParseDebt(testDb.db, tipDebtInput)).topLevel).toBe(true);
     expect(await runCanonicalization(appStub())).toMatchObject({ appended: 3, stamped: 1 });
+    expect((await readAgentPostTipParseDebt(testDb.db, tipDebtInput)).topLevel).toBe(false);
     expect(await runCreatorPostsProjection(appStub())).toMatchObject({ upserted: 2 });
 
     const persistedTipEvent = await testDb.pool.query<{
