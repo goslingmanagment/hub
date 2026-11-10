@@ -30,7 +30,7 @@ describe("runMigrations", () => {
     const originalCwd = process.cwd();
     const db = migrationDbMock((text) => {
         if (text === APPLIED_MIGRATIONS_SQL) {
-          return appliedRows(["9999_cwd.sql"]);
+          return appliedRows([]);
         }
 
         return {
@@ -48,7 +48,10 @@ describe("runMigrations", () => {
       await expect(runMigrations({ db: db as never })).resolves.toBeUndefined();
       expect(db.query).toHaveBeenCalledWith(expect.stringContaining("create table if not exists schema_migrations"));
       expect(db.query).toHaveBeenCalledWith(APPLIED_MIGRATIONS_SQL);
-      expect(db.query).not.toHaveBeenCalledWith(expect.stringContaining("select 1;"));
+      // The cwd folder is the one that was read: its only file is applied and recorded.
+      expect(db.query).toHaveBeenCalledWith("insert into schema_migrations (id) values ($1)", ["9999_cwd.sql"]);
+      const recorded = db.query.mock.calls.filter(([text]) => text === "insert into schema_migrations (id) values ($1)");
+      expect(recorded).toHaveLength(1);
     } finally {
       process.chdir(originalCwd);
       await rm(tempDir, { recursive: true, force: true });
