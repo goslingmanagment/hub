@@ -450,6 +450,17 @@ export async function rebuildRevenueRollups(
                f.creator_net_amount_mills,
                now()
         from fresh f
+        -- An unchanged row is not even offered to the upsert: on conflict
+        -- locks every conflicting row (WAL) even when its where is false.
+        where not exists (
+          select 1 from revenue_daily rd
+          where rd.platform_account_id = f.platform_account_id
+            and rd.business_date = f.business_date
+            and rd.canonical_type = f.canonical_type
+            and rd.transaction_state = f.transaction_state
+            and (rd.transaction_count, rd.gross_amount_mills, rd.creator_net_amount_mills)
+                is not distinct from (f.transaction_count, f.gross_amount_mills, f.creator_net_amount_mills)
+        )
         on conflict (
           platform_account_id,
           business_date,
@@ -555,6 +566,14 @@ export async function rebuildFollowerRollups(
       )
       select ${platformAccountId}, x.business_date, x.new_followers, x.known_total_followers, now()
       from desired x
+      -- Unchanged rows skip the upsert, which would lock them anyway.
+      where not exists (
+        select 1 from daily_followers df
+        where df.platform_account_id = ${platformAccountId}
+          and df.business_date = x.business_date
+          and (df.new_followers, df.known_total_followers)
+              is not distinct from (x.new_followers, x.known_total_followers)
+      )
       on conflict (
         platform_account_id,
         business_date
@@ -596,7 +615,10 @@ export async function rebuildSubscriberRollups(db: Database, platformAccountId: 
       where platform_account_id = ${platformAccountId}
       group by 1
     ),
-    active_subscribers as (
+    series_bounds as (
+      select min(business_date) as first_day, max(business_date) as last_day from date_series
+    ),
+    subscription_ranges as (
       -- Historical dates must count subscriptions that were active THEN,
       -- not only rows still in the platform's current set: is_current=false
       -- means "retired by a later sweep", and gating on it made every past
@@ -605,18 +627,33 @@ export async function rebuildSubscriberRollups(db: Database, platformAccountId: 
       -- retirement stamp (deactivate sets it; retired rows are never
       -- touched again), which covers early cancellation (ends_at still in
       -- the future) and natural expiry (retirement lagging ends_at) alike.
+      -- Each subscription is one day range clipped to the series; a range
+      -- with no end (retired, both stamps null) or ending before it starts
+      -- counts on no day.
+      select coalesce((ps.source_created_at at time zone ${BUSINESS_TZ})::date, b.first_day) as start_day,
+             case
+               when ps.is_current
+                 then least(coalesce((ps.ends_at at time zone ${BUSINESS_TZ})::date, b.last_day), b.last_day)
+               else least((least(ps.ends_at, ps.last_seen_at) at time zone ${BUSINESS_TZ})::date, b.last_day)
+             end as end_day
+      from page_subscriptions ps
+      cross join series_bounds b
+      where ps.platform_account_id = ${platformAccountId}
+    ),
+    range_deltas as (
+      select d, sum(delta) as delta from (
+        select start_day as d, 1 as delta from subscription_ranges where end_day >= start_day
+        union all
+        select end_day + 1, -1 from subscription_ranges where end_day >= start_day
+      ) e group by d
+    ),
+    active_subscribers as (
+      -- A running sum of range starts and ends: the old days x subscriptions
+      -- join had no equality key and cost ~2 s on the big pages.
       select ds.business_date,
-             count(ps.id)::int as active_subscribers
+             coalesce(sum(rd.delta) over (order by ds.business_date), 0)::int as active_subscribers
       from date_series ds
-      left join page_subscriptions ps
-        on ps.platform_account_id = ${platformAccountId}
-       and coalesce((ps.source_created_at at time zone ${BUSINESS_TZ})::date, ds.business_date) <= ds.business_date
-       and (case
-              when ps.is_current
-                then coalesce((ps.ends_at at time zone ${BUSINESS_TZ})::date, ds.business_date)
-              else (least(ps.ends_at, ps.last_seen_at) at time zone ${BUSINESS_TZ})::date
-            end) >= ds.business_date
-      group by ds.business_date
+      left join range_deltas rd on rd.d = ds.business_date
     ),
     desired as (
       select ds.business_date,
@@ -640,6 +677,14 @@ export async function rebuildSubscriberRollups(db: Database, platformAccountId: 
              x.active_subscribers,
              now()
       from desired x
+      -- Unchanged rows skip the upsert, which would lock them anyway.
+      where not exists (
+        select 1 from daily_subscribers stored
+        where stored.platform_account_id = ${platformAccountId}
+          and stored.business_date = x.business_date
+          and (stored.new_subscribers, stored.active_subscribers)
+              is not distinct from (x.new_subscribers, x.active_subscribers)
+      )
       on conflict (
         platform_account_id,
         business_date
