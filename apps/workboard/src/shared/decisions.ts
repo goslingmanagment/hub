@@ -2,7 +2,7 @@ import { queryOptions, useQueries } from "@tanstack/react-query";
 import { formatCount } from "@agency_hub_core/ui/format";
 import { moscowToday } from "@agency_hub_core/ui/moscow";
 import { ruPlural } from "@agency_hub_core/ui/plural";
-import { pendingChangesOf, postOnPage, reportQuestionsWindow, unparsedPosts } from "@agency_hub_core/ui/shiftReports";
+import { pendingChangesOf, postOnPage, reportQuestionsWindow, unparsedPostsToDecide } from "@agency_hub_core/ui/shiftReports";
 import { kernel } from "./hub.js";
 import { carryParams } from "./links.js";
 import { useMe } from "./useMe.js";
@@ -25,8 +25,9 @@ const LEDGER_EVERY = 5 * MINUTE;
 
 /**
  * The shift reports' questions, the owner's only (the agency ledger's, through Hub): the posts in «Отчётность» the
- * ledger could not use (`teamLedgerReports`) and the paid days whose report changed since (`teamLedgerPayouts`), of
- * the last month (`reportQuestionsWindow`) — the same window the console's «Ждут вас» counts.
+ * ledger could not use (`teamLedgerReports`) of the days it accrues from the posts (`reportsFrom` of
+ * `teamLedgerPayouts`, `unparsedPostsToDecide`) and the paid days whose report changed since (`teamLedgerPayouts`), of
+ * the last month (`reportQuestionsWindow`) — the same window and rule the console's «Ждут вас» counts.
  */
 export function reportPostsQuery(today: string = moscowToday()) {
   const window = reportQuestionsWindow(today);
@@ -69,9 +70,10 @@ export type DecisionQueue = (typeof DECISION_QUEUES)[number];
 export interface DecisionCounts {
   /**
    * The reports' questions — posts the ledger could not use on the chosen page
-   * (`page`; a post of no known page is every page's) and paid days whose report
-   * changed (a person's pay, not a page's: on every page). null: not read
-   * (failed, still loading, or not the owner's to see).
+   * (`page`; a post of no known page is every page's), of the days it accrues
+   * from the posts (none while the payout sheets pay: `unparsedPostsToDecide`),
+   * and paid days whose report changed (a person's pay, not a page's: on every
+   * page). null: not read (failed, still loading, or not the owner's to see).
    */
   reports: number | null;
   /** The same, in its two kinds, for the words. */
@@ -132,7 +134,8 @@ export function useDecisionCounts(options: { page?: string | null } = {}): Decis
     return { reports: null, reportParts: null, customs: null, held: null, total: 0, page, elsewhere: 0, loading, settled: false, failed: [], complete: false, retry };
   }
   const onPage = (label: string) => page === null || label === page;
-  const unparsed = posts.data ? unparsedPosts(posts.data) : undefined;
+  // Whether a post waits depends on the payouts' answer too (`reportsFrom`): without both, no count.
+  const unparsed = posts.data && changes.data ? unparsedPostsToDecide(posts.data, changes.data) : undefined;
   const pending = changes.data ? pendingChangesOf(changes.data) : undefined;
   const paidCustoms = customs.data?.customs.filter((custom) => custom.state === "paid");
   const reportParts = unparsed && pending ? { posts: unparsed.filter((post) => postOnPage(post, page)).length, changes: pending.length } : null;

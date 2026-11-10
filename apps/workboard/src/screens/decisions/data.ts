@@ -1,6 +1,6 @@
 import { queryOptions, useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ClientSendCustodyListItem, ClientSendCustodyResolveBody, KernelOperationResponse, TeamLedgerReportPost } from "@agency_hub_core/contracts";
-import { pendingChangesOf, postOnPage, unparsedPosts, type PendingChange } from "@agency_hub_core/ui/shiftReports";
+import { pendingChangesOf, postOnPage, unparsedPostsToDecide, type PendingChange } from "@agency_hub_core/ui/shiftReports";
 import { customsQuery, heldSendsQuery, reportChangesQuery, reportPostsQuery } from "@/shared/decisions";
 import { kernel } from "@/shared/hub";
 
@@ -11,9 +11,11 @@ import { kernel } from "@/shared/hub";
  * shared ones (src/shared/decisions.ts), so a decision made here moves the
  * sidebar's count at once:
  *   - the shift reports' questions (the owner's only, the agency ledger's, the
- *     last month): the posts it could not use (`teamLedgerReports`) and the paid
- *     days whose report changed (`teamLedgerPayouts`) — read only: the owner's
- *     word on them is given to the ledger, not here;
+ *     last month): the posts it could not use (`teamLedgerReports`) of the days
+ *     it accrues from the posts — none while the payout sheets pay
+ *     (`unparsedPostsToDecide`, by `reportsFrom` of `teamLedgerPayouts`) — and
+ *     the paid days whose report changed (`teamLedgerPayouts`) — read only: the
+ *     owner's word on them is given to the ledger, not here;
  *   - customs: `teamCustoms`;
  *   - held sends: `clientSendCustodyList` (held: the shared key; resolved: ours);
  *   - fan names: `pageFanCard` per fan — Hub sends the number only (phase 2: the
@@ -40,7 +42,8 @@ export const CUSTOM_OVERDUE_DAYS = 7;
 
 /** Future contract (phase 2, `teamDecisions`): one read of the screen, already cut to the page filter on the server. */
 export interface DecisionsView {
-  /** The posts the ledger could not use (on the page: a post of no known page is every page's) and the paid days whose report changed. */
+  /** The posts the ledger could not use, of the days it accrues from the posts (on the page: a post of no known page is
+   *  every page's), and the paid days whose report changed. */
   reports: { posts: TeamLedgerReportPost[]; changes: PendingChange[]; elsewhere: number } | null;
   customs: { paid: Custom[]; ordered: Custom[]; other: Custom[]; elsewhere: number; capped: boolean; serverNow: string } | null;
   held: { items: HeldSend[]; total: number; elsewhere: number; serverNow: string } | null;
@@ -60,12 +63,13 @@ export function useDecisions(options: { owner: boolean; page: string | null }) {
   });
 
   const onPage = (label: string) => page === null || label === page;
+  const toDecide = posts.data && changes.data ? unparsedPostsToDecide(posts.data, changes.data) : [];
   const view: DecisionsView = {
     reports: posts.data && changes.data
       ? {
-        posts: unparsedPosts(posts.data).filter((post) => postOnPage(post, page)),
+        posts: toDecide.filter((post) => postOnPage(post, page)),
         changes: pendingChangesOf(changes.data),
-        elsewhere: unparsedPosts(posts.data).filter((post) => !postOnPage(post, page)).length,
+        elsewhere: toDecide.filter((post) => !postOnPage(post, page)).length,
       }
       : null,
     customs: customs.data

@@ -146,7 +146,8 @@ export function demoReportDays(now: Date): DemoReportDay[] {
       let pages = drafted;
       let paidAsMills: number | null = null;
       if (twist?.kind === "blocked") {
-        // The post is out of the pay base: the day stands as drafted, the post waits in «Решения».
+        // The post is out of the pay base: the day stands as drafted; the post waits in «Решения» if its day is one the
+        // reports accrue (team-ledger.ts, REPORTS_FROM_DAYS), else it is history in «Выплаты → Отчёты».
         posts.push(postOf({
           id: msgId, at: twist.flag === "date_mismatch" ? postedAt + 3 * 24 * 60 * MINUTE_MS : postedAt, user, sender: user.name, date,
           draft: drafted, flags: [twist.flag], ...(twist.flag === "sum_mismatch" ? { totalShift: 10_000 } : {}),
