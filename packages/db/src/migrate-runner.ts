@@ -147,17 +147,10 @@ export async function runMigrations(input?: {
       }
       const selectedFiles = files.slice(0, throughIndex + 1);
 
-      const appliedFiles = new Set<string>();
-      for (const file of files) {
-        const alreadyApplied = await db.query(
-          "select 1 from schema_migrations where id = $1",
-          [file],
-        );
-
-        if (alreadyApplied.rowCount) {
-          appliedFiles.add(file);
-        }
-      }
+      // One read under the lock: ids with no file are ignored, as before.
+      const applied = await db.query("select id from schema_migrations");
+      const appliedIds = new Set((applied.rows as Array<{ id: string }>).map((row) => row.id));
+      const appliedFiles = new Set(files.filter((file) => appliedIds.has(file)));
       assertContiguousAppliedPrefix(files, appliedFiles);
 
       for (const file of selectedFiles) {
