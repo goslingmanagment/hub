@@ -41,7 +41,7 @@
 // i.e. everything outside the canary — are filtered after that bounded scan,
 // so a page that is not in the canary costs nothing but the scan.
 
-import { sql } from "drizzle-orm";
+import { type SQL, sql } from "drizzle-orm";
 
 import {
   CapturePayloadCodecError,
@@ -331,52 +331,59 @@ export interface CapturePayloadDanglingRefCensus {
   scanLimit: number;
 }
 
+// Each census counts in SQL and returns ONE row when nothing dangles: the
+// catalog is probed through its primary key `(bucket_month, object_id)` once per
+// referenced row. The scalar subquery with `limit 1` is what keeps the planner
+// from flattening the probe back into a hash join against a seq scan of every
+// `capture_payload_objects` partition (it misjudges how many recent rows carry a
+// reference). `referenced` and `dangling` repeat on every row; sample columns are
+// null on the single row of a clean pass. Which dangling rows are sampled was
+// never ordered and is not now.
+const danglingRefCensusOver = (recent: SQL) => sql`
+  with recent as (${recent}),
+  judged as materialized (
+    select r.envelope_id, r.bucket_month, r.object_id,
+           (select true from capture_payload_objects c
+             where c.bucket_month = r.bucket_month and c.object_id = r.object_id
+             limit 1) is null as dangling
+      from recent r
+     where r.object_id is not null
+  )
+  select (select count(*) from judged)::int as referenced,
+         (select count(*) from judged where dangling)::int as dangling,
+         s.envelope_id::text as envelope_id,
+         to_char(s.bucket_month, 'YYYY-MM-DD') as bucket_month,
+         s.object_id::text as object_id
+    from (select 1) one
+    left join lateral (
+      select * from judged where dangling limit ${CAPTURE_PAYLOAD_DANGLING_REF_SAMPLE_LIMIT}
+    ) s on true
+`;
+
 const DANGLING_REF_CENSUS_TABLES = [
   {
     envelope: "observation" as const,
     // `observations` is partitioned; `o.id` is the leading column of the
     // composite primary key, so this is a MergeAppend of backward index scans.
-    sql: (scanLimit: number) => sql`
-      with recent as (
+    sql: (scanLimit: number) => danglingRefCensusOver(sql`
         select o.id as envelope_id,
                o.payload_bucket_month as bucket_month,
                o.payload_object_id as object_id
         from observations o
         order by o.id desc
         limit ${scanLimit}
-      )
-      select 'observation' as envelope,
-             r.envelope_id::text as envelope_id,
-             to_char(r.bucket_month, 'YYYY-MM-DD') as bucket_month,
-             r.object_id::text as object_id,
-             (c.object_id is null) as dangling
-      from recent r
-      left join capture_payload_objects c
-        on c.bucket_month = r.bucket_month and c.object_id = r.object_id
-      where r.object_id is not null
-    `,
+    `),
   },
   {
     envelope: "raw_payload" as const,
-    sql: (scanLimit: number) => sql`
-      with recent as (
+    sql: (scanLimit: number) => danglingRefCensusOver(sql`
         select rp.id as envelope_id,
                rp.payload_bucket_month as bucket_month,
                rp.payload_object_id as object_id
         from sync_raw_payloads rp
         order by rp.id desc
         limit ${scanLimit}
-      )
-      select 'raw_payload' as envelope,
-             r.envelope_id::text as envelope_id,
-             to_char(r.bucket_month, 'YYYY-MM-DD') as bucket_month,
-             r.object_id::text as object_id,
-             (c.object_id is null) as dangling
-      from recent r
-      left join capture_payload_objects c
-        on c.bucket_month = r.bucket_month and c.object_id = r.object_id
-      where r.object_id is not null
-    `,
+    `),
   },
 ];
 
@@ -417,17 +424,20 @@ export async function censusCapturePayloadDanglingRefs(
 
   for (const table of DANGLING_REF_CENSUS_TABLES) {
     const rows = await db.execute<{
-      envelope_id: string;
+      referenced: number;
+      dangling: number;
+      envelope_id: string | null;
       bucket_month: string;
       object_id: string;
-      dangling: boolean;
     }>(table.sql(scanLimit));
+    const counts = rows.rows[0];
+    census.referenced += Number(counts?.referenced ?? 0);
+    census.dangling += Number(counts?.dangling ?? 0);
     for (const row of rows.rows) {
-      census.referenced += 1;
-      if (!row.dangling) {
+      // The single row of a clean pass carries no sample.
+      if (row.envelope_id === null) {
         continue;
       }
-      census.dangling += 1;
       if (census.samples.length < CAPTURE_PAYLOAD_DANGLING_REF_SAMPLE_LIMIT) {
         census.samples.push({
           envelope: table.envelope,
