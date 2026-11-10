@@ -1126,6 +1126,15 @@ async function listDmLiveReaderMessages(
         select 1 from message_archive held
         where held.account_id = m.page_id and held.platform = 'fansly' and held.message_ref = m.platform_message_id
       )`;
+  // A row the parity check settled against the archive is held there (both
+  // writers set `message_archive` only after reading its archive row, and no
+  // path deletes an archive row but erasure, which deletes the overlay row in
+  // the same transaction), so skip it before the per-row archive probe: the
+  // busiest chats carry thousands of such rows. Null-safe on purpose: an
+  // `excluded` verdict has no source and must stay visible.
+  const settledByStore = input.store === "message_archive"
+    ? sql`and (m.confirmed_at is null or m.confirm_source is distinct from 'message_archive')`
+    : sql``;
   const result = await db.execute<{
     platform_message_id: string;
     platform_conversation_id: string;
@@ -1157,6 +1166,7 @@ async function listDmLiveReaderMessages(
       and m.created_at is not null
       and m.content is not null
       and m.confirm_outcome is distinct from 'not_found'
+      ${settledByStore}
       and not ${heldByStore}
     order by m.created_at desc, m.platform_message_id desc
     limit ${input.limit}
