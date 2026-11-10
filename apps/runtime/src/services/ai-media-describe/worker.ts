@@ -34,11 +34,8 @@ import { resolveEgress } from "../egress/resolver.ts";
 import { downloadMediaForDescribe, type MediaDownloadResult } from "../egress/media-download.ts";
 import {
   AI_MEDIA_DESCRIBE_ACCOUNT_STOP_SUBKEY,
-  AI_MEDIA_DESCRIBE_BREAKER_SUBKEY,
-  AI_MEDIA_DESCRIBE_FAST_LANE_SUBKEY,
   incidentKey,
   openCriticalNotificationIncident,
-  resolveCriticalNotificationIncident,
 } from "../notification-incidents.ts";
 import { resolveStoredProxyConfig } from "../page-context.ts";
 import {
@@ -220,35 +217,6 @@ async function isAccountStopped(app: AppContext) {
   return incident?.status === "open";
 }
 
-/** Latches whose producer is gone; one an older build left open resolves on
- * the next sweep. The refusal breaker (owner, 2026-09-30: refusals of explicit
- * images are a normal outcome, not a provider fault) and the Fansly fast lane
- * (step 4, S4-12: deleted with the legacy WebSocket receiver). */
-const RETIRED_INCIDENTS = [
-  { subKey: AI_MEDIA_DESCRIBE_BREAKER_SUBKEY, platform: null },
-  { subKey: AI_MEDIA_DESCRIBE_FAST_LANE_SUBKEY, platform: "fansly" },
-] as const;
-
-async function resolveRetiredIncidents(app: AppContext, now: Date): Promise<void> {
-  for (const { subKey, platform } of RETIRED_INCIDENTS) {
-    const incident = await getNotificationIncidentByKey(app.db, incidentKey({
-      kind: "ai_provider_failed",
-      platformAccountId: null,
-      subKey,
-    }));
-    if (incident?.status === "open") {
-      await resolveCriticalNotificationIncident(app, {
-        kind: "ai_provider_failed",
-        platformAccountId: null,
-        pageLabel: null,
-        platform,
-        subKey,
-        recoveredAt: now,
-      });
-    }
-  }
-}
-
 /** Refusals are counted per UTC day for the runbook queries; they never pause the lane. */
 async function recordRefusal(app: AppContext, now: Date) {
   await incrementAiMediaDescribeRefusals(app.db, { day: utcDay(now), now });
@@ -290,7 +258,6 @@ export async function runAiMediaDescribeSweep(
   if (await hasWaitingAiMediaDescription(app.db, { errorCode: CREDIT_WAIT_ERROR_CODE, now: startedAt })) {
     return { ...result, skipped: "account_unavailable" };
   }
-  await resolveRetiredIncidents(app, startedAt);
 
   const pagesById = new Map(pages.map((page) => [page.id, page]));
   const model = effective.aiMediaDescribeModel ?? MEDIA_DESCRIBE_DEFAULT_MODEL;

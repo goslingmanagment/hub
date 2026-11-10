@@ -357,7 +357,3 @@ export const FEATURE_POLICIES = {
 export function isOperationFeature(feature: FeatureType): feature is OperationFeature {
   return feature !== 'compare';
 }
-
-export function getFeaturePolicy(feature: OperationFeature): FeaturePolicy {
-  return FEATURE_POLICIES[feature];
-}

@@ -393,16 +393,3 @@ export async function listAiTranscriptUnionMessages(
     isOpened: row.is_opened == null ? null : row.is_opened === true,
   }));
 }
-
-/** Perf-gate seam: EXPLAIN over the EXACT same statement the reader runs
- * (single source of truth — the gate asserts index usage on the real query,
- * never a drifting copy). Text format, no ANALYZE. */
-export async function explainAiTranscriptUnionQuery(
-  db: Database,
-  input: AiTranscriptUnionInput,
-): Promise<string> {
-  const result = await db.execute<{ "QUERY PLAN": string }>(
-    sql`explain (format text) ${buildUnionQuery(input)}`,
-  );
-  return result.rows.map((row) => row["QUERY PLAN"]).join("\n");
-}

@@ -52,10 +52,4 @@ export const ofapiChatMessageSchema = z.looseObject({
   replyToMessage: z.unknown().optional(),
 });
 
-export type OfapiMessageMedia = z.infer<typeof ofapiMessageMediaSchema>;
 export type OfapiChatMessage = z.infer<typeof ofapiChatMessageSchema>;
-
-/** Validates a raw OFAPI `data` array at the trust boundary. */
-export function parseOfapiChatMessages(raw: unknown): OfapiChatMessage[] {
-  return z.array(ofapiChatMessageSchema).parse(raw);
-}

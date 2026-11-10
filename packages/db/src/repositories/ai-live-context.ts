@@ -155,17 +155,6 @@ export async function lookupAiKnownMessages(
   return states;
 }
 
-/** Perf-gate seam: EXPLAIN over the exact statement the lookup runs. */
-export async function explainAiKnownMessagesQuery(
-  db: Database,
-  input: AiKnownMessageLookupInput,
-): Promise<string> {
-  const result = await db.execute<{ "QUERY PLAN": string }>(
-    sql`explain (format text) ${buildKnownMessageQuery(input)}`,
-  );
-  return result.rows.map((row) => row["QUERY PLAN"]).join("\n");
-}
-
 // chat-extension H-4c: where the hub's stores stand on message ids a client
 // sent WITH their text (`liveTextContext`, the fresh text of the open chat).
 // The AI feature lane asks it for the ids the served transcript does not hold,
@@ -466,17 +455,6 @@ export async function lookupAiLiveTextMessages(
   return states;
 }
 
-/** Perf-gate seam: EXPLAIN over the exact statement the lookup runs. */
-export async function explainAiLiveTextMessagesQuery(
-  db: Database,
-  input: AiLiveTextLookupInput,
-): Promise<string> {
-  const result = await db.execute<{ "QUERY PLAN": string }>(
-    sql`explain (format text) ${buildLiveTextMessageQuery(input)}`,
-  );
-  return result.rows.map((row) => row["QUERY PLAN"]).join("\n");
-}
-
 // chat-extension R20 HF-5: the oldest message the hub holds LIVE for one
 // conversation. Hi on Fansly is admitted by the client's proof of the
 // conversation's start (`startProof`); the AI feature lane asks this, once per
@@ -536,15 +514,4 @@ export async function findAiConversationOldestMessageRef(
   const result = await db.execute<{ message_ref: string }>(buildConversationOldestMessageQuery(input));
   const row = result.rows[0];
   return row === undefined ? null : String(row.message_ref);
-}
-
-/** Perf-gate seam: EXPLAIN over the exact statement the read runs. */
-export async function explainAiConversationOldestMessageQuery(
-  db: Database,
-  input: AiConversationOldestMessageInput,
-): Promise<string> {
-  const result = await db.execute<{ "QUERY PLAN": string }>(
-    sql`explain (format text) ${buildConversationOldestMessageQuery(input)}`,
-  );
-  return result.rows.map((row) => row["QUERY PLAN"]).join("\n");
 }
