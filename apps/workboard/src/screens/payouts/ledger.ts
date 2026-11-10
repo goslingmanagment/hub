@@ -1,5 +1,11 @@
 import { useQuery } from "@tanstack/react-query";
-import { TEAM_LEDGER_PAYOUTS_MAX_DAYS, type TeamLedgerPayoutPerson, type TeamLedgerPayoutsResponse } from "@agency_hub_core/contracts";
+import {
+  TEAM_LEDGER_PAYOUTS_MAX_DAYS,
+  type TeamLedgerPayoutPerson,
+  type TeamLedgerPayoutsResponse,
+  type TeamLedgerReportDay,
+  type TeamLedgerReportsResponse,
+} from "@agency_hub_core/contracts";
 import { millsFromInteger, sumMills, type Mills } from "@agency_hub_core/shared";
 import { hubErrorStatus } from "@agency_hub_core/ui/hubClient";
 import { daysInRange, moscowToday } from "@agency_hub_core/ui/moscow";
@@ -8,12 +14,15 @@ import { kernel } from "@/shared/hub";
 import { useMe } from "@/shared/useMe";
 
 /**
- * Выплаты from the agency ledger (ledger release 2, H3): what each person
- * accrued and was paid in the period, and what the agency owes them now. The
- * ledger counts the money (from the payout sheets today, from Hub's facts
- * later); Hub passes it on (`teamLedgerPayouts`, the owner's only). A team lead
- * never asks; a ledger not connected (503) leaves the shift reports alone on
- * the screen.
+ * Выплаты from the agency ledger — the screen's whole data (spec §4.7 r5: money
+ * comes from ledger). The ledger counts the money: from the payout sheets, then
+ * from Hub's facts or the chatters' posted shift reports from the days it
+ * switched; Hub passes it on, the owner's only:
+ *   - `teamLedgerPayouts` — what each person accrued and was paid in the period,
+ *     what the agency owes them now, and the paid days whose report changed;
+ *   - `teamLedgerReports` — every chatter's reports of the period: the pay base
+ *     by page (posted and drafted), the drafts, the posts it could not use.
+ * A team lead never asks. Query keys start with "payouts".
  */
 
 /** One day of a person's strip: nothing, accrued and paid, accrued and still owed, or not come yet. */
@@ -32,6 +41,8 @@ export interface LedgerRow {
   unenteredDays: number;
   unenteredMills: Mills;
   strip: StripDay[];
+  /** Paid days whose report changed since: each waits for the owner's word. */
+  pendingChanges: TeamLedgerPayoutPerson["pendingChanges"];
 }
 
 export interface LedgerView {
@@ -49,6 +60,9 @@ export interface LedgerView {
   /** Whose unpaid day is the oldest. */
   oldest: { row: LedgerRow; date: string } | null;
   checks: TeamLedgerPayoutsResponse["checks"];
+  /** From these days on the ledger accrues from Hub's facts / from the posted reports; null — not switched. */
+  factsFrom: string | null;
+  reportsFrom: string | null;
 }
 
 function daysOfWindow(from: string, to: string): string[] {
@@ -81,10 +95,11 @@ export function buildLedger(data: TeamLedgerPayoutsResponse, today: string = mos
         day,
         state: day > today ? "future" : !accrued.has(day) ? "none" : owed.has(day) ? "owed" : "paid",
       })),
+      pendingChanges: person.pendingChanges,
     };
   })
     // A person with nothing in the period and nothing owed is not on the screen.
-    .filter((row) => row.owedMills !== 0n || row.accruedMills !== 0n || row.paidMills !== 0n || row.unenteredDays > 0)
+    .filter((row) => row.owedMills !== 0n || row.accruedMills !== 0n || row.paidMills !== 0n || row.unenteredDays > 0 || row.pendingChanges.length > 0)
     .sort((left, right) => (left.owedMills === right.owedMills ? left.person.name.localeCompare(right.person.name) : left.owedMills > right.owedMills ? -1 : 1));
 
   const owing = rows.filter((row) => row.owedMills > 0n);
@@ -104,10 +119,12 @@ export function buildLedger(data: TeamLedgerPayoutsResponse, today: string = mos
     unenteredPeople: rows.filter((row) => row.unenteredDays > 0).length,
     oldest: oldest ? { row: oldest, date: oldest.person.oldestUnpaidDate! } : null,
     checks: data.checks,
+    factsFrom: data.factsFrom,
+    reportsFrom: data.reportsFrom,
   };
 }
 
-/** Why the ledger is not asked for this period; null — it is. */
+/** Why the ledger is not asked for this period; null — it is. (Its reports take the same 62 days.) */
 export function ledgerWindowProblem(period: ResolvedPeriod): string | null {
   if (period.from > period.to) return "Период ещё не начался.";
   if (daysInRange(period.from, period.to) > TEAM_LEDGER_PAYOUTS_MAX_DAYS) return `Ledger отвечает за период до ${TEAM_LEDGER_PAYOUTS_MAX_DAYS} дней.`;
@@ -150,4 +167,35 @@ export function usePayoutPrepare(slug: string | null) {
     enabled: isOwner && slug !== null,
     staleTime: 60_000,
   });
+}
+
+/**
+ * Every chatter's reports of the period (`teamLedgerReports`): the journal of «Отчёты», and the report a payouts
+ * day opens to. Asked only while something shows it (`enabled`).
+ */
+export function useLedgerReports(period: ResolvedPeriod, enabled = true) {
+  const { isOwner } = useMe();
+  const problem = ledgerWindowProblem(period);
+  const window = { from: period.from, to: period.to };
+  const asked = isOwner && problem === null && enabled;
+  const query = useQuery({
+    queryKey: ["payouts", "reports", window] as const,
+    queryFn: () => kernel.teamLedgerReports({ query: window }),
+    enabled: asked,
+    staleTime: 60_000,
+  });
+  const current = query.data !== undefined && query.data.from === window.from && query.data.to === window.to;
+  return {
+    asked,
+    problem,
+    data: current ? query.data : null,
+    query,
+    unavailable: query.isError && hubErrorStatus(query.error) === 503,
+    loading: asked && !current && (query.isLoading || query.isFetching),
+  };
+}
+
+/** The report of a person's day, when the ledger has one: by the ledger's code and the report date. */
+export function reportOfDay(reports: TeamLedgerReportsResponse | null, slug: string, date: string): TeamLedgerReportDay | null {
+  return reports?.reports.find((day) => day.person.slug === slug && day.reportDate === date) ?? null;
 }

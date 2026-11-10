@@ -1,10 +1,19 @@
-import type { AccountReport, AccountReportLine } from "@agency_hub_core/contracts";
+import type {
+  AccountReport,
+  AccountReportLine,
+  TeamLedgerPayoutsResponse,
+  TeamLedgerReportPerson,
+  TeamLedgerReportPost,
+  TeamLedgerReportsResponse,
+} from "@agency_hub_core/contracts";
 
 /**
- * A chatter's own shift reports (`accountReports`, the agency ledger's
- * breakdown of each shift) in words, for Workboard's «Мои смены», where each
- * report opens in its shift's row. Sales only, no pay. Times are Moscow's. No
- * React here.
+ * Shift reports (the agency ledger's breakdown of each shift, and the posts in
+ * «Отчётность» it reads) in words: a chatter's own in Workboard's «Мои смены»
+ * (`accountReports`: sales only, no pay), every chatter's for the owner in
+ * «Выплаты → Отчёты» and «Решения» (`teamLedgerReports`), and what of them
+ * waits for the owner — the same count in Workboard and on the console's
+ * «Ждут вас». Times are Moscow's. No React here.
  */
 
 const MSK_OFFSET_MS = 3 * 3_600_000;
@@ -74,4 +83,70 @@ export function reasonText(flag: string): string {
 /** The report's sales in two groups, each in the ledger's order: what is in the total, and what was held out. */
 export function splitLines(lines: readonly AccountReportLine[]): { counted: AccountReportLine[]; held: AccountReportLine[] } {
   return { counted: lines.filter((line) => line.counted), held: lines.filter((line) => !line.counted) };
+}
+
+// ─────────────────────────────────────────────── The owner's: posts and questions
+
+/** What a post's flag says, in a few words (the ledger's codes; an unknown one as it came). */
+export const POST_FLAG_WORDS: Readonly<Record<string, string>> = {
+  unknown_author: "автор не узнан",
+  no_date: "дата не прочитана",
+  date_mismatch: "дата дальше суток от отправки",
+  sum_mismatch: "страницы не сходятся с итогом",
+  unknown_page: "страница не узнана",
+  tag_mismatch: "тег другого человека",
+  duplicate: "повтор: учтён последний пост",
+};
+
+/** Why a flag matters, said in full (a hint): what the ledger did with the post and what fixes it. */
+export const POST_FLAG_HINTS: Readonly<Record<string, string>> = {
+  unknown_author: "Ledger не понял, чей это пост: отправитель не записан за человеком, и #тега нет. Пост не входит в оплату, пока автора не привяжут в ledger.",
+  no_date: "В посте не прочиталась дата отчёта. Пост не входит в оплату, пока его не поправят.",
+  date_mismatch: "Дата в посте дальше суток от дня отправки — скорее всего, опечатка. Пост не входит в оплату, пока его не поправят.",
+  sum_mismatch: "Суммы по страницам не дают «Общий доход» поста. Пост не входит в оплату, пока его не поправят.",
+  unknown_page: "Имя страницы в посте ledger не знает: эта строка не входит в оплату, остальные — да.",
+  tag_mismatch: "#тег поста указывает на другого человека; ledger считает автором отправителя.",
+  duplicate: "Та же страница того же дня есть в другом посте; считается последний.",
+};
+
+export function postFlagWord(flag: string): string {
+  return POST_FLAG_WORDS[flag] ?? flag;
+}
+
+/** How far back Решения and «Ждут вас» look for questions about the reports. */
+export const REPORT_QUESTIONS_DAYS = 31;
+
+/** The report dates read for the questions: the last REPORT_QUESTIONS_DAYS Moscow days, today included. */
+export function reportQuestionsWindow(today: string): { from: string; to: string } {
+  const from = new Date(Date.parse(`${today}T00:00:00Z`) - (REPORT_QUESTIONS_DAYS - 1) * DAY_MS).toISOString().slice(0, 10);
+  return { from, to: today };
+}
+
+/** The posts the ledger could not use at all (a blocking flag): out of the pay base until they are fixed. */
+export function unparsedPosts(answer: Pick<TeamLedgerReportsResponse, "posts">): TeamLedgerReportPost[] {
+  return answer.posts.filter((post) => post.blocking);
+}
+
+/** A post is about a page when one of its account lines is that page; a post with no page Hub knows is every page's. */
+export function postOnPage(post: Pick<TeamLedgerReportPost, "pages">, page: string | null): boolean {
+  if (page === null) return true;
+  const labels = post.pages.map((line) => line.pageLabel).filter((label): label is string => label !== null);
+  return labels.length === 0 || labels.includes(page);
+}
+
+type PayoutPerson = TeamLedgerPayoutsResponse["people"][number];
+
+/** A paid day whose report changed since, with whose it is: it waits for the owner's word. */
+export type PendingChange = PayoutPerson["pendingChanges"][number] & {
+  person: TeamLedgerReportPerson & { slug: string };
+};
+
+/** Every person's paid days whose report changed since, the oldest day first. */
+export function pendingChangesOf(answer: Pick<TeamLedgerPayoutsResponse, "people">): PendingChange[] {
+  return answer.people
+    .flatMap((person) => person.pendingChanges.map((change) => ({
+      ...change,
+      person: { slug: person.slug, hubUser: person.hubUser, name: person.hubUser?.username ?? person.name },
+    })))
+    .sort((left, right) => left.day.localeCompare(right.day) || left.person.name.localeCompare(right.person.name));
 }

@@ -146,6 +146,17 @@ function reportWithoutShift(world: DemoChatterWorld): Report | null {
   return null;
 }
 
+/**
+ * The ended shifts of a chatter's working life with their reports, the newest first: a report is composed at the end
+ * of a shift (the shift going on has none yet), and one of them was never asked for (null). The owner's «Отчёты»
+ * (team-reports.ts) read the same reports, so a chatter and the owner see one report.
+ */
+export function shiftReportsOf(world: DemoChatterWorld): Array<{ shift: DemoShift; index: number; report: Report | null }> {
+  return world.shifts
+    .filter((shift) => !shift.visit && !shift.ongoing)
+    .map((shift, index) => ({ shift, index, report: index === WITHOUT_REPORT ? null : reportOf(shift, index, world.user.pages, world.now) }));
+}
+
 export function accountReports(request: DemoRequest): Reports | DemoReply {
   const fromQuery = queryString(request, "from");
   const toQuery = queryString(request, "to");
@@ -159,11 +170,7 @@ export function accountReports(request: DemoRequest): Reports | DemoReply {
   if (Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`) >= MAX_DAYS * DAY_MS) {
     return demoError(400, "Bad Request", `At most ${MAX_DAYS} days`);
   }
-  // A report is composed at the end of a shift: the shift going on has none yet.
-  const ended = world.shifts.filter((shift) => !shift.visit && !shift.ongoing);
-  const reports = ended
-    .map((shift, index) => (index === WITHOUT_REPORT ? null : reportOf(shift, index, world.user.pages, world.now)))
-    .filter((report): report is Report => report !== null);
+  const reports = shiftReportsOf(world).flatMap((one) => (one.report === null ? [] : [one.report]));
   const alone = reportWithoutShift(world);
   if (alone !== null) reports.push(alone);
   const inRange = reports

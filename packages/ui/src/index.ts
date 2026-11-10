@@ -11,10 +11,9 @@
  *   @agency_hub_core/ui/theme     light / dark / as the system, shared by both apps
  *   @agency_hub_core/ui/hubClient the Hub API client on the cookie session
  *   @agency_hub_core/ui/shiftReview the rules of «Разбор смены» and a shift's three quality numbers
- *   @agency_hub_core/ui/payoutSheet the payout sheet's text, byte for byte
  *   @agency_hub_core/ui/teamAccess  people's access: states, the join link, words of links and devices
  *   @agency_hub_core/ui/heldSends   a held send and its resolve, in words, for the send's platform
- *   @agency_hub_core/ui/shiftReports a chatter's own shift reports in words (Workboard's «Мои смены»)
+ *   @agency_hub_core/ui/shiftReports shift reports and the posts in «Отчётность» in words, and what of them waits for the owner
  *   @agency_hub_core/ui/sites       the production names of the console and the chatters' site
  */
 export { Badge, CountBadge, StatusDot, type Tone } from "./components/Badge.js";

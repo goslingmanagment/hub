@@ -10,6 +10,7 @@
 import { z } from "zod";
 
 import { businessDate, errorResponseSchema, intId, isoTimestamp, mills } from "./primitives.ts";
+import { accountReportSchema } from "./routes-account-reports.ts";
 
 /** The ledger's widest window of one read (ledger MaxPayoutDays). */
 export const TEAM_LEDGER_PAYOUTS_MAX_DAYS = 62;
@@ -36,7 +37,7 @@ export const teamLedgerPayoutPersonSchema = z.object({
     model: z.string(),
     amountMills: mills,
     worked: z.boolean(),
-    /** Where the day came from: «sheet» — the payout sheet. */
+    /** Where the day came from: «sheet» — the payout sheet, «facts» — Hub's facts, «reports» — the posted shift report; another value as the ledger wrote it. */
     source: z.string(),
   })),
   /** Accrued over the window's days. */
@@ -59,6 +60,18 @@ export const teamLedgerPayoutPersonSchema = z.object({
   /** «Не занесено» now: the tab's empty days on which Hub shows money in the person's scheduled shift — pay the sheet
    *  has not got yet, so not in the debt. shareMills is an estimate at the tab's rate; unknown — days Hub did not prove. */
   unentered: z.object({ days: z.number().int().nonnegative(), shareMills: mills, unknown: z.number().int().nonnegative() }),
+  /** Paid days whose report changed after the payout (a paid day never moves by itself): each waits for the owner's word.
+   *  Empty — none, or a ledger that does not say yet. */
+  pendingChanges: z.array(z.object({
+    id: intId,
+    day: businessDate,
+    model: z.string(),
+    /** What the day was paid by. */
+    postedMills: mills,
+    /** What the report says now. */
+    newMills: mills,
+    reason: z.string(),
+  })),
 });
 
 export const teamLedgerPayoutsResponseSchema = z.object({
@@ -66,6 +79,10 @@ export const teamLedgerPayoutsResponseSchema = z.object({
   to: businessDate,
   /** Days before it are in the opening debt, not one by one. */
   accrualFrom: businessDate,
+  /** From this day on the days are accrued from Hub's facts; null — not switched (or a ledger that does not say). */
+  factsFrom: businessDate.nullable(),
+  /** From this day on the days are accrued from the posted shift reports; null — not switched (or a ledger that does not say). */
+  reportsFrom: businessDate.nullable(),
   /** When the ledger answered. */
   generatedAt: isoTimestamp,
   people: z.array(teamLedgerPayoutPersonSchema),
@@ -105,9 +122,111 @@ export const teamLedgerPayoutPrepareResponseSchema = z.object({
   placeholder: z.string().nullable(),
 });
 
+/**
+ * Every chatter's shift reports of a window (Workboard «Выплаты → Отчёты», the owner's): the pay base the ledger
+ * reads from the posts in «Отчётность» — posted and drafted page by page — each day with the agent's draft as the
+ * chatter sees it, and the posts the ledger could not use in full. Read from the ledger's GET /v1/reports,
+ * /v1/report-days and /v1/report-posts with Hub's payouts key. No post text reaches Hub.
+ */
+export const TEAM_LEDGER_REPORTS_MAX_DAYS = 62;
+
+export const teamLedgerReportsQuerySchema = z.object({
+  /** Report dates (the Moscow day a shift started), both included. */
+  from: businessDate,
+  to: businessDate,
+});
+
+/** Whose a report or a post is. */
+export const teamLedgerReportPersonSchema = z.object({
+  /** The ledger's code of the person; null — the ledger could not tell. */
+  slug: z.string().nullable(),
+  /** The Hub user they are: by the report's Hub user id, else by name; null — none. */
+  hubUser: z.object({ userId: intId, username: z.string() }).nullable(),
+  /** How to name them: the Hub login, else the ledger's name or code, else the post's sender. */
+  name: z.string(),
+});
+
+/** One page of a person's report day in the pay base. */
+export const teamLedgerReportPageSchema = z.object({
+  pageLabel: z.string(),
+  /** The ledger's model of the page; "" — not known. */
+  model: z.string(),
+  /** The page's amount in the chatter's post; null — not posted. */
+  postedMills: mills.nullable(),
+  /** The agent's draft of the page; null — written without the agent. */
+  draftMills: mills.nullable(),
+  /** posted − draft, when the chatter changed the amount; else null. */
+  diffMills: mills.nullable(),
+  /** posted_equal · posted_changed · post_only · draft_only; another value as the ledger wrote it. */
+  state: z.string(),
+  postedAt: isoTimestamp.nullable(),
+});
+
+/** A post in «Отчётность» the ledger could not use in full (a flag on it). */
+export const teamLedgerReportPostSchema = z.object({
+  id: intId,
+  postedAt: isoTimestamp,
+  /** The Telegram name of who sent it. */
+  sender: z.string(),
+  /** The #tag the post carries; "" — none. */
+  tag: z.string(),
+  person: teamLedgerReportPersonSchema,
+  model: z.string(),
+  /** The day the post reports; null — not read. */
+  reportDate: businessDate.nullable(),
+  /** «Общий доход» as the post writes it. */
+  totalMills: mills,
+  /** The post's account lines added up. */
+  pagesMills: mills,
+  /** unknown_author · tag_mismatch · no_date · date_mismatch · sum_mismatch · unknown_page · duplicate; another as written. */
+  flags: z.array(z.string()),
+  /** A flag keeps the whole post out of the pay base: unknown_author, no_date, sum_mismatch, date_mismatch. */
+  blocking: z.boolean(),
+  pages: z.array(z.object({ name: z.string(), pageLabel: z.string().nullable(), inShift: z.boolean(), amountMills: mills })),
+  /** The post in Telegram; null — the chat's id does not make a link. */
+  link: z.string().nullable(),
+});
+
+/** One person's report day: the pay base by page, the draft, the posts of it the ledger could not use. */
+export const teamLedgerReportDaySchema = z.object({
+  /** Stable within a window: the person (or the draft) and the day. */
+  key: z.string(),
+  person: teamLedgerReportPersonSchema,
+  reportDate: businessDate,
+  pages: z.array(teamLedgerReportPageSchema),
+  /** The pages' posted amounts added up; null — nothing posted. */
+  postedMills: mills.nullable(),
+  /** The pages' drafted amounts added up; null — no draft. */
+  draftMills: mills.nullable(),
+  /** The latest post that touched a page of the day; null — none. */
+  postedAt: isoTimestamp.nullable(),
+  /** The agent's current draft, as the chatter sees it in «Мои смены»; null — written without the agent. */
+  draft: accountReportSchema.nullable(),
+  /** `posts` of this person and day. */
+  postIds: z.array(intId),
+});
+
+export const teamLedgerReportsResponseSchema = z.object({
+  from: businessDate,
+  to: businessDate,
+  /** The newest day first. */
+  reports: z.array(teamLedgerReportDaySchema),
+  /** The window's posts with a flag, the newest first; a post whose person or day is not known belongs to no day. */
+  posts: z.array(teamLedgerReportPostSchema),
+  /** false — the ledger does not let Hub read the posts yet: `posts` is empty for that, not because there are none. */
+  postsRead: z.boolean(),
+  serverNow: isoTimestamp,
+});
+
 export type TeamLedgerPayoutsResponse = z.infer<typeof teamLedgerPayoutsResponseSchema>;
 export type TeamLedgerPayoutPrepareResponse = z.infer<typeof teamLedgerPayoutPrepareResponseSchema>;
 export type TeamLedgerPayoutPerson = z.infer<typeof teamLedgerPayoutPersonSchema>;
+export type TeamLedgerReportsQuery = z.infer<typeof teamLedgerReportsQuerySchema>;
+export type TeamLedgerReportsResponse = z.infer<typeof teamLedgerReportsResponseSchema>;
+export type TeamLedgerReportDay = z.infer<typeof teamLedgerReportDaySchema>;
+export type TeamLedgerReportPage = z.infer<typeof teamLedgerReportPageSchema>;
+export type TeamLedgerReportPost = z.infer<typeof teamLedgerReportPostSchema>;
+export type TeamLedgerReportPerson = z.infer<typeof teamLedgerReportPersonSchema>;
 
 export const teamLedgerRouteSchemas = {
   teamLedgerPayouts: {
@@ -138,6 +257,22 @@ export const teamLedgerRouteSchemas = {
       401: errorResponseSchema,
       403: errorResponseSchema,
       404: errorResponseSchema,
+      503: errorResponseSchema,
+    },
+  },
+  teamLedgerReports: {
+    auth: { kind: "owner-session" },
+    tags: ["admin"],
+    summary: "Every chatter's shift reports from the agency ledger: posted and drafted by page, the drafts, the posts it could not use",
+    description: "Read from the ledger's GET /v1/reports, /v1/report-days and /v1/report-posts with Hub's payouts key. Report "
+      + "dates are Moscow days, at most 62. While the ledger refuses Hub the posts (403/404), `posts` is empty and "
+      + "`postsRead` false. 503 when the ledger is not connected or did not answer.",
+    querystring: teamLedgerReportsQuerySchema,
+    response: {
+      200: teamLedgerReportsResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
       503: errorResponseSchema,
     },
   },

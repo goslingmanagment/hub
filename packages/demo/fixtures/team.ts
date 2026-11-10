@@ -1,19 +1,17 @@
 import type { KernelOperationResponse } from "@agency_hub_core/contracts";
 import { averageQuality, type ShiftQuality } from "@agency_hub_core/ui/shiftReview";
-import { shiftPayDay } from "@agency_hub_core/ui/shiftWhen";
 
 import { demoError, queryNumber, queryString, type DemoHandlers, type DemoRequest } from "../core.ts";
-import { DEMO_CHATTERS, DEMO_DATA_PAGES, DEMO_PAGES, DEMO_USERS, demoFans, demoPage, type DemoUser } from "../world.ts";
+import { DEMO_CHATTERS, DEMO_DATA_PAGES, demoFans, demoPage } from "../world.ts";
 import { teamCustoms, teamGreetings, teamWinBackApproaches, teamWinBackResults } from "./team-extra.ts";
 import { adminModelApplication, adminModelApplications } from "./team-applications.ts";
 import { teamChatterStats, teamShiftSales } from "./team-stats.ts";
-import { teamDisputes, type DemoDispute } from "./team-disputes.ts";
+import { teamDisputes } from "./team-disputes.ts";
 import { shiftReviewNumbers, teamShiftReview } from "./team-review.ts";
 import {
   DAY,
   HOUR,
   MIN,
-  addDays,
   between,
   clamp,
   creditedOf,
@@ -32,7 +30,6 @@ import {
   windowDays,
   windowStart,
   workedPages,
-  type DemoSale,
   type DemoShift,
 } from "./team-world.ts";
 
@@ -52,23 +49,6 @@ function badDays(max: number) {
 /** Shifts that touch the viewer's pages. */
 function scopedShifts(shifts: readonly DemoShift[], scope: readonly string[]): DemoShift[] {
   return shifts.filter((shift) => shift.pages.some((page) => page.messages > 0 && scope.includes(page.pageLabel)));
-}
-
-// --- Disputes: sales on shared pages where two chatters' marks do not agree (team-disputes.ts) ---
-
-function disputeMarks(dispute: DemoDispute) {
-  const { shift, other, reason, sale } = dispute;
-  const mine = { userId: shift.user.id, username: shift.user.username, mark: "mine", shareWithUserId: null, shareWith: null, amountMills: null };
-  if (reason === "two_mine") {
-    return [mine, { userId: other.id, username: other.username, mark: "mine", shareWithUserId: null, shareWith: null, amountMills: null }];
-  }
-  if (reason === "share_not_agreed") {
-    return [{ userId: shift.user.id, username: shift.user.username, mark: "share", shareWithUserId: other.id, shareWith: other.username, amountMills: null }];
-  }
-  return [
-    { ...mine, amountMills: Math.round((sale.netMills * 0.6) / 1000) * 1000 },
-    { userId: other.id, username: other.username, mark: "share", shareWithUserId: shift.user.id, shareWith: shift.user.username, amountMills: null },
-  ];
 }
 
 // --- Authorship ---
@@ -395,86 +375,6 @@ function parseInstant(value: string | undefined): number | null | undefined {
   return Number.isFinite(at) ? at : null;
 }
 
-// --- Export ---
-
-function exportOf(request: DemoRequest, scope: readonly string[], fromDay: string, toDay: string): KernelOperationResponse<"teamShiftExport"> {
-  const now = request.now;
-  const world = teamWorld(now);
-  const disputes = teamDisputes(now);
-  const disputeByRef = new Map(disputes.map((dispute) => [dispute.sale.ref, dispute]));
-  const inWindow = (day: string) => day >= fromDay && day <= toDay;
-  const cells = new Map<string, { username: string; pageLabel: string; platform: string; shiftDate: string; creditedMills: number }>();
-  const credit = (user: DemoUser, sale: DemoSale, day: string, amount: number) => {
-    if (amount <= 0) return;
-    const key = `${user.username}\u0000${sale.pageLabel}\u0000${day}`;
-    const cell = cells.get(key) ?? { username: user.username, pageLabel: sale.pageLabel, platform: sale.platform, shiftDate: day, creditedMills: 0 };
-    cell.creditedMills += sale.platform === "onlyfans" ? Math.round(amount / 1000) * 1000 : amount;
-    cells.set(key, cell);
-  };
-  const ownAmounts: KernelOperationResponse<"teamShiftExport">["ownAmounts"] = [];
-  const unconfirmed: KernelOperationResponse<"teamShiftExport">["unconfirmed"] = [];
-  let disputedOpen = 0;
-  for (const shift of scopedShifts(world.shifts, scope)) {
-    // The day holding most of the shift, as Hub's payout sheet (shift-report.ts payDay = dayOfWork) and the grid.
-    const day = shiftPayDay(shift);
-    if (!inWindow(day)) continue;
-    if (shift.confirmedAt === null) {
-      unconfirmed.push({ username: shift.user.username, startedAt: isoAt(shift.startedAt), endedAt: isoAt(shift.endedAt), ongoing: shift.ongoing });
-      continue;
-    }
-    const pages = workedPages(shift);
-    for (const sale of shift.sales) {
-      if (!pages.includes(sale.pageLabel) || !scope.includes(sale.pageLabel)) continue;
-      const dispute = disputeByRef.get(sale.ref);
-      if (dispute) {
-        if (dispute.resolution === null) {
-          disputedOpen += 1;
-          continue;
-        }
-        for (const share of dispute.resolution) credit(share.user, sale, day, Math.round((sale.netMills * share.percent) / 100));
-        continue;
-      }
-      credit(shift.user, sale, day, creditedOf(sale));
-      if (sale.mark === "share" && sale.shareWith) credit(sale.shareWith, sale, day, Math.round(sale.netMills / 2));
-      if (sale.ownAmountMills !== null) {
-        ownAmounts.push({ username: shift.user.username, pageLabel: sale.pageLabel, saleRef: sale.ref, occurredAt: isoAt(sale.at), netMills: sale.netMills, amountMills: sale.ownAmountMills });
-      }
-    }
-  }
-  const lateChanges: KernelOperationResponse<"teamShiftExport">["lateChanges"] = [];
-  for (const dispute of disputes) {
-    const payDay = shiftPayDay(dispute.shift);
-    if (!inWindow(payDay) || dispute.resolution === null || dispute.resolvedAt === null || !scope.includes(dispute.sale.pageLabel)) continue;
-    if (dispute.resolvedAt < mskMidnight(addDays(payDay, 2))) continue;
-    for (const share of dispute.resolution) {
-      lateChanges.push({
-        username: share.user.username,
-        pageLabel: dispute.sale.pageLabel,
-        saleRef: dispute.sale.ref,
-        occurredAt: isoAt(dispute.sale.at),
-        payDay,
-        creditedMills: Math.round((dispute.sale.netMills * share.percent) / 100),
-        change: "added",
-        at: isoAt(dispute.resolvedAt),
-      });
-    }
-  }
-  const order = new Map(DEMO_USERS.map((user, index) => [user.username, index]));
-  const pageOrder = new Map(DEMO_PAGES.map((page, index) => [page.label, index]));
-  const rows = [...cells.values()].sort((left, right) => (order.get(left.username)! - order.get(right.username)!)
-    || (pageOrder.get(left.pageLabel)! - pageOrder.get(right.pageLabel)!)
-    || left.shiftDate.localeCompare(right.shiftDate));
-  return {
-    from: fromDay,
-    to: toDay,
-    rows,
-    disputedOpen,
-    ownAmounts,
-    unconfirmed: unconfirmed.sort((left, right) => left.startedAt.localeCompare(right.startedAt)),
-    lateChanges,
-    serverNow: now.toISOString(),
-  };
-}
 
 const BUSINESS_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -622,49 +522,6 @@ export const teamHandlers: DemoHandlers = {
     if (days === null) return badDays(31);
     const userId = queryNumber(request, "userId", Number.NaN);
     return teamChatterStats(request, scope, days, Number.isInteger(userId) && userId > 0 ? userId : undefined);
-  },
-
-  teamShiftDisputes: (request) => {
-    const scope = viewerPages(request);
-    if (!scope) return FORBIDDEN();
-    const days = daysParam(request, 14, 31);
-    if (days === null) return badDays(31);
-    const from = windowStart(request.now, days);
-    const disputes = teamDisputes(request.now)
-      .filter((dispute) => dispute.sale.at >= from && scope.includes(dispute.sale.pageLabel))
-      .sort((left, right) => (left.resolution === null ? 0 : 1) - (right.resolution === null ? 0 : 1) || right.sale.at - left.sale.at)
-      .map((dispute) => ({
-        saleRef: dispute.sale.ref,
-        pageLabel: dispute.sale.pageLabel,
-        platform: dispute.sale.platform,
-        fanRef: dispute.sale.fan.platformUserId,
-        occurredAt: isoAt(dispute.sale.at),
-        netMills: dispute.sale.netMills,
-        reason: dispute.reason,
-        marks: disputeMarks(dispute),
-        people: [dispute.shift.user, dispute.other].map((user) => ({ userId: user.id, username: user.username })),
-        resolution: dispute.resolution?.map((share) => ({ userId: share.user.id, username: share.user.username, percent: share.percent })) ?? null,
-      }));
-    return { disputes, serverNow: request.now.toISOString() };
-  },
-
-  teamShiftExport: (request) => {
-    const scope = viewerPages(request);
-    if (!scope) return FORBIDDEN();
-    const from = queryString(request, "from") ?? "";
-    const to = queryString(request, "to") ?? "";
-    if (!BUSINESS_DATE.test(from) || !BUSINESS_DATE.test(to) || Number.isNaN(Date.parse(from)) || Number.isNaN(Date.parse(to))) {
-      return demoError(400, "Bad Request", "from и to — даты YYYY-MM-DD.");
-    }
-    const span = (Date.parse(to) - Date.parse(from)) / DAY + 1;
-    if (span < 1 || span > 31) return demoError(400, "Bad Request", "Окно — от 1 до 31 дня.");
-    return exportOf(request, scope, from, to);
-  },
-
-  // The owner's split is accepted and changes nothing in the invented world.
-  teamShiftResolve: (request) => {
-    if (request.role !== "owner") return demoError(403, "Forbidden", "Споры решает владелец.");
-    return { changed: true, serverNow: request.now.toISOString() };
   },
 
   adminModelApplications,
