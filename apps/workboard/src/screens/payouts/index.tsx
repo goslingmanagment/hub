@@ -104,6 +104,7 @@ export function PayoutsScreen() {
         from={period.from}
         to={period.to}
         page={page}
+        sheetsPay={ledger.view !== null && ledger.view.reportsFrom === null}
         questionsOnly={questionsOnly}
         onQuestionsOnly={(on) => setParam("questions", on ? "1" : null)}
       />

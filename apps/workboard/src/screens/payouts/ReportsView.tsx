@@ -122,11 +122,13 @@ function FactsLine({ all, postsRead, questionsOnly, onQuestionsOnly }: {
   );
 }
 
-export function ReportsView({ data, from, to, page, questionsOnly, onQuestionsOnly }: {
+export function ReportsView({ data, from, to, page, sheetsPay, questionsOnly, onQuestionsOnly }: {
   data: TeamLedgerReportsResponse;
   from: string;
   to: string;
   page: string | null;
+  /** The ledger said it does not accrue from the posted reports yet (`reportsFrom` null): the payout sheets pay. */
+  sheetsPay: boolean;
   questionsOnly: boolean;
   onQuestionsOnly: (on: boolean) => void;
 }) {
@@ -145,6 +147,8 @@ export function ReportsView({ data, from, to, page, questionsOnly, onQuestionsOn
   return (
     <div className="payouts-reports">
       <FactsLine all={all} postsRead={data.postsRead} questionsOnly={questionsOnly} onQuestionsOnly={onQuestionsOnly} />
+      {/* Until the reports accrue, what this view shows is for checking, not what pays (a post not parsed is no decision). */}
+      {sheetsPay && <p className="payouts-note">Начисляет пока таблица выплат: отчёты здесь для сверки.</p>}
       <div ref={box} className="payouts-journal">
         <Table
           label="Отчёты смен"

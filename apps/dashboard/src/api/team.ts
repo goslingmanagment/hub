@@ -1,5 +1,5 @@
 import { queryOptions, useQuery } from "@tanstack/react-query";
-import { pendingChangesOf, reportQuestionsWindow, unparsedPosts } from "@agency_hub_core/ui/shiftReports";
+import { pendingChangesOf, reportQuestionsWindow, unparsedPostsToDecide } from "@agency_hub_core/ui/shiftReports";
 
 import { kernel } from "./sdk.js";
 
@@ -46,7 +46,8 @@ export const teamCustomsQueryOptions = queryOptions({
 
 /**
  * What waits for the owner about the shift reports (Workboard Решения → «Отчёты»): the posts the ledger could not
- * use and the paid days whose report changed, of the last month — the same reads and window as Workboard's count.
+ * use of the days it accrues from the posts (none while the payout sheets pay: `unparsedPostsToDecide`) and the paid
+ * days whose report changed, of the last month — the same reads, window and rule as Workboard's count.
  * The owner's only; the ledger not answering is «не удалось проверить», never a zero.
  */
 export function reportQuestionsQueryOptions(today: string) {
@@ -58,7 +59,7 @@ export function reportQuestionsQueryOptions(today: string) {
         kernel.teamLedgerReports({ query: window }),
         kernel.teamLedgerPayouts({ query: window }),
       ]);
-      return unparsedPosts(reports).length + pendingChangesOf(payouts).length;
+      return unparsedPostsToDecide(reports, payouts).length + pendingChangesOf(payouts).length;
     },
     meta: { suppressGlobalError: true },
   });
