@@ -2,7 +2,6 @@ import type { CrossPageTransactionListQuery } from "@agency_hub_core/contracts";
 import type { Period, PeriodOption } from "@/stores/periodStore";
 import { buildFansRoute, isSafeInAppPath, resolveDashboardPeriod } from "./navigation.js";
 
-export const OVERVIEW_PERIODS = ["today", "7d", "30d", "all"] as const;
 export const PERIOD_LABELS: Record<PeriodOption, string> = {
   today: "Сегодня",
   "7d": "7 дней",

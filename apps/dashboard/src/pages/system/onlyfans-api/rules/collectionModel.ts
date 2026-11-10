@@ -33,10 +33,6 @@ export function scopePageId(scope: CollectionScope): number | null {
   return scope.kind === "page" ? scope.pageId : null;
 }
 
-export function scopeEquals(a: CollectionScope, b: CollectionScope) {
-  return a.kind === b.kind && scopePageId(a) === scopePageId(b);
-}
-
 // ---------------------------------------------------------------------------
 // Draft
 

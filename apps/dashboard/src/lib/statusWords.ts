@@ -159,23 +159,6 @@ export const TEAM_STATUS = {
   customDelivered: status("Отдан", "good"),
 } as const satisfies Record<string, StatusWord>;
 
-/** «Модели и страницы» → «Незавершённые подключения». */
-export const CONNECT_STATUS = {
-  waitingServer: status("Ждёт создания на сервере", "moving"),
-  noEnvironment: status("Нет окружения", "attention"),
-  noProxy: status("У страницы нет прокси", "broken"),
-  loginRunning: status("Идёт вход", "moving"),
-  stopping: status("Останавливаем", "moving"),
-  loggedIn: status("Вход выполнен", "good"),
-  needProxy: status("Нужен прокси", "attention"),
-  needExitIp: status("Нужен выходной IP", "attention"),
-  readyToLogin: status("Готов ко входу", "moving"),
-} as const satisfies Record<string, StatusWord>;
-
-export const HELD_SEND_STATUS = {
-  held: status("Ждёт разбора", "waiting"),
-} as const satisfies Record<string, StatusWord>;
-
 export const HISTORY_REQUEST_STATUS: Readonly<Record<string, StatusWord>> = {
   requested: status("Ждёт решения", "waiting"),
   approved: status("Одобрена", "moving"),

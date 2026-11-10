@@ -33,9 +33,6 @@ const sectionGroups = [
 ].filter(group => group.sections.length > 0);
 const stateLabels: Record<OfapiActionIntent["state"], string> = { prepared: "Готово к выполнению", dispatching: "Запрос отправляется", confirmed: "Запрос подтверждён", partial: "Выполнено частично", rejected: "Отклонено OnlyFans API", indeterminate: "Результат неизвестен", cancelled: "Отменено до отправки" };
 const stateBadges: Record<OfapiActionIntent["state"], string> = { prepared: "badge badge-accent", dispatching: "badge badge-info", confirmed: "badge badge-success", partial: "badge badge-warning", rejected: "badge badge-danger", indeterminate: "badge badge-warning", cancelled: "badge" };
-/** A section's name on screen: the vendor's own names in Russian. */
-const SECTION_NAMES: Readonly<Record<string, string>> = { Stories: "Сториз", Highlights: "Хайлайты" };
-const sectionName = (section: string) => SECTION_NAMES[section] ?? section;
 const credits = (count: number) => `${count} ${ruPlural(count, "кредит", "кредита", "кредитов")}`;
 export function OfapiActionFields({ fields, values, update, disabled }: { fields: OfapiActionField[]; values: FormValues; update: (value: FormValues) => void; disabled: boolean }) {
   const put = (name: string, value: unknown) => update({ ...values, [name]: value });

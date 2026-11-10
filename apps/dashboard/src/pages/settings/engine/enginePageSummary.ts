@@ -33,13 +33,6 @@ function blocksPhrase(blocks: readonly EngineBlock[]): string {
   return `${quoted.length === 1 ? "блок" : "блоки"} ${quoted.join(", ")}`;
 }
 
-/** The browser login is how a page with a server browser gets a new session. */
-export function engineLoginNeeded(page: SyncBlocksPage, state: EngineStatusState): boolean {
-  const browser = state.kind === "ready" ? state.status.browser : undefined;
-  if (browser?.login.needed) return true;
-  return engineBlocksOf(page).some((block) => block.engine.stops.some(isCredentialsStop));
-}
-
 /** A page with a server browser: its login is the way to new credentials. */
 export function engineHasBrowser(state: EngineStatusState): boolean {
   return state.kind === "ready" && state.status.browser !== undefined;

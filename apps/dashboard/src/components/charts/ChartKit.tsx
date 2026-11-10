@@ -236,33 +236,3 @@ export function isolatedDot(
   };
 }
 
-/**
- * Where the line is broken: each run of buckets carrying none of `keys`, as
- * the x-span between the measured neighbours around it (or the plot's edge).
- * Drawn as a faint band, so a hole reads as "not captured" and never as a
- * drop to zero.
- */
-export function gapSpans(
-  rows: readonly Record<string, unknown>[],
-  xKey: string,
-  keys: readonly string[],
-): Array<{ x1: unknown; x2: unknown }> {
-  const measured = rows.map((row) => keys.some((key) => finite(row[key]) !== null));
-  const spans: Array<{ x1: unknown; x2: unknown }> = [];
-  let index = 0;
-  while (index < rows.length) {
-    if (measured[index]) {
-      index += 1;
-      continue;
-    }
-    const start = index;
-    while (index < rows.length && !measured[index]) index += 1;
-    const left = Math.max(0, start - 1);
-    const right = Math.min(rows.length - 1, index);
-    if (right > left) {
-      spans.push({ x1: rows[left]![xKey], x2: rows[right]![xKey] });
-    }
-  }
-  // A window with nothing measured at all is the empty state, not a band.
-  return measured.some(Boolean) ? spans : [];
-}

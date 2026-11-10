@@ -3,8 +3,6 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { kernel } from "./sdk.js";
 import { OFAPI_COLLECTION_QUERY_KEY, ofapiCollectionQueryOptions } from "./ofapiCollection.js";
 
-export { OFAPI_COLLECTION_QUERY_KEY } from "./ofapiCollection.js";
-
 export type OfapiCollectionSnapshot = Awaited<ReturnType<typeof kernel.ofapiCollectionGet>>;
 export type OfapiCollectionPreview = Awaited<ReturnType<typeof kernel.ofapiCollectionPreview>>;
 export type OfapiCollectionChangeBody = NonNullable<Parameters<typeof kernel.ofapiCollectionApply>[0]>["body"];
@@ -14,16 +12,12 @@ export type OfapiCollectionCategory = OfapiCollectionSettings["category"];
 export type OfapiCollectionMode = OfapiCollectionSettings["mode"];
 export type OfapiCollectionPolicy = OfapiCollectionSnapshot["policies"][number];
 export type OfapiCollectionPolicySource = OfapiCollectionPolicy["source"];
-export type OfapiCollectionPolicyState = OfapiCollectionPolicy["state"];
 export type OfapiCollectionCatalogEntry = OfapiCollectionSnapshot["catalog"][number];
-export type OfapiCollectionPage = OfapiCollectionSnapshot["pages"][number];
 export type OfapiCollectionJob = OfapiCollectionSnapshot["jobs"][number];
 export type OfapiCollectionScheduleHealth = OfapiCollectionPolicy["scheduleHealth"];
 export type OfapiCollectionRun = NonNullable<OfapiCollectionScheduleHealth["lastRun"]>;
 export type OfapiCollectionJobStateFilter = NonNullable<NonNullable<Parameters<typeof kernel.ofapiCollectionGet>[0]>["query"]>["jobState"];
 export type OfapiCollectionAuditRow = OfapiCollectionSnapshot["audit"][number];
-export type OfapiCollectionApplyResult = Awaited<ReturnType<typeof kernel.ofapiCollectionApply>>;
-export type OfapiCollectionJobCreateResult = Awaited<ReturnType<typeof kernel.ofapiCollectionJobCreate>>;
 
 /** Read-only: the GET reads retained local rows only, never the vendor. */
 export function useAdminOfapiCollection() {

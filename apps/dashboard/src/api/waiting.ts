@@ -54,8 +54,6 @@ function failedOr<T>(query: { data: T | undefined; isError: boolean }, count: (d
   return query.isError ? null : 0;
 }
 
-export type { OfapiStatus };
-
 /**
  * Whether the OnlyFans API is on, with the read behind it (design/screens/system.md
  * §0.2). `off` is said only when every process reported the key unset; a process

@@ -5,7 +5,6 @@ import { useAuthMe } from "@/api/queries";
 import { useOfapiExportPages } from "@/api/ofapiExports";
 import { ofapiMediaActions, useOfapiMedia } from "@/api/ofapiMedia";
 import { StatusPanel } from "@/components/shared/StatusPanel";
-import { Disclosure } from "@/components/ui/Disclosure";
 import { Notice } from "@/components/ui/Notice";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { RowMenu } from "@/components/ui/RowMenu";

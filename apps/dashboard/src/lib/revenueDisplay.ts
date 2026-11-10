@@ -1,5 +1,3 @@
-import { formatMills, formatSignedMills } from "./format.js";
-
 export const SOURCE_LABELS: Record<string, string> = {
   subscription: "Подписки",
   tip: "Чаевые",
@@ -11,6 +9,3 @@ export const SOURCE_LABELS: Record<string, string> = {
   other: "Прочее",
   payout_reversal: "Отмена выплаты",
 };
-export const money = (value: number | null | undefined) =>
-  value == null ? "—" : formatMills(value);
-export const signedMoney = (value: number) => formatSignedMills(value);

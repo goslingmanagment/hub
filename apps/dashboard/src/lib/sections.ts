@@ -10,14 +10,6 @@ import type { Platform } from "@agency_hub_core/shared";
 import { decodedPath, pathSegment } from "./path.js";
 import type { PeriodKey } from "./period.js";
 import { WORKBOARD_HREF } from "./workboard.js";
-import { UNTIL_REBUILT_FANS_PAGE } from "./sections/untilRebuilt/fans-page.js";
-import { UNTIL_REBUILT_HOME_MONEY } from "./sections/untilRebuilt/home-money.js";
-import { UNTIL_REBUILT_PUBLICATIONS } from "./sections/untilRebuilt/publications.js";
-import { UNTIL_REBUILT_SETTINGS } from "./sections/untilRebuilt/settings.js";
-import { UNTIL_REBUILT_STATS } from "./sections/untilRebuilt/stats.js";
-import { UNTIL_REBUILT_SYSTEM } from "./sections/untilRebuilt/system.js";
-import { UNTIL_REBUILT_TEAM } from "./sections/untilRebuilt/team.js";
-import type { ScreenGap } from "./sections/untilRebuilt/types.js";
 
 export type Role = "owner" | "team_lead" | string;
 
@@ -82,6 +74,8 @@ export interface Screen {
   /** Said instead of «Hub не собирает данные Telegram» where that is not the point. */
   telegramNote?: { title: string; text: string };
   period?: ScreenPeriod;
+  /** The screen draws its period itself: «Операции» has a fifth value, «Свои даты» (design/screens/home-money.md §4). */
+  periodInBody?: boolean;
   /** Old names: the search finds a screen by the word a habit remembers. */
   keywords?: string;
   /** The header is the object itself, under crumbs; no section tabs. */
@@ -92,22 +86,6 @@ export interface Screen {
   /** The address's filters can make the period not the screen's to choose. */
   forcedPeriod?: (search: URLSearchParams) => ForcedPeriod | null;
 }
-
-/**
- * Where a not-yet-rebuilt screen falls short of the table below, by screen id. The
- * table says where the screen is going; these say what the old component can do
- * today, so the chip and the period never promise what it does not do. One file
- * per group: a rebuild deletes its screen's row there and touches nothing else.
- */
-const UNTIL_REBUILT: Readonly<Record<string, ScreenGap>> = {
-  ...UNTIL_REBUILT_HOME_MONEY,
-  ...UNTIL_REBUILT_FANS_PAGE,
-  ...UNTIL_REBUILT_STATS,
-  ...UNTIL_REBUILT_PUBLICATIONS,
-  ...UNTIL_REBUILT_TEAM,
-  ...UNTIL_REBUILT_SETTINGS,
-  ...UNTIL_REBUILT_SYSTEM,
-};
 
 const COMMON_PERIODS: readonly PeriodKey[] = ["today", "7d", "30d", "all"];
 const SPENDER_PERIODS: readonly PeriodKey[] = ["today", "7d", "30d", "90d", "180d", "all"];
@@ -147,6 +125,7 @@ export const SCREENS: readonly Screen[] = [
     pageFilter: "any", platforms: REPORTED,
     platformsNote: "Hub не собирает данные Telegram.",
     period: { class: "shared", options: COMMON_PERIODS },
+    periodInBody: true,
     keywords: "транзакции продажи платежи",
   },
   {
@@ -536,19 +515,17 @@ export function matchScreen(pathname: string): ScreenMatch | null {
 
 /** What the page filter does on this screen today. */
 export function pageFilterOf(screen: Screen): { mode: PageFilterMode; onePageWay: OnePageWay | null } {
-  const gap = UNTIL_REBUILT[screen.id];
-  const mode = gap?.pageFilter ?? screen.pageFilter;
-  return { mode, onePageWay: mode === "one" ? gap?.onePageWay ?? screen.onePageWay ?? "picker" : null };
+  return { mode: screen.pageFilter, onePageWay: screen.pageFilter === "one" ? screen.onePageWay ?? "picker" : null };
 }
 
-/** The period the header draws today; null when there is none or the old screen draws its own. */
+/** The period the header draws today; null when there is none or the screen draws its own. */
 export function headerPeriodOf(screen: Screen): ScreenPeriod | null {
-  return screen.period && !UNTIL_REBUILT[screen.id]?.periodInBody ? screen.period : null;
+  return screen.period && !screen.periodInBody ? screen.period : null;
 }
 
 /** The period the address's filters force on this screen today, if any. */
 export function forcedPeriodOf(screen: Screen, search: URLSearchParams): ForcedPeriod | null {
-  return UNTIL_REBUILT[screen.id]?.noForcedPeriod ? null : screen.forcedPeriod?.(search) ?? null;
+  return screen.forcedPeriod?.(search) ?? null;
 }
 
 export function screenVisible(screen: Screen, role: Role): boolean {

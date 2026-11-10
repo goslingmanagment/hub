@@ -1,13 +1,6 @@
 import { toast } from "sonner";
 import { KernelApiError } from "@/api/sdk";
 
-/**
- * How the settings screens speak about a write's answer (design/screens/settings.md
- * §0.6): no server text on screen, words by the status; the raw text only in a
- * title. A write with no answer or a 5xx has an unknown outcome and is never
- * repeated by itself.
- */
-export const FALLBACK_ERROR = "Не получилось. Hub вернул ошибку.";
 export const UNKNOWN_OUTCOME = "Hub не ответил: неизвестно, сохранилось ли.";
 
 export function errorStatus(error: unknown): number | null {

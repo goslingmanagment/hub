@@ -83,14 +83,6 @@ export function clientHealthRange(period: ClientHealthPeriod, today: string): { 
   return { from: new Date(utcDay(today).getTime() - (days - 1) * DAY_MS).toISOString().slice(0, 10), to: today };
 }
 
-const DAY_AND_MONTH = new Intl.DateTimeFormat("ru-RU", { day: "numeric", month: "short", timeZone: "UTC" });
-
-/** "3 октября" or "27 сентября – 3 октября". */
-export function clientHealthRangeLabel(range: { from: string; to: string }): string {
-  const print = (date: string) => DAY_AND_MONTH.format(utcDay(date));
-  return range.from === range.to ? print(range.to) : `${print(range.from)} – ${print(range.to)}`;
-}
-
 const NUMBER = new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 0 });
 const NUMBER_ONE_DECIMAL = new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 1 });
 

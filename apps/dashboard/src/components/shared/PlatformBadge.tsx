@@ -12,7 +12,3 @@ export function PlatformBadge({ platform }: PlatformBadgeProps) {
   return <span className="platform-tag">{PLATFORM_WORD[platform]}</span>;
 }
 
-/** The same word in a dense list. */
-export function PlatformTag({ platform }: PlatformBadgeProps) {
-  return <span className="platform-tag">{PLATFORM_WORD[platform]}</span>;
-}

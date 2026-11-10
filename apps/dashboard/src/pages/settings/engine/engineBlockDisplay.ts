@@ -6,7 +6,6 @@ import { COLLECTION_STATUS, type StatusWord } from "@/lib/statusWords";
 import { SYNC_BLOCK_LABELS, SYNC_LEVER_LABELS, syncStreamLabel } from "../sync/syncVocabulary.js";
 
 import {
-  engineAgeText,
   engineClockText,
   engineCount,
   engineDurationText,
@@ -15,9 +14,7 @@ import {
   engineReadingWords,
   engineStopText,
   engineWaitWords,
-  isCredentialsStop,
   type EngineReadingState,
-  type EngineReadingTone,
   type EngineStop,
 } from "./engineDisplay.js";
 
@@ -98,22 +95,6 @@ export function engineSubstreamState(block: EngineBlock, substream: EngineSubstr
   });
 }
 
-export interface EngineTone {
-  badge: string;
-  dot: string;
-  text: string;
-}
-
-const TONES: Record<EngineReadingTone, EngineTone> = {
-  ok: { badge: "badge badge-success", dot: "status-dot status-dot-ok", text: "text-text-secondary" },
-  quiet: { badge: "badge", dot: "status-dot", text: "text-text-secondary" },
-  warn: { badge: "badge badge-warning", dot: "status-dot status-dot-warn", text: "text-warning-dark" },
-};
-
-export function engineStateTone(state: EngineReadingState): EngineTone {
-  return TONES[engineReadingTone(state)];
-}
-
 export function engineStateLabel(state: EngineReadingState): string {
   const { text } = engineReadingWords(state, "ru");
   return text.charAt(0).toUpperCase() + text.slice(1);
@@ -142,11 +123,6 @@ function lowerFirst(text: string): string {
   return text.charAt(0).toLowerCase() + text.slice(1);
 }
 
-function readText(succeededAt: string | null, now: number): string {
-  const age = engineAgeText(succeededAt, now);
-  return age === null ? "ещё не читалось" : `последнее чтение ${age} назад`;
-}
-
 /** The chats Fansly does not serve to the page, as the block that reads the
  *  chats' messages counts them (`engine.chatsUnavailable`): "чатов, которые
  *  Fansly не отдаёт: 1". Informational — a chat's unavailability episode is no
@@ -172,46 +148,6 @@ export function engineAttentionText(info: Pick<EngineBlockInfo, "quarantined" | 
   ].filter((part): part is string => part !== null).join(", ");
 }
 
-/** A block in one line (the page's card of the list): what is true of it —
- *  with what stops it and what of it needs the owner — and when it was last
- *  read. A hold of the whole page is named once, on the page: its blocks say
- *  only that the page is held. */
-export function engineBlockSummary(block: EngineBlock, now: number = Date.now()): string {
-  const state = engineBlockState(block);
-  const words = engineReadingWords(state, "ru").text;
-  if (state === "no_owner" || state === "switching") return words;
-  const [first] = block.engine.stops;
-  const stop = first === undefined
-    ? null
-    : `${lowerFirst(engineBlockStopText(first, now))}${block.engine.stops.length > 1 ? ` и ещё ${block.engine.stops.length - 1}` : ""}`;
-  const attention = engineAttentionText(block.engine);
-  const parts: string[] = [];
-  switch (state) {
-    case "paused":
-    case "held":
-      parts.push(stop ?? words);
-      break;
-    case "partly_paused":
-    case "partly_held":
-      parts.push(stop === null ? words : `${words}: ${stop}`);
-      break;
-    case "page_held":
-    case "attention":
-    case "reading":
-      parts.push(words);
-      break;
-    case "idle":
-    case "never_read":
-      // Nothing to say but when it was read.
-      break;
-  }
-  if (attention !== "") parts.push(attention);
-  const chats = engineChatsUnavailableText(block.engine);
-  if (chats !== null) parts.push(chats);
-  parts.push(readText(block.succeededAt, now));
-  return parts.join(" · ");
-}
-
 /** What a stream of a block says in the "Состояние" column: what is true of
  *  it, and for a stream that is read — why its earliest work waits. */
 export function engineSubstreamStateText(block: EngineBlock, substream: EngineSubstream): string {
@@ -234,11 +170,6 @@ export function engineAttentionLines(block: EngineBlock): string[] {
       : []),
     ...(blockedByVendor.count > 0 ? [`Fansly отказывает ${engineCount(blockedByVendor.count)}`] : []),
   ];
-}
-
-/** The block's page is held for its credentials: only new ones end it. */
-export function engineBlockCredentialsRefused(block: EngineBlock): boolean {
-  return block.engine.stops.some(isCredentialsStop);
 }
 
 // ── the buttons ──────────────────────────────────────────────────────────────

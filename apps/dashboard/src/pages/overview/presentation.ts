@@ -1,15 +1,12 @@
 import type {
   OverviewResponse,
   OverviewRevenueResponse,
-  PlatformRevenueWindow,
 } from "@agency_hub_core/contracts";
-import { BUSINESS_TIME_ZONE, toBusinessDate } from "@agency_hub_core/shared";
 import type { PageSort } from "@/lib/overviewNavigation";
 
 export type CatalogPage = OverviewResponse["pages"][number];
 export type RevenuePage = OverviewRevenueResponse["pages"][number];
 export type PageRow = RevenuePage & { catalog: CatalogPage | undefined };
-export { SOURCE_LABELS, money, signedMoney } from "@/lib/revenueDisplay";
 
 /** Russian plural: plural(2, "страница", "страницы", "страниц"). */
 export function plural(count: number, one: string, few: string, many: string) {
@@ -20,44 +17,6 @@ export function plural(count: number, one: string, few: string, many: string) {
   return many;
 }
 
-/** A server-computed change in percent, as the table prints it. */
-export function formatPct(pct: number) {
-  return `${pct > 0 ? "+" : ""}${pct.toFixed(1)}%`;
-}
-
-/** Calendar padding is presentation of stored daily sums, not a claim about
- * platform capture. Unbounded history uses only its observed date extent. */
-export function calendarSeries(
-  series: Array<{ businessDate: string; netAmountMills: number }>,
-  windows: PlatformRevenueWindow[],
-) {
-  const bounded = windows.filter((window) => window.from && window.to);
-  const earliest = bounded.map((window) => window.from!).sort()[0];
-  const from = earliest
-    ? toBusinessDate(new Date(earliest), BUSINESS_TIME_ZONE)
-    : series[0]?.businessDate;
-  const exclusiveTo = bounded
-    .map((window) => window.to!)
-    .sort()
-    .at(-1);
-  const to = exclusiveTo
-    ? toBusinessDate(new Date(Date.parse(exclusiveTo) - 1), BUSINESS_TIME_ZONE)
-    : series.at(-1)?.businessDate;
-  if (!from || !to) return [];
-  const values = new Map(
-    series.map((point) => [point.businessDate, point.netAmountMills]),
-  );
-  const result: Array<{ businessDate: string; value: number }> = [];
-  for (
-    const day = new Date(`${from}T00:00:00Z`);
-    day.toISOString().slice(0, 10) <= to;
-    day.setUTCDate(day.getUTCDate() + 1)
-  ) {
-    const businessDate = day.toISOString().slice(0, 10);
-    result.push({ businessDate, value: values.get(businessDate) ?? 0 });
-  }
-  return result;
-}
 export function groupRevenue(
   report: OverviewRevenueResponse,
   catalog: CatalogPage[],

@@ -8,7 +8,6 @@ import { savePageBrowserDraft, usePageBrowserDrafts } from "@/api/queries";
 import { Notice } from "@/components/ui/Notice";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Spinner } from "@/components/ui/Skeleton";
-import { buildSettingsRoute } from "@/lib/navigation";
 import { ServerAdminCommand } from "@/components/shared/ServerAdminCommand";
 import { ConnectSteps } from "./ConnectSteps.js";
 import { Card } from "./loginParts.js";
@@ -150,7 +149,7 @@ export function PageBrowserDraftPage() {
             {saved.proxy !== null && <p className="field-hint">Прокси: <span className="font-mono">{maskedLine(saved.proxy)}</span>. Пароль хранится зашифрованным и сюда не возвращается.</p>}
           </Card>
           <div className="connect-actions">
-            <Link to={buildSettingsRoute("pages")} className="btn btn-primary">К моделям и страницам</Link>
+            <Link to="/settings/pages" className="btn btn-primary">К моделям и страницам</Link>
             <button type="button" className="btn" onClick={() => setSaved(null)}>Изменить черновик</button>
           </div>
         </div>

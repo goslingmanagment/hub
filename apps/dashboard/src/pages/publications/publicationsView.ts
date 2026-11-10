@@ -282,33 +282,6 @@ export function whenLabel(at: string, todayKey: string): string {
   return dayKeyOf(at) === todayKey ? `сегодня ${timeOf(at)}` : momentLabel(at, todayKey);
 }
 
-export interface PublicationDay {
-  key: string;
-  label: string;
-  publications: PublicationWire[];
-}
-
-/**
- * The publications by their Moscow publish day, earliest first, each day in
- * publish order.
- */
-export function groupPublicationsByDay(
-  publications: readonly PublicationWire[],
-  todayKey: string,
-  timeZone = PUBLICATIONS_TIME_ZONE,
-): PublicationDay[] {
-  const ordered = [...publications].sort((a, b) =>
-    (Date.parse(a.publishAt) - Date.parse(b.publishAt)) || a.pageLabel.localeCompare(b.pageLabel) || a.id - b.id);
-  const days: PublicationDay[] = [];
-  for (const publication of ordered) {
-    const key = dayKeyOf(publication.publishAt, timeZone);
-    const last = days.at(-1);
-    if (last?.key === key) last.publications.push(publication);
-    else days.push({ key, label: dayLabel(key, todayKey), publications: [publication] });
-  }
-  return days;
-}
-
 // ── the address of a view: page, status, date window, panels ────────────────
 
 export const PUBLICATION_WINDOWS = [
@@ -320,8 +293,6 @@ export const PUBLICATION_WINDOWS = [
 ] as const;
 export type PublicationWindow = (typeof PUBLICATION_WINDOWS)[number]["key"];
 
-/** «Не вышли»: three statuses read as one filter. */
-export const NOT_OUT_STATUSES = ["not_published", "rejected", "missed"] as const satisfies readonly PublicationStatus[];
 export type PublicationStatusFilter = PublicationStatus | "not_out";
 
 export interface PublicationsView {

@@ -36,10 +36,6 @@ export function publicationsQueryOptions(params: PublicationListParams) {
   });
 }
 
-export function usePublications(params: PublicationListParams) {
-  return useQuery(publicationsQueryOptions(params));
-}
-
 export function usePublicationSettings() {
   return useQuery({
     queryKey: [...PUBLICATIONS_KEY, "settings"] as const,

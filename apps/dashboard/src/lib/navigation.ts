@@ -1,7 +1,6 @@
 import { pathSegment } from "./path.js";
 import { isChatterSite, isConsoleSite } from "./sites.js";
-import { workboardHref } from "./workboard.js";
-import type { Period, PeriodOption, SpenderPeriodOption } from "../stores/periodStore.js";
+import type { Period, PeriodOption } from "../stores/periodStore.js";
 
 /**
  * The period a revenue report shows for the console's period. Revenue is
@@ -24,31 +23,10 @@ export function resolveDashboardPeriod(value: string | null, fallback: Period): 
   return revenuePeriod(askedPeriod(value, fallback));
 }
 
-export function resolveSpenderPeriod(value: string | null, fallback: Period): SpenderPeriodOption {
-  const asked = askedPeriod(value, fallback);
-  if (asked === "365d") return "180d";
-  return asked === "14d" ? "7d" : asked;
-}
-
 export interface FanProfileNavigationState {
   backTo: string;
   fanLabel?: string;
 }
-
-export type SettingsTab =
-  | "features"
-  | "credentials"
-  | "engine"
-  | "sync"
-  | "collection"
-  | "models"
-  | "personas"
-  | "pages"
-  | "users"
-  | "agentKeys"
-  | "configuration"
-  | "ofapi"
-  | "notifications";
 
 export function buildPageRoute(pageLabel: string) {
   return `/pages/${pathSegment(pageLabel)}`;
@@ -114,66 +92,10 @@ export function buildFanProfileNavigation(
   };
 }
 
-export function resolveFanLabelFromState(state: unknown): string | undefined {
-  if (
-    typeof state === "object"
-    && state !== null
-    && "fanLabel" in state
-    && typeof state.fanLabel === "string"
-  ) {
-    return state.fanLabel;
-  }
-  return undefined;
-}
-
-/** The two ways a page is read: `engine` is the Fansly Sync Engine's, `sync` the
- *  legacy page-sync executor's. Both show a page at /system/collection/:pageLabel. */
-export type SyncSettingsTab = Extract<SettingsTab, "engine" | "sync">;
-
-/** The platforms the Fansly Sync Engine reads; every other platform's pages
- *  are the legacy executor's. One table, so no screen compares a platform to
- *  decide where a page's sync is shown. */
-const SYNC_SETTINGS_TAB_BY_PLATFORM: Readonly<Partial<Record<string, SyncSettingsTab>>> = {
-  fansly: "engine",
-};
-
-/** Which of the two reads a page of this platform. */
-export function syncSettingsTab(platform: string): SyncSettingsTab {
-  return SYNC_SETTINGS_TAB_BY_PLATFORM[platform] ?? "sync";
-}
-
-/** Where each old Settings tab lives now. */
-const SETTINGS_TAB_ROUTES: Readonly<Record<SettingsTab, string>> = {
-  pages: "/settings/pages",
-  models: "/settings/pages",
-  credentials: "/settings/pages",
-  // Workboard's: a real navigation, not the console's router.
-  users: workboardHref("access"),
-  personas: "/settings/ai/personas",
-  notifications: "/settings/notifications",
-  collection: "/system/onlyfans-api/collection",
-  ofapi: "/system/onlyfans-api/tools",
-  agentKeys: "/system/agent-keys",
-  features: "/settings/ai/features",
-  configuration: "/system/dev/config",
-  engine: "/system/collection",
-  sync: "/system/collection",
-};
-
-export function buildSettingsRoute(tab: SettingsTab, pageLabel?: string) {
-  if ((tab === "sync" || tab === "engine") && pageLabel) return buildPageCollectionRoute(pageLabel);
-  return SETTINGS_TAB_ROUTES[tab];
-}
-
 /** A page's collection screen: the page is in the path, so a lever on it cannot
  *  take its target from anywhere else. */
 export function buildPageCollectionRoute(pageLabel: string) {
   return `/system/collection/${pathSegment(pageLabel)}`;
-}
-
-/** A page's sync detail. */
-export function buildPageSyncRoute(_platform: string, pageLabel: string) {
-  return buildPageCollectionRoute(pageLabel);
 }
 
 export function isSafeInAppPath(value: string) {

@@ -1,7 +1,6 @@
 import { useEffect } from "react";
 import { mutationOptions, queryOptions, useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import type {
-  RevenueDailyQuery,
   RevenueQuery,
   SpenderBatchBody,
   SpenderBatchResponse,
@@ -61,15 +60,6 @@ export function usePageRevenue(pageLabel: string, period: string, options: Query
       kernel.pageRevenue({ params: { pageLabel }, query: { period, windowAt: options.windowAt } as RevenueQuery }),
     enabled: options.enabled ?? true,
     meta: { suppressGlobalError: Boolean(options.windowAt) },
-  });
-}
-
-export function usePageRevenueDaily(pageLabel: string, period = "30d", options: QueryOptions = {}) {
-  return useQuery({
-    queryKey: ["pageRevenueDaily", pageLabel, period],
-    queryFn: () =>
-      kernel.pageRevenueDaily({ params: { pageLabel }, query: { period } as RevenueDailyQuery }),
-    enabled: options.enabled ?? true,
   });
 }
 

@@ -15,7 +15,7 @@ import {
   type ChartTooltipRenderProps,
 } from "@/components/charts/ChartKit";
 import { evenTickIndices, linearTicks } from "@/components/charts/scale";
-import { formatBusinessDateShort, formatDate, formatDateTime } from "@/lib/format";
+import { formatBusinessDateShort, formatDateTime } from "@/lib/format";
 import { credits, creditsToUsd, creditsWord, fmtCredits, operationLabel } from "@/lib/ofapiCredits";
 import { ruPlural } from "@/lib/plural";
 import type { OfapiStatus } from "@/lib/statusWords";
@@ -55,7 +55,6 @@ export { credits, creditsToUsd, creditsWord, fmtCredits, operationLabel };
 export const daysWord = (value: number) => ruPlural(value, "день", "дня", "дней");
 /** A UTC day of the hub's ledger, written as a day: «4 нояб.». */
 export const humanDay = (day: string) => formatBusinessDateShort(day);
-export { formatDate, formatDateTime };
 
 /** A page's revenue ÷ the estimated cost of its credits; null without a price. */
 export function computeRoi(revenueMills: number, amount: number, microUsdPerCredit: number): number | null {

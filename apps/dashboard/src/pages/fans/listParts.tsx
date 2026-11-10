@@ -2,9 +2,7 @@ import { useCallback, useRef, type ReactNode } from "react";
 import { useLocation, useSearchParams } from "react-router";
 import { useAuthMe } from "@/api/queries";
 import { useOfapiStatus } from "@/api/waiting";
-import { useDashboardShell } from "@/components/layout/DashboardShellContext";
-import { usePageFilter } from "@/components/layout/usePageFilter";
-import { NoAnswerPanel, StatusPanel } from "@/components/shared/StatusPanel";
+import { NoAnswerPanel } from "@/components/shared/StatusPanel";
 import { QueryNotice } from "@/components/shared/QueryNotice";
 import { TableSkeleton } from "@/components/shared/TableSkeleton";
 import { OFAPI_FEED_NOTE, type OfapiStatus } from "@/lib/statusWords";
@@ -35,23 +33,6 @@ export function useListParams() {
     }, { replace: true, state: latest.current.state });
   }, []);
   return { search, update };
-}
-
-/** The page of the list, whatever the filter says, by the catalog. */
-export function usePlatformOfPage(pageLabel: string | null | undefined) {
-  const { findPageByLabel } = useDashboardShell();
-  return pageLabel ? findPageByLabel(pageLabel)?.platform ?? null : null;
-}
-
-/** A chosen Telegram page: said, never another page in its place. */
-export function TelegramPanel() {
-  const filter = usePageFilter();
-  return (
-    <StatusPanel
-      title="Hub не собирает данные Telegram"
-      action={<button type="button" className="btn btn-sm" onClick={() => filter.select(null)}>Все страницы</button>}
-    />
-  );
 }
 
 /** First load, no answer, or the list. If rows were there they stay, under a notice. */

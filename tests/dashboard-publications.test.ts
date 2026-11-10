@@ -8,7 +8,7 @@ import {
   dayKeyOf,
   dayStartIso,
   dollarsInput,
-  groupPublicationsByDay,
+  feedDays,
   parseDollars,
   parsePublicationsView,
   priceLabel,
@@ -49,13 +49,13 @@ describe("Moscow days", () => {
   });
 
   it("groups by day, earliest first, each day in publish order", () => {
-    const days = groupPublicationsByDay([
+    const days = feedDays([
       publication(3, "2026-10-24T09:00:00.000Z"),
       publication(1, "2026-10-23T22:30:00.000Z"),
       publication(2, "2026-10-23T10:00:00.000Z"),
       publication(4, "2026-10-24T09:00:00.000Z", { pageLabel: "ari-1" }),
-    ], "2026-10-23");
-    expect(days.map((day) => [day.key, day.publications.map((item) => item.id)])).toEqual([
+    ], [], "2026-10-23");
+    expect(days.map((day) => [day.key, day.rows.map((row) => row.kind === "post" ? row.publication.id : null)])).toEqual([
       ["2026-10-23", [2]],
       ["2026-10-24", [1, 4, 3]],
     ]);

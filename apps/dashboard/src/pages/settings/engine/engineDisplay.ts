@@ -149,18 +149,6 @@ export function engineClockText(iso: string, now: number = Date.now()): string {
   return moscowDay(at) === moscowDay(new Date(now)) ? formatTimeOfDay(at) : formatDateTime(iso, { yearUnlessCurrent: true });
 }
 
-const MODE_LABELS: Record<EnginePageStatus["mode"], string> = {
-  live: "включён",
-  handover: "переключение",
-  shadow: "пробный режим",
-  off: "выключен",
-};
-
-/** The page's mode in the screen's words. */
-export function engineModeLabel(mode: EnginePageStatus["mode"]): string {
-  return MODE_LABELS[mode] ?? mode;
-}
-
 export function engineHoldText(status: EnginePageStatus, now: number = Date.now()): string | null {
   const hold = status.holds.page;
   if (hold === null) return null;
