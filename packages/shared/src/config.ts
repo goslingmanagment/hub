@@ -110,7 +110,6 @@ const envSchema = z.object({
   TELEGRAM_BOT_TOKEN: optionalTrimmedStringSchema,
   TELEGRAM_CHAT_ID: optionalTrimmedStringSchema,
   TELEGRAM_REPORT_HOUR: optionalTelegramHourSchema,
-  TELEGRAM_PROXY_PAGE_LABEL: optionalTrimmedStringSchema,
   SERVICE_EGRESS_PROXY_URL: optionalTrimmedStringSchema,
   SERVICE_EGRESS_PROXY_USERNAME: optionalTrimmedStringSchema,
   SERVICE_EGRESS_PROXY_PASSWORD: optionalTrimmedStringSchema,
@@ -397,12 +396,11 @@ export interface AppConfig {
   telegramChatId: string | null;
   telegramEnabled: boolean;
   telegramReportHourUtc: number;
-  // Optional so existing AppConfig literals (tests, codegen) need not enumerate them;
-  // loadConfig always populates them, so production behavior is exact.
-  telegramProxyPageLabel?: string | null;
   serviceEgressProxyUrl: string | null;
   serviceEgressProxyUsername: string | null;
   serviceEgressProxyPassword: string | null;
+  // Optional so existing AppConfig literals (tests, codegen) need not enumerate them;
+  // loadConfig always populates them, so production behavior is exact.
   ofapiBaseUrl?: string;
   ofapiApiKey?: string | null;
   ofapiExpectedTeamSlug?: string | null;
@@ -795,7 +793,6 @@ export function loadConfig(
     telegramChatId,
     telegramEnabled,
     telegramReportHourUtc: parsed.TELEGRAM_REPORT_HOUR ?? 9,
-    telegramProxyPageLabel: parsed.TELEGRAM_PROXY_PAGE_LABEL ?? null,
     serviceEgressProxyUrl: serviceEgressProxy.url,
     serviceEgressProxyUsername: serviceEgressProxy.username,
     serviceEgressProxyPassword: serviceEgressProxy.password,

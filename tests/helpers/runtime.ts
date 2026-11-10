@@ -50,7 +50,6 @@ export function createTestAppContext(
     sessionTtlDays?: number;
     syncPageExecutorConcurrency?: number;
     healthSyncMonitoringToken?: string | null;
-    telegramProxyPageLabel?: string | null;
     serviceEgressProxyUrl?: string | null;
     serviceEgressProxyUsername?: string | null;
     serviceEgressProxyPassword?: string | null;
@@ -89,7 +88,6 @@ export function createTestAppContext(
       telegramChatId: null,
       telegramEnabled: false,
       telegramReportHourUtc: 9,
-      telegramProxyPageLabel: overrides?.telegramProxyPageLabel ?? null,
       serviceEgressProxyUrl:
         overrides?.serviceEgressProxyUrl === undefined
           ? "socks5://proxy.example.internal:1080"

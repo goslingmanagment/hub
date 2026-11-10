@@ -75,9 +75,10 @@ async function verifyConsumer(
     }
 
     const proxy = resolveServiceEgressProxy(app.config);
+    if (!proxy) throw new Error(`${consumer} resolved without the service proxy`);
     return {
       consumer,
-      route: proxy ? formatMaskedProxyUrl(proxy) : "legacy-page (deprecated)",
+      route: formatMaskedProxyUrl(proxy),
       egressKey: egress.egressKey,
       exitIp,
     };

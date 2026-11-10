@@ -187,7 +187,7 @@ describe("telegram service", () => {
     expect(byDefault).toHaveBeenCalledTimes(2);
   });
 
-  it("fails closed without a dedicated or legacy route and performs zero fetches", async () => {
+  it("fails closed without the service proxy and performs zero fetches", async () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch");
     const logger = { warn: vi.fn() };
     const result = await sendTelegramMessage({
@@ -198,7 +198,6 @@ describe("telegram service", () => {
         telegramBotToken: null,
         telegramChatId: null,
         telegramReportHourUtc: 9,
-        telegramProxyPageLabel: null,
         serviceEgressProxyUrl: null,
         serviceEgressProxyUsername: null,
         serviceEgressProxyPassword: null,
@@ -231,7 +230,6 @@ describe("telegram service", () => {
         telegramBotToken: null,
         telegramChatId: null,
         telegramReportHourUtc: 9,
-        telegramProxyPageLabel: "fake-legacy-page",
         ...serviceProxyConfig(),
       },
     } as never, {
