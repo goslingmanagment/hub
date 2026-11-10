@@ -37,6 +37,7 @@ import {
   isDmArchiveScopeFenced,
   tryAcquireDmArchiveWriterFenceLock,
 } from "./erasure-fence.ts";
+import { textArrayLiteralParam as subjectRefArrayParam } from "./projection-sql.ts";
 
 export type EngagementPlatform = "fansly" | "onlyfans";
 
@@ -294,14 +295,6 @@ export type SubjectRefreshPlane = LegacySubjectRefreshPlane
 // It is a QUEUE, not a scheduler: no reservations, no leases, no settlement.
 // The stream lease the executor already holds is what makes one page's walk
 // single-threaded, and these rows only remember where it got to.
-
-/** ONE bound parameter carrying a Postgres array literal, then cast. Drizzle
- *  expands a bare array into a parameter LIST, so an EMPTY one becomes a syntax
- *  error at runtime. */
-function subjectRefArrayParam(values: readonly string[]): SQL {
-  const literal = `{${values.map((value) => `"${value.replace(/(["\\])/g, "\\$1")}"`).join(",")}}`;
-  return sql`${literal}::text[]`;
-}
 
 /**
  * Seed ONE walk row, idempotently — the same-transaction hook the creator-posts

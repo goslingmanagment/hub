@@ -65,6 +65,7 @@ import {
   asNumber,
   asString,
   isRecord,
+  pageRefOf,
   type CanonicalEventDraft,
   type CanonicalizableObservation,
   type CanonicalizeRunContext,
@@ -91,10 +92,6 @@ export const FANSLY_ENGAGEMENT_EVENT_TYPES = [
   "media.purchase_notification_observed",
   "engagement.notification_observed",
 ] as const;
-
-function pageRefOf(observation: CanonicalizableObservation): string {
-  return String(observation.accountId);
-}
 
 /**
  * Notification instants are epoch SECONDS. Returns null for anything that is

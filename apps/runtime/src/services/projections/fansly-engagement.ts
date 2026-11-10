@@ -63,6 +63,7 @@ import {
 import { sql } from "drizzle-orm";
 
 import type { AppContext } from "../../bootstrap.ts";
+import { asInt, asText, eventData, isoDate } from "./event-fields.ts";
 
 export const FANSLY_ENGAGEMENT_PROJECTION = "fansly_engagement";
 
@@ -94,28 +95,6 @@ export interface FanslyEngagementProjectionResult extends Record<string, unknown
   applied: number;
   notifications: number;
   purchaseSignals: number;
-}
-
-function eventData(value: unknown): Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : {};
-}
-
-function asText(value: unknown): string | null {
-  return typeof value === "string" && value.length > 0 ? value : null;
-}
-
-function asInt(value: unknown): number | null {
-  return typeof value === "number" && Number.isSafeInteger(value) ? value : null;
-}
-
-function isoDate(value: unknown): Date | null {
-  if (typeof value !== "string" || value.length === 0) {
-    return null;
-  }
-  const parsed = new Date(value);
-  return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
 
 /**

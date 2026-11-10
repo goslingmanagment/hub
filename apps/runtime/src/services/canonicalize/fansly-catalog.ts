@@ -84,10 +84,12 @@
 import { fanslyRawMediaDrafts } from "./raw-media.ts";
 
 import {
-  asFanslyTimestamp,
   asNumber,
   asString,
+  envelopeArray,
   isRecord,
+  msInstantIso,
+  pageRefOf,
   type CanonicalEventDraft,
   type CanonicalizableObservation,
   type CanonicalizeRunContext,
@@ -161,41 +163,6 @@ export const FANSLY_CATALOG_EVENT_TYPES = [
   "page.wall_observed",
   "catalog.listing_observed",
 ] as const;
-
-function pageRefOf(observation: CanonicalizableObservation): string {
-  return String(observation.accountId);
-}
-
-/**
- * MILLISECOND instants: album `createdAt`, `albumContent[].createdAt`, gift-code
- * `createdAt`/`startsAt`/`endsAt`. Null stays null — a missing timestamp must
- * never become 1970.
- */
-function msInstantIso(value: unknown): string | null {
-  const raw = asNumber(value);
-  if (raw === null || raw <= 0) {
-    return null;
-  }
-  return asFanslyTimestamp(raw, new Date(0)).toISOString();
-}
-
-/** The rows of an array-shaped response, or of the first array-valued key of an
- *  object-shaped one. `/subscriptions/tiers`, `/subscriptions/giftcodes`,
- *  `/message/automated`, `/account/walls` and both `?ids=` routes all serve a
- *  BARE ARRAY once the `{success, response}` envelope is unwrapped. */
-function envelopeArray(payload: unknown): Record<string, unknown>[] {
-  if (Array.isArray(payload)) {
-    return payload.filter(isRecord);
-  }
-  if (isRecord(payload)) {
-    for (const value of Object.values(payload)) {
-      if (Array.isArray(value)) {
-        return value.filter(isRecord);
-      }
-    }
-  }
-  return [];
-}
 
 /**
  * The roster event: "this FULL listing named exactly these refs, at this

@@ -28,9 +28,10 @@
 // They are related diagnostics, not interchangeable denominators: one raw file
 // can back several offers.
 
-import { sql, type SQL } from "drizzle-orm";
+import { sql } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
+import { millsParam, newerWins, pick, textArrayLiteralParam as textArrayParam } from "./projection-sql.ts";
 
 export type FanslyCatalogPlatform = "fansly" | "onlyfans";
 
@@ -42,42 +43,6 @@ export interface CatalogLineage {
   sourceEventId: number;
   sourceObservationId: number;
   sourceAccountSeq: number;
-}
-
-/** Excluded wins on a newer observation instant, or on the same instant with a
- *  higher account_seq. */
-function newerWins(table: string) {
-  const current = sql.identifier(table);
-  return sql`
-    excluded.last_observed_at > ${current}.last_observed_at
-    or (
-      excluded.last_observed_at = ${current}.last_observed_at
-      and excluded.source_account_seq > ${current}.source_account_seq
-    )
-  `;
-}
-
-function pick(table: string, column: string): SQL {
-  const current = sql.identifier(table);
-  const name = sql.identifier(column);
-  return sql`case when ${newerWins(table)} then excluded.${name} else ${current}.${name} end`;
-}
-
-function millsParam(value: bigint | null): SQL {
-  return value === null ? sql`null` : sql`${value.toString()}::bigint`;
-}
-
-/**
- * ONE bound parameter carrying a Postgres array literal, then cast.
- *
- * Not `sql`${array}`` — drizzle expands an array chunk into a comma-separated
- * parameter LIST, so an EMPTY array expands to nothing and the statement
- * becomes a syntax error at runtime on exactly the common case. An empty roster
- * is not an edge case here: it is what a page with no gift codes left serves.
- */
-function textArrayParam(values: readonly string[]): SQL {
-  const literal = `{${values.map((value) => `"${value.replace(/(["\\])/g, "\\$1")}"`).join(",")}}`;
-  return sql`${literal}::text[]`;
 }
 
 // ── creator_vault_albums ─────────────────────────────────────────────────────

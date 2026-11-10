@@ -25,6 +25,7 @@
 import { sql, type SQL } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
+import { millsParam, textArrayLiteralParam as textArrayParam } from "./projection-sql.ts";
 
 export type PagePayoutPlatform = "fansly" | "onlyfans";
 
@@ -57,24 +58,6 @@ function pick(table: string, column: string): SQL {
   return sql`
     case when ${newerWins(table)} then excluded.${columnName} else ${tableName}.${columnName} end
   `;
-}
-
-function millsParam(value: bigint | null): SQL {
-  return value === null ? sql`null` : sql`${value.toString()}::bigint`;
-}
-
-/**
- * ONE bound parameter carrying a Postgres array literal, then cast.
- *
- * Not `sql`${array}`` — drizzle expands an array chunk into a comma-separated
- * parameter LIST, so an EMPTY array expands to nothing and the statement
- * becomes a syntax error at runtime on exactly the common case. An empty roster
- * is not an edge case here: a creator who removes their last payout method
- * serves `[]`, and that is precisely the response `missing_since` exists for.
- */
-function textArrayParam(values: readonly string[]): SQL {
-  const literal = `{${values.map((value) => `"${value.replace(/(["\\])/g, "\\$1")}"`).join(",")}}`;
-  return sql`${literal}::text[]`;
 }
 
 export interface UpsertPagePayoutMethodInput extends PagePayoutLineage {

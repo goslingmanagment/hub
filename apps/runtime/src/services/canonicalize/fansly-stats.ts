@@ -56,7 +56,10 @@ import {
   asFanslyTimestamp,
   asNumber,
   asString,
+  envelopeArray,
   isRecord,
+  msInstantIso,
+  pageRefOf,
   type CanonicalEventDraft,
   type CanonicalizableObservation,
   type CanonicalizeRunContext,
@@ -98,14 +101,6 @@ export const FANSLY_STATS_UNKNOWN_TYPE_DIAGNOSTIC = "fansly_stats_unknown_type";
 
 // ── small shared helpers ─────────────────────────────────────────────────────
 
-function msInstantIso(value: unknown): string | null {
-  const raw = asNumber(value);
-  if (raw === null || raw <= 0) {
-    return null;
-  }
-  return asFanslyTimestamp(raw, new Date(0)).toISOString();
-}
-
 /** A ratio as a decimal STRING (never a float in storage). Refuses a
  *  non-finite or negative value rather than rounding one into existence. */
 function ratioString(value: unknown): string | null {
@@ -118,26 +113,6 @@ function ratioString(value: unknown): string | null {
 /** UTC business date of an instant, `YYYY-MM-DD`. */
 function businessDate(iso: string): string {
   return iso.slice(0, 10);
-}
-
-function pageRefOf(observation: CanonicalizableObservation): string {
-  return String(observation.accountId);
-}
-
-function envelopeArray(payload: unknown): Record<string, unknown>[] {
-  if (Array.isArray(payload)) {
-    return payload.filter(isRecord);
-  }
-  // Tolerant: some routes may wrap a list. Take the first array-valued key
-  // rather than refusing — unknown keys stay in the journal either way.
-  if (isRecord(payload)) {
-    for (const value of Object.values(payload)) {
-      if (Array.isArray(value)) {
-        return value.filter(isRecord);
-      }
-    }
-  }
-  return [];
 }
 
 // ── /it/amoie/stats — the account statistics response ────────────────────────

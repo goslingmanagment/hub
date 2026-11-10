@@ -24,50 +24,14 @@
 import { sql, type SQL } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
+import { millsParam, pick, textArrayLiteralParam as textArrayParam } from "./projection-sql.ts";
 
 export type FanslyStatsPlatform = "fansly" | "onlyfans";
-
-/** Shared precedence guard: excluded wins on a newer observation instant, or on
- *  the same instant with a higher account_seq. */
-function newerWins(table: string) {
-  const current = sql.identifier(table);
-  return sql`
-    excluded.last_observed_at > ${current}.last_observed_at
-    or (
-      excluded.last_observed_at = ${current}.last_observed_at
-      and excluded.source_account_seq > ${current}.source_account_seq
-    )
-  `;
-}
-
-function pick(table: string, column: string): SQL {
-  const current = sql.identifier(table);
-  const name = sql.identifier(column);
-  return sql`case when ${newerWins(table)} then excluded.${name} else ${current}.${name} end`;
-}
-
-function millsParam(value: bigint | null): SQL {
-  return value === null ? sql`null` : sql`${value.toString()}::bigint`;
-}
 
 /** Ratios travel as decimal STRINGS and land in `numeric` — never through a JS
  *  float, which is the whole reason the column is numeric. */
 function numericParam(value: string | null): SQL {
   return value === null ? sql`null` : sql`${value}::numeric`;
-}
-
-/**
- * ONE bound parameter carrying a Postgres array literal, then cast.
- *
- * Not `sql`${array}`` — drizzle expands an array chunk into a comma-separated
- * parameter LIST, so an EMPTY array expands to nothing and the statement
- * becomes a syntax error at runtime on exactly the common case.
- */
-function textArrayParam(values: readonly string[]): SQL {
-  const literal = `{${
-    values.map((value) => `"${value.replace(/(["\\])/g, "\\$1")}"`).join(",")
-  }}`;
-  return sql`${literal}::text[]`;
 }
 
 export interface StatsLineage {
