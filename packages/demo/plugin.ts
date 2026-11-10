@@ -148,6 +148,7 @@ function signInHtml(next: string | null): string {
   <div class="actions">
     <a class="button primary" href="${escapeHtml(role("owner"))}">Войти как владелец</a>
     <a class="button" href="${escapeHtml(role("team_lead"))}">Войти как тимлид</a>
+    <a class="button" href="${escapeHtml(role("chatter"))}">Войти как чаттер</a>
   </div>
 </main>
 </body>

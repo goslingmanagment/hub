@@ -1,6 +1,8 @@
 import { Navigate, createBrowserRouter, useLocation, useParams, type Params, type RouteObject } from "react-router";
+import { CHATTER, TEAM, homePath, useMe } from "@/shared/useMe";
 import { AuthGate } from "./AuthGate.js";
 import { NotFoundScreen } from "./NotFound.js";
+import { RoleGate } from "./RoleGate.js";
 import { Shell } from "./Shell.js";
 
 /** The router's basename: Vite's `base` without its last slash (src/base.ts is the one constant). */
@@ -17,10 +19,11 @@ export interface ScreenHandle {
   screenKey?: (params: Params) => string;
 }
 
-/** `/` is Смены, with whatever the address carried. */
+/** `/` is Смены for the team and «Мои отчёты» for a chatter, with whatever the address carried. */
 function HomeRedirect() {
   const location = useLocation();
-  return <Navigate to={{ pathname: "/shifts", search: location.search }} replace />;
+  const { role } = useMe();
+  return <Navigate to={{ pathname: homePath(role), search: location.search }} replace />;
 }
 
 /**
@@ -40,12 +43,12 @@ function SalesRedirect() {
 }
 
 /**
- * Every screen of the spec (§3–4), one folder per group under src/screens/,
- * each loaded on first visit. Deep pages: Разбор смены `/shifts/:userId/:shiftStart`,
- * Человек `/people/:userId[/sales|access]` (`/shifts` redirects to Работа).
+ * The team's screens, the owner's and team leads' (spec §3–4), one folder per
+ * group under src/screens/, each loaded on first visit. Deep pages: Разбор
+ * смены `/shifts/:userId/:shiftStart`, Человек `/people/:userId[/sales|access]`
+ * (`/shifts` redirects to Работа).
  */
-const screens: RouteObject[] = [
-  { index: true, element: <HomeRedirect /> },
+const teamScreens: RouteObject[] = [
   { path: "shifts", lazy: () => import("../screens/shifts/index.js").then((m) => ({ Component: m.ShiftsScreen })) },
   {
     path: "shifts/:userId/:shiftStart",
@@ -64,6 +67,23 @@ const screens: RouteObject[] = [
   { path: "decisions", lazy: () => import("../screens/decisions/index.js").then((m) => ({ Component: m.DecisionsScreen })) },
   { path: "payouts", lazy: () => import("../screens/payouts/index.js").then((m) => ({ Component: m.PayoutsScreen })) },
   { path: "access", lazy: () => import("../screens/access/index.js").then((m) => ({ Component: m.AccessScreen })) },
+];
+
+/** A chatter's own part of Workboard (owner, 2026-11-10): their shift reports, sales only — no pay, nobody else's. */
+const chatterScreens: RouteObject[] = [
+  { path: "my/reports", lazy: () => import("../screens/my-reports/index.js").then((m) => ({ Component: m.MyReportsScreen })) },
+];
+
+/**
+ * Every address, each group behind its role guard (RoleGate): a screen of the
+ * team never mounts for a chatter, nor a chatter's for the team — one rule
+ * here, not one per screen. A new chatter screen is one line of `chatterScreens`
+ * and one item of the menu (Shell.tsx).
+ */
+const screens: RouteObject[] = [
+  { index: true, element: <HomeRedirect /> },
+  { element: <RoleGate roles={TEAM} />, children: teamScreens },
+  { element: <RoleGate roles={CHATTER} />, children: chatterScreens },
   // The specimen of packages/ui: the demo and dev servers only, never a production build.
   ...(import.meta.env.DEV
     ? [{ path: "__specimen", lazy: () => import("../screens/specimen/SpecimenScreen.js").then((m) => ({ Component: m.SpecimenScreen })) }]

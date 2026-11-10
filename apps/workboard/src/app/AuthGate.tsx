@@ -1,13 +1,19 @@
 import type { ReactNode } from "react";
 import { Button, EmptyState, ErrorState, Spinner } from "@agency_hub_core/ui";
 import { hubErrorStatus } from "@agency_hub_core/ui/hubClient";
+import { CHATTER_SITE_ORIGIN, CONSOLE_ORIGIN } from "@agency_hub_core/ui/sites";
 import { signInHref } from "@/shared/hub";
 import { useMe } from "@/shared/useMe";
 
 /**
  * Workboard needs the console's session: `me` first. Nobody signed in → the
  * console's sign-in on this host, and back here after it (hub.ts does the
- * redirect on the 401). A chatter has no Workboard: their cabinet is elsewhere.
+ * redirect on the 401). A chatter is let in to their own part of Workboard
+ * (owner, 2026-11-10; the routes and the menu keep them there) — on the
+ * chatters' site. The console's own name is the owner's and the team leads'
+ * door: its sign-in ends a chatter's session (the console's LoginPage), and a
+ * chatter session left from before the names were split opens nothing here
+ * either.
  */
 export function AuthGate({ children }: { children: ReactNode }) {
   const me = useMe();
@@ -40,11 +46,11 @@ export function AuthGate({ children }: { children: ReactNode }) {
     );
   }
 
-  if (me.role === "chatter") {
+  if (me.role === "chatter" && window.location.origin === CONSOLE_ORIGIN) {
     return (
       <div className="wb-gate">
-        <EmptyState title="Workboard — для владельца и тимлидов" action={<a className="ui-btn" href="/account">Открыть кабинет</a>}>
-          Ваш кабинет чаттера — в ChatGoose.
+        <EmptyState title="Это вход для владельца и тимлидов" action={<a className="ui-btn" href={`${CHATTER_SITE_ORIGIN}/account`}>Открыть ChatGoose</a>}>
+          Твой кабинет и отчёты — в ChatGoose.
         </EmptyState>
       </div>
     );

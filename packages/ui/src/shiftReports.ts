@@ -1,12 +1,30 @@
-import type { AccountReport, AccountReportLine } from "@agency_hub_core/contracts";
+import { ACCOUNT_REPORTS_DEFAULT_DAYS, type AccountReport, type AccountReportLine } from "@agency_hub_core/contracts";
+import { addDays, moscowToday, type MoscowDay } from "./moscow.js";
 
-// Pure helpers of the cabinet's «Отчёт смены»: words for the ledger's reports.
-// No React here.
+/**
+ * A chatter's own shift reports (`accountReports`, the agency ledger's
+ * breakdown of each shift) in words, for both screens that show them: the
+ * cabinet's «Отчёт смены» (apps/dashboard) and Workboard's «Мои отчёты». Sales
+ * only, no pay. Times are Moscow's. No React here.
+ */
 
+/** The screens' two windows: the last 14 or 30 Moscow days. */
 export const REPORT_PERIODS = [
   { days: 14, label: "14 дней" },
   { days: 30, label: "30 дней" },
 ] as const;
+
+/** `?days=14|30` of the address; anything else is the default 14. */
+export function reportPeriodOf(raw: string | null | undefined): number {
+  const value = Number(raw);
+  return REPORT_PERIODS.some((period) => period.days === value) ? value : ACCOUNT_REPORTS_DEFAULT_DAYS;
+}
+
+/** The last `days` Moscow days, today included: the query of `accountReports`. */
+export function reportDates(days: number, now: Date = new Date()): { from: MoscowDay; to: MoscowDay } {
+  const to = moscowToday(now);
+  return { from: addDays(to, -(days - 1)), to };
+}
 
 const MSK_OFFSET_MS = 3 * 3_600_000;
 const DAY_MS = 86_400_000;
@@ -49,6 +67,21 @@ export function savedLine(report: Pick<AccountReport, "reportDate" | "savedAt" |
     ? `в ${clockOf(report.savedAt)}`
     : `${dayMonth.format(new Date(`${day}T12:00:00Z`))} в ${clockOf(report.savedAt)}`;
   return `собран ${when} · версия ${report.version} из ${report.versions}`;
+}
+
+/** A report's state (the ledger's `status`) in a word. */
+export const REPORT_STATUS_WORDS = {
+  draft: "Собран",
+  posted: "Отправлен",
+  superseded: "Заменён",
+} as const;
+
+/** What a chatter does with a report that is only composed. */
+export const REPORT_DRAFT_NEXT = "проверь и отправь в Отчётность";
+
+/** The state in a word; an unknown one as it came. */
+export function reportStatusWord(status: string): string {
+  return (REPORT_STATUS_WORDS as Readonly<Record<string, string>>)[status] ?? status;
 }
 
 const KIND_WORDS: Readonly<Record<string, string>> = {

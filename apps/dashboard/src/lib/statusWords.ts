@@ -1,3 +1,5 @@
+import { REPORT_STATUS_WORDS } from "@agency_hub_core/ui/shiftReports";
+
 /**
  * The one dictionary of states (design/design-language.md §2.5): six tones and
  * the word of every state, so no screen keeps a table of its own. A tone answers
@@ -197,11 +199,11 @@ export const REPORT_STATUS = {
   skipped: status("Пропущен", "off"),
 } as const satisfies Record<string, StatusWord>;
 
-/** The cabinet's «Отчёт смены»: a shift report the agent composed (the ledger's status). */
+/** The cabinet's «Отчёт смены»: a shift report the agent composed (the ledger's status; the words are Workboard's too). */
 export const SHIFT_REPORT_STATUS: Readonly<Record<string, StatusWord>> = {
-  draft: status("Собран", "waiting"),
-  posted: status("Отправлен", "good"),
-  superseded: status("Заменён", "off"),
+  draft: status(REPORT_STATUS_WORDS.draft, "waiting"),
+  posted: status(REPORT_STATUS_WORDS.posted, "good"),
+  superseded: status(REPORT_STATUS_WORDS.superseded, "off"),
 };
 
 /** Настройки → Функции ИИ. */
