@@ -7,6 +7,11 @@ import { describe, expect, it, vi } from "vitest";
 import { runMigrations } from "../packages/db/src/migrate-runner.ts";
 
 const TRY_MIGRATION_LOCK_SQL = "select pg_try_advisory_lock($1, $2) as locked";
+const APPLIED_MIGRATIONS_SQL = "select id from schema_migrations";
+
+function appliedRows(ids: string[]) {
+  return { rowCount: ids.length, rows: ids.map((id) => ({ id })) };
+}
 
 function migrationDbMock(run: (text: string) => unknown) {
   return {
@@ -24,11 +29,8 @@ describe("runMigrations", () => {
     const tempDir = await mkdtemp(path.join(tmpdir(), "agency-hub-migrations-cwd-"));
     const originalCwd = process.cwd();
     const db = migrationDbMock((text) => {
-        if (text.includes("select 1 from schema_migrations where id = $1")) {
-          return {
-            rowCount: 1,
-            rows: [],
-          };
+        if (text === APPLIED_MIGRATIONS_SQL) {
+          return appliedRows([]);
         }
 
         return {
@@ -45,10 +47,11 @@ describe("runMigrations", () => {
 
       await expect(runMigrations({ db: db as never })).resolves.toBeUndefined();
       expect(db.query).toHaveBeenCalledWith(expect.stringContaining("create table if not exists schema_migrations"));
-      expect(db.query).toHaveBeenCalledWith(
-        "select 1 from schema_migrations where id = $1",
-        ["9999_cwd.sql"],
-      );
+      expect(db.query).toHaveBeenCalledWith(APPLIED_MIGRATIONS_SQL);
+      // The cwd folder is the one that was read: its only file is applied and recorded.
+      expect(db.query).toHaveBeenCalledWith("insert into schema_migrations (id) values ($1)", ["9999_cwd.sql"]);
+      const recorded = db.query.mock.calls.filter(([text]) => text === "insert into schema_migrations (id) values ($1)");
+      expect(recorded).toHaveLength(1);
     } finally {
       process.chdir(originalCwd);
       await rm(tempDir, { recursive: true, force: true });
@@ -58,11 +61,8 @@ describe("runMigrations", () => {
   it("acquires and releases the advisory lock around direct migration runs", async () => {
     const tempDir = await mkdtemp(path.join(tmpdir(), "agency-hub-migrations-lock-"));
     const db = migrationDbMock((text) => {
-        if (text.includes("select 1 from schema_migrations where id = $1")) {
-          return {
-            rowCount: 1,
-            rows: [],
-          };
+        if (text === APPLIED_MIGRATIONS_SQL) {
+          return appliedRows(["0001_lock_probe.sql"]);
         }
 
         return {
@@ -96,8 +96,8 @@ describe("runMigrations", () => {
           attempts += 1;
           return { rowCount: 1, rows: [{ locked: attempts > 1 }] };
         }
-        if (text.includes("select 1 from schema_migrations where id = $1")) {
-          return { rowCount: 1, rows: [] };
+        if (text === APPLIED_MIGRATIONS_SQL) {
+          return appliedRows(["0001_lock_wait_probe.sql"]);
         }
         return { rowCount: 0, rows: [] };
       }),
@@ -175,11 +175,8 @@ describe("runMigrations", () => {
   it("ignores dotfile SQL metadata in migrations directories", async () => {
     const tempDir = await mkdtemp(path.join(tmpdir(), "agency-hub-migrations-dotfiles-"));
     const db = migrationDbMock((text) => {
-        if (text.includes("select 1 from schema_migrations where id = $1")) {
-          return {
-            rowCount: 1,
-            rows: [],
-          };
+        if (text === APPLIED_MIGRATIONS_SQL) {
+          return appliedRows([]);
         }
 
         return {
@@ -199,13 +196,10 @@ describe("runMigrations", () => {
       })).resolves.toBeUndefined();
 
       expect(db.query).toHaveBeenCalledWith(
-        "select 1 from schema_migrations where id = $1",
+        "insert into schema_migrations (id) values ($1)",
         ["0001_real.sql"],
       );
-      expect(db.query).not.toHaveBeenCalledWith(
-        "select 1 from schema_migrations where id = $1",
-        ["._0001_real.sql"],
-      );
+      expect(db.query).not.toHaveBeenCalledWith(expect.stringContaining("select broken;"));
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }
@@ -240,11 +234,8 @@ describe("runMigrations", () => {
     const tempDir = await mkdtemp(path.join(tmpdir(), "agency-hub-migrations-fallback-"));
     const originalCwd = process.cwd();
     const db = migrationDbMock((text) => {
-        if (text.includes("select 1 from schema_migrations where id = $1")) {
-          return {
-            rowCount: 1,
-            rows: [],
-          };
+        if (text === APPLIED_MIGRATIONS_SQL) {
+          return appliedRows([]);
         }
 
         return {
@@ -258,7 +249,7 @@ describe("runMigrations", () => {
 
       await expect(runMigrations({ db: db as never })).resolves.toBeUndefined();
       expect(db.query).toHaveBeenCalledWith(
-        "select 1 from schema_migrations where id = $1",
+        "insert into schema_migrations (id) values ($1)",
         ["0000_baseline.sql"],
       );
     } finally {
