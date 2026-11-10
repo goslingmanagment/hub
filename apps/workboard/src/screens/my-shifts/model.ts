@@ -1,0 +1,347 @@
+/**
+ * «Мои смены» — what the screen shows, worked out from two reads; pure, no
+ * React (tests/workboard-my-shifts.test.ts). The reads themselves are data.ts.
+ *
+ * - `accountChatterStats` — the chatter's own shifts as Hub saw them in the
+ *   extension: when, worked time, pages, Hub's own sales figure, going on.
+ * - `accountReports` — the chatter's own shift reports as the agency ledger
+ *   keeps them: the window, the total, the pages, the sales and why some were
+ *   held out, the state.
+ *
+ * A shift and its report are one row: the report's total is the shift's one
+ * number (what the chatter stands behind); Hub's figure shows only where there
+ * is no report yet. Sales only — nothing here is pay.
+ */
+import type { AccountReport, ChatterStats } from "@agency_hub_core/contracts";
+import { addDays, daysInRange, moscowDayOf, moscowDayStart, type MoscowDay } from "@agency_hub_core/ui/moscow";
+import { formatDayRange } from "@agency_hub_core/ui/format";
+import type { ResolvedPeriod } from "@agency_hub_core/ui/period";
+import { shiftWhen, type ShiftWhen } from "@agency_hub_core/ui/shiftWhen";
+import { perHourMills } from "../../shared/metrics.js";
+
+export type StatsShift = ChatterStats["shifts"][number];
+
+const DAY_MS = 86_400_000;
+
+/** The longest window `accountChatterStats` reads (Moscow days): a longer own range shows its last days. */
+export const MY_SHIFTS_MAX_DAYS = 31;
+
+// ─────────────────────────────────────────────────────────────── The window
+
+export interface MyShiftsWindow {
+  /** What `accountChatterStats` is asked for. */
+  days: number;
+  until: MoscowDay | undefined;
+  /** The shown Moscow days, both included (a week's days to come are inside, empty). */
+  from: MoscowDay;
+  to: MoscowDay;
+  /** `[startsAt, endsAt)`, ms: Moscow midnight of `from` and of the day after `to`. */
+  startsAt: number;
+  endsAt: number;
+  /** The period is longer than Hub reads: its last MY_SHIFTS_MAX_DAYS days are shown. */
+  clipped: boolean;
+  /**
+   * The report dates to read. A report is dated by the Moscow day its shift
+   * began (the ledger's `report_date`): a night that began the evening before
+   * the window's first day is dated the day before.
+   */
+  reportsFrom: MoscowDay;
+  reportsTo: MoscowDay;
+  /** The whole window before, of the same length, and its report dates (the comparison cuts it: `comparisonOf`). */
+  previous: { startsAt: number; endsAt: number; reportsFrom: MoscowDay; reportsTo: MoscowDay };
+}
+
+/** The window of a period of the app (spec §3: week · 14 · 30 · own range), as of `now`. */
+export function myShiftsWindow(period: ResolvedPeriod, now: number = Date.now()): MyShiftsWindow {
+  const { spec } = period;
+  let days: number;
+  let until: MoscowDay | undefined;
+  let from: MoscowDay;
+  let to: MoscowDay;
+  let clipped = false;
+  if (spec.kind === "week") {
+    // The whole calendar week: its days to come are empty.
+    days = 7;
+    until = addDays(spec.monday, 6);
+    from = spec.monday;
+    to = until;
+  } else if (spec.kind === "days") {
+    days = spec.days;
+    until = undefined;
+    from = period.from;
+    to = period.to;
+  } else {
+    const full = daysInRange(period.from, period.to);
+    days = Math.min(full, MY_SHIFTS_MAX_DAYS);
+    until = period.to;
+    from = addDays(period.to, -(days - 1));
+    to = period.to;
+    clipped = full > days;
+  }
+  const startsAt = Date.parse(moscowDayStart(from));
+  const endsAt = Date.parse(moscowDayStart(addDays(to, 1)));
+  const today = moscowDayOf(now);
+  const previousTo = addDays(from, -1);
+  return {
+    days,
+    until,
+    from,
+    to,
+    startsAt,
+    endsAt,
+    clipped,
+    reportsFrom: addDays(from, -1),
+    reportsTo: to > today ? today : to,
+    previous: {
+      startsAt: startsAt - days * DAY_MS,
+      endsAt: startsAt,
+      reportsFrom: addDays(from, -days - 1),
+      reportsTo: previousTo > today ? today : previousTo,
+    },
+  };
+}
+
+/** What the period's reports are compared with: the window before, as far as it is comparable. */
+export interface Comparison {
+  startsAt: number;
+  endsAt: number;
+  /** «2–3 нояб.». */
+  label: string;
+  /** Cut short of its end: «на это же время». */
+  sameTime: boolean;
+}
+
+/**
+ * The window before, cut at the same point while this one goes on («на это же
+ * время») — and at the start of the shift going on, if there is one: its report
+ * comes only when it ends, so the same shift of the window before is left out
+ * too. A window already over is compared with the whole one before it.
+ */
+export function comparisonOf(window: Pick<MyShiftsWindow, "days" | "previous">, now: number, ongoingStartedAt: string | null): Comparison {
+  const point = ongoingStartedAt === null ? now : Math.min(now, Date.parse(ongoingStartedAt));
+  const endsAt = Math.max(window.previous.startsAt, Math.min(window.previous.endsAt, point - window.days * DAY_MS));
+  return {
+    startsAt: window.previous.startsAt,
+    endsAt,
+    label: formatDayRange(moscowDayOf(window.previous.startsAt), moscowDayOf(Math.max(window.previous.startsAt, endsAt - 1))),
+    sameTime: endsAt < window.previous.endsAt,
+  };
+}
+
+// ──────────────────────────────────────────────────────────────── The rows
+
+/**
+ * The state of a row, in words on the screen:
+ * - `posted` «Отправлен»; `draft` «Собран» — check it and send it (the one to act on);
+ * - `missing` «Отчёта нет» — the shift ended and nobody asked for one (to act on);
+ * - `ongoing` «Идёт» — no report while the shift goes on;
+ * - `unknown` — the reports did not come (the ledger is away): nothing is said per row;
+ * - `other` — a state the ledger added later, in its own word.
+ */
+export type RowState = "posted" | "draft" | "missing" | "ongoing" | "unknown" | "other";
+
+export interface MyShiftRow {
+  /** The shift's start, or `report:<id>` for a report Hub has no shift for. */
+  key: string;
+  /** Hub's shift; null — a report whose shift Hub did not see («смена в Hub не найдена»). */
+  shift: StatsShift | null;
+  /** The shift's report; null — none (yet), or the reports did not come. */
+  report: AccountReport | null;
+  /** The one label of a shift (D12): the shift's own; a report alone — its window's. */
+  when: ShiftWhen;
+  /** Where the shift worked (Hub); a report alone — the report's pages. */
+  pages: string[];
+  /** Hub's worked time; null — a report alone. */
+  workedMinutes: number | null;
+  /** The shift's one number: the report's total; null — no report. */
+  totalMills: number | null;
+  /** Hub's own figure of the shift's sales, shown only where there is no report: null when there is one. */
+  hubMills: number | null;
+  state: RowState;
+}
+
+function windowOf(report: Pick<AccountReport, "windowFrom" | "windowTo">): { from: number; to: number } | null {
+  const from = Date.parse(report.windowFrom);
+  const to = Date.parse(report.windowTo);
+  return Number.isNaN(from) || Number.isNaN(to) || to <= from ? null : { from, to };
+}
+
+/** How long a report's window and a shift ran at the same time, ms. */
+function overlapOf(report: AccountReport, shift: StatsShift): number {
+  const window = windowOf(report);
+  if (window === null) return 0;
+  return Math.max(0, Math.min(window.to, Date.parse(shift.endedAt)) - Math.max(window.from, Date.parse(shift.startedAt)));
+}
+
+/**
+ * Whether a report belongs to `[startsAt, endsAt)`: the middle of its window is
+ * inside — as Hub puts a shift in a window by the middle of its work. A report
+ * without a readable window: its date.
+ */
+export function reportInWindow(report: AccountReport, startsAt: number, endsAt: number): boolean {
+  const window = windowOf(report);
+  if (window === null) {
+    const day = Date.parse(moscowDayStart(report.reportDate));
+    return day >= startsAt && day < endsAt;
+  }
+  const middle = Math.floor((window.from + window.to - 1) / 2);
+  return middle >= startsAt && middle < endsAt;
+}
+
+/**
+ * Which report is which shift's. The ledger dates a report by the day its shift
+ * BEGAN, while a night's own day is the one holding most of it (`shiftWhen`'s
+ * pay day), so the day alone puts a night's report on the night before. Hence:
+ *
+ * 1. a report goes to the shift its window ran at the same time with the
+ *    longest (a tie: the shift with more worked time) — every pair once,
+ *    the longest overlaps first;
+ * 2. a report that overlaps no free shift (the agent's window is the schedule,
+ *    the work was at another hour): the ended shift whose pay day is the
+ *    report's date, of several the one with the most worked time;
+ * 3. a report that still has no shift is a row of its own, when its window
+ *    belongs to this one (`reportInWindow`) — reports of the neighbouring
+ *    windows, read for their nights, are dropped.
+ *
+ * `reports` null: they did not come — every shift is a row, states `unknown`
+ * (a shift going on stays «Идёт»). Newest first, a shift going on first.
+ */
+export function joinShifts(input: {
+  shifts: readonly StatsShift[];
+  reports: readonly AccountReport[] | null;
+  window: Pick<MyShiftsWindow, "startsAt" | "endsAt">;
+}): MyShiftRow[] {
+  const { shifts, reports, window } = input;
+  const reportOfShift = new Map<number, AccountReport>();
+  const placed = new Set<number>();
+
+  if (reports !== null) {
+    // 1. The longest overlaps first.
+    const pairs: Array<{ shift: number; report: number; overlap: number }> = [];
+    shifts.forEach((shift, shiftIndex) => {
+      reports.forEach((report, reportIndex) => {
+        const overlap = overlapOf(report, shift);
+        if (overlap > 0) pairs.push({ shift: shiftIndex, report: reportIndex, overlap });
+      });
+    });
+    pairs.sort((a, b) => b.overlap - a.overlap || shifts[b.shift]!.workedMinutes - shifts[a.shift]!.workedMinutes);
+    for (const pair of pairs) {
+      if (reportOfShift.has(pair.shift) || placed.has(pair.report)) continue;
+      reportOfShift.set(pair.shift, reports[pair.report]!);
+      placed.add(pair.report);
+    }
+    // 2. By the day, for what is left.
+    reports.forEach((report, reportIndex) => {
+      if (placed.has(reportIndex)) return;
+      let best: number | null = null;
+      shifts.forEach((shift, shiftIndex) => {
+        if (shift.ongoing || reportOfShift.has(shiftIndex)) return;
+        if (shiftWhen(shift).payDay !== report.reportDate) return;
+        if (best === null || shift.workedMinutes > shifts[best]!.workedMinutes) best = shiftIndex;
+      });
+      if (best === null) return;
+      reportOfShift.set(best, report);
+      placed.add(reportIndex);
+    });
+  }
+
+  const rows: Array<{ row: MyShiftRow; at: number; ongoing: boolean }> = shifts.map((shift, index) => {
+    const report = reportOfShift.get(index) ?? null;
+    return {
+      row: {
+        key: shift.startedAt,
+        shift,
+        report,
+        when: shiftWhen({ startedAt: shift.startedAt, endedAt: shift.endedAt, ongoing: shift.ongoing, workedMinutes: shift.workedMinutes }),
+        pages: shift.pages,
+        workedMinutes: shift.workedMinutes,
+        totalMills: report?.totalMills ?? null,
+        hubMills: report === null ? shift.salesNetMills : null,
+        state: report !== null ? reportState(report.status) : shift.ongoing ? "ongoing" : reports === null ? "unknown" : "missing",
+      },
+      at: Date.parse(shift.startedAt),
+      ongoing: shift.ongoing,
+    };
+  });
+
+  // 3. The reports of shifts Hub did not see.
+  reports?.forEach((report, reportIndex) => {
+    if (placed.has(reportIndex) || !reportInWindow(report, window.startsAt, window.endsAt)) return;
+    const own = windowOf(report);
+    const day = moscowDayStart(report.reportDate);
+    rows.push({
+      row: {
+        key: `report:${report.id}`,
+        shift: null,
+        report,
+        when: shiftWhen(own === null ? { startedAt: day, endedAt: day } : { startedAt: own.from, endedAt: own.to }),
+        pages: report.pages.map((page) => page.pageLabel),
+        workedMinutes: null,
+        totalMills: report.totalMills,
+        hubMills: null,
+        state: reportState(report.status),
+      },
+      at: own?.from ?? Date.parse(day),
+      ongoing: false,
+    });
+  });
+
+  return rows.sort((a, b) => Number(b.ongoing) - Number(a.ongoing) || b.at - a.at).map((one) => one.row);
+}
+
+function reportState(status: string): RowState {
+  return status === "posted" ? "posted" : status === "draft" ? "draft" : "other";
+}
+
+// ─────────────────────────────────────────────────────────────── The facts
+
+export interface MyShiftsFacts {
+  /** Rows: Hub's shifts and the reports Hub has no shift for. */
+  shifts: number;
+  /** Hub's worked time of the shifts, pauses left out. */
+  workedMinutes: number;
+  /** The sum of the report totals; null — the reports did not come. */
+  reportedMills: number | null;
+  /** The report totals of shifts with a report over their worked time; null — no such shift. */
+  perHourMills: number | null;
+  /** Ended shifts with no report: the one thing to act on. 0 while the reports are unknown. */
+  withoutReport: number;
+  /** Reports to check and send («Собран»). */
+  drafts: number;
+}
+
+export function factsOf(rows: readonly MyShiftRow[], reportsKnown: boolean): MyShiftsFacts {
+  let workedMinutes = 0;
+  let reportedMills = 0;
+  let pairedMills = 0;
+  let pairedMinutes = 0;
+  for (const row of rows) {
+    workedMinutes += row.workedMinutes ?? 0;
+    reportedMills += row.totalMills ?? 0;
+    if (row.shift !== null && row.report !== null) {
+      pairedMills += row.report.totalMills;
+      pairedMinutes += row.shift.workedMinutes;
+    }
+  }
+  return {
+    shifts: rows.length,
+    workedMinutes,
+    reportedMills: reportsKnown ? reportedMills : null,
+    perHourMills: reportsKnown ? perHourMills(pairedMills, pairedMinutes) : null,
+    withoutReport: rows.filter((row) => row.state === "missing").length,
+    drafts: rows.filter((row) => row.state === "draft").length,
+  };
+}
+
+/**
+ * The sum of the report totals of the window before (`comparisonOf`), to
+ * compare with; null — nothing to compare with: the reports did not come, or
+ * none of that window is in the ledger (the reports began later: unknown, never
+ * a zero).
+ */
+export function previousReportedMills(reports: readonly AccountReport[] | null, previous: Pick<Comparison, "startsAt" | "endsAt">): number | null {
+  if (reports === null || previous.endsAt <= previous.startsAt) return null;
+  const inside = reports.filter((report) => reportInWindow(report, previous.startsAt, previous.endsAt));
+  if (inside.length === 0) return null;
+  return inside.reduce((sum, report) => sum + report.totalMills, 0);
+}

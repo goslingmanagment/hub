@@ -18,9 +18,10 @@ export const chatterStatsRouteSchemas = {
     auth: { kind: "any-session" },
     tags: ["client"],
     summary: "The caller's own statistics: the money of their shifts, how they write and sell, their records",
-    description: "The chatter's cabinet; read-only, database only. Shifts are the caller's actual shifts (by the chat "
-      + "extension) that began in the last `days` Moscow days, on the pages they work now; a shift's money is the net of "
-      + "the sales on a page they had open during it. A guide, not a basis for pay.",
+    description: "Workboard's «Мои смены»; read-only, database only, the session's user only. Shifts are the caller's "
+      + "actual shifts (by the chat extension) of the `days` Moscow days up to `until` (default today), on the pages "
+      + "they work now; a shift's money is the net of the sales on a page they had open during it. A guide, not a "
+      + "basis for pay.",
     querystring: accountChatterStatsQuerySchema,
     response: { 200: chatterStatsSchema, ...errors },
   },

@@ -26,8 +26,8 @@ function NotForChatter() {
   useWorkboardTitle();
   return (
     <div className="wb-content">
-      <EmptyState title="Этот раздел — для владельца и тимлидов" action={<LinkButton variant="primary" to={homePath("chatter")}>Мои отчёты</LinkButton>}>
-        Твои отчёты по сменам — в «Моих отчётах».
+      <EmptyState title="Этот раздел — для владельца и тимлидов" action={<LinkButton variant="primary" to={homePath("chatter")}>Мои смены</LinkButton>}>
+        Твои смены и отчёты по ним — в «Моих сменах».
       </EmptyState>
     </div>
   );
@@ -38,7 +38,7 @@ function ForChatterOnly() {
   return (
     <div className="wb-content">
       <EmptyState title="Это раздел чаттера" action={<LinkButton to={homePath("owner")}>К сменам</LinkButton>}>
-        Здесь чаттер видит свои отчёты по сменам. У вашей учётной записи их нет.
+        Здесь чаттер видит свои смены и отчёты по ним. У вашей учётной записи их нет.
       </EmptyState>
     </div>
   );

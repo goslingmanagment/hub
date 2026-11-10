@@ -18,7 +18,7 @@ export function registerChatterStatsRoutes(server: ApiServer, ctx: ApiModuleCont
     schema: routeSchemas.accountChatterStats,
   }, async (request): Promise<ChatterStats> => {
     const principal = await requirePrincipal(request);
-    return readAccountChatterStats(appContext, principal, { days: request.query.days });
+    return readAccountChatterStats(appContext, principal, { days: request.query.days, until: request.query.until });
   });
 
   server.get("/api/v1/team/chatter-stats", {

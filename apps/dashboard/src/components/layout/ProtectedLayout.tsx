@@ -5,9 +5,10 @@ import { useAuthMe, usePages } from "@/api/queries";
 import { KernelApiError } from "@/api/sdk";
 import { ErrorBoundary } from "@/components/shared/ErrorBoundary";
 import { QueryNotice } from "@/components/shared/QueryNotice";
-import { CHATTER_HOME, buildLoginRoute, chatterExit } from "@/lib/navigation";
+import { CABINET_PATH, buildLoginRoute, chatterExit, isWorkboardPath } from "@/lib/navigation";
 import { isPaletteShortcut } from "@/lib/paletteShortcut";
 import { isChatterSite } from "@/lib/sites";
+import { LeaveForWorkboard } from "@/routes/ToWorkboard";
 import { DashboardShellProvider } from "./DashboardShellContext.js";
 import { Sidebar } from "./Sidebar.js";
 
@@ -66,10 +67,10 @@ function MobileNavigation({ user, close, onOpenPalette }: {
 // The chatters' site serves /account, /join and /login of this app and nothing
 // else, so a console route is reachable there only from inside the app — the
 // catch-all, for one. Whoever arrives that way, of any role, is taken to their
-// cabinet before the console asks the kernel for anything: the console has a
+// account page before the console asks the kernel for anything: the console has a
 // name of its own.
 export function ProtectedLayout() {
-  if (isChatterSite()) return <Navigate to={CHATTER_HOME} replace />;
+  if (isChatterSite()) return <Navigate to={CABINET_PATH} replace />;
   return <ConsoleLayout />;
 }
 
@@ -123,11 +124,13 @@ function ConsoleLayout() {
   </div>;
 
   // Every page behind this layout is owner or team-lead work and
-  // answers 403 for a chatter. Send them to their own cabinet instead of
-  // rendering a console full of refusals — or, on the console's own name,
-  // where there is no cabinet, to the sign-in page that turns them away.
+  // answers 403 for a chatter. Send them to their own home — «Мои смены» in
+  // Workboard, another app: a page load — instead of rendering a console full
+  // of refusals; or, on the console's own name, to the sign-in page that turns
+  // them away.
   if (data.user.role === "chatter") {
-    return <Navigate to={chatterExit()} replace />;
+    const exit = chatterExit();
+    return isWorkboardPath(exit) ? <LeaveForWorkboard href={exit} /> : <Navigate to={exit} replace />;
   }
 
   const shellValue = {

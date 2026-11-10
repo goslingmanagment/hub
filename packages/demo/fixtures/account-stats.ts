@@ -78,11 +78,17 @@ function statsSale(sale: DemoSale) {
   };
 }
 
-export function chatterStats(world: DemoChatterWorld, days: number): ChatterStats {
+/**
+ * `days` Moscow days up to `until` (default today; at most the days that keep
+ * today inside the window: the days to come are listed empty), cut at now — as Hub.
+ */
+export function chatterStats(world: DemoChatterWorld, days: number, until?: string): ChatterStats {
   const { user, now, today } = world;
-  const firstDay = addDays(today, -(days - 1));
-  const windowDays = dayRange(firstDay, today);
-  const inWindow = (shift: DemoShift) => shift.date >= firstDay && shift.date <= today;
+  const latest = addDays(today, days - 1);
+  const lastDay = until === undefined ? today : until > latest ? latest : until;
+  const firstDay = addDays(lastDay, -(days - 1));
+  const windowDays = dayRange(firstDay, lastDay);
+  const inWindow = (shift: DemoShift) => shift.date >= firstDay && shift.date <= lastDay;
   const shifts = world.shifts.filter((shift) => !shift.visit && inWindow(shift));
   const visits = world.shifts.filter((shift) => shift.visit && inWindow(shift));
   const sales = shifts.flatMap((shift) => shift.sales);
@@ -182,7 +188,7 @@ export function chatterStats(world: DemoChatterWorld, days: number): ChatterStat
     user: { userId: user.id, username: user.username },
     days,
     from: iso(new Date(mskMidnight(firstDay))),
-    to: iso(new Date(now)),
+    to: iso(new Date(Math.min(now, mskMidnight(addDays(lastDay, 1))))),
     activitySince: world.activitySince === null ? null : iso(new Date(world.activitySince)),
     totals: {
       ...totalsOf(shifts),

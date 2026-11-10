@@ -249,7 +249,9 @@ export const accountHandlers: DemoHandlers = {
   accountChatterStats: (request) => {
     const days = daysOf(request, 31, 7);
     if (days === null) return demoError(400, "Bad Request", "querystring/days must be an integer from 1 to 31");
-    return chatterStats(worldOf(request), days);
+    const until = queryString(request, "until");
+    if (until !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(until)) return demoError(400, "Bad Request", "querystring/until must be a date YYYY-MM-DD");
+    return chatterStats(worldOf(request), days, until);
   },
   accountShiftReport: shiftReport,
   accountReports,

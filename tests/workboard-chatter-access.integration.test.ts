@@ -2,7 +2,7 @@ import { createServer, type Server } from "node:http";
 
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
-import { accountReportsResponseSchema } from "@agency_hub_core/contracts";
+import { accountReportsResponseSchema, chatterStatsSchema } from "@agency_hub_core/contracts";
 
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
@@ -12,11 +12,12 @@ import { listenOnLoopback } from "./helpers/network.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 import { fixtureUserId } from "./helpers/user-identity.ts";
 
-// Workboard lets a chatter in, to a part of their own (owner, 2026-11-10): their
-// shift reports. The app keeps them out of the team's screens, but the wall is
-// Hub's: every read and write the owner's and team leads' screens send
-// (apps/workboard/src/screens/*/data.ts, shared/reads.ts, shared/decisions.ts)
-// refuses a chatter's session, and only `accountReports` answers it.
+// Workboard lets a chatter in, to a part of their own (owner, 2026-11-10): «Мои
+// смены», their shifts with their reports. The app keeps them out of the team's
+// screens, but the wall is Hub's: every read and write the owner's and team
+// leads' screens send (apps/workboard/src/screens/*/data.ts, shared/reads.ts,
+// shared/decisions.ts) refuses a chatter's session, and only their own reads —
+// `accountChatterStats` and `accountReports` — answer it.
 
 vi.mock("argon2", () => import("./helpers/cheap-argon2.ts"));
 
@@ -175,6 +176,20 @@ describe("a chatter in Workboard", () => {
       const status = (await server.inject({ method: "GET", url, headers: { cookie: cookies.owner! } })).statusCode;
       expect([401, 403], `${operation} answered the owner ${status}`).not.toContain(status);
     }
+  });
+
+  it("reads the chatter's own shifts, of a past week too", async (context) => {
+    if (!testDb || !server) return context.skip();
+    const response = await server.inject({ method: "GET", url: "/api/v1/account/stats?days=7&until=2026-11-08", headers: { cookie: cookies.nikita! } });
+    expect(response.statusCode, response.body).toBe(200);
+    const body = chatterStatsSchema.parse(response.json());
+    // The session's user, whatever the query; the week Monday 2 – Sunday 8 November, Moscow.
+    expect({ userId: body.user.userId, from: body.from, to: body.to, days: body.daily.map((day) => day.date) }).toEqual({
+      userId: users.nikita,
+      from: "2026-11-01T21:00:00.000Z",
+      to: "2026-11-08T21:00:00.000Z",
+      days: ["2026-11-02", "2026-11-03", "2026-11-04", "2026-11-05", "2026-11-06", "2026-11-07", "2026-11-08"],
+    });
   });
 
   it("reads the chatter's own reports", async (context) => {

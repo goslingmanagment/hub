@@ -42,7 +42,7 @@ import {
 import { DELAY_BOUNDS, byDelayOf, byPriceOf } from "./team-sales.ts";
 
 /**
- * A chatter's statistics: the cabinet's «Статистика» (`accountChatterStats`,
+ * A chatter's statistics: Workboard's «Мои смены» (`accountChatterStats`,
  * the caller's own) and the same for the owner and team leads
  * (`teamChatterStats`). Contract: packages/contracts chatter-stats.ts.
  *
@@ -188,33 +188,53 @@ function fansOf(shift: { endedAt: number }, sends: readonly AuthoredSendRow[], s
   return { written: [...firstTo.keys()], paid: [...paid] };
 }
 
+/**
+ * The window of `days` Moscow days ending on `until` (default today; at most the
+ * days that keep today inside it), cut at `now` — the rule of `teamShiftSales`
+ * (team-shift-sales.ts `shiftSalesWindow`), so a chatter's week is the owner's
+ * week. The window before is the `days` whole days right before it. Pure.
+ */
+export function statsWindow(input: { days: number; now: Date; until?: string | undefined }): { from: Date; to: Date; previousFrom: Date } {
+  const { days, now } = input;
+  const today = moscowDayOf(now.getTime());
+  const latest = moscowDayOf(addUtcDays(startOfBusinessDay(now), days - 1).getTime());
+  const asked = input.until ?? today;
+  const lastDay = asked > latest ? latest : asked;
+  const from = addUtcDays(new Date(Date.parse(`${lastDay}T00:00:00+03:00`)), -(days - 1));
+  return {
+    from,
+    to: new Date(Math.min(now.getTime(), from.getTime() + days * DAY_MS)),
+    previousFrom: addUtcDays(from, -days),
+  };
+}
+
 export async function computeChatterStats(
   db: Database,
-  input: { userId: number; username: string; pages: readonly StatsPage[]; days: number; now: Date },
+  input: { userId: number; username: string; pages: readonly StatsPage[]; days: number; until?: string | undefined; now: Date },
 ): Promise<ChatterStats> {
   const { userId, now } = input;
-  const from = addUtcDays(startOfBusinessDay(now), -(input.days - 1));
-  const previousFrom = addUtcDays(from, -input.days);
+  const { from, to, previousFrom } = statsWindow(input);
   // A reply's day for a purchase must be over (as «Продажи»).
-  const repliesTo = new Date(Math.max(now.getTime() - DAY_MS, from.getTime()));
+  const repliesTo = new Date(Math.max(Math.min(to.getTime(), now.getTime() - DAY_MS), from.getTime()));
   const pageIds = input.pages.map((page) => page.pageId);
-  // A day more, so a shift of the window's first day that began the evening before is whole.
+  // A day more on each side, so a shift the window's edge cuts is whole.
   const readFrom = new Date(previousFrom.getTime() - DAY_MS);
+  const readTo = new Date(Math.min(now.getTime(), to.getTime() + DAY_MS));
 
   const [activitySince, people] = await Promise.all([
     findFirstChatterActivity(db, userId),
-    readPeopleWork(db, { from: readFrom, to: now, now, pages: pageIds, userId }),
+    readPeopleWork(db, { from: readFrom, to: readTo, now, pages: pageIds, userId }),
   ]);
-  const work = (people.get(userId)?.work ?? []).filter((one) => middleOfWork(one) >= previousFrom.getTime());
-  const sales = work.length === 0 ? [] : await listShiftSales(db, { pageIds, from: readFrom, to: now });
+  const work = (people.get(userId)?.work ?? []).filter((one) => middleOfWork(one) >= previousFrom.getTime() && middleOfWork(one) < to.getTime());
+  const sales = work.length === 0 ? [] : await listShiftSales(db, { pageIds, from: readFrom, to: readTo });
   const held = work.map((one) => ({ work: one, sales: sales.filter((sale) => workHoldsShiftSale(one, sale)) }));
   const heldSales = held.flatMap((one) => one.sales);
 
   const [team, sendsRead, ppvRows, replyRows, reports] = await Promise.all([
     // Whose shifts hold these sales too.
-    heldSales.length === 0 ? Promise.resolve(new Map<number, PersonWork>()) : readPeopleWork(db, { from: readFrom, to: now, now, pages: pageIds }),
-    listAuthoredSends(db, { userId, pageIds, from: new Date(from.getTime() - DAY_MS), to: now }),
-    listPpvFacts(db, { from, to: now, pages: pageIds, burstMinFans: MASS_SEND_MIN_CHATS }),
+    heldSales.length === 0 ? Promise.resolve(new Map<number, PersonWork>()) : readPeopleWork(db, { from: readFrom, to: readTo, now, pages: pageIds }),
+    listAuthoredSends(db, { userId, pageIds, from: new Date(from.getTime() - DAY_MS), to: readTo }),
+    listPpvFacts(db, { from, to, pages: pageIds, burstMinFans: MASS_SEND_MIN_CHATS }),
     repliesTo <= from
       ? Promise.resolve([])
       : listReplyDelayCounts(db, { from, to: repliesTo, pages: pageIds, burstMinFans: MASS_SEND_MIN_CHATS, delayBounds: DELAY_BOUNDS }),
@@ -250,7 +270,7 @@ export async function computeChatterStats(
   for (const sale of currentSales) {
     if (settled(sale) === "both") together.set(sale.transactionId, othersOf.get(sale.transactionId)!.map((otherId) => usernames.get(otherId)!));
   }
-  const sends = sendsRead.filter((send) => send.at >= from);
+  const sends = sendsRead.filter((send) => send.at >= from && send.at < to);
   const salesByFan = new Map<string, ShiftSale[]>();
   for (const sale of sales) if (sale.fanRef !== null) push(salesByFan, `${sale.pageId}:${sale.fanRef}`, sale);
   const confirmations = revenueOfShifts(work, current.map((one) => one.work), reports);
@@ -363,7 +383,7 @@ export async function computeChatterStats(
     user: { userId, username: input.username },
     days: input.days,
     from: from.toISOString(),
-    to: now.toISOString(),
+    to: to.toISOString(),
     activitySince: activitySince?.toISOString() ?? null,
     totals: {
       shifts: shifts.length,
@@ -428,10 +448,10 @@ export async function computeChatterStats(
 }
 
 /** The caller's own statistics, on the pages they work now. Any cookie session. */
-export async function readAccountChatterStats(app: AppContext, principal: AuthPrincipal, input: { days: number }): Promise<ChatterStats> {
+export async function readAccountChatterStats(app: AppContext, principal: AuthPrincipal, input: { days: number; until?: string | undefined }): Promise<ChatterStats> {
   requireSessionUser(principal);
   const pages = principal.user.assignedPages.map((page) => ({ pageId: page.id, label: page.label, platform: page.platform }));
-  return computeChatterStats(app.db, { userId: principal.user.id, username: principal.user.username, pages, days: input.days, now: new Date() });
+  return computeChatterStats(app.db, { userId: principal.user.id, username: principal.user.username, pages, days: input.days, until: input.until, now: new Date() });
 }
 
 /** A chatter's statistics for the owner and team leads: the chatter's pages the viewer reaches. */
@@ -449,6 +469,6 @@ export async function readTeamChatterStats(
   const pages = (await listUserPageAssignments(app.db, chosen.userId))
     .filter((page) => scope === undefined || scope.includes(page.pageId))
     .map((page) => ({ pageId: page.pageId, label: page.label, platform: page.platform }));
-  const stats = await computeChatterStats(app.db, { userId: chosen.userId, username: chosen.username, pages, days: input.query.days, now });
+  const stats = await computeChatterStats(app.db, { userId: chosen.userId, username: chosen.username, pages, days: input.query.days, until: input.query.until, now });
   return { people, stats, serverNow: now.toISOString() };
 }
