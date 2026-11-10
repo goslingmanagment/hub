@@ -1,4 +1,5 @@
 import type { AccountReport, AccountReportLine } from "@agency_hub_core/contracts";
+import { REPORT_DRAFT_NEXT, REPORT_PERIODS, clockOf, fanOf, kindWord, reasonText, reportDay, reportPeriodOf, reportWindow, savedLine, splitLines } from "@agency_hub_core/ui/shiftReports";
 import { ChevronDown } from "lucide-react";
 import { useSearchParams } from "react-router";
 
@@ -9,18 +10,11 @@ import { Skeleton } from "@/components/ui/Skeleton";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { formatMills } from "@/lib/format";
 import { SHIFT_REPORT_STATUS } from "@/lib/statusWords";
-import { REPORT_PERIODS, clockOf, fanOf, kindWord, reasonText, reportDay, reportWindow, savedLine, splitLines } from "./reportsView.js";
 
 // «Отчёт смены» in the cabinet: the chatter's own shift reports as the team's
 // chat agent composed them at the end of each shift, read from the agency
 // ledger. The newest first, each a card that opens to its sales: what is in the
 // total and what was held out, and why. Sales only, no pay.
-
-/** `?days=14|30`; anything else is 14. */
-function daysOf(raw: string | null): number {
-  const value = Number(raw);
-  return REPORT_PERIODS.some((period) => period.days === value) ? value : 14;
-}
 
 function LineRow({ line }: { line: AccountReportLine }) {
   const fan = fanOf(line);
@@ -56,7 +50,7 @@ function ReportCard({ report }: { report: AccountReport }) {
             </h2>
             <p className="rp-state">
               {status ? <StatusBadge status={status} /> : <StatusBadge tone="off">{report.status}</StatusBadge>}
-              {report.status === "draft" && <span>проверь и отправь в Отчётность</span>}
+              {report.status === "draft" && <span>{REPORT_DRAFT_NEXT}</span>}
             </p>
           </div>
           <div className="rp-total">
@@ -93,7 +87,7 @@ function ReportCard({ report }: { report: AccountReport }) {
 
 export function ShiftReports() {
   const [params, setParams] = useSearchParams();
-  const days = daysOf(params.get("days"));
+  const days = reportPeriodOf(params.get("days"));
   const reports = useMyReports(days);
   const pick = (next: number) => {
     const query = new URLSearchParams(params);

@@ -1,4 +1,4 @@
-import { ArrowLeft, Banknote, CalendarClock, Inbox, KeyRound, LogOut, Monitor, Moon, Sun, TrendingUp, Users } from "lucide-react";
+import { ArrowLeft, Banknote, CalendarClock, FileText, Inbox, KeyRound, LogOut, Monitor, Moon, Sun, TrendingUp, Users } from "lucide-react";
 import { Suspense, type ReactNode } from "react";
 import { NavLink, Navigate, Outlet, useLocation, useMatches, type UIMatch } from "react-router";
 import { CountBadge, ErrorState, Menu, Skeleton, Tooltip, type IconComponent } from "@agency_hub_core/ui";
@@ -6,7 +6,7 @@ import { THEME_OPTIONS, useThemeStore, type ThemePreference } from "@agency_hub_
 import { kernel, queryClient, signInHref } from "@/shared/hub";
 import { carryParams } from "@/shared/links";
 import { decisionParts, decisionsElsewhereText, decisionsFailedText, useDecisionCounts } from "@/shared/decisions";
-import { useMe } from "@/shared/useMe";
+import { CHATTER, OWNER, TEAM, useMe, type Role } from "@/shared/useMe";
 import { usePageFilter } from "@/shared/usePageFilter";
 import { useRestoredPeriod } from "@/shared/usePeriod";
 import { useScrollMemory } from "@/shared/scroll";
@@ -17,29 +17,47 @@ interface NavItem {
   to: string;
   label: string;
   icon: IconComponent;
-  ownerOnly?: boolean;
+  /** Who sees it (shared/useMe.ts); its screen is behind the same roles (routes.tsx). */
+  roles: readonly Role[];
 }
 
 /**
  * The sidebar, by work (spec §3). Labels are final unless the owner renames
  * them. Every item carries the period and the page filter (spec §3 r2, D3): a
  * screen that does not need them keeps them in its address and does not show
- * them, so the next screen opens on the same dates.
+ * them, so the next screen opens on the same dates. The team (the owner and
+ * team leads) and a chatter see their own items only: a chatter's part of
+ * Workboard is theirs alone (owner, 2026-11-10).
  */
 const WORK: readonly NavItem[] = [
-  { to: "/shifts", label: "Смены", icon: CalendarClock },
-  { to: "/people", label: "Люди", icon: Users },
-  { to: "/sales", label: "Что продаёт", icon: TrendingUp },
-  { to: "/decisions", label: "Решения", icon: Inbox },
-  { to: "/payouts", label: "Выплаты", icon: Banknote },
+  { to: "/my/reports", label: "Мои отчёты", icon: FileText, roles: CHATTER },
+  { to: "/shifts", label: "Смены", icon: CalendarClock, roles: TEAM },
+  { to: "/people", label: "Люди", icon: Users, roles: TEAM },
+  { to: "/sales", label: "Что продаёт", icon: TrendingUp, roles: TEAM },
+  { to: "/decisions", label: "Решения", icon: Inbox, roles: TEAM },
+  { to: "/payouts", label: "Выплаты", icon: Banknote, roles: TEAM },
 ];
 
 const ADMIN: readonly NavItem[] = [
-  { to: "/access", label: "Доступ", icon: KeyRound, ownerOnly: true },
+  { to: "/access", label: "Доступ", icon: KeyRound, roles: OWNER },
+];
+
+/**
+ * The way out to the other app on this host (a page load): the console for the
+ * team, the cabinet for a chatter — their statistics, devices and password.
+ */
+const EXITS: readonly { href: string; label: string; roles: readonly Role[] }[] = [
+  { href: "/", label: "Hub", roles: TEAM },
+  { href: "/account", label: "Кабинет", roles: CHATTER },
 ];
 
 const ROLE_WORD: Record<string, string> = { owner: "Владелец", team_lead: "Тимлид", chatter: "Чаттер" };
 const THEME_ICON: Record<ThemePreference, IconComponent> = { system: Monitor, light: Sun, dark: Moon };
+
+/** The items of a list that `role` sees. */
+function seenBy<T extends { roles: readonly Role[] }>(items: readonly T[], role: Role | null): T[] {
+  return role === null ? [] : items.filter((item) => item.roles.includes(role));
+}
 
 function Brand() {
   return (
@@ -170,27 +188,30 @@ export function ScreenFallback() {
  * sidebar.
  */
 export function Shell() {
-  const { isOwner } = useMe();
+  const { role } = useMe();
   const location = useLocation();
-  // A bare address opens the period last used in this tab (D3); the address then says it.
-  const restored = useRestoredPeriod();
+  // A bare address opens the period last used in this tab (D3); the address then says it. The team's
+  // period: a chatter's screen keeps its own window in its address, and nothing of the team's is remembered for it.
+  const restored = useRestoredPeriod(role !== "chatter");
   // «←» comes back to the same place of the page; a new screen opens at its top (D16).
   useScrollMemory();
   const screenKey = useScreenKey();
   return (
-    <div className="wb-app">
+    <div className="wb-app" data-part={role === "chatter" ? "chatter" : undefined}>
       <aside className="wb-side">
         <Brand />
         <nav aria-label="Разделы Workboard" className="wb-nav">
-          {WORK.map((item) => (
+          {seenBy(WORK, role).map((item) => (
             <NavRow key={item.to} item={item} end={item.to === "/decisions" ? <DecisionsCount /> : undefined} />
           ))}
           <div className="wb-nav__sep" role="separator" />
-          {ADMIN.filter((item) => isOwner || !item.ownerOnly).map((item) => <NavRow key={item.to} item={item} />)}
-          <a href="/" className="wb-nav__item wb-nav__item--quiet">
-            <ArrowLeft size={18} strokeWidth={1.75} aria-hidden className="wb-nav__icon" />
-            <span className="wb-nav__label">Hub</span>
-          </a>
+          {seenBy(ADMIN, role).map((item) => <NavRow key={item.to} item={item} />)}
+          {seenBy(EXITS, role).map((exit) => (
+            <a key={exit.href} href={exit.href} className="wb-nav__item wb-nav__item--quiet">
+              <ArrowLeft size={18} strokeWidth={1.75} aria-hidden className="wb-nav__icon" />
+              <span className="wb-nav__label">{exit.label}</span>
+            </a>
+          ))}
         </nav>
         <div className="wb-side__foot">
           <Account />

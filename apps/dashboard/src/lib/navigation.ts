@@ -163,12 +163,22 @@ export function chatterExit(): string {
 /**
  * Where a signed-in principal belongs. A chatter has no owner page to return
  * to — every one of them answers 403 — so a remembered `next` never overrides
- * the cabinet for them. On the chatters' site that holds for every role: the
- * console is not served on that name, so the cabinet is the only home there.
- * Elsewhere every other role keeps the requested destination.
+ * the cabinet for them, with one exception: Workboard, which has a part of
+ * their own (owner, 2026-11-10), so a chatter sent to sign in from it goes
+ * back there. On the chatters' site the cabinet is every other role's only
+ * home: the console is not served on that name. Elsewhere every other role
+ * keeps the requested destination. `requested` has passed
+ * `resolveLoginReturnPath`: a path of this host.
  */
 export function resolveRoleHome(role: string, requested: string): string {
-  return isChatterSite() || role === "chatter" ? CHATTER_HOME : requested;
+  if (role === "chatter") return opensWorkboard(requested) ? requested : CHATTER_HOME;
+  return isChatterSite() ? CHATTER_HOME : requested;
+}
+
+/** A path into Workboard as the browser will open it: `/workboard/../settings` is the console's /settings. */
+function opensWorkboard(path: string): boolean {
+  if (!isSafeInAppPath(path)) return false;
+  return isWorkboardPath(new URL(path, "https://hub.invalid").pathname);
 }
 
 export function resolveFanProfileBackTarget(

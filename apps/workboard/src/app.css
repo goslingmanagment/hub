@@ -638,6 +638,8 @@
 
     .wb-app {
       grid-template-columns: minmax(0, 1fr);
+      /* The strip keeps its height on a short screen: the window's rest is the screen's. */
+      grid-template-rows: auto 1fr;
     }
 
     .wb-side {
@@ -685,6 +687,22 @@
     }
 
     .wb-filter-slot {
+      display: none;
+    }
+  }
+
+  /* A chatter looks from a phone: their two items and the menu (theme, sign out) fit the strip. */
+  @media (max-width: 640px) {
+    .wb-app[data-part="chatter"] .wb-nav__item {
+      gap: 8px;
+      padding: 0 8px;
+    }
+
+    .wb-app[data-part="chatter"] .wb-account {
+      padding-left: 0;
+    }
+
+    .wb-app[data-part="chatter"] .wb-account__avatar {
       display: none;
     }
   }

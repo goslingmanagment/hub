@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ChangePasswordBody } from "@agency_hub_core/contracts";
-import { MOSCOW_TIME_ZONE, toBusinessDate } from "@agency_hub_core/shared";
+import { reportDates } from "@agency_hub_core/ui/shiftReports";
 
 import { kernel } from "./sdk.js";
 
@@ -69,20 +69,11 @@ export function useMyUsage(params: { from?: string; to?: string } = {}) {
   });
 }
 
-const DAY_MS = 86_400_000;
-
-/** The last `days` Moscow days, today included. */
-function lastDays(days: number): { from: string; to: string } {
-  const to = toBusinessDate(new Date(), MOSCOW_TIME_ZONE);
-  const from = new Date(Date.parse(`${to}T00:00:00Z`) - (days - 1) * DAY_MS).toISOString().slice(0, 10);
-  return { from, to };
-}
-
 /** The caller's own shift reports from the agency ledger (`accountReports`): the cabinet's «Отчёт смены». */
 export function useMyReports(days: number) {
   return useQuery({
     queryKey: ["account", "reports", days],
-    queryFn: () => kernel.accountReports({ query: lastDays(days) }),
+    queryFn: () => kernel.accountReports({ query: reportDates(days) }),
     placeholderData: (previous) => previous,
     staleTime: 60_000,
   });
