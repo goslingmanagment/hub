@@ -681,14 +681,21 @@ export interface SyncWsWindowReceipt {
 /**
  * The receipts received in [from, to) of the given pages (all Fansly pages
  * when omitted), in id order, at most `limit` after `afterId`. Paged by the
- * caller through `afterId`.
+ * caller through `afterId`. `skipIds`: receipts left out of the answer (and
+ * of the join to their bodies) — the window itself, its floor included, is
+ * the same with or without them.
  */
 export async function listSyncWsReceiptsInWindow(
   db: Database,
-  input: { from: Date; to: Date; pageIds?: readonly number[]; afterId?: number; limit: number },
+  input: {
+    from: Date; to: Date; pageIds?: readonly number[]; afterId?: number; limit: number; skipIds?: readonly number[];
+  },
 ): Promise<SyncWsWindowReceipt[]> {
   if (!Number.isSafeInteger(input.limit) || input.limit <= 0) throw new Error(`limit must be positive, received ${input.limit}`);
   const pages = input.pageIds === undefined ? sql`true` : sql`r.page_id = any(${sql.param([...input.pageIds])}::bigint[])`;
+  const skipped = input.skipIds === undefined || input.skipIds.length === 0
+    ? sql`true`
+    : sql`r.observation_id <> all(${sql.param([...input.skipIds])}::bigint[])`;
   const result = await db.execute<{
     observationId: string;
     pageId: string;
@@ -708,6 +715,7 @@ export async function listSyncWsReceiptsInWindow(
        and r.received_at >= ${input.from}::timestamptz
        and r.received_at < ${input.to}::timestamptz
        and ${pages}
+       and ${skipped}
      order by r.observation_id
      limit ${input.limit}
   `);
