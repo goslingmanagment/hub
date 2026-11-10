@@ -28,11 +28,9 @@ docs/*
 docs/runbooks/*
 !docs/error-handling.md
 !docs/runbooks/desktop-lifecycle-v2-cutover.md
-# Tracked because a test executes its command lines against the real contract:
-# an enablement runbook whose smoke test has drifted is worse than none.
+# Agent read plane enablement runbook.
 !docs/runbooks/agent-read-plane-enablement.md
-# The Fansly Sync Engine's operator runbook. Tracked because tests parse its
-# command lines against the real CLI and run its SQL on the migrated schema.
+# The Fansly Sync Engine's operator runbook.
 !docs/runbooks/sync.md
 # Operational acceptance for the OFAPI vendor transport and bounded recovery.
 !docs/runbooks/ofapi-posts-transport-recovery.md
@@ -42,9 +40,7 @@ docs/runbooks/*
 !docs/runbooks/ofapi-credit-reconciliation.md
 # AI media describer: switches, stops, custody exception and read-only checks.
 !docs/runbooks/ai-media-describe.md
-# Read-only production storage census. Tracked because a test runs its SQL
-# on the migrated schema: a census that no longer parses is found in CI, not
-# on the server.
+# Read-only production storage census.
 !docs/runbooks/storage-census.sql
 *.sql.gz
 

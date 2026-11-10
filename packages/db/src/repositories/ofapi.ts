@@ -575,7 +575,8 @@ export async function listOfapiSpendProjectionEvents(db: Database) {
  * proven by structural equality — a list that differs in CONTENT OR ORDER
  * silently stops the index from being used and the sweep goes back to walking
  * the whole 570k-row journal every minute (19.4 s, 380k buffers on prod
- * 2026-08-23). `tests/migration-invariants.test.ts` pins the two together.
+ * 2026-08-23). This list must equal 0143's predicate, same members in the
+ * same order; a change needs a new index migration with the new predicate.
  *
  * The sweep no longer passes the list in: one list, one query, nothing to drift.
  */

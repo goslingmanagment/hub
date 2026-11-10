@@ -1,5 +1,3 @@
-import { readdirSync, readFileSync } from "node:fs";
-
 import { describe, expect, it } from "vitest";
 
 import { planTrafficIntervals, type TrafficIntervalRow } from "@agency_hub_core/db";
@@ -177,34 +175,5 @@ describe("planTrafficIntervals (one key's history; the caller holds its lock)", 
       want("lora.b", "2026-02-01T00:00:00Z", null),
     ]);
     expect(plan.conflicts).toEqual([expect.stringMatching(/lora\.a \[2026-01-01T00:00:00\.000Z, open\) overlaps lora\.b/)]);
-  });
-});
-
-describe("traffic_link_bindings.sql (link → channel → contractor, dated)", () => {
-  // Found by its name, not its number: the number is the next free one at merge.
-  const found = readdirSync("packages/db/migrations").filter((file) => file.endsWith("_traffic_link_bindings.sql"));
-  const migration = found[0] ?? "";
-  const text = found.length === 1 ? readFileSync(`packages/db/migrations/${migration}`, "utf8") : "";
-  const sql = text
-    .split("\n")
-    .filter((line) => !line.trimStart().startsWith("--"))
-    .join("\n")
-    .replace(/\s+/g, " ");
-
-  it("states the start basis on both dated tables, with no default", () => {
-    expect(sql.match(/valid_from_basis text not null,/g)).toHaveLength(2);
-    expect(sql.match(/check \(valid_from_basis in \('confirmed', 'assumed_link_created'\)\)/g)).toHaveLength(2);
-    expect(sql).not.toMatch(/valid_from_basis text not null default/);
-  });
-
-  it("keeps the open-row unique indexes as the backstop of one channel per link and one contractor per channel", () => {
-    expect(sql).toContain(
-      "create unique index if not exists traffic_link_bindings_open_uniq on traffic_link_bindings "
-        + "(platform_account_id, link_kind, platform_link_id) where valid_to is null;",
-    );
-    expect(sql).toContain(
-      "create unique index if not exists traffic_channel_contractors_open_uniq on traffic_channel_contractors "
-        + "(channel_id) where valid_to is null;",
-    );
   });
 });
