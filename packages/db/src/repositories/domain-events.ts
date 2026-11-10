@@ -372,7 +372,7 @@ async function appendDomainEventsBatchInTransaction(
         and observation_id = ${event.observationId}
         and type = ${event.type}
         and occurred_at = ${event.occurredAt}
-      order by id
+      order by domain_events.id
       limit 1
     `);
     if (existing.rows.length === 0) {

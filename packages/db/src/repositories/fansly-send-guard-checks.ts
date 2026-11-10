@@ -75,7 +75,7 @@ export async function findFanslySendPaceBatchEnd(
              as ready
       from fansly_send_log
      where id > ${input.afterId}
-     order by id
+     order by fansly_send_log.id
      limit ${input.limit}
   `);
   let throughId = input.afterId;
