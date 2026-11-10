@@ -19,10 +19,7 @@ import {
   updatePageByLabel,
 } from "@agency_hub_core/db";
 import {
-  createProxyRequestDispatcher,
-  normalizeProxyConfig,
   redactSensitiveText,
-  undiciRequest,
   type Platform,
 } from "@agency_hub_core/shared";
 
@@ -40,7 +37,6 @@ import {
 import { pagesForPrincipalResponse } from "../../services/closed-platform-responses.ts";
 import { checkFanslyIdentityThroughBrowser, onboardFanslyPageThroughBrowser } from "../../services/page-browser-onboarding.ts";
 import { onboardOnlyFansPage } from "../../services/page-onboarding.ts";
-import { assertAllowedProxyTarget } from "../../services/proxy-validation.ts";
 import {
   getPageSummary,
   listModelSummaries,
@@ -406,44 +402,6 @@ export function registerCatalogRoutes(server: ApiServer, ctx: ApiModuleContext) 
       throw new BadRequestError(
         `Credential verification failed: ${redactSensitiveText(error instanceof Error ? error.message : "Unknown error")}`,
       );
-    }
-  });
-
-  server.post("/api/v1/admin/proxy/test", {
-    schema: routeSchemas.adminTestProxy,
-  }, async (request) => {
-    let proxy: ReturnType<typeof normalizeProxyConfig>;
-    try {
-      const { url, username, password } = request.body.proxy;
-      proxy = normalizeProxyConfig({ url, username: username ?? null, password: password ?? null });
-      await assertAllowedProxyTarget(proxy);
-    } catch (error) {
-      throw new BadRequestError(
-        `Proxy test failed: ${redactSensitiveText(error instanceof Error ? error.message : "Invalid proxy URL")}`,
-      );
-    }
-    const dispatcher = createProxyRequestDispatcher(proxy);
-    try {
-      const { statusCode, body: responseBody } = await undiciRequest(
-        "https://api.ipify.org?format=json",
-        {
-          method: "GET",
-          signal: AbortSignal.timeout(30_000),
-          dispatcher,
-        },
-      );
-      const text = await responseBody.text();
-      if (statusCode < 200 || statusCode >= 300) {
-        throw new Error(`IP check returned HTTP ${statusCode}`);
-      }
-      const data = JSON.parse(text) as { ip: string };
-      return { ip: data.ip };
-    } catch (error) {
-      throw new BadRequestError(
-        `Proxy test failed: ${redactSensitiveText(error instanceof Error ? error.message : "Unknown error")}`,
-      );
-    } finally {
-      await dispatcher.close();
     }
   });
 

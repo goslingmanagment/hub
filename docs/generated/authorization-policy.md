@@ -27,7 +27,7 @@ for at password sign-in (`client: "chat-extension"`): it reaches only the
 61 routes marked "yes", and every route marked "no" refuses it with 403.
 A full device token is not affected.
 
-## Routes (432)
+## Routes (427)
 
 | Method | Path | Route key | Kind | Roles | Page scope | chat-extension token |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -157,7 +157,6 @@ A full device token is not affected.
 | DELETE | `/api/v1/admin/pages/:pageLabel` | `adminDeletePage` | `owner-session` | — | — | no |
 | PATCH | `/api/v1/admin/pages/:pageLabel` | `adminUpdatePage` | `owner-session` | — | — | no |
 | POST | `/api/v1/admin/pages/:pageLabel/verify` | `adminVerifyPage` | `owner-session` | — | — | no |
-| POST | `/api/v1/admin/proxy/test` | `adminTestProxy` | `owner-session` | — | — | no |
 | GET | `/api/v1/admin/publications` | `adminPublicationList` | `owner-session` | — | — | no |
 | POST | `/api/v1/admin/publications` | `adminPublicationCreate` | `owner-session` | — | — | no |
 | GET | `/api/v1/admin/publications/:id` | `adminPublicationGet` | `owner-session` | — | — | no |
@@ -334,7 +333,6 @@ A full device token is not affected.
 | POST | `/api/v1/model-applications` | `modelApplicationSubmit` | `public` | — | — | — |
 | POST | `/api/v1/model-applications/progress` | `modelApplicationProgress` | `public` | — | — | — |
 | GET | `/api/v1/models` | `models` | `session` | — | — | no |
-| GET | `/api/v1/models/:modelSlug/revenue` | `modelRevenue` | `session` | — | — | no |
 | GET | `/api/v1/models/:modelSlug/revenue/daily` | `modelRevenueDaily` | `session` | — | — | no |
 | GET | `/api/v1/ofapi/banned-words` | `ofapiBannedWordsGet` | `apiKey` | — | — | no |
 | POST | `/api/v1/ofapi/banned-words/preview` | `ofapiBannedWordsPreview` | `apiKey` | — | — | no |
@@ -352,7 +350,6 @@ A full device token is not affected.
 | GET | `/api/v1/overview` | `overview` | `session` | — | — | no |
 | GET | `/api/v1/overview/growth` | `overviewGrowth` | `session` | — | — | no |
 | GET | `/api/v1/overview/revenue` | `overviewRevenue` | `session` | — | — | no |
-| GET | `/api/v1/overview/revenue/by-model` | `overviewRevenueByModel` | `session` | — | — | no |
 | GET | `/api/v1/overview/revenue/daily` | `overviewRevenueDaily` | `session` | — | — | no |
 | GET | `/api/v1/page-browser/drafts` | `pageBrowserDrafts` | `owner-session` | — | — | no |
 | DELETE | `/api/v1/page-browser/drafts/:name` | `pageBrowserDraftDelete` | `owner-session` | — | — | no |
@@ -381,7 +378,6 @@ A full device token is not affected.
 | GET | `/api/v1/pages` | `pages` | `any` | — | — | no |
 | POST | `/api/v1/pages/:pageLabel/client-send-custody/:attemptId/resolve` | `clientSendCustodyResolve` | `session` | — | page | no |
 | GET | `/api/v1/pages/:pageLabel/content/comments` | `contentComments` | `owner-session` | — | page | no |
-| GET | `/api/v1/pages/:pageLabel/content/media` | `contentMedia` | `owner-session` | — | page | no |
 | GET | `/api/v1/pages/:pageLabel/conversations/:conversationId/messages` | `pageConversationMessages` | `session` | — | page | no |
 | GET | `/api/v1/pages/:pageLabel/conversations/:conversationId/profile` | `pageConversationProfile` | `any` | — | page | yes |
 | GET | `/api/v1/pages/:pageLabel/conversations/:platformConversationId/preview` | `pageConversationPreview` | `session` | — | page | no |
@@ -416,7 +412,6 @@ A full device token is not affected.
 | GET | `/api/v1/pages/:pageLabel/stats/holdings` | `statsHoldings` | `owner-session` | — | page | no |
 | GET | `/api/v1/pages/:pageLabel/stats/media` | `statsMedia` | `owner-session` | — | page | no |
 | GET | `/api/v1/pages/:pageLabel/stats/tags` | `statsTags` | `owner-session` | — | page | no |
-| GET | `/api/v1/pages/:pageLabel/stats/traffic` | `statsTraffic` | `owner-session` | — | page | no |
 | GET | `/api/v1/pages/:pageLabel/subscribers` | `pageSubscribers` | `any` | — | page | no |
 | GET | `/api/v1/pages/:pageLabel/subscribers/daily` | `pageSubscribersDaily` | `any` | — | page | no |
 | GET | `/api/v1/pages/:pageLabel/sync/blocks` | `pageSyncBlocks` | `any` | — | page | no |

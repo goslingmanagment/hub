@@ -8,26 +8,22 @@ import {
   type PageProfileResponse,
   type PagePromoResponse,
   type PageSettingsResponse,
-  type ContentMediaResponse,
   type MoneyPayoutsResponse,
   type MoneyRevenueMixResponse,
   type StatsCoverageResponse,
   type StatsHoldingsResponse,
   type StatsMediaResponse,
   type StatsTagsResponse,
-  type StatsTrafficResponse,
   routeSchemas,
 } from "@agency_hub_core/contracts";
 import {
   type InsightsCoverageRow,
   type InsightsMediaHeadRow,
   type InsightsTrafficBucketRow,
-  listInsightsAutomations,
   listInsightsComments,
   listInsightsCommentsPerPost,
   listInsightsCoverage,
   listInsightsHoldings,
-  listInsightsMediaHeads,
   listInsightsMediaDailyPoints,
   listInsightsMediaHeadsByRefs,
   listInsightsMediaTrafficBuckets,
@@ -38,16 +34,9 @@ import {
   listInsightsPostLikes,
   listInsightsRevenueMix,
   listInsightsRevenueMonths,
-  listInsightsTierPlans,
-  listInsightsTiers,
   listInsightsTopMedia,
   listInsightsTopTags,
-  listInsightsTrafficBuckets,
   listInsightsRecentMediaHeads,
-  listInsightsVaultAlbums,
-  listInsightsWalls,
-  countCreatorVaultUniqueMembers,
-  countPageUniqueCreatorMedia,
   readCreatorStatsAudience,
   readCreatorStatsContent,
   readCreatorStatsTopSales,
@@ -58,7 +47,6 @@ import {
   readFanslyPageProfile,
   readFanslyPagePromo,
   readFanslyPageSettings,
-  sumCreatorVaultAlbumItemCounts,
 } from "@agency_hub_core/db";
 import {
   CAPTURE_COVERAGE_PLANES,
@@ -115,10 +103,6 @@ import type { ApiModuleContext, ApiServer } from "../context.ts";
  *  computed here — with its basis carried on the wire beside the number. */
 const SALES_GROSS_BASIS =
   "net / 0.8 — Fansly's 20% platform cut (A12); rounded to whole mills";
-
-const INVENTORY_ALBUM_SUM_BASIS =
-  "sum of creator_vault_albums.item_count — NON-UNIQUE: the system albums are "
-  + "views over the same media, so this double-counts. M is uniqueMediaCount.";
 
 /** Catalogue sidecars are small and page-scoped; they are still bounded, so a
  *  pathological page cannot produce an unbounded body. */
@@ -201,7 +185,7 @@ function labelTrafficRow(row: InsightsTrafficBucketRow) {
   };
 }
 
-function trafficRowToWire(row: InsightsTrafficBucketRow): StatsTrafficResponse["rows"][number] {
+function trafficRowToWire(row: InsightsTrafficBucketRow): StatsMediaResponse["media"][number]["buckets"][number] {
   return {
     subjectKind: row.subjectKind,
     subjectRef: row.subjectRef,
@@ -225,7 +209,7 @@ function trafficRowToWire(row: InsightsTrafficBucketRow): StatsTrafficResponse["
   };
 }
 
-function coverageRowToWire(row: InsightsCoverageRow): StatsTrafficResponse["coverage"][number] {
+function coverageRowToWire(row: InsightsCoverageRow): StatsCoverageResponse["planes"][number] {
   return {
     plane: row.plane,
     scopeRef: row.scopeRef,
@@ -473,52 +457,6 @@ export function registerInsightsRoutes(server: ApiServer, ctx: ApiModuleContext)
       window,
       ...read,
       revenue: read.revenue.map((row) => ({ ...row, productLabel: fanslyRevenueTypeLabel(row.productType) })),
-    };
-  });
-
-  server.get("/api/v1/pages/:pageLabel/stats/traffic", {
-    schema: routeSchemas.statsTraffic,
-  }, async (request): Promise<StatsTrafficResponse> => {
-    const page = await resolveOwnerPage(request);
-    const window = parseWindow(request.query.from, request.query.to);
-    const after = request.query.cursor === undefined
-      ? undefined
-      : (() => {
-        const [bucketStart, sourceCode] = decodeCursor(request.query.cursor as string, 2);
-        return {
-          bucketStart: parseInstant(bucketStart as string, "cursor"),
-          sourceCode: sourceCode as string,
-        };
-      })();
-
-    const limit = request.query.limit;
-    const rows = await listInsightsTrafficBuckets(appContext.db, {
-      pageId: page.id,
-      subjectKind: request.query.subjectKind,
-      subjectRef: request.query.subjectRef,
-      periodMs: request.query.periodMs,
-      from: window.from,
-      to: window.to,
-      limit,
-      after,
-    });
-    const coverage = await listInsightsCoverage(appContext.db, { pageId: page.id });
-    const last = rows.length === limit ? rows[rows.length - 1] : undefined;
-
-    return {
-      page: { label: page.label, platform: page.platform },
-      window: {
-        from: iso(window.from),
-        to: iso(window.to),
-        periodMs: request.query.periodMs,
-        subjectKind: request.query.subjectKind,
-        subjectRef: request.query.subjectRef ?? null,
-      },
-      rows: rows.map(trafficRowToWire),
-      coverage: coverage.map(coverageRowToWire),
-      nextCursor: last === undefined
-        ? null
-        : encodeCursor([iso(last.bucketStart), last.sourceCode]),
     };
   });
 
@@ -803,110 +741,6 @@ export function registerInsightsRoutes(server: ApiServer, ctx: ApiModuleContext)
         oldestAt: isoOrNull(row.oldestAt),
         newestAt: isoOrNull(row.newestAt),
       })),
-    };
-  });
-
-  server.get("/api/v1/pages/:pageLabel/content/media", {
-    schema: routeSchemas.contentMedia,
-  }, async (request): Promise<ContentMediaResponse> => {
-    const page = await resolveOwnerPage(request);
-    const afterRef = request.query.cursor === undefined
-      ? undefined
-      : decodeCursor(request.query.cursor as string, 1)[0];
-    const limit = request.query.limit;
-
-    const [heads, albums, tiers, plans, walls, automations, coverage] = await Promise.all([
-      listInsightsMediaHeads(appContext.db, { pageId: page.id, limit, afterRef }),
-      listInsightsVaultAlbums(appContext.db, { pageId: page.id, limit: CATALOG_SIDECAR_LIMIT }),
-      listInsightsTiers(appContext.db, { pageId: page.id, limit: CATALOG_SIDECAR_LIMIT }),
-      listInsightsTierPlans(appContext.db, { pageId: page.id, limit: CATALOG_SIDECAR_LIMIT }),
-      listInsightsWalls(appContext.db, { pageId: page.id, limit: CATALOG_SIDECAR_LIMIT }),
-      listInsightsAutomations(appContext.db, { pageId: page.id, limit: CATALOG_SIDECAR_LIMIT }),
-      listInsightsCoverage(appContext.db, { pageId: page.id }),
-    ]);
-    const [uniqueMediaCount, vaultMemberUniqueCount, albumMembershipSum] = await Promise.all([
-      countPageUniqueCreatorMedia(appContext.db, page.id),
-      countCreatorVaultUniqueMembers(appContext.db, page.id),
-      sumCreatorVaultAlbumItemCounts(appContext.db, page.id),
-    ]);
-
-    const plansByTier = new Map<string, typeof plans>();
-    for (const plan of plans) {
-      const list = plansByTier.get(plan.tierRef);
-      if (list) {
-        list.push(plan);
-      } else {
-        plansByTier.set(plan.tierRef, [plan]);
-      }
-    }
-    const last = heads.length === limit ? heads[heads.length - 1] : undefined;
-
-    return {
-      page: { label: page.label, platform: page.platform },
-      generatedAt: new Date().toISOString(),
-      media: heads.map(mediaHeadToWire),
-      vaultAlbums: albums.map((album) => ({
-        vaultKind: album.vaultKind,
-        albumRef: album.albumRef,
-        title: album.title,
-        albumType: album.albumType,
-        status: album.status,
-        pos: album.pos,
-        itemCount: album.itemCount,
-        missingSince: isoOrNull(album.missingSince),
-        lastObservedAt: iso(album.lastObservedAt),
-      })),
-      tiers: tiers.map((tier) => ({
-        tierRef: tier.tierRef,
-        name: tier.name,
-        color: tier.color,
-        pos: tier.pos,
-        basePriceMills: millsOrNull(tier.basePriceMills),
-        maxSubscribers: tier.maxSubscribers,
-        missingSince: isoOrNull(tier.missingSince),
-        plans: (plansByTier.get(tier.tierRef) ?? []).map((plan) => ({
-          planRef: plan.planRef,
-          status: plan.status,
-          durationDays: plan.durationDays,
-          priceMills: millsOrNull(plan.priceMills),
-          useAmounts: plan.useAmounts,
-          promoCount: plan.promoCount,
-          missingSince: isoOrNull(plan.missingSince),
-        })),
-      })),
-      walls: walls.map((wall) => ({
-        wallRef: wall.wallRef,
-        name: wall.name,
-        description: wall.description,
-        pos: wall.pos,
-        mainWall: wall.mainWall,
-        defaultWall: wall.defaultWall,
-        private: wall.private,
-        missingSince: isoOrNull(wall.missingSince),
-      })),
-      automations: automations.map((automation) => ({
-        automationRef: automation.automationRef,
-        triggerType: automation.triggerType,
-        delaySeconds: automation.delaySeconds,
-        cooldownSeconds: automation.cooldownSeconds,
-        templateType: automation.templateType,
-        senderRef: automation.senderRef,
-        messageText: automation.messageText,
-        attachmentCount: automation.attachmentCount,
-        parseOk: automation.parseOk,
-        missingSince: isoOrNull(automation.missingSince),
-      })),
-      inventory: {
-        uniqueMediaCount,
-        vaultMemberUniqueCount,
-        albumMembershipSum: {
-          value: albumMembershipSum,
-          derived: true,
-          basis: INVENTORY_ALBUM_SUM_BASIS,
-        },
-      },
-      coverage: coverage.map(coverageRowToWire),
-      nextCursor: last === undefined ? null : encodeCursor([last.mediaOfferRef]),
     };
   });
 

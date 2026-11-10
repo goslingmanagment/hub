@@ -131,7 +131,7 @@ function coverageFor(page: DemoPage, now: Date, planes: readonly string[]): Cove
 
 // --- traffic ---
 
-type TrafficRow = KernelOperationResponse<"statsTraffic">["rows"][number];
+type TrafficRow = KernelOperationResponse<"statsMedia">["media"][number]["buckets"][number];
 
 function trafficRow(subjectKind: string, subjectRef: string, bucket: number, now: Date, fields: Partial<TrafficRow> & Pick<TrafficRow, "sourceCode" | "sourceLabel">): TrafficRow {
   return {

@@ -1658,26 +1658,7 @@ describe("api integration", () => {
     });
     await rebuildRevenueRollups(testDb.db, onlyFansPage.id);
 
-    const login = await server.inject({
-      method: "POST",
-      url: "/api/v1/auth/login",
-      payload: {
-        username: "dima",
-        password: "owner-secret",
-      },
-    });
-    const cookie = sessionCookieFrom(login);
-
-    const response = await server.inject({
-      method: "GET",
-      url: "/api/v1/models/lana-model/revenue?period=custom&from=2026-03-01&to=2026-03-31",
-      headers: {
-        cookie,
-      },
-    });
-    expect(response.statusCode).toBe(200);
-
-    const expected = await getModelRevenueReport(createTestAppContext(testDb), "lana-model", {
+    const report = await getModelRevenueReport(createTestAppContext(testDb), "lana-model", {
       period: "custom",
       custom: {
         from: "2026-03-01",
@@ -1685,13 +1666,7 @@ describe("api integration", () => {
       },
     });
 
-    expect(response.json()).toMatchObject({
-      revenueMills: expected.revenueMills,
-      adjustmentMills: expected.adjustmentMills,
-      unclassifiedMills: expected.unclassifiedMills,
-      netEarningsMills: expected.netEarningsMills,
-      totalNetMills: expected.totalNetMills,
-      breakdown: expected.breakdown,
+    expect(report).toMatchObject({
       pages: expect.arrayContaining([
         expect.objectContaining({
           pageLabel: "lana",
@@ -3904,12 +3879,8 @@ describe("api integration", () => {
     expect(retiredModel).toMatchObject({ netEarningsMills: 8_000, status: "retired" });
 
     // The model revenue report stays reachable for a fully-retired model...
-    const modelRevenue = await server.inject({
-      method: "GET",
-      url: "/api/v1/models/stage13-model/revenue?period=all",
-      headers: { cookie: ownerCookie },
-    });
-    expect(modelRevenue.statusCode, modelRevenue.body).toBe(200);
+    await expect(getModelRevenueReport(createTestAppContext(testDb), "stage13-model", { period: "all" }))
+      .resolves.toMatchObject({ model: { slug: "stage13-model" } });
     // ...while the PAGE-scoped detail route still 404s (retired pages stay
     // hidden as pages; only rollups keep history).
     const pageRevenue = await server.inject({
