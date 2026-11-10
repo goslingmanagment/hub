@@ -688,6 +688,7 @@ export async function loadSpendingContext(
     join fans f on f.id = t.fan_id
     where t.platform_account_id = ${input.pageId}
       and f.platform_user_id = ${input.fanRef}
+      and f.platform = (select p.platform from pages p where p.id = ${input.pageId})
       and t.is_active = true
     order by t.occurred_at desc
     limit 500
@@ -732,6 +733,7 @@ export async function loadSubscriptionContext(
     join fans f on f.id = pf.fan_id
     where pf.platform_account_id = ${input.pageId}
       and f.platform_user_id = ${input.fanRef}
+      and f.platform = (select p.platform from pages p where p.id = ${input.pageId})
   `);
   const row = result.rows[0];
   const iso = (value: Date | null | undefined) => (value ? new Date(value).toISOString() : null);
