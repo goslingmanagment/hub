@@ -40,6 +40,7 @@ import {
   standingRecheckAt,
   type SubjectQueueWalk,
 } from "../lib/subject-queue.ts";
+import { count, DAY_MS, recordOf, strings as stringList, text } from "../lib/values.ts";
 
 // `post-replies.walk` and `post-replies.authors` (plan §5, design §5.16): the
 // comment archive. `GET /post/{postId}/replies` bare, `?before=<last reply id>`
@@ -67,7 +68,6 @@ import {
 export type PostRepliesVariant = "walk" | "authors";
 
 const AUTHORS_KEY = "post-replies.authors";
-const DAY_MS = 86_400_000;
 /** Pages ONE post's walk may take (a safety net, not a coverage limit). */
 export const MAX_PAGES_PER_POST = 20;
 /** The walk looks at its queue again this long after it found nothing due
@@ -76,22 +76,6 @@ export const POST_REPLIES_RECHECK_MS = 6 * 60 * 60 * 1000;
 const HYDRATED_AUTHOR_MEMORY = 1_000;
 const POSTS_LENGTH_SAMPLE_LIMIT = 200;
 const DEFAULT_REWALK_CYCLE_DAYS = Number(getDescriptor("fanslyRepliesRewalkCycleDays")?.default ?? "14");
-
-function recordOf(value: unknown): Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : {};
-}
-
-function count(value: unknown): number | null {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
-}
-
-function text(value: unknown): string | null {
-  return typeof value === "string" && value.length > 0 ? value : null;
-}
-
-function stringList(value: unknown): string[] {
-  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string" && item.length > 0) : [];
-}
 
 /** `fanslyRepliesRewalkCycleDays`, read live (≥ 1). */
 async function rewalkCycleDays(settings: SettingsSource | undefined): Promise<number> {

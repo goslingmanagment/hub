@@ -37,6 +37,7 @@ import type {
 import { accountCountersFresh, readFanslyPageFacts } from "../lib/page-facts.ts";
 import { offsetPageDone } from "../lib/offset-walk.ts";
 import { lookupFollowups, partitionLookupIds } from "./fan-profiles.ts";
+import { count, recordOf } from "../lib/values.ts";
 
 // `subscribers.poll` and `subscribers.history` (plan §5, design §5.11): the
 // offset walk of `GET /subscribers?offset&limit=100&status=…`, one page per
@@ -89,14 +90,6 @@ export interface SubscribersCursor {
   restartCount: number;
   /** The receipt of the last finished walk. */
   last: Record<string, unknown> | null;
-}
-
-function recordOf(value: unknown): Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : {};
-}
-
-function count(value: unknown): number | null {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
 }
 
 function parseWalk(value: unknown): SubscribersWalk | null {

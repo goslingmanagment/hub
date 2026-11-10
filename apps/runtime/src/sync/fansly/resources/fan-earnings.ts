@@ -20,6 +20,7 @@ import type {
   ResourceModule,
   StepPlan,
 } from "../../engine/resource.ts";
+import { DAY_MS, recordOf } from "../lib/values.ts";
 
 // `fan-earnings.roster` (plan §5, design §5.8): the per-fan earnings of the
 // page's spenders, one endpoint for one fan per step —
@@ -57,8 +58,6 @@ import type {
 // `tests/fan-earnings-receipts.integration.test.ts`).
 
 export const FAN_EARNINGS_ROSTER_KEY = "fan-earnings.roster";
-
-const DAY_MS = 86_400_000;
 /** The roster age (owner decision 09.10, У14: 30 days): a spender is read
  *  again this long after its last read. */
 export const FAN_EARNINGS_ROSTER_MAX_AGE_MS = 30 * DAY_MS;
@@ -73,10 +72,6 @@ export interface FanEarningsSubject {
 export interface DueFanEarningsSubject extends FanEarningsSubject {
   /** 0 marked due (dirty, retry), 1 never read, 2 read before the roster age. */
   rank: number;
-}
-
-function recordOf(value: unknown): Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
 
 function windowOf(value: unknown): FanEarningsWindow | null {

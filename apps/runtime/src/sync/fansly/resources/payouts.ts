@@ -33,6 +33,7 @@ import type {
   ResourceModule,
   StepPlan,
 } from "../../engine/resource.ts";
+import { int as intOrNull, recordOf, strings, text as nonEmpty } from "../lib/values.ts";
 
 // `payouts.daily` and `payouts.walk` (design §5.10): money OUT —
 // `GET /payments/payoutmethods` (journaled verbatim as `payout_methods`; it
@@ -82,22 +83,6 @@ interface WalkCursor {
   lastPageFirstRef: string | null;
   pages: number;
   catchUp: FanslyPayoutsCatchUp | null;
-}
-
-function recordOf(value: unknown): Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : {};
-}
-
-function intOrNull(value: unknown): number | null {
-  return typeof value === "number" && Number.isSafeInteger(value) ? value : null;
-}
-
-function nonEmpty(value: unknown): string | null {
-  return typeof value === "string" && value.length > 0 ? value : null;
-}
-
-function strings(value: unknown): string[] {
-  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string" && item.length > 0) : [];
 }
 
 function parseCatchUp(value: unknown): FanslyPayoutsCatchUp | null {

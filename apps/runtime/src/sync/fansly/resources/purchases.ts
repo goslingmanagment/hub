@@ -14,6 +14,7 @@ import type {
   ResourceModule,
   StepPlan,
 } from "../../engine/resource.ts";
+import { recordOf, strings as stringsOf } from "../lib/values.ts";
 
 // `purchases.targets` (plan §5, design §5.9): the order history of one PPV
 // media or bundle the page sold — `GET /media/orderhistory?accountMediaId=|
@@ -58,14 +59,6 @@ const KNOWN_ORDER_IDS_KEPT = 20;
 export interface PurchaseTarget {
   kind: "media" | "bundle";
   id: string;
-}
-
-function recordOf(value: unknown): Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : {};
-}
-
-function stringsOf(value: unknown): string[] {
-  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string" && item.length > 0) : [];
 }
 
 /** `media:<id>` | `bundle:<id>`. */

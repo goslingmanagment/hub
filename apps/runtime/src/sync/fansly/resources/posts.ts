@@ -47,6 +47,7 @@ import {
   standingRecheckAt,
   type SubjectQueueWalk,
 } from "../lib/subject-queue.ts";
+import { count, DAY_MS, recordOf, text } from "../lib/values.ts";
 
 // `posts.refresh`, `posts.backfill`, `posts.engagement` (plan §5, design
 // §5.15). Journaled exactly as the legacy `posts` stream journals: timeline
@@ -78,26 +79,12 @@ import {
 // continuations are retired.
 
 export type PostsVariant = "refresh" | "backfill" | "engagement";
-
-const DAY_MS = 86_400_000;
 /** The engagement walk looks at its queue again this long after it found
  *  nothing due (the legacy phase ran once per 6-hour posts cadence). */
 export const POST_ENGAGEMENT_RECHECK_MS = 6 * 60 * 60 * 1000;
 /** Ids the provider left out of a batch are asked again after this long
  *  (legacy: a post it drops is not one whose counters were seen). */
 const UNSERVED_RETRY_MS = DAY_MS;
-
-function recordOf(value: unknown): Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : {};
-}
-
-function count(value: unknown): number | null {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
-}
-
-function text(value: unknown): string | null {
-  return typeof value === "string" && value.length > 0 ? value : null;
-}
 
 function stringList(value: unknown): string[] | null {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string" && item.length > 0) : null;

@@ -6,6 +6,7 @@ import {
   upsertTransactionTipContext,
 } from "@agency_hub_core/db";
 import { millsFromInteger } from "@agency_hub_core/shared";
+import { isRecord } from "./values.ts";
 
 type TipItemRejectionReason =
   | "not_object"
@@ -38,10 +39,6 @@ export interface FanslyDmTipSidecarParseResult {
   rejectedItems: FanslyDmTipItemRejection[];
   /** Malformed optional values are isolated to their field and become null. */
   droppedOptionalMemberCount: number;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function nonemptyString(value: unknown) {

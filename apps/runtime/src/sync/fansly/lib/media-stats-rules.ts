@@ -6,6 +6,7 @@ import {
 } from "@agency_hub_core/db";
 
 import { classifyStatsWindow, parseWindowGuard, type BackfillWindowGuard } from "./stats-rules.ts";
+import { asInt, int as asNullableSafeInt, text as asNullableString } from "./values.ts";
 
 // The per-media statistics rules of the Sync Engine's `media-stats.*`
 // resources (resources/media-stats.ts): the `media_stats` cursor and the
@@ -162,18 +163,6 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
     : null;
-}
-
-function asInt(value: unknown, fallback: number): number {
-  return typeof value === "number" && Number.isSafeInteger(value) ? value : fallback;
-}
-
-function asNullableString(value: unknown): string | null {
-  return typeof value === "string" && value.length > 0 ? value : null;
-}
-
-function asNullableSafeInt(value: unknown): number | null {
-  return typeof value === "number" && Number.isSafeInteger(value) ? value : null;
 }
 
 /** A cursor written before this lane existed parses as an item that has walked

@@ -56,6 +56,7 @@ import {
 } from "../../engine/resource.ts";
 import { clearQueueSubjectBlocks, recordQueueSubjectFailures, standingRecheckAt } from "../lib/subject-queue.ts";
 import { fanslyResourceSpec } from "../registry.ts";
+import { DAY_MS, HOUR_MS, int, recordOf, text } from "../lib/values.ts";
 
 // `media-stats.walk` (plan §5, design §5.18, owner decision №6 "экономно"):
 // per-media traffic, `GET /it/moie/statsnew`, journaled as
@@ -101,8 +102,6 @@ import { fanslyResourceSpec } from "../registry.ts";
 
 const KEY = "media-stats.walk";
 const PLANE = "media_stats";
-const DAY_MS = 86_400_000;
-const HOUR_MS = 3_600_000;
 /** The walk looks at its queue again this long after it found nothing due
  *  (the legacy stream's cadence). */
 export const MEDIA_STATS_RECHECK_MS = 6 * HOUR_MS;
@@ -111,18 +110,6 @@ export const MEDIA_STATS_RECHECK_MS = 6 * HOUR_MS;
 const COVERAGE_EVERY_MS = HOUR_MS;
 /** Error classes of a failure that is about the item (its breaker opened). */
 const SUBJECT_ERRORS: ReadonlySet<string> = new Set(["subject_failure", "envelope_unsuccessful", "subject_terminal"]);
-
-function recordOf(value: unknown): Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : {};
-}
-
-function text(value: unknown): string | null {
-  return typeof value === "string" && value.length > 0 ? value : null;
-}
-
-function int(value: unknown): number | null {
-  return typeof value === "number" && Number.isSafeInteger(value) ? value : null;
-}
 
 // ── the tiers (owner decision №6, from the registry) ─────────────────────────
 

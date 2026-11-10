@@ -1,4 +1,4 @@
-import type { AdmissionCancel, SiteAdmit, SiteAdmitResult, SiteDone, WsAdmit, WsDone } from "../../services/egress/page-browser-protocol.ts";
+import { REFUSALS, type AdmissionCancel, type Refusal, type SiteAdmit, type SiteAdmitResult, type SiteDone, type WsAdmit, type WsDone } from "../../services/egress/page-browser-protocol.ts";
 import type { SyncLogger } from "../engine/commit.ts";
 import type { LinkStatus, MonoBridge, PageBrowserRpcClient, SiteObservedMessage } from "../../services/egress/page-browser-rpc.ts";
 import { retryAfterDelayMs } from "../engine/errors.ts";
@@ -65,6 +65,15 @@ import { classifySiteRequest } from "../engine/site-admission.ts";
  *  never run from an instant before the true send (I1: a strict minimum).
  *  The browser transport's too. */
 export const SEND_REPORT_GUARD_MS = 1;
+
+const PROTOCOL_REFUSALS: ReadonlySet<string> = new Set(REFUSALS);
+
+/** The refusal an admission answers the operator with: a reason the
+ *  protocol knows as itself, any other as `lease_inactive`. The browser
+ *  transport's and the onboarding task's grant checks both answer so. */
+export function protocolRefusalOf(reason: string): Refusal {
+  return PROTOCOL_REFUSALS.has(reason) ? (reason as Refusal) : "lease_inactive";
+}
 
 /** Ids of finished requests kept, so that one asked again is not admitted
  *  a second time (spec §6.1: an id is never acted on twice). */

@@ -19,6 +19,7 @@ import {
   type Segment,
   type ThreadChain,
 } from "./chain.ts";
+import { isRecord } from "./values.ts";
 
 // Fansly Sync Engine (plan §6.3, design §8.2, §8.3): the legacy DM journal —
 // the `/message` pages in `sync_raw_payloads` since 2026-07-05, each with its
@@ -58,10 +59,6 @@ export interface JournalEntry {
 }
 
 const DECIMAL = /^[0-9]{1,30}$/;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 /** Request parameters of a journal row: `{groupId, limit, before?}`. Rows
  *  captured before 2026-07-05 carry none and fold nothing. */

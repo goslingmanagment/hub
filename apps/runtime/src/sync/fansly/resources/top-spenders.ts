@@ -25,6 +25,7 @@ import {
   type TopSpendersCursorWindow,
 } from "../lib/money-rules.ts";
 import { readFanslyPageFacts } from "../lib/page-facts.ts";
+import { recordOf } from "../lib/values.ts";
 
 // `top-spenders.window` and `.bootstrap` (design §5.7): the page's spenders
 // ranked by `/account/wallets/earnings/accounts?after=<ms>&before=<ms>`,
@@ -50,10 +51,6 @@ interface TopSpendersCursor {
   pending: TopSpendersCursorWindow[];
   /** Bootstrap: the legacy-shaped walk state. */
   state: TopSpendersCursorState | null;
-}
-
-function recordOf(value: unknown): Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
 
 function parseWindows(value: unknown): TopSpendersCursorWindow[] {

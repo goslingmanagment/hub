@@ -46,7 +46,7 @@ import {
   readOnboardingLinkRevision,
   readOnboardingLinkSettings,
 } from "../../services/egress/page-browser-link.ts";
-import { REFUSALS, type Command, type CommandKind, type CommandResult, type Refusal, type State } from "../../services/egress/page-browser-protocol.ts";
+import type { Command, CommandKind, CommandResult, State } from "../../services/egress/page-browser-protocol.ts";
 import {
   PageBrowserRpcClient,
   systemMonoBridge,
@@ -70,7 +70,8 @@ import {
   transportOutcomeOfSite,
 } from "../engine/site-admission.ts";
 import { routeOfEngineOperation, routeOfLegacyOperation, type FanslyRoute } from "./routes.ts";
-import { BrowserSiteAdmission, SEND_REPORT_GUARD_MS } from "./browser-site.ts";
+import { browserStands } from "./browser-control.ts";
+import { BrowserSiteAdmission, protocolRefusalOf, SEND_REPORT_GUARD_MS } from "./browser-site.ts";
 import { browserTransitionRow } from "./browser-intake.ts";
 import { stateTelemetry } from "./browser-record.ts";
 import { siteResponseObservation } from "./browser-site-capture.ts";
@@ -366,12 +367,6 @@ export class BrowserOnboardingTask {
   }
 }
 
-/** The browser stands, waiting for a start: never started, or stopped —
- *  not in a failure's backoff, not halted for the owner's decision. */
-function stands(state: State): boolean {
-  return state.step === "exit_closed" && !state.exitOpen && state.retryAtWall === null && (state.stopReason === null || state.stopReason === "owner_stop");
-}
-
 const STEP_ORDER = ["exit_closed", "env_applied", "chrome_started", "control_attached", "selftest_passed", "exit_ip_verified", "exit_open", "site_loaded", "session_confirmed", "ready"];
 
 /** The browser can take a Hub request: up at the site, in the automation. */
@@ -392,8 +387,6 @@ export function confirmsRead(state: State | null, accountId: string, fingerprint
     && STEP_ORDER.indexOf(state.step) >= STEP_ORDER.indexOf("session_confirmed")
     && state.sessionFingerprint === fingerprint && state.accountId === accountId;
 }
-
-const PROTOCOL_REFUSALS: ReadonlySet<string> = new Set(REFUSALS);
 
 /** The link to one profile no page has. */
 export class OnboardingLink {
@@ -677,7 +670,7 @@ export class OnboardingLink {
     // Only a login_required (or none): the login's to start.
     const login = profile.onboarding === "login";
     if (halts.length > 0 && !login) return;
-    const standing = stands(state) || (login && state.step === "exit_closed" && !state.exitOpen && state.retryAtWall === null && state.stopReason === "login_required");
+    const standing = browserStands(state) || (login && state.step === "exit_closed" && !state.exitOpen && state.retryAtWall === null && state.stopReason === "login_required");
     if (!standing || now - this.#lastStartMono < this.#t.restartEveryMs) return;
     this.#lastStartMono = now;
     await this.#command("restartBrowser", why);
@@ -1194,7 +1187,7 @@ export class OnboardingLink {
           }
           const refusal = this.pacer.checkRemoteGrant(admission);
           if (refusal !== null) {
-            reply = { admit: false, reason: PROTOCOL_REFUSALS.has(refusal.reason) ? (refusal.reason as Refusal) : "lease_inactive" };
+            reply = { admit: false, reason: protocolRefusalOf(refusal.reason) };
             return;
           }
           // With its pause: the operator keeps it by its own sight of the

@@ -3,6 +3,7 @@ import { upsertFanslyPageSettingsVersion } from "@agency_hub_core/db";
 import { ApplyQuarantine } from "../../engine/commit.ts";
 import type { ApplyInput, ApplyResult, RequestPlan, ResourceModule, StepPlan } from "../../engine/resource.ts";
 import { PAGE_SETTINGS_STEPS, parsePageSettingsAnswer } from "../lib/page-settings.ts";
+import { recordOf } from "../lib/values.ts";
 
 // `page-settings.daily` (0338): the page's settings and standing, once a day —
 // eleven single reads, one a step, the position in the poll row's cursor (as
@@ -15,10 +16,6 @@ import { PAGE_SETTINGS_STEPS, parsePageSettingsAnswer } from "../lib/page-settin
 interface SettingsCursor {
   /** The step the next read is. */
   index: number;
-}
-
-function recordOf(value: unknown): Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
 
 function indexOf(value: unknown): number | null {

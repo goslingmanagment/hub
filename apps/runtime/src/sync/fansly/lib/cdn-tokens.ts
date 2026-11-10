@@ -1,3 +1,4 @@
+import { isRecord } from "./values.ts";
 // Owner decision 2026-09-29 — one-off CloudFront signing tokens are stripped
 // from Fansly pull bodies BEFORE they are journaled.
 //
@@ -134,10 +135,6 @@ function stripSignedUrl(value: string): string {
   }
   const kept = pairs.filter((_pair, index) => !SIGNING_NAMES.has(names[index]!));
   return `${value.slice(0, queryStart)}${kept.length > 0 ? `?${kept.join("&")}` : ""}${value.slice(queryEnd)}`;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 /** Copy-on-write over an array's entries. */

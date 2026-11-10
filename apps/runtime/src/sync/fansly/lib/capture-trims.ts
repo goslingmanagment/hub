@@ -1,14 +1,11 @@
 import { FANSLY_MAPPER_VERSION } from "@agency_hub_core/fansly";
+import { isRecord } from "./values.ts";
 
 // What a Fansly capture journals for the kinds that are not journaled
 // verbatim, and the capture-shape version each of them stamps. Shared by the
 // Fansly Sync Engine's journal body (../capture.ts) and the legacy lanes; the
 // versions keep their values, because replay and the observation kinds read
 // them.
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function asNullableString(value: unknown) {
   return typeof value === "string" ? value : null;

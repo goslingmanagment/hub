@@ -2,6 +2,8 @@ import type { SyncAttemptRow } from "@agency_hub_core/db";
 import { FANSLY_LIST_WRITE_BATCH_MAX } from "@agency_hub_core/fansly";
 
 import type { FanListServed } from "./fan-lists-rules.ts";
+import { idOf } from "./fan-lists-rules.ts";
+import { recordOrNull as recordOf } from "./values.ts";
 
 // Fan set lists (2026-10-28): the pure rules of `fan-set-lists.sync`, the
 // Fansly user list Hub keeps equal to a set of fans (the cross-page spenders
@@ -121,15 +123,6 @@ export function diffFanSetList(input: {
     withheld,
     writes: [...batches("add", toAdd, batch), ...(withheld === null ? batches("remove", toRemove, batch) : [])],
   };
-}
-
-function recordOf(value: unknown): Record<string, unknown> | null {
-  return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : null;
-}
-
-function idOf(value: unknown): string | null {
-  if (typeof value === "number" && Number.isSafeInteger(value) && value >= 0) return String(value);
-  return typeof value === "string" && /^\d{1,30}$/.test(value) ? value : null;
 }
 
 /** The created list's id, or null when the answer names none. */

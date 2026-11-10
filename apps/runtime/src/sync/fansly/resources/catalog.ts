@@ -54,6 +54,7 @@ import { readFanslyPageFacts } from "../lib/page-facts.ts";
 import { projectionBehind } from "../lib/projection-lag.ts";
 import { standingRecheckAt } from "../lib/subject-queue.ts";
 import { fanslyResourceSpec } from "../registry.ts";
+import { DAY_MS, int, recordOf, strings as stringList, text } from "../lib/values.ts";
 
 // `catalog.fixed`, `catalog.vault`, `catalog.hydrate` (plan §5, design §5.17,
 // owner decision №6 "экономно"): the page's inventory. Every answer is
@@ -93,7 +94,6 @@ export type CatalogVariant = "fixed" | "vault" | "hydrate";
 
 const VAULT_KEY = "catalog.vault";
 const HYDRATE_KEY = "catalog.hydrate";
-const DAY_MS = 86_400_000;
 /** The vault walk's cadence (owner decision №6): it looks at its albums
  *  again `everyMs` after it found none to walk (incremental daily), and an
  *  album walked `fullEveryMs` ago is due again (full weekly) — the registry's
@@ -117,22 +117,6 @@ const UNSERVED_MEMORY_MS = DAY_MS;
 const ALBUM_EVENT_TYPES: readonly string[] = FANSLY_CATALOG_EVENT_TYPES.filter((type) => (
   type === "vault.album_observed" || type === "catalog.listing_observed"
 ));
-
-function recordOf(value: unknown): Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : {};
-}
-
-function text(value: unknown): string | null {
-  return typeof value === "string" && value.length > 0 ? value : null;
-}
-
-function int(value: unknown): number | null {
-  return typeof value === "number" && Number.isSafeInteger(value) ? value : null;
-}
-
-function stringList(value: unknown): string[] {
-  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string" && item.length > 0) : [];
-}
 
 function coverageWriter(tx: Database, pageId: number, plane: string, now: Date) {
   return (scopeRef: string, status: CaptureCoverageStatus, proof: CaptureCoverageProof, extra: {

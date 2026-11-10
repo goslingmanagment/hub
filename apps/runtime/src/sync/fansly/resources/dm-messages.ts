@@ -83,6 +83,7 @@ import { materializeFanslyDmTipContexts } from "../lib/tip-contexts.ts";
 import { needsHistoryHeadRead } from "../../requests/history-rules.ts";
 import { OWN_MASS_MESSAGE_CONTAINER_TYPE } from "../ws/router.ts";
 import { purchaseTargetFollowups, purchaseTargetSubject, type PurchaseTarget } from "./purchases.ts";
+import { count, recordOf } from "../lib/values.ts";
 
 // `dm-messages.head`, `.catchup`, `.history` (plan §6.2, §7 p.4, §4; design
 // §5.4): one `/message?groupId=<g>&limit=25[&before=<id>]` page a step,
@@ -220,16 +221,8 @@ const CHAIN_WRITING_VERDICTS: ReadonlySet<ChainVerdict["kind"]> = new Set([
 
 const DECIMAL_ID = /^[0-9]{1,30}$/;
 
-function recordOf(value: unknown): Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : {};
-}
-
 function decimalId(value: unknown): string | null {
   return typeof value === "string" && DECIMAL_ID.test(value) ? value : null;
-}
-
-function count(value: unknown): number | null {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
 }
 
 /** Snowflake order; ids that are not plain decimals never compare above. */

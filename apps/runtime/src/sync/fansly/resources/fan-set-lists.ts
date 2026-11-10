@@ -56,6 +56,7 @@ import {
   type FanSetListWrite,
 } from "../lib/fan-set-list-rules.ts";
 import { writeOutcomeDecision } from "../publish/commands.ts";
+import { count, recordOf, text } from "../lib/values.ts";
 
 // `fan-set-lists.sync` (2026-10-28): a Fansly user list of the page that Hub
 // keeps equal to a set of fans: the page's cross-page spenders
@@ -210,18 +211,6 @@ export const databaseFanSetListStore: FanSetListStore = {
 };
 
 // ── the cursor ──────────────────────────────────────────────────────────────
-
-function recordOf(value: unknown): Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : {};
-}
-
-function count(value: unknown): number | null {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
-}
-
-function text(value: unknown): string | null {
-  return typeof value === "string" && value.length > 0 ? value : null;
-}
 
 function ids(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string" && /^\d{1,30}$/.test(item)) : [];

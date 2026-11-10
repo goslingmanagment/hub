@@ -52,6 +52,7 @@ import type {
 import { accountCountersFresh, readFanslyPageFacts, waitForPageIdentity } from "../lib/page-facts.ts";
 import { ACCOUNT_ME_REQUEST, applyAccountMeToPage } from "./account.ts";
 import { lookupFollowups, partitionLookupIds } from "./fan-profiles.ts";
+import { count, recordOf, text } from "../lib/values.ts";
 
 // `followers.head` and `followers.reconcile` (plan §5, design §5.12):
 // `GET /account/{id}/followersnew?offset&limit=100`, journaled as `followers`
@@ -83,18 +84,6 @@ export type FollowersVariant = "head" | "reconcile";
 
 /** The demand reason that bypasses the floor (owner CLI / reset). */
 export const OWNER_DEMAND_REASON = "owner";
-
-function recordOf(value: unknown): Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : {};
-}
-
-function count(value: unknown): number | null {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
-}
-
-function text(value: unknown): string | null {
-  return typeof value === "string" && value.length > 0 ? value : null;
-}
 
 function followersRequest(accountId: string, offset: number): RequestPlan<"followers.page"> {
   return { spec: "followers.page", params: { accountId, offset } };

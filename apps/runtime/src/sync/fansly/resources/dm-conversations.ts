@@ -48,6 +48,7 @@ import {
   type ResolvedListItem,
 } from "../lib/conversation-list.ts";
 import { readFanslyPageFacts, waitForPageIdentity } from "../lib/page-facts.ts";
+import { count, iso, recordOf } from "../lib/values.ts";
 
 // `dm-conversations.head`, `.full`, `.find`, `.detail`, `.ws-down` (plan §6.2,
 // §7 p.3 and p.6; design §5.3): the conversation list
@@ -128,18 +129,6 @@ export const DM_LIST_REPEAT_ONLY_PAGE_LIMIT = 2;
 export const DM_LIST_WS_DOWN_EVERY_MS = 30_000;
 
 type FollowupClass = "planned" | "urgent";
-
-function recordOf(value: unknown): Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : {};
-}
-
-function count(value: unknown): number | null {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
-}
-
-function iso(value: unknown): string | null {
-  return typeof value === "string" && !Number.isNaN(Date.parse(value)) ? value : null;
-}
 
 function listRequest(offset: number): RequestPlan<"messaging.groups"> {
   return { spec: "messaging.groups", params: { offset } };

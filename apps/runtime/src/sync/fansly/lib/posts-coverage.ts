@@ -2,6 +2,7 @@ import type { CaptureCoverageProof, CaptureCoverageStatus } from "@agency_hub_co
 import { CAPTURE_COVERAGE_HEAD_TOLERANCE_MS, CAPTURE_COVERAGE_PLANES } from "@agency_hub_core/shared";
 
 import type { OutcomeClass } from "../../engine/errors.ts";
+import { iso as instant, recordOf } from "./values.ts";
 
 // The `posts` plane of `capture_coverage` (ContentOps entry E7): one row per
 // page, scope ''. Its claim: every post the page published from the end of
@@ -59,14 +60,6 @@ export interface PostsCoverageClaim {
   chain: PostsCoverageChain;
   /** A full walk is needed to prove the floor again. */
   needsBackfill: boolean;
-}
-
-function recordOf(value: unknown): Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : {};
-}
-
-function instant(value: unknown): string | null {
-  return typeof value === "string" && !Number.isNaN(Date.parse(value)) ? value : null;
 }
 
 export function parsePostsCoverageChain(cursor: unknown): PostsCoverageChain {

@@ -21,7 +21,7 @@ import {
 import type { AppConfig } from "@agency_hub_core/shared";
 
 import { isFanslyCdnUrl, MEDIA_DOWNLOAD_MAX_BYTES, MEDIA_DOWNLOAD_TIMEOUT_MS } from "../../services/egress/media-download.ts";
-import { REFUSALS, type Check, type Refusal, type Send, type SiteDone, type State, type WsDone } from "../../services/egress/page-browser-protocol.ts";
+import type { Check, Send, SiteDone, State, WsDone } from "../../services/egress/page-browser-protocol.ts";
 import {
   systemMonoBridge,
   type CheckReply,
@@ -48,7 +48,7 @@ import {
 import type { RequestPlan } from "../engine/resource.ts";
 import { decryptSyncWorkSecret } from "../requests/secret-params.ts";
 import { openPublicationFile } from "../../services/publication-files.ts";
-import { SEND_REPORT_GUARD_MS, siteRequestEndOf } from "./browser-site.ts";
+import { protocolRefusalOf, SEND_REPORT_GUARD_MS, siteRequestEndOf } from "./browser-site.ts";
 
 // The browser page transport (Project Browser, plan §3.2, §4.2; stage 3 PR
 // 12): the engine's `PageTransport` — `prepare`, `send` (at most one physical
@@ -311,8 +311,6 @@ export function browserNotTaking(state: State | null): string | null {
 function mediaKind(url: URL): "image" | "video" {
   return /\.(mp4|m4v|mov|webm|m3u8|ts)$/i.test(url.pathname) ? "video" : "image";
 }
-
-const PROTOCOL_REFUSALS: ReadonlySet<string> = new Set(REFUSALS);
 
 /**
  * The browser transport of one page over its operator's RPC client. The
@@ -733,7 +731,7 @@ export async function createBrowserPageTransport(
         }
       }
       const refusal = hooks.grant();
-      if (refusal !== null) return { admit: false, reason: PROTOCOL_REFUSALS.has(refusal.reason) ? (refusal.reason as Refusal) : "lease_inactive" };
+      if (refusal !== null) return { admit: false, reason: protocolRefusalOf(refusal.reason) };
       granted = true;
       // The pause goes with it: the operator keeps it by its own sight of
       // the page's sends before the release (plan-b Б12). A write's admission

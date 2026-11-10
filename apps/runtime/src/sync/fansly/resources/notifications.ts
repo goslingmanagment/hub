@@ -34,6 +34,7 @@ import type {
   ResourceModule,
   StepPlan,
 } from "../../engine/resource.ts";
+import { count, recordOf, text } from "../lib/values.ts";
 
 // `notifications.forward` and `notifications.backfill` (plan §5, design §5.14):
 // `GET /notifications?before=<id|0>&after=0[&type=<csv>]`, journaled as
@@ -145,18 +146,6 @@ function parseForm(value: unknown): NotificationsForm {
 }
 
 // ── small parsers ───────────────────────────────────────────────────────────
-
-function recordOf(value: unknown): Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : {};
-}
-
-function count(value: unknown): number | null {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
-}
-
-function text(value: unknown): string | null {
-  return typeof value === "string" && value.length > 0 ? value : null;
-}
 
 /** The request parameters of a `notifications.page` step. */
 function pageParams(request: { params: unknown }): { before: string; types: readonly number[] | null } {

@@ -2,6 +2,7 @@ import type { FanslyWriteStep } from "@agency_hub_core/db";
 import { FANSLY_UPLOAD_PART_MAX_BYTES, FANSLY_UPLOAD_STATUS, isFanslyStorageHost } from "@agency_hub_core/fansly";
 
 import { sameCardName } from "./uploads.ts";
+import { isRecord } from "../lib/values.ts";
 
 // What a write's 2xx answer gave (wall posts PR 6): the ids the next steps
 // are derived from. Read from the journaled answer (the capture wrote it to
@@ -68,11 +69,7 @@ function uploadParts(raw: unknown): Array<{ index: number; host: string; path: s
   return parts.every((part, position) => part.index === position) ? parts : null;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function idOf(value: unknown): string | null {
+export function idOf(value: unknown): string | null {
   if (typeof value === "string" && value.trim() !== "") return value;
   if (typeof value === "number" && Number.isSafeInteger(value) && value > 0) return String(value);
   return null;
