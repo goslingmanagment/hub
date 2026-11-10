@@ -57,8 +57,8 @@ import { DELAY_BOUNDS, byDelayOf, byPriceOf } from "./team-sales.ts";
  * $96 stayed with both, and the sheet's cells came closer. A visit's sales are
  * chatter-shifts.ts's (`salesHeldBy`), here read for all of them at once.
  *
- * A guide, not a basis for pay — what a sale pays whom is the confirmed shift
- * report's (services/shift-report.ts), shown beside it.
+ * A guide, not a basis for pay — what a sale pays whom is the agency ledger's,
+ * from the chatters' posted shift reports.
  *
  * THE REST is what «Числа» and «Продажи» already count, for this chatter:
  * messages with them as the author, fans written to and who paid within the

@@ -4,6 +4,7 @@ import {
   ACCOUNT_REPORTS_DEFAULT_DAYS,
   ACCOUNT_REPORTS_MAX_DAYS,
   businessDate,
+  type AccountReport,
   type AccountReportsQuery,
   type AccountReportsResponse,
 } from "@agency_hub_core/contracts";
@@ -31,43 +32,104 @@ const text = z.string().nullish().transform((value) => value ?? "");
 /** A list of texts; Go writes an empty one as null. */
 const texts = z.array(z.string()).nullish().transform((value): string[] => value ?? []);
 
-const ledgerReportsSchema = z.object({
-  from: z.string(),
-  to: z.string(),
-  reports: list(z.object({
-    id: z.number().int().positive(),
-    hub_username: text,
-    hub_user_id: z.number().int().nullish().transform((value) => value ?? null),
-    report_date: businessDate,
-    window_from: z.string(),
-    window_to: z.string(),
-    cut_at: z.string(),
-    version: z.number().int().positive(),
-    versions: z.number().int().positive(),
-    status: z.string(),
-    total_micros: micros,
-    created_at: z.string(),
-    pages: list(z.object({ page: z.string(), amount_micros: micros })),
-    lines: list(z.object({
-      n: z.number().int().nullish().transform((value) => value ?? null),
-      page: text,
-      fan_ref: text,
-      fan_name: text,
-      kind: text,
-      occurred_at: z.string().nullish().transform((value) => value ?? null),
-      net_micros: micros,
-      counted: z.boolean(),
-      added: z.boolean(),
-      what: text,
-      flags: texts,
-      notes: texts,
-      ppv_author: text,
-      ppv_sent_at: text,
-    })),
+/**
+ * One report as the ledger's GET /v1/reports serves it — the shape the cabinet and the owner's «Отчёты»
+ * (ledger-team-reports.ts) both read. What only the owner's screen uses (whose, the posted side) may be absent.
+ */
+export const ledgerReportSchema = z.object({
+  id: z.number().int().positive(),
+  person: z.string().nullish().transform((value) => value ?? null),
+  hub_username: text,
+  hub_user_id: z.number().int().nullish().transform((value) => value ?? null),
+  chatter: text,
+  report_date: businessDate,
+  window_from: z.string(),
+  window_to: z.string(),
+  cut_at: z.string(),
+  version: z.number().int().positive(),
+  versions: z.number().int().positive(),
+  status: z.string(),
+  total_micros: micros,
+  created_at: z.string(),
+  posted_at: z.string().nullish().transform((value) => value ?? null),
+  pages: list(z.object({
+    page: z.string(),
+    model: text,
+    amount_micros: micros,
+    posted_micros: micros.nullish().transform((value) => value ?? null),
+    post_state: text,
+  })),
+  lines: list(z.object({
+    n: z.number().int().nullish().transform((value) => value ?? null),
+    page: text,
+    fan_ref: text,
+    fan_name: text,
+    kind: text,
+    occurred_at: z.string().nullish().transform((value) => value ?? null),
+    net_micros: micros,
+    counted: z.boolean(),
+    added: z.boolean(),
+    what: text,
+    flags: texts,
+    notes: texts,
+    ppv_author: text,
+    ppv_sent_at: text,
   })),
 });
 
-type LedgerReport = z.output<typeof ledgerReportsSchema>["reports"][number];
+export type LedgerReport = z.output<typeof ledgerReportSchema>;
+
+const ledgerReportsSchema = z.object({
+  from: z.string(),
+  to: z.string(),
+  reports: list(ledgerReportSchema),
+});
+
+/**
+ * A report as a chatter sees it (and the owner, opened): the pages and their amounts, the sales counted and held out,
+ * in mills. Sales only — the ledger's people, models, the posted side, transactions, gross and decisions stay behind.
+ */
+export function accountReportOf(report: LedgerReport): AccountReport {
+  return {
+    id: report.id,
+    reportDate: report.report_date,
+    windowFrom: report.window_from,
+    windowTo: report.window_to,
+    cutAt: report.cut_at,
+    version: report.version,
+    versions: report.versions,
+    status: report.status,
+    totalMills: millsOf(report.total_micros),
+    savedAt: report.created_at,
+    pages: report.pages.map((page) => ({ pageLabel: page.page, amountMills: millsOf(page.amount_micros) })),
+    lines: report.lines.map((line) => ({
+      n: line.n,
+      pageLabel: line.page,
+      fanRef: line.fan_ref,
+      fanName: line.fan_name,
+      kind: line.kind,
+      occurredAt: line.occurred_at,
+      netMills: millsOf(line.net_micros),
+      counted: line.counted,
+      added: line.added,
+      what: line.what,
+      flags: line.flags,
+      notes: line.notes,
+      ppvAuthor: line.ppv_author,
+      ppvSentAt: line.ppv_sent_at,
+    })),
+  };
+}
+
+/** The ledger's GET /v1/reports answer, checked: a changed shape is a 503, and the log says what changed. */
+export function parseLedgerReports(app: Pick<LedgerReadApp, "logger">, body: unknown) {
+  const parsed = ledgerReportsSchema.safeParse(body);
+  if (!parsed.success) {
+    app.logger.warn({ issues: parsed.error.issues.slice(0, 5).map((issue) => `${issue.path.join(".")}: ${issue.message}`) }, "ledger reports: unexpected answer");
+    throw new ServiceUnavailableError("The ledger's GET /v1/reports answered in a shape Hub does not know");
+  }
+  return parsed.data;
+}
 
 function addDays(day: string, days: number): string {
   return new Date(Date.parse(`${day}T00:00:00Z`) + days * DAY_MS).toISOString().slice(0, 10);
@@ -102,47 +164,15 @@ export async function readAccountReports(
     { from: window.from, to: window.to, hub_user_id: String(user.id), hub_username: user.username },
     { client: "account-reports", ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}) },
   );
-  const parsed = ledgerReportsSchema.safeParse(body);
-  if (!parsed.success) {
-    app.logger.warn({ issues: parsed.error.issues.slice(0, 5).map((issue) => `${issue.path.join(".")}: ${issue.message}`) }, "ledger reports: unexpected answer");
-    throw new ServiceUnavailableError("The ledger's GET /v1/reports answered in a shape Hub does not know");
-  }
+  const answer = parseLedgerReports(app, body);
 
   // The ledger filters by the user already; a report of someone else in the answer never reaches the screen.
-  const own = parsed.data.reports.filter((report) => belongsTo(report, user));
-  const dropped = parsed.data.reports.length - own.length;
+  const own = answer.reports.filter((report) => belongsTo(report, user));
+  const dropped = answer.reports.length - own.length;
   if (dropped > 0) app.logger.warn({ userId: user.id, dropped }, "ledger reports: the answer held reports of another user, dropped");
 
   const reports = own
-    .map((report) => ({
-      id: report.id,
-      reportDate: report.report_date,
-      windowFrom: report.window_from,
-      windowTo: report.window_to,
-      cutAt: report.cut_at,
-      version: report.version,
-      versions: report.versions,
-      status: report.status,
-      totalMills: millsOf(report.total_micros),
-      savedAt: report.created_at,
-      pages: report.pages.map((page) => ({ pageLabel: page.page, amountMills: millsOf(page.amount_micros) })),
-      lines: report.lines.map((line) => ({
-        n: line.n,
-        pageLabel: line.page,
-        fanRef: line.fan_ref,
-        fanName: line.fan_name,
-        kind: line.kind,
-        occurredAt: line.occurred_at,
-        netMills: millsOf(line.net_micros),
-        counted: line.counted,
-        added: line.added,
-        what: line.what,
-        flags: line.flags,
-        notes: line.notes,
-        ppvAuthor: line.ppv_author,
-        ppvSentAt: line.ppv_sent_at,
-      })),
-    }))
+    .map(accountReportOf)
     // The newest first: by the shift's day, then its window, then the ledger's order.
     .sort((left, right) => right.reportDate.localeCompare(left.reportDate)
       || Date.parse(right.windowFrom) - Date.parse(left.windowFrom)

@@ -518,7 +518,7 @@ export function notificationsReportPreview(request: DemoRequest): KernelOperatio
   const shifts = intBetween(random, 8, 11);
   lines.push("");
   lines.push("👥 <b>Команда</b>");
-  lines.push(`Смены за сутки: ${shifts} · подтверждено ${shifts - intBetween(random, 0, 2)}`);
+  lines.push(`Смены за сутки: ${shifts}`);
   lines.push(`Кастомы не отданы: 2 · самый старый оплачен 3 дн назад`);
   lines.push(`Ждут ответа 6+ ч: 14 (платили 5) · mia-1 6, nova-1 5, mia-2 3`);
   lines.push(`Вернуть, 14 дн: 38 попыток · ответили 11 из 31 · купили 4 из 24`);

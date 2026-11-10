@@ -27,14 +27,11 @@ for at password sign-in (`client: "chat-extension"`): it reaches only the
 61 routes marked "yes", and every route marked "no" refuses it with 403.
 A full device token is not affected.
 
-## Routes (424)
+## Routes (419)
 
 | Method | Path | Route key | Kind | Roles | Page scope | chat-extension token |
 | --- | --- | --- | --- | --- | --- | --- |
 | GET | `/api/v1/account/reports` | `accountReports` | `any-session` | — | — | no |
-| GET | `/api/v1/account/shift-report` | `accountShiftReport` | `any-session` | — | — | no |
-| POST | `/api/v1/account/shift-report/confirm` | `accountShiftReportConfirm` | `any-session` | — | — | no |
-| POST | `/api/v1/account/shift-report/marks` | `accountShiftReportMark` | `any-session` | — | — | no |
 | GET | `/api/v1/account/stats` | `accountChatterStats` | `any-session` | — | — | no |
 | GET | `/api/v1/admin/ai/accounts` | `adminAiAccountsList` | `owner-session` | — | — | no |
 | PATCH | `/api/v1/admin/ai/accounts/:accountId` | `adminAiAccountUpdate` | `owner-session` | — | — | no |
@@ -438,11 +435,9 @@ A full device token is not affected.
 | GET | `/api/v1/team/greetings` | `teamGreetings` | `session` | — | — | no |
 | GET | `/api/v1/team/ledger-payouts` | `teamLedgerPayouts` | `owner-session` | — | — | no |
 | GET | `/api/v1/team/ledger-payouts/prepare` | `teamLedgerPayoutPrepare` | `owner-session` | — | — | no |
+| GET | `/api/v1/team/ledger-reports` | `teamLedgerReports` | `owner-session` | — | — | no |
 | GET | `/api/v1/team/sales/ppv` | `teamSalesPpv` | `session` | — | — | no |
 | GET | `/api/v1/team/sales/replies` | `teamSalesReplies` | `session` | — | — | no |
-| GET | `/api/v1/team/shift-reports/disputes` | `teamShiftDisputes` | `session` | — | — | no |
-| POST | `/api/v1/team/shift-reports/disputes/:saleRef` | `teamShiftResolve` | `owner-session` | — | — | no |
-| GET | `/api/v1/team/shift-reports/export` | `teamShiftExport` | `session` | — | — | no |
 | GET | `/api/v1/team/shift-review` | `teamShiftReview` | `owner-session` | — | — | no |
 | GET | `/api/v1/team/shift-sales` | `teamShiftSales` | `session` | — | — | no |
 | GET | `/api/v1/team/shifts` | `teamShifts` | `session` | — | — | no |

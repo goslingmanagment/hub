@@ -13,7 +13,7 @@
     font-variant-numeric: tabular-nums;
   }
 
-  /* «Ждут вашего решения: 1 спор · …»: each part goes to its section. */
+  /* «Ждут вашего решения: 1 пост не разобран · …»: each part goes to its section. */
   .decisions-jump {
     color: inherit;
     text-decoration: underline;
@@ -117,73 +117,7 @@
     font-variant-numeric: tabular-nums;
   }
 
-  /* ----------------------------------------------------- A dispute's panel */
-
-  .decisions-panel {
-    display: flex;
-    flex-direction: column;
-    gap: 28px;
-  }
-
-  .decisions-panel__title {
-    margin: 0 0 8px;
-    color: var(--ui-text);
-    font-size: var(--ui-fs-15);
-    line-height: var(--ui-lh-15);
-    font-weight: 600;
-  }
-
-  /* Who claims what, and beside each one their conversation with the fan in their shift. */
-  .decisions-marks {
-    display: flex;
-    flex-direction: column;
-    margin: 0;
-    padding: 0;
-    list-style: none;
-    border-top: 1px solid var(--ui-line-soft);
-  }
-
-  .decisions-marks li {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px 16px;
-    min-height: 60px;
-    padding: 8px 0;
-    border-bottom: 1px solid var(--ui-line-soft);
-  }
-
-  .decisions-marks__who {
-    min-width: 0;
-  }
-
-  .decisions-evidence {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    color: var(--ui-accent);
-    font-size: var(--ui-fs-14);
-    line-height: var(--ui-lh-14);
-    font-weight: 500;
-    text-decoration: none;
-    white-space: nowrap;
-    border-radius: var(--ui-radius-sm);
-  }
-
-  a.decisions-evidence:hover {
-    text-decoration: underline;
-  }
-
-  a.decisions-evidence:focus-visible {
-    outline: var(--ui-focus);
-    outline-offset: 2px;
-  }
-
-  .decisions-evidence--none {
-    color: var(--ui-text-2);
-    font-weight: 400;
-  }
+  /* ----------------------------------------------------- Choosing an answer */
 
   /* Answers to choose from: a whole row is the target, the picked one in ink. */
   .decisions-choices {
@@ -254,12 +188,6 @@
     color: var(--ui-text);
     font-size: var(--ui-fs-15);
     line-height: var(--ui-lh-15);
-    font-weight: 500;
-  }
-
-  .decisions-choice__now {
-    color: var(--ui-accent);
-    font-size: var(--ui-fs-14);
     font-weight: 500;
   }
 
@@ -334,33 +262,6 @@
 
   /* ----------------------------------------------------------- Round 2 */
 
-  /* Who claims a sale in a row: the people side by side, why it is a dispute under them. */
-  .decisions-claimants {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    min-width: 0;
-  }
-
-  .decisions-people {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 4px 20px;
-  }
-
-  /* A claimant's way to the conversation at the sale: the link, and under it which shift it opens. */
-  .decisions-evidence-box {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-end;
-    gap: 2px;
-    text-align: right;
-  }
-
-  .decisions-oneside {
-    margin-top: 12px;
-  }
-
   /* A held send's resolve takes the focus on its words, not on an answer: a stray Space picks nothing (Р-н7). */
   .decisions-resolve:focus {
     outline: none;
@@ -386,5 +287,69 @@
     color: inherit;
     font: inherit;
     cursor: pointer;
+  }
+
+  /* ----------------------------------------------------------- Отчёты */
+
+  .decisions-groups {
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+    padding-top: 8px;
+  }
+
+  .decisions-group {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .decisions-group__title {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 2px 12px;
+    margin: 0;
+    color: var(--ui-text);
+    font-size: var(--ui-fs-15);
+    line-height: var(--ui-lh-15);
+    font-weight: 600;
+  }
+
+  .decisions-group__hint {
+    color: var(--ui-text-2);
+    font-size: var(--ui-fs-14);
+    font-weight: 400;
+  }
+
+  /* A row's words and, right after them, its way on («Открыть пост», «В выплатах»). */
+  .decisions-what {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 2px 16px;
+  }
+
+  /* «В выплатах →»: the person in Выплаты, the way the app's quiet links look. */
+  .decisions-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--ui-accent);
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+    font-weight: 500;
+    text-decoration: none;
+    white-space: nowrap;
+    border-radius: var(--ui-radius-sm);
+  }
+
+  .decisions-link:hover {
+    text-decoration: underline;
+  }
+
+  .decisions-link:focus-visible {
+    outline: var(--ui-focus);
+    outline-offset: 2px;
   }
 }

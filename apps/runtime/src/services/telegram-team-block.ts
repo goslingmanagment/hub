@@ -1,5 +1,4 @@
 import {
-  listConfirmedReports,
   listFansWaitingSince,
   listFirstChatterActivities,
   listPageOpenCustoms,
@@ -9,14 +8,14 @@ import {
 
 import type { AppContext } from "../bootstrap.ts";
 import { dayOfShift, moscowDayOf, readPeopleWork } from "./chatter-shifts.ts";
-import { listSaleDisputes, reportsOfShifts } from "./shift-report.ts";
 
 /**
  * Chat Memory week 5 (docs/plans/2026-10-24-chat-memory/week-5.md §3): the
  * morning report's team block — what waits for the owner. Shifts of the
- * report's business day and how many are confirmed, open disputes, open
- * customs, fans waiting since the night, and win back of the last two weeks.
- * A line shows only when it has something; nothing at all — no block.
+ * report's business day, open customs, fans waiting since the night, and win
+ * back of the last two weeks. A line shows only when it has something; nothing
+ * at all — no block. (Hub's own marks and their disputes are gone: what a shift
+ * pays is the chatter's posted report, which the agency ledger reads.)
  */
 
 const DAY_MS = 86_400_000;
@@ -26,8 +25,6 @@ const WIN_BACK_DAYS = 14;
 
 export interface TeamBlockFacts {
   shifts: number;
-  confirmed: number;
-  disputesOpen: number;
   /** Customs paid and not delivered yet (an ordered, unpaid one waits for the fan, not the team). */
   customsOpen: number;
   oldestCustomPaidAt: Date | null;
@@ -42,8 +39,7 @@ function escapeHtml(text: string) {
 /** The block's lines (Telegram HTML); empty when there is nothing to say. Pure. */
 export function renderTeamBlock(facts: TeamBlockFacts, now: Date): string[] {
   const lines: string[] = [];
-  if (facts.shifts > 0) lines.push(`Смены за сутки: ${facts.shifts} · подтверждено ${facts.confirmed}`);
-  if (facts.disputesOpen > 0) lines.push(`Споры по продажам: ${facts.disputesOpen} — «Команда → Выплаты»`);
+  if (facts.shifts > 0) lines.push(`Смены за сутки: ${facts.shifts}`);
   if (facts.customsOpen > 0) {
     const oldest = facts.oldestCustomPaidAt === null ? "" : ` · самый старый оплачен ${Math.floor((now.getTime() - facts.oldestCustomPaidAt.getTime()) / DAY_MS)} дн назад`;
     lines.push(`Кастомы не отданы: ${facts.customsOpen}${oldest}`);
@@ -72,23 +68,14 @@ export async function loadTeamBlockFacts(app: Pick<AppContext, "db">, input: { f
   const firstDay = moscowDayOf(input.from.getTime());
   const lastDay = moscowDayOf(input.to.getTime() - 1);
   let shifts = 0;
-  let confirmed = 0;
   for (const [userId, person] of people) {
-    const dayShifts = person.work.filter((shift) => {
+    shifts += person.work.filter((shift) => {
       if (shift.kind !== "shift") return false;
       const day = dayOfShift(shift, firstActivity.get(userId)?.getTime());
       return day >= firstDay && day <= lastDay;
-    });
-    if (dayShifts.length === 0) continue;
-    // A report is its shift's though the shift's bounds moved since (`reportsOfShifts`), matched against all the work read.
-    const reports = await listConfirmedReports(app.db, { userId, since: new Date(input.from.getTime() - DAY_MS) });
-    const reportsOf = reportsOfShifts(person.work, reports);
-    shifts += dayShifts.length;
-    confirmed += dayShifts.filter((shift) => reportsOf.has(person.work.indexOf(shift))).length;
+    }).length;
   }
-  const [disputes, customs, waiting, winBack] = await Promise.all([
-    // Every undecided dispute, however old: age decides nothing about money.
-    listSaleDisputes(app.db, { from: new Date(0), to: input.now, pages: "all" }),
+  const [customs, waiting, winBack] = await Promise.all([
     listPageOpenCustoms(app.db, { pageIds: "all", limit: 500 }),
     listFansWaitingSince(app.db, { now: input.now, minWaitHours: WAITING_HOURS, maxDays: WAITING_MAX_DAYS }),
     listWinBackResults(app.db, { from: new Date(input.now.getTime() - WIN_BACK_DAYS * DAY_MS), to: input.now, now: input.now, pages: "all" }),
@@ -97,8 +84,6 @@ export async function loadTeamBlockFacts(app: Pick<AppContext, "db">, input: { f
   const paid = paidOpen.map((custom) => custom.paidAt).filter((at): at is Date => at !== null).sort((a, b) => a.getTime() - b.getTime());
   return {
     shifts,
-    confirmed,
-    disputesOpen: disputes.filter((dispute) => dispute.resolution === null).length,
     customsOpen: paidOpen.length,
     oldestCustomPaidAt: paid[0] ?? null,
     waiting,
