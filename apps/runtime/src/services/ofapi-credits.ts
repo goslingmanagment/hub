@@ -82,15 +82,15 @@ export function webhookAccrualCredits(eventCount: number) {
   return Math.ceil(Math.max(0, eventCount) / 100);
 }
 
-function utcDayStart(date: Date) {
+export function utcDayStart(date: Date) {
   return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
 }
 
-function addUtcDays(dayStart: Date, days: number) {
+export function addUtcDays(dayStart: Date, days: number) {
   return new Date(dayStart.getTime() + days * 24 * 60 * 60 * 1000);
 }
 
-function isoDay(dayStart: Date) {
+export function isoDay(dayStart: Date) {
   return dayStart.toISOString().slice(0, 10);
 }
 

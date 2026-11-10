@@ -14,7 +14,6 @@ import {
   type Database,
 } from "@agency_hub_core/db";
 import {
-  dollarsToMills,
 } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
@@ -33,6 +32,7 @@ import {
   normalizeOfapiSpendAmountMills,
 } from "./ofapi-spend-transaction-mapping.ts";
 import { resolveEgress } from "./egress/resolver.ts";
+import { asRecord, parseOfapiDollarMills, parseOfapiVendorDate } from "./ofapi-payloads.ts";
 
 const OFAPI_TRANSACTION_BACKFILL_LIMIT = 100;
 const OVERLAP_CHUNK_SIZE = 500;
@@ -135,12 +135,6 @@ function bump(histogram: Record<string, number>, key: string) {
   histogram[key] = (histogram[key] ?? 0) + 1;
 }
 
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : null;
-}
-
 function asStringId(value: unknown) {
   if (typeof value === "number" && Number.isFinite(value)) {
     return String(Math.trunc(value));
@@ -156,32 +150,6 @@ function firstStringId(...values: unknown[]) {
     }
   }
   return null;
-}
-
-function parseDate(value: unknown): Date | null {
-  if (typeof value !== "string" || value.trim().length === 0) {
-    return null;
-  }
-  const raw = value.trim();
-  const normalized = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(raw)
-    ? `${raw.replace(" ", "T")}Z`
-    : raw;
-  const parsed = new Date(normalized);
-  return Number.isNaN(parsed.getTime()) ? null : parsed;
-}
-
-function parseDollarMills(value: unknown): bigint | null {
-  if (typeof value !== "number" && typeof value !== "string") {
-    return null;
-  }
-  const normalized = typeof value === "string"
-    ? value.trim().replace(/^\$/, "").replace(/,/g, "")
-    : value;
-  try {
-    return dollarsToMills(normalized);
-  } catch {
-    return null;
-  }
 }
 
 function formatOfapiStartDate(date: Date) {
@@ -230,7 +198,7 @@ function normalizeRestTransaction(
     return { status: "skipped", reason: "missing_fan_id" };
   }
 
-  const occurredAt = parseDate(
+  const occurredAt = parseOfapiVendorDate(
     row.createdAt ?? row.created_at ?? row.date ?? row.timestamp ?? row.time,
   );
   if (!occurredAt) {
@@ -256,17 +224,17 @@ function normalizeRestTransaction(
     return { status: "skipped", reason: "unsupported_currency" };
   }
 
-  const grossAmountMills = parseDollarMills(
+  const grossAmountMills = parseOfapiDollarMills(
     row.amount ?? row.gross ?? row.gross_amount ?? row.grossAmount ?? row.price,
   );
   if (grossAmountMills === null) {
     return { status: "skipped", reason: "missing_gross_amount" };
   }
 
-  const explicitNet = parseDollarMills(
+  const explicitNet = parseOfapiDollarMills(
     row.net ?? row.net_amount ?? row.netAmount ?? row.creator_net_amount ?? row.creatorNetAmount,
   );
-  const fee = parseDollarMills(row.fee_amount ?? row.fee ?? row.platform_fee ?? row.platformFee);
+  const fee = parseOfapiDollarMills(row.fee_amount ?? row.fee ?? row.platform_fee ?? row.platformFee);
   const creatorNetAmountMills = explicitNet ?? (fee === null ? null : grossAmountMills - fee);
   if (creatorNetAmountMills === null) {
     return { status: "skipped", reason: "missing_net_amount" };
@@ -276,8 +244,8 @@ function normalizeRestTransaction(
   // values are stored; NULL keeps "derivable as gross − net" a query-time
   // fallback instead of baking a derivation into the explicit-fee column.
   const platformFeeMills = fee;
-  const vatAmountMills = parseDollarMills(row.vat_amount ?? row.vatAmount ?? row.vat);
-  const taxAmountMills = parseDollarMills(row.tax_amount ?? row.taxAmount ?? row.tax);
+  const vatAmountMills = parseOfapiDollarMills(row.vat_amount ?? row.vatAmount ?? row.vat);
+  const taxAmountMills = parseOfapiDollarMills(row.tax_amount ?? row.taxAmount ?? row.tax);
 
   const rawType = typeof row.type === "string" && row.type.trim().length > 0
     ? row.type.trim()

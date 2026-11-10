@@ -39,6 +39,7 @@ import {
   extractMessageIdFromNotification,
   idToString,
   ofapiWebhookEnvelopeSchema,
+  parseOfapiTimestamp,
 } from "./ofapi-payloads.ts";
 
 export const OFAPI_DM_PROJECTION_EVENT_TYPES = [
@@ -90,15 +91,6 @@ export function truncatePreview(content: string) {
   return content.length <= DM_PREVIEW_MAX_LENGTH
     ? content
     : `${content.slice(0, DM_PREVIEW_MAX_LENGTH - 1).trimEnd()}…`;
-}
-
-function parseMessageTimestamp(value: unknown): Date | null {
-  if (typeof value !== "string" || value.length === 0) {
-    return null;
-  }
-
-  const parsed = new Date(value);
-  return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
 
 function usdToCents(value: unknown): number {
@@ -153,7 +145,7 @@ export function parseOfapiDmMessagePayload(
   const partner = asRecord(direction === "received" ? payload.fromUser : payload.toUser);
   const fanId = idToString(partner?.id);
   const messageId = idToString(payload.id);
-  const createdAt = parseMessageTimestamp(payload.createdAt);
+  const createdAt = parseOfapiTimestamp(payload.createdAt);
   if (!partner || !fanId || !messageId || !createdAt) {
     return null;
   }
@@ -176,7 +168,7 @@ export function parseOfapiDmMessagePayload(
     // so only tip messages carry an amount here. D5: media is never downloaded.
     tipAmountCents: payload.isTip === true ? usdToCents(payload.price) : 0,
     inReplyToMessageId: idToString(asRecord(payload.replyToMessage)?.id),
-    partnerLastSeenAt: parseMessageTimestamp(partner.lastSeen),
+    partnerLastSeenAt: parseOfapiTimestamp(partner.lastSeen),
   };
 }
 
@@ -424,7 +416,7 @@ async function projectDmPpvUnlocked(
     return { status: "skipped", reason: "ppv.unlocked notification has no message reference" };
   }
 
-  const purchasedAt = parseMessageTimestamp(payload.createdAt);
+  const purchasedAt = parseOfapiTimestamp(payload.createdAt);
   const marked = await markPageDmMessagePurchased(app.db, {
     platformAccountId: page.id,
     platformMessageId: messageId,

@@ -4,7 +4,7 @@
 // circular import through the event processor.
 
 import { z } from "zod";
-import { normalizeDmMessageText, truncateUtf16Safe } from "@agency_hub_core/shared";
+import { dollarsToMills, normalizeDmMessageText, truncateUtf16Safe } from "@agency_hub_core/shared";
 
 // The wire envelope, live-verified 2026-06-10: the event id is NOT in the body
 // (dedupe runs on the x-ofapi-idempotency-key header before this is parsed).
@@ -23,6 +23,45 @@ export function asRecord(value: unknown): Record<string, unknown> | null {
   return typeof value === "object" && value !== null && !Array.isArray(value)
     ? value as Record<string, unknown>
     : null;
+}
+
+/** A vendor timestamp: a non-empty string `new Date` can read, else null. */
+export function parseOfapiTimestamp(value: unknown): Date | null {
+  if (typeof value !== "string" || value.length === 0) {
+    return null;
+  }
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+/** A vendor date of the REST lists: "YYYY-MM-DD HH:MM:SS" is read as UTC,
+ *  any other non-blank string as `new Date` reads it, else null. */
+export function parseOfapiVendorDate(value: unknown): Date | null {
+  if (typeof value !== "string" || value.trim().length === 0) {
+    return null;
+  }
+  const raw = value.trim();
+  const normalized = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(raw)
+    ? `${raw.replace(" ", "T")}Z`
+    : raw;
+  const parsed = new Date(normalized);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+/** A vendor dollar amount (a number, or a string like "$1,234.50") in mills,
+ *  null when `dollarsToMills` refuses it. */
+export function parseOfapiDollarMills(value: unknown): bigint | null {
+  if (typeof value !== "number" && typeof value !== "string") {
+    return null;
+  }
+  const normalized = typeof value === "string"
+    ? value.trim().replace(/^\$/, "").replace(/,/g, "")
+    : value;
+  try {
+    return dollarsToMills(normalized);
+  } catch {
+    return null;
+  }
 }
 
 /** A receipt field is PRESENT when it is truthy or a non-empty array. `null`,

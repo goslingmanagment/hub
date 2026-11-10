@@ -38,7 +38,10 @@ import type { AppContext } from "../bootstrap.ts";
 import { BadRequestError } from "./errors.ts";
 import { loadEffectiveConfig } from "./effective-config.ts";
 import {
+  addUtcDays,
   DEFAULT_BURN_ALERT_CREDITS_PER_HOUR,
+  isoDay,
+  utcDayStart,
   webhookAccrualCredits,
 } from "./ofapi-credits.ts";
 import { isOfapiCreditFloorBlocking } from "./sync/ofapi-dm-sync.ts";
@@ -55,18 +58,6 @@ const REFILL_TARGET_DAYS = 30;
 const BURN_WINDOW_MINUTES = 60;
 const BURN_TOP_N = 5;
 
-
-function utcDayStart(date: Date) {
-  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
-}
-
-function addUtcDays(dayStart: Date, days: number) {
-  return new Date(dayStart.getTime() + days * 24 * 60 * 60 * 1000);
-}
-
-function isoDay(date: Date) {
-  return date.toISOString().slice(0, 10);
-}
 
 type SpendBySource = OfapiCreditsSummaryResponse["today"]["bySource"];
 

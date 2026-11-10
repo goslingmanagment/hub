@@ -16,6 +16,7 @@ import {
   asRecord,
   idToString,
   ofapiWebhookEnvelopeSchema,
+  parseOfapiTimestamp,
 } from "./ofapi-payloads.ts";
 
 // Retention stand-down: aligned with the env default; effectively-forever.
@@ -73,14 +74,6 @@ export function resolveOfapiDmColdArchiveRetentionDays() {
 
 function archiveRetainUntil(sourceReceivedAt: Date) {
   return new Date(sourceReceivedAt.getTime() + DM_COLD_ARCHIVE_RETAIN_DAYS * 24 * 60 * 60 * 1000);
-}
-
-function parseMessageTimestamp(value: unknown): Date | null {
-  if (typeof value !== "string" || value.length === 0) {
-    return null;
-  }
-  const parsed = new Date(value);
-  return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
 
 function nonNegativeNumber(value: unknown): number | null {
@@ -145,7 +138,7 @@ function parseArchiveMessage(
   const partner = asRecord(isSentByMe ? payload.toUser : payload.fromUser);
   const fanId = idToString(partner?.id);
   const messageId = idToString(payload.id);
-  const messageCreatedAt = parseMessageTimestamp(payload.createdAt);
+  const messageCreatedAt = parseOfapiTimestamp(payload.createdAt);
   if (!partner || !fanId || !messageId || !messageCreatedAt) {
     return null;
   }

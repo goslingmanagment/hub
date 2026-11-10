@@ -1,5 +1,5 @@
 import { findOfapiReadDefinition } from "@agency_hub_core/shared";
-import { isOfapiTypedExportProfile, type OfapiTypedExportProfile } from "@agency_hub_core/shared";
+import { isOfapiTypedExportProfile, OFAPI_TYPED_EXPORT_PROFILES, type OfapiTypedExportProfile } from "@agency_hub_core/shared";
 import { createHash, randomUUID } from "node:crypto";
 
 import { sql } from "drizzle-orm";
@@ -493,6 +493,10 @@ export async function createOfapiInteractiveRequest(
   return { id, requestFingerprint };
 }
 
+/** The typed-export profiles as SQL literals (`'profile_visitors','fans',…`): their jobs
+ * belong to the typed-export lane, not to the generic capture lane. */
+const TYPED_EXPORT_PROFILES_SQL = sql.raw(OFAPI_TYPED_EXPORT_PROFILES.map((profile) => `'${profile}'`).join(","));
+
 export async function listRunnableOfapiCapturePages(
   db: Database,
   input?: { now?: Date; limit?: number },
@@ -508,7 +512,7 @@ export async function listRunnableOfapiCapturePages(
            max(priority)::int as priority,
            min(case when state = 'awaiting_parse' then updated_at else next_attempt_at end) as requested_at
     from ofapi_capture_jobs
-    where kind not in ('collection_read','media_upload') and not (kind='account_export' and coalesce(target->>'profile' in ('profile_visitors','fans','tracking_links','trial_links','smart_links'),false)) and ((state = 'awaiting_parse' and reason_code is null)
+    where kind not in ('collection_read','media_upload') and not (kind='account_export' and coalesce(target->>'profile' in (${TYPED_EXPORT_PROFILES_SQL}),false)) and ((state = 'awaiting_parse' and reason_code is null)
        or (state in ('ready', 'retry_wait') and next_attempt_at <= ${now}))
     group by page_id
     order by max(priority) desc,
@@ -543,7 +547,7 @@ export async function leaseNextOfapiCaptureJob(
       select id
       from ofapi_capture_jobs
       where page_id = ${input.pageId}
-        and ${(input.jobId ?? input.exactJobId) ? sql`id=${input.jobId ?? input.exactJobId}::uuid` : sql`kind not in ('collection_read','media_upload') and not (kind = 'account_export' and coalesce(target->>'profile' in ('profile_visitors','fans','tracking_links','trial_links','smart_links'),false))`}
+        and ${(input.jobId ?? input.exactJobId) ? sql`id=${input.jobId ?? input.exactJobId}::uuid` : sql`kind not in ('collection_read','media_upload') and not (kind = 'account_export' and coalesce(target->>'profile' in (${TYPED_EXPORT_PROFILES_SQL}),false))`}
         and (
           (state = 'awaiting_parse' and reason_code is null)
           or (state in ('ready', 'retry_wait') and next_attempt_at <= ${now})
