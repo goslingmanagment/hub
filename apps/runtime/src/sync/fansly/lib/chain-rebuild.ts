@@ -1,20 +1,12 @@
 import { setTimeout as delay } from "node:timers/promises";
 
 import {
-  getLatestCompletedChainRebuild,
-  getSyncPage,
   listLegacyDmJournalRows,
-  listPageThreadChains,
-  readThreadStoredFacts,
-  SYNC_CHAIN_REBUILD_AUDIT_EVENT,
-  writeRebuiltThreadChain,
   type LegacyDmJournalRow,
-  type SyncPageMode,
   type ThreadChainRow,
 } from "@agency_hub_core/db";
 
 import type { AppContext } from "../../../bootstrap.ts";
-import { recordAudit, type AuditContext } from "../../../services/auth.ts";
 import { createCapturePayloadRowResolver, isCapturePayloadUnavailable } from "../../../services/payload-reader.ts";
 import {
   chainPageNeedsStoredFacts,
@@ -28,23 +20,17 @@ import {
   type ThreadChain,
 } from "./chain.ts";
 
-// Fansly Sync Engine (plan §6.3, design §8.2): DM chains re-proved LOCALLY
-// from the legacy journal — the `/message` pages in `sync_raw_payloads` since
-// 2026-07-05, each with its own request parameters — by the same fold the
-// engine runs online (chain.ts). No request reaches Fansly.
-//
-// What it writes (`--write`; a dry run writes nothing): only the chain columns
-// of `page_dm_threads`, through `writeRebuiltThreadChain` — never a legacy
-// coverage column, so pages the legacy engine owns see no change. Never on a
-// `handover`/`live` page (the engine is the chain writer there, I9), never over
-// a chain the engine wrote, never between 00:00 and 05:00 UTC (the legacy night
+// Fansly Sync Engine (plan §6.3, design §8.2, §8.3): the legacy DM journal —
+// the `/message` pages in `sync_raw_payloads` since 2026-07-05, each with its
+// own request parameters — read in paced batches and folded LOCALLY by the
+// same fold the engine runs online (chain.ts), for the read-only checks
+// (`sync chain check-end-rule`, the ETA backtest). No request reaches Fansly;
+// nothing is written. Not between 00:00 and 05:00 UTC (the legacy night
 // backfill window) unless forced.
 //
-// Initial chains are empty: legacy coverage is not trusted. A thread that
-// holds messages and has no head page in the journal stays `unverified`. A
-// body the catalog cannot serve is skipped and counted; the fold then simply
-// cannot continue a walk past it (the next page's cursor no longer matches).
-// A head walk still staged when a run ends is not persisted (D18).
+// Initial chains are empty: legacy coverage is not trusted. A body the catalog
+// cannot serve is skipped and counted; the fold then simply cannot continue a
+// walk past it (the next page's cursor no longer matches).
 
 export type SyncChainContext = Pick<AppContext, "db" | "logger">;
 
@@ -379,218 +365,4 @@ export async function foldJournalEntry(
   state.dirty = true;
   state.foldedPages += 1;
   return { state, fold };
-}
-
-// ── the rebuild ───────────────────────────────────────────────────────────────
-
-export interface ChainRebuildOptions extends ScanPacing {
-  pageId: number;
-  /** One thread only (page_dm_threads.id); its run never counts as the page's. */
-  threadId?: number;
-  write: boolean;
-  /** Ignore earlier rebuilds: fold the whole journal from empty chains. */
-  full: boolean;
-  audit?: AuditContext;
-  /** Progress after every batch (the CLI prints it). */
-  onBatch?: (progress: { pageId: number; throughRawId: number; rowsScanned: number; batches: number }) => void;
-}
-
-export interface ChainRebuildThreadSummary {
-  folded: number;
-  complete: number;
-  completeVia: Record<ChainCompletion | "earlier_run", number>;
-  partial: number;
-  unverified: number;
-  none: number;
-  written: number;
-  skipped: { engine_owned: number; concurrent_write: number; thread_missing: number };
-  epochChanged: number;
-}
-
-export interface ChainRebuildPageReport {
-  pageId: number;
-  pageLabel: string | null;
-  mode: SyncPageMode | "no_sync_page";
-  write: boolean;
-  full: boolean;
-  threadId: number | null;
-  scan: {
-    fromRawId: number;
-    throughRawId: number;
-    rowsScanned: number;
-    batches: number;
-    completed: boolean;
-    stoppedBy: ScanStop | null;
-  };
-  rows: ChainFoldCounters;
-  threads: ChainRebuildThreadSummary;
-}
-
-/** The rebuild refuses a page the engine owns (I9). */
-export class ChainRebuildRefusedError extends Error {
-  constructor(readonly pageId: number, readonly mode: SyncPageMode) {
-    super(
-      `sync chain rebuild: page ${pageId} is '${mode}' — the Fansly Sync Engine is the only chain writer there `
-        + "(the rebuild runs on 'off' and 'shadow' pages)",
-    );
-    this.name = "ChainRebuildRefusedError";
-  }
-}
-
-/**
- * Rebuild the chains of one page (or one thread) from the legacy journal.
- * Incremental by default: the scan starts after the page's last completed
- * page-wide `--write` run, and a thread resumes from its stored chain past its
- * own watermark. With `write`, folded threads are written after every batch
- * (each in its own short transaction) and the run leaves an audit event; a
- * page-wide run that reached the end of the journal is the page's completed
- * rebuild.
- */
-export async function rebuildPageChains(
-  app: SyncChainContext,
-  options: ChainRebuildOptions,
-  governor: ScanGovernor = new ScanGovernor(options),
-): Promise<ChainRebuildPageReport> {
-  const syncPage = await getSyncPage(app.db, options.pageId);
-  const mode: SyncPageMode | "no_sync_page" = syncPage?.mode ?? "no_sync_page";
-  if (mode === "handover" || mode === "live") {
-    throw new ChainRebuildRefusedError(options.pageId, mode);
-  }
-
-  const threads = await listPageThreadChains(app.db, {
-    pageId: options.pageId,
-    ...(options.threadId === undefined ? {} : { threadId: options.threadId }),
-  });
-  if (options.threadId !== undefined && threads.length === 0) {
-    throw new Error(`sync chain rebuild: thread ${options.threadId} is not a thread of page ${options.pageId}`);
-  }
-  const foldMode = options.full ? "full" : "incremental";
-  const book = new Map(threads.map((row) => [row.groupId, initialFoldState(row, foldMode)]));
-  const latest = options.full ? null : await getLatestCompletedChainRebuild(app.db, options.pageId);
-  const fromRawId = latest?.throughRawId ?? 0;
-  const counters = newFoldCounters();
-  const summary: ChainRebuildThreadSummary = {
-    folded: 0,
-    complete: 0,
-    completeVia: { empty_page: 0, empty_head: 0, segment_empty_page: 0, earlier_run: 0 },
-    partial: 0,
-    unverified: 0,
-    none: 0,
-    written: 0,
-    skipped: { engine_owned: 0, concurrent_write: 0, thread_missing: 0 },
-    epochChanged: 0,
-  };
-  const scan: ChainRebuildPageReport["scan"] = {
-    fromRawId,
-    throughRawId: fromRawId,
-    rowsScanned: 0,
-    batches: 0,
-    completed: false,
-    stoppedBy: null,
-  };
-  const readStored = (threadId: number) => readThreadStoredFacts(app.db, threadId);
-
-  const flush = async (throughRawId: number) => {
-    if (!options.write) return;
-    for (const state of book.values()) {
-      if (!state.dirty || state.engineOwned || state.conflicted) continue;
-      const written = await writeRebuiltThreadChain(app.db, {
-        pageId: options.pageId,
-        threadId: state.threadId,
-        chain: state.chain,
-        expectedWatermark: state.storedWatermark,
-        journalWatermark: throughRawId,
-      });
-      state.dirty = false;
-      if (written.kind === "written") {
-        state.written = true;
-        state.storedWatermark = Math.max(state.storedWatermark, throughRawId);
-        if (written.epochChanged) summary.epochChanged += 1;
-        continue;
-      }
-      summary.skipped[written.reason] += 1;
-      if (written.reason === "engine_owned") state.engineOwned = true;
-      else state.conflicted = true;
-    }
-  };
-
-  scan.stoppedBy = governor.stopReason();
-  if (scan.stoppedBy === null) {
-    const groupId = options.threadId === undefined ? undefined : threads[0]!.groupId;
-    for await (const batch of legacyJournalBatches(app, {
-      pageId: options.pageId,
-      afterId: fromRawId,
-      batchRows: options.batchRows,
-      ...(groupId === undefined ? {} : { groupId }),
-    })) {
-      for (const entry of batch.entries) await foldJournalEntry(book, entry, counters, readStored);
-      scan.rowsScanned += batch.entries.length;
-      scan.batches += 1;
-      scan.throughRawId = batch.throughRawId;
-      await flush(batch.throughRawId);
-      options.onBatch?.({
-        pageId: options.pageId,
-        throughRawId: scan.throughRawId,
-        rowsScanned: scan.rowsScanned,
-        batches: scan.batches,
-      });
-      if (batch.exhausted) {
-        scan.completed = true;
-        break;
-      }
-      scan.stoppedBy = governor.stopReason();
-      if (scan.stoppedBy !== null) break;
-      await governor.pause();
-    }
-  }
-
-  for (const state of book.values()) {
-    if (state.written) summary.written += 1;
-    if (state.foldedPages === 0) continue;
-    summary.folded += 1;
-    if (state.chain.state === "complete") {
-      summary.complete += 1;
-      summary.completeVia[state.completedVia ?? "earlier_run"] += 1;
-    } else {
-      summary[state.chain.state] += 1;
-    }
-  }
-
-  const report: ChainRebuildPageReport = {
-    pageId: options.pageId,
-    pageLabel: syncPage?.pageLabel ?? null,
-    mode,
-    write: options.write,
-    full: options.full,
-    threadId: options.threadId ?? null,
-    scan,
-    rows: counters,
-    threads: summary,
-  };
-  if (options.write) {
-    await recordAudit(app, {
-      ...(options.audit ?? { source: "cli", actorUserId: null }),
-      eventType: SYNC_CHAIN_REBUILD_AUDIT_EVENT,
-      platformAccountId: options.pageId,
-      metadata: {
-        scope: options.threadId === undefined ? "page" : "thread",
-        threadId: options.threadId ?? null,
-        full: options.full,
-        completed: scan.completed,
-        stoppedBy: scan.stoppedBy,
-        fromRawId: scan.fromRawId,
-        throughRawId: scan.throughRawId,
-        rowsScanned: scan.rowsScanned,
-        rowsFolded: counters.folded,
-        threadsFolded: summary.folded,
-        threadsWritten: summary.written,
-        threadsComplete: summary.complete,
-        threadsPartial: summary.partial,
-        anomalies: counters.anomalies,
-        contractViolations: counters.contractViolations,
-        bodiesUnavailable: counters.skipped.body_unavailable,
-      },
-    });
-  }
-  return report;
 }

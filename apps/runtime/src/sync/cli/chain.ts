@@ -4,16 +4,11 @@ import { listSyncPages, readThreadChain, type SyncPageRow } from "@agency_hub_co
 
 import { createAppContext } from "../../bootstrap.ts";
 import { checkEndRule, checkWindow, type EndRulePageReport } from "../fansly/lib/chain-checks.ts";
-import {
-  ChainRebuildRefusedError,
-  rebuildPageChains,
-  ScanGovernor,
-  type ChainRebuildPageReport,
-} from "../fansly/lib/chain-rebuild.ts";
+import { ScanGovernor } from "../fansly/lib/chain-rebuild.ts";
 
-// Owner CLI `pnpm cli sync chain …` (design §7.6, §8.2, §8.3): the DM chain
-// rebuild from the legacy journal and its read-only checks. JSON reports on
-// stdout, progress on stderr.
+// Owner CLI `pnpm cli sync chain …` (design §8.3): the read-only checks of the
+// DM chains over the legacy journal. JSON reports on stdout, progress on
+// stderr.
 
 const DEFAULT_SINCE = "2026-07-05T00:00:00Z";
 
@@ -77,7 +72,7 @@ async function resolvePages(
 
 /**
  * `--page` of a `sync chain` command. The root program is not positional, so
- * commander splits `sync chain rebuild --page x` at the root and the `sync`
+ * commander splits `sync chain check-end-rule --page x` at the root and the `sync`
  * command (which has its own `--page`) takes the value; `sync status` reads it
  * the same way.
  */
@@ -97,74 +92,7 @@ function print(value: unknown): void {
 export function registerSyncChainCommands(sync: Command): void {
   const chain = sync
     .command("chain")
-    .description("Fansly Sync Engine DM chains: rebuild from the legacy journal and its read-only checks");
-
-  chain
-    .command("rebuild")
-    .description(
-      "Re-prove DM chains from the legacy /message journal (no Fansly request). Dry run unless --write; "
-        + "writes only the chain columns; refuses handover/live pages; not between 00:00 and 05:00 UTC",
-    )
-    .option("--page <label>", "one page (default: every Fansly page)")
-    .option("--thread <id>", "one thread (page_dm_threads.id)", positiveInt)
-    .option("--write", "write the rebuilt chains (default: dry run)")
-    .option("--full", "ignore earlier rebuilds and fold the whole journal from empty chains")
-    .option("--batch-rows <n>", "journal rows per read", positiveInt, 500)
-    .option("--sleep-ms <n>", "pause between batches", nonNegativeInt, 200)
-    .option("--max-duration <duration>", "stop after this long (90s, 30m, 2h)", parseDurationMs)
-    .option("--force-window", "run inside the 00:00–05:00 UTC legacy night window")
-    .action(async (options: {
-      page?: string;
-      thread?: number;
-      write?: boolean;
-      full?: boolean;
-      batchRows: number;
-      sleepMs: number;
-      maxDuration?: number;
-      forceWindow?: boolean;
-    }, command: Command) => {
-      const page = pageLabel(options, command);
-      const app = await createAppContext();
-      try {
-        const { pages, threadId } = await resolvePages(app, {
-          ...(page === undefined ? {} : { page }),
-          ...(options.thread === undefined ? {} : { thread: options.thread }),
-        });
-        const refused = pages.filter((page) => page.mode === "handover" || page.mode === "live");
-        if (refused.length > 0) {
-          throw new ChainRebuildRefusedError(refused[0]!.pageId, refused[0]!.mode);
-        }
-        const pacing = {
-          batchRows: options.batchRows,
-          sleepMs: options.sleepMs,
-          maxDurationMs: options.maxDuration ?? null,
-          forceWindow: options.forceWindow === true,
-        };
-        const governor = new ScanGovernor(pacing);
-        const reports: ChainRebuildPageReport[] = [];
-        for (const target of pages) {
-          const report = await rebuildPageChains(app, {
-            ...pacing,
-            pageId: target.pageId,
-            ...(threadId === undefined ? {} : { threadId }),
-            write: options.write === true,
-            full: options.full === true,
-            audit: { source: "cli", actorUserId: null },
-            onBatch: (progress) => {
-              console.error(
-                `[sync chain rebuild] ${target.pageLabel ?? target.pageId}: through raw ${progress.throughRawId}, `
-                  + `${progress.rowsScanned} rows, ${progress.batches} batches`,
-              );
-            },
-          }, governor);
-          reports.push(report);
-          if (report.scan.stoppedBy !== null) break;
-        }
-        print({ write: options.write === true, full: options.full === true, pages: reports });
-      } finally {
-        await app.close();
-      }
-    });
+    .description("Fansly Sync Engine DM chains: read-only checks over the legacy journal");
 
   chain
     .command("check-end-rule")

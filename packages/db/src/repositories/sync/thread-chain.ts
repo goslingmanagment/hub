@@ -14,8 +14,8 @@ import { textArrayParam, toDate, toRequiredDate } from "./values.ts";
 // I9 — two column groups, two writers, no overlap:
 //   chain columns (0231: head_confirmed_*, contiguous_*, chain_*, history_*)
 //       written ONLY by `writeThreadChain` — by the engine's DM apply in the
-//       transaction of the messages, or by the journal rebuild in its own
-//       short transaction (`writeRebuiltThreadChain`);
+//       transaction of the messages (the journal rebuild, `journal_rebuild`,
+//       wrote them through it until 2026-10-03);
 //   legacy coverage columns (stored_*, message_coverage_status,
 //       message_backfill_complete, last_message_sync_at, last_fan/model_*)
 //       written by the engine ONLY through `writeThreadSummary` (a read
@@ -37,9 +37,6 @@ export type ThreadHistoryProof = (typeof THREAD_HISTORY_PROOFS)[number];
 
 export const THREAD_CHAIN_SOURCES = ["journal_rebuild", "engine"] as const;
 export type ThreadChainSource = (typeof THREAD_CHAIN_SOURCES)[number];
-
-/** The audit event a `--write` run of `sync chain rebuild` leaves per page. */
-export const SYNC_CHAIN_REBUILD_AUDIT_EVENT = "admin.sync_chain_rebuild";
 
 /** The page that proved `complete`: an engine observation or a legacy
  *  journal row. */
@@ -102,22 +99,6 @@ export class ThreadSummaryRefusedError extends Error {
   }
 }
 
-/** A rebuild write refused by the page mode (the engine is the chain writer). */
-export class ThreadChainRebuildModeError extends Error {
-  readonly pageId: number;
-  readonly mode: SyncPageMode;
-
-  constructor(pageId: number, mode: SyncPageMode) {
-    super(
-      `Page ${pageId} is '${mode}': the Fansly Sync Engine is the only chain writer there; `
-        + "the journal rebuild runs on 'off' and 'shadow' pages",
-    );
-    this.name = "ThreadChainRebuildModeError";
-    this.pageId = pageId;
-    this.mode = mode;
-  }
-}
-
 const SQL_IDENTIFIER = /^[a-z_][a-z0-9_]*$/;
 
 /**
@@ -165,7 +146,7 @@ function assertWritableChain(threadId: number, chain: ThreadChainState): void {
  * THE single writer of a thread's chain columns (I9). Writes only those
  * columns, `chain_source`, and — when given — raises the journal watermark;
  * never a legacy column, never `updated_at`. Runs inside the caller's
- * transaction (engine: the DM apply; rebuild: `writeRebuiltThreadChain`).
+ * transaction (the engine's DM apply).
  * Returns the epoch the thread had, so the caller can clear request anchors
  * of a replaced chain (§7.1.6).
  */
@@ -527,89 +508,6 @@ export async function listLegacyDmJournalRows(
     payloadRef: capturePayloadRefFromColumns(row.payloadBucketMonth, row.payloadObjectId),
     capturedAt: toRequiredDate(row.capturedAt),
   }));
-}
-
-// ── the rebuild's write ───────────────────────────────────────────────────────
-
-export type RebuiltThreadChainWrite =
-  | { kind: "written"; epochChanged: boolean }
-  | { kind: "skipped"; reason: "engine_owned" | "concurrent_write" | "thread_missing" };
-
-/**
- * One rebuilt thread in one short transaction (§8.2): the page row first
- * (lock order; `for share` holds the mode still), then the thread row
- * `for update`, and only then the checks — an engine chain is never
- * overwritten, and a thread another run wrote since this one read it is
- * skipped. A page in `handover`/`live` refuses (the engine is the chain
- * writer there).
- */
-export async function writeRebuiltThreadChain(
-  db: Database,
-  input: {
-    pageId: number;
-    threadId: number;
-    chain: ThreadChainState;
-    /** The thread's watermark when the run read it. */
-    expectedWatermark: number;
-    /** The journal id the run folded this thread through. */
-    journalWatermark: number;
-  },
-): Promise<RebuiltThreadChainWrite> {
-  return db.transaction(async (transaction) => {
-    const tx = transaction as unknown as Database;
-    const page = await tx.execute<{ mode: SyncPageMode }>(sql`
-      select mode from sync_pages where page_id = ${input.pageId} for share
-    `);
-    const mode = page.rows[0]?.mode ?? "off";
-    if (mode !== "off" && mode !== "shadow") throw new ThreadChainRebuildModeError(input.pageId, mode);
-
-    const locked = await tx.execute<{ chainSource: ThreadChainSource | null; watermark: string }>(sql`
-      select chain_source as "chainSource", chain_journal_watermark::text as watermark
-        from page_dm_threads
-       where id = ${input.threadId} and platform_account_id = ${input.pageId}
-         for update
-    `);
-    const row = locked.rows[0];
-    if (!row) return { kind: "skipped", reason: "thread_missing" };
-    if (row.chainSource === "engine") return { kind: "skipped", reason: "engine_owned" };
-    if (Number(row.watermark) !== input.expectedWatermark) return { kind: "skipped", reason: "concurrent_write" };
-    const written = await writeThreadChain(tx, input.threadId, {
-      chain: input.chain,
-      source: "journal_rebuild",
-      journalWatermark: input.journalWatermark,
-    });
-    return { kind: "written", epochChanged: written.epochChanged };
-  });
-}
-
-export interface ChainRebuildRunRecord {
-  auditEventId: number;
-  createdAt: Date;
-  /** The journal id the run scanned through. */
-  throughRawId: number;
-}
-
-/** The latest page-wide `--write` rebuild of the page that reached the end of
- *  the journal: an incremental run starts after it. */
-export async function getLatestCompletedChainRebuild(
-  db: Database,
-  pageId: number,
-): Promise<ChainRebuildRunRecord | null> {
-  const result = await db.execute<{ id: string; createdAt: Date | string; throughRawId: string }>(sql`
-    select a.id::text as id, a.created_at as "createdAt", a.metadata->>'throughRawId' as "throughRawId"
-      from audit_events a
-     where a.event_type = ${SYNC_CHAIN_REBUILD_AUDIT_EVENT}
-       and a.platform_account_id = ${pageId}
-       and a.metadata->>'scope' = 'page'
-       and a.metadata->>'completed' = 'true'
-       and a.metadata->>'throughRawId' ~ '^[0-9]+$'
-     order by a.id desc
-     limit 1
-  `);
-  const row = result.rows[0];
-  return row
-    ? { auditEventId: Number(row.id), createdAt: toRequiredDate(row.createdAt), throughRawId: Number(row.throughRawId) }
-    : null;
 }
 
 // ── the summary columns on engine-owned pages (from the archive) ──────────────

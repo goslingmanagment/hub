@@ -805,8 +805,9 @@ a pair the send audit could not judge), `owner_review` (429s on two or more rout
 the runbook reads it there. Its fixtures: tests/sync-live-hour.integration.test.ts.
 
 The switch itself is history. Step 3 took the six pages over with `sync switch` (handover, guard hand-over, legacy stop
-confirmed, final chain rebuild, legacy import, live) and could give one back with its rollback until step 4 S4-10; both
-are deleted with their audit trail's writers (the `admin.sync_switch*` rows stay as records). What they left on a page —
+confirmed, final chain rebuild, legacy import, live) and could give one back with its rollback until step 4 S4-10; they
+and `sync chain rebuild` are deleted with their audit trail's writers (the `admin.sync_switch*` and
+`admin.sync_chain_rebuild` rows stay as records). What they left on a page —
 the import mark, imported cursors, `legacy_import` breaker carriers, converted hydration requests — is ordinary engine
 state.
 

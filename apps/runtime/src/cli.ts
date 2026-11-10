@@ -3274,8 +3274,8 @@ export function buildProgram() {
       }
     });
 
-  // Fansly Sync Engine DM chains (design §8.2, §8.3): `sync chain rebuild |
-  // check-end-rule | check-window`.
+  // Fansly Sync Engine DM chains (design §8.3): `sync chain check-end-rule |
+  // check-window`.
   registerSyncChainCommands(sync);
   // Fansly Sync Engine history requests (design §7.6): `sync history request |
   // status | cancel | list | eta-backtest`.
