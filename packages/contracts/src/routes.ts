@@ -1733,28 +1733,6 @@ export const revenueDailyResponseSchema = z.object({
   })),
 });
 
-// Per-model earnings + trends: every visible model's period total and daily
-// series in one call (the dashboard's "By model" comparison view).
-export const revenueByModelQuerySchema = z.object({
-  period: periodEnum.default("30d"),
-  windowAt: revenueInstantSchema.optional(),
-  from: businessDate.optional(),
-  to: businessDate.optional(),
-});
-
-export const revenueByModelItemSchema = z.object({
-  modelSlug: z.string(),
-  modelName: z.string(),
-  pageCount: z.number().int(),
-  totalNetAmountMills: mills,
-  transactionCount: z.number().int(),
-  series: z.array(revenueDailyItemSchema),
-});
-
-export const revenueByModelResponseSchema = z.object({
-  models: z.array(revenueByModelItemSchema),
-});
-
 export const crossPageTransactionItemSchema = z.object({
   transactionId: z.string(),
   rawType: z.union([z.number().int(), z.string()]),
@@ -3989,18 +3967,6 @@ export const createPageBodySchema = z.union([
   }),
 ]);
 
-export const testProxyBodySchema = z.object({
-  proxy: z.object({
-    url: z.string().min(1),
-    username: z.string().nullable().optional(),
-    password: z.string().nullable().optional(),
-  }),
-});
-
-export const testProxyResponseSchema = z.object({
-  ip: z.string(),
-});
-
 export const createModelBodySchema = z.object({
   slug: z.string().min(1).max(100),
   name: z.string().min(1).max(200),
@@ -5760,13 +5726,6 @@ const insightsLimitSchema = z.coerce.number().int().min(1).max(500);
  *  sort position inside the SAME page's SAME query — never a scope. */
 const insightsCursorSchema = z.string().min(1).max(512);
 
-const insightsSubjectKindEnum = z.enum([
-  "account_profile",
-  "account_media",
-  "media_offer",
-  "post",
-]);
-
 const insightsPageSchema = z.object({
   label: z.string(),
   platform: platformEnum,
@@ -6247,30 +6206,6 @@ export const creatorStatsAudienceResponseSchema = z.object({
   mediaShown: z.array(z.object({ hour: isoTimestamp, source: z.number().int(), mediaShown: creatorStatsCount })),
 });
 
-export const statsTrafficQuerySchema = z.object({
-  from: insightsInstant,
-  to: insightsInstant,
-  periodMs: z.coerce.number().int().min(1).default(86_400_000),
-  subjectKind: insightsSubjectKindEnum.default("account_profile"),
-  subjectRef: z.string().max(64).optional(),
-  limit: insightsLimitSchema.default(500),
-  cursor: insightsCursorSchema.optional(),
-});
-
-export const statsTrafficResponseSchema = z.object({
-  page: insightsPageSchema,
-  window: z.object({
-    from: isoTimestamp,
-    to: isoTimestamp,
-    periodMs: z.number().int(),
-    subjectKind: z.string(),
-    subjectRef: z.string().nullable(),
-  }),
-  rows: z.array(insightsTrafficRowSchema),
-  coverage: z.array(insightsCoverageRowSchema),
-  nextCursor: z.string().nullable(),
-});
-
 const insightsMediaRowSchema = z.object({
   mediaOfferRef: z.string(),
   mediaRef: z.string().nullable(),
@@ -6472,90 +6407,6 @@ export const statsHoldingsResponseSchema = z.object({
     oldestAt: isoTimestamp.nullable(),
     newestAt: isoTimestamp.nullable(),
   })),
-});
-
-export const contentMediaQuerySchema = z.object({
-  limit: insightsLimitSchema.default(100),
-  cursor: insightsCursorSchema.optional(),
-});
-
-export const contentMediaResponseSchema = z.object({
-  page: insightsPageSchema,
-  generatedAt: isoTimestamp,
-  /** Catalog heads. IDs ONLY — `mediaRef`/`previewRef` are platform ids, and no
-   *  delivery or CDN address exists anywhere in this response by construction. */
-  media: z.array(insightsMediaRowSchema.omit({
-    buckets: true,
-    windowViews: true,
-    windowPreviewViews: true,
-    daily: true,
-  })),
-  vaultAlbums: z.array(z.object({
-    vaultKind: z.string(),
-    albumRef: z.string(),
-    title: z.string().nullable(),
-    albumType: z.number().int().nullable(),
-    status: z.number().int().nullable(),
-    pos: z.number().int().nullable(),
-    /** AS SERVED, and NON-UNIQUE across albums: the system albums are views
-     *  over the same media. M is `count(distinct media_offer_ref)`. */
-    itemCount: z.number().int().nullable(),
-    missingSince: isoTimestamp.nullable(),
-    lastObservedAt: isoTimestamp,
-  })),
-  tiers: z.array(z.object({
-    tierRef: z.string(),
-    name: z.string().nullable(),
-    color: z.string().nullable(),
-    pos: z.number().int().nullable(),
-    /** `tier.price` — a BASE, never the price a subscriber pays. The price
-     *  truth is the plan rows below. */
-    basePriceMills: mills.nullable(),
-    maxSubscribers: z.number().int().nullable(),
-    missingSince: isoTimestamp.nullable(),
-    plans: z.array(z.object({
-      planRef: z.string(),
-      status: z.number().int().nullable(),
-      durationDays: z.number().int().nullable(),
-      priceMills: mills.nullable(),
-      useAmounts: z.number().int().nullable(),
-      promoCount: z.number().int(),
-      missingSince: isoTimestamp.nullable(),
-    })),
-  })),
-  walls: z.array(z.object({
-    wallRef: z.string(),
-    name: z.string().nullable(),
-    description: z.string().nullable(),
-    pos: z.number().int().nullable(),
-    mainWall: z.boolean().nullable(),
-    defaultWall: z.boolean().nullable(),
-    private: z.number().int().nullable(),
-    missingSince: isoTimestamp.nullable(),
-  })),
-  automations: z.array(z.object({
-    automationRef: z.string(),
-    /** RAW platform code (3 and 15 observed live). Never a label. */
-    triggerType: z.number().int().nullable(),
-    delaySeconds: z.number().int().nullable(),
-    cooldownSeconds: z.number().int().nullable(),
-    templateType: z.number().int().nullable(),
-    senderRef: z.string().nullable(),
-    messageText: z.string().nullable(),
-    attachmentCount: z.number().int(),
-    /** FALSE when the served template did not parse. An unparsed template and
-     *  an automation with no text must never look alike. */
-    parseOk: z.boolean(),
-    missingSince: isoTimestamp.nullable(),
-  })),
-  /** M and the numbers M is not. */
-  inventory: z.object({
-    uniqueMediaCount: z.number().int(),
-    vaultMemberUniqueCount: z.number().int(),
-    albumMembershipSum: insightsDerived(z.number().int()),
-  }),
-  coverage: z.array(insightsCoverageRowSchema),
-  nextCursor: z.string().nullable(),
 });
 
 export const contentCommentsQuerySchema = z.object({
@@ -7593,19 +7444,6 @@ const baseRouteSchemas = {
       403: errorResponseSchema,
     },
   },
-  modelRevenue: {
-    auth: { kind: "session" },
-    tags: ["revenue"],
-    summary: "Get revenue for one model",
-    params: modelParamsSchema,
-    querystring: revenueQuerySchema,
-    response: {
-      200: modelRevenueResponseSchema,
-      401: errorResponseSchema,
-      403: errorResponseSchema,
-      404: errorResponseSchema,
-    },
-  },
   pageRevenue: {
     auth: { kind: "session", scope: "page" },
     tags: ["revenue"],
@@ -8077,17 +7915,6 @@ const baseRouteSchemas = {
     querystring: revenueDailyQuerySchema,
     response: {
       200: revenueDailyResponseSchema,
-      401: errorResponseSchema,
-      403: errorResponseSchema,
-    },
-  },
-  overviewRevenueByModel: {
-    auth: { kind: "session" },
-    tags: ["dashboard"],
-    summary: "Get per-model revenue totals and daily series",
-    querystring: revenueByModelQuerySchema,
-    response: {
-      200: revenueByModelResponseSchema,
       401: errorResponseSchema,
       403: errorResponseSchema,
     },
@@ -9056,18 +8883,6 @@ const baseRouteSchemas = {
       403: errorResponseSchema,
     },
   },
-  adminTestProxy: {
-    auth: { kind: "owner-session" },
-    tags: ["admin"],
-    summary: "Test a proxy connection and return the exit IP",
-    body: testProxyBodySchema,
-    response: {
-      200: testProxyResponseSchema,
-      400: errorResponseSchema,
-      401: errorResponseSchema,
-      403: errorResponseSchema,
-    },
-  },
   adminVerifyPage: {
     auth: { kind: "owner-session" },
     tags: ["admin"],
@@ -9275,20 +9090,6 @@ const baseRouteSchemas = {
   // `read:money` capability exists on the AGENT plane, whose datasets carry the
   // same data behind it). `tests/contracts-auth-declarations.test.ts` pins both
   // halves so a later widening cannot happen quietly.
-  statsTraffic: {
-    auth: { kind: "owner-session", scope: "page" },
-    tags: ["insights"],
-    summary: "Profile/media traffic buckets by RAW source code for one page",
-    params: pageParamsSchema,
-    querystring: statsTrafficQuerySchema,
-    response: {
-      200: statsTrafficResponseSchema,
-      400: errorResponseSchema,
-      401: errorResponseSchema,
-      403: errorResponseSchema,
-      404: errorResponseSchema,
-    },
-  },
   statsMedia: {
     auth: { kind: "owner-session", scope: "page" },
     tags: ["insights"],
@@ -9426,20 +9227,6 @@ const baseRouteSchemas = {
     params: pageParamsSchema,
     response: {
       200: statsHoldingsResponseSchema,
-      401: errorResponseSchema,
-      403: errorResponseSchema,
-      404: errorResponseSchema,
-    },
-  },
-  contentMedia: {
-    auth: { kind: "owner-session", scope: "page" },
-    tags: ["insights"],
-    summary: "Content catalog: media, vault albums, tiers/plans, walls, automations",
-    params: pageParamsSchema,
-    querystring: contentMediaQuerySchema,
-    response: {
-      200: contentMediaResponseSchema,
-      400: errorResponseSchema,
       401: errorResponseSchema,
       403: errorResponseSchema,
       404: errorResponseSchema,
@@ -9722,8 +9509,6 @@ export type SyncRunsQuery = z.infer<typeof syncRunsQuerySchema>;
 export type ConnectionItem = z.infer<typeof connectionItemSchema>;
 export type VerifyCredentialsBody = z.infer<typeof verifyCredentialsBodySchema>;
 export type VerifyCredentialsResponse = z.infer<typeof verifyCredentialsResponseSchema>;
-export type TestProxyBody = z.infer<typeof testProxyBodySchema>;
-export type TestProxyResponse = z.infer<typeof testProxyResponseSchema>;
 export type CreateModelBody = z.infer<typeof createModelBodySchema>;
 export type UpdateModelBody = z.infer<typeof updateModelBodySchema>;
 export type CreateModelResponse = z.infer<typeof createModelResponseSchema>;
@@ -9760,8 +9545,6 @@ export type ChangePasswordBody = z.infer<typeof changePasswordBodySchema>;
 export type DeviceTokenItem = z.infer<typeof deviceTokenItemSchema>;
 export type IssuedDeviceTokenResponse = z.infer<typeof issuedDeviceTokenResponseSchema>;
 
-export type StatsTrafficQuery = z.infer<typeof statsTrafficQuerySchema>;
-export type StatsTrafficResponse = z.infer<typeof statsTrafficResponseSchema>;
 export type PageSettingsResponse = z.infer<typeof pageSettingsResponseSchema>;
 export type PagePromoResponse = z.infer<typeof pagePromoResponseSchema>;
 export type PageMassMessagesQuery = z.infer<typeof pageMassMessagesQuerySchema>;
@@ -9779,8 +9562,6 @@ export type StatsTagsQuery = z.infer<typeof statsTagsQuerySchema>;
 export type StatsTagsResponse = z.infer<typeof statsTagsResponseSchema>;
 export type StatsCoverageResponse = z.infer<typeof statsCoverageResponseSchema>;
 export type StatsHoldingsResponse = z.infer<typeof statsHoldingsResponseSchema>;
-export type ContentMediaQuery = z.infer<typeof contentMediaQuerySchema>;
-export type ContentMediaResponse = z.infer<typeof contentMediaResponseSchema>;
 export type ContentCommentsQuery = z.infer<typeof contentCommentsQuerySchema>;
 export type ContentCommentsResponse = z.infer<typeof contentCommentsResponseSchema>;
 export type MoneyRevenueMixQuery = z.infer<typeof moneyRevenueMixQuerySchema>;

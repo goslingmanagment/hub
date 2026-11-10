@@ -40,7 +40,6 @@ import {
 import { listConnectionStatuses } from "../../services/connections.ts";
 import { ForbiddenError, NotFoundError } from "../../services/errors.ts";
 import {
-  getModelRevenueReport,
   getOverviewRevenueReport,
   getPageRevenueReport,
   getPageSummary,
@@ -100,21 +99,6 @@ export function registerFinanceRoutes(server: ApiServer, ctx: ApiModuleContext) 
     const query = request.query;
     const pageIds = pageScopeFor(principal);
     return getOverviewRevenueReport(appContext, {
-      now,
-      period: query.period,
-      ...(query.period === "custom" ? { custom: { from: query.from, to: query.to } } : {}),
-      ...(pageIds === undefined ? {} : { pageIds }),
-    });
-  });
-
-  server.get("/api/v1/models/:modelSlug/revenue", {
-    schema: routeSchemas.modelRevenue,
-  }, async (request) => {
-    const now = request.query.windowAt ? new Date(request.query.windowAt) : new Date();
-    const principal = await requirePrincipal(request);
-    const query = request.query;
-    const pageIds = pageScopeFor(principal);
-    return getModelRevenueReport(appContext, request.params.modelSlug, {
       now,
       period: query.period,
       ...(query.period === "custom" ? { custom: { from: query.from, to: query.to } } : {}),
@@ -554,54 +538,6 @@ export function registerFinanceRoutes(server: ApiServer, ctx: ApiModuleContext) 
     }
     enforceRevenueRouteRoleScope(principal);
     return getRevenueDailySeries([page], request.query, now);
-  });
-
-  server.get("/api/v1/overview/revenue/by-model", {
-    schema: routeSchemas.overviewRevenueByModel,
-  }, async (request) => {
-    const now = request.query.windowAt ? new Date(request.query.windowAt) : new Date();
-    const principal = await requirePrincipal(request);
-    const pages = await listRevenuePages(appContext.db, pageScopeFor(principal));
-
-    const byModel = new Map<string, { modelName: string; pages: typeof pages }>();
-    for (const page of pages) {
-      const group = byModel.get(page.modelSlug);
-      if (group) {
-        group.pages.push(page);
-      } else {
-        byModel.set(page.modelSlug, { modelName: page.modelName, pages: [page] });
-      }
-    }
-
-    const models = [];
-    for (const [modelSlug, group] of byModel) {
-      const { series } = await getRevenueDailySeries(
-        group.pages,
-        { ...request.query, groupByType: false },
-        now,
-      );
-      let totalNetAmountMills = 0n;
-      let transactionCount = 0;
-      for (const item of series) {
-        totalNetAmountMills += BigInt(item.netAmountMills);
-        transactionCount += item.transactionCount;
-      }
-      models.push({
-        modelSlug,
-        modelName: group.modelName,
-        pageCount: group.pages.length,
-        // Summed as bigint, emitted as wire mills (number — same as the
-        // sibling revenue endpoints' items).
-        totalNetAmountMills: Number(totalNetAmountMills),
-        transactionCount,
-        series,
-      });
-    }
-    models.sort((left, right) =>
-      right.totalNetAmountMills - left.totalNetAmountMills
-      || left.modelSlug.localeCompare(right.modelSlug),
-    );
-    return { models };
   });
 
   server.get("/api/v1/models/:modelSlug/revenue/daily", {

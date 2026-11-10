@@ -129,7 +129,6 @@ describe("route auth declarations", () => {
       // principal is its own PR with its own gate — and would have to edit
       // both this list and the kind assertion below.
       "contentComments",
-      "contentMedia",
       "createFanNote",
       "creatorStatsAudience",
       "creatorStatsContent",
@@ -169,7 +168,6 @@ describe("route auth declarations", () => {
       "statsHoldings",
       "statsMedia",
       "statsTags",
-      "statsTraffic",
       "upsertFanProfile",
       "voiceNoteAllowance",
       "voiceNoteAudio",
@@ -178,7 +176,7 @@ describe("route auth declarations", () => {
     ]);
   });
 
-  it("WP-S1's nine serving routes are owner-session, page-scoped, and read-only", () => {
+  it("WP-S1's seven serving routes are owner-session, page-scoped, and read-only", () => {
     // The three halves of the S1 access story, pinned together because each one
     // alone is insufficient: `owner-session` (not `session`, not `any`) is what
     // makes `/money/*` money-gated on the REST surface; `scope: "page"` is what
@@ -186,12 +184,10 @@ describe("route auth declarations", () => {
     // with no body is what makes "serving never authorizes capture" structural
     // rather than a promise in a comment.
     const s1Routes = [
-      "statsTraffic",
       "statsMedia",
       "statsTags",
       "statsCoverage",
       "statsHoldings",
-      "contentMedia",
       "contentComments",
       "moneyRevenueMix",
       "moneyPayouts",

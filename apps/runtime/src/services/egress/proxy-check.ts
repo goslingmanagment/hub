@@ -15,9 +15,9 @@ import { nonGlobalAddressReason } from "@agency_hub_core/shared";
 //
 // This is NOT a platform request and not a page's egress: it never touches
 // Fansly (or any platform), it never goes through the egress resolver, and
-// nothing of a page's sends it. It is the dashboard's proxy test made
-// precise — `POST /api/v1/admin/proxy/test` reads only the exit IP through
-// undici — run on the owner's press, once:
+// nothing of a page's sends it. It is the old dashboard proxy test (its
+// route, which read only the exit IP through undici, is gone) made precise —
+// run on the owner's press, once:
 // - one TCP connection to the proxy; the SOCKS5 greeting exactly as the
 //   page's operator sends it (RFC 1928: password login only, RFC 1929), so
 //   what it says here is what the operator will meet;
