@@ -56,7 +56,8 @@ export interface SyncUxStreamLike {
   consecutiveFailures: number;
 }
 
-function buildSummary(
+/** One `SyncUxSummary`: the optional fields default to null (`requiresAction` to false). */
+export function buildSummary(
   state: SyncUxState,
   input: {
     label: string;

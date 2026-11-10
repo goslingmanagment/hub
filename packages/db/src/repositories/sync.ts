@@ -27,7 +27,6 @@ import {
 import {
   LEGACY_EXECUTOR_PLATFORMS,
   LEGACY_EXECUTOR_STREAMS,
-  SYNC_STREAMS,
   getSyncStreamsForPlatform,
   syncStreamOrderSql,
   type PageSyncStatus,
@@ -39,6 +38,14 @@ import {
   lockCapturePayloadRefAlive,
 } from "./capture-payloads.ts";
 import { egressKeySql } from "./egress.ts";
+import {
+  asPlatform,
+  asSyncStream,
+  normalizeNullableNumber,
+  normalizeNumber,
+  normalizeRecord,
+  streamArraySql,
+} from "./sync-normalize.ts";
 import { PageSyncLeaseLostError, getPageSyncExecutionContext } from "./sync-context.ts";
 
 type TimestampValue = Date | string | null | undefined;
@@ -46,28 +53,9 @@ type NumericValue = number | bigint | null | undefined;
 
 export * from "./page-sync.ts";
 
-function normalizeNumber(value: NumericValue, field: string) {
-  if (value === null || value === undefined) {
-    throw new Error(`Expected ${field} to be present`);
-  }
-
-  if (typeof value === "bigint") {
-    return Number(value);
-  }
-
-  if (typeof value === "number") {
-    return value;
-  }
-
-  throw new Error(`Expected ${field} to be numeric`);
-}
-
-function normalizeNullableNumber(value: NumericValue, field: string) {
-  if (value === null || value === undefined) {
-    return null;
-  }
-
-  return normalizeNumber(value, field);
+/** `asPlatform` under this file's declared result type. */
+function normalizePlatformValue(value: unknown, field: string): Platform {
+  return asPlatform(value, field);
 }
 
 function parseTimestamp(value: TimestampValue, field: string) {
@@ -109,14 +97,6 @@ function requireTimestamp(value: Date | string | null | undefined, field: string
   return parsed;
 }
 
-function normalizePlatformValue(value: unknown, field: string): Platform {
-  if (value === "fansly" || value === "onlyfans") {
-    return value;
-  }
-
-  throw new Error(`Expected ${field} to be a supported platform`);
-}
-
 function normalizeNullableJsonRecord(value: unknown, field: string) {
   if (value === null || value === undefined) {
     return null;
@@ -127,26 +107,6 @@ function normalizeNullableJsonRecord(value: unknown, field: string) {
   }
 
   return value as Record<string, unknown>;
-}
-
-function normalizeJsonRecord(value: unknown, field: string) {
-  if (value === null || value === undefined) {
-    return {};
-  }
-
-  if (typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`Expected ${field} to be an object`);
-  }
-
-  return value as Record<string, unknown>;
-}
-
-function asSyncStream(value: string): SyncStream {
-  if ((SYNC_STREAMS as readonly string[]).includes(value)) {
-    return value as SyncStream;
-  }
-
-  throw new Error(`Unsupported sync stream "${value}"`);
 }
 
 function normalizeStatusOutcome(status: "success" | "partial" | "failed" | "skipped") {
@@ -174,14 +134,6 @@ function normalizeTriggerToSource(trigger: string | null | undefined): SyncReque
     default:
       return null;
   }
-}
-
-function streamArraySql(streams: readonly SyncStream[]) {
-  if (streams.length === 0) {
-    return sql`ARRAY[]::sync_stream[]`;
-  }
-
-  return sql`ARRAY[${sql.join(streams.map((stream) => sql`${stream}::sync_stream`), sql`, `)}]::sync_stream[]`;
 }
 
 export async function startSyncRun(
@@ -1621,7 +1573,7 @@ function normalizeSyncMonitorRecentEventRow(row: Record<string, unknown>): SyncM
     eventType: String(row.eventType ?? ""),
     severity: row.severity as "info" | "warn" | "error",
     message: String(row.message ?? ""),
-    details: normalizeJsonRecord(row.details, "details"),
+    details: normalizeRecord(row.details, "details"),
     emittedAt: requireTimestamp(row.emittedAt as TimestampValue, "emittedAt"),
   };
 }

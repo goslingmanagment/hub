@@ -10,6 +10,7 @@ import { acknowledgeSyncPaceViolations, readSyncAlertStatus } from "../engine/al
 import { createFanslyRegistry } from "../fansly/registry.ts";
 import { findSyncPageByLabel } from "../inspect.ts";
 import { pageLabel } from "./chain.ts";
+import { json } from "./args.ts";
 
 // Owner CLI of the engine's alerts (design §9.6):
 //   pnpm cli sync alerts status [--page <label>]
@@ -25,10 +26,6 @@ const defaultDeps: SyncAlertsCliDeps = {
   openContext: () => createSyncContext(),
   print: (line) => console.log(line),
 };
-
-function json(value: unknown): string {
-  return JSON.stringify(value, (_key, item: unknown) => (typeof item === "bigint" ? item.toString() : item), 2);
-}
 
 function cliActor(): string {
   return `cli@${hostname()} pid ${process.pid}`;

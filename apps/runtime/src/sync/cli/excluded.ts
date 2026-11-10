@@ -18,6 +18,7 @@ import {
   unliftExcludedChats,
 } from "../excluded.ts";
 import { createFanslyRegistry } from "../fansly/registry.ts";
+import { json } from "./args.ts";
 
 // The owner's CLI of owner decision №8 (step-3 design S3-06, runbook §6.2 S6):
 //   pnpm cli sync excluded probe  --page P [--sample 20] [--reason partner_missing_from_aggregation_accounts]
@@ -35,10 +36,6 @@ const defaultDeps: SyncExcludedCliDeps = {
   openContext: () => createSyncContext(),
   print: (line) => console.log(line),
 };
-
-function json(value: unknown): string {
-  return JSON.stringify(value, (_key, item: unknown) => (typeof item === "bigint" ? item.toString() : item), 2);
-}
 
 function cliActor(): string {
   return `cli@${hostname()} pid ${process.pid}`;

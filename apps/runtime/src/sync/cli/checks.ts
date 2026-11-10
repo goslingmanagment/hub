@@ -1,11 +1,11 @@
 import { writeFile } from "node:fs/promises";
 
 import type { Command } from "commander";
-import { InvalidArgumentError } from "commander";
 
 import { acceptanceExitCode, checkLiveHour } from "../checks/live-hour.ts";
 import { createSyncContext, type SyncContext } from "../context.ts";
 import { findSyncPageByLabel } from "../inspect.ts";
+import { isoDate, json } from "./args.ts";
 
 // The engine's read-only checks (`sync/checks/`):
 //   pnpm cli sync check live-hour --page P [--page Q …] --since <iso> [--until <iso>] [--out <path>]
@@ -36,19 +36,9 @@ function defaultDeps(): SyncCheckCliDeps {
   };
 }
 
-function isoDate(value: string): Date {
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) throw new InvalidArgumentError(`expected an ISO date, got "${value}"`);
-  return parsed;
-}
-
 /** `--page a --page b,c` → [a, b, c]. */
 function collectLabels(value: string, previous: string[]): string[] {
   return [...previous, ...value.split(",").map((label) => label.trim()).filter((label) => label !== "")];
-}
-
-function json(value: unknown): string {
-  return JSON.stringify(value, (_key, item: unknown) => (typeof item === "bigint" ? item.toString() : item), 2);
 }
 
 /** Add `sync check …` to the `sync` command group. */

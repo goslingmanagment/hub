@@ -1,5 +1,5 @@
 import type { Pool } from "pg";
-import { resolveMigrationFiles } from "./migrations-dir.ts";
+import { assertUniqueMigrationPrefixes, resolveMigrationFiles } from "./migrations-dir.ts";
 
 type ColumnShapeRow = {
   data_type: string;
@@ -52,26 +52,6 @@ function normalizeDefaultExpression(value: string | null) {
 
 function isEmptyJsonbDefault(value: string | null) {
   return normalizeDefaultExpression(value) === "'{}'::jsonb";
-}
-
-function assertUniqueMigrationPrefixes(files: string[]) {
-  const seenPrefixes = new Map<string, string>();
-
-  for (const file of files) {
-    const prefix = file.split("_", 1)[0] ?? "";
-    if (!prefix) {
-      continue;
-    }
-
-    const existing = seenPrefixes.get(prefix);
-    if (existing) {
-      throw new Error(
-        `Duplicate migration prefix "${prefix}" found in "${existing}" and "${file}"`,
-      );
-    }
-
-    seenPrefixes.set(prefix, file);
-  }
 }
 
 function driftError(detail: string) {

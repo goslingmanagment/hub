@@ -30,6 +30,7 @@ import {
 import { loadEffectiveConfig } from "./effective-config.ts";
 import { filterOnlyFansAudienceStreams } from "./sync/ofapi-audience-sync.ts";
 import { legacyExecutorPlatforms } from "../sync/onlyfans/boundary.ts";
+import { buildSummary as summary } from "./sync-ux.ts";
 import {
   buildEngineDomainBlock,
   readEngineStatusFacts,
@@ -449,27 +450,6 @@ function pickProgressTask(
   }
 
   return withProgress[0] ?? null;
-}
-
-function summary(state: SyncUxSummary["state"], input: {
-  label: string;
-  headline: string;
-  detail?: string | null;
-  progressLabel?: string | null;
-  nextRetryAt?: string | null;
-  updatedAt?: string | null;
-  requiresAction?: boolean;
-}): SyncUxSummary {
-  return {
-    state,
-    label: input.label,
-    headline: input.headline,
-    detail: input.detail ?? null,
-    progressLabel: input.progressLabel ?? null,
-    nextRetryAt: input.nextRetryAt ?? null,
-    updatedAt: input.updatedAt ?? null,
-    requiresAction: input.requiresAction ?? false,
-  };
 }
 
 function isHealthyQueueWaitingBlock(block: SyncDomainBlockStatus) {

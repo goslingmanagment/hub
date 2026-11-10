@@ -25,7 +25,7 @@ import { AdmissionHeldError, observedHoldClearedWithin, pageErrorState, type Cap
 import { onOutcome } from "./errors.ts";
 import type { SlotGrant } from "./pacer.ts";
 import type { ObservedSiteKey, SiteAdmissionPort, SiteRequestEnd } from "./ports.ts";
-import { routeAdmissionView, type RouteClocks } from "./route-policy.ts";
+import { routeAdmissionView, routeStateWriteOf, type RouteClocks } from "./route-policy.ts";
 import type { RouteKeySpec } from "./route-policy.ts";
 import {
   decideSite,
@@ -439,14 +439,7 @@ async function commitAnswerIn(
       ...fenced,
       route: decision.routeHold.route,
       expectRevision: decision.routeHold.expectRevision,
-      entry: {
-        holdUntil: entry.holdUntil === null ? null : new Date(entry.holdUntil),
-        ladderStep: entry.ladderStep,
-        effectivePerMin: entry.effectivePerMin,
-        policyVersion: entry.policyVersion,
-        last429AttemptId: entry.last429AttemptId,
-        last429At: entry.last429At === null ? null : new Date(entry.last429At),
-      },
+      entry: routeStateWriteOf(entry),
     });
     if (written.kind === "stale") throw new Error(`route state of ${decision.routeHold.route} changed under the page lock`);
   }
