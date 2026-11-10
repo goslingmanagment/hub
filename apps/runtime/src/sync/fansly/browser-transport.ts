@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { open } from "node:fs/promises";
 
-import { findPageById, getFanslyWriteCommand, getSyncPage, readSyncWorkSecretParams, type Database, type SyncAttemptRow, type SyncWorkRow } from "@agency_hub_core/db";
+import { getFanslyWriteCommand, readBrowserCredentialsSnapshot, readSyncWorkSecretParams, type Database, type SyncAttemptRow, type SyncWorkRow } from "@agency_hub_core/db";
 import {
   buildFanslyWireUrl,
   describeFanslyPart,
@@ -262,22 +262,19 @@ export function browserCredentialsGeneration(input: {
 }
 
 async function readSnapshot(db: Database, pageId: number): Promise<PageSnapshot | null> {
-  return db.transaction(async (raw) => {
-    const tx = raw as unknown as Database;
-    const stored = await findPageById(tx, pageId);
-    if (stored === null) return null;
-    const verified = (await getSyncPage(tx, pageId))?.credentialsGeneration ?? null;
-    const proxy = stored.proxy ?? null;
-    return {
-      pageId,
-      platform: stored.page.platform,
-      nativeAccountId: stored.page.platformAccountId ?? null,
-      proxy: proxy === null
-        ? null
-        : { id: proxy.id, url: proxy.url, ciphertext: proxy.encryptedAuth ?? null, keyVersion: proxy.keyVersion ?? null, rateLimitScopeKey: proxy.rateLimitScopeKey ?? null },
-      verified,
-    };
-  }, { isolationLevel: "repeatable read", accessMode: "read only" });
+  // One statement: the page, its proxy and the verified generation from one snapshot.
+  const stored = await readBrowserCredentialsSnapshot(db, pageId);
+  if (stored === null) return null;
+  const proxy = stored.proxy ?? null;
+  return {
+    pageId,
+    platform: stored.platform,
+    nativeAccountId: stored.platformAccountId ?? null,
+    proxy: proxy === null
+      ? null
+      : { id: proxy.id, url: proxy.url, ciphertext: proxy.encryptedAuth ?? null, keyVersion: proxy.keyVersion ?? null, rateLimitScopeKey: proxy.rateLimitScopeKey ?? null },
+    verified: stored.verified ?? null,
+  };
 }
 
 /** The page's browser credentials generation with `sessionFingerprint` (null:
