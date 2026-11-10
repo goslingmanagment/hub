@@ -24,6 +24,7 @@ import { aiSpendRouteSchemas } from "./routes-ai-spend.ts";
 import { aiOpenerRouteSchemas } from "./routes-ai-openers.ts";
 import { shiftReviewRouteSchemas } from "./routes-shift-review.ts";
 import { teamLedgerRouteSchemas } from "./routes-team-ledger.ts";
+import { accountReportsRouteSchemas } from "./routes-account-reports.ts";
 import {
   PERIOD_OPTIONS,
   SPENDER_PERIOD_OPTIONS,
@@ -8099,6 +8100,7 @@ const baseRouteSchemas = {
   ...aiOpenerRouteSchemas,
   ...shiftReviewRouteSchemas,
   ...teamLedgerRouteSchemas,
+  ...accountReportsRouteSchemas,
   adminAiPersonasList: {
     auth: { kind: "owner-session" },
     tags: ["admin"],

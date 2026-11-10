@@ -4,6 +4,7 @@ import type { KernelOperationDef, KernelOperationKey } from "@agency_hub_core/co
 
 export const kernelOperations = {
   accountChatterStats: { method: "GET", path: "/api/v1/account/stats" },
+  accountReports: { method: "GET", path: "/api/v1/account/reports" },
   accountShiftReport: { method: "GET", path: "/api/v1/account/shift-report" },
   accountShiftReportConfirm: { method: "POST", path: "/api/v1/account/shift-report/confirm" },
   accountShiftReportMark: { method: "POST", path: "/api/v1/account/shift-report/marks" },

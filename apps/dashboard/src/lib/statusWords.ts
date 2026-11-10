@@ -197,6 +197,13 @@ export const REPORT_STATUS = {
   skipped: status("Пропущен", "off"),
 } as const satisfies Record<string, StatusWord>;
 
+/** The cabinet's «Отчёт смены»: a shift report the agent composed (the ledger's status). */
+export const SHIFT_REPORT_STATUS: Readonly<Record<string, StatusWord>> = {
+  draft: status("Собран", "waiting"),
+  posted: status("Отправлен", "good"),
+  superseded: status("Заменён", "off"),
+};
+
 /** Настройки → Функции ИИ. */
 export const FEATURE_STATUS = {
   on: status("Включено", "good"),
