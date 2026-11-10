@@ -62,6 +62,45 @@
     color: var(--ui-text-2);
   }
 
+  /* A posted report's head: the pages as posted and drafted (ReportPages), then when it was composed and sent. */
+  .wb-report__posted {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  /* The pages: the name on the left, the amounts in fixed columns ending at the report's right edge. */
+  .wb-report-pages {
+    display: flex;
+    flex-direction: column;
+    border-top: 1px solid var(--ui-line-soft);
+  }
+
+  .wb-report-pages__row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) repeat(var(--wb-report-page-columns, 1), minmax(96px, max-content));
+    align-items: baseline;
+    column-gap: 24px;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--ui-line-soft);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .wb-report-pages__row > :not(:first-child) {
+    text-align: right;
+  }
+
+  .wb-report-pages__row--head {
+    padding: 4px 0;
+    color: var(--ui-text-2);
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+  }
+
+  .wb-report-pages__row .ui-page {
+    color: var(--ui-text);
+  }
+
   .wb-report__groups {
     display: flex;
     flex-direction: column;

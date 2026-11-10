@@ -1,23 +1,27 @@
-import { useLayoutEffect, type ReactNode, type RefObject } from "react";
-import type { AccountReport, AccountReportLine } from "@agency_hub_core/contracts";
-import { Badge, Fan, Money, PageLabel } from "@agency_hub_core/ui";
+import { useLayoutEffect, type CSSProperties, type RefObject } from "react";
+import type { AccountReport, AccountReportLine, AccountShiftReport } from "@agency_hub_core/contracts";
+import { Badge, Fan, Mark, Money, PageLabel } from "@agency_hub_core/ui";
+import { formatDateTime } from "@agency_hub_core/ui/format";
 import { ruPlural } from "@agency_hub_core/ui/plural";
 import { clockOf, kindWord, reasonText, savedLine, splitLines } from "@agency_hub_core/ui/shiftReports";
 import "./report.css";
 
 /**
- * A shift's report, opened in its row — one look for the chatter («Мои смены»)
- * and the owner («Выплаты»): the head (by default the pages with their amounts,
- * a page at zero too, and when it was composed and which version), then the
- * sales — what is in the total first, then «Не вошло в итог», each held-out sale
- * with its reason. An amount added by hand says so and why; the agent's notes
- * are quiet lines under their sale. Money, pages and Moscow times as the app
- * shows them. The owner's head is his own (the posted and drafted pages).
+ * A shift's report, opened in its row — the chatter's («Мои смены»). A draft not
+ * posted yet: the pages with the draft's amounts (a page at zero too), when it
+ * was composed and which version. A posted report: the pages as posted — the
+ * post is the report that counts — with the draft's amount beside a page the
+ * chatter changed or left out (ReportPages, as the owner's «Отчёты» show them),
+ * when it was composed and sent. Then the sales of the draft — what is in the
+ * total first, then «Не вошло в итог», each held-out sale with its reason; a post
+ * written without the agent has none, and says so. Money, pages and Moscow times
+ * as the app shows them.
  */
-export function ReportBody({ report, head }: { report: AccountReport; head?: ReactNode }) {
-  return (
-    <div className="wb-report">
-      {head ?? (
+export function ReportBody({ report }: { report: AccountShiftReport }) {
+  const saved = savedOf(report);
+  if (report.source === "draft") {
+    return (
+      <div className="wb-report">
         <div className="wb-report__head">
           <ul className="wb-report__pages" aria-label="По страницам">
             {report.pages.map((page) => (
@@ -27,16 +31,95 @@ export function ReportBody({ report, head }: { report: AccountReport; head?: Rea
               </li>
             ))}
           </ul>
-          <p className="wb-report__saved">{savedLine(report)}</p>
+          {saved !== null && <p className="wb-report__saved">{saved}</p>}
         </div>
-      )}
-      <ReportLines report={report} />
+        <ReportLines report={report} />
+      </div>
+    );
+  }
+  const when = [saved, report.postedAt === null ? null : `отправлен ${formatDateTime(report.postedAt)}`].filter((part): part is string => part !== null).join(" · ");
+  return (
+    <div className="wb-report">
+      <div className="wb-report__posted">
+        <ReportPages
+          pages={report.pages.map((page) => ({ ...page, state: page.postState, diffMills: null }))}
+          drafts="changed"
+        />
+        {when !== "" && <p className="wb-report__saved">{when}</p>}
+      </div>
+      {report.source === "post"
+        ? <p className="wb-report__none">Отчёт написан без Генгара: списка продаж нет.</p>
+        : <ReportLines report={report} />}
+    </div>
+  );
+}
+
+/** «собран в 23:54 · версия 2 из 2» of a report with a draft; null — a post written without the agent. */
+function savedOf(report: AccountShiftReport): string | null {
+  const { savedAt, version, versions } = report;
+  return savedAt === null || version === null || versions === null ? null : savedLine({ reportDate: report.reportDate, savedAt, version, versions });
+}
+
+/** A page of a posted report as ReportPages shows it. */
+export interface ReportPageRow {
+  pageLabel: string;
+  /** The agent's draft of the page; null — not in a draft. */
+  draftMills: number | null;
+  /** The page in the post; null — not posted. */
+  postedMills: number | null;
+  /** posted − draft where the chatter changed it, for the owner's marked column; null — not changed or not shown. */
+  diffMills: number | null;
+  /** The ledger's state of the page: draft_only — drafted, not in the post. */
+  state: string;
+}
+
+/**
+ * The pages of a posted report — the owner's «Отчёты» and a chatter's «Мои смены» show them alike. Read left to right
+ * as it happened: what the agent drafted (quiet), what the chatter changed (`changes`: the owner's marked column),
+ * what the post says — strong, at the right edge, under the row's own sum. `drafts`: the draft's column whenever a
+ * page was drafted (the owner's), or only when a page's post differs from its draft (the chatter's: a report posted as
+ * drafted has nothing to compare).
+ */
+export function ReportPages({ pages, drafts = "drafted", changes = false }: {
+  pages: readonly ReportPageRow[];
+  drafts?: "drafted" | "changed";
+  changes?: boolean;
+}) {
+  const drafted = drafts === "drafted"
+    ? pages.some((page) => page.draftMills !== null)
+    : pages.some((page) => page.draftMills !== null && page.postedMills !== page.draftMills);
+  const changed = changes && pages.some((page) => page.diffMills !== null);
+  const columns = 1 + Number(drafted) + Number(changed);
+  return (
+    <div className="wb-report-pages" role="table" aria-label="Страницы отчёта" style={{ "--wb-report-page-columns": columns } as CSSProperties}>
+      <div className="wb-report-pages__row wb-report-pages__row--head" role="row">
+        <span role="columnheader">Страница</span>
+        {drafted && <span role="columnheader">Черновик</span>}
+        {changed && <span role="columnheader">Изменено</span>}
+        <span role="columnheader">В посте</span>
+      </div>
+      {pages.map((page) => (
+        <div key={page.pageLabel} className="wb-report-pages__row" role="row">
+          <span role="cell"><PageLabel label={page.pageLabel} /></span>
+          {drafted && <span role="cell">{page.draftMills === null ? <span className="ui-muted">—</span> : <Money mills={page.draftMills} muted={page.postedMills !== null} />}</span>}
+          {changed && (
+            <span role="cell">
+              {page.diffMills !== null && <Mark hint="Чаттер поменял сумму страницы в посте: в оплату идёт сумма поста."><Money mills={page.diffMills} signed /></Mark>}
+            </span>
+          )}
+          <span role="cell">
+            {page.postedMills === null
+              ? <span className="ui-muted">{page.state === "draft_only" ? "не в посте" : "—"}</span>
+              : <Money mills={page.postedMills} strong={page.postedMills !== 0} muted={page.postedMills === 0} />}
+          </span>
+        </div>
+      ))}
     </div>
   );
 }
 
 /** The report's sales: «В итоге», then «Не вошло в итог»; none at all is said. */
-export function ReportLines({ report }: { report: AccountReport }) {
+export function ReportLines({ report }: { report: Pick<AccountReport, "lines"> }) {
   const { counted, held } = splitLines(report.lines);
   if (counted.length + held.length === 0) return <p className="wb-report__none">В отчёте нет продаж.</p>;
   return (

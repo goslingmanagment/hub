@@ -1,9 +1,8 @@
-import type { CSSProperties } from "react";
-import { Badge, Mark, Money, PageLabel, Tooltip, cx } from "@agency_hub_core/ui";
+import { Badge, Money, PageLabel, Tooltip, cx } from "@agency_hub_core/ui";
 import type { TeamLedgerReportPage, TeamLedgerReportPost } from "@agency_hub_core/contracts";
 import { formatDateTime } from "@agency_hub_core/ui/format";
 import { savedLine } from "@agency_hub_core/ui/shiftReports";
-import { ReportLines } from "@/shared/ReportBody";
+import { ReportLines, ReportPages } from "@/shared/ReportBody";
 import { PostLink, postEvidence, postHint, postProblemWords } from "@/shared/reportPosts";
 import type { ReportRow } from "./reportRows";
 
@@ -16,11 +15,6 @@ import type { ReportRow } from "./reportRows";
 export function ReportDetail({ row, panel = false }: { row: ReportRow; panel?: boolean }) {
   // Under a journal row the row's state already says what is wrong with its post: here only the numbers and the post.
   const said = !panel;
-  const drafted = row.pages.some((page) => page.draftMills !== null);
-  const changed = row.pages.some((page) => page.diffMills !== null);
-  // Read left to right as it happened: what the agent drafted, what the chatter changed, what the post says — the
-  // posted amount at the right edge, under the row's own sum.
-  const columns = 1 + Number(drafted) + Number(changed);
   const postedAt = latest(row.pages);
   const when = [row.draft ? savedLine(row.draft) : null, postedAt ? `отправлен ${formatDateTime(postedAt)}` : null]
     .filter((part): part is string => part !== null).join(" · ");
@@ -28,31 +22,8 @@ export function ReportDetail({ row, panel = false }: { row: ReportRow; panel?: b
   return (
     <div className={cx("wb-report", panel && "wb-report--panel")}>
       {row.pages.length > 0 && (
-        <div className="payouts-report-head">
-          <div className="payouts-pages" role="table" aria-label="Страницы отчёта" style={{ "--payouts-page-columns": columns } as CSSProperties}>
-            <div className="payouts-pages__row payouts-pages__row--head" role="row">
-              <span role="columnheader">Страница</span>
-              {drafted && <span role="columnheader">Черновик</span>}
-              {changed && <span role="columnheader">Изменено</span>}
-              <span role="columnheader">В посте</span>
-            </div>
-            {row.pages.map((page) => (
-              <div key={page.pageLabel} className="payouts-pages__row" role="row">
-                <span role="cell"><PageLabel label={page.pageLabel} /></span>
-                {drafted && <span role="cell">{page.draftMills === null ? <span className="ui-muted">—</span> : <Money mills={page.draftMills} muted={page.postedMills !== null} />}</span>}
-                {changed && (
-                  <span role="cell">
-                    {page.diffMills !== null && <Mark hint="Чаттер поменял сумму страницы в посте: в оплату идёт сумма поста."><Money mills={page.diffMills} signed /></Mark>}
-                  </span>
-                )}
-                <span role="cell">
-                  {page.postedMills === null
-                    ? <span className="ui-muted">{page.state === "draft_only" ? "не в посте" : "—"}</span>
-                    : <Money mills={page.postedMills} strong />}
-                </span>
-              </div>
-            ))}
-          </div>
+        <div className="wb-report__posted">
+          <ReportPages pages={row.pages} changes />
           {when !== "" && <p className="wb-report__saved">{when}</p>}
         </div>
       )}
