@@ -38,10 +38,10 @@ import {
   type InsertLinkStatSnapshotInput,
   type LinkStatKind,
 } from "@agency_hub_core/db";
-import { dollarsToMills, sanitizeError } from "@agency_hub_core/shared";
+import { sanitizeError } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
-import { asRecord, idToString } from "./ofapi-payloads.ts";
+import { asRecord, idToString, parseOfapiDollarMills } from "./ofapi-payloads.ts";
 import { ofapiAuthStatusNeedsAction } from "./ofapi-account-health.ts";
 import type { OfapiListPage, OfapiRequestContext } from "./ofapi.ts";
 import { persistRawPayload, retentionDate } from "./sync/shared.ts";
@@ -185,20 +185,6 @@ function parseCounter(value: unknown): number | null {
   return value;
 }
 
-function parseDollarMills(value: unknown): bigint | null {
-  if (typeof value !== "number" && typeof value !== "string") {
-    return null;
-  }
-  const normalized = typeof value === "string"
-    ? value.trim().replace(/^\$/, "").replace(/,/g, "")
-    : value;
-  try {
-    return dollarsToMills(normalized);
-  } catch {
-    return null;
-  }
-}
-
 function parseOptionalString(value: unknown): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
 }
@@ -270,11 +256,11 @@ function normalizeLinkItem(
       // revenue.total is the creator's NET: after the 20 % OnlyFans fee and
       // after refunds and chargebacks (proved to the cent against the ledger;
       // the vendor documents the same). Stored as is — no fee is taken off.
-      revenueNetMills: revenueKnown ? parseDollarMills(revenue.total) : null,
+      revenueNetMills: revenueKnown ? parseOfapiDollarMills(revenue.total) : null,
       // The positive amount the vendor ALREADY took out of revenue.total:
       // informational, never to be subtracted again. A block without the
       // field leaves it unknown, not zero.
-      revenueChargebacksMills: revenueKnown ? parseDollarMills(revenue.chargebacks) : null,
+      revenueChargebacksMills: revenueKnown ? parseOfapiDollarMills(revenue.chargebacks) : null,
       revenueIsLoading,
       revenueCalculatedAt: parseDate(revenue?.calculatedAt),
       // The free period a trial link grants; tracking links have none.

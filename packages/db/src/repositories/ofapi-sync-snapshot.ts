@@ -468,6 +468,55 @@ const hotMessageArchiveTwin = and(
   eq(messageArchive.messageRef, pageDmMessages.platformMessageId),
 );
 
+/** The columns of a hot message row, shared by the legacy and the bounded snapshot. */
+const hotMessageColumns = {
+  id: pageDmMessages.id,
+  conversationId: pageDmMessages.conversationId,
+  platformConversationId: pageDmThreads.platformConversationId,
+  platformMessageId: pageDmMessages.platformMessageId,
+  senderRole: pageDmMessages.senderRole,
+  createdAt: pageDmMessages.createdAt,
+  content: pageDmMessages.content,
+  totalTipAmountCents: pageDmMessages.totalTipAmountCents,
+  inReplyToMessageId: pageDmMessages.inReplyToMessageId,
+  purchasedAt: pageDmMessages.purchasedAt,
+  syncedAt: pageDmMessages.syncedAt,
+  archivePriceMills: messageArchive.priceMills,
+  archiveMediaMetadata: messageArchive.mediaMetadata,
+  archiveIsOpened: messageArchive.isOpened,
+};
+
+/** The columns of an archive message row, shared by the legacy and the bounded snapshot. */
+const archiveMessageColumns = {
+  id: dmMessageArchive.id,
+  platformConversationId: dmMessageArchive.platformConversationId,
+  platformMessageId: dmMessageArchive.platformMessageId,
+  senderRole: dmMessageArchive.senderRole,
+  isSentByMe: dmMessageArchive.isSentByMe,
+  messageCreatedAt: dmMessageArchive.messageCreatedAt,
+  textPlain: dmMessageArchive.textPlain,
+  priceMills: dmMessageArchive.priceMills,
+  isOpened: dmMessageArchive.isOpened,
+  isTip: dmMessageArchive.isTip,
+  tipAmountMills: dmMessageArchive.tipAmountMills,
+  inReplyToMessageId: dmMessageArchive.inReplyToMessageId,
+  deletedAt: dmMessageArchive.deletedAt,
+  sourceFanoutSeq: dmMessageArchive.sourceFanoutSeq,
+  sourceReceivedAt: dmMessageArchive.sourceReceivedAt,
+  mediaMetadata: dmMessageArchive.mediaMetadata,
+  updatedAt: dmMessageArchive.updatedAt,
+};
+
+/** The columns of a chat-less delete fact, shared by the legacy and the bounded snapshot. */
+const tombstoneColumns = {
+  id: dmMessageArchive.id,
+  platformMessageId: dmMessageArchive.platformMessageId,
+  deletedAt: dmMessageArchive.deletedAt,
+  sourceFanoutSeq: dmMessageArchive.sourceFanoutSeq,
+  sourceReceivedAt: dmMessageArchive.sourceReceivedAt,
+  updatedAt: dmMessageArchive.updatedAt,
+};
+
 export async function listOfapiSyncSnapshotHotMessages(
   db: Database,
   input: {
@@ -479,22 +528,7 @@ export async function listOfapiSyncSnapshotHotMessages(
     return [];
   }
   return db
-    .select({
-      id: pageDmMessages.id,
-      conversationId: pageDmMessages.conversationId,
-      platformConversationId: pageDmThreads.platformConversationId,
-      platformMessageId: pageDmMessages.platformMessageId,
-      senderRole: pageDmMessages.senderRole,
-      createdAt: pageDmMessages.createdAt,
-      content: pageDmMessages.content,
-      totalTipAmountCents: pageDmMessages.totalTipAmountCents,
-      inReplyToMessageId: pageDmMessages.inReplyToMessageId,
-      purchasedAt: pageDmMessages.purchasedAt,
-      syncedAt: pageDmMessages.syncedAt,
-      archivePriceMills: messageArchive.priceMills,
-      archiveMediaMetadata: messageArchive.mediaMetadata,
-      archiveIsOpened: messageArchive.isOpened,
-    })
+    .select(hotMessageColumns)
     .from(pageDmMessages)
     .innerJoin(pageDmThreads, eq(pageDmThreads.id, pageDmMessages.conversationId))
     .leftJoin(messageArchive, hotMessageArchiveTwin)
@@ -530,25 +564,7 @@ export async function listOfapiSyncSnapshotArchiveMessages(
     );
 
   return db
-    .select({
-      id: dmMessageArchive.id,
-      platformConversationId: dmMessageArchive.platformConversationId,
-      platformMessageId: dmMessageArchive.platformMessageId,
-      senderRole: dmMessageArchive.senderRole,
-      isSentByMe: dmMessageArchive.isSentByMe,
-      messageCreatedAt: dmMessageArchive.messageCreatedAt,
-      textPlain: dmMessageArchive.textPlain,
-      priceMills: dmMessageArchive.priceMills,
-      isOpened: dmMessageArchive.isOpened,
-      isTip: dmMessageArchive.isTip,
-      tipAmountMills: dmMessageArchive.tipAmountMills,
-      inReplyToMessageId: dmMessageArchive.inReplyToMessageId,
-      deletedAt: dmMessageArchive.deletedAt,
-      sourceFanoutSeq: dmMessageArchive.sourceFanoutSeq,
-      sourceReceivedAt: dmMessageArchive.sourceReceivedAt,
-      mediaMetadata: dmMessageArchive.mediaMetadata,
-      updatedAt: dmMessageArchive.updatedAt,
-    })
+    .select(archiveMessageColumns)
     .from(dmMessageArchive)
     .where(and(
       eq(dmMessageArchive.platformAccountId, input.platformAccountId),
@@ -570,14 +586,7 @@ export async function listOfapiSyncSnapshotUnresolvedTombstones(
   },
 ) {
   return db
-    .select({
-      id: dmMessageArchive.id,
-      platformMessageId: dmMessageArchive.platformMessageId,
-      deletedAt: dmMessageArchive.deletedAt,
-      sourceFanoutSeq: dmMessageArchive.sourceFanoutSeq,
-      sourceReceivedAt: dmMessageArchive.sourceReceivedAt,
-      updatedAt: dmMessageArchive.updatedAt,
-    })
+    .select(tombstoneColumns)
     .from(dmMessageArchive)
     .where(and(
       eq(dmMessageArchive.platformAccountId, input.platformAccountId),
@@ -622,14 +631,7 @@ export async function listOfapiSyncSnapshotUnresolvedTombstonePage(
   },
 ) {
   return db
-    .select({
-      id: dmMessageArchive.id,
-      platformMessageId: dmMessageArchive.platformMessageId,
-      deletedAt: dmMessageArchive.deletedAt,
-      sourceFanoutSeq: dmMessageArchive.sourceFanoutSeq,
-      sourceReceivedAt: dmMessageArchive.sourceReceivedAt,
-      updatedAt: dmMessageArchive.updatedAt,
-    })
+    .select(tombstoneColumns)
     .from(dmMessageArchive)
     .where(and(
       eq(dmMessageArchive.platformAccountId, input.platformAccountId),
@@ -671,25 +673,7 @@ export async function listOfapiSyncSnapshotArchiveMessagePage(
     ));
 
   return db
-    .select({
-      id: dmMessageArchive.id,
-      platformConversationId: dmMessageArchive.platformConversationId,
-      platformMessageId: dmMessageArchive.platformMessageId,
-      senderRole: dmMessageArchive.senderRole,
-      isSentByMe: dmMessageArchive.isSentByMe,
-      messageCreatedAt: dmMessageArchive.messageCreatedAt,
-      textPlain: dmMessageArchive.textPlain,
-      priceMills: dmMessageArchive.priceMills,
-      isOpened: dmMessageArchive.isOpened,
-      isTip: dmMessageArchive.isTip,
-      tipAmountMills: dmMessageArchive.tipAmountMills,
-      inReplyToMessageId: dmMessageArchive.inReplyToMessageId,
-      deletedAt: dmMessageArchive.deletedAt,
-      sourceFanoutSeq: dmMessageArchive.sourceFanoutSeq,
-      sourceReceivedAt: dmMessageArchive.sourceReceivedAt,
-      mediaMetadata: dmMessageArchive.mediaMetadata,
-      updatedAt: dmMessageArchive.updatedAt,
-    })
+    .select(archiveMessageColumns)
     .from(dmMessageArchive)
     .where(and(
       eq(dmMessageArchive.platformAccountId, input.platformAccountId),
@@ -731,22 +715,7 @@ export async function listOfapiSyncSnapshotHotMessagePage(
     ));
 
   return db
-    .select({
-      id: pageDmMessages.id,
-      conversationId: pageDmMessages.conversationId,
-      platformConversationId: pageDmThreads.platformConversationId,
-      platformMessageId: pageDmMessages.platformMessageId,
-      senderRole: pageDmMessages.senderRole,
-      createdAt: pageDmMessages.createdAt,
-      content: pageDmMessages.content,
-      totalTipAmountCents: pageDmMessages.totalTipAmountCents,
-      inReplyToMessageId: pageDmMessages.inReplyToMessageId,
-      purchasedAt: pageDmMessages.purchasedAt,
-      syncedAt: pageDmMessages.syncedAt,
-      archivePriceMills: messageArchive.priceMills,
-      archiveMediaMetadata: messageArchive.mediaMetadata,
-      archiveIsOpened: messageArchive.isOpened,
-    })
+    .select(hotMessageColumns)
     .from(pageDmMessages)
     .innerJoin(pageDmThreads, eq(pageDmThreads.id, pageDmMessages.conversationId))
     .leftJoin(messageArchive, hotMessageArchiveTwin)

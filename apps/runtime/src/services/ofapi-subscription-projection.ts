@@ -28,6 +28,7 @@ import {
   asRecord,
   idToString,
   ofapiWebhookEnvelopeSchema,
+  parseOfapiTimestamp,
 } from "./ofapi-payloads.ts";
 
 export const OFAPI_SUBSCRIPTION_PROJECTION_EVENT_TYPES = [
@@ -45,14 +46,6 @@ export function isOfapiSubscriptionProjectionEventType(eventType: string) {
 
 function nonEmpty(value: unknown): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value : null;
-}
-
-function parseTimestamp(value: unknown): Date | null {
-  if (typeof value !== "string" || value.length === 0) {
-    return null;
-  }
-  const parsed = new Date(value);
-  return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
 
 // replacePairs["{PRICE}"] arrives as a formatted string like "$4.00".
@@ -100,13 +93,13 @@ export function parseOfapiSubscriptionPayload(
     fanId,
     username: nonEmpty(user.username),
     displayName: nonEmpty(user.name) ?? nonEmpty(user.displayName),
-    occurredAt: parseTimestamp(payload.createdAt),
-    expiredAt: parseTimestamp(payload.expiredAt),
+    occurredAt: parseOfapiTimestamp(payload.createdAt),
+    expiredAt: parseOfapiTimestamp(payload.expiredAt),
     priceDollars: parseDollarString(replacePairs?.["{PRICE}"]) ??
       (typeof subscribePrice === "number" && Number.isFinite(subscribePrice) && subscribePrice > 0
         ? subscribePrice
         : null),
-    lastSeenAt: parseTimestamp(user.lastSeen),
+    lastSeenAt: parseOfapiTimestamp(user.lastSeen),
   };
 }
 

@@ -25,6 +25,7 @@ import type { EgressPriorityClass } from "@agency_hub_core/platform-core";
 
 
 import { normalizeOnlyFansAvatarUrl } from "./onlyfans.ts";
+import { asRecord } from "./ofapi-payloads.ts";
 
 const OFAPI_REQUEST_TIMEOUT_MS = 15_000;
 // The free, bounded delivery-history GET can outlast the generic admin deadline.
@@ -581,12 +582,6 @@ export interface OfapiClient {
     accountId: string,
     conversationId: string,
   ): Promise<OfapiMarkReadResult>;
-}
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : null;
 }
 
 function wrappedOnlyFansStatus(value: unknown): number | null {

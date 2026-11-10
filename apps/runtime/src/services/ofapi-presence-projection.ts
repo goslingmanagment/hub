@@ -21,6 +21,7 @@ import {
   asRecord,
   idToString,
   ofapiWebhookEnvelopeSchema,
+  parseOfapiTimestamp,
 } from "./ofapi-payloads.ts";
 
 export const OFAPI_PRESENCE_PROJECTION_EVENT_TYPES = [
@@ -33,14 +34,6 @@ const OFAPI_PRESENCE_PROJECTION_SWEEP_LIMIT = 200;
 
 export function isOfapiPresenceProjectionEventType(eventType: string) {
   return (OFAPI_PRESENCE_PROJECTION_EVENT_TYPES as readonly string[]).includes(eventType);
-}
-
-function parseTimestamp(value: unknown): Date | null {
-  if (typeof value !== "string" || value.length === 0) {
-    return null;
-  }
-  const parsed = new Date(value);
-  return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
 
 export interface OfapiPresenceEventData {
@@ -63,10 +56,10 @@ export function parseOfapiPresencePayload(
 
   return {
     fanId,
-    lastSeenAt: parseTimestamp(payload.last_seen_online_at) ??
-      parseTimestamp(payload.status_changed_at) ??
-      parseTimestamp(payload.observed_at),
-    observedAt: parseTimestamp(payload.observed_at),
+    lastSeenAt: parseOfapiTimestamp(payload.last_seen_online_at) ??
+      parseOfapiTimestamp(payload.status_changed_at) ??
+      parseOfapiTimestamp(payload.observed_at),
+    observedAt: parseOfapiTimestamp(payload.observed_at),
   };
 }
 

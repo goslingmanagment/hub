@@ -21,12 +21,11 @@ import {
   type Database,
 } from "@agency_hub_core/db";
 import {
-  dollarsToMills,
 } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
 import { resolveOfapiListNextOffset } from "./ofapi-list-pagination.ts";
-import { asRecord, idToString } from "./ofapi-payloads.ts";
+import { asRecord, idToString, parseOfapiDollarMills, parseOfapiVendorDate } from "./ofapi-payloads.ts";
 import { upsertTransactionWithNegationGuards } from "./money-negation-guards.ts";
 import { OfapiApiError, type OfapiListPage, type OfapiRequestContext } from "./ofapi.ts";
 import { resolveEgress } from "./egress/resolver.ts";
@@ -118,32 +117,6 @@ async function journalChargebacksPage(
   }, { action: CHARGEBACKS_JOURNAL_ACTION, platform: "onlyfans" });
 }
 
-function parseDate(value: unknown): Date | null {
-  if (typeof value !== "string" || value.trim().length === 0) {
-    return null;
-  }
-  const raw = value.trim();
-  const normalized = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(raw)
-    ? `${raw.replace(" ", "T")}Z`
-    : raw;
-  const parsed = new Date(normalized);
-  return Number.isNaN(parsed.getTime()) ? null : parsed;
-}
-
-function parseDollarMills(value: unknown): bigint | null {
-  if (typeof value !== "number" && typeof value !== "string") {
-    return null;
-  }
-  const normalized = typeof value === "string"
-    ? value.trim().replace(/^\$/, "").replace(/,/g, "")
-    : value;
-  try {
-    return dollarsToMills(normalized);
-  } catch {
-    return null;
-  }
-}
-
 /** Refund direction: chargeback amounts are stored negated (like OnlyMonster). */
 function negated(value: bigint | null): bigint | null {
   return value === null ? null : value > 0n ? -value : value;
@@ -181,7 +154,7 @@ function normalizeChargeback(item: Record<string, unknown>):
   if (!fanPlatformUserId) {
     return { status: "skipped", reason: "missing_fan_id" };
   }
-  const occurredAt = parseDate(item.createdAt ?? payment.createdAt);
+  const occurredAt = parseOfapiVendorDate(item.createdAt ?? payment.createdAt);
   if (!occurredAt) {
     return { status: "skipped", reason: "missing_occurred_at" };
   }
@@ -189,11 +162,11 @@ function normalizeChargeback(item: Record<string, unknown>):
   if (currency !== null && currency !== "USD") {
     return { status: "skipped", reason: "unsupported_currency" };
   }
-  const grossAmountMills = negated(parseDollarMills(payment.amount));
+  const grossAmountMills = negated(parseOfapiDollarMills(payment.amount));
   if (grossAmountMills === null) {
     return { status: "skipped", reason: "missing_gross_amount" };
   }
-  const creatorNetAmountMills = negated(parseDollarMills(payment.net)) ?? grossAmountMills;
+  const creatorNetAmountMills = negated(parseOfapiDollarMills(payment.net)) ?? grossAmountMills;
 
   return {
     status: "ok",
@@ -209,9 +182,9 @@ function normalizeChargeback(item: Record<string, unknown>):
         : "chargeback",
       grossAmountMills,
       creatorNetAmountMills,
-      platformFeeMills: negated(parseDollarMills(payment.fee)),
-      vatAmountMills: negated(parseDollarMills(payment.vatAmount)),
-      taxAmountMills: negated(parseDollarMills(payment.taxAmount)),
+      platformFeeMills: negated(parseOfapiDollarMills(payment.fee)),
+      vatAmountMills: negated(parseOfapiDollarMills(payment.vatAmount)),
+      taxAmountMills: negated(parseOfapiDollarMills(payment.taxAmount)),
       occurredAt,
     },
   };
