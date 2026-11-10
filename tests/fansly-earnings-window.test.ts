@@ -5,10 +5,6 @@ import {
   parseEarningsWindow,
   startEarningsWindow,
 } from "../apps/runtime/src/sync/fansly/lib/earnings-window.ts";
-import {
-  emptyFanslyStatsCursorState,
-  parseFanslyStatsCursorState,
-} from "../apps/runtime/src/sync/fansly/lib/stats-rules.ts";
 
 const DAY = 86_400_000;
 const START = Date.UTC(2026, 7, 1);
@@ -101,21 +97,4 @@ describe("Fansly aggregate earnings time windows", () => {
       expect(walk.hasRows).toBe(false);
     },
   );
-
-  it("migrates the stuck legacy offset without erasing budget or completed history", () => {
-    const now = new Date(START);
-    const old = { ...emptyFanslyStatsCursorState(now), version: 2,
-      callsToday: 25, earningsOffset: 55000, earningsPreviousOffset: 54900 };
-    old.backfill!.daily.done = true;
-    old.backfill!.hourly.done = true;
-    Object.assign(old.backfill!.earnings, { offset: 55000, lastOffset: 54900 });
-    const state = parseFanslyStatsCursorState(old, now)!;
-    expect(state.version).toBe(2);
-    expect(state.callsToday).toBe(25);
-    expect(state.backfill!.daily.done).toBe(true);
-    expect(state.backfill!.hourly.done).toBe(true);
-    expect(state.backfill!.earnings.done).toBe(false);
-    expect(state.backfill!.earnings.walk).toBeNull();
-    expect(state.backfill!.earnings.nextBeforeMs).toBe(START);
-  });
 });

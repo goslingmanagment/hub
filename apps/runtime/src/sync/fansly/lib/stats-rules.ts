@@ -3,7 +3,7 @@ import {
   isExactTerminalNullAccountStatsPayload,
 } from "../../../services/canonicalize/fansly-stats.ts";
 import { parseEarningsWindow, type EarningsWindowWalk } from "./earnings-window.ts";
-import { classifyFanslyResponse, fanslyUtcDayKey, type FanslyResponseClass } from "./lane.ts";
+import { classifyFanslyResponse, type FanslyResponseClass } from "./lane.ts";
 
 // The account-statistics rules of the Sync Engine's `stats.*` resources
 // (resources/stats.ts): the `stats_snapshot` cursor with its backfill walks'
@@ -62,7 +62,6 @@ export const DISCOVERY_PAGES_PER_SWEEP = 2;
  * and NOT a reason to raise the cap.
  */
 const BACKFILL_DAILY_WINDOW_DAYS = 31;
-const BACKFILL_HOURLY_STEP_DAYS = 4;
 /**
  * The bounds the MONTH form carries, which the server ignores.
  *
@@ -178,13 +177,6 @@ export interface DailyBackfillState {
   guard: BackfillWindowGuard;
 }
 
-interface HourlyBackfillState {
-  nextBeforeMs: number;
-  daysWalked: number;
-  done: boolean;
-  guard: BackfillWindowGuard;
-}
-
 export interface EarningsBackfillState {
   nextBeforeMs: number;
   walk: EarningsWindowWalk | null;
@@ -197,57 +189,6 @@ export interface EarningsBackfillState {
   probeHitBeforeMs: number | null;
   done: boolean;
   guard: BackfillWindowGuard;
-}
-
-export interface FanslyStatsCursorState {
-  version: 2;
-  mode: "backfill" | "steady";
-  /** The UTC day `callsToday` belongs to; a different day resets the counter. */
-  utcDay: string;
-  /** HTTP ATTEMPTS spent by this lane on `utcDay`. Retries included. */
-  callsToday: number;
-  /** The last UTC day a full daily sweep completed. */
-  lastSweepDay: string | null;
-  /** The UTC day the in-progress steady sweep belongs to. It survives a UTC
-   *  rollover so finishing yesterday's tail cannot masquerade as today's full
-   *  sweep. Null when no steady sweep is in progress. */
-  sweepDay: string | null;
-  /** Which step to resume at within `sweepDay`. */
-  stepIndex: number;
-  // Additive fields keep the v2 envelope readable during image rollback:
-  // old readers may re-read this window, but retain the day budget/history.
-  earningsWalk: EarningsWindowWalk | null;
-  discoveryPage: number;
-  /** `before` cursor for the first-enable broadcast walk; null once at the floor. */
-  broadcastBefore: string | null;
-  broadcastFloorReached: boolean;
-  /** Pages the broadcast walk has taken in THIS sweep. Bounded so the
-   *  first-enable walk cannot hold the sweep at step 6 for days and starve the
-   *  daily traffic capture behind it. */
-  broadcastPagesInSweep: number;
-  /** Why the live walk reached its floor; null while it is open, or when it
-   *  got there before the reason was kept. */
-  broadcastWalkStop: BroadcastWalkStop | null;
-  /** The same walk over the DELETED list (step 7), with the same bound. A
-   *  cursor from before it existed starts it once. */
-  deletedBroadcastBefore: string | null;
-  deletedBroadcastFloorReached: boolean;
-  deletedBroadcastPagesInSweep: number;
-  deletedBroadcastWalkStop: BroadcastWalkStop | null;
-  /** When the hourly plane's trailing window was last captured — that
-   *  request's window end, ISO. The hourly capture keeps its own clock, not
-   *  the daily sweep's. Null until the first capture; a cursor from before
-   *  this field derives it once from the steady coverage row. */
-  lastHourlyCapturedAt: string | null;
-  /** The newest bucket that capture was SERVED — the body's `dateBefore`,
-   *  ISO — which is where the next capture's window has to reach back to.
-   *  Null when the body carried no bounds; derived like the field above. */
-  lastHourlyServedBefore: string | null;
-  backfill: {
-    daily: DailyBackfillState;
-    hourly: HourlyBackfillState;
-    earnings: EarningsBackfillState;
-  } | null;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -266,18 +207,6 @@ function asNullableString(value: unknown): string | null {
 
 function asNullableInt(value: unknown): number | null {
   return typeof value === "number" && Number.isSafeInteger(value) ? value : null;
-}
-
-function asNullableInstant(value: unknown): string | null {
-  const text = asNullableString(value);
-  const ms = text === null ? Number.NaN : Date.parse(text);
-  return Number.isFinite(ms) ? new Date(ms).toISOString() : null;
-}
-
-function previousUtcDayKey(day: string, fallbackNow: Date): string {
-  const midnightMs = Date.parse(`${day}T00:00:00.000Z`);
-  const baseMs = Number.isNaN(midnightMs) ? fallbackNow.getTime() : midnightMs;
-  return fanslyUtcDayKey(new Date(baseMs - DAY_MS));
 }
 
 /** A cursor written before the guard existed parses as a lane that has asked
@@ -334,16 +263,6 @@ export function parseDailyBackfill(value: unknown, now: Date): DailyBackfillStat
   };
 }
 
-function parseHourlyBackfill(value: unknown, now: Date): HourlyBackfillState {
-  const record = asRecord(value);
-  return {
-    nextBeforeMs: asInt(record?.nextBeforeMs, now.getTime()),
-    daysWalked: asInt(record?.daysWalked, 0),
-    done: record?.done === true,
-    guard: parseWindowGuard(record?.guard, BACKFILL_HOURLY_STEP_DAYS),
-  };
-}
-
 export function parseEarningsBackfill(value: unknown, now: Date): EarningsBackfillState {
   const record = asRecord(value);
   return {
@@ -356,68 +275,6 @@ export function parseEarningsBackfill(value: unknown, now: Date): EarningsBackfi
     probeHitBeforeMs: asNullableInt(record?.probeHitBeforeMs),
     done: record?.done === true,
     guard: parseWindowGuard(record?.guard, BACKFILL_EARNINGS_WINDOW_DAYS),
-  };
-}
-
-export function parseFanslyStatsCursorState(
-  value: unknown,
-  now = new Date(),
-): FanslyStatsCursorState | null {
-  const state = asRecord(value);
-  if (!state || (state.version !== 1 && state.version !== 2)) {
-    return null;
-  }
-  const mode = state.mode === "backfill" || state.mode === "steady" ? state.mode : null;
-  const utcDay = asNullableString(state.utcDay);
-  if (mode === null || utcDay === null) {
-    return null;
-  }
-  const backfillRecord = asRecord(state.backfill);
-  const stepIndex = Math.min(LAST_SWEEP_STEP, Math.max(0, asInt(state.stepIndex, 0)));
-  const lastSweepDay = asNullableString(state.lastSweepDay);
-  const legacySweepDay = mode === "steady" && stepIndex > 0
-    // A v1 cursor cannot prove whether this tail already crossed midnight. Treat
-    // it as belonging to the last completed day (or yesterday on first enable),
-    // finish it, then force one bounded current-day sweep. That one-time repeat
-    // is safer than preserving the exact stale-head failure this migration fixes.
-    ? lastSweepDay ?? previousUtcDayKey(utcDay, now)
-    : null;
-  return {
-    version: 2,
-    mode,
-    utcDay,
-    callsToday: Math.max(0, asInt(state.callsToday, 0)),
-    // A completed v1 cursor also cannot prove that step 0 ran on this UTC day.
-    // Clearing the completion marker makes the upgrade self-heal with one
-    // ordinary capped sweep; v2 checkpoints never take this branch again.
-    lastSweepDay: state.version === 1 && mode === "steady" && stepIndex === 0
-      ? null
-      : lastSweepDay,
-    sweepDay: state.version === 1 ? legacySweepDay : asNullableString(state.sweepDay),
-    // Clamped to the real step range. A stored value past the last step would
-    // otherwise wedge the lane: the sweep loop would fall straight through to
-    // its `break` and return "not satisfied, nothing done" on every dispatch,
-    // forever, with no call and no error to show for it.
-    stepIndex,
-    // Legacy offsets never proved progress. Re-read the current root window;
-    // completed history and all physical-attempt accounting remain unchanged.
-    earningsWalk: parseEarningsWindow(state.earningsWalk),
-    discoveryPage: Math.max(0, asInt(state.discoveryPage, 0)),
-    broadcastBefore: asNullableString(state.broadcastBefore),
-    broadcastFloorReached: state.broadcastFloorReached === true,
-    broadcastPagesInSweep: Math.max(0, asInt(state.broadcastPagesInSweep, 0)),
-    broadcastWalkStop: parseBroadcastWalkStop(state.broadcastWalkStop),
-    deletedBroadcastBefore: asNullableString(state.deletedBroadcastBefore),
-    deletedBroadcastFloorReached: state.deletedBroadcastFloorReached === true,
-    deletedBroadcastPagesInSweep: Math.max(0, asInt(state.deletedBroadcastPagesInSweep, 0)),
-    deletedBroadcastWalkStop: parseBroadcastWalkStop(state.deletedBroadcastWalkStop),
-    lastHourlyCapturedAt: asNullableInstant(state.lastHourlyCapturedAt),
-    lastHourlyServedBefore: asNullableInstant(state.lastHourlyServedBefore),
-    backfill: backfillRecord === null ? null : {
-      daily: parseDailyBackfill(backfillRecord.daily, now),
-      hourly: parseHourlyBackfill(backfillRecord.hourly, now),
-      earnings: parseEarningsBackfill(backfillRecord.earnings, now),
-    },
   };
 }
 
@@ -607,42 +464,6 @@ export function classifyStatsMonth(payload: unknown): FanslyResponseClass {
   return "empty";
 }
 
-export function emptyFanslyStatsCursorState(now: Date): FanslyStatsCursorState {
-  return {
-    version: 2,
-    // History remains resumable background work. Each day's fresh sweep gets
-    // first use of the same physical-attempt budget, including on first enable.
-    mode: "backfill",
-    utcDay: fanslyUtcDayKey(now),
-    callsToday: 0,
-    lastSweepDay: null,
-    sweepDay: null,
-    stepIndex: 0,
-    earningsWalk: null,
-    discoveryPage: 0,
-    broadcastBefore: null,
-    broadcastFloorReached: false,
-    broadcastPagesInSweep: 0,
-    broadcastWalkStop: null,
-    deletedBroadcastBefore: null,
-    deletedBroadcastFloorReached: false,
-    deletedBroadcastPagesInSweep: 0,
-    deletedBroadcastWalkStop: null,
-    lastHourlyCapturedAt: null,
-    lastHourlyServedBefore: null,
-    backfill: {
-      daily: emptyDailyBackfill(now),
-      hourly: {
-        nextBeforeMs: now.getTime(),
-        daysWalked: 0,
-        done: false,
-        guard: emptyWindowGuard(BACKFILL_HOURLY_STEP_DAYS),
-      },
-      earnings: emptyEarningsBackfill(now.getTime(), false),
-    },
-  };
-}
-
 // ── the hourly plane's clock ─────────────────────────────────────────────────
 
 /**
@@ -770,19 +591,6 @@ export type BroadcastWalkStop =
   | "no_row_ids"
   | "cursor_not_advancing"
   | "malformed_shape";
-
-const BROADCAST_WALK_STOPS: ReadonlySet<string> = new Set<BroadcastWalkStop>([
-  "empty_page",
-  "no_row_ids",
-  "cursor_not_advancing",
-  "malformed_shape",
-]);
-
-function parseBroadcastWalkStop(value: unknown): BroadcastWalkStop | null {
-  return typeof value === "string" && BROADCAST_WALK_STOPS.has(value)
-    ? value as BroadcastWalkStop
-    : null;
-}
 
 /** One broadcast list's walk, as the cursor keeps it. */
 export interface BroadcastWalk {
