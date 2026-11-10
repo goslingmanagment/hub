@@ -70,6 +70,7 @@ export async function createSyncContext(options: CreateSyncContextOptions = {}):
   const logger = createLogger(rawConfig.logLevel);
   const timeouts = options.poolTimeouts;
   const pool = createPool(rawConfig.databaseUrl, {
+    applicationName: "hub-sync",
     ...(timeouts === undefined ? {} : { timeouts }),
     ...(options.poolLifetime === undefined ? {} : { lifetime: options.poolLifetime }),
   });
