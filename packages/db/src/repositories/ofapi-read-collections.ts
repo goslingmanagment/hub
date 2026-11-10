@@ -6,7 +6,7 @@ import {
 } from "@agency_hub_core/shared";
 import type { Database } from "../client.ts";
 import { settleLostOfapiCollectionReadAsBilled } from "./ofapi-capture.ts";
-import { getEffectiveOfapiCollectionPolicy, ofapiCollectionHasScheduledReads } from "./ofapi-collection.ts";
+import { effectiveOfapiCollectionPolicyFrom, getEffectiveOfapiCollectionPolicy, loadOfapiCollectionPolicyContext, ofapiCollectionHasScheduledReads } from "./ofapi-collection.ts";
 import { isDmArchiveScopeFenced, tryAcquireDmArchiveWriterFenceLock } from "./erasure-fence.ts";
 
 export async function claimOfapiCollectionJob(
@@ -273,6 +273,19 @@ export async function enqueueDueOfapiCollectionSchedules(
     sql`select id from pages where platform='onlyfans' and deleted_at is null and ofapi_account_id is not null`,
   );
   const created: string[] = [];
+  const pageIds = pages.rows.map((page) => Number(page.id));
+  // One read of the state, the policies and the schedule rows for the whole
+  // tick; the transaction below re-reads all of it under the lock, so these
+  // only spare it the pairs that would come out of it with nothing written.
+  const context = await loadOfapiCollectionPolicyContext(db, pageIds);
+  const lastScheduled = new Map<string, Date>();
+  if (pageIds.length) {
+    const schedules = await db.execute<{ page_id: string; category: string; last_scheduled_at: Date }>(
+      sql`select page_id,category,last_scheduled_at from ofapi_collection_schedules where page_id in (${sql.join(pageIds.map((id) => sql`${id}`), sql`,`)})`,
+    );
+    for (const row of schedules.rows)
+      lastScheduled.set(`${Number(row.page_id)}:${row.category}`, new Date(row.last_scheduled_at));
+  }
   for (const page of pages.rows)
     for (const category of categories) {
       if (
@@ -280,12 +293,16 @@ export async function enqueueDueOfapiCollectionSchedules(
         !ofapiCollectionHasScheduledReads(category)
       )
         continue;
-      const policy = await getEffectiveOfapiCollectionPolicy(
-        db,
+      const policy = effectiveOfapiCollectionPolicyFrom(
+        context,
         category,
         Number(page.id),
       );
       if (policy.mode !== "scheduled" || policy.backgroundPaused) continue;
+      // Not due yet: the upsert below would match no row and the transaction
+      // would write nothing. `last_scheduled_at` only moves forward.
+      const last = lastScheduled.get(`${Number(page.id)}:${category}`);
+      if (last && last.getTime() >= now.getTime() - policy.intervalMinutes * 60000) continue;
       await db.transaction(async (tx) => {
         const database = tx as unknown as Database;
         await database.execute(
