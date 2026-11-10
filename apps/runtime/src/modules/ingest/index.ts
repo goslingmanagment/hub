@@ -13,9 +13,7 @@ import { refreshOfapiBinding } from "../../services/ofapi-binding-refresh.ts";
 import { routeSchemas } from "@agency_hub_core/contracts";
 
 import {
-  requireApiKeyUser,
   requireHarvestDeviceToken,
-  type HumanAuthPrincipal,
 } from "../../services/auth.ts";
 import {
   ingestClientObservations,
@@ -30,7 +28,6 @@ import {
 import {
   sendOfapiCommandExecuteJob,
 } from "../../services/ofapi-command-executor.ts";
-import { reportOfapiMediaFetches, resolveOfapiMedia } from "../../services/ofapi-media-resolve.ts";
 import {
   getOfapiWebhookStatus,
   receiveOfapiWebhook,
@@ -189,27 +186,6 @@ export async function registerIngestRoutes(server: ApiServer, ctx: ApiModuleCont
     return reconcileOfapiWebhookRegistration(appContext, request.body);
   });
 
-  // Desktop media images (docs/runbooks/ofapi-media.md). Authentication runs
-  // as a preHandler; the day's media credit budget is the only ceiling.
-  const mediaPrincipals = new WeakMap<object, HumanAuthPrincipal>();
-  const authenticateMediaDevice = async (request: Parameters<typeof requirePrincipal>[0]) => {
-    const principal = await requirePrincipal(request);
-    requireApiKeyUser(principal);
-    mediaPrincipals.set(request, principal);
-  };
-  const mediaPrincipal = (request: object) => {
-    const principal = mediaPrincipals.get(request);
-    if (!principal) throw new ServiceUnavailableError("Media request was not authenticated");
-    return principal;
-  };
-  server.post("/api/v1/ofapi/media/resolve", {
-    schema: routeSchemas.ofapiMediaResolve,
-    preHandler: authenticateMediaDevice,
-  }, async (request) => resolveOfapiMedia(appContext, mediaPrincipal(request), request.body));
-  server.post("/api/v1/ofapi/media/reports", {
-    schema: routeSchemas.ofapiMediaReports,
-    preHandler: authenticateMediaDevice,
-  }, async (request) => reportOfapiMediaFetches(appContext, mediaPrincipal(request), request.body.reports));
 
   server.post("/api/v1/admin/ofapi/marketing/rebuild", {schema:routeSchemas.ofapiMarketingRebuild}, async request => {
     const principal=await requirePrincipal(request);

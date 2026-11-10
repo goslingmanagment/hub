@@ -27,7 +27,7 @@ for at password sign-in (`client: "chat-extension"`): it reaches only the
 61 routes marked "yes", and every route marked "no" refuses it with 403.
 A full device token is not affected.
 
-## Routes (419)
+## Routes (417)
 
 | Method | Path | Route key | Kind | Roles | Page scope | chat-extension token |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -335,8 +335,6 @@ A full device token is not affected.
 | POST | `/api/v1/ofapi/commands` | `createOfapiCommand` | `apiKey` | — | — | no |
 | GET | `/api/v1/ofapi/commands/:commandId` | `getOfapiCommand` | `apiKey` | — | — | no |
 | POST | `/api/v1/ofapi/commands/:commandId/cancel` | `cancelOfapiCommand` | `apiKey` | — | — | no |
-| POST | `/api/v1/ofapi/media/reports` | `ofapiMediaReports` | `apiKey` | — | — | no |
-| POST | `/api/v1/ofapi/media/resolve` | `ofapiMediaResolve` | `apiKey` | — | — | no |
 | POST | `/api/v1/ofapi/webhook` | `ofapiWebhookReceive` | `hmac` | — | — | — |
 | GET | `/api/v1/openapi.json` | `openApiJson` | `owner-session` | — | — | no |
 | GET | `/api/v1/ops/live` | `opsLive` | `monitoring` | owner | — | no |
