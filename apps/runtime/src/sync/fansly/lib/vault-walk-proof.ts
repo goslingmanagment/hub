@@ -1,5 +1,4 @@
 // A resumable proof of one unfiltered walk, never an inference from `done`.
-import { randomUUID } from "node:crypto";
 
 export interface VaultWalkProof {
   walkRef: string;
@@ -9,14 +8,6 @@ export interface VaultWalkProof {
   seenMediaRefs: string[];
   observationRefs: number[];
   valid: boolean;
-}
-
-export function newVaultWalkProof(album: { itemCount: number | null; lastItemRef: string | null }): VaultWalkProof {
-  return {
-    walkRef: randomUUID(), startedAt: new Date().toISOString(),
-    expectedCount: album.itemCount, headRef: album.lastItemRef,
-    seenMediaRefs: [], observationRefs: [], valid: true,
-  };
 }
 
 export function parseVaultWalkProof(value: unknown): VaultWalkProof | undefined {

@@ -510,13 +510,6 @@ function foldBelowOldest(chain: ThreadChain, segment: Segment | null, page: Chai
   };
 }
 
-/** The `before` of the next read that continues the thread's chain downwards
- *  (a staged walk first), or null for a head read. */
-export function nextChainCursor(chain: ThreadChain, segment: Segment | null): string | null {
-  if (segment !== null) return segment.oldestId;
-  return chain.state === "partial" ? chain.oldestId : null;
-}
-
 /** Creation instant of a Fansly snowflake id in ms, or null for a non-id. */
 export function snowflakeMs(id: string): number | null {
   if (!isDecimalId(id)) return null;

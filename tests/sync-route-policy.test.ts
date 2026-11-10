@@ -21,7 +21,6 @@ import {
   FANSLY_ROUTES,
   familyOfRoute,
   intervalMsOf,
-  isFanslySiteRoute,
   routeBudget,
   routeOfEngineOperation,
   ROUTE_BUDGETS,
@@ -97,8 +96,6 @@ describe("the route catalogue", () => {
     expect(routeBudget("auth.twofa")).toEqual(DEFAULT_ROUTE_BUDGET);
     // A site or login attempt of sync_attempts counts on its route.
     for (const route of ["site.other", "auth.login", "auth.twofa"] as const) expect(routeOfEngineOperation(route)).toBe(route);
-    expect(isFanslySiteRoute("site.other")).toBe(true);
-    expect(isFanslySiteRoute("account.me")).toBe(false);
   });
 
   it("the families are routes, each route in one family at most", () => {
