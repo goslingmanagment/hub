@@ -7,9 +7,9 @@ import {
   rebuildRevenueRollups,
   rebuildSpenderProjections,
   rebuildSubscriberRollups,
-  upsertFanPage,
+  upsertFanPages,
   upsertFans,
-  upsertPageFollow,
+  upsertPageFollows,
   upsertPageSubscription,
   upsertTransaction,
 } from "@agency_hub_core/db";
@@ -105,7 +105,7 @@ describe("rollup rebuilds apply a diff", () => {
         { platform: "fansly", platformUserId: "diff-fan-c" },
       ]);
       for (const fan of [fanA!, fanB!, fanC!]) {
-        await upsertFanPage(testDb.db, { fanId: fan.id, platformAccountId: pageId, isFollower: true });
+        await upsertFanPages(testDb.db, [{ fanId: fan.id, platformAccountId: pageId, isFollower: true }]);
       }
 
       const now = Date.now();
@@ -138,12 +138,12 @@ describe("rollup rebuilds apply a diff", () => {
       await tx("diff-tx-4", fanB!.id, 2, 40_000n);
       await tx("diff-tx-5", fanC!.id, 1, 50_000n);
 
-      await upsertPageFollow(testDb.db, {
+      await upsertPageFollows(testDb.db, [{
         platformAccountId: pageId, fanId: fanA!.id, platformFollowId: "diff-follow-a", followedAt: at(10),
-      });
-      await upsertPageFollow(testDb.db, {
+      }]);
+      await upsertPageFollows(testDb.db, [{
         platformAccountId: pageId, fanId: fanB!.id, platformFollowId: "diff-follow-b", followedAt: at(3),
-      });
+      }]);
       await upsertPageSubscription(testDb.db, {
         platformSubscriptionId: "diff-sub-b",
         platformAccountId: pageId,
@@ -187,9 +187,9 @@ describe("rollup rebuilds apply a diff", () => {
         [pageId],
       );
       await tx("diff-tx-6", fanC!.id, 0, 60_000n);
-      await upsertPageFollow(testDb.db, {
+      await upsertPageFollows(testDb.db, [{
         platformAccountId: pageId, fanId: fanC!.id, platformFollowId: "diff-follow-c", followedAt: at(1),
-      });
+      }]);
 
       await rebuildAll(testDb, pageId, at(7), 121);
       const incremental = await snapshot(testDb, pageId);

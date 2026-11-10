@@ -53,8 +53,8 @@ import type {
 // `blocked_by_vendor` with a daily probe; a 400/404/410 is the subject's final
 // answer for now — a `rejected` receipt, read again on the next dirty mark or
 // at the roster age. Retired: the daily target cap, the target attempt
-// journal, the recovery roster (its debt stays readable as
-// `countFanEarningsRecoveryDebt`).
+// journal, the recovery roster (its debt query lives on only in
+// `tests/fan-earnings-receipts.integration.test.ts`).
 
 export const FAN_EARNINGS_ROSTER_KEY = "fan-earnings.roster";
 

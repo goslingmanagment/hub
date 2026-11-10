@@ -9,11 +9,11 @@ import {
   createModel,
   deleteProxyConfig,
   deleteTransactionsMissingFromWindow,
-  recalculateFanPageSpend,
+  rebuildSpenderProjections,
   rebuildRevenueRollups,
   storeProxyConfig,
   updatePageMetadata,
-  upsertFanPage,
+  upsertFanPages,
   upsertFans,
   upsertFanslyTransactionWithEarningsDirty,
   upsertPageTopSpenders,
@@ -508,10 +508,10 @@ describe("db write safety", () => {
     }]);
     assert(fan !== undefined, "Expected fan from the test fixture");
 
-    await upsertFanPage(testDb.db, {
+    await upsertFanPages(testDb.db, [{
       fanId: fan.id,
       platformAccountId: page.id,
-    });
+    }]);
 
     await upsertTransaction(testDb.db, {
       platformAccountId: page.id,
@@ -570,7 +570,7 @@ describe("db write safety", () => {
       occurredAt: new Date("2026-03-08T00:00:00.000Z"),
     });
 
-    await recalculateFanPageSpend(testDb.db, page.id);
+    await rebuildSpenderProjections(testDb.db, page.id);
 
     const spendBeforePayoutReversal = await testDb.pool.query(`
       select creator_net_amount_mills
@@ -595,7 +595,7 @@ describe("db write safety", () => {
       occurredAt: new Date("2026-03-09T00:00:00.000Z"),
     });
 
-    await recalculateFanPageSpend(testDb.db, page.id);
+    await rebuildSpenderProjections(testDb.db, page.id);
 
     const spendAfterPayoutReversal = await testDb.pool.query(`
       select creator_net_amount_mills
@@ -1135,10 +1135,10 @@ describe("db write safety", () => {
     }]);
     assert(fan !== undefined, "Expected fan from the test fixture");
 
-    await upsertFanPage(testDb.db, {
+    await upsertFanPages(testDb.db, [{
       fanId: fan.id,
       platformAccountId: page.id,
-    });
+    }]);
     await upsertTransaction(testDb.db, {
       platformAccountId: page.id,
       source: "onlymonster",
@@ -1154,7 +1154,7 @@ describe("db write safety", () => {
       occurredAt: new Date("2026-03-05T00:00:00.000Z"),
     });
 
-    await recalculateFanPageSpend(testDb.db, page.id);
+    await rebuildSpenderProjections(testDb.db, page.id);
 
     const beforeDelete = await testDb.pool.query(`
       select gross_amount_mills, creator_net_amount_mills
@@ -1182,7 +1182,7 @@ describe("db write safety", () => {
         and transaction_id = 'stale-tip'
     `);
 
-    await recalculateFanPageSpend(testDb.db, page.id);
+    await rebuildSpenderProjections(testDb.db, page.id);
 
     const afterDeleteLifetime = await testDb.pool.query(`
       select count(*)::int as count

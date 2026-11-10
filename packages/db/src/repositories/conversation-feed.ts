@@ -355,16 +355,6 @@ export async function listConversationFeedPage(
   return { rows: page, nextBefore: page.at(-1)?.position ?? null };
 }
 
-/** Perf-gate seam: EXPLAIN over the exact statement the reader runs. */
-export async function explainConversationFeedPage(
-  db: Database,
-  input: ConversationFeedPageInput,
-): Promise<string> {
-  const { query } = buildPageQuery(input);
-  const result = await db.execute<{ "QUERY PLAN": string }>(sql`explain (format text) ${query}`);
-  return result.rows.map((row) => row["QUERY PLAN"]).join("\n");
-}
-
 // chat-extension `coach-depth-v1`: how deep one conversation's stored history
 // goes, for the chatter to choose how many messages Coach reads («300
 // сообщений · 2 недели», «вся переписка: 2 431, с 14 марта»), and for Coach's

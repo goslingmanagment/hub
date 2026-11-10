@@ -16,7 +16,7 @@ import {
   insertSyncRequestAttempt,
   insertSyncRunEvent,
   openNotificationIncident,
-  recalculateFanPageSpend,
+  rebuildSpenderProjections,
   rebuildFollowerRollups,
   rebuildRevenueRollups,
   rebuildSubscriberRollups,
@@ -26,11 +26,11 @@ import {
   pageSyncStates as pageSyncStateRows,
   startSyncRun,
   updatePageMetadata,
-  upsertFanPage,
+  upsertFanPages,
   upsertFans,
   upsertPageDmConversation,
   upsertPageDmMessages,
-  upsertPageFollow,
+  upsertPageFollows,
   upsertPageSubscription,
   upsertTransaction,
 } from "@agency_hub_core/db";
@@ -182,7 +182,7 @@ async function seedPhase2Fixture(testDb: StartedTestDatabase) {
   }]);
   assert(fan !== undefined, "Expected fan from the test fixture");
 
-  await upsertFanPage(testDb.db, {
+  await upsertFanPages(testDb.db, [{
     fanId: fan.id,
     platformAccountId: lanaPage.id,
     isFollower: true,
@@ -191,20 +191,20 @@ async function seedPhase2Fixture(testDb: StartedTestDatabase) {
     subscriberSince: new Date("2026-03-01T12:00:00.000Z"),
     subscriptionExpiresAt: new Date("2026-03-20T12:00:00.000Z"),
     autoRenew: true,
-  });
-  await upsertFanPage(testDb.db, {
+  }]);
+  await upsertFanPages(testDb.db, [{
     fanId: fan.id,
     platformAccountId: lilyPage.id,
     isFollower: false,
     isSubscriber: false,
-  });
+  }]);
 
-  await upsertPageFollow(testDb.db, {
+  await upsertPageFollows(testDb.db, [{
     platformAccountId: lanaPage.id,
     fanId: fan.id,
     platformFollowId: "follow-lana-1",
     followedAt: new Date("2026-03-02T12:00:00.000Z"),
-  });
+  }]);
   await upsertPageSubscription(testDb.db, {
     platformSubscriptionId: "sub-lana-1",
     platformAccountId: lanaPage.id,
@@ -279,8 +279,8 @@ async function seedPhase2Fixture(testDb: StartedTestDatabase) {
   await rebuildRevenueRollups(testDb.db, lilyPage.id);
   await rebuildFollowerRollups(testDb.db, lanaPage.id, 1);
   await rebuildSubscriberRollups(testDb.db, lanaPage.id);
-  await recalculateFanPageSpend(testDb.db, lanaPage.id);
-  await recalculateFanPageSpend(testDb.db, lilyPage.id);
+  await rebuildSpenderProjections(testDb.db, lanaPage.id);
+  await rebuildSpenderProjections(testDb.db, lilyPage.id);
 
   return {
     lanaModel,
@@ -526,12 +526,12 @@ async function seedSyncMonitorScenario(
   assert(fanD !== undefined, "Expected fanD from the test fixture");
 
   for (const fan of [fanA, fanB, fanC, fanD]) {
-    await upsertFanPage(testDb.db, {
+    await upsertFanPages(testDb.db, [{
       fanId: fan.id,
       platformAccountId: pageId,
       isFollower: false,
       isSubscriber: false,
-    });
+    }]);
   }
 
   const completedConversation = await upsertPageDmConversation(testDb.db, {
@@ -1928,12 +1928,12 @@ describe("api integration", () => {
       displayName: "Created At Fan",
     }]);
     assert(fan !== undefined, "Expected fan from the test fixture");
-    await upsertFanPage(testDb.db, {
+    await upsertFanPages(testDb.db, [{
       fanId: fan.id,
       platformAccountId: createdAtPage.id,
       isFollower: false,
       isSubscriber: false,
-    });
+    }]);
 
     await upsertTransaction(testDb.db, {
       platformAccountId: createdAtPage.id,
@@ -1974,7 +1974,7 @@ describe("api integration", () => {
     );
 
     await rebuildRevenueRollups(testDb.db, createdAtPage.id);
-    await recalculateFanPageSpend(testDb.db, createdAtPage.id);
+    await rebuildSpenderProjections(testDb.db, createdAtPage.id);
 
     const login = await server.inject({
       method: "POST",

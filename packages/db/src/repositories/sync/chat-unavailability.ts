@@ -396,11 +396,6 @@ export async function lockOpenChatUnavailability(
   return new Map(episodes.map((episode) => [episode.threadId, episode]));
 }
 
-/** Every episode of one chat, oldest first (the open one last, if any). */
-export async function listChatUnavailabilityEpisodes(db: Database, input: { threadId: number }): Promise<ChatUnavailabilityEpisode[]> {
-  return readEpisodes(db, sql`e.thread_id = ${input.threadId}`);
-}
-
 /**
  * Defer the chat's socket messages that no REST read has settled
  * (`confirm_wait_reason = 'chat_unavailable'`, no next look of the parity

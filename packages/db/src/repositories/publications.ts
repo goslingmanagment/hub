@@ -1387,19 +1387,6 @@ export interface PublicationCheckRecord {
   createdAt: Date;
 }
 
-function toCheck(row: Row): PublicationCheckRecord {
-  return {
-    id: num(row.id),
-    publicationId: num(row.publication_id),
-    kind: row.kind as PublicationCheckKind,
-    outcome: row.outcome as PublicationCheckOutcome,
-    reason: (row.reason as string | null) ?? null,
-    platformPostRef: (row.platform_post_ref as string | null) ?? null,
-    evidence: (row.evidence as Record<string, unknown> | null) ?? {},
-    createdAt: date(row.created_at),
-  };
-}
-
 export async function insertPublicationCheck(db: Database, input: {
   publicationId: number;
   kind: PublicationCheckKind;
@@ -1415,13 +1402,6 @@ export async function insertPublicationCheck(db: Database, input: {
            ${JSON.stringify(input.evidence)}::jsonb, ${input.at ?? new Date()}
       from publications p where p.id = ${input.publicationId}
   `);
-}
-
-export async function listPublicationChecks(db: Database, publicationId: number): Promise<PublicationCheckRecord[]> {
-  const result = await db.execute<Row>(sql`
-    select * from publication_checks where publication_id = ${publicationId} order by id
-  `);
-  return result.rows.map(toCheck);
 }
 
 /** An OnlyFans publication whose fate on the platform Hub still reads: its facts and its checks since its last status change. */

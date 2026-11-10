@@ -65,33 +65,6 @@ export async function deletePageTopSpenders(
   await db.delete(pageTopSpenders).where(eq(pageTopSpenders.platformAccountId, platformAccountId));
 }
 
-export async function countPageTopSpenders(
-  db: Database,
-  platformAccountId: number,
-) {
-  const [row] = await db.select({
-    count: sql<number>`count(*)::int`,
-  }).from(pageTopSpenders)
-    .where(eq(pageTopSpenders.platformAccountId, platformAccountId));
-
-  return row?.count ?? 0;
-}
-
-export async function findPageTopSpenderByCorrelationAccountId(
-  db: Database,
-  input: {
-    platformAccountId: number;
-    correlationAccountId: string;
-  },
-) {
-  return db.query.pageTopSpenders.findFirst({
-    where: and(
-      eq(pageTopSpenders.platformAccountId, input.platformAccountId),
-      eq(pageTopSpenders.correlationAccountId, input.correlationAccountId),
-    ),
-  });
-}
-
 // Shared filter with the spenders v2 projections (rebuildSpenderDailyFacts):
 // active spender-relevant transactions linked to a fan — keeps the computed
 // rankings reconcilable with fan_spend_daily for the same window.
