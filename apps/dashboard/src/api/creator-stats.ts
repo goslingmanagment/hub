@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { addDays } from "@agency_hub_core/ui/moscow";
 
 import { kernel } from "./sdk.js";
 
@@ -79,11 +80,6 @@ export function useCreatorStatsAudience(pageLabel: string, days: CreatorStatsDay
   });
 }
 
-/** The day after a UTC day: the server's custom window does not include its end. */
-function dayAfter(day: string): string {
-  return new Date(Date.parse(`${day}T00:00:00Z`) + 86_400_000).toISOString().slice(0, 10);
-}
-
 /**
  * The page's money by Hub's operations over exactly Fansly's days `fromDay`…`toDay`
  * (`pageRevenue`, custom window). Fansly's days are UTC and Hub's are Moscow, so it
@@ -96,7 +92,7 @@ export function useHubRevenueWindow(pageLabel: string, window: { fromDay: string
     queryKey: ["statsHubRevenue", pageLabel, window?.fromDay, window?.toDay],
     queryFn: () => kernel.pageRevenue({
       params: { pageLabel },
-      query: { period: "custom", from: window!.fromDay, to: dayAfter(window!.toDay), utcDays: true },
+      query: { period: "custom", from: window!.fromDay, to: addDays(window!.toDay, 1), utcDays: true },
     }),
     enabled: pageLabel.length > 0 && window !== null,
     staleTime: STALE,
@@ -110,7 +106,7 @@ export function useHubRevenueDays(pageLabel: string, window: { fromDay: string; 
     queryKey: ["statsHubRevenueDays", pageLabel, window?.fromDay, window?.toDay],
     queryFn: () => kernel.pageRevenueDaily({
       params: { pageLabel },
-      query: { period: "custom", from: window!.fromDay, to: dayAfter(window!.toDay), groupByType: false, utcDays: true },
+      query: { period: "custom", from: window!.fromDay, to: addDays(window!.toDay, 1), groupByType: false, utcDays: true },
     }),
     enabled: enabled && pageLabel.length > 0 && window !== null,
     staleTime: STALE,

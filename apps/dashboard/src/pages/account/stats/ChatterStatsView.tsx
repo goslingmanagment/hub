@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { Link } from "react-router";
 import { CHATTER_SHIFT_MIN_MESSAGES, CHATTER_SHIFT_MIN_WORKED_MINUTES, SHIFT_REPORT_MAX_DAYS } from "@agency_hub_core/contracts";
 import { sumMills } from "@agency_hub_core/shared";
+import { addDays } from "@agency_hub_core/ui/moscow";
 
 import { ChartTable } from "@/components/charts/ChartTable";
 import { usdAxisFormatter } from "@/components/charts/format";
@@ -65,10 +66,6 @@ const SHORT_DATE = new Intl.DateTimeFormat("ru-RU", { day: "numeric", month: "sh
 /** What makes a shift, in words: `2 ч работы и 50 сообщений`. */
 const SHIFT_RULE = `${duration(CHATTER_SHIFT_MIN_WORKED_MINUTES)} работы и ${CHATTER_SHIFT_MIN_MESSAGES} сообщений`;
 const DAY_MS = 86_400_000;
-
-function addDays(day: string, days: number): string {
-  return new Date(Date.parse(`${day}T00:00:00Z`) + days * DAY_MS).toISOString().slice(0, 10);
-}
 
 /** A shift whose report can still be confirmed: over, not confirmed, not older than the API takes. */
 function confirmable(shift: StatsShift, now: number): boolean {

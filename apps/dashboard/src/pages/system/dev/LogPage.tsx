@@ -32,6 +32,43 @@ interface Row {
   details: Record<string, unknown> | null;
 }
 
+/** A log item and an incident item make the same row. */
+function toRow(item: {
+  id?: number | string | null;
+  emittedAt: string | null;
+  pageLabel: string | null;
+  stream: string | null;
+  severity: string;
+  eventType: string | null;
+  message: string | null;
+  syncRunId: number | string | null;
+  details: Record<string, unknown> | null;
+}, index: number): Row {
+  const code = resolveEventCode(item.details, item.eventType);
+  return {
+    key: item.id != null ? String(item.id) : String(index),
+    emittedAt: item.emittedAt,
+    pageLabel: item.pageLabel,
+    stream: item.stream,
+    severity: item.severity,
+    displaySeverity: getEventDisplaySeverity({ eventCode: code, severity: item.severity, details: item.details }),
+    type: item.eventType,
+    code,
+    message: item.message,
+    syncRunId: item.syncRunId,
+    details: item.details,
+  };
+}
+
+/** Old data on screen after a failed refresh. */
+function StaleNotice({ query }: { query: { dataUpdatedAt: number; refetch: () => unknown } }) {
+  return (
+    <Notice tone="warning" role="alert" action={<button type="button" className="btn btn-sm" onClick={() => void query.refetch()}>Повторить</button>}>
+      {staleDataText(query.dataUpdatedAt)}
+    </Notice>
+  );
+}
+
 function EventsTable({ rows, problems, off }: { rows: readonly Row[]; problems: boolean; off: boolean }) {
   const [expanded, setExpanded] = useState<string | null>(null);
   return (
@@ -100,30 +137,11 @@ function EventsTable({ rows, problems, off }: { rows: readonly Row[]; problems: 
 
 function LogMode({ severity, off }: { severity: string | null; off: boolean }) {
   const query = useAdminLogs({ ...(severity ? { severity } : {}), limit: 100 });
-  const rows: Row[] = (query.data ?? []).map((log, index) => {
-    const code = resolveEventCode(log.details, log.eventType);
-    return {
-      key: log.id != null ? String(log.id) : String(index),
-      emittedAt: log.emittedAt,
-      pageLabel: log.pageLabel,
-      stream: log.stream,
-      severity: log.severity,
-      displaySeverity: getEventDisplaySeverity({ eventCode: code, severity: log.severity, details: log.details }),
-      type: log.eventType,
-      code,
-      message: log.message,
-      syncRunId: log.syncRunId,
-      details: log.details,
-    };
-  });
+  const rows: Row[] = (query.data ?? []).map(toRow);
   return (
     <>
       <PageHeader fresh={freshOf(query)} />
-      {query.isError && query.data && (
-        <Notice tone="warning" role="alert" action={<button type="button" className="btn btn-sm" onClick={() => void query.refetch()}>Повторить</button>}>
-          {staleDataText(query.dataUpdatedAt)}
-        </Notice>
-      )}
+      {query.isError && query.data && <StaleNotice query={query} />}
       <section className="card" aria-label="События">
         {query.isLoading && !query.data ? <TableSkeleton rows={8} columns={6} /> : !query.data ? <NoAnswerPanel retry={query.refetch} /> : <EventsTable rows={rows} problems={false} off={off} />}
       </section>
@@ -141,30 +159,11 @@ function ProblemsMode({ code, onCode, off }: { code: string | null; onCode: (cod
     else acc.push({ code: item.code, severity: displaySeverity, count: item.count });
     return acc;
   }, []);
-  const rows: Row[] = (data?.items ?? []).map((item, index) => {
-    const eventCode = resolveEventCode(item.details, item.eventType);
-    return {
-      key: item.id != null ? String(item.id) : String(index),
-      emittedAt: item.emittedAt,
-      pageLabel: item.pageLabel,
-      stream: item.stream,
-      severity: item.severity,
-      displaySeverity: getEventDisplaySeverity({ eventCode, severity: item.severity, details: item.details }),
-      type: item.eventType,
-      code: eventCode,
-      message: item.message,
-      syncRunId: item.syncRunId,
-      details: item.details,
-    };
-  });
+  const rows: Row[] = (data?.items ?? []).map(toRow);
   return (
     <>
       <PageHeader fresh={freshOf(query)} />
-      {query.isError && data && (
-        <Notice tone="warning" role="alert" action={<button type="button" className="btn btn-sm" onClick={() => void query.refetch()}>Повторить</button>}>
-          {staleDataText(query.dataUpdatedAt)}
-        </Notice>
-      )}
+      {query.isError && data && <StaleNotice query={query} />}
       {query.isLoading && !data ? (
         <div className="card"><TableSkeleton rows={8} columns={6} /></div>
       ) : !data ? (

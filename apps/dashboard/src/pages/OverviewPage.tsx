@@ -20,11 +20,12 @@ import { NoAnswerPanel, StatusPanel } from "@/components/shared/StatusPanel";
 import { QueryNotice } from "@/components/shared/QueryNotice";
 import { StatCardSkeleton, TableSkeleton } from "@/components/shared/TableSkeleton";
 import { formatDuration, formatMills } from "@/lib/format";
+import { ruPlural } from "@/lib/plural";
 import { buildPageRoute } from "@/lib/navigation";
 import { overviewSearch, parseOverviewState, PERIOD_LABELS, type OverviewState, type PageSort } from "@/lib/overviewNavigation";
 import { revenueComparisonRange, revenuePreviousLabel, revenueWindowLabel, mainRevenueWindow } from "@/lib/revenueWindow";
 import { OFAPI_FEED_NOTE, type OfapiStatus } from "@/lib/statusWords";
-import { biggestMovers, groupRevenue, plural, type PageRow } from "./overview/presentation.js";
+import { biggestMovers, groupRevenue, type PageRow } from "./overview/presentation.js";
 import { AudienceNow, FreeAudienceLink, PageKinds, PageSources, PaidSubscribersLink, pageTransactionsLink, pageWindowOf } from "./overview/PageSources.js";
 import { HomeStrip } from "./overview/HomeStrip.js";
 
@@ -440,7 +441,7 @@ export function OverviewPage() {
                         <td>
                           {model.modelName}
                           <span className="meta">
-                            {model.pageCount} {plural(model.pageCount, "страница", "страницы", "страниц")}
+                            {model.pageCount} {ruPlural(model.pageCount, "страница", "страницы", "страниц")}
                             {model.status === "retired" ? ", в архиве" : ""}
                           </span>
                         </td>

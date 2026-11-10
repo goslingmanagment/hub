@@ -1,5 +1,6 @@
 import type { ChatterSaleKind, ChatterStats } from "@agency_hub_core/contracts";
 import { formatDuration, formatMills, formatPercent } from "@/lib/format";
+import { ribbonRowOf, ribbonRowStart, type RibbonClock } from "@agency_hub_core/ui/ribbon";
 
 // Pure helpers of the cabinet's «Статистика»: words, numbers and the layout
 // of the shift ribbon. No React here.
@@ -93,11 +94,6 @@ export function moscowOf(at: number): { day: string; minute: number } {
   return { day, minute: Math.floor((shifted - midnight) / 60_000) };
 }
 
-/** The start of a Moscow day, as an instant. */
-function moscowMidnight(day: string): number {
-  return Date.parse(`${day}T00:00:00Z`) - MSK_OFFSET_MS;
-}
-
 const weekday = new Intl.DateTimeFormat("ru-RU", { weekday: "short", timeZone: "UTC" });
 const dayMonth = new Intl.DateTimeFormat("ru-RU", { day: "numeric", month: "short", timeZone: "UTC" });
 const timeFormat = new Intl.DateTimeFormat("ru-RU", { hour: "2-digit", minute: "2-digit", timeZone: "Europe/Moscow" });
@@ -125,62 +121,9 @@ export function shiftWhen(shift: Pick<StatsShift, "date" | "startedAt" | "endedA
 
 const DAY_MINUTES = 1440;
 const MINUTE_MS = 60_000;
-const HOUR_MS = 3_600_000;
-/** The hour marks of the ribbon are this far apart; its rows start on one. */
-export const RIBBON_STEP_HOURS = 3;
 
-/** Where the ribbon's day of the clock starts, and which day names a row. */
-export interface RibbonClock {
-  /** The Moscow hour the rows start at. */
-  startHour: number;
-  /** Minutes from a row's start to the moment whose Moscow day names the row: the middle of the chatter's working hours. */
-  labelAt: number;
-}
-
-/**
- * The ribbon's clock for the chatter's shifts: the rows start in the middle of
- * the longest stretch of the clock none of them touches — on a mark of the
- * hours if that is free too, else on the hour — so a shift lies whole in a row;
- * a row is named by the day of its working hours' middle, the day its shifts
- * belong to (`shifts[].date`): an evening's row by the evening, a night's by
- * its morning. No shifts — midnight to midnight. Pure.
- */
-export function ribbonClock(shifts: ReadonlyArray<Pick<StatsShift, "startedAt" | "endedAt">>): RibbonClock {
-  const plain = { startHour: 0, labelAt: DAY_MINUTES / 2 };
-  if (shifts.length === 0) return plain;
-  const taken = new Array<boolean>(DAY_MINUTES).fill(false);
-  for (const shift of shifts) {
-    const start = moscowOf(Date.parse(shift.startedAt)).minute;
-    const length = Math.min(Math.ceil((Date.parse(shift.endedAt) - Date.parse(shift.startedAt)) / MINUTE_MS), DAY_MINUTES);
-    for (let minute = 0; minute < length; minute += 1) taken[(start + minute) % DAY_MINUTES] = true;
-  }
-  let best = { from: 0, length: 0 };
-  // Twice round the clock, so a free stretch over midnight counts whole.
-  let run = 0;
-  for (let minute = 0; minute < 2 * DAY_MINUTES; minute += 1) {
-    run = taken[minute % DAY_MINUTES] ? 0 : Math.min(run + 1, DAY_MINUTES);
-    if (run > best.length) best = { from: minute - run + 1, length: run };
-  }
-  if (best.length === 0) return plain;
-  const freeMiddle = (best.from + best.length / 2) % DAY_MINUTES;
-  const onMark = (Math.round(freeMiddle / 60 / RIBBON_STEP_HOURS) * RIBBON_STEP_HOURS) % 24;
-  const startHour = taken[onMark * 60] ? Math.round(freeMiddle / 60) % 24 : onMark;
-  const busyMiddle = (freeMiddle + DAY_MINUTES / 2) % DAY_MINUTES;
-  return { startHour, labelAt: Math.floor((busyMiddle - startHour * 60 + DAY_MINUTES) % DAY_MINUTES) };
-}
-
-/** The row an instant falls in. Pure. */
-export function ribbonRowOf(at: number, clock: RibbonClock): string {
-  const intoRow = (moscowOf(at).minute - clock.startHour * 60 + DAY_MINUTES) % DAY_MINUTES;
-  const rowStart = Math.floor(at / MINUTE_MS) * MINUTE_MS - intoRow * MINUTE_MS;
-  return moscowOf(rowStart + clock.labelAt * MINUTE_MS).day;
-}
-
-/** The instant a row starts. Pure. */
-export function ribbonRowStart(day: string, clock: RibbonClock): number {
-  const sameDay = clock.startHour * 60 + clock.labelAt < DAY_MINUTES;
-  return moscowMidnight(day) + (clock.startHour - (sameDay ? 0 : 24)) * HOUR_MS;
-}
+// The ribbon's clock lives in the design system, shared with Workboard's person card.
+export { RIBBON_STEP_HOURS, ribbonClock, ribbonRowOf, ribbonRowStart, type RibbonClock } from "@agency_hub_core/ui/ribbon";
 
 export interface RibbonPiece {
   /** Index into `stats.shifts`. */
