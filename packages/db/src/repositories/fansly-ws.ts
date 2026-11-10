@@ -107,6 +107,9 @@ export function browserWsFrameKey(bufferId: string, seq: number): string {
 export async function captureBrowserWsFrame(tx: Database, input: {
   pageId: number; browserConnectionId: string; bufferId: string; seq: number;
   accountRef: string | null; frame: string; receivedAt: Date; trustedGeneration: string | null;
+  /** The captured frame's stamp-only parse_version (the runtime's
+   * `stampOnlyParseVersion`); the kept `:<why>` facts never take it. */
+  parseVersion?: number | undefined;
 }): Promise<BrowserWsFrameCapture> {
   if (!await tryAcquireDmArchiveWriterFenceLock(tx, input.pageId)) throw new Error("fansly_ws_erasure_busy");
   const connection = await tx.execute<{ id: string; generation: string }>(sql`select c.id::text as id, c.generation
@@ -133,6 +136,7 @@ export async function captureBrowserWsFrame(tx: Database, input: {
     payload: { codec: FANSLY_WS_CAPTURE_KIND, frame: input.frame, generation: row.generation },
     payloadHash: createHash("sha256").update(input.frame).digest(),
     idempotencyKey: browserWsFrameKey(input.bufferId, input.seq), receivedAt: input.receivedAt,
+    parseVersion: input.parseVersion,
   });
   await tx.execute(sql`insert into fansly_ws_decode_receipts(observation_id,page_id,received_at)
     values(${inserted.observationId},${input.pageId},${inserted.receivedAt}) on conflict do nothing`);

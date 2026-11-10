@@ -25,6 +25,8 @@ import { CLIENT_HEALTH_INGEST_KIND, type ClientTokenProfile } from "@agency_hub_
 import type { AppContext } from "../bootstrap.ts";
 import { clientHealthIngestEnabled, intakeClientHealthReports } from "./client-health-intake.ts";
 import { clientTokenIngestKinds, clientTokenIngestProducer } from "./client-token-profile.ts";
+import { stampOnlyParseVersion } from "./canonicalize/index.ts";
+import { HARVEST_PRODUCER_PREFIX, isHarvestProducer } from "./harvest-producer.ts";
 
 // Canonicalizer-backed desktop kinds. Everything else journals as
 // desktop.unknown:<kind>.
@@ -52,7 +54,6 @@ export const HARVEST_KIND_ALLOWLIST: ReadonlySet<string> = new Set([
 ]);
 
 const HARVEST_VERSION_PREFIX = "harvest-";
-const HARVEST_PRODUCER_PREFIX = "desktop-harvest@";
 
 export function isHarvestClientVersion(clientVersion: string) {
   return clientVersion.startsWith(HARVEST_VERSION_PREFIX);
@@ -76,9 +77,7 @@ export function ingestProducerForClientVersion(clientVersion: string) {
     : `desktop@${clientVersion}`;
 }
 
-export function isHarvestProducer(producer: string) {
-  return producer.startsWith(HARVEST_PRODUCER_PREFIX);
-}
+export { isHarvestProducer };
 
 // The harvest namespace is producer-gated: harvest.<table> kinds canonicalize
 // into real domain events, so only the harvest uploader (x-client-version
@@ -249,6 +248,7 @@ export async function ingestClientObservations(
         platform: page?.platform ?? null,
         accountId: page?.id ?? null,
         kind,
+        parseVersion: stampOnlyParseVersion("client_capture", kind),
         payload: event.payload,
         payloadHash: createHash("sha256").update(JSON.stringify(event.payload)).digest(),
         idempotencyKey: trustedHarvestEvent

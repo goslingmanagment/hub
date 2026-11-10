@@ -53,6 +53,7 @@ import { requireClientGrantedPage } from "./client-switches.ts";
 import { clientTokenIngestProducer } from "./client-token-profile.ts";
 import { BadRequestError, ConflictError, NotFoundError } from "./errors.ts";
 import { ingestProducerForClientVersion } from "./ingest-observations.ts";
+import { stampOnlyParseVersion } from "./canonicalize/index.ts";
 
 /**
  * «Рассылки» kept by Hub (docs/plans/2026-11-01-outreach-store/spec.md): the
@@ -412,6 +413,7 @@ export async function sendClientOutreach(
         platform: page.platform,
         accountId: page.id,
         kind: OUTREACH_SEND_OBSERVATION_KIND,
+        parseVersion: stampOnlyParseVersion("client_capture", OUTREACH_SEND_OBSERVATION_KIND),
         payload,
         payloadHash: createHash("sha256").update(JSON.stringify(payload)).digest(),
         idempotencyKey: `${me}:outreach_send:${outreachId}:${body.fanRef}:${payload.attemptId}:${body.action}:${now.toISOString()}`,

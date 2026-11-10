@@ -29,6 +29,7 @@ import { clientTokenIngestProducer } from "./client-token-profile.ts";
 import { BadRequestError, ClientFeatureDisabledError } from "./errors.ts";
 import { countOwnSendsInFanQueues } from "./fan-queues.ts";
 import { ingestProducerForClientVersion } from "./ingest-observations.ts";
+import { stampOnlyParseVersion } from "./canonicalize/index.ts";
 
 /**
  * Who sent each outgoing message (`clientSendAttributions`, capability
@@ -159,6 +160,7 @@ export async function applyClientSendAttributions(
         platform: page.platform,
         accountId: page.id,
         kind: SEND_ATTRIBUTION_OBSERVATION_KIND,
+        parseVersion: stampOnlyParseVersion("client_capture", SEND_ATTRIBUTION_OBSERVATION_KIND),
         payload,
         payloadHash: createHash("sha256").update(JSON.stringify(payload)).digest(),
         idempotencyKey: `${principal.user.id}:send_attribution:${page.id}:${fact.platformMessageId}`,

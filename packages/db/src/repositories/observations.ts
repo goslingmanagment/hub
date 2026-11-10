@@ -88,6 +88,14 @@ export interface ObservationInsertInput {
    * dual-written one in every column except the body itself.
    */
   omitInlinePayload?: boolean;
+  /**
+   * The parse_version to write WITH the row, for a kind whose canonicalizer
+   * family only ever stamps it (the runtime's `stampOnlyParseVersion`; this
+   * package cannot read that registry, so the caller passes the value). The
+   * sweep then never visits the row. Omitted: the column takes its default
+   * (0) and the sweep stamps it, as for every other row.
+   */
+  parseVersion?: number | undefined;
 }
 
 export type ObservationInsertResult =
@@ -182,6 +190,14 @@ async function claimAndJournal(
   // largest table in the system — and not derived at the producer, so a column
   // can never disagree with the body it was read off.
   const queryable = deriveObservationQueryableFields(input);
+  if (input.parseVersion !== undefined
+    && (!Number.isSafeInteger(input.parseVersion) || input.parseVersion < 0)) {
+    throw new Error(`Observation parseVersion must be a non-negative integer, got ${input.parseVersion}`);
+  }
+  // Without a stamp the statement is exactly the pre-stamp one: the column
+  // keeps its default.
+  const parseVersionColumn = input.parseVersion === undefined ? sql`` : sql`, parse_version`;
+  const parseVersionValue = input.parseVersion === undefined ? sql`` : sql`, ${input.parseVersion}`;
   // G5 slice 3c-1: the inline body is skipped only when a catalog reference is
   // going into the same row. The `payloadRef` conjunct is the invariant, not a
   // defensive nicety — it is what makes the table CHECK (0128: payload IS NOT
@@ -213,7 +229,7 @@ async function claimAndJournal(
       id, source, producer, platform, account_id, native_account_ref, kind,
       payload, payload_hash, idempotency_key, observed_at, received_at,
       actor_principal_id, payload_bucket_month, payload_object_id,
-      harvest_machine_id, harvest_tx_id, harvest_tx_amount, harvest_tx_created_at
+      harvest_machine_id, harvest_tx_id, harvest_tx_amount, harvest_tx_created_at${parseVersionColumn}
     ) overriding system value values (
       ${observationId},
       ${input.source},
@@ -233,7 +249,7 @@ async function claimAndJournal(
       ${queryable.harvestMachineId},
       ${queryable.harvestTxId},
       ${queryable.harvestTxAmount},
-      ${queryable.harvestTxCreatedAt}
+      ${queryable.harvestTxCreatedAt}${parseVersionValue}
     )
   `);
 

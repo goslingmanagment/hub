@@ -23,8 +23,9 @@ import {
   type Database,
   type UpsertDemandInput,
 } from "@agency_hub_core/db";
-import { businessFanslyWsFrame, classifyFanslyWsFrame } from "@agency_hub_core/shared";
+import { businessFanslyWsFrame, classifyFanslyWsFrame, FANSLY_WS_CAPTURE_KIND } from "@agency_hub_core/shared";
 
+import { stampOnlyParseVersion } from "../../services/canonicalize/index.ts";
 import type { BufferEvent, EventsRefused, State } from "../../services/egress/page-browser-protocol.ts";
 import type { DeliveredEvents, LinkStatus, PageBrowserRpcClient } from "../../services/egress/page-browser-rpc.ts";
 import { errorName, type SyncLogger } from "../engine/commit.ts";
@@ -766,6 +767,8 @@ export class BrowserBufferIntake {
                   frame: replaceJournalUnstorableText(business).value,
                   receivedAt: at,
                   trustedGeneration,
+                  // Its family only stamps a captured frame: stamped here, never by the sweep.
+                  parseVersion: stampOnlyParseVersion("fansly_ws", FANSLY_WS_CAPTURE_KIND),
                 });
                 if (frame.kind === "captured") {
                   batch.frames += 1;

@@ -36,6 +36,7 @@ import { requireClientGrantedPage, type ClientFeatureRequest } from "./client-sw
 import { clientTokenIngestProducer } from "./client-token-profile.ts";
 import { BadRequestError, ClientFeatureDisabledError } from "./errors.ts";
 import { ingestProducerForClientVersion } from "./ingest-observations.ts";
+import { stampOnlyParseVersion } from "./canonicalize/index.ts";
 
 /**
  * Who wrote each fan note (`clientNoteAttributions`, capability
@@ -154,6 +155,7 @@ export async function applyClientNoteAttributions(
         platform: page.platform,
         accountId: page.id,
         kind: NOTE_ATTRIBUTION_OBSERVATION_KIND,
+        parseVersion: stampOnlyParseVersion("client_capture", NOTE_ATTRIBUTION_OBSERVATION_KIND),
         payload,
         payloadHash: createHash("sha256").update(JSON.stringify(payload)).digest(),
         idempotencyKey: `${principal.user.id}:note_attribution:${page.id}:${fact.eventId.toLowerCase()}`,
