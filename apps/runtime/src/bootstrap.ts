@@ -153,7 +153,10 @@ export async function createAppContext(options: CreateAppContextOptions = {}): P
   }
 
   const poolLifetime = poolLifetimeForRole(options.processRole);
-  const pool = createPool(rawConfig.databaseUrl, poolLifetime === undefined ? {} : { lifetime: poolLifetime });
+  const pool = createPool(rawConfig.databaseUrl, {
+    applicationName: `hub-${options.processRole ?? "cli"}`,
+    ...(poolLifetime === undefined ? {} : { lifetime: poolLifetime }),
+  });
   try {
     await assertRuntimeSchemaReady(pool);
 

@@ -77,6 +77,9 @@ export type CreatePoolOptions = {
   timeouts?: PoolTimeouts;
   /** Absent: node-postgres' defaults (idle 10 s, no lifetime cap). */
   lifetime?: PoolLifetime;
+  /** `pg_stat_activity.application_name` of every session. Absent: none is sent
+   *  (one in the connection string still wins over this one). */
+  applicationName?: string;
 };
 
 /** The server-side timeouts a pooled session runs with, as Postgres reports
@@ -134,6 +137,7 @@ export function createPool(connectionString: string, options: CreatePoolOptions 
   const timeouts = options.timeouts;
   const pool = new Pool({
     connectionString,
+    ...(options.applicationName === undefined ? {} : { application_name: options.applicationName }),
     ...(timeouts === undefined ? {} : {
       connectionTimeoutMillis: timeouts.connectionTimeoutMillis,
       statement_timeout: timeouts.statementTimeoutMs,
