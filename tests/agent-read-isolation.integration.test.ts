@@ -156,13 +156,6 @@ describe("[sync-critical] agent read plane isolation (refusals)", () => {
     }
   });
 
-  it("an agent key is refused on the event streams (no SSE for agents)", async () => {
-    for (const url of ["/api/v1/events/stream", "/api/v1/events/v2/stream"]) {
-      const response = await agentGet(url);
-      expect([401, 403], url).toContain(response.statusCode);
-    }
-  });
-
   it("an unauthenticated caller is refused on agent routes", async () => {
     const anonymous = await server!.inject({ method: "GET", url: "/api/v1/agent/capabilities" });
     expect(anonymous.statusCode).toBe(401);

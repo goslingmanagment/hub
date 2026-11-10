@@ -27,7 +27,6 @@ export * from "./routes-publication-files.ts";
 // Narrow device-token profiles (the chat extension's route allowlist, H-3).
 export * from "./client-token-scopes.ts";
 export * from "./authorization-policy.ts";
-export * from "./domain-event-cursor.ts";
 export * from "./sdk-runtime.ts";
 export * from "./contract-hash.ts";
 // Agent Read Plane vocabulary. Declared once and derived, so a drift between
@@ -76,7 +75,6 @@ export * from "./ofapi-smart-links.ts";
 export * from "./routes-ofapi-exports.ts";
 
 export * from "./routes-ofapi-media.ts";
-export * from "./routes-ofapi-media-images.ts";
 export * from "./ofapi-actions.ts";
 export * from "./ofapi-actions-collections.ts";
 

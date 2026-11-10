@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   createKernelClient,
   fetchVoiceNoteAudio,
-  subscribeSyncEvents,
+  streamAiFeature,
 } from "../packages/contracts/src/sdk-runtime.ts";
 
 // The options contract promises onAuthError on every 401/403, with a null
@@ -75,17 +75,54 @@ describe("onAuthError coverage beyond the typed path", () => {
     expect(onAuthError).not.toHaveBeenCalled();
   });
 
-  it("SSE subscribe notifies the hook before throwing on 401", async () => {
+  it("an SSE stream notifies the hook before throwing on 401", async () => {
     const onAuthError = vi.fn();
-    const handle = subscribeSyncEvents({
+    const handle = streamAiFeature({
       baseUrl: "http://kernel.test",
       onAuthError,
       fetch: (async () => new Response("nope", { status: 401 })) as never,
-    }, { onFrame: () => {} });
+    }, { feature: "fast-reply", body: {} as never, onFrame: () => {} });
 
     await expect(handle.done).rejects.toMatchObject({ category: "auth" });
     expect(onAuthError).toHaveBeenCalledTimes(1);
     expect(onAuthError.mock.calls[0]![1]).toBeNull();
+  });
+
+  // chat-extension opens every AI stream with `auth: { mode: "bearer" }`: the
+  // SSE opener, not the typed call() path, has to put the token on the wire.
+  it("an SSE stream opened with a bearer token reaches the server authenticated", async () => {
+    const seen: Array<string | null> = [];
+    const server = (async (_url: string | URL | Request, init?: RequestInit) => {
+      const authorization = new Headers(init?.headers).get("authorization");
+      seen.push(authorization);
+      if (authorization !== "Bearer sk-stream") {
+        return new Response("nope", { status: 401 });
+      }
+      return new Response('event: ai\ndata: {"type":"content_delta","text":"hi"}\n\n', {
+        status: 200,
+        headers: { "content-type": "text/event-stream" },
+      });
+    }) as never;
+
+    const onAuthError = vi.fn();
+    const frames: unknown[] = [];
+    const authenticated = streamAiFeature({
+      baseUrl: "http://kernel.test",
+      auth: { mode: "bearer", token: async () => "sk-stream" },
+      onAuthError,
+      fetch: server,
+    }, { feature: "fast-reply", body: {} as never, onFrame: (frame) => frames.push(frame) });
+    await authenticated.done;
+    expect(frames).toEqual([{ type: "content_delta", text: "hi" }]);
+    expect(onAuthError).not.toHaveBeenCalled();
+
+    const anonymous = streamAiFeature({
+      baseUrl: "http://kernel.test",
+      fetch: server,
+    }, { feature: "fast-reply", body: {} as never, onFrame: () => {} });
+    await expect(anonymous.done).rejects.toMatchObject({ category: "auth", status: 401 });
+
+    expect(seen).toEqual(["Bearer sk-stream", null]);
   });
 });
 
@@ -137,11 +174,11 @@ describe("the 401 reason survives every transport", () => {
 
   it("reaches the SSE handshake failure instead of being flattened into text", async () => {
     const onAuthError = vi.fn();
-    const handle = subscribeSyncEvents({
+    const handle = streamAiFeature({
       baseUrl: "http://kernel.test",
       onAuthError,
       fetch: (async () => unauthorized("token_revoked")) as never,
-    }, { onFrame: () => {} });
+    }, { feature: "fast-reply", body: {} as never, onFrame: () => {} });
 
     await expect(handle.done).rejects.toMatchObject({
       category: "auth",
@@ -153,10 +190,10 @@ describe("the 401 reason survives every transport", () => {
   });
 
   it("still classifies a 401 with no envelope at all", async () => {
-    const handle = subscribeSyncEvents({
+    const handle = streamAiFeature({
       baseUrl: "http://kernel.test",
       fetch: (async () => new Response("nope", { status: 401 })) as never,
-    }, { onFrame: () => {} });
+    }, { feature: "fast-reply", body: {} as never, onFrame: () => {} });
 
     await expect(handle.done).rejects.toMatchObject({
       category: "auth",

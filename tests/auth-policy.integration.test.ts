@@ -250,7 +250,6 @@ const MODULE_MATRIX: Array<{
   { module: "audience", url: "/api/v1/pages/lana/subscribers", cells: { anon: 401, chatter: "allowed", lead: "allowed", owner: "allowed" } },
   { module: "ai", url: "/api/v1/admin/usage/chatters", cells: { anon: 401, chatter: 403, lead: 403, owner: "allowed" } },
   { module: "ops", url: "/api/v1/sync/overview", cells: { anon: 401, chatter: 403, lead: "allowed", owner: "allowed" } },
-  { module: "events", url: "/api/v1/events/snapshot?accountId=1&afterSeq=0", cells: { anon: 401, chatter: "unchecked", lead: 403, owner: 403 } },
 ];
 
 describe("per-module role matrix (Stage 19)", () => {

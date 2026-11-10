@@ -59,7 +59,7 @@ export function HowItCounts({ page }: { page: string | null }) {
           {" "}{OUTLIER.unansweredFloor}; ИИ без правки на {Math.round(OUTLIER.aiAbovePoints * 100)} пунктов выше обычного и
           от {Math.round(OUTLIER.aiFloor * 100)} %.
         </p>
-        <p>Это ориентир, а не основание для оплаты: к выплате идут подтверждённые отчёты смен.</p>
+        <p>Это ориентир, а не основание для оплаты: платят по отчётам смен, которые чаттеры отправляют в «Отчётность» (ledger агентства).</p>
       </div>
     </Disclosure>
   );

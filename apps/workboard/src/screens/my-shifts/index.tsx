@@ -1,6 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { RotateCw } from "lucide-react";
-import { useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
+import { useMemo, useRef, useState, type ReactNode } from "react";
 import { useLocation } from "react-router";
 import {
   Badge,
@@ -27,6 +27,7 @@ import { currentWeek, stepWeek, withPeriod, type ResolvedPeriod } from "@agency_
 import { ruPlural } from "@agency_hub_core/ui/plural";
 import { REPORT_DRAFT_NEXT, reportStatusWord } from "@agency_hub_core/ui/shiftReports";
 import { shiftDurationHint, shiftWhen } from "@agency_hub_core/ui/shiftWhen";
+import { ReportBody, useReportEdge } from "@/shared/ReportBody";
 import { ScreenHeader } from "@/shared/ScreenHeader";
 import { usePeriod } from "@/shared/usePeriod";
 import {
@@ -43,17 +44,18 @@ import {
   type MyShiftsFacts,
   type StatsShift,
 } from "./data";
-import { ReportBody } from "./Report";
 import "./my-shifts.css";
 
 /**
  * Мои смены — a chatter's own part of Workboard (owner, 2026-11-10): every
- * shift of the period with its report, one row each, newest first. The row's
- * one number is the report's total — what the chatter stands behind; Hub's own
- * sales figure shows only where there is no report yet. A row opens in place to
- * its report: the pages, the sales in the total and those held out, and why.
- * The period is the app's one period; nothing here is pay, nothing is anyone
- * else's.
+ * shift of the period with its report, one row each, newest first. The report
+ * is the post in «Отчётность» — with the agent's draft or written by hand — and
+ * a draft not posted yet. The row's one number is the report's: what the
+ * chatter posted, else the draft's total; Hub's own sales figure shows only
+ * where there is no report yet. A row opens in place to its report: the pages
+ * as posted (the draft's amount beside a page that differs), the sales in the
+ * total and those held out, and why. The period is the app's one period;
+ * nothing here is pay, nothing is anyone else's.
  */
 
 /** What a missing report asks of the chatter. */
@@ -99,7 +101,12 @@ function PagesCell({ row }: { row: MyShiftRow }) {
     <span className="mys-pages">
       {row.pages.length > 0 ? <PageLabels labels={row.pages} /> : <span className="ui-muted">—</span>}
       {row.shift === null && (
-        <Tooltip content="Hub не видел в это время твоей работы в расширении ChatGoose: отчёт собрали без смены." align="start">
+        <Tooltip
+          content={row.report?.source === "post"
+            ? "Hub не видел в этот день твоей работы в расширении ChatGoose: к какой смене относится отчёт, неизвестно."
+            : "Hub не видел в это время твоей работы в расширении ChatGoose: отчёт собрали без смены."}
+          align="start"
+        >
           <span className="mys-pages__note">смена в Hub не найдена</span>
         </Tooltip>
       )}
@@ -127,7 +134,13 @@ function TotalCell({ row }: { row: MyShiftRow }) {
 function StateCell({ row }: { row: MyShiftRow }) {
   switch (row.state) {
     case "posted":
-      return <span className="mys-state"><Badge tone="success" bare className="mys-state__badge">Отправлен</Badge></span>;
+      return (
+        <span className="mys-state">
+          <Badge tone="success" bare className="mys-state__badge">Отправлен</Badge>
+          {/* The chatter's right, not an alarm: said quietly, under the word. */}
+          {row.draftMills !== null && <span className="mys-state__was">в черновике было {formatMills(row.draftMills)}</span>}
+        </span>
+      );
     case "draft":
       return (
         <span className="mys-state">
@@ -162,12 +175,20 @@ const COLUMNS: Column<MyShiftRow>[] = [
 
 // ───────────────────────────────────────────────────────────── The facts
 
+/** What of the reports did not come: all of them, or the posts alone (the drafts are shown). */
+type Unavailable = "reports" | "posts" | null;
+
+const UNAVAILABLE_HINT: Record<Exclude<Unavailable, null>, string> = {
+  reports: "Отчёты хранятся отдельно от Hub, и сейчас они не пришли. Смены видны и без них; суммы по отчётам появятся, когда отчёты снова откроются.",
+  posts: "Отчёты, отправленные в Отчётность, сейчас не пришли: видны только черновики Генгара. Суммы по отчётам появятся, когда отправленные снова откроются.",
+};
+
 function FactsLine({ facts, previous, versus, unavailable, onRetry, retrying }: {
   facts: MyShiftsFacts;
   /** The report totals of the window before; null — nothing to compare with. */
   previous: number | null;
   versus: string;
-  unavailable: boolean;
+  unavailable: Unavailable;
   onRetry: () => void;
   retrying: boolean;
 }) {
@@ -175,16 +196,16 @@ function FactsLine({ facts, previous, versus, unavailable, onRetry, retrying }: 
     { label: "Смен", value: String(facts.shifts) },
     { label: "Отработано", value: <Duration minutes={facts.workedMinutes} /> },
   ];
-  if (unavailable) {
+  if (unavailable !== null) {
     items.push({
       label: "По отчётам",
       value: (
         <span className="mys-facts__away">
-          сейчас недоступны
+          {unavailable === "posts" ? "отправленные сейчас недоступны" : "сейчас недоступны"}
           <Button size="sm" variant="ghost" icon={RotateCw} loading={retrying} onClick={onRetry}>{retrying ? "Повторяем…" : "Повторить"}</Button>
         </span>
       ),
-      title: "Отчёты хранятся отдельно от Hub, и сейчас они не пришли. Смены видны и без них; суммы по отчётам появятся, когда отчёты снова откроются.",
+      title: UNAVAILABLE_HINT[unavailable],
     });
   } else {
     const showDelta = previous !== null && facts.reportedMills !== null && readDelta(facts.reportedMills, previous).kind !== "none";
@@ -253,29 +274,6 @@ function NowRow({ shift }: { shift: StatsShift }) {
   );
 }
 
-/**
- * Where the total column ends, from the table's left edge: an opened report's
- * amounts end there too, right under the row's total (one right edge). Set as
- * `--mys-total-edge` on the journal; measured again whenever the table resizes.
- */
-function useTotalEdge(box: RefObject<HTMLDivElement | null>, columnIndex: number) {
-  useLayoutEffect(() => {
-    const element = box.current;
-    if (!element || typeof ResizeObserver === "undefined") return;
-    const update = () => {
-      const table = element.querySelector("table");
-      const head = table?.querySelectorAll(":scope > thead > tr > th")[columnIndex];
-      if (!table || !head) return;
-      const edge = Math.round(head.getBoundingClientRect().right - table.getBoundingClientRect().left);
-      if (edge > 0) element.style.setProperty("--mys-total-edge", `${edge}px`);
-    };
-    update();
-    const observer = new ResizeObserver(update);
-    observer.observe(element);
-    return () => observer.disconnect();
-  });
-}
-
 // ───────────────────────────────────────────────────────────── The screen
 
 export function MyShiftsScreen() {
@@ -287,13 +285,15 @@ export function MyShiftsScreen() {
   const previous = usePreviousReports(window);
   const [open, setOpen] = useState<ReadonlySet<string>>(() => new Set());
   const journal = useRef<HTMLDivElement>(null);
-  useTotalEdge(journal, COLUMNS.findIndex((column) => column.key === "total"));
+  useReportEdge(journal, COLUMNS.findIndex((column) => column.key === "total"));
 
   const data = read.data;
   const reports = data?.reports?.reports ?? null;
-  const rows = useMemo(() => (data ? joinShifts({ shifts: data.stats.shifts, reports, window }) : undefined), [data, reports, window]);
-  const facts = useMemo(() => (rows ? factsOf(rows, reports !== null) : undefined), [rows, reports]);
-  const unavailable = data !== undefined && data.reports === null;
+  // The drafts came, the posts did not: the drafts show, and nothing is claimed of a shift without one.
+  const postsRead = data?.reports?.postsRead ?? true;
+  const rows = useMemo(() => (data ? joinShifts({ shifts: data.stats.shifts, reports, postsRead, window }) : undefined), [data, reports, postsRead, window]);
+  const facts = useMemo(() => (rows ? factsOf(rows, reports !== null && postsRead) : undefined), [rows, reports, postsRead]);
+  const unavailable: Unavailable = data === undefined ? null : data.reports === null ? "reports" : postsRead ? null : "posts";
 
   // The shift going on is shown once: as the journal's first row when the period holds it, else above the journal
   // («Сейчас на смене», from the read of the last two days — a past period, or a night begun before its first day).
@@ -302,7 +302,8 @@ export function MyShiftsScreen() {
   const nowShift = ongoing === null ? now.data ?? null : null;
 
   const comparison = comparisonOf(window, read.dataUpdatedAt || Date.now(), ongoing?.startedAt ?? null);
-  const previousMills = previousReportedMills(previous.data?.reports ?? null, comparison);
+  // The window before without its posts is no comparison: its sums would be the drafts'.
+  const previousMills = previousReportedMills(previous.data?.postsRead === false ? null : previous.data?.reports ?? null, comparison);
   const refreshing = read.isPlaceholderData && read.isFetching;
   const versus = `К ${comparison.label}${comparison.sameTime ? " на это же время" : ""}, по отчётам`;
   const refresh = () => void queryClient.invalidateQueries({ queryKey: ["my-shifts"] });

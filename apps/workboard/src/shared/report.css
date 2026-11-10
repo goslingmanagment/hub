@@ -1,0 +1,244 @@
+/*
+ * A shift's report opened in its row (shared/ReportBody.tsx): «Мои смены» and «Выплаты». Tokens only.
+ */
+@layer components {
+
+  /*
+   * From under the first cell's words (past the chevron) to the end of the row's money column: the sales' amounts
+   * end where the row's sum ends (`--wb-report-edge`, measured by `useReportEdge`; 24 px of the cell's left padding,
+   * 16 of the money's right).
+   */
+  .wb-report {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    width: calc(var(--wb-report-edge, 904px) - 40px);
+    min-width: min(100%, 560px);
+    max-width: 100%;
+    padding: 4px 0 4px 24px;
+  }
+
+  .wb-report__head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 4px 24px;
+  }
+
+  .wb-report__pages {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 24px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .wb-report__page {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 8px;
+    white-space: nowrap;
+  }
+
+  .wb-report__page .ui-page {
+    color: var(--ui-text-2);
+  }
+
+  .wb-report__page--zero .ui-page {
+    color: var(--ui-text-3);
+  }
+
+  .wb-report__saved {
+    margin: 0;
+    color: var(--ui-text-3);
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+  }
+
+  .wb-report__none {
+    margin: 0;
+    color: var(--ui-text-2);
+  }
+
+  /* A posted report's head: the pages as posted and drafted (ReportPages), then when it was composed and sent. */
+  .wb-report__posted {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  /* The pages: the name on the left, the amounts in fixed columns ending at the report's right edge. */
+  .wb-report-pages {
+    display: flex;
+    flex-direction: column;
+    border-top: 1px solid var(--ui-line-soft);
+  }
+
+  .wb-report-pages__row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) repeat(var(--wb-report-page-columns, 1), minmax(96px, max-content));
+    align-items: baseline;
+    column-gap: 24px;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--ui-line-soft);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .wb-report-pages__row > :not(:first-child) {
+    text-align: right;
+  }
+
+  .wb-report-pages__row--head {
+    padding: 4px 0;
+    color: var(--ui-text-2);
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+  }
+
+  .wb-report-pages__row .ui-page {
+    color: var(--ui-text);
+  }
+
+  .wb-report__groups {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  .wb-report__title {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    margin: 0 0 2px;
+    color: var(--ui-text);
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+    font-weight: 600;
+  }
+
+  .wb-report__count {
+    color: var(--ui-text-3);
+    font-weight: 400;
+  }
+
+  .wb-lines {
+    margin: 0;
+    padding: 0;
+    border-top: 1px solid var(--ui-line-soft);
+    list-style: none;
+  }
+
+  .wb-line {
+    display: grid;
+    grid-template-columns: 48px minmax(0, 1fr) auto;
+    align-items: baseline;
+    gap: 12px;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--ui-line-soft);
+  }
+
+  .wb-line__time {
+    color: var(--ui-text-3);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .wb-line__main {
+    min-width: 0;
+  }
+
+  .wb-line__what {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 2px 12px;
+    margin: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .wb-line__what .ui-page,
+  .wb-line__kind {
+    color: var(--ui-text-2);
+  }
+
+  .wb-line__fan {
+    color: var(--ui-text);
+  }
+
+  .wb-line__added {
+    align-self: center;
+  }
+
+  .wb-line__reason,
+  .wb-line__note {
+    margin: 2px 0 0;
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+  }
+
+  .wb-line__reason {
+    color: var(--ui-text-2);
+  }
+
+  .wb-line__note {
+    color: var(--ui-text-3);
+  }
+
+  .wb-line__money {
+    text-align: right;
+    font-weight: 500;
+  }
+
+  .wb-line--held .wb-line__fan {
+    color: var(--ui-text-2);
+  }
+
+  /* A report opened inside a narrow panel: the panel's own width. */
+  .wb-report--panel {
+    width: auto;
+    min-width: 0;
+    padding: 4px 0;
+  }
+
+  @media (max-width: 640px) {
+    .wb-report {
+      width: auto;
+      min-width: 0;
+      padding-left: 0;
+    }
+
+    .wb-report__head {
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .wb-line {
+      grid-template-columns: 44px minmax(0, 1fr) auto;
+      gap: 10px;
+    }
+  }
+
+  /* «Открыть пост ↗»: the post in Telegram, quiet ink like the app's other ways on. */
+  .wb-post-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--ui-accent);
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+    font-weight: 500;
+    text-decoration: none;
+    white-space: nowrap;
+    border-radius: var(--ui-radius-sm);
+  }
+
+  .wb-post-link:hover {
+    text-decoration: underline;
+  }
+
+  .wb-post-link:focus-visible {
+    outline: var(--ui-focus);
+    outline-offset: 2px;
+  }
+}

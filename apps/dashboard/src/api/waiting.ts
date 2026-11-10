@@ -14,7 +14,7 @@ import { hydrationRequestTakesApproval } from "./agentHydration.js";
 import { clientHeldSendsQueryOptions } from "./clientHeldSends.js";
 import { publicationsQueryOptions } from "./publications.js";
 import { kernel } from "./sdk.js";
-import { teamCustomsQueryOptions, teamShiftDisputesQueryOptions } from "./team.js";
+import { reportQuestionsQueryOptions, teamCustomsQueryOptions } from "./team.js";
 
 /**
  * «Ждут вас»: everything that waits for the owner, as counts by kind, each with
@@ -32,7 +32,7 @@ import { teamCustomsQueryOptions, teamShiftDisputesQueryOptions } from "./team.j
  * none: without `?page=` it shows every page.
  */
 export interface WaitingRow {
-  id: "drafts" | "unknown" | "disputes" | "customs" | "held" | "login" | "failures" | "extension" | "history";
+  id: "drafts" | "unknown" | "reports" | "customs" | "held" | "login" | "failures" | "extension" | "history";
   label: string;
   /** null: the read failed, or the state it depends on could not be checked. */
   count: number | null;
@@ -111,11 +111,12 @@ export function useWaitingCounts(role: string): WaitingCounts {
   const today = toBusinessDate(new Date(), MOSCOW_TIME_ZONE);
   const week = clientHealthRange("7d", today);
 
-  const [drafts, unknown, disputes, customs, held, overview, enginePages, incidents, extension, history] = useQueries({
+  const [drafts, unknown, reports, customs, held, overview, enginePages, incidents, extension, history] = useQueries({
     queries: [
       { ...publicationsQueryOptions({ status: "draft", limit: LIST_LIMIT }), enabled: owner, refetchInterval: MINUTE },
       { ...publicationsQueryOptions({ status: "unknown", limit: LIST_LIMIT }), enabled: owner, refetchInterval: MINUTE },
-      { ...teamShiftDisputesQueryOptions(), enabled: owner, refetchInterval: MINUTE },
+      // The ledger's reads are heavier and change with the posts' collection: every five minutes is enough.
+      { ...reportQuestionsQueryOptions(today), enabled: owner, refetchInterval: 5 * MINUTE },
       { ...teamCustomsQueryOptions, refetchInterval: MINUTE },
       { ...clientHeldSendsQueryOptions({ state: "held", limit: 1, offset: 0 }), refetchInterval: MINUTE },
       {
@@ -172,7 +173,7 @@ export function useWaitingCounts(role: string): WaitingCounts {
     const draftCount = failedOr(drafts, (data) => data.publications.length);
     push({ id: "drafts", label: "Посты на утверждение", count: draftCount, capped: draftCount === LIST_LIMIT, to: "/publications?status=draft&window=all&page=all" });
     push({ id: "unknown", label: "Публикации: исход неизвестен", count: failedOr(unknown, (data) => data.publications.length), to: "/publications?status=unknown&window=all&page=all" });
-    push({ id: "disputes", label: "Споры по продажам", count: failedOr(disputes, (data) => data.disputes.filter((dispute) => dispute.resolution === null).length), to: workboardHref("decisions", "", "disputes") });
+    push({ id: "reports", label: "Отчёты смен ждут решения", count: failedOr(reports, (count) => count), to: workboardHref("decisions", "", "reports") });
   }
   const customsCount = failedOr(customs, (data) => data.customs.filter((custom) => custom.state === "paid").length);
   push({ id: "customs", label: "Кастомы оплачены, не отданы", count: customsCount, capped: customsCount === CUSTOMS_LIMIT, to: workboardHref("decisions", "", "customs") });
@@ -211,7 +212,7 @@ export function useWaitingCounts(role: string): WaitingCounts {
     }
   }
 
-  const queries = [drafts, unknown, disputes, customs, held, overview, enginePages, incidents, extension, history];
+  const queries = [drafts, unknown, reports, customs, held, overview, enginePages, incidents, extension, history];
   const loading = ofapiLoading || queries.some((query) => query.isLoading);
   const refetchAll = () => {
     refetchOfapi();

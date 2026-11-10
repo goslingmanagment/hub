@@ -141,10 +141,6 @@ const envSchema = z.object({
   OFAPI_DM_RECONCILE_INTERVAL_MINUTES: z.coerce.number().int().positive().default(360),
   OFAPI_CREDIT_ALERT_THRESHOLD: z.coerce.number().int().min(0).default(1000),
   OFAPI_WEBHOOK_SILENCE_THRESHOLD_MINUTES: z.coerce.number().int().positive().default(720),
-  // Desktop media images: agency-wide paid-download budget per UTC day. Auto
-  // previews pass only while used + price <= cap; an explicit click always
-  // passes and is flagged over_cap. Env-only by owner decision (redeploy).
-  OFAPI_MEDIA_DAILY_CAP_CREDITS: z.coerce.number().int().min(0).max(100000).default(100),
   OFAPI_BURN_ALERT_CREDITS_PER_HOUR: z.coerce.number().int().min(0).default(300),
   OFAPI_CREDIT_MICRO_USD_PRICE: z.coerce.number().int().min(0).default(0),
   OFAPI_FAN_IDENTITIES_FINISHED_LINK_INTERVAL_HOURS: z.coerce.number().int().min(0).max(720).default(0),
@@ -431,7 +427,6 @@ export interface AppConfig {
   ofapiDmReconcileIntervalMinutes?: number;
   ofapiCreditAlertThreshold?: number;
   ofapiWebhookSilenceThresholdMinutes?: number;
-  ofapiMediaDailyCapCredits?: number;
   ofapiBurnAlertCreditsPerHour?: number;
   ofapiCreditMicroUsdPrice?: number;
   /** A finished trial link's subscriber list is re-read at most once in this
@@ -813,7 +808,6 @@ export function loadConfig(
     ofapiDmReconcileIntervalMinutes: parsed.OFAPI_DM_RECONCILE_INTERVAL_MINUTES,
     ofapiCreditAlertThreshold: parsed.OFAPI_CREDIT_ALERT_THRESHOLD,
     ofapiWebhookSilenceThresholdMinutes: parsed.OFAPI_WEBHOOK_SILENCE_THRESHOLD_MINUTES,
-    ofapiMediaDailyCapCredits: parsed.OFAPI_MEDIA_DAILY_CAP_CREDITS,
     ofapiBurnAlertCreditsPerHour: parsed.OFAPI_BURN_ALERT_CREDITS_PER_HOUR,
     ofapiCreditMicroUsdPrice: parsed.OFAPI_CREDIT_MICRO_USD_PRICE,
     ofapiFanIdentitiesFinishedLinkIntervalHours: parsed.OFAPI_FAN_IDENTITIES_FINISHED_LINK_INTERVAL_HOURS,

@@ -1,36 +1,31 @@
-import type { KernelOperationResponse } from "@agency_hub_core/contracts";
+import type { AccountReport } from "@agency_hub_core/contracts";
 
-import { demoError, iso, mills, queryString, type DemoReply, type DemoRequest } from "../core.ts";
-import { demoFans, demoUserByRole } from "../world.ts";
-import { addDays, chatterWorld, mskDay, mskMidnight, DAY_MS, HOUR_MS, MINUTE_MS, type DemoChatterWorld, type DemoSale, type DemoShift } from "./account-model.ts";
+import { iso, mills } from "../core.ts";
+import { demoFans } from "../world.ts";
+import { addDays, mskDay, mskMidnight, HOUR_MS, MINUTE_MS, type DemoChatterWorld, type DemoSale, type DemoShift } from "./account-model.ts";
 
 /**
- * A chatter's shift reports as the agency ledger keeps them (`accountReports`):
- * Workboard's «Мои смены» joins them to the shifts of `accountChatterStats`, so
- * both are made from the same working life (account-model.ts) — the same days,
- * a report's window the shift's own. The demo walks every state of the screen:
+ * A chatter's shift reports as the agent composes them — the drafts of the
+ * agency ledger's GET /v1/reports. What the chatter posted of them is the
+ * owner's report days (team-reports.ts), and «Мои смены» reads both
+ * (account-shift-reports.ts). Made from the chatter's working life
+ * (account-model.ts), so a draft's window is the shift's own:
  *
- * - the newest ended shift: a draft the agent composed twice (version 2 of 2) —
- *   «проверь и отправь»;
- * - the one before: posted;
- * - the third: posted, the chatter's second page was not open, so it stands at
- *   zero, its sales are held out with the reason, and an amount added by hand
- *   sits beside them; a sale in an overlap with a colleague's shift is held out
+ * - the newest ended shift: a draft the agent composed twice (version 2 of 2);
+ * - the third: the chatter's second page was not open, so it stands at zero,
+ *   its sales are held out with the reason, and an amount added by hand sits
+ *   beside them; a sale in an overlap with a colleague's shift is held out
  *   everywhere;
- * - the fourth: no report at all (the chatter did not ask for one);
+ * - the fourth: no draft at all (the chatter did not ask for one);
  * - a day off in Hub with a report of its own: the chatter worked with the
- *   extension switched off — «смена в Hub не найдена»;
- * - older ones are posted; the shift going on has none yet.
+ *   extension switched off — «смена в Hub не найдена».
  *
  * Invented data only.
  */
 
-type Reports = KernelOperationResponse<"accountReports">;
-type Report = Reports["reports"][number];
+type Report = AccountReport;
 type Line = Report["lines"][number];
 
-const BUSINESS_DATE = /^\d{4}-\d{2}-\d{2}$/;
-const MAX_DAYS = 62;
 const STEP_MS = 5 * MINUTE_MS;
 /** The ended shift (newest first, from 0) the chatter never asked a report for. */
 const WITHOUT_REPORT = 3;
@@ -110,7 +105,7 @@ function reportOf(shift: DemoShift, index: number, pages: readonly string[], now
  * the extension switched off, and the agent composed the report from the page's
  * sales. The latest such day at least a few days back, inside the chatter's history.
  */
-function reportWithoutShift(world: DemoChatterWorld): Report | null {
+export function reportWithoutShift(world: DemoChatterWorld): Report | null {
   if (world.activitySince === null || world.user.pages.length === 0) return null;
   const worked = new Set(world.shifts.filter((shift) => !shift.visit).flatMap((shift) => [mskDay(shift.start), shift.date]));
   for (let back = 4; back <= 20; back += 1) {
@@ -146,29 +141,13 @@ function reportWithoutShift(world: DemoChatterWorld): Report | null {
   return null;
 }
 
-export function accountReports(request: DemoRequest): Reports | DemoReply {
-  const fromQuery = queryString(request, "from");
-  const toQuery = queryString(request, "to");
-  if ((fromQuery !== undefined && !BUSINESS_DATE.test(fromQuery)) || (toQuery !== undefined && !BUSINESS_DATE.test(toQuery))) {
-    return demoError(400, "Bad Request", "`from` and `to` must be dates YYYY-MM-DD");
-  }
-  const world = chatterWorld(demoUserByRole(request.role), request.now);
-  const to = toQuery ?? world.today;
-  const from = fromQuery ?? addDays(to, -13);
-  if (from > to) return demoError(400, "Bad Request", "from is after to");
-  if (Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`) >= MAX_DAYS * DAY_MS) {
-    return demoError(400, "Bad Request", `At most ${MAX_DAYS} days`);
-  }
-  // A report is composed at the end of a shift: the shift going on has none yet.
-  const ended = world.shifts.filter((shift) => !shift.visit && !shift.ongoing);
-  const reports = ended
-    .map((shift, index) => (index === WITHOUT_REPORT ? null : reportOf(shift, index, world.user.pages, world.now)))
-    .filter((report): report is Report => report !== null);
-  const alone = reportWithoutShift(world);
-  if (alone !== null) reports.push(alone);
-  const inRange = reports
-    .filter((report) => report.reportDate >= from && report.reportDate <= to)
-    // The newest first, as Hub sends them.
-    .sort((left, right) => right.reportDate.localeCompare(left.reportDate) || Date.parse(right.windowFrom) - Date.parse(left.windowFrom));
-  return { from, to, reports: inRange };
+/**
+ * The ended shifts of a chatter's working life with their reports, the newest first: a report is composed at the end
+ * of a shift (the shift going on has none yet), and one of them was never asked for (null). The owner's «Отчёты»
+ * (team-reports.ts) read the same reports, so a chatter and the owner see one report.
+ */
+export function shiftReportsOf(world: DemoChatterWorld): Array<{ shift: DemoShift; index: number; report: Report | null }> {
+  return world.shifts
+    .filter((shift) => !shift.visit && !shift.ongoing)
+    .map((shift, index) => ({ shift, index, report: index === WITHOUT_REPORT ? null : reportOf(shift, index, world.user.pages, world.now) }));
 }

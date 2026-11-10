@@ -499,7 +499,6 @@ async function retireOrphanedMetricLatches(
 export interface GoldenSignalsReport {
   samples: Array<Omit<OpsMetricSampleRow, "sampledAt"> & { sampledAt: string }>;
   thresholdsMs: Record<string, number>;
-  smoke: { framesSeen: number; gapCount: number; duplicateCount: number; updatedAt: string | null } | null;
 }
 
 /** A gauge's p50 series stopped when gauges became one p95 sample; its old
@@ -529,9 +528,6 @@ export async function getGoldenSignalsReport(
   return {
     samples,
     thresholdsMs: GOLDEN_SIGNAL_THRESHOLDS_MS,
-    // The stream verifier that wrote this block is retired; the field stays
-    // nullable in the contract until the stream itself goes.
-    smoke: null,
   };
 }
 

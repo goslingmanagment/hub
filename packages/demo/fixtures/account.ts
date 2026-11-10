@@ -1,16 +1,15 @@
 import type { KernelOperationResponse } from "@agency_hub_core/contracts";
 
 import { between, demoError, hashString, intBetween, iso, queryString, rng, type DemoHandlers, type DemoReply, type DemoRequest } from "../core.ts";
-import { demoUserByRole, type DemoUser } from "../world.ts";
-import { addDays, chatterWorld, creditedMills, dayRange, DAY_MS, MINUTE_MS, type DemoChatterWorld, type DemoSale } from "./account-model.ts";
-import { accountReports } from "./account-reports.ts";
+import { demoUserByRole } from "../world.ts";
+import { addDays, chatterWorld, dayRange, DAY_MS, MINUTE_MS, type DemoChatterWorld } from "./account-model.ts";
+import { accountReports } from "./account-shift-reports.ts";
 import { chatterStats } from "./account-stats.ts";
 
 // Demo answers of this area's screens (see demo/core.ts): the cabinet at
 // /account — «Статистика», «Отчёт смены» (the ledger's reports, account-reports.ts),
 // «Профиль» (devices, AI spend). One chatter's working life (account-model.ts) feeds all three.
 
-type ShiftReport = KernelOperationResponse<"accountShiftReport">;
 type MyUsage = KernelOperationResponse<"authMyUsage">;
 type Devices = KernelOperationResponse<"authListDevices">;
 
@@ -24,61 +23,6 @@ function daysOf(request: DemoRequest, max: number, fallback: number): number | n
 
 function worldOf(request: DemoRequest): DemoChatterWorld {
   return chatterWorld(demoUserByRole(request.role), request.now);
-}
-
-// --- «Отчёт смены» ---
-
-function reportSale(sale: DemoSale, teammates: readonly DemoUser[]): ShiftReport["sharedWithMe"][number] {
-  const shareWith = sale.myMark?.shareWith ?? null;
-  return {
-    saleRef: sale.ref,
-    pageLabel: sale.pageLabel,
-    platform: sale.platform,
-    kind: sale.reportKind,
-    fanRef: sale.fan.platformUserId,
-    fanName: sale.fanName,
-    netMills: sale.netMills,
-    occurredAt: iso(new Date(sale.at)),
-    ppvSender: sale.ppvSender,
-    ppvWithoutAuthor: sale.ppvWithoutAuthor,
-    writers: sale.writers,
-    withoutAuthor: sale.withoutAuthor,
-    confirmed: sale.confirmed,
-    myMark: sale.myMark === null ? null : {
-      mark: sale.myMark.mark,
-      shareWithUserId: shareWith === null ? null : teammates.find((user) => user.username === shareWith)?.id ?? null,
-      shareWith,
-      amountMills: sale.myMark.amountMills,
-      note: sale.myMark.note,
-    },
-    otherMarks: sale.otherMarks,
-  };
-}
-
-function shiftReport(request: DemoRequest): ShiftReport | DemoReply {
-  const days = daysOf(request, 14, 7);
-  if (days === null) return demoError(400, "Bad Request", "querystring/days must be an integer from 1 to 14");
-  const world = worldOf(request);
-  const since = world.now - days * DAY_MS;
-  // Shifts, and the visits that had a sale: a sale in a look-in stays markable.
-  const shifts = world.shifts.filter((shift) => shift.start >= since && (!shift.visit || shift.sales.length > 0));
-  return {
-    shifts: shifts.map((shift) => ({
-      visit: shift.visit,
-      startedAt: iso(new Date(shift.start)),
-      endedAt: iso(new Date(shift.end)),
-      ongoing: shift.ongoing,
-      pages: shift.pages,
-      sales: shift.sales.map((sale) => reportSale(sale, world.teammates)),
-      creditedMills: creditedMills(shift.confirmedAt === null ? shift.sales : shift.sales.filter((sale) => sale.confirmed)),
-      unmarked: shift.sales.filter((sale) => sale.myMark === null).length,
-      pending: shift.pending,
-      confirmedAt: shift.confirmedAt === null ? null : iso(new Date(shift.confirmedAt)),
-    })),
-    sharedWithMe: world.sharedWithMe.filter((sale) => sale.at >= since).map((sale) => reportSale(sale, world.teammates)),
-    teammates: world.teammates.map((user) => ({ userId: user.id, username: user.username })),
-    serverNow: iso(request.now),
-  };
 }
 
 // --- «Устройства» ---
@@ -253,7 +197,6 @@ export const accountHandlers: DemoHandlers = {
     if (until !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(until)) return demoError(400, "Bad Request", "querystring/until must be a date YYYY-MM-DD");
     return chatterStats(worldOf(request), days, until);
   },
-  accountShiftReport: shiftReport,
   accountReports,
   authListDevices: devices,
   authMyUsage: usage,

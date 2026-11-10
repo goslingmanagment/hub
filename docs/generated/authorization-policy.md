@@ -27,14 +27,11 @@ for at password sign-in (`client: "chat-extension"`): it reaches only the
 61 routes marked "yes", and every route marked "no" refuses it with 403.
 A full device token is not affected.
 
-## Routes (421)
+## Routes (409)
 
 | Method | Path | Route key | Kind | Roles | Page scope | chat-extension token |
 | --- | --- | --- | --- | --- | --- | --- |
 | GET | `/api/v1/account/reports` | `accountReports` | `any-session` | — | — | no |
-| GET | `/api/v1/account/shift-report` | `accountShiftReport` | `any-session` | — | — | no |
-| POST | `/api/v1/account/shift-report/confirm` | `accountShiftReportConfirm` | `any-session` | — | — | no |
-| POST | `/api/v1/account/shift-report/marks` | `accountShiftReportMark` | `any-session` | — | — | no |
 | GET | `/api/v1/account/stats` | `accountChatterStats` | `any-session` | — | — | no |
 | GET | `/api/v1/admin/ai/accounts` | `adminAiAccountsList` | `owner-session` | — | — | no |
 | PATCH | `/api/v1/admin/ai/accounts/:accountId` | `adminAiAccountUpdate` | `owner-session` | — | — | no |
@@ -320,11 +317,6 @@ A full device token is not affected.
 | GET | `/api/v1/client/pages/:pageLabel/spenders/stats` | `clientSpenderStats` | `apiKey` | — | page | yes |
 | GET | `/api/v1/client/pages/:pageLabel/win-back` | `clientWinBack` | `apiKey` | — | page | yes |
 | POST | `/api/v1/client/pages/:pageLabel/win-back/attempts` | `clientWinBackAttempt` | `apiKey` | — | page | yes |
-| GET | `/api/v1/events/snapshot` | `eventsSnapshot` | `apiKey` | — | — | no |
-| GET | `/api/v1/events/stream` | `eventsStream` | `apiKey` | — | — | no |
-| GET | `/api/v1/events/v2/facts` | `eventsV2Facts` | `any` | — | — | no |
-| GET | `/api/v1/events/v2/snapshot` | `eventsV2Snapshot` | `any` | — | — | no |
-| GET | `/api/v1/events/v2/stream` | `eventsV2Stream` | `any` | — | — | no |
 | GET | `/api/v1/fans/:platform/:platformUserId` | `crossPageFanDetail` | `session` | — | — | no |
 | PATCH | `/api/v1/fans/:platform/:platformUserId/flags` | `setFanFlags` | `owner-session` | — | — | no |
 | GET | `/api/v1/fans/:platform/:platformUserId/transactions` | `crossPageFanTransactions` | `session` | — | — | no |
@@ -335,8 +327,6 @@ A full device token is not affected.
 | POST | `/api/v1/model-applications/progress` | `modelApplicationProgress` | `public` | — | — | — |
 | GET | `/api/v1/models` | `models` | `session` | — | — | no |
 | GET | `/api/v1/models/:modelSlug/revenue/daily` | `modelRevenueDaily` | `session` | — | — | no |
-| POST | `/api/v1/ofapi/media/reports` | `ofapiMediaReports` | `apiKey` | — | — | no |
-| POST | `/api/v1/ofapi/media/resolve` | `ofapiMediaResolve` | `apiKey` | — | — | no |
 | POST | `/api/v1/ofapi/webhook` | `ofapiWebhookReceive` | `hmac` | — | — | — |
 | GET | `/api/v1/openapi.json` | `openApiJson` | `owner-session` | — | — | no |
 | GET | `/api/v1/ops/live` | `opsLive` | `monitoring` | owner | — | no |
@@ -435,11 +425,9 @@ A full device token is not affected.
 | GET | `/api/v1/team/greetings` | `teamGreetings` | `session` | — | — | no |
 | GET | `/api/v1/team/ledger-payouts` | `teamLedgerPayouts` | `owner-session` | — | — | no |
 | GET | `/api/v1/team/ledger-payouts/prepare` | `teamLedgerPayoutPrepare` | `owner-session` | — | — | no |
+| GET | `/api/v1/team/ledger-reports` | `teamLedgerReports` | `owner-session` | — | — | no |
 | GET | `/api/v1/team/sales/ppv` | `teamSalesPpv` | `session` | — | — | no |
 | GET | `/api/v1/team/sales/replies` | `teamSalesReplies` | `session` | — | — | no |
-| GET | `/api/v1/team/shift-reports/disputes` | `teamShiftDisputes` | `session` | — | — | no |
-| POST | `/api/v1/team/shift-reports/disputes/:saleRef` | `teamShiftResolve` | `owner-session` | — | — | no |
-| GET | `/api/v1/team/shift-reports/export` | `teamShiftExport` | `session` | — | — | no |
 | GET | `/api/v1/team/shift-review` | `teamShiftReview` | `owner-session` | — | — | no |
 | GET | `/api/v1/team/shift-sales` | `teamShiftSales` | `session` | — | — | no |
 | GET | `/api/v1/team/shifts` | `teamShifts` | `session` | — | — | no |

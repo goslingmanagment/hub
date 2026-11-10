@@ -1,31 +1,50 @@
 import { queryOptions, useQueries } from "@tanstack/react-query";
 import { formatCount } from "@agency_hub_core/ui/format";
+import { moscowToday } from "@agency_hub_core/ui/moscow";
 import { ruPlural } from "@agency_hub_core/ui/plural";
+import { pendingChangesOf, postOnPage, reportQuestionsWindow, unparsedPosts } from "@agency_hub_core/ui/shiftReports";
 import { kernel } from "./hub.js";
 import { carryParams } from "./links.js";
 import { useMe } from "./useMe.js";
 
 /**
  * What waits for the owner's decision (spec §4.6), from the operations Hub has
- * today. One set of query keys for the sidebar's count, the «Ждут решения» line
+ * today: the shift reports' questions, customs paid and not delivered, held
+ * sends. One set of query keys for the sidebar's count, the «Ждут решения» line
  * on Смены and the Решения screen itself: a decision made there moves the count
- * at once. Read at most once a minute and only while the tab is visible.
+ * at once. Read at most once a minute (the ledger's, every five) and only while
+ * the tab is visible.
  *
  * A queue that did not answer is not a zero (spec r3, D17): the counts say which
  * failed (`failed`), and the words for it are here (`decisionsFailedText`).
  */
 
 const MINUTE = 60_000;
+/** The ledger's reads are heavier and change with the posts' collection: every five minutes is enough. */
+const LEDGER_EVERY = 5 * MINUTE;
 
-/** The longest window `teamShiftDisputes` takes (the console says «за 31 день»). */
-export const DISPUTE_DAYS = 31;
+/**
+ * The shift reports' questions, the owner's only (the agency ledger's, through Hub): the posts in «Отчётность» the
+ * ledger could not use (`teamLedgerReports`) and the paid days whose report changed since (`teamLedgerPayouts`), of
+ * the last month (`reportQuestionsWindow`) — the same window the console's «Ждут вас» counts.
+ */
+export function reportPostsQuery(today: string = moscowToday()) {
+  const window = reportQuestionsWindow(today);
+  return queryOptions({
+    queryKey: ["decisions", "report-posts", window] as const,
+    queryFn: () => kernel.teamLedgerReports({ query: window }),
+    staleTime: MINUTE,
+  });
+}
 
-/** Disputed sales of the shift reports (`teamShiftDisputes`); the owner's only. */
-export const disputesQuery = queryOptions({
-  queryKey: ["decisions", "disputes", DISPUTE_DAYS] as const,
-  queryFn: () => kernel.teamShiftDisputes({ query: { days: DISPUTE_DAYS } }),
-  staleTime: MINUTE,
-});
+export function reportChangesQuery(today: string = moscowToday()) {
+  const window = reportQuestionsWindow(today);
+  return queryOptions({
+    queryKey: ["decisions", "report-changes", window] as const,
+    queryFn: () => kernel.teamLedgerPayouts({ query: window }),
+    staleTime: MINUTE,
+  });
+}
 
 /** Open customs of the viewer's pages (`teamCustoms`). */
 export const customsQuery = queryOptions({
@@ -43,17 +62,21 @@ export function heldSendsQuery(params: { limit: number; offset: number; pageLabe
   });
 }
 
-/** The three queues of Решения, in the screen's order; each is a section there (`#disputes`, `#customs`, `#held`). */
-export const DECISION_QUEUES = ["disputes", "customs", "held"] as const;
+/** The three queues of Решения, in the screen's order; each is a section there (`#reports`, `#customs`, `#held`). */
+export const DECISION_QUEUES = ["reports", "customs", "held"] as const;
 export type DecisionQueue = (typeof DECISION_QUEUES)[number];
 
 export interface DecisionCounts {
   /**
-   * Disputes without a resolution — on the chosen page (`page`), on every page
-   * without one. null: not read (failed, still loading, or not the owner's to see).
+   * The reports' questions — posts the ledger could not use on the chosen page
+   * (`page`; a post of no known page is every page's) and paid days whose report
+   * changed (a person's pay, not a page's: on every page). null: not read
+   * (failed, still loading, or not the owner's to see).
    */
-  disputes: number | null;
-  /** Customs paid and not delivered, the same way. */
+  reports: number | null;
+  /** The same, in its two kinds, for the words. */
+  reportParts: { posts: number; changes: number } | null;
+  /** Customs paid and not delivered, on the chosen page (every page without one); null — not read. */
   customs: number | null;
   /** Sends waiting for a manual resolve, the same way. */
   held: number | null;
@@ -88,41 +111,46 @@ export function useDecisionCounts(options: { page?: string | null } = {}): Decis
   const page = options.page ?? null;
   const { isOwner, user } = useMe();
   const signedIn = user !== undefined;
-  const [disputes, customs, held, heldOnPage] = useQueries({
+  const [posts, changes, customs, held, heldOnPage] = useQueries({
     queries: [
-      { ...disputesQuery, enabled: isOwner, refetchInterval: MINUTE },
+      { ...reportPostsQuery(), enabled: isOwner, refetchInterval: LEDGER_EVERY },
+      { ...reportChangesQuery(), enabled: isOwner, refetchInterval: LEDGER_EVERY },
       { ...customsQuery, enabled: signedIn, refetchInterval: MINUTE },
       { ...heldSendsQuery(), enabled: signedIn, refetchInterval: MINUTE },
       // The page's own count of held sends: Hub cuts it (the list of every page above says what the others hold).
       { ...heldSendsQuery({ limit: 1, offset: 0, pageLabel: page ?? "" }), enabled: signedIn && page !== null, refetchInterval: MINUTE },
     ],
   });
-  const reads = { disputes, customs, held: page === null ? held : heldOnPage };
-  const loading = disputes.isLoading || customs.isLoading || held.isLoading || (page !== null && heldOnPage.isLoading);
+  const heldRead = page === null ? held : heldOnPage;
+  const loading = posts.isLoading || changes.isLoading || customs.isLoading || held.isLoading || (page !== null && heldOnPage.isLoading);
   const retry = () => {
-    for (const query of [disputes, customs, held, heldOnPage]) if (query.isError) void query.refetch();
+    for (const query of [posts, changes, customs, held, heldOnPage]) if (query.isError) void query.refetch();
   };
   // Not signed in yet: the queues are not even asked, nothing is settled.
   const settled = signedIn && !loading;
   if (!settled) {
-    return { disputes: null, customs: null, held: null, total: 0, page, elsewhere: 0, loading, settled: false, failed: [], complete: false, retry };
+    return { reports: null, reportParts: null, customs: null, held: null, total: 0, page, elsewhere: 0, loading, settled: false, failed: [], complete: false, retry };
   }
   const onPage = (label: string) => page === null || label === page;
-  const openDisputes = disputes.data?.disputes.filter((dispute) => dispute.resolution === null);
+  const unparsed = posts.data ? unparsedPosts(posts.data) : undefined;
+  const pending = changes.data ? pendingChangesOf(changes.data) : undefined;
   const paidCustoms = customs.data?.customs.filter((custom) => custom.state === "paid");
+  const reportParts = unparsed && pending ? { posts: unparsed.filter((post) => postOnPage(post, page)).length, changes: pending.length } : null;
   const counts = {
-    disputes: openDisputes ? openDisputes.filter((dispute) => onPage(dispute.pageLabel)).length : null,
+    reports: reportParts === null ? null : reportParts.posts + reportParts.changes,
     customs: paidCustoms ? paidCustoms.filter((custom) => onPage(custom.pageLabel)).length : null,
-    held: reads.held.data ? reads.held.data.total : null,
+    held: heldRead.data ? heldRead.data.total : null,
   };
-  const elsewhere = page === null ? 0 : (openDisputes ? openDisputes.length - (counts.disputes ?? 0) : 0)
+  const elsewhere = page === null ? 0 : (unparsed && reportParts ? unparsed.length - reportParts.posts : 0)
     + (paidCustoms ? paidCustoms.length - (counts.customs ?? 0) : 0)
     + (held.data && counts.held !== null ? Math.max(0, held.data.total - counts.held) : 0);
-  // Only a read that was asked and broke is a failure: a team lead's disputes are simply not theirs.
-  const failed = DECISION_QUEUES.filter((queue) => reads[queue].isError && counts[queue] === null);
+  // Only a read that was asked and broke is a failure: a team lead's reports are simply not theirs.
+  const broke = { reports: posts.isError || changes.isError, customs: customs.isError, held: heldRead.isError };
+  const failed = DECISION_QUEUES.filter((queue) => broke[queue] && counts[queue] === null);
   return {
     ...counts,
-    total: (counts.disputes ?? 0) + (counts.customs ?? 0) + (counts.held ?? 0),
+    reportParts,
+    total: (counts.reports ?? 0) + (counts.customs ?? 0) + (counts.held ?? 0),
     page,
     elsewhere,
     loading,
@@ -133,37 +161,40 @@ export function useDecisionCounts(options: { page?: string | null } = {}): Decis
   };
 }
 
-/** One queue that waits, as the «Ждут решения» line says it: «2 спора по продажам», with its section on Решения. */
+/** One kind of what waits, as the «Ждут решения» line says it: «2 поста не разобраны», with its section on Решения. */
 export interface DecisionPart {
+  /** Unique within the parts: the queue, or the queue and its kind. */
+  key: string;
   queue: DecisionQueue;
   count: number;
-  /** «1 спор по продажам» · «2 кастома оплачены и не отданы» · «3 отправки зависли». */
+  /** «1 пост не разобран» · «1 выплаченный день изменён» · «2 кастома оплачены и не отданы» · «3 отправки зависли». */
   text: string;
   /** `/decisions?week=…&page=…#customs`: Решения with this period and page, at the section. */
   to: string;
 }
 
 /** The queues that wait (zero ones left out), in the screen's order, each with its words and its link. */
-export function decisionParts(counts: Pick<DecisionCounts, "disputes" | "customs" | "held">, search: URLSearchParams | string): DecisionPart[] {
+export function decisionParts(counts: Pick<DecisionCounts, "reportParts" | "customs" | "held">, search: URLSearchParams | string): DecisionPart[] {
   const carried = carryParams(search).toString();
   const to = (queue: DecisionQueue) => `/decisions${carried ? `?${carried}` : ""}#${queue}`;
   const parts: DecisionPart[] = [];
-  const add = (queue: DecisionQueue, count: number | null, words: (n: number) => string) => {
-    if (count) parts.push({ queue, count, text: `${formatCount(count)} ${words(count)}`, to: to(queue) });
+  const add = (queue: DecisionQueue, count: number | null, words: (n: number) => string, kind = "") => {
+    if (count) parts.push({ key: kind ? `${queue}:${kind}` : queue, queue, count, text: `${formatCount(count)} ${words(count)}`, to: to(queue) });
   };
-  add("disputes", counts.disputes, (n) => `${ruPlural(n, "спор", "спора", "споров")} по продажам`);
+  add("reports", counts.reportParts?.posts ?? null, (n) => ruPlural(n, "пост не разобран", "поста не разобраны", "постов не разобраны"), "posts");
+  add("reports", counts.reportParts?.changes ?? null, (n) => ruPlural(n, "выплаченный день изменён", "выплаченных дня изменены", "выплаченных дней изменены"), "changes");
   add("customs", counts.customs, (n) => ruPlural(n, "кастом оплачен и не отдан", "кастома оплачены и не отданы", "кастомов оплачены и не отданы"));
   add("held", counts.held, (n) => ruPlural(n, "отправка зависла", "отправки зависли", "отправок зависли"));
   return parts;
 }
 
-const FAILED_WORD: Record<DecisionQueue, string> = { disputes: "споры", customs: "кастомы", held: "зависшие отправки" };
+const FAILED_WORD: Record<DecisionQueue, string> = { reports: "отчёты", customs: "кастомы", held: "зависшие отправки" };
 
 /**
  * «Не удалось проверить решения» when nothing answered; «Не удалось проверить
  * споры и кастомы» when only some did. null when nothing failed.
  */
-export function decisionsFailedText(counts: Pick<DecisionCounts, "failed" | "disputes" | "customs" | "held">): string | null {
+export function decisionsFailedText(counts: Pick<DecisionCounts, "failed" | "reports" | "customs" | "held">): string | null {
   if (counts.failed.length === 0) return null;
   const answered = DECISION_QUEUES.filter((queue) => counts[queue] !== null).length;
   if (answered === 0) return "Не удалось проверить решения";

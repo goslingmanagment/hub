@@ -27,7 +27,8 @@ import { saleKindOf } from "./chatter-stats.ts";
  * holds a sale by `workHoldsSale`, a look-in only one to a fan its person wrote
  * to last; the bought PPV's sender, a post tip and a Campaign contribution by
  * `listSaleFacts`; the last writer within SALE_LAST_WRITER_HOURS; the chatters'
- * marks and the owner's split from the shift reports. Whose a sale is, and what
+ * marks and the owner's split as Hub's old shift-report tables hold them (no
+ * longer written). Whose a sale is, and what
  * anyone is paid, the ledger decides (owner, 2026-11-08). Database only,
  * read-only.
  */
@@ -73,6 +74,9 @@ export async function readAgentTeamSales(
   const ids = sales.map((sale) => sale.transactionId);
   const facts = await listSaleFacts(db, { transactionIds: ids });
   const lastWriters = await listSaleLastWriters(db, { hours: SALE_LAST_WRITER_HOURS, sales: lastWriterQuery(sales) });
+  // `marks` and `resolution` keep their shape for the ledger, which parses them: Hub's marks flow is gone (the
+  // chatter's posted report is what a shift pays), so nothing writes these tables any more and they answer what
+  // they held — today, nothing. Kept until the ledger stops reading them; the tables are never dropped.
   const marks = await listShiftMarks(db, { transactionIds: ids });
   const confirmed = await listConfirmedMarkKeys(db, { transactionIds: ids });
   const resolutions = await listShiftResolutions(db, { transactionIds: ids });

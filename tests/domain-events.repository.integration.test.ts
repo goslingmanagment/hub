@@ -11,7 +11,6 @@ import {
   getDomainEventPartitionLeadMonths,
   getOfapiBindingPage,
   listEventsSince,
-  listDomainEventContiguousReplayEnds,
   listObservationsForReplay,
   markObservationParsed,
   insertObservation,
@@ -212,12 +211,6 @@ describe("domain events append protocol (Stage 8)", () => {
       type: "stream.projection_checkpoint",
       data: { hiddenCount: 4 },
     });
-    const ends = await listDomainEventContiguousReplayEnds(testDb.db, [{
-      accountId: 17,
-      afterSeq: 0,
-      throughSeq: 5,
-    }], { excludeProjectionOnly: true });
-    expect(ends.get(17)).toBe(5);
 
     const replay = await appendProjectionOnlyDomainEvents(testDb.db, 17, material, {
       occurredAt: new Date("2026-06-15T12:01:00Z"),

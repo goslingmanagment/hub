@@ -169,161 +169,17 @@
     color: var(--ui-text-2);
   }
 
-  /* Colour only where something is to be done: a sent report keeps its green mark, its word is plain. */
-  .mys-state .ui-badge--success {
-    color: var(--ui-text-2);
-  }
-
-  /* ------------------------------------------------- The report, opened */
-
-  /*
-   * From under the first cell's words (past the chevron) to the end of the row's total: the sales' amounts end
-   * where the total ends (`--mys-total-edge`, measured; 24 px of the cell's left padding, 16 of the total's right).
-   */
-  .mys-report {
-    display: flex;
-    flex-direction: column;
-    gap: 16px;
-    width: calc(var(--mys-total-edge, 904px) - 40px);
-    min-width: min(100%, 560px);
-    max-width: 100%;
-    padding: 4px 0 4px 24px;
-  }
-
-  .mys-report__head {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: baseline;
-    justify-content: space-between;
-    gap: 4px 24px;
-  }
-
-  .mys-report__pages {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 4px 24px;
-    margin: 0;
-    padding: 0;
-    list-style: none;
-  }
-
-  .mys-report__page {
-    display: inline-flex;
-    align-items: baseline;
-    gap: 8px;
+  /* A sum the chatter changed after the draft: their right, said quietly beside the word — never a mark. */
+  .mys-state__was {
+    color: var(--ui-text-3);
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+    font-variant-numeric: tabular-nums;
     white-space: nowrap;
   }
 
-  .mys-report__page .ui-page {
-    color: var(--ui-text-2);
-  }
-
-  .mys-report__page--zero .ui-page {
-    color: var(--ui-text-3);
-  }
-
-  .mys-report__saved {
-    margin: 0;
-    color: var(--ui-text-3);
-    font-size: var(--ui-fs-14);
-    line-height: var(--ui-lh-14);
-  }
-
-  .mys-report__none {
-    margin: 0;
-    color: var(--ui-text-2);
-  }
-
-  .mys-report__groups {
-    display: flex;
-    flex-direction: column;
-    gap: 16px;
-  }
-
-  .mys-report__title {
-    display: flex;
-    align-items: baseline;
-    gap: 8px;
-    margin: 0 0 2px;
-    color: var(--ui-text);
-    font-size: var(--ui-fs-14);
-    line-height: var(--ui-lh-14);
-    font-weight: 600;
-  }
-
-  .mys-report__count {
-    color: var(--ui-text-3);
-    font-weight: 400;
-  }
-
-  .mys-lines {
-    margin: 0;
-    padding: 0;
-    border-top: 1px solid var(--ui-line-soft);
-    list-style: none;
-  }
-
-  .mys-line {
-    display: grid;
-    grid-template-columns: 48px minmax(0, 1fr) auto;
-    align-items: baseline;
-    gap: 12px;
-    padding: 8px 0;
-    border-bottom: 1px solid var(--ui-line-soft);
-  }
-
-  .mys-line__time {
-    color: var(--ui-text-3);
-    font-variant-numeric: tabular-nums;
-  }
-
-  .mys-line__main {
-    min-width: 0;
-  }
-
-  .mys-line__what {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: baseline;
-    gap: 2px 12px;
-    margin: 0;
-    overflow-wrap: anywhere;
-  }
-
-  .mys-line__what .ui-page,
-  .mys-line__kind {
-    color: var(--ui-text-2);
-  }
-
-  .mys-line__fan {
-    color: var(--ui-text);
-  }
-
-  .mys-line__added {
-    align-self: center;
-  }
-
-  .mys-line__reason,
-  .mys-line__note {
-    margin: 2px 0 0;
-    font-size: var(--ui-fs-14);
-    line-height: var(--ui-lh-14);
-  }
-
-  .mys-line__reason {
-    color: var(--ui-text-2);
-  }
-
-  .mys-line__note {
-    color: var(--ui-text-3);
-  }
-
-  .mys-line__money {
-    text-align: right;
-    font-weight: 500;
-  }
-
-  .mys-line--held .mys-line__fan {
+  /* Colour only where something is to be done: a sent report keeps its green mark, its word is plain. */
+  .mys-state .ui-badge--success {
     color: var(--ui-text-2);
   }
 
@@ -409,7 +265,8 @@
       justify-self: end;
     }
 
-    .mys-journal .mys-state__next {
+    .mys-journal .mys-state__next,
+    .mys-journal .mys-state__was {
       grid-column: 1 / -1;
       grid-row: 3;
       margin-top: 4px;
@@ -447,20 +304,5 @@
       padding: 0;
     }
 
-    .mys-report {
-      width: auto;
-      min-width: 0;
-      padding-left: 0;
-    }
-
-    .mys-report__head {
-      flex-direction: column;
-      gap: 4px;
-    }
-
-    .mys-line {
-      grid-template-columns: 44px minmax(0, 1fr) auto;
-      gap: 10px;
-    }
   }
 }

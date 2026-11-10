@@ -151,8 +151,6 @@ export const VOICE_STATUS: Readonly<Record<string, StatusWord>> = {
 
 export const TEAM_STATUS = {
   onShift: status("На смене", "good"),
-  reportConfirmed: status("Подтверждён", "good"),
-  reportNotConfirmed: status("Не подтверждён", "attention"),
   dispute: status("Ждёт решения", "waiting"),
   customPaid: status("Оплачен, не отдан", "waiting"),
   customUnpaid: status("Ждёт оплаты", "moving"),
