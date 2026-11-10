@@ -97,12 +97,3 @@ export function supersedingDedupKey(
 ): string {
   return `msg:${direction}:${messageRef}:${fingerprintHex(fingerprint)}`;
 }
-
-/** The generic corrections fingerprint for non-OF facts (the Fansly repair):
- * same domain separation, over an arbitrary canonicalized fact object. */
-export function computeFactFingerprint(fact: Record<string, unknown>): Buffer {
-  return createHash("sha256")
-    .update(FINGERPRINT_DOMAIN)
-    .update(JSON.stringify(canonicalJson(fact)))
-    .digest();
-}

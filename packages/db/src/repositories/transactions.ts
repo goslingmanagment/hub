@@ -303,57 +303,6 @@ export async function countActivePendingTransactionsByIds(
   return rows.length;
 }
 
-/** W7.3 repair (E6 census): active negation anomalies — double-negative
- * pairs and orphan negatives — for the owner-gated repair CLI. */
-export async function listActiveNegationAnomalies(db: Database) {
-  const pairs = await db.execute<{
-    platform_account_id: number;
-    reversal_id: number;
-    chargeback_id: number;
-    base_transaction_id: string;
-    reversal_occurred_at: Date;
-    chargeback_occurred_at: Date;
-  }>(sql`
-    select r.platform_account_id,
-           r.id as reversal_id, c.id as chargeback_id,
-           regexp_replace(r.transaction_id, ':reversal$', '') as base_transaction_id,
-           r.occurred_at as reversal_occurred_at, c.occurred_at as chargeback_occurred_at
-    from transactions r
-    join transactions c on c.platform_account_id = r.platform_account_id
-     and c.transaction_id = regexp_replace(r.transaction_id, ':reversal$', '') || ':chargeback'
-    where r.transaction_id like '%:reversal' and r.is_active and c.is_active
-  `);
-  const orphans = await db.execute<{
-    id: number;
-    platform_account_id: number;
-    transaction_id: string;
-    occurred_at: Date;
-    gross_amount_mills: string;
-  }>(sql`
-    select t.id, t.platform_account_id, t.transaction_id, t.occurred_at, t.gross_amount_mills::text
-    from transactions t
-    left join transactions o on o.platform_account_id = t.platform_account_id
-     and o.transaction_id = regexp_replace(t.transaction_id, ':(reversal|chargeback)$', '')
-     and o.is_active and ${settledTransactionStateSql("o")} = 'posted'::transaction_state
-    where (t.transaction_id like '%:reversal' or t.transaction_id like '%:chargeback')
-      and t.is_active and o.id is null
-  `);
-  return { pairs: pairs.rows, orphans: orphans.rows };
-}
-
-/** W7.3 repair: deactivate a specific anomaly row (never delete). */
-export async function deactivateTransactionById(
-  db: Database,
-  input: {
-    id: number;
-    reason: "superseded_duplicate_negation" | "reversal_without_settled_original";
-  },
-): Promise<void> {
-  await db.update(transactions)
-    .set({ isActive: false, inactiveReason: input.reason, inactivatedAt: new Date() })
-    .where(and(eq(transactions.id, input.id), eq(transactions.isActive, true)));
-}
-
 export async function markTransactionsScanToken(
   db: Database,
   input: {

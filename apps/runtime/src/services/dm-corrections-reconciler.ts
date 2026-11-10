@@ -17,8 +17,8 @@
 // for the next pass). Null-ref stubs and rows with unresolvable observation
 // lineage are skip-and-counted (preamble 3; ids are NEVER faked).
 //
-// Gated on a STAGED boot flag that stays OFF until the preamble backfill
-// (corrections:backfill-fingerprints) has run — enabling against NULL
+// Gated on a STAGED boot flag that stayed OFF until the preamble backfill
+// (a one-off, done and removed) had run — enabling against NULL
 // emitted fingerprints for already-evented history would mass-append
 // redundant superseding events (preamble 1).
 

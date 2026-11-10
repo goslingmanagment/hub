@@ -127,7 +127,7 @@ export async function upsertPlatformNotification(
  * was material refuses the row. A read; exported so a dry-run can count what
  * the upsert would refuse.
  */
-export async function isPlatformNotificationErasureFenced(
+async function isPlatformNotificationErasureFenced(
   db: Database,
   input: Pick<
     UpsertPlatformNotificationInput,

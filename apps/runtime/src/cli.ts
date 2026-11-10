@@ -28,7 +28,6 @@ import {
   findUserById,
   insertDeliveryAttempt,
   insertErasureLog,
-  replayFanslyWsDecode,
   listPendingFanslyWsLiveReceipts,
   TrafficBindingsConflictError,
   getPagePublishingSettings,
@@ -107,18 +106,14 @@ import {
   runTrafficBindingsSet,
   TrafficBindingsFileError,
 } from "./services/traffic-bindings.ts";
-import { runDmCorrectionsFingerprintBackfill } from "./services/dm-corrections-backfill.ts";
 import { runTransactionTipContextsBackfill } from "./services/transaction-tip-contexts-backfill.ts";
 import { runDmCorrectionsLineageIntake } from "./services/dm-corrections-lineage-intake.ts";
-import { runFansly1970Repair } from "./services/fansly-1970-repair.ts";
 import { runOfapiPpvRefRepair } from "./services/ofapi-ppv-ref-repair.ts";
 import { runPpvPurchaseBackfill } from "./services/ppv-purchase-backfill.ts";
 import {
   DM_ONLY_PRUNE_DEFAULT_WAIT_MS,
   runFanslyMediaStatsDmOnlyPrune,
 } from "./services/fansly-media-stats-dm-only-prune.ts";
-import { runFanslyMediaStatsForeignPrune } from "./services/fansly-media-stats-foreign-prune.ts";
-import { runNotificationReadStateReplay } from "./services/fansly-notification-read-state-replay.ts";
 import { runAccountMeRejournal } from "./services/observations-account-me-rejournal.ts";
 import {
   countHarvestObservations,
@@ -2097,7 +2092,7 @@ export function buildProgram() {
 
   program
     .command("fansly:decode-ws")
-    .description("B0: settle bounded metadata receipts and apply pending live-overlay receipts from durable WS raw; no provider requests")
+    .description("B0: apply pending live-overlay receipts from durable WS raw; no provider requests")
     .requiredOption("--page <label>", "one exact page label")
     .option("--max-batches <n>", "at most 20 retained observations per batch", "50")
     .action(async (options) => {
@@ -2107,12 +2102,6 @@ export function buildProgram() {
       try {
         const stored = await findPageByLabel(app.db, options.page);
         if (!stored) throw new Error("Page not found");
-        let decoded = 0;
-        for (let batch = 0; batch < limit; batch++) {
-          const count = await replayFanslyWsDecode(app.db, stored.page.id);
-          decoded += count;
-          if (count < 20) break;
-        }
         // The worker timer does the same; this is the offline repair path.
         const resolvePayload = fanslyWsLivePayloadResolver(app);
         const live: Record<string, number> = {};
@@ -2131,7 +2120,7 @@ export function buildProgram() {
           if (pending.length < 20) break;
           after = pending.at(-1)!;
         }
-        console.log(JSON.stringify({ pageId: stored.page.id, decoded, live }));
+        console.log(JSON.stringify({ pageId: stored.page.id, live }));
       } finally { await app.close(); }
     });
 
@@ -2374,33 +2363,6 @@ export function buildProgram() {
     });
 
   program
-    .command("corrections:backfill-fingerprints")
-    .description(
-      "Wave 2 preamble: fingerprint every dm_message_archive row; close emitted_* against "
-        + "existing ledger claims; seed legacy provenance. Run (and size drainOpen) before "
-        + "the corrections reconciler runs on new rows",
-    )
-    .option("--dry-run", "count without writing", false)
-    .option("--batch <n>", "batch size (default 500)", (v) => Number.parseInt(v, 10))
-    .action(async (options) => {
-      const app = await createAppContext();
-      try {
-        const result = await runDmCorrectionsFingerprintBackfill(app, {
-          dryRun: Boolean(options.dryRun),
-          ...(options.batch !== undefined ? { batchSize: options.batch } : {}),
-        });
-        console.log(JSON.stringify(result));
-        console.log(
-          `${options.dryRun ? "[dry-run] would fingerprint" : "fingerprinted"} ${result.fingerprinted} `
-            + `(closed-in-ledger ${result.emittedClosed}, INITIAL DRAIN BOUND ${result.drainOpen} first `
-            + `events, stubs skipped ${result.stubsSkipped}) of ${result.scanned} scanned`,
-        );
-      } finally {
-        await app.close();
-      }
-    });
-
-  program
     .command("tip-contexts:backfill")
     .description(
       "Replay retained Fansly dm_messages raw payloads into exact transaction tip contexts",
@@ -2459,69 +2421,7 @@ export function buildProgram() {
       }
     });
 
-  program
-    .command("events:repair-fansly-1970")
-    .description(
-      "Wave 2: append superseding events (corrected timestamps from source observations) for "
-        + "the Fansly 1970 message events — replay cannot heal them (msg dedup key). Idempotent; "
-        + "the archive projection sweep applies the heal",
-    )
-    .option("--dry-run", "count without writing", false)
-    .option("--account <id>", "restrict to one internal account (page) id", (v) => Number.parseInt(v, 10))
-    .option("--limit <n>", "max events to scan this run", (v) => Number.parseInt(v, 10))
-    .action(async (options) => {
-      const app = await createAppContext();
-      try {
-        const result = await runFansly1970Repair(app, {
-          dryRun: Boolean(options.dryRun),
-          ...(options.account !== undefined ? { accountId: options.account } : {}),
-          ...(options.limit !== undefined ? { limit: options.limit } : {}),
-        });
-        console.log(JSON.stringify(result));
-        console.log(
-          `${options.dryRun ? "[dry-run] would repair" : "repaired"} ${result.repaired} `
-            + `(already ${result.alreadyRepaired}, missing-obs ${result.missingObservation}, `
-            + `missing-item ${result.missingItem}, out-of-range ${result.outOfRange}, `
-            + `errored ${result.errored}) of ${result.scanned} scanned`,
-        );
-      } finally {
-        await app.close();
-      }
-    });
-
-  // M11. An owner-run one-off like the two below: dry-run is the default
-  // (inside a READ ONLY transaction), `--execute` opts in, a re-run reports
-  // zeros. It deletes queue state only and makes no Fansly call.
-  program
-    .command("fansly:media-stats-prune-foreign")
-    .description(
-      "M11: delete the never-visited media_stats queue rows of media the page does not own "
-        + "(every media.observed for the ref names another account, e.g. a fan's DM media), "
-        + "which the route can only ever fail. Heads and journal stay. Dry-run default; idempotent",
-    )
-    .option("--execute", "actually delete (default is a read-only dry-run count)")
-    .option("--account <id>", "restrict to one internal account (page) id", parsePositiveInt)
-    .action(async (options) => {
-      const app = await createAppContext();
-      try {
-        const result = await runFanslyMediaStatsForeignPrune(app, {
-          dryRun: !options.execute,
-          ...(options.account !== undefined ? { accountId: options.account } : {}),
-        });
-        console.log(JSON.stringify(result));
-        for (const page of result.pages) {
-          console.log(`page ${page.pageId} (${page.pageLabel}): ${page.rows} (failing ${page.failing})`);
-        }
-        console.log(
-          `${result.dryRun ? "[dry-run] would delete" : "deleted"} ${result.rows} `
-            + `foreign media_stats rows (failing ${result.failing}) on ${result.pages.length} page(s)`,
-        );
-      } finally {
-        await app.close();
-      }
-    });
-
-  // Owner decision 2026-09-29, an owner-run one-off like M11 above: dry-run
+  // Owner decision 2026-09-29, an owner-run one-off: dry-run
   // default (READ ONLY), `--execute` opts in, a re-run reports zeros. It deletes
   // queue state only and makes no Fansly call. `--execute` waits for the
   // media_plane, creator_posts and fansly_stats projectors to reach the journal
@@ -2591,46 +2491,6 @@ export function buildProgram() {
       }
     });
 
-  // J7. Owner-run one-off like M11 above: dry-run default (READ ONLY),
-  // `--execute` opts in, a re-run reports zeros, no platform call.
-  program
-    .command("fansly:notifications-replay-read-state")
-    .description(
-      "J7: replay the notification.observed looks the pre-J7 head guard discarded on a "
-        + "createdAt tie (below the fansly_engagement watermark) through the fixed "
-        + "platform_notifications upsert, so rows first seen unread get their read state. "
-        + "Touches nothing else — NOT a projection rebuild. Dry-run default; idempotent",
-    )
-    .option("--execute", "actually replay (default is a read-only dry-run count)")
-    .option("--account <id>", "restrict to one internal account (page) id", parsePositiveInt)
-    .action(async (options) => {
-      const app = await createAppContext();
-      try {
-        const result = await runNotificationReadStateReplay(app, {
-          dryRun: !options.execute,
-          ...(options.account !== undefined ? { accountId: options.account } : {}),
-        });
-        console.log(JSON.stringify(result));
-        for (const page of result.pages) {
-          console.log(
-            `page ${page.pageId}: ${page.events} look(s), heads ${page.heads}, `
-              + `acknowledged ${page.acknowledged}, unacknowledged ${page.unacknowledged}`,
-          );
-        }
-        console.log(
-          `${result.dryRun ? "[dry-run] would move" : "moved"} ${result.heads} notification head(s) `
-            + `(acknowledged ${result.acknowledged}, unacknowledged ${result.unacknowledged}; `
-            + `${result.events} look(s) replayed, erasure-fenced ${result.erasureFenced}, `
-            + `deferred ${result.deferred})`,
-        );
-        if (result.deferred > 0) {
-          process.exitCode = 1;
-        }
-      } finally {
-        await app.close();
-      }
-    });
-
   // H2 (INC-001). Both commands are owner-run one-offs: dry-run is the
   // default (inside a READ ONLY transaction — it cannot write), `--execute`
   // opts in, a re-run reports zeros. Neither calls OFAPI.
@@ -2692,72 +2552,6 @@ export function buildProgram() {
             + `message_archive is_opened ${result.messageArchiveOpened}, `
             + `dm_message_archive is_opened ${result.dmArchiveOpened} `
             + `(${result.facts} purchase facts in scope)`,
-        );
-      } finally {
-        await app.close();
-      }
-    });
-
-  program
-    .command("money:repair-negations")
-    .description(
-      "W7.3 (A21+B4): deactivate double-negative twins and orphan negatives "
-        + "(no active settled original), then rebuild spender/revenue rollups per page. "
-        + "Never deletes. Run --dry-run first",
-    )
-    .option("--dry-run", "census only, no writes", false)
-    .action(async (options) => {
-      const app = await createAppContext();
-      try {
-        const { repairNegationAnomalies } = await import("./services/money-negation-guards.ts");
-        const result = await repairNegationAnomalies(app, { dryRun: Boolean(options.dryRun) });
-        console.log(JSON.stringify(result));
-        console.log(
-          `${result.dryRun ? "[dry-run] would deactivate" : "deactivated"} `
-            + `${result.dryRun ? result.pairs + result.orphans : result.deactivated} `
-            + `(pairs ${result.pairs}, orphans ${result.orphans}); pages rebuilt ${result.pagesRebuilt}`,
-        );
-      } finally {
-        await app.close();
-      }
-    });
-
-  program
-    .command("observations:rejournal-collisions")
-    .description(
-      "W8 / E5 (A22): re-journal the pull observations swallowed by the pre-f8c4409 "
-        + "chunk-constant idempotency key (2026-07-05..07-07 window) — verbatim from "
-        + "sync_raw_payloads, producer 'rejournal:a22', append-only, idempotent. "
-        + "Run --dry-run first; the canonicalize sweep then consumes the rows "
-        + "(domain_event_keys dedup makes repeats no-ops)",
-    )
-    .option("--dry-run", "census only, no writes", false)
-    .option("--from <iso>", "captured_at lower bound (default: the E5 window start)")
-    .option("--to <iso>", "captured_at upper bound (default: the E5 window end)")
-    .action(async (options) => {
-      const app = await createAppContext();
-      try {
-        const { runObservationsRejournal } = await import("./services/observations-rejournal.ts");
-        const result = await runObservationsRejournal(app, {
-          dryRun: Boolean(options.dryRun),
-          ...(options.from ? { from: new Date(options.from) } : {}),
-          ...(options.to ? { to: new Date(options.to) } : {}),
-        });
-        console.log(JSON.stringify(result));
-        for (const [stream, counts] of Object.entries(result.perStream)) {
-          console.log(
-            `${stream}: raw ${counts.rawFetches}, observed ${counts.observed}, `
-              + `missing ${counts.missing}, rejournaled ${counts.rejournaled}, `
-              + `already ${counts.alreadyRejournaled}`,
-          );
-        }
-        console.log(
-          `${result.dryRun ? "[dry-run] would re-journal" : "re-journaled"} `
-            + `${result.dryRun
-              ? result.totals.missing - result.totals.alreadyRejournaled
-              : result.totals.rejournaled} `
-            + `(missing ${result.totals.missing}, already ${result.totals.alreadyRejournaled}) `
-            + `across ${result.groupsScanned} chunk groups`,
         );
       } finally {
         await app.close();

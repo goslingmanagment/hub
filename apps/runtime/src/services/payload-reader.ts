@@ -105,17 +105,12 @@
 //   services/ofapi-dm-readthrough.ts              propagate (per-row catch)
 //   services/ofapi-capture-jobs.ts                propagate (leased job retries)
 //   services/projections/ai-acceptance.ts         propagate (watermark unmoved)
-//   services/fansly-1970-repair.ts                propagate (per-row catch)
 //   services/domain-events-enrich.ts              propagate (caller serves a
 //                                                 thin frame and logs — the
 //                                                 events module's own policy)
 //   services/sync/executor-handlers.ts (×2)       propagate (chunk fails; the
 //                                                 raw-payload cursor is NOT
 //                                                 advanced past unread pages)
-//   services/observations-rejournal.ts            propagate (the campaign
-//                                                 ABORTS rather than insert an
-//                                                 empty observation under a
-//                                                 deterministic key)
 //   services/observations-account-me-rejournal.ts catch → unavailableBody
 //                                                 (the capture is skipped, never
 //                                                 journaled empty; a re-run

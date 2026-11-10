@@ -120,10 +120,7 @@ function isoDate(value: unknown): Date | null {
 
 /**
  * The `platform_notifications` row one `notification.observed` event projects
- * to, or null when the projector skips the event. Parsed HERE, once, for the
- * projector and for the owner-run read-state replay
- * (`fansly:notifications-replay-read-state`), so the two can never date or
- * skip a notification differently.
+ * to, or null when the projector skips the event.
  */
 export function platformNotificationInputFromEvent(
   pageId: number,

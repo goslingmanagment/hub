@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { sql, type SQL } from "drizzle-orm";
-import { decodeFanslyWsCapture, FANSLY_WS_CAPTURE_KIND, type FanslyWsDecodeNode } from "@agency_hub_core/shared";
+import { FANSLY_WS_CAPTURE_KIND } from "@agency_hub_core/shared";
 import type { Database } from "../client.ts";
 import { insertObservation } from "./observations.ts";
 import { tryAcquireDmArchiveWriterFenceLock } from "./erasure-fence.ts";
@@ -230,28 +230,3 @@ async function fanslyWsFrameErased(db: Database, input: { pageId: number; frame:
   return erased.rows.length > 0;
 }
 
-/** Settles a receipt from its decoded nodes. The nodes set the state and are
- * not stored: nothing reads them, and decodeFanslyWsCapture(frame) of the
- * journaled observation rebuilds them (storage audit 2026-10-16). */
-export async function settleFanslyWsDecode(db: Database, observationId: number, nodes: FanslyWsDecodeNode[]) {
-  const state = nodes.some((n) => n.state !== "retained") ? "debt" : "retained";
-  await db.execute(sql`update fansly_ws_decode_receipts set
-    state=${state},decoded_at=clock_timestamp() where observation_id=${observationId} and state='pending'`);
-}
-
-/** Revisit a bounded batch of already durable inline B0 facts. Missing/tiered
- * observations remain pending; they never become a successful decode receipt.
- * Only receipts captured before the live overlay (`live_state='legacy'`): the
- * live apply settles every newer receipt's metadata in its own transaction,
- * and this writer never waits on a receipt that apply holds. */
-export async function replayFanslyWsDecode(db: Database, pageId: number) {
-  const result = await db.execute<{ id: string; frame: string }>(sql`
-    select r.observation_id::text as id,o.payload->>'frame' as frame
-    from fansly_ws_decode_receipts r join observations o
-      on o.id=r.observation_id and o.received_at=r.received_at
-    where r.page_id=${pageId} and r.state='pending' and r.live_state='legacy'
-      and o.payload->>'codec'=${FANSLY_WS_CAPTURE_KIND}
-    order by r.observation_id limit 20`);
-  for (const row of result.rows) await settleFanslyWsDecode(db, Number(row.id), decodeFanslyWsCapture(row.frame));
-  return result.rows.length;
-}

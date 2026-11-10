@@ -106,7 +106,8 @@ mass-appends redundant superseding events for the whole history (preamble 1).
    observations replay through the reducer on the first sweeps (a brief backlog
    blip, then zero; the replays are material no-ops).
 2. **Preamble backfill** (owner CLI, one-shot, idempotent/resumable):
-   `corrections:backfill-fingerprints --dry-run` → review counts → run for real.
+   done 2026-07; the one-shot command `corrections:backfill-fingerprints` was
+   removed (2026-11, W2-01) — every archive row is fingerprinted at write.
    The output's **INITIAL DRAIN BOUND** (`drainOpen`) = Wave-1 REST-only +
    command-only rows that will get FIRST events when the reconciler turns on;
    `emittedClosed` should be the overwhelming majority (webhook history already in
@@ -123,8 +124,8 @@ mass-appends redundant superseding events for the whole history (preamble 1).
    > now read 0 on prod. Steps kept for provenance/re-runs only.
    - size first (prod psql): `SELECT count(*) FROM domain_events_pre_2024 WHERE
      occurred_at < '2000-01-01' AND type IN ('message.received','message.sent');`
-   - `events:repair-fansly-1970 --dry-run` (add `--account <id>` to pilot one page)
-     → real run. Superseding events land with corrected timestamps; the minutely
+   - `events:repair-fansly-1970` (removed 2026-11, W2-01: every 1970 event has
+     its superseder) ran once. Superseding events land with corrected timestamps; the minutely
      archive projection sweep applies the heals (verify:
      `SELECT count(*) FROM message_archive WHERE occurred_at < '2000-01-01'` → 0
      for fansly accounts once the sweep passes).

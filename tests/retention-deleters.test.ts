@@ -153,14 +153,6 @@ const SANCTIONED_DELETER_FILES = [
   "packages/db/src/repositories/catalog.ts",
   "packages/db/src/repositories/config-settings.ts",
   "packages/db/src/repositories/fan-metadata.ts",
-  // M11: an owner-run queue repair, never scheduled, dry-run by default (a
-  // READ ONLY transaction). deleteForeignMediaStatsQueueRows removes only
-  // never-visited `media_stats` rows of `subject_refresh_state` — capture-plane
-  // operational state (§3.4), no captured fact — for media another account
-  // owns, which the route can only ever fail. Every observation, event and
-  // `creator_media` head stays, and the enqueue's owner check keeps the rows
-  // from coming back.
-  "packages/db/src/repositories/fansly-media-stats-foreign-queue.ts",
   // Arena "vanished chat" R5: the owner's `sync public-lookup proxy remove`
   // deletes the one row of `fansly_public_egress` — the public reader's proxy
   // configuration (the twin of `catalog.ts` deleteProxyConfig for a page's),

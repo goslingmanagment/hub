@@ -522,10 +522,10 @@ export const DYNAMIC_OBSERVATION_KIND_RULES: readonly DynamicObservationKindRule
     matches: (kind) =>
       /^(auth|user|api_key|device_token|page|model|config|erasure|agent_key)\./.test(kind),
   },
-  // Not a rule: services/observations-rejournal.ts writes
-  // `kind = rawRow.endpoint` (and observations-account-me-rejournal.ts writes
-  // `account_me`). Neither mints a new value space — every kind they can
-  // write is already a registered sync-plane kind above.
+  // Not a rule: services/observations-account-me-rejournal.ts writes
+  // `account_me` (and the removed `rejournal:a22` campaign wrote
+  // `kind = rawRow.endpoint`). Neither mints a new value space — every kind
+  // they wrote is already a registered sync-plane kind above.
 ];
 
 /**
