@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import {
+  appendDomainEvents,
   appendProjectionOnlyDomainEvents,
   applyDmMessagePurchaseFact,
   computeDmMaterialFingerprint,
@@ -15,6 +16,7 @@ import {
   listDmRepairSignalRows,
   reduceDmMessageCandidate,
   setPageOfapiAccountId,
+  supersessionDedupKey,
   upsertOfapiWebhookConfig,
 } from "@agency_hub_core/db";
 import { encryptJson } from "@agency_hub_core/shared";
@@ -406,5 +408,69 @@ describe("PPV purchases in every hub projection (H2, INC-001)", () => {
               (select count(*)::int from dm_message_archive) as dm`,
     );
     expect(rows.rows[0]).toEqual({ ma: 0, dm: 0 });
+  });
+
+  // The ledger is append-only: a repair appends a superseding unlock (dedup
+  // key supersedes:<id>) and leaves the original in place. Purchase facts are
+  // read through domainEventNotSupersededSql, so only the repair may open.
+  it("a superseded unlock opens nothing; the repair that supersedes it does", async (context) => {
+    if (!testDb || !server) {
+      context.skip();
+      return;
+    }
+    const page = await seedPage();
+    const SUPERSEDED = "2000020";
+    const REPAIRED = "2000021";
+    await deliverAndProcess(await sentPpv(SUPERSEDED));
+    await deliverAndProcess(await sentPpv(REPAIRED));
+    await runMessageArchiveProjection(appContext, { accountId: page.id });
+    const unbought = { hotPurchasedAt: null, dmIsOpened: false, maIsOpened: null };
+    expect(await stateOf(page.id, SUPERSEDED)).toEqual(unbought);
+    expect(await stateOf(page.id, REPAIRED)).toEqual(unbought);
+
+    // The wrong-ref unlock (the creator's own id as the fan), then its repair
+    // naming the fan and the message the notification really linked.
+    const unlockedAt = new Date(Date.now() - 5 * 60_000);
+    const original = await appendDomainEvents(appContext.db, page.id, [{
+      type: "message.ppv_unlocked",
+      occurredAt: unlockedAt,
+      fanIdentityRef: CREATOR,
+      conversationRef: CREATOR,
+      messageRef: SUPERSEDED,
+      data: { amountText: "$25.00", amountUsd: 25 },
+      schemaVersion: 1,
+      observationId: 1,
+      dedupKey: "test:ppv-unlock:superseded",
+    }]);
+    const originalId = original.events[0]!.eventId;
+    const repair = await appendDomainEvents(appContext.db, page.id, [{
+      type: "message.ppv_unlocked",
+      occurredAt: unlockedAt,
+      fanIdentityRef: FAN,
+      conversationRef: FAN,
+      messageRef: REPAIRED,
+      data: {
+        amountText: "$25.00",
+        amountUsd: 25,
+        supersedesEventId: originalId,
+        repair: "ofapi_ppv_conversation_ref",
+      },
+      schemaVersion: 2,
+      observationId: 1,
+      dedupKey: supersessionDedupKey(originalId),
+    }]);
+    expect(repair.appended).toBe(1);
+
+    expect(await reconcileRecentPpvPurchases(appContext, { accountId: page.id })).toEqual({
+      hotPurchasedMarked: 1,
+      messageArchiveOpened: 1,
+      dmArchiveOpened: 1,
+    });
+    expect(await stateOf(page.id, SUPERSEDED)).toEqual(unbought);
+    expect(await stateOf(page.id, REPAIRED)).toEqual({
+      hotPurchasedAt: unlockedAt,
+      dmIsOpened: true,
+      maIsOpened: true,
+    });
   });
 });

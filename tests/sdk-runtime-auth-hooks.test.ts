@@ -87,6 +87,43 @@ describe("onAuthError coverage beyond the typed path", () => {
     expect(onAuthError).toHaveBeenCalledTimes(1);
     expect(onAuthError.mock.calls[0]![1]).toBeNull();
   });
+
+  // chat-extension opens every AI stream with `auth: { mode: "bearer" }`: the
+  // SSE opener, not the typed call() path, has to put the token on the wire.
+  it("an SSE stream opened with a bearer token reaches the server authenticated", async () => {
+    const seen: Array<string | null> = [];
+    const server = (async (_url: string | URL | Request, init?: RequestInit) => {
+      const authorization = new Headers(init?.headers).get("authorization");
+      seen.push(authorization);
+      if (authorization !== "Bearer sk-stream") {
+        return new Response("nope", { status: 401 });
+      }
+      return new Response('event: ai\ndata: {"type":"content_delta","text":"hi"}\n\n', {
+        status: 200,
+        headers: { "content-type": "text/event-stream" },
+      });
+    }) as never;
+
+    const onAuthError = vi.fn();
+    const frames: unknown[] = [];
+    const authenticated = streamAiFeature({
+      baseUrl: "http://kernel.test",
+      auth: { mode: "bearer", token: async () => "sk-stream" },
+      onAuthError,
+      fetch: server,
+    }, { feature: "fast-reply", body: {} as never, onFrame: (frame) => frames.push(frame) });
+    await authenticated.done;
+    expect(frames).toEqual([{ type: "content_delta", text: "hi" }]);
+    expect(onAuthError).not.toHaveBeenCalled();
+
+    const anonymous = streamAiFeature({
+      baseUrl: "http://kernel.test",
+      fetch: server,
+    }, { feature: "fast-reply", body: {} as never, onFrame: () => {} });
+    await expect(anonymous.done).rejects.toMatchObject({ category: "auth", status: 401 });
+
+    expect(seen).toEqual(["Bearer sk-stream", null]);
+  });
 });
 
 // Decision 349 §4.5: the kernel's 401 for a revoked or expired device token
