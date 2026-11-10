@@ -450,6 +450,17 @@ export async function rebuildRevenueRollups(
                f.creator_net_amount_mills,
                now()
         from fresh f
+        -- An unchanged row is not even offered to the upsert: on conflict
+        -- locks every conflicting row (WAL) even when its where is false.
+        where not exists (
+          select 1 from revenue_daily rd
+          where rd.platform_account_id = f.platform_account_id
+            and rd.business_date = f.business_date
+            and rd.canonical_type = f.canonical_type
+            and rd.transaction_state = f.transaction_state
+            and (rd.transaction_count, rd.gross_amount_mills, rd.creator_net_amount_mills)
+                is not distinct from (f.transaction_count, f.gross_amount_mills, f.creator_net_amount_mills)
+        )
         on conflict (
           platform_account_id,
           business_date,
@@ -555,6 +566,14 @@ export async function rebuildFollowerRollups(
       )
       select ${platformAccountId}, x.business_date, x.new_followers, x.known_total_followers, now()
       from desired x
+      -- Unchanged rows skip the upsert, which would lock them anyway.
+      where not exists (
+        select 1 from daily_followers df
+        where df.platform_account_id = ${platformAccountId}
+          and df.business_date = x.business_date
+          and (df.new_followers, df.known_total_followers)
+              is not distinct from (x.new_followers, x.known_total_followers)
+      )
       on conflict (
         platform_account_id,
         business_date
@@ -658,6 +677,14 @@ export async function rebuildSubscriberRollups(db: Database, platformAccountId: 
              x.active_subscribers,
              now()
       from desired x
+      -- Unchanged rows skip the upsert, which would lock them anyway.
+      where not exists (
+        select 1 from daily_subscribers stored
+        where stored.platform_account_id = ${platformAccountId}
+          and stored.business_date = x.business_date
+          and (stored.new_subscribers, stored.active_subscribers)
+              is not distinct from (x.new_subscribers, x.active_subscribers)
+      )
       on conflict (
         platform_account_id,
         business_date
