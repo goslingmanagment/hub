@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ShiftReviewChat, ShiftReviewMessage, TeamShiftReviewResponse } from "@agency_hub_core/contracts";
-import { chatBusyIn, fanReturnOf, myMessages, pulseOf, reviewWaits, salesByOrigin, salesSplit, showPasses, sortSummaries, summariesOf, totalsOf } from "@/pages/team/review/shiftReviewView";
+import { chatBusyIn, fanReturnOf, myMessages, pulseOf, reviewWaits, salesByOrigin, salesSplit, showPasses, sortSummaries, summariesOf, totalsOf } from "@agency_hub_core/ui/shiftReview";
 
 // «Разбор смены»: whose a fan's wait is when a page is shared or handed over (2026-11-07). The first version counted
 // a colleague's chats, waits and money as the reviewed chatter's.

@@ -1,14 +1,18 @@
 import { Navigate, useLocation, useParams } from "react-router";
 import { legacyTarget, type LegacyRule } from "@/lib/redirects";
+import { isWorkboardHref } from "@/lib/workboard";
+import { LeaveForWorkboard } from "./ToWorkboard.js";
 
 /**
  * Takes an old address to its new place: its query parameters, its anchor and
  * `location.state` come along. Only `<Navigate replace>`: nothing here writes,
- * and the route it lands on checks the rights.
+ * and the route it lands on checks the rights. A place in Workboard is another
+ * app: there the browser goes, the old address replaced as well.
  */
 export function Legacy({ rule }: { rule: LegacyRule }) {
   const params = useParams();
   const location = useLocation();
   const target = legacyTarget(rule, params, location.search, location.hash);
+  if (isWorkboardHref(target.pathname)) return <LeaveForWorkboard href={`${target.pathname}${target.search}${target.hash}`} />;
   return <Navigate to={target} state={location.state} replace />;
 }

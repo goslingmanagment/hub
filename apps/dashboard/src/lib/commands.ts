@@ -21,6 +21,7 @@ import {
   type Section,
 } from "./sections.js";
 import { platformName } from "./platformUrls.js";
+import { WORKBOARD_SCREENS, workboardHref } from "./workboard.js";
 
 export type CommandGroup = "Разделы" | "Страницы" | "Фаны" | "Настройки" | "Система" | "Параметры" | "Оформление";
 
@@ -65,10 +66,32 @@ function screenHint(section: Section, screen: Screen): string {
   return tab && tab.label !== screen.label ? `${section.label} · ${tab.label}` : section.label;
 }
 
+/** «Команда» is Workboard: the item itself in the short list, its screens by name and by the old words. */
+function workboardCommands(section: Section, role: Role): Command[] {
+  const commands: Command[] = [{ id: `section:${section.id}`, label: section.label, group: "Разделы", to: section.href!, hint: "Workboard", keywords: "workboard" }];
+  for (const screen of WORKBOARD_SCREENS) {
+    if (screen.ownerOnly && role !== "owner") continue;
+    commands.push({
+      id: `workboard:${screen.path}`,
+      label: screen.label,
+      group: "Разделы",
+      to: workboardHref(screen.path),
+      hint: "Workboard",
+      keywords: `${section.label} workboard ${screen.keywords}`,
+      searchOnly: true,
+    });
+  }
+  return commands;
+}
+
 function sectionCommands(role: Role): Command[] {
   const commands: Command[] = [];
   for (const section of SECTIONS) {
     if (section.id === "page") continue;
+    if (section.href) {
+      commands.push(...workboardCommands(section, role));
+      continue;
+    }
     const visibleTabs = visibleSectionTabs(section, role);
     const firstOfTab = new Set(visibleTabs.map((item) => tabRow(item, role)[0]?.id));
     const group = sectionGroup(section);

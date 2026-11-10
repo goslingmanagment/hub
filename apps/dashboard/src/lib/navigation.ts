@@ -1,5 +1,6 @@
 import { pathSegment } from "./path.js";
 import { isChatterSite, isConsoleSite } from "./sites.js";
+import { workboardHref } from "./workboard.js";
 import type { Period, PeriodOption, SpenderPeriodOption } from "../stores/periodStore.js";
 
 /**
@@ -146,7 +147,8 @@ const SETTINGS_TAB_ROUTES: Readonly<Record<SettingsTab, string>> = {
   pages: "/settings/pages",
   models: "/settings/pages",
   credentials: "/settings/pages",
-  users: "/team/people",
+  // Workboard's: a real navigation, not the console's router.
+  users: workboardHref("access"),
   personas: "/settings/ai/personas",
   notifications: "/settings/notifications",
   collection: "/system/onlyfans-api/collection",

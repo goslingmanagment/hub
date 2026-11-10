@@ -9,9 +9,8 @@ import { ruPlural } from "./plural.js";
 
 /**
  * A held send of the chat extension and its manual resolve, as words and a
- * body ready to send (chat-extension H-7e). One copy for the console's cabinet
- * page (apps/dashboard/src/pages/clientHeldSendsView.ts re-exports these) and
- * Workboard's Решения: nothing preselected, «why» required, a message id only
+ * body ready to send (chat-extension H-7e), for Workboard's Решения (the
+ * console's page it replaced said the same): nothing preselected, «why» required, a message id only
  * with «sent», the contract's schema has the last word, every refusal in words.
  * The words name the platform of the send's page — 92 % of held sends are
  * Fansly's; an OnlyFans send reads as the console always said. Times are

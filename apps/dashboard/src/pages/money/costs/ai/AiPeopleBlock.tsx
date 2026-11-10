@@ -10,6 +10,7 @@ import { formatAiUsd, formatCount, formatDateTime, formatDuration } from "@/lib/
 import { ruPlural } from "@/lib/plural";
 import { AI_LIMIT_STATUS } from "@/lib/statusWords";
 import { ROLE_WORD, anyFeatureLabel, callsWord, compact, sharePct, todayMoscow } from "./aiShared.js";
+import { workboardPersonHref } from "@/lib/workboard";
 
 type Spend = AdminAiSpendResponse;
 type UsageRow = AdminChatterUsageResponse["rows"][number];
@@ -180,7 +181,7 @@ export function AiPeopleBlock({ data, range }: { data: Spend; range: { from: str
                           <ChevronRight size={16} aria-hidden="true" />
                         </button>
                         <div className="min-w-0">
-                          <Link className="money-link font-medium" to={isChatter ? `/team/chatters/${entry.userId}` : `/team/people/${entry.userId}`}>{entry.username}</Link>
+                          <a className="money-link font-medium" href={workboardPersonHref(entry.userId, isChatter)}>{entry.username}</a>
                           {entry.role && <div className="ai-sub">{ROLE_WORD[entry.role] ?? entry.role}</div>}
                         </div>
                       </div>

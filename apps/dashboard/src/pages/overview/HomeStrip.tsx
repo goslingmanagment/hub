@@ -1,8 +1,9 @@
-import { Link } from "react-router";
 import { useAuthMe } from "@/api/queries";
 import { useTeamShifts } from "@/api/team";
 import { useWaitingCounts, type WaitingRow } from "@/api/waiting";
+import { AppLink } from "@/components/shared/AppLink";
 import { formatDuration, formatTimeOfDay } from "@/lib/format";
+import { workboardHref, workboardPersonHref } from "@/lib/workboard";
 
 /**
  * The two lines above the money on Главная: what waits for the owner and who is
@@ -44,7 +45,7 @@ function WaitingLine({ role }: { role: string }) {
       <div className="home-strip-items">
         {loading && rows.length === 0 && <span className="text-text-muted">Проверяем…</span>}
         {rows.map((row) => (
-          <Link key={row.id} to={row.to} className="home-strip-item">
+          <AppLink key={row.id} to={row.to} className="home-strip-item">
             {DOT[row.id] && <span className={`status-dot ${DOT[row.id]}`} aria-hidden="true" />}
             {row.count === null ? (
               <span>{SHORT_LABEL[row.id]}: <span className="text-text-muted">не удалось проверить</span></span>
@@ -56,7 +57,7 @@ function WaitingLine({ role }: { role: string }) {
                 <span className="home-count">{row.capped ? `${row.count}+` : row.count}</span>
               </>
             )}
-          </Link>
+          </AppLink>
         ))}
         {failed.length > 0 && <button type="button" className="link" onClick={refetchAll}>Повторить</button>}
       </div>
@@ -75,7 +76,7 @@ function ShiftsLine() {
 
   return (
     <div className="home-strip-row">
-      <Link to="/team/shifts?page=all" className="home-strip-label">На смене</Link>
+      <a href={workboardHref("shifts")} className="home-strip-label">На смене</a>
       <div className="home-strip-items">
         {!data && shifts.isError && (
           <span className="text-text-muted">
@@ -95,11 +96,11 @@ function ShiftsLine() {
           const shown = pages.length > 0 ? pages : shift.pages.slice(0, 1).map((page) => page.pageLabel);
           const minutes = Math.max(0, Math.round((now - Date.parse(shift.startedAt)) / 60_000));
           return (
-            <Link key={shift.userId} to={`/team/chatters/${shift.userId}`} className="home-strip-item">
+            <a key={shift.userId} href={workboardPersonHref(shift.userId)} className="home-strip-item">
               <span className="font-medium">{shift.username}</span>
               <span className="text-text-secondary">{shown.slice(0, 2).join(", ")}{shown.length > 2 ? ` +${shown.length - 2}` : ""}</span>
               <span className="text-text-muted">{formatDuration(minutes)}</span>
-            </Link>
+            </a>
           );
         })}
       </div>

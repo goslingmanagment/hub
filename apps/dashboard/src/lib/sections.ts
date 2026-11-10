@@ -9,6 +9,7 @@ import { matchPath } from "react-router";
 import type { Platform } from "@agency_hub_core/shared";
 import { decodedPath, pathSegment } from "./path.js";
 import type { PeriodKey } from "./period.js";
+import { WORKBOARD_HREF } from "./workboard.js";
 import { UNTIL_REBUILT_FANS_PAGE } from "./sections/untilRebuilt/fans-page.js";
 import { UNTIL_REBUILT_HOME_MONEY } from "./sections/untilRebuilt/home-money.js";
 import { UNTIL_REBUILT_PUBLICATIONS } from "./sections/untilRebuilt/publications.js";
@@ -51,7 +52,7 @@ export interface ScreenPeriod {
   default?: PeriodKey;
 }
 
-export type SectionId = "home" | "money" | "fans" | "stats" | "publications" | "team" | "settings" | "system" | "page";
+export type SectionId = "home" | "money" | "fans" | "stats" | "publications" | "team" | "applications" | "settings" | "system" | "page";
 
 export interface Crumb {
   label: string;
@@ -111,7 +112,6 @@ const UNTIL_REBUILT: Readonly<Record<string, ScreenGap>> = {
 const COMMON_PERIODS: readonly PeriodKey[] = ["today", "7d", "30d", "all"];
 const SPENDER_PERIODS: readonly PeriodKey[] = ["today", "7d", "30d", "90d", "180d", "all"];
 const STATS_PERIODS: readonly PeriodKey[] = ["7d", "30d", "90d", "180d", "365d"];
-const CHATTER_PERIODS: readonly PeriodKey[] = ["7d", "14d", "30d"];
 
 const REPORTED: readonly Platform[] = ["fansly", "onlyfans"];
 const FANSLY: readonly Platform[] = ["fansly"];
@@ -276,102 +276,20 @@ export const SCREENS: readonly Screen[] = [
     keywords: "посты стена расписание утвердить настройки публикации",
   },
 
-  // ── Команда ────────────────────────────────────────────────────────────
+  // ── Анкеты ─────────────────────────────────────────────────────────
+  // «Команда» is Workboard now (lib/workboard.ts); the questionnaires stayed here, at their old addresses.
   {
-    id: "team-shifts", path: "/team/shifts", label: "Заработок", title: "Смены", section: "team",
-    why: "Кто сколько заработал за смены по дням недели, рост и падение, кто на смене сейчас.",
-    pageFilter: "any", platforms: REPORTED,
-    platformsNote: "Hub не собирает данные Telegram.",
-    // Its own: a calendar week with arrows, or 14 / 30 days (the screen's header).
-    keywords: "команда смены кто работал заработок продажи графики неделя на смене без автора",
-  },
-  {
-    id: "team-review", path: "/team/review", label: "Разбор смены", title: "Разбор смены", section: "team", ownerOnly: true,
-    why: "Как шла смена по минутам, с кем и о чём чаттер писал, откуда взят текст.",
-    pageFilter: "none",
-    keywords: "аудит контроль чаттера переписка диалоги темп скорость ответа нейрослоп ии текст пульс",
-  },
-  {
-    id: "team-coverage", path: "/team/coverage", label: "Кто ждал", title: "Кто ждал", section: "team",
-    why: "Когда фаны писали, а никого не было; кого не поприветствовали.",
-    pageFilter: "any", platforms: REPORTED,
-    period: { class: "shared", options: ["7d", "30d"] },
-    keywords: "покрытие пустые часы приветствия рассылки",
-  },
-  {
-    id: "team-held-sends", path: "/team/held-sends", label: "Проверить отправки", title: "Проверить отправки", section: "team",
-    why: "Ушло ли сообщение, о котором расширение не отчиталось.",
-    pageFilter: "any", platforms: ["onlyfans"],
-    platformsNote: "Проверка отправок есть только у страниц OnlyFans.", platformsShort: "только OnlyFans",
-    keywords: "зависшие отправки разбор",
-  },
-  {
-    id: "team-chatters", path: "/team/chatters", label: "Чаттеры", title: "Чаттеры", section: "team",
-    why: "Сравнение чаттеров за период. Это ориентир, а не основание для оплаты.",
-    pageFilter: "all",
-    period: { class: "shared", options: CHATTER_PERIODS },
-    keywords: "числа кабинет чаттера выручка",
-  },
-  {
-    id: "team-chatter", path: "/team/chatters/:userId", label: "Чаттер", title: "Чаттер", section: "team",
-    why: "Всё о работе одного человека.",
-    pageFilter: "all",
-    period: { class: "shared", options: CHATTER_PERIODS },
-    deep: true, notSearched: true,
-    crumbs: () => [{ label: "Команда", to: "/team/shifts" }, { label: "Чаттеры", to: "/team/chatters" }],
-  },
-  {
-    id: "team-payouts", path: "/team/payouts", label: "Выплаты", title: "Выплаты", section: "team",
-    why: "Споры, кто не подтвердил смену, выгрузка в таблицу выплат.",
-    pageFilter: "all",
-    keywords: "отчёты смен споры выгрузка таблица выплат",
-  },
-  {
-    id: "team-sales", path: "/team/sales", label: "Цена и скорость", title: "Цена и скорость", section: "team",
-    why: "Какая цена платных сообщений и какая скорость ответа дают покупки.",
-    pageFilter: "any", platforms: REPORTED,
-    period: { class: "shared", options: ["7d", "30d"] },
-    keywords: "продажи ppv платные сообщения конверсия скорость ответа",
-  },
-  {
-    id: "team-win-back", path: "/team/win-back", label: "Возврат фанов", title: "Возврат фанов", section: "team",
-    why: "Какие подходы возвращают фанов и у кого.",
-    pageFilter: "all",
-    // Its results ripen over 72 h, 7 and 30 days: its own period, a month by default.
-    period: { class: "own", options: ["7d", "30d", "90d"], default: "30d" },
-    keywords: "подходы продажи вернуть",
-  },
-  {
-    id: "team-customs", path: "/team/customs", label: "Кастомы", title: "Кастомы", section: "team",
-    why: "Какие кастомы заказаны или оплачены и не отданы.",
-    pageFilter: "any", platforms: REPORTED,
-    keywords: "заказы продажи",
-  },
-  {
-    id: "team-people", path: "/team/people", label: "Сотрудники", title: "Сотрудники и доступ", section: "team", ownerOnly: true,
-    why: "Кто в команде, у кого какой доступ, кого пригласить.",
-    pageFilter: "none",
-    keywords: "команда доступ приглашение пользователи устройства логины",
-  },
-  {
-    id: "team-person", path: "/team/people/:userId", label: "Карточка сотрудника", title: "Карточка сотрудника", section: "team", ownerOnly: true,
-    why: "Страницы, входы и устройства человека.",
-    pageFilter: "none",
-    deep: true, notSearched: true,
-    crumbs: () => [{ label: "Команда", to: "/team/shifts" }, { label: "Сотрудники", to: "/team/people" }],
-  },
-  {
-    id: "team-applications", path: "/team/applications", label: "Анкеты", title: "Анкеты моделей", section: "team", ownerOnly: true,
+    id: "team-applications", path: "/team/applications", label: "Анкеты", title: "Анкеты моделей", section: "applications", ownerOnly: true,
     why: "Кто сейчас заполняет анкету модели на сайте, кто бросил, кто отправил.",
     pageFilter: "none",
     keywords: "анкета модели сайт найм заявки кандидатки",
   },
   {
-    id: "team-application", path: "/team/applications/:ref", label: "Анкета", title: "Анкета модели", section: "team", ownerOnly: true,
+    id: "team-application", path: "/team/applications/:ref", label: "Анкета", title: "Анкета модели", section: "applications", ownerOnly: true,
     why: "Ответы одной анкеты по разделам.",
     pageFilter: "none",
     deep: true, notSearched: true,
-    crumbs: () => [{ label: "Команда", to: "/team/shifts" }, { label: "Анкеты", to: "/team/applications" }],
+    crumbs: () => [{ label: "Анкеты", to: "/team/applications" }],
   },
 
   // ── Настройки ──────────────────────────────────────────────────────────
@@ -656,8 +574,11 @@ export interface Section {
   label: string;
   /** The screen header's title: the section, not the tab. */
   title: string;
-  icon: "House" | "Wallet" | "Heart" | "ChartColumn" | "CalendarClock" | "Users" | "Settings" | "Wrench";
+  icon: "House" | "Wallet" | "Heart" | "ChartColumn" | "CalendarClock" | "Users" | "ClipboardList" | "Settings" | "Wrench";
   ownerOnly?: boolean;
+  /** The item leaves the console for another app on this host (Workboard): a full
+   *  navigation in the same tab, no screens of its own here. */
+  href?: string;
   /** Under the rule at the bottom of the menu. */
   lower?: boolean;
   nav: "tabs" | "side" | "none";
@@ -702,15 +623,13 @@ export const SECTIONS: readonly Section[] = [
     tabs: [tab("publications", "Публикации", "publications")],
   },
   {
-    id: "team", label: "Команда", title: "Команда", icon: "Users", nav: "tabs",
-    tabs: [
-      tab("shifts", "Смены", "team-shifts", "team-review", "team-coverage", "team-held-sends"),
-      tab("chatters", "Чаттеры", "team-chatters", "team-chatter"),
-      tab("payouts", "Выплаты", "team-payouts"),
-      tab("sales", "Продажи", "team-sales", "team-win-back", "team-customs"),
-      tab("people", "Сотрудники", "team-people", "team-person"),
-      tab("applications", "Анкеты", "team-applications", "team-application"),
-    ],
+    // Workboard: the owner's and the team leads' control of the team (owner, 2026-11-10).
+    id: "team", label: "Команда", title: "Команда", icon: "Users", nav: "none", href: WORKBOARD_HREF,
+    tabs: [],
+  },
+  {
+    id: "applications", label: "Анкеты", title: "Анкеты моделей", icon: "ClipboardList", ownerOnly: true, nav: "none",
+    tabs: [tab("applications", "Анкеты", "team-applications", "team-application")],
   },
   {
     id: "settings", label: "Настройки", title: "Настройки", icon: "Settings", ownerOnly: true, lower: true, nav: "side",
@@ -761,6 +680,7 @@ export function tabOfScreen(section: Section, screenId: string): SectionTab | nu
 
 /** Where a menu item leads for this role. */
 export function sectionHome(section: Section, role: Role): string {
+  if (section.href) return section.href;
   const first = visibleSectionTabs(section, role)[0];
   const screen = first ? tabRow(first, role)[0] : undefined;
   return screen?.path ?? "/";

@@ -9,6 +9,7 @@
 import { matchPath } from "react-router";
 import { ALL_PAGES_PARAM } from "./pageParam.js";
 import { decodedPath, pathSegment } from "./path.js";
+import { teamToWorkboard, workboardHref } from "./workboard.js";
 
 export type RouteParams = Readonly<Record<string, string | undefined>>;
 
@@ -106,30 +107,7 @@ export const LEGACY_ROUTES: ReadonlyArray<LegacyRule & { path: string }> = [
   { path: "usage", to: "/money/costs/ai" }, // 21
   { path: "ai-spend", to: "/money/costs/ai" }, // 22
   { path: "publication-settings", to: "/publications", set: { panel: "settings" } }, // 23
-  { path: "team", to: "/team/shifts" }, // 24
-  {
-    path: "team/authors", // 25
-    to: (_, query) => {
-      const period: Readonly<Record<string, string>> = { "1": "24h", "3": "3d", "7": "7d" };
-      query.set("period", period[query.get("days") ?? "7"] ?? "7d");
-      query.delete("days");
-      return "/team/shifts";
-    },
-    hash: "#authors",
-  },
-  { path: "team/approaches", to: "/team/win-back", days: "days" }, // 26
-  { path: "team/numbers", to: "/team/chatters" }, // 27
-  { path: "team/shift-reports", to: "/team/payouts" }, // 28
-  {
-    path: "team/chatter-stats", // 29, 30
-    days: "days",
-    to: (_, query) => {
-      const user = query.get("user");
-      query.delete("user");
-      return user ? `/team/chatters/${pathSegment(user)}` : "/team/chatters";
-    },
-  },
-  { path: "held-sends", to: "/team/held-sends" }, // 31
+  // 24–31, the old addresses of «Команда»: Workboard's now (lib/workboard.ts).
   { path: "agent-hydration", to: "/system/history-requests" }, // 32
   { path: "incidents", to: "/system/failures" }, // 33
   { path: "analytics", to: "/stats", rename: { range: "period" } }, // 34
@@ -182,7 +160,7 @@ const SETTINGS_TAB_TARGET: Readonly<Record<string, string>> = {
   pages: "/settings/pages",
   models: "/settings/pages",
   credentials: "/settings/pages",
-  users: "/team/people",
+  users: workboardHref("access"),
   personas: "/settings/ai/personas",
   notifications: "/settings/notifications",
   collection: "/system/onlyfans-api/collection",
@@ -213,9 +191,12 @@ export const SETTINGS_INDEX_RULE: LegacyRule = {
 
 /**
  * The address an old one lands on, or null if this address is not an old one.
- * The table test reads this; the routes in routes/legacy.tsx apply the same rules.
+ * The table test reads this; the routes in routes/legacy.tsx and
+ * routes/ToWorkboard.tsx apply the same rules.
  */
-export function resolveLegacyUrl(url: string): string | null {
+export function resolveLegacyUrl(url: string, today?: string): string | null {
+  const workboard = teamToWorkboard(url, today);
+  if (workboard !== null) return workboard;
   const parsed = new URL(url, "https://hub.invalid");
   const { search, hash } = parsed;
   const pathname = decodedPath(parsed.pathname);

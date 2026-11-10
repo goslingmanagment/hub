@@ -33,16 +33,30 @@ const REDIRECTS: ReadonlyArray<readonly [number | string, string, string]> = [
   [21, "/usage", "/money/costs/ai"],
   [22, "/ai-spend", "/money/costs/ai"],
   [23, "/publication-settings", "/publications?panel=settings"],
-  [24, "/team", "/team/shifts"],
-  [25, "/team/authors?days=1", "/team/shifts?period=24h#authors"],
-  ["25, 3 days", "/team/authors?days=3", "/team/shifts?period=3d#authors"],
-  ["25, no days", "/team/authors", "/team/shifts?period=7d#authors"],
-  [26, "/team/approaches?days=90", "/team/win-back?period=90d"],
-  [27, "/team/numbers", "/team/chatters"],
-  [28, "/team/shift-reports", "/team/payouts"],
-  [29, "/team/chatter-stats?user=7&days=14", "/team/chatters/7?period=14d"],
-  [30, "/team/chatter-stats?days=30", "/team/chatters?period=30d"],
-  [31, "/held-sends?state=resolved&page=mia-of&offset=25", "/team/held-sends?state=resolved&page=mia-of&offset=25"],
+  // 24–31 and «Команда» itself: Workboard's screens (lib/workboard.ts, old-new-map.md §5). Today is 2026-11-10.
+  [24, "/team", "/workboard/shifts"],
+  [25, "/team/authors?days=1", "/workboard/shifts?authors=1"],
+  [26, "/team/approaches?days=90", "/workboard/sales/win-back?from=2026-08-13&to=2026-11-10"],
+  [27, "/team/numbers", "/workboard/people"],
+  [28, "/team/shift-reports", "/workboard/payouts"],
+  [29, "/team/chatter-stats?user=7&days=14", "/workboard/people/7?days=14"],
+  [30, "/team/chatter-stats?days=30", "/workboard/people?days=30"],
+  [31, "/held-sends?state=resolved&page=mia-of&offset=25", "/workboard/decisions?page=mia-of#held"],
+  ["Смены, a week", "/team/shifts?at=2026-11-03&page=mia-1", "/workboard/shifts?week=2026-11-03&page=mia-1"],
+  ["Смены, 30 days, every page", "/team/shifts?period=30d&page=all#authors", "/workboard/shifts?days=30&authors=1"],
+  ["a shift", "/team/review?user=4&at=2026-11-06T06:16:00.000Z&chat=fansly%3A77&pick=10-40&kind=touch&sort=time", "/workboard/shifts/4/2026-11-06T09:16?chat=fansly%3A77&span=10-40&show=all"],
+  ["a shift, its money", "/team/review?user=4&at=2026-11-06T06:16:30.500Z&show=money", "/workboard/shifts/4/2026-11-06T06%3A16%3A30.500Z?show=paid"],
+  ["the choice of a shift", "/team/review?who=4", "/workboard/people/4"],
+  ["Кто ждал", "/team/coverage?period=7d&page=mia-1", "/workboard/sales/greetings?from=2026-11-04&to=2026-11-10&page=mia-1"],
+  ["Чаттер", "/team/chatters/9?period=14d", "/workboard/people/9?days=14"],
+  ["Выплаты", "/team/payouts?from=2026-11-01&to=2026-11-07&chatter=alex.k#unconfirmed", "/workboard/payouts?from=2026-11-01&to=2026-11-07&chatter=alex.k"],
+  ["Споры", "/team/payouts#disputes", "/workboard/decisions#disputes"],
+  ["Цена и скорость", "/team/sales?period=30d", "/workboard/sales/price?days=30"],
+  ["Возврат фанов opens on 30 days", "/team/win-back", "/workboard/sales/win-back?days=30"],
+  ["Кастомы", "/team/customs?page=mia-1", "/workboard/decisions?page=mia-1#customs"],
+  ["Сотрудники", "/team/people", "/workboard/access"],
+  ["Карточка сотрудника", "/team/people/12", "/workboard/people/12/access"],
+  ["a removed screen", "/team/whatever?x=1", "/workboard/shifts"],
   [32, "/agent-hydration", "/system/history-requests"],
   [33, "/incidents", "/system/failures"],
   [34, "/analytics?page=mia-1&range=90d", "/stats?page=mia-1&period=90d"],
@@ -58,7 +72,7 @@ const REDIRECTS: ReadonlyArray<readonly [number | string, string, string]> = [
   [42, "/settings?tab=pages&page=mia-1", "/settings/pages"],
   [43, "/settings?tab=models", "/settings/pages"],
   [44, "/settings?tab=credentials", "/settings/pages"],
-  [45, "/settings?tab=users", "/team/people"],
+  [45, "/settings?tab=users", "/workboard/access"],
   [46, "/settings?tab=personas", "/settings/ai/personas"],
   [47, "/settings?tab=collection", "/system/onlyfans-api/collection"],
   [48, "/settings?tab=notifications", "/settings/notifications"],
@@ -88,7 +102,7 @@ const REDIRECTS: ReadonlyArray<readonly [number | string, string, string]> = [
 
 describe("old addresses (design/ia.md §8.2)", () => {
   it.each(REDIRECTS)("row %s: %s lands on %s", (_row, from, to) => {
-    expect(resolveLegacyUrl(from)).toBe(to);
+    expect(resolveLegacyUrl(from, "2026-11-10")).toBe(to);
   });
 
   it("carries a parameter it does not know", () => {
@@ -100,16 +114,17 @@ describe("old addresses (design/ia.md §8.2)", () => {
     expect(resolveLegacyUrl("/settings?tab=engine&page=a%2Fb")).toBe("/system/collection/a%2Fb");
   });
 
-  it.each(["/", "/?period=30d", "/?row=mia-1&chart=page:mia-1&sort=decline&period=30d", "/stats", "/stats?period=30d&page=mia-1", "/pages/mia-1", "/pages/mia-1?period=7d", "/pages/mia-1/promo", "/publications?page=mia-1&status=draft&window=all", "/team/customs", "/account", "/join", "/login"])(
+  it.each(["/", "/?period=30d", "/?row=mia-1&chart=page:mia-1&sort=decline&period=30d", "/stats", "/stats?period=30d&page=mia-1", "/pages/mia-1", "/pages/mia-1?period=7d", "/pages/mia-1/promo", "/publications?page=mia-1&status=draft&window=all", "/team/applications", "/team/applications/abc", "/account", "/join", "/login"])(
     "leaves %s where it is",
     (url) => {
       expect(resolveLegacyUrl(url)).toBeNull();
     },
   );
 
-  it("every target is a screen of the console", () => {
+  it("every target is a screen of the console or Workboard's", () => {
     for (const [row, , to] of REDIRECTS) {
       const pathname = new URL(to, "https://hub.invalid").pathname;
+      if (pathname.startsWith("/workboard/")) continue;
       expect(matchScreen(pathname), `row ${row}: ${to}`).not.toBeNull();
     }
   });

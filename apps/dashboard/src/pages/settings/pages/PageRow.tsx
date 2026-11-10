@@ -9,6 +9,7 @@ import { buildPageCollectionRoute, buildPageRoute, buildPageSectionRoute } from 
 import { platformName } from "@/lib/platformUrls";
 import { errorCode, errorStatus, toastError } from "../settingsFeedback.js";
 import type { PageCollection } from "./pageCollection.js";
+import { workboardHref, workboardPersonHref } from "@/lib/workboard";
 
 export interface PageWorker {
   userId: number;
@@ -28,14 +29,14 @@ function Workers({ workers }: { workers: readonly PageWorker[] | null }) {
     <span className="settings-workers">
       {shown.map((worker, index) => (
         <span key={worker.userId}>
-          <Link to={`/team/people/${worker.userId}`} className={`settings-link ${worker.invited ? "text-text-secondary" : ""}`}>
+          <a href={workboardPersonHref(worker.userId, false)} className={`settings-link ${worker.invited ? "text-text-secondary" : ""}`}>
             {worker.username}
-          </Link>
+          </a>
           {worker.invited && <span className="text-text-secondary"> (приглашён)</span>}
           {index < shown.length - 1 || rest > 0 ? ", " : ""}
         </span>
       ))}
-      {rest > 0 && <Link to="/team/people" className="settings-link text-text-secondary">ещё {rest}</Link>}
+      {rest > 0 && <a href={workboardHref("access")} className="settings-link text-text-secondary">ещё {rest}</a>}
     </span>
   );
 }

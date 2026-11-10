@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useLocation } from "react-router";
 import {
+  ArrowUpRight,
   CalendarClock,
   ChartColumn,
   ChevronsUpDown,
+  ClipboardList,
   Heart,
   House,
   LogOut,
@@ -36,6 +38,7 @@ const ICONS: Readonly<Record<Section["icon"], LucideIcon>> = {
   ChartColumn,
   CalendarClock,
   Users,
+  ClipboardList,
   Settings,
   Wrench,
 };
@@ -157,6 +160,16 @@ export function Sidebar({ user, onOpenPalette }: SidebarProps) {
 
   const item = (section: Section) => {
     const Icon = ICONS[section.icon];
+    // Another app on this host (Workboard): the browser goes there, in this tab.
+    if (section.href) {
+      return (
+        <a key={section.id} href={section.href} className="nav-item" title="Откроется Workboard">
+          <Icon size={18} strokeWidth={1.75} aria-hidden="true" />
+          <span className="min-w-0 truncate">{section.label}</span>
+          <ArrowUpRight size={14} strokeWidth={1.75} aria-hidden="true" className="nav-away" />
+        </a>
+      );
+    }
     return (
       <Link
         key={section.id}

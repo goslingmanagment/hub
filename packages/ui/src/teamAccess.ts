@@ -2,9 +2,8 @@ import { CHATTER_SITE_ORIGIN, chatterSiteOriginFor } from "./sites.js";
 
 /**
  * The people's access, without React: who is in what state, the one-time join
- * link and its Telegram text, the words of links and devices. One copy for the
- * console's people screens (apps/dashboard/src/pages/team/people/teamView.ts
- * re-exports these) and Workboard's Доступ.
+ * link and its Telegram text, the words of links and devices, for Workboard's
+ * Доступ (the console's people screens it replaced said the same).
  */
 
 export type AccessRole = "owner" | "team_lead" | "chatter";
