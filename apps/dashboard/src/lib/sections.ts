@@ -120,6 +120,12 @@ export const SCREENS: readonly Screen[] = [
 
   // ── Деньги ─────────────────────────────────────────────────────────────
   {
+    id: "budgets", path: "/money/budgets", label: "Бюджеты", title: "Бюджеты", section: "money", ownerOnly: true,
+    why: "Сколько пришло и ушло за месяц, против плана, и сколько вложено в трафик.",
+    pageFilter: "all",
+    keywords: "бюджет план факт доходы расходы прибыль касса трафик месяц ledger закрытие",
+  },
+  {
     id: "transactions", path: "/money/transactions", label: "Операции", title: "Операции", section: "money",
     why: "Из каких операций сложилась сумма.",
     pageFilter: "any", platforms: REPORTED,
@@ -572,6 +578,7 @@ export const SECTIONS: readonly Section[] = [
   {
     id: "money", label: "Деньги", title: "Деньги", icon: "Wallet", nav: "tabs",
     tabs: [
+      tab("budgets", "Бюджеты", "budgets"),
       tab("costs", "Расходы", "costs-ai", "costs-anthropic", "costs-onlyfans-api"),
       tab("transactions", "Операции", "transactions"),
     ],

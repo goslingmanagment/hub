@@ -177,4 +177,151 @@
     .home-strip-label { flex: 0 0 auto; }
     .data-table tr.row-detail > td { padding: 12px 16px 16px; }
   }
+
+  /* ── Деньги → Бюджеты ───────────────────────────────────────────────── */
+  .budget-tiles { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .budget-tiles .stat-meta .budget-bar { margin: 8px 0 6px; }
+  .budget-tile-line { display: block; }
+  .budget-grid {
+    display: grid;
+    grid-template-columns: repeat(12, minmax(0, 1fr));
+    gap: 24px;
+    align-items: start;
+  }
+  .budget-col { display: grid; gap: 24px; min-width: 0; }
+  .budget-col-left { grid-column: span 5; }
+  .budget-col-right { grid-column: span 7; }
+  @media (max-width: 1199px) {
+    .budget-col-left, .budget-col-right { grid-column: 1 / -1; }
+    .budget-col-right { order: -1; }
+  }
+  @media (max-width: 899px) {
+    .budget-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  }
+
+  .budget-card-aside { display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: 0 4px; font-size: 14px; line-height: 20px; }
+  .budget-total { font-size: 17px; font-weight: 600; line-height: 24px; font-variant-numeric: tabular-nums; color: var(--color-text-primary); }
+  .budget-muted { color: var(--color-text-muted); }
+  .budget-over { color: var(--color-down); }
+  .budget-good { color: var(--color-up); }
+  .budget-empty { padding: 4px 24px 20px; font-size: 14px; line-height: 20px; color: var(--color-text-secondary); }
+  .budget-plan-button { margin-left: 8px; gap: 6px; }
+
+  /* One scale per card: the fill is the fact, the tick the plan, past the plan in the overspend colour. */
+  .budget-bar { position: relative; display: block; height: 8px; border-radius: 4px; background: var(--color-track); }
+  .budget-bar-fill { position: absolute; inset: 0 auto 0 0; display: block; border-radius: 4px; background: var(--color-chart-blue); }
+  .budget-bar-neutral { background: var(--color-chart-violet); }
+  .budget-bar-over { position: absolute; top: 0; bottom: 0; display: block; border-radius: 0 4px 4px 0; background: var(--color-down); }
+  .budget-bar-mark { position: absolute; top: -3px; bottom: -3px; display: block; width: 2px; border-radius: 1px; background: var(--color-text-primary); }
+
+  .budget-table td, .budget-table th { vertical-align: middle; }
+  .budget-table td { padding-block: 10px; }
+  .budget-table .budget-bar-cell { width: 34%; min-width: 96px; }
+  .budget-amount { font-weight: 500; white-space: nowrap; }
+  .budget-share { width: 1%; font-size: 13px; white-space: nowrap; color: var(--color-text-muted); }
+  .budget-table .budget-bar-narrow { width: 28%; min-width: 64px; }
+  .budget-line-name { display: flex; align-items: center; gap: 6px; min-width: 0; margin-left: -8px; }
+  .budget-page-name { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  @media (max-width: 899px) { .budget-col-month { display: none; } }
+  @media (max-width: 639px) {
+    .budget-table .budget-bar-cell { display: none; }
+    .budget-card .card-header { padding-inline: 16px; }
+    .budget-plan-button { margin-left: 0; }
+  }
+  .budget-line-label { font-weight: 500; white-space: nowrap; }
+  .budget-line-sub { overflow: hidden; font-size: 13px; white-space: nowrap; text-overflow: ellipsis; }
+  .budget-expander-space { flex: 0 0 28px; }
+  .budget-table tbody tr.budget-row-open { cursor: pointer; }
+  .budget-table tbody tr.is-expanded td { background: var(--color-hover-alt); }
+  .budget-foot td { border-top: 1px solid var(--color-border); font-weight: 600; }
+  .budget-foot td:first-child { padding-left: 24px; }
+  .budget-foot-quiet td { font-weight: 400; color: var(--color-text-secondary); }
+  .budget-foot-quiet + .budget-foot td { border-top: 0; }
+
+  .budget-payments > td { padding: 0 24px 12px 44px !important; background: var(--color-hover-alt); }
+  .budget-payment-list { display: grid; gap: 2px; }
+  .budget-payment {
+    display: grid;
+    grid-template-columns: 64px minmax(0, 14rem) minmax(0, 1fr) auto;
+    gap: 12px;
+    align-items: baseline;
+    padding: 4px 0;
+    font-size: 14px;
+    line-height: 20px;
+  }
+  .budget-payment + .budget-payment { border-top: 1px solid var(--color-border-light); }
+  .budget-payment-date { color: var(--color-text-secondary); font-variant-numeric: tabular-nums; }
+  .budget-payment-who { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  .budget-payment-note { overflow: hidden; color: var(--color-text-muted); white-space: nowrap; text-overflow: ellipsis; }
+  .budget-payment-sum { white-space: nowrap; text-align: right; font-variant-numeric: tabular-nums; }
+  .budget-payment-num { display: inline-block; min-width: 40px; margin-left: 8px; font-size: 12px; }
+  @media (max-width: 639px) {
+    .budget-payments > td { padding: 0 16px 12px !important; }
+    .budget-payment { grid-template-columns: 56px minmax(0, 1fr) auto; }
+    .budget-payment-note { display: none; }
+  }
+
+  .budget-chip {
+    display: inline-block; margin-left: 8px; padding: 0 6px; border-radius: 4px;
+    background: var(--color-active-bg); font-size: 12px; line-height: 18px; color: var(--color-text-secondary); white-space: nowrap;
+  }
+  .budget-chip-warn { background: var(--color-warning-soft); color: var(--color-warning-text); }
+
+  .budget-owner { justify-content: flex-start; gap: 16px; }
+  .budget-owner-sums { display: inline-flex; gap: 16px; }
+  .budget-owner-sums b { font-weight: 600; color: var(--color-text-primary); font-variant-numeric: tabular-nums; }
+
+  /* Traffic by month: one column a month, stacked by channel. */
+  .budget-trend {
+    display: grid;
+    grid-auto-columns: minmax(0, 1fr);
+    grid-auto-flow: column;
+    gap: 12px;
+    padding: 16px 24px 20px;
+    border-top: 1px solid var(--color-border-light);
+  }
+  .budget-trend-col { display: flex; flex-direction: column; align-items: stretch; min-width: 0; }
+  .budget-trend-bar { align-items: flex-end; justify-content: center; width: 100%; height: 88px; }
+  .budget-trend-stack { display: flex; flex-direction: column-reverse; width: 100%; max-width: 40px; overflow: hidden; border-radius: 4px 4px 0 0; opacity: 0.55; }
+  .budget-trend-col.is-current .budget-trend-stack { opacity: 1; }
+  .budget-trend-part { display: block; min-height: 2px; }
+  .budget-tone-0 { background: var(--color-chart-violet); }
+  .budget-tone-1 { background: var(--color-chart-aqua); }
+  .budget-tone-2 { background: var(--color-chart-orange); }
+  .budget-tone-3 { background: var(--color-chart-blue); }
+  .budget-tone-4 { background: var(--color-chart-magenta); }
+  .budget-tone-5 { background: var(--color-chart-lime); }
+  .budget-trend-sum { margin-top: 6px; font-size: 13px; line-height: 18px; text-align: center; font-variant-numeric: tabular-nums; color: var(--color-text-secondary); }
+  .budget-trend-label { font-size: 12px; line-height: 16px; text-align: center; color: var(--color-text-muted); }
+  .budget-trend-col.is-current .budget-trend-sum { font-weight: 600; color: var(--color-text-primary); }
+
+  .budget-legend { display: flex; flex-wrap: wrap; gap: 4px 16px; padding: 0 24px 16px; margin-top: -8px; font-size: 13px; line-height: 18px; color: var(--color-text-secondary); }
+  .budget-legend li { display: inline-flex; align-items: center; gap: 6px; }
+  .budget-legend-dot { display: inline-block; width: 8px; height: 8px; border-radius: 2px; opacity: 0.8; }
+  .budget-history-row { cursor: pointer; }
+  .budget-history-row.is-partial td { color: var(--color-text-muted); }
+  .budget-month-link { font: inherit; font-weight: 500; color: var(--color-text-primary); cursor: pointer; }
+  .budget-month-link:hover { text-decoration: underline; text-underline-offset: 3px; }
+  .budget-history .is-selected .budget-month-link { font-weight: 600; }
+
+  .budget-hinted { text-decoration: underline dotted var(--color-border); text-underline-offset: 4px; cursor: help; }
+  .budget-hinted:hover { text-decoration-color: var(--color-text-muted); }
+  .budget-hint { display: block; max-width: 320px; font-size: 13px; line-height: 18px; }
+
+  /* The month's plan. */
+  .budget-plan-form { display: grid; gap: 16px; }
+  .budget-plan-form > .btn { justify-self: start; }
+  .budget-plan-rows { display: grid; }
+  .budget-plan-row {
+    display: flex; align-items: center; justify-content: space-between; gap: 16px;
+    padding: 6px 0; border-top: 1px solid var(--color-border-light); font-size: 15px; line-height: 24px;
+  }
+  .budget-plan-row.is-income { border-top: 0; padding-bottom: 12px; }
+  .budget-plan-row.is-income + .budget-plan-row { border-top: 1px solid var(--color-border); padding-top: 12px; }
+  .budget-plan-item { min-width: 0; }
+  .budget-plan-input { display: inline-flex; align-items: center; gap: 6px; }
+  .budget-plan-input .is-invalid { border-color: var(--color-danger); }
+  .budget-plan-total { font-size: 14px; line-height: 20px; color: var(--color-text-secondary); }
+  .budget-plan-total b { color: var(--color-text-primary); font-variant-numeric: tabular-nums; }
+  .budget-plan-actions { display: flex; justify-content: flex-end; gap: 8px; }
 }

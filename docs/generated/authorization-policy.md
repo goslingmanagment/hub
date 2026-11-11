@@ -26,7 +26,7 @@ for at password sign-in (`client: "chat-extension"`): it reaches only the
 62 routes marked "yes", and every route marked "no" refuses it with 403.
 A full device token is not affected.
 
-## Routes (411)
+## Routes (413)
 
 | Method | Path | Route key | Kind | Roles | Page scope | chat-extension token |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -64,6 +64,8 @@ A full device token is not affected.
 | POST | `/api/v1/admin/models` | `adminCreateModel` | `owner-session` | — | — | no |
 | DELETE | `/api/v1/admin/models/:modelSlug` | `adminDeleteModel` | `owner-session` | — | — | no |
 | PATCH | `/api/v1/admin/models/:modelSlug` | `adminUpdateModel` | `owner-session` | — | — | no |
+| GET | `/api/v1/admin/money/budgets` | `adminMoneyBudgets` | `owner-session` | — | — | no |
+| POST | `/api/v1/admin/money/budgets/plans` | `adminMoneyBudgetPlansSet` | `owner-session` | — | — | no |
 | POST | `/api/v1/admin/notifications/discover-chats` | `notificationsDiscoverChats` | `owner-session` | — | — | no |
 | GET | `/api/v1/admin/notifications/incidents` | `notificationsIncidents` | `owner-session` | — | — | no |
 | POST | `/api/v1/admin/notifications/incidents/:incidentId/resolve` | `notificationsResolveIncident` | `owner-session` | — | — | no |

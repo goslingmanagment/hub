@@ -66,6 +66,8 @@ export * from "./routes-ai-openers.ts";
 export * from "./routes-shift-review.ts";
 // Выплаты from the agency ledger (`GET /api/v1/team/ledger-payouts`), spread by routes.ts.
 export * from "./routes-team-ledger.ts";
+// Деньги → Бюджеты from the agency ledger (`GET /api/v1/admin/money/budgets`), spread by routes.ts.
+export * from "./routes-money-budgets.ts";
 // The chatter's own shift reports from the agency ledger (`GET /api/v1/account/reports`), spread by routes.ts.
 export * from "./routes-account-reports.ts";
 // Its quality numbers, one definition for the review's screen and «Смены» (`teamChatterNumbers`).

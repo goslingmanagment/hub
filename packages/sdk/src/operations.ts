@@ -47,6 +47,8 @@ export const kernelOperations = {
   adminModelApplication: { method: "GET", path: "/api/v1/admin/model-applications/:ref" },
   adminModelApplications: { method: "GET", path: "/api/v1/admin/model-applications" },
   adminModels: { method: "GET", path: "/api/v1/admin/models" },
+  adminMoneyBudgetPlansSet: { method: "POST", path: "/api/v1/admin/money/budgets/plans" },
+  adminMoneyBudgets: { method: "GET", path: "/api/v1/admin/money/budgets" },
   adminOfapiBindingRefresh: { method: "POST", path: "/api/v1/admin/ofapi/webhook/bindings" },
   adminOfapiCaptureAttemptResolve: { method: "POST", path: "/api/v1/admin/ofapi/capture/attempts/:attemptId/resolve" },
   adminOfapiCaptureControl: { method: "POST", path: "/api/v1/admin/ofapi/capture/controls" },

@@ -663,6 +663,26 @@ export async function getOverviewRevenueReport(
   };
 }
 
+/**
+ * Each page's net over the Moscow days [from, toExclusive) — the same sum the home's custom window shows a page.
+ * Деньги → Бюджеты read the ledger's page plans against it. Every page, retired ones too: history keeps them.
+ */
+export async function getPageNetForDays(app: AppContext, from: string, toExclusive: string, now: Date = new Date()) {
+  const pageRows = await listRevenuePages(app.db);
+  const totals = await getRevenuePageTotalsByPlatform(app, groupPageIdsByPlatform(pageRows), {
+    period: "custom",
+    custom: { from, to: toExclusive },
+    now,
+  });
+  const byPageId = new Map(totals.map((row) => [row.pageId, row.netEarningsMills]));
+  return pageRows.map((page) => ({
+    pageLabel: page.label,
+    modelName: page.modelName,
+    platform: page.platform,
+    netMills: byPageId.get(page.id) ?? 0n,
+  }));
+}
+
 export async function getModelRevenueReport(
   app: AppContext,
   modelSlug: string,

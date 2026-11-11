@@ -76,6 +76,7 @@ import { registerPublicationRoutes } from "../modules/publications/index.ts";
 import { registerAgentTeamRoutes } from "../modules/agent-team/index.ts";
 import { registerMediaLookRoutes } from "../modules/media-looks/index.ts";
 import { registerTeamLedgerRoutes } from "../modules/team-ledger/index.ts";
+import { registerMoneyBudgetsRoutes } from "../modules/money-budgets/index.ts";
 import { registerFanQueueRoutes } from "../modules/fan-queues/index.ts";
 import { registerOutreachRoutes } from "../modules/outreach/index.ts";
 import { registerPublicationFileRoutes } from "../modules/publication-files/index.ts";
@@ -675,6 +676,8 @@ export async function buildApiServer(appContext: AppContext) {
   registerMediaLookRoutes(server, moduleContext);
   // Workboard «Выплаты» from the agency ledger (the owner's session, read through Hub's payouts key).
   registerTeamLedgerRoutes(server, moduleContext);
+  // Деньги → Бюджеты from the agency ledger (the owner's session, through Hub's budgets key).
+  registerMoneyBudgetsRoutes(server, moduleContext);
   // «Рассылки» kept by Hub: the page's outreaches, shared by its team, and each fan's send claimed once.
   registerOutreachRoutes(server, moduleContext);
   // Their files: the upload streams raw bytes to disk (its own body-parser scope).
