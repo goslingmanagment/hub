@@ -1066,8 +1066,8 @@ group have a badge at all. A badge is the fan's, not the page's: read through
 one page, it stands on every Fansly page the fan is on. OnlyFans rows have
 none.
 
-The same row carries `lifetimeSpendMills`, what the fan paid THIS page (mills:
-1000 = $1), so «who left more here: fans with only the card or fans with a
+The same row carries `lifetimeSpendMills`, THIS page's money from the fan (the
+creator's net, mills: 1000 = $1), so «who left more here: fans with only the card or fans with a
 bronze gem» is one walk of the page's payers:
 
 ```
