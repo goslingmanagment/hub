@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
@@ -64,9 +64,41 @@ beforeAll(async () => {
   server = await buildApiServer(app);
 }, 120_000);
 
+/**
+ * Every stored questionnaire and every claimed start sends the owner a
+ * Telegram notice the request does not await. The notice's last statement
+ * inserts its row into telegram_delivery_attempts, and that insert's foreign
+ * key check locks notification_incidents. The next case's reset locks every
+ * table in name order, so a notice still running then deadlocks with it
+ * (40P01). Each case waits here until all of its notices have written their
+ * rows.
+ */
+async function settleOwnerNotices(db: StartedTestDatabase) {
+  const deadline = Date.now() + 10_000;
+  for (;;) {
+    const result = await db.pool.query<{ started: string; told: string }>(`
+      select
+        (select count(*) from model_applications)
+          + (select count(*) from model_application_sessions where start_notified_at is not null) as started,
+        (select count(*) from telegram_delivery_attempts
+          where kind in ('model_application', 'model_application_started')) as told`);
+    const { started, told } = result.rows[0]!;
+    if (Number(told) >= Number(started)) return;
+    if (Date.now() > deadline) {
+      throw new Error(`owner notices still running after 10 s: ${told} of ${started} written`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+
 beforeEach(async () => {
   if (!testDb) return;
   await resetIntegrationDatabase(testDb.pool);
+});
+
+afterEach(async () => {
+  if (!testDb) return;
+  await settleOwnerNotices(testDb);
 });
 
 afterAll(async () => {
@@ -376,6 +408,10 @@ describe("the owner's console (Команда → Анкеты)", () => {
       session: typing, form: "model-full", filled: 1, total: 90, section: "Основное",
       answers: [{ section: "1. Основное", key: "name", label: "Имя", value: "Алина" }, { section: "1. Основное", key: "age", label: "Возраст", value: "" }],
     })).statusCode).toBe(204);
+    // Posts a few milliseconds apart can share a millisecond, and a tie sorts
+    // either way: the last activities are set apart explicitly.
+    await setup.testDb.pool.query("update model_applications set created_at = now() - interval '20 minutes'");
+    await setup.testDb.pool.query("update model_application_sessions set updated_at = now() - interval '10 minutes' where session = $1", [sentFilling]);
 
     const list = await listModelApplicationConsole(setup.app);
     expect(list.items.map((item) => [item.ref.length > 10 ? item.ref : "application", item.status, item.name, item.filled, item.total])).toEqual([
