@@ -124,6 +124,11 @@ export const AGENT_CLAIM_CLASSES = {
       // Lifetime totals have their own rollup; reading `transactions` for a
       // window says nothing about a lifetime figure.
       lifetimeSpendMills: { required: ["fan_spend_lifetime"] },
+      // A fan's spend badges as chatters' browsers read them (0373): FBuddy's
+      // tier across creators and Fansly's «Recent Spender» mark — neither is
+      // the ledger, and only the fans their boards showed have them.
+      fbuddyTier: { required: ["fan_badges"] },
+      recentSpender: { required: ["fan_badges"] },
       // ── endpoints-cover (WP-S1) ──────────────────────────────────────────
       // The platform's own earnings breakdown and the money-OUT head. Neither
       // is the ledger: `revenue_mix_daily` is what Fansly says it paid, and

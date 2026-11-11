@@ -117,10 +117,17 @@ const FAN_MEMBERSHIPS = `
          case when pf.account_probe_resolved is false then pf.account_probe_at end
                                  as f_account_lookup_miss_at,
          pf.account_probe_at     as f_account_checked_at,
-         pf.account_contactability as f_account_contactability
+         pf.account_contactability as f_account_contactability,
+         -- The fan's badges from chatters' browsers (0373): the fan's, so the
+         -- same on each of its pages; Fansly only.
+         fb.fbuddy_tier          as f_fbuddy_tier,
+         fb.fbuddy_tier_checked_at as f_fbuddy_tier_checked_at,
+         fb.recent_spender       as f_recent_spender,
+         fb.recent_spender_checked_at as f_recent_spender_checked_at
   from page_fans pf
   join fans f on f.id = pf.fan_id
   join pages p on p.id = pf.platform_account_id
+  left join fan_badges fb on fb.fan_id = pf.fan_id and p.platform = 'fansly'
 `;
 
 const DM_THREADS = `
@@ -2257,9 +2264,13 @@ export const AGENT_DATASET_SQL: Readonly<Record<string, AgentDatasetSqlMapping>>
       accountLookupMissAt: "f_account_lookup_miss_at",
       accountCheckedAt: "f_account_checked_at",
       accountContactability: "f_account_contactability",
+      fbuddyTier: "f_fbuddy_tier",
+      fbuddyTierCheckedAt: "f_fbuddy_tier_checked_at",
+      recentSpender: "f_recent_spender",
+      recentSpenderCheckedAt: "f_recent_spender_checked_at",
     },
     windowColumn: "k_occurred_at",
-    readPlanes: ["page_fans", "fans"],
+    readPlanes: ["page_fans", "fans", "fan_badges"],
   },
   dm_threads: {
     source: DM_THREADS,
