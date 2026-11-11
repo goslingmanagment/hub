@@ -155,13 +155,18 @@ export interface KnownFan {
 
 const fanKey = (fan: FanRefOnPage) => `${fan.pageLabel}\u0000${fan.fanRef}`;
 
+/** A fan's reference Hub can look up: the platform's user number. */
+export const isPlatformFanRef = (fan: FanRefOnPage): boolean => /^[1-9]\d{0,29}$/u.test(fan.fanRef);
+
 /**
  * The names of a few fans (`pageFanCard`, one read each, long cached): the
  * disputes, customs and held sends carry the number only. A fan Hub does not
  * know, or a read that failed, stays «фан ·4821» — never the 18 digits.
  */
 export function useFanNames(fans: readonly FanRefOnPage[]): (fan: FanRefOnPage) => KnownFan | undefined {
-  const unique = [...new Map(fans.map((fan) => [fanKey(fan), fan])).values()];
+  // Only a platform's fan number can be looked up. A question from the ledger may name its fan by a username or a
+  // label («общак …»): that row shows the name it came with, and no read is sent for it.
+  const unique = [...new Map(fans.filter(isPlatformFanRef).map((fan) => [fanKey(fan), fan])).values()];
   const results = useQueries({
     queries: unique.map((fan) => ({
       queryKey: ["decisions", "fan", fan.pageLabel, fan.fanRef] as const,
