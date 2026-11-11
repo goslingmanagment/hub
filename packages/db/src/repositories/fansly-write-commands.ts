@@ -56,8 +56,10 @@ export interface FanslyWriteRequestRecord {
 export interface FanslyWriteCommandRecord {
   id: number;
   pageId: number;
-  dispatchId: number;
-  publicationId: number;
+  /** Null for a post with no Hub publication (0369): an agent's cancel or
+   *  delete of a post placed by hand, by its `postRef`. */
+  dispatchId: number | null;
+  publicationId: number | null;
   step: FanslyWriteStep;
   /** `media:<position>`, `preview:<position>` (an upload's part `…/part:<k>`,
    *  a read of its processing `…/poll:<k>`), or '' for the publication. */
@@ -78,6 +80,9 @@ export interface FanslyWriteCommandRecord {
   createdAt: Date;
   admittedAt: Date | null;
   settledAt: Date | null;
+  /** The post a cancel or a delete takes (0369): every one queued since names
+   *  it, a publication's too. Null for every other step and older rows. */
+  postRef: string | null;
 }
 
 type Row = Record<string, unknown>;
@@ -108,8 +113,8 @@ function toCommand(row: Row): FanslyWriteCommandRecord {
   return {
     id: num(row.id),
     pageId: num(row.page_id),
-    dispatchId: num(row.dispatch_id),
-    publicationId: num(row.publication_id),
+    dispatchId: nullableNum(row.dispatch_id),
+    publicationId: nullableNum(row.publication_id),
     step: row.step as FanslyWriteStep,
     item: String(row.item ?? ""),
     priority: row.priority as FanslyWritePriority,
@@ -128,6 +133,7 @@ function toCommand(row: Row): FanslyWriteCommandRecord {
     createdAt: date(row.created_at),
     admittedAt: nullableDate(row.admitted_at),
     settledAt: nullableDate(row.settled_at),
+    postRef: (row.post_ref as string | null | undefined) ?? null,
   };
 }
 
@@ -138,25 +144,80 @@ export interface InsertFanslyWriteCommandInput {
   priority: FanslyWritePriority;
   notBefore: Date;
   notAfter: Date | null;
+  /** A cancel's or a delete's post (0369): one live command per page, step
+   *  and post, whichever route asks. */
+  postRef?: string | null;
 }
 
 /**
  * Queue one request of a dispatch (its page and publication are the
- * dispatch's). Null when a row of the same dispatch, step and item that was
- * not refused exists: the request is queued, sent or settled already, and is
- * never queued twice.
+ * dispatch's). Null when a row of the same dispatch, step and item — or of
+ * the same page, step and post — that was not refused exists: the request is
+ * queued, sent or settled already, and is never queued twice.
  */
 export async function insertFanslyWriteCommand(db: Database, input: InsertFanslyWriteCommandInput): Promise<FanslyWriteCommandRecord | null> {
   const inserted = await db.execute<Row>(sql`
-    insert into fansly_write_commands (page_id, dispatch_id, publication_id, step, item, priority, not_before, not_after)
-    select d.page_id, d.id, d.publication_id, ${input.step}, ${input.item}, ${input.priority}, ${input.notBefore}, ${input.notAfter}
+    insert into fansly_write_commands (page_id, dispatch_id, publication_id, step, item, priority, not_before, not_after, post_ref)
+    select d.page_id, d.id, d.publication_id, ${input.step}, ${input.item}, ${input.priority}, ${input.notBefore}, ${input.notAfter},
+           ${input.postRef ?? null}
       from publication_dispatches d
      where d.id = ${input.dispatchId} and d.platform = 'fansly'
-    on conflict (dispatch_id, step, item) where state <> 'refused' do nothing
+    on conflict do nothing
     returning *
   `);
   const row = inserted.rows[0];
   return row ? toCommand(row) : null;
+}
+
+export type FanslyPostStep = "post_cancel" | "post_delete";
+
+/**
+ * Queue a cancel or a delete of a post with no Hub publication (0369): the
+ * page's own command, by the post's id. Null when a live command of the same
+ * page, step and post exists (a publication's too): never queued twice.
+ */
+export async function insertFanslyPostCommand(db: Database, input: {
+  pageId: number;
+  step: FanslyPostStep;
+  postRef: string;
+  notBefore: Date;
+  notAfter: Date | null;
+}): Promise<FanslyWriteCommandRecord | null> {
+  const inserted = await db.execute<Row>(sql`
+    insert into fansly_write_commands (page_id, dispatch_id, publication_id, step, item, priority, not_before, not_after, post_ref)
+    values (${input.pageId}, null, null, ${input.step}, '', 'background', ${input.notBefore}, ${input.notAfter}, ${input.postRef})
+    on conflict do nothing
+    returning *
+  `);
+  const row = inserted.rows[0];
+  return row ? toCommand(row) : null;
+}
+
+/** The live command (anything but refused) of a page's post and step,
+ *  whichever route queued it; null: none, or only refused ones. */
+export async function findFanslyPostCommand(
+  db: Database,
+  input: { pageId: number; step: FanslyPostStep; postRef: string },
+): Promise<FanslyWriteCommandRecord | null> {
+  const result = await db.execute<Row>(sql`
+    select * from fansly_write_commands
+     where page_id = ${input.pageId} and step = ${input.step} and post_ref = ${input.postRef} and state <> 'refused'
+     order by id desc limit 1
+  `);
+  const row = result.rows[0];
+  return row ? toCommand(row) : null;
+}
+
+/** The commands of posts with no Hub publication that Fansly answered (or
+ *  that ended unknown) since `since`: the minutely job asks the reads that
+ *  decide them. */
+export async function listFanslyPostCommandsSettledSince(db: Database, since: Date): Promise<FanslyWriteCommandRecord[]> {
+  const result = await db.execute<Row>(sql`
+    select * from fansly_write_commands
+     where publication_id is null and state in ('answered', 'unknown') and settled_at >= ${since}
+     order by id
+  `);
+  return result.rows.map(toCommand);
 }
 
 /** The work row the engine runs the command under (set once, at enqueue). */

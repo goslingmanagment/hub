@@ -92,7 +92,9 @@ import {
  * `publication-withdraw` when Fansly's answer is `accepted` (not withdrawn
  * yet), and `publication-queue --refresh`, which first asks
  * `agentPublicationQueueRefresh` for a fresh read (the owner's «Обновить») and
- * then prints the last read, its own operation's answer, saying so.
+ * then prints the last read, its own operation's answer, saying so. So do
+ * `post-withdraw` and `post-delete` when the answer is `accepted` (not done
+ * yet: ask again) or `unknown` (not done: tell the owner).
  *
  * WHAT IS NOT HERE, and why it never will be: operation 9b (observation payloads)
  * and #13 (hydration decisions) are OWNER-SESSION. An agent key cannot call them
@@ -824,6 +826,30 @@ const WITHDRAW_CAPABILITY_HINT =
 
 function withdrawHint(error: { status: number | null; code: string | null }): string | null {
   return error.code === "agent_capability_missing" ? WITHDRAW_CAPABILITY_HINT : null;
+}
+
+const DELETE_CAPABILITY_HINT =
+  "This key lacks delete:posts (to delete a published post, only on the owner's «да» for that post): the owner grants"
+  + " it to the key (dashboard, Settings, agent keys).";
+
+function deleteHint(error: { status: number | null; code: string | null }): string | null {
+  return error.code === "agent_capability_missing" ? DELETE_CAPABILITY_HINT : null;
+}
+
+const POST_ACCEPTED_NOTE =
+  "Accepted is not done yet: Hub queued ONE command on the page's engine (a cancel goes once a fresh read of the"
+  + " schedule still shows the post; a delete is checked by reading the post after Fansly's answer). Ask the same"
+  + " command again in a minute or two: it sends nothing and answers where the command stands.";
+
+const POST_UNKNOWN_NOTE =
+  "Unknown is NOT done: Hub does not know whether the platform did it, and never sends it again. Tell the owner at"
+  + " once (the post, why, `check`); do not report it as done.";
+
+/** `post-withdraw`'s and `post-delete`'s answer, with a note when it is not an end. */
+function notedPostAnswer<T extends { outcome: string }>(answer: T): T | HubNotedResult {
+  if (answer.outcome === "accepted") return new HubNotedResult(answer, POST_ACCEPTED_NOTE);
+  if (answer.outcome === "unknown") return new HubNotedResult(answer, POST_UNKNOWN_NOTE);
+  return answer;
 }
 
 const PUBLICATION_WITHDRAW_ACCEPTED_NOTE =
@@ -2182,6 +2208,43 @@ export const HUB_COMMANDS: readonly HubCommand[] = [
         ? new HubNotedResult(answer, PUBLICATION_WITHDRAW_ACCEPTED_NOTE)
         : answer;
     },
+  },
+  {
+    name: "post-withdraw",
+    operation: "agentPostWithdraw",
+    summary:
+      "Take any post of your page off the platform's schedule by its id (postRef from publication-queue) — one put"
+      + " there by hand too. Only a post Hub's own read of the page's schedule, an hour old at most, shows waiting"
+      + " (refresh the queue first), 15 minutes or more before its time. A Hub post goes through its publication's"
+      + " withdrawal. One command per post: asking again sends nothing and answers where it stands. Never a"
+      + " deletion. Needs withdraw:publications.",
+    options: {
+      "page-label": { kind: "string", describe: "The page (required)" },
+      "post-ref": { kind: "string", describe: "The platform's post id: postRef of the schedule entry (required)" },
+    },
+    hint: withdrawHint,
+    run: async (client, values) => notedPostAnswer(await client.agentPostWithdraw({
+      params: { pageLabel: requireString(values, "page-label"), postRef: requireString(values, "post-ref") },
+    })),
+  },
+  {
+    name: "post-delete",
+    operation: "agentPostDelete",
+    summary:
+      "Delete a published post of your page by its id — ONLY on the owner's «да» for that very post. Only a post Hub"
+      + " has among the page's own posts, not in its schedule (that is post-withdraw). A daily ceiling per key; the"
+      + " reason goes to the owner's audit. One command per post: asking again sends nothing and answers where it"
+      + " stands; unknown is never sent again. Needs delete:posts.",
+    options: {
+      "page-label": { kind: "string", describe: "The page (required)" },
+      "post-ref": { kind: "string", describe: "The platform's post id (required)" },
+      reason: { kind: "string", describe: "Why, with whose «да», e.g. «Дима 11.11: удалить, нарезка из кастома» (required, 3-300 chars)" },
+    },
+    hint: deleteHint,
+    run: async (client, values) => notedPostAnswer(await client.agentPostDelete({
+      params: { pageLabel: requireString(values, "page-label"), postRef: requireString(values, "post-ref") },
+      body: { reason: requireString(values, "reason") },
+    })),
   },
   {
     name: "publication-queue",

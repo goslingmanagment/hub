@@ -76,6 +76,7 @@ import { refreshOnlyfansQueueSnapshots } from "./services/publications-onlyfans-
 import { runFanslyChecksTick } from "./services/publications-fansly-checks.ts";
 import { followFanslyDeletions } from "./services/publications-fansly-delete.ts";
 import { followFanslyWithdrawals } from "./services/publications-fansly-withdraw.ts";
+import { followFanslyPostCommands } from "./services/post-commands.ts";
 import {
   PUBLICATIONS_FANSLY_QUEUE,
   fanslyFollowUntil,
@@ -618,8 +619,10 @@ export async function startWorkerServices(
     const withdrawals = await followFanslyWithdrawals(app);
     // …and each deletion of a published post the owner asked for: its fresh read, its outcome.
     const deletions = await followFanslyDeletions(app);
-    if (checks.checked + checks.scheduleRefreshes + withdrawals.followed + deletions.followed > 0) {
-      app.logger?.info({ component: "publications_fansly_checks", ...checks, withdrawals, deletions }, "publications: Fansly checks");
+    // …and an agent's cancel or delete of a post with no Hub publication: the read that decides it.
+    const posts = await followFanslyPostCommands(app);
+    if (checks.checked + checks.scheduleRefreshes + withdrawals.followed + deletions.followed + posts.followed > 0) {
+      app.logger?.info({ component: "publications_fansly_checks", ...checks, withdrawals, deletions, posts }, "publications: Fansly checks");
     }
     const follow = await followFanslyCreates(app, { until: fanslyFollowUntil(startedAt), signal: abortController.signal });
     if (follow.queued + follow.settled > 0) {

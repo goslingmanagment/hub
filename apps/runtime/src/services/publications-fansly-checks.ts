@@ -27,6 +27,7 @@ import { demandToUpsert } from "../sync/engine/resource.ts";
 import {
   FANSLY_SCHEDULE_KEY,
   FANSLY_VERIFY_KEY,
+  fanslyPostVerifySubject,
   parsePublicationReads,
   type FanslyPublicationReads,
   type FanslyReadPost,
@@ -354,6 +355,21 @@ export async function askVerifyReads(app: AppContext, input: { pageId: number; p
   const upsert = demandToUpsert({
     resource: FANSLY_VERIFY_KEY, subject: String(input.publicationId), params: { v: 1, mode: input.mode },
     demand: { reason: `publication:${input.publicationId}:${input.mode}` },
+  }, spec, { pageId: input.pageId, now: input.now, page });
+  if (upsert === null) return false;
+  await upsertDemand(app.db, { ...upsert, createOnly: true });
+  return true;
+}
+
+/** Ask the page's engine to read a post with no Hub publication by its id (`publish.verify`, subject `post:<ref>`,
+ *  0369): did an agent's delete take it off the wall. Never beside an open one. */
+export async function askPostVerifyRead(app: AppContext, input: { pageId: number; postRef: string; now: Date }): Promise<boolean> {
+  const spec = fanslyResourceSpec(FANSLY_VERIFY_KEY);
+  const page = await getSyncPage(app.db, input.pageId);
+  if (spec === null || page === null) return false;
+  const upsert = demandToUpsert({
+    resource: FANSLY_VERIFY_KEY, subject: fanslyPostVerifySubject(input.postRef), params: { v: 1, mode: "deleted" },
+    demand: { reason: `post:${input.postRef}:deleted` },
   }, spec, { pageId: input.pageId, now: input.now, page });
   if (upsert === null) return false;
   await upsertDemand(app.db, { ...upsert, createOnly: true });

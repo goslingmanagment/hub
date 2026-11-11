@@ -47,6 +47,7 @@ import type {
 import { journalWriteAnswer, readWriteAnswer } from "./answers.ts";
 import { FANSLY_WITHDRAW_STEP_STATUS, FANSLY_WITHDRAW_STEPS, FANSLY_WRITE_STEP_ROUTES, fanslyStepSendable, nextWriteStep, writeAnswerVerdict, writeOutcomeDecision } from "./commands.ts";
 import {
+  deriveFanslyPostCommand,
   deriveFanslyWrite,
   describeFanslyCommandRequest,
   fanslyPartRange,
@@ -90,6 +91,12 @@ import { writeGuard } from "./guard.ts";
 // - unsendable: a request its transport can never build (a part whose bytes
 //   changed on disk or whose sealed URL does not open, a page no longer
 //   active) refuses the command, still queued, with that reason.
+// - a post with no Hub publication (owner 2026-11-11, 0369): only a cancel or
+//   a delete, of the command's own `postRef`. The same guard, the same one
+//   attempt and fingerprint; there is no approval to derive from or lock, so
+//   the plan derives from the post itself (a cancel, from a read of the
+//   schedule taken after it was queued) and the admission and the
+//   confirmation check the page is not stopped.
 
 /** A work's subject is its command's id. */
 export function writeCommandIdOf(work: Pick<SyncWorkRow, "subject">): number | null {
@@ -127,6 +134,8 @@ export interface WriteModuleStore {
   getAttempt(db: Database, attemptId: number): Promise<Pick<SyncAttemptRow, "id" | "outcome" | "applyState" | "errorClass"> | null>;
   readPageSettings(db: Database, pageId: number): Promise<{ enabled: boolean; autostopReason: string | null }>;
   readDeriveContext(db: Database, command: FanslyWriteCommandRecord): Promise<WriteDeriveContext>;
+  /** The page's latest read of its schedule, each post with its time (a cancel of a post with no publication). */
+  readPostSchedule(db: Database, pageId: number): Promise<FanslyScheduleFacts | null>;
   /** The publication, its row locked for the admission's transaction. */
   lockPublication(db: Database, publicationId: number): Promise<{ status: string; approvedRevisionId: number | null } | null>;
   /** The publication as it stands, unlocked (a write's confirmation). */
@@ -166,6 +175,7 @@ async function readPartSha256(input: { file: FanslyWriteFileFacts; byteOffset: n
 }
 
 async function readDeriveContext(db: Database, command: FanslyWriteCommandRecord): Promise<WriteDeriveContext> {
+  if (command.dispatchId === null || command.publicationId === null) return { ok: false, reason: "no_publication" };
   const dispatch = await getFanslyWriteDispatch(db, command.dispatchId);
   if (dispatch === null || dispatch.platform !== "fansly" || dispatch.publicationId !== command.publicationId || dispatch.pageId !== command.pageId) {
     return { ok: false, reason: "dispatch_mismatch" };
@@ -207,6 +217,16 @@ async function readDeriveContext(db: Database, command: FanslyWriteCommandRecord
   };
 }
 
+async function readPostSchedule(db: Database, pageId: number): Promise<FanslyScheduleFacts | null> {
+  const snapshot = (await listPublicationQueueSnapshots(db, [pageId]))[0];
+  if (snapshot?.readAt == null) return null;
+  const entries = snapshot.entries.flatMap((entry) => (entry.postRef === null ? [] : [{
+    postId: entry.postRef,
+    publishAtMs: entry.publishAt === null ? null : Date.parse(entry.publishAt),
+  }]));
+  return { readAtMs: snapshot.readAt.getTime(), postIds: entries.map((entry) => entry.postId), entries };
+}
+
 export const databaseWriteStore: WriteModuleStore = {
   getCommand: (db, id, forUpdate) => getFanslyWriteCommand(db, id, { forUpdate: forUpdate === true }),
   getAttempt: (db, attemptId) => getSyncAttempt(db, attemptId),
@@ -215,6 +235,7 @@ export const databaseWriteStore: WriteModuleStore = {
     return { enabled: settings.enabled, autostopReason: settings.autostopReason };
   },
   readDeriveContext,
+  readPostSchedule,
   async lockPublication(db, publicationId) {
     const result = await db.execute<{ status: string; approved_revision_id: string | null }>(sql`
       select status, approved_revision_id::text from publications where id = ${publicationId} for share
@@ -258,6 +279,20 @@ function isLocalDetail(value: unknown): value is WriteLocalDetail {
 
 function local(detail: WriteLocalDetail): Extract<StepPlan, { kind: "local" }> {
   return { kind: "local", reason: `write_${detail.action}`, detail };
+}
+
+/**
+ * A withdrawal goes only after a fresh read of the page's schedule (the
+ * Publications job makes its poll due): until one taken after the withdrawal
+ * was asked for has landed, it waits — a while, not forever. (A delete's post
+ * is on the wall, not in the schedule: it needs none.) Null: go on.
+ */
+function awaitFreshSchedule(command: FanslyWriteCommandRecord, schedule: FanslyScheduleFacts | null, now: Date): StepPlan | null {
+  if (command.step !== "post_cancel" || (schedule !== null && schedule.readAtMs > command.createdAt.getTime())) return null;
+  if (now.getTime() - command.createdAt.getTime() > WITHDRAW_READ_WAIT_MS) {
+    return local({ action: "refuse", commandId: command.id, reason: "schedule_not_read" });
+  }
+  return { kind: "wait", reason: "dependency", until: new Date(now.getTime() + WITHDRAW_READ_RECHECK_MS) };
 }
 
 export function fanslyWriteModule(store: WriteModuleStore = databaseWriteStore): ResourceModule {
@@ -317,19 +352,19 @@ export function fanslyWriteModule(store: WriteModuleStore = databaseWriteStore):
       });
       if (verdict.kind === "refuse") return local({ action: "refuse", commandId: command.id, reason: verdict.reason });
       if (verdict.kind === "wait") return { kind: "wait", reason: verdict.reason === "not_before" ? "not_due" : "dependency", until: verdict.until };
+      // A post with no Hub publication (0369): its own post, no approval.
+      if (command.publicationId === null) {
+        const schedule = command.step === "post_cancel" ? await store.readPostSchedule(ctx.db, command.pageId) : null;
+        const waiting = awaitFreshSchedule(command, schedule, ctx.now);
+        if (waiting !== null) return waiting;
+        const derived = deriveFanslyPostCommand({ command, schedule, now: ctx.now });
+        if (!derived.ok) return local({ action: "refuse", commandId: command.id, reason: derived.reason });
+        return { kind: "request", request: derived.request };
+      }
       const context = await store.readDeriveContext(ctx.db, command);
       if (!context.ok) return local({ action: "refuse", commandId: command.id, reason: context.reason });
-      // A withdrawal goes only after a fresh read of the page's schedule (the
-      // Publications job makes its poll due): until one taken after the
-      // withdrawal was asked for has landed, it waits — a while, not forever.
-      // (A delete's post is on the wall, not in the schedule: it needs none.)
-      if (command.step === "post_cancel"
-        && (context.schedule == null || context.schedule.readAtMs <= command.createdAt.getTime())) {
-        if (ctx.now.getTime() - command.createdAt.getTime() > WITHDRAW_READ_WAIT_MS) {
-          return local({ action: "refuse", commandId: command.id, reason: "schedule_not_read" });
-        }
-        return { kind: "wait", reason: "dependency", until: new Date(ctx.now.getTime() + WITHDRAW_READ_RECHECK_MS) };
-      }
+      const waiting = awaitFreshSchedule(command, context.schedule ?? null, ctx.now);
+      if (waiting !== null) return waiting;
       // An upload's part (wall posts PR 8): of the bytes on disk for its
       // range, read and hashed now. Parts go in any order, a few at once
       // outside the page's pause where its browser takes them (0347; S3
@@ -379,14 +414,19 @@ export function fanslyWriteModule(store: WriteModuleStore = databaseWriteStore):
       if (write.fingerprint !== facts.fingerprint || (read ? admission.writeFingerprint !== null : admission.writeFingerprint !== facts.fingerprint)) {
         refuseAdmission(id, "fingerprint_mismatch");
       }
-      // The approval still stands, under the row lock of this transaction: an
-      // edit, a cancel or a new approval between the plan and now refuses.
-      const publication = await store.lockPublication(tx, command.publicationId);
       const withdraw = FANSLY_WITHDRAW_STEPS.includes(command.step);
-      if (publication === null) return refuseAdmission(id, "publication_missing");
-      // A cancel's post still in the schedule, a delete's still on the wall.
-      if (withdraw ? publication.status !== FANSLY_WITHDRAW_STEP_STATUS[command.step] : !["approved", "submitting"].includes(publication.status) || publication.approvedRevisionId !== facts.revisionId) {
-        refuseAdmission(id, `publication_${publication.status}`);
+      if (command.publicationId === null) {
+        // A post with no publication (0369): only a cancel or a delete, of its own post.
+        if (!withdraw || command.postRef === null) refuseAdmission(id, "step_needs_publication");
+      } else {
+        // The approval still stands, under the row lock of this transaction: an
+        // edit, a cancel or a new approval between the plan and now refuses.
+        const publication = await store.lockPublication(tx, command.publicationId);
+        if (publication === null) return refuseAdmission(id, "publication_missing");
+        // A cancel's post still in the schedule, a delete's still on the wall.
+        if (withdraw ? publication.status !== FANSLY_WITHDRAW_STEP_STATUS[command.step] : !["approved", "submitting"].includes(publication.status) || publication.approvedRevisionId !== facts.revisionId) {
+          refuseAdmission(id, `publication_${publication.status}`);
+        }
       }
       const page = await store.readPageSettings(tx, command.pageId);
       if (page.autostopReason !== null || (!withdraw && !page.enabled)) refuseAdmission(id, "page_publishing_off");
@@ -406,13 +446,18 @@ export function fanslyWriteModule(store: WriteModuleStore = databaseWriteStore):
       const facts = command.request?.facts as Partial<WriteDerivedFacts> | undefined;
       const withdraw = FANSLY_WITHDRAW_STEPS.includes(command.step);
       const [publication, page, config] = await Promise.all([
-        store.readPublication(db, command.publicationId),
+        command.publicationId === null ? Promise.resolve(null) : store.readPublication(db, command.publicationId),
         store.readPageSettings(db, command.pageId),
         input.settings === undefined ? Promise.resolve(null) : input.settings.read(),
       ]);
-      if (publication === null) return "publication_missing";
-      if (withdraw ? publication.status !== FANSLY_WITHDRAW_STEP_STATUS[command.step] : !["approved", "submitting"].includes(publication.status) || publication.approvedRevisionId !== facts?.revisionId) {
-        return `publication_${publication.status}`;
+      if (command.publicationId === null) {
+        // A post with no publication (0369): a cancel or a delete of its own post.
+        if (!withdraw || command.postRef === null) return "step_needs_publication";
+      } else {
+        if (publication === null) return "publication_missing";
+        if (withdraw ? publication.status !== FANSLY_WITHDRAW_STEP_STATUS[command.step] : !["approved", "submitting"].includes(publication.status) || publication.approvedRevisionId !== facts?.revisionId) {
+          return `publication_${publication.status}`;
+        }
       }
       if (page.autostopReason !== null) return `page_stopped:${page.autostopReason}`;
       if (!withdraw && !page.enabled) return "page_publishing_off";

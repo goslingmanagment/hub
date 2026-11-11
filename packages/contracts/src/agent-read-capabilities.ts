@@ -68,9 +68,19 @@ export const AGENT_CAPABILITIES = [
    * post there, not only this key's drafts (owner 2026-11-11: an agent may take
    * a post off the schedule at any time without asking): the owner's own
    * withdrawal, refusals and all, and the page's schedule read to see it.
-   * Never a published post's deletion, never a whole page at once.
+   * Never a published post's deletion, never a whole page at once. With it a
+   * key also takes off a post put in the schedule by hand, by the platform's
+   * post id, once Hub's own fresh read of the page's schedule shows it.
    */
   "withdraw:publications",
+  /**
+   * Deleting a published post of the key's pages (owner 2026-11-11: only on the
+   * owner's «да» for that post — the agent's rules hold that word, Hub does not
+   * check it): a post Hub has among the page's own synced posts, never one still
+   * in the schedule. A daily ceiling per key, one command per post, the agent's
+   * reason in the owner's audit.
+   */
+  "delete:posts",
 ] as const;
 
 export type AgentCapability = (typeof AGENT_CAPABILITIES)[number];

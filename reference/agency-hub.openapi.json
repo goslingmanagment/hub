@@ -89760,7 +89760,8 @@
                                   "write:fan_queues",
                                   "read:content",
                                   "read:team",
-                                  "withdraw:publications"
+                                  "withdraw:publications",
+                                  "delete:posts"
                                 ]
                               },
                               "granted": {
@@ -90287,7 +90288,8 @@
                                 "write:fan_queues",
                                 "read:content",
                                 "read:team",
-                                "withdraw:publications"
+                                "withdraw:publications",
+                                "delete:posts"
                               ]
                             }
                           },
@@ -109290,7 +109292,7 @@
                   },
                   "capabilities": {
                     "minItems": 1,
-                    "maxItems": 12,
+                    "maxItems": 13,
                     "type": "array",
                     "items": {
                       "type": "string",
@@ -109306,7 +109308,8 @@
                         "write:fan_queues",
                         "read:content",
                         "read:team",
-                        "withdraw:publications"
+                        "withdraw:publications",
+                        "delete:posts"
                       ]
                     }
                   },
@@ -109383,7 +109386,8 @@
                               "write:fan_queues",
                               "read:content",
                               "read:team",
-                              "withdraw:publications"
+                              "withdraw:publications",
+                              "delete:posts"
                             ]
                           }
                         },
@@ -109675,7 +109679,8 @@
                             "write:fan_queues",
                             "read:content",
                             "read:team",
-                            "withdraw:publications"
+                            "withdraw:publications",
+                            "delete:posts"
                           ]
                         }
                       },
@@ -109824,7 +109829,7 @@
                 "type": "object",
                 "properties": {
                   "capabilities": {
-                    "maxItems": 12,
+                    "maxItems": 13,
                     "type": "array",
                     "items": {
                       "type": "string",
@@ -109840,7 +109845,8 @@
                         "write:fan_queues",
                         "read:content",
                         "read:team",
-                        "withdraw:publications"
+                        "withdraw:publications",
+                        "delete:posts"
                       ]
                     }
                   }
@@ -109905,7 +109911,8 @@
                           "write:fan_queues",
                           "read:content",
                           "read:team",
-                          "withdraw:publications"
+                          "withdraw:publications",
+                          "delete:posts"
                         ]
                       }
                     },
@@ -121961,6 +121968,1933 @@
                     "delivery",
                     "capture",
                     "conclusion"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/agent/pages/{pageLabel}/posts/{postRef}/delete": {
+      "post": {
+        "summary": "Delete a published post of a granted page by the platform's post id (needs delete:posts; only on the owner's «да» for that post). Only a post Hub has among the page's own posts, not in its schedule. A daily ceiling per key; the reason goes to the owner's audit. One command per post: a repeat answers its state and sends nothing; an unknown outcome is never sent again",
+        "tags": [
+          "agent"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "reason": {
+                    "type": "string",
+                    "minLength": 3,
+                    "maxLength": 300
+                  }
+                },
+                "required": [
+                  "reason"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "in": "path",
+            "name": "pageLabel",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[1-9][0-9]{0,29}$"
+            },
+            "in": "path",
+            "name": "postRef",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "agentKeyAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "pageLabel": {
+                      "type": "string"
+                    },
+                    "platform": {
+                      "type": "string",
+                      "enum": [
+                        "fansly",
+                        "onlyfans"
+                      ]
+                    },
+                    "postRef": {
+                      "type": "string"
+                    },
+                    "action": {
+                      "type": "string",
+                      "enum": [
+                        "withdraw",
+                        "delete"
+                      ]
+                    },
+                    "outcome": {
+                      "type": "string",
+                      "enum": [
+                        "accepted",
+                        "withdrawn",
+                        "deleted",
+                        "unknown",
+                        "rejected",
+                        "not_sent",
+                        "refused"
+                      ]
+                    },
+                    "reason": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "repeat": {
+                      "type": "boolean"
+                    },
+                    "publicationId": {
+                      "anyOf": [
+                        {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "publication": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "id": {
+                              "type": "integer",
+                              "exclusiveMinimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "pageLabel": {
+                              "type": "string"
+                            },
+                            "platform": {
+                              "type": "string",
+                              "enum": [
+                                "fansly",
+                                "onlyfans",
+                                "telegram"
+                              ]
+                            },
+                            "kind": {
+                              "type": "string",
+                              "enum": [
+                                "fyp_post",
+                                "subscriber_post",
+                                "paid_post",
+                                "story",
+                                "vault_album"
+                              ]
+                            },
+                            "status": {
+                              "type": "string",
+                              "enum": [
+                                "draft",
+                                "approved",
+                                "submitting",
+                                "scheduled",
+                                "processing",
+                                "published",
+                                "not_published",
+                                "rejected",
+                                "unknown",
+                                "missed",
+                                "withdrawn",
+                                "cancelled"
+                              ]
+                            },
+                            "version": {
+                              "type": "integer",
+                              "exclusiveMinimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "text": {
+                              "type": "string"
+                            },
+                            "publishAt": {
+                              "type": "string"
+                            },
+                            "expiresAt": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "wallRefs": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            },
+                            "tierRefs": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            },
+                            "priceMills": {
+                              "anyOf": [
+                                {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "repost": {
+                              "type": "boolean"
+                            },
+                            "pinWallRefs": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            },
+                            "replyLock": {
+                              "type": "array",
+                              "items": {
+                                "type": "string",
+                                "enum": [
+                                  "followers",
+                                  "subscribers"
+                                ]
+                              }
+                            },
+                            "subscribersOnly": {
+                              "type": "boolean"
+                            },
+                            "extraAttachments": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "attachment": {
+                                    "type": "integer",
+                                    "exclusiveMinimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "access": {
+                                    "type": "string",
+                                    "enum": [
+                                      "everyone",
+                                      "subscribers",
+                                      "paid"
+                                    ]
+                                  },
+                                  "tierRefs": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "priceMills": {
+                                    "anyOf": [
+                                      {
+                                        "type": "integer",
+                                        "minimum": -9007199254740991,
+                                        "maximum": 9007199254740991
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "subscribersOnly": {
+                                    "type": "boolean"
+                                  }
+                                },
+                                "required": [
+                                  "attachment",
+                                  "access",
+                                  "tierRefs",
+                                  "priceMills",
+                                  "subscribersOnly"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
+                            "media": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "role": {
+                                    "type": "string",
+                                    "enum": [
+                                      "media",
+                                      "preview"
+                                    ]
+                                  },
+                                  "position": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "source": {
+                                    "type": "string",
+                                    "enum": [
+                                      "vault",
+                                      "file"
+                                    ]
+                                  },
+                                  "mediaRef": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  },
+                                  "fileId": {
+                                    "anyOf": [
+                                      {
+                                        "type": "integer",
+                                        "minimum": -9007199254740991,
+                                        "maximum": 9007199254740991
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "attachment": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "name": {
+                                    "default": null,
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "role",
+                                  "position",
+                                  "source",
+                                  "mediaRef",
+                                  "fileId",
+                                  "attachment",
+                                  "name"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
+                            "findings": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "code": {
+                                    "type": "string",
+                                    "enum": [
+                                      "publish_time_past",
+                                      "file_of_another_model",
+                                      "file_deleted",
+                                      "media_not_on_page",
+                                      "repost_within_threshold",
+                                      "posted_before",
+                                      "price_range_not_set",
+                                      "price_out_of_range",
+                                      "paid_post_off_on_onlyfans",
+                                      "volume_high",
+                                      "daily_limit_exceeded",
+                                      "wall_not_on_page",
+                                      "wall_default_unknown",
+                                      "tier_not_on_page",
+                                      "onlyfans_file_upload_unsupported",
+                                      "onlyfans_file_too_large",
+                                      "fansly_file_upload_unsupported",
+                                      "fansly_several_tiers_unsupported",
+                                      "platform_schedule_incomplete"
+                                    ]
+                                  },
+                                  "severity": {
+                                    "type": "string",
+                                    "enum": [
+                                      "blocking",
+                                      "warning",
+                                      "info"
+                                    ]
+                                  },
+                                  "mediaKey": {
+                                    "default": null,
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  },
+                                  "at": {
+                                    "default": null,
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  },
+                                  "postRef": {
+                                    "default": null,
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  },
+                                  "publicationId": {
+                                    "default": null,
+                                    "anyOf": [
+                                      {
+                                        "type": "integer",
+                                        "minimum": -9007199254740991,
+                                        "maximum": 9007199254740991
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "detail": {
+                                    "default": {},
+                                    "type": "object",
+                                    "propertyNames": {
+                                      "type": "string"
+                                    },
+                                    "additionalProperties": {
+                                      "type": [
+                                        "number",
+                                        "string",
+                                        "null"
+                                      ]
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "code",
+                                  "severity",
+                                  "mediaKey",
+                                  "at",
+                                  "postRef",
+                                  "publicationId",
+                                  "detail"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
+                            "blocked": {
+                              "type": "boolean"
+                            },
+                            "author": {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "enum": [
+                                    "human",
+                                    "agent"
+                                  ]
+                                },
+                                "userId": {
+                                  "anyOf": [
+                                    {
+                                      "type": "integer",
+                                      "minimum": -9007199254740991,
+                                      "maximum": 9007199254740991
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "agentKeyId": {
+                                  "anyOf": [
+                                    {
+                                      "type": "integer",
+                                      "minimum": -9007199254740991,
+                                      "maximum": 9007199254740991
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "userId",
+                                "agentKeyId"
+                              ],
+                              "additionalProperties": false
+                            },
+                            "approvedRevisionId": {
+                              "anyOf": [
+                                {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "platformPostRef": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "vaultAlbumRef": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "statusReason": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "previousPublicationId": {
+                              "anyOf": [
+                                {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "withdrawal": {
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "state": {
+                                      "type": "string"
+                                    },
+                                    "errorCode": {
+                                      "type": [
+                                        "string",
+                                        "null"
+                                      ]
+                                    },
+                                    "at": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "state",
+                                    "errorCode",
+                                    "at"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "deletion": {
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "state": {
+                                      "type": "string"
+                                    },
+                                    "errorCode": {
+                                      "type": [
+                                        "string",
+                                        "null"
+                                      ]
+                                    },
+                                    "at": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "state",
+                                    "errorCode",
+                                    "at"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "createdAt": {
+                              "type": "string"
+                            },
+                            "updatedAt": {
+                              "type": "string"
+                            },
+                            "statusChangedAt": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "pageLabel",
+                            "platform",
+                            "kind",
+                            "status",
+                            "version",
+                            "text",
+                            "publishAt",
+                            "expiresAt",
+                            "wallRefs",
+                            "tierRefs",
+                            "priceMills",
+                            "repost",
+                            "pinWallRefs",
+                            "replyLock",
+                            "subscribersOnly",
+                            "extraAttachments",
+                            "media",
+                            "findings",
+                            "blocked",
+                            "author",
+                            "approvedRevisionId",
+                            "platformPostRef",
+                            "vaultAlbumRef",
+                            "statusReason",
+                            "previousPublicationId",
+                            "withdrawal",
+                            "deletion",
+                            "createdAt",
+                            "updatedAt",
+                            "statusChangedAt"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "command": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "state": {
+                              "type": "string"
+                            },
+                            "stateReason": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "createdAt": {
+                              "type": "string"
+                            },
+                            "settledAt": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "state",
+                            "stateReason",
+                            "createdAt",
+                            "settledAt"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "check": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "dailyLimit": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "limit": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "used": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            }
+                          },
+                          "required": [
+                            "limit",
+                            "used"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "pageLabel",
+                    "platform",
+                    "postRef",
+                    "action",
+                    "outcome",
+                    "reason",
+                    "repeat",
+                    "publicationId",
+                    "publication",
+                    "command",
+                    "check",
+                    "dailyLimit"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/agent/pages/{pageLabel}/posts/{postRef}/withdraw": {
+      "post": {
+        "summary": "Take a post of a granted page off the platform's schedule by the platform's post id — one put there by hand too (needs withdraw:publications). Only a post Hub's own read of the page's schedule, an hour old at most, shows waiting, 15 minutes or more before its time, the page not stopped. A Hub post goes through its publication's withdrawal. One command per post: a repeat answers its state and sends nothing. Never a deletion",
+        "tags": [
+          "agent"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "in": "path",
+            "name": "pageLabel",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[1-9][0-9]{0,29}$"
+            },
+            "in": "path",
+            "name": "postRef",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "agentKeyAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "pageLabel": {
+                      "type": "string"
+                    },
+                    "platform": {
+                      "type": "string",
+                      "enum": [
+                        "fansly",
+                        "onlyfans"
+                      ]
+                    },
+                    "postRef": {
+                      "type": "string"
+                    },
+                    "action": {
+                      "type": "string",
+                      "enum": [
+                        "withdraw",
+                        "delete"
+                      ]
+                    },
+                    "outcome": {
+                      "type": "string",
+                      "enum": [
+                        "accepted",
+                        "withdrawn",
+                        "deleted",
+                        "unknown",
+                        "rejected",
+                        "not_sent",
+                        "refused"
+                      ]
+                    },
+                    "reason": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "repeat": {
+                      "type": "boolean"
+                    },
+                    "publicationId": {
+                      "anyOf": [
+                        {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "publication": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "id": {
+                              "type": "integer",
+                              "exclusiveMinimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "pageLabel": {
+                              "type": "string"
+                            },
+                            "platform": {
+                              "type": "string",
+                              "enum": [
+                                "fansly",
+                                "onlyfans",
+                                "telegram"
+                              ]
+                            },
+                            "kind": {
+                              "type": "string",
+                              "enum": [
+                                "fyp_post",
+                                "subscriber_post",
+                                "paid_post",
+                                "story",
+                                "vault_album"
+                              ]
+                            },
+                            "status": {
+                              "type": "string",
+                              "enum": [
+                                "draft",
+                                "approved",
+                                "submitting",
+                                "scheduled",
+                                "processing",
+                                "published",
+                                "not_published",
+                                "rejected",
+                                "unknown",
+                                "missed",
+                                "withdrawn",
+                                "cancelled"
+                              ]
+                            },
+                            "version": {
+                              "type": "integer",
+                              "exclusiveMinimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "text": {
+                              "type": "string"
+                            },
+                            "publishAt": {
+                              "type": "string"
+                            },
+                            "expiresAt": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "wallRefs": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            },
+                            "tierRefs": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            },
+                            "priceMills": {
+                              "anyOf": [
+                                {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "repost": {
+                              "type": "boolean"
+                            },
+                            "pinWallRefs": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            },
+                            "replyLock": {
+                              "type": "array",
+                              "items": {
+                                "type": "string",
+                                "enum": [
+                                  "followers",
+                                  "subscribers"
+                                ]
+                              }
+                            },
+                            "subscribersOnly": {
+                              "type": "boolean"
+                            },
+                            "extraAttachments": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "attachment": {
+                                    "type": "integer",
+                                    "exclusiveMinimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "access": {
+                                    "type": "string",
+                                    "enum": [
+                                      "everyone",
+                                      "subscribers",
+                                      "paid"
+                                    ]
+                                  },
+                                  "tierRefs": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "priceMills": {
+                                    "anyOf": [
+                                      {
+                                        "type": "integer",
+                                        "minimum": -9007199254740991,
+                                        "maximum": 9007199254740991
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "subscribersOnly": {
+                                    "type": "boolean"
+                                  }
+                                },
+                                "required": [
+                                  "attachment",
+                                  "access",
+                                  "tierRefs",
+                                  "priceMills",
+                                  "subscribersOnly"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
+                            "media": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "role": {
+                                    "type": "string",
+                                    "enum": [
+                                      "media",
+                                      "preview"
+                                    ]
+                                  },
+                                  "position": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "source": {
+                                    "type": "string",
+                                    "enum": [
+                                      "vault",
+                                      "file"
+                                    ]
+                                  },
+                                  "mediaRef": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  },
+                                  "fileId": {
+                                    "anyOf": [
+                                      {
+                                        "type": "integer",
+                                        "minimum": -9007199254740991,
+                                        "maximum": 9007199254740991
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "attachment": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "name": {
+                                    "default": null,
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "role",
+                                  "position",
+                                  "source",
+                                  "mediaRef",
+                                  "fileId",
+                                  "attachment",
+                                  "name"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
+                            "findings": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "code": {
+                                    "type": "string",
+                                    "enum": [
+                                      "publish_time_past",
+                                      "file_of_another_model",
+                                      "file_deleted",
+                                      "media_not_on_page",
+                                      "repost_within_threshold",
+                                      "posted_before",
+                                      "price_range_not_set",
+                                      "price_out_of_range",
+                                      "paid_post_off_on_onlyfans",
+                                      "volume_high",
+                                      "daily_limit_exceeded",
+                                      "wall_not_on_page",
+                                      "wall_default_unknown",
+                                      "tier_not_on_page",
+                                      "onlyfans_file_upload_unsupported",
+                                      "onlyfans_file_too_large",
+                                      "fansly_file_upload_unsupported",
+                                      "fansly_several_tiers_unsupported",
+                                      "platform_schedule_incomplete"
+                                    ]
+                                  },
+                                  "severity": {
+                                    "type": "string",
+                                    "enum": [
+                                      "blocking",
+                                      "warning",
+                                      "info"
+                                    ]
+                                  },
+                                  "mediaKey": {
+                                    "default": null,
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  },
+                                  "at": {
+                                    "default": null,
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  },
+                                  "postRef": {
+                                    "default": null,
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  },
+                                  "publicationId": {
+                                    "default": null,
+                                    "anyOf": [
+                                      {
+                                        "type": "integer",
+                                        "minimum": -9007199254740991,
+                                        "maximum": 9007199254740991
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "detail": {
+                                    "default": {},
+                                    "type": "object",
+                                    "propertyNames": {
+                                      "type": "string"
+                                    },
+                                    "additionalProperties": {
+                                      "type": [
+                                        "number",
+                                        "string",
+                                        "null"
+                                      ]
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "code",
+                                  "severity",
+                                  "mediaKey",
+                                  "at",
+                                  "postRef",
+                                  "publicationId",
+                                  "detail"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
+                            "blocked": {
+                              "type": "boolean"
+                            },
+                            "author": {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "enum": [
+                                    "human",
+                                    "agent"
+                                  ]
+                                },
+                                "userId": {
+                                  "anyOf": [
+                                    {
+                                      "type": "integer",
+                                      "minimum": -9007199254740991,
+                                      "maximum": 9007199254740991
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "agentKeyId": {
+                                  "anyOf": [
+                                    {
+                                      "type": "integer",
+                                      "minimum": -9007199254740991,
+                                      "maximum": 9007199254740991
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "userId",
+                                "agentKeyId"
+                              ],
+                              "additionalProperties": false
+                            },
+                            "approvedRevisionId": {
+                              "anyOf": [
+                                {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "platformPostRef": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "vaultAlbumRef": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "statusReason": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "previousPublicationId": {
+                              "anyOf": [
+                                {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "withdrawal": {
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "state": {
+                                      "type": "string"
+                                    },
+                                    "errorCode": {
+                                      "type": [
+                                        "string",
+                                        "null"
+                                      ]
+                                    },
+                                    "at": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "state",
+                                    "errorCode",
+                                    "at"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "deletion": {
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "state": {
+                                      "type": "string"
+                                    },
+                                    "errorCode": {
+                                      "type": [
+                                        "string",
+                                        "null"
+                                      ]
+                                    },
+                                    "at": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "state",
+                                    "errorCode",
+                                    "at"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "createdAt": {
+                              "type": "string"
+                            },
+                            "updatedAt": {
+                              "type": "string"
+                            },
+                            "statusChangedAt": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "pageLabel",
+                            "platform",
+                            "kind",
+                            "status",
+                            "version",
+                            "text",
+                            "publishAt",
+                            "expiresAt",
+                            "wallRefs",
+                            "tierRefs",
+                            "priceMills",
+                            "repost",
+                            "pinWallRefs",
+                            "replyLock",
+                            "subscribersOnly",
+                            "extraAttachments",
+                            "media",
+                            "findings",
+                            "blocked",
+                            "author",
+                            "approvedRevisionId",
+                            "platformPostRef",
+                            "vaultAlbumRef",
+                            "statusReason",
+                            "previousPublicationId",
+                            "withdrawal",
+                            "deletion",
+                            "createdAt",
+                            "updatedAt",
+                            "statusChangedAt"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "command": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "state": {
+                              "type": "string"
+                            },
+                            "stateReason": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "createdAt": {
+                              "type": "string"
+                            },
+                            "settledAt": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "state",
+                            "stateReason",
+                            "createdAt",
+                            "settledAt"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "check": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "dailyLimit": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "limit": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "used": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            }
+                          },
+                          "required": [
+                            "limit",
+                            "used"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "pageLabel",
+                    "platform",
+                    "postRef",
+                    "action",
+                    "outcome",
+                    "reason",
+                    "repeat",
+                    "publicationId",
+                    "publication",
+                    "command",
+                    "check",
+                    "dailyLimit"
                   ],
                   "additionalProperties": false
                 }

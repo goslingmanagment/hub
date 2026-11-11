@@ -1886,6 +1886,8 @@ async function pageHotTargets(app: Db, scope: ResolvedScope): Promise<WorkTarget
     // at) and the reads that checked them, the publications (their media,
     // approvals and status journal go with them by FK) and the page's settings.
     ["fansly_write_commands", "page_id"],
+    // An agent key's deletions of the page's posts, its daily ceiling (0369).
+    ["agent_post_delete_slots", "page_id"],
     ["publication_dispatches", "page_id"],
     ["publication_checks", "page_id"],
     // Which OnlyFansAPI upload served which file of a publication (0303).

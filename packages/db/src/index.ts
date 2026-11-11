@@ -140,6 +140,7 @@ export * from "./repositories/capture-payload-erasure.ts";
 export * from "./repositories/capture-rewrite.ts";
 export * from "./repositories/agent-keys.ts";
 export * from "./repositories/agent-read-audit.ts";
+export * from "./repositories/agent-post-delete-slots.ts";
 // Agent Read Plane witnesses: the TYPE and NOTHING ELSE. The mint helpers stay
 // unexported from the barrel so a runtime handler cannot claim it read a store it
 // never queried — the first review round found four handlers doing exactly that.

@@ -357,6 +357,17 @@ function publicationIdOf(work: Pick<SyncWorkRow, "subject">): number | null {
   return /^[1-9][0-9]{0,17}$/.test(work.subject) ? Number(work.subject) : null;
 }
 
+/** The subject of a read of a post with no Hub publication (0369): `post:<ref>`. */
+export function fanslyPostVerifySubject(postRef: string): string {
+  return `post:${postRef}`;
+}
+
+/** The post a `post:<ref>` subject names. */
+function postRefOfSubject(work: Pick<SyncWorkRow, "subject">): string | null {
+  const match = /^post:([0-9A-Za-z_-]{1,64})$/.exec(work.subject);
+  return match === null ? null : match[1]!;
+}
+
 type NextRead = { spec: "posts.by_ids"; ref: string } | { spec: "posts.scheduled" } | { spec: "posts.timeline" } | { spec: "stories.list" } | null;
 
 /**
@@ -387,6 +398,16 @@ export function nextPublicationRead(input: {
 export const fanslyVerifyModule: ResourceModule = {
   async plan(work, ctx: PlanContext): Promise<StepPlan> {
     const id = publicationIdOf(work);
+    // A deleted post with no Hub publication (an agent's, 0369): its id alone.
+    const postRef = id === null ? postRefOfSubject(work) : null;
+    if (postRef !== null) {
+      const reads: FanslyPublicationReads = parsePublicationReads(work.cursor) ?? { v: 1, publicationId: 0, mode: "deleted" };
+      if (ctx.now.getTime() - work.createdAt.getTime() > FANSLY_VERIFY_GIVE_UP_MS) {
+        return { kind: "local", reason: "verify_give_up", detail: { ...reads, gaveUp: "reads_timed_out", at: ctx.now.toISOString() } };
+      }
+      if (reads.byId !== undefined) return { kind: "done", reason: "reads_taken", cursor: reads, result: { ...reads, at: ctx.now.toISOString() } };
+      return { kind: "request", request: { spec: "posts.by_ids", params: { ids: [postRef] }, step: { read: "by_id", ref: postRef } } };
+    }
     if (id === null) return { kind: "quarantine", reason: "verify_subject_invalid" };
     const params = verifyParamsOf(work);
     const reads: FanslyPublicationReads = parsePublicationReads(work.cursor) ?? { v: 1, publicationId: id, mode: params.mode };

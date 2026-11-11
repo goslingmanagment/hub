@@ -87,6 +87,12 @@ export function publicationActionId(publicationId: number, revisionId: number, k
   return stableUuid(`publication:${publicationId}:revision:${revisionId}:${kind}`);
 }
 
+/** The action id of a post's delete with no Hub publication (an agent's, owner 2026-11-11): one per page and post —
+ *  on OnlyFans taking a post off the schedule and off the wall is one and the same request, sent once. */
+export function postDeleteActionId(pageId: number, postRef: string): string {
+  return stableUuid(`page:${pageId}:post:${postRef}:post_delete`);
+}
+
 /** The upload request of one new file of one approval (plan PR 4c): a retry finds the same upload, a new approval makes a new one. */
 export function publicationUploadRequestId(publicationId: number, revisionId: number, role: string, position: number): string {
   return stableUuid(`publication:${publicationId}:revision:${revisionId}:upload:${role}:${position}`);

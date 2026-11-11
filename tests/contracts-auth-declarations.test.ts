@@ -54,6 +54,10 @@ describe("route auth declarations", () => {
       // The Sync Engine's history-request create (same shape as hydration's).
       "agentHistoryRequestCreate",
       "agentHydrationRequestCreate",
+      // Any post of a page by the platform's id: off the schedule
+      // (withdraw:publications) or off the wall (delete:posts).
+      "agentPostDelete",
+      "agentPostWithdraw",
       // Publications: an agent's draft, its page's list and the page's media
       // for drafts, and a file uploaded for the page's model (write:publication_drafts),
       // or found there by its bytes' SHA-256 before an upload.

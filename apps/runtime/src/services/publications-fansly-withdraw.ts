@@ -140,7 +140,8 @@ export async function withdrawFanslyPublications(
         dispatchId: dispatch.id, step: "post_cancel", item: "", priority: "background",
         // Never sent closer than 15 minutes to the time (the engine checks it again before the send).
         notBefore: now, notAfter: new Date(record.publishAt.getTime() - PUBLICATION_WITHDRAW_MIN_LEAD_MINUTES * MINUTE_MS),
-        config, now, isSendable,
+        // The post itself: one live cancel of it, whichever route asks (0369).
+        config, now, isSendable, postRef: record.platformPostRef,
       });
       return queued === null ? "withdraw_in_progress" : "accepted";
     }).catch((error: unknown) => {

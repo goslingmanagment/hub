@@ -383,6 +383,62 @@ export const publicationQueueListResponseSchema = z.object({ pages: z.array(publ
 export const publicationQueueRefreshBodySchema = z.strictObject({ pageLabel: z.string().min(1) });
 export const publicationQueueRefreshResponseSchema = z.object({ requestedAt: z.string() });
 
+// --- Any post of a page, by the platform's id (owner 2026-11-11) -------------
+
+/** A platform's post id as its schedule and its posts name it: digits. */
+export const AGENT_POST_REF_PATTERN = /^[1-9][0-9]{0,29}$/;
+
+export const agentPostParamsSchema = z.object({
+  pageLabel: z.string().min(1),
+  /** The platform's post id: `postRef` of the page's schedule entry, or of its post. */
+  postRef: z.string().regex(AGENT_POST_REF_PATTERN),
+});
+
+export const agentPostDeleteBodySchema = z.strictObject({
+  /** Why, in a few words, with whose «да» (e.g. «Дима 11.11: удалить, нарезка из кастома»):
+   *  kept in the owner's audit beside the key, the page and the post. */
+  reason: z.string().trim().min(3).max(300),
+});
+
+/** The command Hub holds for the post (one per post and action, whichever route asked). */
+export const agentPostCommandStateSchema = z.object({
+  /** queued, sending, answered, rejected, unknown (Fansly's engine); prepared, dispatching, confirmed, rejected,
+   *  indeterminate (an OnlyFans owner action). */
+  state: z.string(),
+  stateReason: z.string().nullable(),
+  createdAt: z.string(),
+  settledAt: z.string().nullable(),
+});
+
+export const agentPostCommandResponseSchema = z.object({
+  pageLabel: z.string(),
+  platform: z.enum(["fansly", "onlyfans"]),
+  postRef: z.string(),
+  action: z.enum(["withdraw", "delete"]),
+  /**
+   * accepted — Fansly: Hub queued ONE command on the page's engine; ask again in a minute or two for its end;
+   * withdrawn — off the schedule: the platform's answer or a read after it proves it;
+   * deleted — off the wall: the platform's answer (OnlyFans) or a read of the post after it (Fansly) proves it;
+   * unknown — the command may or may not have done it: nothing is sent again, a person checks (`check`);
+   * rejected — the platform said no: the post stays;
+   * not_sent — the command never left: ask again;
+   * refused — Hub sent nothing (`reason`).
+   */
+  outcome: z.enum(["accepted", "withdrawn", "deleted", "unknown", "rejected", "not_sent", "refused"]),
+  reason: z.string().nullable(),
+  /** Hub already holds a command for this post and action: this answers from it, and nothing was sent now. */
+  repeat: z.boolean(),
+  /** The Hub publication the post is (its withdrawal or deletion went through it), or null for one placed by hand. */
+  publicationId: z.number().int().nullable(),
+  publication: publicationSchema.nullable(),
+  command: agentPostCommandStateSchema.nullable(),
+  /** unknown: what a person checks on the platform. */
+  check: z.string().nullable(),
+  /** A deletion's ceiling for this key over the last 24 hours (null: a withdrawal, or no ceiling). */
+  dailyLimit: z.object({ limit: z.number().int(), used: z.number().int() }).nullable(),
+});
+export type AgentPostCommandResponse = z.infer<typeof agentPostCommandResponseSchema>;
+
 // --- The page's media, for the agents who draft (plan PR 10, spec §7) ---------
 
 /** What a file is, as far as Hub knows. */

@@ -1544,6 +1544,35 @@ export async function getLatestFanslyVerifyWork(db: Database, input: { pageId: n
   };
 }
 
+/** The newest `publish.verify` work of a post with no Hub publication (0369):
+ *  its subject is `post:<ref>`, its one read the post by its id. */
+export async function getLatestFanslyPostVerifyWork(db: Database, input: { pageId: number; postRef: string }): Promise<FanslyVerifyWorkFacts | null> {
+  const result = await db.execute<Row>(sql`
+    select id, state, created_at, closed_at, close_reason, result from sync_work
+     where page_id = ${input.pageId} and not shadow and resource = 'publish.verify' and subject = ${`post:${input.postRef}`}
+     order by id desc limit 1
+  `);
+  const row = result.rows[0];
+  if (!row) return null;
+  return {
+    id: num(row.id),
+    state: String(row.state),
+    createdAt: date(row.created_at),
+    closedAt: nullableDate(row.closed_at),
+    closeReason: (row.close_reason as string | null) ?? null,
+    result: row.result ?? null,
+  };
+}
+
+/** Whether Hub holds `postRef` among the page's own synced posts (`creator_posts`
+ *  of the page's account): the only posts an agent may delete (0369). */
+export async function pageHasCreatorPost(db: Database, input: { pageId: number; postRef: string }): Promise<boolean> {
+  const result = await db.execute<Row>(sql`
+    select exists(select 1 from creator_posts where account_id = ${input.pageId} and platform_post_id = ${input.postRef}) as found
+  `);
+  return result.rows[0]?.found === true;
+}
+
 /** A Fansly withdrawal Hub follows (plan PR 9): the publication, and its latest cancel command. */
 export interface FanslyWithdrawalFacts {
   dispatchId: number;
@@ -1862,6 +1891,16 @@ export async function listPublicationsByPlatformPostRef(db: Database, pageId: nu
   return new Map(result.rows.map((row) => [String(row.platform_post_ref), { id: num(row.id), status: row.status as PublicationStatus }]));
 }
 
+/** The Hub publication that is the page's post `postRef` (the newest, should two have named it), or null. */
+export async function findPublicationIdByPlatformPostRef(db: Database, input: { pageId: number; postRef: string }): Promise<number | null> {
+  const result = await db.execute<Row>(sql`
+    select id from publications where page_id = ${input.pageId} and platform_post_ref = ${input.postRef}
+     order by id desc limit 1
+  `);
+  const row = result.rows[0];
+  return row ? num(row.id) : null;
+}
+
 /** The page's Hub posts in the platform's schedule, earliest first ("Снять всё, что поставил Hub"). */
 export async function listScheduledPublicationIds(db: Database, pageId: number): Promise<number[]> {
   const result = await db.execute<Row>(sql`
@@ -1971,9 +2010,10 @@ export async function listOnlyfansPublicationsWithUploads(db: Database): Promise
  * Whether a page's Fansly schedule is worth reading (`GET /post/scheduled`):
  * its publishing is on, Hub has a post of the page in flight there, or someone
  * asked for a fresh read (the owner's «Обновить», an agent key's refresh) that
- * no read has answered yet — one read, which clears the request. A page with
- * publishing off, nothing of Hub's on it and no such request gets no new kind
- * of request.
+ * no read has answered yet — one read, which clears the request — or a cancel
+ * of a post with no Hub publication (0369) waits for a read: before it goes,
+ * or, answered within the last 30 minutes, after it. A page with publishing
+ * off, nothing of Hub's on it and no such request gets no new kind of request.
  */
 export async function fanslyScheduleReadWanted(db: Database, pageId: number): Promise<boolean> {
   const result = await db.execute<Row>(sql`
@@ -1985,6 +2025,12 @@ export async function fanslyScheduleReadWanted(db: Database, pageId: number): Pr
        where p.page_id = ${pageId} and p.status in ('submitting', 'scheduled', 'processing', 'unknown')
     ) or exists(
       select 1 from publication_queue_snapshots where page_id = ${pageId} and refresh_requested_at is not null
+    ) or exists(
+      select 1 from fansly_write_commands c
+       where c.page_id = ${pageId} and c.publication_id is null and c.step = 'post_cancel'
+         and (c.state in ('queued', 'sending')
+              or (c.state = 'answered' and c.settled_at > now() - interval '30 minutes'
+                  and not exists (select 1 from publication_queue_snapshots s where s.page_id = c.page_id and s.read_at > c.settled_at)))
     ) as wanted
   `);
   return result.rows[0]?.wanted === true;

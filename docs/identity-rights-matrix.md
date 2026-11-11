@@ -110,10 +110,18 @@ the owner's routes refuse every agent key with 403. A key with
 the platform's schedule (`/agent/publications/{id}/withdraw`, the owner's
 withdrawal services, the same refusals; the owner's audit row names the key)
 and reads its pages' schedules (`/agent/pages/{label}/publication-queue`, and
-its refresh), as `write:publication_drafts` does; deleting a published post and
-a whole page's withdrawal stay the owner's. A page outside the grant is the plane's static 404, a key without the
-capability 403. The rows are held by `publications.integration` and
-`publications-fansly-withdraw.integration`.
+its refresh), as `write:publication_drafts` does. By the platform's post id
+(`/agent/pages/{label}/posts/{postRef}/withdraw`) the same key takes any post of
+its pages off the schedule, one placed by hand too, once Hub's own read of the
+page's schedule (an hour old at most) shows it. A key with `delete:posts`
+(owner 2026-11-11, only on the owner's «да» for that post — the agent holds it)
+deletes a published post among its page's own posts
+(`/agent/pages/{label}/posts/{postRef}/delete`): a daily ceiling per key
+(`AGENT_POST_DELETE_DAILY_LIMIT_PER_KEY`), one command per post whichever route
+asks, its reason in the owner's audit row with the key. A whole page's
+withdrawal stays the owner's. A page outside the grant is the plane's static 404, a key without the
+capability 403. The rows are held by `publications.integration`,
+`publications-fansly-withdraw.integration` and `agent-post-commands.integration`.
 
 Agent keys are the owner's too: only the owner's cookie session issues, lists,
 revokes and changes one. A live key's capabilities change in place (owner,
