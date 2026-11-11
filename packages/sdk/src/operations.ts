@@ -202,6 +202,7 @@ export const kernelOperations = {
   clientConversationFeed: { method: "GET", path: "/api/v1/client/pages/:pageLabel/conversations/:fanRef/feed" },
   clientConversationRecaps: { method: "GET", path: "/api/v1/client/pages/:pageLabel/conversations/:fanRef/recaps" },
   clientDeletedMessages: { method: "GET", path: "/api/v1/client/pages/:pageLabel/fans/:fanRef/deleted-messages" },
+  clientFanBadges: { method: "POST", path: "/api/v1/client/pages/:pageLabel/fan-badges" },
   clientFanCard: { method: "GET", path: "/api/v1/client/pages/:pageLabel/fans/:fanRef/card" },
   clientFanClaim: { method: "POST", path: "/api/v1/client/pages/:pageLabel/fans/:fanRef/claim" },
   clientFanClaimStatus: { method: "GET", path: "/api/v1/client/pages/:pageLabel/fans/:fanRef/claim" },

@@ -209,6 +209,9 @@ export const SERVED_CLIENT_CAPABILITIES: readonly ClientHubCapabilityName[] = [
   // …/outreach-touches. No owner switch, like fan queues: an extension without
   // it keeps its outreaches in the browser.
   "outreach-store-v1",
+  // POST …/fan-badges: FBuddy's spending tier and Fansly's «Recent Spender» mark of the page's fans, as a chatter's
+  // browser read them (Fansly pages). No owner switch: an extension without it keeps the badges to itself.
+  "fan-badges-v1",
 ];
 
 /**

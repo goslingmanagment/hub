@@ -86,6 +86,8 @@ export const CLIENT_TOKEN_PROFILES = {
       "clientOnlinePresence",
       "clientOnlineProbe",
       "clientOnlineAttempt",
+      // fan-badges-v1: FBuddy's tier and Fansly's blue card of the fans a tab just read.
+      "clientFanBadges",
       // Fan queues: the caller's queues, a portion, each fan's outcome, giving a portion back.
       "clientFanQueues",
       "clientFanQueueTake",

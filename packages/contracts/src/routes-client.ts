@@ -200,6 +200,8 @@ export const CLIENT_HUB_CAPABILITY_NAMES = [
   "chatspace-tab-state-v2",
   // «Рассылки» kept by Hub, shared by the page's team: the list, one outreach, its save, each fan's claimed send, touches.
   "outreach-store-v1",
+  // Fan badges: `clientFanBadges` takes FBuddy's tier and Fansly's blue card of the fans a tab just read.
+  "fan-badges-v1",
 ] as const;
 /**
  * Append-only. `client_outdated` (the caller's `x-client-version` is below the
@@ -3212,6 +3214,39 @@ export const clientOnlinePresenceResponseSchema = z.object({
   serverNow: isoTimestamp,
 });
 
+// ── Fan badges (clientFanBadges) ────────────────────────────────────────────
+
+/** FBuddy's spending tiers (`tierVersion=2`): Basic $0, Bronze to $100, Silver to $1 000, Gold to $3 000, Platinum above. */
+export const CLIENT_FBUDDY_TIERS = ["basic", "bronze", "silver", "gold", "platinum"] as const;
+/** One report's fans at most: as many as a board of the extension asks about at once. */
+export const CLIENT_FAN_BADGES_MAX = 300;
+
+export const clientFanBadgesBodySchema = z.object({
+  /**
+   * The badges a chatter's browser just read for fans of the page, the two FBuddy draws beside a fan's name. A field
+   * is sent only when its source answered for the fan:
+   * - `fbuddyTier`: FBuddy's spending tier of the fan, summed over every creator who shares spend with FBuddy, read
+   *   from FBuddy in the chatter's own FBuddy sign-in; null when FBuddy answered and has no tier for the fan;
+   * - `recentSpender`: Fansly's own «Recent Spender» mark of the fan's account (the blue card), read from Fansly in
+   *   the page's session.
+   */
+  fans: z.array(z.object({
+    fanRef: clientFanRefSchema,
+    fbuddyTier: z.enum(CLIENT_FBUDDY_TIERS).nullable().optional(),
+    recentSpender: z.boolean().optional(),
+  }).strict()).min(1).max(CLIENT_FAN_BADGES_MAX),
+}).strict();
+
+export const clientFanBadgesResponseSchema = z.object({
+  /** Fans of the page with a badge Hub did not have, or had another value of: kept now. */
+  changed: count,
+  /** Fans whose badges Hub already had as reported. */
+  unchanged: count,
+  /** Fans not linked to the page (yet), or sent with neither badge. */
+  skipped: count,
+  serverNow: isoTimestamp,
+});
+
 export const clientOnlineProbeBodySchema = z.object({}).strict();
 
 export const clientOnlineProbeResponseSchema = z.object({
@@ -4308,6 +4343,29 @@ export const clientRouteSchemas = {
       409: errorResponseSchema,
     },
   },
+  clientFanBadges: {
+    auth: { kind: "apiKey", scope: "page" },
+    tags: ["client"],
+    summary: "The badges a chatter's browser read for the page's fans: FBuddy's tier, Fansly's blue card",
+    description: "Database-only; Hub asks neither Fansly nor FBuddy. A device token's, for an active Fansly page "
+      + "granted to the caller (else 409 `client_feature_disabled` / `not_granted`; another platform "
+      + "`platform_unsupported`). Up to 300 fans, each with what the browser just read: `fbuddyTier` (FBuddy's "
+      + "spending tier across creators; null: FBuddy has none for the fan) and `recentSpender` (Fansly's «Recent "
+      + "Spender» mark), each sent only when its source answered. Only fans already linked to the page are kept. "
+      + "A badge is the fan's, not the page's: one fan has one tier and one mark on every page. New and changed "
+      + "values are journaled once and kept with the moment of the change; a value Hub already has writes nothing "
+      + "but, at most once a day, the moment it was confirmed.",
+    params: clientPageParamsSchema,
+    body: clientFanBadgesBodySchema,
+    response: {
+      200: clientFanBadgesResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+      409: errorResponseSchema,
+    },
+  },
   clientOnlineProbe: {
     auth: { kind: "apiKey", scope: "page" },
     tags: ["client"],
@@ -4686,6 +4744,9 @@ export type ClientOnlineItem = z.infer<typeof clientOnlineItemSchema>;
 export type ClientOnlineResponse = z.infer<typeof clientOnlineResponseSchema>;
 export type ClientOnlinePresenceBody = z.infer<typeof clientOnlinePresenceBodySchema>;
 export type ClientOnlinePresenceResponse = z.infer<typeof clientOnlinePresenceResponseSchema>;
+export type ClientFbuddyTier = (typeof CLIENT_FBUDDY_TIERS)[number];
+export type ClientFanBadgesBody = z.infer<typeof clientFanBadgesBodySchema>;
+export type ClientFanBadgesResponse = z.infer<typeof clientFanBadgesResponseSchema>;
 export type ClientOnlineProbeBody = z.infer<typeof clientOnlineProbeBodySchema>;
 export type ClientOnlineProbeResponse = z.infer<typeof clientOnlineProbeResponseSchema>;
 export type ClientOnlineAttemptBody = z.infer<typeof clientOnlineAttemptBodySchema>;
