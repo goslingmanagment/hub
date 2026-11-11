@@ -2008,7 +2008,8 @@ export const clientDeletedMessagesResponseSchema = z.object({
   })).max(CLIENT_DELETED_MESSAGES_MAX),
   /**
    * Only when the request named `conversationRef`: the chat's length; null
-   * when the page holds no thread of that group with this fan.
+   * when the page holds no thread of that group with this fan (on an OnlyFans
+   * page: no message of that fan's chat).
    */
   chat: clientChatLengthSchema.nullable().optional(),
   serverNow: isoTimestamp,

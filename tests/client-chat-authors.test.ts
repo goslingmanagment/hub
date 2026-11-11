@@ -91,7 +91,7 @@ describe("onlyFansChatLengthOf", () => {
 
   it("still answers a chat whose only trace is a reported send, its first message unknown when no row has a time", () => {
     const withSend = onlyFansChatLengthOf("500", { messages: 0, oldestAt: null, authors: { chatters: [chatter(ME, "anna", 1)], pageSide: 0 } }, ME);
-    expect(withSend).toMatchObject({ messages: 0, firstMessageAt: null, approximate: true, authors: { fan: 0, unattributed: 0 } });
+    expect(withSend).toMatchObject({ messages: 1, firstMessageAt: null, approximate: true, authors: { fan: 0, unattributed: 0 } });
     expect(onlyFansChatLengthOf("500", { messages: 3, oldestAt: null, authors: { chatters: [], pageSide: 1 } }, ME))
       .toMatchObject({ messages: 3, firstMessageAt: null, authors: { chatters: [], fan: 2, unattributed: 1 } });
   });

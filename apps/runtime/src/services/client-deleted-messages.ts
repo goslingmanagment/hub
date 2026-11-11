@@ -88,11 +88,14 @@ export function chatLengthOf(
  */
 export function onlyFansChatLengthOf(conversationRef: string, row: ClientOnlyFansChatRow, callerUserId: number): ClientChatLength | null {
   if (row.messages === 0 && row.authors.chatters.length === 0) return null;
+  // A send can be reported a moment before the archive holds it: the chat is never shorter than its reported sends.
+  const reported = row.authors.chatters.reduce((sum, chatter) => sum + Math.max(0, chatter.messages), 0);
+  const messages = Math.max(row.messages, reported);
   return {
     conversationRef,
-    messages: row.messages,
+    messages,
     firstMessageAt: row.oldestAt === null ? null : row.oldestAt.toISOString(),
-    authors: chatAuthorsOf(row.messages, row.authors, callerUserId),
+    authors: chatAuthorsOf(messages, row.authors, callerUserId),
     approximate: true,
   };
 }
