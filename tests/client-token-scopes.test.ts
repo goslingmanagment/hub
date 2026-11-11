@@ -66,14 +66,12 @@ describe("CLIENT_TOKEN_PROFILES[\"chat-extension\"]", () => {
     expect(reached.filter((path) => path!.startsWith("/api/v1/ofapi") || path!.startsWith("/api/v1/events"))).toEqual([]);
   });
 
-  it("never lists the persona texts, the raw gateway, Fansly outreach or the top spenders", () => {
+  it("never lists the persona texts or the raw gateway", () => {
     for (const key of [
       "aiPersonasList",
       "aiPersonaUpsert",
       "aiPersonaArchive",
       "aiGatewayStream",
-      "followerOutreachAttempt",
-      "pageTopSpenders",
     ]) {
       expect(key in schemas, key).toBe(true);
       expect(operations, key).not.toContain(key);

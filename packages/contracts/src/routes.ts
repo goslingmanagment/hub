@@ -3081,65 +3081,6 @@ export const syncRunDetailResponseSchema = z.object({
   })),
 });
 
-const syncMonitorStatusEnum = z.enum([
-  "idle",
-  "pending",
-  "running",
-  "retrying",
-  "blocked",
-  "paused",
-]);
-const syncMonitorRateHealthEnum = z.enum(["healthy", "warning", "limited"]);
-
-export const syncMonitorProgressSchema = z.object({
-  label: z.string(),
-  current: z.number().int(),
-  total: z.number().int().nullable(),
-  unit: z.string(),
-  percent: z.number().nullable(),
-});
-
-export const syncMonitorRateHealthSchema = z.object({
-  state: syncMonitorRateHealthEnum,
-  last429At: isoTimestamp.nullable(),
-  nextAvailableAt: isoTimestamp.nullable(),
-});
-
-export const syncMonitorRecentRunsSchema = z.object({
-  running: z.number().int(),
-  success: z.number().int(),
-  partial: z.number().int(),
-  failed: z.number().int(),
-  skipped: z.number().int(),
-});
-
-export const syncMonitorRecentErrorsSchema = z.object({
-  total429s: z.number().int(),
-  total5xxs: z.number().int(),
-  failedRuns: z.number().int(),
-  failedAttempts: z.number().int(),
-  retryAttempts: z.number().int(),
-  last429At: isoTimestamp.nullable(),
-  last5xxAt: isoTimestamp.nullable(),
-});
-
-export const syncMonitorLastCompletionSchema = z.object({
-  runId: z.number().int(),
-  trigger: z.string(),
-  status: z.enum(["success", "partial", "failed", "skipped"]),
-  startedAt: isoTimestamp,
-  finishedAt: isoTimestamp,
-  durationMs: z.number().int().nullable(),
-  errorSummary: z.string().nullable(),
-});
-
-export const syncMonitorActiveRunSchema = z.object({
-  runId: z.number().int(),
-  trigger: z.string(),
-  startedAt: isoTimestamp,
-  lastActivityAt: isoTimestamp,
-});
-
 const extendedSyncStreamEnum = z.enum([
   "light",
   "fan_identities",
@@ -3167,109 +3108,6 @@ const extendedSyncStreamEnum = z.enum([
   // WP-F4.
   "media_stats",
 ]);
-
-export const syncMonitorStreamItemSchema = z.object({
-  stream: extendedSyncStreamEnum,
-  status: syncMonitorStatusEnum,
-  stalled: z.boolean(),
-  pending: z.boolean(),
-  retryAt: isoTimestamp.nullable(),
-  progress: syncMonitorProgressSchema.nullable(),
-  recentRuns: syncMonitorRecentRunsSchema,
-  recentErrors: syncMonitorRecentErrorsSchema,
-  rateHealth: syncMonitorRateHealthSchema,
-  activeRun: syncMonitorActiveRunSchema.nullable(),
-  lastCompletion: syncMonitorLastCompletionSchema.nullable(),
-  succeededAt: isoTimestamp.nullable(),
-  failedAt: isoTimestamp.nullable(),
-  lastErrorSummary: z.string().nullable(),
-  consecutiveFailures: z.number().int(),
-  syncUx: syncUxSummarySchema,
-});
-
-export const syncMonitorPageCountsSchema = z.object({
-  fans: z.number().int(),
-  followers: z.number().int(),
-  subscribers: z.number().int(),
-  transactions: z.number().int(),
-  conversations: z.number().int(),
-  messages: z.number().int(),
-});
-
-export const syncMonitorPageSummarySchema = z.object({
-  runningStreams: z.number().int(),
-  blockedStreams: z.number().int(),
-  stalledStreams: z.number().int(),
-  pendingStreams: z.number().int(),
-  retryingStreams: z.number().int(),
-});
-
-export const syncMonitorPageItemSchema = z.object({
-  pageId: z.number().int(),
-  pageLabel: z.string(),
-  platform: platformEnum,
-  modelSlug: z.string(),
-  modelName: z.string(),
-  username: z.string().nullable(),
-  displayName: z.string().nullable(),
-  counts: syncMonitorPageCountsSchema,
-  summary: syncMonitorPageSummarySchema,
-  streams: z.array(syncMonitorStreamItemSchema),
-  syncUx: syncUxSummarySchema,
-});
-
-export const syncMonitorProviderSummarySchema = z.object({
-  platform: platformEnum,
-  rateHealth: syncMonitorRateHealthSchema,
-  recent429s: z.number().int(),
-  recent5xxs: z.number().int(),
-});
-
-export const syncMonitorOverallSchema = z.object({
-  pages: z.number().int(),
-  streams: z.number().int(),
-  runningStreams: z.number().int(),
-  blockedStreams: z.number().int(),
-  stalledStreams: z.number().int(),
-  pendingStreams: z.number().int(),
-  retryingStreams: z.number().int(),
-  counts: syncMonitorPageCountsSchema,
-  recentRuns: syncMonitorRecentRunsSchema,
-  recentErrors: syncMonitorRecentErrorsSchema,
-  providers: z.array(syncMonitorProviderSummarySchema),
-  syncUx: syncUxSummarySchema,
-});
-
-export const syncMonitorRecentEventSchema = z.object({
-  id: z.number().int(),
-  runId: z.number().int(),
-  pageId: z.number().int(),
-  pageLabel: z.string(),
-  platform: platformEnum,
-  stream: extendedSyncStreamEnum,
-  eventType: z.string(),
-  severity: z.enum(["info", "warn", "error"]),
-  message: z.string(),
-  details: z.record(z.string(), z.unknown()),
-  emittedAt: isoTimestamp,
-});
-
-export const syncStatusQuerySchema = z.object({
-  pageLabel: z.string().min(1).optional(),
-  windowHours: z.coerce.number().int().min(1).max(24 * 14).default(24),
-  eventLimit: z.coerce.number().int().min(1).max(200).default(50),
-});
-
-export const syncStatusResponseSchema = z.object({
-  generatedAt: isoTimestamp,
-  window: z.object({
-    hours: z.number().int(),
-    startedAt: isoTimestamp,
-  }),
-  overall: syncMonitorOverallSchema,
-  pages: z.array(syncMonitorPageItemSchema),
-  recentEvents: z.array(syncMonitorRecentEventSchema),
-});
 
 export const syncRequestsQuerySchema = z.object({
   since: z.string().optional(),
@@ -6893,59 +6731,6 @@ const baseRouteSchemas = {
       404: errorResponseSchema,
     },
   },
-  pageTopSpenders: {
-    auth: { kind: "any", scope: "page" },
-    tags: ["fans"],
-    summary: "Top spenders for one page from the fan-earnings projection",
-    params: pageParamsSchema,
-    querystring: z.object({
-      // 'lifetime' or a month window ('2026-06') — the projection's window values.
-      window: z.string().regex(/^(lifetime|\d{4}-\d{2})$/).default("lifetime"),
-      limit: z.coerce.number().int().min(1).max(1000).default(150),
-    }),
-    response: {
-      200: z.object({
-        window: z.string(),
-        /** Freshest observed_at in the window (null = projection empty for this page). */
-        builtAt: z.string().nullable(),
-        /** Spenders with gross > 0 in this window (entries may be a bounded subset). */
-        fanCount: z.number().int().nonnegative(),
-        /** W8.1 (A12/A20): why the projection is (or is not) being fed — a
-         * `builtAt: null` response is no longer ambiguous between "no
-         * spenders" and "nobody reads this page's fan earnings". Additive. */
-        source: z.object({
-          /** `ramped`: the Fansly Sync Engine reads the page's fan earnings;
-           *  `flag_off`: it does not (the owner paused it, or the engine does
-           *  not own the page). `not_allowlisted` was the legacy executor's
-           *  page allowlist and is no longer served. */
-          streamState: z.enum(["ramped", "flag_off", "not_allowlisted", "unsupported_platform"]),
-          /** When the engine last applied a fan-earnings read for this page. */
-          lastSyncedAt: z.string().nullable(),
-          /** The largest failure count among its active fan-earnings work;
-           *  null = the engine does not own the page. */
-          consecutiveFailures: z.number().int().nullable(),
-        }),
-        entries: z.array(z.object({
-          platformUserId: z.string(),
-          username: z.string().nullable(),
-          displayName: z.string().nullable(),
-          grossMills: z.number().int().nonnegative(),
-          netMills: z.number().int().nullable(),
-          currency: z.string(),
-          observedAt: z.string(),
-          /** First time hydration failed to find this account on the platform
-           * (fans.deleted_detected_at); null = the fan is alive. Cleared server
-           * side as soon as any sync sees a name again (fans.ts:116-136).
-           * Optional so a client vendored against an older kernel still
-           * validates the response. */
-          deletedAt: z.string().nullable().optional(),
-        })),
-      }),
-      401: errorResponseSchema,
-      403: errorResponseSchema,
-      404: errorResponseSchema,
-    },
-  },
   pageDeletedFans: {
     auth: { kind: "any", scope: "page" },
     tags: ["fans"],
@@ -7032,19 +6817,6 @@ const baseRouteSchemas = {
     params: pageConversationProfileParamsSchema,
     response: {
       200: fanProfileResponseSchema,
-      401: errorResponseSchema,
-      403: errorResponseSchema,
-      404: errorResponseSchema,
-    },
-  },
-  upsertFanProfile: {
-    auth: { kind: "any", scope: "page" },
-    tags: ["fans"],
-    summary: "Append a new intelligence profile version for one fan on one page",
-    params: pageFanParamsSchema,
-    body: upsertFanProfileBodySchema,
-    response: {
-      200: fanProfileDocumentSchema,
       401: errorResponseSchema,
       403: errorResponseSchema,
       404: errorResponseSchema,
@@ -7181,22 +6953,6 @@ const baseRouteSchemas = {
       404: errorResponseSchema,
     },
   },
-  followerOutreachAttempt: {
-    auth: { kind: "any", scope: "page" },
-    tags: ["conversations"],
-    summary: "Reserve and record one human-triggered follower greeting send",
-    params: pageParamsSchema,
-    body: z.object({
-      fanRef: z.string().regex(/^\d{1,24}$/),
-      attemptId: z.string().uuid(),
-      action: z.enum(["reserve", "dispatch", "sent"]),
-      messageRef: z.string().regex(/^\d{1,24}$/).optional(),
-    }).strict(),
-    response: {
-      200: z.object({ owned: z.boolean(), state: z.enum(["reserved", "dispatching", "sent", "expired"]), expiresAt: isoTimestamp.nullable() }).strict(),
-      400: errorResponseSchema, 401: errorResponseSchema, 403: errorResponseSchema, 404: errorResponseSchema,
-    },
-  },
   // --- Phase 4: Dashboard routes ---
   overview: {
     auth: { kind: "session" },
@@ -7206,18 +6962,6 @@ const baseRouteSchemas = {
       200: overviewResponseSchema,
       401: errorResponseSchema,
       403: errorResponseSchema,
-    },
-  },
-  syncStatus: {
-    auth: { kind: "session" },
-    tags: ["dashboard"],
-    summary: "Get aggregated sync monitor data for visible pages",
-    querystring: syncStatusQuerySchema,
-    response: {
-      200: syncStatusResponseSchema,
-      401: errorResponseSchema,
-      403: errorResponseSchema,
-      404: errorResponseSchema,
     },
   },
   syncRequests: {
@@ -8808,8 +8552,6 @@ export type AdminTerminateAllAccessResponse = z.infer<typeof adminTerminateAllAc
 export type AdminAssignPageBody = z.infer<typeof adminAssignPageBodySchema>;
 export type SyncRunItem = z.infer<typeof syncRunItemSchema>;
 export type SyncRunDetailResponse = z.infer<typeof syncRunDetailResponseSchema>;
-export type SyncStatusQuery = z.infer<typeof syncStatusQuerySchema>;
-export type SyncMonitorResponse = z.infer<typeof syncStatusResponseSchema>;
 export type SyncRequestsQuery = z.infer<typeof syncRequestsQuerySchema>;
 export type SyncRequestItem = z.infer<typeof syncRequestItemSchema>;
 export type SyncRequestsResponse = z.infer<typeof syncRequestsResponseSchema>;

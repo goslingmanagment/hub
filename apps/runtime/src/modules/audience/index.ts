@@ -2,9 +2,7 @@ import { routeSchemas } from "@agency_hub_core/contracts";
 import {
   createFanNote,
   findPlatformFan,
-  getFanEarningsSnapshotMeta,
   listFanPageContexts,
-  listTopFanEarnings,
   setFanFlags,
 } from "@agency_hub_core/db";
 
@@ -27,8 +25,6 @@ import {
 } from "../../services/reporting.ts";
 import { readPageFanCard } from "../../services/fan-card.ts";
 import { searchVisibleFans } from "../../services/spenders.ts";
-import { loadEffectiveConfig } from "../../services/effective-config.ts";
-import { engineStreamState, readEngineStatusFacts } from "../../services/sync-status-engine.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
 
 // Audience module (target §6.1): fans, subscriptions, follows, growth, fan
@@ -37,35 +33,6 @@ import type { ApiModuleContext, ApiServer } from "../context.ts";
 export function registerAudienceRoutes(server: ApiServer, ctx: ApiModuleContext) {
   const { appContext } = ctx;
   const { requirePrincipal } = ctx.auth;
-
-  /**
-   * W8.1 (A12/A20): why the fan-earnings projection is (or is
-   * not) being fed, so `builtAt: null / entries: []` is not read as "no
-   * spenders". The Fansly Sync Engine feeds it (`fan-earnings.roster`, the
-   * `fan_earnings` stream's key), so the answer is that key's live work:
-   * `ramped` while the engine owns the page and the owner has not paused it,
-   * `flag_off` otherwise; the last applied read and the largest failure count of
-   * its active work. OnlyFans has no such stream.
-   */
-  async function topSpendersSource(page: { id: number; platform: string }) {
-    if (page.platform !== "fansly") {
-      return { streamState: "unsupported_platform" as const, lastSyncedAt: null, consecutiveFailures: null };
-    }
-    const effective = await loadEffectiveConfig(appContext.db, appContext.config);
-    const facts = (await readEngineStatusFacts(appContext.db, {
-      pageIds: [page.id],
-      settingMs: effective.fanslyDefaultDelayMs,
-    })).get(page.id);
-    if (facts === undefined) {
-      return { streamState: "flag_off" as const, lastSyncedAt: null, consecutiveFailures: null };
-    }
-    const state = engineStreamState("fan_earnings", facts);
-    return {
-      streamState: state.paused ? "flag_off" as const : "ramped" as const,
-      lastSyncedAt: state.succeededAt?.toISOString() ?? null,
-      consecutiveFailures: state.consecutiveFailures,
-    };
-  }
 
   server.get("/api/v1/overview/growth", {
     schema: routeSchemas.overviewGrowth,
@@ -142,42 +109,6 @@ export function registerAudienceRoutes(server: ApiServer, ctx: ApiModuleContext)
       throw new ForbiddenError("Page access denied");
     }
     return getPageFansReport(appContext, request.params.pageLabel, query);
-  });
-
-  // The extension's spenders board reads the projection
-  // instead of rebuilding rankings from ~150 Fansly calls. Page-scoped
-  // per-fan spend for an ASSIGNED page — deliberately not the dashboard's
-  // cross-page revenue aggregates behind the chatter gate.
-  server.get("/api/v1/pages/:pageLabel/top-spenders", {
-    schema: routeSchemas.pageTopSpenders,
-  }, async (request) => {
-    const principal = await requirePrincipal(request);
-    const page = await getPageSummary(appContext, request.params.pageLabel);
-    if (!canAccessPage(principal, page.id)) {
-      throw new ForbiddenError("Page access denied");
-    }
-    const { window, limit } = request.query;
-    const [meta, entries, source] = await Promise.all([
-      getFanEarningsSnapshotMeta(appContext.db, { accountId: page.id, window }),
-      listTopFanEarnings(appContext.db, { accountId: page.id, window, limit }),
-      topSpendersSource(page),
-    ]);
-    return {
-      window,
-      builtAt: meta.builtAt === null ? null : meta.builtAt.toISOString(),
-      fanCount: meta.fanCount,
-      source,
-      entries: entries.map((entry) => ({
-        platformUserId: entry.platformUserId,
-        username: entry.username,
-        displayName: entry.displayName,
-        grossMills: entry.grossMills,
-        netMills: entry.netMills,
-        currency: entry.currency,
-        observedAt: entry.observedAt.toISOString(),
-        deletedAt: entry.deletedAt === null ? null : entry.deletedAt.toISOString(),
-      })),
-    };
   });
 
   server.get("/api/v1/pages/:pageLabel/deleted-fans", {

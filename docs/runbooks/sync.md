@@ -1458,7 +1458,7 @@ replays the retained legacy raw (`sync_raw_payloads`) only. `message_archive` is
 
 ## OnlyFans: the legacy page-sync queue
 
-The legacy page-sync executor serves OnlyFans pages only; `pnpm cli sync status` and `/api/v1/sync/status` are its
+The legacy page-sync executor serves OnlyFans pages only; `pnpm cli sync status` is its
 monitor. A Fansly page's rows in `page_sync_states` are parked records (`paused`, blocker `retired`) that no image
 clears.
 

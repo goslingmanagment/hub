@@ -27,7 +27,7 @@ for at password sign-in (`client: "chat-extension"`): it reaches only the
 61 routes marked "yes", and every route marked "no" refuses it with 403.
 A full device token is not affected.
 
-## Routes (412)
+## Routes (408)
 
 | Method | Path | Route key | Kind | Roles | Page scope | chat-extension token |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -373,11 +373,9 @@ A full device token is not affected.
 | GET | `/api/v1/pages/:pageLabel/fans/:platformUserId/card` | `pageFanCard` | `session` | — | page | no |
 | POST | `/api/v1/pages/:pageLabel/fans/:platformUserId/notes` | `createFanNote` | `any` | — | page | no |
 | GET | `/api/v1/pages/:pageLabel/fans/:platformUserId/profile` | `pageFanProfile` | `any` | — | page | yes |
-| PUT | `/api/v1/pages/:pageLabel/fans/:platformUserId/profile` | `upsertFanProfile` | `any` | — | page | no |
 | GET | `/api/v1/pages/:pageLabel/fans/:platformUserId/profile/versions` | `pageFanProfileVersions` | `any` | — | page | no |
 | GET | `/api/v1/pages/:pageLabel/fans/:platformUserId/profile/versions/:version` | `pageFanProfileVersion` | `any` | — | page | no |
 | GET | `/api/v1/pages/:pageLabel/fans/:platformUserId/transactions` | `pageFanTransactions` | `session` | — | page | no |
-| POST | `/api/v1/pages/:pageLabel/follower-outreach/attempt` | `followerOutreachAttempt` | `any` | — | page | no |
 | GET | `/api/v1/pages/:pageLabel/followers` | `pageFollowers` | `any` | — | page | no |
 | GET | `/api/v1/pages/:pageLabel/followers/daily` | `pageFollowersDaily` | `any` | — | page | no |
 | GET | `/api/v1/pages/:pageLabel/mass-messages` | `pageMassMessages` | `owner-session` | — | page | no |
@@ -402,7 +400,6 @@ A full device token is not affected.
 | GET | `/api/v1/pages/:pageLabel/subscribers/daily` | `pageSubscribersDaily` | `any` | — | page | no |
 | GET | `/api/v1/pages/:pageLabel/sync/blocks` | `pageSyncBlocks` | `any` | — | page | no |
 | GET | `/api/v1/pages/:pageLabel/sync/blocks/messages` | `pageMessagesBlock` | `any` | — | page | no |
-| GET | `/api/v1/pages/:pageLabel/top-spenders` | `pageTopSpenders` | `any` | — | page | no |
 | GET | `/api/v1/pages/:pageLabel/transactions` | `pageTransactions` | `session` | — | page | no |
 | POST | `/api/v1/pages/:pageLabel/voice-notes` | `voiceNoteCreate` | `apiKey` | — | page | yes |
 | GET | `/api/v1/pages/:pageLabel/voice-notes/:id` | `voiceNoteStatus` | `apiKey` | — | page | yes |
@@ -418,7 +415,6 @@ A full device token is not affected.
 | GET | `/api/v1/sync/pages/:pageLabel/work` | `syncPageWork` | `owner-session` | — | — | no |
 | GET | `/api/v1/sync/pages/:pageLabel/work/:workId` | `syncPageWorkGet` | `owner-session` | — | — | no |
 | GET | `/api/v1/sync/requests` | `syncRequests` | `session` | — | — | no |
-| GET | `/api/v1/sync/status` | `syncStatus` | `session` | — | — | no |
 | GET | `/api/v1/team/authorship` | `teamAuthorship` | `session` | — | — | no |
 | GET | `/api/v1/team/chatter-numbers` | `teamChatterNumbers` | `session` | — | — | no |
 | GET | `/api/v1/team/chatter-stats` | `teamChatterStats` | `session` | — | — | no |
