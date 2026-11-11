@@ -479,7 +479,8 @@ export function registerPublicationRoutes(server: ApiServer, ctx: ApiModuleConte
         operation: WITHDRAW_OPERATION,
         pageIds: [page.id],
         verbatimText: false,
-        requestSummary: { publicationId: id, outcome: result.outcome, reason: result.reason },
+        // The reason's leading code only: some reasons carry an error's text after it.
+        requestSummary: { publicationId: id, outcome: result.outcome, reasonCode: /^[a-z0-9_]{1,64}/.exec(result.reason ?? "")?.[0] ?? null },
       });
       await auditWithdraw({ audit: auditCtx(principal), refreshUserId: key.createdBy }, { id: page.id, label: page.pageLabel }, results);
       return { results };

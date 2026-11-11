@@ -3,6 +3,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import type { PublicationContentBody } from "@agency_hub_core/contracts";
 import {
   admitFanslyWriteCommand,
+  fanslyScheduleReadWanted,
   insertAgentKey,
   savePublicationQueueSnapshot,
   settleFanslyWriteCommand,
@@ -181,6 +182,15 @@ describe("a Fansly withdrawal (spec §8.2)", () => {
     await expect(replaceWithdrawnPublication(app.db, { id, userId: ownerId })).rejects.toThrow(/only a withdrawn publication/);
   });
 
+  it("Fansly's answer listing the post as taken off, and a read after it without the post: withdrawn, the list's wholeness unclaimed", async () => {
+    const id = await scheduledPost("p1");
+    await withdrawFanslyPublications(app, { ids: [id], userId: ownerId, isSendable });
+    await settleCommand((await cancels(id))[0]!.id, "answered", { cancelled: true, listedStatus: 3 });
+    await readSchedule([]);
+    await followFanslyWithdrawals(app);
+    expect(await status(id)).toMatchObject({ status: "withdrawn", status_reason: "withdrawn_cancel_acknowledged" });
+  });
+
   it("a lost answer is unknown and never sent again; Fansly's refusal leaves the post scheduled", async () => {
     const lost = await scheduledPost("p1");
     const refused = await scheduledPost("p2", 3);
@@ -210,6 +220,7 @@ const OUTSIDE = `${AGENT_KEY_TOKEN_PREFIX}withdraw-outside`;
 
 let server: Awaited<ReturnType<typeof buildApiServer>> | null = null;
 let ownerCookie = "";
+let otherPageId = 0;
 const keyIds = new Map<string, number>();
 
 afterEach(async () => {
@@ -219,6 +230,7 @@ afterEach(async () => {
 
 async function startApi() {
   const other = await seedSyncPage({ db: app.db as unknown as Database, pool: testDb!.pool }, { label: "lora-1" });
+  otherPageId = other.pageId;
   for (const [token, name, capabilities, pageIds] of [
     [WITHDRAWER, "withdraw-only", ["withdraw:publications"], [pageId]],
     [DRAFTER, "withdraw-drafter", ["write:publication_drafts"], [pageId]],
@@ -272,7 +284,7 @@ describe("an agent key takes a post off the schedule (withdraw:publications, own
     // ... the agent audit names the post, and the screen's refresh is asked as the key's owner.
     expect(await sql<{ request_summary: Record<string, unknown> }>(
       "select request_summary from agent_read_audit where agent_key_id = $1 and operation = 'agentPublicationWithdraw'", [keyIds.get(WITHDRAWER)],
-    )).toEqual([{ request_summary: { publicationId: id, outcome: "accepted", reason: "schedule_read_then_cancel" } }]);
+    )).toEqual([{ request_summary: { publicationId: id, outcome: "accepted", reasonCode: "schedule_read_then_cancel" } }]);
     expect(await sql("select refresh_requested_by_user_id::int as by from publication_queue_snapshots where page_id = $1", [pageId]))
       .toEqual([{ by: ownerId }]);
     // A second press is the owner's refusal too: one cancel per post.
@@ -359,5 +371,10 @@ describe("an agent key reads its page's schedule as the owner does", () => {
     )).toEqual([{ by: ownerId }]);
     expect((await asAgent(READER, "POST", "/api/v1/agent/pages/lilly-1/publication-queue/refresh")).statusCode).toBe(403);
     expect((await asAgent(OUTSIDE, "POST", "/api/v1/agent/pages/lilly-1/publication-queue/refresh")).statusCode).toBe(404);
+
+    // A page with publishing off and no Hub post on it: its schedule is read only once someone asks.
+    expect(await fanslyScheduleReadWanted(app.db, otherPageId)).toBe(false);
+    expect((await asAgent(OUTSIDE, "POST", "/api/v1/agent/pages/lora-1/publication-queue/refresh")).statusCode).toBe(200);
+    expect(await fanslyScheduleReadWanted(app.db, otherPageId)).toBe(true);
   });
 });

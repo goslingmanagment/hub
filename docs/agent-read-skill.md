@@ -771,9 +771,11 @@ credits: refresh when you need it, never in a loop.
      It goes only once a fresh read of the schedule still shows the post, never
      closer than 15 minutes to its time, and Hub reads the schedule again after
      Fansly's answer. Within minutes the post's status says how it ended
-     (`hub publication-get --id <id>`): `withdrawn`, `unknown` (below), or
-     still `scheduled` with `withdrawal.state: rejected` — Fansly said no, the
-     post stays in the schedule: tell the owner.
+     (`hub publication-get --id <id>`): `withdrawn` (reason
+     `withdrawn_cancel_acknowledged`: Fansly's answer to the cancel listed this
+     very post as taken off and the read after it no longer lists it),
+     `unknown` (below), or still `scheduled` with `withdrawal.state: rejected` —
+     Fansly said no, the post stays in the schedule: tell the owner.
    - **OnlyFans** answers the outcome at once: Hub reads the schedule whole
      before (it must show the post), sends one delete, and reads it again.
      `withdrawn` — gone from a complete read; `unknown` (below); `rejected` —
@@ -797,18 +799,36 @@ credits: refresh when you need it, never in a loop.
 | OnlyFans `schedule_incomplete:…`, `schedule_read_failed:…`, `not_in_schedule`, `schedule_ambiguous`, `not_prepared: …` | The read before could not show the post exactly once, or the command could not be prepared. | Tell the owner. |
 | any other (Fansly) | The page's guard said no before anything was written. | Tell the owner. |
 
-**`unknown` after a withdrawal** means Hub does not know whether the post left
-the schedule, and a person has to look. On Fansly this is today's usual end
-(`withdraw_unconfirmed_incomplete`): Fansly answered the cancel, the read after
-no longer lists the post, but Hub cannot yet prove that Fansly's list is the
-whole schedule, so an absence is no proof. Other reasons: `withdraw_still_in_schedule`
+**`unknown` after a withdrawal: the post is NOT taken off as far as you know.**
+Hub does not know whether it left the schedule — it may still go out at its
+time. Do not report it as withdrawn and do not treat the job as done:
+
+1. Read the page's schedule: `hub publication-queue --page-label <page>
+   --refresh`, then again in a minute or two until `readAt` is after your
+   refresh. Note whether the post (`postRef` = the publication's
+   `platformPostRef`) is still listed; an absence is a hint, not proof.
+2. Tell the owner at once: which post, why it had to come off, its time, the
+   `statusReason`, and what the read showed. He checks the platform and takes
+   it off by hand if it is still there.
+3. Never withdraw it again (Hub refuses: one cancel per post), and never draft
+   it again.
+
+The reasons: `withdraw_unconfirmed_incomplete` (Fansly answered, the read after
+no longer lists the post, but Fansly's answer did not name it as taken off and
+Hub cannot prove the list is the whole schedule), `withdraw_still_in_schedule`
 (the read after still shows it), `withdraw_unconfirmed_read_failed` (no read
-after in 30 minutes), `withdraw_unconfirmed_time_passed`, `withdraw_<code>`
-(the answer was lost). Never withdraw again (Hub refuses: one cancel per post)
-and never draft a replacement for it: tell the owner, who checks the platform
-and answers in Hub. `hub publication-queue --refresh` and the read after it
-are worth quoting in your report — a read without the post is a hint, not
-proof.
+after in 30 minutes), `withdraw_unconfirmed_time_passed` (its time passed
+before the read), `withdraw_<code>` (the answer was lost).
+
+**A replacement draft is not a fix.** When the owner answers an `unknown`
+publication with «не вышло» (`did_not_go_out`), Hub closes it as
+`not_published` and creates a new draft of the same post, linked to it
+(`previousPublicationId`); a confirmed `withdrawn` one may be replaced the same
+way. For a post taken off for cause (wrong content, a fan's paid custom, the
+owner's stop), that replacement carries the very same text and files: never
+approve it, never edit it into shape and approve it, and say so to the owner
+when it shows up in `publication-list` — only he decides whether it goes out
+again.
 
 A publication that is not on your pages answers 404, exactly as one that does
 not exist; a key without `withdraw:publications` is 403
