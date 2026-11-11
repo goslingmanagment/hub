@@ -19,18 +19,21 @@ export function ReportDetail({ row, panel = false }: { row: ReportRow; panel?: b
   const when = [row.draft ? savedLine(row.draft) : null, postedAt ? `отправлен ${formatDateTime(postedAt)}` : null]
     .filter((part): part is string => part !== null).join(" · ");
 
+  // The box takes the cell's width and gives the table none of its own (report.css): an opened report never widens the sheet.
   return (
-    <div className={cx("wb-report", panel && "wb-report--panel")}>
-      {row.pages.length > 0 && (
-        <div className="wb-report__posted">
-          <ReportPages pages={row.pages} changes />
-          {when !== "" && <p className="wb-report__saved">{when}</p>}
-        </div>
-      )}
-      {row.posts.map((post) => <PostProblem key={post.id} post={post} lines={row.pages.length === 0} said={said} />)}
-      {row.draft !== null
-        ? <ReportLines report={row.draft} />
-        : row.posts.length === 0 && <p className="wb-report__none">Черновика нет: отчёт написан без агента, продаж по нему у ledger нет.</p>}
+    <div className="wb-report-box">
+      <div className={cx("wb-report", panel && "wb-report--panel")}>
+        {row.pages.length > 0 && (
+          <div className="wb-report__posted">
+            <ReportPages pages={row.pages} changes />
+            {when !== "" && <p className="wb-report__saved">{when}</p>}
+          </div>
+        )}
+        {row.posts.map((post) => <PostProblem key={post.id} post={post} lines={row.pages.length === 0} said={said} />)}
+        {row.draft !== null
+          ? <ReportLines report={row.draft} />
+          : row.posts.length === 0 && <p className="wb-report__none">Черновика нет: отчёт написан без агента, продаж по нему у ledger нет.</p>}
+      </div>
     </div>
   );
 }
