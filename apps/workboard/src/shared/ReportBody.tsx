@@ -18,6 +18,11 @@ import "./report.css";
  * as the app shows them.
  */
 export function ReportBody({ report }: { report: AccountShiftReport }) {
+  // The box takes the cell's width and gives the table none of its own (report.css): an opened report never widens the sheet.
+  return <div className="wb-report-box"><ReportContent report={report} /></div>;
+}
+
+function ReportContent({ report }: { report: AccountShiftReport }) {
   const saved = savedOf(report);
   if (report.source === "draft") {
     return (
