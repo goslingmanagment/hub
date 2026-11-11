@@ -61,7 +61,6 @@ function evaluate(input: {
   auth: RouteAuthPolicy;
   principal?: AuthPrincipal | null;
   monitoringToken?: boolean;
-  pendingDeviceToken?: boolean;
   pageAccess?: PageAccessResolution;
   pageLabelParam?: string;
 }) {
@@ -73,7 +72,6 @@ function evaluate(input: {
       }
       return input.principal;
     },
-    resolvePendingDeviceToken: async () => input.pendingDeviceToken ?? false,
     hasMonitoringToken: () => input.monitoringToken ?? false,
     resolvePageAccess: async () => {
       if (input.pageAccess === undefined) {
@@ -91,21 +89,6 @@ describe("computeAuthPolicyVerdict", () => {
     // hmac routes authenticate in-handler over the raw body; the middleware
     // must not consume the request or resolve principals for them.
     await expect(evaluate({ auth: { kind: "hmac" } })).resolves.toEqual({ allow: true });
-  });
-
-  it("admits only the specialized pending bearer on the activation policy", async () => {
-    await expect(evaluate({
-      auth: { kind: "pending-device-token" },
-      pendingDeviceToken: true,
-    })).resolves.toEqual({ allow: true });
-    await expect(evaluate({
-      auth: { kind: "pending-device-token" },
-      pendingDeviceToken: false,
-    })).resolves.toEqual({
-      allow: false,
-      statusCode: 401,
-      reason: "pending_device_token_required",
-    });
   });
 
   it("denies unauthenticated requests on principal kinds with 401", async () => {

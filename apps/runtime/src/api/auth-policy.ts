@@ -69,8 +69,6 @@ export interface AuthPolicyEvaluationInput {
   auth: RouteAuthPolicy;
   /** Memoized upstream (request.auth), so repeated calls are free. */
   resolvePrincipal: () => Promise<AuthPrincipal | null>;
-  /** Specialized non-principal check used only by the activation route. */
-  resolvePendingDeviceToken: () => Promise<boolean>;
   /** The x-monitoring-token check (timing-safe, config-gated). */
   hasMonitoringToken: () => boolean;
   /** findPageSummaryByLabel + canAccessPage, exactly the handlers' shape. */
@@ -92,11 +90,6 @@ export async function computeAuthPolicyVerdict(
   }
   if (auth.kind === "monitoring" && input.hasMonitoringToken()) {
     return ALLOW;
-  }
-  if (auth.kind === "pending-device-token") {
-    return await input.resolvePendingDeviceToken()
-      ? ALLOW
-      : { allow: false, statusCode: 401, reason: "pending_device_token_required" };
   }
 
   const principal = await input.resolvePrincipal();

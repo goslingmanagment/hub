@@ -4,7 +4,6 @@ import type { AppContext } from "../bootstrap.ts";
 import {
   SESSION_COOKIE_NAME,
   authenticateBearerCredential,
-  authenticatePendingDeviceTokenForActivation,
   authenticateSessionToken,
   isAgentPrincipal,
   normalizeClientVersionHeader,
@@ -16,7 +15,6 @@ import {
   type AuthFailure,
   type AuthPrincipal,
   type HumanAuthPrincipal,
-  type PendingDeviceTokenActivationCredential,
 } from "../services/auth.ts";
 import { UnauthorizedError } from "../services/errors.ts";
 
@@ -29,7 +27,6 @@ export interface PrincipalRequest {
   /** Why the presented device token was refused, kept
    * BESIDE the memoized null principal so the 401 can carry a reason. */
   authFailure?: AuthFailure | null;
-  pendingDeviceTokenAuth?: PendingDeviceTokenActivationCredential | null;
   headers: Record<string, string | string[] | undefined>;
   cookies: Record<string, string | undefined>;
 }
@@ -157,25 +154,6 @@ export function createRequestAuth(appContext: AppContext) {
     return request.auth;
   }
 
-  async function resolvePendingDeviceToken(request: PrincipalRequest) {
-    if (request.pendingDeviceTokenAuth !== undefined) {
-      return request.pendingDeviceTokenAuth;
-    }
-    const token = bearerToken(request);
-    request.pendingDeviceTokenAuth = token === null
-      ? null
-      : await authenticatePendingDeviceTokenForActivation(appContext, token);
-    return request.pendingDeviceTokenAuth;
-  }
-
-  async function requirePendingDeviceToken(request: PrincipalRequest) {
-    const credential = await resolvePendingDeviceToken(request);
-    if (credential === null) {
-      throw new UnauthorizedError("Pending device-token bearer required");
-    }
-    return credential;
-  }
-
   /**
    * The handler-facing principal of every route that predates the agent plane.
    *
@@ -243,10 +221,8 @@ export function createRequestAuth(appContext: AppContext) {
 
   return {
     resolvePrincipal,
-    resolvePendingDeviceToken,
     requirePrincipal,
     requireAgentKeyPrincipal,
-    requirePendingDeviceToken,
     hasValidSyncHealthMonitoringToken,
     requireSyncHealthAccess,
     requireOpsLiveAccess,

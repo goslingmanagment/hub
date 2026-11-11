@@ -30,11 +30,11 @@ describe("route schema security", () => {
     expect(routeSecurityFromAuth(routeSchemas.aiGatewayStream.auth)).toEqual(cookieOnlySecurity);
   });
 
-  it("documents pending device-token activation as bearer-only", () => {
+  it("documents device-token sign-out as bearer-only", () => {
     const bearerOnlySecurity = [{ bearerAuth: [] }];
 
-    expect(routeSchemas.authActivateDeviceToken.auth.kind).toBe("pending-device-token");
-    expect(routeSecurityFromAuth(routeSchemas.authActivateDeviceToken.auth))
+    expect(routeSchemas.authRevokeCurrentDeviceToken.auth.kind).toBe("device-token");
+    expect(routeSecurityFromAuth(routeSchemas.authRevokeCurrentDeviceToken.auth))
       .toEqual(bearerOnlySecurity);
   });
 });

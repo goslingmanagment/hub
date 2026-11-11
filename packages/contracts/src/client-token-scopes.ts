@@ -10,8 +10,8 @@ import type { KernelOperationKey } from "./sdk-runtime.ts";
  * reaches tokens already issued, with no re-issue.
  *
  * The API server refuses every route outside `operations` with a reason-less
- * 403; routes that take no principal (`public`, `hmac`,
- * `pending-device-token`) are not subject to it. The capture
+ * 403; routes that take no principal (`public`, `hmac`) are not subject to
+ * it. The capture
  * lane accepts only `ingestKinds` from such a token, under the profile's own
  * producer.
  *
@@ -135,9 +135,9 @@ export function isClientTokenProfile(value: unknown): value is ClientTokenProfil
   return typeof value === "string" && Object.hasOwn(CLIENT_TOKEN_PROFILES, value);
 }
 
-/** Route kinds that take no principal (sign-in, webhooks, a reservation's
- *  activation): a narrow token's list does not apply to them. */
-const UNGUARDED_ROUTE_KINDS: ReadonlySet<RouteAuthPolicy["kind"]> = new Set(["public", "hmac", "pending-device-token"]);
+/** Route kinds that take no principal (sign-in, webhooks): a narrow token's
+ *  list does not apply to them. */
+const UNGUARDED_ROUTE_KINDS: ReadonlySet<RouteAuthPolicy["kind"]> = new Set(["public", "hmac"]);
 
 /** Whether a narrow token's list is checked on a route of this kind. */
 export function clientTokenAllowlistApplies(auth: Pick<RouteAuthPolicy, "kind">): boolean {

@@ -143,20 +143,6 @@ export const issuedDeviceTokenResponseSchema = z.object({
   expiresAt: isoTimestamp,
 });
 
-export const reservedDeviceTokenResponseSchema = z.object({
-  // Distinct-prefix raw reservation bearer, returned exactly once.  It cannot
-  // authenticate ordinary routes until the activation move commits.
-  token: z.string(),
-  reservationId: intId,
-  label: z.string(),
-  keyPrefix: z.string(),
-  reservationExpiresAt: isoTimestamp,
-});
-
-export const activatedDeviceTokenResponseSchema = issuedDeviceTokenResponseSchema.omit({
-  token: true,
-});
-
 export const deviceTokenItemSchema = z.object({
   id: intId,
   label: z.string(),
@@ -171,31 +157,6 @@ export const deviceTokenItemSchema = z.object({
   createdAt: isoTimestamp,
   revokedAt: isoTimestamp.nullable(),
   revokedReason: z.string().nullable(),
-});
-
-// D116(c) fleet-gate foundation (desktop D19): per active chatter, device-token
-// freshness. Read-only reporting surface. (The API-key columns were retired
-// with the lane itself.)
-// Deliberately NO aggregate go/no-go boolean: chatter-role automation
-// accounts (probes/scripts) are indistinguishable from humans until the
-// service-account split lands, so any all-chatters flag would be
-// permanently false — the summary counts let the phase-2 CI (or the owner)
-// apply policy over the rows once accounts are classified.
-export const deviceTokenAdoptionRowSchema = z.object({
-  username: z.string(),
-  hasFreshDeviceToken: z.boolean(),
-  deviceTokenLastUsedAt: isoTimestamp.nullable(),
-  deviceTokenExpiresAt: isoTimestamp.nullable(),
-});
-
-export const deviceTokenAdoptionReportSchema = z.object({
-  generatedAt: isoTimestamp,
-  freshWindowDays: z.number().int().positive(),
-  chatters: z.array(deviceTokenAdoptionRowSchema),
-  summary: z.object({
-    activeChatters: z.number().int().nonnegative(),
-    onFreshTokens: z.number().int().nonnegative(),
-  }),
 });
 
 export const registrationStateEnum = z.enum(["invited", "active"]);
@@ -297,36 +258,27 @@ export const authRedeemAccountLinkResponseSchema = z.object({
   username: z.string(),
 });
 
-export const deviceTokenIssueModeEnum = z.enum(["active", "pending"]);
+export const deviceTokenIssueModeEnum = z.enum(["active"]);
 
 export const authIssueDeviceTokenWithPasswordBodySchema = z.object({
   username: z.string().trim().min(1).max(100),
   password: z.string().min(1).max(1024),
   label: z.string().min(1).max(120),
-  // active  → a live device token (the extension: one atomic storage write);
-  // pending → a 10-minute reservation, activated through authActivateDeviceToken
-  //           after the client has durably staged custody (the desktop).
+  // active → a live device token (the only mode left; the field stays required).
   mode: deviceTokenIssueModeEnum,
   // chat-extension H-3: a narrow token bound to this client's route allowlist
-  // (client-token-scopes.ts), stored immutably on the token. Active only. A hub
+  // (client-token-scopes.ts), stored immutably on the token. A hub
   // without H-3 drops the key and issues a full token, so the client requires
   // the echo below (and the bootstrap's identity.tokenClient) before using it.
   client: z.enum(["chat-extension"]).optional(),
-}).superRefine((value, ctx) => {
-  if (value.client !== undefined && value.mode !== "active") {
-    ctx.addIssue({ code: "custom", path: ["client"], message: "client requires mode active" });
-  }
 });
 
-export const authIssueDeviceTokenWithPasswordResponseSchema = z.discriminatedUnion("mode", [
-  issuedDeviceTokenResponseSchema.extend({
-    mode: z.literal("active"),
-    // The profile the token was issued with: null for a full token. Open on
-    // the wire, absent from a hub without H-3.
-    client: z.string().min(1).max(64).nullable().optional(),
-  }),
-  reservedDeviceTokenResponseSchema.extend({ mode: z.literal("pending") }),
-]);
+export const authIssueDeviceTokenWithPasswordResponseSchema = issuedDeviceTokenResponseSchema.extend({
+  mode: z.literal("active"),
+  // The profile the token was issued with: null for a full token. Open on
+  // the wire, absent from a hub without H-3.
+  client: z.string().min(1).max(64).nullable().optional(),
+});
 
 export const ownDeviceItemSchema = z.object({
   id: intId,
@@ -5061,7 +5013,7 @@ export const ofapiDmColdArchiveStatusResponseSchema = z.object({
 // admits an agent: it names human roles.
 export const routeAuthPolicySchema = z
   .object({
-    kind: z.enum(["public", "hmac", "monitoring", "session", "any-session", "owner-session", "apiKey", "device-token", "pending-device-token", "agentKey", "any"]),
+    kind: z.enum(["public", "hmac", "monitoring", "session", "any-session", "owner-session", "apiKey", "device-token", "agentKey", "any"]),
     roles: z.array(userRoleEnum).nonempty().optional(),
     scope: z.enum(["page", "none"]).optional(),
   })
@@ -5088,7 +5040,6 @@ export function routeSecurityFromAuth(
       return [{ cookieAuth: [] }];
     case "apiKey":
     case "device-token":
-    case "pending-device-token":
       return [{ bearerAuth: [] }];
     // An agent key travels in the same Authorization: Bearer header as the other
     // bearers, but it gets its OWN scheme: folding it into bearerAuth would make
@@ -7666,19 +7617,6 @@ const baseRouteSchemas = {
       403: errorResponseSchema,
     },
   },
-  authActivateDeviceToken: {
-    auth: { kind: "pending-device-token" },
-    tags: ["auth"],
-    summary: "Activate a durably staged pending device token",
-    description: "Accepts only the distinct pending-device-token bearer. Atomically "
-      + "moves its digest into active device_tokens and deletes the reservation. "
-      + "Retrying after a lost success response is idempotent.",
-    response: {
-      200: activatedDeviceTokenResponseSchema,
-      401: errorResponseSchema,
-      403: errorResponseSchema,
-    },
-  },
   authRevokeCurrentDeviceToken: {
     auth: { kind: "device-token" },
     tags: ["auth"],
@@ -7713,19 +7651,6 @@ const baseRouteSchemas = {
       401: errorResponseSchema,
       403: errorResponseSchema,
       404: errorResponseSchema,
-    },
-  },
-  adminDeviceTokenAdoption: {
-    auth: { kind: "owner-session" },
-    tags: ["admin"],
-    summary: "Device-token adoption across active chatters (D116(c) gate report)",
-    description: "Read-only: per active chatter, whether a live device token "
-      + "was used within the freshness window, and which client version it last "
-      + "spoke. The fleet gate for retiring a client lane reads these rows.",
-    response: {
-      200: deviceTokenAdoptionReportSchema,
-      401: errorResponseSchema,
-      403: errorResponseSchema,
     },
   },
   // --- Unified chatter account (PR-1A) ---

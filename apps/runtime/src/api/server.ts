@@ -34,7 +34,6 @@ import {
   SESSION_COOKIE_NAME,
   type AuthFailure,
   type AuthPrincipal,
-  type PendingDeviceTokenActivationCredential,
 } from "../services/auth.ts";
 import {
   AppError,
@@ -97,7 +96,6 @@ declare module "fastify" {
   interface FastifyRequest {
     auth?: AuthPrincipal | null;
     authFailure?: AuthFailure | null;
-    pendingDeviceTokenAuth?: PendingDeviceTokenActivationCredential | null;
   }
   interface FastifyInstance {
     /** Route → auth declaration rows, collected at registration. */
@@ -240,7 +238,6 @@ export async function buildApiServer(appContext: AppContext) {
   server.setSerializerCompiler(serializerCompiler);
   server.decorateRequest("auth");
   server.decorateRequest("authFailure");
-  server.decorateRequest("pendingDeviceTokenAuth");
 
   // Fleet-verify: the desktop stamps x-client-version on every call;
   // one "Desktop client version observed" log line per (version, address)
@@ -333,7 +330,6 @@ export async function buildApiServer(appContext: AppContext) {
   const requestAuth = createRequestAuth(appContext);
   const {
     resolvePrincipal,
-    resolvePendingDeviceToken,
     requirePrincipal,
     hasValidSyncHealthMonitoringToken,
   } = requestAuth;
@@ -415,7 +411,6 @@ export async function buildApiServer(appContext: AppContext) {
     const verdict = await computeAuthPolicyVerdict({
       auth: entry.auth,
       resolvePrincipal: () => resolvePrincipal(request),
-      resolvePendingDeviceToken: async () => (await resolvePendingDeviceToken(request)) !== null,
       hasMonitoringToken: () => hasValidSyncHealthMonitoringToken(request),
       resolvePageAccess: async (pageLabel) => {
         const page = await findPageSummaryByLabel(appContext.db, pageLabel);

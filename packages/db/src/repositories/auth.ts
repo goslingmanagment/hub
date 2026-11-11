@@ -216,14 +216,6 @@ export interface CreateDeviceTokenInput {
   clientProfile?: string | null | undefined;
 }
 
-export interface CreatePendingDeviceTokenInput {
-  userId: number;
-  label: string;
-  tokenDigest: string;
-  keyPrefix: string;
-  expiresAt: Date;
-}
-
 export async function createDeviceToken(db: Database, input: CreateDeviceTokenInput) {
   const [created] = await db.insert(deviceTokens).values({
     userId: input.userId,
@@ -234,14 +226,6 @@ export async function createDeviceToken(db: Database, input: CreateDeviceTokenIn
     lastClientVersion: input.lastClientVersion ?? null,
     clientProfile: input.clientProfile ?? null,
   }).returning();
-  return created!;
-}
-
-export async function createPendingDeviceToken(
-  db: Database,
-  input: CreatePendingDeviceTokenInput,
-) {
-  const [created] = await db.insert(pendingDeviceTokens).values(input).returning();
   return created!;
 }
 
@@ -267,34 +251,9 @@ export async function advanceDeviceTokenEpoch(db: Database, userId: number) {
   return updated ?? null;
 }
 
-export async function findPendingDeviceTokenByDigest(
-  db: Database,
-  tokenDigest: string,
-  input?: { forUpdate?: boolean },
-) {
-  const query = db.select().from(pendingDeviceTokens)
-    .where(eq(pendingDeviceTokens.tokenDigest, tokenDigest))
-    .limit(1);
-  const [record] = input?.forUpdate === true ? await query.for("update") : await query;
-  return record ?? null;
-}
-
-export async function deletePendingDeviceTokenById(db: Database, id: number) {
-  const [deleted] = await db.delete(pendingDeviceTokens)
-    .where(eq(pendingDeviceTokens.id, id))
-    .returning({ id: pendingDeviceTokens.id });
-  return deleted ?? null;
-}
-
 export async function deletePendingDeviceTokensForUser(db: Database, userId: number) {
   return db.delete(pendingDeviceTokens)
     .where(eq(pendingDeviceTokens.userId, userId))
-    .returning({ id: pendingDeviceTokens.id });
-}
-
-export async function deleteExpiredPendingDeviceTokens(db: Database, now = new Date()) {
-  return db.delete(pendingDeviceTokens)
-    .where(sql`${pendingDeviceTokens.expiresAt} <= ${now}`)
     .returning({ id: pendingDeviceTokens.id });
 }
 

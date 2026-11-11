@@ -17,8 +17,7 @@ import {
 import { createTestAppContext } from "./helpers/runtime.ts";
 
 // Decision 349 Р2: the single client sign-in — username + password, no cookie,
-// `active` for the extension and `pending` (reserve → activate) for the
-// desktop. It shares the login backoff, the login failure audit and the §4.3
+// `mode: "active"`. It shares the login backoff, the login failure audit and the §4.3
 // password core with the cookie lane.
 
 let testDb: StartedTestDatabase | null = null;
@@ -174,7 +173,6 @@ describe("who is refused", () => {
         username: "boris",
         password: "not-the-password",
         label: "Firefox · Windows",
-        mode: "active",
         clientVersion: null,
       })).rejects.toMatchObject({ statusCode: 401 });
     }
@@ -187,7 +185,6 @@ describe("who is refused", () => {
       username: "boris",
       password: PASSWORD,
       label: "Firefox · Windows",
-      mode: "active",
       clientVersion: null,
     })).rejects.toMatchObject({ statusCode: 429 });
   });
@@ -224,7 +221,7 @@ describe("the issuance audit", () => {
     await setup.testDb.pool.query("delete from audit_events");
   }
 
-  it("journals the issuance of both modes with the prefix and NEITHER secret", async (context) => {
+  it("journals the issuance with the prefix and NEITHER secret", async (context) => {
     const setup = requireSetup(context);
     if (!setup) return;
     await seedAudited(setup);
@@ -233,44 +230,28 @@ describe("the issuance audit", () => {
       username: AUDITED,
       password: PASSWORD,
       label: "Firefox · Windows",
-      mode: "active",
       clientVersion: "2.4.0",
-    });
-    const pending = await issueDeviceTokenWithPassword(setup.app, {
-      username: AUDITED,
-      password: PASSWORD,
-      label: "Desktop · audrey-pc",
-      mode: "pending",
-      clientVersion: "0.1.55",
     });
 
     const rows = await operatorObservations(setup);
     const issued = rows.find((row) => row.kind === "device_token.issued");
-    const reserved = rows.find((row) => row.kind === "device_token.reserved");
-
-    for (const [row, credential, label, clientVersion] of [
-      [issued, active, "Firefox · Windows", "2.4.0"],
-      [reserved, pending, "Desktop · audrey-pc", "0.1.55"],
-    ] as const) {
-      expect(row, label).toBeDefined();
-      expect(row!.producer).toBe("api:admin");
-      expect(row!.payload).toMatchObject({
-        metadata: expect.objectContaining({
-          username: AUDITED,
-          label,
-          keyPrefix: credential.keyPrefix,
-          via: "password",
-          clientVersion,
-        }),
-      });
-    }
+    expect(issued).toBeDefined();
+    expect(issued!.producer).toBe("api:admin");
+    expect(issued!.payload).toMatchObject({
+      metadata: expect.objectContaining({
+        username: AUDITED,
+        label: "Firefox · Windows",
+        keyPrefix: active.keyPrefix,
+        via: "password",
+        clientVersion: "2.4.0",
+      }),
+    });
 
     // The secrets never reach the journal: not the bearer, not the password.
     // The prefix above is exactly what an operator may see — which is why this
     // check cannot be satisfied by simply writing nothing.
     const journal = JSON.stringify(rows);
     expect(journal).not.toContain(active.token);
-    expect(journal).not.toContain(pending.token);
     expect(journal).not.toContain(PASSWORD);
   });
 });

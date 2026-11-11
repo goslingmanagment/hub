@@ -15,11 +15,9 @@ import { getOwnUsageReport } from "../../services/ai-usage.ts";
 import {
   SESSION_COOKIE_NAME,
   assignPageToUser,
-  activatePendingDeviceToken,
   changeOwnPassword,
   deactivateUser,
   deleteUser,
-  deviceTokenAdoptionReport,
   getAdminUserById,
   issueDeviceTokenWithPassword,
   listDeviceTokensForUserId,
@@ -67,7 +65,7 @@ function clearCookie(reply: {
 
 export function registerIdentityRoutes(server: ApiServer, ctx: ApiModuleContext) {
   const { appContext } = ctx;
-  const { requirePendingDeviceToken, requirePrincipal } = ctx.auth;
+  const { requirePrincipal } = ctx.auth;
 
   server.post("/api/v1/auth/login", {
     schema: routeSchemas.login,
@@ -201,19 +199,6 @@ export function registerIdentityRoutes(server: ApiServer, ctx: ApiModuleContext)
   // (authIssueDeviceTokenWithPassword). The two cookie-session issuance routes
   // are gone — no client mints a bearer from a browser session any more.
 
-  server.post("/api/v1/auth/device-tokens/activate", {
-    schema: routeSchemas.authActivateDeviceToken,
-  }, async (request) => {
-    const credential = await requirePendingDeviceToken(request);
-    const activated = await activatePendingDeviceToken(appContext, credential);
-    return {
-      id: activated.id,
-      label: activated.label,
-      keyPrefix: activated.keyPrefix,
-      expiresAt: activated.expiresAt.toISOString(),
-    };
-  });
-
   server.delete("/api/v1/auth/device-tokens/current", {
     schema: routeSchemas.authRevokeCurrentDeviceToken,
   }, async (request) => {
@@ -236,12 +221,6 @@ export function registerIdentityRoutes(server: ApiServer, ctx: ApiModuleContext)
     return revokeDeviceTokensForUserId(appContext, {
       userId: request.params.userId,
     }, auditCtx(principal));
-  });
-
-  server.get("/api/v1/admin/device-token-adoption", {
-    schema: routeSchemas.adminDeviceTokenAdoption,
-  }, async () => {
-    return deviceTokenAdoptionReport(appContext);
   });
 
   // --- Unified chatter account (PR-1A) ---
@@ -326,7 +305,7 @@ export function registerIdentityRoutes(server: ApiServer, ctx: ApiModuleContext)
     });
   });
 
-  // Р2: the single client sign-in — no cookie, one call, active or pending.
+  // Р2: the single client sign-in — no cookie, one call.
   server.post("/api/v1/auth/device-tokens/password", {
     schema: routeSchemas.authIssueDeviceTokenWithPassword,
     config: { rateLimit: { max: 20, timeWindow: 60_000 } },
@@ -335,30 +314,20 @@ export function registerIdentityRoutes(server: ApiServer, ctx: ApiModuleContext)
       username: request.body.username,
       password: request.body.password,
       label: request.body.label,
-      mode: request.body.mode,
       clientVersion: normalizeClientVersionHeader(request.headers["x-client-version"]),
       clientProfile: request.body.client ?? null,
     });
-    return issued.mode === "active"
-      ? {
-        mode: "active" as const,
-        token: issued.token,
-        id: issued.id,
-        label: issued.label,
-        keyPrefix: issued.keyPrefix,
-        expiresAt: issued.expiresAt.toISOString(),
-        // chat-extension H-3: the echo the client requires before trusting a
-        // narrow token (a hub without H-3 issues a full one silently).
-        client: issued.clientProfile,
-      }
-      : {
-        mode: "pending" as const,
-        token: issued.token,
-        reservationId: issued.reservationId,
-        label: issued.label,
-        keyPrefix: issued.keyPrefix,
-        reservationExpiresAt: issued.reservationExpiresAt.toISOString(),
-      };
+    return {
+      mode: "active" as const,
+      token: issued.token,
+      id: issued.id,
+      label: issued.label,
+      keyPrefix: issued.keyPrefix,
+      expiresAt: issued.expiresAt.toISOString(),
+      // chat-extension H-3: the echo the client requires before trusting a
+      // narrow token (a hub without H-3 issues a full one silently).
+      client: issued.clientProfile,
+    };
   });
 
   // Cabinet (any live cookie session, any human role).
