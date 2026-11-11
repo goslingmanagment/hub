@@ -10648,6 +10648,31 @@
                                 "type": "integer",
                                 "minimum": 0,
                                 "maximum": 9007199254740991
+                              },
+                              "regular": {
+                                "anyOf": [
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "amountMills": {
+                                        "type": "integer",
+                                        "minimum": -9007199254740991,
+                                        "maximum": 9007199254740991
+                                      },
+                                      "period": {
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": [
+                                      "amountMills",
+                                      "period"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
                               }
                             },
                             "required": [
@@ -10657,7 +10682,8 @@
                               "model",
                               "byMonth",
                               "totalMills",
-                              "payments"
+                              "payments",
+                              "regular"
                             ],
                             "additionalProperties": false
                           }

@@ -31,6 +31,8 @@ interface Promo {
   model: string;
   /** Dollars paid in the month `back` months before the running one; 0 — nothing. `share` — how much of that month has passed. */
   paid: (back: number, share: number, random: () => number) => number;
+  /** What the ledger expects to pay regularly: dollars and the ledger's word of the period. */
+  regular?: { dollars: number; period: string };
 }
 
 /** A monthly fee: paid in full once the month is `after` through. */
@@ -38,13 +40,13 @@ const monthly = (amount: number, from: number, to: number, after = 0.1): Promo["
   (back, share) => (back <= from && back >= to && share >= after ? amount : 0);
 
 const PROMO: readonly Promo[] = [
-  { kind: "traffic", category: "Трафик", counterparty: "Northwind (Reddit)", model: "Mia", paid: monthly(700, 4, 0, 0.2) },
-  { kind: "traffic", category: "Трафик", counterparty: "Pixel Rounds (Twitter)", model: "Nova", paid: monthly(620, 1, 0, 0.3) },
+  { kind: "traffic", category: "Трафик", counterparty: "Northwind (Reddit)", model: "Mia", paid: monthly(700, 4, 0, 0.2), regular: { dollars: 700, period: "month" } },
+  { kind: "traffic", category: "Трафик", counterparty: "Pixel Rounds (Twitter)", model: "Nova", paid: monthly(620, 1, 0, 0.3), regular: { dollars: 620, period: "month" } },
   { kind: "traffic", category: "Трафик", counterparty: "Bloomgram (Instagram)", model: "Mia", paid: monthly(290, 7, 3) },
   { kind: "traffic", category: "Трафик", counterparty: "Coral (паки фанов)", model: "Mia", paid: (back) => (back === 5 || back === 2 ? 300 : 0) },
-  { kind: "contractor", category: "Подрядчик", counterparty: "SFS Helper", model: "Mia", paid: (_back, share, random) => Math.round(between(random, 96, 164) * share) },
+  { kind: "contractor", category: "Подрядчик", counterparty: "SFS Helper", model: "Mia", paid: (_back, share, random) => Math.round(between(random, 96, 164) * share), regular: { dollars: 30, period: "week" } },
   { kind: "contractor", category: "Подрядчик", counterparty: "Sam (клипы для For You)", model: "Mia, Nova", paid: (back, share, random) => (back <= 5 && share > 0.45 ? intBetween(random, 180, 260) : 0) },
-  { kind: "contractor", category: "Подрядчик", counterparty: "Аня (помощь с наймом)", model: "", paid: (back, share) => (back <= 3 ? Math.floor(share * 4) * 50 : 0) },
+  { kind: "contractor", category: "Подрядчик", counterparty: "Аня (помощь с наймом)", model: "", paid: (back, share) => (back <= 3 ? Math.floor(share * 4) * 50 : 0), regular: { dollars: 50, period: "week" } },
 ];
 
 function build(now: Date): Answer {
@@ -158,6 +160,7 @@ function build(now: Date): Answer {
     return {
       kind: promo.kind, category: promo.category, counterparty: promo.counterparty, model: promo.model,
       byMonth, totalMills: byMonth.reduce((sum, value) => sum + value, 0), payments: byMonth.filter((value) => value > 0).length,
+      regular: promo.regular ? { amountMills: wire(cents(promo.regular.dollars)), period: promo.regular.period } : null,
     };
   }).filter((source) => source.totalMills > 0).sort((a, b) => b.totalMills - a.totalMills);
 

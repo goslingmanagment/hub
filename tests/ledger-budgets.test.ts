@@ -49,7 +49,15 @@ const ANSWERS: Record<string, Row[]> = {
     ["model_names", JSON.stringify({ Mia: "Мия", Nova: "Нова" })],
   ],
   plans: [["2026-11", "mia-1", 470], ["2026-11", "mia-of", 50.5]],
-  reinvest: [["Рост Мии в ноябре", 2_500_000_000, "2026-11-30"], ["Старый кап", 700_000_000, "2026-06-30"]],
+  commitments: [
+    ["reinvest", "Рост Мии в ноябре", "", 2_500_000_000, "once", "2026-11-30"],
+    ["reinvest", "Старый кап", "", 700_000_000, "once", "2026-06-30"],
+    // What the ledger expects to pay regularly: the plan of a source. One is paid already, one not yet.
+    ["contractor", "clip sam", "Подрядчик", 209_000_000, "month", "2026-11-30"],
+    ["contractor", "Insta Crew", "Трафик", 290_000_000, "month", "2026-12-01"],
+    // Not traffic and not a contractor: no row of the table.
+    ["subscription", "Some AI", "AI и разработка", 200_000_000, "month", "2026-12-03"],
+  ],
   owner: [
     ["2026-10-08", "expense", "Owner зарплата", 3_000_000_000, "{}"],
     // Paid on the last day of October for November: all of it leaves October.
@@ -75,7 +83,7 @@ function queryOf(sql: string): string {
   if (sql.includes("FROM periods")) return "periods";
   if (sql.includes("FROM settings")) return "settings";
   if (sql.includes("FROM month_plans")) return "plans";
-  if (sql.includes("FROM commitments")) return "reinvest";
+  if (sql.includes("FROM commitments")) return "commitments";
   if (sql.includes("GROUP BY")) return "promotion";
   if (sql.includes("Owner зарплата")) return "owner";
   throw new Error(`unexpected statement: ${sql}`);
@@ -100,7 +108,7 @@ describe("readLedgerBudgets", () => {
     const seen: string[] = [];
     const result = await readLedgerBudgets(app(), { fetchImpl: ledger(ANSWERS, seen), now });
 
-    expect(seen.sort()).toEqual(["cards", "owner", "periods", "plans", "promotion", "reinvest", "settings"].map((name) => `POST /v1/sql ${name} Bearer test-read-key`));
+    expect(seen.sort()).toEqual(["cards", "commitments", "owner", "periods", "plans", "promotion", "settings"].map((name) => `POST /v1/sql ${name} Bearer test-read-key`));
     expect(result.months.map((month) => [month.month, month.state, month.closedAt, month.daysInMonth])).toEqual([
       ["2026-09", "closed", "2026-10-14T16:22:53.000Z", 30],
       ["2026-10", "preliminary", null, 31],
@@ -163,11 +171,13 @@ describe("readLedgerBudgets", () => {
     const { promotion } = await readLedgerBudgets(app(), { fetchImpl: ledger(), now });
 
     expect(promotion.months).toEqual(["2026-09", "2026-10", "2026-11"]);
-    // July is before the first month the ledger counts: not in the table.
+    // July is before the first month the ledger counts: not in the table. A regular payment is the source's plan, whatever
+    // the case of its name; a source that is expected and not paid yet is there with zeros.
     expect(promotion.sources).toEqual([
-      { kind: "traffic", category: "Трафик", counterparty: "Reddit Co", model: "Мия", byMonth: [290_000, 0, 0], totalMills: 290_000, payments: 1 },
-      { kind: "contractor", category: "Подрядчик", counterparty: "Clip Sam", model: "Мия, Нова", byMonth: [0, 209_000, 0], totalMills: 209_000, payments: 2 },
-      { kind: "traffic", category: "SFS", counterparty: "Shout Crew", model: "", byMonth: [0, 0, 49_990], totalMills: 49_990, payments: 2 },
+      { kind: "traffic", category: "Трафик", counterparty: "Reddit Co", model: "Мия", byMonth: [290_000, 0, 0], totalMills: 290_000, payments: 1, regular: null },
+      { kind: "contractor", category: "Подрядчик", counterparty: "Clip Sam", model: "Мия, Нова", byMonth: [0, 209_000, 0], totalMills: 209_000, payments: 2, regular: { amountMills: 209_000, period: "month" } },
+      { kind: "traffic", category: "SFS", counterparty: "Shout Crew", model: "", byMonth: [0, 0, 49_990], totalMills: 49_990, payments: 2, regular: null },
+      { kind: "traffic", category: "Трафик", counterparty: "Insta Crew", model: "", byMonth: [0, 0, 0], totalMills: 0, payments: 0, regular: { amountMills: 290_000, period: "month" } },
     ]);
     expect(promotion.totals).toEqual([
       { month: "2026-09", trafficMills: 290_000, contractorMills: 0 },

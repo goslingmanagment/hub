@@ -6,7 +6,7 @@ import { StackedBarChart } from "@/components/shared/StackedBarChart";
 import { Disclosure } from "@/components/ui/Disclosure";
 import { Stat, StatGrid } from "@/components/ui/StatGrid";
 import { formatMills, formatPercent } from "@/lib/format";
-import { articleRows, monthAxisLabel, monthLong, monthShort, monthWindow, runningDay, shareOf } from "./budgetsView.js";
+import { articleRows, monthAxisLabel, monthLong, monthShort, monthSince, monthWindow, runningDay, shareOf } from "./budgetsView.js";
 
 /** One hue per thing on the whole screen: what came in, what was spent, the CEO's pay, what is left. */
 const INCOME = "var(--color-chart-blue)";
@@ -273,14 +273,7 @@ export function FlowCards({ month, figures, promotion }: { month: BudgetMonth; f
           {rate !== null && <FlowRow name="Зарплата CEO" sub={`выплачено ${formatMills(month.owner.salaryPaidMills)}`} amount={rate} whole={whole} color={CEO} />}
           {figures.leftMills !== null && <FlowRow name="Остаётся" amount={figures.leftMills} whole={whole} color={LEFT} total />}
         </ul>
-        {(ownerNotes.length > 0 || month.plan.reinvest.length > 0) && (
-          <div className="card-footer budget-notes">
-            {month.plan.reinvest.map((item) => (
-              <p key={item.name}><b>{item.name}</b>: до {formatMills(item.capMills)}</p>
-            ))}
-            {ownerNotes.length > 0 && <p>{ownerNotes.join(" ")}</p>}
-          </div>
-        )}
+        {ownerNotes.length > 0 && <p className="card-footer budget-notes">{ownerNotes.join(" ")}</p>}
       </section>
     </div>
   );
@@ -352,17 +345,31 @@ function PagesCard({ month, figures }: { month: BudgetMonth; figures: BudgetFigu
 
 // ── Traffic and contractors by source ────────────────────────────────────
 
-export function PromotionCard({ promotion, active }: { promotion: AdminBudgetsResponse["promotion"]; active: string }) {
+/** «$30.00 в неделю»: what the ledger expects to pay a source regularly, in the ledger's period. */
+function regularText(regular: { amountMills: number; period: string }): string {
+  const days = /^(\d+)d$/.exec(regular.period)?.[1];
+  const period = regular.period === "week" ? "в неделю" : regular.period === "month" ? "в месяц" : regular.period === "once" ? "разово"
+    : days ? `раз в ${days} дн.` : regular.period;
+  return `${formatMills(regular.amountMills)} ${period}`.trim();
+}
+
+export function PromotionCard({ promotion, month }: { promotion: AdminBudgetsResponse["promotion"]; month: BudgetMonth }) {
+  const active = month.month;
   const chosen = Math.max(0, promotion.months.indexOf(active));
-  const { from, to } = monthWindow(promotion.months.length, chosen);
+  // Five months and the total: a table of months stays inside seven columns.
+  const { from, to } = monthWindow(promotion.months.length, chosen, 5);
   const months = promotion.months.slice(from, to);
   const totals = promotion.totals.slice(from, to);
+  // A source is a row when it was paid in these months, or when a regular payment to it is agreed.
   const shown = promotion.sources
-    .map((source) => ({ ...source, byMonth: source.byMonth.slice(from, to) }))
-    .filter((source) => source.byMonth.some((value) => value !== 0));
+    .map((source) => ({ ...source, shownByMonth: source.byMonth.slice(from, to) }))
+    .filter((source) => source.regular !== null || source.shownByMonth.some((value) => value !== 0));
   const activeTotals = promotion.totals[chosen];
   const money = (value: number) => (value === 0 ? "" : formatMills(value));
-  const column = (month: string) => (month === active ? "num budget-col-active" : "num");
+  const column = (key: string) => (key === active ? "num budget-col-active" : "num");
+  const both = (total: { trafficMills: number; contractorMills: number }) => Number(sumMills([total.trafficMills, total.contractorMills]));
+  const allTime = (pick: (total: (typeof totals)[number]) => number) => Number(sumMills(promotion.totals.map(pick)));
+  const first = promotion.months[0];
   const group = (kind: "traffic" | "contractor", label: string, sum: (total: (typeof totals)[number]) => number) => {
     const sources = shown.filter((source) => source.kind === kind);
     if (sources.length === 0) return null;
@@ -371,16 +378,25 @@ export function PromotionCard({ promotion, active }: { promotion: AdminBudgetsRe
         <tr className="row-group">
           <td>{label}</td>
           {totals.map((total) => <td key={total.month} className={column(total.month)}>{money(sum(total))}</td>)}
+          <td className="num">{money(allTime(sum))}</td>
         </tr>
-        {sources.map((source) => (
-          <tr key={`${source.category}:${source.counterparty}`}>
-            <td>
-              {source.counterparty}
-              <span className="budget-row-sub">{[source.category === "Трафик" || source.category === "Подрядчик" ? null : source.category, source.model].filter(Boolean).join(" · ")}</span>
-            </td>
-            {source.byMonth.map((value, index) => <td key={months[index]} className={column(months[index] ?? "")}>{money(value)}</td>)}
-          </tr>
-        ))}
+        {sources.map((source) => {
+          const sub = [
+            source.category === "Трафик" || source.category === "Подрядчик" ? null : source.category,
+            source.model,
+            source.regular ? `обычно ${regularText(source.regular)}` : null,
+          ].filter(Boolean).join(" · ");
+          return (
+            <tr key={`${source.category}:${source.counterparty}`}>
+              <td>
+                {source.counterparty}
+                {sub && <span className="budget-row-sub">{sub}</span>}
+              </td>
+              {source.shownByMonth.map((value, index) => <td key={months[index]} className={column(months[index] ?? "")}>{money(value)}</td>)}
+              <td className="num">{money(source.totalMills)}</td>
+            </tr>
+          );
+        })}
       </>
     );
   };
@@ -388,12 +404,18 @@ export function PromotionCard({ promotion, active }: { promotion: AdminBudgetsRe
     <section className="card" aria-label="Трафик и подрядчики">
       <div className="card-header">
         <h2 className="card-title">Трафик и подрядчики</h2>
-        <p className="card-description">
-          {activeTotals
-            ? `${monthLong(active)}: трафик ${formatMills(activeTotals.trafficMills)}, подрядчики ${formatMills(activeTotals.contractorMills)}`
-            : "Кому платили, по дате платежа"}
-        </p>
+        {activeTotals && (
+          <p className="card-description">
+            {monthLong(active)}: вложено {formatMills(both(activeTotals))} — трафик {formatMills(activeTotals.trafficMills)}, подрядчики {formatMills(activeTotals.contractorMills)}
+          </p>
+        )}
       </div>
+      {/* The month's plan of growth spending stands beside what was put in: the cap the owner allowed. */}
+      {month.plan.reinvest.length > 0 && (
+        <div className="budget-caps">
+          {month.plan.reinvest.map((item) => <p key={item.name}><b>План: до {formatMills(item.capMills)}</b> · {item.name}</p>)}
+        </div>
+      )}
       {shown.length === 0 ? (
         <p className="card-body budget-empty">За эти месяцы платежей за трафик и подрядчикам нет.</p>
       ) : (
@@ -402,12 +424,18 @@ export function PromotionCard({ promotion, active }: { promotion: AdminBudgetsRe
             <thead>
               <tr>
                 <th scope="col">Кому платили</th>
-                {months.map((month) => <th key={month} scope="col" className={column(month)}>{monthShort(month, month === months[0] || month.endsWith("-01"))}</th>)}
+                {months.map((key) => <th key={key} scope="col" className={column(key)}>{monthShort(key, key === months[0] || key.endsWith("-01"))}</th>)}
+                <th scope="col" className="num">{first ? `Всего ${monthSince(first)}` : "Всего"}</th>
               </tr>
             </thead>
             <tbody>
               {group("traffic", "Трафик", (total) => total.trafficMills)}
               {group("contractor", "Подрядчики", (total) => total.contractorMills)}
+              <tr className="row-total">
+                <td>Итого</td>
+                {totals.map((total) => <td key={total.month} className={column(total.month)}>{money(both(total))}</td>)}
+                <td className="num">{money(allTime(both))}</td>
+              </tr>
             </tbody>
           </table>
         </div>

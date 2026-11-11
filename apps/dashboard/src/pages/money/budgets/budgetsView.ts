@@ -24,6 +24,14 @@ export function monthShort(month: string, withYear = false): string {
   return withYear ? `${SHORT[index] ?? month} ${year}` : SHORT[index] ?? month;
 }
 
+const SINCE = ["янв.", "февр.", "марта", "апр.", "мая", "июня", "июля", "авг.", "сент.", "окт.", "нояб.", "дек."];
+
+/** «с марта 2026», «с авг. 2026»: the month a total is counted from. */
+export function monthSince(month: string): string {
+  const { year, index } = parts(month);
+  return `с ${SINCE[index] ?? month} ${year}`;
+}
+
 /** A row of months names the year on its first month and on every January. */
 export function monthAxisLabel(month: string, months: readonly string[]): string {
   return monthShort(month, month === months[0] || month.endsWith("-01"));

@@ -44,7 +44,8 @@ const QUERIES = {
   periods: "SELECT month, locked_at FROM periods",
   settings: "SELECT key, value FROM settings WHERE key IN ('category_caps', 'owner_salary_rate', 'model_names')",
   plans: "SELECT month, page_label, per_day FROM month_plans",
-  reinvest: "SELECT name, amount, coalesce(until, next_due, '') FROM commitments WHERE kind = 'reinvest'",
+  // What the ledger expects to pay: a reinvest cap ends in a month; a regular payment of a traffic or contractor article is that source's plan.
+  commitments: "SELECT kind, name, coalesce(category, ''), amount, coalesce(period, ''), coalesce(until, next_due, '') FROM commitments",
   owner: `SELECT date, type, category, amount_micros, coalesce(tags, '{}') FROM v_documents
     WHERE status = 'paid' AND category IN (${quoted([OWNER_SALARY, OWNER_DRAW, OWNER_INJECTION])})`,
   promotion: `SELECT substr(date, 1, 7), category, counterparty, coalesce(model, ''), sum(amount_micros), count(*) FROM v_documents
@@ -89,7 +90,7 @@ const cardRow = z.tuple([
 const periodRow = z.tuple([text.regex(MONTH), text.nullable()]);
 const settingRow = z.tuple([text, text.nullable()]);
 const planRow = z.tuple([text.regex(MONTH), text, dollars]);
-const reinvestRow = z.tuple([text, micros, text]);
+const commitmentRow = z.tuple([text, text, text, micros, text, text]);
 const ownerRow = z.tuple([
   text.regex(DAY), text, text, micros,
   // {"за": [{"месяц": "2026-11", "сумма": 608.27}]}: a part of the line is for another month.
@@ -233,7 +234,10 @@ export async function readLedgerBudgets(
   }
 
   const plans = rowsOf(app, "plans", planRow, raw.plans);
-  const reinvest = rowsOf(app, "reinvest", reinvestRow, raw.reinvest);
+  const commitments = rowsOf(app, "commitments", commitmentRow, raw.commitments);
+  const reinvest = commitments.filter(([kind]) => kind === "reinvest");
+  const promotionCategories = [...TRAFFIC_CATEGORIES, CONTRACTOR_CATEGORY];
+  const regular = commitments.filter(([kind, , category]) => kind !== "reinvest" && promotionCategories.includes(category));
 
   const budgetMonths: BudgetMonth[] = cards.map(([month, asOf, status, reason, totals, lines, expenses, notes, pages]) => {
     const days = daysInMonth(month);
@@ -316,7 +320,7 @@ export async function readLedgerBudgets(
         factMills: planPages.length === 0 || status !== "ok" ? null
           : asNumber(cardCents(planPages.reduce((sum, page) => sum + (pages?.[page.pageLabel] ?? 0), 0))),
         pages: planPages,
-        reinvest: reinvest.filter(([, , due]) => due.slice(0, 7) === month).map(([name, amount]) => ({ name, capMills: asNumber(journalCents([amount])) })),
+        reinvest: reinvest.filter(([, , , , , due]) => due.slice(0, 7) === month).map(([, name, , amount]) => ({ name, capMills: asNumber(journalCents([amount])) })),
       },
     };
   });
@@ -324,24 +328,38 @@ export async function readLedgerBudgets(
   // Who was paid for traffic and as a contractor: one row per article and counterparty, the months side by side.
   const monthIndex = new Map(months.map((month, index) => [month, index]));
   const sources = new Map<string, { kind: "traffic" | "contractor"; category: string; counterparty: string; models: string[]; byMonth: number[][]; payments: number }>();
-  for (const [month, category, counterparty, model, amountMicros, payments] of rowsOf(app, "promotion", promotionRow, raw.promotion)) {
-    const index = monthIndex.get(month);
-    if (index === undefined) continue;
+  const sourceOf = (category: string, counterparty: string) => {
     const id = `${category}\u0000${counterparty}`;
     const source = sources.get(id) ?? {
       kind: TRAFFIC_CATEGORIES.includes(category) ? "traffic" as const : "contractor" as const,
       category, counterparty, models: [], byMonth: months.map(() => []), payments: 0,
     };
+    sources.set(id, source);
+    return source;
+  };
+  for (const [month, category, counterparty, model, amountMicros, payments] of rowsOf(app, "promotion", promotionRow, raw.promotion)) {
+    const index = monthIndex.get(month);
+    if (index === undefined) continue;
+    const source = sourceOf(category, counterparty);
     for (const name of modelsOf(model)) if (!source.models.includes(name)) source.models.push(name);
     source.byMonth[index]?.push(amountMicros);
     source.payments += payments;
-    sources.set(id, source);
+  }
+  // What the ledger expects to pay a source regularly is the source's plan; it is in the table even before the first payment.
+  const sameName = (one: string, other: string) => one.trim().toLowerCase() === other.trim().toLowerCase();
+  const regularOf = (category: string, counterparty: string) => {
+    const row = regular.find(([, name, ofCategory]) => ofCategory === category && sameName(name, counterparty));
+    return row ? { amountMills: asNumber(journalCents([row[3]])), period: row[4] } : null;
+  };
+  for (const [, name, category] of regular) {
+    if (![...sources.values()].some((source) => source.category === category && sameName(source.counterparty, name))) sourceOf(category, name);
   }
   const promotionSources = [...sources.values()].map((source) => {
     const byMonth = source.byMonth.map((parts) => journalCents(parts));
     return {
       kind: source.kind, category: source.category, counterparty: source.counterparty, model: source.models.join(", "),
       byMonth: byMonth.map(asNumber), totalMills: asNumber(sumMills(byMonth)), payments: source.payments,
+      regular: regularOf(source.category, source.counterparty),
     };
   }).sort((a, b) => b.totalMills - a.totalMills || a.counterparty.localeCompare(b.counterparty, "ru"));
 

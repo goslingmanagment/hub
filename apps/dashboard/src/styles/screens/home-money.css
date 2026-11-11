@@ -98,8 +98,9 @@
   .budget-where-item { display: inline-flex; align-items: center; gap: 8px; font-variant-numeric: tabular-nums; }
   .budget-where-item > i { flex: 0 0 auto; width: 12px; height: 12px; border-radius: 3px; }
   .budget-where-stuck { background: var(--color-hover); box-shadow: inset 0 0 0 1px var(--color-border-strong); }
-  .budget-notes { display: grid; gap: 4px; }
-  .budget-notes b { font-weight: 500; color: var(--color-text-primary); }
+  .budget-notes { display: grid; gap: 4px; margin: 0; }
+  .budget-notes b, .budget-caps b { font-weight: 500; color: var(--color-text-primary); }
+  .budget-caps { display: grid; gap: 4px; padding: 0 24px 12px; font-size: 14px; line-height: 20px; color: var(--color-text-secondary); }
   .budget-plan-legend { gap: 10px; }
   .budget-plan-legend > .budget-bar-mark { position: static; flex: 0 0 auto; width: 2px; height: 16px; margin: 0; }
   .budget-empty { color: var(--color-text-secondary); }

@@ -111,8 +111,12 @@ export const budgetPromotionSourceSchema = z.object({
   model: z.string(),
   /** One sum per month of `promotion.months`, in its order; 0 — nothing paid. */
   byMonth: z.array(mills),
+  /** Over every month of `promotion.months`. */
   totalMills: mills,
   payments: z.number().int().nonnegative(),
+  /** What the ledger expects to pay the source regularly (its commitments): the plan of the source. `period` is the
+   *  ledger's word: `week`, `month`, `90d`, `once`. null — nothing regular is agreed. */
+  regular: z.object({ amountMills: mills, period: z.string() }).nullable(),
 });
 
 export const adminBudgetsResponseSchema = z.object({
@@ -121,7 +125,7 @@ export const adminBudgetsResponseSchema = z.object({
   promotion: z.object({
     /** The months of `months`, in the same order. */
     months: z.array(budgetMonthKey),
-    /** The largest total first. */
+    /** The largest total first; a source the ledger expects to pay and has not paid yet is here with zeros. */
     sources: z.array(budgetPromotionSourceSchema),
     /** Per month of `months`: the traffic articles' and the contractors' sums. */
     totals: z.array(z.object({ month: budgetMonthKey, trafficMills: mills, contractorMills: mills })),

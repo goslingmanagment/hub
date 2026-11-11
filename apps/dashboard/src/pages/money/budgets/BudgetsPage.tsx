@@ -102,7 +102,7 @@ export function BudgetsPage() {
       <MonthTiles month={month} />
       <MonthsCard months={months} active={month.month} onPick={open} />
       {month.figures && <FlowCards month={month} figures={month.figures} promotion={data.promotion} />}
-      <PromotionCard promotion={data.promotion} active={month.month} />
+      <PromotionCard promotion={data.promotion} month={month} />
       <div className="help-row">
         <Disclosure>
           <p>
@@ -117,7 +117,9 @@ export function BudgetsPage() {
           </p>
           <p>
             «Трафик и подрядчики» — строки журнала по дате платежа: статьи «Трафик», «SFS», «YouTube» и «Подрядчик».
-            План оборота — дневные планы страниц на число дней месяца, без поступлений мимо площадок.
+            «Обычно» под именем — регулярный платёж этому источнику из обязательств ledger, его план; кап реинвеста —
+            сколько владелец разрешил вложить в рост в этом месяце. План оборота — дневные планы страниц на число дней
+            месяца, без поступлений мимо площадок.
           </p>
         </Disclosure>
         {month.figures && month.figures.notes.length > 0 && (
