@@ -20,7 +20,7 @@ import { demoPageSyncBlocks, demoSyncHistoryRequests, demoSyncOverview, demoSync
 type Capability =
   | "read:messages" | "read:money" | "read:observations_envelope" | "read:datasets" | "request:hydration"
   | "write:publication_drafts" | "approve:publications" | "write:fan_queues" | "read:content" | "read:team"
-  | "withdraw:publications";
+  | "withdraw:publications" | "delete:posts";
 
 /** The agents' read keys: the research agent, ContentOps (its own content only), the queue builder, and two that ended. */
 function agentKeys(request: DemoRequest) {

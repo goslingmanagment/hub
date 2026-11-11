@@ -44,7 +44,7 @@ function command(step: FanslyWriteStep, state: FanslyWriteState, extra: Partial<
     id: nextId++, pageId: 1, dispatchId: 1, publicationId: 1, step, item: "", priority: "background",
     notBefore: NOW, notAfter: null, state, stateReason: null, workId: null, attemptId: null, notSentCount: 0,
     request: null, requestFingerprint: null, result: null, httpStatus: null, observationId: null,
-    createdAt: NOW, admittedAt: null, settledAt: null, ...extra,
+    createdAt: NOW, admittedAt: null, settledAt: null, postRef: null, ...extra,
   };
 }
 

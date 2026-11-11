@@ -24,9 +24,9 @@ import {
 } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
-import { dispatchOfapiAction, getOfapiAction, prepareOfapiAction } from "./ofapi-actions.ts";
+import { dispatchOfapiAction, getOfapiAction, listOfapiActionsOfCommand, prepareOfapiAction } from "./ofapi-actions.ts";
 import { normalizePostText } from "./publications-onlyfans-checks.ts";
-import { publicationActionId } from "./publications-onlyfans.ts";
+import { postDeleteActionId, publicationActionId } from "./publications-onlyfans.ts";
 import {
   addUtcDays,
   readOnlyfansQueue,
@@ -274,16 +274,29 @@ export async function withdrawOnlyfansPublications(
   return input.ids.filter((id, index, all) => all.indexOf(id) === index).map((id) => results.get(id) as PublicationWithdrawResult);
 }
 
+/**
+ * Whether a delete of this very post under another id has left (0369): a
+ * publication's withdrawal and an agent's post route each prepare their own
+ * action of one and the same request — whichever goes first, the other never
+ * goes beside it. Asked right before the send, under the owner actions' one
+ * lock, so two cannot both pass. A reason, or null.
+ */
+export async function otherPostDeleteLeft(app: AppContext, command: OfapiAction, ownId: string): Promise<string | null> {
+  const others = (await listOfapiActionsOfCommand(app, command)).filter((action) => action.id !== ownId && action.state !== "prepared");
+  return others.length > 0 ? "post_delete_already_sent" : null;
+}
+
 /** One post delete, sent at most once. Confirmed waits for the read after; anything else is its result now. */
 async function sendWithdraw(app: AppContext, item: Eligible, postId: string, userId: number): Promise<"confirmed" | PublicationWithdrawResult> {
   const { record } = item;
   const intentId = publicationActionId(record.id, item.revisionId, "withdraw");
+  const command = { action: "post_delete", pageId: record.pageId, postId } as OfapiAction;
   const result = async (outcome: PublicationWithdrawResult["outcome"], reason: string | null) => {
     const fresh = await getPublication(app.db, record.id);
     return { id: record.id, outcome, reason, publication: fresh ? toPublicationWire(fresh) : null };
   };
   try {
-    await prepareOfapiAction(app, { id: intentId, command: { action: "post_delete", pageId: record.pageId, postId } as OfapiAction }, userId);
+    await prepareOfapiAction(app, { id: intentId, command }, userId);
   } catch (error) {
     return result("refused", `not_prepared: ${error instanceof Error ? error.message : String(error)}`.slice(0, 300));
   }
@@ -293,7 +306,8 @@ async function sendWithdraw(app: AppContext, item: Eligible, postId: string, use
   if (dispatch?.ofapiActionIntentId !== intentId) return result("refused", "withdraw_already_recorded");
   let intent;
   try {
-    intent = await dispatchOfapiAction(app, intentId, userId);
+    // A delete of this post another route sent first (0369): this one never goes.
+    intent = await dispatchOfapiAction(app, intentId, userId, { beforeSend: () => otherPostDeleteLeft(app, command, intentId) });
   } catch (error) {
     intent = await getOfapiAction(app, intentId).catch(() => null);
     // Never left: the owner may press again; the guards run again then.
@@ -313,4 +327,69 @@ async function sendWithdraw(app: AppContext, item: Eligible, postId: string, use
 export async function withdrawAllOnlyfansPublications(app: AppContext, input: { pageId: number; userId: number; clock?: () => Date }): Promise<PublicationWithdrawResult[]> {
   const ids = await listScheduledPublicationIds(app.db, input.pageId);
   return withdrawOnlyfansPublications(app, { ids, userId: input.userId, ...(input.clock ? { clock: input.clock } : {}) });
+}
+
+// ---------------------------------------------------------------------------
+// A post with no Hub publication (an agent's, owner 2026-11-11, 0369)
+// ---------------------------------------------------------------------------
+
+export type OnlyfansPostSend =
+  /** Hub sent nothing; nothing was prepared. */
+  | { kind: "refused"; reason: string }
+  /** Prepared, never left (busy, transport down): asking again may send it. */
+  | { kind: "not_sent"; reason: string }
+  /** It left: the owner action's state says how it ended. */
+  | { kind: "sent"; state: string; errorCode: string | null; createdAt: Date };
+
+/**
+ * One `post_delete` of a post with no Hub publication, as the key's owner,
+ * sent at most once: one action per page and post (a withdrawal and a deletion
+ * share it), and none while a delete of the same post under another id — a
+ * publication's withdrawal — has left.
+ */
+export async function sendOnlyfansPostDelete(app: AppContext, input: { pageId: number; postRef: string; userId: number }): Promise<OnlyfansPostSend> {
+  const intentId = postDeleteActionId(input.pageId, input.postRef);
+  const command = { action: "post_delete", pageId: input.pageId, postId: input.postRef } as OfapiAction;
+  try {
+    await prepareOfapiAction(app, { id: intentId, command }, input.userId);
+  } catch (error) {
+    return { kind: "refused", reason: `not_prepared: ${error instanceof Error ? error.message : String(error)}`.slice(0, 300) };
+  }
+  let intent;
+  try {
+    intent = await dispatchOfapiAction(app, intentId, input.userId, { beforeSend: () => otherPostDeleteLeft(app, command, intentId) });
+  } catch (error) {
+    intent = await getOfapiAction(app, intentId).catch(() => null);
+    if (!intent || intent.state === "prepared") return { kind: "not_sent", reason: `${error instanceof Error ? error.message : String(error)}`.slice(0, 300) };
+  }
+  if (intent.state === "prepared") return { kind: "not_sent", reason: "not_dispatched" };
+  return { kind: "sent", state: intent.state, errorCode: intent.errorCode, createdAt: new Date(intent.createdAt) };
+}
+
+/**
+ * Take a post with no Hub publication off OnlyFans' schedule (0369): the owner
+ * action `withdrawOnlyfansPublications` uses, with its precondition — a fresh
+ * read of the post's day, whole, shows it exactly once as scheduled, 15 minutes
+ * or more before its time — then one delete. Its outcome is OnlyFans' answer
+ * (`sendOnlyfansPostDelete`).
+ */
+export async function withdrawOnlyfansPost(
+  app: AppContext,
+  input: { pageId: number; postRef: string; userId: number; publishAt: Date; clock?: () => Date },
+): Promise<OnlyfansPostSend> {
+  const clock = input.clock ?? (() => new Date());
+  const lead = PUBLICATION_WITHDRAW_MIN_LEAD_MINUTES * MINUTE_MS;
+  if (input.publishAt.getTime() - clock().getTime() < lead) return { kind: "refused", reason: "too_close_to_publish_time" };
+  const day = utcDay(input.publishAt);
+  const before = await readOnlyfansQueue({ app, pageId: input.pageId, actorUserId: input.userId }, { from: day, to: day, maxListReads: WITHDRAW_LIST_READS, now: clock() });
+  if (!before.ok || !before.complete) {
+    return { kind: "refused", reason: before.ok ? `schedule_incomplete:${before.incompleteReasons.join(",")}` : `schedule_read_failed:${before.reason}` };
+  }
+  // The post the entry holds, or the entry itself when it names none: the id the delete takes.
+  const entries = before.entries.filter((entry) => (entry.entityId ?? entry.id) === input.postRef);
+  if (entries.length !== 1) return { kind: "refused", reason: entries.length === 0 ? "not_in_schedule" : "schedule_ambiguous" };
+  // The read's own time for it, and the reads took time: checked again right before the send.
+  const at = entries[0]!.at ?? input.publishAt;
+  if (at.getTime() - clock().getTime() < lead) return { kind: "refused", reason: "too_close_to_publish_time" };
+  return sendOnlyfansPostDelete(app, { pageId: input.pageId, postRef: input.postRef, userId: input.userId });
 }

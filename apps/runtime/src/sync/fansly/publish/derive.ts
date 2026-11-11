@@ -273,7 +273,10 @@ function itemOf(media: Pick<ApprovedFormMedia, "role" | "position">): string {
 }
 
 export interface WriteDeriveInput {
-  command: Pick<FanslyWriteCommandRecord, "id" | "step" | "item" | "dispatchId" | "publicationId" | "createdAt">;
+  command: Pick<FanslyWriteCommandRecord, "id" | "step" | "item" | "dispatchId" | "publicationId" | "createdAt"> & {
+    /** The post a cancel or a delete was queued for (0369; absent on older rows). */
+    postRef?: string | null;
+  };
   dispatch: { kind: "create" | "withdraw" | "delete"; mode: string; revisionId: number };
   /** The approved form of the dispatch's revision. */
   form: ApprovedForm;
@@ -378,14 +381,17 @@ function uploadTypeOf(mimeType: string | null): number | null {
 export interface FanslyScheduleFacts {
   readAtMs: number;
   postIds: readonly string[];
+  /** Each post's time in that read (a cancel of a post with no Hub publication, 0369). */
+  entries?: ReadonlyArray<{ postId: string; publishAtMs: number | null }>;
 }
 
 /** What a derived request was made of, kept with it (the attempt's
  *  `request.step`, the command's `request.facts`). */
 export interface WriteDerivedFacts {
   commandId: number;
-  dispatchId: number;
-  revisionId: number;
+  /** Null: a post with no Hub publication (0369), no dispatch or approval. */
+  dispatchId: number | null;
+  revisionId: number | null;
   step: FanslyWriteStep;
   item: string;
   /** The uploaded file's sha256 an upload was checked against. */
@@ -653,6 +659,8 @@ function build(input: WriteDeriveInput): Built<FanslyWireId> {
       if (command.item !== "") refuse("item_not_of_step");
       if (input.publication.status !== "scheduled") refuse("not_scheduled");
       const postId = input.publication.platformPostRef ?? refuse("no_platform_post");
+      // The post it was queued for, the one row that holds it (0369).
+      if ((command.postRef ?? postId) !== postId) refuse("post_ref_moved");
       // Only well before its time: a cancel next to the publication could
       // meet a post that already went out (spec §8.2).
       if (form.publishAtMs - input.now.getTime() < FANSLY_WITHDRAW_LEAD_MS) refuse("too_close_to_publish");
@@ -674,6 +682,7 @@ function build(input: WriteDeriveInput): Built<FanslyWireId> {
       if (form.kind === "vault_album") refuse("vault_album_is_no_post");
       if (input.publication.status !== "published") refuse("not_published");
       const postId = input.publication.platformPostRef ?? refuse("no_platform_post");
+      if ((command.postRef ?? postId) !== postId) refuse("post_ref_moved");
       return { spec: "publish.post_delete", params: { postId }, from };
     }
     case "album_create": {
@@ -820,6 +829,58 @@ export function deriveFanslyWrite(input: WriteDeriveInput): WriteDerivation {
     item: input.command.item,
     ...(built.fileSha256 === undefined ? {} : { fileSha256: built.fileSha256 }),
     from: [...new Set(built.from)].sort((a, b) => a - b),
+    fingerprint: write.fingerprint,
+  };
+  return { ok: true, request: { spec: built.spec, params: built.params, step: facts }, write, facts };
+}
+
+/**
+ * The request of a cancel or a delete of a post with no Hub publication (owner
+ * 2026-11-11, 0369): no approval to derive it from — the post is the
+ * command's own `postRef`, the one Hub saw on the page before queueing it. A
+ * cancel goes only once a read of the schedule taken after the command was
+ * queued still shows the post, 15 minutes or more before that read's time for
+ * it; a delete's post is on the wall, not in the schedule. Any other step
+ * needs a publication.
+ */
+export function deriveFanslyPostCommand(input: {
+  command: Pick<FanslyWriteCommandRecord, "id" | "step" | "item" | "postRef" | "createdAt">;
+  schedule: FanslyScheduleFacts | null;
+  now: Date;
+}): WriteDerivation {
+  const { command } = input;
+  let built: Built<"publish.post_cancel" | "publish.post_delete">;
+  try {
+    if (command.item !== "") refuse("item_not_of_step");
+    const postId = command.postRef ?? refuse("no_platform_post");
+    if (command.step === "post_cancel") {
+      const schedule = input.schedule ?? refuse("schedule_not_read");
+      if (schedule.readAtMs <= command.createdAt.getTime()) refuse("schedule_not_fresh");
+      const entries = (schedule.entries ?? []).filter((entry) => entry.postId === postId);
+      if (entries.length === 0 || !schedule.postIds.includes(postId)) refuse("not_in_schedule");
+      if (entries.length > 1) refuse("schedule_ambiguous");
+      const publishAtMs = entries[0]!.publishAtMs ?? refuse("publish_time_unknown");
+      // Never next to its time: the cancel could meet a post that already went out (spec §8.2).
+      if (publishAtMs - input.now.getTime() < FANSLY_WITHDRAW_LEAD_MS) refuse("too_close_to_publish");
+      built = { spec: "publish.post_cancel", params: { postId }, from: [] };
+    } else if (command.step === "post_delete") {
+      built = { spec: "publish.post_delete", params: { postId }, from: [] };
+    } else {
+      refuse("step_needs_publication");
+    }
+  } catch (error) {
+    if (error instanceof Refused) return { ok: false, reason: error.reason };
+    throw error;
+  }
+  if (built.spec !== FANSLY_WRITE_STEP_ROUTES[command.step]) return { ok: false, reason: "route_not_of_step" };
+  const write = describeFanslyCommandRequest(built.spec, built.params);
+  const facts: WriteDerivedFacts = {
+    commandId: command.id,
+    dispatchId: null,
+    revisionId: null,
+    step: command.step,
+    item: command.item,
+    from: [],
     fingerprint: write.fingerprint,
   };
   return { ok: true, request: { spec: built.spec, params: built.params, step: facts }, write, facts };

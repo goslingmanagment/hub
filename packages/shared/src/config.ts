@@ -263,6 +263,11 @@ const envSchema = z.object({
   AGENT_EXPORT_POLICY_VALUE: z
     .enum(agentExportPolicyValues)
     .default("no_raw_transcript_export_endpoint_yet"),
+  // Deleting published posts by an agent key (delete:posts, owner 2026-11-11):
+  // at most this many per key over a rolling 24 hours, each slot reserved
+  // before its command is sent; 0 = agents delete nothing (there is no
+  // unlimited mode).
+  AGENT_POST_DELETE_DAILY_LIMIT_PER_KEY: z.coerce.number().int().min(0).max(1000).default(10),
   // Chat extension (chat-extension docs/hub-pr-plan.md H-2b): the owner's
   // switches for the hub's third client, live and audited. Every one rests OFF.
   // The JSON and version values are parsed where they are read
@@ -551,6 +556,8 @@ export interface AppConfig {
   agentSearchBackend?: "off" | "fts" | "fts_trgm";
   /** The value served in `exportPolicy`; flipped only after the fleet re-vendors. */
   agentExportPolicyValue?: AgentExportPolicyValue;
+  /** An agent key's deletions of published posts per rolling 24 hours (delete:posts); 0 = agents delete nothing. */
+  agentPostDeleteDailyLimitPerKey?: number;
   /** Chat extension master switch; off = every feature off (H-2b). */
   chatExtensionEnabled?: boolean;
   /** JSON: scope ("*" or a page label) → flag → on. */
@@ -870,6 +877,7 @@ export function loadConfig(
     aiDraftMediaEnabled: parsed.AI_DRAFT_MEDIA_ENABLED,
     agentSearchBackend: parsed.AGENT_SEARCH_BACKEND,
     agentExportPolicyValue: parsed.AGENT_EXPORT_POLICY_VALUE,
+    agentPostDeleteDailyLimitPerKey: parsed.AGENT_POST_DELETE_DAILY_LIMIT_PER_KEY,
     chatExtensionEnabled: parsed.CHAT_EXTENSION_ENABLED,
     chatExtensionFeatures: parsed.CHAT_EXTENSION_FEATURES,
     chatExtensionMinVersion: parsed.CHAT_EXTENSION_MIN_VERSION,

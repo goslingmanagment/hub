@@ -100,6 +100,13 @@ export const AGENT_READ_AUDIT_SUMMARY_SHAPES = {
    *  some reasons carry after it. */
   outcome: "identifier",
   reasonCode: "identifier",
+  /** Any post of a page by the platform's id (owner 2026-11-11): the platform's
+   *  post id (digits), whether Hub answered from the command it already held,
+   *  and the key's deletions over the last 24 hours. A deletion's reason enters
+   *  as `reasonSha256`/`reasonLength`; its words go to the owner's audit only. */
+  postRef: "identifier",
+  repeat: "flag",
+  dailyUsed: "count",
 } as const satisfies Record<string, AgentReadAuditSummaryShape>;
 
 export type AgentReadAuditSummaryKey = keyof typeof AGENT_READ_AUDIT_SUMMARY_SHAPES;

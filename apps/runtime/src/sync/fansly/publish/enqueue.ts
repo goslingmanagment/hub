@@ -2,10 +2,12 @@ import {
   getFanslyWriteDispatch,
   getPagePublishingSettings,
   getSyncPageTransport,
+  insertFanslyPostCommand,
   insertFanslyWriteCommand,
   setFanslyWriteCommandWork,
   upsertDemand,
   type Database,
+  type FanslyPostStep,
   type FanslyWriteCommandRecord,
   type FanslyWritePriority,
   type FanslyWriteStep,
@@ -55,27 +57,21 @@ export interface EnqueueFanslyWriteInput {
   /** Whether a route's contract is verified: `isFanslyWriteSendable` (the
    *  one list, `FANSLY_VERIFIED_WRITE_ROUTES`); integration tests pass their own. */
   isSendable?: (spec: FanslyWireId) => boolean;
+  /** A cancel's or a delete's post (0369): one live command per page, step and post. */
+  postRef?: string | null;
 }
 
-/**
- * Queue one request of a Fansly dispatch and the work row its page's actor
- * runs it under, in one transaction. Null: that step of the dispatch is
- * queued, sent or settled already (never twice). Throws
- * `FanslyWriteRefusedError` when a guard says no; nothing is written then.
- */
-export async function enqueueFanslyWriteCommand(db: Database, input: EnqueueFanslyWriteInput): Promise<FanslyWriteCommandRecord | null> {
-  const now = input.now ?? new Date();
-  const dispatch = await getFanslyWriteDispatch(db, input.dispatchId);
-  if (dispatch === null || dispatch.platform !== "fansly") throw new FanslyWriteRefusedError("dispatch_not_fansly");
+/** Every switch and the route, for one step of the page (refuses by throwing). */
+async function guardEnqueue(db: Database, pageId: number, input: Pick<EnqueueFanslyWriteInput, "step" | "notBefore" | "notAfter" | "config" | "now" | "isSendable">): Promise<void> {
   const [page, transport] = await Promise.all([
-    getPagePublishingSettings(db, dispatch.pageId),
-    getSyncPageTransport(db, dispatch.pageId),
+    getPagePublishingSettings(db, pageId),
+    getSyncPageTransport(db, pageId),
   ]);
   // No engine row: no actor of the page would ever run the command.
   if (transport === null) throw new FanslyWriteRefusedError("no_sync_page");
   const verdict = writeGuard({
     step: input.step,
-    now,
+    now: input.now ?? new Date(),
     notBefore: input.notBefore,
     notAfter: input.notAfter,
     publishingEnabled: input.config.publishingEnabled === true,
@@ -85,6 +81,18 @@ export async function enqueueFanslyWriteCommand(db: Database, input: EnqueueFans
     contractVerified: fanslyStepSendable(input.step, input.isSendable ?? isFanslyWriteSendable),
   });
   if (verdict.kind === "refuse") throw new FanslyWriteRefusedError(verdict.reason);
+}
+
+/**
+ * Queue one request of a Fansly dispatch and the work row its page's actor
+ * runs it under, in one transaction. Null: that step of the dispatch is
+ * queued, sent or settled already (never twice). Throws
+ * `FanslyWriteRefusedError` when a guard says no; nothing is written then.
+ */
+export async function enqueueFanslyWriteCommand(db: Database, input: EnqueueFanslyWriteInput): Promise<FanslyWriteCommandRecord | null> {
+  const dispatch = await getFanslyWriteDispatch(db, input.dispatchId);
+  if (dispatch === null || dispatch.platform !== "fansly") throw new FanslyWriteRefusedError("dispatch_not_fansly");
+  await guardEnqueue(db, dispatch.pageId, input);
   return db.transaction(async (raw) => {
     const tx = raw as unknown as Database;
     const command = await insertFanslyWriteCommand(tx, {
@@ -94,6 +102,7 @@ export async function enqueueFanslyWriteCommand(db: Database, input: EnqueueFans
       priority: input.priority,
       notBefore: input.notBefore,
       notAfter: input.notAfter,
+      postRef: input.postRef ?? null,
     });
     if (command === null) return null;
     const resource = fanslyWriteResource(input.priority, input.step);
@@ -109,6 +118,43 @@ export async function enqueueFanslyWriteCommand(db: Database, input: EnqueueFans
       // serves the nearest deadline first.
       deadlineAt: urgent ? input.notAfter : null,
       demand: { reasons: [`publication:${command.publicationId}:${command.step}`] },
+      createOnly: true,
+    });
+    await setFanslyWriteCommandWork(tx, { id: command.id, workId: work.id });
+    return { ...command, workId: work.id };
+  });
+}
+
+export interface EnqueueFanslyPostInput extends Pick<EnqueueFanslyWriteInput, "notBefore" | "notAfter" | "config" | "now" | "isSendable"> {
+  pageId: number;
+  step: FanslyPostStep;
+  postRef: string;
+}
+
+/**
+ * Queue a cancel or a delete of a post with no Hub publication (owner
+ * 2026-11-11, 0369) and its work row, in one transaction, under the same
+ * switches as every write (a cancel and a delete go while publishing is off,
+ * never while the page is stopped). Null: a live command of this page, step
+ * and post exists — a publication's too — and none is queued beside it.
+ */
+export async function enqueueFanslyPostCommand(db: Database, input: EnqueueFanslyPostInput): Promise<FanslyWriteCommandRecord | null> {
+  await guardEnqueue(db, input.pageId, input);
+  return db.transaction(async (raw) => {
+    const tx = raw as unknown as Database;
+    const command = await insertFanslyPostCommand(tx, {
+      pageId: input.pageId, step: input.step, postRef: input.postRef, notBefore: input.notBefore, notAfter: input.notAfter,
+    });
+    if (command === null) return null;
+    const work = await upsertDemand(tx, {
+      pageId: command.pageId,
+      resource: fanslyWriteResource("background", input.step),
+      subject: String(command.id),
+      kind: "goal",
+      class: "planned",
+      dueAt: input.notBefore,
+      deadlineAt: null,
+      demand: { reasons: [`post:${input.postRef}:${input.step}`] },
       createOnly: true,
     });
     await setFanslyWriteCommandWork(tx, { id: command.id, workId: work.id });

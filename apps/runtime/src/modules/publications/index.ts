@@ -31,6 +31,7 @@ import {
 import { listPublicationPageMediaWire } from "../../services/publication-media.ts";
 import { listFanslyQueueWire } from "../../services/publications-fansly-checks.ts";
 import { deleteFanslyPublication } from "../../services/publications-fansly-delete.ts";
+import { deletePagePost, withdrawPagePost, type PostCommandPage, type PostCommandResult } from "../../services/post-commands.ts";
 import { withdrawAllFanslyPublications, withdrawFanslyPublications } from "../../services/publications-fansly-withdraw.ts";
 import {
   listOnlyfansQueueWire,
@@ -56,6 +57,9 @@ const CHANGES_OPERATION = "agentPublicationChanges";
 const WITHDRAW_OPERATION = "agentPublicationWithdraw";
 /** The agent operation asking for a fresh read of a page's schedule. */
 const QUEUE_REFRESH_OPERATION = "agentPublicationQueueRefresh";
+/** The agent operations on any post of a page by the platform's id (owner 2026-11-11). */
+const POST_WITHDRAW_OPERATION = "agentPostWithdraw";
+const POST_DELETE_OPERATION = "agentPostDelete";
 
 /** The owner's change of a page's publishing settings in the audit log. */
 export const PUBLICATION_SETTINGS_AUDIT_EVENT = "admin.publication_settings";
@@ -63,6 +67,10 @@ export const PUBLICATION_SETTINGS_AUDIT_EVENT = "admin.publication_settings";
 export const PUBLICATION_WITHDRAW_AUDIT_EVENT = "admin.publication_withdraw";
 /** The owner's deletion of a published Fansly post from the wall in the audit log (0305). */
 export const PUBLICATION_DELETE_POST_AUDIT_EVENT = "admin.publication_delete_post";
+/** An agent key's withdrawal or deletion of a page's post by the platform's id (0369): the key, the page, the post,
+ *  the outcome and, for a deletion, the agent's reason in its words. */
+export const PAGE_POST_WITHDRAW_AUDIT_EVENT = "admin.page_post_withdraw";
+export const PAGE_POST_DELETE_AUDIT_EVENT = "admin.page_post_delete";
 
 /**
  * Publications (docs/plans/2026-10-23-wall-posts, spec §9). The owner drafts,
@@ -252,14 +260,15 @@ export function registerPublicationRoutes(server: ApiServer, ctx: ApiModuleConte
   // approves them, on the owner's word in the chat (owner 2026-10-27).
   // withdraw:publications takes any Hub post of the key's pages off the
   // platform's schedule, as the owner's «Снять» does, and reads the page's
-  // schedule (owner 2026-11-11). Deleting a published post, «Снять всё» on a
-  // page and the settings are the owner's. A page or publication outside the
-  // grant is the plane's one static 404.
+  // schedule (owner 2026-11-11). delete:posts deletes a published post of its
+  // pages, on the owner's «да» for that post (below). «Снять всё» on a page and
+  // the settings are the owner's. A page or publication outside the grant is
+  // the plane's one static 404.
 
   async function agentScope(
     request: Parameters<typeof requireAgentKeyPrincipal>[0],
     operation: string,
-    requiredCapabilities: Array<"write:publication_drafts" | "approve:publications" | "approve:vault_albums" | "withdraw:publications"> = ["write:publication_drafts"],
+    requiredCapabilities: Array<"write:publication_drafts" | "approve:publications" | "approve:vault_albums" | "withdraw:publications" | "delete:posts"> = ["write:publication_drafts"],
   ) {
     const principal = await requireAgentKeyPrincipal(request);
     const scope = await beginAgentRequest(appContext, principal, { operation, requiredCapabilities });
@@ -485,6 +494,92 @@ export function registerPublicationRoutes(server: ApiServer, ctx: ApiModuleConte
       await auditWithdraw({ audit: auditCtx(principal), refreshUserId: key.createdBy }, { id: page.id, label: page.pageLabel }, results);
       return { results };
     }, (response) => response.results.length);
+  });
+
+  // Any post of a page by the platform's id (owner 2026-11-11): withdraw (any
+  // post Hub's fresh read of the schedule shows, one put there by hand too —
+  // withdraw:publications) and delete (a published post among the page's own,
+  // on the owner's «да» for that post — delete:posts). The platform's commands
+  // go as the key's owner; the owner's audit row names the key, the post, the
+  // outcome and a deletion's reason; the agent audit closed identifiers only.
+
+  /** The key's page with posts, or the plane's static 404; and the key's owner. */
+  async function postScope(
+    principal: Awaited<ReturnType<typeof requireAgentKeyPrincipal>>,
+    scope: Awaited<ReturnType<typeof beginAgentRequest>>,
+    pageLabel: string,
+  ) {
+    const granted = scope.pages.find((candidate) => candidate.pageLabel === pageLabel);
+    if (!granted || (granted.platform !== "fansly" && granted.platform !== "onlyfans")) throw staticNotFound();
+    const key = await getAgentKeyById(db, principal.agentKeyId);
+    if (key?.createdBy == null) throw new ConflictError("this key names no owner to act for: issue a new key");
+    const page: PostCommandPage = { id: granted.id, pageLabel: granted.pageLabel, platform: granted.platform };
+    return { page, actor: { agentKeyId: principal.agentKeyId, ownerUserId: key.createdBy, allowedPageIds: scope.pages.map((candidate) => candidate.id) } };
+  }
+
+  async function auditPostCommand(
+    principal: Awaited<ReturnType<typeof requireAgentKeyPrincipal>>,
+    operation: string,
+    page: PostCommandPage,
+    result: PostCommandResult,
+    deleteReason: string | null,
+  ) {
+    await recordAudit({ db }, {
+      ...auditCtx(principal),
+      eventType: deleteReason === null ? PAGE_POST_WITHDRAW_AUDIT_EVENT : PAGE_POST_DELETE_AUDIT_EVENT,
+      platformAccountId: page.id,
+      metadata: {
+        pageLabel: page.pageLabel,
+        platform: page.platform,
+        postRef: result.postRef,
+        outcome: result.outcome,
+        reason: result.reason,
+        repeat: result.repeat,
+        publicationId: result.publicationId,
+        ...(deleteReason === null ? {} : { deleteReason, dailyLimit: result.dailyLimit }),
+      },
+    });
+    await writeAgentAudit(db, {
+      agentKeyId: principal.agentKeyId,
+      operation,
+      pageIds: [page.id],
+      verbatimText: false,
+      requestSummary: {
+        postRef: result.postRef,
+        outcome: result.outcome,
+        // The reason's leading code only: some reasons carry an error's text after it.
+        reasonCode: /^[a-z0-9_]{1,64}/.exec(result.reason ?? "")?.[0] ?? null,
+        repeat: result.repeat,
+        publicationId: result.publicationId,
+        ...(deleteReason === null ? {} : {
+          reasonSha256: createHash("sha256").update(deleteReason).digest("hex"),
+          reasonLength: deleteReason.length,
+          dailyUsed: result.dailyLimit?.used ?? null,
+        }),
+      },
+    });
+  }
+
+  server.post("/api/v1/agent/pages/:pageLabel/posts/:postRef/withdraw", { schema: routeSchemas.agentPostWithdraw }, async (request) => {
+    const { principal, scope } = await agentScope(request, POST_WITHDRAW_OPERATION, ["withdraw:publications"]);
+    return settled(scope, async () => {
+      const { page, actor } = await postScope(principal, scope, request.params.pageLabel);
+      const result = await withdrawPagePost(appContext, { page, postRef: request.params.postRef, actor });
+      await auditPostCommand(principal, POST_WITHDRAW_OPERATION, page, result, null);
+      // The screen's schedule follows within a minute, once something was sent now.
+      if (!result.repeat && result.outcome !== "refused") await requestPublicationQueueRefresh(db, { pageId: page.id, userId: actor.ownerUserId });
+      return result;
+    }, () => 1);
+  });
+
+  server.post("/api/v1/agent/pages/:pageLabel/posts/:postRef/delete", { schema: routeSchemas.agentPostDelete }, async (request) => {
+    const { principal, scope } = await agentScope(request, POST_DELETE_OPERATION, ["delete:posts"]);
+    return settled(scope, async () => {
+      const { page, actor } = await postScope(principal, scope, request.params.pageLabel);
+      const result = await deletePagePost(appContext, { page, postRef: request.params.postRef, actor });
+      await auditPostCommand(principal, POST_DELETE_OPERATION, page, result, request.body.reason);
+      return result;
+    }, () => 1);
   });
 
   // The page's own schedule on the platform (the owner's «Очередь площадки»

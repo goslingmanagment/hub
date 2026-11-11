@@ -26,7 +26,7 @@ for at password sign-in (`client: "chat-extension"`): it reaches only the
 61 routes marked "yes", and every route marked "no" refuses it with 403.
 A full device token is not affected.
 
-## Routes (406)
+## Routes (408)
 
 | Method | Path | Route key | Kind | Roles | Page scope | chat-extension token |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -220,6 +220,8 @@ A full device token is not affected.
 | POST | `/api/v1/agent/pages/:pageLabel/fan-queues` | `agentFanQueueCreate` | `agentKey` | — | page | no |
 | POST | `/api/v1/agent/pages/:pageLabel/fan-queues/preview` | `agentFanQueuePreview` | `agentKey` | — | page | no |
 | POST | `/api/v1/agent/pages/:pageLabel/history-requests` | `agentHistoryRequestCreate` | `agentKey` | — | page | no |
+| POST | `/api/v1/agent/pages/:pageLabel/posts/:postRef/delete` | `agentPostDelete` | `agentKey` | — | page | no |
+| POST | `/api/v1/agent/pages/:pageLabel/posts/:postRef/withdraw` | `agentPostWithdraw` | `agentKey` | — | page | no |
 | POST | `/api/v1/agent/pages/:pageLabel/publication-files` | `agentPublicationFileUpload` | `agentKey` | — | page | no |
 | POST | `/api/v1/agent/pages/:pageLabel/publication-files/lookup` | `agentPublicationFileLookup` | `agentKey` | — | page | no |
 | GET | `/api/v1/agent/pages/:pageLabel/publication-media` | `agentPublicationMedia` | `agentKey` | — | page | no |

@@ -11,7 +11,7 @@ import { pick, type ClassWorkSource } from "../apps/runtime/src/sync/engine/sche
 import { createFanslyRegistry, FANSLY_RESOURCE_SPECS } from "../apps/runtime/src/sync/fansly/registry.ts";
 import { journalWriteAnswer, readWriteAnswer } from "../apps/runtime/src/sync/fansly/publish/answers.ts";
 import { FANSLY_WRITE_OPERATIONS, nextWriteStep, writeAnswerVerdict, writeOutcomeDecision } from "../apps/runtime/src/sync/fansly/publish/commands.ts";
-import { deriveFanslyWrite, FANSLY_SCHEDULE_LEAD_MS, FANSLY_WITHDRAW_LEAD_MS, fanslyPartRange, parseApprovedForm, postWallIds, type ApprovedForm, type WriteDeriveInput } from "../apps/runtime/src/sync/fansly/publish/derive.ts";
+import { deriveFanslyPostCommand, deriveFanslyWrite, FANSLY_SCHEDULE_LEAD_MS, FANSLY_WITHDRAW_LEAD_MS, fanslyPartRange, parseApprovedForm, postWallIds, type ApprovedForm, type WriteDeriveInput } from "../apps/runtime/src/sync/fansly/publish/derive.ts";
 import { writeGuard, type WriteGuardInput } from "../apps/runtime/src/sync/fansly/publish/guard.ts";
 import { fanslyWriteModule, WriteAdmissionRefusedError, type WriteDeriveContext, type WriteModuleStore } from "../apps/runtime/src/sync/fansly/publish/module.ts";
 
@@ -71,6 +71,7 @@ function command(overrides: Partial<FanslyWriteCommandRecord> = {}): FanslyWrite
     createdAt: NOW,
     admittedAt: null,
     settledAt: null,
+    postRef: null,
     ...overrides,
   };
 }
@@ -770,6 +771,9 @@ function fakeStore(state: FakeState): WriteModuleStore {
         commands: [accountMedia],
       };
     },
+    async readPostSchedule() {
+      return null;
+    },
     async lockPublication() {
       return state.publication;
     },
@@ -1041,6 +1045,87 @@ describe("the module: a published post's delete (0312)", () => {
     expect(state.command).toMatchObject({ state: "unknown", stateReason: "no_answer:timeout" });
     for (let i = 0; i < 2; i += 1) expect(await module.plan(WORK, planContext())).toMatchObject({ kind: "done" });
     expect(state.admitted).toBe(1);
+  });
+});
+
+describe("a post with no Hub publication (an agent's cancel or delete, 0369)", () => {
+  const POST = "971000000000000001";
+  const DAY = 24 * 60 * 60_000;
+  // Queued a minute ago; the post's time two days ahead.
+  const postCommand = (step: "post_cancel" | "post_delete", overrides: Partial<FanslyWriteCommandRecord> = {}) => command({
+    step, dispatchId: null, publicationId: null, postRef: POST, createdAt: new Date(NOW.getTime() - 60_000), ...overrides,
+  });
+  const read = (atMs: number, entries: Array<{ postId: string; publishAtMs: number | null }> = [{ postId: POST, publishAtMs: NOW.getTime() + 2 * DAY }]) => ({
+    readAtMs: atMs, postIds: entries.map((entry) => entry.postId), entries,
+  });
+
+  it("a cancel is derived from the post alone, only from a read after it was queued that shows it 15 minutes or more ahead", () => {
+    const cancel = postCommand("post_cancel");
+    const derive = (schedule: ReturnType<typeof read> | null) => deriveFanslyPostCommand({ command: cancel, schedule, now: NOW });
+    expect(derive(null)).toEqual({ ok: false, reason: "schedule_not_read" });
+    expect(derive(read(cancel.createdAt.getTime()))).toEqual({ ok: false, reason: "schedule_not_fresh" });
+    expect(derive(read(NOW.getTime(), []))).toEqual({ ok: false, reason: "not_in_schedule" });
+    expect(derive(read(NOW.getTime(), [{ postId: POST, publishAtMs: null }]))).toEqual({ ok: false, reason: "publish_time_unknown" });
+    expect(derive(read(NOW.getTime(), [{ postId: POST, publishAtMs: NOW.getTime() + FANSLY_WITHDRAW_LEAD_MS - 1 }]))).toEqual({ ok: false, reason: "too_close_to_publish" });
+    const derived = derive(read(NOW.getTime()));
+    expect(derived).toMatchObject({ ok: true, request: { spec: "publish.post_cancel", params: { postId: POST } }, facts: { dispatchId: null, revisionId: null, step: "post_cancel" } });
+    // A cancel is never a delete.
+    expect(derived.ok && derived.write.pathAndQuery).toContain(`/post/scheduled/${POST}/cancel`);
+    expect(derived.ok && derived.write.pathAndQuery).not.toContain("/delete");
+  });
+
+  it("a delete takes its own post; any other step needs a publication", () => {
+    expect(deriveFanslyPostCommand({ command: postCommand("post_delete"), schedule: null, now: NOW }))
+      .toMatchObject({ ok: true, request: { spec: "publish.post_delete", params: { postId: POST } } });
+    expect(deriveFanslyPostCommand({ command: { ...postCommand("post_delete"), step: "post" }, schedule: null, now: NOW }))
+      .toEqual({ ok: false, reason: "step_needs_publication" });
+    expect(deriveFanslyPostCommand({ command: postCommand("post_delete", { postRef: null }), schedule: null, now: NOW }))
+      .toEqual({ ok: false, reason: "no_platform_post" });
+  });
+
+  it("the module: a cancel waits for a fresh read, goes once with no publication locked, never while the page is stopped", async () => {
+    const state = fresh({ command: postCommand("post_cancel") });
+    let schedule: ReturnType<typeof read> | null = read(NOW.getTime() - 120_000);
+    const store: WriteModuleStore = {
+      ...fakeStore(state),
+      async readDeriveContext() {
+        throw new Error("a post with no publication has no approval to read");
+      },
+      async readPostSchedule() {
+        return schedule;
+      },
+      async lockPublication() {
+        throw new Error("a post with no publication locks none");
+      },
+      async readPublication() {
+        throw new Error("a post with no publication reads none");
+      },
+    };
+    const module = fanslyWriteModule(store);
+    const off = { read: async () => ({ publishingEnabled: false }) as never };
+    state.page = { enabled: false, autostopReason: null };
+    // The read predates the command: it waits — and gives up after a while, never sent.
+    expect(await module.plan(WORK, planContext({ settings: off }))).toMatchObject({ kind: "wait", reason: "dependency" });
+    expect(await module.plan(WORK, planContext({ settings: off, now: new Date(NOW.getTime() + 16 * 60_000) })))
+      .toMatchObject({ kind: "local", detail: { action: "refuse", reason: "schedule_not_read" } });
+    // A fresh read that shows it: the cancel, with publishing off.
+    schedule = read(NOW.getTime());
+    const plan = await module.plan(WORK, planContext({ settings: off }));
+    expect(plan).toMatchObject({ kind: "request", request: { spec: "publish.post_cancel", params: { postId: POST } } });
+    await admitOnce(module, plan, 8);
+    expect(state.admitted).toBe(1);
+    expect(state.command.request).toMatchObject({ spec: "publish.post_cancel", pathAndQuery: expect.stringContaining(`/post/scheduled/${POST}/cancel`) });
+    expect(await module.confirmWrite!(db, WORK, { attemptId: 8, writeFingerprint: state.command.requestFingerprint!, settings: off })).toBeNull();
+    state.page = { enabled: false, autostopReason: "fansly_http_401" };
+    expect(await module.confirmWrite!(db, WORK, { attemptId: 8, writeFingerprint: state.command.requestFingerprint!, settings: off })).toBe("page_stopped:fansly_http_401");
+
+    // Stopped before the admission: refused, nothing admitted.
+    const stopped = fresh({ command: postCommand("post_cancel") });
+    const second = fanslyWriteModule({ ...store, ...{ getCommand: fakeStore(stopped).getCommand, readPageSettings: async () => stopped.page, admit: fakeStore(stopped).admit } });
+    const secondPlan = await second.plan(WORK, planContext());
+    stopped.page = { enabled: true, autostopReason: "browser_login_lost" };
+    await expect(admitOnce(second, secondPlan, 9)).rejects.toBeInstanceOf(WriteAdmissionRefusedError);
+    expect(stopped.admitted).toBe(0);
   });
 });
 

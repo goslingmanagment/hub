@@ -1,5 +1,8 @@
 import { errorResponseSchema } from "./primitives.ts";
 import {
+  agentPostCommandResponseSchema,
+  agentPostDeleteBodySchema,
+  agentPostParamsSchema,
   agentPublicationChangesQuerySchema,
   agentPublicationChangesResponseSchema,
   agentPublicationCreateBodySchema,
@@ -39,7 +42,10 @@ import {
 // handed it to the platform (owner 2026-10-29); one with withdraw:publications
 // takes any Hub post of its pages off the platform's schedule, as the owner's
 // «Снять» does, and reads the page's schedule (owner 2026-11-11). Only the
-// withdrawal talks to a platform, through the owner's own services.
+// withdrawal talks to a platform, through the owner's own services. By the
+// platform's post id (owner 2026-11-11) a key takes any post of its pages off
+// the schedule, one placed by hand too, and with delete:posts deletes a
+// published one — the owner's «да» for that post is the agent's to hold.
 
 const owner = { kind: "owner-session" } as const;
 const ownerErrors = {
@@ -194,6 +200,26 @@ export const publicationRouteSchemas = {
       + " and the result comes as the publication's status; OnlyFans answers its outcome",
     params: publicationIdParamsSchema,
     response: { 200: publicationWithdrawResponseSchema, ...agentErrors },
+  },
+  agentPostWithdraw: {
+    auth: { kind: "agentKey", scope: "page" }, tags: ["agent"],
+    summary: "Take a post of a granted page off the platform's schedule by the platform's post id — one put there"
+      + " by hand too (needs withdraw:publications). Only a post Hub's own read of the page's schedule, an hour old"
+      + " at most, shows waiting, 15 minutes or more before its time, the page not stopped. A Hub post goes through"
+      + " its publication's withdrawal. One command per post: a repeat answers its state and sends nothing. Never a"
+      + " deletion",
+    params: agentPostParamsSchema,
+    response: { 200: agentPostCommandResponseSchema, ...agentErrors },
+  },
+  agentPostDelete: {
+    auth: { kind: "agentKey", scope: "page" }, tags: ["agent"],
+    summary: "Delete a published post of a granted page by the platform's post id (needs delete:posts; only on the"
+      + " owner's «да» for that post). Only a post Hub has among the page's own posts, not in its schedule. A daily"
+      + " ceiling per key; the reason goes to the owner's audit. One command per post: a repeat answers its state"
+      + " and sends nothing; an unknown outcome is never sent again",
+    params: agentPostParamsSchema,
+    body: agentPostDeleteBodySchema,
+    response: { 200: agentPostCommandResponseSchema, ...agentErrors },
   },
   agentPublicationQueue: {
     auth: { kind: "agentKey", scope: "page" }, tags: ["agent"],

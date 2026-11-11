@@ -566,8 +566,9 @@ you approve vault albums on the word of the person who asked and nothing else:
 fans do not see an album, and any other kind is refused with `kind_not_allowed`.
 You cancel only what your key
 drafted, and only before Hub hands it to the platform (below); you take a post
-off the platform's schedule only with `withdraw:publications` (see "Taking a
-post off the schedule"), you never switch publishing on, and nothing you draft
+off the platform's schedule only with `withdraw:publications` and delete a
+published one only with `delete:posts` on the owner's word for that post (see
+"Taking a post off the schedule"), you never switch publishing on, and nothing you draft
 reaches a platform before it is approved. Drafts are writes, not reads: the conclusion envelope above is not
 on these answers.
 
@@ -731,15 +732,20 @@ Fansly applied its last step — the album made, the files added: do not send it
 again or retry, tell the owner, Dima), `missed` (a story not started in time),
 `withdrawn` (taken off the schedule), `cancelled` (by a person before sending).
 
-## Taking a post off the schedule (`hub publication-withdraw`, `hub publication-queue`)
+## Taking a post off the schedule or the wall (`hub publication-withdraw`, `hub post-withdraw`, `hub post-delete`, `hub publication-queue`)
 
-With `withdraw:publications` (the owner grants it per key) you take a Hub post
-of your pages off the platform's schedule at any time, without asking — any Hub
-post there, whoever drafted or approved it (owner 2026-11-11). It is the
-owner's own «Снять»: the same checks, the same refusals, one cancel per post.
-Not yours: deleting a post that already went out, taking a whole page's
-schedule off at once, and posts put in the schedule by hand (no Hub
-publication) — those are the owner's; tell him.
+With `withdraw:publications` (the owner grants it per key) you take a post of
+your pages off the platform's schedule at any time, without asking — any Hub
+post there, whoever drafted or approved it, and, by the platform's post id,
+one put in the schedule by hand (owner 2026-11-11). A Hub post's withdrawal is
+the owner's own «Снять»: the same checks, the same refusals, one cancel per
+post.
+
+With `delete:posts` (granted separately) you delete a post that already went
+out — **only when the owner said «да» to deleting that very post**. Hub does
+not check his word: you hold it, and you write it into `--reason`. Without it,
+never: tell the owner and wait. Not yours either way: taking a whole page's
+schedule off at once.
 
 **The page's schedule.** `hub publication-queue --page-label <page>`
 (`GET /api/v1/agent/pages/<page>/publication-queue`; needs
@@ -755,6 +761,15 @@ answer is still the last read, so ask again in a minute or two and look for a
 credits: refresh when you need it, never in a loop.
 
 ### How to stop a post
+
+Which command, by where the post is:
+
+| The post | Command |
+|---|---|
+| Your own draft, not handed to the platform yet (`draft`, `approved`) | `hub publication-cancel --id <id>` |
+| A Hub post in the schedule (`scheduled`) | `hub publication-withdraw --id <id>` (or `post-withdraw` with its `platformPostRef`: the same withdrawal) |
+| Any post in the schedule — one put there by hand too (`publicationId: null` in the queue) | `hub post-withdraw --page-label <page> --post-ref <postRef>` |
+| A published post (out on the wall) | `hub post-delete --page-label <page> --post-ref <postRef> --reason "…"` — only on the owner's «да» for that very post |
 
 1. **Find it.** `hub publication-list --page-label <page>` (with
    `write:publication_drafts`) or `hub publication-queue --page-label <page>`;
@@ -786,7 +801,7 @@ credits: refresh when you need it, never in a loop.
 | Reason | Means | Do |
 |---|---|---|
 | `status_draft`, `status_approved` | Not handed to the platform yet. | Cancel it if your key drafted it; otherwise tell the owner. |
-| `status_published` | It already went out. | Deleting a published post is the owner's: tell him. |
+| `status_published` | It already went out. | Only on the owner's «да» for this post: `post-delete` (with `delete:posts`); otherwise tell him. |
 | `status_withdrawn`, `status_cancelled`, `status_not_published`, … | It is not in the schedule (already off, or never went). | Nothing. |
 | `status_unknown` | Hub does not know whether it is there. | Tell the owner; do not ask again. |
 | `story_has_no_schedule` | A story goes out at once; it has no schedule. | Nothing to withdraw. |
@@ -833,6 +848,84 @@ again.
 A publication that is not on your pages answers 404, exactly as one that does
 not exist; a key without `withdraw:publications` is 403
 `agent_capability_missing`.
+
+### Any post by its id: `hub post-withdraw`, `hub post-delete`
+
+Both name the page and the platform's post id: `--post-ref` is the `postRef`
+of the post's entry in `hub publication-queue` (a scheduled post) or of the
+post in the `posts` dataset (a published one), digits only. A page that is not
+yours is 404, as one that does not exist; a key without the capability is 403
+`agent_capability_missing`. The answer (`POST /api/v1/agent/pages/<page>/posts/<postRef>/withdraw`
+or `…/delete`) is one object: `outcome`, `reason`, `repeat`, `publicationId`
+(the Hub publication the post is, or null for one placed by hand),
+`publication`, `command` (the command Hub holds for the post: its `state`),
+`check` (what a person checks when it is unknown) and, for a deletion,
+`dailyLimit` (`limit`, `used` over the last 24 hours).
+
+**One command per post.** Hub keeps ONE command per post and action, whichever
+route asked for it (your post route, the publication's, the owner's). Asking
+again sends nothing: it answers `repeat: true` and where that command stands —
+so asking again is how you follow it. After `unknown` Hub never sends it again;
+it only reads (the schedule, or the post by its id) to see whether it is gone.
+
+**`post-withdraw`** (`withdraw:publications`) takes a post off the schedule —
+never deletes one. Hub must have seen it waiting in ITS OWN read of the page's
+schedule, at most an hour old: refresh first (`hub publication-queue
+--page-label <page> --refresh`, then again until `readAt` is after your
+refresh), then withdraw. A Hub post goes through its publication's withdrawal
+(as `publication-withdraw`, its outcome there). Otherwise:
+
+- **Fansly** answers `accepted`: one cancel is queued on the page's engine; it
+  goes only once a read of the schedule taken after it still shows the post,
+  never closer than 15 minutes to its time. Ask again in a minute or two:
+  `withdrawn` (Fansly's answer named the post as taken off and the read after
+  no longer lists it), `unknown` (below), `rejected` (Fansly said no: it stays
+  scheduled — tell the owner), or still `accepted` while the read is pending.
+- **OnlyFans** answers at once: Hub reads the post's day of the schedule whole
+  (it must show the post exactly once), sends one delete as the key's owner;
+  `withdrawn` — OnlyFans confirmed it; `rejected`; `unknown`; `not_sent` — it
+  never left, ask again.
+
+**`post-delete`** (`delete:posts`) deletes a published post, only on the
+owner's «да» for that very post. `--reason` (3–300 characters) says why and
+whose «да», e.g. «Дима 11.11: удалить, нарезка из кастома»: it goes to the
+owner's audit with your key, the page and the post. Hub deletes only a post it
+has among the page's own posts, never one still in the schedule (that is
+`post-withdraw`), and a Fansly Hub post through the owner's own deletion.
+**Daily ceiling:** a key deletes at most `dailyLimit.limit` posts over a rolling
+24 hours (the owner's setting, 10 by default); each slot is taken before the
+command goes and is not given back when the outcome is unknown. At the ceiling
+Hub refuses `daily_delete_limit_reached`: tell the owner, never try to get
+around it. A ceiling of 0 is the owner's off switch: every new deletion is
+refused `agent_post_delete_off` and nothing is sent (asking again about a
+deletion that already went still answers where it stands).
+
+- **Fansly** answers `accepted`; ask again in a minute or two: `deleted` (a read
+  of the post by its id after Fansly's answer lists nothing), `unknown`,
+  `rejected`.
+- **OnlyFans** answers at once: `deleted` (OnlyFans confirmed the delete),
+  `rejected`, `unknown`, `not_sent`.
+
+**`unknown` is not done.** Hub does not know whether the platform did it, and
+will not send it again. Do not report it as withdrawn or deleted: tell the
+owner at once — which post, why, `reason`, and `check` (what he looks at on
+the platform).
+
+`refused` — Hub sent nothing; `reason` says why:
+
+| Reason | Means | Do |
+|---|---|---|
+| `schedule_not_read_refresh_first`, `schedule_stale_refresh_first` | Hub has no read of the page's schedule, or none in the last hour. | Refresh the queue, wait for a `readAt` after it, ask again. |
+| `not_in_schedule`, `schedule_ambiguous` | Hub's read does not show the post waiting (exactly once). | Check `--post-ref` against the queue; if it went out, it is a delete. |
+| `publish_time_unknown`, `too_close_to_publish_time` | Its time is unknown, or less than 15 minutes away. | Tell the owner at once: only a person, on the platform, can still try. |
+| `post_not_seen_on_page` | Hub does not have this post among the page's own posts. | Check the page and the id; Hub never deletes a post it has not seen there. |
+| `post_in_schedule_use_withdraw` | The post is still in the schedule. | `post-withdraw` it. |
+| `daily_delete_limit_reached` | The key's deletions of the last 24 hours reached the ceiling. | Tell the owner. |
+| `agent_post_delete_off` | The owner turned agents' deletions off (the ceiling is 0). | Tell the owner; delete nothing. |
+| `onlyfans_publication_delete_not_in_hub` | An OnlyFans Hub post: Hub has no deletion of it. | Tell the owner; he deletes it by hand. |
+| `publishing_stopped`, `publishing_stopped_schedule_stays` | The page is stopped (a lost login, a platform check, 401/403/429): nothing may be sent for it. | Tell the owner. |
+| `route_unverified` | Hub may not send this request to Fansly. | Tell the owner. |
+| `status_…`, `withdraw_…`, `delete_…`, OnlyFans `schedule_…`, `not_prepared: …` | A Hub post's own refusal (the table above), or the read before the send could not show the post. | As above; otherwise tell the owner. |
 
 ## Fan queues for chatters (`hub queue-*`)
 
@@ -1042,6 +1135,8 @@ Global flags: `--base-url`, `--fail-on-partial`, `--pretty`, `--help`.
 | `hub publication-changes` | Your key's publications changed at or after `--since`, oldest change first: status, its reason, the platform's post or album. |
 | `hub publication-cancel` | Cancel a publication your key drafted, before Hub hands it to the platform (draft or approved). |
 | `hub publication-withdraw` | Take a Hub post of your pages off the platform's schedule (any Hub post, whoever drafted it), as the owner's «Снять». Needs `withdraw:publications`. |
+| `hub post-withdraw` | Take any post of your page off the schedule by its id (`--post-ref`), one put there by hand too, once Hub's read of the schedule (≤ 1 h old) shows it. One command per post; asking again follows it. Needs `withdraw:publications`. |
+| `hub post-delete` | Delete a published post of your page by its id, ONLY on the owner's «да» for that post (`--reason` with his word). Daily ceiling per key; one command per post. Needs `delete:posts`. |
 | `hub publication-queue` | The page's own schedule on the platform as Hub last read it: Hub's posts and the ones put there by hand; `--refresh` asks for a fresh read first. Needs `write:publication_drafts` or `withdraw:publications`. |
 | `hub publication-file-upload` | COMPOSITE: files from disk (bare paths) into Hub for a page's model: those Hub holds (by SHA-256) are not sent again, the others streamed whole, a lost network waited for; per file `media: "file:<id>"` for a draft. Progress on stderr. |
 | `hub vault-album-draft` | COMPOSITE: a Fansly vault album draft from a pack's folder (a bare path), its files in name order, the first on top; again after a break it sends only what Hub lacks; `--dry-run` lists it and uploads nothing. |

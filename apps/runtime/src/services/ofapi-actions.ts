@@ -100,9 +100,41 @@ async function authority(app: AppContext, command: OfapiAction, frozen?: Frozen,
 /** Who asked for an action: the owner (and publications' sends), or a read Hub makes for publications itself (plan PR 5), kept off the owner's action list. */
 export type OfapiActionOrigin = "owner" | "publication_read";
 
+/** The digest an action's body is kept under (`body_hash`): the same command
+ *  hashes the same whichever id or route prepared it. */
+export function ofapiActionBodyHash(command: OfapiAction): string {
+  return createHash("sha256").update(JSON.stringify(ofapiActionSchema.parse(command))).digest("hex");
+}
+
+/** An action of the page that is exactly this command, under any id. */
+export interface OfapiActionOfCommand {
+  id: string;
+  state: string;
+  errorCode: string | null;
+  createdAt: Date;
+  settledAt: Date | null;
+}
+
+/**
+ * The page's actions that are exactly `command` (its body's digest), under any
+ * id — a post's delete prepared by a publication's withdrawal and by an
+ * agent's post route alike (0369) — newest first, the cancelled ones left out.
+ */
+export async function listOfapiActionsOfCommand(app: AppContext, command: OfapiAction): Promise<OfapiActionOfCommand[]> {
+  const rows = (await app.db.execute<{ id: string; state: string; error_code: string | null; created_at: Date; settled_at: Date | null }>(sql`
+    select id, state, error_code, created_at, settled_at from ofapi_action_intents
+     where page_id = ${command.pageId} and action = ${command.action} and body_hash = ${ofapiActionBodyHash(command)} and state <> 'cancelled'
+     order by created_at desc, id desc
+  `)).rows;
+  return rows.map((row) => ({
+    id: row.id, state: row.state, errorCode: row.error_code,
+    createdAt: new Date(row.created_at), settledAt: row.settled_at === null ? null : new Date(row.settled_at),
+  }));
+}
+
 export async function prepareOfapiAction(app: AppContext, input: { id: string; command: OfapiAction; origin?: OfapiActionOrigin }, actorUserId: number) {
   const command = ofapiActionSchema.parse(input.command);
-  const hash = createHash("sha256").update(JSON.stringify(command)).digest("hex");
+  const hash = ofapiActionBodyHash(command);
   // Existing identity is resolved before changing authority/time validation.
   const previous = (await app.db.execute<Row>(sql`select * from ofapi_action_intents where id=${input.id}`)).rows[0];
   if (previous) {

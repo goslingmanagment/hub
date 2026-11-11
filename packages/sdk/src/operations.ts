@@ -145,6 +145,8 @@ export const kernelOperations = {
   agentObservations: { method: "GET", path: "/api/v1/agent/observations" },
   agentPerson: { method: "GET", path: "/api/v1/agent/people/:platform/:platformUserId" },
   agentPersonTimeline: { method: "GET", path: "/api/v1/agent/people/:platform/:platformUserId/timeline" },
+  agentPostDelete: { method: "POST", path: "/api/v1/agent/pages/:pageLabel/posts/:postRef/delete" },
+  agentPostWithdraw: { method: "POST", path: "/api/v1/agent/pages/:pageLabel/posts/:postRef/withdraw" },
   agentPublicationApprove: { method: "POST", path: "/api/v1/agent/publications/approve" },
   agentPublicationCancel: { method: "POST", path: "/api/v1/agent/publications/:id/cancel" },
   agentPublicationChanges: { method: "GET", path: "/api/v1/agent/publications/changes" },

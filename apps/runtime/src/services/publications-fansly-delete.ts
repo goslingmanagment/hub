@@ -112,7 +112,8 @@ export async function deleteFanslyPublication(
     const queued = await enqueueFanslyWriteCommand(tx, {
       dispatchId: dispatch.id, step: "post_delete", item: "", priority: "background",
       notBefore: now, notAfter: new Date(now.getTime() + FANSLY_DELETE_SEND_WINDOW_MS),
-      config, now, isSendable,
+      // The post itself: one live delete of it, whichever route asks (0369).
+      config, now, isSendable, postRef: record.platformPostRef,
     });
     return queued === null ? "delete_in_progress" : "accepted";
   }).catch((error: unknown) => {

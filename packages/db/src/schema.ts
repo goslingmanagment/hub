@@ -3492,7 +3492,8 @@ export const agentKeys = pgTable(
         'write:fan_queues',
         'read:content',
         'read:team',
-        'withdraw:publications'
+        'withdraw:publications',
+        'delete:posts'
       ]::text[]
     `),
     expiresAtCheck: check("agent_keys_expires_at_check", sql`
