@@ -88,6 +88,8 @@ describe("route auth declarations", () => {
       "clientConversationRecaps",
       // The fan's deleted messages of a page, with the text the hub kept.
       "clientDeletedMessages",
+      // Fan badges: FBuddy's tier and Fansly's blue card of the fans a tab just read.
+      "clientFanBadges",
       "clientFanCard",
       "clientFanClaim",
       "clientFanClaimStatus",
