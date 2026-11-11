@@ -1930,13 +1930,6 @@ export const clientDeletedMessagesQuerySchema = z.object({
   conversationRef: clientConversationRefSchema.optional(),
 }).strict();
 
-/**
- * The length of the fan's chat with the page, for the chat header: how many
- * messages it ever had and since when. Exact or nothing: both stay null until
- * Hub holds the chat from its very first message (the sync's chain proved
- * `complete`); then `messages` is the proven chain and what the page's socket
- * brought after its head, both sides, deleted ones included.
- */
 /** The most chatters `chat.authors` names, the most messages first. */
 export const CLIENT_CHAT_LENGTH_CHATTERS_MAX = 50;
 
@@ -1968,6 +1961,13 @@ export const clientChatAuthorsSchema = z.object({
   unattributed: z.number().int().nonnegative().nullable(),
 });
 
+/**
+ * The length of the fan's chat with the page, for the chat header: how many
+ * messages it ever had and since when. Exact or nothing: both stay null until
+ * Hub holds the chat from its very first message (the sync's chain proved
+ * `complete`); then `messages` is the proven chain and what the page's socket
+ * brought after its head, both sides, deleted ones included.
+ */
 export const clientChatLengthSchema = z.object({
   conversationRef: clientConversationRefSchema,
   /** Every message of the chat, both sides; null while its history is not proven complete. */
