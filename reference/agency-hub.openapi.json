@@ -176154,6 +176154,9 @@
                                 "unattributed"
                               ],
                               "additionalProperties": false
+                            },
+                            "approximate": {
+                              "type": "boolean"
                             }
                           },
                           "required": [

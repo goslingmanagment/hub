@@ -3,11 +3,12 @@ import { describe, expect, it } from "vitest";
 import { CLIENT_CHAT_LENGTH_CHATTERS_MAX } from "@agency_hub_core/contracts";
 import type { ClientChatChatterRow, ClientChatLengthRow } from "@agency_hub_core/db";
 
-import { chatAuthorsOf, chatLengthOf } from "../apps/runtime/src/services/client-deleted-messages.ts";
+import { chatAuthorsOf, chatLengthOf, onlyFansChatLengthOf } from "../apps/runtime/src/services/client-deleted-messages.ts";
 
 // The chat header's card: how many messages the chat ever had, since when, and
 // who wrote them. The chatters always; the fan and the page's unattributed
-// messages only beside a proven length, adding up to it.
+// messages only beside a proven length, adding up to it. An OnlyFans chat:
+// what the archive holds of it, marked approximate.
 
 const ME = 7;
 const OLDEST = new Date(Date.UTC(2026, 9, 26, 12, 0));
@@ -57,6 +58,42 @@ describe("chatLengthOf", () => {
 
   it("answers no authors at all in a proven chat nobody reported a send of: everything the page sent is unattributed", () => {
     expect(chatLengthOf("900", thread(), { chatters: [], pageSide: 300 }, ME).authors).toEqual({ chatters: [], fan: 115, unattributed: 300 });
+  });
+});
+
+describe("onlyFansChatLengthOf", () => {
+  it("answers what the archive holds of an OnlyFans chat, marked approximate, with the authors adding up to it", () => {
+    const chat = onlyFansChatLengthOf("500", {
+      messages: 120,
+      oldestAt: OLDEST,
+      authors: { chatters: [chatter(8, "olga", 20), chatter(ME, "anna", 30)], pageSide: 70 },
+    }, ME);
+    expect(chat).toEqual({
+      conversationRef: "500",
+      messages: 120,
+      firstMessageAt: OLDEST.toISOString(),
+      approximate: true,
+      authors: {
+        chatters: [
+          { userId: ME, name: "anna", isMe: true, messages: 30 },
+          { userId: 8, name: "olga", isMe: false, messages: 20 },
+        ],
+        fan: 50,
+        unattributed: 20,
+      },
+    });
+    expect(total(chat!.authors!)).toBe(120);
+  });
+
+  it("answers no chat when the archive holds nothing of it and nobody reported a send", () => {
+    expect(onlyFansChatLengthOf("500", { messages: 0, oldestAt: null, authors: { chatters: [], pageSide: 0 } }, ME)).toBeNull();
+  });
+
+  it("still answers a chat whose only trace is a reported send, its first message unknown when no row has a time", () => {
+    const withSend = onlyFansChatLengthOf("500", { messages: 0, oldestAt: null, authors: { chatters: [chatter(ME, "anna", 1)], pageSide: 0 } }, ME);
+    expect(withSend).toMatchObject({ messages: 1, firstMessageAt: null, approximate: true, authors: { fan: 0, unattributed: 0 } });
+    expect(onlyFansChatLengthOf("500", { messages: 3, oldestAt: null, authors: { chatters: [], pageSide: 1 } }, ME))
+      .toMatchObject({ messages: 3, firstMessageAt: null, authors: { chatters: [], fan: 2, unattributed: 1 } });
   });
 });
 

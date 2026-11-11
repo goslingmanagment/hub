@@ -10,8 +10,10 @@ import {
   listClientDeletedMessages,
   readClientChatAuthors,
   readClientChatLength,
+  readClientOnlyFansChat,
   type ClientChatAuthorsRow,
   type ClientChatLengthRow,
+  type ClientOnlyFansChatRow,
   type Database,
 } from "@agency_hub_core/db";
 
@@ -49,6 +51,14 @@ import { requireClientGrantedPage } from "./client-switches.ts";
  * sends (send-attribution-v1), always; the fan's and the page's unattributed
  * messages only beside a proven length, the page's side counted from the
  * archive and the fan's the rest of the length (`chatAuthorsOf`).
+ *
+ * ON ONLYFANS. The same card on ChatSpace (owner, 2026-11-11: «там же все то
+ * же самое нужно»). There the chat is the fan, and no sync proves its first
+ * message, so the answer is what the message archive holds of it, marked
+ * `approximate`: its rows, both sides, deleted ones included, since the
+ * earliest of them; the page's side is the archive's too, so the fan and the
+ * unattributed come out by the same arithmetic. Nothing in the archive and no
+ * reported send: `chat` null (`onlyFansChatLengthOf`).
  */
 export const DELETED_MESSAGES_FEATURE = "deleted-messages-v1";
 
@@ -69,6 +79,24 @@ export function chatLengthOf(
     messages,
     firstMessageAt: !complete || row.oldestAt === null ? null : row.oldestAt.toISOString(),
     authors: chatAuthorsOf(messages, authors, callerUserId),
+  };
+}
+
+/**
+ * What the header may say of an OnlyFans chat: what the archive holds of it, marked approximate, and who wrote it by
+ * the same arithmetic as a proven chat's; null when the archive holds nothing of it and nobody reported a send. Pure.
+ */
+export function onlyFansChatLengthOf(conversationRef: string, row: ClientOnlyFansChatRow, callerUserId: number): ClientChatLength | null {
+  if (row.messages === 0 && row.authors.chatters.length === 0) return null;
+  // A send can be reported a moment before the archive holds it: the chat is never shorter than its reported sends.
+  const reported = row.authors.chatters.reduce((sum, chatter) => sum + Math.max(0, chatter.messages), 0);
+  const messages = Math.max(row.messages, reported);
+  return {
+    conversationRef,
+    messages,
+    firstMessageAt: row.oldestAt === null ? null : row.oldestAt.toISOString(),
+    authors: chatAuthorsOf(messages, row.authors, callerUserId),
+    approximate: true,
   };
 }
 
@@ -108,6 +136,17 @@ async function readChat(
   return chatLengthOf(input.conversationRef, length, authors, callerUserId);
 }
 
+/** The open OnlyFans chat's length and authors as the archive holds them; null when it holds nothing of the chat. */
+async function readOnlyFansChat(
+  db: Database,
+  input: { pageId: number; conversationRef: string; fanRef: string },
+  callerUserId: number,
+): Promise<ClientChatLength | null> {
+  // The chat is the fan: read by the fan's id, the client's conversationRef only echoed back.
+  const row = await readClientOnlyFansChat(db, { pageId: input.pageId, fanRef: input.fanRef });
+  return onlyFansChatLengthOf(input.conversationRef, row, callerUserId);
+}
+
 export async function readClientDeletedMessages(
   app: AppContext,
   principal: HumanAuthPrincipal,
@@ -118,12 +157,14 @@ export async function readClientDeletedMessages(
   const page = await requireClientGrantedPage(app, principal, await findPageSummaryByLabel(app.db, input.pageLabel), DELETED_MESSAGES_FEATURE);
   const fansly = page.platform === "fansly";
   const { conversationRef } = input;
+  // A Fansly chat by its thread, an OnlyFans chat by the archive; another platform's never.
+  const readOpenChat = fansly ? readChat : page.platform === "onlyfans" ? readOnlyFansChat : null;
   const [{ total, rows }, chat] = await Promise.all([
     fansly
       ? listClientDeletedMessages(app.db, { pageId: page.id, fanRef: input.fanRef, limit: CLIENT_DELETED_MESSAGES_MAX })
       : { total: 0, rows: [] },
-    fansly && conversationRef !== undefined
-      ? readChat(app.db, { pageId: page.id, conversationRef, fanRef: input.fanRef }, principal.user.id)
+    readOpenChat !== null && conversationRef !== undefined
+      ? readOpenChat(app.db, { pageId: page.id, conversationRef, fanRef: input.fanRef }, principal.user.id)
       : null,
   ]);
   return {
