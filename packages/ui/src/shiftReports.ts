@@ -81,6 +81,19 @@ export function reasonText(flag: string): string {
   return flag.replace(/\s*\(§[^()]*\)\s*$/u, "").trim();
 }
 
+/**
+ * A text the team's agent wrote, as plain words. The agent writes its notes in Markdown out of habit, and a screen
+ * that shows them as text would show the marks: «**Фан** …». The emphasis and code marks go, the words stay; a lone
+ * asterisk or underscore is part of the text and stays too.
+ */
+export function plainNote(text: string): string {
+  return text
+    .replace(/\*\*([^*\n]+)\*\*/gu, "$1")
+    .replace(/(^|[\s(«"])__([^_\n]+)__(?=$|[\s).,:;!?»"])/gu, "$1$2")
+    .replace(/`([^`\n]+)`/gu, "$1")
+    .trim();
+}
+
 /** The report's sales in two groups, each in the ledger's order: what is in the total, and what was held out. */
 export function splitLines(lines: readonly AccountReportLine[]): { counted: AccountReportLine[]; held: AccountReportLine[] } {
   return { counted: lines.filter((line) => line.counted), held: lines.filter((line) => !line.counted) };
