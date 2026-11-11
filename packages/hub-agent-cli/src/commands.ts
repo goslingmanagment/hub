@@ -884,9 +884,10 @@ function mediaLookHint(error: { status: number | null; code: string | null }): s
       return "Another look of this page is still in flight (one at a time per page): read it with media-look-get, then ask again.";
     case "media_look_daily_limit":
       return "The page's looks for today (UTC) are used up: a cached look of a file still answers; otherwise wait for tomorrow or tell the owner.";
-    case "media_look_not_scheduled":
-    case "media_look_not_in_schedule":
-      return "Only a post waiting in the page's Fansly schedule is looked at for now: a published post or a vault file cannot be yet.";
+    case "media_look_post_not_seen":
+      return "Hub looks only at a post it has seen on this page (its schedule or its wall): check --post-ref against publication-queue or the posts dataset.";
+    case "media_look_not_in_vault":
+      return "That file is in no album of the page's vault as Hub last walked it: look at it through a post (--post-ref) instead.";
     default:
       return null;
   }
@@ -911,10 +912,11 @@ export function mediaLookFrameFileName(frame: { index: number; atMs: number | nu
   return frame.atMs === null ? `f${index}.jpg` : `f${index}_t${String(frame.atMs).padStart(5, "0")}ms.jpg`;
 }
 
-/** `DIR/<page>/<publication-N or post-REF>[-<index>]`: one folder per file of a post. */
+/** `DIR/<page>/<publication-N or post-REF>[-<index>]`: one folder per file of a post; `DIR/<page>/media-REF` for a vault file. */
 export function mediaLookFolder(out: string, pageLabel: string, target: MediaLookAnswer["target"]): string {
-  const post = target.publicationId === null ? `post-${safeName(target.postRef)}` : `publication-${target.publicationId}`;
-  return resolve(out, safeName(pageLabel), target.index === 0 ? post : `${post}-${target.index}`);
+  if (target.postRef === null && target.publicationId === null) return resolve(out, safeName(pageLabel), `media-${safeName(target.mediaRef ?? "unknown")}`);
+  const post = target.publicationId === null ? `post-${safeName(target.postRef ?? "unknown")}` : `publication-${target.publicationId}`;
+  return resolve(out, safeName(pageLabel), (target.index ?? 0) === 0 ? post : `${post}-${target.index}`);
 }
 
 /** The look as printed: as the hub answered, or — with `--out` — its frames
@@ -2491,21 +2493,23 @@ export const HUB_COMMANDS: readonly HubCommand[] = [
     name: "media-look",
     operation: "agentMediaLookCreate",
     summary:
-      "Look at a file of a post in the page's Fansly schedule (a Hub publication in status scheduled, or a post"
-      + " placed by hand): frames ≤ 512 px — a video's sample (one per second, or evenly spaced: what is between"
-      + " frames is not seen) or its cover, a photo downscaled. One image request through the page at its pace, a"
-      + " daily limit per page; a fresh look of the same file answers cached and costs nothing. While it is queued"
-      + " it is read again (media-look-get) up to --wait seconds. --out DIR writes the frames as JPEGs and prints"
-      + " their paths. Needs look:media.",
+      "Look at a file of the page on Fansly: a post in its schedule or a published one (--post-ref, or a Hub"
+      + " publication scheduled or published), or a file of its own vault (--media-ref): frames ≤ 512 px — a video's"
+      + " sample (one per second, or evenly spaced: what is between frames is not seen) or its cover, a photo"
+      + " downscaled. Through the page at its pace: one request for a scheduled post, two (a read, then the image)"
+      + " for a published post or a vault file — one look against the page's daily limit; a fresh look of the same"
+      + " file answers cached and costs nothing. While it is queued it is read again (media-look-get) up to --wait"
+      + " seconds. --out DIR writes the frames as JPEGs and prints their paths. Needs look:media.",
     options: {
       "page-label": { kind: "string", describe: "The page (required)" },
-      "publication-id": { kind: "number", describe: "A Hub publication of the page in status scheduled (or --post-ref)" },
-      "post-ref": { kind: "string", describe: "A post in the page's Fansly schedule, its Fansly id (or --publication-id)" },
-      index: { kind: "number", describe: "Which of the post's files, 0-based, an album's files in its order (default 0)" },
+      "publication-id": { kind: "number", describe: "A Hub publication of the page, scheduled or published (or --post-ref, --media-ref)" },
+      "post-ref": { kind: "string", describe: "A post of the page, scheduled or published, its Fansly id (or --publication-id, --media-ref)" },
+      "media-ref": { kind: "string", describe: "A file of the page's own vault, its Fansly media id (or --publication-id, --post-ref)" },
+      index: { kind: "number", describe: "Which of the post's files, 0-based, an album's files in its order (default 0); not with --media-ref" },
       cover: { kind: "boolean", describe: "A video's cover instead of its frames" },
       fresh: { kind: "boolean", describe: "Look again even when a fresh look of the file is kept (costs one look)" },
       "no-frames": { kind: "boolean", describe: "The frames' facts only, no pictures" },
-      out: { kind: "string", describe: "Write the frames as JPEGs under this folder: DIR/<page>/<post or publication>/f000_t00000ms.jpg" },
+      out: { kind: "string", describe: "Write the frames as JPEGs under this folder: DIR/<page>/<post, publication or media>/f000_t00000ms.jpg" },
       wait: { kind: "number", describe: `Seconds to keep reading a queued look (default ${MEDIA_LOOK_WAIT_SECONDS}; 0: answer at once)` },
     },
     hint: mediaLookHint,
@@ -2513,8 +2517,12 @@ export const HUB_COMMANDS: readonly HubCommand[] = [
       const pageLabel = requireString(values, "page-label");
       const publicationId = readNumber(values, "publication-id");
       const postRef = readString(values, "post-ref");
-      if ((publicationId === undefined) === (postRef === undefined)) {
-        throw new HubUsageError("name exactly one of --publication-id, --post-ref");
+      const mediaRef = readString(values, "media-ref");
+      if ([publicationId, postRef, mediaRef].filter((target) => target !== undefined).length !== 1) {
+        throw new HubUsageError("name exactly one of --publication-id, --post-ref, --media-ref");
+      }
+      if (mediaRef !== undefined && readNumber(values, "index") !== undefined) {
+        throw new HubUsageError("a vault file has no index: --media-ref takes no --index");
       }
       const frames = mediaLookFramesMode(values);
       const waitSeconds = readNumber(values, "wait") ?? MEDIA_LOOK_WAIT_SECONDS;
@@ -2526,6 +2534,7 @@ export const HUB_COMMANDS: readonly HubCommand[] = [
         body: {
           ...(publicationId === undefined ? {} : { publicationId: requireId(values, "publication-id") }),
           ...(postRef === undefined ? {} : { postRef }),
+          ...(mediaRef === undefined ? {} : { mediaRef }),
           index: readNumber(values, "index") ?? 0,
           cover: readFlag(values, "cover"),
           fresh: readFlag(values, "fresh"),

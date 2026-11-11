@@ -13,12 +13,21 @@ import {
   listUnsettledMediaLooks,
   mediaLookSpriteFailed,
   mediaLookWorkFacts,
+  pagePostFileRefs,
+  pageVaultFile,
   readMediaLookSource,
   type MediaLookRecord,
+  type MediaLookVariant,
+  type NewMediaLook,
 } from "@agency_hub_core/db";
 
 import type { AppContext } from "../../bootstrap.ts";
 import { MEDIA_LOOK_KEY, isMediaLookImageUrl, mediaLookSubject } from "../../sync/fansly/resources/media-look.ts";
+import {
+  MEDIA_LOOK_RESOLVE_KEY,
+  vaultPageCursorAt,
+  type MediaLookResolveParams,
+} from "../../sync/fansly/resources/media-look-resolve.ts";
 import { readFanslyPageFacts } from "../../sync/fansly/lib/page-facts.ts";
 import { encryptSyncWorkSecret } from "../../sync/requests/secret-params.ts";
 import { cloudFrontExpiry } from "../ai-media-describe/fansly-source.ts";
@@ -32,9 +41,8 @@ import { selectMediaLookSource } from "./select.ts";
 // (≤ 512 px) of a file of its page's posts — Hub pulls ONE image through the
 // page's own session at its pace (`media-look.fetch`), cuts it here, in the
 // API process, and keeps the frames 7 days. Never the file, never a link: the
-// signed URL is read from the newest schedule read, sealed into the work's
-// secret, and nothing an agent receives carries a URL, a location or a
-// variant list.
+// signed URL lives only sealed in the image work's secret, and nothing an
+// agent receives carries a URL, a location or a variant list.
 //
 // The caps, before any work is queued (one transaction under a per-page
 // advisory lock, `createMediaLookGuarded`): one look in flight per page (409
@@ -43,16 +51,21 @@ import { selectMediaLookSource } from "./select.ts";
 // 503 `media_look_off`). A fresh ready look of the same file and variant is
 // answered `cached` and costs nothing, unless the caller asks `fresh`.
 //
-// A look gets one request (plus its redirects) and is never retried: a failed
-// look is the caller's to ask again, and it counts against the cap when a
-// request left. When the engine has not answered within the wait (≈ 20 s) the
-// look is `queued`; whoever reads it next (its GET, the page's next look)
-// finishes it.
+// Where the signed location comes from:
+// - a post waiting in the platform's schedule (by Hub or by hand; a Hub
+//   publication in status `scheduled`): the newest read of the page's
+//   schedule, journaled verbatim — ONE request, the image;
+// - a published post Hub has among the page's own posts (a Hub publication in
+//   status `published`), or a file of the page's own vault: the page's engine
+//   reads the post or the file's vault page first (`media-look.resolve`), and
+//   its apply queues the image request with the URL sealed — TWO requests,
+//   still ONE look against the cap (`requests_sent` says how many left).
 //
-// This slice finds the signed location in the newest read of the page's Fansly
-// schedule: posts in the platform's schedule (by Hub or by hand) and Hub
-// publications in status `scheduled`. A published post or a vault file needs
-// a fresh read — the next slice's second source.
+// A look's requests are never retried: a failed look is the caller's to ask
+// again, and it counts against the cap when a request left. When the engine
+// has not answered within the wait (≈ 20 s, both requests together) the look
+// is `queued`; whoever reads it next (its GET, the page's next look) finishes
+// it.
 
 /** How long a look waits for the page's engine before it answers `queued`. */
 export const MEDIA_LOOK_WAIT_MS = 20_000;
@@ -62,6 +75,9 @@ export const MEDIA_LOOK_DAILY_LIMIT_DEFAULT = 40;
 const EXPIRY_MARGIN_MS = 120_000;
 /** A look in flight with no work this long after it was written lost its enqueue. */
 const WORK_MISSING_AFTER_MS = 60_000;
+/** How often a look waiting for its image's work reads the work again. */
+const WORK_POLL_MS = 250;
+const IN_FLIGHT: ReadonlySet<MediaLookRecord["status"]> = new Set(["resolving", "queued", "fetched"]);
 
 /** A refusal before anything was written or sent, with its closed code. */
 export class MediaLookError extends AppError {
@@ -130,26 +146,63 @@ export function mediaLookFetchFailure(result: unknown, closeReason: string | nul
   return reason === "" ? "fetch_not_answered" : `fetch_closed_${reason}`;
 }
 
+/** A closed read's failure (it closed without naming the file), as a look's closed code. */
+export function mediaLookResolveFailure(result: unknown, closeReason: string | null): string {
+  const record = typeof result === "object" && result !== null ? result as Record<string, unknown> : {};
+  if (typeof record.failure === "string" && /^[a-z0-9_]{1,60}$/.test(record.failure)) {
+    return record.failure.startsWith("resolve_") ? record.failure : `resolve_${record.failure}`;
+  }
+  const reason = (closeReason ?? "").toLowerCase().replace(/[^a-z0-9_]/g, "_").slice(0, 40);
+  return reason === "" ? "resolve_not_answered" : `resolve_closed_${reason}`;
+}
+
 /**
- * Finish a look whose engine work has answered: cut its bytes into frames, or
- * close it with the failure the work closed with. A look still in flight is
- * returned as it is. Safe to call from two places at once: only one of them
- * finishes it.
+ * Finish a look whose engine work has answered: its read (a published post's,
+ * a vault file's) named the file and queued the image, or closed without it;
+ * its image's bytes are cut into frames, or the look closes with the failure
+ * the work closed with. A look still in flight is returned as it is. Safe to
+ * call from two places at once: only one of them finishes it. `requests_sent`
+ * is every request of the look's works that may have left.
  */
 export async function settleMediaLook(app: MediaLookApp, look: MediaLookRecord, now = new Date()): Promise<MediaLookRecord> {
-  if (look.status !== "queued" && look.status !== "fetched") return look;
-  const work = await mediaLookWorkFacts(app.db, { pageId: look.pageId, resource: MEDIA_LOOK_KEY, subject: mediaLookSubject(look.id) });
+  if (!IN_FLIGHT.has(look.status)) return look;
+  const subject = mediaLookSubject(look.id);
+  const reread = async () => (await getMediaLook(app.db, { pageId: look.pageId, lookId: look.id })) ?? look;
+  const resolve = look.sourceKind === "schedule_read"
+    ? null
+    : await mediaLookWorkFacts(app.db, { pageId: look.pageId, resource: MEDIA_LOOK_RESOLVE_KEY, subject });
+  const readSent = resolve?.requestsSent ?? 0;
+
+  if (look.status === "resolving") {
+    if (resolve === null) {
+      if (now.getTime() - look.createdAt.getTime() < WORK_MISSING_AFTER_MS) return look;
+      await failMediaLook(app.db, { pageId: look.pageId, lookId: look.id, failure: "work_missing", requestsSent: 0 });
+      return reread();
+    }
+    if (!resolve.closed) return look;
+    // Read after the work: its apply and its close commit together.
+    const fresh = await reread();
+    if (fresh.status !== "resolving") return IN_FLIGHT.has(fresh.status) ? settleMediaLook(app, fresh, now) : fresh;
+    // The read closed without naming the file (it did not answer, or its apply could not run).
+    await failMediaLook(app.db, {
+      pageId: look.pageId, lookId: look.id, failure: mediaLookResolveFailure(resolve.result, resolve.closeReason), requestsSent: readSent,
+    });
+    return reread();
+  }
+
+  const work = await mediaLookWorkFacts(app.db, { pageId: look.pageId, resource: MEDIA_LOOK_KEY, subject });
   if (work === null) {
     if (now.getTime() - look.createdAt.getTime() < WORK_MISSING_AFTER_MS) return look;
-    await failMediaLook(app.db, { pageId: look.pageId, lookId: look.id, failure: "work_missing", requestsSent: 0 });
-    return (await getMediaLook(app.db, { pageId: look.pageId, lookId: look.id })) ?? look;
+    await failMediaLook(app.db, { pageId: look.pageId, lookId: look.id, failure: "work_missing", requestsSent: readSent });
+    return reread();
   }
   if (!work.closed) return look;
+  const sent = readSent + work.requestsSent;
   // Read after the work: its apply and its close commit together.
   const fresh = await getMediaLook(app.db, { pageId: look.pageId, lookId: look.id });
   if (fresh === null || (fresh.status !== "queued" && fresh.status !== "fetched")) return fresh ?? look;
   const fail = async (failure: string) => {
-    await failMediaLook(app.db, { pageId: fresh.pageId, lookId: fresh.id, failure, requestsSent: work.requestsSent });
+    await failMediaLook(app.db, { pageId: fresh.pageId, lookId: fresh.id, failure, requestsSent: sent });
   };
   if (fresh.status === "queued") {
     await fail(mediaLookFetchFailure(work.result, work.closeReason));
@@ -168,7 +221,7 @@ export async function settleMediaLook(app: MediaLookApp, look: MediaLookRecord, 
         await completeMediaLook(app.db, {
           pageId: fresh.pageId,
           lookId: fresh.id,
-          requestsSent: work.requestsSent,
+          requestsSent: sent,
           cut: { coverage: fresh.coverage ?? "whole_image", gridCols: cut.gridCols, gridRows: cut.gridRows, frames: cut.frames },
         });
       }
@@ -193,7 +246,9 @@ export async function mediaLookWire(
     lookId: look.id,
     status,
     failure,
-    target: { publicationId: look.publicationId, postRef: look.postRef, index: look.attachmentIndex },
+    target: { publicationId: look.publicationId, postRef: look.postRef, index: look.attachmentIndex, mediaRef: look.mediaRef },
+    source: look.sourceKind,
+    requestsSent: look.requestsSent,
     media: { type: look.mediaType, durationMs: look.durationMs },
     coverage,
     frameIntervalMs: coverage === "per_second" || coverage === "sampled" ? look.frameIntervalMs : null,
@@ -221,64 +276,42 @@ async function assertLookablePage(app: MediaLookApp, page: MediaLookPage): Promi
   }
 }
 
-/**
- * Look at a file of a post in the page's Fansly schedule. Refusals before
- * anything is written or sent throw a `MediaLookError` with a closed code;
- * a publication or look of another page is `notFound()` (the plane's static
- * 404). The answer is the look as the agent reads it.
- */
-export async function createMediaLook(
+/** What a look is, decided before anything is written: the image from the
+ *  schedule's read, or a read of the post or the vault page first. */
+type LookPlan =
+  | { kind: "schedule"; url: URL; fields: Omit<NewMediaLook, "pageId" | "agentKeyId"> }
+  | {
+    kind: "read";
+    params: MediaLookResolveParams;
+    /** The file, when Hub already knows which it is (the cached look's key). */
+    knownMediaRef: string | null;
+    fields: Omit<NewMediaLook, "pageId" | "agentKeyId">;
+  };
+
+const NOTHING_RESOLVED = {
+  mediaType: null, variant: null, coverage: null, durationMs: null, frameIntervalMs: null, frameCount: null,
+  gridCols: null, gridRows: null, cellWidth: null, cellHeight: null, sourceObservationId: null,
+} as const;
+
+/** A post waiting in the schedule's newest read: the image straight from it. */
+async function schedulePlan(
   app: MediaLookApp,
-  input: {
-    page: MediaLookPage;
-    agentKeyId: number;
-    body: AgentMediaLookCreateBody;
-    notFound: () => Error;
-    waitMs?: number;
-    now?: Date;
-  },
-): Promise<MediaLookAnswer & { cached: boolean }> {
-  const { page, body } = input;
-  const now = input.now ?? new Date();
-  const effective = await loadEffectiveConfig(app.db, app.config);
-  const limit = dailyLimitOf(effective);
-  await assertLookablePage(app, page);
-  if (limit === 0) throw new MediaLookError("Media looks are off (MEDIA_LOOK_DAILY_LIMIT_PER_PAGE is 0): ask the owner", 503, "media_look_off");
-
-  // The post: a Hub publication in the platform's schedule, or a post ref.
-  let postRef: string;
-  let publicationId: number | null = null;
-  if (body.publicationId !== undefined) {
-    const publication = await getPublication(app.db, body.publicationId);
-    if (publication === null || publication.pageId !== page.id) throw input.notFound();
-    if (publication.status !== "scheduled") {
-      throw conflict("media_look_not_scheduled", `Publication ${publication.id} is ${publication.status}: only a post in the platform's schedule is looked at for now`);
-    }
-    if (publication.platformPostRef === null) {
-      throw conflict("media_look_not_in_schedule", `Publication ${publication.id} names no platform post`);
-    }
-    postRef = publication.platformPostRef;
-    publicationId = publication.id;
-  } else {
-    postRef = body.postRef!;
-  }
-
-  // The file, from the newest read of the page's schedule.
-  const facts = await readFanslyPageFacts(app.db, page.id);
-  if (facts?.externalId == null) throw conflict("media_look_page_identity_unknown", "Hub does not know the page's own Fansly account yet");
+  input: { page: MediaLookPage; ownAccountRef: string; postRef: string; publicationId: number | null; body: AgentMediaLookCreateBody; now: Date },
+): Promise<LookPlan | "not_in_schedule"> {
+  const { page, postRef, body } = input;
   const observationId = await newestScheduleObservationId(app.db, page.id);
-  if (observationId === null) throw conflict("media_look_no_schedule_read", "Hub has no recent read of the page's schedule");
+  if (observationId === null) return "not_in_schedule";
   const resolved = findScheduledPostMedia(await loadScheduleRead(app, observationId), postRef, body.index);
   if (!resolved.ok) {
+    if (resolved.reason === "not_in_schedule") return "not_in_schedule";
     const messages = {
-      not_in_schedule: `Post ${postRef} is not waiting in the page's schedule as Hub last read it`,
       attachment_not_found: `Post ${postRef} has no file at index ${body.index}`,
       media_not_in_read: `The schedule read does not carry post ${postRef}'s file at index ${body.index}`,
     } as const;
     throw conflict(`media_look_${resolved.reason}`, messages[resolved.reason]);
   }
   // A fan's media is never looked at: only a file of the page's own account.
-  if (resolved.ownerAccountRef !== facts.externalId) {
+  if (resolved.ownerAccountRef !== input.ownAccountRef) {
     throw conflict("media_look_foreign_media", `The file at index ${body.index} of post ${postRef} is not the page's own`);
   }
   const selection = selectMediaLookSource(resolved.media, {
@@ -293,13 +326,165 @@ export async function createMediaLook(
   const url = new URL(selection.url);
   if (!isMediaLookImageUrl(url)) throw conflict("media_look_no_image_variant", "The file has no still image Hub may fetch");
   const expiry = cloudFrontExpiry(selection.url);
-  if (expiry !== null && expiry.getTime() - EXPIRY_MARGIN_MS <= now.getTime()) {
+  if (expiry !== null && expiry.getTime() - EXPIRY_MARGIN_MS <= input.now.getTime()) {
     throw conflict("media_look_source_expired", "The schedule read's signed location has expired: wait for the next read of the schedule");
   }
+  const geometry = selection.variant === "sprite" ? selection.geometry : null;
+  return {
+    kind: "schedule",
+    url,
+    fields: {
+      status: "queued",
+      sourceKind: "schedule_read",
+      publicationId: input.publicationId,
+      postRef,
+      attachmentIndex: body.index,
+      vaultAlbumRef: null,
+      mediaRef: resolved.mediaRef,
+      mediaType: selection.mediaType,
+      variant: selection.variant,
+      sourceObservationId: observationId,
+      coverage: selection.coverage,
+      durationMs: selection.durationMs,
+      frameIntervalMs: geometry === null ? null : Math.max(1, Math.round(geometry.intervalMs)),
+      frameCount: geometry?.count ?? null,
+      gridCols: geometry?.gridA ?? null,
+      gridRows: geometry?.gridB ?? null,
+      cellWidth: geometry?.cellWidth ?? null,
+      cellHeight: geometry?.cellHeight ?? null,
+    },
+  };
+}
 
-  // A fresh look of the same file and variant: no request.
+/** What the look is of: the schedule's read when the post waits there, else a read by the page's engine. */
+async function planLook(
+  app: MediaLookApp,
+  input: { page: MediaLookPage; ownAccountRef: string; body: AgentMediaLookCreateBody; notFound: () => Error; now: Date },
+): Promise<LookPlan> {
+  const { page, body } = input;
+  if (body.mediaRef !== undefined) {
+    // A file of the page's own vault: its vault page, from the file's own membership row.
+    const file = await pageVaultFile(app.db, { pageId: page.id, mediaRef: body.mediaRef, ownAccountRef: input.ownAccountRef });
+    if (file === "not_own") {
+      throw conflict("media_look_media_not_seen", `Hub has no file ${body.mediaRef} of the page's own account in its media`);
+    }
+    if (file === "not_in_vault") {
+      throw conflict("media_look_not_in_vault", `File ${body.mediaRef} is in no album of the page's vault as Hub last walked it: look at it through a post`);
+    }
+    return {
+      kind: "read",
+      knownMediaRef: body.mediaRef,
+      params: { target: "vault", mediaRef: body.mediaRef, albumRef: file.albumRef, before: vaultPageCursorAt(file.memberRef), cover: body.cover },
+      fields: {
+        ...NOTHING_RESOLVED, status: "resolving", sourceKind: "vault_read", publicationId: null, postRef: null,
+        attachmentIndex: null, vaultAlbumRef: file.albumRef, mediaRef: body.mediaRef,
+      },
+    };
+  }
+
+  // A post: a Hub publication's, or a post ref.
+  let postRef: string;
+  let publicationId: number | null = null;
+  let published = false;
+  if (body.publicationId !== undefined) {
+    const publication = await getPublication(app.db, body.publicationId);
+    if (publication === null || publication.pageId !== page.id) throw input.notFound();
+    if (publication.status !== "scheduled" && publication.status !== "published") {
+      throw conflict("media_look_publication_status", `Publication ${publication.id} is ${publication.status}: only a scheduled or a published post is looked at`);
+    }
+    if (publication.platformPostRef === null) {
+      throw conflict("media_look_post_not_seen", `Publication ${publication.id} names no platform post`);
+    }
+    postRef = publication.platformPostRef;
+    publicationId = publication.id;
+    published = publication.status === "published";
+  } else {
+    postRef = body.postRef!;
+  }
+  if (!published) {
+    const fromSchedule = await schedulePlan(app, { page, ownAccountRef: input.ownAccountRef, postRef, publicationId, body, now: input.now });
+    if (fromSchedule !== "not_in_schedule") return fromSchedule;
+    if (publicationId !== null) {
+      throw conflict("media_look_not_in_schedule", `Publication ${publicationId}'s post ${postRef} is not waiting in the page's schedule as Hub last read it`);
+    }
+  }
+  // A published post: only one Hub has among this page's own posts (a Hub publication's is the page's by its own record).
+  const files = await pagePostFileRefs(app.db, { pageId: page.id, postRef });
+  if (files === null && publicationId === null) {
+    throw conflict("media_look_post_not_seen", `Hub has not seen post ${postRef} among the page's own posts, in its schedule or on its wall`);
+  }
+  return {
+    kind: "read",
+    knownMediaRef: files?.[body.index] ?? null,
+    params: { target: "post", postRef, index: body.index, cover: body.cover },
+    fields: {
+      ...NOTHING_RESOLVED, status: "resolving", sourceKind: "post_read", publicationId, postRef,
+      attachmentIndex: body.index, vaultAlbumRef: null, mediaRef: null,
+    },
+  };
+}
+
+/** A fresh ready look of the file: what the asked variant may be answered with. */
+async function cachedLookOf(app: MediaLookApp, input: { pageId: number; mediaRef: string; cover: boolean }): Promise<MediaLookRecord | null> {
+  const variants: MediaLookVariant[] = input.cover
+    ? ["cover"]
+    : await mediaLookSpriteFailed(app.db, input) ? ["cover", "image"] : ["sprite", "image"];
+  for (const variant of variants) {
+    const cached = await findFreshMediaLook(app.db, { pageId: input.pageId, mediaRef: input.mediaRef, variant });
+    if (cached !== null) return cached;
+  }
+  return null;
+}
+
+/** Wait until the look's image work closed, or the deadline. */
+async function waitForImage(app: MediaLookApp, look: MediaLookRecord, deadlineMs: number): Promise<void> {
+  for (;;) {
+    const work = await mediaLookWorkFacts(app.db, { pageId: look.pageId, resource: MEDIA_LOOK_KEY, subject: mediaLookSubject(look.id) });
+    const remaining = deadlineMs - Date.now();
+    if (work?.closed === true || remaining <= 0) return;
+    await new Promise((resolve) => setTimeout(resolve, Math.min(WORK_POLL_MS, remaining)));
+  }
+}
+
+/**
+ * Look at a file of the page: a post in its Fansly schedule, a published post
+ * of its own, or a file of its own vault. Refusals before anything is written
+ * or sent throw a `MediaLookError` with a closed code; a publication or look of
+ * another page is `notFound()` (the plane's static 404). The answer is the look
+ * as the agent reads it.
+ */
+export async function createMediaLook(
+  app: MediaLookApp,
+  input: {
+    page: MediaLookPage;
+    agentKeyId: number;
+    body: AgentMediaLookCreateBody;
+    notFound: () => Error;
+    waitMs?: number;
+    now?: Date;
+  },
+): Promise<MediaLookAnswer & { cached: boolean }> {
+  const { page, body } = input;
+  const now = input.now ?? new Date();
+  const waitMs = input.waitMs ?? MEDIA_LOOK_WAIT_MS;
+  const deadlineMs = Date.now() + waitMs;
+  const effective = await loadEffectiveConfig(app.db, app.config);
+  const limit = dailyLimitOf(effective);
+  await assertLookablePage(app, page);
+  if (limit === 0) throw new MediaLookError("Media looks are off (MEDIA_LOOK_DAILY_LIMIT_PER_PAGE is 0): ask the owner", 503, "media_look_off");
+  const facts = await readFanslyPageFacts(app.db, page.id);
+  if (facts?.externalId == null) throw conflict("media_look_page_identity_unknown", "Hub does not know the page's own Fansly account yet");
+
+  const plan = await planLook(app, { page, ownAccountRef: facts.externalId, body, notFound: input.notFound, now });
+
+  // A fresh look of the same file: no request.
   if (!body.fresh) {
-    const cached = await findFreshMediaLook(app.db, { pageId: page.id, mediaRef: resolved.mediaRef, variant: selection.variant });
+    const mediaRef = plan.kind === "schedule" ? plan.fields.mediaRef : plan.knownMediaRef;
+    const cached = mediaRef === null
+      ? null
+      : plan.kind === "schedule"
+        ? await findFreshMediaLook(app.db, { pageId: page.id, mediaRef, variant: plan.fields.variant! })
+        : await cachedLookOf(app, { pageId: page.id, mediaRef, cover: body.cover });
     if (cached !== null) return { look: cached, cached: true, wire: await mediaLookWire(app, cached, { frames: body.frames, cached: true, limit }) };
   }
 
@@ -307,27 +492,7 @@ export async function createMediaLook(
   await dropExpiredMediaLookSources(app.db);
   for (const pending of await listUnsettledMediaLooks(app.db, page.id)) await settleMediaLook(app, pending, now);
 
-  const geometry = selection.variant === "sprite" ? selection.geometry : null;
-  const created = await createMediaLookGuarded(app.db, {
-    pageId: page.id,
-    agentKeyId: input.agentKeyId,
-    publicationId,
-    postRef,
-    attachmentIndex: body.index,
-    mediaRef: resolved.mediaRef,
-    mediaType: selection.mediaType,
-    variant: selection.variant,
-    sourceObservationId: observationId,
-    coverage: selection.coverage,
-    durationMs: selection.durationMs,
-    frameIntervalMs: geometry === null ? null : Math.max(1, Math.round(geometry.intervalMs)),
-    frameCount: geometry?.count ?? null,
-    gridCols: geometry?.gridA ?? null,
-    gridRows: geometry?.gridB ?? null,
-    cellWidth: geometry?.cellWidth ?? null,
-    cellHeight: geometry?.cellHeight ?? null,
-    dailyLimit: limit,
-  });
+  const created = await createMediaLookGuarded(app.db, { pageId: page.id, agentKeyId: input.agentKeyId, ...plan.fields, dailyLimit: limit });
   if (created.kind === "in_flight") {
     throw conflict("media_look_in_flight", `Look ${created.lookId} of this page is still in flight (one at a time per page): read it, then ask again`);
   }
@@ -335,21 +500,26 @@ export async function createMediaLook(
     throw new MediaLookError(`The page's looks today reached the limit (${created.usedToday} of ${limit}, UTC day)`, 429, "media_look_daily_limit");
   }
 
-  // One request through the page's engine, at its pace. The URL is sealed
-  // into the work's secret and is nowhere else.
+  // Through the page's engine, at its pace: the image (its URL sealed into the
+  // work's secret and nowhere else), or the read whose apply queues it.
   const look = created.look;
   const { enqueueAndWait, UrgentWorkRefusedError } = await import("../../sync/requests/urgent.ts");
   try {
     const waited = await enqueueAndWait({ db: app.db }, {
       pageId: page.id,
-      resource: MEDIA_LOOK_KEY,
+      resource: plan.kind === "schedule" ? MEDIA_LOOK_KEY : MEDIA_LOOK_RESOLVE_KEY,
       subject: mediaLookSubject(look.id),
-      secretParams: encryptSyncWorkSecret(app.config, { url: url.toString() }),
-      waitMs: input.waitMs ?? MEDIA_LOOK_WAIT_MS,
+      ...(plan.kind === "schedule"
+        ? { secretParams: encryptSyncWorkSecret(app.config, { url: plan.url.toString() }) }
+        : { params: plan.params }),
+      waitMs,
       reason: "media_look",
     });
     if (waited.state === "not_live" || waited.state === "switching") {
       await failMediaLook(app.db, { pageId: page.id, lookId: look.id, failure: "engine_not_live", requestsSent: 0 });
+    } else if (plan.kind === "read" && waited.state === "done") {
+      // The read answered within the wait: the image goes next, in what is left of it.
+      await waitForImage(app, look, deadlineMs);
     }
   } catch (error) {
     if (!(error instanceof UrgentWorkRefusedError)) throw error;

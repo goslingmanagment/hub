@@ -2543,6 +2543,7 @@ export const agentSyncResourceKeyEnum = z.enum([
   "stats.backfill",
   "media-download.fetch",
   "media-look.fetch",
+  "media-look.resolve",
   "repair.ws-gap",
   "probe.manual",
   "probe.excluded-chat",

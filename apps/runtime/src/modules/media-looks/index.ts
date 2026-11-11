@@ -7,8 +7,9 @@ import type { ApiModuleContext, ApiServer } from "../context.ts";
 
 /**
  * Media looks (owner 2026-11-11): an agent key with look:media looks at a file
- * of a post in its page's Fansly schedule — frames (≤ 512 px) Hub pulls through
- * the page's own session, never the file, never a link — and reads a look
+ * of its Fansly page — a post in its schedule or a published one, a file of its
+ * own vault — frames (≤ 512 px) Hub pulls through the page's own session, never
+ * the file, never a link — and reads a look
  * again by its id. look:media on the create and the read alike; a page outside
  * the grant, and a look or publication of another page, is the plane's one
  * static 404. Each answer leaves an audit row of ids and Hub's own words.
@@ -23,12 +24,15 @@ function lookSummary(answer: MediaLookAnswer, cached: boolean): AgentReadAuditSu
   return {
     lookId: look.id,
     ...(look.publicationId === null ? {} : { publicationId: look.publicationId }),
-    postRef: look.postRef,
-    attachmentIndex: look.attachmentIndex,
-    mediaVariant: look.variant,
+    ...(look.postRef === null ? {} : { postRef: look.postRef }),
+    ...(look.attachmentIndex === null ? {} : { attachmentIndex: look.attachmentIndex }),
+    ...(look.mediaRef === null ? {} : { mediaRef: look.mediaRef }),
+    ...(look.variant === null ? {} : { mediaVariant: look.variant }),
+    lookSource: look.sourceKind,
     lookStatus: wire.status,
     cached,
     frameCount: wire.frames.length,
+    requestsSent: look.requestsSent,
     ...(wire.failure === null ? {} : { reasonCode: wire.failure }),
   };
 }

@@ -2,9 +2,11 @@ import { sql } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
 
-// Media looks (0371, owner 2026-11-11): an agent key's look at a file of its
-// page — one image request of the page's engine (`media-look.fetch`), cut into
-// frames (≤ 512 px) by the API process. The engine's apply leaves the fetched
+// Media looks (0371, 0372, owner 2026-11-11): an agent key's look at a file of
+// its page — one image request of the page's engine (`media-look.fetch`), cut
+// into frames (≤ 512 px) by the API process. A published post or a vault file
+// is read first (`media-look.resolve`, 0372): the look is `resolving` until
+// that read's apply names the file and queues the image request. The engine's apply leaves the fetched
 // bytes on the look (`storeMediaLookSource`, transient); whoever settles the
 // look next cuts them, stores the frames and drops the bytes in one
 // transaction (`completeMediaLook`). Nothing here holds a URL.
@@ -23,7 +25,10 @@ export const MEDIA_LOOK_SOURCE_MAX_BYTES = 5 * 1024 * 1024;
 /** Rows a sweep statement touches at most. */
 const SWEEP_BATCH = 500;
 
-export type MediaLookRowStatus = "queued" | "fetched" | "ready" | "failed" | "expired";
+export type MediaLookRowStatus = "resolving" | "queued" | "fetched" | "ready" | "failed" | "expired";
+export type MediaLookSourceKind = "schedule_read" | "post_read" | "vault_read";
+/** A look the engine may still answer: one per page at a time. */
+const IN_FLIGHT = sql`('resolving', 'queued', 'fetched')`;
 export type MediaLookVariant = "sprite" | "cover" | "image";
 export type MediaLookRowCoverage = "per_second" | "sampled" | "cover_only" | "whole_image" | "first_frame";
 
@@ -32,14 +37,18 @@ export interface MediaLookRecord {
   pageId: number;
   agentKeyId: number | null;
   publicationId: number | null;
-  postRef: string;
-  attachmentIndex: number;
-  mediaRef: string;
-  mediaType: "video" | "image";
-  variant: MediaLookVariant;
+  /** Null for a vault file. */
+  postRef: string | null;
+  attachmentIndex: number | null;
+  /** Null until the engine's read named the file (a published post's). */
+  mediaRef: string | null;
+  mediaType: "video" | "image" | null;
+  variant: MediaLookVariant | null;
   status: MediaLookRowStatus;
   failure: string | null;
-  sourceKind: "schedule_read";
+  sourceKind: MediaLookSourceKind;
+  /** A vault file's album. */
+  vaultAlbumRef: string | null;
   sourceObservationId: number | null;
   coverage: MediaLookRowCoverage | null;
   durationMs: number | null;
@@ -86,7 +95,7 @@ function bytesOf(value: unknown): Buffer {
 
 const LOOK_COLUMNS = sql`
   l.id, l.page_id, l.agent_key_id, l.publication_id, l.post_ref, l.attachment_index, l.media_ref, l.media_type,
-  l.variant, l.status, l.failure, l.source_kind, l.source_observation_id, l.coverage, l.duration_ms,
+  l.variant, l.status, l.failure, l.source_kind, l.vault_album_ref, l.source_observation_id, l.coverage, l.duration_ms,
   l.frame_interval_ms, l.frame_count, l.grid_cols, l.grid_rows, l.cell_width, l.cell_height, l.requests_sent,
   (l.source_bytes is not null) as has_source, l.source_expires_at, l.frames_expire_at, l.created_at, l.completed_at`;
 
@@ -96,14 +105,15 @@ function lookOf(row: Row): MediaLookRecord {
     pageId: Number(row.page_id),
     agentKeyId: nullableNumber(row.agent_key_id),
     publicationId: nullableNumber(row.publication_id),
-    postRef: String(row.post_ref),
-    attachmentIndex: Number(row.attachment_index),
-    mediaRef: String(row.media_ref),
-    mediaType: row.media_type as MediaLookRecord["mediaType"],
-    variant: row.variant as MediaLookVariant,
+    postRef: (row.post_ref as string | null) ?? null,
+    attachmentIndex: nullableNumber(row.attachment_index),
+    mediaRef: (row.media_ref as string | null) ?? null,
+    mediaType: (row.media_type as MediaLookRecord["mediaType"]) ?? null,
+    variant: (row.variant as MediaLookVariant | null) ?? null,
     status: row.status as MediaLookRowStatus,
     failure: (row.failure as string | null) ?? null,
-    sourceKind: row.source_kind as MediaLookRecord["sourceKind"],
+    sourceKind: row.source_kind as MediaLookSourceKind,
+    vaultAlbumRef: (row.vault_album_ref as string | null) ?? null,
     sourceObservationId: nullableNumber(row.source_observation_id),
     coverage: (row.coverage as MediaLookRowCoverage | null) ?? null,
     durationMs: nullableNumber(row.duration_ms),
@@ -122,18 +132,23 @@ function lookOf(row: Row): MediaLookRecord {
   };
 }
 
-/** What a new look is about: chosen before anything is written. */
+/** What a new look is about: chosen before anything is written — all of it
+ *  for a look from the schedule's read (`queued`), its target alone for one
+ *  the engine reads first (`resolving`). */
 export interface NewMediaLook {
   pageId: number;
   agentKeyId: number | null;
+  status: "queued" | "resolving";
+  sourceKind: MediaLookSourceKind;
   publicationId: number | null;
-  postRef: string;
-  attachmentIndex: number;
-  mediaRef: string;
-  mediaType: "video" | "image";
-  variant: MediaLookVariant;
+  postRef: string | null;
+  attachmentIndex: number | null;
+  vaultAlbumRef: string | null;
+  mediaRef: string | null;
+  mediaType: "video" | "image" | null;
+  variant: MediaLookVariant | null;
   sourceObservationId: number | null;
-  coverage: MediaLookRowCoverage;
+  coverage: MediaLookRowCoverage | null;
   durationMs: number | null;
   frameIntervalMs: number | null;
   frameCount: number | null;
@@ -150,7 +165,7 @@ function countedTodaySql(pageId: number) {
     select count(*)::int as n from media_looks
      where page_id = ${pageId}
        and created_at >= date_trunc('day', clock_timestamp() at time zone 'UTC') at time zone 'UTC'
-       and (requests_sent > 0 or status in ('queued', 'fetched'))`;
+       and (requests_sent > 0 or status in ${IN_FLIGHT})`;
 }
 
 export async function countMediaLooksToday(db: Database, pageId: number): Promise<number> {
@@ -180,20 +195,20 @@ export async function createMediaLookGuarded(
     const tx = raw as unknown as Database;
     await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`media_look:${input.pageId}`}, 0))`);
     const flying = await tx.execute<{ id: string }>(sql`
-      select id::text as id from media_looks where page_id = ${input.pageId} and status in ('queued', 'fetched') limit 1
+      select id::text as id from media_looks where page_id = ${input.pageId} and status in ${IN_FLIGHT} limit 1
     `);
     if (flying.rows[0] !== undefined) return { kind: "in_flight", lookId: Number(flying.rows[0].id) };
     const used = Number((await tx.execute<{ n: number }>(countedTodaySql(input.pageId))).rows[0]?.n ?? 0);
     if (used >= input.dailyLimit) return { kind: "daily_limit", usedToday: used };
     const inserted = await tx.execute<Row>(sql`
       insert into media_looks as l (
-        page_id, agent_key_id, publication_id, post_ref, attachment_index, media_ref, media_type, variant,
+        page_id, agent_key_id, publication_id, post_ref, attachment_index, vault_album_ref, media_ref, media_type, variant,
         status, source_kind, source_observation_id, coverage, duration_ms, frame_interval_ms, frame_count,
         grid_cols, grid_rows, cell_width, cell_height
       ) values (
         ${input.pageId}, ${input.agentKeyId}, ${input.publicationId}, ${input.postRef}, ${input.attachmentIndex},
-        ${input.mediaRef}, ${input.mediaType}, ${input.variant}, 'queued', 'schedule_read', ${input.sourceObservationId},
-        ${input.coverage}, ${input.durationMs}, ${input.frameIntervalMs}, ${input.frameCount},
+        ${input.vaultAlbumRef}, ${input.mediaRef}, ${input.mediaType}, ${input.variant}, ${input.status}, ${input.sourceKind},
+        ${input.sourceObservationId}, ${input.coverage}, ${input.durationMs}, ${input.frameIntervalMs}, ${input.frameCount},
         ${input.gridCols}, ${input.gridRows}, ${input.cellWidth}, ${input.cellHeight}
       )
       returning ${LOOK_COLUMNS}
@@ -211,10 +226,10 @@ export async function getMediaLook(db: Database, input: { pageId: number; lookId
   return row === undefined ? null : lookOf(row);
 }
 
-/** The page's looks still in flight (queued, or fetched and not cut yet). */
+/** The page's looks still in flight (resolving, queued, or fetched and not cut yet). */
 export async function listUnsettledMediaLooks(db: Database, pageId: number): Promise<MediaLookRecord[]> {
   const result = await db.execute<Row>(sql`
-    select ${LOOK_COLUMNS} from media_looks l where l.page_id = ${pageId} and l.status in ('queued', 'fetched') order by l.id
+    select ${LOOK_COLUMNS} from media_looks l where l.page_id = ${pageId} and l.status in ${IN_FLIGHT} order by l.id
   `);
   return result.rows.map(lookOf);
 }
@@ -389,10 +404,121 @@ export async function failMediaLook(
        set status = 'failed', failure = ${input.failure}, requests_sent = ${input.requestsSent},
            source_bytes = null, source_content_type = null, source_expires_at = null,
            completed_at = clock_timestamp(), updated_at = clock_timestamp()
-     where id = ${input.lookId} and page_id = ${input.pageId} and status in ('queued', 'fetched')
+     where id = ${input.lookId} and page_id = ${input.pageId} and status in ${IN_FLIGHT}
     returning id::text as id
   `);
   return result.rows.length > 0;
+}
+
+/** What the engine's read of a post or a vault page made of a look: its file,
+ *  what is fetched of it and how it is cut. */
+export interface MediaLookResolved {
+  mediaRef: string;
+  mediaType: "video" | "image";
+  variant: MediaLookVariant;
+  coverage: MediaLookRowCoverage;
+  durationMs: number | null;
+  frameIntervalMs: number | null;
+  frameCount: number | null;
+  gridCols: number | null;
+  gridRows: number | null;
+  cellWidth: number | null;
+  cellHeight: number | null;
+}
+
+/**
+ * The read's apply (`media-look.resolve`, in its transaction): a look still
+ * `resolving` names its file and goes `queued` for its image request. False
+ * when the look is gone or no longer resolving: nothing is queued for it.
+ */
+export async function markMediaLookResolved(
+  db: Database,
+  input: { pageId: number; lookId: number; resolved: MediaLookResolved },
+): Promise<boolean> {
+  const r = input.resolved;
+  const result = await db.execute<{ id: string }>(sql`
+    update media_looks
+       set status = 'queued', media_ref = ${r.mediaRef}, media_type = ${r.mediaType}, variant = ${r.variant},
+           coverage = ${r.coverage}, duration_ms = ${r.durationMs}, frame_interval_ms = ${r.frameIntervalMs},
+           frame_count = ${r.frameCount}, grid_cols = ${r.gridCols}, grid_rows = ${r.gridRows},
+           cell_width = ${r.cellWidth}, cell_height = ${r.cellHeight}, updated_at = clock_timestamp()
+     where id = ${input.lookId} and page_id = ${input.pageId} and status = 'resolving'
+    returning id::text as id
+  `);
+  return result.rows.length > 0;
+}
+
+/** A published post Hub has among this page's own posts: the files its
+ *  attachments name, in order (an album's files in its order), as the media
+ *  plane knows them — null for a file the plane has not linked. Null: Hub has
+ *  not seen the post on this page. */
+export async function pagePostFileRefs(
+  db: Database,
+  input: { pageId: number; postRef: string },
+): Promise<Array<string | null> | null> {
+  const post = await db.execute<{ attachment_refs: unknown }>(sql`
+    select attachment_refs from creator_posts where account_id = ${input.pageId} and platform_post_id = ${input.postRef}
+  `);
+  if (post.rows.length === 0) return null;
+  const attachments = Array.isArray(post.rows[0]!.attachment_refs) ? post.rows[0]!.attachment_refs as unknown[] : [];
+  const ordered = attachments
+    .map((raw, order) => ({ raw: (typeof raw === "object" && raw !== null ? raw : {}) as Record<string, unknown>, order }))
+    .sort((a, b) => (Number(a.raw.pos ?? a.order) - Number(b.raw.pos ?? b.order)) || a.order - b.order);
+  const offers: Array<string | null> = [];
+  for (const { raw } of ordered) {
+    const contentId = typeof raw.contentId === "string" ? raw.contentId : typeof raw.contentId === "number" ? String(raw.contentId) : null;
+    if (contentId === null) continue;
+    if (raw.contentType === 1) {
+      offers.push(contentId);
+    } else if (raw.contentType === 2) {
+      const bundle = await db.execute<{ member_refs: string[] | null }>(sql`
+        select member_refs from creator_media_bundles where page_id = ${input.pageId} and bundle_ref = ${contentId} limit 1
+      `);
+      const members = bundle.rows[0]?.member_refs;
+      // An album the plane does not hold: what follows cannot be counted.
+      if (!Array.isArray(members)) {
+        offers.push(null);
+        break;
+      }
+      offers.push(...members);
+    }
+  }
+  const files: Array<string | null> = [];
+  for (const offer of offers) {
+    if (offer === null) {
+      files.push(null);
+      continue;
+    }
+    const media = await db.execute<{ media_ref: string | null }>(sql`
+      select media_ref from creator_media where page_id = ${input.pageId} and media_offer_ref = ${offer} limit 1
+    `);
+    files.push(media.rows[0]?.media_ref ?? null);
+  }
+  return files;
+}
+
+/** A file of the page's own account in its media plane and its creator vault:
+ *  its mime type and the vault membership a read pages through (the newest
+ *  album that still holds it, by the membership's own id). Null: not the
+ *  page's own file, or not in its vault. */
+export async function pageVaultFile(
+  db: Database,
+  input: { pageId: number; mediaRef: string; ownAccountRef: string },
+): Promise<{ mimeType: string | null; albumRef: string; memberRef: string } | "not_own" | "not_in_vault"> {
+  const raw = await db.execute<{ owner_account_ref: string | null; mime_type: string | null }>(sql`
+    select owner_account_ref, mime_type from creator_raw_media where page_id = ${input.pageId} and media_ref = ${input.mediaRef} limit 1
+  `);
+  const file = raw.rows[0];
+  if (file === undefined || file.owner_account_ref !== input.ownAccountRef) return "not_own";
+  const member = await db.execute<{ album_ref: string; member_ref: string }>(sql`
+    select album_ref, member_ref from creator_vault_album_members
+     where page_id = ${input.pageId} and vault_kind = 'creator' and media_ref = ${input.mediaRef}
+       and member_ref is not null and missing_since is null
+     order by last_observed_at desc, album_ref
+     limit 1
+  `);
+  const row = member.rows[0];
+  return row === undefined ? "not_in_vault" : { mimeType: file.mime_type, albumRef: row.album_ref, memberRef: row.member_ref };
 }
 
 /** Fetched bytes past their 15 minutes, cut or not: dropped (the look then
@@ -459,7 +585,7 @@ export async function sweepMediaLooks(db: Database, input: { maxBatches?: number
     const result = await db.execute<{ n: number }>(sql`
       with doomed as (
         select id from media_looks
-         where expires_at <= clock_timestamp() and status not in ('queued', 'fetched')
+         where expires_at <= clock_timestamp() and status not in ${IN_FLIGHT}
          order by expires_at
          limit ${SWEEP_BATCH}
       ), removed as (

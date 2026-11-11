@@ -283,7 +283,8 @@ describe("the plane's boundary of a media look", () => {
     expect(onlyfans.statusCode, onlyfans.body).toBe(409);
     expect(onlyfans.json().error).toBe("media_look_fansly_only");
     const notWaiting = await asAgent(LOOKER, "POST", "/api/v1/agent/pages/lilly-1/media-looks", { postRef: "300" });
-    expect(notWaiting.json().error).toBe("media_look_not_in_schedule");
+    // Neither waiting in the schedule nor among the page's posts Hub has seen.
+    expect(notWaiting.json().error).toBe("media_look_post_not_seen");
     const both = await asAgent(LOOKER, "POST", "/api/v1/agent/pages/lilly-1/media-looks", { postRef: "100", publicationId: 1 });
     expect(both.statusCode).toBe(400);
     expect(await lookWorks()).toEqual([]);

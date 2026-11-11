@@ -125,7 +125,10 @@ describe("the Fansly registry table", () => {
     ]);
     expect(byKey("media-download.fetch").operations).toEqual(["cdn.media"]);
     // An agent's media look rides the same CDN route with its own key and breaker.
-    expect(byKey("media-look.fetch")).toMatchObject({ file: "media-look", class: "planned", triggers: ["api"], operations: ["cdn.media"] });
+    expect(byKey("media-look.fetch")).toMatchObject({ file: "media-look", class: "planned", triggers: ["api", "apply:media-look.resolve"], operations: ["cdn.media"] });
+    // Its read of a published post or a vault page is an API read: a 401/403 there is the session's.
+    expect(byKey("media-look.resolve")).toMatchObject({ file: "media-look", class: "planned", triggers: ["api"], operations: ["posts.by_ids", "vault.media"] });
+    expect(byKey("media-look.resolve").subjectScopedAuthStatuses).toBeUndefined();
     expect(byKey("repair.ws-gap").operations).toEqual(["messaging.groups"]);
     const registry = createFanslyRegistry();
     // Its answers are never journaled: applied from memory.
@@ -211,6 +214,12 @@ describe("every trigger an entry declares has its producer", () => {
     // reads and for the page's schedule at once (the owner's "Обновить").
     { key: "publish.verify", trigger: "publication", file: `${SRC}/services/publications-fansly-checks.ts`, marker: "resource: FANSLY_VERIFY_KEY" },
     { key: "publish.schedule", trigger: "publication", file: `${SRC}/services/publications-fansly-checks.ts`, marker: "resource: FANSLY_SCHEDULE_KEY" },
+    // A media look of a published post or a vault file: its read's apply
+    // queues the look's image request, the URL sealed in its secret.
+    {
+      key: "media-look.fetch", trigger: "apply:media-look.resolve",
+      file: `${SRC}/sync/fansly/resources/media-look-resolve.ts`, marker: "resource: MEDIA_LOOK_KEY, subject: input.work.subject",
+    },
   ];
 
   const ownerKeys = new Set(ownerEnqueueKeys());

@@ -9,8 +9,12 @@ import { intId } from "./primitives.ts";
 // per second or evenly spaced), or its cover; a look of a photo is the photo
 // downscaled. Nothing here carries a URL, a location or a variant list.
 //
-// This first slice looks at the posts in the platform's schedule (placed by
-// Hub or by hand) and at Hub publications in status `scheduled`; Fansly only.
+// What can be looked at (Fansly only): a post in the platform's schedule
+// (placed by Hub or by hand) and a Hub publication in status `scheduled` — the
+// schedule's own read names the image, one request; a published post of the
+// page (one Hub has among its posts) and a Hub publication in status
+// `published`, and a file of the page's own vault — the page's engine reads the
+// post or the vault page first, two requests, still one look.
 
 /** The longest edge of a frame, in pixels: a frame is never larger. */
 export const MEDIA_LOOK_FRAME_MAX_EDGE_PX = 512;
@@ -31,7 +35,8 @@ export const MEDIA_LOOK_INDEX_MAX = 99;
  */
 export const mediaLookCoverageSchema = z.enum(["per_second", "sampled", "cover_only", "whole_image", "first_frame"]);
 
-/** `ready`: the frames are here; `queued`: the page's engine has not answered yet — read it again by its id;
+/** `ready`: the frames are here; `queued`: the page's engine has not answered yet (its read of the post or
+ *  the vault page, or the image) — read it again by its id;
  *  `failed`: no frames (`failure` says why). */
 export const mediaLookStatusSchema = z.enum(["ready", "queued", "failed"]);
 
@@ -41,11 +46,13 @@ export const mediaLookPageParamsSchema = z.object({ pageLabel: z.string().min(1)
 export const mediaLookParamsSchema = z.object({ pageLabel: z.string().min(1), lookId: z.coerce.number().int().positive() });
 
 export const agentMediaLookCreateBodySchema = z.strictObject({
-  /** A Hub publication of the page in status `scheduled`. */
+  /** A Hub publication of the page in status `scheduled` or `published`. */
   publicationId: intId.optional(),
-  /** A post in the platform's schedule (Fansly's post id), placed by Hub or by hand. */
+  /** A post of the page (Fansly's post id): in the platform's schedule, by Hub or by hand, or published. */
   postRef: z.string().regex(/^[0-9]{1,24}$/).optional(),
-  /** Which of the post's files (0-based, in the post's order, an album's files in its order). */
+  /** A file of the page's own vault (Fansly's media id, `mediaRef` of the `raw_media` / `vault_media` datasets). */
+  mediaRef: z.string().regex(/^[0-9]{1,24}$/).optional(),
+  /** Which of the post's files (0-based, in the post's order, an album's files in its order); not for `mediaRef`. */
   index: z.number().int().min(0).max(MEDIA_LOOK_INDEX_MAX).default(0),
   /** A video's cover instead of its frames. */
   cover: z.boolean().default(false),
@@ -54,8 +61,12 @@ export const agentMediaLookCreateBodySchema = z.strictObject({
   /** `inline`: each frame's JPEG in base64; `none`: the frames' facts only. */
   frames: mediaLookFramesModeSchema.default("inline"),
 }).superRefine((value, ctx) => {
-  if ((value.publicationId === undefined) === (value.postRef === undefined)) {
-    ctx.addIssue({ code: "custom", path: ["publicationId"], message: "name exactly one of publicationId, postRef" });
+  const named = [value.publicationId, value.postRef, value.mediaRef].filter((target) => target !== undefined).length;
+  if (named !== 1) {
+    ctx.addIssue({ code: "custom", path: ["publicationId"], message: "name exactly one of publicationId, postRef, mediaRef" });
+  }
+  if (value.mediaRef !== undefined && value.index !== 0) {
+    ctx.addIssue({ code: "custom", path: ["index"], message: "a vault file has no index: name it by its mediaRef alone" });
   }
 });
 
@@ -79,14 +90,23 @@ export const mediaLookSchema = z.object({
   status: mediaLookStatusSchema,
   /** Why there are no frames (a closed code), or null. */
   failure: z.string().nullable(),
-  /** What was asked: the post and which of its files. */
+  /** What was asked: the post and which of its files, or the vault file. */
   target: z.object({
     publicationId: z.number().int().positive().nullable(),
-    postRef: z.string(),
-    index: z.number().int().nonnegative(),
+    postRef: z.string().nullable(),
+    index: z.number().int().nonnegative().nullable(),
+    /** The file (Fansly's media id): asked for, or named by the read; null until then. */
+    mediaRef: z.string().nullable(),
   }),
+  /** Where the image came from: the schedule's own read (one request), or the engine's read of the
+   *  post or the vault page first (two requests, still one look). */
+  source: z.enum(["schedule_read", "post_read", "vault_read"]),
+  /** The requests this look sent to the platform so far (a read and an image at most); a `cached` answer cost
+   *  nothing now. */
+  requestsSent: z.number().int().nonnegative(),
   media: z.object({
-    type: z.enum(["video", "image"]),
+    /** Null until the engine's read named the file. */
+    type: z.enum(["video", "image"]).nullable(),
     /** A video's length; null for a photo. */
     durationMs: z.number().int().nonnegative().nullable(),
   }),

@@ -118,6 +118,11 @@ export const AGENT_READ_AUDIT_SUMMARY_SHAPES = {
   lookStatus: "identifier",
   cached: "flag",
   frameCount: "count",
+  /** A look of a published post or a vault file (0372): the file it named, where its
+   *  image came from (`schedule_read`, `post_read`, `vault_read`) and the requests it sent. */
+  mediaRef: "identifier",
+  lookSource: "identifier",
+  requestsSent: "count",
 } as const satisfies Record<string, AgentReadAuditSummaryShape>;
 
 export type AgentReadAuditSummaryKey = keyof typeof AGENT_READ_AUDIT_SUMMARY_SHAPES;

@@ -139,6 +139,8 @@ const mediaDownloadModule = async (): Promise<ResourceModule> =>
   (await import("./resources/media-download.ts")).mediaDownloadModule;
 const mediaLookModule = async (): Promise<ResourceModule> =>
   (await import("./resources/media-look.ts")).mediaLookModule;
+const mediaLookResolveModule = async (): Promise<ResourceModule> =>
+  (await import("./resources/media-look-resolve.ts")).mediaLookResolveModule;
 const repairModule = async (): Promise<ResourceModule> =>
   (await import("./resources/repair.ts")).repairWsGapModule;
 
@@ -724,12 +726,26 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     // look — a video's thumbnail sheet or cover, a photo's resize — with the
     // describer's transport and hops, its own breaker; the URL in the work's
     // secret. A 401/403 is the signed URL's, never the page session's.
+    // A published post's or a vault file's look gets it from its read's apply
+    // (`media-look.resolve`), the URL sealed in its secret there.
     key: "media-look.fetch", file: "media-look", subject: "media", kind: "trigger", class: "planned",
-    triggers: ["api"], slo: {},
+    triggers: ["api", "apply:media-look.resolve"], slo: {},
     proof: "snapshot", walk: "single", http: true, evidence: false, fence: "none",
     subjectScopedAuthStatuses: [401, 403],
     operations: ["cdn.media"],
     module: mediaLookModule,
+  },
+  {
+    // The read a look of a published post or a vault file needs first: the
+    // post by its id, or the vault page that starts at the file — one read at
+    // the page's pace, journaled and never canonicalized, never retried; its
+    // apply takes the signed location from the answer in memory and queues
+    // the look's image request. A 401/403 here is the session's (an API read).
+    key: "media-look.resolve", file: "media-look", subject: "media", kind: "trigger", class: "planned",
+    triggers: ["api"], slo: {},
+    proof: "snapshot", walk: "single", http: true, evidence: false, fence: "none",
+    operations: ["posts.by_ids", "vault.media"],
+    module: mediaLookResolveModule,
   },
   {
     // Also a frame no chat can be named for (plan §7 p.10 (b), the router).
