@@ -246,6 +246,9 @@ export function cardForDashboard(card: ClientFanCardResponse): ClientFanCardResp
 }
 
 /** The console's read of the card: a dashboard session, on a page it reaches (the route's declared auth). No client switch: that one is for the extension. */
+/** A fan's reference on a platform: its user number, as every fan field of the contract requires. */
+const PLATFORM_FAN_REF = /^[1-9]\d{0,29}$/u;
+
 export async function readPageFanCard(
   app: AppContext,
   principal: HumanAuthPrincipal,
@@ -254,6 +257,9 @@ export async function readPageFanCard(
   const page = await findPageSummaryByLabel(app.db, input.pageLabel);
   if (!page) throw new NotFoundError(`Page "${input.pageLabel}" was not found`);
   if (!canAccessPage(principal, page.id)) throw new ForbiddenError("Page access denied");
+  // A fan's reference is the platform's number. Anything else — a username, a label — names no fan: a 404, not the
+  // «unknown fan» card, whose `fanRef` must be that number (an echoed username failed the response schema: a 500).
+  if (!PLATFORM_FAN_REF.test(input.platformUserId)) throw new NotFoundError(`No fan "${input.platformUserId}" on page "${page.label}"`);
   const fan = await findCardFan(app.db, page.platform, input.platformUserId);
   return cardForDashboard(await cardOf(app, principal, { pageLabel: page.label, fanRef: input.platformUserId, fan, pageId: page.id }));
 }
