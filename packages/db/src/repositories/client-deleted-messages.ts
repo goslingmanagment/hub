@@ -7,7 +7,9 @@ import type { Database } from "../client.ts";
 // delete. A Fansly deletion is a fact about the message, not an erasure (owner,
 // 2026-09-28): the row keeps its text, which this read serves. The route
 // (apps/runtime services/client-deleted-messages.ts) decides who may read it.
-// The same read answers the open chat's length and who wrote it.
+// The same read answers the open chat's length and who wrote it: a Fansly chat
+// from its proven sync chain, an OnlyFans chat (the fan) from what the message
+// archive holds of it, with no proof of its first message.
 
 export interface ClientDeletedMessageRow {
   platformMessageId: string;
@@ -140,5 +142,48 @@ export async function readClientChatAuthors(
   return {
     chatters: chatters.rows.map((row) => ({ userId: Number(row.user_id), username: row.username, messages: Number(row.messages) })),
     pageSide: pageSide === null ? null : Number(pageSide.rows[0]!.page_side),
+  };
+}
+
+export interface ClientOnlyFansChatRow {
+  /** The chat's rows in the archive, both sides, deleted ones included. */
+  messages: number;
+  /** When the earliest of them was sent; null when none has a time. */
+  oldestAt: Date | null;
+  /** The reported sends by user, and the page's side of those rows (never null here). */
+  authors: ClientChatAuthorsRow;
+}
+
+/**
+ * One OnlyFans chat of a page as the archive holds it (the chat header on ChatSpace, 2026-11-11). On OnlyFans the chat
+ * is the fan: the archive keys it by the fan's id (conversation_ref), a reported send names only the fan
+ * (conversation_ref null). No thread proves the chat's first message, so this is what the hub captured, both sides,
+ * deleted ones included. Two index reads: message_archive by (account_id, conversation_ref) (its rows, the page's side
+ * and the earliest at once) and client_send_attributions_fan; a deleted user still names their messages.
+ */
+export async function readClientOnlyFansChat(
+  db: Database,
+  input: { pageId: number; fanRef: string },
+): Promise<ClientOnlyFansChatRow> {
+  const [archive, chatters] = await Promise.all([
+    db.execute<{ messages: number | string; page_side: number | string; oldest_at: Date | string | null }>(sql`
+      select count(*) as messages, count(*) filter (where m.is_sent_by_me) as page_side, min(m.occurred_at) as oldest_at
+      from message_archive m
+      where m.account_id = ${input.pageId} and m.conversation_ref = ${input.fanRef} and m.platform = 'onlyfans'`),
+    db.execute<{ user_id: string | number; username: string; messages: number | string }>(sql`
+      select a.user_id, u.username, count(*) as messages
+      from client_send_attributions a
+      join users u on u.id = a.user_id
+      where a.platform = 'onlyfans' and a.page_id = ${input.pageId} and a.fan_ref = ${input.fanRef}
+      group by a.user_id, u.username`),
+  ]);
+  const row = archive.rows[0]!;
+  return {
+    messages: Number(row.messages),
+    oldestAt: row.oldest_at === null ? null : new Date(row.oldest_at),
+    authors: {
+      chatters: chatters.rows.map((chatter) => ({ userId: Number(chatter.user_id), username: chatter.username, messages: Number(chatter.messages) })),
+      pageSide: Number(row.page_side),
+    },
   };
 }
