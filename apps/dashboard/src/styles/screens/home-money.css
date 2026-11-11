@@ -73,11 +73,12 @@
   .budget-flow .card-footer { margin-top: auto; }
   .budget-rows { display: grid; align-content: start; padding: 0 24px 8px; }
   .budget-row {
-    display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 104px 44px; align-items: center; gap: 0 16px;
+    display: grid; grid-template-columns: minmax(96px, 1fr) minmax(48px, 1fr) 104px 44px; align-items: center; gap: 0 16px;
     padding: 10px 0; border-top: 1px solid var(--color-border-light); font-size: 15px; line-height: 22px;
   }
   .budget-rows > :first-child { border-top: 0; }
-  .budget-row-name { min-width: 0; overflow-wrap: anywhere; }
+  /* A name wraps between its words; a word is broken only when it alone is wider than its column. */
+  .budget-row-name { min-width: 0; overflow-wrap: break-word; }
   /* The quiet line of a row, under all of it: the sums stay on the first line. */
   .budget-row-sub { grid-column: 1 / -1; font-size: 14px; font-weight: 400; line-height: 20px; color: var(--color-text-secondary); }
   .budget-row-over { color: var(--color-warning-text); }
@@ -87,7 +88,7 @@
   .budget-row-total { border-top-color: var(--color-border-strong); font-weight: 600; }
   .budget-row-strong { font-weight: 600; }
   /* A page: its turnover, the bar towards the plan, the plan, the share done. */
-  .budget-page-row { grid-template-columns: minmax(0, 1fr) 96px minmax(72px, 1.4fr) 88px 44px; gap: 0 12px; }
+  .budget-page-row { grid-template-columns: minmax(96px, 1.2fr) 96px minmax(48px, 1fr) 88px 44px; gap: 0 12px; }
   .budget-bar { position: relative; display: flex; height: 8px; border-radius: 2px; background: var(--color-hover); }
   .budget-bar-fill { flex: 0 0 auto; height: 100%; }
   .budget-bar-fill:first-child { border-radius: 2px 0 0 2px; }
@@ -116,9 +117,12 @@
   .budget-sheet { border: 1px solid var(--color-border); border-radius: var(--radius-button); }
   .budget-sheet .budget-sheet-strong td { font-weight: 600; }
   .budget-sheet .budget-sheet-quiet td { color: var(--color-text-secondary); }
+  /* Two columns of rows need room: on a laptop's width the lists stand one under the other. */
+  @media (max-width: 1279px) {
+    .budget-flow { grid-template-columns: minmax(0, 1fr); }
+  }
   @media (max-width: 1099px) {
     .budget-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-    .budget-flow { grid-template-columns: minmax(0, 1fr); }
   }
   @media (max-width: 767px) {
     .budget-row, .budget-page-row { grid-template-columns: minmax(0, 1fr) auto 44px; }
