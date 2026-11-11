@@ -188,8 +188,17 @@ describe("joinShifts: the posts in «Отчётность»", () => {
     const rows = joinShifts({
       shifts: [changed, partial, same, drafted],
       reports: [
-        report(21, "2026-11-03", changed.startedAt, changed.endedAt, { totalMills: 95_000, draftTotalMills: 80_000 }),
-        report(22, "2026-11-04", partial.startedAt, partial.endedAt, { totalMills: 50_000, draftTotalMills: 70_000 }),
+        report(21, "2026-11-03", changed.startedAt, changed.endedAt, {
+          totalMills: 95_000, draftTotalMills: 80_000,
+          pages: [{ pageLabel: "page-a", amountMills: 95_000, draftMills: 80_000, postedMills: 95_000, postState: "posted_changed" }],
+        }),
+        report(22, "2026-11-04", partial.startedAt, partial.endedAt, {
+          totalMills: 50_000, draftTotalMills: 70_000,
+          pages: [
+            { pageLabel: "page-a", amountMills: 50_000, draftMills: 50_000, postedMills: 50_000, postState: "posted_equal" },
+            { pageLabel: "page-b", amountMills: 0, draftMills: 20_000, postedMills: null, postState: "draft_only" },
+          ],
+        }),
         report(23, "2026-11-05", same.startedAt, same.endedAt),
         report(24, "2026-11-06", drafted.startedAt, drafted.endedAt, { source: "draft", status: "draft", postedAt: null }),
       ],
@@ -202,6 +211,32 @@ describe("joinShifts: the posts in «Отчётность»", () => {
     expect(of(drafted)).toMatchObject({ state: "draft", totalMills: 80_000, draftMills: null });
     // «По отчётам» is what was posted, the draft where nothing was.
     expect(factsOf(rows, true)).toMatchObject({ reportedMills: 95_000 + 50_000 + 80_000 + 80_000, withoutReport: 0, drafts: 1 });
+  });
+
+  it("a draft in thousandths posted as it is, in cents, is the same report: a cent of rounding is not another sum", () => {
+    const rounded = shift(msk("2026-11-03", "10:00"), msk("2026-11-03", "18:00"));
+    const changedByACent = shift(msk("2026-11-04", "10:00"), msk("2026-11-04", "18:00"));
+    const rows = joinShifts({
+      shifts: [rounded, changedByACent],
+      reports: [
+        // Two pages of x.xx5 each round up in the post: the posted total is a cent over the draft's.
+        report(31, "2026-11-03", rounded.startedAt, rounded.endedAt, {
+          totalMills: 776_780, draftTotalMills: 776_774,
+          pages: [
+            { pageLabel: "page-a", amountMills: 500_390, draftMills: 500_387, postedMills: 500_390, postState: "posted_equal" },
+            { pageLabel: "page-b", amountMills: 276_390, draftMills: 276_387, postedMills: 276_390, postState: "posted_equal" },
+          ],
+        }),
+        // The ledger says a page was changed, but the totals read alike: nothing to say either.
+        report(32, "2026-11-04", changedByACent.startedAt, changedByACent.endedAt, {
+          totalMills: 80_000, draftTotalMills: 80_004,
+          pages: [{ pageLabel: "page-a", amountMills: 80_000, draftMills: 80_004, postedMills: 80_000, postState: "posted_changed" }],
+        }),
+      ],
+      window: WEEK,
+    });
+    expect(rows.find((row) => row.shift === rounded)).toMatchObject({ state: "posted", totalMills: 776_780, draftMills: null });
+    expect(rows.find((row) => row.shift === changedByACent)).toMatchObject({ state: "posted", totalMills: 80_000, draftMills: null });
   });
 
   it("claims no missing report while the posts did not come: a shift without a draft may have a post", () => {
