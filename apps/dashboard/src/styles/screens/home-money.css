@@ -99,8 +99,13 @@
   .budget-where-item > i { flex: 0 0 auto; width: 12px; height: 12px; border-radius: 3px; }
   .budget-where-stuck { background: var(--color-hover); box-shadow: inset 0 0 0 1px var(--color-border-strong); }
   .budget-notes { display: grid; gap: 4px; margin: 0; }
-  .budget-notes b, .budget-caps b { font-weight: 500; color: var(--color-text-primary); }
-  .budget-caps { display: grid; gap: 4px; padding: 0 24px 12px; font-size: 14px; line-height: 20px; color: var(--color-text-secondary); }
+  .budget-notes b, .budget-cap b { font-weight: 500; color: var(--color-text-primary); }
+  /* The plan of the month's growth spending against what was put in: one line under the card's header. */
+  .budget-cap {
+    display: grid; grid-template-columns: minmax(0, auto) minmax(96px, 1fr) auto 44px; align-items: center; gap: 0 16px;
+    padding: 0 24px 16px; font-size: 14px; line-height: 20px; color: var(--color-text-secondary);
+  }
+  .budget-cap .budget-row-sum { font-size: 15px; line-height: 22px; color: var(--color-text-primary); }
   .budget-plan-legend { gap: 10px; }
   .budget-plan-legend > .budget-bar-mark { position: static; flex: 0 0 auto; width: 2px; height: 16px; margin: 0; }
   .budget-empty { color: var(--color-text-secondary); }
@@ -117,6 +122,9 @@
   @media (max-width: 767px) {
     .budget-row, .budget-page-row { grid-template-columns: minmax(0, 1fr) auto 44px; }
     .budget-row > .budget-bar, .budget-row > .budget-row-of { display: none; }
+    .budget-cap { grid-template-columns: minmax(0, 1fr) auto; gap: 4px 16px; }
+    .budget-cap > .budget-bar { grid-column: 1 / -1; grid-row: 2; }
+    .budget-cap > .budget-row-share { display: none; }
   }
 
   /* ── Деньги → Операции ───────────────────────────────────────────────── */

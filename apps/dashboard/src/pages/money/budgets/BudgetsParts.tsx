@@ -47,7 +47,8 @@ export function MonthTiles({ month }: { month: BudgetMonth }) {
         value={figures?.leftMills == null ? "—" : formatMills(figures.leftMills)}
         meta={!figures ? unknown : figures.leftMills === null ? "нет ставки CEO" : figures.leftMills < 0
           ? "расходы и зарплата больше заработанного"
-          : `${share(figures.leftMills, figures.earnedMills) || "—"} заработанного`}
+          // Earned − expenses − the CEO's pay is this number only without what is stuck: say so beside it.
+          : `${share(figures.leftMills, figures.earnedMills) || "—"} заработанного${figures.stuckMills > 0 ? ` · без застрявших ${formatMills(figures.stuckMills)}` : ""}`}
       />
     </StatGrid>
   );
@@ -366,10 +367,13 @@ export function PromotionCard({ promotion, month }: { promotion: AdminBudgetsRes
     .filter((source) => source.regular !== null || source.shownByMonth.some((value) => value !== 0));
   const activeTotals = promotion.totals[chosen];
   const money = (value: number) => (value === 0 ? "" : formatMills(value));
+  const caps = month.plan.reinvest;
+  const capSum = Number(sumMills(caps.map((item) => item.capMills)));
   const column = (key: string) => (key === active ? "num budget-col-active" : "num");
   const both = (total: { trafficMills: number; contractorMills: number }) => Number(sumMills([total.trafficMills, total.contractorMills]));
   const allTime = (pick: (total: (typeof totals)[number]) => number) => Number(sumMills(promotion.totals.map(pick)));
   const first = promotion.months[0];
+  const invested = activeTotals ? both(activeTotals) : 0;
   const group = (kind: "traffic" | "contractor", label: string, sum: (total: (typeof totals)[number]) => number) => {
     const sources = shown.filter((source) => source.kind === kind);
     if (sources.length === 0) return null;
@@ -410,10 +414,16 @@ export function PromotionCard({ promotion, month }: { promotion: AdminBudgetsRes
           </p>
         )}
       </div>
-      {/* The month's plan of growth spending stands beside what was put in: the cap the owner allowed. */}
-      {month.plan.reinvest.length > 0 && (
-        <div className="budget-caps">
-          {month.plan.reinvest.map((item) => <p key={item.name}><b>План: до {formatMills(item.capMills)}</b> · {item.name}</p>)}
+      {/* The plan of the month's growth spending (the caps the owner allowed) against what was put in. */}
+      {caps.length > 0 && activeTotals && (
+        <div className="budget-cap">
+          <span className="budget-cap-name"><b>План: до {formatMills(capSum)}</b> · {caps.map((item) => item.name).join("; ")}</span>
+          <span className="budget-bar" aria-hidden="true">
+            <span className="budget-bar-fill" style={{ width: `${Math.min(100, shareOf(invested, capSum) ?? 0)}%`, background: SPENT }} />
+          </span>
+          <span className="budget-row-sum">вложено {formatMills(invested)}</span>
+          <span className="budget-row-share">{share(invested, capSum)}</span>
+          {invested > capSum && <span className="budget-row-sub budget-row-over">выше плана на {formatMills(sumMills([invested, -capSum]))}</span>}
         </div>
       )}
       {shown.length === 0 ? (

@@ -10,7 +10,7 @@ import { PageHeader } from "@/components/ui/PageHeader";
 import { PeriodStepper } from "@/components/ui/PeriodStepper";
 import { formatDay, formatMills } from "@/lib/format";
 import { FlowCards, MonthTiles, MonthsCard, PromotionCard } from "./BudgetsParts.js";
-import { monthLong, pickMonth, runningDay } from "./budgetsView.js";
+import { monthLong, monthSince, pickMonth, runningDay } from "./budgetsView.js";
 import type { BudgetMonth } from "@agency_hub_core/contracts";
 
 /** What the header says about the month: it runs, it is over and not closed, it is closed. */
@@ -106,6 +106,10 @@ export function BudgetsPage() {
       <div className="help-row">
         <Disclosure>
           <p>
+            Месяцы здесь {monthSince(months[0]?.month ?? month.month)}: с него ledger ведёт полный учёт и считает месяц
+            целиком, более ранние он не считает.
+          </p>
+          <p>
             Числа считает ledger агентства. «Заработано» — доля агентства от оборота страниц и поступлений мимо площадок,
             по времени платежа фана. «В пути» — деньги на холде, на странице и в переводе; «застряло» — остаток страницы
             ниже минимума вывода, в «Остаётся» он не входит.
@@ -117,8 +121,9 @@ export function BudgetsPage() {
           </p>
           <p>
             «Трафик и подрядчики» — строки журнала по дате платежа: статьи «Трафик», «SFS», «YouTube» и «Подрядчик».
-            «Обычно» под именем — регулярный платёж этому источнику из обязательств ledger, его план; кап реинвеста —
-            сколько владелец разрешил вложить в рост в этом месяце. План оборота — дневные планы страниц на число дней
+            «Обычно» под именем — регулярный платёж этому источнику из обязательств ledger, его план. «План: до …» —
+            капы реинвеста месяца: сколько владелец разрешил вложить в рост; рядом — сколько вложено в трафик и
+            подрядчиков за месяц. План оборота — дневные планы страниц на число дней
             месяца, без поступлений мимо площадок.
           </p>
         </Disclosure>
