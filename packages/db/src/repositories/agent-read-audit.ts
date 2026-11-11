@@ -94,6 +94,12 @@ export const AGENT_READ_AUDIT_SUMMARY_SHAPES = {
   queueId: "count",
   ruleSha256: "sha256",
   queueStatus: "identifier",
+  /** An agent's withdrawal of a post (withdraw:publications, owner 2026-11-11): its
+   *  outcome (`accepted`, `refused`, …) and the code its reason starts with
+   *  (`too_close_to_publish_time`) — Hub's own vocabulary, never the error text
+   *  some reasons carry after it. */
+  outcome: "identifier",
+  reasonCode: "identifier",
 } as const satisfies Record<string, AgentReadAuditSummaryShape>;
 
 export type AgentReadAuditSummaryKey = keyof typeof AGENT_READ_AUDIT_SUMMARY_SHAPES;

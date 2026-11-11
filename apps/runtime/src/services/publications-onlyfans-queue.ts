@@ -34,7 +34,7 @@ import {
   type OnlyfansPlatformItem,
   type OnlyfansQueueRead,
 } from "./publications-onlyfans-reads.ts";
-import { toPublicationWire } from "./publications.ts";
+import { toPublicationWire, withdrawerReaches, withdrawerUserId, type PublicationWithdrawer } from "./publications.ts";
 
 // OnlyFans' own schedule for wall posts (docs/plans/2026-10-23-wall-posts,
 // spec §6, §8.2, §8.4, §9; plan PR 5b):
@@ -195,9 +195,16 @@ const inSchedule = (read: OnlyfansQueueRead, ref: string) => read.entries.filter
 /**
  * Withdraw Hub posts from OnlyFans' schedule, one command per post, each with
  * its own outcome. A page's schedule is read fresh and whole before (it must
- * show the post) and after (it must no longer show it).
+ * show the post) and after (it must no longer show it). An agent's post
+ * outside its pages is refused `not_found` with no publication; its reads and
+ * owner actions go as the key's owner.
  */
-export async function withdrawOnlyfansPublications(app: AppContext, input: { ids: readonly number[]; userId: number; clock?: () => Date }): Promise<PublicationWithdrawResult[]> {
+export async function withdrawOnlyfansPublications(
+  app: AppContext,
+  input: { ids: readonly number[]; clock?: () => Date } & ({ userId: number } | { withdrawer: PublicationWithdrawer }),
+): Promise<PublicationWithdrawResult[]> {
+  const withdrawer: PublicationWithdrawer = "withdrawer" in input ? input.withdrawer : { kind: "human", userId: input.userId };
+  const userId = withdrawerUserId(withdrawer);
   const clock = input.clock ?? (() => new Date());
   const results = new Map<number, PublicationWithdrawResult>();
   const refuse = async (id: number, reason: string) => {
@@ -206,7 +213,12 @@ export async function withdrawOnlyfansPublications(app: AppContext, input: { ids
   };
   const byPage = new Map<number, Eligible[]>();
   for (const id of [...new Set(input.ids)]) {
-    const eligible = await withdrawEligibility(app.db, await getPublication(app.db, id), clock());
+    const record = await getPublication(app.db, id);
+    if (record !== null && !withdrawerReaches(withdrawer, record.pageId)) {
+      results.set(id, { id, outcome: "refused", reason: "not_found", publication: null });
+      continue;
+    }
+    const eligible = await withdrawEligibility(app.db, record, clock());
     if (!eligible.ok) {
       await refuse(id, eligible.reason);
       continue;
@@ -217,7 +229,7 @@ export async function withdrawOnlyfansPublications(app: AppContext, input: { ids
   for (const [pageId, items] of byPage) {
     items.sort((a, b) => a.record.publishAt.getTime() - b.record.publishAt.getTime());
     const window = { from: utcDay(items[0]!.record.publishAt), to: utcDay(items.at(-1)!.record.publishAt) };
-    const ctx = { app, pageId, actorUserId: input.userId };
+    const ctx = { app, pageId, actorUserId: userId };
     const before = await readOnlyfansQueue(ctx, { ...window, maxListReads: WITHDRAW_LIST_READS, now: clock() });
     if (!before.ok || !before.complete) {
       const reason = before.ok ? `schedule_incomplete:${before.incompleteReasons.join(",")}` : `schedule_read_failed:${before.reason}`;
@@ -240,7 +252,7 @@ export async function withdrawOnlyfansPublications(app: AppContext, input: { ids
       // The post inside the schedule entry, when the entry names one (ASSUMPTION
       // until the owner's check, plan §12: post delete takes the post's id).
       const postId = entries[0]!.entityId ?? ref;
-      const outcome = await sendWithdraw(app, item, postId, input.userId);
+      const outcome = await sendWithdraw(app, item, postId, userId);
       if (outcome === "confirmed") {
         sent.push(item);
         continue;

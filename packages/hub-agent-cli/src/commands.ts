@@ -88,7 +88,11 @@ import {
  * A NOTED ANSWER: `thread-availability` returns its validated response with a
  * one-line `note` beside it ({@link HubNotedResult}), because its null episode
  * reads too easily as "the chat is served"; on a hub without the route it
- * answers `data: null` and a note saying the state is unknown.
+ * answers `data: null` and a note saying the state is unknown. So does
+ * `publication-withdraw` when Fansly's answer is `accepted` (not withdrawn
+ * yet), and `publication-queue --refresh`, which first asks
+ * `agentPublicationQueueRefresh` for a fresh read (the owner's «Обновить») and
+ * then prints the last read, its own operation's answer, saying so.
  *
  * WHAT IS NOT HERE, and why it never will be: operation 9b (observation payloads)
  * and #13 (hydration decisions) are OWNER-SESSION. An agent key cannot call them
@@ -813,6 +817,19 @@ const PUBLICATION_CAPABILITY_HINT =
 function publicationHint(error: { status: number | null; code: string | null }): string | null {
   return error.code === "agent_capability_missing" ? PUBLICATION_CAPABILITY_HINT : null;
 }
+
+const WITHDRAW_CAPABILITY_HINT =
+  "This key lacks withdraw:publications (to take a post off the schedule; it also reads the page's schedule, as"
+  + " write:publication_drafts does): the owner grants it to the key (dashboard, Settings, agent keys).";
+
+function withdrawHint(error: { status: number | null; code: string | null }): string | null {
+  return error.code === "agent_capability_missing" ? WITHDRAW_CAPABILITY_HINT : null;
+}
+
+const PUBLICATION_WITHDRAW_ACCEPTED_NOTE =
+  "Accepted is not withdrawn yet: Hub sends the cancel once a fresh read of the schedule still shows the post, then"
+  + " reads again. Follow it with publication-get: withdrawn, unknown (a person checks Fansly) or still scheduled"
+  + " with the withdrawal rejected.";
 
 /** What a draft body says (publicationContentSchema), besides its media. A vault
  *  album's `vaultAlbumRef` stays with it: sent again, its files go into that album. */
@@ -2139,13 +2156,56 @@ export const HUB_COMMANDS: readonly HubCommand[] = [
     operation: "agentPublicationCancel",
     summary:
       "Cancel a publication this key drafted while Hub has not handed it to the platform (a draft or an approved"
-      + " one). Later only the owner takes it off, in Hub (409 publication_handed_to_platform). Needs"
-      + " write:publication_drafts.",
+      + " one). Later a cancel no longer applies (409 publication_handed_to_platform): publication-withdraw takes it"
+      + " off the schedule. Needs write:publication_drafts.",
     options: {
       id: { kind: "number", describe: "The publication id (required)" },
     },
     hint: publicationHint,
     run: (client, values) => client.agentPublicationCancel({ params: { id: requireId(values, "id") } }),
+  },
+  {
+    name: "publication-withdraw",
+    operation: "agentPublicationWithdraw",
+    summary:
+      "Take a Hub post of your pages off the platform's schedule, any Hub post there, whoever drafted it — the"
+      + " owner's «Снять», with the same refusals (only a scheduled post, 15 minutes or more before its time, the"
+      + " page not stopped, one cancel per post). Fansly answers accepted and the result comes as the post's status"
+      + " within minutes (publication-get); OnlyFans answers its outcome. Needs withdraw:publications.",
+    options: {
+      id: { kind: "number", describe: "The publication id (required)" },
+    },
+    hint: withdrawHint,
+    run: async (client, values) => {
+      const answer = await client.agentPublicationWithdraw({ params: { id: requireId(values, "id") } });
+      return answer.results.some((result) => result.outcome === "accepted")
+        ? new HubNotedResult(answer, PUBLICATION_WITHDRAW_ACCEPTED_NOTE)
+        : answer;
+    },
+  },
+  {
+    name: "publication-queue",
+    operation: "agentPublicationQueue",
+    summary:
+      "The page's own schedule on the platform as Hub last read it: Hub's posts in it (publicationId) and the ones"
+      + " put there by hand (publicationId null), when it was read (readAt), whether it was complete and fresh."
+      + " --refresh first asks for a fresh read (it lands within a minute or two; on OnlyFans it spends"
+      + " OnlyFansAPI credits). Needs write:publication_drafts or withdraw:publications.",
+    options: {
+      "page-label": { kind: "string", describe: "The page (required)" },
+      refresh: { kind: "boolean", describe: "Ask for a fresh read first; this answer is still the last one" },
+    },
+    hint: withdrawHint,
+    run: async (client, values) => {
+      const params = { pageLabel: requireString(values, "page-label") };
+      if (!readFlag(values, "refresh")) return client.agentPublicationQueue({ params });
+      const asked = await client.agentPublicationQueueRefresh({ params });
+      return new HubNotedResult(
+        await client.agentPublicationQueue({ params }),
+        `A fresh read was asked for at ${asked.requestedAt}; this is the last one. Ask again in a minute or two: the`
+          + " fresh one has a readAt after that time.",
+      );
+    },
   },
   {
     name: "publication-approve",

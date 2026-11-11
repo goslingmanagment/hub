@@ -895,6 +895,24 @@ async function listPublicationHeads(db: Database, ids: readonly number[]): Promi
   return out;
 }
 
+/** Who takes a post off the platform's schedule: a person, or an agent key with
+ *  withdraw:publications (owner 2026-11-11) — any Hub post, but only on its
+ *  pages; a post elsewhere is refused `not_found` with no publication, as one
+ *  that does not exist. The platform's own commands go as the key's owner. */
+export type PublicationWithdrawer =
+  | { kind: "human"; userId: number }
+  | { kind: "agent"; agentKeyId: number; ownerUserId: number; allowedPageIds: readonly number[] };
+
+/** The person the platform commands of a withdrawal go as (an OnlyFans owner action, a schedule read). */
+export function withdrawerUserId(withdrawer: PublicationWithdrawer): number {
+  return withdrawer.kind === "human" ? withdrawer.userId : withdrawer.ownerUserId;
+}
+
+/** Whether the withdrawer may reach a publication of this page at all. */
+export function withdrawerReaches(withdrawer: PublicationWithdrawer, pageId: number): boolean {
+  return withdrawer.kind === "human" || withdrawer.allowedPageIds.includes(pageId);
+}
+
 /** Statuses of a publication Hub has handed to the platform and that may still be on it. */
 const HANDED_TO_PLATFORM: ReadonlySet<PublicationRecord["status"]> = new Set([
   "submitting", "scheduled", "processing", "published", "unknown",
@@ -908,8 +926,9 @@ export type PublicationCanceller =
 /**
  * Cancel before Hub sends it: a draft or an approved publication. An agent
  * cancels only what its key drafted; once Hub has handed it to the platform
- * that is the owner's, in Hub (publication_handed_to_platform), and a
- * cancelled one answers as it is, so the agent's retry is safe.
+ * a cancel no longer applies (publication_handed_to_platform): it is a
+ * withdrawal then, and a cancelled one answers as it is, so the agent's retry
+ * is safe.
  */
 export async function cancelPublication(db: Database, input: { id: number } & PublicationCanceller): Promise<PublicationWire> {
   const actor: PublicationActor = "userId" in input
@@ -919,7 +938,8 @@ export async function cancelPublication(db: Database, input: { id: number } & Pu
     if (canTransitionPublication(record.status, "cancelled", actor.kind)) return null;
     if (actor.kind === "agent" && HANDED_TO_PLATFORM.has(record.status)) {
       return new PublicationConflictError(
-        `Hub has handed this publication to the platform (${record.status}): only the owner takes it off, in Hub`,
+        `Hub has handed this publication to the platform (${record.status}): a cancel no longer applies; a key with`
+          + " withdraw:publications takes it off the schedule (withdraw), or the owner in Hub",
         "publication_handed_to_platform",
       );
     }

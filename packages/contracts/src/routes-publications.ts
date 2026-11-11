@@ -25,6 +25,7 @@ import {
   publicationQueueListResponseSchema,
   publicationQueueRefreshBodySchema,
   publicationQueueRefreshResponseSchema,
+  publicationQueueSnapshotSchema,
   publicationWithdrawPageBodySchema,
   publicationWithdrawResponseSchema,
 } from "./publications.ts";
@@ -35,7 +36,10 @@ import {
 // their statuses and picks files from the page's media; one with
 // approve:publications also approves them, on the owner's word in the chat
 // (owner 2026-10-27). An agent cancels what its key drafted while Hub has not
-// handed it to the platform (owner 2026-10-29). Nothing here talks to a platform.
+// handed it to the platform (owner 2026-10-29); one with withdraw:publications
+// takes any Hub post of its pages off the platform's schedule, as the owner's
+// «Снять» does, and reads the page's schedule (owner 2026-11-11). Only the
+// withdrawal talks to a platform, through the owner's own services.
 
 const owner = { kind: "owner-session" } as const;
 const ownerErrors = {
@@ -44,7 +48,7 @@ const ownerErrors = {
   409: errorResponseSchema,
 } as const;
 const agentErrors = { ...ownerErrors, 429: errorResponseSchema, 503: errorResponseSchema } as const;
-// publication_handed_to_platform: Hub has sent it to the platform; only the owner takes it off, in Hub.
+// publication_handed_to_platform: Hub has sent it to the platform; a cancel no longer applies, a withdrawal does.
 
 export const publicationRouteSchemas = {
   adminPublicationList: {
@@ -175,10 +179,36 @@ export const publicationRouteSchemas = {
   agentPublicationCancel: {
     auth: { kind: "agentKey" }, tags: ["agent"],
     summary: "Cancel a publication this key drafted while Hub has not handed it to the platform: a draft or an"
-      + " approved one (needs write:publication_drafts). Later it is the owner's, in Hub: 409"
-      + " publication_handed_to_platform. A cancelled one answers as it is",
+      + " approved one (needs write:publication_drafts). Later it is 409 publication_handed_to_platform: a key"
+      + " with withdraw:publications takes it off the schedule (agentPublicationWithdraw). A cancelled one answers"
+      + " as it is",
     params: publicationIdParamsSchema,
     response: { 200: publicationSchema, ...agentErrors },
+  },
+  agentPublicationWithdraw: {
+    // An id path, so no declarative page scope: the service checks the grant.
+    auth: { kind: "agentKey" }, tags: ["agent"],
+    summary: "Take a Hub post of a granted page off the platform's schedule (needs withdraw:publications), any Hub"
+      + " post there, whoever drafted it: the owner's own withdrawal, with the same refusals (only a scheduled post,"
+      + " 15 minutes or more before its time, the page not stopped, one cancel per post). Fansly answers accepted"
+      + " and the result comes as the publication's status; OnlyFans answers its outcome",
+    params: publicationIdParamsSchema,
+    response: { 200: publicationWithdrawResponseSchema, ...agentErrors },
+  },
+  agentPublicationQueue: {
+    auth: { kind: "agentKey", scope: "page" }, tags: ["agent"],
+    summary: "The latest read of the page's own schedule on the platform: Hub's posts in it, the ones put there by"
+      + " hand, when it was read and whether it was complete and fresh (needs write:publication_drafts or"
+      + " withdraw:publications)",
+    params: publicationPageParamsSchema,
+    response: { 200: publicationQueueSnapshotSchema, ...agentErrors },
+  },
+  agentPublicationQueueRefresh: {
+    auth: { kind: "agentKey", scope: "page" }, tags: ["agent"],
+    summary: "Read the page's schedule again within a minute, as the owner's «Обновить» (needs"
+      + " write:publication_drafts or withdraw:publications). On OnlyFans it spends OnlyFansAPI credits",
+    params: publicationPageParamsSchema,
+    response: { 200: publicationQueueRefreshResponseSchema, ...agentErrors },
   },
   agentPublicationTargets: {
     auth: { kind: "agentKey", scope: "page" }, tags: ["agent"],

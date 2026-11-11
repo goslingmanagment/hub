@@ -26,6 +26,7 @@ import {
   resolveUnknownPublication,
   updatePublicationDraft,
   updatePublicationSettings,
+  type PublicationWithdrawer,
 } from "../../services/publications.ts";
 import { listPublicationPageMediaWire } from "../../services/publication-media.ts";
 import { listFanslyQueueWire } from "../../services/publications-fansly-checks.ts";
@@ -51,6 +52,10 @@ import type { ApiModuleContext, ApiServer } from "../context.ts";
 const MEDIA_OPERATION = "agentPublicationMedia";
 /** The agent operation listing its own publications changed since a time. */
 const CHANGES_OPERATION = "agentPublicationChanges";
+/** The agent operation taking a Hub post off the platform's schedule (withdraw:publications). */
+const WITHDRAW_OPERATION = "agentPublicationWithdraw";
+/** The agent operation asking for a fresh read of a page's schedule. */
+const QUEUE_REFRESH_OPERATION = "agentPublicationQueueRefresh";
 
 /** The owner's change of a page's publishing settings in the audit log. */
 export const PUBLICATION_SETTINGS_AUDIT_EVENT = "admin.publication_settings";
@@ -66,8 +71,9 @@ export const PUBLICATION_DELETE_POST_AUDIT_EVENT = "admin.publication_delete_pos
  * drafts on its granted pages, reads their statuses under
  * `/api/v1/agent/…/publications` and picks files from the page's media under
  * `/api/v1/agent/pages/:pageLabel/publication-media`. Both call the same service, so the checks,
- * the version compare-and-set and the transitions cannot drift apart. Nothing
- * here talks to a platform.
+ * the version compare-and-set and the transitions cannot drift apart. Only a
+ * withdrawal talks to a platform, through its services (the owner's and a key's
+ * with withdraw:publications alike).
  */
 export function registerPublicationRoutes(server: ApiServer, ctx: ApiModuleContext) {
   const { appContext } = ctx;
@@ -142,16 +148,24 @@ export function registerPublicationRoutes(server: ApiServer, ctx: ApiModuleConte
     return { requestedAt: new Date().toISOString() };
   });
 
-  async function auditWithdraw(principal: Awaited<ReturnType<typeof requirePrincipal>>, page: { id: number; label: string }, results: Array<{ id: number; outcome: string; reason: string | null }>) {
+  /** The owner's audit row of a withdrawal and the schedule's refresh after it.
+   *  An agent key's row is its own (`auditCtx`: source agent_key, the key's id
+   *  in the metadata), so the owner's log says which key took which post off;
+   *  the refresh is asked as `refreshUserId` (the key's owner for a key). */
+  async function auditWithdraw(
+    actor: { audit: ReturnType<typeof auditCtx>; refreshUserId: number },
+    page: { id: number; label: string },
+    results: Array<{ id: number; outcome: string; reason: string | null }>,
+  ) {
     await recordAudit({ db }, {
-      ...auditCtx(principal),
+      ...actor.audit,
       eventType: PUBLICATION_WITHDRAW_AUDIT_EVENT,
       platformAccountId: page.id,
       metadata: { pageLabel: page.label, results: results.map(({ id, outcome, reason }) => ({ id, outcome, reason })) },
     });
     // The screen's schedule follows within a minute.
     if (results.some((result) => result.outcome !== "refused")) {
-      await requestPublicationQueueRefresh(db, { pageId: page.id, userId: principal.user.id });
+      await requestPublicationQueueRefresh(db, { pageId: page.id, userId: actor.refreshUserId });
     }
   }
 
@@ -162,7 +176,7 @@ export function registerPublicationRoutes(server: ApiServer, ctx: ApiModuleConte
     const results = page.platform === "fansly"
       ? await withdrawAllFanslyPublications(appContext, { pageId: page.id, userId: principal.user.id })
       : await withdrawAllOnlyfansPublications(appContext, { pageId: page.id, userId: principal.user.id });
-    await auditWithdraw(principal, page, results);
+    await auditWithdraw({ audit: auditCtx(principal), refreshUserId: principal.user.id }, page, results);
     return { results };
   });
 
@@ -196,7 +210,9 @@ export function registerPublicationRoutes(server: ApiServer, ctx: ApiModuleConte
       ? await withdrawFanslyPublications(appContext, { ids: [request.params.id], userId: principal.user.id })
       : await withdrawOnlyfansPublications(appContext, { ids: [request.params.id], userId: principal.user.id });
     const publication = results[0]?.publication;
-    if (publication) await auditWithdraw(principal, await pageByLabel(publication.pageLabel), results);
+    if (publication) {
+      await auditWithdraw({ audit: auditCtx(principal), refreshUserId: principal.user.id }, await pageByLabel(publication.pageLabel), results);
+    }
     return { results };
   });
 
@@ -234,13 +250,16 @@ export function registerPublicationRoutes(server: ApiServer, ctx: ApiModuleConte
   // what it drafted (cancel only before Hub hands it to the platform, owner
   // 2026-10-29), read statuses and the page's media; approve:publications also
   // approves them, on the owner's word in the chat (owner 2026-10-27).
-  // Taking a post off the platform and the settings are the owner's. A page or
-  // publication outside the grant is the plane's one static 404.
+  // withdraw:publications takes any Hub post of the key's pages off the
+  // platform's schedule, as the owner's «Снять» does, and reads the page's
+  // schedule (owner 2026-11-11). Deleting a published post, «Снять всё» on a
+  // page and the settings are the owner's. A page or publication outside the
+  // grant is the plane's one static 404.
 
   async function agentScope(
     request: Parameters<typeof requireAgentKeyPrincipal>[0],
     operation: string,
-    requiredCapabilities: Array<"write:publication_drafts" | "approve:publications" | "approve:vault_albums"> = ["write:publication_drafts"],
+    requiredCapabilities: Array<"write:publication_drafts" | "approve:publications" | "approve:vault_albums" | "withdraw:publications"> = ["write:publication_drafts"],
   ) {
     const principal = await requireAgentKeyPrincipal(request);
     const scope = await beginAgentRequest(appContext, principal, { operation, requiredCapabilities });
@@ -431,6 +450,85 @@ export function registerPublicationRoutes(server: ApiServer, ctx: ApiModuleConte
         requestSummary: { publicationId: publication.id, publicationKind: publication.kind },
       });
       return publication;
+    }, () => 1);
+  });
+
+  // «Снять» by a key (withdraw:publications ALONE, owner 2026-11-11): any Hub
+  // post of its pages, through the owner's own services, so every refusal is
+  // the owner's. The platform's commands go as the key's owner; the owner's
+  // audit row names the key (source agent_key), the agent audit the post.
+  server.post("/api/v1/agent/publications/:id/withdraw", { schema: routeSchemas.agentPublicationWithdraw }, async (request) => {
+    const { principal, scope } = await agentScope(request, WITHDRAW_OPERATION, ["withdraw:publications"]);
+    return settled(scope, async () => {
+      const key = await getAgentKeyById(db, principal.agentKeyId);
+      if (key?.createdBy == null) throw new ConflictError("this key names no owner to withdraw for: issue a new key");
+      const withdrawer: PublicationWithdrawer = {
+        kind: "agent", agentKeyId: principal.agentKeyId, ownerUserId: key.createdBy, allowedPageIds: scope.pages.map((page) => page.id),
+      };
+      const id = request.params.id;
+      const target = await getPublication(db, id);
+      const results = target?.platform === "fansly"
+        ? await withdrawFanslyPublications(appContext, { ids: [id], withdrawer })
+        : await withdrawOnlyfansPublications(appContext, { ids: [id], withdrawer });
+      const result = results[0];
+      // None, or on a page outside the grant (the service answers both alike): the one static 404.
+      const page = result?.publication == null ? undefined : scope.pages.find((candidate) => candidate.pageLabel === result.publication?.pageLabel);
+      if (result === undefined || page === undefined) throw staticNotFound();
+      await writeAgentAudit(db, {
+        agentKeyId: principal.agentKeyId,
+        operation: WITHDRAW_OPERATION,
+        pageIds: [page.id],
+        verbatimText: false,
+        // The reason's leading code only: some reasons carry an error's text after it.
+        requestSummary: { publicationId: id, outcome: result.outcome, reasonCode: /^[a-z0-9_]{1,64}/.exec(result.reason ?? "")?.[0] ?? null },
+      });
+      await auditWithdraw({ audit: auditCtx(principal), refreshUserId: key.createdBy }, { id: page.id, label: page.pageLabel }, results);
+      return { results };
+    }, (response) => response.results.length);
+  });
+
+  // The page's own schedule on the platform (the owner's «Очередь площадки»
+  // for one page): write:publication_drafts reads it, and so does a key that
+  // only withdraws, which must see what it takes off.
+  async function queueScope(request: Parameters<typeof requireAgentKeyPrincipal>[0], operation: string) {
+    const caller = await requireAgentKeyPrincipal(request);
+    const withdrawOnly = !caller.capabilities.includes("write:publication_drafts") && caller.capabilities.includes("withdraw:publications");
+    return agentScope(request, operation, [withdrawOnly ? "withdraw:publications" : "write:publication_drafts"]);
+  }
+
+  server.get("/api/v1/agent/pages/:pageLabel/publication-queue", { schema: routeSchemas.agentPublicationQueue }, async (request) => {
+    const { scope } = await queueScope(request, "agentPublicationQueue");
+    return settled(scope, async () => {
+      const page = scope.pages.find((candidate) => candidate.pageLabel === request.params.pageLabel);
+      if (!page) throw staticNotFound();
+      // The owner's own listing of the page's platform, this page's entry.
+      const listed = page.platform === "fansly"
+        ? await listFanslyQueueWire(appContext)
+        : page.platform === "onlyfans" ? await listOnlyfansQueueWire(appContext) : [];
+      const snapshot = listed.find((candidate) => candidate.pageLabel === page.pageLabel);
+      // A page Hub reads no schedule of (no engine, no OnlyFansAPI account).
+      if (snapshot === undefined) throw staticNotFound();
+      return snapshot;
+    }, (snapshot) => snapshot.entries.length);
+  });
+
+  server.post("/api/v1/agent/pages/:pageLabel/publication-queue/refresh", { schema: routeSchemas.agentPublicationQueueRefresh }, async (request) => {
+    const { principal, scope } = await queueScope(request, QUEUE_REFRESH_OPERATION);
+    return settled(scope, async () => {
+      const page = scope.pages.find((candidate) => candidate.pageLabel === request.params.pageLabel);
+      if (!page || (page.platform !== "onlyfans" && page.platform !== "fansly")) throw staticNotFound();
+      const key = await getAgentKeyById(db, principal.agentKeyId);
+      if (key?.createdBy == null) throw new ConflictError("this key names no owner to read the schedule as: issue a new key");
+      // As the owner's «Обновить»: the minutely jobs read it, as the key's owner.
+      await requestPublicationQueueRefresh(db, { pageId: page.id, userId: key.createdBy });
+      await writeAgentAudit(db, {
+        agentKeyId: principal.agentKeyId,
+        operation: QUEUE_REFRESH_OPERATION,
+        pageIds: [page.id],
+        verbatimText: false,
+        requestSummary: { platform: page.platform },
+      });
+      return { requestedAt: new Date().toISOString() };
     }, () => 1);
   });
 
