@@ -8,9 +8,9 @@ import {
 } from "./media-looks.ts";
 
 // Media looks (owner 2026-11-11): an agent key with look:media asks for the
-// frames of a file of a post in its page's schedule, and reads a look again by
-// its id. The page's engine makes one image request at its pace; Hub cuts the
-// frames. A page outside the grant, and a look or publication of another
+// frames of a file of its page — a post in its schedule or a published one, a
+// vault file — and reads a look again by its id. The page's engine makes the
+// requests at its pace; Hub cuts the frames. A page outside the grant, and a look or publication of another
 // page, is the plane's one static 404.
 
 const agentErrors = {
@@ -18,7 +18,7 @@ const agentErrors = {
   401: errorResponseSchema,
   403: errorResponseSchema,
   404: errorResponseSchema,
-  // media_look_in_flight | media_look_fansly_only | media_look_not_scheduled | media_look_not_in_schedule | …
+  // media_look_in_flight | media_look_fansly_only | media_look_post_not_seen | media_look_not_in_vault | …
   409: errorResponseSchema,
   // media_look_daily_limit
   429: errorResponseSchema,
@@ -29,11 +29,13 @@ const agentErrors = {
 export const mediaLookRouteSchemas = {
   agentMediaLookCreate: {
     auth: { kind: "agentKey", scope: "page" }, tags: ["agent"],
-    summary: "Look at a file of a post in the page's Fansly schedule (needs look:media): frames of a video (the"
-      + " platform's thumbnail sheet, a sample — per second or evenly spaced) or its cover, a photo downscaled; each"
-      + " frame ≤ 512 px, a JPEG without metadata. One image request through the page's engine at its pace, a daily"
-      + " limit per page; a fresh look of the same file answers cached and costs nothing. Answers queued when the"
-      + " engine takes longer: read it again by its id",
+    summary: "Look at a file of the page on Fansly (needs look:media): a post in its schedule or a published one Hub"
+      + " has among the page's own posts, or a file of the page's own vault. Frames of a video (the platform's"
+      + " thumbnail sheet, a sample — per second or evenly spaced) or its cover, a photo downscaled; each frame ≤ 512"
+      + " px, a JPEG without metadata. Through the page's engine at its pace: one image request for a scheduled post,"
+      + " a read of the post or the vault page first for the others (two requests, one look); a daily limit per page;"
+      + " a fresh look of the same file answers cached and costs nothing. Answers queued when the engine takes"
+      + " longer: read it again by its id",
     params: mediaLookPageParamsSchema,
     body: agentMediaLookCreateBodySchema,
     response: { 200: mediaLookSchema, ...agentErrors },

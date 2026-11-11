@@ -15,8 +15,11 @@ import { isMediaLookImageUrl } from "../../sync/fansly/resources/media-look.ts";
 //
 // Never: a blurred copy (type 3), a stream (302 HLS, 303 DASH), the top-level
 // location of a video (the video file itself), a URL whose path is not an
-// image's, or a location signed beside its URL (the streams' form) — Hub never
-// assembles a URL. Pure: no I/O.
+// image's, or a location not signed in its own query — one signed beside its
+// URL (the streams' form: Hub never assembles a URL), or one the journal
+// stripped (sync/fansly/lib/cdn-tokens.ts: a request to it would only be
+// refused). One selector for every source of a look: the schedule's verbatim
+// read and the engine's fresh read of a post or a vault page. Pure: no I/O.
 
 /** The long edge a look's photo aims for: the smallest resize that covers it. */
 export const MEDIA_LOOK_TARGET_EDGE_PX = 512;
@@ -98,10 +101,18 @@ function metadataOf(value: unknown): Record<string, unknown> {
   return asRecord(value) ?? {};
 }
 
+/** How a look picks: `allowUnsigned` only tells a stripped answer (the
+ *  journal's copy) from one without a still image — never what is fetched. */
+export interface MediaLookSelectOptions {
+  cover: boolean;
+  spriteUnusable?: boolean;
+  allowUnsigned?: boolean;
+}
+
 /** The first location of a node that a look may fetch: a Fansly media CDN URL
- *  of an image, signed in its own query (or not signed at all) — never one
- *  whose signature rides beside it. */
-export function mediaLookLocation(node: Record<string, unknown>): string | null {
+ *  of an image, signed in its own query — never one whose signature rides
+ *  beside it, never an unsigned one (`allowUnsigned`: diagnosis only). */
+export function mediaLookLocation(node: Record<string, unknown>, allowUnsigned = false): string | null {
   for (const location of records(node.locations)) {
     const url = text(location.location);
     if (url === null) continue;
@@ -113,8 +124,9 @@ export function mediaLookLocation(node: Record<string, unknown>): string | null 
     }
     if (!isMediaLookImageUrl(parsed)) continue;
     const metadata = asRecord(location.metadata) ?? {};
+    const signedInQuery = parsed.searchParams.has("Signature") && parsed.searchParams.has("Key-Pair-Id");
     const signedBeside = SIGNING_NAMES.some((name) => typeof metadata[name] === "string");
-    if (signedBeside && !parsed.searchParams.has("Signature")) continue;
+    if (!signedInQuery && (signedBeside || !allowUnsigned)) continue;
     return url;
   }
   return null;
@@ -127,13 +139,13 @@ interface StillCandidate {
 }
 
 /** The node's image variants of one type that a look may fetch, never a blurred copy or a stream. */
-function imageVariants(media: Record<string, unknown>, type: number): StillCandidate[] {
+function imageVariants(media: Record<string, unknown>, type: number, allowUnsigned: boolean): StillCandidate[] {
   const out: StillCandidate[] = [];
   records(media.variants).forEach((variant, order) => {
     const variantType = num(variant.type);
     if (variantType === null || variantType !== type || NEVER_FETCHED.has(variantType)) return;
     if (!(text(variant.mimetype) ?? "").toLowerCase().startsWith("image/")) return;
-    const url = mediaLookLocation(variant);
+    const url = mediaLookLocation(variant, allowUnsigned);
     if (url === null) return;
     out.push({ edge: Math.max(num(variant.width) ?? 0, num(variant.height) ?? 0), url, order });
   });
@@ -150,11 +162,14 @@ function durationMsOf(...metadata: Array<Record<string, unknown>>): number | nul
 }
 
 /** The video's thumbnail sheet and its geometry, when its metadata states a usable one. */
-function spriteOf(media: Record<string, unknown>): { url: string; geometry: MediaLookSpriteGeometry; metadata: Record<string, unknown> } | null {
+function spriteOf(
+  media: Record<string, unknown>,
+  allowUnsigned: boolean,
+): { url: string; geometry: MediaLookSpriteGeometry; metadata: Record<string, unknown> } | null {
   for (const variant of records(media.variants)) {
     if (num(variant.type) !== VARIANT_SPRITE) continue;
     if (!(text(variant.mimetype) ?? "").toLowerCase().startsWith("image/")) continue;
-    const url = mediaLookLocation(variant);
+    const url = mediaLookLocation(variant, allowUnsigned);
     if (url === null) continue;
     const metadata = metadataOf(variant.metadata);
     const grid = Array.isArray(metadata.thumbnailGrid) ? metadata.thumbnailGrid : [];
@@ -177,15 +192,13 @@ function spriteOf(media: Record<string, unknown>): { url: string; geometry: Medi
  * frames; `spriteUnusable`: an earlier look found this video's sheet
  * uncuttable — take the cover.
  */
-export function selectMediaLookSource(
-  media: Record<string, unknown>,
-  options: { cover: boolean; spriteUnusable?: boolean },
-): MediaLookSelection {
+export function selectMediaLookSource(media: Record<string, unknown>, options: MediaLookSelectOptions): MediaLookSelection {
+  const unsigned = options.allowUnsigned === true;
   const mime = (text(media.mimetype) ?? "").toLowerCase();
   if (mime.startsWith("video/")) {
     const mediaMetadata = metadataOf(media.metadata);
     if (!options.cover && options.spriteUnusable !== true) {
-      const sprite = spriteOf(media);
+      const sprite = spriteOf(media, unsigned);
       if (sprite !== null) {
         return {
           ok: true,
@@ -199,15 +212,15 @@ export function selectMediaLookSource(
       }
     }
     // The largest poster; never the video's own location.
-    const poster = imageVariants(media, VARIANT_POSTER).sort((left, right) => right.edge - left.edge || left.order - right.order)[0];
+    const poster = imageVariants(media, VARIANT_POSTER, unsigned).sort((left, right) => right.edge - left.edge || left.order - right.order)[0];
     if (poster === undefined) return { ok: false, reason: "no_image_variant" };
     return { ok: true, variant: "cover", mediaType: "video", url: poster.url, durationMs: durationMsOf(mediaMetadata), coverage: "cover_only" };
   }
   if (mime.startsWith("image/")) {
     const coverage = mime === "image/gif" ? "first_frame" as const : "whole_image" as const;
-    const resizes = imageVariants(media, VARIANT_POSTER).sort((left, right) => left.edge - right.edge || left.order - right.order);
+    const resizes = imageVariants(media, VARIANT_POSTER, unsigned).sort((left, right) => left.edge - right.edge || left.order - right.order);
     const pick = resizes.find((candidate) => candidate.edge >= MEDIA_LOOK_TARGET_EDGE_PX) ?? resizes.at(-1);
-    const url = pick?.url ?? mediaLookLocation(media);
+    const url = pick?.url ?? mediaLookLocation(media, unsigned);
     if (url === null || url === undefined) return { ok: false, reason: "no_image_variant" };
     return { ok: true, variant: "image", mediaType: "image", url, durationMs: null, coverage };
   }

@@ -124,12 +124,14 @@ capability 403. The rows are held by `publications.integration`,
 `publications-fansly-withdraw.integration` and `agent-post-commands.integration`.
 
 A key with `look:media` (owner 2026-11-11) sees frames (≤ 512 px) of a file of
-its Fansly pages' scheduled posts (`/agent/pages/{label}/media-looks`, POST
-and GET by id): one image request of the page's engine at its pace, a daily
-limit per page, one look in flight per page; never the file or a link, and a
-file that is not the page's own account's is refused. A page outside the
-grant, or a look or publication of another page, is the plane's static 404, a
-key without the capability 403. The rows are held by `media-looks.integration`.
+its Fansly pages' posts — scheduled, or published ones Hub has among the page's
+own posts — and of their own vaults (`/agent/pages/{label}/media-looks`, POST
+and GET by id): the page's engine at its pace, one image request (a published
+post or a vault file: one read of it first), a daily limit per page, one look
+in flight per page; never the file or a link, and a file that is not the page's
+own account's is refused. A page outside the grant, or a look or publication of
+another page, is the plane's static 404, a key without the capability 403. The
+rows are held by `media-looks.integration` and `media-looks-resolve.integration`.
 
 Agent keys are the owner's too: only the owner's cookie session issues, lists,
 revokes and changes one. A live key's capabilities change in place (owner,

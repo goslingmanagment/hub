@@ -380,6 +380,11 @@ engine owns — which every page an actor runs is. (The socket's own Upgrade, `w
   breaker, one image only (a video's thumbnail sheet or cover, a photo's resize; never a video, a playlist or a
   manifest, the path must be an image's); the bytes go onto the look (`media_looks.source_bytes`, dropped after
   15 minutes) and the API process cuts them into frames (`services/media-looks`). Subject `look:<id>`.
+- `media-look.resolve` — the read a look of a published post (`posts.by_ids`) or a vault file (`vault.media`, the
+  album's page that starts at the file's own membership row) needs first: one read at the page's pace, journaled and
+  never canonicalized (a lone vault page is no walk), closed on any failure (never retried). Its apply takes the
+  signed location from the answer in memory and queues `media-look.fetch` with it sealed in that work's secret; read
+  back from the journal (tokens stripped) the look fails `source_not_in_memory`. Subject `look:<id>`.
 
 The Upgrade and a CDN hop journal nothing (`capture` on their wire spec): no observation, no request line in
 `sync_attempts.request` (a hop keeps its number and the sha256 of its path). Their answer is applied once, from

@@ -122231,7 +122231,7 @@
     },
     "/api/v1/agent/pages/{pageLabel}/media-looks": {
       "post": {
-        "summary": "Look at a file of a post in the page's Fansly schedule (needs look:media): frames of a video (the platform's thumbnail sheet, a sample — per second or evenly spaced) or its cover, a photo downscaled; each frame ≤ 512 px, a JPEG without metadata. One image request through the page's engine at its pace, a daily limit per page; a fresh look of the same file answers cached and costs nothing. Answers queued when the engine takes longer: read it again by its id",
+        "summary": "Look at a file of the page on Fansly (needs look:media): a post in its schedule or a published one Hub has among the page's own posts, or a file of the page's own vault. Frames of a video (the platform's thumbnail sheet, a sample — per second or evenly spaced) or its cover, a photo downscaled; each frame ≤ 512 px, a JPEG without metadata. Through the page's engine at its pace: one image request for a scheduled post, a read of the post or the vault page first for the others (two requests, one look); a daily limit per page; a fresh look of the same file answers cached and costs nothing. Answers queued when the engine takes longer: read it again by its id",
         "tags": [
           "agent"
         ],
@@ -122248,6 +122248,10 @@
                     "maximum": 9007199254740991
                   },
                   "postRef": {
+                    "type": "string",
+                    "pattern": "^[0-9]{1,24}$"
+                  },
+                  "mediaRef": {
                     "type": "string",
                     "pattern": "^[0-9]{1,24}$"
                   },
@@ -122338,29 +122342,66 @@
                           ]
                         },
                         "postRef": {
-                          "type": "string"
+                          "type": [
+                            "string",
+                            "null"
+                          ]
                         },
                         "index": {
-                          "type": "integer",
-                          "minimum": 0,
-                          "maximum": 9007199254740991
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "mediaRef": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
                         }
                       },
                       "required": [
                         "publicationId",
                         "postRef",
-                        "index"
+                        "index",
+                        "mediaRef"
                       ],
                       "additionalProperties": false
+                    },
+                    "source": {
+                      "type": "string",
+                      "enum": [
+                        "schedule_read",
+                        "post_read",
+                        "vault_read"
+                      ]
+                    },
+                    "requestsSent": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
                     },
                     "media": {
                       "type": "object",
                       "properties": {
                         "type": {
-                          "type": "string",
-                          "enum": [
-                            "video",
-                            "image"
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "enum": [
+                                "video",
+                                "image"
+                              ]
+                            },
+                            {
+                              "type": "null"
+                            }
                           ]
                         },
                         "durationMs": {
@@ -122493,6 +122534,8 @@
                     "status",
                     "failure",
                     "target",
+                    "source",
+                    "requestsSent",
                     "media",
                     "coverage",
                     "frameIntervalMs",
@@ -122842,29 +122885,66 @@
                           ]
                         },
                         "postRef": {
-                          "type": "string"
+                          "type": [
+                            "string",
+                            "null"
+                          ]
                         },
                         "index": {
-                          "type": "integer",
-                          "minimum": 0,
-                          "maximum": 9007199254740991
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "mediaRef": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
                         }
                       },
                       "required": [
                         "publicationId",
                         "postRef",
-                        "index"
+                        "index",
+                        "mediaRef"
                       ],
                       "additionalProperties": false
+                    },
+                    "source": {
+                      "type": "string",
+                      "enum": [
+                        "schedule_read",
+                        "post_read",
+                        "vault_read"
+                      ]
+                    },
+                    "requestsSent": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
                     },
                     "media": {
                       "type": "object",
                       "properties": {
                         "type": {
-                          "type": "string",
-                          "enum": [
-                            "video",
-                            "image"
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "enum": [
+                                "video",
+                                "image"
+                              ]
+                            },
+                            {
+                              "type": "null"
+                            }
                           ]
                         },
                         "durationMs": {
@@ -122997,6 +123077,8 @@
                     "status",
                     "failure",
                     "target",
+                    "source",
+                    "requestsSent",
                     "media",
                     "coverage",
                     "frameIntervalMs",
@@ -129844,6 +129926,7 @@
                 "stats.backfill",
                 "media-download.fetch",
                 "media-look.fetch",
+                "media-look.resolve",
                 "repair.ws-gap",
                 "probe.manual",
                 "probe.excluded-chat"
@@ -233973,6 +234056,7 @@
                 "stats.backfill",
                 "media-download.fetch",
                 "media-look.fetch",
+                "media-look.resolve",
                 "repair.ws-gap",
                 "probe.manual",
                 "probe.excluded-chat"

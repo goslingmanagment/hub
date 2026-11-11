@@ -937,32 +937,51 @@ platform's copies (owner 2026-11-11). Use it before you draft, approve or keep a
 post whose content you have not seen — a clip may be a cut from a fan's paid
 custom.
 
-**For now: Fansly only, and only a post waiting in the platform's schedule** —
-a Hub publication in status `scheduled`, or a post put in the schedule by hand
-(its `postRef` from `hub publication-queue`). A post that already went out and
-a vault file cannot be looked at yet (409 `media_look_not_scheduled` /
-`media_look_not_in_schedule`). An OnlyFans page is 409 `media_look_fansly_only`.
+**What can be looked at (Fansly only; an OnlyFans page is 409
+`media_look_fansly_only`):**
+
+- **A post waiting in the platform's schedule** — a Hub publication in status
+  `scheduled`, or a post put there by hand (its `postRef` from `hub
+  publication-queue`). Hub already holds its image's link from its own read of
+  the schedule: **one request** (the image).
+- **A published post** — a Hub publication in status `published`, or a post Hub
+  has among the page's own posts (its `postRef` from the `posts` dataset). The
+  page's engine first reads the post by its id, then fetches the image: **two
+  requests, still one look.** A post Hub has not seen on this page — in its
+  schedule or on its wall — is 409 `media_look_post_not_seen` (another page's
+  post too).
+- **A file of the page's own vault** (`--media-ref`, the `mediaRef` of the
+  `raw_media` / `vault_media` datasets): the engine reads the vault page that
+  starts at the file, then fetches the image — **two requests, one look.** Only
+  a file of the page's own account that Hub has in the page's media (else 409
+  `media_look_media_not_seen`) and in an album of its vault as Hub last walked
+  it (else 409 `media_look_not_in_vault`: look at it through a post).
 
 ```
 hub media-look --page-label lilly-1 --publication-id 812 --out ./looks
 hub media-look --page-label lilly-1 --post-ref 976348790736838656 --index 1 --out ./looks
+hub media-look --page-label lilly-1 --media-ref 975814443797590016 --out ./looks
 hub media-look --page-label lilly-1 --publication-id 812 --cover
 hub media-look-get --page-label lilly-1 --look-id 37 --out ./looks
 ```
 
 `--index` is which of the post's files (0-based; an album's files in its order,
-a poll or a goal is not a file). With `--out DIR` the frames are written as
-`DIR/<page>/<publication-N or post-REF>[-<index>]/f000_t00000ms.jpg` (a cover or
-a photo: `f000.jpg`) and the printed answer names their `path` instead of the
-base64; without it each frame's `jpegBase64` is in the answer (a whole sheet is
-about 1–2 MB). `--no-frames` prints the facts alone.
+a poll or a goal is not a file); a vault file has none. With `--out DIR` the
+frames are written as `DIR/<page>/<publication-N or post-REF>[-<index>]/f000_t00000ms.jpg`
+(a vault file: `DIR/<page>/media-REF/…`; a cover or a photo: `f000.jpg`) and the
+printed answer names their `path` instead of the base64; without it each frame's
+`jpegBase64` is in the answer (a whole sheet is about 1–2 MB). `--no-frames`
+prints the facts alone.
 
 **The answer** (`POST /api/v1/agent/pages/<page>/media-looks`, body: exactly
-one of `publicationId`, `postRef`; `index`, `cover`, `fresh`, `frames:
-"inline" | "none"`): `lookId`, `status` (`ready`, `queued`, `failed`),
-`failure`, `target`, `media` (`type` `video` or `image`, `durationMs`),
-`coverage`, `frameIntervalMs`, `coverageNote`, `frames` (`index`, `atMs`,
-`width`, `height`, `jpegBase64`), `cached`, `budget` (`usedToday`, `limit`).
+one of `publicationId`, `postRef`, `mediaRef`; `index`, `cover`, `fresh`,
+`frames: "inline" | "none"`): `lookId`, `status` (`ready`, `queued`,
+`failed`), `failure`, `target` (`publicationId`, `postRef`, `index`, `mediaRef`
+— the file, once the read named it), `source` (`schedule_read`, `post_read`,
+`vault_read`), `requestsSent`, `media` (`type` `video` or `image`, null until
+the read named the file; `durationMs`), `coverage`, `frameIntervalMs`,
+`coverageNote`, `frames` (`index`, `atMs`, `width`, `height`, `jpegBase64`),
+`cached`, `budget` (`usedToday`, `limit`).
 
 **What the frames show — read `coverage` before you conclude anything:**
 
@@ -979,10 +998,13 @@ Frames are a sample, never the video. **"Not visible in the frames" is not
 the coverage was — "in 7 frames, one per second, I see no…" — and tell the
 owner when a sample cannot settle it.
 
-**Cost and limits.** Each look sends one image request of the page to Fansly, at
-the page's pace; a page has a daily limit (`budget.limit`, the owner's setting,
-UTC day) of looks that sent a request, and one look in flight at a time (409
-`media_look_in_flight` names it: read it, then ask again). A look of the same
+**Cost and limits.** A look of a scheduled post sends one request of the page
+to Fansly (the image), a look of a published post or a vault file two (the read,
+then the image) — at the page's pace, and `requestsSent` says how many left. A
+page has a daily limit (`budget.limit`, the owner's setting, UTC day) of looks
+that sent a request — a two-request look is one look — and one look in flight at
+a time, its read and its image together (409 `media_look_in_flight` names it:
+read it, then ask again). A look of the same
 file taken in the last 7 days answers `cached: true` and costs nothing; `--fresh`
 looks again and costs one. 429 `media_look_daily_limit`: the day's looks are
 used up — tell the owner if it cannot wait. 503 `media_look_off`: the owner
@@ -996,17 +1018,27 @@ for up to `--wait` seconds (default 60); after that,
 (`GET /api/v1/agent/pages/<page>/media-looks/<id>`) finishes it.
 
 **Failures** (`failure`, the look ends without frames): `fetch_http_<status>`
-(the platform refused the image: its link may have expired — wait for the next
-read of the schedule, `hub publication-queue --refresh`), `fetch_timeout`,
+(the platform refused the image: its link may have expired — for a scheduled
+post wait for the next read of the schedule, `hub publication-queue --refresh`;
+for the others ask again, a new read gets a new link), `resolve_<class>` (the
+read of the post or the vault page did not answer: `resolve_auth`,
+`resolve_rate_limit`, `resolve_network`, …), `post_not_in_read` /
+`media_not_in_read` / `attachment_not_found` (the read did not carry the post
+or the file), `foreign_media` (the read names the file under another account),
+`source_not_in_memory` (Hub read the answer back after a restart, without its
+links: ask again), `fetch_timeout`,
 `fetch_transport`, `fetch_too_large`, `fetch_not_an_image`,
 `sprite_geometry_mismatch` (the thumbnail sheet was not what its facts said; the
 next look of that file takes the cover), `source_expired` (the image came but
 nobody read the look within 15 minutes), `frames_expired` (older than 7 days:
 look again), `engine_not_live`. Refusals before anything is sent are 409s:
-`media_look_not_in_schedule`, `media_look_attachment_not_found` (no file at that
-index), `media_look_media_not_in_read`, `media_look_foreign_media` (not the
-page's own file — a fan's media is never looked at), `media_look_no_image_variant`,
-`media_look_source_expired`, `media_look_no_schedule_read`.
+`media_look_post_not_seen`, `media_look_media_not_seen`, `media_look_not_in_vault`,
+`media_look_publication_status` (a publication neither scheduled nor published),
+`media_look_not_in_schedule` (a scheduled publication's post the schedule's read
+does not show), `media_look_attachment_not_found` (no file at that index),
+`media_look_media_not_in_read`, `media_look_foreign_media` (not the page's own
+file — a fan's media is never looked at), `media_look_no_image_variant`,
+`media_look_source_expired`.
 
 A page outside your key, and a look or publication of another page, answers 404;
 a key without `look:media` is 403 `agent_capability_missing`.
@@ -1222,7 +1254,7 @@ Global flags: `--base-url`, `--fail-on-partial`, `--pretty`, `--help`.
 | `hub post-withdraw` | Take any post of your page off the schedule by its id (`--post-ref`), one put there by hand too, once Hub's read of the schedule (≤ 1 h old) shows it. One command per post; asking again follows it. Needs `withdraw:publications`. |
 | `hub post-delete` | Delete a published post of your page by its id, ONLY on the owner's «да» for that post (`--reason` with his word). Daily ceiling per key; one command per post. Needs `delete:posts`. |
 | `hub publication-queue` | The page's own schedule on the platform as Hub last read it: Hub's posts and the ones put there by hand; `--refresh` asks for a fresh read first. Needs `write:publication_drafts` or `withdraw:publications`. |
-| `hub media-look` | Frames (≤ 512 px) of a file of a post in the page's Fansly schedule: a video's sample or cover, a photo; `--out DIR` writes them as JPEGs. Reads a queued look again up to `--wait`. Needs `look:media`. |
+| `hub media-look` | Frames (≤ 512 px) of a file of the page on Fansly — a post in its schedule or a published one (`--post-ref`, `--publication-id`), a file of its own vault (`--media-ref`): a video's sample or cover, a photo; `--out DIR` writes them as JPEGs. One request for a scheduled post, two for the others, one look. Reads a queued look again up to `--wait`. Needs `look:media`. |
 | `hub media-look-get` | A media look by its id, finished now when the page's engine has answered; `--out DIR` as above. Needs `look:media`. |
 | `hub publication-file-upload` | COMPOSITE: files from disk (bare paths) into Hub for a page's model: those Hub holds (by SHA-256) are not sent again, the others streamed whole, a lost network waited for; per file `media: "file:<id>"` for a draft. Progress on stderr. |
 | `hub vault-album-draft` | COMPOSITE: a Fansly vault album draft from a pack's folder (a bare path), its files in name order, the first on top; again after a break it sends only what Hub lacks; `--dry-run` lists it and uploads nothing. |
