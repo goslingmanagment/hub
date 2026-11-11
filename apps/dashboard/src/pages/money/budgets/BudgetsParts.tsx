@@ -25,30 +25,33 @@ export function MonthTiles({ month }: { month: BudgetMonth }) {
   const figures = month.figures;
   const rate = month.owner.salaryRateMills;
   const unknown = "Ledger не посчитал";
+  // Before the books were whole there is no month card: what the journal has, by the date of payment.
+  const early = month.state === "incomplete";
+  const paid = month.owner.salaryPaidMills;
   return (
     <StatGrid className="budget-tiles">
       <Stat
-        label="Заработано"
+        label={early ? "Пришло" : "Заработано"}
         value={figures ? formatMills(figures.earnedMills) : "—"}
-        meta={figures ? `оборот ${formatMills(figures.turnoverMills)}` : unknown}
+        meta={!figures ? unknown : early ? "по журналу, учёт неполный" : `оборот ${formatMills(figures.turnoverMills)}`}
       />
       <Stat
         label="Расходы"
         value={figures ? formatMills(figures.expensesMills) : "—"}
-        meta={figures ? `${share(figures.expensesMills, figures.earnedMills) || "—"} заработанного` : unknown}
+        meta={figures ? `${share(figures.expensesMills, figures.earnedMills) || "—"} ${early ? "пришедшего" : "заработанного"}` : unknown}
       />
       <Stat
         label="Зарплата CEO"
-        value={rate === null ? "—" : formatMills(rate)}
-        meta={rate === null ? "ставка не задана" : `выплачено ${formatMills(month.owner.salaryPaidMills)}`}
+        value={rate !== null ? formatMills(rate) : early && paid > 0 ? formatMills(paid) : "—"}
+        meta={rate !== null ? `выплачено ${formatMills(paid)}` : early ? (paid > 0 ? "выплачено, ставки ещё не было" : "ещё не платилась") : "ставка не задана"}
       />
       <Stat
         label={month.state === "open" ? "Остаётся на сегодня" : "Остаётся"}
         value={figures?.leftMills == null ? "—" : formatMills(figures.leftMills)}
         meta={!figures ? unknown : figures.leftMills === null ? "нет ставки CEO" : figures.leftMills < 0
-          ? "расходы и зарплата больше заработанного"
+          ? (early ? "расходы больше пришедшего" : "расходы и зарплата больше заработанного")
           // Earned − expenses − the CEO's pay is this number only without what is stuck: say so beside it.
-          : `${share(figures.leftMills, figures.earnedMills) || "—"} заработанного${figures.stuckMills > 0 ? ` · без застрявших ${formatMills(figures.stuckMills)}` : ""}`}
+          : `${share(figures.leftMills, figures.earnedMills) || "—"} ${early ? "пришедшего" : "заработанного"}${figures.stuckMills > 0 ? ` · без застрявших ${formatMills(figures.stuckMills)}` : ""}`}
       />
     </StatGrid>
   );
@@ -58,19 +61,25 @@ export function MonthTiles({ month }: { month: BudgetMonth }) {
 
 export function MonthsCard({ months, active, onPick }: { months: readonly BudgetMonth[]; active: string; onPick: (month: string) => void }) {
   const keys = months.map((month) => month.month);
-  // A month the ledger did not count has no bar: the chart says «нет данных» for it, not a zero.
+  // A month the ledger did not count has no bar: the chart says so, not a zero. A month before the books were whole
+  // has the journal's bar (no CEO rate then), pale like the running one: neither is the whole picture.
   const rows = months.map((month): Record<string, string | number> => {
     const figures = month.figures;
-    const rate = month.owner.salaryRateMills;
+    const rate = month.state === "incomplete" ? 0 : month.owner.salaryRateMills;
     return figures && figures.leftMills !== null && rate !== null
-      ? { month: month.month, spent: figures.expensesMills, ceo: rate, left: figures.leftMills, earned: figures.earnedMills, open: month.state === "open" ? 1 : 0 }
+      ? {
+        month: month.month, spent: figures.expensesMills, ceo: rate, left: figures.leftMills, earned: figures.earnedMills,
+        open: month.state === "open" ? 1 : 0, early: month.state === "incomplete" ? 1 : 0,
+      }
       : { month: month.month };
   });
   return (
     <section className="card" aria-label="Месяцы">
       <div className="card-header">
         <h2 className="card-title">По месяцам</h2>
-        <p className="card-description">Клик по столбику открывает месяц</p>
+        <p className="card-description">
+          Клик по столбику открывает месяц{rows.some((row) => row.early === 1) ? " · бледные: учёт неполный или месяц ещё идёт" : ""}
+        </p>
       </div>
       <div className="card-body">
         <StackedBarChart
@@ -89,8 +98,10 @@ export function MonthsCard({ months, active, onPick }: { months: readonly Budget
           valueFormatter={formatMills}
           axisFormatter={usdAxisFormatter}
           totalLabel={null}
-          note={(row) => (typeof row.earned === "number" ? `Заработано ${formatMills(row.earned)}${row.open === 1 ? ", месяц идёт" : ""}` : null)}
-          unfinished={(row) => row.open === 1}
+          note={(row) => (typeof row.earned !== "number" ? null : row.early === 1
+            ? `Пришло ${formatMills(row.earned)}, учёт неполный`
+            : `Заработано ${formatMills(row.earned)}${row.open === 1 ? ", месяц идёт" : ""}`)}
+          unfinished={(row) => row.open === 1 || row.early === 1}
           activeX={active}
           onPick={onPick}
         />
@@ -133,13 +144,13 @@ function MonthsTable({ months, active }: { months: readonly BudgetMonth[]; activ
             <th scope="col">Статья</th>
             {shown.map((month) => (
               <th key={month.month} scope="col" className={month.month === active ? "num budget-col-active" : "num"}>
-                {monthAxisLabel(month.month, keys)}{month.state === "open" ? ", идёт" : ""}
+                {monthAxisLabel(month.month, keys)}{month.state === "open" ? ", идёт" : month.state === "incomplete" ? ", неполный" : ""}
               </th>
             ))}
           </tr>
         </thead>
         <tbody>
-          {row("Оборот", (figures) => figures.turnoverMills, "budget-sheet-quiet")}
+          {row("Оборот", (figures, month) => (month.state === "incomplete" ? null : figures.turnoverMills), "budget-sheet-quiet")}
           {row("Заработано", (figures) => figures.earnedMills, "budget-sheet-strong")}
           {anyStuck && row("Застряло на страницах", (figures) => (figures.stuckMills === 0 ? null : -figures.stuckMills), "budget-sheet-quiet")}
           {articles.map((article) => (
@@ -149,7 +160,7 @@ function MonthsTable({ months, active }: { months: readonly BudgetMonth[]; activ
             </tr>
           ))}
           {row("Расходы", (figures) => figures.expensesMills, "row-total")}
-          {row("До зарплаты CEO", (figures) => figures.decisionMills)}
+          {row("До зарплаты CEO", (figures, month) => (month.state === "incomplete" ? null : figures.decisionMills))}
           {row("Зарплата CEO", (_figures, month) => month.owner.salaryRateMills)}
           {row("Остаётся", (figures) => figures.leftMills, "row-total")}
         </tbody>
@@ -232,7 +243,7 @@ export function FlowCards({ month, figures, promotion }: { month: BudgetMonth; f
             {figures.sources.map((source) => (
               <FlowRow
                 key={`${source.model}:${source.channel}:${source.channelName}`}
-                name={`${source.model} · ${source.channelName}`}
+                name={source.model === "" ? source.channelName : `${source.model} · ${source.channelName}`}
                 amount={source.earnedMills}
                 whole={whole}
                 color={INCOME}
@@ -346,7 +357,7 @@ function PagesCard({ month, figures }: { month: BudgetMonth; figures: BudgetFigu
 
 // ── Traffic and contractors by source ────────────────────────────────────
 
-/** «$30.00 в неделю»: what the ledger expects to pay a source regularly, in the ledger's period. */
+/** «$500.00 разово»: a commitment that is not a monthly plan, in the ledger's period. */
 function regularText(regular: { amountMills: number; period: string }): string {
   const days = /^(\d+)d$/.exec(regular.period)?.[1];
   const period = regular.period === "week" ? "в неделю" : regular.period === "month" ? "в месяц" : regular.period === "once" ? "разово"
@@ -354,11 +365,28 @@ function regularText(regular: { amountMills: number; period: string }): string {
   return `${formatMills(regular.amountMills)} ${period}`.trim();
 }
 
+type PromotionSource = AdminBudgetsResponse["promotion"]["sources"][number];
+
+/** A source's plan of a month: its regular payment brought to a month («≈» when the ledger agreed it by the week). */
+function planCell(regular: PromotionSource["regular"]): string {
+  if (regular === null) return "";
+  if (regular.monthlyMills === null) return regularText(regular);
+  return `${regular.period === "month" ? "" : "≈ "}${formatMills(regular.monthlyMills)}`;
+}
+
+/** The plans of several sources as one sum; «≈» as soon as one of them is brought to a month from another period. */
+function planSum(sources: readonly PromotionSource[]): string {
+  const planned = sources.flatMap((source) => (source.regular && source.regular.monthlyMills !== null ? [source.regular] : []));
+  if (planned.length === 0) return "";
+  const sum = formatMills(sumMills(planned.map((regular) => regular.monthlyMills ?? 0)));
+  return planned.some((regular) => regular.period !== "month") ? `≈ ${sum}` : sum;
+}
+
 export function PromotionCard({ promotion, month }: { promotion: AdminBudgetsResponse["promotion"]; month: BudgetMonth }) {
   const active = month.month;
   const chosen = Math.max(0, promotion.months.indexOf(active));
-  // Five months and the total: a table of months stays inside seven columns.
-  const { from, to } = monthWindow(promotion.months.length, chosen, 5);
+  // Four months, the total and the plan: a table of months stays inside seven columns.
+  const { from, to } = monthWindow(promotion.months.length, chosen, 4);
   const months = promotion.months.slice(from, to);
   const totals = promotion.totals.slice(from, to);
   // A source is a row when it was paid in these months, or when a regular payment to it is agreed.
@@ -383,13 +411,10 @@ export function PromotionCard({ promotion, month }: { promotion: AdminBudgetsRes
           <td>{label}</td>
           {totals.map((total) => <td key={total.month} className={column(total.month)}>{money(sum(total))}</td>)}
           <td className="num">{money(allTime(sum))}</td>
+          <td className="num">{planSum(sources)}</td>
         </tr>
         {sources.map((source) => {
-          const sub = [
-            source.category === "Трафик" || source.category === "Подрядчик" ? null : source.category,
-            source.model,
-            source.regular ? `обычно ${regularText(source.regular)}` : null,
-          ].filter(Boolean).join(" · ");
+          const sub = [source.category === "Трафик" || source.category === "Подрядчик" ? null : source.category, source.model].filter(Boolean).join(" · ");
           return (
             <tr key={`${source.category}:${source.counterparty}`}>
               <td>
@@ -398,6 +423,7 @@ export function PromotionCard({ promotion, month }: { promotion: AdminBudgetsRes
               </td>
               {source.shownByMonth.map((value, index) => <td key={months[index]} className={column(months[index] ?? "")}>{money(value)}</td>)}
               <td className="num">{money(source.totalMills)}</td>
+              <td className="num muted">{planCell(source.regular)}</td>
             </tr>
           );
         })}
@@ -436,6 +462,7 @@ export function PromotionCard({ promotion, month }: { promotion: AdminBudgetsRes
                 <th scope="col">Кому платили</th>
                 {months.map((key) => <th key={key} scope="col" className={column(key)}>{monthShort(key, key === months[0] || key.endsWith("-01"))}</th>)}
                 <th scope="col" className="num">{first ? `Всего ${monthSince(first)}` : "Всего"}</th>
+                <th scope="col" className="num">План в месяц</th>
               </tr>
             </thead>
             <tbody>
@@ -445,6 +472,7 @@ export function PromotionCard({ promotion, month }: { promotion: AdminBudgetsRes
                 <td>Итого</td>
                 {totals.map((total) => <td key={total.month} className={column(total.month)}>{money(both(total))}</td>)}
                 <td className="num">{money(allTime(both))}</td>
+                <td className="num">{planSum(shown)}</td>
               </tr>
             </tbody>
           </table>

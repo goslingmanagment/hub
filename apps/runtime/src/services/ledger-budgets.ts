@@ -28,6 +28,9 @@ const CONTRACTOR_CATEGORY = "Подрядчик";
 const OWNER_SALARY = "Owner зарплата";
 const OWNER_DRAW = "Owner draw";
 const OWNER_INJECTION = "Owner вливание";
+const CHATTERS_CATEGORY = "Чаттер зарплата";
+/** An expense that came back: income by its type, an expense below zero by its meaning. */
+const REFUND_CATEGORY = "Возврат расхода";
 
 const quoted = (values: readonly string[]) => values.map((value) => `'${value}'`).join(", ");
 
@@ -46,6 +49,9 @@ const QUERIES = {
   plans: "SELECT month, page_label, per_day FROM month_plans",
   // What the ledger expects to pay: a reinvest cap ends in a month; a regular payment of a traffic or contractor article is that source's plan.
   commitments: "SELECT kind, name, coalesce(category, ''), amount, coalesce(period, ''), coalesce(until, next_due, '') FROM commitments",
+  // The months before the ledger's books were whole (its own mark on a journal line): what is written, by the date of payment.
+  early: `SELECT substr(date, 1, 7), type, category, coalesce(model, ''), sum(amount_micros) FROM v_documents
+    WHERE status = 'paid' AND incomplete = 1 AND type IN ('income', 'expense') GROUP BY 1, 2, 3, 4 ORDER BY 1, 2, 3, 4`,
   owner: `SELECT date, type, category, amount_micros, coalesce(tags, '{}') FROM v_documents
     WHERE status = 'paid' AND category IN (${quoted([OWNER_SALARY, OWNER_DRAW, OWNER_INJECTION])})`,
   promotion: `SELECT substr(date, 1, 7), category, counterparty, coalesce(model, ''), sum(amount_micros), count(*) FROM v_documents
@@ -96,6 +102,7 @@ const ownerRow = z.tuple([
   // {"за": [{"месяц": "2026-11", "сумма": 608.27}]}: a part of the line is for another month.
   jsonColumn(z.object({ "за": z.array(z.object({ "месяц": text.regex(MONTH), "сумма": dollars })).optional() }), {}),
 ]);
+const earlyRow = z.tuple([text.regex(MONTH), text, text, text, micros]);
 const promotionRow = z.tuple([text.regex(MONTH), text, text, text, micros, z.number().int().nonnegative()]);
 
 type BudgetsApp = Pick<AppContext, "config" | "logger">;
@@ -184,6 +191,18 @@ const CHANNELS: Readonly<Record<string, { channel: "fansly" | "onlyfans" | "off_
   "вне платформ": { channel: "off_platform", name: "вне платформ" },
 };
 
+/**
+ * A regular payment as a month's plan, in micro-dollars: a week is 52/12 of a month, a period of N days 365/12/N of it.
+ * `once` and a period Hub does not know are not a monthly plan.
+ */
+function monthlyMicros(amountMicros: number, period: string): number | null {
+  const days = /^([1-9]\d*)d$/.exec(period)?.[1];
+  const share = period === "month" ? [1n, 1n] as const : period === "week" ? [52n, 12n] as const : days ? [365n, 12n * BigInt(days)] as const : null;
+  if (share === null) return null;
+  const [times, parts] = share;
+  return Number((BigInt(amountMicros) * times + parts / 2n) / parts);
+}
+
 /** The CEO's rate on the month's first day: the latest dated rate not after it, else the undated one. */
 function rateOf(rates: Readonly<Record<string, number>>, month: string): number | null {
   const first = `${month}-01`;
@@ -210,7 +229,9 @@ export async function readLedgerBudgets(
   /** «Lora, Lily» as the ledger names the models for people; «—» is no model. */
   const modelsOf = (value: string) => value.split(",").map((one) => one.trim()).filter((one) => one !== "" && one !== "—").map((one) => modelNames[one] ?? one);
 
-  const months = cards.map(([month]) => month);
+  const cardOf = new Map(cards.map((card) => [card[0], card]));
+  const early = rowsOf(app, "early", earlyRow, raw.early).filter(([month]) => !cardOf.has(month));
+  const months = [...new Set([...early.map(([month]) => month), ...cardOf.keys()])].sort();
   const currentMonth = toBusinessDate(now).slice(0, 7);
 
   // The owner's lines in micro-dollars, by the month they are for: a part marked {за ГГГГ-ММ} leaves the month of payment.
@@ -239,7 +260,78 @@ export async function readLedgerBudgets(
   const promotionCategories = [...TRAFFIC_CATEGORIES, CONTRACTOR_CATEGORY];
   const regular = commitments.filter(([kind, , category]) => kind !== "reinvest" && promotionCategories.includes(category));
 
-  const budgetMonths: BudgetMonth[] = cards.map(([month, asOf, status, reason, totals, lines, expenses, notes, pages]) => {
+  const ownerOf = (month: string) => {
+    const lines = owner.get(month);
+    return {
+      salaryPaidMills: asNumber(journalCents(lines?.salary ?? [])),
+      drawMills: asNumber(journalCents(lines?.draw ?? [])),
+      injectionMills: asNumber(journalCents(lines?.injection ?? [])),
+    };
+  };
+  const reinvestOf = (month: string) => reinvest.filter(([, , , , , due]) => due.slice(0, 7) === month)
+    .map(([, name, , amount]) => ({ name, capMills: asNumber(journalCents([amount])) }));
+
+  /**
+   * A month before the ledger's books were whole: no month card, only what the journal has, by the date of payment.
+   * What came in stands where a counted month has «earned», the journal's categories are the articles, and what is
+   * left is income less expenses: the CEO was not paid a rate then.
+   */
+  const earlyMonth = (month: string): BudgetMonth => {
+    const rows = early.filter(([rowMonth]) => rowMonth === month);
+    const incomeRows = rows.filter(([, type, category]) => type === "income" && category !== OWNER_INJECTION && category !== REFUND_CATEGORY);
+    const expenseRows = rows.filter(([, type, category]) => type === "expense" && category !== OWNER_SALARY && category !== OWNER_DRAW && category !== OWNER_INJECTION);
+    const refundRows = rows.filter(([, type, category]) => type === "income" && category === REFUND_CATEGORY);
+    const microsOf = (list: typeof rows) => list.reduce((sum, row) => sum + row[4], 0);
+    const grouped = (list: typeof rows, keyOf: (row: (typeof rows)[number]) => string) => {
+      const groups = new Map<string, typeof rows>();
+      for (const row of list) groups.set(keyOf(row), [...(groups.get(keyOf(row)) ?? []), row]);
+      return [...groups.values()];
+    };
+    const income = microsOf(incomeRows);
+    const spent = microsOf(expenseRows) - microsOf(refundRows);
+    const incomeMills = asNumber(journalCents([income]));
+    const decisionMills = asNumber(journalCents([income - spent]));
+    const articles: BudgetArticle[] = [
+      ...grouped(expenseRows, (row) => row[2]).map((group) => {
+        const category = group[0]![2];
+        const chatters = category === CHATTERS_CATEGORY;
+        return { key: chatters ? "chatters" : category, name: chatters ? "Чаттеры" : category, amountMills: asNumber(journalCents([microsOf(group)])), capMills: null, parts: [] };
+      }),
+      ...(refundRows.length === 0 ? [] : [{ key: REFUND_CATEGORY, name: REFUND_CATEGORY, amountMills: asNumber(journalCents([-microsOf(refundRows)])), capMills: null, parts: [] }]),
+    ].filter((article) => article.amountMills !== 0).sort((a, b) => b.amountMills - a.amountMills);
+    return {
+      month,
+      state: "incomplete",
+      closedAt: null,
+      daysInMonth: daysInMonth(month),
+      elapsedShare: 1,
+      figures: {
+        turnoverMills: incomeMills,
+        earnedMills: incomeMills,
+        arrivedMills: incomeMills,
+        transitMills: 0,
+        stuckMills: 0,
+        sources: grouped(incomeRows, (row) => `${row[2]}\u0000${modelsOf(row[3]).join(", ")}`).map((group) => {
+          const amountMills = asNumber(journalCents([microsOf(group)]));
+          return { model: modelsOf(group[0]![3]).join(", "), channel: "other" as const, channelName: group[0]![2], turnoverMills: amountMills, earnedMills: amountMills };
+        }).filter((source) => source.earnedMills !== 0).sort((a, b) => b.earnedMills - a.earnedMills),
+        pages: [],
+        expensesMills: asNumber(journalCents([spent])),
+        articles,
+        decisionMills,
+        leftMills: decisionMills,
+        notes: [],
+      },
+      unknownReason: null,
+      owner: { salaryRateMills: null, ...ownerOf(month) },
+      plan: { turnoverMills: null, factMills: null, pages: [], reinvest: reinvestOf(month) },
+    };
+  };
+
+  const budgetMonths: BudgetMonth[] = months.map((month) => {
+    const card = cardOf.get(month);
+    if (!card) return earlyMonth(month);
+    const [, asOf, status, reason, totals, lines, expenses, notes, pages] = card;
     const days = daysInMonth(month);
     const rate = rateOf(rates, month);
     const rateMills = rate === null ? null : cardCents(rate);
@@ -292,7 +384,6 @@ export async function readLedgerBudgets(
       };
     }
 
-    const ownerLines = owner.get(month);
     const planPages = plans.filter(([planMonth]) => planMonth === month)
       .map(([, pageLabel, perDay]) => {
         const perDayMills = cardCents(perDay);
@@ -308,19 +399,14 @@ export async function readLedgerBudgets(
       elapsedShare: month < currentMonth ? 1 : elapsedShare(month, asOfDate),
       figures,
       unknownReason: status === "ok" ? null : reason === "" ? "the ledger gave no reason" : reason,
-      owner: {
-        salaryRateMills: rateMills === null ? null : asNumber(rateMills),
-        salaryPaidMills: asNumber(journalCents(ownerLines?.salary ?? [])),
-        drawMills: asNumber(journalCents(ownerLines?.draw ?? [])),
-        injectionMills: asNumber(journalCents(ownerLines?.injection ?? [])),
-      },
+      owner: { salaryRateMills: rateMills === null ? null : asNumber(rateMills), ...ownerOf(month) },
       plan: {
         turnoverMills: planPages.length === 0 ? null : asNumber(sumMills(planPages.map((page) => page.planMills))),
         // The planned pages' turnover in dollars, added before rounding: with every page planned it is the month's turnover to the cent.
         factMills: planPages.length === 0 || status !== "ok" ? null
           : asNumber(cardCents(planPages.reduce((sum, page) => sum + (pages?.[page.pageLabel] ?? 0), 0))),
         pages: planPages,
-        reinvest: reinvest.filter(([, , , , , due]) => due.slice(0, 7) === month).map(([, name, , amount]) => ({ name, capMills: asNumber(journalCents([amount])) })),
+        reinvest: reinvestOf(month),
       },
     };
   });
@@ -349,7 +435,9 @@ export async function readLedgerBudgets(
   const sameName = (one: string, other: string) => one.trim().toLowerCase() === other.trim().toLowerCase();
   const regularOf = (category: string, counterparty: string) => {
     const row = regular.find(([, name, ofCategory]) => ofCategory === category && sameName(name, counterparty));
-    return row ? { amountMills: asNumber(journalCents([row[3]])), period: row[4] } : null;
+    if (!row) return null;
+    const perMonth = monthlyMicros(row[3], row[4]);
+    return { amountMills: asNumber(journalCents([row[3]])), period: row[4], monthlyMills: perMonth === null ? null : asNumber(journalCents([perMonth])) };
   };
   for (const [, name, category] of regular) {
     if (![...sources.values()].some((source) => source.category === category && sameName(source.counterparty, name))) sourceOf(category, name);

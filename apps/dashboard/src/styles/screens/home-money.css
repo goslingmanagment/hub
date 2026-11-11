@@ -68,7 +68,8 @@
   /* The two sides end on one line: the last card of the shorter side grows, its footer stays at the bottom. */
   .budget-flow-column { display: flex; flex-direction: column; gap: 24px; min-width: 0; }
   .budget-flow .card { display: flex; flex-direction: column; }
-  .budget-flow > .card, .budget-flow-column > .card:last-child { flex: 1 0 auto; }
+  /* A lone card of the left side keeps its own height: one row of income is not stretched into a tall sheet. */
+  .budget-flow > .card, .budget-flow-column > .card:last-child:not(:first-child) { flex: 1 0 auto; }
   .budget-flow .card-footer { margin-top: auto; }
   .budget-rows { display: grid; align-content: start; padding: 0 24px 8px; }
   .budget-row {

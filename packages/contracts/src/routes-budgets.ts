@@ -41,7 +41,11 @@ export const budgetArticleSchema = z.object({
   parts: z.array(z.object({ name: z.string(), amountMills: mills })),
 });
 
-/** A month's figures as the ledger's month card has them now. */
+/**
+ * A month's figures as the ledger's month card has them now. For an `incomplete` month there is no card: the figures
+ * are what the journal has, by the date of payment — what came in stands for the turnover, the earned and the arrived
+ * money, the journal's categories are the articles, and `leftMills` is income less expenses (no CEO rate then).
+ */
 export const budgetFiguresSchema = z.object({
   turnoverMills: mills,
   earnedMills: mills,
@@ -68,8 +72,9 @@ export const budgetFiguresSchema = z.object({
 
 export const budgetMonthSchema = z.object({
   month: budgetMonthKey,
-  /** `open` — the running month; `preliminary` — over, not closed yet; `closed` — closed by the ledger. */
-  state: z.enum(["open", "preliminary", "closed"]),
+  /** `open` — the running month; `preliminary` — over, not closed yet; `closed` — closed by the ledger;
+   *  `incomplete` — a month before the ledger's books were whole: only what its journal has. */
+  state: z.enum(["open", "preliminary", "closed", "incomplete"]),
   closedAt: isoTimestamp.nullable(),
   daysInMonth: z.number().int().min(28).max(31),
   /** How much of the month had passed at the ledger's cut: 0–1; 1 for a month that is over. */
@@ -115,12 +120,13 @@ export const budgetPromotionSourceSchema = z.object({
   totalMills: mills,
   payments: z.number().int().nonnegative(),
   /** What the ledger expects to pay the source regularly (its commitments): the plan of the source. `period` is the
-   *  ledger's word: `week`, `month`, `90d`, `once`. null — nothing regular is agreed. */
-  regular: z.object({ amountMills: mills, period: z.string() }).nullable(),
+   *  ledger's word: `week`, `month`, `90d`, `once`; `monthlyMills` is the same as a month's plan (a week is 52/12 of a
+   *  month), null when the period is not a regular one. null — nothing regular is agreed. */
+  regular: z.object({ amountMills: mills, period: z.string(), monthlyMills: mills.nullable() }).nullable(),
 });
 
 export const adminBudgetsResponseSchema = z.object({
-  /** Every month the ledger counts, the oldest first. Empty — it has none yet. */
+  /** Every month of the ledger's books, the oldest first: the incomplete ones, then the ones it counts. Empty — none yet. */
   months: z.array(budgetMonthSchema),
   promotion: z.object({
     /** The months of `months`, in the same order. */

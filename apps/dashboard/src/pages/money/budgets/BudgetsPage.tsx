@@ -16,6 +16,7 @@ import type { BudgetMonth } from "@agency_hub_core/contracts";
 /** What the header says about the month: it runs, it is over and not closed, it is closed. */
 function monthState(month: BudgetMonth): string {
   if (month.state === "open") return `Месяц идёт: день ${runningDay(month)} из ${month.daysInMonth}`;
+  if (month.state === "incomplete") return "Учёт неполный: только записанное в журнале";
   if (month.state === "closed") return month.closedAt ? `Месяц закрыт ${formatDay(month.closedAt)}` : "Месяц закрыт";
   const transit = month.figures?.transitMills ?? 0;
   return transit > 0 ? `Месяц не закрыт: ${formatMills(transit)} ещё в пути` : "Месяц не закрыт";
@@ -99,6 +100,11 @@ export function BudgetsPage() {
           Ledger не смог посчитать {monthLong(month.month).toLowerCase()}. Чисел месяца нет. Это не ноль.
         </Notice>
       )}
+      {month.state === "incomplete" && (
+        <Notice tone="off" role="status" detail="Показано то, что записано в журнале, по дате платежа. Настоящие расходы могли быть больше.">
+          За {monthLong(month.month).toLowerCase()} учёт неполный: ledger считает месяцы целиком {monthSince(months.find((one) => one.state !== "incomplete")?.month ?? month.month)}.
+        </Notice>
+      )}
       <MonthTiles month={month} />
       <MonthsCard months={months} active={month.month} onPick={open} />
       {month.figures && <FlowCards month={month} figures={month.figures} promotion={data.promotion} />}
@@ -106,8 +112,8 @@ export function BudgetsPage() {
       <div className="help-row">
         <Disclosure>
           <p>
-            Месяцы здесь {monthSince(months[0]?.month ?? month.month)}: с него ledger ведёт полный учёт и считает месяц
-            целиком, более ранние он не считает.
+            Месяцы с пометкой «неполный» — до того, как ledger стал вести полный учёт: у них только записанное в журнале,
+            по дате платежа, без оборота страниц, плана и ставки CEO. Остальные месяцы ledger считает целиком.
           </p>
           <p>
             Числа считает ledger агентства. «Заработано» — доля агентства от оборота страниц и поступлений мимо площадок,
@@ -121,9 +127,9 @@ export function BudgetsPage() {
           </p>
           <p>
             «Трафик и подрядчики» — строки журнала по дате платежа: статьи «Трафик», «SFS», «YouTube» и «Подрядчик».
-            «Обычно» под именем — регулярный платёж этому источнику из обязательств ledger, его план. «План: до …» —
-            капы реинвеста месяца: сколько владелец разрешил вложить в рост; рядом — сколько вложено в трафик и
-            подрядчиков за месяц. План оборота — дневные планы страниц на число дней
+            «План в месяц» — регулярный платёж источнику из обязательств ledger, приведённый к месяцу («≈», если он
+            назначен за неделю); у источника без обязательства плана нет. «План: до …» — капы реинвеста месяца: сколько
+            владелец разрешил вложить в рост; рядом — сколько вложено в трафик и подрядчиков за месяц. План оборота — дневные планы страниц на число дней
             месяца, без поступлений мимо площадок.
           </p>
         </Disclosure>

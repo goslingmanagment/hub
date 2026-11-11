@@ -6,8 +6,9 @@ import { DEMO_DATA_PAGES, DEMO_MODELS } from "../world.ts";
 /**
  * «Деньги → Бюджеты» (`adminBudgets`) of the invented agency, as the agency ledger would count it: nine months up to
  * the running one. Mia carries the agency, Nova started half a year ago and grows, Ivy earns too little to be paid out
- * (her money is «застряло»). The older months are closed, the last one is over and not closed yet (a part is still on
- * its way), the running one has most of its money on hold. The last three months have a turnover plan by page, «AI и
+ * (her money is «застряло»). The two oldest months are from before the ledger's books were whole (only the journal's
+ * cash), the next ones are closed, the last one is over and not closed yet (a part is still on its way), the running
+ * one has most of its money on hold. The last three months have a turnover plan by page, «AI и
  * разработка» has a limit it sometimes breaks, the running month has a reinvest cap. Traffic and contractors come and
  * go the way channels do. Invented names and sums only; every sum is whole cents.
  */
@@ -115,6 +116,35 @@ function build(now: Date): Answer {
       return { pageLabel: page.label, perDayMills: wire(cents(perDay)), planMills: wire(cents(perDay * days)) };
     }).sort((a, b) => b.planMills - a.planMills);
 
+    // The two oldest months: before the ledger's books were whole. Only the journal's cash, by model; no pages, plan or CEO rate.
+    if (back >= MONTHS - 2) {
+      const cashArticles = articles.map((article) => ({ ...article, capMills: null, parts: [] })).filter((article) => article.amountMills !== 0);
+      const spent = cashArticles.reduce((sum, article) => sum + article.amountMills, 0);
+      const byModel = new Map<string, number>();
+      for (const source of sources) byModel.set(source.model, (byModel.get(source.model) ?? 0) + source.earned);
+      return {
+        month: key,
+        state: "incomplete",
+        closedAt: null,
+        daysInMonth: days,
+        elapsedShare: 1,
+        figures: {
+          turnoverMills: wire(earned), earnedMills: wire(earned), arrivedMills: wire(earned), transitMills: 0, stuckMills: 0,
+          sources: [...byModel].map(([model, amount]) => ({ model: MODEL_NAME.get(model) ?? model, channel: "other" as const, channelName: "Платформы", turnoverMills: wire(amount), earnedMills: wire(amount) }))
+            .sort((a, b) => b.earnedMills - a.earnedMills),
+          pages: [],
+          expensesMills: spent,
+          articles: cashArticles,
+          decisionMills: wire(earned) - spent,
+          leftMills: wire(earned) - spent,
+          notes: [],
+        },
+        unknownReason: null,
+        owner: { salaryRateMills: null, salaryPaidMills: 0, drawMills: 0, injectionMills: back === MONTHS - 1 ? wire(cents(3000)) : 0 },
+        plan: { turnoverMills: null, factMills: null, pages: [], reinvest: [] },
+      };
+    }
+
     return {
       month: key,
       state: back === 0 ? "open" : back === 1 ? "preliminary" : "closed",
@@ -160,7 +190,10 @@ function build(now: Date): Answer {
     return {
       kind: promo.kind, category: promo.category, counterparty: promo.counterparty, model: promo.model,
       byMonth, totalMills: byMonth.reduce((sum, value) => sum + value, 0), payments: byMonth.filter((value) => value > 0).length,
-      regular: promo.regular ? { amountMills: wire(cents(promo.regular.dollars)), period: promo.regular.period } : null,
+      regular: promo.regular ? {
+        amountMills: wire(cents(promo.regular.dollars)), period: promo.regular.period,
+        monthlyMills: wire(cents(promo.regular.period === "week" ? (promo.regular.dollars * 52) / 12 : promo.regular.dollars)),
+      } : null,
     };
   }).filter((source) => source.totalMills > 0).sort((a, b) => b.totalMills - a.totalMills);
 

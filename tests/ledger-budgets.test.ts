@@ -54,7 +54,7 @@ const ANSWERS: Record<string, Row[]> = {
     ["reinvest", "Старый кап", "", 700_000_000, "once", "2026-06-30"],
     // What the ledger expects to pay regularly: the plan of a source. One is paid already, one not yet.
     ["contractor", "clip sam", "Подрядчик", 209_000_000, "month", "2026-11-30"],
-    ["contractor", "Insta Crew", "Трафик", 290_000_000, "month", "2026-12-01"],
+    ["contractor", "Insta Crew", "Трафик", 30_000_000, "week", "2026-12-01"],
     // Not traffic and not a contractor: no row of the table.
     ["subscription", "Some AI", "AI и разработка", 200_000_000, "month", "2026-12-03"],
   ],
@@ -66,8 +66,21 @@ const ANSWERS: Record<string, Row[]> = {
     ["2026-10-20", "expense", "Owner draw", 5_000_000_000, "{}"],
     ["2026-10-15", "income", "Owner вливание", 100_000_000, "{}"],
     ["2026-09-26", "expense", "Owner вливание", 3_000_000_000, "{}"],
-    // Before the first month the ledger counts: nowhere to put it.
+    // In a month before the books were whole: the owner's lines are his there too.
     ["2026-07-30", "income", "Owner вливание", 3_000_000_000, "{}"],
+    ["2026-07-26", "expense", "Owner draw", 633_312_200, "{}"],
+  ],
+  // July: before the ledger's books were whole. What its journal has, by the date of payment.
+  early: [
+    ["2026-07", "income", "Платформы", "Mia", 11_130_000_000],
+    ["2026-07", "income", "Owner вливание", "—", 3_000_000_000],
+    ["2026-07", "income", "Возврат расхода", "—", 94_005_000],
+    ["2026-07", "expense", "Чаттер зарплата", "Mia", 4_000_000_000],
+    ["2026-07", "expense", "Чаттер зарплата", "Mia, Nova", 2_583_000_000],
+    ["2026-07", "expense", "Инструменты", "—", 866_714_900],
+    ["2026-07", "expense", "Owner draw", "—", 633_312_200],
+    // A card's month never comes from the journal, whatever its lines are marked.
+    ["2026-09", "income", "Платформы", "Mia", 1_000_000],
   ],
   promotion: [
     ["2026-09", "Трафик", "Reddit Co", "Mia", 290_000_000, 1],
@@ -84,6 +97,7 @@ function queryOf(sql: string): string {
   if (sql.includes("FROM settings")) return "settings";
   if (sql.includes("FROM month_plans")) return "plans";
   if (sql.includes("FROM commitments")) return "commitments";
+  if (sql.includes("incomplete = 1")) return "early";
   if (sql.includes("GROUP BY")) return "promotion";
   if (sql.includes("Owner зарплата")) return "owner";
   throw new Error(`unexpected statement: ${sql}`);
@@ -108,18 +122,19 @@ describe("readLedgerBudgets", () => {
     const seen: string[] = [];
     const result = await readLedgerBudgets(app(), { fetchImpl: ledger(ANSWERS, seen), now });
 
-    expect(seen.sort()).toEqual(["cards", "commitments", "owner", "periods", "plans", "promotion", "settings"].map((name) => `POST /v1/sql ${name} Bearer test-read-key`));
+    expect(seen.sort()).toEqual(["cards", "commitments", "early", "owner", "periods", "plans", "promotion", "settings"].map((name) => `POST /v1/sql ${name} Bearer test-read-key`));
     expect(result.months.map((month) => [month.month, month.state, month.closedAt, month.daysInMonth])).toEqual([
+      ["2026-07", "incomplete", null, 31],
       ["2026-09", "closed", "2026-10-14T16:22:53.000Z", 30],
       ["2026-10", "preliminary", null, 31],
       ["2026-11", "open", null, 30],
     ]);
     // The running month is counted to the ledger's cut (12 November, 00:20 in Moscow), a month that is over is whole.
-    expect(result.months[2]!.elapsedShare).toBeCloseTo((11 + 20.75 / 60 / 24) / 30, 3);
-    expect(result.months[1]!.elapsedShare).toBe(1);
+    expect(result.months[3]!.elapsedShare).toBeCloseTo((11 + 20.75 / 60 / 24) / 30, 3);
+    expect(result.months[2]!.elapsedShare).toBe(1);
     expect(result.ledgerAsOf).toBe("2026-11-11T21:20:46.000Z");
 
-    const figures = result.months[1]!.figures!;
+    const figures = result.months[2]!.figures!;
     expect(figures).toMatchObject({
       turnoverMills: 30_000_500, earnedMills: 20_000_260, arrivedMills: 18_000_000, transitMills: 1_900_260, stuckMills: 100_000,
       expensesMills: 8_237_250, decisionMills: 12_000_000,
@@ -150,8 +165,10 @@ describe("readLedgerBudgets", () => {
 
   it("puts the owner's lines into the month they are for, and the plans into theirs", async () => {
     const result = await readLedgerBudgets(app(), { fetchImpl: ledger(), now });
-    const [september, october, november] = result.months;
+    const [july, september, october, november] = result.months;
 
+    // No CEO rate before the books were whole; what the owner put in and took out is in the month of payment.
+    expect(july!.owner).toEqual({ salaryRateMills: null, salaryPaidMills: 0, drawMills: 633_310, injectionMills: 3_000_000 });
     expect(september!.owner).toEqual({ salaryRateMills: 2_500_000, salaryPaidMills: 0, drawMills: 0, injectionMills: -3_000_000 });
     expect(october!.owner).toEqual({ salaryRateMills: 3_500_000, salaryPaidMills: 3_000_000, drawMills: 5_000_000, injectionMills: 100_000 });
     // 608.2725 moved from October plus 602.05 paid in November: added exactly, rounded once.
@@ -170,16 +187,17 @@ describe("readLedgerBudgets", () => {
   it("lays traffic and contractors out by source and month, a counterparty's models joined", async () => {
     const { promotion } = await readLedgerBudgets(app(), { fetchImpl: ledger(), now });
 
-    expect(promotion.months).toEqual(["2026-09", "2026-10", "2026-11"]);
-    // July is before the first month the ledger counts: not in the table. A regular payment is the source's plan, whatever
-    // the case of its name; a source that is expected and not paid yet is there with zeros.
+    // The months are all of the books', the early one too. A regular payment is the source's plan, whatever the case of
+    // its name, and a week's payment is 52/12 of a month's; a source that is expected and not paid yet is there with zeros.
+    expect(promotion.months).toEqual(["2026-07", "2026-09", "2026-10", "2026-11"]);
     expect(promotion.sources).toEqual([
-      { kind: "traffic", category: "Трафик", counterparty: "Reddit Co", model: "Мия", byMonth: [290_000, 0, 0], totalMills: 290_000, payments: 1, regular: null },
-      { kind: "contractor", category: "Подрядчик", counterparty: "Clip Sam", model: "Мия, Нова", byMonth: [0, 209_000, 0], totalMills: 209_000, payments: 2, regular: { amountMills: 209_000, period: "month" } },
-      { kind: "traffic", category: "SFS", counterparty: "Shout Crew", model: "", byMonth: [0, 0, 49_990], totalMills: 49_990, payments: 2, regular: null },
-      { kind: "traffic", category: "Трафик", counterparty: "Insta Crew", model: "", byMonth: [0, 0, 0], totalMills: 0, payments: 0, regular: { amountMills: 290_000, period: "month" } },
+      { kind: "traffic", category: "Трафик", counterparty: "Reddit Co", model: "Мия", byMonth: [700_000, 290_000, 0, 0], totalMills: 990_000, payments: 2, regular: null },
+      { kind: "contractor", category: "Подрядчик", counterparty: "Clip Sam", model: "Мия, Нова", byMonth: [0, 0, 209_000, 0], totalMills: 209_000, payments: 2, regular: { amountMills: 209_000, period: "month", monthlyMills: 209_000 } },
+      { kind: "traffic", category: "SFS", counterparty: "Shout Crew", model: "", byMonth: [0, 0, 0, 49_990], totalMills: 49_990, payments: 2, regular: null },
+      { kind: "traffic", category: "Трафик", counterparty: "Insta Crew", model: "", byMonth: [0, 0, 0, 0], totalMills: 0, payments: 0, regular: { amountMills: 30_000, period: "week", monthlyMills: 130_000 } },
     ]);
     expect(promotion.totals).toEqual([
+      { month: "2026-07", trafficMills: 700_000, contractorMills: 0 },
       { month: "2026-09", trafficMills: 290_000, contractorMills: 0 },
       { month: "2026-10", trafficMills: 0, contractorMills: 209_000 },
       { month: "2026-11", trafficMills: 49_990, contractorMills: 0 },
@@ -192,13 +210,39 @@ describe("readLedgerBudgets", () => {
     const result = await readLedgerBudgets(app(), { fetchImpl: ledger({ ...ANSWERS, cards: [cardRow("2026-09", card()), stale, never] }), now });
 
     expect(result.months.map((month) => [month.month, month.figures === null, month.unknownReason])).toEqual([
+      ["2026-07", false, null],
       ["2026-09", false, null],
       ["2026-10", true, "таблицы выплат не разобраны"],
       ["2026-11", true, "the ledger gave no reason"],
     ]);
     // What does not come from the card is still said.
-    expect(result.months[1]!.owner.salaryRateMills).toBe(3_500_000);
-    expect(result.months[2]!.plan).toMatchObject({ turnoverMills: 15_615_000, factMills: null });
+    expect(result.months[2]!.owner.salaryRateMills).toBe(3_500_000);
+    expect(result.months[3]!.plan).toMatchObject({ turnoverMills: 15_615_000, factMills: null });
+  });
+
+  it("shows a month before the books were whole as what the journal has, marked incomplete", async () => {
+    const result = await readLedgerBudgets(app(), { fetchImpl: ledger(), now });
+    const july = result.months[0]!;
+
+    expect(july).toMatchObject({ month: "2026-07", state: "incomplete", elapsedShare: 1, unknownReason: null });
+    expect(july.plan).toEqual({ turnoverMills: null, factMills: null, pages: [], reinvest: [] });
+    // What came in stands for the turnover, the earned and the arrived; the owner's own lines are neither income nor expenses.
+    expect(july.figures).toEqual({
+      turnoverMills: 11_130_000, earnedMills: 11_130_000, arrivedMills: 11_130_000, transitMills: 0, stuckMills: 0,
+      sources: [{ model: "Мия", channel: "other", channelName: "Платформы", turnoverMills: 11_130_000, earnedMills: 11_130_000 }],
+      pages: [],
+      // 6583.00 + 866.7149 − 94.005, added exactly and rounded once.
+      expensesMills: 7_355_710,
+      articles: [
+        { key: "chatters", name: "Чаттеры", amountMills: 6_583_000, capMills: null, parts: [] },
+        { key: "Инструменты", name: "Инструменты", amountMills: 866_710, capMills: null, parts: [] },
+        { key: "Возврат расхода", name: "Возврат расхода", amountMills: -94_010, capMills: null, parts: [] },
+      ],
+      decisionMills: 3_774_290,
+      // No CEO rate then: what is left is income less expenses.
+      leftMills: 3_774_290,
+      notes: [],
+    });
   });
 
   it("answers 503 when the ledger is not connected, refuses, or answers in a shape Hub does not know", async () => {
