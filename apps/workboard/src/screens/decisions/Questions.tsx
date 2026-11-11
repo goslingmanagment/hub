@@ -4,6 +4,7 @@ import { Button, Disclosure, Mark, Money, Section, Table, Tooltip, type Column }
 import type { TeamLedgerQuestion } from "@agency_hub_core/contracts";
 import { formatDateTime } from "@agency_hub_core/ui/format";
 import { ruPlural } from "@agency_hub_core/ui/plural";
+import { plainNote } from "@agency_hub_core/ui/shiftReports";
 import { FanCell, collidingIn } from "./FanCell";
 import type { FanRefOnPage, KnownFan } from "./data";
 
@@ -127,7 +128,7 @@ function useColumns({ rows, serverNow, platformOf, fanOf, markLongWait }: {
       cell: (row) => (
         <div className="decisions-question">
           <p className="decisions-question__text">
-            {row.question || <span className="ui-muted">ledger не записал вопрос</span>}
+            {plainNote(row.question) || <span className="ui-muted">ledger не записал вопрос</span>}
             {/* The gap is preserved spaces, not a margin: on a line of its own the link starts at the line's start. */}
             {row.sourceLink !== null && "   "}
             {row.sourceLink !== null && (
@@ -137,7 +138,7 @@ function useColumns({ rows, serverNow, platformOf, fanOf, markLongWait }: {
               </a>
             )}
           </p>
-          {row.note !== "" && <QuestionNote text={row.note} />}
+          {plainNote(row.note) !== "" && <QuestionNote text={plainNote(row.note)} />}
         </div>
       ),
     },
