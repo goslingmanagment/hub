@@ -87,7 +87,8 @@ export function ReportPages({ pages, drafts = "drafted", changes = false }: {
 }) {
   const drafted = drafts === "drafted"
     ? pages.some((page) => page.draftMills !== null)
-    : pages.some((page) => page.draftMills !== null && page.postedMills !== page.draftMills);
+    // The ledger's word, to the cent: a draft in thousandths beside its own post in cents is not a change.
+    : pages.some((page) => page.draftMills !== null && page.postedMills !== page.draftMills && page.state !== "posted_equal");
   const changed = changes && pages.some((page) => page.diffMills !== null);
   const columns = 1 + Number(drafted) + Number(changed);
   return (

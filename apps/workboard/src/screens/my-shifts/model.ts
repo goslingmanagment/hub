@@ -313,10 +313,20 @@ function reportState(report: Pick<AccountShiftReport, "source" | "status">): Row
   return report.status === "posted" ? "posted" : report.status === "draft" ? "draft" : "other";
 }
 
-/** The draft's total when the chatter posted another sum; null — the same, not posted, or no draft. */
-function changedFrom(report: Pick<AccountShiftReport, "source" | "totalMills" | "draftTotalMills">): number | null {
-  return report.source === "both" && report.draftTotalMills !== null && report.draftTotalMills !== report.totalMills ? report.draftTotalMills : null;
+/**
+ * The draft's total when the chatter posted another sum; null — the same, not posted, or no draft. A draft is kept in
+ * thousandths and a post in cents, so the two totals of a report posted as drafted may differ by a cent of rounding:
+ * the ledger compares page by page to the cent, and its word is taken — every page `posted_equal` is the same report.
+ * Whatever the pages say, a draft that reads as the same sum is never shown as another one.
+ */
+function changedFrom(report: Pick<AccountShiftReport, "source" | "totalMills" | "draftTotalMills" | "pages">): number | null {
+  if (report.source !== "both" || report.draftTotalMills === null) return null;
+  if (report.pages.length > 0 && report.pages.every((page) => page.postState === "posted_equal")) return null;
+  return cents(report.draftTotalMills) === cents(report.totalMills) ? null : report.draftTotalMills;
 }
+
+/** A sum as it is read: whole cents. */
+const cents = (mills: number): number => Math.round(mills / 10);
 
 /** The label of a report Hub has no shift for and that has no window (a post written by hand): its day alone. */
 function dayOnly(dayStart: string): ShiftWhen {
