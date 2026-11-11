@@ -16,7 +16,6 @@ import { BudgetPlanEditor } from "./BudgetPlanEditor.js";
 import { BulletBar, Hint } from "./BudgetParts.js";
 import { formatUsd, monthViews, type MonthView } from "./budgetsModel.js";
 
-const MONTH = /^\d{4}-\d{2}$/;
 
 function share(part: number, whole: number | null): string {
   if (whole === null || whole <= 0) return "";
