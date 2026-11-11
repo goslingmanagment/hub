@@ -15,7 +15,7 @@
  */
 import type { AccountShiftReport, ChatterStats } from "@agency_hub_core/contracts";
 import { addDays, daysInRange, moscowDayOf, moscowDayStart, type MoscowDay } from "@agency_hub_core/ui/moscow";
-import { formatDayRange } from "@agency_hub_core/ui/format";
+import { formatDayRange, formatMills } from "@agency_hub_core/ui/format";
 import type { ResolvedPeriod } from "@agency_hub_core/ui/period";
 import { shiftWhen, type ShiftWhen } from "@agency_hub_core/ui/shiftWhen";
 import { perHourMills } from "../../shared/metrics.js";
@@ -322,11 +322,8 @@ function reportState(report: Pick<AccountShiftReport, "source" | "status">): Row
 function changedFrom(report: Pick<AccountShiftReport, "source" | "totalMills" | "draftTotalMills" | "pages">): number | null {
   if (report.source !== "both" || report.draftTotalMills === null) return null;
   if (report.pages.length > 0 && report.pages.every((page) => page.postState === "posted_equal")) return null;
-  return cents(report.draftTotalMills) === cents(report.totalMills) ? null : report.draftTotalMills;
+  return formatMills(report.draftTotalMills) === formatMills(report.totalMills) ? null : report.draftTotalMills;
 }
-
-/** A sum as it is read: whole cents. */
-const cents = (mills: number): number => Math.round(mills / 10);
 
 /** The label of a report Hub has no shift for and that has no window (a post written by hand): its day alone. */
 function dayOnly(dayStart: string): ShiftWhen {
