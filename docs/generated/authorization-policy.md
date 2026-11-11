@@ -192,7 +192,6 @@ A full device token is not affected.
 | DELETE | `/api/v1/admin/users/by-id/:userId/device-tokens` | `adminRevokeDeviceTokens` | `owner-session` | — | — | no |
 | GET | `/api/v1/admin/users/by-id/:userId/device-tokens` | `adminListDeviceTokens` | `owner-session` | — | — | no |
 | DELETE | `/api/v1/admin/users/by-id/:userId/device-tokens/:tokenId` | `adminRevokeDeviceToken` | `owner-session` | — | — | no |
-| PATCH | `/api/v1/admin/users/by-id/:userId/device-tokens/:tokenId/harvest-capability` | `adminSetDeviceTokenHarvestCapability` | `owner-session` | — | — | no |
 | GET | `/api/v1/admin/users/by-id/:userId/links` | `adminListAccountLinks` | `owner-session` | — | — | no |
 | POST | `/api/v1/admin/users/by-id/:userId/links` | `adminCreateAccountLink` | `owner-session` | — | — | no |
 | POST | `/api/v1/admin/users/by-id/:userId/links/:linkId/revoke` | `adminRevokeAccountLink` | `owner-session` | — | — | no |
@@ -421,6 +420,7 @@ A full device token is not affected.
 | GET | `/api/v1/team/greetings` | `teamGreetings` | `session` | — | — | no |
 | GET | `/api/v1/team/ledger-payouts` | `teamLedgerPayouts` | `owner-session` | — | — | no |
 | GET | `/api/v1/team/ledger-payouts/prepare` | `teamLedgerPayoutPrepare` | `owner-session` | — | — | no |
+| GET | `/api/v1/team/ledger-questions` | `teamLedgerQuestions` | `owner-session` | — | — | no |
 | GET | `/api/v1/team/ledger-reports` | `teamLedgerReports` | `owner-session` | — | — | no |
 | GET | `/api/v1/team/sales/ppv` | `teamSalesPpv` | `session` | — | — | no |
 | GET | `/api/v1/team/sales/replies` | `teamSalesReplies` | `session` | — | — | no |

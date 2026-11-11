@@ -11,13 +11,15 @@ import { usePages } from "@/shared/usePages";
 import { ScreenHeader } from "@/shared/ScreenHeader";
 import { CustomsFolds, CustomsSection } from "./Customs";
 import { HeldSection, ResolveSendModal, ResolvedJournal } from "./HeldSends";
+import { ChattersQuestions, QuestionsSection, QuestionsUnavailable } from "./Questions";
 import { ReportsSection } from "./Reports";
 import { useDecisions, useFanNames, type FanRefOnPage, type HeldSend } from "./data";
 import "./decisions.css";
 
 /**
- * Решения (spec §4.6): what waits for the owner's decision — the shift reports'
- * questions (posts the ledger could not parse, paid days whose report changed),
+ * Решения (spec §4.6): what waits for the owner's decision — the questions «whose
+ * is this sale» the chat agent asked him, the shift reports' questions (posts
+ * the ledger could not parse, paid days whose report changed),
  * customs paid and not delivered, held sends. Each section is there only while
  * it has rows; nothing at all is «Всё решено». A section whose read failed says
  * so in its place: no answer is not a zero. A send's resolve, when open, is in
@@ -39,6 +41,7 @@ export function DecisionsScreen() {
   const userIdOf = (username: string) => users.data?.find((user) => user.username === username && !user.deletedAt)?.id ?? null;
 
   const fans: FanRefOnPage[] = [
+    ...(view.questions ? [...view.questions.owner, ...view.questions.chatters].flatMap((question) => (question.fanRef === null || question.pageLabel === "" ? [] : [{ pageLabel: question.pageLabel, fanRef: question.fanRef }])) : []),
     ...(view.customs ? [...view.customs.paid, ...view.customs.ordered, ...view.customs.other] : []),
     ...(view.held ? view.held.items : []),
   ];
@@ -59,26 +62,29 @@ export function DecisionsScreen() {
   const openSend = foundSend ?? (attemptId && lastSend.current?.attemptId === attemptId ? lastSend.current : undefined);
 
   const failed = {
+    questions: isOwner && decisions.questions.isError && !view.questions,
     reports: isOwner && (decisions.posts.isError || decisions.changes.isError) && !view.reports,
     customs: decisions.customs.isError && !view.customs,
     held: decisions.held.isError && !view.held,
   };
-  const anyFailed = failed.reports || failed.customs || failed.held;
+  const anyFailed = failed.questions || failed.reports || failed.customs || failed.held;
   // The counts of this page (or of all), in the words the menu and Смены use (D17): a queue that did not answer is
-  // null, never a zero. A team lead has no reports to read: theirs is a zero, not a failure.
+  // null, never a zero. A team lead has no questions or reports to read: theirs is a zero, not a failure.
   const reportParts = !isOwner ? { posts: 0, changes: 0 } : view.reports ? { posts: view.reports.posts.length, changes: view.reports.changes.length } : null;
   const counts = {
+    questions: !isOwner ? 0 : view.questions ? view.questions.owner.length : null,
     reports: reportParts === null ? null : reportParts.posts + reportParts.changes,
     reportParts,
     customs: view.customs ? view.customs.paid.length : null,
     held: view.held ? view.held.total : null,
-    failed: (["reports", "customs", "held"] as const).filter((queue) => failed[queue]) as DecisionQueue[],
+    failed: (["questions", "reports", "customs", "held"] as const).filter((queue) => failed[queue]) as DecisionQueue[],
   };
-  const waiting = (counts.reports ?? 0) + (counts.customs ?? 0) + (counts.held ?? 0);
-  const elsewhere = (view.reports?.elsewhere ?? 0) + (view.customs?.elsewhere ?? 0) + (view.held?.elsewhere ?? 0);
+  const waiting = (counts.questions ?? 0) + (counts.reports ?? 0) + (counts.customs ?? 0) + (counts.held ?? 0);
+  const elsewhere = (view.questions?.elsewhere ?? 0) + (view.reports?.elsewhere ?? 0) + (view.customs?.elsewhere ?? 0) + (view.held?.elsewhere ?? 0);
   // The header's line is the screen's contents: each part jumps to its section (Р2, Р5).
   const parts = decisionParts(counts, location.search);
-  const failedText = decisionsFailedText(counts);
+  // The questions' failure is said once, in their own section's line (the ledger's word, not Hub's): not here as well.
+  const failedText = decisionsFailedText({ ...counts, failed: counts.failed.filter((queue) => queue !== "questions") });
   const elsewhereText = page !== null ? decisionsElsewhereText(elsewhere) : null;
 
   // A link with an anchor (`/decisions#held`, the «Ждут решения» line of Смены) lands on its section once the
@@ -146,6 +152,11 @@ export function DecisionsScreen() {
           </Section>
         ) : (
           <>
+            {failed.questions && <QuestionsUnavailable onRetry={() => void decisions.questions.refetch()} retrying={decisions.questions.isFetching} />}
+            {view.questions && view.questions.owner.length > 0 && (
+              <QuestionsSection owner={view.questions.owner} chatters={view.questions.chatters} serverNow={view.questions.serverNow} platformOf={platformOf} fanOf={fanOf} />
+            )}
+
             {failed.reports && (
               <Section title="Отчёты">
                 <ErrorState
@@ -192,12 +203,15 @@ export function DecisionsScreen() {
             {waiting === 0 && !anyFailed && (
               <EmptyState icon={CircleCheck} title="Всё решено" className="decisions-empty">
                 {page === null
-                  ? "Неразобранных постов и изменённых выплаченных дней, оплаченных и не отданных кастомов и зависших отправок нет."
-                  : `На ${page} неразобранных постов, оплаченных и не отданных кастомов и зависших отправок нет.`}
+                  ? `${isOwner ? "Вопросов «чья продажа», н" : "Н"}еразобранных постов и изменённых выплаченных дней, оплаченных и не отданных кастомов и зависших отправок нет.`
+                  : `На ${page} ${isOwner ? "вопросов «чья продажа», " : ""}неразобранных постов, оплаченных и не отданных кастомов и зависших отправок нет.`}
               </EmptyState>
             )}
 
             <div className="decisions-history">
+              {view.questions && view.questions.owner.length === 0 && view.questions.chatters.length > 0 && (
+                <ChattersQuestions alone chatters={view.questions.chatters} serverNow={view.questions.serverNow} platformOf={platformOf} fanOf={fanOf} />
+              )}
               {view.customs && view.customs.paid.length === 0 && (
                 <CustomsFolds {...view.customs} platformOf={platformOf} fanOf={fanOf} userIdOf={userIdOf} />
               )}

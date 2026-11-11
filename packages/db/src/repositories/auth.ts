@@ -316,44 +316,6 @@ export async function findDeviceTokenForUser(
   });
 }
 
-/**
- * Owner-controlled transfer of the one-machine harvest capability. The
- * advisory lock serializes grants for one machine so two concurrent admin
- * requests cannot surface a unique-index 500 or leave the authority unclear.
- */
-export async function setDeviceTokenHarvestMachine(
-  db: Database,
-  input: { deviceTokenId: number; userId: number; machineId: string | null },
-) {
-  let replacedTokenId: number | null = null;
-  if (input.machineId) {
-    await db.execute(sql`
-      select pg_advisory_xact_lock(
-        hashtextextended(${`desktop-harvest:${input.machineId}`}, 0)
-      )
-    `);
-    const previous = await db.query.deviceTokens.findFirst({
-      where: eq(deviceTokens.harvestMachineId, input.machineId),
-    });
-    if (previous && previous.id !== input.deviceTokenId) {
-      replacedTokenId = previous.id;
-      await db.update(deviceTokens).set({
-        harvestMachineId: null,
-      }).where(eq(deviceTokens.id, previous.id));
-    }
-  }
-
-  const [updated] = await db.update(deviceTokens).set({
-    harvestMachineId: input.machineId,
-  }).where(and(
-    eq(deviceTokens.id, input.deviceTokenId),
-    eq(deviceTokens.userId, input.userId),
-    isNull(deviceTokens.revokedAt),
-  )).returning();
-
-  return { updated: updated ?? null, replacedTokenId };
-}
-
 export async function updateDeviceTokenUse(db: Database, deviceTokenId: number, input: {
   lastUsedAt: Date;
   expiresAt?: Date;

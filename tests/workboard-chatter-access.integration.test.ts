@@ -71,6 +71,8 @@ function teamReads(chatterId: number): Array<[string, string]> {
     ["teamLedgerPayouts", "/api/v1/team/ledger-payouts?from=2026-11-02&to=2026-11-08"],
     ["teamLedgerReports", "/api/v1/team/ledger-reports?from=2026-11-02&to=2026-11-08"],
     ["teamLedgerPayoutPrepare", "/api/v1/team/ledger-payouts/prepare?person=nikita"],
+    // Решения: the questions «whose is this sale»
+    ["teamLedgerQuestions", "/api/v1/team/ledger-questions"],
     // Доступ
     ["adminPages", "/api/v1/admin/pages"],
     ["adminListDeviceTokens", `/api/v1/admin/users/by-id/${chatterId}/device-tokens`],

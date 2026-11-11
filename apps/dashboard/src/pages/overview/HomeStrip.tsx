@@ -13,6 +13,7 @@ import { workboardHref, workboardPersonHref } from "@/lib/workboard";
 const SHORT_LABEL: Readonly<Record<WaitingRow["id"], string>> = {
   drafts: "Посты на утверждение",
   unknown: "Исход неизвестен",
+  questions: "Чья продажа",
   reports: "Отчёты смен",
   customs: "Кастомы не отданы",
   held: "Проверить отправки",

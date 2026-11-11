@@ -88283,293 +88283,6 @@
         }
       }
     },
-    "/api/v1/admin/users/by-id/{userId}/device-tokens/{tokenId}/harvest-capability": {
-      "patch": {
-        "summary": "Bind or remove a device token's Desktop harvest capability",
-        "tags": [
-          "admin"
-        ],
-        "description": "Owner-only machine binding. Rebinding one machine atomically transfers its harvest authority from the previous device token.",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "machineId": {
-                    "anyOf": [
-                      {
-                        "type": "string",
-                        "format": "uuid",
-                        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  }
-                },
-                "required": [
-                  "machineId"
-                ]
-              }
-            }
-          }
-        },
-        "parameters": [
-          {
-            "schema": {
-              "type": "integer",
-              "exclusiveMinimum": 0,
-              "maximum": 9007199254740991
-            },
-            "in": "path",
-            "name": "userId",
-            "required": true
-          },
-          {
-            "schema": {
-              "type": "integer",
-              "exclusiveMinimum": 0,
-              "maximum": 9007199254740991
-            },
-            "in": "path",
-            "name": "tokenId",
-            "required": true
-          }
-        ],
-        "security": [
-          {
-            "cookieAuth": []
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "id": {
-                      "type": "integer",
-                      "exclusiveMinimum": 0,
-                      "maximum": 9007199254740991
-                    },
-                    "label": {
-                      "type": "string"
-                    },
-                    "keyPrefix": {
-                      "type": "string"
-                    },
-                    "harvestMachineId": {
-                      "anyOf": [
-                        {
-                          "type": "string",
-                          "format": "uuid",
-                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-                        },
-                        {
-                          "type": "null"
-                        }
-                      ]
-                    },
-                    "isActive": {
-                      "type": "boolean"
-                    },
-                    "expiresAt": {
-                      "type": "string"
-                    },
-                    "lastUsedAt": {
-                      "type": [
-                        "string",
-                        "null"
-                      ]
-                    },
-                    "lastClientVersion": {
-                      "type": [
-                        "string",
-                        "null"
-                      ]
-                    },
-                    "createdAt": {
-                      "type": "string"
-                    },
-                    "revokedAt": {
-                      "type": [
-                        "string",
-                        "null"
-                      ]
-                    },
-                    "revokedReason": {
-                      "type": [
-                        "string",
-                        "null"
-                      ]
-                    }
-                  },
-                  "required": [
-                    "id",
-                    "label",
-                    "keyPrefix",
-                    "harvestMachineId",
-                    "isActive",
-                    "expiresAt",
-                    "lastUsedAt",
-                    "lastClientVersion",
-                    "createdAt",
-                    "revokedAt",
-                    "revokedReason"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    },
-                    "message": {
-                      "type": "string"
-                    },
-                    "statusCode": {
-                      "type": "integer",
-                      "minimum": -9007199254740991,
-                      "maximum": 9007199254740991
-                    },
-                    "reason": {
-                      "type": "string"
-                    },
-                    "statusUrl": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "error",
-                    "message",
-                    "statusCode"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    },
-                    "message": {
-                      "type": "string"
-                    },
-                    "statusCode": {
-                      "type": "integer",
-                      "minimum": -9007199254740991,
-                      "maximum": 9007199254740991
-                    },
-                    "reason": {
-                      "type": "string"
-                    },
-                    "statusUrl": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "error",
-                    "message",
-                    "statusCode"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    },
-                    "message": {
-                      "type": "string"
-                    },
-                    "statusCode": {
-                      "type": "integer",
-                      "minimum": -9007199254740991,
-                      "maximum": 9007199254740991
-                    },
-                    "reason": {
-                      "type": "string"
-                    },
-                    "statusUrl": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "error",
-                    "message",
-                    "statusCode"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    },
-                    "message": {
-                      "type": "string"
-                    },
-                    "statusCode": {
-                      "type": "integer",
-                      "minimum": -9007199254740991,
-                      "maximum": 9007199254740991
-                    },
-                    "reason": {
-                      "type": "string"
-                    },
-                    "statusUrl": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "error",
-                    "message",
-                    "statusCode"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/api/v1/admin/users/by-id/{userId}/links": {
       "post": {
         "summary": "Create a one-time invite or password-reset link for a user (returned once)",
@@ -234733,6 +234446,322 @@
             }
           },
           "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/team/ledger-questions": {
+      "get": {
+        "summary": "The open questions «whose is this sale» from the agency ledger, split by whom they wait for",
+        "tags": [
+          "admin"
+        ],
+        "description": "Read from the ledger's GET /v1/questions?open=1 with Hub's payouts key. Read-only: the owner answers the agent in the chat. While the ledger refuses Hub the questions (403/404), both lists are empty and `questionsRead` false. 503 when the ledger is not connected or did not answer.",
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "owner": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "integer",
+                            "exclusiveMinimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "pageLabel": {
+                            "type": "string"
+                          },
+                          "fanRef": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "fanName": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "transactionRef": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "netMills": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "occurredAt": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "question": {
+                            "type": "string"
+                          },
+                          "who": {
+                            "type": "string"
+                          },
+                          "askedAt": {
+                            "type": "string"
+                          },
+                          "sourceLink": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "note": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "pageLabel",
+                          "fanRef",
+                          "fanName",
+                          "transactionRef",
+                          "netMills",
+                          "occurredAt",
+                          "question",
+                          "who",
+                          "askedAt",
+                          "sourceLink",
+                          "note"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "chatters": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "integer",
+                            "exclusiveMinimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "pageLabel": {
+                            "type": "string"
+                          },
+                          "fanRef": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "fanName": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "transactionRef": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "netMills": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "occurredAt": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "question": {
+                            "type": "string"
+                          },
+                          "who": {
+                            "type": "string"
+                          },
+                          "askedAt": {
+                            "type": "string"
+                          },
+                          "sourceLink": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "note": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "pageLabel",
+                          "fanRef",
+                          "fanName",
+                          "transactionRef",
+                          "netMills",
+                          "occurredAt",
+                          "question",
+                          "who",
+                          "askedAt",
+                          "sourceLink",
+                          "note"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "questionsRead": {
+                      "type": "boolean"
+                    },
+                    "serverNow": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "owner",
+                    "chatters",
+                    "questionsRead",
+                    "serverNow"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
             "description": "Default Response",
             "content": {
               "application/json": {

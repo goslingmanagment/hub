@@ -303,6 +303,8 @@ describe("the fan's card across pages", () => {
       if (!testDb || !server) return context.skip();
       expect((await card("lora-1", "7000000011", lead)).statusCode).toBe(403);
       expect((await card("nosuchpage", "7000000011", owner)).statusCode).toBe(404);
+      // A reference that is not the platform's fan number names no fan: a 404, never a card that fails its own schema.
+      expect((await card("ari-1", "some_username", owner)).statusCode).toBe(404);
       expect((await card("ari-1", "7000000011", await login("vanya", "vanya-secret"))).statusCode).toBe(403);
       const device = await server.inject({
         method: "GET",

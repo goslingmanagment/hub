@@ -1,7 +1,7 @@
 import { queryOptions, useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
-import type { ClientSendCustodyListItem, ClientSendCustodyResolveBody, KernelOperationResponse, TeamLedgerReportPost } from "@agency_hub_core/contracts";
-import { pendingChangesOf, postOnPage, unparsedPosts, type PendingChange } from "@agency_hub_core/ui/shiftReports";
-import { customsQuery, heldSendsQuery, reportChangesQuery, reportPostsQuery } from "@/shared/decisions";
+import type { ClientSendCustodyListItem, ClientSendCustodyResolveBody, KernelOperationResponse, TeamLedgerQuestion, TeamLedgerReportPost } from "@agency_hub_core/contracts";
+import { pendingChangesOf, postOnPage, unparsedPostsToDecide, type PendingChange } from "@agency_hub_core/ui/shiftReports";
+import { customsQuery, heldSendsQuery, questionOnPage, reportChangesQuery, reportPostsQuery, saleQuestionsQuery } from "@/shared/decisions";
 import { kernel } from "@/shared/hub";
 
 /**
@@ -10,10 +10,16 @@ import { kernel } from "@/shared/hub";
  * Phase 1 adapter over today's operations; the reads and their keys are the
  * shared ones (src/shared/decisions.ts), so a decision made here moves the
  * sidebar's count at once:
+ *   - the questions «whose is this sale» the chat agent asked (the owner's only,
+ *     the agency ledger's, `teamLedgerQuestions`): the owner's to decide and the
+ *     chatters' own — read only: the owner answers the agent in the chat, the
+ *     agent records the decision in the ledger and the question leaves;
  *   - the shift reports' questions (the owner's only, the agency ledger's, the
- *     last month): the posts it could not use (`teamLedgerReports`) and the paid
- *     days whose report changed (`teamLedgerPayouts`) — read only: the owner's
- *     word on them is given to the ledger, not here;
+ *     last month): the posts it could not use (`teamLedgerReports`) of the days
+ *     it accrues from the posts — none while the payout sheets pay
+ *     (`unparsedPostsToDecide`, by `reportsFrom` of `teamLedgerPayouts`) — and
+ *     the paid days whose report changed (`teamLedgerPayouts`) — read only: the
+ *     owner's word on them is given to the ledger, not here;
  *   - customs: `teamCustoms`;
  *   - held sends: `clientSendCustodyList` (held: the shared key; resolved: ours);
  *   - fan names: `pageFanCard` per fan — Hub sends the number only (phase 2: the
@@ -40,7 +46,11 @@ export const CUSTOM_OVERDUE_DAYS = 7;
 
 /** Future contract (phase 2, `teamDecisions`): one read of the screen, already cut to the page filter on the server. */
 export interface DecisionsView {
-  /** The posts the ledger could not use (on the page: a post of no known page is every page's) and the paid days whose report changed. */
+  /** The questions «whose is this sale» on the page (a question of no known page is every page's): the owner's to decide, and
+   *  the chatters' own (information, not counted); `elsewhere` — the owner's on the other pages. */
+  questions: { owner: TeamLedgerQuestion[]; chatters: TeamLedgerQuestion[]; elsewhere: number; serverNow: string } | null;
+  /** The posts the ledger could not use, of the days it accrues from the posts (on the page: a post of no known page is
+   *  every page's), and the paid days whose report changed. */
   reports: { posts: TeamLedgerReportPost[]; changes: PendingChange[]; elsewhere: number } | null;
   customs: { paid: Custom[]; ordered: Custom[]; other: Custom[]; elsewhere: number; capped: boolean; serverNow: string } | null;
   held: { items: HeldSend[]; total: number; elsewhere: number; serverNow: string } | null;
@@ -48,8 +58,9 @@ export interface DecisionsView {
 
 export function useDecisions(options: { owner: boolean; page: string | null }) {
   const { owner, page } = options;
-  const [posts, changes, customs, held, heldAll] = useQueries({
+  const [questions, posts, changes, customs, held, heldAll] = useQueries({
     queries: [
+      { ...saleQuestionsQuery, enabled: owner, refetchInterval: 5 * MINUTE },
       { ...reportPostsQuery(), enabled: owner, refetchInterval: 5 * MINUTE },
       { ...reportChangesQuery(), enabled: owner, refetchInterval: 5 * MINUTE },
       { ...customsQuery, refetchInterval: MINUTE },
@@ -60,12 +71,21 @@ export function useDecisions(options: { owner: boolean; page: string | null }) {
   });
 
   const onPage = (label: string) => page === null || label === page;
+  const toDecide = posts.data && changes.data ? unparsedPostsToDecide(posts.data, changes.data) : [];
   const view: DecisionsView = {
+    questions: questions.data
+      ? {
+        owner: questions.data.owner.filter((question) => questionOnPage(question, page)),
+        chatters: questions.data.chatters.filter((question) => questionOnPage(question, page)),
+        elsewhere: questions.data.owner.filter((question) => !questionOnPage(question, page)).length,
+        serverNow: questions.data.serverNow,
+      }
+      : null,
     reports: posts.data && changes.data
       ? {
-        posts: unparsedPosts(posts.data).filter((post) => postOnPage(post, page)),
+        posts: toDecide.filter((post) => postOnPage(post, page)),
         changes: pendingChangesOf(changes.data),
-        elsewhere: unparsedPosts(posts.data).filter((post) => !postOnPage(post, page)).length,
+        elsewhere: toDecide.filter((post) => !postOnPage(post, page)).length,
       }
       : null,
     customs: customs.data
@@ -88,9 +108,10 @@ export function useDecisions(options: { owner: boolean; page: string | null }) {
       : null,
   };
 
-  const reads = owner ? [posts, changes, customs, held] : [customs, held];
+  const reads = owner ? [questions, posts, changes, customs, held] : [customs, held];
   return {
     view,
+    questions,
     posts,
     changes,
     customs,
@@ -134,13 +155,18 @@ export interface KnownFan {
 
 const fanKey = (fan: FanRefOnPage) => `${fan.pageLabel}\u0000${fan.fanRef}`;
 
+/** A fan's reference Hub can look up: the platform's user number. */
+export const isPlatformFanRef = (fan: FanRefOnPage): boolean => /^[1-9]\d{0,29}$/u.test(fan.fanRef);
+
 /**
  * The names of a few fans (`pageFanCard`, one read each, long cached): the
  * disputes, customs and held sends carry the number only. A fan Hub does not
  * know, or a read that failed, stays «фан ·4821» — never the 18 digits.
  */
 export function useFanNames(fans: readonly FanRefOnPage[]): (fan: FanRefOnPage) => KnownFan | undefined {
-  const unique = [...new Map(fans.map((fan) => [fanKey(fan), fan])).values()];
+  // Only a platform's fan number can be looked up. A question from the ledger may name its fan by a username or a
+  // label («общак …»): that row shows the name it came with, and no read is sent for it.
+  const unique = [...new Map(fans.filter(isPlatformFanRef).map((fan) => [fanKey(fan), fan])).values()];
   const results = useQueries({
     queries: unique.map((fan) => ({
       queryKey: ["decisions", "fan", fan.pageLabel, fan.fanRef] as const,
@@ -164,12 +190,13 @@ export function useFanNames(fans: readonly FanRefOnPage[]): (fan: FanRefOnPage) 
 
 /**
  * What a decision changes: the queues and their counts — not the fans' names
- * (`["decisions","fan",…]`) or the ledger's reads, which a write here never
- * changes (Р10: no N `pageFanCard` reads after every decision).
+ * (`["decisions","fan",…]`) or the ledger's reads (the questions, the reports),
+ * which a write here never changes (Р10: no N `pageFanCard` reads after every
+ * decision).
  */
 function isQueueKey(query: { queryKey: readonly unknown[] }): boolean {
   const [area, kind] = query.queryKey;
-  return area === "decisions" && kind !== "fan" && kind !== "report-posts" && kind !== "report-changes";
+  return area === "decisions" && kind !== "fan" && kind !== "sale-questions" && kind !== "report-posts" && kind !== "report-changes";
 }
 
 /**

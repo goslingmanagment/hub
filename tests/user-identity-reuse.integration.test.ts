@@ -177,7 +177,6 @@ describe("immutable user identities and reusable logins", () => {
       ["POST", "/deactivate", {}], ["POST", "/reactivate", {}],
       ["GET", "/device-tokens", undefined], ["POST", "/device-tokens", { label: "must not issue" }],
       ["DELETE", "/device-tokens", undefined], ["DELETE", "/device-tokens/1", undefined],
-      ["PATCH", "/device-tokens/1/harvest-capability", { machineId: null }],
       ["POST", "/models", { modelSlug: "lora-model" }], ["DELETE", "/models/lora-model", undefined],
       ["GET", "/grants", undefined], ["GET", "/links", undefined],
       ["POST", "/links", { kind: "invite" }], ["POST", "/links/1/revoke", {}],

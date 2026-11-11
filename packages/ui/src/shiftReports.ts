@@ -13,7 +13,8 @@ import type {
  * (`accountReports`: sales only, no pay), every chatter's for the owner in
  * «Выплаты → Отчёты» and «Решения» (`teamLedgerReports`), and what of them
  * waits for the owner — the same count in Workboard and on the console's
- * «Ждут вас». Times are Moscow's. No React here.
+ * «Ждут вас» (`unparsedPostsToDecide`, `pendingChangesOf`). Times are Moscow's.
+ * No React here.
  */
 
 const MSK_OFFSET_MS = 3 * 3_600_000;
@@ -80,6 +81,19 @@ export function reasonText(flag: string): string {
   return flag.replace(/\s*\(§[^()]*\)\s*$/u, "").trim();
 }
 
+/**
+ * A text the team's agent wrote, as plain words. The agent writes its notes in Markdown out of habit, and a screen
+ * that shows them as text would show the marks: «**Фан** …». The emphasis and code marks go, the words stay; a lone
+ * asterisk or underscore is part of the text and stays too.
+ */
+export function plainNote(text: string): string {
+  return text
+    .replace(/\*\*([^*\n]+)\*\*/gu, "$1")
+    .replace(/(^|[\s(«"])__([^_\n]+)__(?=$|[\s).,:;!?»"])/gu, "$1$2")
+    .replace(/`([^`\n]+)`/gu, "$1")
+    .trim();
+}
+
 /** The report's sales in two groups, each in the ledger's order: what is in the total, and what was held out. */
 export function splitLines(lines: readonly AccountReportLine[]): { counted: AccountReportLine[]; held: AccountReportLine[] } {
   return { counted: lines.filter((line) => line.counted), held: lines.filter((line) => !line.counted) };
@@ -122,9 +136,24 @@ export function reportQuestionsWindow(today: string): { from: string; to: string
   return { from, to: today };
 }
 
-/** The posts the ledger could not use at all (a blocking flag): out of the pay base until they are fixed. */
-export function unparsedPosts(answer: Pick<TeamLedgerReportsResponse, "posts">): TeamLedgerReportPost[] {
-  return answer.posts.filter((post) => post.blocking);
+/**
+ * The posts the ledger could not use at all (a blocking flag) that wait for the owner's decision: the one rule of
+ * Решения, the sidebar's count, the «Ждут решения» line on Смены and the console's «Ждут вас». A post is a decision
+ * only while the ledger accrues pay from the posted reports (`reportsFrom` of `teamLedgerPayouts`) and only of the days
+ * it accrues: its report date on or after `reportsFrom`, or — the date not read — posted (Moscow) on or after it.
+ * Before that the payout sheets pay for the day, and the post is information for «Выплаты → Отчёты», not a question.
+ */
+export function unparsedPostsToDecide(
+  reports: Pick<TeamLedgerReportsResponse, "posts">,
+  payouts: Pick<TeamLedgerPayoutsResponse, "reportsFrom">,
+): TeamLedgerReportPost[] {
+  const from = payouts.reportsFrom;
+  if (!from) return [];
+  return reports.posts.filter((post) => {
+    if (!post.blocking) return false;
+    const day = post.reportDate ?? moscowDay(post.postedAt);
+    return day !== null && day >= from;
+  });
 }
 
 /** A post is about a page when one of its account lines is that page; a post with no page Hub knows is every page's. */

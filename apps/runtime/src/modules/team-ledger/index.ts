@@ -1,6 +1,7 @@
 import { routeSchemas } from "@agency_hub_core/contracts";
 
 import { readLedgerPayoutPrepare, readLedgerPayouts } from "../../services/ledger-payouts.ts";
+import { readTeamLedgerQuestions } from "../../services/ledger-questions.ts";
 import { readTeamLedgerReports } from "../../services/ledger-team-reports.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
 
@@ -9,7 +10,8 @@ import type { ApiModuleContext, ApiServer } from "../context.ts";
  * release 2): the chatters' accrued, paid and owed pay, read from the ledger
  * with Hub's payouts key; and every chatter's shift reports (`teamLedgerReports`):
  * the pay base the ledger reads from the posts, the drafts, the posts it could
- * not use. Owner session only (the routes' auth); nothing is written anywhere.
+ * not use; and the open questions «whose is this sale» (`teamLedgerQuestions`). Owner session only (the routes'
+ * auth); nothing is written anywhere.
  */
 export function registerTeamLedgerRoutes(server: ApiServer, ctx: ApiModuleContext) {
   const { appContext } = ctx;
@@ -25,5 +27,11 @@ export function registerTeamLedgerRoutes(server: ApiServer, ctx: ApiModuleContex
 
   server.get("/api/v1/team/ledger-reports", { schema: routeSchemas.teamLedgerReports }, async (request) => {
     return readTeamLedgerReports(appContext, request.query);
+  });
+
+  // The open questions «whose is this sale» the chat agent asked (Решения → «Чья продажа»): read only, the owner
+  // answers the agent in the chat.
+  server.get("/api/v1/team/ledger-questions", { schema: routeSchemas.teamLedgerQuestions }, async () => {
+    return readTeamLedgerQuestions(appContext);
   });
 }

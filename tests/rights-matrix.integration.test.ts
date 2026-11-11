@@ -553,9 +553,10 @@ describe("§7 — roles", () => {
       .toBe(403);
     expect((await get(setup.server, `/api/v1/admin/users/by-id/${await fixtureUserId(app!, "lead")}/links`, { cookie: leadCookie }))
       .statusCode).toBe(403);
-    // People's pay and their shift reports from the agency ledger are the owner's alone.
+    // People's pay, their shift reports and the questions whose a sale is, from the agency ledger, are the owner's alone.
     expect((await get(setup.server, "/api/v1/team/ledger-payouts?from=2026-11-02&to=2026-11-08", { cookie: leadCookie })).statusCode).toBe(403);
     expect((await get(setup.server, "/api/v1/team/ledger-reports?from=2026-11-02&to=2026-11-08", { cookie: leadCookie })).statusCode).toBe(403);
+    expect((await get(setup.server, "/api/v1/team/ledger-questions", { cookie: leadCookie })).statusCode).toBe(403);
 
     // Clients: exactly the assigned pages, the same rule as for a chatter.
     expect((await get(setup.server, "/api/v1/pages", bearer))
@@ -693,7 +694,7 @@ describe("§7 — AI persona prompts are owner content", () => {
 
   /** Every device token a person can hold, whatever its role or age: a fresh
    * client sign-in (it carries a client version), a legacy token with no
-   * client version or harvest capability at all, the chat-extension's narrow
+   * client version at all, the chat-extension's narrow
    * token, a team lead's and the owner's own. */
   async function everyDeviceToken(activeApp: AppContext, activeServer: NonNullable<typeof server>) {
     await registerChatter(activeApp, ["lora-fansly"]);

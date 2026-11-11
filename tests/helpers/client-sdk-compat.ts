@@ -231,8 +231,6 @@ export interface ClientLane {
   healthEvent: ((version: string) => Record<string, unknown>) | null;
   /** The producer its capture events are journaled under (H-12a). */
   producer(input: { version: string; header: string }): string;
-  /** The desktop also uploads its one-time local-DB harvest (x-client-version harvest-<v>). */
-  harvest: boolean;
 }
 
 const ARCHIVE_MARKER = `${COMPAT_ARCHIVE.onlyfans} 35`;
@@ -396,7 +394,6 @@ const extensionLane: ClientLane = {
   acceptanceEvent: extensionAcceptanceEvent,
   // H-12a: the narrow token's profile names the producer; the header only the version.
   producer: ({ version }) => `chat-extension@${version}`,
-  harvest: false,
 };
 
 export const CLIENT_LANES: Partial<Record<ClientSdkName, ClientLane>> = {
