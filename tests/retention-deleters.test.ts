@@ -21,6 +21,9 @@ import { describe, expect, it } from "vitest";
 //   - expired Fansly Sync Engine media handoff rows (0234: transient chat-media
 //     bytes for the AI describer nobody consumed within 24 h; not a captured
 //     fact — owner decision №17)
+//   - media looks' frames after 7 days and look rows after 90 (0371: frames
+//     Hub cut for an agent from one image of the page's media; not a captured
+//     fact)
 //   - pg-boss's own archival tables
 // Raw payloads (sync_raw_payloads) are explicitly NOT on that list: they are
 // captured facts, and the nightly `fansly.raw-payload-cleanup` job keeps only
@@ -202,6 +205,11 @@ const SANCTIONED_DELETER_FILES = [
   // and every new download of the page). A transient handoff buffer, not a
   // captured fact: the description and the media metadata observation are.
   "packages/db/src/repositories/sync/media-handoff.ts",
+  // Media looks (0371, owner 2026-11-11): the frames Hub cut from one image
+  // of a page's media for an agent — Hub's own derived pictures, never a
+  // captured fact (the schedule reads they came from are). The nightly
+  // retention job deletes frames after 7 days and look rows after 90.
+  "packages/db/src/repositories/media-looks.ts",
   // Fansly Sync Engine hold set (0240, owner decision №26): a page's holds
   // are rows of `sync_holds`, and lifting a hold deletes its row — in the
   // actor's own transaction (an identity proof, an answer after a hold ended,

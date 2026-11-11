@@ -27,7 +27,8 @@ import {
 export type ResourceFile =
   | "account" | "ws" | "dm-conversations" | "dm-messages" | "dm-live" | "transactions" | "top-spenders"
   | "fan-earnings" | "purchases" | "payouts" | "subscribers" | "followers" | "fan-profiles" | "notifications"
-  | "posts" | "post-replies" | "catalog" | "media-stats" | "stats" | "creator-stats" | "media-download" | "repair" | "probe"
+  | "posts" | "post-replies" | "catalog" | "media-stats" | "stats" | "creator-stats" | "media-download" | "media-look" | "repair"
+  | "probe"
   | "publish" | "fan-lists" | "fan-set-lists" | "page-settings" | "tracking-links";
 
 /** What creates or bumps the work (design §4.1). */
@@ -136,6 +137,8 @@ const probeExcludedChatModule = async (): Promise<ResourceModule> =>
   (await import("./resources/probe.ts")).probeExcludedChatModule;
 const mediaDownloadModule = async (): Promise<ResourceModule> =>
   (await import("./resources/media-download.ts")).mediaDownloadModule;
+const mediaLookModule = async (): Promise<ResourceModule> =>
+  (await import("./resources/media-look.ts")).mediaLookModule;
 const repairModule = async (): Promise<ResourceModule> =>
   (await import("./resources/repair.ts")).repairWsGapModule;
 
@@ -715,6 +718,18 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     subjectScopedAuthStatuses: [401, 403],
     operations: ["cdn.media"],
     module: mediaDownloadModule,
+  },
+  {
+    // An agent's media look (owner 2026-11-11): the one image request of a
+    // look — a video's thumbnail sheet or cover, a photo's resize — with the
+    // describer's transport and hops, its own breaker; the URL in the work's
+    // secret. A 401/403 is the signed URL's, never the page session's.
+    key: "media-look.fetch", file: "media-look", subject: "media", kind: "trigger", class: "planned",
+    triggers: ["api"], slo: {},
+    proof: "snapshot", walk: "single", http: true, evidence: false, fence: "none",
+    subjectScopedAuthStatuses: [401, 403],
+    operations: ["cdn.media"],
+    module: mediaLookModule,
   },
   {
     // Also a frame no chat can be named for (plan §7 p.10 (b), the router).

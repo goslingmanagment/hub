@@ -112,6 +112,7 @@ export const syncResourceFileEnum = z.enum([
   "media-stats",
   "stats",
   "media-download",
+  "media-look",
   "repair",
   "probe",
 ]);

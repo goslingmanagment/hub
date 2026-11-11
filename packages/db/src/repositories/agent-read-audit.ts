@@ -107,6 +107,17 @@ export const AGENT_READ_AUDIT_SUMMARY_SHAPES = {
   postRef: "identifier",
   repeat: "flag",
   dailyUsed: "count",
+  /** An agent's look at its page's media (look:media, owner 2026-11-11): which look,
+   *  the platform's post id and which of its files, what was fetched (`sprite`,
+   *  `cover`, `image`), the look's status, whether it was a cached answer and how
+   *  many frames it holds — ids and Hub's own words, never a URL. A failure's
+   *  code goes in `reasonCode`. */
+  lookId: "count",
+  attachmentIndex: "count",
+  mediaVariant: "identifier",
+  lookStatus: "identifier",
+  cached: "flag",
+  frameCount: "count",
 } as const satisfies Record<string, AgentReadAuditSummaryShape>;
 
 export type AgentReadAuditSummaryKey = keyof typeof AGENT_READ_AUDIT_SUMMARY_SHAPES;

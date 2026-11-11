@@ -141,6 +141,8 @@ export const kernelOperations = {
   agentKeyList: { method: "GET", path: "/api/v1/agent/keys" },
   agentKeyRevoke: { method: "POST", path: "/api/v1/agent/keys/:id/revoke" },
   agentKeyUpdate: { method: "PATCH", path: "/api/v1/agent/keys/:id" },
+  agentMediaLookCreate: { method: "POST", path: "/api/v1/agent/pages/:pageLabel/media-looks" },
+  agentMediaLookGet: { method: "GET", path: "/api/v1/agent/pages/:pageLabel/media-looks/:lookId" },
   agentObservationPayload: { method: "GET", path: "/api/v1/agent/observations/:observationRef/payload" },
   agentObservations: { method: "GET", path: "/api/v1/agent/observations" },
   agentPerson: { method: "GET", path: "/api/v1/agent/people/:platform/:platformUserId" },

@@ -146,6 +146,8 @@ describe("the works' secret parameters stay ciphertext (J7)", () => {
     expect(readFileSync("apps/runtime/src/sync/requests/secret-params.ts", "utf8").match(/decryptSyncWorkSecret[<(]/g)).toHaveLength(1);
     expect(grep("encryptSyncWorkSecret[<(]")).toEqual([
       "apps/runtime/src/services/ai-media-describe/engine-download.ts",
+      // An agent's media look (owner 2026-11-11): its one image's URL, sealed into `media-look.fetch`.
+      "apps/runtime/src/services/media-looks/index.ts",
       "apps/runtime/src/sync/requests/secret-params.ts",
     ]);
   });

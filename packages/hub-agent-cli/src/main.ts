@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
 import { parseArgs } from "node:util";
 
 import { KernelApiError, createClient, type KernelClient } from "@kernel/sdk";
@@ -91,6 +92,13 @@ export interface HubCliDeps {
   upload?: HubFileUpload;
   /** Where a long call's progress lines go: stderr from the executable, nowhere by default. */
   progress?: (line: string) => void;
+  /** The files a command writes (`media-look --out`); injected by tests. */
+  writeFile?: (path: string, bytes: Uint8Array) => void;
+}
+
+function writeLocalFile(path: string, bytes: Uint8Array): void {
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, bytes);
 }
 
 function readLocalFile(path: string): string | null {
@@ -338,6 +346,7 @@ export async function runHubCli(deps: HubCliDeps): Promise<HubCliResult> {
     files: deps.files ?? nodeHubLocalFiles,
     upload: deps.upload ?? createHubFileUpload({ baseUrl, token: credentials.token }),
     progress: deps.progress ?? (() => {}),
+    writeFile: deps.writeFile ?? writeLocalFile,
   };
   let data: unknown;
   try {

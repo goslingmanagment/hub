@@ -85,6 +85,11 @@ import {
  * only the others; the album also makes one `agentPublicationCreate`. They
  * take their paths as bare words.
  *
+ * `media-look` and `media-look-get` WRITE LOCAL FILES with `--out DIR`: a
+ * look's frames as JPEGs under DIR, the printed answer naming their paths in
+ * place of the base64. While a look is `queued`, `media-look` reads it again
+ * with `agentMediaLookGet` (`--wait`, nothing new is fetched by that).
+ *
  * A NOTED ANSWER: `thread-availability` returns its validated response with a
  * one-line `note` beside it ({@link HubNotedResult}), because its null episode
  * reads too easily as "the chat is served"; on a hub without the route it
@@ -408,6 +413,8 @@ export interface HubRunDeps {
   upload: HubFileUpload;
   /** A line for whoever watches a long call (stderr); never part of the document. */
   progress(line: string): void;
+  /** Write one file, its folders made as needed (`media-look --out`). */
+  writeFile(path: string, bytes: Uint8Array): void;
 }
 
 /**
@@ -856,6 +863,85 @@ const PUBLICATION_WITHDRAW_ACCEPTED_NOTE =
   "Accepted is not withdrawn yet: Hub sends the cancel once a fresh read of the schedule still shows the post, then"
   + " reads again. Follow it with publication-get: withdrawn, unknown (a person checks Fansly) or still scheduled"
   + " with the withdrawal rejected.";
+
+// --- media looks (look:media) ----------------------------------------------
+
+/** How long `media-look` keeps reading a queued look by default, and at most. */
+const MEDIA_LOOK_WAIT_SECONDS = 60;
+const MEDIA_LOOK_WAIT_MAX_SECONDS = 600;
+/** Seconds between two reads of a queued look (each read is one call, nothing is fetched). */
+const MEDIA_LOOK_POLL_SECONDS = 5;
+
+const MEDIA_LOOK_CAPABILITY_HINT =
+  "This key lacks look:media (frames of the page's own media): the owner grants it to the key (dashboard, Settings,"
+  + " agent keys).";
+
+function mediaLookHint(error: { status: number | null; code: string | null }): string | null {
+  switch (error.code) {
+    case "agent_capability_missing":
+      return MEDIA_LOOK_CAPABILITY_HINT;
+    case "media_look_in_flight":
+      return "Another look of this page is still in flight (one at a time per page): read it with media-look-get, then ask again.";
+    case "media_look_daily_limit":
+      return "The page's looks for today (UTC) are used up: a cached look of a file still answers; otherwise wait for tomorrow or tell the owner.";
+    case "media_look_not_scheduled":
+    case "media_look_not_in_schedule":
+      return "Only a post waiting in the page's Fansly schedule is looked at for now: a published post or a vault file cannot be yet.";
+    default:
+      return null;
+  }
+}
+
+type MediaLookAnswer = KernelOperationResponse<"agentMediaLookCreate">;
+
+function mediaLookFramesMode(values: HubOptionValues): "inline" | "none" {
+  const none = readFlag(values, "no-frames");
+  if (none && readString(values, "out") !== undefined) throw new HubUsageError("--out writes the frames: it takes no --no-frames");
+  return none ? "none" : "inline";
+}
+
+/** A folder or file name from a page label or a ref: nothing but safe characters. */
+function safeName(value: string): string {
+  return value.replace(/[^A-Za-z0-9._-]/g, "_").replace(/^\.+/, "_") || "_";
+}
+
+/** `f000_t00000ms.jpg`: a frame's place in the video; `f000.jpg` for a cover or a photo. */
+export function mediaLookFrameFileName(frame: { index: number; atMs: number | null }): string {
+  const index = String(frame.index).padStart(3, "0");
+  return frame.atMs === null ? `f${index}.jpg` : `f${index}_t${String(frame.atMs).padStart(5, "0")}ms.jpg`;
+}
+
+/** `DIR/<page>/<publication-N or post-REF>[-<index>]`: one folder per file of a post. */
+export function mediaLookFolder(out: string, pageLabel: string, target: MediaLookAnswer["target"]): string {
+  const post = target.publicationId === null ? `post-${safeName(target.postRef)}` : `publication-${target.publicationId}`;
+  return resolve(out, safeName(pageLabel), target.index === 0 ? post : `${post}-${target.index}`);
+}
+
+/** The look as printed: as the hub answered, or — with `--out` — its frames
+ *  written under the folder and named by their paths instead of base64. A
+ *  look still queued carries a note naming the command that reads it. */
+function mediaLookPrinted(look: MediaLookAnswer, pageLabel: string, out: string | undefined, deps: HubRunDeps): unknown {
+  let data: unknown = look;
+  if (out !== undefined) {
+    const folder = mediaLookFolder(out, pageLabel, look.target);
+    data = {
+      ...look,
+      frames: look.frames.map(({ jpegBase64, ...frame }) => {
+        if (jpegBase64 === undefined) return frame;
+        const path = resolve(folder, mediaLookFrameFileName(frame));
+        deps.writeFile(path, Buffer.from(jpegBase64, "base64"));
+        return { ...frame, path };
+      }),
+    };
+  }
+  return look.status === "queued"
+    ? new HubNotedResult(
+      data,
+      `The page's engine has not answered yet: read it again with hub media-look-get --page-label ${pageLabel} --look-id`
+        + ` ${look.lookId}${out === undefined ? "" : ` --out ${out}`}`,
+    )
+    : data;
+}
 
 /** What a draft body says (publicationContentSchema), besides its media. A vault
  *  album's `vaultAlbumRef` stays with it: sent again, its files go into that album. */
@@ -2400,6 +2486,81 @@ export const HUB_COMMANDS: readonly HubCommand[] = [
     },
     hint: publicationHint,
     run: (client, values, deps, args) => draftVaultAlbum(client, values, deps, args[0]!),
+  },
+  {
+    name: "media-look",
+    operation: "agentMediaLookCreate",
+    summary:
+      "Look at a file of a post in the page's Fansly schedule (a Hub publication in status scheduled, or a post"
+      + " placed by hand): frames ≤ 512 px — a video's sample (one per second, or evenly spaced: what is between"
+      + " frames is not seen) or its cover, a photo downscaled. One image request through the page at its pace, a"
+      + " daily limit per page; a fresh look of the same file answers cached and costs nothing. While it is queued"
+      + " it is read again (media-look-get) up to --wait seconds. --out DIR writes the frames as JPEGs and prints"
+      + " their paths. Needs look:media.",
+    options: {
+      "page-label": { kind: "string", describe: "The page (required)" },
+      "publication-id": { kind: "number", describe: "A Hub publication of the page in status scheduled (or --post-ref)" },
+      "post-ref": { kind: "string", describe: "A post in the page's Fansly schedule, its Fansly id (or --publication-id)" },
+      index: { kind: "number", describe: "Which of the post's files, 0-based, an album's files in its order (default 0)" },
+      cover: { kind: "boolean", describe: "A video's cover instead of its frames" },
+      fresh: { kind: "boolean", describe: "Look again even when a fresh look of the file is kept (costs one look)" },
+      "no-frames": { kind: "boolean", describe: "The frames' facts only, no pictures" },
+      out: { kind: "string", describe: "Write the frames as JPEGs under this folder: DIR/<page>/<post or publication>/f000_t00000ms.jpg" },
+      wait: { kind: "number", describe: `Seconds to keep reading a queued look (default ${MEDIA_LOOK_WAIT_SECONDS}; 0: answer at once)` },
+    },
+    hint: mediaLookHint,
+    run: async (client, values, deps) => {
+      const pageLabel = requireString(values, "page-label");
+      const publicationId = readNumber(values, "publication-id");
+      const postRef = readString(values, "post-ref");
+      if ((publicationId === undefined) === (postRef === undefined)) {
+        throw new HubUsageError("name exactly one of --publication-id, --post-ref");
+      }
+      const frames = mediaLookFramesMode(values);
+      const waitSeconds = readNumber(values, "wait") ?? MEDIA_LOOK_WAIT_SECONDS;
+      if (!Number.isFinite(waitSeconds) || waitSeconds < 0 || waitSeconds > MEDIA_LOOK_WAIT_MAX_SECONDS) {
+        throw new HubUsageError(`--wait must be 0 to ${MEDIA_LOOK_WAIT_MAX_SECONDS} seconds`);
+      }
+      let look = await client.agentMediaLookCreate({
+        params: { pageLabel },
+        body: {
+          ...(publicationId === undefined ? {} : { publicationId: requireId(values, "publication-id") }),
+          ...(postRef === undefined ? {} : { postRef }),
+          index: readNumber(values, "index") ?? 0,
+          cover: readFlag(values, "cover"),
+          fresh: readFlag(values, "fresh"),
+          frames,
+        },
+      });
+      const started = deps.now();
+      while (look.status === "queued" && deps.now() - started + MEDIA_LOOK_POLL_SECONDS * MS_PER_SECOND <= waitSeconds * MS_PER_SECOND) {
+        await deps.sleep(MEDIA_LOOK_POLL_SECONDS * MS_PER_SECOND);
+        look = await client.agentMediaLookGet({ params: { pageLabel, lookId: look.lookId }, query: { frames } });
+      }
+      return mediaLookPrinted(look, pageLabel, readString(values, "out"), deps);
+    },
+  },
+  {
+    name: "media-look-get",
+    operation: "agentMediaLookGet",
+    summary:
+      "A media look of the page by its id: its status and frames, finished now when the page's engine has answered"
+      + " since. --out DIR writes the frames as JPEGs and prints their paths. Needs look:media.",
+    options: {
+      "page-label": { kind: "string", describe: "The page (required)" },
+      "look-id": { kind: "number", describe: "The look's id (required)" },
+      "no-frames": { kind: "boolean", describe: "The frames' facts only, no pictures" },
+      out: { kind: "string", describe: "Write the frames as JPEGs under this folder: DIR/<page>/<post or publication>/f000_t00000ms.jpg" },
+    },
+    hint: mediaLookHint,
+    run: async (client, values, deps) => {
+      const pageLabel = requireString(values, "page-label");
+      const look = await client.agentMediaLookGet({
+        params: { pageLabel, lookId: requireId(values, "look-id") },
+        query: { frames: mediaLookFramesMode(values) },
+      });
+      return mediaLookPrinted(look, pageLabel, readString(values, "out"), deps);
+    },
   },
   {
     name: "queue-preview",

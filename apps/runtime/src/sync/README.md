@@ -376,6 +376,10 @@ engine owns — which every page an actor runs is. (The socket's own Upgrade, `w
   signed URL's and closes the download (`subjectScopedAuthStatuses`), a 429 holds the `cdn.media` route. The bytes cross to
   the worker through the transient handoff table `sync_media_handoff` (owner decision №17): not a captured fact,
   consumed by the describer's read, swept after 24 h.
+- `media-look.fetch` — an agent's media look (owner 2026-11-11): the same transport and hops with its own key and
+  breaker, one image only (a video's thumbnail sheet or cover, a photo's resize; never a video, a playlist or a
+  manifest, the path must be an image's); the bytes go onto the look (`media_looks.source_bytes`, dropped after
+  15 minutes) and the API process cuts them into frames (`services/media-looks`). Subject `look:<id>`.
 
 The Upgrade and a CDN hop journal nothing (`capture` on their wire spec): no observation, no request line in
 `sync_attempts.request` (a hop keeps its number and the sha256 of its path). Their answer is applied once, from

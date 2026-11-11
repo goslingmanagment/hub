@@ -10,6 +10,7 @@ import { ofapiCollectionRouteSchemas } from "./routes-ofapi-collection.ts";
 import { ofLinksRouteSchemas } from "./routes-of-links.ts";
 import { pageBrowserRouteSchemas } from "./routes-page-browser.ts";
 import { publicationRouteSchemas } from "./routes-publications.ts";
+import { mediaLookRouteSchemas } from "./routes-media-looks.ts";
 import { agentTeamRouteSchemas } from "./agent-team.ts";
 import { fanQueueRouteSchemas } from "./routes-fan-queues.ts";
 import { outreachRouteSchemas } from "./routes-outreach.ts";
@@ -5941,6 +5942,7 @@ const baseRouteSchemas = {
   ...ofLinksRouteSchemas,
   ...pageBrowserRouteSchemas,
   ...publicationRouteSchemas,
+  ...mediaLookRouteSchemas,
   ...fanQueueRouteSchemas,
   ...agentTeamRouteSchemas,
   ...outreachRouteSchemas,
