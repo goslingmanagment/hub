@@ -19,7 +19,8 @@ import { demoPageSyncBlocks, demoSyncHistoryRequests, demoSyncOverview, demoSync
 
 type Capability =
   | "read:messages" | "read:money" | "read:observations_envelope" | "read:datasets" | "request:hydration"
-  | "write:publication_drafts" | "approve:publications" | "write:fan_queues" | "read:content" | "read:team";
+  | "write:publication_drafts" | "approve:publications" | "write:fan_queues" | "read:content" | "read:team"
+  | "withdraw:publications";
 
 /** The agents' read keys: the research agent, ContentOps (its own content only), the queue builder, and two that ended. */
 function agentKeys(request: DemoRequest) {
@@ -53,7 +54,7 @@ function agentKeys(request: DemoRequest) {
   const all = ["mia-1", "mia-2", "mia-3", "mia-of", "mia-vip-of", "nova-1", "ivy-1", "ivy-2"];
   return [
     key(7, "Исследователь архива", "Xk4q9TzP2w", ["read:messages", "read:money", "read:datasets", "read:observations_envelope", "request:hydration"], all, 41, 79, 0.3),
-    key(9, "ContentOps", "m3RfV8bN1c", ["read:content", "write:publication_drafts", "approve:publications"], ["mia-1", "mia-2", "mia-3", "nova-1", "ivy-1", "ivy-2"], 8, 82, 2.6),
+    key(9, "ContentOps", "m3RfV8bN1c", ["read:content", "write:publication_drafts", "approve:publications", "withdraw:publications"], ["mia-1", "mia-2", "mia-3", "nova-1", "ivy-1", "ivy-2"], 8, 82, 2.6),
     key(10, "Очереди фанов", "Q7pLs2dYe9", ["read:datasets", "read:money", "write:fan_queues"], ["mia-1", "mia-2", "nova-1"], 5, 85, 19),
     key(4, "Разбор страниц Ivy (разовый)", "aZ5h0KcW3u", ["read:messages", "read:datasets"], ["ivy-1", "ivy-2"], 62, -2, 300),
     key(3, "Старый агент отчётов", "Tr8vN6eJq1", ["read:money", "read:datasets"], ["mia-1", "nova-1"], 120, 245, 2_100, 33),

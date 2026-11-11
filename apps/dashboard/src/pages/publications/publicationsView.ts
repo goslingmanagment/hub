@@ -92,6 +92,7 @@ const EVENT_REASONS: Readonly<Record<string, string>> = {
   absent_by_id_and_live_stories: "сториз нет ни по номеру, ни среди текущих",
   withdrawn: "убран из расписания площадки",
   withdraw_confirmed_by_read: "убран: расписание площадки его больше не показывает",
+  withdrawn_cancel_acknowledged: "убран: Fansly ответил на снятие, что пост снят, и следующее чтение расписания его не показывает",
   withdraw_still_in_schedule: "команда отправлена, но расписание всё ещё показывает пост",
   withdraw_unconfirmed_incomplete: "команда отправлена, проверить не удалось: расписание прочитано неполно",
   withdraw_unconfirmed_read_failed: "команда отправлена, проверить не удалось: расписание не прочиталось",
