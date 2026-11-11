@@ -7,6 +7,7 @@ import type { Database } from "../client.ts";
 // delete. A Fansly deletion is a fact about the message, not an erasure (owner,
 // 2026-09-28): the row keeps its text, which this read serves. The route
 // (apps/runtime services/client-deleted-messages.ts) decides who may read it.
+// The same read answers the open chat's length and who wrote it.
 
 export interface ClientDeletedMessageRow {
   platformMessageId: string;
@@ -93,5 +94,51 @@ export async function readClientChatLength(
     chainCount: Number(row.contiguous_count),
     afterHead: Number(row.after_head),
     oldestAt: row.contiguous_oldest_at === null ? null : new Date(row.contiguous_oldest_at),
+  };
+}
+
+export interface ClientChatChatterRow {
+  userId: number;
+  username: string;
+  /** The chat's messages of the page this user sent, as their sends were reported (send-attribution-v1). */
+  messages: number;
+}
+
+export interface ClientChatAuthorsRow {
+  /** Every user with a reported send in the chat, in no order. */
+  chatters: ClientChatChatterRow[];
+  /** The page's own messages of the chat in the archive, deleted ones included; null when not counted. */
+  pageSide: number | null;
+}
+
+/**
+ * Who wrote one Fansly chat of a page (the chat header, 2026-11-11): the reported sends of the chat by user, and, only
+ * when asked (`countPageSide`: the chat's history is proven complete), how many of the chat's messages the archive holds
+ * as the page's. The sends are filtered by the fan as well, so the (page_id, fan_ref) index serves them; a deleted user
+ * still names their messages. The page's side is one read of message_archive_account_conv_idx.
+ */
+export async function readClientChatAuthors(
+  db: Database,
+  input: { pageId: number; conversationRef: string; fanRef: string; countPageSide: boolean },
+): Promise<ClientChatAuthorsRow> {
+  const [chatters, pageSide] = await Promise.all([
+    db.execute<{ user_id: string | number; username: string; messages: number | string }>(sql`
+      select a.user_id, u.username, count(*) as messages
+      from client_send_attributions a
+      join users u on u.id = a.user_id
+      where a.platform = 'fansly' and a.page_id = ${input.pageId} and a.fan_ref = ${input.fanRef}
+        and a.conversation_ref = ${input.conversationRef}
+      group by a.user_id, u.username`),
+    input.countPageSide
+      ? db.execute<{ page_side: number | string }>(sql`
+        select count(*) as page_side
+        from message_archive m
+        where m.account_id = ${input.pageId} and m.conversation_ref = ${input.conversationRef}
+          and m.platform = 'fansly' and m.is_sent_by_me`)
+      : null,
+  ]);
+  return {
+    chatters: chatters.rows.map((row) => ({ userId: Number(row.user_id), username: row.username, messages: Number(row.messages) })),
+    pageSide: pageSide === null ? null : Number(pageSide.rows[0]!.page_side),
   };
 }

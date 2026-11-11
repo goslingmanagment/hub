@@ -173,6 +173,9 @@ for (const file of [
   "ofapi-actions-publishing.ts",
   "ofapi-actions-account.ts",
   "routes-ofapi-actions.ts",
+  // Media looks (look:media): the barrel re-exports both and routes.ts spreads the routes in.
+  "media-looks.ts",
+  "routes-media-looks.ts",
   "sdk-runtime.ts",
   "authorization-policy.ts",
   "contract-hash.ts",

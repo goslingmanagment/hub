@@ -1,5 +1,19 @@
-import { CLIENT_DELETED_MESSAGES_MAX, type ClientChatLength, type ClientDeletedMessagesResponse } from "@agency_hub_core/contracts";
-import { findPageSummaryByLabel, listClientDeletedMessages, readClientChatLength, type ClientChatLengthRow } from "@agency_hub_core/db";
+import {
+  CLIENT_CHAT_LENGTH_CHATTERS_MAX,
+  CLIENT_DELETED_MESSAGES_MAX,
+  type ClientChatAuthors,
+  type ClientChatLength,
+  type ClientDeletedMessagesResponse,
+} from "@agency_hub_core/contracts";
+import {
+  findPageSummaryByLabel,
+  listClientDeletedMessages,
+  readClientChatAuthors,
+  readClientChatLength,
+  type ClientChatAuthorsRow,
+  type ClientChatLengthRow,
+  type Database,
+} from "@agency_hub_core/db";
 
 import type { AppContext } from "../bootstrap.ts";
 import { requireApiKeyUser, type HumanAuthPrincipal } from "./auth.ts";
@@ -29,21 +43,69 @@ import { requireClientGrantedPage } from "./client-switches.ts";
  * messages the open chat ever had and since when (owner, 2026-11-08: a badge
  * in the header, «без лишних запросов и точно»): the header asks this read
  * once per opened chat anyway. Exact or nothing (`chatLengthOf`).
+ *
+ * WHO WROTE IT. The same answer names the chat's authors (owner, 2026-11-11:
+ * «кто из чатеров сколько сообщений оставил»): the chatters by their reported
+ * sends (send-attribution-v1), always; the fan's and the page's unattributed
+ * messages only beside a proven length, the page's side counted from the
+ * archive and the fan's the rest of the length (`chatAuthorsOf`).
  */
 export const DELETED_MESSAGES_FEATURE = "deleted-messages-v1";
 
 /**
  * What the header may say of a thread: the count and the first message only when the sync proved the chain reaches
- * the chat's first message; otherwise both null, never a count that may miss older messages. Pure.
+ * the chat's first message; otherwise both null, never a count that may miss older messages; and who wrote them. Pure.
  */
-export function chatLengthOf(conversationRef: string, row: ClientChatLengthRow | null): ClientChatLength | null {
-  if (row === null) return null;
-  if (row.historyState !== "complete") return { conversationRef, messages: null, firstMessageAt: null };
+export function chatLengthOf(
+  conversationRef: string,
+  row: ClientChatLengthRow,
+  authors: ClientChatAuthorsRow,
+  callerUserId: number,
+): ClientChatLength {
+  const complete = row.historyState === "complete";
+  const messages = complete ? row.chainCount + row.afterHead : null;
   return {
     conversationRef,
-    messages: row.chainCount + row.afterHead,
-    firstMessageAt: row.oldestAt === null ? null : row.oldestAt.toISOString(),
+    messages,
+    firstMessageAt: !complete || row.oldestAt === null ? null : row.oldestAt.toISOString(),
+    authors: chatAuthorsOf(messages, authors, callerUserId),
   };
+}
+
+/**
+ * Who wrote the chat's `messages`. The chatters, the most messages first (then by name), at most
+ * CLIENT_CHAT_LENGTH_CHATTERS_MAX, whatever the history's state. The fan and the unattributed only with a proven length
+ * and the page's side counted: the page's messages are at least the chatters' (a send can be reported a moment before
+ * the archive holds it), the fan's are the rest of the length, and the unattributed what of the page's no chatter
+ * claims; so they add up to `messages` unless a side is ahead of the length. Pure.
+ */
+export function chatAuthorsOf(messages: number | null, authors: ClientChatAuthorsRow, callerUserId: number): ClientChatAuthors {
+  const chatters = authors.chatters
+    .filter((chatter) => chatter.messages > 0)
+    .sort((a, b) => b.messages - a.messages || a.username.localeCompare(b.username) || a.userId - b.userId)
+    .slice(0, CLIENT_CHAT_LENGTH_CHATTERS_MAX)
+    .map((chatter) => ({ userId: chatter.userId, name: chatter.username, isMe: chatter.userId === callerUserId, messages: chatter.messages }));
+  if (messages === null || authors.pageSide === null) return { chatters, fan: null, unattributed: null };
+  const attributed = chatters.reduce((sum, chatter) => sum + chatter.messages, 0);
+  const page = Math.max(authors.pageSide, attributed);
+  return {
+    chatters,
+    fan: Math.max(0, messages - page),
+    unattributed: Math.max(0, Math.min(page, messages) - attributed),
+  };
+}
+
+/** The open chat's length and authors, when the page's thread of the group is this fan's; null otherwise. */
+async function readChat(
+  db: Database,
+  input: { pageId: number; conversationRef: string; fanRef: string },
+  callerUserId: number,
+): Promise<ClientChatLength | null> {
+  const length = await readClientChatLength(db, input);
+  if (length === null) return null;
+  // The archive's count only beside a proven length: an unproven chat never pays for it.
+  const authors = await readClientChatAuthors(db, { ...input, countPageSide: length.historyState === "complete" });
+  return chatLengthOf(input.conversationRef, length, authors, callerUserId);
 }
 
 export async function readClientDeletedMessages(
@@ -56,12 +118,12 @@ export async function readClientDeletedMessages(
   const page = await requireClientGrantedPage(app, principal, await findPageSummaryByLabel(app.db, input.pageLabel), DELETED_MESSAGES_FEATURE);
   const fansly = page.platform === "fansly";
   const { conversationRef } = input;
-  const [{ total, rows }, length] = await Promise.all([
+  const [{ total, rows }, chat] = await Promise.all([
     fansly
       ? listClientDeletedMessages(app.db, { pageId: page.id, fanRef: input.fanRef, limit: CLIENT_DELETED_MESSAGES_MAX })
       : { total: 0, rows: [] },
     fansly && conversationRef !== undefined
-      ? readClientChatLength(app.db, { pageId: page.id, conversationRef, fanRef: input.fanRef })
+      ? readChat(app.db, { pageId: page.id, conversationRef, fanRef: input.fanRef }, principal.user.id)
       : null,
   ]);
   return {
@@ -76,7 +138,7 @@ export async function readClientDeletedMessages(
       sentAt: row.sentAt === null ? null : row.sentAt.toISOString(),
       deletedAt: row.deletedAt.toISOString(),
     })),
-    ...(conversationRef === undefined ? {} : { chat: chatLengthOf(conversationRef, length) }),
+    ...(conversationRef === undefined ? {} : { chat }),
     serverNow: new Date().toISOString(),
   };
 }

@@ -176087,6 +176087,73 @@
                                 "string",
                                 "null"
                               ]
+                            },
+                            "authors": {
+                              "type": "object",
+                              "properties": {
+                                "chatters": {
+                                  "maxItems": 50,
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "userId": {
+                                        "type": "integer",
+                                        "exclusiveMinimum": 0,
+                                        "maximum": 9007199254740991
+                                      },
+                                      "name": {
+                                        "type": "string"
+                                      },
+                                      "isMe": {
+                                        "type": "boolean"
+                                      },
+                                      "messages": {
+                                        "type": "integer",
+                                        "exclusiveMinimum": 0,
+                                        "maximum": 9007199254740991
+                                      }
+                                    },
+                                    "required": [
+                                      "userId",
+                                      "name",
+                                      "isMe",
+                                      "messages"
+                                    ],
+                                    "additionalProperties": false
+                                  }
+                                },
+                                "fan": {
+                                  "anyOf": [
+                                    {
+                                      "type": "integer",
+                                      "minimum": 0,
+                                      "maximum": 9007199254740991
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "unattributed": {
+                                  "anyOf": [
+                                    {
+                                      "type": "integer",
+                                      "minimum": 0,
+                                      "maximum": 9007199254740991
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                }
+                              },
+                              "required": [
+                                "chatters",
+                                "fan",
+                                "unattributed"
+                              ],
+                              "additionalProperties": false
                             }
                           },
                           "required": [

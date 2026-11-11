@@ -1930,6 +1930,37 @@ export const clientDeletedMessagesQuerySchema = z.object({
   conversationRef: clientConversationRefSchema.optional(),
 }).strict();
 
+/** The most chatters `chat.authors` names, the most messages first. */
+export const CLIENT_CHAT_LENGTH_CHATTERS_MAX = 50;
+
+/**
+ * Who wrote the chat's messages (owner, 2026-11-11: «кто из чатеров сколько
+ * сообщений оставил», in the same card).
+ *
+ * `chatters`: the page's messages of this chat by the person who sent them
+ * (send-attribution-v1: recorded from 2026-10-24, only for a send made through
+ * the chat extension), the most messages first. Exact whatever the history's
+ * state.
+ *
+ * `fan` and `unattributed` split the rest and need the whole chat: both null
+ * while `messages` is null. `unattributed` is the page's messages with no
+ * known author: a mass message, a send from outside the extension, anything
+ * before authors were recorded. When they are not null, `fan`, `unattributed`
+ * and the chatters' counts add up to `messages`.
+ */
+export const clientChatAuthorsSchema = z.object({
+  chatters: z.array(z.object({
+    userId: intId,
+    /** The author's login, as the dashboard shows it. */
+    name: z.string(),
+    /** The caller themself. */
+    isMe: z.boolean(),
+    messages: z.number().int().positive(),
+  })).max(CLIENT_CHAT_LENGTH_CHATTERS_MAX),
+  fan: z.number().int().nonnegative().nullable(),
+  unattributed: z.number().int().nonnegative().nullable(),
+});
+
 /**
  * The length of the fan's chat with the page, for the chat header: how many
  * messages it ever had and since when. Exact or nothing: both stay null until
@@ -1943,6 +1974,8 @@ export const clientChatLengthSchema = z.object({
   messages: z.number().int().nonnegative().nullable(),
   /** When its first message was sent; null while its history is not proven complete. */
   firstMessageAt: isoTimestamp.nullable(),
+  /** Who wrote them. Absent only in the answer of a hub older than 2026-11-11. */
+  authors: clientChatAuthorsSchema.optional(),
 });
 
 export const clientDeletedMessagesResponseSchema = z.object({
@@ -4670,6 +4703,7 @@ export type ClientMessageAuthorsResponse = z.infer<typeof clientMessageAuthorsRe
 export type ClientDeletedMessagesResponse = z.infer<typeof clientDeletedMessagesResponseSchema>;
 export type ClientDeletedMessagesQuery = z.infer<typeof clientDeletedMessagesQuerySchema>;
 export type ClientChatLength = z.infer<typeof clientChatLengthSchema>;
+export type ClientChatAuthors = z.infer<typeof clientChatAuthorsSchema>;
 export type ClientFanslyProxiesResponse = z.infer<typeof clientFanslyProxiesResponseSchema>;
 export type ClientNoteAttributionWho = z.infer<typeof clientNoteAttributionWhoSchema>;
 export type ClientAudienceNewQuery = z.infer<typeof clientAudienceNewQuerySchema>;
