@@ -3394,6 +3394,35 @@ describe("api integration", () => {
     expect(fansly.overall).toMatchObject({ pages: 0, streams: 0 });
   }, 15_000);
 
+  it("answers a sync trigger for an unknown page with 404 [sync-critical]", async (context) => {
+    if (!testDb || !server || !fixture) {
+      context.skip();
+      return;
+    }
+
+    const ownerLogin = await server.inject({
+      method: "POST",
+      url: "/api/v1/auth/login",
+      payload: { username: "dima", password: "owner-secret" },
+    });
+    const ownerCookie = sessionCookieFrom(ownerLogin);
+
+    // The page label rides in the body, so no policy answers first: the 404
+    // is getPageSummary's.
+    const missing = await server.inject({
+      method: "POST",
+      url: "/api/v1/admin/sync/trigger",
+      headers: { cookie: ownerCookie },
+      payload: { pageLabel: "missing-page", scope: "all" },
+    });
+    expect(missing.statusCode).toBe(404);
+    expect(missing.json()).toEqual({
+      error: "not_found",
+      message: 'Page "missing-page" not found',
+      statusCode: 404,
+    });
+  });
+
   it("returns sync block overview rows and keeps OnlyFans legacy history retired [sync-critical]", async (context) => {
     if (!testDb || !server || !fixture) {
       context.skip();

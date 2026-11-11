@@ -9,6 +9,8 @@ import {
   createFanslyPage,
   createModel,
   insertObservation,
+  upsertFanEarningsStat,
+  upsertFans,
 } from "@agency_hub_core/db";
 
 import { runCanonicalization } from "../apps/runtime/src/services/canonicalize-driver.ts";
@@ -149,5 +151,102 @@ describe("fan earnings parse side (Stage 16 v3)", () => {
       [page.id],
     );
     expect(after.rows[0]!.n).toBe("2");
+  });
+});
+
+describe("fan_earnings_stats writer", () => {
+  it("stores every month window beside the capped lifetime row, and an unknown net as NULL", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const model = await createModel(testDb.db, { slug: "m-capped", name: "M Capped" });
+    const page = await createFanslyPage(testDb.db, { modelId: model.id, label: "capped-1" });
+    const fans = await upsertFans(testDb.db, [
+      { platform: "fansly", platformUserId: "fan-c-capped" },
+      { platform: "fansly", platformUserId: "fan-c-whole" },
+      { platform: "fansly", platformUserId: "fan-c-lifetime-only" },
+      { platform: "fansly", platformUserId: "fan-c-stale-month" },
+      { platform: "fansly", platformUserId: "fan-c-net-unknown" },
+      { platform: "fansly", platformUserId: "fan-c-monthly-only" },
+    ]);
+    const [capped, whole, lifetimeOnly, staleMonth, netUnknown, monthlyOnly] = fans;
+    const t1 = new Date("2026-07-01T00:00:00Z");
+    const t2 = new Date("2026-07-02T00:00:00Z");
+    let sourceEventId = 0;
+    const seed = async (
+      fan: { id: number },
+      window: string,
+      grossMills: number,
+      netMills: number | null,
+      observedAt: Date,
+    ) => {
+      sourceEventId += 1;
+      await upsertFanEarningsStat(testDb!.db, {
+        accountId: page.id, fanId: fan.id, window, grossMills, netMills, observedAt, sourceEventId,
+      });
+    };
+    // The prod shape: Fansly's lifetime answer hit its 100-row cap, so the
+    // stored lifetime row is a slice (835_450) of what the months add up to.
+    await seed(capped!, "lifetime", 835_450, 668_360, t2);
+    await seed(capped!, "2026-05", 1_000_000, 800_000, t2);
+    await seed(capped!, "2026-06", 1_481_980, 1_185_584, t2);
+    await seed(capped!, "2026-07", 1_000_000, 800_000, t2);
+    // Uncapped: lifetime and Σmonthly agree.
+    await seed(whole!, "lifetime", 3_103_980, 2_483_184, t2);
+    await seed(whole!, "2026-06", 3_000_000, 2_400_000, t2);
+    await seed(whole!, "2026-07", 103_980, 83_184, t2);
+    // No month rows: the stored lifetime row is all there is.
+    await seed(lifetimeOnly!, "lifetime", 5_000, 4_000, t1);
+    // 2026-05 came from an OLDER monthly answer: it keeps that answer's time.
+    await seed(staleMonth!, "lifetime", 150_000, 120_000, t2);
+    await seed(staleMonth!, "2026-05", 900_000, 720_000, t1);
+    await seed(staleMonth!, "2026-06", 150_000, 120_000, t2);
+    // One month without a net.
+    await seed(netUnknown!, "lifetime", 60_000, 48_000, t2);
+    await seed(netUnknown!, "2026-06", 40_000, 32_000, t2);
+    await seed(netUnknown!, "2026-07", 20_000, null, t2);
+    // Month rows without a lifetime row.
+    await seed(monthlyOnly!, "2026-07", 7_000, 5_600, t2);
+
+    const stored = await testDb.pool.query<{
+      fan: string; window: string; gross_mills: string; net_mills: string | null;
+      currency: string; observed_at: Date;
+    }>(
+      `select f.platform_user_id as fan, s."window", s.gross_mills::text as gross_mills,
+              s.net_mills::text as net_mills, s.currency, s.observed_at
+       from fan_earnings_stats s join fans f on f.id = s.fan_id
+       where s.account_id = $1
+       order by f.platform_user_id collate "C", s."window" collate "C"`,
+      [page.id],
+    );
+    const T1 = t1.toISOString();
+    const T2 = t2.toISOString();
+    // One row per (fan, window): each month is its own row under its period,
+    // the lifetime row stays the capped slice as served.
+    expect(stored.rows.map((row) => [
+      row.fan, row.window, row.gross_mills, row.net_mills, row.observed_at.toISOString(),
+    ])).toEqual([
+      ["fan-c-capped", "2026-05", "1000000", "800000", T2],
+      ["fan-c-capped", "2026-06", "1481980", "1185584", T2],
+      ["fan-c-capped", "2026-07", "1000000", "800000", T2],
+      ["fan-c-capped", "lifetime", "835450", "668360", T2],
+      ["fan-c-lifetime-only", "lifetime", "5000", "4000", T1],
+      ["fan-c-monthly-only", "2026-07", "7000", "5600", T2],
+      ["fan-c-net-unknown", "2026-06", "40000", "32000", T2],
+      ["fan-c-net-unknown", "2026-07", "20000", null, T2],
+      ["fan-c-net-unknown", "lifetime", "60000", "48000", T2],
+      ["fan-c-stale-month", "2026-05", "900000", "720000", T1],
+      ["fan-c-stale-month", "2026-06", "150000", "120000", T2],
+      ["fan-c-stale-month", "lifetime", "150000", "120000", T2],
+      ["fan-c-whole", "2026-06", "3000000", "2400000", T2],
+      ["fan-c-whole", "2026-07", "103980", "83184", T2],
+      ["fan-c-whole", "lifetime", "3103980", "2483184", T2],
+    ]);
+    expect(new Set(stored.rows.map((row) => row.currency))).toEqual(new Set(["USD"]));
+    // An unknown net is stored unknown (NULL), never as 0: a lifetime summed
+    // from the months must come out unknown, not smaller.
+    expect(stored.rows.filter((row) => row.net_mills === null).map((row) => [row.fan, row.window]))
+      .toEqual([["fan-c-net-unknown", "2026-07"]]);
   });
 });
