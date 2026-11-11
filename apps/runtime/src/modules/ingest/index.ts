@@ -13,12 +13,8 @@ import { refreshOfapiBinding } from "../../services/ofapi-binding-refresh.ts";
 import { routeSchemas } from "@agency_hub_core/contracts";
 
 import {
-  requireHarvestDeviceToken,
-} from "../../services/auth.ts";
-import {
   ingestClientObservations,
   InvalidIngestEventError,
-  isHarvestClientVersion,
 } from "../../services/ingest-observations.ts";
 import {
   getOfapiWebhookStatus,
@@ -55,11 +51,6 @@ export async function registerIngestRoutes(server: ApiServer, ctx: ApiModuleCont
       });
     }
     const normalizedClientVersion = clientVersion.trim();
-    // A narrow client token never carries a harvest machine (the capability
-    // refuses it), so a harvest-* header from one is a 403 here.
-    const harvestCapability = isHarvestClientVersion(normalizedClientVersion)
-      ? requireHarvestDeviceToken(principal)
-      : null;
     try {
       return await ingestClientObservations(appContext, {
         principalUserId: principal.user.id,
@@ -67,7 +58,6 @@ export async function registerIngestRoutes(server: ApiServer, ctx: ApiModuleCont
         // everyone else attributes only to their assigned pages.
         allowedPageIds: principal.user.role === "owner" ? null : principal.assignedPageIds,
         clientVersion: normalizedClientVersion,
-        authorizedHarvestMachineId: harvestCapability?.machineId ?? null,
         clientProfile: principal.clientProfile ?? null,
         events: request.body.events,
       });

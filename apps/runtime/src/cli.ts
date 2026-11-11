@@ -82,7 +82,6 @@ import { registerSyncExcludedCommands } from "./sync/cli/excluded.ts";
 import { registerSyncHistoryCommands } from "./sync/cli/history.ts";
 import { registerSyncPublicLookupCommands } from "./sync/cli/public-lookup.ts";
 import { verifyPageOnEngine } from "./services/sync-engine-account.ts";
-import { resolveHarvestManifest } from "./services/harvest-manifest.ts";
 import {
   runOfapiTransactionsBackfill,
   type OfapiTransactionsBackfillResult,
@@ -115,9 +114,7 @@ import {
 } from "./services/fansly-media-stats-dm-only-prune.ts";
 import { runAccountMeRejournal } from "./services/observations-account-me-rejournal.ts";
 import {
-  countHarvestObservations,
   listFanslyBackscrollManifest,
-  listHarvestTransactionResidue,
 } from "@agency_hub_core/db";
 import {
   runMessageArchiveBackfills,
@@ -2681,68 +2678,6 @@ export function buildProgram() {
         const complete = rows.filter((row) => row.archiveCount >= row.hotCount).length;
         console.log("");
         console.log(`conversations: ${rows.length}; archive>=hot: ${complete}; gaps: ${rows.length - complete}`);
-      } finally {
-        await app.close();
-      }
-    });
-
-  program
-    .command("harvest:reconcile")
-    .description("Reconcile a machine's harvest manifest against kernel observation counts")
-    .requiredOption(
-      "--manifest <path>",
-      "canonical ...-latest.json (timestamped snapshots auto-follow a canonical sibling)",
-    )
-    .action(async (options) => {
-      const resolvedManifest = await resolveHarvestManifest(options.manifest);
-      const manifest = resolvedManifest.manifest;
-      if (resolvedManifest.supersededPath !== null) {
-        console.log(
-          `Using canonical harvest manifest ${resolvedManifest.path} `
-            + `(supersedes ${resolvedManifest.supersededPath})`,
-        );
-      }
-
-      const app = await createAppContext();
-      try {
-        console.log(`Harvest reconciliation for machine ${manifest.machineId}`);
-        let mismatches = 0;
-        for (const entry of manifest.tables) {
-          const counted = await countHarvestObservations(app.db, {
-            machineId: manifest.machineId,
-            kind: entry.kind,
-          });
-          // The lane counts accepted+duplicates per batch; the kernel-side
-          // count must equal the WALKED rows once the machine has fully
-          // drained (over-upload is free, under-upload is the only failure).
-          const ok = counted === entry.walked;
-          if (!ok) {
-            mismatches += 1;
-          }
-          console.log(
-            `  ${entry.kind}: walked=${entry.walked} uploaded=${entry.uploaded}`
-              + ` duplicates=${entry.duplicates} kernel=${counted} ${ok ? "OK" : "MISMATCH"}`,
-          );
-        }
-        const residue = await listHarvestTransactionResidue(app.db, {
-          machineId: manifest.machineId,
-          limit: 50,
-        });
-        console.log("");
-        console.log(
-          `transaction residue (harvested, no kernel counterpart): ${residue.total}`
-            + (residue.total > 0 ? " — REVIEW REQUIRED (report-only; nothing was ingested)" : ""),
-        );
-        for (const row of residue.sample) {
-          console.log(`  ${JSON.stringify(row)}`);
-        }
-        console.log("");
-        console.log(mismatches === 0
-          ? "RECONCILED: kernel holds every walked row."
-          : `INCOMPLETE: ${mismatches} kind(s) mismatch — resume the harvest on this machine.`);
-        if (mismatches > 0) {
-          process.exitCode = 1;
-        }
       } finally {
         await app.close();
       }

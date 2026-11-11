@@ -367,9 +367,9 @@ export const SCREENS: readonly Screen[] = [
   },
   {
     id: "system-agent-keys", path: "/system/agent-keys", label: "Доступ ИИ-агентов", title: "Доступ ИИ-агентов", section: "system", ownerOnly: true,
-    why: "Ключи агентов, их права; привязка сбора к устройству.",
+    why: "Ключи агентов и их права.",
     pageFilter: "none",
-    keywords: "ключи агентов устройство",
+    keywords: "ключи агентов",
   },
   {
     id: "system-onlyfans-api", path: "/system/onlyfans-api", label: "Состояние", title: "OnlyFans API", section: "system", ownerOnly: true,
