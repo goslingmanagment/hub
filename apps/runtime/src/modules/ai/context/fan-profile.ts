@@ -2,8 +2,8 @@ import { findPlatformFan, getLatestPromptEligibleFanProfile } from "@agency_hub_
 
 import type { AppContext } from "../../../bootstrap.ts";
 
-// Fan-dossier context: the latest stored fan profile (the Scan dossier the
-// clients write via upsertFanProfile) compiled down to a prompt-safe excerpt.
+// Fan-dossier context: the latest stored fan profile (the dossier clients
+// save from a generation) compiled down to a prompt-safe excerpt.
 // The dossier is optional ENRICHMENT — every consumer treats a miss (no fan,
 // deleted fan, no profile, lookup error) as "no section", never as a failed
 // generation. Compilation happens BEFORE prompt escaping (the builder escapes

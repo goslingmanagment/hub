@@ -315,7 +315,6 @@ for (const row of CLIENT_SDK_REGISTRY) {
         expect(persona?.definitionId).toEqual(expect.any(String));
         ctx = {
           sdk, lane, options, pageIds, persona, client, pool: testDb!.pool,
-          seed: sdk.createClient(optionsFor(chatterToken)),
           clientFor: (other) => sdk.createClient(optionsFor(other)),
         };
       });

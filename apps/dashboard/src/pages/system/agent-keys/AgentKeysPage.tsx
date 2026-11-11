@@ -43,6 +43,7 @@ const CAPABILITY_HELP: Readonly<Record<AgentCapability, string>> = {
   "write:fan_queues": "Очереди фанов для чаттеров на своих страницах: по слову того, кто попросил",
   "read:content": "Посты, вложения, файлы и медиатека своих страниц с их просмотрами и лайками — без переписки, фанов и денег",
   "read:team": "Смены команды и факты каждой продажи на своих страницах (кто держал страницу, кто отправил PPV) — для ledger, вместе с правом на деньги",
+  "withdraw:publications": "Снимать посты Hub с расписания площадки на своих страницах, без спроса, как «Снять» владельца, и видеть расписание. Вышедший пост не удалить",
 };
 
 const CAPABILITY_SHORT: Readonly<Record<AgentCapability, string>> = {
@@ -57,6 +58,7 @@ const CAPABILITY_SHORT: Readonly<Record<AgentCapability, string>> = {
   "write:fan_queues": "Вести очереди фанов",
   "read:content": "Читать контент",
   "read:team": "Факты смен и продаж",
+  "withdraw:publications": "Снимать посты с расписания",
 };
 
 const INPUT = "input";

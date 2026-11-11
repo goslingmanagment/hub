@@ -1552,18 +1552,20 @@ export interface FanslyWithdrawalFacts {
   status: PublicationStatus;
   publishAt: Date;
   platformPostRef: string | null;
-  command: { id: number; state: string; stateReason: string | null; createdAt: Date; settledAt: Date | null } | null;
+  /** `listedStatus`: the status the cancel's answer listed this post at (`result.listedStatus`; null: not listed). */
+  command: { id: number; state: string; stateReason: string | null; createdAt: Date; settledAt: Date | null; listedStatus: number | null } | null;
 }
 
 /** The withdrawals of Fansly posts still in the schedule (or whose cancel is under way). */
 export async function listFanslyWithdrawals(db: Database): Promise<FanslyWithdrawalFacts[]> {
   const result = await db.execute<Row>(sql`
     select d.id as dispatch_id, p.id, p.page_id, p.status, p.publish_at, p.platform_post_ref,
-           c.id as command_id, c.state, c.state_reason, c.created_at as command_created_at, c.settled_at
+           c.id as command_id, c.state, c.state_reason, c.created_at as command_created_at, c.settled_at,
+           c.result -> 'listedStatus' as listed_status
       from publication_dispatches d
       join publications p on p.id = d.publication_id
       left join lateral (
-        select fc.id, fc.state, fc.state_reason, fc.created_at, fc.settled_at from fansly_write_commands fc
+        select fc.id, fc.state, fc.state_reason, fc.created_at, fc.settled_at, fc.result from fansly_write_commands fc
          where fc.dispatch_id = d.id and fc.step = 'post_cancel' order by fc.id desc limit 1
       ) c on true
      where d.kind = 'withdraw' and d.platform = 'fansly' and p.status = 'scheduled'
@@ -1586,6 +1588,7 @@ export async function listFanslyWithdrawals(db: Database): Promise<FanslyWithdra
       stateReason: (row.state_reason as string | null) ?? null,
       createdAt: date(row.command_created_at),
       settledAt: nullableDate(row.settled_at),
+      listedStatus: typeof row.listed_status === "number" && Number.isSafeInteger(row.listed_status) ? row.listed_status : null,
     },
   }));
 }
@@ -1966,8 +1969,11 @@ export async function listOnlyfansPublicationsWithUploads(db: Database): Promise
 
 /**
  * Whether a page's Fansly schedule is worth reading (`GET /post/scheduled`):
- * its publishing is on, or Hub has a post of the page in flight there. A page
- * with publishing off and nothing of Hub's on it gets no new kind of request.
+ * its publishing is on, Hub has a post of the page in flight there, or someone
+ * asked for a fresh read (the owner's «Обновить», an agent key's refresh) that
+ * no read has answered yet — one read, which clears the request. A page with
+ * publishing off, nothing of Hub's on it and no such request gets no new kind
+ * of request.
  */
 export async function fanslyScheduleReadWanted(db: Database, pageId: number): Promise<boolean> {
   const result = await db.execute<Row>(sql`
@@ -1977,6 +1983,8 @@ export async function fanslyScheduleReadWanted(db: Database, pageId: number): Pr
       select 1 from publications p
         join publication_dispatches d on d.publication_id = p.id and d.platform = 'fansly'
        where p.page_id = ${pageId} and p.status in ('submitting', 'scheduled', 'processing', 'unknown')
+    ) or exists(
+      select 1 from publication_queue_snapshots where page_id = ${pageId} and refresh_requested_at is not null
     ) as wanted
   `);
   return result.rows[0]?.wanted === true;

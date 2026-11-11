@@ -137,6 +137,9 @@ export type FanslyScheduleRead =
   }
   | { ok: false; reason: string };
 
+/** A read's incomplete reason while the stand has not confirmed the list is the whole schedule. */
+export const FANSLY_SCHEDULE_LIST_WHOLE_UNVERIFIED = "list_whole_unverified";
+
 /** The schedule as one `GET /post/scheduled` answer (`response`) gives it. */
 export function readFanslySchedule(response: unknown, facts: FanslyPublishFacts = FANSLY_PUBLISH_FACTS_VERIFIED): FanslyScheduleRead {
   if (!isRecord(response) || !Array.isArray(response.scheduledPosts)) return { ok: false, reason: "answer_without_scheduled_posts" };
@@ -174,7 +177,7 @@ export function readFanslySchedule(response: unknown, facts: FanslyPublishFacts 
     });
   }
   const incompleteReasons: string[] = [];
-  if (!facts.scheduleListWhole) incompleteReasons.push("list_whole_unverified");
+  if (!facts.scheduleListWhole) incompleteReasons.push(FANSLY_SCHEDULE_LIST_WHOLE_UNVERIFIED);
   if (unreadable > 0) incompleteReasons.push(`entries_unreadable:${unreadable}`);
   return { ok: true, active, statuses, complete: incompleteReasons.length === 0, incompleteReasons };
 }
@@ -241,8 +244,9 @@ async function keepScheduleRead(tx: Database, input: ApplyInput, read: FanslySch
 
 /**
  * `publish.schedule`: one read a step, kept as the page's latest. Only on a
- * page whose publishing is on or where Hub has a post in flight: until then
- * the page sends Fansly no new kind of request.
+ * page whose publishing is on, where Hub has a post in flight, or whose fresh
+ * read someone asked for (the owner's «Обновить», an agent's refresh): until
+ * then the page sends Fansly no new kind of request.
  */
 export const fanslySchedulePollModule: ResourceModule = {
   async plan(_work: SyncWorkRow, ctx: PlanContext): Promise<StepPlan> {

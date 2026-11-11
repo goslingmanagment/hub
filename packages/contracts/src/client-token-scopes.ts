@@ -16,8 +16,7 @@ import type { KernelOperationKey } from "./sdk-runtime.ts";
  * producer.
  *
  * Never on a list: `/ofapi/*`, the event streams, the full persona texts and
- * their writes, the raw AI gateway, the Fansly outreach route, the top-spenders
- * read, and any cookie-session route.
+ * their writes, the raw AI gateway, and any cookie-session route.
  *
  * The boundary is honest about what it is: it keeps a leaked or misbehaving
  * extension inside its own surface. The person behind it can still sign in

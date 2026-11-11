@@ -565,9 +565,10 @@ kind, text or title, files in order, time). With `approve:vault_albums` instead,
 you approve vault albums on the word of the person who asked and nothing else:
 fans do not see an album, and any other kind is refused with `kind_not_allowed`.
 You cancel only what your key
-drafted, and only before Hub hands it to the platform (below); you never take a
-post off a schedule or switch publishing on, and nothing you draft reaches a
-platform before it is approved. Drafts are writes, not reads: the conclusion envelope above is not
+drafted, and only before Hub hands it to the platform (below); you take a post
+off the platform's schedule only with `withdraw:publications` (see "Taking a
+post off the schedule"), you never switch publishing on, and nothing you draft
+reaches a platform before it is approved. Drafts are writes, not reads: the conclusion envelope above is not
 on these answers.
 
 The path of one post:
@@ -683,9 +684,10 @@ The path of one post:
    (`POST /api/v1/agent/publications/<id>/cancel`): a publication your key
    drafted, while it is a draft or approved — Hub has not handed it to the
    platform yet (posts go into the platform's own schedule 7 days ahead). Later
-   it is 409 `publication_handed_to_platform`: only the owner takes it off, in
-   Hub. Someone else's is 409 `publication_not_editable`; a cancelled one
-   answers as it is, so a retry is safe.
+   a cancel no longer applies, 409 `publication_handed_to_platform`: it is a
+   withdrawal then (`hub publication-withdraw`, below). Someone else's is 409
+   `publication_not_editable`; a cancelled one answers as it is, so a retry is
+   safe.
 
 The idempotency key is required: the same key with the same body answers the
 same draft, the same key with another body is 409 `idempotency_mismatch`. One
@@ -728,6 +730,109 @@ lost: a person checks the wall; for a vault album, Hub does not know whether
 Fansly applied its last step — the album made, the files added: do not send it
 again or retry, tell the owner, Dima), `missed` (a story not started in time),
 `withdrawn` (taken off the schedule), `cancelled` (by a person before sending).
+
+## Taking a post off the schedule (`hub publication-withdraw`, `hub publication-queue`)
+
+With `withdraw:publications` (the owner grants it per key) you take a Hub post
+of your pages off the platform's schedule at any time, without asking — any Hub
+post there, whoever drafted or approved it (owner 2026-11-11). It is the
+owner's own «Снять»: the same checks, the same refusals, one cancel per post.
+Not yours: deleting a post that already went out, taking a whole page's
+schedule off at once, and posts put in the schedule by hand (no Hub
+publication) — those are the owner's; tell him.
+
+**The page's schedule.** `hub publication-queue --page-label <page>`
+(`GET /api/v1/agent/pages/<page>/publication-queue`; needs
+`write:publication_drafts` or `withdraw:publications`) is the platform's own
+schedule as Hub last read it: `readAt`, `complete` and `incompleteReasons` (an
+incomplete read proves nothing about a post being absent), `stale` (older than
+twice its cadence, or never read), `postsPerDay`, and `entries` — `postRef`,
+`publishAt`, the caption's head, `mediaCount`, and `publicationId`: Hub's
+publication, or `null` for a post put there by hand. `--refresh` first asks for
+a fresh read (`POST …/publication-queue/refresh`, the owner's «Обновить»); the
+answer is still the last read, so ask again in a minute or two and look for a
+`readAt` after the time it names. On OnlyFans each read spends OnlyFansAPI
+credits: refresh when you need it, never in a loop.
+
+### How to stop a post
+
+1. **Find it.** `hub publication-list --page-label <page>` (with
+   `write:publication_drafts`) or `hub publication-queue --page-label <page>`;
+   `hub publication-get --id <id>` says its `status`.
+2. **Not handed to the platform yet** (`draft`, `approved`): `hub
+   publication-cancel --id <id>` — only a publication your key drafted. One
+   someone else drafted and a person approved, still `approved`, is neither a
+   cancel nor a withdrawal for you (the withdrawal answers `status_approved`):
+   tell the owner.
+3. **Handed** (`scheduled`): `hub publication-withdraw --id <id>`
+   (`POST /api/v1/agent/publications/<id>/withdraw`). The answer is `{results:
+   [{id, outcome, reason, publication}]}`:
+   - **Fansly** answers `accepted`: Hub queued one cancel on the page's engine.
+     It goes only once a fresh read of the schedule still shows the post, never
+     closer than 15 minutes to its time, and Hub reads the schedule again after
+     Fansly's answer. Within minutes the post's status says how it ended
+     (`hub publication-get --id <id>`): `withdrawn` (reason
+     `withdrawn_cancel_acknowledged`: Fansly's answer to the cancel listed this
+     very post as taken off and the read after it no longer lists it),
+     `unknown` (below), or still `scheduled` with `withdrawal.state: rejected` —
+     Fansly said no, the post stays in the schedule: tell the owner.
+   - **OnlyFans** answers the outcome at once: Hub reads the schedule whole
+     before (it must show the post), sends one delete, and reads it again.
+     `withdrawn` — gone from a complete read; `unknown` (below); `rejected` —
+     OnlyFans said no, the post stays scheduled; `not_sent` — the command never
+     left, you may ask again.
+   - `refused` — Hub sent nothing; `reason` says why:
+
+| Reason | Means | Do |
+|---|---|---|
+| `status_draft`, `status_approved` | Not handed to the platform yet. | Cancel it if your key drafted it; otherwise tell the owner. |
+| `status_published` | It already went out. | Deleting a published post is the owner's: tell him. |
+| `status_withdrawn`, `status_cancelled`, `status_not_published`, … | It is not in the schedule (already off, or never went). | Nothing. |
+| `status_unknown` | Hub does not know whether it is there. | Tell the owner; do not ask again. |
+| `story_has_no_schedule` | A story goes out at once; it has no schedule. | Nothing to withdraw. |
+| `no_platform_ref` | Hub does not know the platform's post. | Tell the owner. |
+| `too_close_to_publish_time` | Less than 15 minutes before its time: Hub never races the platform. | Tell the owner at once: only a person, on the platform, can still try. |
+| `publishing_stopped_schedule_stays` | The page is stopped (a lost login, a platform check, 401/403/429): nothing may be sent for it; the schedule stays. | Tell the owner. |
+| `withdraw_in_progress` | A cancel of this post is already queued or being sent. | Wait; follow it with `publication-get`. |
+| `withdraw_already_sent`, `withdraw_already_recorded` | A cancel already went (answered, refused by the platform, or lost). Hub never sends one twice. | Follow its status; if it is still scheduled, tell the owner. |
+| `route_unverified` | Hub may not send this request to Fansly. | Tell the owner. |
+| OnlyFans `schedule_incomplete:…`, `schedule_read_failed:…`, `not_in_schedule`, `schedule_ambiguous`, `not_prepared: …` | The read before could not show the post exactly once, or the command could not be prepared. | Tell the owner. |
+| any other (Fansly) | The page's guard said no before anything was written. | Tell the owner. |
+
+**`unknown` after a withdrawal: the post is NOT taken off as far as you know.**
+Hub does not know whether it left the schedule — it may still go out at its
+time. Do not report it as withdrawn and do not treat the job as done:
+
+1. Read the page's schedule: `hub publication-queue --page-label <page>
+   --refresh`, then again in a minute or two until `readAt` is after your
+   refresh. Note whether the post (`postRef` = the publication's
+   `platformPostRef`) is still listed; an absence is a hint, not proof.
+2. Tell the owner at once: which post, why it had to come off, its time, the
+   `statusReason`, and what the read showed. He checks the platform and takes
+   it off by hand if it is still there.
+3. Never withdraw it again (Hub refuses: one cancel per post), and never draft
+   it again.
+
+The reasons: `withdraw_unconfirmed_incomplete` (Fansly answered, the read after
+no longer lists the post, but Fansly's answer did not name it as taken off and
+Hub cannot prove the list is the whole schedule), `withdraw_still_in_schedule`
+(the read after still shows it), `withdraw_unconfirmed_read_failed` (no read
+after in 30 minutes), `withdraw_unconfirmed_time_passed` (its time passed
+before the read), `withdraw_<code>` (the answer was lost).
+
+**A replacement draft is not a fix.** When the owner answers an `unknown`
+publication with «не вышло» (`did_not_go_out`), Hub closes it as
+`not_published` and creates a new draft of the same post, linked to it
+(`previousPublicationId`); a confirmed `withdrawn` one may be replaced the same
+way. For a post taken off for cause (wrong content, a fan's paid custom, the
+owner's stop), that replacement carries the very same text and files: never
+approve it, never edit it into shape and approve it, and say so to the owner
+when it shows up in `publication-list` — only he decides whether it goes out
+again.
+
+A publication that is not on your pages answers 404, exactly as one that does
+not exist; a key without `withdraw:publications` is 403
+`agent_capability_missing`.
 
 ## Fan queues for chatters (`hub queue-*`)
 
@@ -936,6 +1041,8 @@ Global flags: `--base-url`, `--fail-on-partial`, `--pretty`, `--help`.
 | `hub publication-targets` | The page's Fansly walls and tiers by name, no prices: what a draft's `--wall` and `--tier` name. |
 | `hub publication-changes` | Your key's publications changed at or after `--since`, oldest change first: status, its reason, the platform's post or album. |
 | `hub publication-cancel` | Cancel a publication your key drafted, before Hub hands it to the platform (draft or approved). |
+| `hub publication-withdraw` | Take a Hub post of your pages off the platform's schedule (any Hub post, whoever drafted it), as the owner's «Снять». Needs `withdraw:publications`. |
+| `hub publication-queue` | The page's own schedule on the platform as Hub last read it: Hub's posts and the ones put there by hand; `--refresh` asks for a fresh read first. Needs `write:publication_drafts` or `withdraw:publications`. |
 | `hub publication-file-upload` | COMPOSITE: files from disk (bare paths) into Hub for a page's model: those Hub holds (by SHA-256) are not sent again, the others streamed whole, a lost network waited for; per file `media: "file:<id>"` for a draft. Progress on stderr. |
 | `hub vault-album-draft` | COMPOSITE: a Fansly vault album draft from a pack's folder (a bare path), its files in name order, the first on top; again after a break it sends only what Hub lacks; `--dry-run` lists it and uploads nothing. |
 | `hub queue-preview` | How many fans a rule or a list puts in a fan queue, what it leaves out, the rule in Hub's words and a few fans. Nothing is written. Needs `write:fan_queues`. |

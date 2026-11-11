@@ -492,29 +492,6 @@ describe("voice-script feature (voice notes lane)", () => {
   }, INTEGRATION_TEST_TIMEOUT_MS);
 });
 
-describe("client-context path (Stage 32)", () => {
-  it("fences follower send custody by human authentication, assigned page and platform", async (context) => {
-    if (!testDb) { context.skip(); return; }
-    const payload = { fanRef: "123", attemptId: randomUUID(), action: "reserve" };
-    const url = "/api/v1/pages/svc-fs/follower-outreach/attempt";
-    const anonymous = await apiServer!.inject({ method: "POST", url, payload });
-    expect(anonymous.statusCode).toBe(401);
-    const headers = { authorization: `Bearer ${chatterKey}` };
-    const claim = await apiServer!.inject({ method: "POST", url, headers, payload });
-    expect(claim.statusCode, claim.body).toBe(200);
-    expect(claim.json()).toMatchObject({ owned: true, state: "reserved" });
-    const wrongPlatform = await apiServer!.inject({ method: "POST", url: "/api/v1/pages/svc-of/follower-outreach/attempt", headers, payload });
-    expect(wrongPlatform.statusCode).toBe(404);
-    const model = await createModel(appContext.db, { slug: "unassigned", name: "Unassigned" });
-    if (!model) throw new Error("model fixture missing");
-    await createFanslyPage(appContext.db, { modelId: model.id, label: "unassigned-fs" });
-    const forbidden = await apiServer!.inject({ method: "POST", url: "/api/v1/pages/unassigned-fs/follower-outreach/attempt", headers, payload });
-    expect([403, 404]).toContain(forbidden.statusCode);
-    const noReceipt = await apiServer!.inject({ method: "POST", url, headers, payload: { ...payload, action: "sent" } });
-    expect(noReceipt.statusCode).toBe(400);
-  });
-});
-
 describe("fan-summary short variant cap (Task 8)", () => {
   // The compact recap rides the client-context (fansly) lane; messageCount 35
   // clears fan-summary's deep-feature minimum without a seeded archive.
