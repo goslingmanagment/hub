@@ -62,6 +62,10 @@ describe("route auth declarations", () => {
       "agentPublicationFileUpload",
       "agentPublicationList",
       "agentPublicationMedia",
+      // The page's own schedule on the platform and its «Обновить»
+      // (write:publication_drafts or withdraw:publications).
+      "agentPublicationQueue",
+      "agentPublicationQueueRefresh",
       // The page's walls and tiers a draft may name, without prices.
       "agentPublicationTargets",
       // The Sync Engine's "why waiting" of one page's work.

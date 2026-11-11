@@ -19,14 +19,16 @@ import type { AppContext } from "../bootstrap.ts";
 import { enqueueFanslyWriteCommand, FanslyWriteRefusedError } from "../sync/fansly/publish/enqueue.ts";
 import { loadEffectiveConfig } from "./effective-config.ts";
 import { askScheduleRead } from "./publications-fansly-checks.ts";
-import { toPublicationWire } from "./publications.ts";
+import { toPublicationWire, withdrawerReaches, type PublicationWithdrawer } from "./publications.ts";
 
 // Withdrawal of Hub's posts from Fansly's own schedule (docs/plans/2026-10-23-
 // wall-posts, spec §8.2, §8.4; plan PR 9) — the same rules as OnlyFans', on the
 // page's engine:
 //
 // - The owner presses «Снять» (one post, or «Снять всё, что поставил Hub», one
-//   command per post with its own outcome). Hub refuses without a request when
+//   command per post with its own outcome), or an agent key with
+//   withdraw:publications asks for one post of its pages (owner 2026-11-11):
+//   the same path, the same refusals. Hub refuses without a request when
 //   the post is less than 15 minutes from its time, the page is stopped (a lost
 //   login, a Fansly check, a 401/403/429 — the schedule stays on Fansly), the
 //   cancel route is not verified by the stand, or a cancel already went.
@@ -88,12 +90,14 @@ export interface FanslyWithdrawOptions {
 /**
  * Withdraw Hub posts from Fansly's schedule, one command per post, each with
  * its own outcome: refused now, or accepted — its result comes as the
- * publication's status within minutes.
+ * publication's status within minutes. An agent's post outside its pages is
+ * refused `not_found` with no publication, as one that does not exist.
  */
 export async function withdrawFanslyPublications(
   app: AppContext,
-  input: { ids: readonly number[]; userId: number } & FanslyWithdrawOptions,
+  input: { ids: readonly number[] } & ({ userId: number } | { withdrawer: PublicationWithdrawer }) & FanslyWithdrawOptions,
 ): Promise<PublicationWithdrawResult[]> {
+  const withdrawer: PublicationWithdrawer = "withdrawer" in input ? input.withdrawer : { kind: "human", userId: input.userId };
   const now = input.now ?? new Date();
   const isSendable = input.isSendable ?? isFanslyWriteSendable;
   const config = await loadEffectiveConfig(app.db, app.config);
@@ -104,7 +108,12 @@ export async function withdrawFanslyPublications(
   };
   const pagesToRead = new Set<number>();
   for (const id of [...new Set(input.ids)]) {
-    const eligible = await fanslyWithdrawEligibility(app.db, await getPublication(app.db, id), now, isSendable);
+    const target = await getPublication(app.db, id);
+    if (target !== null && !withdrawerReaches(withdrawer, target.pageId)) {
+      results.push({ id, outcome: "refused", reason: "not_found", publication: null });
+      continue;
+    }
+    const eligible = await fanslyWithdrawEligibility(app.db, target, now, isSendable);
     if (!eligible.ok) {
       await result(id, "refused", eligible.reason);
       continue;

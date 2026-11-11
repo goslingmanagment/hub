@@ -63,6 +63,14 @@ export const AGENT_CAPABILITIES = [
    * sale is and what anyone is paid is the ledger's. Needs read:money too.
    */
   "read:team",
+  /**
+   * Taking a Hub post off the platform's schedule on the key's pages, any Hub
+   * post there, not only this key's drafts (owner 2026-11-11: an agent may take
+   * a post off the schedule at any time without asking): the owner's own
+   * withdrawal, refusals and all, and the page's schedule read to see it.
+   * Never a published post's deletion, never a whole page at once.
+   */
+  "withdraw:publications",
 ] as const;
 
 export type AgentCapability = (typeof AGENT_CAPABILITIES)[number];
