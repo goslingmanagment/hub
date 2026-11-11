@@ -4,6 +4,7 @@ import {
   BarChart,
   CartesianGrid,
   Rectangle,
+  ReferenceArea,
   ReferenceLine,
   ResponsiveContainer,
   Tooltip,
@@ -51,6 +52,8 @@ export function StackedBarChart(props: {
   xKey: string;
   series: StackedBarChartSeries[];
   xTickFormatter?: (value: string) => string;
+  /** The tooltip's heading for an x value, when the axis label is too short for it; falls back to `xTickFormatter`. */
+  tooltipLabelFormatter?: ((value: string) => string) | undefined;
   valueFormatter?: (value: number) => string;
   /** Axis labels, given the axis step (e.g. whole dollars vs cents); falls
    *  back to `valueFormatter`. */
@@ -75,6 +78,12 @@ export function StackedBarChart(props: {
   scale?: ((min: number, max: number) => LinearTicks) | undefined;
   /** Room per date label and how many at most (wide labels such as «3 нояб., 15:00»). */
   tickSpacing?: { spacing: number; max: number } | undefined;
+  /** Said in the tooltip of a row without values, when its x is not a day. */
+  emptyText?: string | undefined;
+  /** The x value the rest of the screen is about: a quiet band stands behind its bar. */
+  activeX?: string | undefined;
+  /** A click on a bar's band picks its x value (the same choice has a control outside the chart). */
+  onPick?: ((x: string) => void) | undefined;
 }) {
   const height = props.height ?? 300;
   const { budget, onResize } = useTickBudget(props.tickSpacing?.spacing, props.tickSpacing?.max);
@@ -95,8 +104,22 @@ export function StackedBarChart(props: {
     <>
       <ChartLegend series={props.series} />
       <ResponsiveContainer width="100%" height={height} onResize={onResize}>
-        <BarChart data={props.data} margin={CHART_MARGIN} stackOffset="sign" barCategoryGap="20%">
+        <BarChart
+          data={props.data}
+          margin={CHART_MARGIN}
+          stackOffset="sign"
+          barCategoryGap="20%"
+          {...(props.onPick ? {
+            style: { cursor: "pointer" },
+            onClick: (state: { activeLabel?: string | number | undefined }) => {
+              if (state.activeLabel !== undefined) props.onPick?.(String(state.activeLabel));
+            },
+          } : {})}
+        >
           <CartesianGrid {...chartGridProps} />
+          {props.activeX !== undefined && props.data.some((row) => row[props.xKey] === props.activeX) ? (
+            <ReferenceArea x1={props.activeX} x2={props.activeX} fill="var(--color-accent-soft)" fillOpacity={1} stroke="none" />
+          ) : null}
           <XAxis
             {...xAxisProps}
             dataKey={props.xKey}
@@ -156,8 +179,9 @@ export function StackedBarChart(props: {
                 {...tooltip}
                 series={props.series}
                 formatValue={tooltipFormat}
-                formatLabel={(label) => xFormat(String(label))}
+                formatLabel={(label) => (props.tooltipLabelFormatter ?? xFormat)(String(label))}
                 totalLabel={props.totalLabel === null ? undefined : props.totalLabel ?? "Итого"}
+                emptyText={props.emptyText}
                 note={props.note}
               />
             )}

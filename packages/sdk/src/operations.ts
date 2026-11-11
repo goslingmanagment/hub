@@ -21,6 +21,7 @@ export const kernelOperations = {
   adminAiReconciliationKeyUpdate: { method: "PUT", path: "/api/v1/admin/ai/reconciliation/keys" },
   adminAiSpend: { method: "GET", path: "/api/v1/admin/ai/spend" },
   adminAssignPage: { method: "POST", path: "/api/v1/admin/users/by-id/:userId/pages" },
+  adminBudgets: { method: "GET", path: "/api/v1/admin/budgets" },
   adminChatterUsage: { method: "GET", path: "/api/v1/admin/usage/chatters" },
   adminClientHealth: { method: "GET", path: "/api/v1/admin/client-health" },
   adminConfig: { method: "GET", path: "/api/v1/admin/config" },

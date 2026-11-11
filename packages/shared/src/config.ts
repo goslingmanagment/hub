@@ -122,6 +122,8 @@ const envSchema = z.object({
   // with a `payouts` key (it opens that route only). Unset key: Выплаты show the shift reports only.
   LEDGER_URL: z.string().url().default("https://ledger.gosling-agency.ru"),
   LEDGER_PAYOUTS_KEY: optionalTrimmedStringSchema,
+  // «Бюджеты» read the ledger's month cards and journal (POST /v1/sql) with a `read` key. Unset: the screen says so.
+  LEDGER_READ_KEY: optionalTrimmedStringSchema,
   FANSLY_REPLIES_REWALK_CYCLE_DAYS: z.coerce.number().int().min(1).max(365).default(14),
   // Owner decision №6 (2026-11-07 rollout): the pages whose vault walk reads a
   // moved album from its head only; empty = every page walks it in full.
@@ -413,6 +415,8 @@ export interface AppConfig {
   ledgerUrl?: string;
   /** LEDGER_PAYOUTS_KEY: the ledger key with the `payouts` scope; null — Выплаты do not read the ledger. */
   ledgerPayoutsKey?: string | null;
+  /** LEDGER_READ_KEY: the ledger key with the `read` scope; null — «Бюджеты» do not read the ledger. */
+  ledgerReadKey?: string | null;
   /** How stale a post's last walk must be before the round-robin re-reads it. */
   fanslyRepliesRewalkCycleDays?: number;
   /** CSV of exact page labels whose vault walk reads a moved album from its
@@ -808,6 +812,7 @@ export function loadConfig(
     ofapiEventWorkerReplicas: parsed.OFAPI_EVENT_WORKER_REPLICAS,
     ledgerUrl: parsed.LEDGER_URL,
     ledgerPayoutsKey: parsed.LEDGER_PAYOUTS_KEY ?? null,
+    ledgerReadKey: parsed.LEDGER_READ_KEY ?? null,
     fanslyRepliesRewalkCycleDays: parsed.FANSLY_REPLIES_REWALK_CYCLE_DAYS,
     fanslyVaultHeadWalkPages: parsed.FANSLY_VAULT_HEAD_WALK_PAGES,
     fanslyPublicLookupEnabled: parsed.FANSLY_PUBLIC_LOOKUP_ENABLED,

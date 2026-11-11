@@ -6,17 +6,19 @@ import { shiftAnchor, usageDateLabel, type UsagePeriod } from "@/lib/format";
  * a day of limits, a week of AI spending. In the header, beside or instead of the
  * period's segments; the place itself lives in the address. Only moves: it writes nothing.
  */
-export function PeriodStepper({ label, onPrev, onNext, canNext, prevLabel = "Предыдущий период", nextLabel = "Следующий период" }: {
+export function PeriodStepper({ label, onPrev, onNext, canNext, canPrev = true, prevLabel = "Предыдущий период", nextLabel = "Следующий период" }: {
   label: string;
   onPrev: () => void;
   onNext: () => void;
   canNext: boolean;
+  /** false: the place is the first there is (the oldest month of the books). */
+  canPrev?: boolean;
   prevLabel?: string;
   nextLabel?: string;
 }) {
   return (
     <span className="period-stepper">
-      <button type="button" className="btn btn-icon" aria-label={prevLabel} onClick={onPrev}><ChevronLeft size={16} aria-hidden="true" /></button>
+      <button type="button" className="btn btn-icon" aria-label={prevLabel} disabled={!canPrev} onClick={onPrev}><ChevronLeft size={16} aria-hidden="true" /></button>
       <span className="min-w-[96px] text-center text-sm tabular-nums" aria-live="polite">{label}</span>
       <button type="button" className="btn btn-icon" aria-label={nextLabel} disabled={!canNext} onClick={onNext}><ChevronRight size={16} aria-hidden="true" /></button>
     </span>

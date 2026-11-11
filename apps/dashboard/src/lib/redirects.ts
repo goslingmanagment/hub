@@ -127,7 +127,7 @@ export const LEGACY_ROUTES: ReadonlyArray<LegacyRule & { path: string }> = [
   },
   { path: "dev/client-health", to: "/system/dev/extension" }, // §7.1, row 50
   // The roots of the new sections (65–69).
-  { path: "money", to: "/money/costs/ai" },
+  { path: "money", to: "/money/budgets" },
   { path: "money/income", to: "/" },
   { path: "money/costs", to: "/money/costs/ai" },
   { path: "settings/ai", to: "/settings/ai/personas" },

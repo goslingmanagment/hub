@@ -65,6 +65,9 @@ chatters' AI features, the owner's dashboard. Production is `agency-de` (`root@1
 - What AI money went to (Hub's ledger, by feature/model/effort/window/chatter/page/key/branch, unit costs, dearest calls,
   setting changes): `ssh root@152.53.191.242 'docker exec agency-hub-api-1 node /app/apps/runtime/dist/cli.js ai:spend --from YYYY-MM-DD [--to …] [--json]'`
   (default: yesterday, Moscow). The owner's page: Деньги → Расходы → ИИ.
+- «Деньги → Бюджеты» (the agency's months: earned, spent by article, left, the plans, traffic by source) is the agency
+  ledger's count, not Hub's: Hub reads the ledger's month cards and journal through its SQL for agents (`POST /v1/sql`)
+  with `LEDGER_READ_KEY` (a ledger key with the `read` scope). Without the key the screen says the ledger did not answer.
 - Model questionnaires from gosling-agency.ru (public `POST /api/v1/model-applications`; sensitive personal data:
   read them on the server, copy them nowhere): `ssh root@152.53.191.242 'docker exec agency-hub-api-1 node
   /app/apps/runtime/dist/cli.js model-applications:list'`, then `model-applications:show <id> [--json]`; fillings
