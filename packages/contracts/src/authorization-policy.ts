@@ -22,7 +22,6 @@ const KIND_DESCRIPTIONS: Record<RouteAuthPolicy["kind"], string> = {
   "owner-session": "dashboard cookie session, owner role only",
   "apiKey": "device-token bearer (historical kind name: API keys are retired)",
   "device-token": "device-token bearer only",
-  "pending-device-token": "short-lived pending device-token bearer, activation route only",
   "agentKey": "Agent Read Plane key only; no human principal is admitted",
   "any": "any authenticated principal except an agent key",
 };

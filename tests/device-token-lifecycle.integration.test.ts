@@ -56,29 +56,6 @@ async function login(
   return sessionCookieFrom(response);
 }
 
-/** Decision 370: the desktop reserves by password, never from a cookie. */
-async function reserve(activeServer: NonNullable<typeof server>) {
-  const response = await activeServer.inject({
-    method: "POST",
-    url: "/api/v1/auth/device-tokens/password",
-    payload: {
-      username: "anton",
-      password: "chatter-secret",
-      label: "desktop-test",
-      mode: "pending",
-    },
-  });
-  expect(response.statusCode).toBe(200);
-  return response.json<{
-    mode: "pending";
-    token: string;
-    reservationId: number;
-    label: string;
-    keyPrefix: string;
-    reservationExpiresAt: string;
-  }>();
-}
-
 async function waitForUserLockWaiters(
   db: StartedTestDatabase,
   minimum: number,
@@ -128,70 +105,9 @@ afterAll(async () => {
   await testDb?.stop();
 });
 
-describe("pending device-token activation protocol", () => {
-  async function expectPendingInvalidated(
-    setup: NonNullable<ReturnType<typeof requireSetup>>,
-    boundary: (ownerCookie: string) => Promise<void>,
-  ) {
-    const pending = await reserve(setup.server);
-    const ownerCookie = await login(setup.server, "owner", "owner-secret");
-    await boundary(ownerCookie);
-    expect((await setup.server.inject({
-      method: "POST",
-      url: "/api/v1/auth/device-tokens/activate",
-      headers: { authorization: `Bearer ${pending.token}` },
-    })).statusCode).toBe(401);
-    const pendingCount = await setup.testDb.pool.query<{ count: string }>(
-      "select count(*)::text as count from pending_device_tokens",
-    );
-    expect(pendingCount.rows[0]?.count).toBe("0");
-  }
-
-  it("keeps a reservation outside ordinary auth, then activates idempotently", async (context) => {
-    const setup = requireSetup(context);
-    if (!setup) return;
-    const pending = await reserve(setup.server);
-    expect(pending.token).toMatch(/^agency_hub_pending_device_/);
-
-    const beforeActivation = await setup.server.inject({
-      method: "GET",
-      url: "/api/v1/auth/me",
-      headers: { authorization: `Bearer ${pending.token}` },
-    });
-    expect(beforeActivation.statusCode).toBe(401);
-
-    const activate = () => setup.server.inject({
-      method: "POST",
-      url: "/api/v1/auth/device-tokens/activate",
-      headers: { authorization: `Bearer ${pending.token}` },
-    });
-    const [first, retry] = await Promise.all([activate(), activate()]);
-    expect(first.statusCode).toBe(200);
-    expect(retry.statusCode).toBe(200);
-    expect(retry.json()).toEqual(first.json());
-    expect(first.json()).not.toHaveProperty("token");
-
-    const afterActivation = await setup.server.inject({
-      method: "GET",
-      url: "/api/v1/auth/me",
-      headers: { authorization: `Bearer ${pending.token}` },
-    });
-    expect(afterActivation.statusCode).toBe(200);
-    const counts = await setup.testDb.pool.query<{
-      active: string;
-      pending: string;
-    }>(`
-      select
-        (select count(*) from device_tokens where revoked_at is null)::text as active,
-        (select count(*) from pending_device_tokens)::text as pending
-    `);
-    expect(counts.rows[0]).toEqual({ active: "1", pending: "0" });
-  });
-
-  it("issues an active token directly while activation rejects its prefix", async (context) => {
-    const setup = requireSetup(context);
-    if (!setup) return;
-    const issued = await setup.server.inject({
+describe("password device sign-in and its revocation boundaries", () => {
+  async function issueActive(activeServer: NonNullable<typeof server>) {
+    const response = await activeServer.inject({
       method: "POST",
       url: "/api/v1/auth/device-tokens/password",
       payload: {
@@ -201,14 +117,35 @@ describe("pending device-token activation protocol", () => {
         mode: "active",
       },
     });
-    expect(issued.statusCode).toBe(200);
-    const body = issued.json<{ token: string }>();
+    expect(response.statusCode).toBe(200);
+    return response.json<{ token: string }>();
+  }
+
+  async function expectActiveRevoked(
+    setup: NonNullable<ReturnType<typeof requireSetup>>,
+    boundary: (ownerCookie: string) => Promise<void>,
+  ) {
+    const issued = await issueActive(setup.server);
+    const ownerCookie = await login(setup.server, "owner", "owner-secret");
+    await boundary(ownerCookie);
+    const me = await setup.server.inject({
+      method: "GET",
+      url: "/api/v1/auth/me",
+      headers: { authorization: `Bearer ${issued.token}` },
+    });
+    expect(me.statusCode).toBe(401);
+    expect(me.json()).toMatchObject({ reason: "token_revoked" });
+    const live = await setup.testDb.pool.query<{ count: string }>(
+      "select count(*)::text as count from device_tokens where revoked_at is null",
+    );
+    expect(live.rows[0]?.count).toBe("0");
+  }
+
+  it("issues an active token directly", async (context) => {
+    const setup = requireSetup(context);
+    if (!setup) return;
+    const body = await issueActive(setup.server);
     expect(body.token).toMatch(/^agency_hub_device_/);
-    expect((await setup.server.inject({
-      method: "POST",
-      url: "/api/v1/auth/device-tokens/activate",
-      headers: { authorization: `Bearer ${body.token}` },
-    })).statusCode).toBe(401);
     expect((await setup.server.inject({
       method: "GET",
       url: "/api/v1/auth/me",
@@ -216,11 +153,11 @@ describe("pending device-token activation protocol", () => {
     })).statusCode).toBe(200);
   });
 
-  it("invalidates pending custody on password reset", async (context) => {
+  it("revokes the device token on password reset", async (context) => {
     const setup = requireSetup(context);
     if (!setup) return;
     // Decision 370: an owner resets by link or CLI; both run this primitive.
-    await expectPendingInvalidated(setup, async () => {
+    await expectActiveRevoked(setup, async () => {
       await setUserPassword(setup.app, {
         userId: await fixtureUserId(setup.app, "anton"),
         password: "new-chatter-secret",
@@ -228,10 +165,10 @@ describe("pending device-token activation protocol", () => {
     });
   });
 
-  it("invalidates pending custody on revoke-all", async (context) => {
+  it("revokes the device token on revoke-all", async (context) => {
     const setup = requireSetup(context);
     if (!setup) return;
-    await expectPendingInvalidated(setup, async (ownerCookie) => {
+    await expectActiveRevoked(setup, async (ownerCookie) => {
       const response = await setup.server.inject({
         method: "DELETE",
         url: `/api/v1/admin/users/by-id/${await fixtureUserId(setup.app, "anton")}/device-tokens`,
@@ -261,7 +198,6 @@ describe("password sign-in authority races", () => {
         username: "anton",
         password: "chatter-secret",
         label: "racing-client",
-        mode: "active",
         clientVersion: null,
       });
       const issueOutcome = issuePromise.then(

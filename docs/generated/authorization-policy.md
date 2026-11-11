@@ -18,7 +18,6 @@ body remain handler-checked and are noted per route in the service layer.
 | `owner-session` | dashboard cookie session, owner role only |
 | `apiKey` | device-token bearer (historical kind name: API keys are retired) |
 | `device-token` | device-token bearer only |
-| `pending-device-token` | short-lived pending device-token bearer, activation route only |
 | `agentKey` | Agent Read Plane key only; no human principal is admitted |
 | `any` | any authenticated principal except an agent key |
 
@@ -27,7 +26,7 @@ for at password sign-in (`client: "chat-extension"`): it reaches only the
 61 routes marked "yes", and every route marked "no" refuses it with 403.
 A full device token is not affected.
 
-## Routes (408)
+## Routes (406)
 
 | Method | Path | Route key | Kind | Roles | Page scope | chat-extension token |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -56,7 +55,6 @@ A full device token is not affected.
 | GET | `/api/v1/admin/connections` | `adminConnections` | `owner-session` | — | — | no |
 | POST | `/api/v1/admin/credentials/verify` | `adminVerifyCredentials` | `owner-session` | — | — | no |
 | GET | `/api/v1/admin/db/stats` | `adminDbStats` | `owner-session` | — | — | no |
-| GET | `/api/v1/admin/device-token-adoption` | `adminDeviceTokenAdoption` | `owner-session` | — | — | no |
 | GET | `/api/v1/admin/incidents` | `adminIncidents` | `owner-session` | — | — | no |
 | POST | `/api/v1/admin/invites` | `adminCreateInvite` | `owner-session` | — | — | no |
 | GET | `/api/v1/admin/logs` | `adminLogs` | `owner-session` | — | — | no |
@@ -259,7 +257,6 @@ A full device token is not affected.
 | GET | `/api/v1/archive/conversations/:ref/messages` | `archiveConversationMessages` | `session` | — | — | no |
 | GET | `/api/v1/archive/search` | `archiveSearch` | `session` | — | — | no |
 | POST | `/api/v1/auth/change-password` | `authChangePassword` | `any-session` | — | — | no |
-| POST | `/api/v1/auth/device-tokens/activate` | `authActivateDeviceToken` | `pending-device-token` | — | — | — |
 | DELETE | `/api/v1/auth/device-tokens/current` | `authRevokeCurrentDeviceToken` | `device-token` | — | — | yes |
 | POST | `/api/v1/auth/device-tokens/password` | `authIssueDeviceTokenWithPassword` | `public` | — | — | — |
 | GET | `/api/v1/auth/devices` | `authListDevices` | `any-session` | — | — | no |

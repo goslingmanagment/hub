@@ -11,7 +11,6 @@ import {
 } from "./services/publication-files.ts";
 import {
   closeOrphanedSyncRuns,
-  deleteExpiredPendingDeviceTokens,
   deleteExpiredSyncEngineTelemetry,
   deleteExpiredSyncMediaHandoff,
   deleteExpiredSyncObservability,
@@ -296,10 +295,6 @@ export async function startWorkerServices(
     // job keeps its historical queue name but no longer touches
     // sync_raw_payloads. Only the owner-initiated erasure removes them.
 
-    // Pending device credentials are deliberately short-lived custody, not an
-    // audit fact. Reuse the already-scheduled nightly retention job so crashed
-    // Desktop reservations cannot accumulate forever.
-    await timed("pendingDeviceTokens", () => deleteExpiredPendingDeviceTokens(app.db, now));
     const observabilityCutoff = new Date(
       now.getTime() - app.config.syncObservabilityRetentionDays * 24 * 60 * 60 * 1000,
     );

@@ -216,7 +216,6 @@ describe("password device sign-in", () => {
         username: "grisha",
         password: PASSWORD,
         label: "Firefox · Windows",
-        mode: "active",
         clientVersion: "2.3.0",
       }),
     );
@@ -227,7 +226,7 @@ describe("password device sign-in", () => {
     expect(await deviceTokenCount(setup.testDb)).toBe(0);
   });
 
-  it("mints NO reservation when the account is deactivated while the sign-in waits", async (context) => {
+  it("mints NO device token when the account is deactivated while the sign-in waits", async (context) => {
     const setup = requireSetup(context);
     if (!setup) return;
     const userId = await grishaId(setup.testDb);
@@ -239,17 +238,13 @@ describe("password device sign-in", () => {
       () => issueDeviceTokenWithPassword(setup.app, {
         username: "grisha",
         password: PASSWORD,
-        label: "Desktop · kevin",
-        mode: "pending",
+        label: "Firefox · Windows",
         clientVersion: null,
       }),
     );
 
     expect(settled.status).toBe("rejected");
-    const pending = await setup.testDb.pool.query<{ count: string }>(
-      "select count(*)::text as count from pending_device_tokens",
-    );
-    expect(Number(pending.rows[0]?.count)).toBe(0);
+    expect(await deviceTokenCount(setup.testDb)).toBe(0);
   });
 
   it("mints the token when the authority is unchanged under the lock", async (context) => {
@@ -265,7 +260,6 @@ describe("password device sign-in", () => {
         username: "grisha",
         password: PASSWORD,
         label: "Firefox · Windows",
-        mode: "active",
         clientVersion: "2.3.0",
       }),
     );

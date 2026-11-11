@@ -43,7 +43,7 @@ const PASSWORDS = { owner: "owner-secret", chatter: "chatter-secret" } as const;
 const AUDIT = { source: "cli" } as const;
 const EXTENSION_VERSION = "chat-extension/1.4.2";
 /** Route kinds that take no principal: the allowlist does not apply to them. */
-const NO_PRINCIPAL_KINDS = new Set(["public", "hmac", "pending-device-token"]);
+const NO_PRINCIPAL_KINDS = new Set(["public", "hmac"]);
 /** Test-only: a request carrying it stops right after the auth hooks (see the walk). */
 const WALK_HEADER = "x-test-route-walk";
 

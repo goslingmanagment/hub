@@ -94,12 +94,12 @@ describe("immutable user identities and reusable logins", () => {
     const originalCookie = await cookieFor(setup.server, "nikita", OLD_PASSWORD);
     const ownerCookie = await cookieFor(setup.server, "owner", "owner-secret");
     const device = await issueDeviceTokenForUserId(setup.app, { userId: originalId, label: "old Firefox" }, audit());
-    const pendingResponse = await setup.server.inject({
+    const signedInResponse = await setup.server.inject({
       method: "POST", url: "/api/v1/auth/device-tokens/password",
-      payload: { username: "NIKITA", password: OLD_PASSWORD, label: "old Desktop", mode: "pending" },
+      payload: { username: "NIKITA", password: OLD_PASSWORD, label: "old Desktop", mode: "active" },
     });
-    expect(pendingResponse.statusCode).toBe(200);
-    const pending = pendingResponse.json<{ token: string }>();
+    expect(signedInResponse.statusCode).toBe(200);
+    const signedIn = signedInResponse.json<{ token: string }>();
     const oldReset = await createAccountLinkForUserId(setup.app, { userId: originalId, kind: "password_reset" }, audit());
     await seedSpend(setup.testDb, originalId, 1100);
 
@@ -107,7 +107,7 @@ describe("immutable user identities and reusable logins", () => {
       method: "DELETE", url: `/api/v1/admin/users/by-id/${originalId}`, headers: { cookie: ownerCookie },
     });
     expect(removed.statusCode).toBe(200);
-    expect(removed.json()).toMatchObject({ ok: true, revokedDeviceTokens: 1 });
+    expect(removed.json()).toMatchObject({ ok: true, revokedDeviceTokens: 2 });
     const replacement = await createInvite(setup.app, { username: "nIKITA", pageLabels: [] }, audit());
     const replacementId = replacement.user.id;
     expect(replacementId).not.toBe(originalId);
@@ -119,12 +119,10 @@ describe("immutable user identities and reusable logins", () => {
     for (const headers of [
       { cookie: originalCookie },
       { authorization: `Bearer ${device.token}` },
+      { authorization: `Bearer ${signedIn.token}` },
     ]) {
       expect((await setup.server.inject({ method: "GET", url: "/api/v1/auth/me", headers })).statusCode).toBe(401);
     }
-    expect((await setup.server.inject({
-      method: "POST", url: "/api/v1/auth/device-tokens/activate", headers: { authorization: `Bearer ${pending.token}` },
-    })).statusCode).toBe(401);
     await expect(loginWithPassword(setup.app, { username: "nikita", password: OLD_PASSWORD })).rejects.toMatchObject({ statusCode: 401 });
 
     // Every stale owner control addresses the original ID, never a newly
@@ -277,7 +275,7 @@ describe("immutable user identities and reusable logins", () => {
         // re-reads the identity under the lock, which is what must refuse here.
         case "device token": return issueDeviceTokenWithPassword(setup.app, {
           username: "nikita", password: OLD_PASSWORD, label: "racing device",
-          mode: "active", clientVersion: null,
+          clientVersion: null,
         });
         case "link creation": return createAccountLinkForUserId(setup.app, { userId, kind: "password_reset" }, audit());
         case "link redemption": return redeemAccountLink(setup.app, { token: resetLink.token, password: NEW_PASSWORD });

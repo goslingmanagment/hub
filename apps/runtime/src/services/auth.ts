@@ -8,13 +8,10 @@ import {
   assignUserToPage,
   advanceDeviceTokenEpoch,
   createAuthSession,
-  createPendingDeviceToken,
   createUser,
-  deletePendingDeviceTokenById,
   deletePendingDeviceTokensForUser,
   findAgentKeyByDigest,
   findAuthSessionByDigest,
-  findPendingDeviceTokenByDigest,
   findUserById,
   findUserByUsername,
   insertAuditEvent,
@@ -821,59 +818,6 @@ export async function unassignPageFromUser(
   });
 }
 
-/** D116(c) fleet-gate foundation (desktop D19). Per ACTIVE chatter: does a
- * live device token exist whose last_used_at is fresher than the window.
- * Read-only. Probe/script automation shares
- * the chatter role (no schema flag yet), so this deliberately publishes
- * summary COUNTS instead of an all-chatters go/no-go boolean — that flag
- * would be permanently false until the service-account split classifies
- * accounts; phase-2 CI applies policy over the rows then. */
-export const DEVICE_TOKEN_ADOPTION_FRESH_WINDOW_DAYS = 14;
-
-export async function deviceTokenAdoptionReport(app: AppContext, now = new Date()) {
-  const freshFloor = now.getTime()
-    - DEVICE_TOKEN_ADOPTION_FRESH_WINDOW_DAYS * 24 * 60 * 60 * 1000;
-  const users = await listUsers(app.db);
-  const chatters = [];
-  for (const user of users) {
-    if (user.role !== "chatter" || user.disabledAt) continue;
-    const tokens = await listDeviceTokensForUser(app.db, user.id);
-    const liveTokens = tokens.filter(
-      (token) => token.revokedAt === null && token.expiresAt > now,
-    );
-    // Both token fields describe ONE row: the live token most recently used.
-    // Multiple live tokens per user are routine (one per machine, issue never
-    // revokes siblings) — an independent max(expiresAt) could advertise a
-    // never-used sibling's 90 days while the token actually in daily use dies
-    // at its 365-day hard cap tomorrow (the max token lifetime).
-    const anchorToken = liveTokens.reduce<(typeof liveTokens)[number] | null>(
-      (best, token) => (
-        token.lastUsedAt !== null
-          && (best === null || token.lastUsedAt > best.lastUsedAt!)
-          ? token
-          : best
-      ),
-      null,
-    );
-    chatters.push({
-      username: user.username,
-      hasFreshDeviceToken: anchorToken !== null
-        && anchorToken.lastUsedAt!.getTime() >= freshFloor,
-      deviceTokenLastUsedAt: anchorToken?.lastUsedAt?.toISOString() ?? null,
-      deviceTokenExpiresAt: anchorToken?.expiresAt.toISOString() ?? null,
-    });
-  }
-  return {
-    generatedAt: now.toISOString(),
-    freshWindowDays: DEVICE_TOKEN_ADOPTION_FRESH_WINDOW_DAYS,
-    chatters,
-    summary: {
-      activeChatters: chatters.length,
-      onFreshTokens: chatters.filter((row) => row.hasFreshDeviceToken).length,
-    },
-  };
-}
-
 // Audit B7: the route-level @fastify/rate-limit plugin runs at onRequest where
 // the body is not yet parsed, so it can only honestly key on the client IP.
 // This registry adds the per-account half: consecutive failures for a username
@@ -1222,12 +1166,7 @@ export function enforceRevenueRouteRoleScope(principal: AuthPrincipal) {
 // --- Device tokens ---
 
 export const DEVICE_TOKEN_PREFIX = "agency_hub_device_";
-/** Reservation prefix intentionally unknown to pre-0092 Core builds, which
- * fail its authentication even after a newer Core has activated the digest
- * into device_tokens. */
-export const PENDING_DEVICE_TOKEN_PREFIX = "agency_hub_pending_device_";
 export const DEVICE_TOKEN_TTL_MS = 90 * 24 * 60 * 60 * 1000;
-const PENDING_DEVICE_TOKEN_TTL_MS = 10 * 60 * 1000;
 /** Sliding refresh never extends past creation + this hard cap. */
 const DEVICE_TOKEN_MAX_LIFETIME_MS = 365 * 24 * 60 * 60 * 1000;
 /** Refresh writes are throttled: bump only when it gains at least a day. */
@@ -1236,115 +1175,6 @@ const DEVICE_TOKEN_REFRESH_GRANULARITY_MS = 24 * 60 * 60 * 1000;
  * authenticates, and what reads the stamp (the «вход … назад» labels, the
  * fleet's 14-day freshness) counts in minutes and days. */
 const DEVICE_TOKEN_USE_GRANULARITY_MS = 60 * 1000;
-
-export interface PendingDeviceTokenActivationCredential {
-  token: string;
-  userId: number;
-  state: "pending" | "active";
-}
-
-/** Specialized authentication for the activation route.  It admits only the
- * 0092 reservation prefix.  An already-moved active row is recognized solely
- * to make a lost activation response retry idempotent. */
-export async function authenticatePendingDeviceTokenForActivation(
-  app: AppContext,
-  rawToken: string,
-): Promise<PendingDeviceTokenActivationCredential | null> {
-  if (!rawToken.startsWith(PENDING_DEVICE_TOKEN_PREFIX)) {
-    return null;
-  }
-  const digest = sha256Hex(rawToken);
-  const now = new Date();
-  const pending = await findPendingDeviceTokenByDigest(app.db, digest);
-  if (pending && pending.expiresAt > now) {
-    const user = await findUserById(app.db, pending.userId);
-    if (user && !user.disabledAt && !user.deletedAt && roleCanUseSession(user.role)) {
-      return { token: rawToken, userId: user.id, state: "pending" };
-    }
-    return null;
-  }
-  const active = await findDeviceTokenByDigest(app.db, digest);
-  if (!active || active.revokedAt || active.expiresAt <= now) {
-    return null;
-  }
-  const user = await findUserById(app.db, active.userId);
-  return user && !user.disabledAt && !user.deletedAt && roleCanUseSession(user.role)
-    ? { token: rawToken, userId: user.id, state: "active" }
-    : null;
-}
-
-/** Atomically linearizes activation against password reset, disable,
- * revoke-all and another activation.  Both pending and user rows are locked in
- * the common user-then-pending order. */
-export async function activatePendingDeviceToken(
-  app: AppContext,
-  credential: PendingDeviceTokenActivationCredential,
-) {
-  if (!credential.token.startsWith(PENDING_DEVICE_TOKEN_PREFIX)) {
-    throw new UnauthorizedError("Invalid pending device token");
-  }
-  const digest = sha256Hex(credential.token);
-  const activated = await withAuditTransaction(app, async (dbTx) => {
-    const user = await lockUserForDeviceTokenMutation(dbTx, credential.userId);
-    if (!user || user.disabledAt || user.deletedAt || !roleCanUseSession(user.role)) {
-      throw new UnauthorizedError("Invalid pending device token");
-    }
-    // Time is sampled only after the potentially long row-lock wait.  A
-    // reservation that expires while revoke/reset owns the lock cannot cross
-    // its TTL on a stale pre-wait timestamp.
-    const now = new Date();
-
-    const pending = await findPendingDeviceTokenByDigest(dbTx, digest, { forUpdate: true });
-    if (pending !== null) {
-      if (pending.userId !== user.id || pending.expiresAt <= now) {
-        throw new UnauthorizedError("Pending device token has expired");
-      }
-      const expiresAt = new Date(now.getTime() + DEVICE_TOKEN_TTL_MS);
-      const active = await createDeviceToken(dbTx, {
-        userId: pending.userId,
-        label: pending.label,
-        tokenDigest: pending.tokenDigest,
-        keyPrefix: pending.keyPrefix,
-        expiresAt,
-      });
-      await deletePendingDeviceTokenById(dbTx, pending.id);
-      await recordAudit({ db: dbTx }, {
-        source: "api",
-        actorUserId: user.id,
-        targetUserId: user.id,
-        eventType: "device_token.activated",
-        metadata: {
-          username: user.username,
-          deviceTokenId: active.id,
-          label: active.label,
-          keyPrefix: active.keyPrefix,
-        },
-      });
-      return active;
-    }
-
-    // Response-loss retry: the digest has already moved.  Never resurrect a
-    // revoked/expired row and never accept a legacy-prefix active token here.
-    const active = await findDeviceTokenByDigest(dbTx, digest);
-    if (
-      !active
-      || active.userId !== user.id
-      || active.revokedAt
-      || active.expiresAt <= now
-      || !credential.token.startsWith(PENDING_DEVICE_TOKEN_PREFIX)
-    ) {
-      throw new UnauthorizedError("Invalid pending device token");
-    }
-    return active;
-  });
-
-  return {
-    id: activated.id,
-    label: activated.label,
-    keyPrefix: activated.keyPrefix,
-    expiresAt: activated.expiresAt,
-  };
-}
 
 /** Why a presented bearer was refused, when that is safe to
  * say. Only a device token that MATCHED a row carries a reason. */
@@ -1488,7 +1318,7 @@ export async function authenticateBearerCredential(
   token: string,
   options?: { clientVersion?: string | null },
 ): Promise<BearerAuthResult> {
-  if (token.startsWith(DEVICE_TOKEN_PREFIX) || token.startsWith(PENDING_DEVICE_TOKEN_PREFIX)) {
+  if (token.startsWith(DEVICE_TOKEN_PREFIX)) {
     return authenticateDeviceToken(app, token, options);
   }
   if (token.startsWith(AGENT_KEY_TOKEN_PREFIX)) {
@@ -1578,39 +1408,28 @@ export async function revokeDeviceTokensForUserId(
 // --- Password-based device sign-in and the revocation ladder ---
 
 /** Static device-token issuance policy shared by the cookie and password lanes. */
-function mintDeviceTokenMaterial(mode: "active" | "pending") {
+function mintDeviceTokenMaterial() {
   const tokenBody = randomToken(24);
-  const prefix = mode === "active" ? DEVICE_TOKEN_PREFIX : PENDING_DEVICE_TOKEN_PREFIX;
   return {
-    rawToken: `${prefix}${tokenBody}`,
-    keyPrefix: `${prefix}${tokenBody.slice(0, KEY_PREFIX_DISPLAY_LENGTH)}`,
+    rawToken: `${DEVICE_TOKEN_PREFIX}${tokenBody}`,
+    keyPrefix: `${DEVICE_TOKEN_PREFIX}${tokenBody.slice(0, KEY_PREFIX_DISPLAY_LENGTH)}`,
   };
 }
 
-export type IssuedDeviceCredential =
-  | {
-    mode: "active";
-    token: string;
-    id: number;
-    label: string;
-    keyPrefix: string;
-    expiresAt: Date;
-    /** chat-extension H-3: the profile the token is bound to; null = a full token. */
-    clientProfile: ClientTokenProfile | null;
-  }
-  | {
-    mode: "pending";
-    token: string;
-    reservationId: number;
-    label: string;
-    keyPrefix: string;
-    reservationExpiresAt: Date;
-  };
+export interface IssuedDeviceCredential {
+  mode: "active";
+  token: string;
+  id: number;
+  label: string;
+  keyPrefix: string;
+  expiresAt: Date;
+  /** chat-extension H-3: the profile the token is bound to; null = a full token. */
+  clientProfile: ClientTokenProfile | null;
+}
 
 /**
- * Р2: the single client sign-in — username + password → a device token
- * (`active`, the extension) or a reservation to activate (`pending`, the
- * desktop), with no cookie session anywhere. Rides the §4.3 core, so a reset
+ * Р2: the single client sign-in — username + password → a device token,
+ * with no cookie session anywhere. Rides the §4.3 core, so a reset
  * that commits mid-request wins and the request answers 401.
  */
 export async function issueDeviceTokenWithPassword(
@@ -1619,87 +1438,48 @@ export async function issueDeviceTokenWithPassword(
     username: string;
     password: string;
     label: string;
-    mode: "active" | "pending";
     clientVersion: string | null;
-    /** chat-extension H-3: a narrow token's profile (active only); null = a full token. */
+    /** chat-extension H-3: a narrow token's profile; null = a full token. */
     clientProfile?: ClientTokenProfile | null;
   },
 ): Promise<IssuedDeviceCredential> {
   const clientProfile = input.clientProfile ?? null;
-  if (clientProfile !== null && input.mode !== "active") {
-    // The body schema refuses it first; a reservation has no profile to carry.
-    throw new BadRequestError("A client profile requires mode active");
-  }
-  const material = mintDeviceTokenMaterial(input.mode);
+  const material = mintDeviceTokenMaterial();
   return verifyPasswordAndLockUser(app, input, async (dbTx, user) => {
-    // Time is sampled after the lock wait, as activation does.
-    const now = Date.now();
-    if (input.mode === "active") {
-      const expiresAt = new Date(now + DEVICE_TOKEN_TTL_MS);
-      const created = await createDeviceToken(dbTx, {
-        userId: user.id,
-        label: input.label,
-        tokenDigest: sha256Hex(material.rawToken),
-        keyPrefix: material.keyPrefix,
-        expiresAt,
-        lastClientVersion: input.clientVersion,
-        clientProfile,
-      });
-      await recordAudit({ db: dbTx }, {
-        source: "api",
-        actorUserId: user.id,
-        targetUserId: user.id,
-        eventType: "device_token.issued",
-        metadata: {
-          username: user.username,
-          label: input.label,
-          keyPrefix: material.keyPrefix,
-          via: "password",
-          clientVersion: input.clientVersion,
-          // Only a narrow token adds the key: a full token's audit row is unchanged.
-          ...(clientProfile !== null ? { clientProfile } : {}),
-        },
-      });
-      return {
-        mode: "active",
-        token: material.rawToken,
-        id: created.id,
-        label: created.label,
-        keyPrefix: material.keyPrefix,
-        expiresAt,
-        clientProfile,
-      };
-    }
-
-    const expiresAt = new Date(now + PENDING_DEVICE_TOKEN_TTL_MS);
-    const reservation = await createPendingDeviceToken(dbTx, {
+    // Time is sampled after the lock wait.
+    const expiresAt = new Date(Date.now() + DEVICE_TOKEN_TTL_MS);
+    const created = await createDeviceToken(dbTx, {
       userId: user.id,
       label: input.label,
       tokenDigest: sha256Hex(material.rawToken),
       keyPrefix: material.keyPrefix,
       expiresAt,
+      lastClientVersion: input.clientVersion,
+      clientProfile,
     });
     await recordAudit({ db: dbTx }, {
       source: "api",
       actorUserId: user.id,
       targetUserId: user.id,
-      eventType: "device_token.reserved",
+      eventType: "device_token.issued",
       metadata: {
         username: user.username,
         label: input.label,
         keyPrefix: material.keyPrefix,
-        expiresAt: expiresAt.toISOString(),
         via: "password",
         clientVersion: input.clientVersion,
+        // Only a narrow token adds the key: a full token's audit row is unchanged.
+        ...(clientProfile !== null ? { clientProfile } : {}),
       },
     });
     return {
-      mode: "pending",
+      mode: "active",
       token: material.rawToken,
-      reservationId: reservation.id,
-      label: reservation.label,
+      id: created.id,
+      label: created.label,
       keyPrefix: material.keyPrefix,
-      reservationExpiresAt: reservation.expiresAt,
+      expiresAt,
+      clientProfile,
     };
   });
 }

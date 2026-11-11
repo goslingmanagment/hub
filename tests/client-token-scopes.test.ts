@@ -55,8 +55,8 @@ describe("CLIENT_TOKEN_PROFILES[\"chat-extension\"]", () => {
     expect(new Set(operations).size).toBe(operations.length);
   });
 
-  it("holds no cookie-session, agent, activation or monitoring route", () => {
-    const refusedKinds = new Set(["owner-session", "session", "any-session", "agentKey", "pending-device-token", "monitoring"]);
+  it("holds no cookie-session, agent or monitoring route", () => {
+    const refusedKinds = new Set(["owner-session", "session", "any-session", "agentKey", "monitoring"]);
     expect(operations.filter((key) => refusedKinds.has(schemas[key]!.auth!.kind))).toEqual([]);
   });
 
@@ -143,14 +143,14 @@ describe("CLIENT_TOKEN_PROFILES[\"chat-extension\"]", () => {
 describe("the password sign-in body and its echo", () => {
   const base = { username: "chatter", password: "secret", label: "Firefox · macOS · ChatSpace", mode: "active" as const };
 
-  it("accepts a known client on an active sign-in only", () => {
+  it("accepts a known client on an active sign-in, and no other mode", () => {
     expect(authIssueDeviceTokenWithPasswordBodySchema.parse({ ...base, client: "chat-extension" }).client)
       .toBe("chat-extension");
     expect(authIssueDeviceTokenWithPasswordBodySchema.parse(base).client).toBeUndefined();
     expect(authIssueDeviceTokenWithPasswordBodySchema.safeParse({ ...base, client: "desktop" }).success).toBe(false);
     const pending = authIssueDeviceTokenWithPasswordBodySchema.safeParse({ ...base, mode: "pending", client: "chat-extension" });
     expect(pending.success).toBe(false);
-    expect(pending.error?.issues.map((issue) => issue.path)).toEqual([["client"]]);
+    expect(pending.error?.issues.map((issue) => issue.path)).toEqual([["mode"]]);
   });
 
   it("offers exactly the profiles the hub knows", () => {
@@ -172,7 +172,7 @@ describe("the password sign-in body and its echo", () => {
 describe("the route guard", () => {
   it("applies to every kind that takes a principal", () => {
     const kinds: Array<[RouteAuthPolicy["kind"], boolean]> = [
-      ["public", false], ["hmac", false], ["pending-device-token", false],
+      ["public", false], ["hmac", false],
       ["monitoring", true], ["session", true], ["any-session", true], ["owner-session", true],
       ["apiKey", true], ["device-token", true], ["agentKey", true], ["any", true],
     ];
