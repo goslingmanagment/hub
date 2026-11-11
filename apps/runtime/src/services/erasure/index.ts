@@ -2056,6 +2056,11 @@ async function pageHotTargets(app: Db, scope: ResolvedScope): Promise<WorkTarget
     // chat-media bytes for the describer; before the descriptions they
     // reference (the FKs cascade on both, which erasure keeps or deletes).
     ["sync_media_handoff", "page_id"],
+    // Media looks (0371, owner 2026-11-11): the frames of the page's media an
+    // agent looked at, before their looks (both cascade on pages, which
+    // erasure keeps).
+    ["media_look_frames", "page_id"],
+    ["media_looks", "page_id"],
     // AI media describer (0212): links before the descriptions they reference.
     ["ai_media_description_links", "page_id"],
     ["ai_media_descriptions", "page_id"],

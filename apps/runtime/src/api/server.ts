@@ -74,6 +74,7 @@ import { registerSyncEngineRoutes } from "../modules/sync-engine/index.ts";
 import { registerPageBrowserRoutes } from "../modules/page-browser/index.ts";
 import { registerPublicationRoutes } from "../modules/publications/index.ts";
 import { registerAgentTeamRoutes } from "../modules/agent-team/index.ts";
+import { registerMediaLookRoutes } from "../modules/media-looks/index.ts";
 import { registerTeamLedgerRoutes } from "../modules/team-ledger/index.ts";
 import { registerFanQueueRoutes } from "../modules/fan-queues/index.ts";
 import { registerOutreachRoutes } from "../modules/outreach/index.ts";
@@ -671,6 +672,7 @@ export async function buildApiServer(appContext: AppContext) {
   // Fan queues: the agent's preview, create and changes, the extension's portions.
   registerFanQueueRoutes(server, moduleContext);
   registerAgentTeamRoutes(server, moduleContext);
+  registerMediaLookRoutes(server, moduleContext);
   // Workboard «Выплаты» from the agency ledger (the owner's session, read through Hub's payouts key).
   registerTeamLedgerRoutes(server, moduleContext);
   // «Рассылки» kept by Hub: the page's outreaches, shared by its team, and each fan's send claimed once.

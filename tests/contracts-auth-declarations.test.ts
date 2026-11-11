@@ -54,6 +54,9 @@ describe("route auth declarations", () => {
       // The Sync Engine's history-request create (same shape as hydration's).
       "agentHistoryRequestCreate",
       "agentHydrationRequestCreate",
+      // Media looks: frames of a file of the page's posts, and a look read again (look:media).
+      "agentMediaLookCreate",
+      "agentMediaLookGet",
       // Any post of a page by the platform's id: off the schedule
       // (withdraw:publications) or off the wall (delete:posts).
       "agentPostDelete",

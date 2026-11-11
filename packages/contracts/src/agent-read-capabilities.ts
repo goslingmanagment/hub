@@ -81,6 +81,13 @@ export const AGENT_CAPABILITIES = [
    * reason in the owner's audit.
    */
   "delete:posts",
+  /**
+   * Looking at the page's own media: frames (≤ 512 px) of a file of a post in
+   * the platform's schedule, pulled through the page's session at its pace —
+   * never the file, never a link (owner 2026-11-11). Fansly only; a daily cap
+   * per page; a fan's media is refused.
+   */
+  "look:media",
 ] as const;
 
 export type AgentCapability = (typeof AGENT_CAPABILITIES)[number];

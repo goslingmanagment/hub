@@ -16,6 +16,7 @@ import {
   deleteExpiredSyncObservability,
   getLatestScheduledReportDateOnOrBefore,
   getTelegramSettings,
+  sweepMediaLooks,
 } from "@agency_hub_core/db";
 import { toBusinessDate, UTC_TIME_ZONE, addUtcDays, startOfBusinessDay } from "@agency_hub_core/shared";
 import type { PgBoss } from "pg-boss";
@@ -313,6 +314,11 @@ export async function startWorkerServices(
     // bytes the describer never consumed are transient custody, deleted once
     // their 24 h passed — not a captured fact.
     const mediaHandoff = await timed("syncMediaHandoff", () => deleteExpiredSyncMediaHandoff(app.db));
+    // Media looks (0371, owner 2026-11-11): an image fetched for a look is
+    // dropped 15 minutes after it came, the frames cut from it after 7 days,
+    // the look's row after 90 — Hub's own pictures of the page's media, not a
+    // captured fact.
+    const mediaLooks = await timed("mediaLooks", () => sweepMediaLooks(app.db));
     // Voice notes ride the nightly cleanup: release the reservations of
     // long-stale indeterminate rows. Their audio is kept.
     const voiceRetention = await timed("voiceNotes", () => runVoiceNotesNightlyRetention(app, now));
@@ -335,6 +341,7 @@ export async function startWorkerServices(
         steps: engineTelemetry.steps,
       },
       syncMediaHandoff: { deletedExpired: mediaHandoff },
+      mediaLooks,
       voiceRetention,
     };
     if (observability.budgetExhausted || engineTelemetry.budgetExhausted) {

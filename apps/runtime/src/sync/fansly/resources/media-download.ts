@@ -2,6 +2,7 @@ import {
   deleteExpiredSyncMediaHandoff,
   setSyncWorkSecretParams,
   storeSyncMediaHandoff,
+  type Database,
 } from "@agency_hub_core/db";
 import type { FanslyCdnAnswer } from "@agency_hub_core/fansly";
 
@@ -40,6 +41,12 @@ import type {
 //   the page's: its REST requests prove or disprove the proxy themselves).
 //
 // Nothing here writes, logs or returns the URL (design J7).
+//
+// The same transport and pacing serve another reader of the page's media, the
+// agents' media looks (`media-look.fetch`, ./media-look.ts): only the sink
+// differs — where a 2xx's bytes go and what the work's result says of them.
+// The describer's sink below is the default; its subject, table and results
+// are as they always were.
 
 export const MEDIA_DOWNLOAD_KEY = "media-download.fetch";
 /** Redirects followed after the signed URL (the legacy download's limit). */
@@ -73,7 +80,8 @@ function hopRequest(hop: number): RequestPlan<"cdn.media"> {
   return { spec: "cdn.media", params: { hop } };
 }
 
-function closed(result: MediaDownloadResultJson, closeReason: string): WorkOutcome {
+/** A closed work's result: the describer's shape, or another sink's own failure. */
+function closed(result: MediaDownloadResultJson | { failure: string; httpStatus: number | null }, closeReason: string): WorkOutcome {
   return { satisfiesRevision: true, close: "done", closeReason, result };
 }
 
@@ -83,6 +91,47 @@ export interface MediaDownloadPolicy {
 }
 
 export const FANSLY_CDN_POLICY: MediaDownloadPolicy = { urlAllowed: isFanslyCdnUrl };
+
+/** What a sink made of a 2xx's bytes: the work's result, or the failure it closes with. */
+export type MediaDownloadStored =
+  | { ok: true; result: Record<string, unknown> }
+  | { ok: false; failure: string };
+
+/** Where a 2xx's bytes go, in the apply's transaction. */
+export interface MediaDownloadSink {
+  /** The id the work's subject names (`desc:<id>` for the describer), or null: not this sink's subject. */
+  subjectId(subject: string): number | null;
+  store(tx: Database, input: {
+    pageId: number;
+    subjectId: number;
+    workId: number;
+    contentType: string | null;
+    bytes: Buffer;
+    /** The hops it took, the signed URL's included. */
+    hops: number;
+  }): Promise<MediaDownloadStored>;
+}
+
+/** The describer's sink: the transient handoff buffer (0234), consumed by the worker. */
+export const DESCRIBER_HANDOFF_SINK: MediaDownloadSink = {
+  subjectId: descriptionIdOfSubject,
+  async store(tx, input) {
+    // Rows nobody consumed within their day go first (owner decision №17).
+    await deleteExpiredSyncMediaHandoff(tx, { pageId: input.pageId, maxBatches: 1 });
+    const stored = await storeSyncMediaHandoff(tx, {
+      pageId: input.pageId,
+      descriptionId: input.subjectId,
+      workId: input.workId,
+      contentType: input.contentType,
+      bytes: input.bytes,
+    });
+    if (stored === null) return { ok: false, failure: "description_gone" };
+    return {
+      ok: true,
+      result: { handoffId: stored.id, contentType: input.contentType, bytes: stored.byteCount, hops: input.hops } satisfies MediaDownloadResultJson,
+    };
+  },
+};
 
 /** The download's own account of an outcome `errors.onOutcome` decided. */
 export function mediaDownloadOutcome(decision: OutcomeDecision, step: OutcomeStep): OutcomeDecision {
@@ -117,10 +166,13 @@ export function mediaDownloadOutcome(decision: OutcomeDecision, step: OutcomeSte
   }
 }
 
-export function createMediaDownloadModule(policy: MediaDownloadPolicy = FANSLY_CDN_POLICY): ResourceModule {
+export function createMediaDownloadModule(
+  policy: MediaDownloadPolicy = FANSLY_CDN_POLICY,
+  sink: MediaDownloadSink = DESCRIBER_HANDOFF_SINK,
+): ResourceModule {
   return {
     async plan(work): Promise<StepPlan> {
-      if (descriptionIdOfSubject(work.subject) === null) {
+      if (sink.subjectId(work.subject) === null) {
         return { kind: "done", reason: "bad_subject", result: { failure: "bad_subject", httpStatus: null } satisfies MediaDownloadResultJson };
       }
       return { kind: "request", request: hopRequest(mediaDownloadHop(work.cursor)) };
@@ -134,7 +186,7 @@ export function createMediaDownloadModule(policy: MediaDownloadPolicy = FANSLY_C
       const answer = input.parsed as FanslyCdnAnswer;
       const hop = mediaDownloadHop(input.request.params);
       const status = answer.status;
-      const fail = (failure: MediaDownloadFailure | "description_gone", reason = "download_failed"): ApplyResult => ({
+      const fail = (failure: MediaDownloadFailure | (string & {}), reason = "download_failed"): ApplyResult => ({
         work: closed({ failure, httpStatus: status }, reason),
         followups: [],
         counters: { [`download_${failure}`]: 1 },
@@ -168,20 +220,19 @@ export function createMediaDownloadModule(policy: MediaDownloadPolicy = FANSLY_C
       if (status < 200 || status > 299) return fail("http_status");
       if (answer.tooLarge) return fail("too_large");
       if (answer.body === null) return fail("http_status");
-      const descriptionId = descriptionIdOfSubject(input.work.subject);
-      if (descriptionId === null) return fail("http_status");
-      // Rows nobody consumed within their day go first (owner decision №17).
-      await deleteExpiredSyncMediaHandoff(tx, { pageId: input.pageId, maxBatches: 1 });
-      const stored = await storeSyncMediaHandoff(tx, {
+      const subjectId = sink.subjectId(input.work.subject);
+      if (subjectId === null) return fail("http_status");
+      const stored = await sink.store(tx, {
         pageId: input.pageId,
-        descriptionId,
+        subjectId,
         workId: input.work.id,
         contentType: answer.contentType,
         bytes: answer.body,
+        hops: hop + 1,
       });
-      if (stored === null) return fail("description_gone");
+      if (!stored.ok) return fail(stored.failure);
       return {
-        work: closed({ handoffId: stored.id, contentType: answer.contentType, bytes: stored.byteCount, hops: hop + 1 }, "downloaded"),
+        work: { satisfiesRevision: true, close: "done", closeReason: "downloaded", result: stored.result },
         followups: [],
         counters: { downloads: 1 },
       };

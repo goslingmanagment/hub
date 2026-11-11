@@ -120,14 +120,18 @@ describe("the Fansly registry table", () => {
     // 401 stays the page's.
     expect(scoped).toEqual([
       ["media-download.fetch", [401, 403]],
+      ["media-look.fetch", [401, 403]],
       ["probe.excluded-chat", [403]],
     ]);
     expect(byKey("media-download.fetch").operations).toEqual(["cdn.media"]);
+    // An agent's media look rides the same CDN route with its own key and breaker.
+    expect(byKey("media-look.fetch")).toMatchObject({ file: "media-look", class: "planned", triggers: ["api"], operations: ["cdn.media"] });
     expect(byKey("repair.ws-gap").operations).toEqual(["messaging.groups"]);
     const registry = createFanslyRegistry();
     // Its answers are never journaled: applied from memory.
     expect(typeof (await registry.module("media-download.fetch")).applyAnswer).toBe("function");
     expect(typeof (await registry.module("media-download.fetch")).outcome).toBe("function");
+    expect(typeof (await registry.module("media-look.fetch")).applyAnswer).toBe("function");
     expect(typeof (await registry.module("repair.ws-gap")).applyLocal).toBe("function");
   });
 });
