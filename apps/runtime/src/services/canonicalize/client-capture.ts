@@ -61,6 +61,8 @@ export const CLIENT_CAPTURE_CANONICALIZED_KINDS: ReadonlySet<string> = new Set([
   "client.fan_queue_item.v1",
   // A fan's send of an outreach (services/client-outreaches.ts): validation only; the route writes its row itself.
   "client.outreach_send.v1",
+  // Fan badges a chatter's browser read (services/client-fan-badges.ts): validation only; the route writes its rows itself.
+  "client.fan_badges.v1",
 ]);
 
 // The only kinds this family can mint events from (the producer-gated

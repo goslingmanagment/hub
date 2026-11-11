@@ -1043,6 +1043,46 @@ file — a fan's media is never looked at), `media_look_no_image_variant`,
 A page outside your key, and a look or publication of another page, answers 404;
 a key without `look:media` is 403 `agent_capability_missing`.
 
+## A fan's badges: FBuddy's gem and Fansly's blue card (`fan_memberships`)
+
+Chatters see two badges beside a Fansly fan's name, and you can read both in
+the `fan_memberships` dataset (it needs `read:datasets` and `read:money`):
+
+- `fbuddyTier`: FBuddy's gem, the fan's spend summed over EVERY creator who
+  shares spend with FBuddy, not only ours: `basic` ($0, spent nowhere), `bronze`
+  (up to $100), `silver` (up to $1 000), `gold` (up to $3 000), `platinum`
+  (above). `none`: FBuddy answered and has no tier for the fan.
+- `recentSpender`: Fansly's own «Recent Spender» mark, the blue card: the fan
+  paid on Fansly lately (`true`) or not (`false`).
+- `fbuddyTierCheckedAt`, `recentSpenderCheckedAt`: when a browser last
+  confirmed the value. An unchanged value moves it at most once a day.
+
+**`null` is «nobody has looked», never «no badge».** Hub cannot ask FBuddy or
+read the mark itself: the badges reach it from the chatters' browsers (ChatGoose
+passes on what its boards read: «Онлайн», «Новые», Spenders, «Рассылка»,
+from 2026-11-12). So only the fans those boards showed have them, and a count
+over the page is a count over the fans read so far: always say how many of the
+group have a badge at all. A badge is the fan's, not the page's: read through
+one page, it stands on every Fansly page the fan is on. OnlyFans rows have
+none.
+
+The same row carries `lifetimeSpendMills`, THIS page's money from the fan (the
+creator's net, mills: 1000 = $1), so «who left more here: fans with only the card or fans with a
+bronze gem» is one walk of the page's payers:
+
+```
+hub dataset --page-label ari-1 --dataset fan_memberships \
+  --from 2020-01-01T00:00:00Z --to 2027-01-01T00:00:00Z \
+  --filter lifetimeSpendMills:gt:0 \
+  --sort lifetimeSpendMills:desc --limit 200
+```
+
+Follow `delivery.nextCursor` to the end, then group by `fbuddyTier` and
+`recentSpender` yourself and report three numbers per group: fans, their sum,
+and how many payers had no badge read (`fbuddyTier` null). One fan:
+`--filter platformUserId:eq:<id>`. The window is the fan's `lastSeenAt` on the
+page, so a wide one takes everybody.
+
 ## Fan queues for chatters (`hub queue-*`)
 
 A fan queue is the fans of one page gathered on someone's word and handed out

@@ -379,6 +379,19 @@ export const AGENT_DATASETS = {
       // OnlyFans only: whether the page can message the fan — contactable,
       // unavailable (chat closed), restricted, blocked, gone, unknown.
       accountContactability: "string",
+      // Fansly only, the fan's badges as chatters' browsers read them beside the
+      // fan's name (Hub cannot read either itself), so only the fans their
+      // boards showed have them; null: never read (and on every OnlyFans row).
+      // FBuddy's spending tier, the fan's spend summed over every creator who
+      // shares spend with FBuddy: basic ($0), bronze (to $100), silver (to
+      // $1 000), gold (to $3 000), platinum (above); none — FBuddy answered and
+      // has no tier for the fan.
+      fbuddyTier: "string",
+      // When a browser last confirmed the tier (at most once a day while it holds).
+      fbuddyTierCheckedAt: "timestamp",
+      // Fansly's own «Recent Spender» mark of the fan's account (the blue card).
+      recentSpender: "bool",
+      recentSpenderCheckedAt: "timestamp",
     },
     defaultSort: { field: "lastSeenAt", dir: "desc", nullsLast: false },
     stableKey: ["fanId"],
