@@ -7,7 +7,9 @@ import type { Database } from "../client.ts";
 // RESERVED before the command is sent, in one transaction that holds the key's
 // row, so two requests at once can never both take the last one. It is given
 // back only when Hub refused before any command of the post existed — never
-// when the outcome is unknown or the command went. Hub's request accounting
+// when the outcome is unknown or the command went. A limit of 0 is the fuse
+// off: nothing is ever reserved, so agents delete nothing (never "no
+// ceiling": there is no unlimited mode). Hub's request accounting
 // (`bumpAgentKeyUsage`) counts and never stops: this one stops.
 
 const DAY_MS = 24 * 60 * 60_000;
@@ -19,8 +21,8 @@ export type AgentPostDeleteSlot =
 
 /**
  * Reserve one deletion of `postRef` for the key, unless its slots of the last
- * 24 hours already reach `limit` (0: no ceiling, the slot is still recorded).
- * `used` counts the reserved slots after this one.
+ * 24 hours already reach `limit` — a limit of 0 (or less) reserves nothing,
+ * ever. `used` counts the reserved slots after this one.
  */
 export async function reserveAgentPostDeleteSlot(db: Database, input: {
   agentKeyId: number;
@@ -41,7 +43,7 @@ export async function reserveAgentPostDeleteSlot(db: Database, input: {
        where agent_key_id = ${input.agentKeyId} and released_at is null and reserved_at > ${since}
     `);
     const used = Number(counted.rows[0]?.used ?? 0);
-    if (input.limit > 0 && used >= input.limit) return { ok: false as const, used };
+    if (used >= input.limit) return { ok: false as const, used };
     const inserted = await tx.execute<{ id: string }>(sql`
       insert into agent_post_delete_slots (agent_key_id, page_id, platform, post_ref, reserved_at)
       values (${input.agentKeyId}, ${input.pageId}, ${input.platform}, ${input.postRef}, ${now})

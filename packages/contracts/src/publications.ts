@@ -434,7 +434,7 @@ export const agentPostCommandResponseSchema = z.object({
   command: agentPostCommandStateSchema.nullable(),
   /** unknown: what a person checks on the platform. */
   check: z.string().nullable(),
-  /** A deletion's ceiling for this key over the last 24 hours (null: a withdrawal, or no ceiling). */
+  /** A deletion's ceiling for this key over the last 24 hours (`limit` 0: agents' deletions are off); null: a withdrawal. */
   dailyLimit: z.object({ limit: z.number().int(), used: z.number().int() }).nullable(),
 });
 export type AgentPostCommandResponse = z.infer<typeof agentPostCommandResponseSchema>;

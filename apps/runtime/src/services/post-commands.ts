@@ -57,7 +57,8 @@ import { toPublicationWire, type PublicationWithdrawer } from "./publications.ts
 //   Fansly delete).
 // - A deletion: a daily ceiling per key (AGENT_POST_DELETE_DAILY_LIMIT_PER_KEY),
 //   its slot reserved before the command and never given back once one exists;
-//   and a reason, kept in the owner's audit (the route's).
+//   0 turns agents' deletions off — never "no ceiling"; and a reason, kept in
+//   the owner's audit (the route's).
 // - Honest outcomes: withdrawn / deleted only when the platform's answer or a
 //   read after it proves it; otherwise unknown, with what a person checks.
 
@@ -380,7 +381,10 @@ export async function withdrawPagePost(
  * owner's Fansly deletion; one with no publication by its own command — only
  * a post Hub has among the page's own posts, not in its schedule. A daily
  * ceiling per key: the slot is reserved before anything is queued or sent and
- * given back only when Hub refused before any command existed.
+ * given back only when Hub refused before any command existed. A ceiling of 0
+ * turns agents' deletions off: every new one is refused `agent_post_delete_off`
+ * and nothing is sent (a repeat still answers the state of a command that went
+ * before — a read, nothing sent).
  */
 export async function deletePagePost(
   app: AppContext,
@@ -390,11 +394,15 @@ export async function deletePagePost(
   const now = input.now ?? new Date();
   const isSendable = input.isSendable ?? isFanslyWriteSendable;
   const config = await loadEffectiveConfig(app.db, app.config);
-  const limit = config.agentPostDeleteDailyLimitPerKey ?? 10;
-  const ceiling = async (used?: number) => (limit === 0 ? null : { limit, used: used ?? await countAgentPostDeleteSlots(app.db, { agentKeyId: actor.agentKeyId, now }) });
+  // 0 (or less): agents delete nothing — the fuse is off, never unlimited.
+  const limit = Math.max(0, config.agentPostDeleteDailyLimitPerKey ?? 10);
+  const off = limit === 0;
+  const ceiling = async (used?: number) => ({ limit, used: used ?? await countAgentPostDeleteSlots(app.db, { agentKeyId: actor.agentKeyId, now }) });
   const refused = async (reason: string, fields: Partial<Fields> = {}) => answer(page, postRef, "delete", { outcome: "refused", reason, dailyLimit: await ceiling(), ...fields });
-  /** The slot, reserved right before the command (refused when the ceiling is reached). */
+  /** The slot, reserved right before the command (refused when the ceiling is reached, or deletions are off). */
   const reserve = () => reserveAgentPostDeleteSlot(app.db, { agentKeyId: actor.agentKeyId, pageId: page.id, platform: page.platform, postRef, limit, now });
+  const slotRefusal = (used: number, fields: Partial<Fields> = {}) =>
+    refused(off ? "agent_post_delete_off" : "daily_delete_limit_reached", { ...fields, dailyLimit: { limit, used } });
   const release = (slotId: number, reason: string) => releaseAgentPostDeleteSlot(app.db, { slotId, reason });
 
   const publicationId = await findPublicationIdByPlatformPostRef(app.db, { pageId: page.id, postRef });
@@ -411,8 +419,9 @@ export async function deletePagePost(
     if (last !== undefined && last.state !== "refused") {
       return answer(page, postRef, "delete", { ...publicationStored("delete", publication), command: commandWire(last), dailyLimit: await ceiling() });
     }
+    if (off) return refused("agent_post_delete_off", { publicationId, publication });
     const slot = await reserve();
-    if (!slot.ok) return refused("daily_delete_limit_reached", { publicationId, publication, dailyLimit: { limit, used: slot.used } });
+    if (!slot.ok) return slotRefusal(slot.used, { publicationId, publication });
     const result = await deleteFanslyPublication(app, { id: publicationId, userId: actor.ownerUserId, now, isSendable });
     if (result.outcome === "refused") {
       await release(slot.slotId, result.reason ?? "refused");
@@ -434,6 +443,8 @@ export async function deletePagePost(
     const stored = await onlyfansStored(app, page, postRef);
     if (stored !== null) return onlyfansStoredAnswer(page, postRef, "delete", stored, await ceiling());
   }
+  // Agents' deletions are off: nothing new, whatever the post.
+  if (off) return refused("agent_post_delete_off");
 
   // Only a post Hub has among THIS page's own posts, out on the wall.
   if (!await pageHasCreatorPost(app.db, { pageId: page.id, postRef })) return refused("post_not_seen_on_page");
@@ -444,8 +455,8 @@ export async function deletePagePost(
   if (page.platform === "fansly" && !isSendable("publish.post_delete")) return refused("route_unverified");
 
   const slot = await reserve();
-  if (!slot.ok) return refused("daily_delete_limit_reached", { dailyLimit: { limit, used: slot.used } });
-  const dailyLimit = limit === 0 ? null : { limit, used: slot.used };
+  if (!slot.ok) return slotRefusal(slot.used);
+  const dailyLimit = { limit, used: slot.used };
 
   if (page.platform === "onlyfans") {
     const sent = await sendOnlyfansPostDelete(app, { pageId: page.id, postRef, userId: actor.ownerUserId });

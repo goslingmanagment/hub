@@ -896,7 +896,9 @@ has among the page's own posts, never one still in the schedule (that is
 24 hours (the owner's setting, 10 by default); each slot is taken before the
 command goes and is not given back when the outcome is unknown. At the ceiling
 Hub refuses `daily_delete_limit_reached`: tell the owner, never try to get
-around it.
+around it. A ceiling of 0 is the owner's off switch: every new deletion is
+refused `agent_post_delete_off` and nothing is sent (asking again about a
+deletion that already went still answers where it stands).
 
 - **Fansly** answers `accepted`; ask again in a minute or two: `deleted` (a read
   of the post by its id after Fansly's answer lists nothing), `unknown`,
@@ -919,6 +921,7 @@ the platform).
 | `post_not_seen_on_page` | Hub does not have this post among the page's own posts. | Check the page and the id; Hub never deletes a post it has not seen there. |
 | `post_in_schedule_use_withdraw` | The post is still in the schedule. | `post-withdraw` it. |
 | `daily_delete_limit_reached` | The key's deletions of the last 24 hours reached the ceiling. | Tell the owner. |
+| `agent_post_delete_off` | The owner turned agents' deletions off (the ceiling is 0). | Tell the owner; delete nothing. |
 | `onlyfans_publication_delete_not_in_hub` | An OnlyFans Hub post: Hub has no deletion of it. | Tell the owner; he deletes it by hand. |
 | `publishing_stopped`, `publishing_stopped_schedule_stays` | The page is stopped (a lost login, a platform check, 401/403/429): nothing may be sent for it. | Tell the owner. |
 | `route_unverified` | Hub may not send this request to Fansly. | Tell the owner. |

@@ -353,4 +353,19 @@ describe("post-delete: a published post of the page, on the owner's word", () =>
     expect((await remove(DELETER, "9306")).json()).toMatchObject({ outcome: "refused", reason: "daily_delete_limit_reached" });
     expect(await commands()).toHaveLength(2);
   });
+
+  it("a ceiling of 0 is the fuse off: no deletion at all, nothing queued, no slot — never «no ceiling»", async () => {
+    app.config.agentPostDeleteDailyLimitPerKey = 0;
+    await ownPost(pageId, "9401");
+    await startApi();
+    const answer = await remove(DELETER, "9401");
+    expect(answer.statusCode, answer.body).toBe(200);
+    expect(answer.json()).toMatchObject({ outcome: "refused", reason: "agent_post_delete_off", repeat: false, dailyLimit: { limit: 0, used: 0 } });
+    expect(await commands()).toEqual([]);
+    expect(await slots()).toEqual([]);
+    // The owner's audit still says who asked and why.
+    expect(await audits("admin.page_post_delete")).toEqual([expect.objectContaining({
+      metadata: expect.objectContaining({ postRef: "9401", outcome: "refused", reason: "agent_post_delete_off", deleteReason: REASON }),
+    })]);
+  });
 });
