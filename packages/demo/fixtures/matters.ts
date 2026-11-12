@@ -229,7 +229,7 @@ const MIRRORED = [
 ];
 const CHECKS = [
   "people.left_with_access", "people.login_unlinked", "people.no_pay_terms", "people.no_working_page", "people.page_without_access",
-  "people.access_idle", "people.agent_key_expiring", "ledger.check", "ledger.sheet_column", "ledger.off_platform",
+  "people.access_idle", "people.agent_key_expiring", "people.proposal_open", "ledger.check", "ledger.sheet_column", "ledger.off_platform",
 ];
 
 function mattersList(request: DemoRequest): ListAnswer {

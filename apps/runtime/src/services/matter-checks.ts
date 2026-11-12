@@ -66,6 +66,7 @@ const SOURCE: Record<MatterCheckKind, MatterSource> = {
   "people.page_without_access": "server",
   "people.access_idle": "server",
   "people.agent_key_expiring": "server",
+  "people.proposal_open": "server",
   "ledger.check": "ledger",
   "ledger.sheet_column": "ledger",
   "ledger.off_platform": "ledger",
@@ -115,6 +116,7 @@ export function peopleCheckItems(snapshot: PeopleCheckSnapshot, now: Date): Reco
     "people.page_without_access": [],
     "people.access_idle": [],
     "people.agent_key_expiring": [],
+    "people.proposal_open": [],
   };
   const pageOf = new Map(snapshot.pages.map((page) => [page.id, page]));
   const personById = new Map(snapshot.people.map((person) => [person.id, person]));
@@ -223,6 +225,26 @@ export function peopleCheckItems(snapshot: PeopleCheckSnapshot, now: Date): Reco
       money: false,
       evidence: { keyId: key.id, name: key.name, expiresAt: key.expiresAt.toISOString(), person: person?.code ?? null },
       link: "/system/agent-keys",
+    });
+  }
+
+  // An agent's proposal about a person waits for the owner's word: one matter per person (or proposed new person), all
+  // of their open proposals in it; closed by the pass once none is open (accepted, rejected or withdrawn).
+  for (const open of snapshot.openProposals) {
+    const person = open.personId === null ? undefined : personById.get(open.personId);
+    const code = person?.code ?? open.proposedCode;
+    if (code === null) continue;
+    const many = open.count > 1 ? ` (${open.count})` : "";
+    out["people.proposal_open"].push({
+      key: `people.proposal_open:${code}`,
+      title: person
+        ? `Предложение агента о человеке: ${person.displayName}${many}`
+        : `Агент предлагает нового человека: ${code}${many}`,
+      object: { type: "person", id: code },
+      pageLabels: [],
+      money: false,
+      evidence: { code, proposals: open.count, since: open.since.toISOString(), newPerson: person === undefined },
+      link: person ? personLink(person.code) : "/workboard/people",
     });
   }
 

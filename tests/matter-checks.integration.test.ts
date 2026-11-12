@@ -263,4 +263,42 @@ describe("matter checks (package K)", () => {
     });
     expect(refused.json()).toMatchObject({ reason: "matter_not_agents" });
   });
+  it("an agent's open proposal about a person waits for the owner as one matter per person, closed once none is open", async (context) => {
+    if (!testDb) return context.skip();
+    const agentKeyId = (await testDb.pool.query("select id from agent_keys where name = 'checks-agent'")).rows[0].id;
+    const bob = (await testDb.pool.query("select id from people where code = 'bob'")).rows[0].id;
+    const propose = (target: { personId?: number; proposedCode?: string }, kind: string) => testDb!.pool.query(
+      "insert into person_proposals (person_id, proposed_code, change, reason, agent_key_id) values ($1, $2, $3, 'test', $4) returning id",
+      [target.personId ?? null, target.proposedCode ?? null, JSON.stringify({ kind }), agentKeyId]);
+    const first = (await propose({ personId: bob }, "update")).rows[0].id;
+    const second = (await propose({ personId: bob }, "update")).rows[0].id;
+    const newbie = (await propose({ proposedCode: "newbie" }, "create")).rows[0].id;
+
+    // A pass after the last one's period: the people checks are due again.
+    const at = new Date(START.getTime() + 2 * HOUR);
+    await runMatterChecks(app, { now: at, fetchImpl: ledger(at) });
+    expect(await openKeys("people.proposal_open:")).toEqual(["people.proposal_open:bob", "people.proposal_open:newbie"]);
+    const rows = (await testDb.pool.query(
+      "select reason_key as key, title, link, owner_role, money from matters where kind = 'people.proposal_open' and state = 'open' order by reason_key")).rows;
+    expect(rows).toEqual([
+      { key: "people.proposal_open:bob", title: "Предложение агента о человеке: Имя bob (2)", link: "/workboard/people/bob", owner_role: "owner", money: false },
+      { key: "people.proposal_open:newbie", title: "Агент предлагает нового человека: newbie", link: "/workboard/people", owner_role: "owner", money: false },
+    ]);
+    // «Ждут вас» of the owner counts it in the people's group.
+    const waiting = mattersWaitingResponseSchema.parse((await asSession("boss", "/api/v1/matters/waiting")).json());
+    expect(waiting.rows.find((row) => row.id === "people")?.count).toBeGreaterThanOrEqual(2);
+
+    // One of bob's decided: still a matter; both decided and the new person's withdrawn: closed by the next pass.
+    const decide = (id: number, state: string) => testDb!.pool.query(
+      "update person_proposals set state = $2, decided_at = now() where id = $1", [id, state]);
+    await decide(first, "rejected");
+    const later = new Date(at.getTime() + 2 * HOUR);
+    await runMatterChecks(app, { now: later, fetchImpl: ledger(later) });
+    expect(await openKeys("people.proposal_open:")).toEqual(["people.proposal_open:bob", "people.proposal_open:newbie"]);
+    await decide(second, "accepted");
+    await decide(newbie, "withdrawn");
+    const last = new Date(later.getTime() + 2 * HOUR);
+    await runMatterChecks(app, { now: last, fetchImpl: ledger(last) });
+    expect(await openKeys("people.proposal_open:")).toEqual([]);
+  });
 });
