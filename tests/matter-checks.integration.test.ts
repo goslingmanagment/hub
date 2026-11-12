@@ -279,9 +279,9 @@ describe("matter checks (package K)", () => {
     await runMatterChecks(app, { now: at, fetchImpl: ledger(at) });
     expect(await openKeys("people.proposal_open:")).toEqual(["people.proposal_open:bob", "people.proposal_open:newbie"]);
     const rows = (await testDb.pool.query(
-      "select key, title, link, owner_role, money from matters where kind = 'people.proposal_open' and state = 'open' order by key")).rows;
+      "select reason_key as key, title, link, owner_role, money from matters where kind = 'people.proposal_open' and state = 'open' order by reason_key")).rows;
     expect(rows).toEqual([
-      { key: "people.proposal_open:bob", title: "Предложение агента о человеке: bob (2)", link: "/workboard/people/bob", owner_role: "owner", money: false },
+      { key: "people.proposal_open:bob", title: "Предложение агента о человеке: Имя bob (2)", link: "/workboard/people/bob", owner_role: "owner", money: false },
       { key: "people.proposal_open:newbie", title: "Агент предлагает нового человека: newbie", link: "/workboard/people", owner_role: "owner", money: false },
     ]);
     // «Ждут вас» of the owner counts it in the people's group.
