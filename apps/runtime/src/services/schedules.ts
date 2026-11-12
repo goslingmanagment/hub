@@ -22,6 +22,7 @@ import {
   ensureClientSendArchiveSweepSchedule,
 } from "./client-send-custody-archive.ts";
 import { ensureObservationsPartitionQueue, ensureObservationsPartitionSchedule } from "./observations-partitions.ts";
+import { ensureMattersMirrorQueue, ensureMattersMirrorSchedule } from "./matters-mirror.ts";
 import { ensureCapturePayloadParityQueue, ensureCapturePayloadParitySchedule } from "./capture-payload-parity.ts";
 import { ensureOfapiChargebacksQueue, ensureOfapiChargebacksSchedule } from "./ofapi-chargebacks-sync.ts";
 import { ensureOfapiFanAccountCheckQueue, ensureOfapiFanAccountCheckSchedule } from "./ofapi-fan-account-check.ts";
@@ -114,6 +115,7 @@ export async function ensureAllQueues(
   await ensureFanslyBlocklistQueue(boss, createdQueues);
   await ensureModelApplicationAbandonSweepQueue(boss, createdQueues);
   await ensureClientSendArchiveSweepQueue(boss, createdQueues);
+  await ensureMattersMirrorQueue(boss, createdQueues);
 }
 
 export async function registerAllSchedules(
@@ -172,5 +174,6 @@ export async function registerAllSchedules(
     ensureFanslyBlocklistSchedule(boss),
     ensureModelApplicationAbandonSweepSchedule(boss),
     ensureClientSendArchiveSweepSchedule(boss),
+    ensureMattersMirrorSchedule(boss),
   ]);
 }

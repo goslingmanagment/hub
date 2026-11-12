@@ -133,6 +133,16 @@ own account's is refused. A page outside the grant, or a look or publication of
 another page, is the plane's static 404, a key without the capability 403. The
 rows are held by `media-looks.integration` and `media-looks-resolve.integration`.
 
+Matters (`/matters…`, package D of the ecosystem plan): a person reads by
+session only what is theirs — the owner every matter, a team lead their own
+and their role's on their pages, a chatter their own — and nobody but the owner
+a matter whose evidence carries money; the extension's narrow token reads the
+same, without evidence and never a money matter (`/client/matters`). «Ждут вас»
+from matters (`/matters/waiting`) is the dashboard session's. A key with
+`write:matters` opens, closes and comments by reason key its own kinds, on its
+pages, for living people; the kinds Hub's server mirrors are 409 for it. The
+rows are held by `matters.integration`.
+
 Agent keys are the owner's too: only the owner's cookie session issues, lists,
 revokes and changes one. A live key's capabilities change in place (owner,
 2026-10-24): the whole new set replaces the old one, the key sees it on its

@@ -113,6 +113,8 @@ export const QUEUE_RETENTION_SETTINGS: readonly QueueRetentionSetting[] = [
   { queue: "model-applications.abandon.sweep", retentionClass: "heartbeat-cron", retentionSeconds: HEARTBEAT_RETENTION_SECONDS, deleteAfterSeconds: HEARTBEAT_RETENTION_SECONDS },
   // Every 5 minutes; each tick reads the held Fansly greetings anew.
   { queue: "client.send-custody.archive-sweep", retentionClass: "heartbeat-cron", retentionSeconds: HEARTBEAT_RETENTION_SECONDS, deleteAfterSeconds: HEARTBEAT_RETENTION_SECONDS },
+  // Every minute; each tick reads the sources of «Ждут вас» and «Решения» anew (the ledger's every five).
+  { queue: "matters.mirror", retentionClass: "heartbeat-cron", retentionSeconds: HEARTBEAT_RETENTION_SECONDS, deleteAfterSeconds: HEARTBEAT_RETENTION_SECONDS },
 
   // ---- Class B: real work queues (14d / 7d, pinned defaults) -------------
   { queue: "sync.page.execute", retentionClass: "work", retentionSeconds: DEFAULT_RETENTION_SECONDS, deleteAfterSeconds: DEFAULT_DELETE_AFTER_SECONDS },

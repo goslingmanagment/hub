@@ -227,6 +227,8 @@ const envSchema = z.object({
   CHATSPACE_SERVER_USERNAME: z.string().trim().min(1).default("chatspace-server"),
   FANSLY_BLOCKLIST_INVITE: z.string().trim().min(1).default("UBpb0x7HoY8xN2Fi"),
   OF_HISTORY_AUTO_APPROVE_ENABLED: booleanSchema.default(true),
+  // Дела (package D): the screens read «Ждут вас» and «Решения» from matters instead of their own sources.
+  MATTERS_READ_ENABLED: booleanSchema.default(false),
   FAN_FACTS_ENABLED: booleanSchema.default(false),
   FAN_FACTS_PAGES: z.string().default(""),
   // The pages whose Fansly list of cross-page spenders Hub keeps (JSON keyed
@@ -510,6 +512,8 @@ export interface AppConfig {
   fanslyBlocklistInvite?: string;
   /** OnlyFans history requests approve themselves when the chat has nothing unread. */
   ofHistoryAutoApproveEnabled?: boolean;
+  /** Дела: «Ждут вас» and «Решения» read matters (`mattersWaiting`) instead of their own sources; off — the old reads. */
+  mattersReadEnabled?: boolean;
   /** Chat Memory: the facts lane (one AI run per quiet conversation). */
   fanFactsEnabled?: boolean;
   /** Comma-separated page labels the facts lane reads; empty = none. */
@@ -860,6 +864,7 @@ export function loadConfig(
     chatspaceServerUsername: parsed.CHATSPACE_SERVER_USERNAME,
     fanslyBlocklistInvite: parsed.FANSLY_BLOCKLIST_INVITE,
     ofHistoryAutoApproveEnabled: parsed.OF_HISTORY_AUTO_APPROVE_ENABLED,
+    mattersReadEnabled: parsed.MATTERS_READ_ENABLED,
     fanFactsEnabled: parsed.FAN_FACTS_ENABLED,
     fanFactsPages: parsed.FAN_FACTS_PAGES,
     crossSpendersLists: parsed.CROSS_SPENDERS_LISTS,
