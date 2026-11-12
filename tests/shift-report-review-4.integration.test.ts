@@ -18,7 +18,10 @@ import { fixtureUserId } from "./helpers/user-identity.ts";
 // counts — only ANOTHER report of the person takes it out of a draft. (2) Two hand-ins of one person in flight never
 // both take one «долёт»: a hand-in reads the facts it writes in its own transaction, in the settlements' turn. (3) A
 // «Привязать» that ties nothing (the decision was cancelled meanwhile) leaves the sale's active decision as it is.
-// Money: required.
+// (4) The report that holds a sale is the one whose line counts it, never one whose line only says «уже в отчёте
+// смены …»: however the sale's own shift and the shift that took its «долёт» are handed in again, the sale counts once,
+// whole. (5) «Не моё» stays on the person's own line at every hand-in until they take it back, and the home the word
+// made (nobody's) does not flip by a hand-in alone. Money: required.
 //
 // anna really worked mia-1 from 30 to 25 hours ago (minutes and messages) and handed that shift in before any sale of
 // those hours reached Hub. By the rule such a sale is hers, of a shift whose report does not hold it: a «долёт» for
@@ -41,7 +44,7 @@ let worked = 0;
 let refs = 0;
 
 const q = (text: string, values: unknown[] = []) => testDb!.pool.query(text, values);
-const asSession = (who: string, method: "GET" | "POST", url: string, payload?: Record<string, unknown>) =>
+const asSession = (who: string, method: "GET" | "POST" | "PUT", url: string, payload?: Record<string, unknown>) =>
   server!.inject({ method, url, headers: { cookie: cookies[who]! }, ...(payload ? { payload } : {}) });
 const asKey = (method: "GET" | "POST", url: string, payload?: Record<string, unknown>) =>
   server!.inject({ method, url, headers: { authorization: `Bearer ${KEY}` }, ...(payload ? { payload } : {}) });
@@ -68,9 +71,14 @@ async function sale(minutesAgo: number): Promise<number> {
      values ($1, $2, 'tip', 'tip', 'posted', 'ok', $3, $3, $4, $5, now() - make_interval(mins => $6), 'fansly:rest', 'USD') returning id`,
     [pageOne, `tx-review4-${refs}`, NET + 4_000, NET, 4_000, minutesAgo],
   );
+  await refreshHomes();
+  return Number(inserted.rows[0].id);
+}
+
+/** The homes of the last two days computed again and written, as the hourly job does. */
+async function refreshHomes() {
   const now = new Date();
   await refreshSaleHomes(app.db, { from: new Date(now.getTime() - 48 * HOUR_MS), to: now, now });
-  return Number(inserted.rows[0].id);
 }
 
 async function homeOf(transactionId: number) {
@@ -251,5 +259,78 @@ describe("«чья продажа» and the shift report, the final review's thi
       { id: words.id, state: "cancelled", sale: null },
     ]);
     expect(await newest(shift, sold)).toMatchObject({ version: 2, line: expect.objectContaining({ amountMills: 0, settled: "owner" }) });
+  });
+
+  it("counts a sale once, whole, however its own shift and the shift that took its «долёт» are handed in again (4)", async (context) => {
+    if (!testDb) return context.skip();
+    // One sale its own shift takes itself, handed in again once the sale is there; one a later shift takes first, as a «долёт».
+    const own = await sale(27 * 60 - 20);
+    await submit(worked);
+    const late = await sale(27 * 60 - 22);
+    const later = await shiftRow(10, 9);
+    await submit(later);
+    /** What the two reports count of a sale: its own shift's, the later shift's. */
+    const counted = async (id: number) => [Number((await newest(worked, id)).line?.amountMills ?? 0), Number((await newest(later, id)).line?.amountMills ?? 0)];
+    const once = [[NET, 0], [0, NET]];
+    expect([await counted(own), await counted(late)]).toEqual(once);
+    // The two shifts handed in again, in every order: each sale stays whole in the report that took it. The other
+    // report's line, if it has one, only says where the sale already is — and is never taken for the report that holds it.
+    for (const [step, shift] of [worked, later, later, worked, worked, later].entries()) {
+      await submit(shift);
+      expect([await counted(own), await counted(late)], `after hand-in ${step + 1}`).toEqual(once);
+    }
+    expect((await newest(worked, late)).line).toMatchObject({ group: "mine", added: false, amountMills: 0, alreadyIn: expect.objectContaining({ shiftId: later }) });
+    expect((await newest(later, late)).line).toMatchObject({ group: "mine", added: true, amountMills: NET, alreadyIn: null });
+    expect((await newest(worked, own)).line).toMatchObject({ group: "mine", added: false, amountMills: NET, alreadyIn: null });
+    expect((await newest(later, own)).line).toBeUndefined();
+    // And no third shift of hers takes either.
+    const third = await shiftRow(8, 7);
+    await submit(third);
+    expect([(await newest(third, own)).line, (await newest(third, late)).line]).toEqual([undefined, undefined]);
+    expect([await counted(own), await counted(late)]).toEqual(once);
+  });
+
+  it("keeps «не моё» on the person's own line at every hand-in, and the home the word made (5)", async (context) => {
+    if (!testDb) return context.skip();
+    const sold = await sale(27 * 60 - 25);
+    const hers = { home: "shift", reason: "holder", shares: [{ userId: anna, shiftId: worked }] };
+    expect(await homeOf(sold)).toEqual(hers);
+    const said = await asSession("anna", "PUT", `/api/v1/shift-reports/${worked}/lines/${sold}`, { statement: "not_mine" });
+    expect(said.statusCode, said.body).toBe(200);
+    // The only person of the sale's home says «не моё»: it is nobody's. A hand-in again changes neither that nor her line.
+    for (const round of [1, 2, 3]) {
+      await submit(worked);
+      await refreshHomes();
+      expect(await homeOf(sold), `hand-in ${round}`).toEqual({ home: "nobody", reason: "agreed", shares: [] });
+      expect((await newest(worked, sold)).line, `hand-in ${round}`).toMatchObject({ group: "mine", statement: "not_mine", amountMills: 0 });
+    }
+    // Her screen: the line is among her own with her word, and says whose the sale is now.
+    const report = shiftReportResponseSchema.parse((await asSession("anna", "GET", `/api/v1/shift-reports/${worked}`)).json());
+    expect(report.view!.lines.find((line) => line.transactionId === sold)).toMatchObject({
+      group: "mine", statement: "not_mine", amountMills: 0, rule: expect.objectContaining({ words: "ничья: все сказали «не моё»" }),
+    });
+    // She takes the word back: it leaves the line with her next hand-in, and the home is the rule's again.
+    const back = await asSession("anna", "PUT", `/api/v1/shift-reports/${worked}/lines/${sold}`, { statement: null });
+    expect(back.statusCode, back.body).toBe(200);
+    await submit(worked);
+    await refreshHomes();
+    expect((await newest(worked, sold)).line).toMatchObject({ statement: null, amountMills: 0 });
+    expect(await homeOf(sold)).toEqual(hers);
+  });
+
+  it("keeps «не моё» on a «долёт» the same way: the line stays in the report that took it (5)", async (context) => {
+    if (!testDb) return context.skip();
+    const late = await sale(27 * 60 - 30);
+    const later = await shiftRow(6, 5);
+    await submit(later);
+    expect((await newest(later, late)).line).toMatchObject({ group: "mine", added: true, amountMills: NET });
+    const said = await asSession("anna", "PUT", `/api/v1/shift-reports/${later}/lines/${late}`, { statement: "not_mine" });
+    expect(said.statusCode, said.body).toBe(200);
+    for (const round of [1, 2, 3]) {
+      await submit(later);
+      await refreshHomes();
+      expect(await homeOf(late), `hand-in ${round}`).toEqual({ home: "nobody", reason: "agreed", shares: [] });
+      expect((await newest(later, late)).line, `hand-in ${round}`).toMatchObject({ group: "mine", added: true, statement: "not_mine", amountMills: 0 });
+    }
   });
 });

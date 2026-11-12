@@ -91,6 +91,24 @@ describe("which sales a shift's draft holds", () => {
     expect(classifySale(lookIn, context())).toMatchObject({ group: "mine", added: true });
   });
 
+  it("keeps a sale the person said «не моё» of as their own line with the word, whatever the rule made of it since", () => {
+    // Its home's only person said «не моё»: by the rule it is nobody's now. Without the word it is a sale nearby.
+    const nobodys = { kind: "nobody" as const, reason: "agreed" as const, pot: null, shares: [] };
+    const held = sale({ transactionId: 31, home: nobodys });
+    expect(classifySale(held, context())).toMatchObject({ group: "near" });
+    const kept = classifySale(held, context({ notMine: new Set([31]) }));
+    expect(kept).toMatchObject({ group: "mine", added: false, shareMills: 0, toUserId: null });
+    // A «долёт» the person said it of, read by id once its home names them no more: outside the window, still theirs.
+    const late = sale({ transactionId: 32, source: "before", heldByShift: false, home: nobodys });
+    expect(classifySale(late, context())).toBeNull();
+    expect(classifySale(late, context({ notMine: new Set([32]) }))).toMatchObject({ group: "mine", added: true, shareMills: 0 });
+    // The line carries the word and counts nothing.
+    const [line] = draftLines({ classified: [kept!], senders: new Map() }, [{ transactionId: 31, statement: "not_mine", shareWithUserId: null, note: null, updatedAt: new Date() }]);
+    expect(line).toMatchObject({ group: "mine", statement: "not_mine", amountMills: 0, disputed: false });
+    // While the rule still gives them a share nothing changes: it is theirs by the rule, the word on it.
+    expect(classifySale(sale({ transactionId: 33 }), context({ notMine: new Set([33]) }))).toMatchObject({ group: "mine", shareMills: 40_000 });
+  });
+
   it("marks a sale another report of the person holds: it counts nothing here", () => {
     const held = classifySale(sale({ transactionId: 8 }), context({ reported: new Map([[8, { handinId: 4, shiftId: 100, reportDate: "2026-11-10" }]]) }));
     expect(held?.alreadyIn).toEqual({ shiftId: 100, reportDate: "2026-11-10" });

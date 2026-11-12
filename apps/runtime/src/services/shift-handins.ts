@@ -377,7 +377,9 @@ async function draftFacts(
   const since = new Date(window.from - (HANDIN_LOOKBACK_DAYS + 3) * DAY_MS).toISOString().slice(0, 10);
   const reported = await listReportedSales(db, { userIds: subject.userIds, since });
   const switchOnAt = subject.person?.submitsShiftSince?.getTime() ?? null;
-  const context = { shiftId: shift.id, workRef, userIds: new Set(subject.userIds), switchOnAt, submittedShiftIds, reported, handinId: handin?.id ?? null };
+  // The sales the person's words here say «не моё» of: each stays their own line (shift-handin-rules.ts).
+  const notMine = new Set(marks.filter((mark) => mark.statement === "not_mine").map((mark) => mark.transactionId));
+  const context = { shiftId: shift.id, workRef, userIds: new Set(subject.userIds), switchOnAt, submittedShiftIds, reported, handinId: handin?.id ?? null, notMine };
 
   const classified: ClassifiedSale[] = [];
   const seen = new Set<number>();
@@ -386,6 +388,14 @@ async function draftFacts(
     const one = classifySale(sale, context);
     if (one === null) continue;
     seen.add(sale.transactionId);
+    classified.push(one);
+  }
+  // One of them the draft no longer reads — of the days before the shift, its home naming the person no more — is
+  // read by its id: the word keeps it a line of the report it was said in.
+  for (const row of await listHandinSalesByIds(db, [...notMine].filter((id) => !seen.has(id)))) {
+    const one = classifySale(saleOfRow(row), context);
+    if (one === null) continue;
+    seen.add(row.transactionId);
     classified.push(one);
   }
 
@@ -608,6 +618,8 @@ interface ViewContext {
 function wireLine(line: HandinVersionLine, context: ViewContext): ShiftReportLine | null {
   if (line.transactionId === null || line.pageLabel === null) return null;
   const toName = line.rule.toUserId === null ? null : context.names.get(line.rule.toUserId) ?? null;
+  // The person's own line the rule gives them nothing of — their «не моё» keeps it theirs: the words say whose the sale is.
+  const givenAway = line.group === "mine" && line.statement === "not_mine" && line.rule.shareMills === 0;
   return {
     transactionId: line.transactionId,
     group: line.group,
@@ -621,7 +633,7 @@ function wireLine(line: HandinVersionLine, context: ViewContext): ShiftReportLin
       home: line.rule.home,
       reason: line.rule.reason,
       words: reasonWords({
-        group: line.group,
+        group: givenAway ? "near" : line.group,
         added: line.added,
         claimed: line.group === "mine" && line.added && line.statement === "mine",
         reason: line.rule.reason as SaleHomeReason,
