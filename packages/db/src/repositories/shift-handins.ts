@@ -370,7 +370,7 @@ export interface HandinVersionRow {
   ruleVersion: string;
   /** Made by the system on a decision; null — handed in by the person. */
   madeFor: HandinVersionMadeFor | null;
-  /** The shift's report date when this version was made (0407); null — a version older than the column. */
+  /** The shift's report date when this version was made (0408); null — a version older than the column. */
   reportDate: string | null;
 }
 
@@ -578,7 +578,7 @@ export async function listHandinVersionsAfter(
 }
 
 /**
- * The versions the feed held back for an agent key (0407 `shift_handin_feed_held`), read again for its pages now:
+ * The versions the feed held back for an agent key (0408 `shift_handin_feed_held`), read again for its pages now:
  * `served` — the key may read them now (released from the list), `held` — still held.
  */
 export async function takeHandinFeedHeld(db: Database, input: { agentKeyId: number; pageIds: readonly number[] }): Promise<{ served: HandinFeedRow[]; held: HandinFeedHeld[] }> {

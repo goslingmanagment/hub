@@ -1,5 +1,5 @@
 -- agency-hub:rollback-compatible — nullable columns, wider checks and a scrub of copied words: the previous image never names the columns, writes none of the new values and reads the scrubbed rows as before.
--- 0407_shift_reports_review_2.sql
+-- 0408_shift_reports_review_2.sql
 --
 -- Review round 2b of the shift report and the claims.
 --
@@ -12,7 +12,7 @@ set local lock_timeout = '5s';
 
 alter table shift_handin_versions add column if not exists report_date date;
 comment on column shift_handin_versions.report_date is
-  'The shift''s report date when this version was made; null — older than 0407 (the report''s date stands).';
+  'The shift''s report date when this version was made; null — older than 0408 (the report''s date stands).';
 
 -- One home and one writer for «чья продажа» (review R2b-3): what the team's chat agent records «со слов» — a decision
 -- about a sale and a question about one — is written here through the agent's door, no longer in the ledger.

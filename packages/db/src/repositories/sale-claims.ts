@@ -129,7 +129,7 @@ export interface SaleClaimRow {
   ledgerRef: Record<string, unknown> | null;
   needsLink: boolean;
   createdAt: Date;
-  /** A question the agent asked (kind question, 0407): of the owner or of the chatters; null — not a question. */
+  /** A question the agent asked (kind question, 0408): of the owner or of the chatters; null — not a question. */
   askedOf: "owner" | "chatters" | null;
   sourceLink: string | null;
   askedByAgentKeyId: number | null;
@@ -334,7 +334,7 @@ export interface SaleDecisionRow {
   ledgerRef: Record<string, unknown> | null;
   needsLink: boolean;
   state: "active" | "superseded" | "cancelled";
-  /** Recorded «со слов» (0407): when it was said, the message, the key; cancelled; taken into a post-based report. */
+  /** Recorded «со слов» (0408): when it was said, the message, the key; cancelled; taken into a post-based report. */
   saidAt: Date | null;
   sourceLink: string | null;
   agentKeyId: number | null;
@@ -435,7 +435,7 @@ export interface SaleDecisionInsert {
   source: "dispute" | "ledger" | "agent";
   ledgerDecisionId: number | null;
   ledgerRef: Record<string, unknown> | null;
-  /** Recorded «со слов» (0407). */
+  /** Recorded «со слов» (0408). */
   saidAt?: Date | null;
   sourceLink?: string | null;
   agentKeyId?: number | null;
