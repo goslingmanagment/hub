@@ -62,7 +62,8 @@ export function screenCommands(role: Role): Command<never>[] {
   const commands: Command<never>[] = [];
   for (const section of SECTIONS) {
     const visibleTabs = visibleSectionTabs(section, role);
-    const firstOfTab = new Set(visibleTabs.map((item) => tabRow(item, role)[0]?.id));
+    // Under «Ещё» a tab is found by typing, as it is reached by a second click.
+    const firstOfTab = new Set(visibleTabs.filter((item) => !item.more).map((item) => tabRow(item, role)[0]?.id));
     const group = sectionGroup(section);
     for (const screen of SCREENS) {
       if (screen.section !== section.id || screen.notSearched || !screenVisible(screen, role)) continue;

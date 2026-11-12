@@ -89,14 +89,15 @@ function OutsideLinks({ outside }: { outside: NonNullable<Section["outside"]> })
 function SectionRow({ section, role, screen, search }: { section: Section; role: Role; screen: Screen; search: URLSearchParams }) {
   const tabs = visibleSectionTabs(section, role);
   const currentTab = tabOfScreen(section, screen.id);
-  const items: SectionTabItem[] = tabs.map((item) => ({ to: linkTo(tabRow(item, role)[0]!, search), label: item.label }));
-  const current = tabs.findIndex((item) => item.id === currentTab?.id);
+  const itemOf = (item: SectionTab): SectionTabItem => ({ to: linkTo(tabRow(item, role)[0]!, search), label: item.label });
+  const currentTo = currentTab && tabs.includes(currentTab) ? itemOf(currentTab).to : undefined;
   return (
     <>
       <SectionTabs
         label={section.title}
-        items={items}
-        current={current >= 0 ? items[current]?.to : undefined}
+        items={tabs.filter((item) => !item.more).map(itemOf)}
+        more={tabs.filter((item) => item.more).map(itemOf)}
+        current={currentTo}
         end={section.outside ? <OutsideLinks outside={section.outside} /> : undefined}
       />
       {currentTab && <SubRow sectionTab={currentTab} role={role} screen={screen} search={search} />}

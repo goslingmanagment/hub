@@ -684,6 +684,8 @@ export interface SectionTab {
   note?: string;
   /** The tab's screens are listed in the side menu, not in a row above the screen. */
   listedInSideMenu?: boolean;
+  /** Not in the row itself: under «Ещё» at its end (a list nobody opened, kept: it costs nothing). */
+  more?: boolean;
 }
 
 export interface Section {
@@ -712,6 +714,8 @@ export interface Section {
 }
 
 const tab = (id: string, label: string, ...screens: string[]): SectionTab => ({ id, label, screens });
+/** A tab under «Ещё» (L2, 12.11: not opened in 14 days, not a duplicate). */
+const moreTab = (id: string, label: string, ...screens: string[]): SectionTab => ({ id, label, screens, more: true });
 
 /** The menu's order is this table's: Главная, Ждут вас, the console's sections, «Команда» last above the rule. */
 export const SECTIONS: readonly Section[] = [
@@ -735,19 +739,19 @@ export const SECTIONS: readonly Section[] = [
     id: "fans", label: "Фаны", title: "Фаны", icon: "Heart", nav: "tabs",
     tabs: [
       tab("fans", "Платящие", "fans", "fan", "fan-any-page"),
-      tab("subscribers", "Подписчики", "fans-subscribers"),
-      tab("followers", "Фолловеры", "fans-followers"),
-      tab("gone", "Ушли", "fans-gone"),
       tab("by-spend", "По сумме трат", "fans-by-spend", "fans-by-spend-list"),
+      moreTab("subscribers", "Подписчики", "fans-subscribers"),
+      moreTab("followers", "Фолловеры", "fans-followers"),
+      moreTab("gone", "Ушли", "fans-gone"),
     ],
   },
   {
     id: "stats", label: "Статистика", title: "Статистика Fansly", icon: "ChartColumn", ownerOnly: true, nav: "tabs",
     tabs: [
       tab("stats", "Главное", "stats"),
-      tab("content", "Контент", "stats-content"),
-      tab("audience", "Аудитория", "stats-audience"),
       tab("income", "Доход Fansly", "stats-income"),
+      moreTab("content", "Контент", "stats-content"),
+      moreTab("audience", "Аудитория", "stats-audience"),
     ],
   },
   {
