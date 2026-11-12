@@ -128,6 +128,11 @@ contentops), `pg_restore -U postgres -d contentops contentops.dump` with a Postg
 points at must be where `/srv/content` was; the database alone shows the catalog with its files
 missing.
 
+After a checked copy the script tells ContentOps so (optional): when `~/.config/agency/contentops-backup-report.env`
+exists with `CONTENTOPS_URL` and `CONTENTOPS_TOKEN` (a ContentOps staff agent's token), it posts the copy's time, size
+and digest to `POST /api/v1/admin/backup-checkpoints`, and ContentOps' «Состояние» says «Копия базы: сегодня 05:45».
+A failed report never fails the copy.
+
 ## What lives only on the Mac
 
 `scripts/backup/push-mac-backups.sh` (Mac) pushes a daily snapshot to agency-de,
