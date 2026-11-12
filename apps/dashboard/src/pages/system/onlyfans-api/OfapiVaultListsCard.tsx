@@ -76,23 +76,21 @@ export function OfapiVaultListsCard({ pageId, owner, writeOff }: { pageId: numbe
             <tr>
               <th>Альбом</th>
               <th className="text-right">Файлов</th>
-              <th>Видели</th>
             </tr>
           </thead>
           <tbody>
             {data && albums.length === 0 && (
-              <tr><td colSpan={3} className="muted">{walk?.completedAt ? "Альбомов нет" : "Нажмите «Обновить альбомы»"}</td></tr>
+              <tr><td colSpan={2} className="muted">{walk?.completedAt ? "Альбомов нет" : "Нажмите «Обновить альбомы»"}</td></tr>
             )}
             {albums.map((album) => (
               <tr key={album.listRef} className={album.missingSince ? "opacity-60" : undefined}>
-                <td title={`ID ${album.listRef}`}>
+                <td title={`ID ${album.listRef} · видели ${formatDateTime(album.lastSeenAt)}`}>
                   <span className="text-text-primary">{album.name || "Без названия"}</span>
                   {album.missingSince && (
                     <span className="badge ml-2" title={`Нет в полном обходе с ${formatDateTime(album.missingSince)}`}>пропал</span>
                   )}
                 </td>
                 <td className="text-right tabular-nums">{album.mediaCount ?? "—"}</td>
-                <td className="muted whitespace-nowrap" title={formatDateTime(album.lastSeenAt)}>{formatAgo(album.lastSeenAt)}</td>
               </tr>
             ))}
           </tbody>
