@@ -540,6 +540,70 @@ describe("another service's server", () => {
     expect((await redeem(await agentKey(["read:content"]), "contentops", await clientCode(session))).statusCode).toBe(403);
   });
 
+  describe("in a silent try (the service opened without its own session)", () => {
+    const CLIENT_STATE = "client-state-0123456789";
+    function silentTry(cookies: Cookies, query: Record<string, string> = {}) {
+      const params = { to: "contentops", state: CLIENT_STATE, next: "/plan", silent: "1", ...query };
+      return request("GET", `${HUB}/api/v1/auth/sso?${new URLSearchParams(params)}`, { cookies });
+    }
+    function callbackOf(response: Injected): URL {
+      expect(response.statusCode, response.body).toBe(302);
+      const at = new URL(String(response.headers.location));
+      // Only ever the client's registered callback: nothing in the request picks the address.
+      expect(`${at.origin}${at.pathname}`).toBe(CLIENT_CALLBACK);
+      return at;
+    }
+
+    it("with a session sends the code to the callback, as without the flag", async (context) => {
+      if (!server) return context.skip();
+      const session = await signIn("owner", HUB);
+      const at = callbackOf(await silentTry({ [SESSION_COOKIE_NAME]: session }));
+      expect(at.searchParams.get("error")).toBeNull();
+      expect(at.searchParams.get("state")).toBe(CLIENT_STATE);
+      expect(at.searchParams.get("next")).toBe("/plan");
+      const redeemed = await redeem(await agentKey(["signin:contentops"]), "contentops", at.searchParams.get("code")!);
+      expect(redeemed.statusCode, redeemed.body).toBe(200);
+      expect(redeemed.json()).toMatchObject({ user: { username: "owner" }, owner: true });
+    });
+
+    it("with nobody signed in answers the callback «nobody»: no code, never Hub's sign-in page", async (context) => {
+      if (!server) return context.skip();
+      const at = callbackOf(await silentTry({}));
+      expect([...at.searchParams.keys()].sort()).toEqual(["error", "next", "state"]);
+      expect(at.searchParams.get("error")).toBe("none");
+      expect(at.searchParams.get("state")).toBe(CLIENT_STATE);
+      expect(at.searchParams.get("next")).toBe("/plan");
+
+      // A session signed out meanwhile is nobody too.
+      const session = await signIn("owner", HUB);
+      await request("POST", `${HUB}/api/v1/auth/logout`, { cookies: { [SESSION_COOKIE_NAME]: session }, headers: { origin: HUB } });
+      const after = callbackOf(await silentTry({ [SESSION_COOKIE_NAME]: session }));
+      expect(after.searchParams.get("error")).toBe("none");
+      expect(after.searchParams.get("code")).toBeNull();
+    });
+
+    it("refuses an unknown client and a `next` or `state` off the rules with 400, never a redirect", async (context) => {
+      if (!server) return context.skip();
+      const session = await signIn("owner", HUB);
+      for (const cookies of [{}, { [SESSION_COOKIE_NAME]: session }]) {
+        for (const query of [
+          { to: "unknown-client" },
+          // Known to Hub's code, but not configured here.
+          { to: "monitor" },
+          { to: "https://evil.example" },
+          { next: "//evil.example/plan" },
+          { next: "https://evil.example/plan" },
+          { next: "/\\evil.example" },
+          { state: "short" },
+        ]) {
+          const answer = await silentTry(cookies, query);
+          expect(answer.statusCode, JSON.stringify(query)).toBe(400);
+          expect(answer.headers.location).toBeUndefined();
+        }
+      }
+    });
+  });
+
   it("cannot take a browser's code, nor a browser the server's", async (context) => {
     if (!server) return context.skip();
     const session = await signIn("owner", HUB);
