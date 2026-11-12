@@ -137,6 +137,24 @@ export function bareOriginOf(value: string): string | null {
 // Control characters, whitespace and backslashes: never in an address we lead to.
 const UNSAFE_URL_CHARACTERS = /[\p{Cc}\s\\]/u;
 
+/**
+ * A path that stays a path of its origin after a URL parser's normalisation, wherever it is used (here, or echoed to
+ * a service that builds a URL of it): as written and percent-decoded, no backslash, control character or whitespace,
+ * no empty segment (`//`, `/%2F/`) and no dot segment (`/./`, `/../`) — `/.//host` folds into `//host`, a
+ * protocol-relative address. The query and the fragment may carry anything a URL may.
+ */
+function isPlainPath(raw: string): boolean {
+  if (!raw.startsWith("/") || UNSAFE_URL_CHARACTERS.test(raw)) return false;
+  const path = raw.split(/[?#]/, 1)[0]!;
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(path);
+  } catch {
+    return false;
+  }
+  return [path, decoded].every((form) => !UNSAFE_URL_CHARACTERS.test(form) && !form.includes("//") && !/(^|\/)\.{1,2}(\/|$)/.test(form));
+}
+
 function isApiPath(pathname: string): boolean {
   const lower = pathname.toLowerCase();
   return lower === "/api" || lower.startsWith("/api/");
@@ -154,7 +172,7 @@ export function resolveBrowserNext(raw: string | undefined, target: string, name
   let url: URL;
   try {
     if (raw.startsWith("/")) {
-      if (raw.startsWith("//")) return null;
+      if (!isPlainPath(raw)) return null;
       url = new URL(raw, target);
       if (url.origin !== target) return null;
     } else {
@@ -165,15 +183,26 @@ export function resolveBrowserNext(raw: string | undefined, target: string, name
   } catch {
     return null;
   }
-  if (url.username || url.password || isApiPath(url.pathname)) return null;
+  if (url.username || url.password || isApiPath(url.pathname) || url.pathname.includes("//")) return null;
   return url.href;
 }
 
-/** A client's own path (it checks it again): `/`, `/plan?week=2`. Null — refused. */
+/**
+ * A client's own path (it checks it again): `/`, `/plan?week=2`, as a path of the client's origin after
+ * normalisation (isPlainPath). Null — refused.
+ */
 export function resolveClientNext(raw: string | undefined): string | null {
   if (raw === undefined) return "/";
-  if (raw.length > 2048 || UNSAFE_URL_CHARACTERS.test(raw) || !raw.startsWith("/") || raw.startsWith("//")) return null;
-  return raw;
+  if (raw.length > 2048 || !isPlainPath(raw)) return null;
+  const base = "http://client.invalid";
+  let url: URL;
+  try {
+    url = new URL(raw, base);
+  } catch {
+    return null;
+  }
+  const next = `${url.pathname}${url.search}${url.hash}`;
+  return url.origin !== base || next.startsWith("//") ? null : next;
 }
 
 /** A browser's state: the begin's random value, 32 bytes base64url. */
