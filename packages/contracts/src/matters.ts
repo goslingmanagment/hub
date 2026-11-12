@@ -9,6 +9,7 @@
 import { z } from "zod";
 
 import { intId, isoTimestamp } from "./primitives.ts";
+import { WAITING_GROUP_IDS, WAITING_TONES } from "./waiting-groups.ts";
 
 /** Dotted words: `send.held`, `shift.report.missing`. */
 export const MATTER_KIND_PATTERN = /^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*$/;
@@ -219,7 +220,22 @@ export const mattersWaitingResponseSchema = z.object({
   active: z.boolean(),
   /** «Ждут вас»: the viewer's rows in the screen's order, none with a zero. */
   rows: z.array(mattersWaitingRowSchema),
-  /** The sum of what did answer: the menu's number. */
+  /**
+   * «Ждут вас» by the list's groups (waiting-groups.ts, the one table): a group per kind the viewer's own open
+   * matters fall in, in the list's order, never «Для сведения»; the console Home's chips. A group's count is the list's
+   * (one per matter; the custom orders' count where they are customs' home); `checked: false` — a source of the group
+   * did not answer lately. The owner's `total` is their sum; a team lead's stays the sum of `rows`.
+   */
+  groups: z.array(z.object({
+    id: z.enum(WAITING_GROUP_IDS),
+    title: z.string(),
+    count: z.number().int().nonnegative(),
+    checked: z.boolean(),
+    /** The worst tone of its matters (`bad` broken, `warn` outcome unknown or not checked; waiting-groups.ts); null — none. */
+    tone: z.enum(WAITING_TONES).nullable(),
+    to: z.string(),
+  })),
+  /** The sum of what did answer: the menu's number (the owner's: of `groups`, the list's numbers). */
   total: z.number().int().nonnegative(),
   /** The rows that could not be checked. */
   failed: z.array(z.enum(WAITING_ROW_IDS)),

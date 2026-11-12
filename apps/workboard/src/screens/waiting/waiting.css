@@ -29,7 +29,7 @@
 
   .wt-group__title {
     display: flex;
-    align-items: baseline;
+    align-items: center;
     gap: var(--ui-space-2);
     margin: 0;
     padding: var(--ui-space-3) var(--ui-space-4) var(--ui-space-1);

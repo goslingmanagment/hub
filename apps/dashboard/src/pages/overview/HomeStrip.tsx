@@ -11,7 +11,7 @@ import { workboardHref, workboardPersonHref } from "@/lib/workboard";
  * working now. They only count and lead to where the thing is done; the trends
  * below stay the screen's main content.
  */
-const SHORT_LABEL: Readonly<Record<WaitingRow["id"], string>> = {
+const SHORT_LABEL: Partial<Readonly<Record<WaitingRow["id"], string>>> = {
   drafts: "Посты на утверждение",
   unknown: "Исход неизвестен",
   questions: "Чья продажа",
@@ -35,6 +35,8 @@ const DOT: Partial<Readonly<Record<WaitingRow["id"], string>>> = {
   extension: "status-dot-error",
 };
 
+const TONE_DOT: Readonly<Record<"bad" | "warn", string>> = { bad: "status-dot-error", warn: "status-dot-warn" };
+
 /** A shift's window, its end on the minute: one query key per minute, not per render. */
 function lastDay(now = Date.now()): { from: string; to: string } {
   const to = Math.floor(now / 60_000) * 60_000;
@@ -51,15 +53,18 @@ function WaitingLine({ role }: { role: string }) {
       <div className="home-strip-items">
         {loading && rows.length === 0 && <span className="text-text-muted">Проверяем…</span>}
         {rows.map((row) => (
-          <AppLink key={row.id} to={row.to} className="home-strip-item">
-            {DOT[row.id] && <span className={`status-dot ${DOT[row.id]}`} aria-hidden="true" />}
+          <AppLink key={`${row.title === undefined ? "row" : "group"}:${row.id}`} to={row.to} className="home-strip-item">
+            {/* A group's tone (the one table): red broken, orange outcome unknown; an old row its own dot. */}
+            {row.title !== undefined
+              ? row.tone && <span className={`status-dot ${TONE_DOT[row.tone]}`} aria-hidden="true" />
+              : DOT[row.id] && <span className={`status-dot ${DOT[row.id]}`} aria-hidden="true" />}
             {row.count === null ? (
-              <span>{SHORT_LABEL[row.id]}: <span className="text-text-muted">не удалось проверить</span></span>
+              <span>{row.title ?? SHORT_LABEL[row.id] ?? row.label}: <span className="text-text-muted">не удалось проверить</span></span>
             ) : row.page !== undefined ? (
-              <span>{SHORT_LABEL[row.id]}: {row.page}</span>
+              <span>{row.title ?? SHORT_LABEL[row.id] ?? row.label}: {row.page}</span>
             ) : (
               <>
-                <span>{SHORT_LABEL[row.id]}</span>
+                <span>{row.title ?? SHORT_LABEL[row.id] ?? row.label}</span>
                 <span className="home-count">{row.capped ? `${row.count}+` : row.count}</span>
               </>
             )}
