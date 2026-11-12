@@ -63,7 +63,7 @@ function AgentKeys({ person }: { person: RegistryPerson }) {
     <Card
       title={<>Ключи агента <span className="access-count">{person.agentKeys.length}</span></>}
       description="Выдают, продлевают и отзывают ключи в консоли."
-      actions={<a className="access-link" href={consoleHref("/system/agent-keys")} target="_blank" rel="noopener">Доступ ИИ-агентов <ExternalLink size={14} strokeWidth={1.75} aria-label="откроется консоль" /></a>}
+      actions={<a className="access-link" href={consoleHref("/system/agent-keys")} target="_blank" rel="noopener">Агенты и ключи <ExternalLink size={14} strokeWidth={1.75} aria-label="откроется консоль" /></a>}
     >
       {person.agentKeys.length === 0 ? <p className="access-text">Ключей нет.</p> : (
         <ul className="access-list">

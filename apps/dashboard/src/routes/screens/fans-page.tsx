@@ -1,15 +1,16 @@
 /**
- * Group fans-page: Фаны, a page's card, the login and connecting a page
- * (design/screens/fans-page.md). The routes and what they render until each
- * screen is rebuilt; routes/pageCard.tsx is this group's too.
+ * Group fans-page: Фаны, a page's own Fansly screens (its account and the
+ * login, under Настройки → Модели и страницы since its card left on 12.11)
+ * and connecting a page (design/screens/fans-page.md).
  */
+import type { ReactNode } from "react";
 import { Link, Navigate, Route, useLocation, useParams } from "react-router";
 import { useQuery } from "@tanstack/react-query";
 import { kernel, KernelApiError } from "@/api/sdk";
-import { PageCardLayout } from "@/components/layout/PageCardLayout";
+import { useDashboardShell } from "@/components/layout/DashboardShellContext";
 import { ScreenFallback } from "@/components/layout/ScreenFrame";
 import { NoAnswerPanel, StatusPanel } from "@/components/shared/StatusPanel";
-import { buildFanProfileNavigation } from "@/lib/navigation";
+import { buildFanProfileNavigation, decodeRouteSegment } from "@/lib/navigation";
 import { named, OnePage, Owner } from "./shared.js";
 
 const PayersPage = named(() => import("@/pages/fans/PayersPage"), "PayersPage");
@@ -21,10 +22,7 @@ const BySpendListPage = named(() => import("@/pages/fans/BySpendListPage"), "ByS
 const FanCardPage = named(() => import("@/pages/fans/FanCardPage"), "FanCardPage");
 const PageBrowserOnboardingPage = named(() => import("@/pages/page-browser/PageBrowserOnboardingPage"), "PageBrowserOnboardingPage");
 const PageBrowserDraftPage = named(() => import("@/pages/page-browser/PageBrowserDraftPage"), "PageBrowserDraftPage");
-const PageSummaryScreen = named(() => import("../pageCard.js"), "PageSummaryScreen");
-const PageAccountScreen = named(() => import("../pageCard.js"), "PageAccountScreen");
-const PagePromoScreen = named(() => import("../pageCard.js"), "PagePromoScreen");
-const MassMessagesPage = named(() => import("@/pages/page-card/MassMessagesPage"), "MassMessagesPage");
+const AccountPage = named(() => import("@/pages/page-card/AccountPage"), "AccountPage");
 const PageBrowserLoginPage = named(() => import("@/pages/page-browser/PageBrowserLoginPage"), "PageBrowserLoginPage");
 
 const FAN_PLATFORMS: ReadonlySet<string> = new Set(["fansly", "onlyfans", "telegram"]);
@@ -78,22 +76,25 @@ export function fansRoutes() {
       <Route element={<Owner />}>
         <Route path="settings/pages/connect" element={<PageBrowserDraftPage />} />
         <Route path="settings/pages/connect/:profileId" element={<PageBrowserOnboardingPage />} />
+        {/* A page's account on Fansly and its login: they were tabs of the page's card. */}
+        <Route path="settings/pages/:pageLabel/account" element={<FanslyPage><AccountPage /></FanslyPage>} />
+        <Route path="settings/pages/:pageLabel/login" element={<FanslyPage><PageBrowserLoginPage /></FanslyPage>} />
       </Route>
     </>
   );
 }
 
-/** A page's own card: an object, not a branch of the menu. Outside the screens' frame. */
-export function pageCardRoutes() {
-  return (
-    <Route path="pages/:pageLabel" element={<PageCardLayout />}>
-      <Route index element={<PageSummaryScreen />} />
-      <Route element={<Owner />}>
-        <Route path="account" element={<PageAccountScreen />} />
-        <Route path="promo" element={<PagePromoScreen />} />
-        <Route path="mass-messages" element={<MassMessagesPage />} />
-        <Route path="browser-login" element={<PageBrowserLoginPage />} />
-      </Route>
-    </Route>
-  );
+/**
+ * A page's own Fansly screen, the page in the path: one that is not there, or
+ * not on Fansly, is said so instead of the screen.
+ */
+function FanslyPage({ children }: { children: ReactNode }) {
+  const { pageLabel = "" } = useParams<{ pageLabel: string }>();
+  const { findPageByLabel, pageCatalogState, retryPageCatalog } = useDashboardShell();
+  const page = findPageByLabel(decodeRouteSegment(pageLabel));
+  if (pageCatalogState === "loading") return <ScreenFallback />;
+  if (pageCatalogState === "error") return <NoAnswerPanel retry={retryPageCatalog} />;
+  if (!page) return <StatusPanel title="Такой страницы нет" description="Её нет среди доступных вам." action={<Link to="/settings/pages" className="btn btn-sm">Модели и страницы</Link>} />;
+  if (page.platform !== "fansly") return <StatusPanel title="Этот экран есть только у страниц Fansly" action={<Link to="/settings/pages" className="btn btn-sm">Модели и страницы</Link>} />;
+  return <>{children}</>;
 }

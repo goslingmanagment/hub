@@ -119,6 +119,13 @@ export function registerSigninRoutes(server: ApiServer, ctx: ApiModuleContext) {
         throw new BadRequestError("A client's sign-in needs its own `state` and a path for `next`");
       }
       if (!session) {
+        if (silent) {
+          // A silent try (the service opened without its own session): nobody
+          // here → its own callback, told so, never Hub's sign-in page. No code.
+          const nobody = new URL(callback);
+          nobody.search = new URLSearchParams({ error: "none", state, next }).toString();
+          return reply.redirect(nobody.href, 302);
+        }
         return reply.redirect(signInFirst(here, { to, next, state }), 302);
       }
       const code = await mintServerCode(appContext, { sessionId: session.session.id, userId: session.user.id, client: to, next });

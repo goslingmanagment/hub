@@ -536,7 +536,7 @@ export function PublicationSettingsDrawer({ rows, settingsState, globalEnabled, 
             <dt>Предел одного файла</dt><dd>{fileMax === null ? "—" : `${number(fileMax)} МБ`}</dd>
             <dt>Предел всех файлов</dt><dd>{filesTotal === null ? "—" : `${number(filesTotal)} ГБ`}</dd>
           </dl>
-          <p className="mt-2"><Link className="link" to="/system/dev/config#config-publishingOnlyfansDailyCredits">Все параметры</Link></p>
+          <p className="mt-2"><Link className="link" to="/system/dev#config-publishingOnlyfansDailyCredits">Все параметры</Link></p>
         </Disclosure>
       </div>
     </Drawer>

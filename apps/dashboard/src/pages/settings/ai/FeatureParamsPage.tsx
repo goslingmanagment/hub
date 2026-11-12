@@ -59,7 +59,7 @@ export function FeatureParamsPage() {
           featureHeader={false}
           alwaysConfirm
           navigationState={state}
-          allSettingsHref="/system/dev/config"
+          allSettingsHref="/system/dev#config"
           featureBackTo={featureReturnHref(feature)}
         />
       </div>

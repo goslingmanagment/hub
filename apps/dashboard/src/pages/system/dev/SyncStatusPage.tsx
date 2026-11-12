@@ -34,7 +34,7 @@ function resolveEventCode(details: Record<string, unknown> | null, fallback: str
   return typeof details?.code === "string" ? details.code : fallback;
 }
 
-const TO_LOG = <Link to="/system/dev/log" className="btn btn-sm">К журналу</Link>;
+const TO_LOG = <Link to="/system/dev#log" className="btn btn-sm">К журналу</Link>;
 
 /** «Запуск сбора №N»: one run of the old collection, its events and its requests by stream (§15). */
 export function SyncStatusPage() {

@@ -1748,7 +1748,7 @@ async function draftVaultAlbum(client: KernelClient, values: HubOptionValues, de
 // --- matters (write:matters) ------------------------------------------------
 
 const MATTER_CAPABILITY_HINT =
-  "This key lacks write:matters: the owner grants it to the key (dashboard, Система, Доступ ИИ-агентов)";
+  "This key lacks write:matters: the owner grants it to the key (dashboard, Система, Агенты и ключи)";
 
 /** What a refusal of the matters' door means, and what to do. */
 function matterHint(error: { status: number | null; code: string | null }): string | null {
@@ -1878,7 +1878,7 @@ const MATTER_COMMANDS: HubCommand[] = [
 // --- custom orders (write:customs) -----------------------------------------
 
 const CUSTOM_CAPABILITY_HINT =
-  "This key lacks write:customs: the owner grants it to the key (dashboard, Система, Доступ ИИ-агентов)";
+  "This key lacks write:customs: the owner grants it to the key (dashboard, Система, Агенты и ключи)";
 
 /** The machine reason of a refusal (`version_changed`, `edited_by_person`…), from the hub's error body. */
 function refusalReason(error: unknown): string | null {
@@ -2168,7 +2168,7 @@ const CUSTOM_COMMANDS: HubCommand[] = [
 // --- shift reports «со слов» (write:shift_reports) ---------------------------
 
 const SHIFT_REPORT_CAPABILITY_HINT =
-  "This key lacks write:shift_reports: the owner grants it to the key (dashboard, Система, Доступ ИИ-агентов)";
+  "This key lacks write:shift_reports: the owner grants it to the key (dashboard, Система, Агенты и ключи)";
 
 /** The one 403 an agent key with the capability gets here: the person's switch is off. */
 const SHIFT_REPORT_SWITCH_OFF =
@@ -2445,7 +2445,7 @@ const SHIFT_REPORT_COMMANDS: HubCommand[] = [
 // --- agent reports (write:reports) -----------------------------------------
 
 const REPORT_CAPABILITY_HINT =
-  "This key lacks write:reports: the owner grants it to the key (dashboard, Система, Доступ ИИ-агентов)";
+  "This key lacks write:reports: the owner grants it to the key (dashboard, Система, Агенты и ключи)";
 
 function reportHint(error: { status: number | null; code: string | null }): string | null {
   return error.status === 403 && error.code !== "forbidden" ? REPORT_CAPABILITY_HINT : null;

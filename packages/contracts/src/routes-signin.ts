@@ -64,9 +64,10 @@ export const authSsoQuerySchema = z.object({
   /** A browser target: the state its `authSsoBegin` set (absent — the begin comes first). A client: its own opaque state, echoed to its callback. */
   state: z.string().min(1).max(256).optional(),
   /**
-   * `1`: a silent try (a name arrived at without a session asks the other one).
-   * No full session on this name → straight back to `next`, never a sign-in
-   * page here. Browser targets only.
+   * `1`: a silent try (a name or a service arrived at without a session asks
+   * this one). No full session on this name → never a sign-in page here: a
+   * browser target goes straight back to `next`; a client to its callback with
+   * `error=none`, its `state` and `next` (no code).
    */
   silent: z.literal("1").optional(),
 });
@@ -143,7 +144,8 @@ export const signinRouteSchemas = {
       + "single use) and a redirect to the target's `authSsoAccept`, or to a client's registered callback with "
       + "`code`, `state` and `next`. A browser target without `state` is sent to its `authSsoBegin` first, which "
       + "binds the code to the browser. Without a session (or with a narrow one): the sign-in page, then on — "
-      + "or, with `silent=1`, straight back to `next`. `next` outside the allow-list of names and paths: 400.",
+      + "or, with `silent=1`, straight back to `next` (a client: its callback with `error=none`, `state` and "
+      + "`next`, no code). `next` outside the allow-list of names and paths: 400.",
     querystring: authSsoQuerySchema,
     response: { 302: z.unknown(), 400: errorResponseSchema, 429: errorResponseSchema },
   },

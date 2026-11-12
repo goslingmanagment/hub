@@ -6,7 +6,7 @@ import { carriedHref, consoleDays, placeName, waitingCount, waitingQuery } from 
 import { matchScreen, menuItemAt, placeMenu, type MenuItem } from "@agency_hub_core/ui/screens";
 import { useLogout } from "@/api/queries";
 import { kernel } from "@/api/sdk";
-import { SIGNED_OUT_LOGIN } from "@/lib/navigation";
+import { ACCOUNT_SCREEN, SIGNED_OUT_LOGIN } from "@/lib/navigation";
 import { ALL_PAGES_PARAM, pageFromSearch } from "@/lib/pageParam";
 import { isPeriodKey, periodParam } from "@/lib/period";
 import { clearDashboardSession } from "@/lib/queryClient";
@@ -56,7 +56,15 @@ export function ConsoleFrame({ user, searchOpen, setSearchOpen, children }: {
       current={menuItemAt(location.pathname)}
       hrefOf={hrefOf}
       counts={{ waiting: waitingCount(waiting) }}
-      account={{ name: user.username, role: user.role, signOut: () => void signOut(), signingOut: logout.isPending, signOutFailed: logout.isError }}
+      account={{
+        name: user.username,
+        role: user.role,
+        signOut: () => void signOut(),
+        signingOut: logout.isPending,
+        signOutFailed: logout.isError,
+        // Workboard's screen, a page load on this host.
+        onAccount: () => window.location.assign(ACCOUNT_SCREEN),
+      }}
       searchOpen={searchOpen}
       setSearchOpen={setSearchOpen}
     >

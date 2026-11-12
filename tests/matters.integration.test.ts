@@ -226,7 +226,7 @@ describe("matters", () => {
     };
     const owner = await waiting("boss");
     expect(owner.active).toBe(false);
-    expect(owner.rows.find((row) => row.id === "failures")).toMatchObject({ count: 1, to: "/system/failures?page=all" });
+    expect(owner.rows.find((row) => row.id === "failures")).toMatchObject({ count: 1, to: "/workboard/decisions#system" });
     // The checks of package K never ran here (their pass is runMatterChecks): «не проверено» too, never a zero.
     expect(owner.rows.filter((row) => row.count === null).map((row) => row.id)).toEqual(["questions", "reports", "people", "ledger"]);
     expect(owner.failed).toEqual(["questions", "reports", "people", "ledger"]);

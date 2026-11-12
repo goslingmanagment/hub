@@ -23,6 +23,7 @@ import {
   type PriceView,
 } from "./data";
 import { BACK_LABEL, barWidth, BeyondReach, BySwitch, Folds, HowItCounts, LineName, MoneyBar, NoAnswer, SalesHeader, WindowNotice, openColumn, panelColumns, skeletonColumns, useSalesParams, windowWords } from "./parts";
+import { usePeopleIndex } from "@/shared/people";
 
 /**
  * Цена: which price of a paid message brings money — by the money one sent
@@ -251,7 +252,8 @@ export function PriceTab() {
   const { by, open, setBy, setOpen } = useSalesParams();
   const window = readWindow(period, today, MAX_DAYS.sales);
   const query = useSalesPpv(window);
-  const view = useMemo(() => (query.data ? priceView(query.data, page) : null), [query.data, page]);
+  const people = usePeopleIndex();
+  const view = useMemo(() => (query.data ? priceView(query.data, page, people) : null), [query.data, page, people]);
   const lines = view ? (by === "pages" ? view.pages : view.chatters) : [];
   const openLine = view ? [...view.pages, ...view.chatters].find((line) => line.key === open) ?? null : null;
   const label = view ? windowWords(view.from, view.to) : "";

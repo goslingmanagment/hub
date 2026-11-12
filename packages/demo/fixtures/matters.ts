@@ -35,6 +35,7 @@ interface Seed {
   money?: boolean;
   evidence?: Record<string, unknown>;
   link?: string | null;
+  object?: Matter["object"];
   /** How long ago it was opened. */
   agoMs: number;
 }
@@ -45,11 +46,11 @@ function matterOf(seed: Seed, id: number, now: number): Matter {
     id,
     key: seed.key,
     kind: seed.kind,
-    source: seed.kind.startsWith("ledger.") ? "ledger" : seed.kind === "agent.reminder" ? "agent" : "server",
+    source: seed.kind.startsWith("ledger.") ? "ledger" : seed.kind.startsWith("contentops.") ? "contentops" : seed.kind === "agent.reminder" ? "agent" : "server",
     state: "open",
     closedHow: null,
     title: seed.title,
-    object: null,
+    object: seed.object ?? null,
     pageLabels: seed.pages ?? [],
     owner: seed.owner ?? OWNER_ROLE,
     watcherUserIds: [],
@@ -109,7 +110,7 @@ function standing(request: DemoRequest): Seed[] {
     }
   }
   seeds.push(
-    { kind: "publication.draft", key: "publication.draft:5101", title: "Пост на утверждение: mia-1", pages: ["mia-1"], link: "/publications?status=draft&window=all&page=all", agoMs: 5 * HOUR },
+    { kind: "publication.draft", key: "publication.draft:5101", title: "Пост на утверждение: mia-1", pages: ["mia-1"], link: "/content/publications?status=draft&window=all&page=all", agoMs: 5 * HOUR },
     { kind: "people.login_unlinked", key: "people.login_unlinked:12", title: "Вход без человека: tester.q", evidence: { userId: 12, username: "tester.q", namesake: { person: "tester-q", name: "Тестер", state: "left", leftOn: isoAt(now - 40 * DAY).slice(0, 10) } }, link: "/workboard/people/12/access", agoMs: 6 * DAY },
     { kind: "people.page_without_access", key: "people.page_without_access:olya-m", title: "Работает без доступа: Оля, mia-of", pages: ["mia-of"], evidence: { person: "olya-m", pages: ["mia-of"], logins: ["olya.m"] }, link: "/workboard/people/7/access", agoMs: 20 * HOUR },
     {
@@ -117,8 +118,21 @@ function standing(request: DemoRequest): Seed[] {
       evidence: { check: "card_cover", name: "карты покрывают списания", severity: "warn", summary: "карта •0042: на счёте 5.40, к списанию 120.00 до 14.11, не хватает 114.60", failingSince: isoAt(now - 1.6 * DAY) },
       agoMs: 0.6 * DAY,
     },
-    { kind: "page.login_needed", key: "page.login_needed:nova-1", title: "Нужен вход в Fansly: nova-1", pages: ["nova-1"], link: "/pages/nova-1/browser-login", agoMs: 3 * HOUR },
+    { kind: "page.login_needed", key: "page.login_needed:nova-1", title: "Нужен вход в Fansly: nova-1", pages: ["nova-1"], link: "/settings/pages/nova-1/login", agoMs: 3 * HOUR },
     { kind: "incident.open", key: "incident.open:901", title: "Сбой: Сбор сообщений mia-2 стоит 2 часа", pages: ["mia-2"], evidence: { openedAt: isoAt(now - 2 * HOUR) }, link: "/system/failures?page=all", agoMs: 2 * HOUR },
+    // ContentOps' findings (its hub-orders/matters.ts): a custom's copy outside the customs folder, a custom in the plan.
+    {
+      kind: "contentops.custom_copy", key: "contentops.custom_copy:demo-case-1", title: "Копия кастома CUS-217 лежит вне папки кастомов: Фото/2026-11/IMG_0412.jpg",
+      object: { type: "contentops_case", id: "demo-case-1" },
+      evidence: { model: "mia-hart", custom: "CUS-217", path: "Фото/2026-11/IMG_0412.jpg", source: "yadisk", seenAt: isoAt(now - 26 * HOUR), rule: "кастом и всё, что из него сделано, не ставится в фуп, сториз и на стену без цены" },
+      agoMs: 26 * HOUR,
+    },
+    {
+      kind: "contentops.custom_in_plan", key: "contentops.custom_in_plan:demo-row-1", title: "В плане ContentOps VID-88 из CUS-203 стоит на стене без цены: mia-1 · стена · завтра 18:00",
+      pages: ["mia-1"], object: { type: "contentops_plan_row", id: "demo-row-1" },
+      evidence: { model: "mia-hart", item: "VID-88", custom: "CUS-203", account: "mia-1", surface: "wall", slot: `${isoAt(now + DAY).slice(0, 10)} 18:00` },
+      agoMs: 4 * HOUR,
+    },
     { kind: "agent.reminder", key: "agent.reminder:owner-1", title: "Генгар: цены на mia-2 не меняли 30 дней, пересмотрите перед выходными", pages: ["mia-2"], agoMs: 9 * HOUR },
     {
       kind: "people.access_idle", key: "people.access_idle:all", title: "Доступ без работы 30 дней: 3 страницы у 2 человек",
@@ -136,7 +150,7 @@ function filler(count: number): Seed[] {
   for (let index = 0; index < count; index += 1) {
     const page = pages[index % pages.length]!;
     const pick = index % 5;
-    if (pick === 0) out.push({ kind: "publication.draft", key: `publication.draft:${6000 + index}`, title: `Пост на утверждение: ${page}`, pages: [page], link: "/publications?status=draft&window=all&page=all", agoMs: (index + 1) * 47 * MIN });
+    if (pick === 0) out.push({ kind: "publication.draft", key: `publication.draft:${6000 + index}`, title: `Пост на утверждение: ${page}`, pages: [page], link: "/content/publications?status=draft&window=all&page=all", agoMs: (index + 1) * 47 * MIN });
     else if (pick === 1) out.push({ kind: "incident.open", key: `incident.open:${1000 + index}`, title: `Сбой: Сбор подписчиков ${page} не отвечает`, pages: [page], link: "/system/failures?page=all", agoMs: (index + 2) * 31 * MIN });
     else if (pick === 2) out.push({ kind: "people.agent_key_expiring", key: `people.agent_key_expiring:${30 + index}`, title: `Ключ агента истекает ${String(13 + (index % 6)).padStart(2, "0")}.11: агент-${index}`, link: "/system/agent-keys", agoMs: (index + 1) * 2 * HOUR });
     else if (pick === 3) out.push({ kind: "ledger.off_platform", key: `ledger.off_platform:${400 + index}`, title: `Мимо площадки, ${8 + (index % 5)} дней не в отчёте: ${page}`, pages: [page], money: true, evidence: { decisionId: 400 + index, netMills: 50_000 + index * 1000, saidBy: "alex.k", telegram: CHAT }, agoMs: (8 + (index % 5)) * DAY });
@@ -231,19 +245,20 @@ function mattersList(request: DemoRequest): ListAnswer {
 }
 
 const ROWS: ReadonlyArray<{ id: WaitingAnswer["rows"][number]["id"]; label: string; to: string; of: (kind: string) => boolean; teamLead?: boolean }> = [
-  { id: "drafts", label: "Посты на утверждение", to: "/publications?status=draft&window=all&page=all", of: (kind) => kind === "publication.draft" },
-  { id: "unknown", label: "Публикации: исход неизвестен", to: "/publications?status=unknown&window=all&page=all", of: (kind) => kind === "publication.unknown" },
+  { id: "drafts", label: "Посты на утверждение", to: "/workboard/decisions#publications", of: (kind) => kind === "publication.draft" },
+  { id: "unknown", label: "Публикации: исход неизвестен", to: "/workboard/decisions#publications", of: (kind) => kind === "publication.unknown" },
   { id: "questions", label: "Чья продажа: вопросы ждут вашего слова", to: "/workboard/decisions#questions", of: (kind) => kind === "ledger.sale_question" },
   { id: "reports", label: "Отчёты смен ждут решения", to: "/workboard/decisions#reports", of: (kind) => kind === "ledger.report_post" || kind === "ledger.paid_day_changed" },
   { id: "customs", label: "Кастомы оплачены, не отданы", to: "/workboard/decisions#customs", of: (kind) => kind === "custom.paid_not_delivered", teamLead: true },
   { id: "held", label: "Проверить отправки", to: "/workboard/decisions#held", of: (kind) => kind === "send.held", teamLead: true },
-  { id: "login", label: "Нужен вход в Fansly", to: "/system/collection?page=all", of: (kind) => kind === "page.login_needed" },
-  { id: "failures", label: "Сбои", to: "/system/failures?page=all", of: (kind) => kind === "incident.open" },
-  { id: "extension", label: "Критичные сбои расширения", to: "/system/dev/extension", of: (kind) => kind === "extension.critical" },
-  { id: "history", label: "Заявки на историю", to: "/system/history-requests?state=requested&page=all", of: (kind) => kind === "history.request" },
+  { id: "login", label: "Нужен вход в Fansly", to: "/workboard/decisions#system", of: (kind) => kind === "page.login_needed" },
+  { id: "failures", label: "Сбои", to: "/workboard/decisions#system", of: (kind) => kind === "incident.open" },
+  { id: "extension", label: "Критичные сбои расширения", to: "/workboard/decisions#system", of: (kind) => kind === "extension.critical" },
+  { id: "history", label: "Заявки на историю", to: "/workboard/decisions#system", of: (kind) => kind === "history.request" },
+  { id: "content", label: "Контент", to: "/workboard/decisions#content", of: (kind) => kind.startsWith("contentops.") },
   { id: "people", label: "Люди и доступ", to: "/workboard/decisions#people", of: (kind) => kind.startsWith("people.") && kind !== "people.access_idle" },
   { id: "ledger", label: "Проверки ledger", to: "/workboard/decisions#ledger", of: (kind) => kind === "ledger.check" || kind === "ledger.sheet_column" || kind === "ledger.off_platform" },
-  { id: "other", label: "Другие дела", to: "/workboard/decisions", of: (kind) => !MIRRORED.includes(kind) && !CHECKS.includes(kind) },
+  { id: "other", label: "Другие дела", to: "/workboard/decisions", of: (kind) => !MIRRORED.includes(kind) && !CHECKS.includes(kind) && !kind.startsWith("contentops.") },
 ];
 
 function mattersWaiting(request: DemoRequest): WaitingAnswer {
@@ -255,7 +270,7 @@ function mattersWaiting(request: DemoRequest): WaitingAnswer {
     const one = row.id === "login" && mine.length === 1 ? mine[0]!.pageLabels[0] ?? null : null;
     return [{
       id: row.id, label: one ? `${row.label}: ${one}` : row.label, count: mine.length, capped: false, pageLabel: one,
-      to: one ? `/pages/${one}/browser-login` : row.to, matterIds: mine.map((matter) => matter.id),
+      to: row.to, matterIds: mine.map((matter) => matter.id),
     }];
   });
   const page = typeof request.query.pageLabel === "string" ? request.query.pageLabel : null;

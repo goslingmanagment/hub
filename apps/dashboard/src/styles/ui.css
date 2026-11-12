@@ -298,6 +298,11 @@
     height: 2px;
     background: var(--color-accent);
   }
+  /* Another product's places at the row's end (Контент: ContentOps). */
+  .section-outside { display: inline-flex; align-items: center; gap: 16px; margin-left: auto; padding-left: 24px; flex-shrink: 0; }
+  .section-outside-label { font-size: 14px; line-height: 20px; color: var(--color-text-muted); white-space: nowrap; }
+  .section-tab-outside { gap: 4px; }
+  .section-tab-outside svg { color: var(--color-text-muted); }
   /* The second row inside a tab: quieter, so two rows do not read as equals. */
   .section-subnav {
     display: flex;
@@ -324,6 +329,55 @@
   }
   .section-subtab:hover { background: var(--color-hover); color: var(--color-text-primary); }
   .section-subtab[aria-current="page"] { background: var(--color-active-bg); color: var(--color-text-primary); }
+
+  /* ── A screen of sections (components/layout/ScreenSections.tsx) ────── */
+  .screen-parts { border-top: 1px solid var(--color-border); }
+  .screen-part { border-bottom: 1px solid var(--color-border); scroll-margin-top: calc(var(--bar-height, 64px) + 8px); }
+  .screen-part-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 4px 24px;
+  }
+  .screen-part-toggle {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    min-width: 0;
+    flex: 1 1 360px;
+    padding: 16px 0;
+    text-align: left;
+    cursor: pointer;
+  }
+  .screen-part-chevron { flex: 0 0 auto; margin-top: 3px; color: var(--color-text-muted); transition: transform 0.15s; }
+  .screen-part-toggle[aria-expanded="true"] .screen-part-chevron { transform: rotate(90deg); }
+  .screen-part-toggle:hover .screen-part-title { text-decoration: underline; text-decoration-color: var(--color-border-strong); text-underline-offset: 3px; }
+  .screen-part-toggle:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; border-radius: 4px; }
+  .screen-part-title {
+    font-size: 17px;
+    font-weight: 600;
+    line-height: 24px;
+    letter-spacing: -0.005em;
+    color: var(--color-text-primary);
+  }
+  .screen-part-why {
+    display: block;
+    font-size: 14px;
+    line-height: 20px;
+    color: var(--color-text-secondary);
+  }
+  .screen-part-window {
+    font-size: 14px;
+    line-height: 20px;
+    color: var(--color-text-secondary);
+    font-variant-numeric: tabular-nums;
+  }
+  .screen-part-window:empty { display: none; }
+  .screen-part-body { padding: 4px 0 32px; }
+  .screen-part-body[hidden] { display: none; }
+  .screen-parts-top { display: grid; gap: 12px; margin-bottom: 24px; }
+  .screen-part-controls { display: flex; flex-wrap: wrap; gap: 8px; }
 
   /* ── Segmented control: a filter of one list, and the period ─────────── */
   .segmented {

@@ -207,7 +207,7 @@ export function ShiftLink({ userId, startedAt, backLabel, children, className, t
 
 /**
  * An address of the console on this host (another app: a full page load). A
- * page's card, a fan's card: `consoleHref("/pages/mia-1")`.
+ * page on Главная, a fan's card: `consoleHref("/?page=mia-1")`.
  */
 export function consoleHref(path: string): string {
   return path.startsWith("/") ? path : `/${path}`;

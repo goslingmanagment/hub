@@ -10,6 +10,7 @@
 import {
   SCREENS,
   SECTIONS,
+  screenParts,
   screenVisible,
   tabOfScreen,
   tabRow,
@@ -52,7 +53,7 @@ function sectionGroup(section: Section): CommandGroup {
 /** Where a screen sits, in the menu's words. The name of a tab says it itself. */
 function screenHint(section: Section, screen: Screen): string {
   const tab = tabOfScreen(section, screen.id);
-  if (section.id === "home" || section.id === "waiting" || section.id === "publications") return "";
+  if (section.id === "home" || section.id === "waiting") return "";
   return tab && tab.label !== screen.label ? `${section.label} · ${tab.label}` : section.label;
 }
 
@@ -61,7 +62,8 @@ export function screenCommands(role: Role): Command<never>[] {
   const commands: Command<never>[] = [];
   for (const section of SECTIONS) {
     const visibleTabs = visibleSectionTabs(section, role);
-    const firstOfTab = new Set(visibleTabs.map((item) => tabRow(item, role)[0]?.id));
+    // Under «Ещё» a tab is found by typing, as it is reached by a second click.
+    const firstOfTab = new Set(visibleTabs.filter((item) => !item.more).map((item) => tabRow(item, role)[0]?.id));
     const group = sectionGroup(section);
     for (const screen of SCREENS) {
       if (screen.section !== section.id || screen.notSearched || !screenVisible(screen, role)) continue;
@@ -76,6 +78,18 @@ export function screenCommands(role: Role): Command<never>[] {
         // System are short, and are always listed in full.
         searchOnly: screen.deep === true || (group === "Разделы" && !firstOfTab.has(screen.id)),
       });
+      // A screen of sections: each is found by its own name and old words, and opens at its anchor.
+      for (const part of screenParts(screen, role)) {
+        commands.push({
+          id: `part:${screen.id}:${part.id}`,
+          label: part.label,
+          group,
+          to: `${screen.path}#${part.id}`,
+          hint: `${section.label} · ${screen.label}`,
+          keywords: `${screen.label} ${screen.keywords ?? ""} ${part.keywords ?? ""}`,
+          searchOnly: true,
+        });
+      }
     }
   }
   return commands;

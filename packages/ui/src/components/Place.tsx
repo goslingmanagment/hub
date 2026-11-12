@@ -19,6 +19,7 @@ import {
   Package,
   Search,
   Settings,
+  Smartphone,
   Sun,
   TrendingUp,
   Users,
@@ -81,6 +82,8 @@ export interface PlaceAccount {
   signingOut?: boolean;
   /** The server did not confirm the sign-out: said under the account, never a silent stay. */
   signOutFailed?: boolean;
+  /** «Аккаунт и устройства» (Workboard's `/workboard/account`): devices, password, the person's AI spend. */
+  onAccount?: () => void;
 }
 
 export interface PlaceSidebarProps {
@@ -164,6 +167,7 @@ function Account({ account }: { account: PlaceAccount }) {
   const theme = useThemeStore((state) => state.theme);
   const setTheme = useThemeStore((state) => state.setTheme);
   const items: MenuEntry[] = [
+    ...(account.onAccount ? [{ label: "Аккаунт и устройства", icon: Smartphone, onSelect: account.onAccount }, { separator: true as const }] : []),
     { group: "Тема" },
     ...THEME_OPTIONS.map((option) => ({
       label: option.label,
@@ -177,11 +181,11 @@ function Account({ account }: { account: PlaceAccount }) {
   return (
     <div className="ui-side__foot">
       <Menu
-        label="Тема и выход"
+        label={account.onAccount ? "Аккаунт, тема и выход" : "Тема и выход"}
         align="start"
         items={items}
         renderTrigger={({ ref, ...trigger }) => (
-          <button ref={ref} type="button" className="ui-side__account" aria-label={`${account.name}: тема и выход`} {...trigger}>
+          <button ref={ref} type="button" className="ui-side__account" aria-label={`${account.name}: ${account.onAccount ? "аккаунт, тема и выход" : "тема и выход"}`} {...trigger}>
             <span className="ui-side__avatar" aria-hidden>{account.name.slice(0, 1).toUpperCase()}</span>
             <span className="ui-side__who">
               <span className="ui-side__name">{account.name}</span>

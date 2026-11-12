@@ -153,7 +153,7 @@ function Body({ pageLabel }: { pageLabel: string }) {
   const actions = (
     <>
       <OtherPageChip current={pageLabel} to={buildPageCollectionRoute} />
-      <Link to={buildPageRoute(pageLabel)} className="btn">Карточка страницы</Link>
+      <Link to={buildPageRoute(pageLabel)} className="btn">Открыть на Главной</Link>
       {isFansly && (
         <Link to={buildPageSectionRoute(pageLabel, "browser-login")} className={row?.login ? "btn btn-primary" : "btn"}>Войти в Fansly</Link>
       )}
@@ -199,7 +199,7 @@ function Body({ pageLabel }: { pageLabel: string }) {
               <StatusPanel
                 title="Сбор не нужен"
                 description="Hub не собирает данные Telegram: расширение читает открытый чат само."
-                action={<Link to={buildPageRoute(pageLabel)} className="btn btn-sm">Карточка страницы</Link>}
+                action={<Link to={buildPageRoute(pageLabel)} className="btn btn-sm">Открыть на Главной</Link>}
               />
             </div>
           ) : page.platform === "onlyfans" ? (

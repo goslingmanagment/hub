@@ -15,6 +15,18 @@ export const LEGACY_CONSOLE_ORIGIN = "https://gosling-agency.ru";
 /** The chatters' site and the team's place (Workboard at /workboard/). Only /account, /join and /login are the console's app there; every other path outside /workboard/ and /api/ is a static page. */
 export const CHATTER_SITE_ORIGIN = "https://chatgoose.gosling-agency.ru";
 
+/** ContentOps, the content's own product: a model's plan, inbox and library at `/<model>/<section>` (its sign-in is Hub's). */
+export const CONTENTOPS_ORIGIN = "https://contentops.gosling-agency.ru";
+
+/**
+ * A model's place in ContentOps. Its models are Hub's model slugs in lower
+ * case (`Lora` → `/lora/…`); with no model, ContentOps opens where its person
+ * was last.
+ */
+export function contentopsHref(modelSlug: string | null, path: string): string {
+  return modelSlug ? `${CONTENTOPS_ORIGIN}/${encodeURIComponent(modelSlug.toLowerCase())}/${path}` : `${CONTENTOPS_ORIGIN}/`;
+}
+
 const PRODUCTION_CONSOLE_ORIGINS: ReadonlySet<string> = new Set([CONSOLE_ORIGIN, LEGACY_CONSOLE_ORIGIN]);
 
 /**

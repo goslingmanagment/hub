@@ -368,7 +368,6 @@ export function OverviewPage() {
           <div className="card-footer home-page-footer">
             <AudienceNow page={onePageRow} backTo={backTo} ofapi={ofapi} />
             <div className="flex flex-wrap gap-2">
-              <Link className="btn btn-sm" to={`${buildPageRoute(onePageRow.pageLabel)}?${new URLSearchParams({ period })}`} state={{ backTo }}>Открыть страницу</Link>
               {pageTransactionsLink(onePageRow, pageWindowOf(onePageRow, report.platformWindows), backTo) && (
                 <Link className="btn btn-sm" to={pageTransactionsLink(onePageRow, pageWindowOf(onePageRow, report.platformWindows), backTo)!}>Все операции за период</Link>
               )}
@@ -475,7 +474,7 @@ export function OverviewPage() {
                                       <span className="badge">Архив</span>
                                     </>
                                   ) : (
-                                    <Link className="home-page-link" to={`${buildPageRoute(page.pageLabel)}?${new URLSearchParams({ period })}`} state={{ backTo }}>
+                                    <Link className="home-page-link" to={buildPageRoute(page.pageLabel, { period })} state={{ backTo }}>
                                       {page.pageLabel}
                                     </Link>
                                   )}

@@ -1,5 +1,6 @@
 import { MATTER_INFO_KINDS } from "@agency_hub_core/contracts";
 import { ruPlural } from "@agency_hub_core/ui/plural";
+import { contentopsHref } from "@agency_hub_core/ui/sites";
 
 /**
  * «Ждут вас»: which group a matter's kind is in, and the words for a kind
@@ -8,7 +9,7 @@ import { ruPlural } from "@agency_hub_core/ui/plural";
  * and age: nothing here has to change for a new kind.
  */
 
-export type WaitingGroupId = "questions" | "reports" | "customs" | "held" | "publications" | "people" | "ledger" | "system" | "other" | "info";
+export type WaitingGroupId = "questions" | "reports" | "customs" | "held" | "publications" | "content" | "people" | "ledger" | "system" | "other" | "info";
 
 export interface WaitingGroup {
   id: WaitingGroupId;
@@ -22,6 +23,8 @@ export const WAITING_GROUPS: readonly WaitingGroup[] = [
   { id: "customs", title: "Кастомы" },
   { id: "held", title: "Зависшие отправки" },
   { id: "publications", title: "Публикации" },
+  // ContentOps' findings (`contentops.*`): decided in ContentOps, each line opens it there (contentopsLink).
+  { id: "content", title: "Контент" },
   { id: "people", title: "Люди и доступ" },
   { id: "ledger", title: "Проверки ledger" },
   { id: "system", title: "Сбор, сбои и рутины" },
@@ -40,6 +43,7 @@ export function groupOf(kind: string): WaitingGroupId {
   if (kind.startsWith("custom.")) return "customs";
   if (kind === "send.held") return "held";
   if (kind.startsWith("publication.")) return "publications";
+  if (kind.startsWith("contentops.")) return "content";
   // The people checks' (package K) and a newcomer's way (package J: `person.no_pages`, `person.onboarding_stuck`).
   if (kind.startsWith("people.") || kind.startsWith("person.")) return "people";
   if (kind === "ledger.check" || kind === "ledger.sheet_column" || kind === "ledger.off_platform") return "ledger";
@@ -107,4 +111,37 @@ export function waitedFor(sinceIso: string, now: number): string {
   if (hours < 24) return `${hours} ч`;
   const days = Math.floor(hours / 24);
   return `${days} ${ruPlural(days, "день", "дня", "дней")}`;
+}
+
+/** «2026-W46»: the ISO week of a day (Monday first), as ContentOps' plan addresses its weeks. */
+export function isoWeekOf(day: string): string | null {
+  const date = new Date(`${day}T12:00:00Z`);
+  if (Number.isNaN(date.getTime())) return null;
+  // The Thursday of the day's week names its year and number.
+  const weekday = (date.getUTCDay() + 6) % 7;
+  date.setUTCDate(date.getUTCDate() - weekday + 3);
+  const year = date.getUTCFullYear();
+  const firstThursday = new Date(Date.UTC(year, 0, 4));
+  firstThursday.setUTCDate(firstThursday.getUTCDate() - ((firstThursday.getUTCDay() + 6) % 7) + 3);
+  const week = 1 + Math.round((date.getTime() - firstThursday.getTime()) / (7 * 86_400_000));
+  return `${year}-W${String(week).padStart(2, "0")}`;
+}
+
+/**
+ * Where a ContentOps matter is decided, in ContentOps (its model's code is the
+ * evidence's `model`): a custom's copy outside the customs folder in the
+ * inbox's «Копии кастомов», a custom in the plan on the plan's week of its
+ * slot. A matter's own `link` stays a hub path, so the address is made here.
+ * Without what an address needs: the model's inbox, or ContentOps itself.
+ */
+export function contentopsLink(matter: { kind: string; evidence: Record<string, unknown> }): string {
+  const model = typeof matter.evidence.model === "string" && matter.evidence.model !== "" ? matter.evidence.model : null;
+  if (model === null) return contentopsHref(null, "");
+  if (matter.kind === "contentops.custom_copy") return contentopsHref(model, "inbox/copies");
+  if (matter.kind === "contentops.custom_in_plan") {
+    const slot = typeof matter.evidence.slot === "string" ? matter.evidence.slot.slice(0, 10) : null;
+    const week = slot ? isoWeekOf(slot) : null;
+    if (week) return contentopsHref(model, `plan/w/${week}`);
+  }
+  return contentopsHref(model, "inbox");
 }

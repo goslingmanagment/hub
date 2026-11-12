@@ -26,7 +26,7 @@ const COMPARISON_LABELS: Readonly<Record<string, string>> = {
 const BENIGN = new Set(["matched", "skipped", "ppv_estimated", "tips_blocked", "tips_signal", "blocked"]);
 
 function ConfigLink({ configKey, children }: { configKey: string; children: string }) {
-  return <Link className="link" to={`/system/dev/config#config-${configKey}`}>{children}</Link>;
+  return <Link className="link" to={`/system/dev#config-${configKey}`}>{children}</Link>;
 }
 
 /** «Точность оценки выручки»: read only when opened. */
