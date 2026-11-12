@@ -24,6 +24,9 @@ import { describe, expect, it } from "vitest";
 //   - media looks' frames after 7 days and look rows after 90 (0371: frames
 //     Hub cut for an agent from one image of the page's media; not a captured
 //     fact)
+//   - the sign-in hand-off's one-time codes (0388) an hour after they were used
+//     or expired, a service's redeemed code once the session behind its grant
+//     is gone (credentials Hub minted; not a captured fact)
 //   - pg-boss's own archival tables
 // Raw payloads (sync_raw_payloads) are explicitly NOT on that list: they are
 // captured facts, and the nightly `fansly.raw-payload-cleanup` job keeps only
@@ -152,6 +155,9 @@ const SANCTIONED_DELETER_FILES = [
   // the whole payout history for a repair that should cost zero platform calls.
   "apps/runtime/src/services/projections/fansly-payouts.ts",
   "packages/db/src/repositories/auth.ts",
+  // The sign-in hand-off's one-time codes (0388), in the nightly retention job: used or expired an hour ago, a
+  // service's redeemed code once its Hub session is gone. Credentials Hub minted, never a captured fact.
+  "packages/db/src/repositories/auth-handoff.ts",
   "packages/db/src/repositories/capture-payload-erasure.ts",
   "packages/db/src/repositories/catalog.ts",
   "packages/db/src/repositories/config-settings.ts",

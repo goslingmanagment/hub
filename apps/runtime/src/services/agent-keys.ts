@@ -1,5 +1,6 @@
 import {
   AgentKeyConstraintError,
+  AgentHoldsLiveKeyError,
   AgentKeyLifetimeError,
   findAgentKeyIntrospection,
   findPageSummaryByLabel,
@@ -158,6 +159,10 @@ async function resolvePageLabels(app: AppContext, rows: readonly AgentKeyRow[]) 
  * rather than chained: `cause` is serialized by the logger too.
  */
 function rethrowAsHttp(error: unknown): never {
+  // One live key per agent (people.ts insertPersonAgentKey): the owner revokes the old key first.
+  if (error instanceof AgentHoldsLiveKeyError) {
+    throw new ConflictError(error.message, { reason: "agent_holds_live_key" });
+  }
   if (error instanceof AgentKeyLifetimeError) {
     throw new BadRequestError(error.message);
   }

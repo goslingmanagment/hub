@@ -295,7 +295,32 @@ export async function findPersonIdOfAgentKey(db: Database, agentKeyId: number): 
   return nullableNumber(result.rows[0]?.person_id);
 }
 
+/**
+ * An agent holds one live key at a time. The services (ledger, TaskIndex, ContentOps) learn from Hub only WHOSE a key
+ * is (`agentKeyIntrospect` answers the agent) and give it that agent's rights: a second live key of the same agent,
+ * however narrow in Hub, would carry them too. A key no agent holds (a reporter, a mirror) is answered inactive there.
+ */
+export class AgentHoldsLiveKeyError extends Error {
+  constructor(readonly personId: number, readonly liveKeyName: string) {
+    super(`The agent already holds a live key «${liveKeyName}»: revoke it first, or keep this key without an agent`);
+    this.name = "AgentHoldsLiveKeyError";
+  }
+}
+
+/**
+ * Links a key to its agent: the one writer of `person_agent_keys`, whoever links (issuance, the person's card, the
+ * CLI, an accepted proposal). Refused with AgentHoldsLiveKeyError while the agent holds another live key (not
+ * revoked, not expired); the person's row is locked first, so two links at once cannot both pass.
+ */
 export async function insertPersonAgentKey(db: Database, input: { personId: number; agentKeyId: number; linkedByUserId: number | null }) {
+  await db.execute(sql`select id from people where id = ${input.personId} for update`);
+  const live = await db.execute<{ name: string }>(sql`
+    select k.name from person_agent_keys pak join agent_keys k on k.id = pak.agent_key_id
+     where pak.person_id = ${input.personId} and pak.agent_key_id <> ${input.agentKeyId}
+       and k.revoked_at is null and k.expires_at > now()
+     order by k.id limit 1`);
+  const holding = live.rows[0];
+  if (holding !== undefined) throw new AgentHoldsLiveKeyError(input.personId, holding.name);
   await db.execute(sql`
     insert into person_agent_keys (agent_key_id, person_id, linked_by_user_id)
     values (${input.agentKeyId}, ${input.personId}, ${input.linkedByUserId})`);

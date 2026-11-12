@@ -136,3 +136,22 @@ export async function findHandoffSession(db: Database, sessionId: number): Promi
       narrowDeviceTokenId: nullableNumber(row.narrow_device_token_id),
     };
 }
+
+/**
+ * The nightly retention sweep (worker-services.ts, `fansly.raw-payload-cleanup`): the codes that can no longer be
+ * accepted or redeemed go — used, or past their minute — an hour after that, so a code is never taken from under its
+ * own accept. A redeemed server code is the handle its service re-checks the sign-in with (`grant_digest`,
+ * sso/check): it stays while the Hub session behind it lives and goes once that session is revoked or past its end.
+ * Credentials Hub minted, never a captured fact; `authSso` is a GET that mints a row each time it is asked.
+ */
+export async function deleteSpentHandoffCodes(db: Database, now: Date): Promise<number> {
+  const result = await db.execute(sql`
+    delete from auth_handoff_codes c
+     where coalesce(c.used_at, c.expires_at) < ${now.toISOString()}::timestamptz - interval '1 hour'
+       and not (
+         c.kind = 'server' and c.used_at is not null and exists (
+           select 1 from auth_sessions s
+            where s.id = c.session_id and s.revoked_at is null and s.expires_at > ${now.toISOString()}::timestamptz))
+  `);
+  return result.rowCount ?? 0;
+}

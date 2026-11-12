@@ -36,12 +36,13 @@ vi.mock("argon2", () => import("./helpers/cheap-argon2.ts"));
 const MIN = 60_000;
 const KEYS = {
   service: { caps: ["introspect:agent_keys"], agent: null },
+  // One live key per agent (people.ts insertPersonAgentKey): each linked key is its own agent's.
   full: { caps: ["read:team", "read:money", "read:messages"], agent: "helper" },
-  plain: { caps: ["read:team", "read:money"], agent: "helper" },
-  team: { caps: ["read:team"], agent: "helper" },
-  watch: { caps: ["read:messages"], agent: "helper" },
-  content: { caps: ["read:content"], agent: "helper" },
-  revoked: { caps: ["read:team"], agent: "helper" },
+  plain: { caps: ["read:team", "read:money"], agent: "helper-plain" },
+  team: { caps: ["read:team"], agent: "helper-team" },
+  watch: { caps: ["read:messages"], agent: "helper-watch" },
+  content: { caps: ["read:content"], agent: "helper-content" },
+  revoked: { caps: ["read:team"], agent: "helper-revoked" },
   unlinked: { caps: ["read:team"], agent: null },
   gone: { caps: ["read:team"], agent: "gone-bot" },
 } as const;
@@ -79,7 +80,10 @@ describe("agent doors: who reads, and what", () => {
       code, displayName: code, kind, role: kind === "agent" ? "agent" : "chatter", state, leftOn: null, telegramUserId: null,
       telegramHandle: null, reportTag: null, onboarding: [], note: null, importNotes: [], origin: "owner", createdByUserId: owner,
     });
-    const people = { helper: await person("helper", "agent", "working"), "gone-bot": await person("gone-bot", "agent", "left") };
+    const people: Record<string, Awaited<ReturnType<typeof person>>> = { "gone-bot": await person("gone-bot", "agent", "left") };
+    for (const spec of Object.values(KEYS)) {
+      if (spec.agent !== null && people[spec.agent] === undefined) people[spec.agent] = await person(spec.agent, "agent", "working");
+    }
     const chatPerson = await person("chat", "human", "working");
     await insertPersonLogin(app.db, { personId: chatPerson.id, userId: chatterId, linkedByUserId: owner });
     for (const [name, spec] of Object.entries(KEYS) as Array<[KeyName, (typeof KEYS)[KeyName]]>) {
@@ -92,7 +96,7 @@ describe("agent doors: who reads, and what", () => {
         expiresAt: new Date(Date.now() + 30 * 24 * 60 * MIN),
         createdBy: owner,
       });
-      if (spec.agent !== null) await insertPersonAgentKey(app.db, { personId: people[spec.agent].id, agentKeyId: key.id, linkedByUserId: owner });
+      if (spec.agent !== null) await insertPersonAgentKey(app.db, { personId: people[spec.agent]!.id, agentKeyId: key.id, linkedByUserId: owner });
       if (name === "revoked") await revokeAgentKey(app.db, { id: key.id });
     }
 

@@ -29,6 +29,7 @@ type Capability =
 const AGENTS = {
   helper: { code: "helper-bot", displayName: "Помощник в чате", state: "working" },
   contentops: { code: "contentops", displayName: "Сервер ContentOps", state: "working" },
+  queues: { code: "queue-bot", displayName: "Сборщик очередей", state: "working" },
 } as const;
 
 /**
@@ -71,7 +72,7 @@ function agentKeys(request: DemoRequest) {
   return [
     key(7, "Исследователь архива", "Xk4q9TzP2w", ["read:messages", "read:money", "read:datasets", "read:observations_envelope", "request:hydration", "read:team"], all, 41, 79, 0.3, null, AGENTS.helper, "agentShiftReview"),
     key(9, "ContentOps", "m3RfV8bN1c", ["read:content", "write:publication_drafts", "approve:publications", "withdraw:publications", "look:media", "signin:contentops"], ["mia-1", "mia-2", "mia-3", "nova-1"], 8, 82, 2.6, null, AGENTS.contentops, "agentDatasetQuery"),
-    key(10, "Очереди фанов", "Q7pLs2dYe9", ["read:datasets", "read:money", "write:fan_queues"], ["mia-1", "mia-2", "nova-1"], 5, 85, 19, null, AGENTS.helper, "agentFanQueueCreate"),
+    key(10, "Очереди фанов", "Q7pLs2dYe9", ["read:datasets", "read:money", "write:fan_queues"], ["mia-1", "mia-2", "nova-1"], 5, 85, 19, null, AGENTS.queues, "agentFanQueueCreate"),
     key(13, "TaskIndex: вход и «кто этот ключ»", "Hn2wQ5sLr8", ["signin:taskindex", "introspect:agent_keys"], ["mia-1"], 1, 89, 0.1, null, null, "agentKeyIntrospect"),
     // The agents that publish report pages (system-reports.ts): the traffic routine and the boards.
     key(11, "Трафик", "Tf3kW8mZr2", ["write:reports"], ["mia-1"], 4, 86, 2.6),

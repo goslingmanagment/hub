@@ -11,6 +11,7 @@ import {
   useRevokeAgentKey,
   useUpdateAgentKeyCapabilities,
 } from "@/api/queries";
+import { KernelApiError } from "@/api/sdk";
 import { ConfirmModal } from "@/components/shared/ConfirmModal";
 import { Field } from "@/components/shared/Field";
 import { ModalShell } from "@/components/shared/ModalShell";
@@ -129,6 +130,15 @@ function CapabilityCheckboxes({
       </Disclosure>
     </div>
   );
+}
+
+/**
+ * One live key per agent (Hub refuses a second: the services give a key its agent's rights): the toast says why a link
+ * or an issuance was refused.
+ */
+function refusedText(error: unknown, fallback: string): string {
+  const reason = error instanceof KernelApiError ? (error.body as { reason?: unknown } | null)?.reason : undefined;
+  return reason === "agent_holds_live_key" ? "У агента уже есть действующий ключ: сначала отзовите его" : fallback;
 }
 
 /** Whose a key is, in a line: the agent, a service's own key, or nobody yet. */
@@ -278,6 +288,8 @@ function AgentKeysSection({ creating, onCreating }: { creating: boolean; onCreat
                             <div>
                               <p className="sys-label">Чей ключ</p>
                               <p>{key.agent ? `${agentLine(key)}, код ${key.agent.code}` : agentLine(key)}</p>
+                              {/* Other services know a key only by its agent (Hub's «кто этот ключ»): without one it is no agent there. */}
+                              {!key.agent && <p className="text-sm text-text-secondary">ключ без агента: в сервисах не действует</p>}
                             </div>
                             <div>
                               <p className="sys-label">Последний вызов</p>
@@ -375,8 +387,8 @@ function CreateAgentKeyModal({
       expiresInDays,
     }, {
       onSuccess: (result) => onIssued(result.token, result.key.name),
-      onError: () => {
-        toast.error("Не удалось выпустить ключ");
+      onError: (error) => {
+        toast.error(refusedText(error, "Не удалось выпустить ключ"));
       },
     });
   }
@@ -600,8 +612,8 @@ function LinkAgentKeyModal({ agentKey, onClose }: { agentKey: AgentKeyItem; onCl
         toast.success(`Ключ «${agentKey.name}» теперь у агента`);
         onClose();
       },
-      onError: () => {
-        toast.error("Не удалось указать агента");
+      onError: (error) => {
+        toast.error(refusedText(error, "Не удалось указать агента"));
       },
     });
   }

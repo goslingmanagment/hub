@@ -13,6 +13,7 @@ import {
   closeOrphanedSyncRuns,
   deleteExpiredSyncEngineTelemetry,
   deleteExpiredSyncMediaHandoff,
+  deleteSpentHandoffCodes,
   deleteExpiredSyncObservability,
   getLatestScheduledReportDateOnOrBefore,
   getTelegramSettings,
@@ -338,6 +339,9 @@ export async function startWorkerServices(
     // Voice notes ride the nightly cleanup: release the reservations of
     // long-stale indeterminate rows. Their audio is kept.
     const voiceRetention = await timed("voiceNotes", () => runVoiceNotesNightlyRetention(app, now));
+    // The sign-in hand-off's one-time codes (0388): used or expired ones, an hour on; a service's redeemed code
+    // stays while the Hub session behind its grant lives. Credentials, not a captured fact.
+    const handoffCodes = await timed("authHandoffCodes", () => deleteSpentHandoffCodes(app.db, now));
 
     const summary = {
       ...timings,
@@ -359,6 +363,7 @@ export async function startWorkerServices(
       syncMediaHandoff: { deletedExpired: mediaHandoff },
       mediaLooks,
       voiceRetention,
+      authHandoffCodes: { deleted: handoffCodes },
     };
     if (observability.budgetExhausted || engineTelemetry.budgetExhausted) {
       // Not a failure — the sweep is resumable and tomorrow finds less to do.

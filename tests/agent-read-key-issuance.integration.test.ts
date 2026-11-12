@@ -99,7 +99,11 @@ describe("agent read plane: key issuance", () => {
     );
 
     // The agents a key may belong to (the people registry): one working, one gone, and a human who is not one.
-    for (const [code, kind, state] of [["audit-bot", "agent", "working"], ["old-bot", "agent", "left"], ["alex", "human", "working"]] as const) {
+    // One live key per agent: a test that keeps several keys alive gives each its own agent (audit-bot-2, -3).
+    for (const [code, kind, state] of [
+      ["audit-bot", "agent", "working"], ["audit-bot-2", "agent", "working"], ["audit-bot-3", "agent", "working"],
+      ["old-bot", "agent", "left"], ["alex", "human", "working"],
+    ] as const) {
       await insertPersonRow(testDb.db, {
         code, displayName: code, kind, role: kind === "agent" ? "agent" : "chatter", state, leftOn: null, telegramUserId: null,
         telegramHandle: null, reportTag: null, onboarding: [], note: null, importNotes: [], origin: "owner", createdByUserId: null,
@@ -195,6 +199,48 @@ describe("agent read plane: key issuance", () => {
     // A refused issuance minted nothing.
     const names = (await testDb.pool.query("select name from agent_keys order by id")).rows.map((row) => row.name);
     expect(names).toEqual(["customs-audit", "taskindex-server"]);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("gives an agent one live key at a time, whoever links: issuance and the person's card", async (context) => {
+    if (!testDb || !server) {
+      context.skip();
+      return;
+    }
+    const cookie = await loginCookie("dima", "owner-secret");
+    const issue = (name: string, agentCode?: string) => server!.inject({
+      method: "POST", url: "/api/v1/agent/keys", headers: { cookie },
+      payload: createBody({ name, agentCode, ...(agentCode === undefined ? { capabilities: ["introspect:agent_keys"] } : {}) }),
+    });
+    const first = await issue("audit-first", "audit-bot");
+    expect(first.statusCode, first.body).toBe(200);
+    // A second live key of the same agent would carry the agent's rights in every service: refused, nothing minted.
+    const second = await issue("audit-second", "audit-bot");
+    expect(second.statusCode, second.body).toBe(409);
+    expect(second.json()).toMatchObject({ reason: "agent_holds_live_key" });
+    // A key no agent holds is not the agent's: issued, and the card cannot hand it to the agent while the first lives.
+    const loose = await issue("audit-loose");
+    expect(loose.statusCode, loose.body).toBe(200);
+    const link = (add: number[], remove: number[] = []) => server!.inject({
+      method: "PATCH", url: "/api/v1/admin/people/audit-bot", headers: { cookie },
+      payload: { agentKeys: { ...(add.length > 0 ? { add } : {}), ...(remove.length > 0 ? { remove } : {}) } },
+    });
+    const firstId = (first.json() as { key: { id: number } }).key.id;
+    const looseId = (loose.json() as { key: { id: number } }).key.id;
+    const refused = await link([looseId]);
+    expect(refused.statusCode, refused.body).toBe(409);
+    expect(refused.json()).toMatchObject({ reason: "agent_holds_live_key" });
+    // Taking the live key off and giving the new one in the same change is one key at a time: accepted.
+    const swapped = await link([looseId], [firstId]);
+    expect(swapped.statusCode, swapped.body).toBe(200);
+    // Once the agent's key is revoked, a new one may be issued for it.
+    expect((await server.inject({ method: "POST", url: `/api/v1/agent/keys/${looseId}/revoke`, headers: { cookie } })).statusCode).toBe(200);
+    expect((await issue("audit-third", "audit-bot")).statusCode).toBe(200);
+    const live = await testDb.pool.query(
+      `select k.name from person_agent_keys pak join agent_keys k on k.id = pak.agent_key_id join people p on p.id = pak.person_id
+        where p.code = 'audit-bot' and k.revoked_at is null and k.expires_at > now() order by k.name`);
+    expect(live.rows.map((row) => row.name)).toEqual(["audit-third"]);
+    expect((await testDb.pool.query("select name from agent_keys order by id")).rows.map((row) => row.name))
+      .toEqual(["audit-first", "audit-loose", "audit-third"]);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("sets Cache-Control: no-store on the response that carries the token", async (context) => {
@@ -531,17 +577,18 @@ describe("agent read plane: key issuance", () => {
       return;
     }
     const cookie = await loginCookie("dima", "owner-secret");
-    const issue = async (name: string) => {
+    // Three keys alive at once: each its own agent (one live key per agent).
+    const issue = async (name: string, agentCode: string) => {
       const created = await server!.inject({
         method: "POST",
         url: "/api/v1/agent/keys",
         headers: { cookie },
-        payload: createBody({ name }),
+        payload: createBody({ name, agentCode }),
       });
       return (created.json() as { key: { id: number } }).key.id;
     };
     const audit = { source: "cli", actorUserId: null };
-    const keyId = await issue("pages-a");
+    const keyId = await issue("pages-a", "audit-bot");
 
     await expect(updateAgentKeyPages(appContext, { id: keyId, add: ["lora-9"], remove: [] }, audit))
       .rejects.toMatchObject({ statusCode: 404 });
@@ -550,12 +597,12 @@ describe("agent read plane: key issuance", () => {
     await expect(updateAgentKeyPages(appContext, { id: keyId, add: [], remove: ["lora-2"] }, audit))
       .rejects.toMatchObject({ statusCode: 400 });
 
-    const revokedId = await issue("pages-revoked");
+    const revokedId = await issue("pages-revoked", "audit-bot-2");
     await server.inject({ method: "POST", url: `/api/v1/agent/keys/${revokedId}/revoke`, headers: { cookie } });
     await expect(updateAgentKeyPages(appContext, { id: revokedId, add: ["lora-1"], remove: [] }, audit))
       .rejects.toMatchObject({ statusCode: 409 });
 
-    const expiredId = await issue("pages-expired");
+    const expiredId = await issue("pages-expired", "audit-bot-3");
     await testDb.pool.query(
       "update agent_keys set expires_at = now() - interval '1 minute', created_at = now() - interval '1 day' where id = $1",
       [expiredId],
