@@ -97,6 +97,9 @@ the owner's machine (outside this repository); a change that moves a home or add
   code sends a person a message; nothing about a fan goes into a personal message.
 - **The menu and every screen's address**: ONE table, `packages/ui/src/screens.ts`, for the console and Workboard. A
   screen is a row there; an address that moved gets a redirect, never a second screen.
+- **The groups of «Ждут вас»**: one table, `packages/contracts/src/waiting-groups.ts` (which group a kind is in, the
+  group's title, order and tone). The Home's chips, the menu's number and the list are built from it; a new kind
+  gets its group there (a test fails when one has none), never a second mapping on a screen.
 - **Sign-in**: `services/signin-handoff.ts`. Cookies are host-only; a session crosses names by a one-time code; a
   cookie-authenticated change is taken only from the console's and the team's names (`api/origin-check.ts`). Other
   services redeem a code with their own key (`signin:<service>`), they never get the session.
