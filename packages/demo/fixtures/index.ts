@@ -8,6 +8,7 @@ import { peopleHandlers } from "./people.ts";
 import { personStartHandlers } from "./person-start.ts";
 import { publishOfHandlers } from "./publish-of.ts";
 import { settingsHandlers } from "./settings.ts";
+import { saleChainHandlers } from "./sale-chain.ts";
 import { saleClaimHandlers } from "./sale-claims.ts";
 import { shiftReportHandlers } from "./shift-reports.ts";
 import { shellHandlers } from "./shell.ts";
@@ -46,6 +47,8 @@ const AREAS: Readonly<Record<string, DemoHandlers>> = {
   "person-start": personStartHandlers,
   // Заявки: claims of a sale, their answers, the owner's disputes and «мимо площадки», kept in memory (sale-claims.ts).
   "sale-claims": saleClaimHandlers,
+  // Цепочка продажи: from a line, a dispute or a console row, the sale's chain of money as Hub reads it (sale-chain.ts).
+  "sale-chain": saleChainHandlers,
   settings: settingsHandlers,
   system: systemHandlers,
 };

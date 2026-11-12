@@ -2518,4 +2518,191 @@
     justify-content: flex-end;
     gap: 8px;
   }
+
+  /* ------------------------------------------------------------ Цепочка продажи (package T) */
+
+  /* The sale's amount is the affordance: the same look as the number, a dotted line under it. */
+  .ui-chain-trigger {
+    display: inline-flex;
+  }
+
+  .ui-chain-trigger__button {
+    padding: 0;
+    border: 0;
+    background: none;
+    color: inherit;
+    font: inherit;
+    text-align: inherit;
+    text-decoration: underline dotted;
+    text-decoration-color: var(--ui-line-strong);
+    text-underline-offset: 4px;
+    cursor: pointer;
+  }
+
+  .ui-chain-trigger__button:hover,
+  .ui-chain-trigger__button[aria-expanded="true"] {
+    text-decoration-color: currentColor;
+  }
+
+  .ui-chain-pop {
+    width: min(560px, calc(100vw - 16px));
+    padding: 12px 16px 14px;
+    overflow-y: auto;
+    text-align: left;
+    white-space: normal;
+    font-weight: 400;
+  }
+
+  .ui-chain-pop__title {
+    margin: 0 0 8px;
+    color: var(--ui-text-2);
+    font-size: var(--ui-fs-13);
+    line-height: var(--ui-lh-13);
+    font-weight: 600;
+  }
+
+  .ui-chain-pop__wait {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 4px 0;
+  }
+
+  .ui-chain {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .ui-chain__steps {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  /* One link: a mark on the rail, its name, its words, a sum, «Открыть». */
+  .ui-chain__step {
+    position: relative;
+    display: grid;
+    grid-template-columns: 12px 96px minmax(0, 1fr) auto auto;
+    align-items: baseline;
+    column-gap: 8px;
+    padding: 4px 0;
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+  }
+
+  /* The rail between the marks. */
+  .ui-chain__step + .ui-chain__step::before {
+    content: "";
+    position: absolute;
+    left: 5px;
+    top: -6px;
+    height: 12px;
+    border-left: 1px solid var(--ui-line);
+  }
+
+  .ui-chain__dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    border: 2px solid var(--ui-text-3);
+    align-self: center;
+  }
+
+  .ui-chain__step--done .ui-chain__dot {
+    border-color: var(--ui-good);
+    background: var(--ui-good);
+  }
+
+  .ui-chain__step--wait .ui-chain__dot {
+    border-color: var(--ui-warn);
+  }
+
+  .ui-chain__step--open .ui-chain__dot {
+    border-color: var(--ui-warn);
+    background: var(--ui-warn);
+  }
+
+  .ui-chain__step--none .ui-chain__dot {
+    border-style: dashed;
+  }
+
+  .ui-chain__step--unknown .ui-chain__dot {
+    border-color: var(--ui-text-3);
+    border-style: dotted;
+  }
+
+  .ui-chain__name {
+    color: var(--ui-text-2);
+  }
+
+  .ui-chain__words {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    color: var(--ui-text);
+    overflow-wrap: anywhere;
+  }
+
+  .ui-chain__step--unknown .ui-chain__words,
+  .ui-chain__step--none .ui-chain__words {
+    color: var(--ui-text-2);
+  }
+
+  .ui-chain__more {
+    color: var(--ui-text-2);
+    font-size: var(--ui-fs-13);
+    line-height: var(--ui-lh-13);
+  }
+
+  .ui-chain__more--open {
+    color: var(--ui-warn-text);
+  }
+
+  .ui-chain__money {
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+
+  .ui-chain__open {
+    white-space: nowrap;
+    font-size: var(--ui-fs-13);
+    line-height: var(--ui-lh-13);
+  }
+
+  .ui-chain__go {
+    color: var(--ui-accent);
+  }
+
+  .ui-chain__person {
+    padding-top: 6px;
+    border-top: 1px solid var(--ui-line-soft);
+  }
+
+  .ui-chain__who {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    margin: 0 0 2px;
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+    font-weight: 600;
+  }
+
+  .ui-chain__note {
+    margin: 4px 0 0;
+    color: var(--ui-text-2);
+    font-size: var(--ui-fs-13);
+    line-height: var(--ui-lh-13);
+  }
+
+  .ui-chain__retry {
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--ui-accent);
+    font: inherit;
+    cursor: pointer;
+  }
 }

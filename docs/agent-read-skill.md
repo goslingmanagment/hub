@@ -1314,6 +1314,7 @@ Global flags: `--base-url`, `--fail-on-partial`, `--pretty`, `--help`.
 | `hub shift-review` | «Разбор смены» of one shift on your pages and the shift audit's numbers from it (`--person` or `--user-id`, `--at`). Needs `read:team` and `read:money`; texts with `read:messages`. The doors by object: `agent-doors.md`. |
 | `hub fan-watch` | Watched fans' new messages on your pages and when the page last wrote to them. Needs `read:messages`. |
 | `hub sale-context` | Each sale's fan, the PPV it bought and who wrote to the fan before it, for a shift report's check. Needs `read:team` and `read:money`. |
+| `hub sale-chain` | From one sale (Hub's id, or `--page` and `--ref`), its chain of money: whose it is and why, the shift, the report of that day, the accrual and the payout as states, no pay sums. Needs `read:team` and `read:money`. |
 | `hub resolve` | A URL, slug, username or native id, turned into fan identities. Try this before concluding a fan does not exist. |
 | `hub person` | One fan across every granted page: identity, memberships, threads, money, bounded post-tip attribution, subscriptions. |
 | `hub timeline` | One fan's merged timeline across lanes (money, separate post-tip attribution, subscriptions, follows, message refs). |

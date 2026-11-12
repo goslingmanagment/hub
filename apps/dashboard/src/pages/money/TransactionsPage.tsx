@@ -14,6 +14,7 @@ import { Segmented } from "@/components/ui/Segmented";
 import { Stat, StatGrid } from "@/components/ui/StatGrid";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { Pagination } from "@/components/shared/Pagination";
+import { ChainMoney } from "@/components/shared/ChainMoney";
 import { QueryNotice } from "@/components/shared/QueryNotice";
 import { NoAnswerPanel, StatusPanel } from "@/components/shared/StatusPanel";
 import { TableSkeleton } from "@/components/shared/TableSkeleton";
@@ -254,7 +255,9 @@ export function TransactionsPage() {
                       <td>{SOURCE_LABELS[item.canonicalType] ?? item.canonicalType}</td>
                       <td className="status-col"><StateCell state={item.transactionState} /></td>
                       <td className={`num${item.netAmountMills < 0 ? " delta-down" : ""}`} title={`До комиссии: ${formatMills(item.amountMills)}`}>
-                        {formatMills(item.netAmountMills)}
+                        {item.netAmountMills > 0
+                          ? <ChainMoney pageLabel={item.pageLabel} transactionRef={item.transactionId}>{formatMills(item.netAmountMills)}</ChainMoney>
+                          : formatMills(item.netAmountMills)}
                       </td>
                     </tr>
                   ))}

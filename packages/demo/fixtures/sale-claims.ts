@@ -201,6 +201,13 @@ export function demoLineOutcome(now: Date, transactionId: number, userId: number
     : { amountMills: 0, mine: false, reason: "owner_split", words: `раздел владельца: ${winner.name}`, toName: winner.name };
 }
 
+/** Цепочка продажи (sale-chain.ts): the claims of one sale, for «Чья». */
+export function demoClaimsOfSale(now: Date, transactionId: number) {
+  return world(now).claims.filter((claim) => claim.transactionId === transactionId).map((claim) => ({
+    state: claim.state, claimant: claim.claimant, side: claim.side, statement: claim.statement, createdAt: claim.createdAt, outcome: claim.decision?.outcome ?? null,
+  }));
+}
+
 /** A person's own «делим с …» waiting for the colleague: the word on their line. Null — none. */
 export function demoOwnShare(now: Date, transactionId: number, userId: number): { shareWithUserId: number; shareWithName: string; note: string } | null {
   const claim = world(now).claims.find((one) => one.transactionId === transactionId && one.claimant.id === userId && one.statement === "share"

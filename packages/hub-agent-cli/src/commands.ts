@@ -3773,6 +3773,31 @@ export const HUB_COMMANDS: readonly HubCommand[] = [
     },
   },
   {
+    name: "sale-chain",
+    operation: "agentSaleChain",
+    summary:
+      "From one sale, its chain of money: whose it is (the rule's home and why, the owner's decision, an open claim), the"
+      + " shift, the report of that day (Hub's handed-in version, else the ledger's post), the ledger's accrual and payout"
+      + " as states. A sale by Hub's id (a bare word) or by --page and --ref (the platform's transaction id). Never a pay"
+      + " sum: the ledger is the door for pay. Needs read:team and read:money.",
+    example: "hub sale-chain 7744520",
+    options: {
+      page: { kind: "string", describe: "With --ref: the sale's page label" },
+      ref: { kind: "string", describe: "With --page: the platform's transaction id" },
+    },
+    arguments: { name: "<transactionId>", describe: "Hub's id of the sale (transactions.id)", min: 0, max: 1 },
+    run: (client, values, _deps, args) => {
+      const page = readString(values, "page");
+      const ref = readString(values, "ref");
+      const saleRef = args[0];
+      if ((saleRef === undefined) === (page === undefined || ref === undefined)) {
+        throw new HubUsageError("name the sale: its Hub id as a bare word, or --page and --ref");
+      }
+      if (saleRef !== undefined && !/^\d{1,19}$/.test(saleRef)) throw new HubUsageError("the sale's Hub id is digits");
+      return client.agentSaleChain({ query: saleRef !== undefined ? { saleRef } : { pageLabel: page!, transactionRef: ref! } });
+    },
+  },
+  {
     name: "report put",
     operation: "agentReportPut",
     summary:
