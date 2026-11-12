@@ -2,12 +2,12 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
 import type { AgentTeamSale, AgentTeamSalesResponse, AgentTeamWork } from "@agency_hub_core/contracts";
-import { listSalePlatformRefs, listUsersLeftAt, listVisiblePages, type Database } from "@agency_hub_core/db";
+import { listSalePlatformRefs, listVisiblePages, type Database } from "@agency_hub_core/db";
 import { formatUsdFromMills, millsToNumber, sumMills } from "@agency_hub_core/shared";
 
 import { readAgentTeamSales } from "./agent-team-sales.ts";
 import { dayOfWork, moscowDayOf } from "./chatter-shifts.ts";
-import { ruleNowOf, ruleSalesOf, ruleWorksOf, sendersOf } from "./sale-homes.ts";
+import { ruleNowOf, ruleSalesOf, ruleWorksOf, sendersOf, usersLeftAt, type SaleSlotProvider } from "./sale-homes.ts";
 import {
   LEDGER_GO_RULE,
   SALE_HOME_REASON_TEXT,
@@ -33,6 +33,9 @@ import { teamShiftSalesOf } from "./team-shift-sales.ts";
  *      depends on a schedule slot is marked.
  *  (b) every person and day: today's Workboard («Смены», `teamShiftMoney`), the rule, the ledger's facts, Gengar's
  *      layout, the posted report.
+ *
+ * A work is whole in the range its day is in, as Workboard counts it: the sales of the day on each side of the range
+ * that a work of the range holds, or that a home dates into it (the night past the last midnight), are compared too.
  *
  * Real names stay in the output: run it where the output is private.
  */
@@ -111,11 +114,12 @@ const int = (value: unknown) => Number(value);
 /** Moscow midnight of a YYYY-MM-DD day, as the ledger writes instants. */
 const mskStart = (day: string) => `${day}T00:00:00+03:00`;
 const nextDay = (day: string) => new Date(Date.parse(`${day}T00:00:00Z`) + DAY_MS).toISOString().slice(0, 10);
+const previousDay = (day: string) => new Date(Date.parse(`${day}T00:00:00Z`) - DAY_MS).toISOString().slice(0, 10);
 
-/** Reads what the ledger holds of [first, last] (Moscow days). */
+/** Reads what the ledger holds of [first, last] (Moscow days) and the day on each side (a work the range's edge cuts). */
 export async function readLedgerExport(run: LedgerSql, range: { first: string; last: string }): Promise<LedgerExport> {
-  const from = mskStart(range.first);
-  const to = mskStart(nextDay(range.last));
+  const from = mskStart(previousDay(range.first));
+  const to = mskStart(nextDay(nextDay(range.last)));
   // The windows a sale of the range is in, and the week before (a work at a window's edge is whole in the window it began in).
   const before = mskStart(new Date(Date.parse(`${range.first}T00:00:00Z`) - 8 * DAY_MS).toISOString().slice(0, 10));
   const windows = (await run(`SELECT window_from, window_to, status, COALESCE(work_to, '') work_to, read_at FROM hub_team_sync
@@ -213,6 +217,8 @@ export interface SaleRuleComparison {
   hubNow: string;
   ruleVersion: string;
   slotsGiven: number;
+  /** Where the slots came from: the people registry (as the job), none, a file. */
+  slotsSource: SlotsSource;
   ledgerWindows: LedgerWindow[];
   sales: SaleComparison[];
   days: PersonDay[];
@@ -220,6 +226,8 @@ export interface SaleRuleComparison {
   datedApart: Array<{ person: string; startedAt: string; endedAt: string; dayOfWork: string; reportDate: string }>;
   notes: string[];
 }
+
+export type SlotsSource = "registry" | "none" | "file";
 
 type DayOf = (ref: string | null, saleAt: string) => { day: string; reportDate: string };
 
@@ -349,6 +357,7 @@ export function compareSaleRule(input: {
   leftAt: ReadonlyMap<number, number>;
   pageIds: ReadonlyMap<string, number>;
   slots: readonly RuleSlot[];
+  slotsSource: SlotsSource;
   workboard: ReadonlyArray<{ userId: number; username: string; daily: ReadonlyArray<{ date: string; salesNetMills: number }> }>;
   /** The platform's reference of each Hub sale: Gengar's layouts name a sale by it. */
   platformRefOf: ReadonlyMap<string, string>;
@@ -418,10 +427,22 @@ export function compareSaleRule(input: {
 
   const fromAt = Date.parse(mskStart(input.first));
   const toAt = Date.parse(mskStart(nextDay(input.last)));
+  const inRange = (day: string) => day >= input.first && day <= input.last;
   const lastRead = ledger.windows.reduce((latest, window) => (window.to > latest ? window.to : latest), "");
+  // The range's sales, and those of the day on each side that a work of the range holds or a home dates into it.
   const refs = new Set<string>();
-  for (const [ref, one] of hubSales) if (Date.parse(one.sale.occurredAt) >= fromAt && Date.parse(one.sale.occurredAt) < toAt) refs.add(ref);
-  for (const ref of factRows.keys()) refs.add(ref);
+  for (const [ref, one] of hubSales) {
+    const at = Date.parse(one.sale.occurredAt);
+    const held = one.sale.holders.some((holder) => {
+      const work = one.works.get(holder);
+      return work !== undefined && inRange(dayOfWork({ startedAt: Date.parse(work.startedAt), endedAt: Date.parse(work.endedAt) }));
+    });
+    const dated = [...one.hub.shares, ...one.hubGo.shares].some((share) => inRange(share.day));
+    if ((at >= fromAt && at < toAt) || held || dated) refs.add(ref);
+  }
+  for (const [ref, rows] of factRows) {
+    if (rows.some((row) => (Date.parse(row.at) >= fromAt && Date.parse(row.at) < toAt) || inRange(row.day))) refs.add(ref);
+  }
 
   const sales: SaleComparison[] = [...refs].map((ref) => {
     const hubOne = hubSales.get(ref);
@@ -485,7 +506,6 @@ export function compareSaleRule(input: {
     }
     return row;
   };
-  const inRange = (day: string) => day >= input.first && day <= input.last;
   for (const one of sales) {
     for (const share of one.hub?.kind === "shift" || one.hub?.kind === "visit" ? one.hub.shares : []) {
       if (inRange(share.day)) keyOf(share.userId, personOf.get(share.userId) ?? null, share.day).ruleMills += share.mills;
@@ -526,6 +546,7 @@ export function compareSaleRule(input: {
     hubNow: input.hubNow.toISOString(),
     ruleVersion: SALE_RULE.version,
     slotsGiven: input.slots.length,
+    slotsSource: input.slotsSource,
     ledgerWindows: ledger.windows,
     sales,
     days: [...days.values()].sort((a, b) => a.person.localeCompare(b.person) || a.day.localeCompare(b.day)),
@@ -542,22 +563,30 @@ export async function runSaleRuleComparison(db: Database, input: {
   last: string;
   now: Date;
   ledger: LedgerSql;
-  slots: readonly RuleSlot[];
+  slots: SaleSlotProvider;
+  slotsSource: SlotsSource;
 }): Promise<SaleRuleComparison> {
   const exported = await readLedgerExport(input.ledger, { first: input.first, last: input.last });
   const pages = (await listVisiblePages(db)).filter((page) => exported.pages.includes(page.label)).map((page) => ({ id: page.id, label: page.label }));
   const pageIds = new Map(pages.map((page) => [page.label, page.id]));
-  const fromAt = Date.parse(mskStart(input.first));
-  const toAt = Math.min(Date.parse(mskStart(nextDay(input.last))), input.now.getTime());
-  // Hub's facts by the ledger's windows, so a work is cut where the ledger's is; past the ledger's last read, one more.
+  // A day on each side, so a work the range's edge cuts is whole (as Workboard reads it).
+  const fromAt = Date.parse(mskStart(previousDay(input.first)));
+  const toAt = Math.min(Date.parse(mskStart(nextDay(nextDay(input.last)))), input.now.getTime());
+  // Hub's facts by the ledger's windows, so a work is cut where the ledger's is; where the ledger has no window, one more.
   const hub: HubWindow[] = [];
-  const ruled = exported.windows.filter((window) => window.status === "ok" && Date.parse(window.to) > fromAt && Date.parse(window.from) < toAt);
+  const read = (from: number, to: number) => readAgentTeamSales(db, { from: new Date(from), to: new Date(to), now: input.now, pages });
+  const ruled = exported.windows
+    .filter((window) => window.status === "ok" && Date.parse(window.to) > fromAt && Date.parse(window.from) < toAt)
+    .sort((a, b) => Date.parse(a.from) - Date.parse(b.from));
+  let covered = fromAt;
   for (const window of ruled) {
-    hub.push({ window, answer: await readAgentTeamSales(db, { from: new Date(window.from), to: new Date(window.to), now: input.now, pages }) });
+    if (Date.parse(window.from) > covered) hub.push({ window: null, answer: await read(covered, Date.parse(window.from)) });
+    hub.push({ window, answer: await read(Date.parse(window.from), Date.parse(window.to)) });
+    covered = Math.max(covered, Date.parse(window.to));
   }
-  const covered = ruled.reduce((latest, window) => Math.max(latest, Date.parse(window.to)), fromAt);
-  if (covered < toAt) hub.push({ window: null, answer: await readAgentTeamSales(db, { from: new Date(covered), to: new Date(toAt), now: input.now, pages }) });
-  const left = await listUsersLeftAt(db, [...new Set(hub.flatMap(({ answer }) => sendersOf(answer)))]);
+  if (covered < toAt) hub.push({ window: null, answer: await read(covered, toAt) });
+  const leftAt = await usersLeftAt(db, [...new Set(hub.flatMap(({ answer }) => sendersOf(answer)))]);
+  const slots = await input.slots.slotsFor({ from: new Date(fromAt), to: new Date(toAt) });
   const days = Math.round((Date.parse(mskStart(nextDay(input.last))) - Date.parse(mskStart(input.first))) / DAY_MS);
   const workboard = await teamShiftSalesOf(db, { days, until: input.last, now: input.now, pages: "all" });
   return compareSaleRule({
@@ -566,9 +595,10 @@ export async function runSaleRuleComparison(db: Database, input: {
     hubNow: input.now,
     hub,
     ledger: exported,
-    leftAt: new Map([...left].map(([userId, at]) => [userId, at.getTime()])),
+    leftAt,
     pageIds,
-    slots: input.slots,
+    slots,
+    slotsSource: input.slotsSource,
     workboard: workboard.chatters,
     platformRefOf: new Map([...await listSalePlatformRefs(db, [...new Set(hub.flatMap(({ answer }) => answer.sales.map((sale) => Number(sale.transactionRef))))])]
       .map(([id, ref]) => [String(id), ref])),
@@ -594,7 +624,9 @@ export function formatSaleRuleComparison(report: SaleRuleComparison): string {
   const lines: string[] = [];
   const range = report.first === report.last ? report.first : `${report.first} … ${report.last}`;
   lines.push(`# Чья продажа: правило хаба, факты ledger, расклады Генгара — ${range}`, "");
-  lines.push(`Хаб прочитан ${report.hubNow} (только чтение); правило ${report.ruleVersion}; слотов графика дано: ${report.slotsGiven}.`);
+  const source = { registry: "из реестра людей, как у задачи", none: "без слотов", file: "из файла" }[report.slotsSource];
+  lines.push(`Хаб прочитан ${report.hubNow} (только чтение); правило ${report.ruleVersion}; слотов графика дано: ${report.slotsGiven} (${source}).`);
+  lines.push("Смена целиком в дне своей середины: продажи дня по обе стороны периода, которые держит смена периода или дом датирует периодом, тоже сравниваются.");
   for (const window of report.ledgerWindows) {
     lines.push(`Окно ledger ${window.from} … ${window.to}: ${window.status}, прочитано ${window.readAt}, смены до ${window.workTo}.`);
   }

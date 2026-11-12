@@ -1,13 +1,22 @@
 import { describe, expect, it } from "vitest";
 
+import type { AgentTeamSale, AgentTeamSalesResponse, AgentTeamWork } from "@agency_hub_core/contracts";
+import type { PersonScheduleSlotRow } from "@agency_hub_core/db";
+
+import { leftAtOf, ruleSlotsOf } from "../apps/runtime/src/services/sale-homes.ts";
+import { slotsOfFile } from "../apps/runtime/src/services/sale-rule-cli.ts";
+import { compareSaleRule, type LedgerExport, type LedgerFactHome } from "../apps/runtime/src/services/sale-rule-compare.ts";
 import {
   LEDGER_GO_RULE,
   POT_OBSHAK,
   homeOfSale,
   homesOfSales,
+  slotRuns,
+  weekdayOfDay,
   type RuleMark,
   type RuleSale,
   type RuleSlot,
+  type RuleWeekday,
   type RuleWork,
   type SaleHome,
   type SaleShare,
@@ -303,7 +312,7 @@ describe("the owner's answers newer than ledger's Go", () => {
   // The evening chatter (101): 18:00–02:00, but on page-a till 00:00; the night one (102): 00:00–08:00 everywhere.
   const slot = (personId: number, start: string, end: string, extra: Partial<RuleSlot> = {}): RuleSlot => {
     const minute = (at: string) => Number(at.slice(0, 2)) * 60 + Number(at.slice(3));
-    return { personId, pageId: null, startMinute: minute(start), endMinute: minute(end), validFrom: null, validTo: null, ...extra };
+    return { personId, pageId: null, startMinute: minute(start), endMinute: minute(end), weekdays: null, validFrom: null, validTo: null, ...extra };
   };
   const slots = [slot(101, "18:00", "02:00"), slot(101, "18:00", "00:00", { pageId: PAGE_A }), slot(102, "00:00", "08:00")];
 
@@ -348,5 +357,165 @@ describe("the owner's answers newer than ledger's Go", () => {
     const b = shift(102, "2026-11-05 10:30", "2026-11-05 14:00");
     const disputed = { ...sale("tip", "2026-11-05 11:00", 1_001, a, b), resolution: [{ userId: 101, percent: 100 }] };
     expectHome(homeOfSale(disputed, [a, b], [slot(101, "09:00", "17:00"), slot(102, "10:00", "18:00")], later), "shift", "owner_split", whole100(a, 1_001));
+  });
+});
+
+// The people registry feeds the rule (ecosystem package C2): its schedule slots with their weekdays and validity, a
+// person's slot for every login of theirs, and «left the team» from the person's state beside the login's end.
+describe("the people registry's slots and leaving", () => {
+  const minute = (at: string) => Number(at.slice(0, 2)) * 60 + Number(at.slice(3));
+  const dateAt = (at: string) => new Date(msk(at));
+  const slot = (personId: number, start: string, end: string, extra: Partial<RuleSlot> = {}): RuleSlot => ({
+    personId, pageId: null, startMinute: minute(start), endMinute: minute(end), weekdays: null, validFrom: null, validTo: null, ...extra,
+  });
+  const runs = (slots: RuleSlot[], personId: number, at: string, pageId: number | null = PAGE_A) => slotRuns(slots, { personId, pageId, at: msk(at) });
+  // 13 November 2026 is a Friday.
+  const weekdaysOnly: RuleWeekday[] = ["mon", "tue", "wed", "thu", "fri"];
+
+  it("runs a slot crossing midnight on the night after its last weekday, not the night after a day off", () => {
+    expect(weekdayOfDay("2026-11-13")).toBe("fri");
+    const evening = [slot(101, "18:00", "02:00", { weekdays: weekdaysOnly })];
+    expect(runs(evening, 101, "2026-11-13 18:00")).toBe(true);
+    // Saturday past midnight: Friday's slot still runs, to 02:00.
+    expect(runs(evening, 101, "2026-11-14 01:59")).toBe(true);
+    expect(runs(evening, 101, "2026-11-14 02:00")).toBe(false);
+    // Saturday evening and the nights after Saturday and Sunday: no slot began.
+    expect(runs(evening, 101, "2026-11-14 18:30")).toBe(false);
+    expect(runs(evening, 101, "2026-11-15 01:00")).toBe(false);
+    expect(runs(evening, 101, "2026-11-16 01:00")).toBe(false);
+    expect(runs(evening, 101, "2026-11-16 18:00")).toBe(true);
+    // No weekdays: every day.
+    expect(runs([slot(101, "18:00", "02:00")], 101, "2026-11-15 01:00")).toBe(true);
+  });
+
+  it("settles a junction by the slot of the day it began", () => {
+    const slots = [slot(101, "18:00", "02:00", { weekdays: weekdaysOnly }), slot(102, "00:00", "08:00")];
+    // Friday's evening slot runs past midnight beside the night one: both run, nobody wrote — the owner decides.
+    const friday = shift(101, "2026-11-13 18:00", "2026-11-14 02:10");
+    const fridayNight = shift(102, "2026-11-13 23:55", "2026-11-14 08:00");
+    const afterFriday = sale("subscription", "2026-11-14 01:00", 4_000, friday, fridayNight);
+    expectHome(homeOfSale(afterFriday, [friday, fridayNight], slots, later), "decide", "no_last_writer");
+    // The evening chatter worked Saturday too, outside her weekdays: past midnight only the night slot runs.
+    const saturday = shift(101, "2026-11-14 18:00", "2026-11-15 02:10");
+    const saturdayNight = shift(102, "2026-11-14 23:55", "2026-11-15 08:00");
+    const afterSaturday = sale("subscription", "2026-11-15 01:00", 4_000, saturday, saturdayNight);
+    expectHome(homeOfSale(afterSaturday, [saturday, saturdayNight], slots, later), "shift", "slot_owner", whole100(saturdayNight, 4_000));
+  });
+
+  it("lets a page's own line stand for the every-page one only on the days it is valid", () => {
+    const slots = [slot(101, "18:00", "02:00"), slot(101, "18:00", "00:00", { pageId: PAGE_A, validTo: "2026-11-10" }),
+      slot(101, "18:00", "23:00", { pageId: PAGE_A, validFrom: "2026-11-12" })];
+    // The page's line began the 10th: its 00:00 end holds past midnight, though the 11th has no line of the page.
+    expect(runs(slots, 101, "2026-11-11 01:00")).toBe(false);
+    expect(runs(slots, 101, "2026-11-10 23:30")).toBe(true);
+    // The 11th: no line of the page is valid, the every-page one runs there to 02:00.
+    expect(runs(slots, 101, "2026-11-12 01:00")).toBe(true);
+    // The 12th: the page's new line, to 23:00.
+    expect(runs(slots, 101, "2026-11-12 23:30")).toBe(false);
+    expect(runs(slots, 101, "2026-11-12 23:30", 2)).toBe(true);
+    // A page's line valid that day stands for the every-page one on its days off too: off its weekdays nothing runs there.
+    const weekdaysOnPage = [slot(101, "18:00", "02:00"), slot(101, "18:00", "00:00", { pageId: PAGE_A, weekdays: weekdaysOnly })];
+    expect(runs(weekdaysOnPage, 101, "2026-11-14 19:00")).toBe(false);
+    expect(runs(weekdaysOnPage, 101, "2026-11-14 19:00", 2)).toBe(true);
+  });
+
+  it("gives a person's slot to every login of theirs, and none to a person with no login", () => {
+    const row = (id: number, personId: number, extra: Partial<PersonScheduleSlotRow> = {}): PersonScheduleSlotRow => ({
+      id, personId, pageId: null, pageLabel: null, startMinute: 1080, endMinute: 0, weekdays: null, validFrom: null, validTo: null, ...extra,
+    });
+    const slots = [
+      row(1, 7, { weekdays: ["mon", "sat"] }),
+      row(2, 7, { pageId: PAGE_A, pageLabel: "page-a", endMinute: 1440 }),
+      row(3, 8),
+      // Ended before the days asked about.
+      row(4, 9, { validTo: "2026-11-01" }),
+      row(5, 9, { validFrom: "2026-11-02" }),
+    ];
+    const logins = [{ personId: 7, userId: 101 }, { personId: 7, userId: 111 }, { personId: 9, userId: 103 }];
+    const got = ruleSlotsOf({ slots, logins, from: dateAt("2026-11-09 00:00"), to: dateAt("2026-11-12 00:00") });
+    expect(got).toEqual([
+      { personId: 101, pageId: null, startMinute: 1080, endMinute: 0, weekdays: ["mon", "sat"], validFrom: null, validTo: null },
+      { personId: 111, pageId: null, startMinute: 1080, endMinute: 0, weekdays: ["mon", "sat"], validFrom: null, validTo: null },
+      { personId: 101, pageId: PAGE_A, startMinute: 1080, endMinute: 1440, weekdays: null, validFrom: null, validTo: null },
+      { personId: 111, pageId: PAGE_A, startMinute: 1080, endMinute: 1440, weekdays: null, validFrom: null, validTo: null },
+      { personId: 103, pageId: null, startMinute: 1080, endMinute: 0, weekdays: null, validFrom: "2026-11-02", validTo: null },
+    ]);
+    // A slot ending 24:00 runs to midnight.
+    expect(slotRuns(got, { personId: 111, pageId: PAGE_A, at: msk("2026-11-10 23:59") })).toBe(true);
+    expect(slotRuns(got, { personId: 111, pageId: PAGE_A, at: msk("2026-11-11 00:00") })).toBe(false);
+  });
+
+  it("dates a sender's leaving by the first of the login's end and the person's leaving", () => {
+    const none = { disabledAt: null, deletedAt: null, personLeft: null };
+    expect(leftAtOf(none)).toBeNull();
+    // A login with no person: its own end, as before the registry.
+    expect(leftAtOf({ ...none, disabledAt: dateAt("2026-11-06 12:00"), deletedAt: dateAt("2026-11-08 12:00") })).toBe(msk("2026-11-06 12:00"));
+    // The person left on a known day: from its Moscow midnight, the login still alive.
+    expect(leftAtOf({ ...none, personLeft: { leftOn: "2026-11-04", recordedAt: dateAt("2026-11-12 11:51") } })).toBe(msk("2026-11-04 00:00"));
+    // The day unknown: from when the registry came to say so.
+    expect(leftAtOf({ ...none, personLeft: { leftOn: null, recordedAt: dateAt("2026-11-12 11:51") } })).toBe(msk("2026-11-12 11:51"));
+    // Both: the first.
+    expect(leftAtOf({ ...none, deletedAt: dateAt("2026-11-03 09:00"), personLeft: { leftOn: "2026-11-04", recordedAt: dateAt("2026-11-12 11:51") } }))
+      .toBe(msk("2026-11-03 09:00"));
+    // The rule reads it: the PPV of a sender whose person left goes by the shift it was bought in.
+    const holder = shift(101, "2026-11-05 13:00", "2026-11-05 20:00");
+    const leftAt = leftAtOf({ ...none, personLeft: { leftOn: "2026-11-04", recordedAt: dateAt("2026-11-12 11:51") } });
+    expectHome(homeOfSale(ppvBy(sale("ppv", "2026-11-05 14:00", 24_000, holder), 102, "chatter", leftAt), [holder], [], later),
+      "shift", "ppv_sender_left", whole100(holder, 24_000));
+  });
+
+  it("reads a slots file written before weekdays as every day", () => {
+    expect(slotsOfFile([{ personId: 101, pageId: null, startMinute: 960, endMinute: 0, validFrom: null, validTo: null }]))
+      .toEqual([{ personId: 101, pageId: null, startMinute: 960, endMinute: 0, weekdays: null, validFrom: null, validTo: null }]);
+    expect(() => slotsOfFile([{ personId: 101, startMinute: 960, endMinute: 0, weekdays: ["fri", "funday"] }])).toThrow(/weekdays/);
+  });
+});
+
+// The comparison's range (sale-rule-compare.ts): a work is whole in the day of its middle, as Workboard counts it.
+describe("the comparison's range edge", () => {
+  const iso = (at: string) => new Date(msk(at)).toISOString();
+  const work = (user: number, from: string, to: string): AgentTeamWork => ({
+    ref: `${user}:${iso(from)}`, userId: user, username: `chatter-${user}`, role: "chatter", kind: "shift", startedAt: iso(from),
+    endedAt: iso(to), ongoing: false, workedMinutes: 300, pages: [{ pageLabel: "page-a", messages: 40, salesFrom: iso(from) }],
+  });
+  const teamSale = (ref: string, at: string, net: number, ...holders: AgentTeamWork[]): AgentTeamSale => ({
+    transactionRef: ref, pageLabel: "page-a", platform: "onlyfans", fanRef: "fan-1", kind: "tip", netMills: net, occurredAt: iso(at),
+    holders: holders.map((one) => one.ref), ppvSender: null, ppvSentAt: null, ppvWithoutAuthor: false, postTip: false, campaign: false,
+    lastWriterUserId: null, writers: [], marks: [], resolution: null,
+  });
+  const factRow = (ref: string, at: string, net: number, user: number, holder: AgentTeamWork, day: string): LedgerFactHome => ({
+    ref, seq: 0, window: "w", at: iso(at), page: "page-a", kind: "tip", netMicros: net * 1000, home: "shift", reason: "holder",
+    userId: user, username: `chatter-${user}`, person: null, workRef: holder.ref, shareMicros: net * 1000, day,
+  });
+
+  it("counts an evening shift's sales past the last midnight in its day, and leaves the next day's shifts out", () => {
+    const evening = work(101, "2026-11-11 18:00", "2026-11-12 02:00");
+    const nextMorning = work(102, "2026-11-12 09:00", "2026-11-12 15:00");
+    const sales = [
+      teamSale("1", "2026-11-11 20:00", 300_000, evening),
+      teamSale("2", "2026-11-12 01:00", 430_000, evening),
+      teamSale("3", "2026-11-12 10:00", 50_000, nextMorning),
+    ];
+    const answer: AgentTeamSalesResponse = {
+      from: iso("2026-11-10 00:00"), to: iso("2026-11-13 00:00"), workFrom: iso("2026-11-02 00:00"), workTo: iso("2026-11-12 18:00"),
+      pages: ["page-a"], works: [evening, nextMorning], sales, serverNow: iso("2026-11-12 18:00"),
+    };
+    const ledger: LedgerExport = {
+      windows: [], works: new Map(), sales: new Map(), pages: ["page-a"], claims: [], layouts: [], layoutLines: [], posted: [],
+      homes: [
+        factRow("1", "2026-11-11 20:00", 300_000, 101, evening, "2026-11-11"),
+        factRow("2", "2026-11-12 01:00", 430_000, 101, evening, "2026-11-11"),
+        factRow("3", "2026-11-12 10:00", 50_000, 102, nextMorning, "2026-11-12"),
+      ],
+    };
+    const report = compareSaleRule({
+      first: "2026-11-11", last: "2026-11-11", hubNow: new Date(msk("2026-11-12 18:00")), hub: [{ window: null, answer }], ledger,
+      leftAt: new Map(), pageIds: new Map([["page-a", PAGE_A]]), slots: [], slotsSource: "none", platformRefOf: new Map(),
+      workboard: [{ userId: 101, username: "chatter-101", daily: [{ date: "2026-11-11", salesNetMills: 730_000 }] }],
+    });
+    expect(report.sales.map((one) => one.ref)).toEqual(["1", "2"]);
+    expect(report.sales.every((one) => one.same)).toBe(true);
+    expect(report.days.map(({ person, day, workboardMills, ruleMills, factsMills }) => ({ person, day, workboardMills, ruleMills, factsMills })))
+      .toEqual([{ person: "chatter-101", day: "2026-11-11", workboardMills: 730_000, ruleMills: 730_000, factsMills: 730_000 }]);
   });
 });
