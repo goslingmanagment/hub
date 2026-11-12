@@ -10,6 +10,6 @@ export interface OfapiUsageResult {
 }
 export interface OfapiKeyScopeApply {
   credentialFingerprint: string; expectedVersion: number;
-  capabilities: ("reads" | "commands" | "webhooks" | "exports" | "uploads" | "links")[] | null;
+  capabilities: ("reads" | "commands" | "webhooks" | "exports" | "uploads" | "links" | "vault")[] | null;
   accountIds: string[] | null; visibility: "unknown" | "declared_team" | "declared_restricted";
 }

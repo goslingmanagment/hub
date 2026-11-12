@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import {
   ofapiUsageResultSchema, ofapiUsageWindowSchema, ofapiKeyScopeSchema,
-  type OfapiUsageWindow, type OfapiKeyScopeApply,
+  type OfapiUsageWindow, type OfapiKeyScopeApply, type OfapiCapability,
 } from "@agency_hub_core/contracts";
 import { applyOfapiKeyDeclaration, compareOfapiVendorUsage, getOfapiKeyDeclaration, saveOfapiVendorUsage, type Database } from "@agency_hub_core/db";
 import type { AppContext } from "../bootstrap.ts";
@@ -67,22 +67,64 @@ export async function applyOfapiKeyScope(app: AppContext, input: OfapiKeyScopeAp
   return getOfapiKeyScope(app);
 }
 
+/**
+ * The three writes the `vault` capability lets through, each with the only method and
+ * path it may carry: uploading a file into the vault, creating a vault list, adding
+ * vault media to a list. A label is trusted only together with its request, so a vault
+ * label on a post, message or other upload path is refused before the network.
+ */
+const VAULT_WRITES: Record<string, { method: string; path: RegExp }> = {
+  ofapi_upload_vault: { method: "POST", path: /^\/([^/]+)\/media\/vault$/ },
+  ofapi_command_action_vault_list_create: { method: "POST", path: /^\/([^/]+)\/media\/vault\/lists$/ },
+  ofapi_command_action_vault_list_add_media: { method: "POST", path: /^\/([^/]+)\/media\/vault\/lists\/[A-Za-z0-9_-]{1,128}\/media$/ },
+};
+
+/** Does a vault-labelled write carry exactly its own method, path and account? */
+function vaultWriteMatches(input: { operation: string; method: string; pathname?: string; accountId?: string | null }) {
+  const shape = VAULT_WRITES[input.operation];
+  if (!shape || input.method !== shape.method || input.pathname === undefined) return false;
+  const match = shape.path.exec(input.pathname);
+  if (!match) return false;
+  let account: string;
+  try { account = decodeURIComponent(match[1]!); } catch { return false; }
+  return /^acct_[A-Za-z0-9_-]+$/.test(account) && (!input.accountId || input.accountId === account);
+}
+
+/**
+ * The declared capabilities any one of which lets an OFAPI request through. A vault write
+ * is still an upload or a command, and an upload's status read is still an upload, so a key
+ * declared for those keeps sending them as before.
+ */
+export function ofapiAcceptedCapabilities(input: { operation: string; method: string; pathname?: string; accountId?: string | null }): OfapiCapability[] {
+  // Reading an upload's status is a read: the outcome of a started upload stays knowable after the key narrows.
+  if (input.operation === "ofapi_upload_status" && (input.method === "GET" || input.method === "HEAD")) return ["reads", "uploads"];
+  if (vaultWriteMatches(input)) return ["vault", input.operation === "ofapi_upload_vault" ? "uploads" : "commands"];
+  return [/webhook/.test(input.operation) ? "webhooks"
+    : /export/.test(input.operation) ? "exports"
+      : /upload/.test(input.operation) ? "uploads"
+        : /smart_link|pixel|postback/.test(input.operation) ? "links"
+          : input.method === "GET" || input.method === "HEAD" ? "reads" : "commands"];
+}
+
 /** Unknown is observed honestly; explicit restrictions fail before egress, independently of Hub ACL. */
 export async function assertOfapiConfiguredAccess(db: Database, fingerprint: string, input: {
-  operation: string; accountId?: string | null; method: string;
+  operation: string; accountId?: string | null; method: string; pathname?: string;
 }) {
   // Free identity and credit diagnostics remain usable to repair a restricted credential.
   if (["ofapi_credential_preflight", "ofapi_balance_ping", "ofapi_vendor_usage"].includes(input.operation)) return;
+  // A vault label is checked against its request for every key, declared or not: a mislabelled
+  // request would otherwise pass as a vault write and be counted as one.
+  if (input.operation in VAULT_WRITES && !vaultWriteMatches(input)) {
+    throw new OfapiKeyPermissionDeniedError(`OFAPI ${input.operation} does not match its method and path`);
+  }
   let policy: Awaited<ReturnType<typeof getOfapiKeyDeclaration>>;
   try { policy = await getOfapiKeyDeclaration(db, fingerprint); }
   catch (error) { throw new OfapiKeyScopeUnavailableError("OFAPI key scope declaration unavailable before dispatch", { cause: error }); }
   if (!policy) return;
-  const capability = /webhook/.test(input.operation) ? "webhooks"
-    : /export/.test(input.operation) ? "exports"
-      : /upload/.test(input.operation) ? "uploads"
-        : /smart_link|pixel|postback/.test(input.operation) ? "links"
-          : input.method === "GET" || input.method === "HEAD" ? "reads" : "commands";
-  if (policy.capabilities && !policy.capabilities.includes(capability)) throw new OfapiKeyPermissionDeniedError(`OFAPI key declaration does not allow ${capability}`);
+  const accepted = ofapiAcceptedCapabilities(input);
+  if (policy.capabilities && !accepted.some(capability => policy.capabilities!.includes(capability))) {
+    throw new OfapiKeyPermissionDeniedError(`OFAPI key declaration does not allow ${accepted.join(" or ")}`);
+  }
   if (input.accountId && policy.account_ids && !policy.account_ids.includes(input.accountId)) {
     throw new OfapiKeyPermissionDeniedError("OFAPI key declaration does not allow this account");
   }

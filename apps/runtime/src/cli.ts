@@ -2605,7 +2605,7 @@ export function buildProgram() {
   program
     .command("ofapi:key-scope")
     .description("Print the declared restrictions of the configured OFAPI key, or replace its capabilities (--apply); audited")
-    .option("--capabilities <list>", "comma list of reads,commands,webhooks,exports,uploads,links, or 'all' for no restriction")
+    .option("--capabilities <list>", "comma list of reads,commands,webhooks,exports,uploads,links,vault, or 'all' for no restriction; vault alone allows only the vault upload, vault list create and add media to a vault list")
     .option("--owner-user-id <id>", "the active owner on whose word the restriction changes", parsePositiveInt)
     .option("--apply", "write the declaration (without it, print what would change)")
     .action(async (options: { capabilities?: string; ownerUserId?: number; apply?: boolean }) => {

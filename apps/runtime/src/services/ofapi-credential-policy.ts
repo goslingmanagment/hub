@@ -87,7 +87,7 @@ export function projectOfapiAccountsRoster(input: { status: number; body: string
 /** Shared by boot and registration; excludes session material from roster evidence. */
 export function ofapiCredentialPolicy(db: Database, config: AppContext["config"], logger: AppContext["logger"]) {
   return {
-    beforeOperationRequest: (request: { operation: string; accountId?: string | null; method: string }) =>
+    beforeOperationRequest: (request: { operation: string; accountId?: string | null; method: string; pathname?: string }) =>
       assertOfapiConfiguredAccess(db, createHash("sha256").update(config.ofapiApiKey ?? "").digest("hex"), request),
     beforeAccountRequest: async (pageId: number | null | undefined, accountId: string, generation?: number) => {
       try { return await checkOfapiCurrentBinding(db, pageId, accountId, generation); }
