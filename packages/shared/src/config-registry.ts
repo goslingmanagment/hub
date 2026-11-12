@@ -53,7 +53,9 @@ export type ConfigStringFormat =
   | "ai-feature-models"
   | "ai-feature-efforts"
   | "ai-feature-windows"
-  | "ai-account-credits";
+  | "ai-account-credits"
+  | "people-message-kinds"
+  | "people-message-chats";
 
 /** How (and whether) an override for this key actually reaches the runtime. This is
  *  the authoritative wiring class, orthogonal to `editability` (the policy class):
@@ -161,6 +163,10 @@ export const CONFIG_DESCRIPTORS: readonly ConfigDescriptor[] = [
   // avoids two conflicting sources of truth (same rule as the Telegram secrets).
   { key: "telegramReportHourUtc", envName: "TELEGRAM_REPORT_HOUR", configField: "telegramReportHourUtc", kind: "number", subsystem: "Telegram", label: "Telegram report hour (UTC, default)", default: "9", editability: NEVER, runtimeApply: "none", comparable: true, min: 0, max: 23, note: "Default only; the operational value is managed in Notifications." },
   { key: "telegramRussian", envName: "TELEGRAM_RUSSIAN", configField: "telegramRussian", kind: "boolean", subsystem: "Telegram", label: "Telegram messages in Russian", default: "false", editability: EDITABLE, runtimeApply: "live", comparable: true, note: "Hub's alerts, the daily report and the alert digest in Russian: the same facts, recipients and schedule, only the language. Off: English. Read at every send; `cli telegram compare` shows both side by side." },
+  // Сообщения людям (package S): the server's own sender, off twice — no token here, no kind on.
+  { key: "peopleTelegramBotToken", envName: "PEOPLE_TELEGRAM_BOT_TOKEN", configField: "peopleTelegramBotToken", kind: "secret", subsystem: "Telegram", label: "Telegram bot token for messages to people", default: "(unset)", editability: NEVER, runtimeApply: "none", comparable: false, note: "The bot that sends the kinds of «Система → Сообщения людям» to people and work chats. Not the owner's alerts bot. Unset: nothing can leave, every message is held. Env only, never stored or shown." },
+  { key: "peopleMessageKinds", envName: "PEOPLE_MESSAGE_KINDS", configField: "peopleMessageKinds", kind: "string", subsystem: "Telegram", label: "Messages to people: kinds turned on", default: "{}", editability: EDITABLE, runtimeApply: "live", comparable: true, format: "people-message-kinds", note: "JSON kind -> the ISO moment it was turned on; only an event after it sends. Turned on and off one kind at a time on «Система → Сообщения людям». {}: none. Read at every pass." },
+  { key: "peopleMessageChats", envName: "PEOPLE_MESSAGE_CHATS", configField: "peopleMessageChats", kind: "string", subsystem: "Telegram", label: "Messages to people: work chats per model", default: "{}", editability: EDITABLE, runtimeApply: "live", comparable: true, format: "people-message-chats", note: "JSON keyed by model slug: {\"reports\": {\"chatId\", \"topicId\"}, \"customs\": {…}} — the chatters' «Отчётность» and the model group's customs topic. A model without its chat gets no group message. {}: none. Read at every pass." },
   { key: "serviceEgressProxyUrl", envName: "SERVICE_EGRESS_PROXY_URL", configField: "serviceEgressProxyUrl", kind: "complex", subsystem: "Security", label: "Service egress proxy URL", default: "(unset)", editability: NEVER, runtimeApply: "none", comparable: false, note: "SOCKS5 route shared by ElevenLabs and Telegram; all three service-egress values are boot-only and must be configured together." },
   { key: "serviceEgressProxyUsername", envName: "SERVICE_EGRESS_PROXY_USERNAME", configField: "serviceEgressProxyUsername", kind: "secret", subsystem: "Security", label: "Service egress proxy username", default: "(unset)", editability: NEVER, runtimeApply: "none", comparable: false },
   { key: "serviceEgressProxyPassword", envName: "SERVICE_EGRESS_PROXY_PASSWORD", configField: "serviceEgressProxyPassword", kind: "secret", subsystem: "Security", label: "Service egress proxy password", default: "(unset)", editability: NEVER, runtimeApply: "none", comparable: false },

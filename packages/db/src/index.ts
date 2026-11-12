@@ -57,6 +57,7 @@ export * from "./repositories/shift-rows.ts";
 export * from "./repositories/sale-homes.ts";
 // The shift report as an object (0400): one per shift row, its draft edits, its versions, «мимо площадки».
 export * from "./repositories/shift-handins.ts";
+export * from "./repositories/people-messages.ts";
 // OnlyFans unlocks paired with their purchases, one to one (the shift report, «Продажи»).
 export * from "./repositories/onlyfans-unlocks.ts";
 // Chat Memory week 5: the numbers of a chatter's shift.

@@ -17,6 +17,7 @@ import type { ConfigStringFormat } from "./config-registry.ts";
 import { parseAiAccountCredits } from "./ai-account-credits.ts";
 import { parseAiFeatureEfforts, parseAiFeatureModels, parseAiFeatureWindows } from "./ai-feature-settings.ts";
 import { parseCrossSpendersLists } from "./cross-spenders-lists.ts";
+import { parsePeopleMessageChats, parsePeopleMessageKinds } from "./people-messages.ts";
 
 export type ChatExtensionParseResult<T> = { ok: true; value: T } | { ok: false; error: string };
 
@@ -234,6 +235,10 @@ function parseConfigStringFormat(format: ConfigStringFormat, value: string): Cha
       return parseAiFeatureWindows(value);
     case "ai-account-credits":
       return parseAiAccountCredits(value);
+    case "people-message-kinds":
+      return parsePeopleMessageKinds(value);
+    case "people-message-chats":
+      return parsePeopleMessageChats(value);
     default: {
       // A new format without a parser fails closed, and fails the build first.
       const unhandled: never = format;

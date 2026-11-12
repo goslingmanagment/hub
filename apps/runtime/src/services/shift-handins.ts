@@ -639,8 +639,13 @@ function versionSummary(version: HandinVersionRow, names: Map<number, string>, k
 
 /** The newest version as today's posts in «Отчётность». */
 function postsOf(version: HandinVersionRow, subject: Subject, context: ViewContext): ShiftReportResponse["posts"] {
+  return modelPostsOf(version, subject, context).map((post) => ({ modelName: post.modelName, text: post.text }));
+}
+
+/** The version's posts, one per model, with the model's slug (the copy to «Отчётность» goes by it). */
+function modelPostsOf(version: HandinVersionRow, subject: Pick<Subject, "shift" | "person">, context: Pick<ViewContext, "catalog" | "names" | "fans">) {
   const tag = subject.person?.reportTag ?? `#${subject.person?.code ?? context.names.get(subject.shift.userId) ?? "чаттер"}`;
-  const texts = postTexts({
+  return postTexts({
     reportDate: subject.shift.reportDate,
     tag,
     pages: version.pages.map((page) => {
@@ -658,7 +663,27 @@ function postsOf(version: HandinVersionRow, subject: Subject, context: ViewConte
     comment: version.comment,
     offPlatform: version.offPlatform.filter((line) => line.state === "pending" || line.state === "confirmed"),
   });
-  return texts.map((post) => ({ modelName: post.modelName, text: post.text }));
+}
+
+/**
+ * The posts of a handed-in version as «Скопировать пост» gives them, one per model with its slug: the text the
+ * server's copy to «Отчётность» sends (people-messages, package S). Null — the shift or the version is gone.
+ */
+export async function readHandinVersionPosts(
+  app: Pick<HandinApp, "db">,
+  input: { shiftId: number; version: number },
+): Promise<{ reportDate: string; startedAt: Date; endedAt: Date; posts: Array<{ modelSlug: string; modelName: string; text: string }> } | null> {
+  const { db } = app;
+  const shift = await findHandinShift(db, input.shiftId);
+  if (shift === null || shift.state === "dropped") return null;
+  const handin = await findHandinByShift(db, shift.id);
+  const version = handin === null ? undefined : (await listHandinVersions(db, handin.id)).find((one) => one.version === input.version);
+  if (version === undefined) return null;
+  const person = await findHandinPersonOfUser(db, shift.userId);
+  const catalog = await pageCatalog(db);
+  const names = await listHandinNames(db, [shift.userId]);
+  const fans = await listHandinSaleFans(db, version.lines.flatMap((line) => (line.transactionId === null ? [] : [line.transactionId])));
+  return { reportDate: shift.reportDate, startedAt: shift.startedAt, endedAt: shift.endedAt, posts: modelPostsOf(version, { shift, person }, { catalog, names, fans }) };
 }
 
 // ── Reads ────────────────────────────────────────────────────────────────────
