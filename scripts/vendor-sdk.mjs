@@ -135,6 +135,15 @@ for (const file of [
   "routes-chatter-stats.ts",
   // Narrow device-token profiles: the barrel re-exports them.
   "client-token-scopes.ts",
+  // One sign-in across the names (#1213): the hand-off routes and the narrow web session's list; routes.ts spreads
+  // the routes in, the barrel re-exports both.
+  "routes-signin.ts",
+  "web-session-scopes.ts",
+  // Matters (#1210) and the people registry (#1212): routes.ts spreads their routes in, the barrel re-exports both.
+  "matters.ts",
+  "routes-matters.ts",
+  "people.ts",
+  "routes-people.ts",
   "routes-ofapi-vendor.ts",
   "ofapi-vendor-usage.ts",
   "routes-ofapi-collection.ts",
