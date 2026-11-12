@@ -183625,7 +183625,7 @@
         "tags": [
           "agent"
         ],
-        "description": "Database only. A version is served as soon as it is committed, in the order the feed placed it (`seq`): a version committed after a later one is placed after it, so `next` never passes a version not served yet. A version with a line on a page outside the key's grant is left out.",
+        "description": "Database only. A version is served as soon as it is committed, in the order the feed placed it (`seq`): a version committed after a later one is placed after it, so `next` never passes a version not served yet. A version with a line on a page outside the key's grant is held back and listed in `held` on every read until the key may read it; then it is served in `reports` at its own place.",
         "parameters": [
           {
             "schema": {
@@ -184052,6 +184052,61 @@
                         "additionalProperties": false
                       }
                     },
+                    "held": {
+                      "default": [],
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "integer",
+                            "exclusiveMinimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "seq": {
+                            "type": "integer",
+                            "exclusiveMinimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "shiftId": {
+                            "type": "integer",
+                            "exclusiveMinimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "person": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "reportDate": {
+                            "type": "string"
+                          },
+                          "reason": {
+                            "type": "string",
+                            "enum": [
+                              "page_outside_key"
+                            ]
+                          },
+                          "pageLabels": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "seq",
+                          "shiftId",
+                          "person",
+                          "reportDate",
+                          "reason",
+                          "pageLabels"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
                     "next": {
                       "type": "string"
                     },
@@ -184061,6 +184116,7 @@
                   },
                   "required": [
                     "reports",
+                    "held",
                     "next",
                     "serverNow"
                   ],
@@ -194022,6 +194078,38 @@
                                 "type": "null"
                               }
                             ]
+                          },
+                          "decision": {
+                            "default": null,
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "enum": [
+                                      "split",
+                                      "nobody",
+                                      "pot"
+                                    ]
+                                  },
+                                  "pot": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "kind",
+                                  "pot"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
                           }
                         },
                         "required": [
@@ -194041,7 +194129,8 @@
                           "lastWriterUserId",
                           "writers",
                           "marks",
-                          "resolution"
+                          "resolution",
+                          "decision"
                         ],
                         "additionalProperties": false
                       }
@@ -273100,6 +273189,38 @@
                         }
                       ]
                     },
+                    "reports": {
+                      "default": [],
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "userId": {
+                            "type": "integer",
+                            "exclusiveMinimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "name": {
+                            "type": "string"
+                          },
+                          "shiftId": {
+                            "type": "integer",
+                            "exclusiveMinimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "reportDate": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "userId",
+                          "name",
+                          "shiftId",
+                          "reportDate"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
                     "serverNow": {
                       "type": "string"
                     }
@@ -273112,6 +273233,7 @@
                     "facts",
                     "outcomes",
                     "decision",
+                    "reports",
                     "serverNow"
                   ],
                   "additionalProperties": false
@@ -274368,6 +274490,38 @@
                         }
                       ]
                     },
+                    "reports": {
+                      "default": [],
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "userId": {
+                            "type": "integer",
+                            "exclusiveMinimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "name": {
+                            "type": "string"
+                          },
+                          "shiftId": {
+                            "type": "integer",
+                            "exclusiveMinimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "reportDate": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "userId",
+                          "name",
+                          "shiftId",
+                          "reportDate"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
                     "serverNow": {
                       "type": "string"
                     }
@@ -274380,6 +274534,7 @@
                     "facts",
                     "outcomes",
                     "decision",
+                    "reports",
                     "serverNow"
                   ],
                   "additionalProperties": false

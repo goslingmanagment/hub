@@ -41,7 +41,9 @@ import {
   listHandinShifts,
   listHandinsOfShifts,
   listHandinVersions,
+  holdHandinFeedVersions,
   listHandinVersionsAfter,
+  takeHandinFeedHeld,
   placeHandinVersionsInFeed,
   listMatterPageLabels,
   listOffPlatform,
@@ -1309,12 +1311,23 @@ export async function saleLineFacts(app: HandinApp, shiftId: number, transaction
  */
 export async function readShiftReportsFeed(
   app: HandinApp,
-  input: { pageIds: readonly number[]; since?: string | undefined; limit: number },
+  input: { pageIds: readonly number[]; since?: string | undefined; limit: number; agentKeyId?: number | undefined },
   now: Date = new Date(),
 ): Promise<AgentShiftReportsFeedResponse> {
   const afterSeq = input.since === undefined ? 0 : Number(input.since);
   await placeHandinVersionsInFeed(app.db);
-  const rows = await listHandinVersionsAfter(app.db, { afterSeq, limit: input.limit, pageIds: input.pageIds });
+  const read = await listHandinVersionsAfter(app.db, { afterSeq, limit: input.limit, pageIds: input.pageIds });
+  // Held back for the key's pages (review R2b-4): kept per key, listed on its every read until it may read them, then
+  // served once, ahead of the new ones, at their own place — the cursor passing them never loses them.
+  let late: typeof read.served = [];
+  let held = read.held;
+  if (input.agentKeyId !== undefined) {
+    const before = await takeHandinFeedHeld(app.db, { agentKeyId: input.agentKeyId, pageIds: input.pageIds });
+    await holdHandinFeedVersions(app.db, { agentKeyId: input.agentKeyId, versionIds: read.held.map((one) => one.id) });
+    late = before.served;
+    held = [...before.held.filter((one) => !read.held.some((other) => other.id === one.id)), ...read.held];
+  }
+  const rows = [...late, ...read.served];
   return {
     reports: rows.map((row) => ({
       id: row.id,
@@ -1360,7 +1373,8 @@ export async function readShiftReportsFeed(
         byUserId: row.actorUserId,
       },
     })),
-    next: String(rows.at(-1)?.seq ?? afterSeq),
+    held: held.map((one) => ({ ...one, reason: "page_outside_key" as const })),
+    next: String(read.last ?? afterSeq),
     serverNow: now.toISOString(),
   };
 }

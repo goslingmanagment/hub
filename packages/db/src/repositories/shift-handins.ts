@@ -518,34 +518,88 @@ export async function placeHandinVersionsInFeed(db: Database): Promise<number> {
   });
 }
 
-/** The versions placed after a place of the feed, in the feed's order, those with a line off the pages left out. */
-export async function listHandinVersionsAfter(
-  db: Database,
-  input: { afterSeq: number; limit: number; pageIds: readonly number[] },
-): Promise<Array<HandinVersionRow & { seq: number; shiftId: number; userId: number; personCode: string | null; reportDate: string }>> {
+/** A version of the feed as it is served. */
+export type HandinFeedRow = HandinVersionRow & { seq: number; shiftId: number; userId: number; personCode: string | null; reportDate: string };
+
+/** A version the feed held back for the key's pages: who and when, and the pages outside them; no sums, no lines. */
+export interface HandinFeedHeld {
+  id: number;
+  seq: number;
+  shiftId: number;
+  person: string | null;
+  reportDate: string;
+  /** The version's pages outside the key's pages. */
+  pageLabels: string[];
+}
+
+/** Feed rows by a condition, in the feed's order, each with the version's pages outside `pageIds`. */
+async function feedRows(db: Database, where: ReturnType<typeof sql>, pageIds: readonly number[], limit: number) {
   const result = await db.execute<Row>(sql`
     select ${VERSION_COLUMNS}, f.seq, h.shift_id, h.user_id, p.code as person_code,
-      to_char(coalesce(v.report_date, h.report_date), 'YYYY-MM-DD') as report_date
+      to_char(coalesce(v.report_date, h.report_date), 'YYYY-MM-DD') as report_date,
+      array(
+        select distinct line ->> 'pageLabel' from jsonb_array_elements(v.lines) as line
+        join pages pg on pg.label = line ->> 'pageLabel'
+        where not (pg.id = any(${ids(pageIds)}))
+        order by 1
+      ) as outside
     from shift_handin_feed f
     join shift_handin_versions v on v.id = f.version_id
     join shift_handins h on h.id = v.handin_id
     left join people p on p.id = h.person_id
-    where f.seq > ${input.afterSeq}
-      and not exists (
-        select 1 from jsonb_array_elements(v.lines) as line
-        join pages pg on pg.label = line ->> 'pageLabel'
-        where not (pg.id = any(${ids(input.pageIds)}))
-      )
+    where ${where}
     order by f.seq
-    limit ${input.limit}`);
-  return result.rows.map((row) => ({
-    ...versionOf(row),
-    seq: num(row.seq),
-    shiftId: num(row.shift_id),
-    userId: num(row.user_id),
-    personCode: text(row.person_code),
-    reportDate: String(row.report_date),
-  }));
+    limit ${limit}`);
+  const served: HandinFeedRow[] = [];
+  const held: HandinFeedHeld[] = [];
+  for (const row of result.rows) {
+    const outside = (Array.isArray(row.outside) ? row.outside : []).map(String);
+    const base = { seq: num(row.seq), shiftId: num(row.shift_id), userId: num(row.user_id), personCode: text(row.person_code), reportDate: String(row.report_date) };
+    if (outside.length > 0) {
+      held.push({ id: num(row.id), seq: base.seq, shiftId: base.shiftId, person: base.personCode, reportDate: base.reportDate, pageLabels: outside });
+      continue;
+    }
+    served.push({ ...versionOf(row), ...base });
+  }
+  const lastRow = result.rows.at(-1);
+  return { served, held, last: lastRow === undefined ? null : num(lastRow.seq) };
+}
+
+/**
+ * The versions placed after a place of the feed, in the feed's order, up to `limit` places: those of the pages served;
+ * a version with a line of a page outside them is held back (review R2b-4). `last` — the last place read, held or not:
+ * the next cursor.
+ */
+export async function listHandinVersionsAfter(
+  db: Database,
+  input: { afterSeq: number; limit: number; pageIds: readonly number[] },
+): Promise<{ served: HandinFeedRow[]; held: HandinFeedHeld[]; last: number | null }> {
+  return feedRows(db, sql`f.seq > ${input.afterSeq}`, input.pageIds, input.limit);
+}
+
+/**
+ * The versions the feed held back for an agent key (0407 `shift_handin_feed_held`), read again for its pages now:
+ * `served` — the key may read them now (released from the list), `held` — still held.
+ */
+export async function takeHandinFeedHeld(db: Database, input: { agentKeyId: number; pageIds: readonly number[] }): Promise<{ served: HandinFeedRow[]; held: HandinFeedHeld[] }> {
+  const kept = await db.execute<Row>(sql`select version_id from shift_handin_feed_held where agent_key_id = ${input.agentKeyId}`);
+  const versionIds = kept.rows.map((row) => num(row.version_id));
+  if (versionIds.length === 0) return { served: [], held: [] };
+  const read = await feedRows(db, sql`f.version_id = any(${ids(versionIds)})`, input.pageIds, versionIds.length);
+  if (read.served.length > 0) {
+    await db.execute(sql`
+      delete from shift_handin_feed_held where agent_key_id = ${input.agentKeyId} and version_id = any(${ids(read.served.map((row) => row.id))})`);
+  }
+  return { served: read.served, held: read.held };
+}
+
+/** Keeps the versions held back for an agent key: listed on its every read until it may read them. */
+export async function holdHandinFeedVersions(db: Database, input: { agentKeyId: number; versionIds: readonly number[] }): Promise<void> {
+  if (input.versionIds.length === 0) return;
+  await db.execute(sql`
+    insert into shift_handin_feed_held (agent_key_id, version_id)
+    select ${input.agentKeyId}, unnest(${ids(input.versionIds)})
+    on conflict do nothing`);
 }
 
 // ── Who the report is of ─────────────────────────────────────────────────────

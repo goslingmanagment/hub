@@ -1315,6 +1315,8 @@ Global flags: `--base-url`, `--fail-on-partial`, `--pretty`, `--help`.
 | `hub fan-watch` | Watched fans' new messages on your pages and when the page last wrote to them. Needs `read:messages`. |
 | `hub sale-context` | Each sale's fan, the PPV it bought and who wrote to the fan before it, for a shift report's check. Needs `read:team` and `read:money`. |
 | `hub sale-chain` | From one sale (Hub's id, or `--page` and `--ref`), its chain of money: whose it is and why, the shift, the report of that day, the accrual and the payout as states, no pay sums. Needs `read:team` and `read:money`. |
+| `hub sale decide\|cancel\|applied\|decisions` | «Чья продажа» «со слов»: record, cancel, mark taken into a post, list (`--open --md` is the memory file's list) the decisions about sales, in their one home. Writes need `write:shift_reports` with `--sender` and `--message`; see `agent-doors.md`, «Чья продажа» «со слов». |
+| `hub sale ask\|answer\|close\|questions` | Questions about whose a sale is: ask the owner or the chatters, answer in words, close, list (`--open --md`). Writes need `write:shift_reports`. |
 | `hub resolve` | A URL, slug, username or native id, turned into fan identities. Try this before concluding a fan does not exist. |
 | `hub person` | One fan across every granted page: identity, memberships, threads, money, bounded post-tip attribution, subscriptions. |
 | `hub timeline` | One fan's merged timeline across lanes (money, separate post-tip attribution, subscriptions, follows, message refs). |

@@ -396,7 +396,23 @@ export const agentShiftReportsFeedItemSchema = z.object({
 
 export const agentShiftReportsFeedResponseSchema = z.object({
   reports: z.array(agentShiftReportsFeedItemSchema),
-  /** Ask again with `since` = this (the last place served); the same as asked when nothing is new. */
+  /**
+   * The versions held back for the key (review R2b-4): each has a line of a page outside the key's pages. Who and when
+   * and which pages, no sums, no lines — the reader records a problem instead of never knowing. A held version is
+   * listed on every read until the key may read its pages; then the next read serves it in `reports`, ahead of the new
+   * ones, at its own `seq` (below the cursor): take every item of `reports` whatever its seq. The cursor passing a held
+   * version never loses it.
+   */
+  held: z.array(z.object({
+    id: intId,
+    seq: intId,
+    shiftId: intId,
+    person: z.string().nullable(),
+    reportDate: z.string(),
+    reason: z.enum(["page_outside_key"]),
+    pageLabels: z.array(z.string()),
+  })).default([]),
+  /** Ask again with `since` = this (the last place read, served or held); the same as asked when nothing is new. */
   next: z.string(),
   serverNow: isoTimestamp,
 });
@@ -533,7 +549,8 @@ export const shiftHandinRouteSchemas = {
     summary: "Every version of every shift report handed in, after a cursor: the ledger's feed (needs read:team and read:money)",
     description: "Database only. A version is served as soon as it is committed, in the order the feed placed it (`seq`): a "
       + "version committed after a later one is placed after it, so `next` never passes a version not served yet. A "
-      + "version with a line on a page outside the key's grant is left out.",
+      + "version with a line on a page outside the key's grant is held back and listed in `held` on every read until the key "
+      + "may read it; then it is served in `reports` at its own place.",
     querystring: agentShiftReportsFeedQuerySchema,
     response: { 200: agentShiftReportsFeedResponseSchema, ...agentErrors },
   },

@@ -83,9 +83,38 @@ update sale_owner_decisions set ledger_ref = ledger_ref - 'fanName' - 'note'
   where ledger_ref is not null and (ledger_ref ->> 'fanName' is not null or ledger_ref ->> 'note' is not null);
 update sale_claims set ledger_ref = ledger_ref - 'fanName' - 'note'
   where ledger_ref is not null and (ledger_ref ->> 'fanName' is not null or ledger_ref ->> 'note' is not null);
--- A dispute's title carries the page, the amount, the day and the people, never a fan's name: the titles of the
--- questions carried over (which quoted the ledger's question) say their page and people; an open one is titled in
--- full again by the next pass of the claims.
-update matters m set title = 'Вопрос «чья продажа» из ledger' || coalesce(': ' || nullif(concat_ws(', ', p.label, c.who_text), ''), '')
+-- A dispute's title carries the page, the amount, the day and the people, never a fan's name (review R2b-3c); a
+-- question says it is one, and one asked of the chatters that nobody answered says so and since when (review R2b-6).
+-- The titles of the questions carried over quoted the ledger's question: here they say their page and people; an open
+-- one is titled in full (amount, day, «5 нояб.») again by the next pass of the claims.
+update matters m
+  set title = case when c.ledger_ref ->> 'askedOf' = 'chatters'
+      then 'Вопрос чаттерам без ответа с ' || to_char(c.claimed_at at time zone 'Europe/Moscow', 'DD.MM')
+      else 'Вопрос «чья продажа» из ledger' end
+    || coalesce(': ' || nullif(concat_ws(', ', p.label, c.who_text), ''), '')
   from sale_claims c left join pages p on p.id = c.page_id
   where m.kind = 'sale.dispute' and m.reason_key = 'sale.dispute:q' || c.id::text;
+-- The owner's open disputes that are only questions asked of the chatters and never answered, tied to their sale.
+update matters m
+  set title = 'Вопрос чаттерам без ответа с ' || to_char(q.since at time zone 'Europe/Moscow', 'DD.MM')
+    || coalesce(': ' || nullif(concat_ws(', ', q.label, q.who), ''), '')
+  from (
+    select c.transaction_id, min(c.claimed_at) as since, max(p.label) as label, max(c.who_text) as who
+    from sale_claims c left join pages p on p.id = c.page_id
+    where c.kind = 'imported' and c.state = 'owner' and c.ledger_ref ->> 'askedOf' = 'chatters' and c.transaction_id is not null
+    group by c.transaction_id
+  ) q
+  where m.kind = 'sale.dispute' and m.state = 'open' and m.reason_key = 'sale.dispute:' || q.transaction_id::text
+    and not exists (
+      select 1 from sale_claims o where o.transaction_id = q.transaction_id and o.state in ('owner', 'asked') and o.kind in ('claim', 'double')
+    );
+
+-- shift_handin_feed_held — the versions the ledger's feed held back for an agent key (a line of a page outside the key's
+--   pages, review R2b-4): listed on every read of that key until it may read them, then served once — at their own
+--   place, ahead of the new ones — and removed here. The cursor passing a held version never loses it.
+create table if not exists shift_handin_feed_held (
+  agent_key_id bigint not null references agent_keys(id) on delete cascade,
+  version_id bigint not null references shift_handin_versions(id) on delete restrict,
+  held_at timestamptz not null default clock_timestamp(),
+  primary key (agent_key_id, version_id)
+);

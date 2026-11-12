@@ -296,10 +296,16 @@ async function syncClaimMatters(app: Pick<AppContext, "db" | "logger">, now: Dat
       key,
       kind: SALE_DISPUTE_KIND,
       source: "server",
-      // A dispute's title names the page, the amount, the day and the people — never a fan (review R2b-3c).
-      title: sale
-        ? disputeTitle({ names: who, kind: sale.kind, netMills: sale.netMills, day: moscowDay(sale.occurredAt.getTime()) })
-        : questionTitle({ fromLedger: first.kind === "imported", pageLabel: label, ref: first.ledgerRef ?? {}, names: who.length > 0 ? who : first.whoText === null ? [] : [first.whoText] }),
+      // A dispute's title names the page, the amount, the day and the people — never a fan (review R2b-3c); a question
+      // says it is one, and one asked of the chatters that nobody answered says so and since when (review R2b-6).
+      title: list.every((claim) => claim.kind === "imported" || claim.kind === "question")
+        ? questionTitle({
+          list, pageLabel: label, ref: first.ledgerRef ?? {}, sale,
+          names: who.length > 0 ? who : first.whoText === null ? [] : [first.whoText],
+        })
+        : sale
+          ? disputeTitle({ names: who, kind: sale.kind, netMills: sale.netMills, day: moscowDay(sale.occurredAt.getTime()) })
+          : questionTitle({ list, pageLabel: label, ref: first.ledgerRef ?? {}, sale, names: who.length > 0 ? who : first.whoText === null ? [] : [first.whoText] }),
       object: first.transactionId === null ? { type: "sale_claim", id: String(first.id) } : { type: "transaction", id: String(first.transactionId) },
       pageIds: label === null ? [] : [pages.idOf.get(label)].filter((id): id is number => id !== undefined),
       owner: { role: "owner" },
@@ -321,16 +327,34 @@ async function syncClaimMatters(app: Pick<AppContext, "db" | "logger">, now: Dat
   return touched;
 }
 
-/** A question with no sale tied: «Вопрос «чья продажа» из ledger: mia-1, $16.00, 11 нояб., Аня и Боря». */
-function questionTitle(input: { fromLedger: boolean; pageLabel: string | null; ref: Record<string, unknown>; names: readonly string[] }): string {
-  const at = typeof input.ref.occurredAt === "string" ? Date.parse(input.ref.occurredAt) : Number.NaN;
+/**
+ * The owner's matter of a question, never naming the fan: «Вопрос чаттерам без ответа с 5 нояб.: mia-1, $16.00,
+ * 11 нояб., Аня и Боря» (asked of the chatters, nobody answered), else «Вопрос «чья продажа» из ledger: …» — the page,
+ * the amount, the sale's day, the people.
+ */
+function questionTitle(input: {
+  list: readonly SaleClaimRow[];
+  pageLabel: string | null;
+  ref: Record<string, unknown>;
+  sale: HandinSaleRow | undefined;
+  names: readonly string[];
+}): string {
+  const refAt = typeof input.ref.occurredAt === "string" ? Date.parse(input.ref.occurredAt) : Number.NaN;
+  const at = input.sale?.occurredAt.getTime() ?? refAt;
+  const net = input.sale?.netMills ?? (typeof input.ref.netMills === "number" ? input.ref.netMills : null);
   const parts = [
     input.pageLabel,
-    typeof input.ref.netMills === "number" ? money(input.ref.netMills) : null,
+    net === null ? null : money(net),
     Number.isNaN(at) ? null : dayWords(moscowDay(at)),
     input.names.length > 0 ? input.names.join(" и ") : null,
   ].filter((part): part is string => part !== null && part !== "");
-  return `Вопрос «чья продажа»${input.fromLedger ? " из ledger" : ""}${parts.length > 0 ? `: ${parts.join(", ")}` : ""}`;
+  const words = parts.length > 0 ? `: ${parts.join(", ")}` : "";
+  const toChatters = input.list.some((claim) => (claim.askedOf ?? (typeof claim.ledgerRef?.askedOf === "string" ? claim.ledgerRef.askedOf : null)) === "chatters");
+  if (toChatters) {
+    const since = Math.min(...input.list.map((claim) => claim.claimedAt.getTime()));
+    return `Вопрос чаттерам без ответа с ${dayWords(moscowDay(since))}${words}`;
+  }
+  return `Вопрос «чья продажа»${input.list.some((claim) => claim.kind === "imported") ? " из ledger" : ""}${words}`;
 }
 
 function fanName(fan: { name: string | null; username: string | null }): string | null {
@@ -887,7 +911,7 @@ export async function readUnlinkedDecisions(app: ClaimsApp, principal: HumanAuth
       id: decision.id,
       ledgerDecisionId: decision.ledgerDecisionId,
       pageLabel,
-      words: ledgerWords(ref),
+      words: ledgerWords(ref, decision.note),
       saidBy: decision.saidBy,
       shares: decision.shares.map((share) => ({ userId: share.userId, name: names.get(share.userId) ?? `#${share.userId}`, percent: share.percent })),
       kind: decision.kind,
@@ -900,13 +924,13 @@ export async function readUnlinkedDecisions(app: ClaimsApp, principal: HumanAuth
   return { decisions: out, serverNow: now.toISOString() };
 }
 
-/** What the ledger wrote of a record, in one line: the fan, the amount, the moment, why. */
-export function ledgerWords(ref: Record<string, unknown>): string {
+/** The words that name a sale not tied yet, in one line: the fan's reference, the amount, the day, why (the decision's note). */
+export function ledgerWords(ref: Record<string, unknown>, note: string | null = null): string {
   const parts = [
-    typeof ref.fanName === "string" && ref.fanName !== "" ? ref.fanName : typeof ref.fanRef === "string" && ref.fanRef !== "" ? ref.fanRef : null,
+    typeof ref.fanRef === "string" && ref.fanRef !== "" ? ref.fanRef : null,
     typeof ref.netMills === "number" ? money(ref.netMills) : null,
-    typeof ref.occurredAt === "string" ? `${dayWords(moscowDay(Date.parse(ref.occurredAt)))}` : null,
-    typeof ref.note === "string" && ref.note !== "" ? ref.note.slice(0, 200) : null,
+    typeof ref.occurredAt === "string" && !Number.isNaN(Date.parse(ref.occurredAt)) ? `${dayWords(moscowDay(Date.parse(ref.occurredAt)))}` : null,
+    note !== null && note !== "" ? note.slice(0, 200) : null,
   ];
   return parts.filter((part): part is string => part !== null).join(", ");
 }
@@ -1058,7 +1082,10 @@ async function disputeOf(app: ClaimsApp, claims: readonly SaleClaimRow[], now: D
     }
   }
   if (transactionId !== null) outcomes.push({ outcome: "nobody", label: "Никому", gives: parties.map((one) => ({ userId: one.userId, mills: 0 })) });
-  if (claims.every((claim) => claim.kind === "imported")) outcomes.push({ outcome: "dismiss", label: "Закрыть без решения", gives: [] });
+  if (claims.every((claim) => claim.kind === "imported" || claim.kind === "question")) outcomes.push({ outcome: "dismiss", label: "Закрыть без решения", gives: [] });
+  // Which handed-in reports a decision gives a new version: the window says so instead of promising it of every report.
+  const held = reports.filter((report) => report.lines.some((line) => line.transactionId === transactionId));
+  const heldNames = await listHandinNames(db, held.map((report) => report.userId));
   return {
     sale: sale === undefined ? null : {
       transactionId: sale.transactionId, pageLabel: sale.pageLabel, platform: sale.platform, kind: sale.kind, occurredAt: sale.occurredAt.toISOString(),
@@ -1078,6 +1105,7 @@ async function disputeOf(app: ClaimsApp, claims: readonly SaleClaimRow[], now: D
     facts,
     outcomes,
     decision: decision === undefined ? null : { outcome: decision.outcome, note: decision.note, decidedAt: decision.decidedAt.toISOString(), by: decider },
+    reports: held.map((report) => ({ userId: report.userId, name: heldNames.get(report.userId) ?? `#${report.userId}`, shiftId: report.shiftId, reportDate: report.reportDate })),
     serverNow: now.toISOString(),
   };
 }
