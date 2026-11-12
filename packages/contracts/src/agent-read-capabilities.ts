@@ -88,6 +88,13 @@ export const AGENT_CAPABILITIES = [
    * per page; a fan's media is refused.
    */
   "look:media",
+  /**
+   * Matters (ecosystem plan, package D): open, close and comment a matter by
+   * its reason key — a finding or a reminder for a person or a role. The
+   * agent's own kinds only: the kinds Hub's server mirrors are the server's.
+   * Nothing is read back but the matter's key and state.
+   */
+  "write:matters",
 ] as const;
 
 export type AgentCapability = (typeof AGENT_CAPABILITIES)[number];

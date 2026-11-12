@@ -42,6 +42,7 @@ export * from "./repositories/fan-lists.ts";
 export * from "./repositories/fansly-blocklist.ts";
 // Chat Memory week 4: customs (0310).
 export * from "./repositories/fan-customs.ts";
+export * from "./repositories/matters.ts";
 // Chat Memory week 4: the draft shift report (0311).
 export * from "./repositories/shift-reports.ts";
 // Shifts as rows with a stable id (0379), whose each sale is by the one rule and the screens' switch to it (0380, 0381).

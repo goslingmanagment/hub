@@ -23,10 +23,10 @@ body remain handler-checked and are noted per route in the service layer.
 
 The `chat-extension token` column is the narrow device token a client asks
 for at password sign-in (`client: "chat-extension"`): it reaches only the
-62 routes marked "yes", and every route marked "no" refuses it with 403.
+63 routes marked "yes", and every route marked "no" refuses it with 403.
 A full device token is not affected.
 
-## Routes (411)
+## Routes (417)
 
 | Method | Path | Route key | Kind | Roles | Page scope | chat-extension token |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -213,6 +213,9 @@ A full device token is not affected.
 | POST | `/api/v1/agent/keys` | `agentKeyCreate` | `owner-session` | — | — | no |
 | PATCH | `/api/v1/agent/keys/:id` | `agentKeyUpdate` | `owner-session` | — | — | no |
 | POST | `/api/v1/agent/keys/:id/revoke` | `agentKeyRevoke` | `owner-session` | — | — | no |
+| POST | `/api/v1/agent/matters` | `agentMatterOpen` | `agentKey` | — | — | no |
+| POST | `/api/v1/agent/matters/close` | `agentMatterClose` | `agentKey` | — | — | no |
+| POST | `/api/v1/agent/matters/comment` | `agentMatterComment` | `agentKey` | — | — | no |
 | GET | `/api/v1/agent/observations` | `agentObservations` | `agentKey` | — | — | no |
 | GET | `/api/v1/agent/observations/:observationRef/payload` | `agentObservationPayload` | `owner-session` | — | — | no |
 | GET | `/api/v1/agent/pages/:pageLabel/cross-spenders` | `agentCrossSpenders` | `agentKey` | — | page | no |
@@ -280,6 +283,7 @@ A full device token is not affected.
 | GET | `/api/v1/client/bootstrap` | `clientBootstrap` | `apiKey` | — | — | yes |
 | POST | `/api/v1/client/chatspace/tab-state` | `clientChatspaceTabState` | `apiKey` | — | — | yes |
 | GET | `/api/v1/client/fansly-proxies` | `clientFanslyProxies` | `apiKey` | — | — | yes |
+| GET | `/api/v1/client/matters` | `clientMatters` | `apiKey` | — | — | yes |
 | GET | `/api/v1/client/pages/:pageLabel/ai-usage` | `clientAiUsageDaily` | `apiKey` | — | page | yes |
 | GET | `/api/v1/client/pages/:pageLabel/audience-new` | `clientAudienceNew` | `apiKey` | — | page | yes |
 | GET | `/api/v1/client/pages/:pageLabel/conversations/:fanRef/feed` | `clientConversationFeed` | `apiKey` | — | page | yes |
@@ -327,6 +331,8 @@ A full device token is not affected.
 | GET | `/api/v1/health` | `health` | `public` | — | — | — |
 | GET | `/api/v1/health/sync` | `healthSync` | `monitoring` | — | — | no |
 | POST | `/api/v1/ingest/observations` | `ingestObservations` | `apiKey` | — | — | yes |
+| GET | `/api/v1/matters` | `mattersList` | `any-session` | — | — | no |
+| GET | `/api/v1/matters/waiting` | `mattersWaiting` | `session` | — | — | no |
 | POST | `/api/v1/model-applications` | `modelApplicationSubmit` | `public` | — | — | — |
 | POST | `/api/v1/model-applications/progress` | `modelApplicationProgress` | `public` | — | — | — |
 | GET | `/api/v1/models` | `models` | `session` | — | — | no |

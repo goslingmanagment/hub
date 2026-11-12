@@ -123,6 +123,8 @@ export const AGENT_READ_AUDIT_SUMMARY_SHAPES = {
   mediaRef: "identifier",
   lookSource: "identifier",
   requestsSent: "count",
+  /** Matters (write:matters, package D): which matter. Its key and words stay in the matter's own history. */
+  matterId: "count",
 } as const satisfies Record<string, AgentReadAuditSummaryShape>;
 
 export type AgentReadAuditSummaryKey = keyof typeof AGENT_READ_AUDIT_SUMMARY_SHAPES;

@@ -35,6 +35,7 @@ import {
   CLIENT_SEND_ARCHIVE_SWEEP_QUEUE,
   runClientSendArchiveSweep,
 } from "./services/client-send-custody-archive.ts";
+import { MATTERS_MIRROR_QUEUE, runMattersMirror } from "./services/matters-mirror.ts";
 import { SALE_HOMES_QUEUE, runSaleHomesTick } from "./services/sale-homes.ts";
 import { SHIFT_ROWS_QUEUE, runShiftRowsTick } from "./services/shift-rows.ts";
 import {
@@ -415,6 +416,13 @@ export async function startWorkerServices(
     }
   });
 
+  // Дела, the shadow week: «Ждут вас» and «Решения»'s sources mirrored into matters, the two counts compared.
+  await boss.work(MATTERS_MIRROR_QUEUE, CRON_SWEEP_WORK_OPTIONS, async () => {
+    const tally = await runMattersMirror(app);
+    if (tally.opened + tally.closed + tally.failed.length + tally.mismatched.length > 0) {
+      app.logger.info(tally, "Matters mirror pass complete");
+    }
+  });
   // Shifts as rows with a stable id, and whose each sale is by the one rule: in shadow, no screen reads them yet.
   await boss.work(SHIFT_ROWS_QUEUE, CRON_SWEEP_WORK_OPTIONS, async () => {
     await runShiftRowsTick(app);
