@@ -1,5 +1,5 @@
 -- agency-hub:rollback-compatible — one trigger function replaced: it refuses everything the previous one did unless a transaction sets the erasure's setting, which the previous image never does.
--- 0408_shift_handin_erasure.sql
+-- 0407_shift_handin_erasure.sql
 --
 -- A handed-in version (0400) is the record of what was reported and never changes — but a line's note is a
 -- person's words about a fan («секстинг, обещал вернуться»), and a fan's erasure must reach them. The one sanctioned

@@ -1259,7 +1259,7 @@ const MATTER_FAN_ERASED = "фан стёрт";
 const MATTER_ERASED_TITLE = "Дело о стёртом фане";
 
 /**
- * The one change a handed-in version takes (0408_shift_handin_erasure.sql): its trigger lets an UPDATE through only
+ * The one change a handed-in version takes (0407_shift_handin_erasure.sql): its trigger lets an UPDATE through only
  * while this transaction-local setting is on, and then only one that clears notes inside `lines` — every other column,
  * every line's other fields and the lines' count unchanged. The fan scope sets it around its own statement.
  */
