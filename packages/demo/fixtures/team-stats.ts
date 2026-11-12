@@ -385,7 +385,8 @@ export function teamShiftSales(request: DemoRequest, scope: readonly string[], d
     if (row !== undefined) {
       row.salesNetMills += decided.sale.netMills;
       row.sales += 1;
-      row.perHourMills = row.workedMinutes === 0 ? null : Math.round(row.salesNetMills / (row.workedMinutes / 60));
+      // As the server's `perHour`: whole mills an hour.
+      row.perHourMills = row.workedMinutes === 0 ? null : Number((BigInt(row.salesNetMills) * 60n) / BigInt(row.workedMinutes));
       const day = row.daily.find((one) => one.date === decided.day);
       if (day !== undefined) day.salesNetMills += decided.sale.netMills;
     }
