@@ -288,7 +288,7 @@ describe("matter checks (package K)", () => {
     ]);
     // «Ждут вас» of the owner counts it in the people's group.
     const waiting = mattersWaitingResponseSchema.parse((await asSession("boss", "/api/v1/matters/waiting")).json());
-    expect(waiting.rows.find((row) => row.id === "people")?.count).toBeGreaterThanOrEqual(2);
+    expect(waiting.groups.find((group) => group.id === "people")?.count).toBeGreaterThanOrEqual(2);
 
     // One of bob's decided: still a matter; both decided and the new person's withdrawn: closed by the next pass.
     const decide = (id: number, state: string) => testDb!.pool.query(
