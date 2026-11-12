@@ -624,12 +624,13 @@ export const CLIENT_SDK_REGISTRY: readonly ClientSdkRegistryRow[] = [
     "sourceCommit": "4abdbbb4c53507615a4e6f4d2b77ee670b37f486",
     "vendorDistSha256": "2ab559019fc6e9db2ae4f37a7a504c4479a57636779a0b22cdc855a9419c1bbe",
     "zodVersion": "4.6.5",
-    "status": "candidate",
+    "status": "released",
     "clients": [
       {
         "name": "chat-extension",
         "versions": [
-          "3.27.0"
+          "3.27.0",
+          "3.28.0"
         ]
       }
     ],
