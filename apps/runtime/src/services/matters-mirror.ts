@@ -29,6 +29,7 @@ import {
   type MatterOwner,
   type MatterSource,
 } from "@agency_hub_core/db";
+import { incidentKindWord } from "@agency_hub_core/look";
 import { MOSCOW_TIME_ZONE, toBusinessDate } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
@@ -207,7 +208,8 @@ export function failureItems(
     .filter((incident) => !(incident.kind === "auth_blocked" && incident.pageLabel !== null && input.loginPages.has(incident.pageLabel)))
     .map((incident) => ({
       key: `incident.open:${incident.id}`,
-      title: incident.pageLabel === null ? `Сбой: ${incident.kind}` : `Сбой: ${incident.kind} · ${incident.pageLabel}`,
+      // The console's words for the kind («Система → Сбои»), its code only for a kind the dictionary does not know.
+      title: `${incidentKindWord(incident.kind) ?? `Сбой: ${incident.kind}`}${incident.pageLabel === null ? "" : ` · ${incident.pageLabel}`}`,
       object: { type: "notification_incident", id: String(incident.id) },
       pageLabels: incident.pageLabel === null ? [] : [incident.pageLabel],
       money: false,
