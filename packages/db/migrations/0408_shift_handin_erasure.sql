@@ -1,5 +1,5 @@
 -- agency-hub:rollback-compatible — one trigger function replaced: it refuses everything the previous one did unless a transaction sets the erasure's setting, which the previous image never does.
--- 0999_shift_handin_erasure.sql (the number is the train's to give)
+-- 0408_shift_handin_erasure.sql
 --
 -- A handed-in version (0400) is the record of what was reported and never changes — but a line's note is a
 -- person's words about a fan («секстинг, обещал вернуться»), and a fan's erasure must reach them. The one sanctioned
@@ -34,4 +34,4 @@ end
 $$;
 
 comment on function shift_handin_versions_immutable() is
-  'A handed-in version never changes; the one exception is a fan''s erasure clearing notes inside lines (setting agency_hub.erasure = shift_handin_lines, 0999).';
+  'A handed-in version never changes; the one exception is a fan''s erasure clearing notes inside lines (setting agency_hub.erasure = shift_handin_lines, 0408).';

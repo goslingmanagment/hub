@@ -1,9 +1,22 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
-import { closeMatter, commentMatter, createFanslyPage, createModel, openMatter } from "@agency_hub_core/db";
+import { agentErasuresFeedResponseSchema } from "@agency_hub_core/contracts";
+import {
+  closeMatter,
+  commentMatter,
+  createFanslyPage,
+  createModel,
+  createOnlyFansPage,
+  ERASURE_EXECUTION_PROTOCOL,
+  insertAgentKey,
+  insertErasureLog,
+  openMatter,
+} from "@agency_hub_core/db";
+import { sha256Hex } from "@agency_hub_core/shared";
 
+import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
-import { createUserAccount } from "../apps/runtime/src/services/auth.ts";
+import { AGENT_KEY_TOKEN_PREFIX, createUserAccount } from "../apps/runtime/src/services/auth.ts";
 import { executeErasure, planErasure } from "../apps/runtime/src/services/erasure/index.ts";
 import { startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
@@ -13,7 +26,8 @@ import { fixtureUserId } from "./helpers/user-identity.ts";
 // decisions), what waits about them (matters) and their history (object events), the notes of a shift report (the
 // draft's marks and the lines of a handed-in version). The money and the facts stay — ids, sums, states, who of the
 // team, when — and the words about the fan go. A bystander fan's rows on the same page keep theirs. A handed-in
-// version stays immutable to everything but the erasure clearing its lines' notes.
+// version stays immutable to everything but the erasure clearing its lines' notes. The ledger, which keeps its own
+// copies, reads the completed erasure (platform and fan ref, nothing more) from its feed.
 
 vi.mock("argon2", () => import("./helpers/cheap-argon2.ts"));
 
@@ -314,6 +328,53 @@ describe("a fan's erasure reaches the work objects about his sales", () => {
       await expect(client.query("update shift_handin_versions set lines = lines where id = $1", [versionId])).rejects.toThrow(/immutable/u);
     } finally {
       client.release();
+    }
+  });
+
+  // The ledger keeps its own copies of what Hub served it; its key reads the erasures Hub completed to blank them.
+  it("serves the ledger each completed fan erasure: the platform and the fan's ref, after a cursor, on its pages", async (context) => {
+    if (!testDb) return context.skip();
+    const boss = await fixtureUserId(app, "boss");
+    const model = await createModel(app.db, { slug: "ola", name: "Ola" });
+    const ofPage = (await createOnlyFansPage(app.db, { modelId: model!.id, label: "ola-of" }))!.id;
+    const keys = {
+      ledger: { token: `${AGENT_KEY_TOKEN_PREFIX}erasures-ledger-key`, capabilities: ["read:team", "read:money"], pages: [pageId, ofPage] },
+      money: { token: `${AGENT_KEY_TOKEN_PREFIX}erasures-money-only`, capabilities: ["read:money"], pages: [pageId] },
+      elsewhere: { token: `${AGENT_KEY_TOKEN_PREFIX}erasures-other-page`, capabilities: ["read:team", "read:money"], pages: [ofPage] },
+    };
+    for (const [name, key] of Object.entries(keys)) {
+      await insertAgentKey(testDb.db, {
+        name: `erasures-${name}`, keyPrefix: key.token.slice(0, AGENT_KEY_TOKEN_PREFIX.length + 6), keyDigest: sha256Hex(key.token),
+        capabilities: key.capabilities as never, pageIds: key.pages, expiresAt: new Date(Date.now() + 86_400_000), createdBy: boss,
+      });
+    }
+    // Never served: a dry run, and an execution that never completed.
+    for (const dryRun of [true, false]) {
+      await insertErasureLog(app.db, {
+        scopeType: "fan", scopeRef: `fan:fansly:${BYSTANDER}`, initiatedBy: boss, dryRun,
+        plan: { resolvedPageIds: [pageId] }, ...(dryRun ? {} : { executionProtocol: ERASURE_EXECUTION_PROTOCOL }),
+      });
+    }
+
+    const server = await buildApiServer(app);
+    await server.ready();
+    try {
+      const read = (key: keyof typeof keys, since?: string) => server.inject({
+        method: "GET", url: `/api/v1/agent/erasures${since === undefined ? "" : `?since=${since}`}`,
+        headers: { authorization: `Bearer ${keys[key].token}` },
+      });
+      const first = await read("ledger");
+      expect(first.statusCode, first.body).toBe(200);
+      const feed = agentErasuresFeedResponseSchema.parse(first.json());
+      const [logged] = await q<{ id: string }>("select id::text from erasure_log where scope_ref = $1 and completed_at is not null", [`fan:fansly:${FAN}`]);
+      expect(feed.erasures).toEqual([{ id: Number(logged!.id), platform: "fansly", fanRef: FAN, erasedAt: expect.any(String) }]);
+      expect(feed.next).toBe(logged!.id);
+      // Nothing new after the cursor; a key without the fan's pages learns nothing and moves past it; read:team too.
+      expect(agentErasuresFeedResponseSchema.parse((await read("ledger", feed.next)).json())).toMatchObject({ erasures: [], next: feed.next });
+      expect(agentErasuresFeedResponseSchema.parse((await read("elsewhere")).json())).toMatchObject({ erasures: [], next: feed.next });
+      expect((await read("money")).statusCode).toBe(403);
+    } finally {
+      await server.close();
     }
   });
 });

@@ -26,7 +26,7 @@ for at password sign-in (`client: "chat-extension"`): it reaches only the
 73 routes marked "yes", and every route marked "no" refuses it with 403.
 A full device token is not affected.
 
-## Routes (497)
+## Routes (498)
 
 | Method | Path | Route key | Kind | Roles | Page scope | chat-extension token |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -215,6 +215,7 @@ A full device token is not affected.
 | POST | `/api/v1/agent/custom-orders` | `agentCustomOrderCreate` | `agentKey` | — | — | no |
 | POST | `/api/v1/agent/custom-orders/:code` | `agentCustomOrderUpdate` | `agentKey` | — | — | no |
 | POST | `/api/v1/agent/custom-orders/cards` | `agentCustomCards` | `agentKey` | — | — | no |
+| GET | `/api/v1/agent/erasures` | `agentErasuresFeed` | `agentKey` | — | — | no |
 | GET | `/api/v1/agent/fan-queues` | `agentFanQueueList` | `agentKey` | — | — | no |
 | GET | `/api/v1/agent/fan-queues/:queueId` | `agentFanQueueGet` | `agentKey` | — | — | no |
 | PATCH | `/api/v1/agent/fan-queues/:queueId` | `agentFanQueueUpdate` | `agentKey` | — | — | no |

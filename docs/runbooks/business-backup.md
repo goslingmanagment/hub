@@ -100,6 +100,11 @@ of the scope is still there and completes its own tombstone in the copy; the dry
 shows what it would take first. If production's `erasure_log` is lost with production, the erasures since
 the copy are known only to the owner: Hub keeps no other record of them.
 
+The ledger reads Hub by cursors, and a restored Hub's ids start again from the copy's: handed-in report
+versions (and their places in the shift reports' feed) and erasures get ids the ledger has already seen, so it
+would take new versions for ones it stored and step over new erasures behind its cursor. Before the ledger reads
+Hub's feeds again, follow the ledger's own note on a Hub restore (in the ledger repository).
+
 ## ContentOps database
 
 ContentOps (a VM on the owner's PC) had no copy of its database: the catalog, the custom orders,
