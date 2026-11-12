@@ -15,13 +15,22 @@ import { insertObservation } from "./observations.ts";
 // closes it itself, on behalf of the install that dispatched it, when its own
 // tables prove that very message went out:
 //
-//   1. the same person reported a send to this fan within ±30 s of the dispatch
-//      (client_send_attributions: the receipt's message id), and it is the
-//      only such report not already another send's;
+//   1. the same person reported a send to this fan (client_send_attributions:
+//      the receipt's message id) whose message went out within ±30 s of the
+//      dispatch, and it is the only such report not already another send's;
 //   2. the page's archive (message_archive) has that message as the page's own,
-//      in the attribution's chat, not deleted;
+//      in the attribution's chat, not deleted, dated;
 //   3. no other send carries that message id (another custody row of the page,
 //      or the fan's greeting as another attempt's first part).
+//
+// "Went out" is read on clocks the sender does not set (2026-11-12): Fansly's
+// own time of the message, the archive copy's occurred_at, against Hub's time
+// of the dispatch. A report whose message Hub has no dated copy of yet is
+// timed by when Hub received it (recorded_at): it can only add a candidate,
+// so it can make the send ambiguous or wait for the archive, never close it.
+// The report's observed_at is the sender's computer clock: one install runs
+// ~41 s ahead, which put every report of it outside the window, and could have
+// put an earlier message of the same person inside it. It is not read here.
 //
 // The archive's copy is the confirmation, as the extension's own history read
 // is: the rule "Fansly's response plus a confirmation" stands. Database only:
@@ -30,7 +39,7 @@ import { insertObservation } from "./observations.ts";
 // under the fan's lock, journaled in `observations` first; a report of the
 // extension that lands first wins and the close then writes nothing.
 
-/** How far from the dispatch the person's own report of the send may be. */
+/** How far from the dispatch the reported message may have gone out, on Fansly's clock (Hub's receipt for an undated one). */
 export const CLIENT_SEND_ARCHIVE_PROOF_WINDOW_MS = 30_000;
 /** How long past its ticket a send waits before Hub looks: a late echo of the client wins. */
 export const CLIENT_SEND_ARCHIVE_GRACE_MS = 60_000;
@@ -59,7 +68,10 @@ export interface HeldSendArchiveAttribution {
   userId: number;
   fanRef: string;
   conversationRef: string | null;
+  /** The reporting computer's clock: journaled, never part of the rule. */
   observedAt: Date;
+  /** Hub's clock when the report arrived: times the message while Hub has no dated copy of it. */
+  recordedAt: Date;
   source: string;
   composedWith: string | null;
   observationId: number | null;
@@ -87,18 +99,26 @@ export type HeldSendArchiveSkipReason =
   | "not_held"
   /** Not a one-part greeting sent from the preview on Fansly. */
   | "not_fansly_greeting"
-  /** No report of a send by the dispatcher to this fan within the window. */
+  /** No report of a send by the dispatcher to this fan whose message went out within the window. */
   | "no_attribution"
   /** Every such report is another send's already. */
   | "taken"
   /** More than one report could be this send: Hub cannot tell which, a person resolves it. */
   | "ambiguous"
-  /** The one report's message is not in the page's archive as its own, in that chat, not deleted. */
+  /** The one report's message is not in the page's archive as its own, in that chat, not deleted, dated. */
   | "not_in_archive";
 
 export type HeldSendArchiveDecision =
   | { close: true; attribution: HeldSendArchiveAttribution; platformMessageId: string; sentAt: Date }
   | { close: false; reason: HeldSendArchiveSkipReason };
+
+/**
+ * When a report's message went out, on a clock the sender does not set: Fansly's time of the page's
+ * archive copy, or, while Hub has no dated copy, when Hub received the report.
+ */
+function heldSendReportTime(row: Pick<HeldSendArchiveAttribution, "archive" | "recordedAt">): Date {
+  return row.archive?.occurredAt ?? row.recordedAt;
+}
 
 /** The rule, without a database. Every condition must hold, or the send is left as it is. */
 export function decideHeldSendArchiveProof(evidence: HeldSendArchiveEvidence): HeldSendArchiveDecision {
@@ -110,17 +130,18 @@ export function decideHeldSendArchiveProof(evidence: HeldSendArchiveEvidence): H
     return { close: false, reason: "not_held" };
   }
   const near = evidence.attributions.filter((row) => row.userId === custody.userId && row.fanRef === custody.fanRef
-    && Math.abs(row.observedAt.getTime() - custody.createdAt.getTime()) <= CLIENT_SEND_ARCHIVE_PROOF_WINDOW_MS);
+    && Math.abs(heldSendReportTime(row).getTime() - custody.createdAt.getTime()) <= CLIENT_SEND_ARCHIVE_PROOF_WINDOW_MS);
   if (near.length === 0) return { close: false, reason: "no_attribution" };
   const free = near.filter((row) => !row.boundElsewhere);
   if (free.length === 0) return { close: false, reason: "taken" };
   if (free.length > 1) return { close: false, reason: "ambiguous" };
   const attribution = free[0]!;
   const copy = attribution.archive;
-  if (copy === null || !copy.sentByMe || copy.deleted || attribution.conversationRef === null
+  // An undated copy was taken in on Hub's receipt of the report alone: that times a candidate, it proves no send.
+  if (copy === null || !copy.sentByMe || copy.deleted || copy.occurredAt === null || attribution.conversationRef === null
     || copy.conversationRef !== attribution.conversationRef) return { close: false, reason: "not_in_archive" };
   // Dated by Fansly's own clock, the one the fan's answers carry (the openers' A/B reads replies after it).
-  const sentAt = copy.occurredAt ?? custody.createdAt;
+  const sentAt = copy.occurredAt;
   return {
     close: true, attribution, platformMessageId: attribution.platformMessageId,
     sentAt: sentAt.getTime() > now.getTime() ? now : sentAt,
@@ -158,7 +179,8 @@ type CustodyEvidenceRow = {
 
 type AttributionEvidenceRow = {
   platform_message_id: string; user_id: string | number; fan_ref: string; conversation_ref: string | null;
-  observed_at: Date | string; source: string; composed_with: string | null; observation_id: string | number | null;
+  observed_at: Date | string; recorded_at: Date | string; source: string; composed_with: string | null;
+  observation_id: string | number | null;
   bound_elsewhere: boolean; archive_id: string | number | null; archive_sent_by_me: boolean | null;
   archive_deleted: boolean | null; archive_conversation_ref: string | null; archive_occurred_at: Date | string | null;
 };
@@ -167,9 +189,10 @@ const date = (value: Date | string) => new Date(value);
 
 /**
  * The evidence of one send: its custody row, and every report of a send to its fan on its page
- * observed within the window around its dispatch, each with its archive copy and whether another
- * send carries its message. Null when the page has no such attempt. The fan's reports are read
- * through client_send_attributions_fan (page, fan), the copy by the archive's unique key.
+ * whose message went out within the window around its dispatch (heldSendReportTime: the archive
+ * copy's Fansly time, else Hub's receipt of the report), each with its archive copy and whether
+ * another send carries its message. Null when the page has no such attempt. The fan's reports are
+ * read through client_send_attributions_fan (page, fan), the copy by the archive's unique key.
  */
 export async function readHeldSendArchiveEvidence(db: Database, attemptId: string): Promise<HeldSendArchiveEvidence | null> {
   const row = (await db.execute<CustodyEvidenceRow>(sql`
@@ -181,8 +204,8 @@ export async function readHeldSendArchiveEvidence(db: Database, attemptId: strin
   const createdAt = date(row.created_at);
   const windowSecs = CLIENT_SEND_ARCHIVE_PROOF_WINDOW_MS / 1000;
   const attributions = (await db.execute<AttributionEvidenceRow>(sql`
-    select a.platform_message_id, a.user_id, a.fan_ref, a.conversation_ref, a.observed_at, a.source, a.composed_with,
-      a.observation_id,
+    select a.platform_message_id, a.user_id, a.fan_ref, a.conversation_ref, a.observed_at, a.recorded_at, a.source,
+      a.composed_with, a.observation_id,
       (exists (
         select 1 from client_send_custody o
         where o.page_id = a.page_id and o.platform_message_id = a.platform_message_id
@@ -198,9 +221,9 @@ export async function readHeldSendArchiveEvidence(db: Database, attemptId: strin
     left join message_archive m
       on m.account_id = a.page_id and m.platform = a.platform and m.message_ref = a.platform_message_id
     where a.platform = ${row.platform} and a.page_id = ${row.page_id} and a.fan_ref = ${row.fan_ref}
-      and a.observed_at between ${createdAt}::timestamptz - make_interval(secs => ${windowSecs})
+      and coalesce(m.occurred_at, a.recorded_at) between ${createdAt}::timestamptz - make_interval(secs => ${windowSecs})
         and ${createdAt}::timestamptz + make_interval(secs => ${windowSecs})
-    order by a.observed_at, a.platform_message_id`)).rows;
+    order by coalesce(m.occurred_at, a.recorded_at), a.platform_message_id`)).rows;
   return {
     now: date(row.now),
     custody: {
@@ -211,7 +234,7 @@ export async function readHeldSendArchiveEvidence(db: Database, attemptId: strin
     },
     attributions: attributions.map((a): HeldSendArchiveAttribution => ({
       platformMessageId: a.platform_message_id, userId: Number(a.user_id), fanRef: a.fan_ref,
-      conversationRef: a.conversation_ref, observedAt: date(a.observed_at), source: a.source,
+      conversationRef: a.conversation_ref, observedAt: date(a.observed_at), recordedAt: date(a.recorded_at), source: a.source,
       composedWith: a.composed_with, observationId: a.observation_id === null ? null : Number(a.observation_id),
       boundElsewhere: a.bound_elsewhere,
       archive: a.archive_id === null ? null : {
@@ -256,7 +279,8 @@ export async function closeHeldSendOnArchiveProof(db: Database, ref: HeldSendRef
       const { custody } = evidence;
       const { attribution } = decision;
       const payload = {
-        rule: "archive-copy.v1",
+        // v2 (2026-11-12): the window is read on the copy's Fansly time, not on the reporting computer's clock.
+        rule: "archive-copy.v2",
         windowMs: CLIENT_SEND_ARCHIVE_PROOF_WINDOW_MS,
         attemptId: custody.attemptId,
         pageId: custody.pageId,
@@ -269,6 +293,7 @@ export async function closeHeldSendOnArchiveProof(db: Database, ref: HeldSendRef
         sentAt: decision.sentAt.toISOString(),
         attribution: {
           observedAt: attribution.observedAt.toISOString(),
+          recordedAt: attribution.recordedAt.toISOString(),
           conversationRef: attribution.conversationRef,
           source: attribution.source,
           composedWith: attribution.composedWith,
