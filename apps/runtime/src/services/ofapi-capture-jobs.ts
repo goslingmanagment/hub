@@ -1,4 +1,5 @@
 import { buildOfapiMediaUploadRequest, parseCapturedOfapiMediaUpload, type OfapiMediaRequestPlan } from "./ofapi-media-uploads.ts";
+import { loadEffectiveConfig } from "./effective-config.ts";
 import { isOfapiTypedExportProfile, ofapiTypedExportCategory, type OfapiCollectionContext } from "@agency_hub_core/shared";
 import { settleOfapiCollectionRequest } from "@agency_hub_core/db";
 import { assertOfapiCollectionAllowed, OfapiCollectionPolicyError } from "@agency_hub_core/db";
@@ -1378,6 +1379,9 @@ export async function executeOfapiCaptureJobChunk(
     // per-user day counter (the repository holds that for the whole life of
     // the reservation).
     const vaultAlbum = job.budgetScope === "vault_album";
+    // The ceiling and the reserve of albums are live settings: the owner
+    // changes them on the screen, so they are read here, not from the boot config.
+    const albumConfig = vaultAlbum ? await loadEffectiveConfig(app.db, app.config) : app.config;
     const creditFloor = Math.max(0, app.config.ofapiCreditFloor ?? 500);
     const reservation = await reserveOfapiRequestAttempt(app.db, {
       ownerKind: "capture_job",
@@ -1395,10 +1399,10 @@ export async function executeOfapiCaptureJobChunk(
       reservedCredits: requestPlan.reservedCredits,
       globalDailyCap,
       scopeDailyCap: vaultAlbum
-        ? Math.max(0, app.config.onlyfansVaultDailyCredits ?? 0)
+        ? Math.max(0, albumConfig.onlyfansVaultDailyCredits ?? 0)
         : globalDailyCap,
       creditFloor: vaultAlbum
-        ? Math.max(creditFloor, app.config.onlyfansVaultReserveCredits ?? 2000)
+        ? Math.max(creditFloor, albumConfig.onlyfansVaultReserveCredits ?? 2000)
         : creditFloor,
       balanceMaxAgeMs: BALANCE_MAX_AGE_MS,
       allowFloorProbe: job.budgetScope === "live",
