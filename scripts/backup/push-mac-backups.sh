@@ -3,6 +3,9 @@
 #   /var/backups/agency-mac/<UTC>/openclaw-workspace-chat/   Gengar's workspace (~/.openclaw/workspace-chat)
 #   /var/backups/agency-mac/<UTC>/openclaw-workspace/        Bobr's workspace (~/.openclaw/workspace)
 #   /var/backups/agency-mac/<UTC>/traffic-control/data/      control.sqlite and its own daily backups/
+#   /var/backups/agency-mac/<UTC>/claude-scheduled-tasks/     the scheduled routines' definitions (~/.claude/scheduled-tasks)
+#   /var/backups/agency-mac/<UTC>/claude-skills/ -hooks/ -agents/  the agents' skills, hooks and subagents (~/.claude)
+#   /var/backups/agency-mac/<UTC>/agents-home/                the global instructions and shared skills (~/.agents)
 # Every snapshot is a full tree, but a file unchanged since the newest snapshot is a hard link to it
 # (rsync --link-dest), so a day costs only what changed. Launchd runs the copy of this file in
 # ~/Backups/agency-mac (install-backup-launchd.sh); after a change here, re-run the installer.
@@ -24,6 +27,10 @@ remote=${MAC_BACKUP_REMOTE_DIR:-/var/backups/agency-mac}
 state=${MAC_BACKUP_DIR:-$HOME/Backups/agency-mac}
 openclaw=${OPENCLAW_DIR:-$HOME/.openclaw}
 traffic=${TRAFFIC_CONTROL_DIR:-$HOME/code/3-traffic/traffic-control}
+# The agents' own definitions: they live only on this Mac, in no repository (a skill that is a link into a repository is
+# copied as the link). Settings files are not taken: they may hold tokens.
+claude=${CLAUDE_DIR:-$HOME/.claude}
+agents_home=${AGENTS_HOME_DIR:-$HOME/.agents}
 min_free_gb=${MAC_BACKUP_MIN_FREE_GB:-20}
 ssh_opts=(-o BatchMode=yes -o ConnectTimeout=20 -o ServerAliveInterval=30 -o ServerAliveCountMax=6)
 
@@ -47,9 +54,10 @@ excludes=(
 )
 # What must be in a snapshot, or it is not one.
 required=(openclaw-workspace-chat/MEMORY.md openclaw-workspace-chat/AGENTS.md openclaw-workspace-chat/SOUL.md
-  openclaw-workspace/MEMORY.md openclaw-workspace/AGENTS.md traffic-control/data/control.sqlite)
+  openclaw-workspace/MEMORY.md openclaw-workspace/AGENTS.md traffic-control/data/control.sqlite
+  agents-home/AGENTS.md)
 
-for dir in "$openclaw/workspace-chat" "$openclaw/workspace" "$traffic/data/backups"; do
+for dir in "$openclaw/workspace-chat" "$openclaw/workspace" "$traffic/data/backups" "$claude/scheduled-tasks" "$agents_home"; do
   [[ -d $dir ]] || { printf 'Missing %s\n' "$dir" >&2; exit 1; }
 done
 [[ -f $traffic/data/control.sqlite ]] || { printf 'Missing %s\n' "$traffic/data/control.sqlite" >&2; exit 1; }
@@ -110,6 +118,12 @@ push "$openclaw/workspace-chat" openclaw-workspace-chat "${excludes[@]}"
 push "$openclaw/workspace" openclaw-workspace "${excludes[@]}"
 push "$work/traffic-control" traffic-control
 push "$traffic/data/backups" traffic-control/data/backups
+push "$claude/scheduled-tasks" claude-scheduled-tasks "${excludes[@]}"
+# Skills, hooks and subagents may be absent on a fresh Mac: what is there is copied.
+[[ ! -d $claude/skills ]] || push "$claude/skills" claude-skills "${excludes[@]}" --exclude=/.trash/
+[[ ! -d $claude/hooks ]] || push "$claude/hooks" claude-hooks "${excludes[@]}"
+[[ ! -d $claude/agents ]] || push "$claude/agents" claude-agents "${excludes[@]}"
+push "$agents_home" agents-home "${excludes[@]}"
 
 # Server side, step 2: the snapshot is complete and the database arrived intact, then its dated name,
 # then what it cost: du counts a hard-linked file once, so the second number is what is new today.
@@ -122,7 +136,8 @@ for f in "$@"; do [ -s "$f" ] || { echo "$f is missing in the snapshot, it stays
   || { echo "control.sqlite differs from the copy sent, it stays in .incoming-$stamp" >&2; exit 1; }
 cd "$dir"
 mv ".incoming-$stamp" "$stamp"
-for p in openclaw-workspace-chat openclaw-workspace traffic-control; do
+for p in openclaw-workspace-chat openclaw-workspace traffic-control claude-scheduled-tasks claude-skills claude-hooks claude-agents agents-home; do
+  [ -d "$stamp/$p" ] || continue
   printf "part\t%s\t%s\t%s\n" "$p" "$(find "$stamp/$p" -type f | wc -l)" "$(du -sb "$stamp/$p" | cut -f 1)"
 done
 if [ -n "$newest" ]; then printf "new\t%s\n" "$(du -sk "$newest" "$stamp" | tail -n 1 | cut -f 1)"
