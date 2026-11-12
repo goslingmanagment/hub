@@ -14,6 +14,7 @@ import {
   findMatterPerson,
   findPageFanByInput,
   listAgentCustomOrders,
+  listOpenCustomOrdersOfFan,
   listCustomOrderCardOwners,
   listCustomOrderMessagesOf,
   type CustomOrderRow,
@@ -27,7 +28,7 @@ import {
   type CustomActor, type CustomEventResult, type CustomMessageInput, type CustomStep,
 } from "./index.ts";
 import { reportUnmatchedCards } from "./checks.ts";
-import { fanInputOf, parseCardText, STEP_FROM } from "./rules.ts";
+import { dottedDay, fanInputOf, moscowDay, parseCardText, STEP_FROM } from "./rules.ts";
 
 /**
  * Заказ кастома, the agent key's door (write:customs): Gengar's `/tz` creates
@@ -126,6 +127,20 @@ export async function agentCreateCustomOrder(app: AgentApp, scope: AgentCustomSc
     if (fan !== null) {
       fanId = fan.fanId;
       if (page.platform === "onlyfans") conversationRef = fan.platformUserId;
+    }
+    // Four doors record orders and only a card's link or code tells a repeat: an agent never silently records a
+    // second open order of the same fan on the page. It hears the open ones; one more only with `another`.
+    const buyer = fanId === null && body.fan !== undefined ? body.fan.slice(0, 300) : null;
+    if (body.another !== true && (fanId !== null || buyer !== null)) {
+      const open = await listOpenCustomOrdersOfFan(app.db, { pageId: page.id, fanId, buyer });
+      if (open.length > 0) {
+        const named = open.map((one) => `${customOrderCode(one.id)} (recorded ${dottedDay(moscowDay(one.createdAt))}, state ${one.state})`).join(", ");
+        throw new ConflictError(
+          `The fan has open orders on ${page.pageLabel}: ${named}. The card is most likely one of them (attach it: custom step <code> --step card);`
+          + " a new custom of the fan is recorded with another: true",
+          { reason: "open_orders" },
+        );
+      }
     }
   }
   const id = await recordCustomOrder(app, {

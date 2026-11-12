@@ -1914,6 +1914,10 @@ function customHint(error: { status: number | null; code: string | null }): stri
       + " never record a second order for a card that carries a code";
   }
   if (error.status === 409 && reason === "code_other_page") return "code_other_page: the card's code is an order of another page: check --page";
+  if (error.status === 409 && reason === "open_orders") {
+    return "open_orders: the fan has open orders on the page (the message names them): the card is most likely one of them —"
+      + " attach it (hub custom step K-… --step card --card <link>); a new custom of the same fan: --another";
+  }
   if (error.status === 409 && reason === "unknown_event") return "unknown_event: the order has no delivery of that ref (read its messages: hub custom list --code K-…)";
   if (error.status === 409 && reason === "event_taken") return "event_taken: this eventRef names another message of the order: an event's ref is its own";
   if (error.status === 409 && reason === "person_unknown") return "No living Hub login of that name: check --accepted-by / --on-behalf-of";
@@ -2023,6 +2027,7 @@ export function customCreateBody(values: HubOptionValues, deps: HubRunDeps) {
       telegramRef: readString(values, "card"),
       deadlineOn: readString(values, "deadline"),
       onBehalfOf: readString(values, "on-behalf-of"),
+      another: readFlag(values, "another") ? true : undefined,
     }),
   });
 }
@@ -2071,7 +2076,9 @@ const CUSTOM_COMMANDS: HubCommand[] = [
       + " postedAt, author, sourceText) and the fan's link; flags override the file. Resolve the code first: a card whose title"
       + " carries «K-…» is that order's (hub custom list --code K-…); given its sourceText, create attaches the card to that order and"
       + " answers it (`outcome`: changed or unchanged; 409 code_unknown — a code of no order this key sees), never a second order and"
-      + " never a match by the fan's name. A fan that matches no fan of the page stays the buyer's string; no page — the order waits"
+      + " never a match by the fan's name. A fan with an open order on the page is refused (409 open_orders, the orders named):"
+      + " attach the card to one of them, or --another for a new custom of the same fan."
+      + " A fan that matches no fan of the page stays the buyer's string; no page — the order waits"
       + " for a person to confirm it. The same Telegram card again answers its order (`outcome`: unchanged). Prints the order's code:"
       + " put «K-…» into the card's title. Exit 0 — recorded or already there; 4 — refused or no answer. Needs write:customs.",
     example: "hub custom create --file card.json --page lora-1 --fan https://fansly.com/fan_name/posts --accepted-by alice",
@@ -2083,6 +2090,7 @@ const CUSTOM_COMMANDS: HubCommand[] = [
       card: { kind: "string", describe: "The card's message in Telegram, when it is posted already" },
       deadline: { kind: "string", describe: "The deadline, YYYY-MM-DD (Moscow)" },
       "on-behalf-of": { kind: "string", describe: "The Hub login on whose word the agent writes" },
+      another: { kind: "boolean", describe: "One more order for a fan who has an open one on the page (else 409 open_orders)" },
     },
     hint: customHint,
     run: async (client, values, deps) => {

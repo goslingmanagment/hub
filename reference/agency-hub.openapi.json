@@ -108758,6 +108758,9 @@
                     "minLength": 1,
                     "maxLength": 8000
                   },
+                  "another": {
+                    "type": "boolean"
+                  },
                   "onBehalfOf": {
                     "type": "string",
                     "minLength": 1,

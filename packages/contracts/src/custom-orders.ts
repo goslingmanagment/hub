@@ -384,6 +384,11 @@ export const agentCustomOrderCreateBodySchema = z.object({
   author: z.string().trim().min(1).max(120).optional(),
   /** The card's whole text as posted, without Markdown. */
   sourceText: z.string().trim().min(1).max(8000).optional(),
+  /**
+   * One more order for a fan who has an open one on the page: without it such a create is refused (409
+   * `open_orders`, the open orders named) — the custom is most likely one of them.
+   */
+  another: z.boolean().optional(),
   /** The person on whose word the agent writes (their login). */
   onBehalfOf: login.optional(),
 }).strict();

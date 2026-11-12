@@ -596,7 +596,7 @@ export async function applyCustomStep(
         }
         case "retract": {
           // The retraction is an event of its own (a note with its reason), so a repeat of it changes nothing.
-          const kept = await addMessage({ ...step.message, excerpt: step.reason }, "note");
+          const kept = await addMessage({ ...step.message, excerpt: step.message.excerpt ?? step.reason }, "note");
           if (kept === "taken") throw new ConflictError("This eventRef names another message of the order", { reason: "event_taken" });
           if (kept === "already") return false;
           const { matched, retracted } = await retractCustomOrderDeliveries(db, { orderId: order.id, ...step.retracts }, now);

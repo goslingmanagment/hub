@@ -242,6 +242,38 @@ export async function findCustomOrderIdByContentops(db: Database, contentopsRef:
   return num(result.rows[0]?.id);
 }
 
+/** The fan's open orders on the page (the fan, or — none confirmed — the same buyer's string), the oldest first. */
+export async function listOpenCustomOrdersOfFan(
+  db: Database,
+  input: { pageId: number; fanId: number | null; buyer: string | null },
+): Promise<Array<{ id: number; state: CustomOrderStateRow; createdAt: Date }>> {
+  const who = input.fanId !== null ? sql`fan_id = ${input.fanId}` : input.buyer !== null ? sql`fan_id is null and lower(buyer) = lower(${input.buyer})` : null;
+  if (who === null) return [];
+  const result = await db.execute<Row>(sql`
+    select id, state, created_at from custom_orders
+    where page_id = ${input.pageId} and ${who} and state not in ('given', 'closed', 'cancelled')
+    order by created_at, id limit 20`);
+  return result.rows.map((row) => ({ id: Number(row.id), state: row.state as CustomOrderStateRow, createdAt: date(row.created_at)! }));
+}
+
+/**
+ * An earlier import's order that nothing but its page and fan names (no Telegram card, no ContentOps order): the
+ * board's «нет карточки» brought in once, found again by the same page and fan (or buyer's string).
+ */
+export async function findImportedCustomOrderWithoutCard(
+  db: Database,
+  input: { pageId: number | null; fanId: number | null; buyer: string | null },
+): Promise<number | null> {
+  const who = input.fanId !== null ? sql`o.fan_id = ${input.fanId}` : input.buyer !== null ? sql`o.fan_id is null and lower(o.buyer) = lower(${input.buyer})` : sql`o.fan_id is null and o.buyer is null`;
+  const page = input.pageId === null ? sql`o.page_id is null` : sql`o.page_id = ${input.pageId}`;
+  const result = await db.execute<{ id: unknown }>(sql`
+    select o.id from custom_orders o
+    where o.origin = 'import' and o.contentops_ref is null and ${page} and ${who}
+      and not exists (select 1 from custom_order_cards c where c.order_id = o.id)
+    order by o.id limit 1`);
+  return num(result.rows[0]?.id);
+}
+
 export interface NewCustomOrderRow {
   pageId: number | null;
   fanId: number | null;

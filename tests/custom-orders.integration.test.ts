@@ -7,6 +7,7 @@ import { sha256Hex } from "@agency_hub_core/shared";
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import { AGENT_KEY_TOKEN_PREFIX, assignPageToUser, createUserAccount, setUserPassword } from "../apps/runtime/src/services/auth.ts";
+import { applyCustomOrdersImport, customOrdersImportArgsSchema, planCustomOrdersImport } from "../apps/runtime/src/services/custom-orders/import.ts";
 import { recordCustomOrder } from "../apps/runtime/src/services/custom-orders/index.ts";
 import { executeErasure, planErasure } from "../apps/runtime/src/services/erasure/index.ts";
 import { startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
@@ -161,8 +162,9 @@ describe("custom orders: who sees and moves what", () => {
     expect((await agent("/api/v1/agent/custom-orders", { pageLabel: "lora-2", fan: "fan_three", card })).statusCode).toBe(404);
     expect((await agent(`/api/v1/agent/custom-orders/${orders.elsewhere}`, { action: "edit", card: { notes: "x" } })).statusCode).toBe(404);
 
+    // fan_one has alice's open order on lora-1: one more is said in so many words.
     const created = await agent("/api/v1/agent/custom-orders", {
-      pageLabel: "lora-1", fan: "https://fansly.com/fan_one/posts", acceptedBy: "alice", card, telegramRef: "https://t.me/c/2600000002/6/200",
+      pageLabel: "lora-1", fan: "https://fansly.com/fan_one/posts", acceptedBy: "alice", card, telegramRef: "https://t.me/c/2600000002/6/200", another: true,
     });
     expect(created.statusCode, created.body).toBe(200);
     const order = agentCustomOrderResponseSchema.parse(created.json()).order;
@@ -289,6 +291,52 @@ describe("custom orders: who sees and moves what", () => {
       expect(refused.statusCode, other).toBe(409);
       expect(refused.json()).toMatchObject({ reason: "code_unknown" });
     }
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("records no second open order of a fan on a page through an agent unless it says another", async (context) => {
+    if (!testDb || !server) return context.skip();
+    const fanId = Number((await testDb.pool.query<{ id: string }>(
+      "insert into fans (platform, platform_user_id, username) values ('fansly', '7400000011', 'fan_eleven') returning id",
+    )).rows[0]!.id);
+    await testDb.pool.query("insert into page_fans (fan_id, platform_account_id, is_subscriber) values ($1, $2, true)", [fanId, pages["lora-1"]]);
+    const first = agentCustomOrderResponseSchema.parse((await agent("/api/v1/agent/custom-orders", { pageLabel: "lora-1", fan: "fan_eleven", card: { task: "Первый" } })).json());
+    // Gengar's `/tz` and the daily routine: the same fan's custom again, no card that would tell it — the open order is the answer.
+    const second = await agent("/api/v1/agent/custom-orders", { pageLabel: "lora-1", fan: "@fan_eleven", card: { task: "Второй" } });
+    expect(second.statusCode, second.body).toBe(409);
+    expect(second.json()).toMatchObject({ reason: "open_orders", message: expect.stringContaining(first.order.code) });
+    const another = await agent("/api/v1/agent/custom-orders", { pageLabel: "lora-1", fan: "fan_eleven", card: { task: "Второй" }, another: true });
+    expect(another.statusCode, another.body).toBe(200);
+    expect(agentCustomOrderResponseSchema.parse(another.json()).outcome).toBe("created");
+    const count = await testDb.pool.query("select count(*)::int as n from custom_orders where fan_id = $1", [fanId]);
+    expect(count.rows[0].n).toBe(2);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("makes a repeat of the import a no-op: every order it stored is found again, a cardless one too", async (context) => {
+    if (!testDb || !server) return context.skip();
+    const fanId = Number((await testDb.pool.query<{ id: string }>(
+      "insert into fans (platform, platform_user_id, username) values ('fansly', '7400000012', 'fan_twelve') returning id",
+    )).rows[0]!.id);
+    await testDb.pool.query("insert into page_fans (fan_id, platform_account_id, is_subscriber) values ($1, $2, true)", [fanId, pages["lora-1"]]);
+    const args = customOrdersImportArgsSchema.parse({
+      version: 1, cardsSince: "2026-01-01", modelGroupChats: ["2600000001"],
+      contentops: [{ model: "lora", orders: [{
+        id: "tg-2600000003-3-900", buyer: "fan_twelve", account: "lora-1", state: "waiting",
+        card: { ref: "tg:2600000003/3/900", posted_at: "2026-11-10T10:00:00Z", text: "📦 Описание заказа\n🎥 Описание задания: Импорт с карточкой" },
+      }] }],
+      // Gengar's board: an order with no card yet.
+      board: { open: [{ fan: "fan_twelve", page: "lora-1", card: null, status: "no_card", usd: 50, duration: "3 минуты" }], done: [] },
+    });
+    const plan = await planCustomOrdersImport(app, args);
+    expect(plan.orders).toHaveLength(2);
+    const created = await applyCustomOrdersImport(app, plan);
+    expect(created).toHaveLength(2);
+    // `--apply` once more with the same file: nothing new.
+    const again = await planCustomOrdersImport(app, args);
+    expect(again.orders).toEqual([]);
+    expect(again.existing.map((one) => one.code).sort()).toEqual([...created].sort());
+    expect(await applyCustomOrdersImport(app, again)).toEqual([]);
+    const count = await testDb.pool.query("select count(*)::int as n from custom_orders where fan_id = $1", [fanId]);
+    expect(count.rows[0].n).toBe(2);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("erases the fan's words with the fan: the messages' excerpts and authors and their copies in the history", async (context) => {
