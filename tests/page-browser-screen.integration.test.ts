@@ -143,6 +143,8 @@ async function rig(watch: { everyMs?: number; deadlineMs?: number } = {}): Promi
     pageBrowserEndpoints: { rpcUrl: () => "ws://127.0.0.1:9/rpc", screen: () => ({ host: "127.0.0.1", port: screen.port }) },
     pageBrowserScreenWatch: { everyMs: WATCH_MS, deadlineMs: 1_000, ...watch },
   });
+  // The console's name here: a change signed in by a cookie is taken only from Hub's own names (origin-check.ts).
+  Object.assign(app.config, { webConsoleOrigin: ORIGIN });
   await createUserAccount(app, { username: "owner-screen", role: "owner", password: "synthetic-password" }, { source: "cli" });
   const server = await buildApiServer(app);
   cleanups.push(() => server.close());

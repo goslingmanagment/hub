@@ -122,6 +122,10 @@ export const CLIENT_TOKEN_PROFILES = {
       // The page's voice-note limits and what is left of today's characters
       // (free, read-only), behind the same flag.
       "voiceNoteAllowance",
+      // web-link-v1: a one-time link into the team's place. It opens a NARROW
+      // web session (web-session-scopes.ts) that dies with this token: the
+      // profile's boundary holds in the browser too.
+      "authWebLink",
     ] as const satisfies readonly KernelOperationKey[],
     // `client_health` (H-11b) is never journaled: the capture lane folds it
     // into hourly rollups that hold no user.

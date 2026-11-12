@@ -110,6 +110,17 @@ export const AGENT_CAPABILITIES = [
    * changes a person itself. Never pay terms (ecosystem plan 2026-11-12).
    */
   "propose:people",
+  /**
+   * «Войти через хаб» for another service's server, one capability per
+   * service, so a key redeems only its own service's codes: it exchanges a
+   * one-time sign-in code for «who is this» — the person and whether they are
+   * the owner, never a Hub session token — and re-checks that sign-in later
+   * (`authSsoRedeem`, `authSsoCheck`; ecosystem plan §3.2). Reads nothing of a
+   * page: the key's page grant does not widen it. SIGNIN_CLIENT_CAPABILITIES.
+   */
+  "signin:contentops",
+  "signin:taskindex",
+  "signin:monitor",
 ] as const;
 
 export type AgentCapability = (typeof AGENT_CAPABILITIES)[number];

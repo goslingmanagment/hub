@@ -41,6 +41,7 @@ import {
   assertUserNotDeactivated,
   assignPageToUserTx,
   createUserOrRefuseDuplicate,
+  createWebSessionTx,
   getAdminUserById,
   getExistingUserById,
   lockExistingUserById,
@@ -482,6 +483,17 @@ export async function redeemAccountLink(
         revokedSessions: terminated?.sessions ?? 0,
       },
     });
-    return { username: user.username };
+    // /join signs the person in at once (ecosystem plan §3.2 p.6): the session
+    // is made here, after the old sign-ins were ended, in the same transaction
+    // as the password — a redeem that rolls back leaves no session behind.
+    const session = await createWebSessionTx(app, dbTx, { userId: user.id });
+    await recordAudit({ db: dbTx }, {
+      source: "api",
+      actorUserId: user.id,
+      targetUserId: user.id,
+      eventType: "auth.login",
+      metadata: { username: user.username, via: "account_link" },
+    });
+    return { username: user.username, sessionToken: session.sessionToken, sessionExpiresAt: session.expiresAt };
   });
 }

@@ -1860,6 +1860,9 @@ export const authSessions = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     revokedAt: timestamp("revoked_at", { withTimezone: true }),
     revokedReason: text("revoked_reason"),
+    /** 0388: a NARROW web session's device token (opened from the extension); null — a full session. */
+    narrowDeviceTokenId: bigint("narrow_device_token_id", { mode: "number" })
+      .references((): AnyPgColumn => deviceTokens.id, { onDelete: "cascade" }),
   },
   (table) => ({
     userIdx: index("auth_sessions_user_idx").on(table.userId),

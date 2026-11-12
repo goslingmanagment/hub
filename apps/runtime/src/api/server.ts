@@ -58,6 +58,9 @@ import {
 import { FanslySyncWorkQueuedError } from "../services/sync-engine-account.ts";
 import { formatRequestValidationMessage, requestBodyErrorStatus } from "./error-boundary.ts";
 import { createRequestAuth, unauthorizedFor } from "./request-auth.ts";
+import { crossOriginRefusal } from "./origin-check.ts";
+import { narrowWebSessionRefusal } from "../services/narrow-web-session.ts";
+import { signinNamesOf } from "../services/signin-handoff.ts";
 import type { ApiModuleContext } from "../modules/context.ts";
 import { registerAgentReadRoutes } from "../modules/agent-read/index.ts";
 import { registerAudienceRoutes } from "../modules/audience/index.ts";
@@ -362,6 +365,8 @@ export async function buildApiServer(appContext: AppContext) {
   // access for page ids that come from the query or body, which this hook
   // cannot see.
   const routePolicyIndex = buildRoutePolicyIndex();
+  // The pages a change signed in by a cookie is taken from: Hub's own web names (origin-check.ts).
+  const signinNames = signinNamesOf(appContext.config);
 
   // Route → declaration table, collected at registration time. Feeds the
   // generated authorization-policy document (and the SDK generator needs the
@@ -409,6 +414,21 @@ export async function buildApiServer(appContext: AppContext) {
       request.log.error({ routeKey: entry.key }, "auth-policy: route has no auth declaration");
       throw new ForbiddenError("Route has no authorization declaration");
     }
+    // A change signed in by a cookie comes from a page of Hub's own names, or not
+    // at all: SameSite does not separate the agency's subdomains. Before the
+    // principal is resolved, so a refused request touches nothing.
+    const crossOrigin = crossOriginRefusal({
+      method: request.method,
+      routeKey: entry.key,
+      authKind: entry.auth.kind,
+      headers: request.headers,
+      hasSessionCookie: typeof request.cookies[SESSION_COOKIE_NAME] === "string",
+      allowedOrigins: signinNames.hubOrigins,
+      allowLoopback: signinNames.allowLoopback,
+    });
+    if (crossOrigin) {
+      throw crossOrigin;
+    }
     const params = request.params as Record<string, unknown> | null;
     const pageLabelParam = typeof params?.pageLabel === "string" ? params.pageLabel : undefined;
     const verdict = await computeAuthPolicyVerdict({
@@ -429,7 +449,11 @@ export async function buildApiServer(appContext: AppContext) {
     // chat-extension H-3: a narrow client token reaches only its profile's
     // routes (client-token-profile.ts).
     if (clientTokenAllowlistApplies(entry.auth)) {
-      const refusal = clientTokenRouteRefusal(entry.key, await resolvePrincipal(request));
+      const principal = await resolvePrincipal(request);
+      const refusal = clientTokenRouteRefusal(entry.key, principal)
+        // The narrow web session (opened from the extension): the team's place
+        // alone, an owner's device included (web-session-scopes.ts).
+        ?? narrowWebSessionRefusal(entry.key, principal);
       if (refusal) {
         throw refusal;
       }

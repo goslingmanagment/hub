@@ -122,6 +122,17 @@ const envSchema = z.object({
   // with a `payouts` key (it opens that route only). Unset key: Выплаты show the shift reports only.
   LEDGER_URL: z.string().url().default("https://ledger.gosling-agency.ru"),
   LEDGER_PAYOUTS_KEY: optionalTrimmedStringSchema,
+  // One sign-in across the names Hub serves (ecosystem plan §3.2): the console's
+  // and the team's names (Hub's own web apps, where the session itself is
+  // planted), and the other services' servers that redeem a code themselves
+  // (`name=callback URL`; each with its own key and `signin:<name>` capability).
+  WEB_CONSOLE_ORIGIN: z.string().url().default("https://hub.gosling-agency.ru"),
+  WEB_TEAM_ORIGIN: z.string().url().default("https://chatgoose.gosling-agency.ru"),
+  WEB_SIGNIN_CLIENTS: z.string().default(
+    "contentops=https://contentops.gosling-agency.ru/auth/hub/callback,"
+      + "taskindex=https://tasks.gosling-agency.ru/auth/hub/callback,"
+      + "monitor=https://monitor.gosling-agency.ru/auth/hub/callback",
+  ),
   FANSLY_REPLIES_REWALK_CYCLE_DAYS: z.coerce.number().int().min(1).max(365).default(14),
   // Owner decision №6 (2026-11-07 rollout): the pages whose vault walk reads a
   // moved album from its head only; empty = every page walks it in full.
@@ -356,6 +367,61 @@ function parseLabelKeyPairs(envName: string, raw: string | undefined | null) {
   return pairs;
 }
 
+/** An origin as a browser sends it (`https://name[:port]`), or a boot error. */
+function webOriginOf(envName: string, value: string): string {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error(`${envName}: ${value} is not a URL`);
+  }
+  if ((url.protocol !== "https:" && url.protocol !== "http:") || url.username || url.password
+    || url.pathname !== "/" || url.search || url.hash) {
+    throw new Error(`${envName}: ${value} must be a bare origin (scheme://name[:port])`);
+  }
+  return url.origin;
+}
+
+const WEB_SIGNIN_CLIENT_NAME = /^[a-z][a-z0-9-]{0,39}$/;
+
+/** WEB_SIGNIN_CLIENTS: `name=https://callback` entries, comma- or space-separated. */
+export function parseWebSigninClients(raw: string | undefined | null): Record<string, string> {
+  const clients: Record<string, string> = {};
+  for (const { label, key } of parseNameUrlPairs("WEB_SIGNIN_CLIENTS", raw)) {
+    if (!WEB_SIGNIN_CLIENT_NAME.test(label)) {
+      throw new Error(`WEB_SIGNIN_CLIENTS: ${label} is not a client name (a-z, 0-9, -)`);
+    }
+    let url: URL;
+    try {
+      url = new URL(key);
+    } catch {
+      throw new Error(`WEB_SIGNIN_CLIENTS: the callback of ${label} is not a URL`);
+    }
+    if ((url.protocol !== "https:" && url.protocol !== "http:") || url.username || url.password || url.search || url.hash) {
+      throw new Error(`WEB_SIGNIN_CLIENTS: the callback of ${label} must be http(s), without a query or credentials`);
+    }
+    clients[label] = url.href;
+  }
+  return clients;
+}
+
+function parseNameUrlPairs(envName: string, raw: string | undefined | null) {
+  const pairs: Array<{ label: string; key: string }> = [];
+  for (const part of (raw ?? "").split(/[\s,]+/).filter(Boolean)) {
+    const separator = part.indexOf("=");
+    const label = separator > 0 ? part.slice(0, separator) : "";
+    const key = separator > 0 ? part.slice(separator + 1) : "";
+    if (label.length === 0 || key.length === 0) {
+      throw new Error(`${envName} entries must use the format name=url`);
+    }
+    if (pairs.some((pair) => pair.label === label)) {
+      throw new Error(`${envName} repeats the name ${label}`);
+    }
+    pairs.push({ label, key });
+  }
+  return pairs;
+}
+
 /** The accounts Hub spends: ANTHROPIC_API_KEYS, else the single
  * ANTHROPIC_API_KEY as the account `default`, else none. */
 export function anthropicKeyPoolEntries(
@@ -415,6 +481,12 @@ export interface AppConfig {
   ledgerUrl?: string;
   /** LEDGER_PAYOUTS_KEY: the ledger key with the `payouts` scope; null — Выплаты do not read the ledger. */
   ledgerPayoutsKey?: string | null;
+  /** WEB_CONSOLE_ORIGIN: the console's name (the owner's place); absent — the production name. */
+  webConsoleOrigin?: string;
+  /** WEB_TEAM_ORIGIN: the team's name (chatgoose., Workboard for the team); absent — the production name. */
+  webTeamOrigin?: string;
+  /** WEB_SIGNIN_CLIENTS: other services' servers that redeem a code themselves, name → callback URL; absent — ContentOps, TaskIndex, server-monitor. */
+  webSigninClients?: Readonly<Record<string, string>>;
   /** How stale a post's last walk must be before the round-robin re-reads it. */
   fanslyRepliesRewalkCycleDays?: number;
   /** CSV of exact page labels whose vault walk reads a moved album from its
@@ -812,6 +884,9 @@ export function loadConfig(
     ofapiEventWorkerReplicas: parsed.OFAPI_EVENT_WORKER_REPLICAS,
     ledgerUrl: parsed.LEDGER_URL,
     ledgerPayoutsKey: parsed.LEDGER_PAYOUTS_KEY ?? null,
+    webConsoleOrigin: webOriginOf("WEB_CONSOLE_ORIGIN", parsed.WEB_CONSOLE_ORIGIN),
+    webTeamOrigin: webOriginOf("WEB_TEAM_ORIGIN", parsed.WEB_TEAM_ORIGIN),
+    webSigninClients: parseWebSigninClients(parsed.WEB_SIGNIN_CLIENTS),
     fanslyRepliesRewalkCycleDays: parsed.FANSLY_REPLIES_REWALK_CYCLE_DAYS,
     fanslyVaultHeadWalkPages: parsed.FANSLY_VAULT_HEAD_WALK_PAGES,
     fanslyPublicLookupEnabled: parsed.FANSLY_PUBLIC_LOOKUP_ENABLED,

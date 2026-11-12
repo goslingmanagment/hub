@@ -26,11 +26,17 @@ export function useMe() {
     staleTime: 5 * 60_000,
   });
   const user = query.data?.user;
+  // A narrow session (opened from the extension) opens the chatter's part alone, whatever the
+  // person's role: Hub refuses it every team and owner read, so the screens and the menu follow.
+  const narrow = query.data?.narrow === true;
   return {
     ...query,
     user,
-    role: (user?.role ?? null) as Role | null,
+    role: (narrow ? "chatter" : user?.role ?? null) as Role | null,
+    /** The person's own role, for what the menu says about them. */
+    accountRole: (user?.role ?? null) as Role | null,
+    narrow,
     /** The owner: Доступ, disputes and the shift review are theirs only (Hub checks it too). */
-    isOwner: user?.role === "owner",
+    isOwner: !narrow && user?.role === "owner",
   };
 }

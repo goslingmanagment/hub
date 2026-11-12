@@ -1,5 +1,5 @@
 import { pathSegment } from "./path.js";
-import { isChatterSite, isConsoleSite } from "./sites.js";
+import { isChatterSite, isConsoleSite, peerSiteOrigin, signInHopHref } from "./sites.js";
 import type { Period, PeriodOption } from "../stores/periodStore.js";
 
 /**
@@ -164,14 +164,24 @@ export const CHATTER_HOME = "/workboard/";
 /** «Мои смены» itself: where the account page and the cabinet's old tabs lead a chatter. */
 export const CHATTER_SHIFTS = "/workboard/my/shifts";
 
+/** The one-time code's way between the names (`/api/v1/auth/sso?…`): a page load, never the console's router. */
+export function isSigninContinuation(path: string): boolean {
+  return (path.split(/[?#]/)[0] ?? "") === "/api/v1/auth/sso";
+}
+
+/** A place outside the console's router on this host: Workboard, or the way to the other name. */
+export function leavesTheConsole(path: string): boolean {
+  return isWorkboardPath(path) || isSigninContinuation(path);
+}
+
 /**
- * Where a chatter is sent from a console page. Their home in Workboard —
- * except on the console's own production name: a chatter login is not a way
- * in there, and the sign-in page ends the session and says where the account
- * is.
+ * Where a chatter is sent from a console page: their home in Workboard. On the
+ * console's own name that home is on the team's name: the chatter is taken
+ * there, signed in (the session crosses by a one-time code) — never turned away.
  */
 export function chatterExit(): string {
-  return isConsoleSite() ? "/login" : CHATTER_HOME;
+  const team = isConsoleSite() ? peerSiteOrigin() : null;
+  return team === null ? CHATTER_HOME : signInHopHref(team, `${team}${CHATTER_HOME}`);
 }
 
 /**
@@ -179,14 +189,35 @@ export function chatterExit(): string {
  * to — every one of them answers 403 — so a remembered `next` wins only when it
  * is a place of theirs: Workboard (their part of it, owner 2026-11-10) or the
  * account page; anything else, or nothing, is their home, «Мои смены». On the
- * chatters' site the account page is every other role's only home: the console
- * is not served on that name. Elsewhere every other role keeps the requested
- * destination. `requested` has passed `resolveLoginReturnPath`: a path of this
- * host.
+ * chatters' site every other role lands in the team's place — Workboard — or
+ * on the account page when that was asked for: the console is not served on
+ * that name. Elsewhere every other role keeps the requested destination.
+ * `requested` has passed `resolveLoginReturnPath`: a path of this host.
  */
 export function resolveRoleHome(role: string, requested: string): string {
   if (role === "chatter") return opensWorkboard(requested) || opensCabinet(requested) ? requested : CHATTER_HOME;
-  return isChatterSite() ? CABINET_PATH : requested;
+  if (!isChatterSite()) return requested;
+  return opensWorkboard(requested) || opensCabinet(requested) ? requested : CHATTER_HOME;
+}
+
+/**
+ * The address a fresh sign-in loads next. On either of the two names the same
+ * session is planted on the other one on the way (one-time code, a few
+ * redirects): signed in on one, signed in on the other. A chatter who signed in
+ * on the console's name lands in their place on the team's name; a chatter on
+ * the team's name stays (the console has nothing for them). A way back into the
+ * code's flow (`/api/v1/auth/sso?…`, another name asking) is followed as it is.
+ * A local build on one name has no other name: the home itself.
+ */
+export function afterSignIn(role: string, requested: string): string {
+  if (isSigninContinuation(requested)) return requested;
+  const home = resolveRoleHome(role, requested);
+  const peer = peerSiteOrigin();
+  if (peer === null || typeof window === "undefined") return home;
+  if (isConsoleSite()) {
+    return signInHopHref(peer, role === "chatter" ? `${peer}${home}` : `${window.location.origin}${home}`);
+  }
+  return role === "chatter" ? home : signInHopHref(peer, `${window.location.origin}${home}`);
 }
 
 /**

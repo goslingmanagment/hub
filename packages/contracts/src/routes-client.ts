@@ -205,6 +205,8 @@ export const CLIENT_HUB_CAPABILITY_NAMES = [
   // A fan's account on the page: `accountState` on the Spenders items and the fan marks; `clientFanBadges` takes
   // `accountSeen`, whether the page's session returned the fan's account to the tab.
   "fan-account-state-v1",
+  // The team's place without a password: `authWebLink` gives a one-time link that opens a narrow web session.
+  "web-link-v1",
 ] as const;
 /**
  * Append-only. `client_outdated` (the caller's `x-client-version` is below the

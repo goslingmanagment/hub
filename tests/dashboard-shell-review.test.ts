@@ -65,12 +65,14 @@ describe("the way back after the sign-in", () => {
     }
   });
 
-  it("on the chatters' site, keeps the account page the home of every other role and Workboard a chatter's", () => {
+  it("on the chatters' site, takes every role to the team's place — Workboard — or the account page when asked", () => {
     vi.stubGlobal("window", { location: { origin: CHATTER_SITE_ORIGIN } });
     expect(home("chatter", "/workboard/my/shifts")).toBe("/workboard/my/shifts");
     expect(home("chatter", null)).toBe("/workboard/");
-    expect(home("owner", "/workboard/payouts")).toBe("/account");
-    expect(home("team_lead", "/settings")).toBe("/account");
+    expect(home("owner", "/workboard/payouts")).toBe("/workboard/payouts");
+    expect(home("owner", "/account")).toBe("/account");
+    expect(home("owner", null)).toBe("/workboard/");
+    expect(home("team_lead", "/settings")).toBe("/workboard/");
   });
 });
 
