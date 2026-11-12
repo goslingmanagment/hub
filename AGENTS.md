@@ -64,6 +64,8 @@ chatters' AI features, the owner's dashboard. Production is `agency-de` (`root@1
 ## One home for each thing
 Hub is the home of the agency's WORK objects; the ledger keeps accounting, ContentOps keeps files. Before adding a
 table, a screen or a computation, find the thing's home here — a second home for the same thing is a bug.
+The one map of the whole system — every part, entity, door between parts, sign-in and copy — is `~/code/SYSTEM.md` on
+the owner's machine (outside this repository); a change that moves a home or adds a door updates it in the same task.
 - **People**: the registry (`apps/runtime/src/services/people`, tables `people`, `person_*`). A login is not a person
   (`person_logins`); never rename `users.username`: scripts outside the repo match by it. Pay terms are money:
   owner-only, never serialised into anyone else's session. Where a person is paid (`person_payout_details`, written by
