@@ -43,6 +43,8 @@ export interface PeopleCheckAgentKey {
   personId: number | null;
   expiresAt: Date;
   revokedAt: Date | null;
+  /** A replacement was issued for it: it ends by itself a day later, which is nobody's matter. */
+  replacedAt: Date | null;
 }
 
 /** The open proposals of agents about one person (`personId`) or one proposed new person (`proposedCode`). */
@@ -102,7 +104,7 @@ export async function readPeopleCheckSnapshot(db: Database, input: { today: stri
         from users u left join person_logins l on l.user_id = u.id
        order by u.id`),
     db.execute<Row>(sql`
-      select a.id, a.name, k.person_id, a.expires_at, a.revoked_at
+      select a.id, a.name, k.person_id, a.expires_at, a.revoked_at, a.replaced_at
         from agent_keys a left join person_agent_keys k on k.agent_key_id = a.id
        order by a.id`),
     db.execute<Row>(sql`select id, label, platform from pages order by id`),
@@ -142,6 +144,7 @@ export async function readPeopleCheckSnapshot(db: Database, input: { today: stri
       personId: row.person_id === null || row.person_id === undefined ? null : Number(row.person_id),
       expiresAt: date(row.expires_at),
       revokedAt: nullableDate(row.revoked_at),
+      replacedAt: nullableDate(row.replaced_at),
     })),
     pages: pages.rows.map((row) => ({ id: Number(row.id), label: String(row.label), platform: String(row.platform) })),
     workingPages: groupIds(working.rows as Array<{ owner: unknown; item: unknown }>),

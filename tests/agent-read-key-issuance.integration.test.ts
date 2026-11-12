@@ -12,6 +12,7 @@ import {
   insertAgentKey,
   insertPersonAgentKey,
   insertPersonRow,
+  readPeopleCheckSnapshot,
 } from "@agency_hub_core/db";
 import { sha256Hex } from "@agency_hub_core/shared";
 
@@ -19,6 +20,7 @@ import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import { replaceAgentKey, updateAgentKeyPages } from "../apps/runtime/src/services/agent-keys.ts";
 import { AGENT_KEY_TOKEN_PREFIX, createUserAccount } from "../apps/runtime/src/services/auth.ts";
+import { peopleCheckItems } from "../apps/runtime/src/services/matter-checks.ts";
 import {
   resetIntegrationDatabase,
   startIntegrationTestDatabase,
@@ -319,6 +321,18 @@ describe("agent read plane: key issuance", () => {
     const listed = (await server.inject({ method: "GET", url: "/api/v1/agent/keys", headers: { cookie } })).json() as Array<{ id: number; isActive: boolean; replacedAt: string | null; expiresAt: string }>;
     expect(listed.find((key) => key.id === old.key.id)).toMatchObject({ isActive: true, replacedAt: marked.replaced_at!.toISOString(), expiresAt: marked.expires_at.toISOString() });
     expect(listed.find((key) => key.id === next.key.id)).toMatchObject({ isActive: true, replacedAt: null });
+
+    // «Ждут вас» says nothing of the replaced key: its end a day ahead is the replacement at work, not a key the
+    // owner is about to lose (people.agent_key_expiring would keep it for a month after it ended).
+    const expiring = async () => peopleCheckItems(
+      await readPeopleCheckSnapshot(testDb!.db, { today: new Date().toISOString().slice(0, 10), idleSince: new Date(0), now: new Date() }),
+      new Date(),
+    )["people.agent_key_expiring"].map((item) => item.key);
+    expect(await expiring()).toEqual([]);
+    // A key that simply nears its end still waits for the owner.
+    await testDb.pool.query("update agent_keys set expires_at = now() + interval '2 days' where id = $1", [next.key.id]);
+    expect(await expiring()).toEqual([`people.agent_key_expiring:${next.key.id}`]);
+    await testDb.pool.query("update agent_keys set expires_at = now() + interval '90 days' where id = $1", [next.key.id]);
 
     // Both rows of the change are audited, and neither carries a token.
     const audit = await testDb.pool.query<{ event_type: string; metadata: Record<string, unknown> }>(
