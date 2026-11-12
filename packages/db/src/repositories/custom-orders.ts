@@ -44,7 +44,7 @@ export interface CustomOrderRow {
   sourceText: string | null;
   /** The parts ready in the current round (services/custom-orders/rules.ts, `roundOf`). */
   partsDone: Array<"video" | "photos">;
-  /** When a person last set «снят» by hand on the board (0999): their word stands for every part until a newer revision request. */
+  /** When a person last set «снят» by hand on the board (0410): their word stands for every part until a newer revision request. */
   shotByHandAt: Date | null;
   personFields: string[];
   version: number;
@@ -517,7 +517,7 @@ export interface CustomOrderRoundRow {
   complete: boolean | null;
   retracted: boolean;
   done: boolean;
-  /** A request the round itself fixed (0999); false — fixed by a word, or open. */
+  /** A request the round itself fixed (0410); false — fixed by a word, or open. */
   doneByDelivery: boolean;
   /** The Telegram message (its own link, or an event's evidence) and its words: what the state «правка» names. */
   telegramRef: string | null;

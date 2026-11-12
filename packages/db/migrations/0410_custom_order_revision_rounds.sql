@@ -36,13 +36,13 @@ alter table custom_order_messages
     not done_by_delivery or (kind = 'revision' and done_at is not null));
 
 comment on column custom_order_messages.done_by_delivery is
-  'A revision request fixed by the round''s own deliveries (0999): it opens again when one of them is taken back. False — fixed by a word.';
+  'A revision request fixed by the round''s own deliveries (0410): it opens again when one of them is taken back. False — fixed by a word.';
 
 alter table custom_orders
   add column if not exists shot_by_hand_at timestamptz;
 
 comment on column custom_orders.shot_by_hand_at is
-  'When a person last set «снят» by hand on the board (0999): their word stands for every part until a newer revision request.';
+  'When a person last set «снят» by hand on the board (0410): their word stands for every part until a newer revision request.';
 
 update custom_orders o
 set shot_by_hand_at = said.at

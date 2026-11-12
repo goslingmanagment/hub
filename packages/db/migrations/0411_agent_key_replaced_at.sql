@@ -17,4 +17,4 @@ set local lock_timeout = '5s';
 alter table agent_keys add column if not exists replaced_at timestamptz;
 
 comment on column agent_keys.replaced_at is
-  'When a replacement was issued for this key (0999): its expires_at is final from then and no longer slides on use. Null: not replaced.';
+  'When a replacement was issued for this key (0411): its expires_at is final from then and no longer slides on use. Null: not replaced.';
