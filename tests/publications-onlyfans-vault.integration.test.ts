@@ -75,6 +75,9 @@ let addAnswer: (listId: string, mediaIds: string[]) => Response = (listId, media
   return json({ data: { id: Number(listId), type: "custom", name: lists.get(listId)?.name ?? "" } });
 };
 let postsSent = 0;
+/** Reads of the page's lists; `listsFail`: OnlyFansAPI answers them with 500. */
+let listReads = 0;
+let listsFail = false;
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 const bodyOf = (init?: RequestInit) => JSON.parse(
@@ -149,6 +152,8 @@ beforeEach(async (context) => {
   creates = [];
   adds = [];
   postsSent = 0;
+  listReads = 0;
+  listsFail = false;
   createAnswer = (name) => {
     const id = String(nextId++);
     lists.set(id, { name, media: [] });
@@ -168,6 +173,8 @@ beforeEach(async (context) => {
       return json({ data: { id: 700001, responseType: "post" } });
     }
     if (pathname.endsWith(`/${ACCOUNT}/media/vault/lists`) && method === "GET") {
+      listReads += 1;
+      if (listsFail) return json({ message: "upstream" }, 500);
       const list = [...lists].map(([id, entry]) => ({ id: Number(id), name: entry.name, type: "custom", mediaCount: entry.media.length }));
       return json({ data: { list, hasMore: false } });
     }
@@ -250,6 +257,11 @@ async function approvedAlbum(count = 3, title = "White robe", overrides: Partial
 /** Minutes of the executor until the album settles (or `ticks` pass). */
 async function runAlbum(ticks = 6) {
   for (let tick = 0; tick < ticks; tick += 1) await runOnlyfansVaultAlbumTick(app, { runUpload: fakeRunUpload });
+}
+
+/** One minute of the executor as if it ran `minutes` from now. */
+async function tickAt(minutes: number) {
+  await runOnlyfansVaultAlbumTick(app, { runUpload: fakeRunUpload, now: new Date(Date.now() + minutes * MIN) });
 }
 
 async function statusOf(id: number) {
@@ -371,6 +383,51 @@ describe("one attempt per write", () => {
     expect((await statusOf(id))?.status).toBe("published");
     await runAlbum(2);
     expect(adds).toHaveLength(1);
+  });
+});
+
+describe("steps that cannot read or write end", () => {
+  it("a walk that keeps failing is tried 3 times, 5 minutes apart, then the album is not sent and no more reads follow", async () => {
+    listsFail = true;
+    const id = await approvedAlbum(2);
+    await tickAt(0); // admitted
+    await tickAt(1); // walk 1 fails
+    await tickAt(2); // within 5 minutes: no read
+    expect(listReads).toBe(1);
+    await tickAt(7); // walk 2
+    await tickAt(13); // walk 3: gives up
+    expect(listReads).toBe(3);
+    expect(await statusOf(id)).toMatchObject({ status: "missed" });
+    expect((await statusOf(id))?.status_reason).toMatch(/^not_sent:lists_not_read:/);
+    await tickAt(30);
+    expect(listReads).toBe(3);
+    expect(creates).toEqual([]);
+  });
+
+  it("a create that does not leave is tried again without a new walk for 10 minutes; after 90 minutes it is cancelled and the album is not sent", async () => {
+    const id = await approvedAlbum(2);
+    await tickAt(0); // admitted
+    // The transport is down for the create: the action stays prepared.
+    const original = app.ofapi!.dispatchGovernedRaw!.bind(app.ofapi);
+    const transport = vi.spyOn(app.ofapi!, "dispatchGovernedRaw").mockImplementation(async (context, request) => {
+      if (request.operation === "ofapi_command_action_vault_list_create") throw new Error("transport down");
+      return original(context, request);
+    });
+    await tickAt(1); // walk, then the create does not leave
+    expect(listReads).toBe(1);
+    await tickAt(3);
+    await tickAt(8);
+    expect(listReads).toBe(1);
+    await tickAt(15); // past 10 minutes: a fresh walk
+    expect(listReads).toBe(2);
+    await tickAt(95); // past 90 minutes from the first try: cancelled
+    transport.mockRestore();
+    expect(await statusOf(id)).toMatchObject({ status: "missed", status_reason: "not_sent:album_create_not_sent" });
+    const state = (await testDb!.pool.query<{ state: string }>(
+      "select state from ofapi_action_intents where action = 'vault_list_create'")).rows;
+    expect(state).toEqual([{ state: "cancelled" }]);
+    await tickAt(100);
+    expect(creates).toEqual([]);
   });
 });
 

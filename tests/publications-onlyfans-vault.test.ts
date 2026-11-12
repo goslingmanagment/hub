@@ -13,6 +13,8 @@ import {
   onlyfansVaultExpectedOrder,
   onlyfansVaultRunSpent,
   vaultFailuresInARow,
+  vaultStepReadFailed,
+  vaultStepReadTurn,
   vaultUploadOutcome,
   ONLYFANS_VAULT_ALBUM_OVERHEAD_CREDITS,
 } from "../apps/runtime/src/services/publications-onlyfans-vault.ts";
@@ -140,6 +142,22 @@ describe("the uploads' order", () => {
     expect(count).toBe(2);
     expect(vaultFailuresInARow(count, "failed")).toBe(3);
     expect(vaultFailuresInARow(count, "done")).toBe(0);
+  });
+});
+
+describe("a step's failed reads", () => {
+  it("are tried again no sooner than 5 minutes later, and given up after the third", () => {
+    const t0 = NOW.getTime();
+    expect(vaultStepReadTurn(undefined, t0)).toBe("read");
+    const first = vaultStepReadFailed(undefined, t0);
+    expect(first.giveUp).toBe(false);
+    expect(vaultStepReadTurn(first.reads, t0 + 4 * MIN)).toBe("wait");
+    expect(vaultStepReadTurn(first.reads, t0 + 5 * MIN)).toBe("read");
+    const second = vaultStepReadFailed(first.reads, t0 + 5 * MIN);
+    const third = vaultStepReadFailed(second.reads, t0 + 10 * MIN);
+    expect(second.giveUp).toBe(false);
+    expect(third.giveUp).toBe(true);
+    expect(vaultStepReadTurn(third.reads, t0 + 60 * MIN)).toBe("give_up");
   });
 });
 

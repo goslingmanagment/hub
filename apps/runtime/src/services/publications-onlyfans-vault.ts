@@ -41,7 +41,7 @@ import { loadEffectiveConfig } from "./effective-config.ts";
 import { BadRequestError } from "./errors.ts";
 import { notifyPublishingStoppedIncident } from "./notification-incidents.ts";
 import { executeOfapiCaptureJobChunk } from "./ofapi-capture-jobs.ts";
-import { dispatchOfapiAction, getOfapiAction, prepareOfapiAction } from "./ofapi-actions.ts";
+import { cancelOfapiAction, dispatchOfapiAction, getOfapiAction, prepareOfapiAction } from "./ofapi-actions.ts";
 import { capturePublicationFileOfapiSource, createOwnerOfapiMediaUpload, OFAPI_UPLOAD_MAX_BYTES } from "./ofapi-media-sources.ts";
 import { onlyfansUploadCredits, stableUuid } from "./publications-onlyfans.ts";
 import {
@@ -94,6 +94,14 @@ export const ONLYFANS_VAULT_READ_FAILURES_MAX = 3;
 /** Reads again while a file the album holds is not ready yet, a few minutes apart. */
 export const ONLYFANS_VAULT_NOT_READY_REREADS = 5;
 const NOT_READY_REREAD_GAP_MS = 2 * 60_000;
+/** A step's read that failed is tried again no sooner than this (reads cost the common account's credits)… */
+export const ONLYFANS_VAULT_STEP_READ_GAP_MS = 5 * 60_000;
+/** …and after this many failures the step gives up. */
+export const ONLYFANS_VAULT_STEP_READ_FAILURES_MAX = 3;
+/** The walk made for a create not sent yet is reused this long: past it, someone may have made the album by hand. */
+export const ONLYFANS_VAULT_CREATE_WALK_REUSE_MS = 10 * 60_000;
+/** A create or an add still not sent this long after its first try is cancelled: it can never leave later. */
+export const ONLYFANS_VAULT_WRITE_NOT_SENT_MS = 90 * 60_000;
 
 const MINUTE_MS = 60_000;
 
@@ -286,6 +294,29 @@ export function vaultUploadOutcome(job: Pick<OnlyfansVaultUploadFacts, "state" |
     return { kind: "unknown", why: reason };
   }
   return { kind: "waiting", left: job.dispatchCount > 0 || cursor !== null };
+}
+
+/** One step's failed reads, kept in the run's notes under the step's key. */
+export interface VaultStepReads {
+  failures: number;
+  lastFailedAt: string | null;
+}
+
+/**
+ * Whether a step may read now: never before 5 minutes after its last failed
+ * read; "give_up" once it failed 3 times (the step settles by what has left).
+ */
+export function vaultStepReadTurn(reads: VaultStepReads | undefined, nowMs: number): "read" | "wait" | "give_up" {
+  if (reads === undefined || reads.failures === 0) return "read";
+  if (reads.failures >= ONLYFANS_VAULT_STEP_READ_FAILURES_MAX) return "give_up";
+  const last = reads.lastFailedAt === null ? 0 : Date.parse(reads.lastFailedAt);
+  return nowMs - last >= ONLYFANS_VAULT_STEP_READ_GAP_MS ? "read" : "wait";
+}
+
+/** A step's reads after one more failure at `nowMs`, and whether the step gives up now. */
+export function vaultStepReadFailed(reads: VaultStepReads | undefined, nowMs: number): { reads: VaultStepReads; giveUp: boolean } {
+  const failures = (reads?.failures ?? 0) + 1;
+  return { reads: { failures, lastFailedAt: new Date(nowMs).toISOString() }, giveUp: failures >= ONLYFANS_VAULT_STEP_READ_FAILURES_MAX };
 }
 
 /** What a run of failed or unknown uploads in a row does: three stop the uploads. */
@@ -622,6 +653,56 @@ function countReads(state: Followed, requests: number) {
   state.run = { ...state.run, actionCredits: state.run.actionCredits + requests };
 }
 
+function stepReads(state: Followed, key: string): VaultStepReads | undefined {
+  const all = state.run.notes.stepReads as Record<string, VaultStepReads> | undefined;
+  return all?.[key];
+}
+
+/** Count one failed read of the step `key`; true: it gave up (3 failures). */
+function stepReadFailed(ctx: RunContext, state: Followed, key: string): boolean {
+  const next = vaultStepReadFailed(stepReads(state, key), ctx.now.getTime());
+  const all = { ...(state.run.notes.stepReads as Record<string, VaultStepReads> | undefined), [key]: next.reads };
+  state.run = { ...state.run, notes: { ...state.run.notes, stepReads: all } };
+  return next.giveUp;
+}
+
+/** Whether the step `key` may read now; "give_up" after its third failure. */
+function stepReadTurn(ctx: RunContext, state: Followed, key: string): "read" | "wait" | "give_up" {
+  return vaultStepReadTurn(stepReads(state, key), ctx.now.getTime());
+}
+
+/** Gives up the album's lookup (the walk or the named album): nothing left, so "not sent" — unless a create's answer was lost. */
+async function albumNotRead(ctx: RunContext, state: Followed, what: "lists" | "album", why: string): Promise<StepResult> {
+  const createId = onlyfansVaultActionId(state.record.id, state.run.revisionId, "vault_list_create");
+  if (state.run.notes.createLost === true) return settle(ctx, state, "unknown", `album_create:${what}_not_read`);
+  // A create prepared but never sent can never leave later.
+  if ((await existingAction(ctx.app, createId))?.state === "prepared") {
+    await cancelOfapiAction(ctx.app, createId, state.revision.approvedByUserId).catch(() => undefined);
+    const after = await existingAction(ctx.app, createId);
+    if (after !== null && after.state !== "cancelled") return "wait";
+  }
+  return settle(ctx, state, "missed", `not_sent:${what}_not_read:${why}`.slice(0, 300));
+}
+
+/**
+ * A create or an add still prepared 90 minutes after its first try is
+ * cancelled. "cancelled": it can never leave; "left": it left meanwhile, its
+ * real state is followed; "keep": still inside its 90 minutes.
+ */
+async function giveUpUnsentWrite(ctx: RunContext, state: Followed, id: string, firstTryKey: string): Promise<"cancelled" | "left" | "keep"> {
+  const firstTry = typeof state.run.notes[firstTryKey] === "string" ? Date.parse(state.run.notes[firstTryKey] as string) : null;
+  if (firstTry === null || ctx.now.getTime() - firstTry < ONLYFANS_VAULT_WRITE_NOT_SENT_MS) return "keep";
+  await cancelOfapiAction(ctx.app, id, state.revision.approvedByUserId).catch(() => undefined);
+  const after = await existingAction(ctx.app, id);
+  return after?.state === "cancelled" ? "cancelled" : "left";
+}
+
+/** The first try of a write, for its 90 minutes. */
+function noteFirstTry(ctx: RunContext, state: Followed, key: string) {
+  if (typeof state.run.notes[key] === "string") return;
+  state.run = { ...state.run, notes: { ...state.run.notes, [key]: ctx.now.toISOString() } };
+}
+
 /** The album, before any file (plan §2.2): named, found by its exact title in a fresh full walk, or created — one attempt. */
 async function albumStep(ctx: RunContext, state: Followed): Promise<StepResult> {
   const { app } = ctx;
@@ -629,9 +710,14 @@ async function albumStep(ctx: RunContext, state: Followed): Promise<StepResult> 
   if (run.albumRef !== null) return moveTo(ctx, state, { step: run.albumExisted ? "contents" : "uploads" });
   // An album the draft names by id: read it (1 credit); gone — refused.
   if (form.albumRef !== null) {
+    const turn = stepReadTurn(ctx, state, "named");
+    if (turn === "wait") return "wait";
+    if (turn === "give_up") return albumNotRead(ctx, state, "album", String(state.run.notes.namedWhy ?? "read_failed"));
     const named = await readOnlyfansVaultListById(state.read, form.albumRef);
     countReads(state, named.intentIds.length);
     if (!named.ok) {
+      state.run = { ...state.run, notes: { ...state.run.notes, namedWhy: named.reason } };
+      if (stepReadFailed(ctx, state, "named")) return albumNotRead(ctx, state, "album", named.reason);
       await saveRun(app, state.run);
       return "wait";
     }
@@ -644,6 +730,18 @@ async function albumStep(ctx: RunContext, state: Followed): Promise<StepResult> 
   const created = await existingAction(app, createId);
   // On the wire this very moment (another minute's request): its answer comes first.
   if (created?.state === "dispatching") return "wait";
+  if (created?.state === "prepared" && !createLost) {
+    const unsent = await giveUpUnsentWrite(ctx, state, createId, "createFirstTryAt");
+    if (unsent === "cancelled") return settle(ctx, state, "missed", "not_sent:album_create_not_sent");
+    if (unsent === "left") return "next";
+    // The walk made for it is reused for 10 minutes: the write is tried again without a new walk.
+    const walkedAt = typeof state.run.notes.createWalkAt === "string" ? Date.parse(state.run.notes.createWalkAt) : null;
+    if (walkedAt !== null && ctx.now.getTime() - walkedAt < ONLYFANS_VAULT_CREATE_WALK_REUSE_MS) {
+      const write = await albumWrite(ctx, state, createId, { action: "vault_list_create", pageId: record.pageId, name: record.text.trim() } as OfapiAction);
+      await saveRun(app, state.run);
+      return write === "sent" ? "next" : "wait";
+    }
+  }
   if (created !== null && created.state !== "prepared" && !createLost) {
     if (created.state === "confirmed" && created.remoteId !== null && /^[1-9]\d{0,19}$/.test(created.remoteId)) {
       // Written on the publication at once: everything after goes into it.
@@ -657,7 +755,11 @@ async function albumStep(ctx: RunContext, state: Followed): Promise<StepResult> 
     // The answer is lost or not the documented one: one more walk decides (below).
     state.run = { ...state.run, notes: { ...state.run.notes, createLost: true } };
   }
-  // A fresh full walk of the page's lists (8–9 reads of 30).
+  // A fresh full walk of the page's lists (8–9 reads of 30); a walk cut short
+  // is tried again no sooner than 5 minutes later, 3 times at most.
+  const turn = stepReadTurn(ctx, state, "walk");
+  if (turn === "wait") return "wait";
+  if (turn === "give_up") return albumNotRead(ctx, state, "lists", String(state.run.notes.walkWhy ?? "read_failed"));
   const walk = await readOnlyfansVaultLists(state.read);
   countReads(state, walk.requests);
   await applyOnlyfansVaultListWalk(app.db, {
@@ -665,6 +767,9 @@ async function albumStep(ctx: RunContext, state: Followed): Promise<StepResult> 
     lists: walk.lists.map((list) => ({ listRef: list.id, name: list.name, type: list.type, mediaCount: list.mediaCount })),
   });
   if (!walk.complete) {
+    const why = walk.reason ?? "incomplete";
+    state.run = { ...state.run, notes: { ...state.run.notes, walkWhy: why } };
+    if (stepReadFailed(ctx, state, "walk")) return albumNotRead(ctx, state, "lists", why);
     await saveRun(app, state.run);
     return "wait";
   }
@@ -676,12 +781,19 @@ async function albumStep(ctx: RunContext, state: Followed): Promise<StepResult> 
     await setPublicationVaultAlbumRef(app.db, { id: record.id, albumRef: matches[0]! });
     return moveTo(ctx, state, { albumRef: matches[0]!, albumExisted: true, step: "contents" });
   }
+  // An album with the title appeared (made by hand meanwhile): a create prepared before never leaves.
+  if (matches.length > 0 && created?.state === "prepared") {
+    await cancelOfapiAction(app, createId, state.revision.approvedByUserId).catch(() => undefined);
+    if ((await existingAction(app, createId))?.state !== "cancelled") return "next";
+  }
   if (matches.length > 1) return settle(ctx, state, "missed", `not_sent:album_title_ambiguous:${matches.length}:${matches.join(",")}`);
   if (matches.length === 1) {
     await setPublicationVaultAlbumRef(app.db, { id: record.id, albumRef: matches[0]! });
     return moveTo(ctx, state, { albumRef: matches[0]!, albumExisted: true, step: "contents" });
   }
   // None: created — one attempt; the first write, 1 credit, before thousands go on files.
+  state.run = { ...state.run, notes: { ...state.run.notes, createWalkAt: ctx.now.toISOString() } };
+  noteFirstTry(ctx, state, "createFirstTryAt");
   const write = await albumWrite(ctx, state, createId, { action: "vault_list_create", pageId: record.pageId, name: title } as OfapiAction);
   await saveRun(app, state.run);
   return write === "sent" ? "next" : "wait";
@@ -689,9 +801,19 @@ async function albumStep(ctx: RunContext, state: Followed): Promise<StepResult> 
 
 /** What the album already holds (plan §2.3): those files are neither uploaded nor added. */
 async function contentsStep(ctx: RunContext, state: Followed): Promise<StepResult> {
+  const notRead = (why: string) => state.run.notes.createLost === true
+    // A create left: the album may be its — a person looks.
+    ? settle(ctx, state, "unknown", `album_contents_not_read:${why}`.slice(0, 300))
+    // Nothing was written: "not sent" is true.
+    : settle(ctx, state, "missed", `not_sent:album_contents_not_read:${why}`.slice(0, 300));
+  const turn = stepReadTurn(ctx, state, "contents");
+  if (turn === "wait") return "wait";
+  if (turn === "give_up") return notRead(String(state.run.notes.contentsWhy ?? "read_failed"));
   const read = await readOnlyfansVaultListMedia(state.read, state.run.albumRef as string);
   countReads(state, read.intentIds.length);
   if (!read.ok) {
+    state.run = { ...state.run, notes: { ...state.run.notes, contentsWhy: read.reason } };
+    if (stepReadFailed(ctx, state, "contents")) return notRead(read.reason);
     await saveRun(ctx.app, state.run);
     return "wait";
   }
@@ -751,9 +873,15 @@ async function startFile(ctx: RunContext, state: Followed, file: OnlyfansVaultAl
     }
   }
   if (file.mediaRef !== null) {
+    // Its read failed 3 times: not uploaded again by itself — it may be in the vault.
+    const key = `media:${file.item}`;
+    const turn = stepReadTurn(ctx, state, key);
+    if (turn === "wait") return "wait";
+    if (turn === "give_up") return fileSettled(ctx, state, file, { state: "unknown", reason: "vault_media_not_read" }, "skipped");
     const media = await readOnlyfansVaultMediaById(state.read, file.mediaRef);
     countReads(state, media.intentIds.length);
     if (!media.ok) {
+      if (stepReadFailed(ctx, state, key)) return fileSettled(ctx, state, file, { state: "unknown", reason: "vault_media_not_read" }, "skipped");
       await saveRun(app, state.run);
       return "wait";
     }
@@ -895,7 +1023,17 @@ async function addStep(ctx: RunContext, state: Followed): Promise<StepResult> {
   if (mediaIds.length === 0) return moveTo(ctx, state, { step: "read" });
   const addId = onlyfansVaultActionId(record.id, run.revisionId, "vault_list_add_media");
   const existing = await existingAction(app, addId);
-  if (existing === null || existing.state === "prepared") {
+  if (existing?.state === "prepared") {
+    const unsent = await giveUpUnsentWrite(ctx, state, addId, "addFirstTryAt");
+    if (unsent === "cancelled") {
+      // The files are in the vault: a re-send takes them without a second payment.
+      const files = vaultAlbumReason(vaultFileGroups(state.run.files, state.run.stopReason));
+      return settle(ctx, state, "rejected", ["album_media:not_sent", files].filter((part) => part !== null).join(";"));
+    }
+  }
+  const current = existing?.state === "prepared" ? await existingAction(app, addId) : existing;
+  if (current === null || current.state === "prepared") {
+    noteFirstTry(ctx, state, "addFirstTryAt");
     const write = await albumWrite(ctx, state, addId, { action: "vault_list_add_media", pageId: record.pageId, listId: run.albumRef as string, mediaIds } as OfapiAction);
     await saveRun(app, state.run);
     if (write !== "sent") return "wait";
