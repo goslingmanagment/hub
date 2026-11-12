@@ -6,6 +6,7 @@ import { createFanslyPage, createModel, upsertTransaction } from "@agency_hub_co
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import { assignPageToUser, createUserAccount, setUserPassword } from "../apps/runtime/src/services/auth.ts";
+import { recordCustomOrder } from "../apps/runtime/src/services/custom-orders/index.ts";
 import { startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 import { INTEGRATION_TEST_TIMEOUT_MS } from "./helpers/timeouts.ts";
@@ -114,6 +115,35 @@ describe("customs of a fan", () => {
     expect((await post(`/${secondId}`, { action: "cancel" })).json()).toMatchObject({ changed: true });
     expect((await card()).customPayments.map((payment) => payment.paymentRef)).toEqual([tipB]);
     expect((await post("", { description: "голосовое, заново", paymentRef: tipB })).statusCode).toBe(200);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("answers «Отменить» it will not do with a refusal the panel shows: another person's order, past «Оплачен» or not", async (context) => {
+    if (!testDb || !server) return context.skip();
+    await createUserAccount(app, { username: "petya", role: "chatter" }, { source: "cli" });
+    const petya = await fixtureUserId(app, "petya");
+    const vanya = await fixtureUserId(app, "vanya");
+    const order = (acceptedByUserId: number, state: "paid" | "at_model" | "shot") => recordCustomOrder(app, {
+      pageId, fanId, buyer: null, conversationRef: null, card: { task: `Ролик ${state}` }, deadlineOn: null, acceptedByUserId, origin: "agent",
+      state, actor: { door: "system" },
+    });
+    const stateOf = async (id: number) => (await testDb!.pool.query("select state from custom_orders where id = $1", [id])).rows[0].state;
+    // The released panel offers «Отменить» on every order in work (it reads them all as «оплачен»). Another chatter's
+    // order is not this chatter's to cancel, on the board either: the answer is a refusal, never a silent nothing.
+    for (const state of ["paid", "at_model", "shot"] as const) {
+      const theirs = await order(petya, state);
+      const refused = await post(`/${theirs}`, { action: "cancel" });
+      expect(refused.statusCode, `${state}: ${refused.body}`).toBe(409);
+      expect(refused.json()).toMatchObject({ reason: "not_allowed" });
+      expect(await stateOf(theirs)).toBe(state);
+    }
+    // Their own order past «Оплачен» the chatter cancels, as on the board.
+    const own = await order(vanya, "at_model");
+    expect((await post(`/${own}`, { action: "cancel" })).json()).toMatchObject({ changed: true });
+    expect(await stateOf(own)).toBe("cancelled");
+    // A cancelled custom is final: a change answers `changed: false`, as before.
+    const again = await post(`/${own}`, { action: "cancel" });
+    expect(again.statusCode, again.body).toBe(200);
+    expect(again.json()).toMatchObject({ changed: false });
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("keeps a fan of another page out of reach: no custom written or changed through this page", async (context) => {

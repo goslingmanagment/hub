@@ -14,11 +14,12 @@ import {
   applyCustomStep,
   customViewerOf,
   deliveryCandidatesOf,
+  notAllowed,
   paymentCandidatesOf,
   recordCustomOrder,
   type CustomStep,
 } from "./index.ts";
-import { cardOf, extensionStateOf, extensionStepOf, mayTakeStep, priceMillsOf, priceTextOf } from "./rules.ts";
+import { cardOf, extensionStateOf, extensionStepOf, mayTakeStep, priceMillsOf, priceTextOf, STEP_FROM } from "./rules.ts";
 
 /**
  * The released extension's block «Кастомы» (Chat Memory week 4: the tab
@@ -113,9 +114,11 @@ export async function extensionRecordCustom(
 }
 
 /**
- * «Это оплата?», «Отдали: это он?», «Отменить», a correction — from the extension. A step that is not the
- * chatter's (cancelling another person's order) or not from the order's state answers `false`, as the old routes
- * answered a final custom: the extension shows the order as it is.
+ * «Это оплата?», «Отдали: это он?», «Отменить», a correction — from the extension. A step the order's state takes
+ * no more (an ended custom) answers `false`, as the old routes answered a final custom: the extension shows the
+ * order as it is. A step that is not this person's — the released panel offers «Отменить» on every order in work,
+ * another chatter's too, at the model or shot as well — is refused in so many words (409 `not_allowed`, which the
+ * panel shows), as the board refuses it; their own order they cancel at any step, as on the board.
  */
 export async function extensionChangeCustom(
   app: ExtApp,
@@ -145,8 +148,9 @@ export async function extensionChangeCustom(
     else card.price = priceTextOf(body.priceMills);
     step = { action: "edit", card, by: "person" };
   }
-  // The old routes knew one rule: an ended custom changes no more (`changed: false`). A step the chatter may not take is the same.
-  if (!mayTakeStep(viewer, order, step.action)) return false;
+  // The old routes knew one rule: an ended custom changes no more (`changed: false`).
+  if (!STEP_FROM[step.action].includes(order.state)) return false;
+  if (!mayTakeStep(viewer, order, step.action)) throw notAllowed("This step of the order is not yours: it is its chatter's, or the customs lead's");
   return applyCustomStep(app, { orderId: order.id, step, actor: { door: "extension", userId: principal.user.id }, viewer, now });
 }
 

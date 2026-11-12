@@ -17,13 +17,16 @@ import {
   addCustomOrderCard,
   addCustomOrderMessage,
   addCustomOrderPayment,
+  answerCustomOrderRevisions,
   bumpCustomOrder,
   closeCustomOrderRevisions,
   dismissCustomSale,
   findCustomOrder,
+  findCustomOrderLastHandMove,
   findCustomSale,
   findPageFanByInput,
   findPageSummaryByLabel,
+  hasCustomOrderStepByRef,
   insertCustomOrder,
   insertCustomOrderEvent,
   listCustomDeliverySuggestions,
@@ -31,21 +34,25 @@ import {
   listCustomOrderActorNames,
   listCustomOrderPayments,
   listCustomOrders,
+  listCustomOrdersInStates,
   listCustomPaymentCandidates,
   listObjectEvents,
   listPersonFans,
   listUsersWithPersonRight,
-  listCustomOrderLiveDeliveries,
   listCustomOrderMessages,
+  listCustomOrderRoundMessages,
   lockCustomOrder,
   markCustomOrderRevisionDone,
   moveCustomOrder,
   removeCustomOrderPayment,
+  reopenCustomOrderRevisions,
   retractCustomOrderDeliveries,
+  setCustomOrderStateNote,
   updateCustomOrderFields,
   type CustomLookalikeRow,
   type CustomOrderMessageResult,
   type CustomOrderMessageRow,
+  type CustomOrderRoundRow,
   type CustomOrderRow,
   type CustomOrderSaleRow,
   type CustomOrderStateRow,
@@ -57,19 +64,22 @@ import { requireSessionUser, type AuthPrincipal, type HumanAuthPrincipal } from 
 import { ConflictError, NotFoundError } from "../errors.ts";
 import {
   cardOf,
-  DELIVERY_MOVES_FROM,
   fanInputOf,
   isBoardAction,
   leadsSteps,
   mayTakeStep,
   overdueDaysOf,
+  partsAbout,
   renderCardText,
+  roundOf,
   seesOrder,
+  stateByMessages,
   STEP_FROM,
   STEP_TO,
   stepsFor,
   wantedParts,
   whatOf,
+  type CustomPart,
   type CustomViewer,
 } from "./rules.ts";
 
@@ -370,7 +380,8 @@ export type CustomStep =
   | { action: "unpay"; transactionId: number }
   | { action: "at_model"; telegramRef?: string | undefined }
   | { action: "partly"; note?: string | undefined; ref?: string | undefined }
-  | { action: "revision"; note?: string | undefined; ref?: string | undefined; message?: CustomMessageInput; ordinal?: number }
+  /** A revision request: about `part`, or — none named — about the whole order. No `message`: a person's «Правка» on the board. */
+  | { action: "revision"; note?: string | undefined; ref?: string | undefined; message?: CustomMessageInput; ordinal?: number; part?: CustomPart | undefined }
   | { action: "shot"; ref?: string | undefined }
   | { action: "refused"; reason: string; ref?: string | undefined }
   | { action: "given"; messageRef: string; at: Date }
@@ -380,7 +391,9 @@ export type CustomStep =
   | { action: "revision_done"; telegramRef: string | null; eventRef?: string | null; ordinal: number }
   | { action: "message"; kind: "repost" | "confirmation" | "note"; message: CustomMessageInput }
   /** A delivery taken back, by its eventRef or its message's link; the retraction is its own event (a note). */
-  | { action: "retract"; retracts: { eventRef: string } | { telegramRef: string }; reason: string; message: CustomMessageInput & { eventRef: string } };
+  | { action: "retract"; retracts: { eventRef: string } | { telegramRef: string }; reason: string; message: CustomMessageInput & { eventRef: string } }
+  /** The server's own: the order put where its kept messages say (`settleCustomOrders`). */
+  | { action: "settle" };
 
 function patched(card: CustomOrderCard, patch: CustomOrderCardPatch): CustomOrderCard {
   const next: Record<string, unknown> = { ...card };
@@ -393,6 +406,76 @@ function patched(card: CustomOrderCard, patch: CustomOrderCardPatch): CustomOrde
 }
 
 const sameValue = (left: unknown, right: unknown) => JSON.stringify(left ?? null) === JSON.stringify(right ?? null);
+
+/** What «правка» is about: the newest request still open, its words and its message; null — none is open. */
+function aboutOf(rows: readonly CustomOrderRoundRow[], open: readonly number[]): { note: string | null; ref: string | null } | null {
+  const newest = rows.find((row) => row.id === open.at(-1));
+  return newest === undefined ? null : { note: newest.excerpt, ref: newest.telegramRef };
+}
+
+/** The steps that put the order in a state by a message of the model's group (`ref`). */
+const STATE_STEPS_BY_MESSAGE: ReadonlySet<string> = new Set(["partly", "shot", "refused"]);
+
+/**
+ * What an order's kept messages say against what it holds, read-only: the state they put it in (`stateByMessages`),
+ * the parts ready by them, whether that differs — and whether a person moved the order by their own hand after its
+ * newest message (they decided with it in sight: such an order is never settled).
+ */
+async function settledOf(db: Database, order: CustomOrderRow): Promise<{ to: CustomOrderStateRow; partsDone: CustomPart[]; differs: boolean; byHand: boolean }> {
+  const wanted = wantedParts(cardOf(order.card));
+  const rows = await listCustomOrderRoundMessages(db, order.id);
+  const round = roundOf({ wanted, partsDone: order.partsDone, messages: rows, saidWholeAt: order.shotByHandAt });
+  const to = stateByMessages(order.state, round);
+  const differs = rows.length > 0 && (to !== order.state || round.answered.length > 0 || round.reopened.length > 0
+    || !sameValue(round.partsDone, wanted.filter((part) => order.partsDone.includes(part))));
+  const newest = rows.reduce((latest, row) => Math.max(latest, row.at.getTime()), 0);
+  const hand = differs ? await findCustomOrderLastHandMove(db, order.id) : null;
+  return { to, partsDone: round.partsDone, differs, byHand: hand !== null && hand.getTime() > newest };
+}
+
+export interface CustomSettleRow {
+  code: string;
+  state: CustomOrderStateRow;
+  /** Where the order's kept messages put it. */
+  byMessages: CustomOrderStateRow;
+  partsDone: CustomPart[];
+  partsByMessages: CustomPart[];
+  /** differs — not applied (a dry run); settled — put there now; by_hand — left: a person moved it after its newest message. */
+  outcome: "differs" | "settled" | "by_hand";
+}
+
+/**
+ * The orders whose kept messages disagree with what they hold — an import stored their messages without a step, and
+ * a repeat of a kept message changes nothing, so no door can apply them any more. Without `apply` nothing is
+ * written: the list says each order's state now and by its messages. With it each is settled by the step every
+ * message goes through (`settle`), with its line in the order's history; a second run finds nothing. `orderIds`
+ * limits it to those orders.
+ */
+export async function settleCustomOrders(
+  app: CustomApp,
+  input: { apply: boolean; orderIds?: readonly number[] | undefined; now?: Date },
+): Promise<CustomSettleRow[]> {
+  const out: CustomSettleRow[] = [];
+  const orders = (await listCustomOrdersInStates(app.db, STEP_FROM.settle))
+    .filter((order) => input.orderIds === undefined || input.orderIds.includes(order.id));
+  for (const order of orders) {
+    const settled = await settledOf(app.db, order);
+    if (!settled.differs) continue;
+    const row = { code: customOrderCode(order.id), state: order.state, byMessages: settled.to, partsDone: order.partsDone, partsByMessages: settled.partsDone };
+    if (settled.byHand) {
+      out.push({ ...row, outcome: "by_hand" });
+    } else if (!input.apply) {
+      out.push({ ...row, outcome: "differs" });
+    } else {
+      const changed = await applyCustomStep(app, {
+        orderId: order.id, step: { action: "settle" }, actor: { door: "system" }, viewer: null, ...(input.now === undefined ? {} : { now: input.now }),
+      });
+      // Moved on between the read and the lock (a step of a door): nothing left to settle, nothing to list.
+      if (changed) out.push({ ...row, outcome: "settled" });
+    }
+  }
+  return out;
+}
 
 /**
  * One step of an order in one transaction, with its history event and a new version: the state checked under
@@ -418,6 +501,12 @@ export async function applyCustomStep(
       if (!seesOrder(input.viewer, order)) throw notFound();
       if (!isBoardAction(step.action) || !mayTakeStep(input.viewer, order, step.action)) throw notAllowed();
     }
+    // One rule for every step that names a message or an event: one the order already keeps changes nothing, whatever
+    // the order's state is now — the daily routine repeats every message it sees. A message step (delivery, revision,
+    // message, retract) is known by the message's own identity (`addMessage` below); a state step by a message
+    // (partly, shot, refused) by that step and message in the order's history.
+    if (STATE_STEPS_BY_MESSAGE.has(step.action) && "ref" in step && typeof step.ref === "string"
+      && (await hasCustomOrderStepByRef(db, { orderId: order.id, event: `custom_order.${step.action}`, ref: step.ref }))) return false;
     if (!STEP_FROM[step.action].includes(order.state)) throw notAllowed(`An order «${order.state}» takes no step «${step.action}»`);
     const event = (name: string, changes: Record<string, unknown>) => insertCustomOrderEvent(db, {
       orderId: order.id, event: `custom_order.${name}`, door: input.actor.door, userId: input.actor.userId ?? null,
@@ -442,6 +531,24 @@ export async function applyCustomStep(
       ...(message.telegramRef === null ? {} : { telegramRef: message.telegramRef }),
       ...(message.eventRef ? { eventRef: message.eventRef } : {}),
     });
+    /**
+     * The order's round after this step's message (rules.ts, `roundOf`), written: the parts ready now and the requests
+     * the round fixes or opens again. `questioned` — the parts this step takes a word's readiness from. Every message
+     * step of every door settles here, so the readiness is computed in one place.
+     */
+    const settleRound = async (wanted: readonly CustomPart[], questioned: readonly CustomPart[] = []) => {
+      const rows = await listCustomOrderRoundMessages(db, order.id);
+      const round = roundOf({ wanted, partsDone: order.partsDone, messages: rows, questioned, saidWholeAt: order.shotByHandAt });
+      if (!sameValue(round.partsDone, order.partsDone)) await updateCustomOrderFields(db, order.id, { partsDone: round.partsDone }, now);
+      await answerCustomOrderRevisions(db, { orderId: order.id, ids: round.answered, at: now });
+      await reopenCustomOrderRevisions(db, { orderId: order.id, ids: round.reopened });
+      return { ...round, about: aboutOf(rows, round.open) };
+    };
+    /** «Правка» about a request still open: the order moves there; in it already, only what it is about follows. */
+    const toRevision = async (about: { note: string | null; ref: string | null }) => {
+      if (order.state !== "revision") await move("revision", about);
+      else if (order.stateNote !== about.note || order.stateRef !== about.ref) await setCustomOrderStateNote(db, order.id, about, now);
+    };
 
     const changed = await (async (): Promise<boolean> => {
       switch (step.action) {
@@ -526,21 +633,19 @@ export async function applyCustomStep(
           const part = step.part ?? wanted[0]!;
           // The same delivery again (or its link holding another message) is nothing new: an old message never moves the order.
           if ((await addMessage(step.message, "delivery", { part, complete: step.complete })) !== "stored") return false;
-          // Kept in every state; it moves the order only from the states before «снят» and from a revision.
-          const moves = DELIVERY_MOVES_FROM.includes(order.state);
-          const partsDone = step.complete ? [...new Set([...order.partsDone, part])] : order.partsDone;
-          // A revision is a requirement of its own round: only a delivery marked whole answers it (and fixes the open
-          // requests); a piece of the new version leaves the order «правка», never «снят» from the old round's parts.
-          const revisionOpen = order.openRevisions > 0 || order.state === "revision";
-          const answered = moves && step.complete && revisionOpen ? await closeCustomOrderRevisions(db, { orderId: order.id, at: now }) : 0;
-          const whole = wanted.every((one) => partsDone.includes(one));
-          const to: CustomOrderStateRow = !moves ? order.state : revisionOpen && !step.complete ? "revision" : whole ? "shot" : "partly";
-          if (partsDone.length !== order.partsDone.length) await updateCustomOrderFields(db, order.id, { partsDone }, now);
-          if (to !== order.state) await move(to, { ref: step.message.telegramRef });
+          // The round decides: a whole delivery makes its own part ready when it is newer than the last request about
+          // that part, and fixes only the requests whose every part is ready now — never the other part's request.
+          const round = await settleRound(wanted);
+          // Kept in every state; it moves the order only from the states before «снят» and from a revision: «снят» when
+          // every wanted part is ready and no request is open, «правка» while one is (or while a revision still waits
+          // for its part), else «сдан частично».
+          const to = stateByMessages(order.state, round);
+          if (to === "revision" && round.about !== null) await toRevision(round.about);
+          else if (to !== order.state) await move(to, { ref: step.message.telegramRef });
           await event("delivery", {
             from: order.state, to, part, complete: step.complete, ...refsOf(step.message),
             ...(step.message.excerpt ? { excerpt: step.message.excerpt } : {}),
-            ...(answered > 0 ? { revisionsDone: answered } : {}),
+            ...(round.answered.length > 0 ? { revisionsDone: round.answered.length } : {}),
           });
           return true;
         }
@@ -549,11 +654,13 @@ export async function applyCustomStep(
         case "refused": {
           const note = step.action === "refused" ? step.reason : step.action === "shot" ? null : step.note ?? null;
           const ref = step.ref ?? null;
-          if (order.state === step.action && order.stateRef === ref && order.stateNote === note && ref !== null) return false;
           // «Снят»: every part whole, and the open revision requests fixed by it (an order with one open is never shot).
+          // Set by a person's own hand, it is their word: it stands until a newer revision request, and a delivery
+          // taken back afterwards does not undo it (`shot_by_hand_at`; the reader's «снят» is no such word).
           let answered = 0;
           if (step.action === "shot") {
-            await updateCustomOrderFields(db, order.id, { partsDone: wantedParts(cardOf(order.card)) }, now);
+            const byHand = input.actor.userId !== undefined && input.actor.userId !== null;
+            await updateCustomOrderFields(db, order.id, { partsDone: wantedParts(cardOf(order.card)), ...(byHand ? { shotByHandAt: now } : {}) }, now);
             answered = await closeCustomOrderRevisions(db, { orderId: order.id, at: now });
           }
           await move(STEP_TO[step.action]!, { note, ref });
@@ -563,20 +670,36 @@ export async function applyCustomStep(
           return true;
         }
         case "revision": {
+          const wanted = wantedParts(cardOf(order.card));
           const note = step.note ?? step.message?.excerpt ?? null;
-          if (step.message !== undefined && (await addMessage({ ...step.message, excerpt: note }, "revision", { ordinal: step.ordinal ?? 0 })) !== "stored") return false;
+          // Every request is a message of the order with its own time, so the round can tell what came after it. A
+          // person's «Правка» on the board has no message of the model's group: the hub names it itself.
+          const message: CustomMessageInput = step.message
+            ?? { telegramRef: null, eventRef: `${input.actor.door}:revision:${order.version + 1}`, at: null, author: null, excerpt: null };
+          if ((await addMessage({ ...message, excerpt: note }, "revision", { ordinal: step.ordinal ?? 0, part: step.part ?? null })) !== "stored") return false;
+          // It sends back the parts it is about: each is ready again only by a whole delivery newer than the request.
+          const round = await settleRound(wanted, partsAbout(wanted, step.part));
           const ref = step.ref ?? step.message?.telegramRef ?? null;
-          if (order.state !== "revision" || order.stateNote !== note || order.stateRef !== ref) await move("revision", { note, ref });
+          // A request reported late, whose parts came whole after it, is fixed already and moves nothing.
+          if (round.about !== null && (order.state !== "revision" || order.stateNote !== round.about.note || order.stateRef !== round.about.ref)) {
+            await move("revision", round.about);
+          }
           await event("revision", {
             from: order.state, ...(note === null ? {} : { note }), ...(ref === null ? {} : { ref }), ...(step.ordinal ? { ordinal: step.ordinal } : {}),
+            ...(step.part === undefined ? {} : { part: step.part }),
             ...(step.message?.eventRef ? { eventRef: step.message.eventRef } : {}),
           });
           return true;
         }
         case "revision_done": {
-          // The request is fixed; the order stays «правка» until a whole delivery or «снят» (the round's readiness).
+          // The request is fixed by a word (it stays fixed); the order stays «правка» until the parts it sent back come
+          // whole again, or «снят».
           const done = await markCustomOrderRevisionDone(db, { orderId: order.id, telegramRef: step.telegramRef, eventRef: step.eventRef ?? null, ordinal: step.ordinal, at: now });
           if (!done) return false;
+          if (order.state === "revision") {
+            const round = await settleRound(wantedParts(cardOf(order.card)));
+            if (round.about !== null) await toRevision(round.about);
+          }
           await event("revision_done", {
             ...(step.telegramRef === null ? {} : { telegramRef: step.telegramRef }), ...(step.eventRef ? { eventRef: step.eventRef } : {}), ordinal: step.ordinal,
           });
@@ -601,20 +724,37 @@ export async function applyCustomStep(
           if (kept === "already") return false;
           const { matched, retracted } = await retractCustomOrderDeliveries(db, { orderId: order.id, ...step.retracts }, now);
           if (matched === 0) throw new ConflictError("The order has no delivery of that ref", { reason: "unknown_event" });
-          // A part stops counting unless another delivery not taken back made it whole; the state follows the parts that stay.
-          const live = await listCustomOrderLiveDeliveries(db, order.id);
-          const lost = [...new Set(retracted.filter((one) => one.complete !== false && one.part !== null).map((one) => one.part!))]
-            .filter((part) => !live.wholeParts.includes(part));
-          const partsDone = order.partsDone.filter((part) => !lost.includes(part));
+          // The part of a whole delivery taken back stands only on a whole delivery that stays and is newer than the last
+          // request about that part: the one that was sent back for revision does not count. The requests the taken
+          // delivery had answered are open again, and the state follows: «правка» while one is open, else what the
+          // parts that stay say.
           const wanted = wantedParts(cardOf(order.card));
-          const to: CustomOrderStateRow = retracted.length === 0 || (order.state !== "shot" && order.state !== "partly") ? order.state
-            : wanted.every((one) => partsDone.includes(one)) ? "shot" : partsDone.length > 0 || live.count > 0 ? "partly" : "at_model";
-          if (partsDone.length !== order.partsDone.length) await updateCustomOrderFields(db, order.id, { partsDone }, now);
-          if (to !== order.state) await move(to);
+          const questioned = [...new Set(retracted.filter((one) => one.complete !== false && one.part !== null).map((one) => one.part!))];
+          const round = await settleRound(wanted, questioned);
+          const lost = wanted.filter((part) => order.partsDone.includes(part) && !round.partsDone.includes(part));
+          const follows = retracted.length > 0 && (order.state === "shot" || order.state === "partly" || order.state === "revision");
+          const to: CustomOrderStateRow = !follows ? order.state
+            : round.about !== null || order.state === "revision" ? "revision"
+            : round.whole ? "shot" : round.partsDone.length > 0 || round.liveDeliveries > 0 ? "partly" : "at_model";
+          if (to === "revision" && round.about !== null) await toRevision(round.about);
+          else if (to !== order.state) await move(to);
           await event("retracted", {
             from: order.state, to, retracts: "eventRef" in step.retracts ? step.retracts.eventRef : step.retracts.telegramRef,
             eventRef: step.message.eventRef, parts: lost, reason: step.reason,
+            ...(round.reopened.length > 0 ? { revisionsReopened: round.reopened.length } : {}),
           });
+          return true;
+        }
+        case "settle": {
+          // The order where its kept messages say: for the ones stored without a step (an import), which no repeat of
+          // the message can apply any more. Never an order a person moved by their own hand after its newest message.
+          const settled = await settledOf(db, order);
+          if (settled.byHand || !settled.differs) return false;
+          const round = await settleRound(wantedParts(cardOf(order.card)));
+          const to = stateByMessages(order.state, round);
+          if (to === "revision" && round.about !== null) await toRevision(round.about);
+          else if (to !== order.state) await move(to);
+          await event("settled", { from: order.state, to, parts: round.partsDone });
           return true;
         }
         case "given": {
@@ -689,8 +829,9 @@ async function boardStep(app: CustomApp, viewer: CustomViewer, order: CustomOrde
       return { action: "given", messageRef: found.messageRef, at: found.at };
     }
     case "partly":
+      return { action: "partly", note: body.note };
     case "revision":
-      return { action: body.action, note: body.note };
+      return { action: "revision", note: body.note, part: body.part };
     case "shot":
     case "close":
       return { action: body.action };
