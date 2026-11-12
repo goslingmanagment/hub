@@ -42,7 +42,7 @@ import { BadRequestError } from "./errors.ts";
 import { notifyPublishingStoppedIncident } from "./notification-incidents.ts";
 import { executeOfapiCaptureJobChunk } from "./ofapi-capture-jobs.ts";
 import { cancelOfapiAction, dispatchOfapiAction, getOfapiAction, prepareOfapiAction } from "./ofapi-actions.ts";
-import { capturePublicationFileOfapiSource, createOwnerOfapiMediaUpload, OFAPI_UPLOAD_MAX_BYTES } from "./ofapi-media-sources.ts";
+import { capturePublicationFileOfapiSource, createOwnerOfapiMediaUpload, OFAPI_LINK_UPLOAD_MAX_BYTES_DEFAULT } from "./ofapi-media-sources.ts";
 import { onlyfansUploadCredits, stableUuid } from "./publications-onlyfans.ts";
 import {
   readOnlyfansVaultListById,
@@ -139,14 +139,18 @@ export interface VaultAlbumFileFacts {
  * The album's files in the approval's order (`media:N`, first file first),
  * each with what its upload would cost: a file the page's vault already holds
  * from Hub's earlier upload (`reusable`, by its bytes) costs the one read that
- * it is still there; a file over what the uploader takes goes by hand and
- * costs nothing; a vault media the draft named costs its read.
+ * it is still there; a file over 100 MB goes by a link to Hub at the same
+ * tariff (plan PR 7); a file over the link's limit (`linkMaxBytes`, the
+ * setting onlyfansVaultLinkMaxMb) goes by hand and costs nothing; a vault
+ * media the draft named costs its read.
  */
 export function buildVaultAlbumFiles(
   form: Pick<ApprovedForm, "media">,
   facts: ReadonlyMap<number, VaultAlbumFileFacts>,
   reusable: ReadonlyMap<string, { mediaRef: string; uploadedAt: Date | null }>,
+  options: { linkMaxBytes?: number } = {},
 ): OnlyfansVaultAlbumFile[] {
+  const maxBytes = options.linkMaxBytes ?? OFAPI_LINK_UPLOAD_MAX_BYTES_DEFAULT;
   return form.media
     .filter((media) => media.role === "media")
     .sort((a, b) => a.position - b.position)
@@ -165,8 +169,8 @@ export function buildVaultAlbumFiles(
       const bytes = file?.byteSize ?? 0;
       const name = (media.name ?? file?.originalName ?? "").trim() || item;
       const common = { ...base, fileId: media.fileId, sha256: media.fileSha256, bytes, mimeType: file?.mimeType ?? null, name };
-      if (bytes > OFAPI_UPLOAD_MAX_BYTES) {
-        return { ...common, credits: 0, state: "too_big", mediaRef: null, uploadedAt: null, reason: `over_${OFAPI_UPLOAD_MAX_BYTES}_bytes` };
+      if (bytes > maxBytes) {
+        return { ...common, credits: 0, state: "too_big", mediaRef: null, uploadedAt: null, reason: `over_${maxBytes}_bytes` };
       }
       const known = media.fileSha256 === null ? undefined : reusable.get(media.fileSha256);
       if (known) {
@@ -585,7 +589,14 @@ async function albumFiles(app: AppContext, pageId: number, form: ApprovedForm): 
     const outcome = vaultUploadOutcome(upload);
     if (outcome.kind === "done" && !reusable.has(upload.sha256)) reusable.set(upload.sha256, { mediaRef: outcome.mediaRef, uploadedAt: outcome.at });
   }
-  return buildVaultAlbumFiles(form, facts, reusable);
+  return buildVaultAlbumFiles(form, facts, reusable, { linkMaxBytes: await vaultLinkMaxBytes(app) });
+}
+
+/** The largest file an album sends by a link, from the live setting onlyfansVaultLinkMaxMb (decimal MB). */
+export async function vaultLinkMaxBytes(app: AppContext): Promise<number> {
+  const config = await loadEffectiveConfig(app.db, app.config);
+  const mb = config.onlyfansVaultLinkMaxMb;
+  return typeof mb === "number" && Number.isFinite(mb) && mb > 0 ? Math.floor(mb) * 1_000_000 : OFAPI_LINK_UPLOAD_MAX_BYTES_DEFAULT;
 }
 
 // ---------------------------------------------------------------------------
@@ -908,7 +919,7 @@ async function startFile(ctx: RunContext, state: Followed, file: OnlyfansVaultAl
   const actorUserId = state.revision.approvedByUserId;
   let jobId: string;
   try {
-    const source = await capturePublicationFileOfapiSource(app, { pageId: record.pageId, fileId: file.fileId as number, actorUserId });
+    const source = await capturePublicationFileOfapiSource(app, { pageId: record.pageId, fileId: file.fileId as number, actorUserId }, { linkMaxBytes: await vaultLinkMaxBytes(app) });
     const policy = (await app.db.execute<{ revision: number }>(sql`select revision from ofapi_collection_state where id=1`)).rows[0];
     const isPhoto = source.mimeType.startsWith("image/");
     const job = await createOwnerOfapiMediaUpload(app, {

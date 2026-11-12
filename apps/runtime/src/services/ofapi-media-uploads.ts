@@ -15,8 +15,12 @@ import type { AppContext } from "../bootstrap.ts";
 import type { parseCapturedOfapiExportQuote } from "./ofapi-export-quotes.ts";
 import {
   loadOfapiMediaSourceBytes,
+  loadOfapiMediaSourceFile,
+  ofapiUploadGoesByLink,
+  ofapiUploadTariffCredits,
   requireOfapiMediaSource,
 } from "./ofapi-media-sources.ts";
+import { createOfapiUploadLink, revokeOfapiUploadLinks } from "./ofapi-upload-links.ts";
 import {
   buildOfapiMediaFact,
   mediaRecord,
@@ -78,6 +82,7 @@ export async function buildOfapiMediaUploadRequest(
       },
     };
   if (job.cursor !== null) return null;
+  if (job.target.byLink === true) return buildLinkUploadRequest(app, job, base);
   const { source, bytes } = await loadOfapiMediaSourceBytes(
     app,
     job.target.sourceId,
@@ -122,6 +127,66 @@ export async function buildOfapiMediaUploadRequest(
       sourceSha256: source.sha256,
       sourceBytes: bytes.length,
       bodyHash: createHash("sha256").update(bodyBytes).digest("hex"),
+    },
+  };
+}
+/**
+ * A vault album's file over 100 MB (plan PR 7): OnlyFansAPI downloads it by
+ * a link to Hub (`file_url`), always async. The file is never read into
+ * memory: its sha256 is checked as a stream. The link's token goes only into
+ * this body; the request shape kept with the attempt names the link's id.
+ * The reserve is the tariff of the file's size, computed here, and never
+ * above the job's approved ceiling.
+ */
+async function buildLinkUploadRequest(
+  app: AppContext,
+  job: OfapiCaptureJobRecord,
+  base: Pick<OfapiMediaRequestPlan, "endpointClass" | "query" | "observationKind" | "timeoutMs" | "maxResponseBytes">,
+): Promise<OfapiMediaRequestPlan | null> {
+  if (job.target.destination !== "vault" || typeof job.target.sourceId !== "string") return null;
+  const { source, fileId } = await loadOfapiMediaSourceFile(app, job.target.sourceId, job.pageId);
+  const bytes = Number(source.byte_size);
+  if (
+    source.sha256 !== job.target.sourceSha256 ||
+    bytes !== job.target.sourceBytes ||
+    !ofapiUploadGoesByLink(bytes)
+  )
+    return null;
+  const reservedCredits = ofapiUploadTariffCredits(bytes);
+  if (reservedCredits > Number(job.target.maxCredits)) return null;
+  // One attempt: a start that may have left is never built again (a new link
+  // would also cut the download of the one in flight).
+  const left = await app.db.execute(
+    sql`select 1 from ofapi_request_attempts where owner_kind='capture_job' and owner_id=${job.id}::uuid and state not in ('reserved','released_pre_dispatch') limit 1`,
+  );
+  if (left.rows.length) return null;
+  const link = await createOfapiUploadLink(app, { uploadJobId: job.id, pageId: job.pageId, fileId });
+  const boundary = `ofapi-${job.id}`;
+  const bodyBytes = Buffer.from(
+    `--${boundary}\r\nContent-Disposition: form-data; name="async"\r\n\r\ntrue\r\n` +
+      `--${boundary}\r\nContent-Disposition: form-data; name="file_url"\r\n\r\n${link.url}\r\n` +
+      `--${boundary}--\r\n`,
+  );
+  return {
+    ...base,
+    operation: "ofapi_upload_vault",
+    method: "POST",
+    requestSemantics: "stateful",
+    pathname: `/${job.ofapiAccountId}/media/vault`,
+    bodyBytes,
+    contentType: `multipart/form-data; boundary=${boundary}`,
+    reservedCredits,
+    request: {
+      method: "POST",
+      resource: "media_upload",
+      destination: "vault",
+      async: true,
+      byLink: true,
+      linkId: link.linkId,
+      linkExpiresAt: link.expiresAt.toISOString(),
+      sourceId: source.id,
+      sourceSha256: source.sha256,
+      sourceBytes: bytes,
     },
   };
 }
@@ -235,6 +300,8 @@ async function applyTerminal(
   await app.db.execute(
     sql`update ofapi_capture_jobs set state=${terminal.status === "completed" && !overrun ? "complete" : "blocked"},completed_at=${terminal.status === "completed" && !overrun ? new Date() : null},cursor=${JSON.stringify(cursor)}::jsonb,cursor_hash=${hashOfapiCaptureValue(cursor)},terminal_observation_id=${observationId},terminal_observation_received_at=${receivedAt},reason_code=${overrun ? "upload_budget_exceeded" : terminal.status === "failed" ? "upload_failed" : null},row_version=row_version+1,updated_at=now() where id=${job.id}::uuid`,
   );
+  // The outcome came: the link OnlyFansAPI downloaded a large file by serves no more.
+  await revokeOfapiUploadLinks(app.db, job.id, `upload_${terminal.status}`);
   await updateOfapiCollectionJob(app.db, String(job.target.collectionJobId), {
     state: terminal.status === "completed" && !overrun ? "completed" : "failed",
     reason: overrun
@@ -255,12 +322,14 @@ export async function parseCapturedOfapiMediaUpload(
       ? mediaRecord(input.parsedJson.body)
       : null;
   const start = job.cursor === null;
+  // A blocked outcome is final for this job: its link (a large file's) serves no more.
   const settle = async (
     accepted: boolean,
     reason: string,
     cursor?: Record<string, unknown>,
-  ) =>
-    settleOfapiCaptureParse(app.db, {
+  ) => {
+    await revokeOfapiUploadLinks(app.db, job.id, reason);
+    return settleOfapiCaptureParse(app.db, {
       jobId: job.id,
       attemptId: input.attemptId,
       leaseToken: job.leaseToken!,
@@ -278,6 +347,7 @@ export async function parseCapturedOfapiMediaUpload(
         ...(cursor ? { cursor } : {}),
       },
     });
+  };
   if (input.status < 200 || input.status >= 300) {
     if (!start && (input.status === 429 || input.status >= 500)) {
       await settleOfapiCaptureParse(app.db, {

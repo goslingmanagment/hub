@@ -1,12 +1,15 @@
+import { createReadStream } from "node:fs";
 import type { Readable } from "node:stream";
 
 import { routeSchemas } from "@agency_hub_core/contracts";
 import { getAgentKeyById } from "@agency_hub_core/db";
+import type { FastifyReply } from "fastify";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
 
 import { auditCtx } from "../../api/request-auth.ts";
 import { recordAudit } from "../../services/auth.ts";
 import { ConflictError } from "../../services/errors.ts";
+import { parseByteRange, resolveOfapiUploadLink } from "../../services/ofapi-upload-links.ts";
 import {
   getPublicationFileWire,
   listPublicationFilesWire,
@@ -159,5 +162,48 @@ export async function registerPublicationFileRoutes(server: ApiServer, ctx: ApiM
   server.get("/api/v1/admin/publications/files/:fileId", { schema: routeSchemas.adminPublicationFileGet }, async (request) => {
     await requirePrincipal(request);
     return getPublicationFileWire(appContext.db, request.params.fileId);
+  });
+
+  // A large file of an OnlyFans vault album, downloaded by OnlyFansAPI by its
+  // link (8-docs 2026-11-12-of-vault-album, plan PR 7;
+  // services/ofapi-upload-links.ts). Public: the token is the key. Its request
+  // line carries the token, so Hub's request log skips it (`logLevel: "warn"`,
+  // as the sign-in steps do); nginx's location for it keeps no access log.
+  // GET and Fastify's HEAD twin; a GET is counted with its address.
+  server.get("/api/v1/public/vault-upload-files/:token", {
+    schema: routeSchemas.publicVaultUploadFile,
+    logLevel: "warn",
+    config: { rateLimit: { max: 600, timeWindow: 60_000 } },
+  }, async (request, reply) => {
+    const head = request.method === "HEAD";
+    const file = await resolveOfapiUploadLink(appContext, request.params.token, {
+      fetch: head ? null : { address: request.ip },
+    });
+    reply.header("Cache-Control", "no-store");
+    reply.header("Referrer-Policy", "no-referrer");
+    reply.header("X-Robots-Tag", "noindex, nofollow");
+    reply.header("X-Content-Type-Options", "nosniff");
+    reply.header("Accept-Ranges", "bytes");
+    const range = parseByteRange(typeof request.headers.range === "string" ? request.headers.range : undefined, file.byteSize);
+    if (range === "unsatisfiable") {
+      reply.code(416).header("Content-Range", `bytes */${file.byteSize}`).type("text/plain");
+      return reply.send("");
+    }
+    const start = range?.start ?? 0;
+    const end = range?.end ?? file.byteSize - 1;
+    reply.type(file.mimeType);
+    reply.header("Content-Length", String(end - start + 1));
+    if (range !== null) {
+      reply.code(206).header("Content-Range", `bytes ${start}-${end}/${file.byteSize}`);
+    }
+    if (head) {
+      // Fastify would answer an empty HEAD with Content-Length 0: the headers go as they are.
+      reply.hijack();
+      reply.raw.writeHead(reply.statusCode, reply.getHeaders() as Record<string, string>);
+      reply.raw.end();
+      return reply;
+    }
+    // A binary body: the typed reply knows only the JSON shapes of the contract.
+    return (reply as unknown as FastifyReply).send(createReadStream(file.path, { start, end }));
   });
 }

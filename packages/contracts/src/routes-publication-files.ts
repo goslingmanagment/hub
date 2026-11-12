@@ -1,3 +1,5 @@
+import { z } from "zod";
+
 import { errorResponseSchema } from "./primitives.ts";
 import { publicationPageParamsSchema } from "./publications.ts";
 import {
@@ -79,5 +81,21 @@ export const publicationFileRouteSchemas = {
     summary: "One uploaded file of publications (metadata only), with its uses and retention",
     params: publicationFileIdParamsSchema,
     response: { 200: publicationFileSchema, ...errors },
+  },
+  // OnlyFans vault album plan PR 7: a file over 100 MB goes to OnlyFansAPI as
+  // `file_url`, a link to this route; OnlyFansAPI downloads it itself.
+  publicVaultUploadFile: {
+    auth: { kind: "public" }, tags: ["ofapi"],
+    summary: "Binary — one file of an OnlyFans vault album upload in flight, by its link's token (OnlyFansAPI downloads"
+      + " it; not for API clients). Range is honoured. An unknown, expired or revoked token, or one whose upload has"
+      + " its outcome, answers 404. A link lives until its upload's outcome and at most 6 hours",
+    params: z.object({ token: z.string().max(128) }),
+    response: {
+      200: z.string().describe("Binary: the file"),
+      206: z.string().describe("Binary: the requested range of the file"),
+      404: errorResponseSchema,
+      416: z.string().describe("The range is outside the file"),
+      429: errorResponseSchema,
+    },
   },
 } as const;

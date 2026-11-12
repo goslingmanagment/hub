@@ -1902,6 +1902,8 @@ async function pageHotTargets(app: Db, scope: ResolvedScope): Promise<WorkTarget
     ["publication_checks", "page_id"],
     // Which OnlyFansAPI upload served which file of a publication (0303).
     ["publication_uploads", "page_id"],
+    // Links OnlyFansAPI downloaded a large vault album file by (0398).
+    ["ofapi_upload_links", "page_id"],
     // An OnlyFans vault album's run: its step, files and spend (0397).
     ["onlyfans_vault_album_runs", "page_id"],
     // The latest read of the page's OnlyFans schedule (0302).

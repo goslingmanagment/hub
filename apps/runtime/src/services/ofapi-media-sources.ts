@@ -1,4 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
+import { createReadStream } from "node:fs";
+import { open } from "node:fs/promises";
 import { sql } from "drizzle-orm";
 import {
   createOfapiCollectionJob,
@@ -19,8 +21,14 @@ import type {
 import type { AppContext } from "../bootstrap.ts";
 import { resolveCapturePayloadRow } from "./payload-reader.ts";
 import { BadRequestError, ConflictError, NotFoundError } from "./errors.ts";
-import { readPublicationFileBytes } from "./publication-files.ts";
+import { openPublicationFile, readPublicationFileBytes, type PublicationFileOnDisk } from "./publication-files.ts";
 export const OFAPI_UPLOAD_MAX_BYTES = 100_000_000;
+/** OnlyFansAPI's documented ceiling for a `file_url` upload; the live limit is the setting onlyfansVaultLinkMaxMb. */
+export const OFAPI_LINK_UPLOAD_MAX_BYTES_DEFAULT = 1_000_000_000;
+/** Whether a source of this size goes to OnlyFansAPI by a link to Hub (`file_url`) instead of its bytes. */
+export function ofapiUploadGoesByLink(bytes: number): boolean {
+  return bytes > OFAPI_UPLOAD_MAX_BYTES;
+}
 interface Source extends Record<string, unknown> {
   id: string;
   page_id: number;
@@ -183,6 +191,58 @@ export async function loadOfapiMediaSourceBytes(
     throw new ConflictError("Retained source checksum, size or type changed");
   return { source, bytes };
 }
+/** The first bytes of a file on disk: enough for its type. */
+async function readFileHead(filePath: string): Promise<Buffer> {
+  const handle = await open(filePath, "r");
+  try {
+    const head = Buffer.alloc(64);
+    const { bytesRead } = await handle.read(head, 0, head.length, 0);
+    return head.subarray(0, bytesRead);
+  } finally {
+    await handle.close();
+  }
+}
+
+/**
+ * A source over 100 MB, sent by a link (plan PR 7): its publication file on
+ * disk, never read into memory whole. The file's size, its type (from its
+ * first bytes) and its sha256 (hashed as a stream) are checked against the
+ * source, as loadOfapiMediaSourceBytes checks the bytes.
+ */
+export async function loadOfapiMediaSourceFile(
+  app: AppContext,
+  sourceId: string,
+  pageId: number,
+): Promise<{ source: Source; fileId: number; onDisk: PublicationFileOnDisk }> {
+  const source = await requireOfapiMediaSource(app, sourceId, pageId);
+  const row = (
+    await findObservationEnvelopesByIds(app.db, [Number(source.observation_id)])
+  ).get(Number(source.observation_id));
+  if (!row || row.kind !== "ofapi.media_source.v1" || row.source !== "operator")
+    throw new ConflictError("Retained source unavailable");
+  const resolved = await resolveCapturePayloadRow(app, "observation", Number(source.observation_id), row);
+  const payload = resolved.payload as Record<string, unknown>;
+  if (payload.encoding !== "publication_file" || typeof payload.publicationFileId !== "number")
+    throw new ConflictError("Only a publication's file goes by a link");
+  const onDisk = await openPublicationFile(app, payload.publicationFileId);
+  if (onDisk.byteSize !== Number(source.byte_size) || onDisk.file.contentSha256 !== source.sha256)
+    throw new ConflictError("Retained source checksum or size changed");
+  const hash = createHash("sha256");
+  let streamed = 0;
+  for await (const chunk of createReadStream(onDisk.path)) {
+    const part = chunk as Buffer;
+    streamed += part.length;
+    hash.update(part);
+  }
+  if (
+    streamed !== onDisk.byteSize ||
+    hash.digest("hex") !== source.sha256 ||
+    detectOfapiUploadMime(await readFileHead(onDisk.path)) !== source.mime_type
+  )
+    throw new ConflictError("Retained source checksum, size or type changed");
+  return { source, fileId: payload.publicationFileId, onDisk };
+}
+
 /**
  * A publication's file as an OnlyFansAPI upload source (wall posts plan PR
  * 4c). The bytes stay on the server's disk (publication-files.ts) and are
@@ -193,11 +253,28 @@ export async function loadOfapiMediaSourceBytes(
 export async function capturePublicationFileOfapiSource(
   app: AppContext,
   input: { pageId: number; fileId: number; actorUserId: number },
+  // `linkMaxBytes`: a file over 100 MB up to this size becomes a source too
+  // (a vault album's, sent by a link — plan PR 7); its bytes are never read
+  // into memory: the type is read from its first bytes, the sha256 and size
+  // are the file's row (checked by a streamed hash when the upload is built).
+  options: { linkMaxBytes?: number } = {},
 ) {
   const page = await findPageById(app.db, input.pageId);
   const accountId = page?.page.ofapiAccountId;
   if (!accountId) throw new NotFoundError("Mapped OnlyFans page not found");
-  const { file, bytes } = await readPublicationFileBytes(app, input.fileId, { maxBytes: OFAPI_UPLOAD_MAX_BYTES });
+  const onDisk = await openPublicationFile(app, input.fileId);
+  const byLink = ofapiUploadGoesByLink(onDisk.byteSize);
+  if (byLink && options.linkMaxBytes === undefined) {
+    // As before links: bytes only, at most 100 MB.
+    throw new ConflictError(`File ${input.fileId} is larger than ${OFAPI_UPLOAD_MAX_BYTES} bytes`);
+  }
+  if (byLink && onDisk.byteSize > (options.linkMaxBytes ?? 0)) {
+    throw new BadRequestError(`File ${input.fileId} is larger than ${options.linkMaxBytes} bytes`);
+  }
+  const { file, head } = byLink
+    ? { file: onDisk.file, head: await readFileHead(onDisk.path) }
+    : await readPublicationFileBytes(app, input.fileId, { maxBytes: OFAPI_UPLOAD_MAX_BYTES }).then(({ file, bytes }) => ({ file, head: bytes }));
+  const byteSize = onDisk.byteSize;
   const sha256 = file.contentSha256;
   const existing = (
     await app.db.execute<Source>(
@@ -205,7 +282,7 @@ export async function capturePublicationFileOfapiSource(
     )
   ).rows[0];
   if (existing) return sourceDto(existing);
-  const mimeType = detectOfapiUploadMime(bytes);
+  const mimeType = detectOfapiUploadMime(head);
   const filename = (file.originalName ?? `publication-file-${file.id}`).slice(0, 200);
   const captured = await insertObservation(app.db, {
     source: "operator",
@@ -214,20 +291,25 @@ export async function capturePublicationFileOfapiSource(
     accountId: input.pageId,
     nativeAccountRef: accountId,
     kind: "ofapi.media_source.v1",
-    payload: { sha256, bytes: bytes.length, filename, mimeType, encoding: "publication_file", publicationFileId: file.id },
+    payload: { sha256, bytes: byteSize, filename, mimeType, encoding: "publication_file", publicationFileId: file.id },
     payloadHash: Buffer.from(sha256, "hex"),
     idempotencyKey: `ofapi-source:${input.pageId}:${accountId}:${sha256}`,
     actorPrincipalId: input.actorUserId,
     observedAt: new Date(),
   });
   await app.db.execute(sql`insert into ofapi_media_sources(id,page_id,account_id,sha256,byte_size,filename,mime_type,observation_id,observation_received_at,actor_user_id)
- values(${randomUUID()}::uuid,${input.pageId},${accountId},${sha256},${bytes.length},${filename},${mimeType},${captured.observationId},${captured.receivedAt},${input.actorUserId}) on conflict(page_id,account_id,sha256) do nothing`);
+ values(${randomUUID()}::uuid,${input.pageId},${accountId},${sha256},${byteSize},${filename},${mimeType},${captured.observationId},${captured.receivedAt},${input.actorUserId}) on conflict(page_id,account_id,sha256) do nothing`);
   const row = (
     await app.db.execute<Source>(
       sql`select * from ofapi_media_sources where page_id=${input.pageId} and account_id=${accountId} and sha256=${sha256}`,
     )
   ).rows[0]!;
   return sourceDto(row);
+}
+
+/** What OnlyFansAPI charges an upload: 3 credits a started decimal MB, at least 1. */
+export function ofapiUploadTariffCredits(bytes: number): number {
+  return Math.max(1, Math.ceil((bytes * 3) / 1_000_000));
 }
 
 export async function createOwnerOfapiMediaUpload(
@@ -251,10 +333,12 @@ export async function createOwnerOfapiMediaUpload(
     input.sourceId,
     input.pageId,
   );
-  const estimatedCredits = Math.max(
-    1,
-    Math.ceil((Number(source.byte_size) * 3) / 1_000_000),
-  );
+  const estimatedCredits = ofapiUploadTariffCredits(Number(source.byte_size));
+  // Over 100 MB the bytes cannot go: OnlyFansAPI downloads the file by a link
+  // to Hub (plan PR 7). Only a vault album's file goes so, and always async.
+  const byLink = ofapiUploadGoesByLink(Number(source.byte_size));
+  if (byLink && (options.album === undefined || options.budgetScope !== "vault_album" || input.destination !== "vault"))
+    throw new BadRequestError("Direct uploads are bounded to 100 decimal MB");
   if (input.maxCredits < estimatedCredits)
     throw new BadRequestError(
       "Approved ceiling is below the documented upload byte tariff",
@@ -293,7 +377,8 @@ export async function createOwnerOfapiMediaUpload(
       maxCredits: input.maxCredits,
       expectedPolicyRevision: input.expectedPolicyRevision,
       // Only when set, so the frozen target of an upload made before is unchanged.
-      ...(options.async === false ? { async: false } : {}),
+      ...(options.async === false && !byLink ? { async: false } : {}),
+      ...(byLink ? { byLink: true } : {}),
       ...(options.album === undefined ? {} : { publicationId: options.album.publicationId, revisionId: options.album.revisionId }),
     };
     const prior = (
@@ -343,7 +428,8 @@ export async function createOwnerOfapiMediaUpload(
         mimeType: source.mime_type,
         destination: input.destination,
         maxCredits: input.maxCredits,
-        async: options.async !== false,
+        async: byLink || options.async !== false,
+        ...(byLink ? { byLink: true } : {}),
       },
       budgetScope: options.budgetScope ?? "bulk",
       originPrincipalId: actorUserId,
