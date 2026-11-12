@@ -120,7 +120,7 @@ describe("the matters mirror keeps the screens' rules", () => {
       : kind === "history.request" ? { ...known, applicable: false } : known);
     const owner = buildWaitingRows({ role: "owner", matters, kindState, labelOf: (id) => `p${id}` });
     expect(owner.rows.map((row) => [row.id, row.count])).toEqual([["questions", null], ["reports", 2], ["held", 2], ["login", 1], ["extension", 3]]);
-    expect(owner.rows.find((row) => row.id === "login")).toMatchObject({ pageLabel: "p10", to: "/settings/pages/p10/login" });
+    expect(owner.rows.find((row) => row.id === "login")).toMatchObject({ pageLabel: "p10", to: "/workboard/decisions#system" });
     expect(owner.total).toBe(8);
     expect(owner.failed).toEqual(["questions"]);
     expect(buildWaitingRows({ role: "team_lead", matters, kindState, labelOf: () => undefined }).rows.map((row) => row.id)).toEqual(["held"]);

@@ -231,16 +231,16 @@ function mattersList(request: DemoRequest): ListAnswer {
 }
 
 const ROWS: ReadonlyArray<{ id: WaitingAnswer["rows"][number]["id"]; label: string; to: string; of: (kind: string) => boolean; teamLead?: boolean }> = [
-  { id: "drafts", label: "Посты на утверждение", to: "/content/publications?status=draft&window=all&page=all", of: (kind) => kind === "publication.draft" },
-  { id: "unknown", label: "Публикации: исход неизвестен", to: "/content/publications?status=unknown&window=all&page=all", of: (kind) => kind === "publication.unknown" },
+  { id: "drafts", label: "Посты на утверждение", to: "/workboard/decisions#publications", of: (kind) => kind === "publication.draft" },
+  { id: "unknown", label: "Публикации: исход неизвестен", to: "/workboard/decisions#publications", of: (kind) => kind === "publication.unknown" },
   { id: "questions", label: "Чья продажа: вопросы ждут вашего слова", to: "/workboard/decisions#questions", of: (kind) => kind === "ledger.sale_question" },
   { id: "reports", label: "Отчёты смен ждут решения", to: "/workboard/decisions#reports", of: (kind) => kind === "ledger.report_post" || kind === "ledger.paid_day_changed" },
   { id: "customs", label: "Кастомы оплачены, не отданы", to: "/workboard/decisions#customs", of: (kind) => kind === "custom.paid_not_delivered", teamLead: true },
   { id: "held", label: "Проверить отправки", to: "/workboard/decisions#held", of: (kind) => kind === "send.held", teamLead: true },
-  { id: "login", label: "Нужен вход в Fansly", to: "/system/collection?page=all", of: (kind) => kind === "page.login_needed" },
-  { id: "failures", label: "Сбои", to: "/system/failures?page=all", of: (kind) => kind === "incident.open" },
-  { id: "extension", label: "Критичные сбои расширения", to: "/system/dev#extension", of: (kind) => kind === "extension.critical" },
-  { id: "history", label: "Заявки на историю", to: "/system/history-requests?state=requested&page=all", of: (kind) => kind === "history.request" },
+  { id: "login", label: "Нужен вход в Fansly", to: "/workboard/decisions#system", of: (kind) => kind === "page.login_needed" },
+  { id: "failures", label: "Сбои", to: "/workboard/decisions#system", of: (kind) => kind === "incident.open" },
+  { id: "extension", label: "Критичные сбои расширения", to: "/workboard/decisions#system", of: (kind) => kind === "extension.critical" },
+  { id: "history", label: "Заявки на историю", to: "/workboard/decisions#system", of: (kind) => kind === "history.request" },
   { id: "people", label: "Люди и доступ", to: "/workboard/decisions#people", of: (kind) => kind.startsWith("people.") && kind !== "people.access_idle" },
   { id: "ledger", label: "Проверки ledger", to: "/workboard/decisions#ledger", of: (kind) => kind === "ledger.check" || kind === "ledger.sheet_column" || kind === "ledger.off_platform" },
   { id: "other", label: "Другие дела", to: "/workboard/decisions", of: (kind) => !MIRRORED.includes(kind) && !CHECKS.includes(kind) },
@@ -255,7 +255,7 @@ function mattersWaiting(request: DemoRequest): WaitingAnswer {
     const one = row.id === "login" && mine.length === 1 ? mine[0]!.pageLabels[0] ?? null : null;
     return [{
       id: row.id, label: one ? `${row.label}: ${one}` : row.label, count: mine.length, capped: false, pageLabel: one,
-      to: one ? `/settings/pages/${one}/login` : row.to, matterIds: mine.map((matter) => matter.id),
+      to: row.to, matterIds: mine.map((matter) => matter.id),
     }];
   });
   const page = typeof request.query.pageLabel === "string" ? request.query.pageLabel : null;

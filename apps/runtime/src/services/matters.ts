@@ -115,18 +115,22 @@ interface WaitingRowSpec {
   to: string;
 }
 
-/** «Ждут вас»'s rows: the same words, order and links as apps/dashboard/src/api/waiting.ts. */
+/**
+ * «Ждут вас»'s rows: the same words and order as apps/dashboard/src/api/waiting.ts. Each row leads to the one list
+ * filtered to its group (`/workboard/decisions#<group>`, Workboard's screens/waiting/kinds.ts), not to the screens of
+ * its kinds (L2, 12.11): the list's line of a matter carries the matter's own link.
+ */
 const WAITING_ROW_SPECS: readonly WaitingRowSpec[] = [
-  { id: "drafts", kinds: ["publication.draft"], teamLead: false, label: "Посты на утверждение", to: "/content/publications?status=draft&window=all&page=all" },
-  { id: "unknown", kinds: ["publication.unknown"], teamLead: false, label: "Публикации: исход неизвестен", to: "/content/publications?status=unknown&window=all&page=all" },
+  { id: "drafts", kinds: ["publication.draft"], teamLead: false, label: "Посты на утверждение", to: "/workboard/decisions#publications" },
+  { id: "unknown", kinds: ["publication.unknown"], teamLead: false, label: "Публикации: исход неизвестен", to: "/workboard/decisions#publications" },
   { id: "questions", kinds: ["ledger.sale_question"], teamLead: false, label: "Чья продажа: вопросы ждут вашего слова", to: "/workboard/decisions#questions" },
   { id: "reports", kinds: ["ledger.report_post", "ledger.paid_day_changed"], teamLead: false, label: "Отчёты смен ждут решения", to: "/workboard/decisions#reports" },
   { id: "customs", kinds: ["custom.paid_not_delivered"], teamLead: true, label: "Кастомы оплачены, не отданы", to: "/workboard/decisions#customs" },
   { id: "held", kinds: ["send.held"], teamLead: true, label: "Проверить отправки", to: "/workboard/decisions#held" },
-  { id: "login", kinds: ["page.login_needed"], teamLead: false, label: "Нужен вход в Fansly", to: "/system/collection?page=all" },
-  { id: "failures", kinds: ["incident.open"], teamLead: false, label: "Сбои", to: "/system/failures?page=all" },
-  { id: "extension", kinds: ["extension.critical"], teamLead: false, label: "Критичные сбои расширения", to: "/system/dev#extension" },
-  { id: "history", kinds: ["history.request"], teamLead: false, label: "Заявки на историю", to: "/system/history-requests?state=requested&page=all" },
+  { id: "login", kinds: ["page.login_needed"], teamLead: false, label: "Нужен вход в Fansly", to: "/workboard/decisions#system" },
+  { id: "failures", kinds: ["incident.open"], teamLead: false, label: "Сбои", to: "/workboard/decisions#system" },
+  { id: "extension", kinds: ["extension.critical"], teamLead: false, label: "Критичные сбои расширения", to: "/workboard/decisions#system" },
+  { id: "history", kinds: ["history.request"], teamLead: false, label: "Заявки на историю", to: "/workboard/decisions#system" },
 ];
 
 /** The kinds a role reads in «Ждут вас»: the owner every one, a team lead customs and held sends, a chatter none. */
@@ -144,6 +148,7 @@ export function waitingKindsOf(role: MatterOwnerRole): MatterMirrorKind[] {
 const FAMILY_ROW_SPECS: ReadonlyArray<{ id: Extract<WaitingRowId, "people" | "ledger" | "other">; label: string; to: string; checks: readonly string[] }> = [
   { id: "people", label: "Люди и доступ", to: "/workboard/decisions#people", checks: PEOPLE_CHECK_KINDS.filter((kind) => !isMatterInfoKind(kind)) },
   { id: "ledger", label: "Проверки ledger", to: "/workboard/decisions#ledger", checks: LEDGER_CHECK_KINDS },
+  // Another package's or an agent's kinds land in several groups of the list: the whole list, nothing hidden.
   { id: "other", label: "Другие дела", to: "/workboard/decisions", checks: [] },
 ];
 
@@ -211,14 +216,14 @@ export function buildWaitingRows(input: {
     const checked = states.every((state) => state.checked);
     const count = checked ? mine.reduce((sum, matter) => sum + matterWeight(matter), 0) : null;
     if (count === 0) continue;
-    let { label, to } = spec;
+    const { to } = spec;
+    let { label } = spec;
     let pageLabel: string | null = null;
     if (spec.id === "login") {
       const pages = mine.flatMap((matter) => matter.pageIds).map(input.labelOf).filter((one): one is string => one !== undefined);
       if (pages.length === 1) {
         pageLabel = pages[0]!;
         label = `Нужен вход в Fansly: ${pageLabel}`;
-        to = `/settings/pages/${encodeURIComponent(pageLabel)}/login`;
       }
     }
     rows.push({
