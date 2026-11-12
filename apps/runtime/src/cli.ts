@@ -59,6 +59,7 @@ import {
 import { createAppContext } from "./bootstrap.ts";
 import { canonicalCapabilities, issueAgentKey, updateAgentKeyCapabilities } from "./services/agent-keys.ts";
 import { registerSyncEngineCommands } from "./sync/cli.ts";
+import { registerPeopleCommands } from "./services/people/cli.ts";
 import { AiGatewayTerminalStreamConsumer, buildAiGatewayTerminalRecord } from "./services/ai-gateway.ts";
 import {
   applyLiveConfigPatches,
@@ -3960,6 +3961,9 @@ export function buildProgram() {
         await app.close();
       }
     });
+
+  // The people registry's one-off import (an argument file from the owner's Mac; dry run unless --apply).
+  registerPeopleCommands(program);
 
   const config = program
     .command("config")

@@ -125,6 +125,10 @@ export const AGENT_READ_AUDIT_SUMMARY_SHAPES = {
   requestsSent: "count",
   /** Matters (write:matters, package D): which matter. Its key and words stay in the matter's own history. */
   matterId: "count",
+  /** The people registry (0384): an agent's proposal about a person (its id), and whether the
+   *  people feed carried pay terms (read:pay_terms). */
+  proposalId: "count",
+  payTerms: "flag",
 } as const satisfies Record<string, AgentReadAuditSummaryShape>;
 
 export type AgentReadAuditSummaryKey = keyof typeof AGENT_READ_AUDIT_SUMMARY_SHAPES;

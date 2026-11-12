@@ -3,6 +3,7 @@ import { accountHandlers } from "./account.ts";
 import { costsAttentionHandlers } from "./costs-attention.ts";
 import { moneyHandlers } from "./money.ts";
 import { pageHandlers } from "./page.ts";
+import { peopleHandlers } from "./people.ts";
 import { publishOfHandlers } from "./publish-of.ts";
 import { settingsHandlers } from "./settings.ts";
 import { shellHandlers } from "./shell.ts";
@@ -27,6 +28,8 @@ const AREAS: Readonly<Record<string, DemoHandlers>> = {
   // Workboard «Решения» and «Доступ»: Fansly held sends over the console's queue, and the access writes (wb-admin.ts).
   "costs-attention": { ...costsAttentionHandlers, ...wbHeldHandlers },
   "wb-admin": wbAdminHandlers,
+  // The people registry: the team's list, the owner's card with pay terms, and its writes (people.ts).
+  people: peopleHandlers,
   settings: settingsHandlers,
   system: systemHandlers,
 };

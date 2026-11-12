@@ -73,6 +73,9 @@ export * from "./routes-team-ledger.ts";
 export * from "./routes-account-reports.ts";
 // Its quality numbers, one definition for the review's screen and «Смены» (`teamChatterNumbers`).
 export * from "./shift-review-rules.ts";
+// The people registry (team list, the owner's card and writes, the agent feed and proposals), spread by routes.ts.
+export * from "./people.ts";
+export * from "./routes-people.ts";
 
 export * from "./routes-ofapi-banned-words.ts";
 export * from "./routes-model-applications.ts";

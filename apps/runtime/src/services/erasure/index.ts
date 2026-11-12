@@ -1762,6 +1762,14 @@ export const PAGE_ERASURE_TABLE_EXCLUSIONS: readonly PageErasureTableExclusion[]
     table: "user_page_assignments",
     reason: "User-to-page authorization is agency catalog configuration, not captured creator or fan data; offboarding access is a separate owner action.",
   },
+  {
+    table: "person_working_pages",
+    reason: "The people registry's staffing (who works the page), agency configuration and not captured creator or fan data; the pages catalog row it names stays.",
+  },
+  {
+    table: "person_schedule_slots",
+    reason: "A person's shift slot on one page, agency staffing and not captured creator or fan data; the pages catalog row it names stays.",
+  },
 ];
 
 async function pageHotTargets(app: Db, scope: ResolvedScope): Promise<WorkTarget[]> {
