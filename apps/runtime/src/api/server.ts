@@ -1,5 +1,6 @@
 import { registerOfapiVendorRoutes } from "../modules/ofapi-vendor/index.ts";
 import { registerModelApplicationRoutes } from "../modules/model-applications/index.ts";
+import { pageHeaders } from "./page-headers.ts";
 import { existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -256,6 +257,13 @@ export async function buildApiServer(appContext: AppContext) {
   // Fleet-verify: the desktop stamps x-client-version on every call;
   // one "Desktop client version observed" log line per (version, address)
   // gives the exit check its data source.
+  // Never framed by another site; HTTPS only in production (api/page-headers.ts). First, so a
+  // route may make them stricter.
+  const headersOfPages = pageHeaders(appContext.config.isProduction);
+  server.addHook("onRequest", async (_request, reply) => {
+    reply.headers(headersOfPages);
+  });
+
   server.addHook("onRequest", async (request) => {
     recordClientVersionObservation({
       version: request.headers["x-client-version"],
