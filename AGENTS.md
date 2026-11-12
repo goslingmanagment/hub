@@ -73,7 +73,8 @@ the owner's machine (outside this repository); a change that moves a home or add
   A newcomer's way to the first shift is read live from the facts (`start.ts`), never ticked by hand.
 - **Whose a sale is**: only `apps/runtime/src/services/sale-rule.ts`, written to `sale_homes` (`sale-homes.ts`);
   schedule slots and «left the team» come from the people registry. Never compute it anywhere else. Screens follow
-  it from the date in `sale_rule_switch` (null: the old computation).
+  it from the date in `sale_rule_switch` (null: the old computation); where a home's share lands (the person's work by
+  any of their logins, or their own money of the sale's day) is `homeCredit` (`sale-rule-screens.ts`) on every screen.
 - **Shifts**: rows with a stable id in `shifts` (`shift-rows.ts`); what a shift IS stays `chatter-shifts.ts`.
 - **What waits for a person**: a matter (`services/matters.ts`, table `matters`): opened and closed by its reason
   key, one writer per kind, closes itself when the cause is gone. No new list, counter or inbox beside it. An

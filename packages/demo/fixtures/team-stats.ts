@@ -377,6 +377,20 @@ export function teamShiftSales(request: DemoRequest, scope: readonly string[], d
     })
     .sort((left, right) => right.salesNetMills - left.salesNetMills || left.username.localeCompare(right.username));
 
+  // The one rule's screens (`ruleFrom`): a sale the owner gave a chatter who had no shift that day — «вне смен» by name,
+  // and in the chatter's row on the sale's day, never in a shift's (sale-rule-screens.ts `homeCredit`).
+  const decided = decidedWithoutShift(current, dayList, scope, to);
+  if (decided !== null) {
+    const row = chatters.find((chatter) => chatter.userId === decided.user.id);
+    if (row !== undefined) {
+      row.salesNetMills += decided.sale.netMills;
+      row.sales += 1;
+      row.perHourMills = row.workedMinutes === 0 ? null : Math.round(row.salesNetMills / (row.workedMinutes / 60));
+      const day = row.daily.find((one) => one.date === decided.day);
+      if (day !== undefined) day.salesNetMills += decided.sale.netMills;
+    }
+  }
+
   return {
     from: isoAt(mskMidnightOf(firstDay)),
     to: isoAt(to),
@@ -408,23 +422,47 @@ export function teamShiftSales(request: DemoRequest, scope: readonly string[], d
         sales: sales.length,
       };
     }),
-    outside: outsideOf(world, scope, dayList, to),
+    outside: outsideOf(world, scope, dayList, to, decided === null ? [] : [decided.sale]),
     // The demo agency counts by the one rule «чья продажа» from a fortnight ago, as Hub does since its switch.
     ruleFrom: addDays(today, -RULE_FROM_DAYS),
     serverNow: now.toISOString(),
   };
 }
 
+type OutsideSale = ShiftSalesResponse["outside"]["sales"][number];
+
+/** The latest day before today the owner gave a sale to a chatter who worked the window but not that day; null — none. */
+function decidedWithoutShift(current: readonly DemoShift[], dayList: readonly string[], scope: readonly string[], to: number) {
+  const pageLabel = scope[0];
+  const fan = pageLabel === undefined ? undefined : demoFans(pageLabel)[0];
+  if (pageLabel === undefined || fan === undefined) return null;
+  const worked = DEMO_CHATTERS.filter((one) => current.some((shift) => shift.user.id === one.id));
+  const days = dayList.filter((one) => mskMidnightOf(one) + 16 * 3_600_000 < to).slice(0, -1).reverse();
+  const found = days.flatMap((day) => {
+    const user = worked.find((one) => !current.some((shift) => shift.user.id === one.id && dateOf(shift) === day));
+    return user === undefined ? [] : [{ day, user }];
+  })[0];
+  if (found === undefined) return null;
+  const { day, user } = found;
+  const sale: OutsideSale = {
+    at: isoAt(mskMidnightOf(day) + 15 * 3_600_000 + 30 * 60_000), pageLabel, fanName: fanNameOf(fan), kind: "ppv", netMills: 45_000, visitBy: user.name, home: "person",
+  };
+  return { user, day, sale };
+}
+
 /**
  * The sales no shift held: the look-ins' and, between shifts, a renewal or a PPV bought at night or before a shift
  * starts — nobody's. By the sale's day and page, as the server.
  */
-function outsideOf(world: ReturnType<typeof teamWorld>, scope: readonly string[], dayList: readonly string[], to: number): ShiftSalesResponse["outside"] {
-  type Sale = ShiftSalesResponse["outside"]["sales"][number];
+function outsideOf(
+  world: ReturnType<typeof teamWorld>, scope: readonly string[], dayList: readonly string[], to: number, decided: readonly OutsideSale[],
+): ShiftSalesResponse["outside"] {
+  type Sale = OutsideSale;
   const sales: Sale[] = world.visits
     .flatMap((visit) => visit.sales.map((sale) => ({ sale, by: visit.user.username })))
     .filter(({ sale }) => scope.includes(sale.pageLabel) && dayList.includes(mskDay(sale.at)) && sale.at < to)
-    .map(({ sale, by }) => ({ at: isoAt(sale.at), pageLabel: sale.pageLabel, fanName: fanNameOf(sale.fan), kind: sale.kind, netMills: sale.netMills, visitBy: by }));
+    .map(({ sale, by }): Sale => ({ at: isoAt(sale.at), pageLabel: sale.pageLabel, fanName: fanNameOf(sale.fan), kind: sale.kind, netMills: sale.netMills, visitBy: by, home: "visit" }));
+  sales.push(...decided);
   for (const day of dayList) {
     const random = rng(`outside:${day}`);
     for (let index = intBetween(random, 0, 3); index > 0; index -= 1) {
@@ -433,20 +471,26 @@ function outsideOf(world: ReturnType<typeof teamWorld>, scope: readonly string[]
       const at = mskMidnightOf(day) + intBetween(random, 2, 10) * 3_600_000 + intBetween(random, 0, 59) * 60_000;
       if (fans.length === 0 || at >= to) continue;
       const kind = pick(random, ["ppv", "subscription", "tip"] as const);
-      sales.push({ at: isoAt(at), pageLabel, fanName: fanNameOf(pick(random, fans)), kind, netMills: pick(random, [8_000, 12_000, 19_200, 31_200, 40_000]), visitBy: null });
+      sales.push({ at: isoAt(at), pageLabel, fanName: fanNameOf(pick(random, fans)), kind, netMills: pick(random, [8_000, 12_000, 19_200, 31_200, 40_000]), visitBy: null, home: "nobody" });
     }
   }
   sales.sort((left, right) => left.at.localeCompare(right.at));
+  const sumOf = (list: readonly Sale[], home: Sale["home"]) => list.filter((sale) => sale.home === home).reduce((sum, sale) => sum + sale.netMills, 0);
   const of = (list: readonly Sale[]) => ({
-    visitsNetMills: list.filter((sale) => sale.visitBy !== null).reduce((sum, sale) => sum + sale.netMills, 0),
-    nobodyNetMills: list.filter((sale) => sale.visitBy === null).reduce((sum, sale) => sum + sale.netMills, 0),
+    visitsNetMills: sumOf(list, "visit"),
+    nobodyNetMills: sumOf(list, "nobody"),
+    personNetMills: sumOf(list, "person"),
+    potNetMills: 0,
+    waitingNetMills: 0,
+    decideNetMills: 0,
   });
+  const total = (one: ReturnType<typeof of>) => one.visitsNetMills + one.nobodyNetMills + one.personNetMills;
   const labels = [...new Set(sales.map((sale) => sale.pageLabel))];
   return {
     ...of(sales),
     daily: dayList.map((date) => ({ date, ...of(sales.filter((sale) => mskDay(Date.parse(sale.at)) === date)) })),
     pages: labels.map((pageLabel) => ({ pageLabel, ...of(sales.filter((sale) => sale.pageLabel === pageLabel)) }))
-      .sort((left, right) => right.visitsNetMills + right.nobodyNetMills - (left.visitsNetMills + left.nobodyNetMills)),
+      .sort((left, right) => total(right) - total(left)),
     sales,
   };
 }

@@ -72,10 +72,12 @@ function CellView({ row, cell, isOwner, back }: { row: GridRow; cell: GridCell; 
       </Tooltip>
     );
   }
-  if (cell.shifts === 0) return <span className="shifts-grid__none">—</span>;
+  if (cell.shifts === 0 && cell.salesNetMills === 0) return <span className="shifts-grid__none">—</span>;
 
   const team = row.userId === null;
   const money = <Money mills={cell.salesNetMills} strong={team} />;
+  // No shift that day, but a sale the rule gave the person with no work to hold it (the owner's decision).
+  if (cell.shifts === 0) return <Tooltip content={`${row.username}: смены не было, продажа отдана по решению`}>{money}</Tooltip>;
   const tip = madeOf(cell.shifts, cell.workedMinutes);
 
   if (column.kind === "chunk") {
@@ -285,17 +287,24 @@ export function WeekGrid({ model, isOwner, versus, loading = false, refreshing =
 }
 
 /**
- * «вне смен»: the period's sales no shift held — in look-ins (the chatter wrote to the fan last) and nobody's. Not in
- * the grid's money; one quiet figure beside its title, by page on hover.
+ * «вне смен»: the period's sales no shift held — in look-ins (the chatter wrote to the fan last) and nobody's; with the
+ * one rule, also a person's with no shift to hold it (by name: in their row too), the pot, a PPV waiting, the owner's
+ * decision. Not in the team's money; one quiet figure beside its title, by line and page on hover.
  */
 function Outside({ outside }: { outside: ShiftsModel["outside"] }) {
-  // The one rule's lines (with `ruleFrom`): the pot, a PPV waiting for its sender, the owner's decision.
-  const ruled = (one: { potNetMills?: number; waitingNetMills?: number; decideNetMills?: number }) =>
-    (one.potNetMills ?? 0) + (one.waitingNetMills ?? 0) + (one.decideNetMills ?? 0);
+  // The one rule's lines (with `ruleFrom`).
+  const ruled = (one: { personNetMills?: number; potNetMills?: number; waitingNetMills?: number; decideNetMills?: number }) =>
+    (one.personNetMills ?? 0) + (one.potNetMills ?? 0) + (one.waitingNetMills ?? 0) + (one.decideNetMills ?? 0);
   const total = outside.visitsNetMills + outside.nobodyNetMills + ruled(outside);
   if (total <= 0) return null;
+  // A person's money with no shift: by whom, so it is never a figure without a name.
+  const people = new Map<string, number>();
+  for (const sale of outside.sales) {
+    if (sale.home === "person") people.set(sale.visitBy ?? "", (people.get(sale.visitBy ?? "") ?? 0) + sale.netMills);
+  }
   const lines: Array<[string, number | undefined]> = [
     ["в заходах", outside.visitsNetMills],
+    ...[...people].map(([name, mills]): [string, number] => [`без смены, по решению: ${name}`, mills]),
     ["общак", outside.potNetMills],
     ["ждут смены отправителя", outside.waitingNetMills],
     ["ждут решения", outside.decideNetMills],
@@ -306,7 +315,7 @@ function Outside({ outside }: { outside: ShiftsModel["outside"] }) {
       <span>
         {outside.potNetMills === undefined
           ? "Продажи страниц, которые не держала ни одна смена: в продажи за смены и в выплаты они не входят."
-          : "Продажи страниц, которые правило не отдало ни одной смене: в продажи за смены и в выплаты они не входят."}
+          : "Продажи страниц, которые правило не отдало ни одной смене: в продажи за смены они не входят. Отданные человеку без смены — в его строке, в день продажи."}
       </span>
       {lines.map(([label, mills]) => (mills ?? 0) > 0 && <span key={label} className="shifts-outside__row">{label}<Money mills={mills!} /></span>)}
       {outside.pages.map((page) => (

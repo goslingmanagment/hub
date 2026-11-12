@@ -402,7 +402,8 @@ export function buildModel(sales: SalesResponse, numbers: NumbersResponse | unde
     totals: totalsOf(chatter),
     previous: chatter.previous === null ? null : totalsOf(chatter.previous),
     unmatched: comparable && chatter.previous === null && chatter.shifts > 0,
-    gone: chatter.shifts === 0,
+    // No shift, but money the rule gave them with no work to hold it («вне смен», by name): a row with that money.
+    gone: chatter.shifts === 0 && chatter.salesNetMills === 0,
     cells: cellsOf(columns, chatter.daily, journal.filter((shift) => chatter.userIds.includes(shift.userId))),
   }))
     // The owner's or a team lead's login without a shift here is not a row of who works shifts («Люди» lists them so).

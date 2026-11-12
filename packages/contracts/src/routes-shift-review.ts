@@ -293,6 +293,12 @@ export const teamShiftReviewResponseSchema = z.object({
    */
   laterSales: z.array(shiftReviewSaleSchema),
   /**
+   * With `ruleFrom`: the sales of the shift's report date the rule gives the person with no work of theirs to hold them
+   * (the owner's decision to someone who had no shift then), each its share: the person's money of that day, not the
+   * shift's («Смены» shows it in their row and «вне смен»). `verdict` `none`, `holderName` the person. Empty for a look-in.
+   */
+  withoutShiftSales: z.array(shiftReviewSaleSchema).optional(),
+  /**
    * Every wait that overlaps the shift, cut to it: `since` is when the fan really started waiting — their first message
    * within SHIFT_REVIEW_WAIT_HORIZON_HOURS. `by` — who ended it (`me`, `other`, `none` — a message without an author);
    * null — still waiting at the shift's end. `pending` — ended by the chatter's send that neither the archive nor the
