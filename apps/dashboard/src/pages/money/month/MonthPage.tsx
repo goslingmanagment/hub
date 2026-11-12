@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link, useSearchParams } from "react-router";
-import { MOSCOW_TIME_ZONE, toBusinessDate } from "@agency_hub_core/shared";
+import { MOSCOW_TIME_ZONE, millsToWholeCents, toBusinessDate } from "@agency_hub_core/shared";
 import type { TeamLedgerMonthCard } from "@agency_hub_core/contracts";
 import { kernel, KernelApiError } from "@/api/sdk";
 import { NoAnswerPanel, StatusPanel } from "@/components/shared/StatusPanel";
@@ -131,7 +131,8 @@ function Card({ card, hub }: {
   hub: { data?: { netEarningsMills: number } | undefined; isError: boolean; isLoading: boolean; refetch: () => unknown };
 }) {
   const hubMills = hub.data?.netEarningsMills ?? null;
-  const delta = hubMills === null || card.pagesNetMills === null ? null : card.pagesNetMills - hubMills;
+  // To the cent: the ledger keeps whole cents, Hub keeps mills; both are compared as the cents they print.
+  const delta = hubMills === null || card.pagesNetMills === null ? null : (millsToWholeCents(card.pagesNetMills) - millsToWholeCents(hubMills)) * 10;
   return (
     <>
       {card.status === "unknown" && (
