@@ -36,7 +36,7 @@ const person = z.object({ userId: intId, name: z.string() });
 export const saleClaimSchema = z.object({
   id: intId,
   /** claim — a statement of a report; double — counted in two reports for more than its net; imported — a question carried over from the ledger. */
-  kind: z.enum(["claim", "double", "imported"]),
+  kind: z.enum(["claim", "double", "imported", "question"]),
   transactionId: intId.nullable(),
   pageLabel: z.string().nullable(),
   /** Who claims: the report's person; null — not known (a question carried over). */
@@ -55,10 +55,10 @@ export const saleClaimSchema = z.object({
   answerNote: z.string().nullable(),
   answeredAt: isoTimestamp.nullable(),
   /** Why it went to the owner: disagree, silence (24 hours), no_side, double, imported; null — it did not. */
-  escalatedWhy: z.enum(["disagree", "silence", "no_side", "double", "imported"]).nullable(),
+  escalatedWhy: z.enum(["disagree", "silence", "no_side", "double", "imported", "question"]).nullable(),
   /** The owner's decision of the sale; null — none. */
   decision: z.object({
-    outcome: z.enum(["first", "second", "half", "nobody", "imported"]),
+    outcome: z.enum(["first", "second", "half", "nobody", "imported", "said"]),
     note: z.string().nullable(),
     decidedAt: isoTimestamp,
   }).nullable(),

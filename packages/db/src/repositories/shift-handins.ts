@@ -347,7 +347,9 @@ export interface HandinVersionOffPlatform {
  */
 export type HandinVersionMadeFor =
   | { kind: "claim"; claimId: number; transactionId: number; outcome: "agreed" | "first" | "second" | "half" | "nobody" }
-  | { kind: "off_platform"; offPlatformId: number; decision: "confirmed" | "rejected" };
+  | { kind: "off_platform"; offPlatformId: number; decision: "confirmed" | "rejected" }
+  /** A decision about the sale recorded «со слов» through the agent's door (review R2b-3). */
+  | { kind: "decision"; decisionId: number; transactionId: number; outcome: "said" };
 
 export interface HandinVersionRow {
   id: number;
@@ -368,7 +370,7 @@ export interface HandinVersionRow {
   ruleVersion: string;
   /** Made by the system on a decision; null — handed in by the person. */
   madeFor: HandinVersionMadeFor | null;
-  /** The shift's report date when this version was made (0999); null — a version older than the column. */
+  /** The shift's report date when this version was made (0407); null — a version older than the column. */
   reportDate: string | null;
 }
 

@@ -92,10 +92,10 @@ export async function listCurrentReportsOfSales(db: Database, transactionIds: re
 
 // ── Claims ───────────────────────────────────────────────────────────────────
 
-export type SaleClaimKind = "claim" | "double" | "imported";
+export type SaleClaimKind = "claim" | "double" | "imported" | "question";
 export type SaleClaimState = "asked" | "agreed" | "owner" | "decided" | "withdrawn";
 export type SaleClaimAnswer = "agree" | "disagree";
-export type SaleClaimEscalation = "disagree" | "silence" | "no_side" | "double" | "imported";
+export type SaleClaimEscalation = "disagree" | "silence" | "no_side" | "double" | "imported" | "question";
 
 export interface SaleClaimRow {
   id: number;
@@ -129,12 +129,21 @@ export interface SaleClaimRow {
   ledgerRef: Record<string, unknown> | null;
   needsLink: boolean;
   createdAt: Date;
+  /** A question the agent asked (kind question, 0407): of the owner or of the chatters; null — not a question. */
+  askedOf: "owner" | "chatters" | null;
+  sourceLink: string | null;
+  askedByAgentKeyId: number | null;
+  /** A question answered in words, with no decision to record. */
+  answerText: string | null;
+  /** A question closed without an answer: why. */
+  closeNote: string | null;
 }
 
 const CLAIM_COLUMNS = sql`c.id, c.transaction_id, c.page_id, c.kind, c.claimant_user_id, c.claimant_handin_id, c.claimant_version, c.statement,
   c.share_with_user_id, c.claimant_note, c.claimed_at, c.side_user_id, c.side_shift_id, c.state, c.answer, c.answer_note, c.answered_at,
   c.answered_by_user_id, c.answered_by_agent_key_id, c.answer_door, c.answer_ref, c.escalated_at, c.escalated_why, c.decision_id,
-  c.closed_at, c.ledger_question_id, c.question, c.who_text, c.ledger_ref, c.needs_link, c.created_at`;
+  c.closed_at, c.ledger_question_id, c.question, c.who_text, c.ledger_ref, c.needs_link, c.created_at, c.asked_of, c.source_link,
+  c.asked_by_agent_key_id, c.answer_text, c.close_note`;
 
 function claimOf(row: Row): SaleClaimRow {
   return {
@@ -169,6 +178,11 @@ function claimOf(row: Row): SaleClaimRow {
     ledgerRef: jsonOf<Record<string, unknown> | null>(row.ledger_ref, null),
     needsLink: Boolean(row.needs_link),
     createdAt: date(row.created_at),
+    askedOf: (row.asked_of ?? null) as SaleClaimRow["askedOf"],
+    sourceLink: text(row.source_link),
+    askedByAgentKeyId: nullableNum(row.asked_by_agent_key_id),
+    answerText: text(row.answer_text),
+    closeNote: text(row.close_note),
   };
 }
 
@@ -231,6 +245,10 @@ export interface SaleClaimInsert {
   answer?: SaleClaimAnswer | null;
   answerNote?: string | null;
   answeredAt?: Date | null;
+  /** A question the agent asks (kind question). */
+  askedOf?: "owner" | "chatters" | null;
+  sourceLink?: string | null;
+  askedByAgentKeyId?: number | null;
 }
 
 /** A new claim; a claim of the same report, sale and side already there — null (nothing written). */
@@ -238,14 +256,16 @@ export async function insertSaleClaim(db: Database, input: SaleClaimInsert, at: 
   const result = await db.execute<Row>(sql`
     insert into sale_claims (transaction_id, page_id, kind, claimant_user_id, claimant_handin_id, claimant_version, statement,
       share_with_user_id, claimant_note, claimed_at, side_user_id, side_shift_id, state, escalated_at, escalated_why, ledger_question_id,
-      question, who_text, ledger_ref, needs_link, decision_id, closed_at, answer, answer_note, answered_at, created_at, updated_at)
+      question, who_text, ledger_ref, needs_link, decision_id, closed_at, answer, answer_note, answered_at, created_at, updated_at,
+      asked_of, source_link, asked_by_agent_key_id)
     values (${input.transactionId}, ${input.pageId}, ${input.kind}, ${input.claimantUserId}, ${input.claimantHandinId}, ${input.claimantVersion},
       ${input.statement}, ${input.shareWithUserId}, ${input.claimantNote}, ${input.claimedAt.toISOString()}::timestamptz, ${input.sideUserId},
       ${input.sideShiftId}, ${input.state}, ${input.escalatedAt?.toISOString() ?? null}::timestamptz, ${input.escalatedWhy ?? null},
       ${input.ledgerQuestionId ?? null}, ${input.question ?? null}, ${input.whoText ?? null},
       ${input.ledgerRef == null ? null : JSON.stringify(input.ledgerRef)}::jsonb, ${input.transactionId === null}, ${input.decisionId ?? null},
       ${input.closedAt?.toISOString() ?? null}::timestamptz, ${input.answer ?? null}, ${input.answerNote ?? null},
-      ${input.answeredAt?.toISOString() ?? null}::timestamptz, ${at.toISOString()}::timestamptz, ${at.toISOString()}::timestamptz)
+      ${input.answeredAt?.toISOString() ?? null}::timestamptz, ${at.toISOString()}::timestamptz, ${at.toISOString()}::timestamptz,
+      ${input.askedOf ?? null}, ${input.sourceLink ?? null}, ${input.askedByAgentKeyId ?? null})
     on conflict do nothing
     returning id`);
   const id = result.rows[0]?.id;
@@ -258,7 +278,8 @@ export async function updateSaleClaim(
   id: number,
   patch: Partial<Pick<SaleClaimRow,
     "state" | "answer" | "answerNote" | "answeredAt" | "answeredByUserId" | "answeredByAgentKeyId" | "answerDoor" | "answerRef"
-    | "escalatedAt" | "escalatedWhy" | "decisionId" | "closedAt" | "claimantVersion" | "claimantNote" | "sideShiftId" | "transactionId" | "pageId">>,
+    | "escalatedAt" | "escalatedWhy" | "decisionId" | "closedAt" | "claimantVersion" | "claimantNote" | "sideShiftId" | "transactionId" | "pageId"
+    | "answerText" | "closeNote">>,
   at: Date,
 ): Promise<void> {
   const sets = [sql`updated_at = ${at.toISOString()}::timestamptz`];
@@ -284,13 +305,15 @@ export async function updateSaleClaim(
     put("needs_link", patch.transactionId === null);
   }
   if (patch.pageId !== undefined) put("page_id", patch.pageId);
+  if (patch.answerText !== undefined) put("answer_text", patch.answerText);
+  if (patch.closeNote !== undefined) put("close_note", patch.closeNote);
   await db.execute(sql`update sale_claims set ${sql.join(sets, sql`, `)} where id = ${id}`);
 }
 
 // ── The owner's decisions ────────────────────────────────────────────────────
 
-export type SaleDecisionKind = "split" | "nobody" | "pot";
-export type SaleDecisionOutcome = "first" | "second" | "half" | "nobody" | "imported";
+export type SaleDecisionKind = "split" | "nobody" | "pot" | "off_platform";
+export type SaleDecisionOutcome = "first" | "second" | "half" | "nobody" | "imported" | "said";
 
 export interface SaleDecisionRow {
   id: number;
@@ -305,15 +328,27 @@ export interface SaleDecisionRow {
   decidedByUserId: number | null;
   decidedAt: Date;
   saidBy: string | null;
-  source: "dispute" | "ledger";
+  source: "dispute" | "ledger" | "agent";
   ledgerDecisionId: number | null;
+  /** The words that name a sale not tied yet (page, fan reference, moment, net): the ledger's, or the agent's. */
   ledgerRef: Record<string, unknown> | null;
   needsLink: boolean;
-  state: "active" | "superseded";
+  state: "active" | "superseded" | "cancelled";
+  /** Recorded «со слов» (0407): when it was said, the message, the key; cancelled; taken into a post-based report. */
+  saidAt: Date | null;
+  sourceLink: string | null;
+  agentKeyId: number | null;
+  cancelledAt: Date | null;
+  cancelNote: string | null;
+  appliedUserId: number | null;
+  appliedReportDate: string | null;
+  appliedAt: Date | null;
+  supersededAt: Date | null;
 }
 
 const DECISION_COLUMNS = sql`d.id, d.transaction_id, d.page_id, d.kind, d.shares, d.pot, d.outcome, d.rule_home, d.note, d.decided_by_user_id,
-  d.decided_at, d.said_by, d.source, d.ledger_decision_id, d.ledger_ref, d.needs_link, d.state`;
+  d.decided_at, d.said_by, d.source, d.ledger_decision_id, d.ledger_ref, d.needs_link, d.state, d.said_at, d.source_link, d.agent_key_id,
+  d.cancelled_at, d.cancel_note, d.applied_user_id, to_char(d.applied_report_date, 'YYYY-MM-DD') as applied_report_date, d.applied_at, d.superseded_at`;
 
 function decisionOf(row: Row): SaleDecisionRow {
   return {
@@ -334,6 +369,15 @@ function decisionOf(row: Row): SaleDecisionRow {
     ledgerRef: jsonOf<Record<string, unknown> | null>(row.ledger_ref, null),
     needsLink: Boolean(row.needs_link),
     state: row.state as SaleDecisionRow["state"],
+    saidAt: nullableDate(row.said_at),
+    sourceLink: text(row.source_link),
+    agentKeyId: nullableNum(row.agent_key_id),
+    cancelledAt: nullableDate(row.cancelled_at),
+    cancelNote: text(row.cancel_note),
+    appliedUserId: nullableNum(row.applied_user_id),
+    appliedReportDate: text(row.applied_report_date),
+    appliedAt: nullableDate(row.applied_at),
+    supersededAt: nullableDate(row.superseded_at),
   };
 }
 
@@ -352,9 +396,17 @@ export async function listActiveSaleDecisions(db: Database, transactionIds: read
 /** Decisions by id, sale or source; the newest first. */
 export async function listSaleDecisions(
   db: Database,
-  input: { ids?: readonly number[]; transactionIds?: readonly number[]; needsLink?: boolean; activeOnly?: boolean; userIds?: readonly number[]; limit?: number },
+  input: {
+    ids?: readonly number[]; transactionIds?: readonly number[]; needsLink?: boolean; activeOnly?: boolean; userIds?: readonly number[]; limit?: number;
+    /** Only active and not taken into a report yet. */
+    open?: boolean;
+    /** Decided (or said) on this day or later. */
+    since?: Date;
+  },
 ): Promise<SaleDecisionRow[]> {
   const where = [sql`true`];
+  if (input.open === true) where.push(sql`d.state = 'active' and d.applied_at is null`);
+  if (input.since !== undefined) where.push(sql`coalesce(d.said_at, d.decided_at) >= ${input.since.toISOString()}::timestamptz`);
   if (input.ids !== undefined) where.push(sql`d.id = any(${ids(input.ids)})`);
   if (input.transactionIds !== undefined) where.push(sql`d.transaction_id = any(${ids(input.transactionIds)})`);
   if (input.needsLink !== undefined) where.push(sql`d.needs_link = ${input.needsLink}`);
@@ -380,9 +432,13 @@ export interface SaleDecisionInsert {
   decidedByUserId: number | null;
   decidedAt: Date;
   saidBy: string | null;
-  source: "dispute" | "ledger";
+  source: "dispute" | "ledger" | "agent";
   ledgerDecisionId: number | null;
   ledgerRef: Record<string, unknown> | null;
+  /** Recorded «со слов» (0407). */
+  saidAt?: Date | null;
+  sourceLink?: string | null;
+  agentKeyId?: number | null;
 }
 
 /**
@@ -401,14 +457,40 @@ export async function insertSaleDecision(db: Database, input: SaleDecisionInsert
   }
   const result = await db.execute<Row>(sql`
     insert into sale_owner_decisions (transaction_id, page_id, kind, shares, pot, outcome, rule_home, note, decided_by_user_id, decided_at,
-      said_by, source, ledger_decision_id, ledger_ref, needs_link, created_at)
+      said_by, source, ledger_decision_id, ledger_ref, needs_link, created_at, said_at, source_link, agent_key_id)
     values (${input.transactionId}, ${input.pageId}, ${input.kind}, ${JSON.stringify(input.shares)}::jsonb, ${input.pot}, ${input.outcome},
       ${input.ruleHome}, ${input.note}, ${input.decidedByUserId}, ${input.decidedAt.toISOString()}::timestamptz, ${input.saidBy}, ${input.source},
-      ${input.ledgerDecisionId}, ${input.ledgerRef == null ? null : JSON.stringify(input.ledgerRef)}::jsonb, ${input.transactionId === null},
-      ${at.toISOString()}::timestamptz)
+      ${input.ledgerDecisionId}, ${input.ledgerRef == null ? null : JSON.stringify(input.ledgerRef)}::jsonb,
+      ${input.transactionId === null && input.kind !== "off_platform"}, ${at.toISOString()}::timestamptz,
+      ${input.saidAt?.toISOString() ?? null}::timestamptz, ${input.sourceLink ?? null}, ${input.agentKeyId ?? null})
     returning id`);
   const found = await listSaleDecisions(db, { ids: [num(result.rows[0]!.id)] });
   return found[0] ?? null;
+}
+
+/** Supersedes one decision by id (a newer one names it); false — not active. */
+export async function supersedeSaleDecision(db: Database, input: { id: number; at: Date }): Promise<boolean> {
+  const result = await db.execute(sql`
+    update sale_owner_decisions set state = 'superseded', superseded_at = ${input.at.toISOString()}::timestamptz
+    where id = ${input.id} and state = 'active'`);
+  return (result.rowCount ?? 0) > 0;
+}
+
+/** Cancels a decision with why; false — already cancelled or superseded. */
+export async function cancelSaleDecision(db: Database, input: { id: number; note: string; at: Date }): Promise<boolean> {
+  const result = await db.execute(sql`
+    update sale_owner_decisions set state = 'cancelled', cancelled_at = ${input.at.toISOString()}::timestamptz, cancel_note = ${input.note}
+    where id = ${input.id} and state = 'active'`);
+  return (result.rowCount ?? 0) > 0;
+}
+
+/** Marks an active decision taken into a post-based report (whose, which date); false — not active or taken already. */
+export async function markSaleDecisionApplied(db: Database, input: { id: number; userId: number; reportDate: string; at: Date }): Promise<boolean> {
+  const result = await db.execute(sql`
+    update sale_owner_decisions set applied_user_id = ${input.userId}, applied_report_date = ${input.reportDate}::date,
+      applied_at = ${input.at.toISOString()}::timestamptz
+    where id = ${input.id} and state = 'active' and applied_at is null`);
+  return (result.rowCount ?? 0) > 0;
 }
 
 /**

@@ -148,7 +148,7 @@ export function deriveClaims(reports: readonly ReportView[]): DerivedClaim[] {
 
 /** What a stored claim is, as `claimStands` reads it. */
 export interface ClaimView {
-  kind: "claim" | "double" | "imported";
+  kind: "claim" | "double" | "imported" | "question";
   transactionId: number | null;
   claimantUserId: number | null;
   claimantHandinId: number | null;
@@ -165,6 +165,8 @@ export interface ClaimView {
  */
 export function claimStands(claim: ClaimView, reports: readonly ReportView[]): boolean {
   if (claim.kind === "imported") return claim.state === "owner";
+  // A question the agent asked stands until it is answered, decided or closed.
+  if (claim.kind === "question") return claim.state === "owner" || claim.state === "asked";
   if (claim.transactionId === null) return false;
   const own = reports.find((report) => report.handinId === claim.claimantHandinId);
   const line = own?.lines.find((one) => one.transactionId === claim.transactionId);
@@ -211,7 +213,8 @@ export function ruleMarksOf(input: { reports: readonly ReportView[]; claims: rea
 
 /** An owner's decision as the rule reads it. */
 export interface DecisionView {
-  kind: "split" | "nobody" | "pot";
+  /** off_platform names no sale: never an input of the rule. */
+  kind: "split" | "nobody" | "pot" | "off_platform";
   shares: ReadonlyArray<{ userId: number; percent: number }>;
   pot: string | null;
   /** The sale's home when decided. */
@@ -224,6 +227,7 @@ export interface DecisionView {
  * applies); «никому» and a pot are their own inputs. Pure.
  */
 export function ruleDecisionOf(decision: DecisionView): { resolution: Array<{ userId: number; percent: number }> | null; claimedBy: number | null; ownerNobody: boolean; ownerPot: string | null } {
+  if (decision.kind === "off_platform") return { resolution: null, claimedBy: null, ownerNobody: false, ownerPot: null };
   if (decision.kind === "nobody") return { resolution: null, claimedBy: null, ownerNobody: true, ownerPot: null };
   if (decision.kind === "pot") return { resolution: null, claimedBy: null, ownerNobody: false, ownerPot: decision.pot };
   const shares = decision.shares.filter((share) => share.percent > 0);
@@ -275,7 +279,7 @@ export function settledShareOf(input: {
   decision: Pick<DecisionView, "kind" | "shares"> | null;
   agreed: ReadonlyArray<{ claimantUserId: number | null; sideUserId: number | null; statement: "mine" | "share" | null }>;
 }): { amountMills: number; settled: "owner" | "agreed" } | null {
-  if (input.decision !== null) {
+  if (input.decision !== null && input.decision.kind !== "off_platform") {
     if (input.decision.kind !== "split") return { amountMills: 0, settled: "owner" };
     const shares = splitShares(input.netMills, input.decision.shares.filter((share) => share.percent > 0));
     return { amountMills: shares.filter((share) => input.userIds.has(share.userId)).reduce((sum, share) => sum + share.mills, 0), settled: "owner" };

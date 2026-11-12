@@ -383,8 +383,10 @@ export const agentShiftReportsFeedItemSchema = z.object({
    * Null — handed in by the person. Such a version supersedes the one before it like any other.
    */
   madeFor: z.object({
-    kind: z.enum(["claim", "off_platform"]),
+    kind: z.enum(["claim", "off_platform", "decision"]),
     claimId: intId.nullable(),
+    /** A decision recorded «со слов» through the agent's door (kind decision, review R2b-3). */
+    decisionId: intId.nullable().default(null),
     offPlatformId: intId.nullable(),
     transactionId: intId.nullable(),
     outcome: z.string(),

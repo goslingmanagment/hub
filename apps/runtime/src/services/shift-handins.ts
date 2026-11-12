@@ -706,6 +706,7 @@ function bodyOf(input: {
 export function madeForWords(madeFor: HandinVersionMadeFor | null, actorName: string | null): string | null {
   if (madeFor === null) return null;
   if (madeFor.kind === "off_platform") return madeFor.decision === "confirmed" ? "владелец подтвердил «мимо площадки»" : "владелец отклонил «мимо площадки»";
+  if (madeFor.kind === "decision") return "решение о продаже, записанное со слов";
   switch (madeFor.outcome) {
     case "agreed": return `согласие${actorName ? `: ${actorName}` : " второй стороны"}`;
     case "first":
@@ -726,7 +727,7 @@ function versionSummary(version: HandinVersionRow, names: Map<number, string>, k
     : names.get(version.actorUserId ?? -1) ?? "";
   const why = version.madeFor;
   const madeFor = cutTo === null || why === null ? why
-    : why.kind === "claim" && version.lines.some((line) => line.transactionId === why.transactionId && line.pageLabel !== null && cutTo.has(line.pageLabel))
+    : why.kind !== "off_platform" && version.lines.some((line) => line.transactionId === why.transactionId && line.pageLabel !== null && cutTo.has(line.pageLabel))
       ? why
       : null;
   return {
@@ -1352,9 +1353,10 @@ export async function readShiftReportsFeed(
       madeFor: row.madeFor === null ? null : {
         kind: row.madeFor.kind,
         claimId: row.madeFor.kind === "claim" ? row.madeFor.claimId : null,
+        decisionId: row.madeFor.kind === "decision" ? row.madeFor.decisionId : null,
         offPlatformId: row.madeFor.kind === "off_platform" ? row.madeFor.offPlatformId : null,
-        transactionId: row.madeFor.kind === "claim" ? row.madeFor.transactionId : null,
-        outcome: row.madeFor.kind === "claim" ? row.madeFor.outcome : row.madeFor.decision,
+        transactionId: row.madeFor.kind === "claim" || row.madeFor.kind === "decision" ? row.madeFor.transactionId : null,
+        outcome: row.madeFor.kind === "off_platform" ? row.madeFor.decision : row.madeFor.outcome,
         byUserId: row.actorUserId,
       },
     })),
