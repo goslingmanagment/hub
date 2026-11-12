@@ -614,11 +614,16 @@ export interface CustomLookalikeRow {
  * Sales between `from` and `to` that look like a custom and have no order: a new subscription to a tier that
  * includes a custom (a benefit or the name with «free» and «custom»), or a tip whose note speaks of a custom. Not
  * a sale an order holds, not one marked «не кастом», not one of a fan whose order on the page was recorded from
- * seven days before it to a day after.
+ * seven days before it to a day after. `alsoIds` — sales looked at whatever their day (the ones a matter still
+ * waits about): the window only limits which new sales are found.
  */
-export async function listCustomLookalikeSales(db: Database, input: { from: Date; to: Date; limit: number }): Promise<CustomLookalikeRow[]> {
+export async function listCustomLookalikeSales(
+  db: Database,
+  input: { from: Date; to: Date; limit: number; alsoIds?: readonly number[] },
+): Promise<CustomLookalikeRow[]> {
   const from = input.from.toISOString();
   const to = input.to.toISOString();
+  const looked = sql`((t.occurred_at >= ${from}::timestamptz and t.occurred_at < ${to}::timestamptz) or t.id = any(${ids(input.alsoIds ?? [])}))`;
   const result = await db.execute<Row>(sql`
     with custom_tiers as (
       select t.page_id, t.tier_ref, t.name from page_subscription_tiers t
@@ -634,14 +639,12 @@ export async function listCustomLookalikeSales(db: Database, input: { from: Date
           and ps.source_created_at between t.occurred_at - interval '2 hours' and t.occurred_at + interval '2 hours'
         order by ps.source_created_at desc limit 1) ps on true
       join custom_tiers ct on ct.page_id = t.platform_account_id and ct.tier_ref = ps.subscription_tier_id
-      where t.canonical_type = 'subscription' and t.is_active and t.gross_amount_mills > 0
-        and t.occurred_at >= ${from}::timestamptz and t.occurred_at < ${to}::timestamptz
+      where t.canonical_type = 'subscription' and t.is_active and t.gross_amount_mills > 0 and ${looked}
       union all
       select t.id, t.platform_account_id, t.fan_id, t.gross_amount_mills, t.occurred_at, 'tip_note', tc.tip_message_text
       from transactions t
       join transaction_tip_contexts tc on tc.account_id = t.platform_account_id and tc.platform_tip_id = t.correlation_id
-      where t.canonical_type = 'tip' and t.is_active and t.gross_amount_mills > 0
-        and t.occurred_at >= ${from}::timestamptz and t.occurred_at < ${to}::timestamptz
+      where t.canonical_type = 'tip' and t.is_active and t.gross_amount_mills > 0 and ${looked}
         and tc.tip_message_text ~* '(custom|кастом)'
     )
     select s.id, s.page_id, p.label as page_label, p.platform, s.fan_id, f.platform_user_id as fan_ref, f.username as fan_username,
@@ -688,6 +691,33 @@ export async function dismissCustomSale(db: Database, input: { transactionId: nu
     insert into custom_sale_dismissals (transaction_id, user_id) values (${input.transactionId}, ${input.userId})
     on conflict (transaction_id) do nothing`);
   return (result.rowCount ?? 0) > 0;
+}
+
+/**
+ * What became of a sale that looked like a custom with no order: `recorded` — an order holds it now, or the fan's
+ * order on the page was recorded beside it; `dismissed` — «не кастом»; `gone` — the sale is no more (refunded,
+ * erased); `waits` — none of these: it still has neither an order nor a word.
+ */
+export type CustomSaleFate = "recorded" | "dismissed" | "gone" | "waits";
+
+export async function listCustomSaleFates(db: Database, transactionIds: readonly number[]): Promise<Map<number, CustomSaleFate>> {
+  const fates = new Map<number, CustomSaleFate>();
+  if (transactionIds.length === 0) return fates;
+  const result = await db.execute<Row>(sql`
+    select asked.id,
+      t.id is not null and t.is_active and t.gross_amount_mills > 0 as live,
+      exists (select 1 from custom_sale_dismissals d where d.transaction_id = asked.id) as dismissed,
+      exists (select 1 from custom_order_payments cp where cp.transaction_id = asked.id)
+        or (t.id is not null and exists (
+          select 1 from custom_orders o
+          where o.page_id = t.platform_account_id and o.fan_id = t.fan_id and o.state <> 'cancelled'
+            and o.created_at between t.occurred_at - interval '7 days' and t.occurred_at + interval '24 hours')) as recorded
+    from unnest(${ids(transactionIds)}) as asked(id)
+    left join transactions t on t.id = asked.id`);
+  for (const row of result.rows) {
+    fates.set(Number(row.id), row.recorded === true ? "recorded" : row.dismissed === true ? "dismissed" : row.live === true ? "waits" : "gone");
+  }
+  return fates;
 }
 
 /** The live logins of the people who hold a narrow right (person_rights), the lowest id first. */
