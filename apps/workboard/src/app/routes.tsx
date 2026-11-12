@@ -1,3 +1,4 @@
+import { lazy } from "react";
 import { Navigate, createBrowserRouter, useLocation, useParams, type Params, type RouteObject } from "react-router";
 import { START_PATH, startOpen, useAccountStart } from "@/shared/start";
 import { CHATTER, TEAM, homePath, useMe } from "@/shared/useMe";
@@ -70,6 +71,15 @@ function MyReportsRedirect() {
   return <Navigate to={{ pathname: "/my/shifts", search: location.search }} replace />;
 }
 
+const AccountScreen = lazy(() => import("../screens/account/index.js").then((m) => ({ default: m.AccountScreen })));
+
+/** A narrow session (from the extension) does not change the account's devices or password: it goes home. */
+function AccountRoute() {
+  const { narrow } = useMe();
+  if (narrow) return <Navigate to="/" replace />;
+  return <AccountScreen />;
+}
+
 /** `/sales` opens its first tab. */
 function SalesRedirect() {
   const location = useLocation();
@@ -132,6 +142,8 @@ const chatterScreens: RouteObject[] = [
  */
 const everyoneScreens: RouteObject[] = [
   { path: "customs", lazy: () => import("../screens/customs/index.js").then((m) => ({ Component: m.CustomsBoardScreen })) },
+  // «Аккаунт и устройства» (the console's /account until 12.11): everyone's own, from the name menu; never a narrow session's.
+  { path: "account", element: <AccountRoute /> },
   {
     path: "customs/:code",
     handle: { screenKey: (params) => params.code ?? "" } satisfies ScreenHandle,

@@ -1,11 +1,12 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useMemo, type ReactNode } from "react";
-import { useLocation } from "react-router";
+import { Link, useLocation, useSearchParams } from "react-router";
 import { Button, EmptyState, ErrorState, LinkButton, Notice } from "@agency_hub_core/ui";
 import { formatDay, formatDayRange } from "@agency_hub_core/ui/format";
 import { addDays, daysInRange } from "@agency_hub_core/ui/moscow";
 import { currentWeek, stepWeek, withPeriod, type ResolvedPeriod } from "@agency_hub_core/ui/period";
 import { SHIFT_SALES_KEY, usersQuery } from "@/shared/reads";
+import { liveLogins, personOfLogin, useTeamPeople } from "@/screens/people/registry";
 import { ScreenHeader } from "@/shared/ScreenHeader";
 import { usePageFilter } from "@/shared/usePageFilter";
 import { usePeriod } from "@/shared/usePeriod";
@@ -28,19 +29,45 @@ function periodWords(period: ResolvedPeriod): string {
 }
 
 /**
+ * The viewer's own logins, for `?mine=1` («Мои смены» of the owner or a team
+ * lead: Смены of one person, not a second screen): every live login of the
+ * person holding theirs, or their own login alone. Null while not asked.
+ */
+function useOwnLogins(mine: boolean): ReadonlySet<number> | null {
+  const { user } = useMe();
+  const people = useTeamPeople();
+  return useMemo(() => {
+    if (!mine || !user) return null;
+    const person = personOfLogin(people.data?.people ?? [], user.id);
+    return new Set(person ? liveLogins(person).map((login) => login.userId) : [user.id]);
+  }, [mine, people.data, user]);
+}
+
+/**
  * Смены — the home of Workboard (spec §4.1): what waits for a decision, who is
  * on a shift now, the period by chatter × day, and the journal of every shift.
  * Every shift (a row, a cell, the «now» row) opens its review. Read-only.
+ * `?mine=1`: only the viewer's own shifts (their «Мои смены», one screen).
  */
 export function ShiftsScreen() {
   const { spec, period, today } = usePeriod();
   const { page, setPage } = usePageFilter();
   const { isOwner } = useMe();
   const location = useLocation();
+  const [search] = useSearchParams();
   const queryClient = useQueryClient();
   const window = useMemo(() => shiftsWindow(period), [period]);
   const { sales, numbers } = useShiftsPeriod({ window, page, current: period.current });
-  const model = useMemo(() => (sales.data ? buildModel(sales.data, numbers.data, window) : undefined), [sales.data, numbers.data, window]);
+  const mine = search.get("mine") === "1";
+  const own = useOwnLogins(mine);
+  const full = useMemo(() => (sales.data ? buildModel(sales.data, numbers.data, window) : undefined), [sales.data, numbers.data, window]);
+  const model = useMemo(() => (full && own ? {
+    ...full,
+    chatters: full.chatters.filter((row) => row.userId !== null && own.has(row.userId)),
+    journal: full.journal.filter((shift) => own.has(shift.userId)),
+  } : full), [full, own]);
+  const everyone = new URLSearchParams(location.search);
+  everyone.delete("mine");
 
   const quality = numbers.data ? "ready" : numbers.isError ? "failed" : "loading";
   const refreshing = sales.isPlaceholderData && sales.isFetching;
@@ -85,7 +112,12 @@ export function ShiftsScreen() {
   } else if (empty) {
     const words = periodWords(period);
     const previousWeek = spec.kind === "week" ? withPeriod(new URLSearchParams(location.search), stepWeek(spec, -1, today)).toString() : null;
-    body = page !== null ? (
+    body = mine ? (
+      <EmptyState
+        title={`У вас ${words} смен нет`}
+        action={<LinkButton to={{ pathname: "/shifts", search: everyone.toString() ? `?${everyone.toString()}` : "" }}>Все смены</LinkButton>}
+      />
+    ) : page !== null ? (
       <EmptyState
         title={`На ${page} ${words} смен нет`}
         action={<Button onClick={() => setPage(null)}>Показать все страницы</Button>}
@@ -112,6 +144,7 @@ export function ShiftsScreen() {
           weekly={spec.kind === "week"}
           page={page}
           columns={windowColumns(window, today)}
+          mine={mine}
         />
         <Journal
           model={model}
@@ -140,9 +173,15 @@ export function ShiftsScreen() {
         refreshing={sales.isFetching}
       />
       <div className="wb-content shifts">
+        {mine && (
+          <p className="shifts-mine">
+            Только ваши смены.{" "}
+            <Link className="ui-link" to={{ pathname: "/shifts", search: everyone.toString() ? `?${everyone.toString()}` : "" }}>Все смены</Link>
+          </p>
+        )}
         <div className="shifts-top">
           <WaitingLine />
-          <NowOnShift page={page} />
+          <NowOnShift page={page} only={own} />
         </div>
         {/* Cut off only days before Hub counted: the header's «Hub считает смены с …» says it all, no advice to pick them. */}
         {window.clipped && model !== undefined && !cutBeforeCounting && (
@@ -153,7 +192,7 @@ export function ShiftsScreen() {
         )}
         {body}
         <div className="shifts-foot">
-          <AuthorlessLine days={authorshipDays} page={page} enabled={period.current} partial={authorshipDays < period.shownDays} />
+          {!mine && <AuthorlessLine days={authorshipDays} page={page} enabled={period.current} partial={authorshipDays < period.shownDays} />}
           <HowItCounts page={page} ruleFrom={sales.data?.ruleFrom ?? null} />
         </div>
       </div>

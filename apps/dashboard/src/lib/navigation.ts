@@ -197,8 +197,11 @@ export const CHATTER_HOME = "/workboard/";
 /** Workboard's «Начало»: where /join lands a newcomer, signed in (package J). */
 export const NEWCOMER_START = "/workboard/start";
 
-/** «Мои смены» itself: where the account page and the cabinet's old tabs lead a chatter. */
+/** «Мои смены» itself: where the cabinet's old tabs lead a chatter. */
 export const CHATTER_SHIFTS = "/workboard/my/shifts";
+
+/** «Аккаунт и устройства»: Workboard's screen since 12.11 (the console's /account leads there). */
+export const ACCOUNT_SCREEN = "/workboard/account";
 
 /** The one-time code's way between the names (`/api/v1/auth/sso?…`): a page load, never the console's router. */
 export function isSigninContinuation(path: string): boolean {

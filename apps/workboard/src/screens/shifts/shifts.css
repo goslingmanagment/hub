@@ -4,6 +4,13 @@
 
   /* The two status lines on top: what waits for a decision, who is on a shift. */
   /* Two status lines (36 px each) read as one block: no air between them beyond their own. */
+  /* `?mine=1`: whose shifts these are, and the way back to everyone's. */
+  .shifts-mine {
+    font-size: 14px;
+    line-height: 20px;
+    color: var(--ui-text-2);
+  }
+
   .shifts-top {
     display: flex;
     flex-direction: column;

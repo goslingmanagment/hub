@@ -389,7 +389,8 @@ export const SCREENS: readonly Screen[] = [
     id: "sales", path: "/workboard/sales", label: "Что продаёт", title: "Что продаёт", section: "team", app: "workboard", icon: "TrendingUp",
     why: "Что и по какой цене покупают, как быстро отвечают.",
     pageFilter: "any",
-    keywords: "продажи цена скорость ответа ppv платные возврат фанов подходы приветствия кто ждал пустые часы рассылки",
+    // «Возврат фанов» and «Приветствия и охват» left its tabs on 12.11 (0 opened in 14 days): their addresses still open.
+    keywords: "продажи цена скорость ответа ppv платные",
   },
   {
     // People's pay is the owner's alone (the ledger's answer reaches no other session).

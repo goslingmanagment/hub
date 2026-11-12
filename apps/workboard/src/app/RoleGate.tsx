@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { Outlet } from "react-router";
+import { Navigate, Outlet, useLocation } from "react-router";
 import { EmptyState, LinkButton } from "@agency_hub_core/ui";
 import { placeName } from "@agency_hub_core/ui/place";
 import { useFace } from "@/shared/face";
@@ -36,7 +36,25 @@ function NotForChatter() {
   );
 }
 
+/**
+ * The owner or a team lead on a chatter's address: «Мои смены» is Смены of
+ * their own shifts (`/shifts?mine=1`, one screen, not a second one); a shift's
+ * report, the team's reading of it. Anything else of a chatter's: one sentence.
+ */
 function ForChatterOnly() {
+  const location = useLocation();
+  const path = location.pathname.replace(/\/+$/, "");
+  if (path === "/my/shifts" || path === "/my/reports") {
+    const search = new URLSearchParams(location.search);
+    search.set("mine", "1");
+    return <Navigate to={{ pathname: "/shifts", search: `?${search.toString()}` }} replace />;
+  }
+  const report = /^\/my\/shifts\/([^/]+)$/.exec(path);
+  if (report) return <Navigate to={{ pathname: `/shifts/report/${report[1]}`, search: location.search }} replace />;
+  return <NotYours />;
+}
+
+function NotYours() {
   useWorkboardTitle();
   return (
     <div className="wb-content">

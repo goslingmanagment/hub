@@ -20,7 +20,6 @@ import { ToWorkboard } from "./routes/ToWorkboard.js";
 
 const LoginPage = lazy(() => import("./pages/LoginPage.js").then((m) => ({ default: m.LoginPage })));
 const JoinPage = lazy(() => import("./pages/account/JoinPage.js").then((m) => ({ default: m.JoinPage })));
-const AccountPage = lazy(() => import("./pages/account/AccountPage.js").then((m) => ({ default: m.AccountPage })));
 
 function LazyFallback() {
   return <div role="status" className="flex items-center justify-center h-full py-20 text-text-muted">Загружаем экран…</div>;
@@ -39,9 +38,8 @@ export function App() {
               (lib/workboard.ts), before any frame of the console loads. «Анкеты» stay below. */}
           <Route path="/team/*" element={<ToWorkboard />} />
           <Route path="/held-sends" element={<ToWorkboard />} />
-          <Route element={<ChatterLayout />}>
-            <Route path="/account" element={<AccountPage />} />
-          </Route>
+          {/* «Аккаунт и устройства» is Workboard's screen: the old address leads there (or a chatter's old tab to «Мои смены»). */}
+          <Route path="/account" element={<ChatterLayout />} />
           <Route element={<ProtectedLayout />}>
             <Route element={<LiveLegacy />}>
               <Route element={<ScreenFrame />}>

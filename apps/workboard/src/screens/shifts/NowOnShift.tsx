@@ -17,8 +17,11 @@ import { useNowOnShift, type NowShift } from "./data.js";
  * a team lead, who has no review, gets the person's card). Nobody on a shift:
  * one muted line with the last shift's end, which opens that shift.
  */
-export function NowOnShift({ page }: { page: string | null }) {
-  const { state, sales } = useNowOnShift(page);
+export function NowOnShift({ page, only = null }: { page: string | null; only?: ReadonlySet<number> | null }) {
+  const read = useNowOnShift(page);
+  const { sales } = read;
+  // «Мои смены» of the owner: their own shifts alone.
+  const state = read.state && only ? { ...read.state, shifts: read.state.shifts.filter((shift) => only.has(shift.userId)), last: read.state.last && only.has(read.state.last.userId) ? read.state.last : null } : read.state;
   const { isOwner } = useMe();
   const location = useLocation();
   const { back } = useBackState("Смены");
