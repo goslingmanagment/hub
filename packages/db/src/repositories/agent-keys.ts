@@ -249,6 +249,31 @@ export async function setAgentKeyCapabilities(
   }
 }
 
+/**
+ * Replaces a live key's page grant. The same guard as `setAgentKeyCapabilities`:
+ * a revoked or expired key matches nothing and the caller gets `null`.
+ */
+export async function setAgentKeyPages(
+  db: Database,
+  input: { id: number; pageIds: number[]; now?: Date },
+): Promise<AgentKeyRow | null> {
+  const now = input.now ?? new Date();
+  try {
+    const [row] = await db
+      .update(agentKeys)
+      .set({ pageIds: input.pageIds })
+      .where(and(
+        eq(agentKeys.id, input.id),
+        isNull(agentKeys.revokedAt),
+        gt(agentKeys.expiresAt, now),
+      ))
+      .returning();
+    return row ?? null;
+  } catch (error) {
+    rethrowAsConstraintError(error);
+  }
+}
+
 export interface AgentKeyUseResult {
   lastUsedAt: Date;
   expiresAt: Date;
