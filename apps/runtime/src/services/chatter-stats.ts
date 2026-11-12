@@ -41,13 +41,16 @@ import {
 } from "./chatter-shifts.ts";
 import {
   RULED_SALES_LEAD_MS,
-  creditedPiece,
+  homeCredit,
   openWindowFrom,
+  ownMoneyShares,
   piecesByUser,
+  readPeopleLogins,
   readScreenHomes,
   readScreensRule,
   ruledSalesFrom,
   ruledWork,
+  type PeopleLogins,
   type ScreensRule,
 } from "./sale-rule-screens.ts";
 import { reportDateOfShift } from "./shift-rows.ts";
@@ -260,11 +263,14 @@ export async function computeChatterStats(
     ? ruledDay(one) >= moscowDayOf(previousFrom.getTime()) && ruledDay(one) <= moscowDayOf(to.getTime() - 1) && one.startedAt < to.getTime()
     : middleOfWork(one) >= previousFrom.getTime() && middleOfWork(one) < to.getTime());
   const work = (people.get(userId)?.work ?? []).filter(inPeriod);
-  const sales = work.length === 0 ? [] : await listShiftSales(db, { pageIds, from: readFrom, to: readTo });
+  // By the rule, a person with no shift in the period may still have money of it: what the rule gives them with no work.
+  const sales = work.length === 0 && rule === null ? [] : await listShiftSales(db, { pageIds, from: readFrom, to: readTo });
   const held = work.map((one) => ({ work: one, sales: sales.filter((sale) => workHoldsShiftSale(one, sale)) }));
-  const ruledHeld = rule !== null && work.some(ruled) ? await ruledCreditsOf(db, { rule, userId, work, sales, pageIds, readFrom, now }) : null;
+  const ruledHeld = rule === null ? null : await ruledCreditsOf(db, {
+    rule, userId, work: people.get(userId)?.work ?? [], sales, pageIds, readFrom, readTo, now, logins: await readPeopleLogins(db),
+  });
   const heldSales = held.flatMap((one) => one.sales);
-  const creditedSales = ruledHeld === null ? [] : [...ruledHeld.credits.values()].flat();
+  const creditedSales = ruledHeld === null ? [] : [...[...ruledHeld.credits.values()].flat(), ...ruledHeld.withoutShift.map((one) => one.sale)];
 
   const [team, sendsRead, ppvRows, replyRows, reports] = await Promise.all([
     // Whose shifts hold these sales too.
@@ -316,6 +322,11 @@ export async function computeChatterStats(
       : one.sales.filter((sale) => (one.work.kind === "shift" ? settled(sale) !== "theirs" : lastWriters.get(sale.transactionId) === userId)),
   }));
   const inWindow = (one: { work: ComputedWork }) => (ruled(one.work) ? ruledDay(one.work) >= firstDay : middleOfWork(one.work) >= from.getTime());
+  // What the rule gives the person with no work to hold it: their money of the sale's day, in no shift (sale-rule-screens.ts).
+  const withoutShift = (ruledHeld?.withoutShift ?? []).filter((one) => !oldCounts(one.sale)
+    && one.day >= moscowDayOf(previousFrom.getTime()) && one.sale.occurredAt.getTime() < to.getTime());
+  const ownNow = withoutShift.filter((one) => one.day >= firstDay);
+  const ownBefore = withoutShift.filter((one) => one.day < firstDay);
   const counted = withSales.filter((one) => one.work.kind === "shift");
   const current = counted.filter(inWindow);
   const before = counted.filter((one) => !inWindow(one));
@@ -372,24 +383,26 @@ export async function computeChatterStats(
 
   const sum = (pick: (shift: (typeof shifts)[number]) => number) => shifts.reduce((total, shift) => total + pick(shift), 0);
   const byKind = emptyByKind();
-  for (const sale of currentSales) byKind[saleKindOf(sale.kind)] += sale.netMills;
+  for (const sale of [...currentSales, ...ownNow.map((one) => one.sale)]) byKind[saleKindOf(sale.kind)] += sale.netMills;
   const workedMinutes = sum((shift) => shift.workedMinutes);
-  const salesNetMills = sum((shift) => shift.salesNetMills);
+  const salesNetMills = sum((shift) => shift.salesNetMills) + netOf(ownNow.map((one) => one.sale));
 
   // The window before: only when Hub had the chatter's activity for all of it.
   const previousCovered = activitySince !== null && activitySince.getTime() <= previousFrom.getTime();
   const previousMinutes = before.reduce((total, one) => total + one.work.workedMinutes, 0);
-  const previousNet = before.reduce((total, one) => total + netOf(one.sales), 0);
+  const previousNet = before.reduce((total, one) => total + netOf(one.sales), 0) + netOf(ownBefore.map((one) => one.sale));
 
   // Every Moscow day of the window, by the day each shift belongs to (as the payout sheet dates a shift).
   const daily = Array.from({ length: input.days }, (_, offset) => {
     const date = moscowDayOf(addUtcDays(from, offset).getTime());
     const ofDay = shifts.filter((shift) => shift.date === date);
+    const ownOfDay = ownNow.filter((one) => one.day === date).map((one) => one.sale);
     const dayKinds = emptyByKind();
     for (const shift of ofDay) for (const sale of shift.sales) dayKinds[sale.kind] += sale.netMills;
+    for (const sale of ownOfDay) dayKinds[saleKindOf(sale.kind)] += sale.netMills;
     return {
       date,
-      salesNetMills: ofDay.reduce((total, shift) => total + shift.salesNetMills, 0),
+      salesNetMills: ofDay.reduce((total, shift) => total + shift.salesNetMills, 0) + netOf(ownOfDay),
       byKind: dayKinds,
       shifts: ofDay.length,
       workedMinutes: ofDay.reduce((total, shift) => total + shift.workedMinutes, 0),
@@ -445,7 +458,7 @@ export async function computeChatterStats(
       shifts: shifts.length,
       workedMinutes,
       salesNetMills,
-      sales: currentSales.length,
+      sales: currentSales.length + ownNow.length,
       perHourMills: perHour(salesNetMills, workedMinutes),
       overlapNetMills: sum((shift) => shift.overlapNetMills),
       byKind,
@@ -456,7 +469,10 @@ export async function computeChatterStats(
       fansPaid: paid.size,
     },
     previous: previousCovered
-      ? { shifts: before.length, workedMinutes: previousMinutes, salesNetMills: previousNet, sales: before.reduce((total, one) => total + one.sales.length, 0), perHourMills: perHour(previousNet, previousMinutes) }
+      ? {
+        shifts: before.length, workedMinutes: previousMinutes, salesNetMills: previousNet,
+        sales: before.reduce((total, one) => total + one.sales.length, 0) + ownBefore.length, perHourMills: perHour(previousNet, previousMinutes),
+      }
       : null,
     daily,
     shifts: [...shifts].reverse(),
@@ -499,14 +515,21 @@ export async function computeChatterStats(
       streakDays: streaks.current,
       longestStreakDays: streaks.longest,
     },
-    ...(rule === null ? {} : { ruleFrom: rule.from }),
+    ...(rule === null ? {} : {
+      ruleFrom: rule.from,
+      withoutShift: withoutShift.map(({ day, sale }) => ({
+        date: day, at: sale.occurredAt.toISOString(), netMills: sale.netMills, kind: saleKindOf(sale.kind), pageLabel: sale.pageLabel, fanName: sale.fanName,
+      })),
+    }),
     serverNow: now.toISOString(),
   };
 }
 
 /**
- * What the rule credits each of one person's ruled works (`work`): the shares of the homes of the sales on `pageIds`
- * that name them, back by the PPV's wait before the read (`readFrom`), each with its share of the net.
+ * What the rule credits one login (`homeCredit`): each of its ruled works, the shares of the homes of the sales on
+ * `pageIds` that land there, back by the PPV's wait before the read (`readFrom`), each with its share of the net; and
+ * the shares of its person with no work to hold them (`ownMoneyShares`), on the sale's day. `work` — the login's every
+ * work of the read; a share lands on the person's work by any of their logins, so theirs are read too.
  */
 async function ruledCreditsOf(db: Database, input: {
   rule: ScreensRule;
@@ -515,28 +538,40 @@ async function ruledCreditsOf(db: Database, input: {
   sales: readonly ShiftSale[];
   pageIds: readonly number[];
   readFrom: Date;
+  readTo: Date;
   now: Date;
-}): Promise<{ credits: Map<ComputedWork, ShiftSale[]> }> {
-  const { rule, userId } = input;
+  logins: PeopleLogins;
+}): Promise<{ credits: Map<ComputedWork, ShiftSale[]>; withoutShift: Array<{ day: string; sale: ShiftSale }> }> {
+  const { rule, userId, logins, now } = input;
   const from = Math.max(ruledSalesFrom(rule), input.readFrom.getTime() - RULED_SALES_LEAD_MS);
   const earlier = from < input.readFrom.getTime() ? await listShiftSales(db, { pageIds: input.pageIds, from: new Date(from), to: input.readFrom }) : [];
   const all = [...earlier, ...input.sales].filter((sale) => sale.occurredAt.getTime() >= from);
-  const homes = await readScreenHomes(db, { sales: all, openFrom: openWindowFrom(input.now, input.work), now: input.now, live: rule.live });
+  const homes = await readScreenHomes(db, { sales: all, openFrom: openWindowFrom(now, input.work), now, live: rule.live });
   const byId = new Map(all.map((sale) => [sale.transactionId, sale]));
-  const byUser = piecesByUser(input.work.filter((one) => ruledWork(rule, one)).map((one) => ({ userId, work: one })));
+  const others = logins.loginsOf(userId).filter((other) => other !== userId);
+  const theirs = await Promise.all(others.map(async (other) => ({
+    other, work: (await readPeopleWork(db, { from: input.readFrom, to: input.readTo, now, pages: input.pageIds, userId: other })).get(other)?.work ?? [],
+  })));
+  const pieces = piecesByUser([
+    ...input.work.map((one) => ({ userId, work: one })),
+    ...theirs.flatMap(({ other, work }) => work.map((one) => ({ userId: other, work: one }))),
+  ]);
+  const person = logins.personOf(userId);
   const credits = new Map<ComputedWork, ShiftSale[]>();
+  const withoutShift: Array<{ day: string; sale: ShiftSale }> = [];
   for (const [transactionId, home] of homes) {
     const sale = byId.get(transactionId);
-    if (sale === undefined || (home.kind !== "shift" && home.kind !== "visit")) continue;
-    for (const share of home.shares) {
-      if (share.userId !== userId) continue;
-      const piece = creditedPiece(byUser, share);
-      if (piece === null || (piece.work.kind === "visit") !== (home.kind === "visit")) continue;
-      credits.set(piece.work, [...(credits.get(piece.work) ?? []), { ...sale, netMills: share.mills }]);
+    if (sale === undefined) continue;
+    const credit = homeCredit({ home, sale, pieces, logins, counts: (piece) => ruledWork(rule, piece.work) });
+    for (const share of credit.shares) {
+      if (share.piece === null || share.piece.userId !== userId) continue;
+      credits.set(share.piece.work, [...(credits.get(share.piece.work) ?? []), { ...sale, netMills: share.mills }]);
     }
+    for (const share of ownMoneyShares(rule, sale, credit)) if (share.person === person) withoutShift.push({ day: share.day, sale: { ...sale, netMills: share.mills } });
   }
   for (const list of credits.values()) list.sort((a, b) => a.occurredAt.getTime() - b.occurredAt.getTime() || a.transactionId - b.transactionId);
-  return { credits };
+  withoutShift.sort((a, b) => a.sale.occurredAt.getTime() - b.sale.occurredAt.getTime() || a.sale.transactionId - b.sale.transactionId);
+  return { credits, withoutShift };
 }
 
 /** The caller's own statistics, on the pages they work now. Any cookie session. */

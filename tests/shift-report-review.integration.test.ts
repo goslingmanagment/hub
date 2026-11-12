@@ -143,7 +143,7 @@ describe("the shift report after a settled claim, and a reader of one page", () 
       const said = await asSession("anna", "PUT", `/api/v1/shift-reports/${shiftClaims}/lines/${id}`, { statement: "mine", note: `моё: ${outcome}` });
       expect(said.statusCode, said.body).toBe(200);
       await submit(shiftClaims);
-      expect((await newest(shiftClaims, id)).line).toMatchObject({ amountMills: net, disputed: true });
+      expect((await newest(shiftClaims, id)).line).toMatchObject({ amountMills: 0, claimedMills: net, disputed: true });
       // The owner decides; the system's version gives anna what the decision gives her.
       const decided = await asSession("boss", "POST", "/api/v1/sale-disputes/decide", { transactionId: id, outcome });
       expect(decided.statusCode, decided.body).toBe(200);

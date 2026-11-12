@@ -21,7 +21,7 @@ capture, delivery) is `agent-read-skill.md`; the CLI is `hub` (`hub <command> --
 | People | `GET /api/v1/agent/people` | `read:team` | Who is who: code, kind, role, state, logins, working pages, schedule, Telegram. Pay terms only with `read:pay_terms` (the ledger's key). `?since=` for changes |
 | People | `POST /api/v1/agent/people/proposals`, `GET …/proposals` | `propose:people` | A change about a person, or a new person; it waits for the owner. Never pay terms |
 | Shifts | `GET /api/v1/agent/team/shift-review` (`hub shift-review`) | `read:team` + `read:money` | «Разбор смены» of one shift on the key's pages and the shift audit's numbers from it. Texts with `read:messages`; the AI's own texts never |
-| Shifts and sales | `POST /api/v1/agent/team/sales` | `read:team` + `read:money` | The team's work and every sale on the key's pages in a window (≤ 31 days), with the facts whose a sale is: holders, the bought PPV's sender, post tip, Campaign, last writer, marks, the owner's split |
+| Shifts and sales | `POST /api/v1/agent/team/sales` | `read:team` + `read:money` | The team's work and every sale on the key's pages in a window (≤ 31 days), with the facts whose a sale is: holders, the bought PPV's sender, post tip, Campaign, last writer, marks, the owner's split (`resolution`: Hub's active decision when it shares the sale out, a nobody's sale given to a person included) and `decision` (`{kind: split\|nobody\|pot, pot}`: Hub's active decision of any kind) |
 | Sales (report check) | `POST /api/v1/agent/team/sale-context` (`hub sale-context`) | `read:team` + `read:money` | Each sale's fan, the PPV it bought (its text with `read:messages`), who wrote to the fan in 48 h, 7 days, last in 60 days; `archive`: the fan's chat as the report check reads the archive (the priced message, the page's messages of 7 days by author, the last author of 60 days) |
 | Sales (chain of money) | `GET /api/v1/agent/team/sale-chain` (`hub sale-chain <id>`) | `read:team` + `read:money` | From one sale: whose it is (home, why, the owner's decision, an open claim), the shift, the report of that day (Hub's version or the ledger's post), accrual and payout as states. Never a pay sum |
 | Fans (watch) | `POST /api/v1/agent/team/fan-watch` (`hub fan-watch`) | `read:messages` | A watched fan's new messages on a page since a mark (the archive's time, to the microsecond), and when the page last wrote to them. Tips with `read:money` |
@@ -34,9 +34,11 @@ capture, delivery) is `agent-read-skill.md`; the CLI is `hub` (`hub <command> --
 | Fan queues | `hub queue-*` | `write:fan_queues` | Queues for chatters, on the word of the person who asked |
 | Custom orders | `GET/POST /api/v1/agent/custom-orders`, `POST …/custom-orders/:code`, `POST …/custom-orders/cards` (`hub custom list\|create\|step\|cards`) | `write:customs` | Record an order from the card (Gengar's `/tz`), write what the models' group says (at the model, deliveries in parts, revisions, refusals, cancels, messages), report cards with no order. Never a payment or «отдали»: those are people's |
 | Shift reports «со слов» | `GET /api/v1/agent/shift-reports/draft`, `GET …/claimable`, `POST …/line`, `…/comment`, `…/off-platform`, `…/submit` (`hub shift-report show\|claimable\|line\|comment\|off-platform\|submit`) | `write:shift_reports` | Gengar's `/smena` fills and hands in the report of a person whose switch «сдаёт смену в системе» is on, from the person's own words: below |
-| Shift reports (the ledger's feed) | `GET /api/v1/agent/shift-reports` | `read:team` + `read:money` | Every version handed in, after a cursor: what the ledger accrues and pays from |
+| Shift reports (the ledger's feed) | `GET /api/v1/agent/shift-reports` | `read:team` + `read:money` | Every version handed in, after a cursor (`next`, a place `seq`): what the ledger accrues and pays from. `held` lists the versions held back for the key's pages, on every read until the key may read them; then they come in `reports` at their own older `seq` — take every item of `reports` whatever its seq |
 | Erasures (the ledger's feed) | `GET /api/v1/agent/erasures` | `read:team` + `read:money` | Every fan erasure Hub completed, after a cursor: the platform and the fan's ref, for the ledger to blank its own copies: below |
-| Claims | — | — | No agent door on Hub yet: it comes with its own package. Until then the ledger holds them |
+| «Чья продажа» «со слов» | `POST /api/v1/agent/sale-decisions`, `…/cancel`, `…/applied`, `GET …/sale-decisions`; `POST /api/v1/agent/sale-questions`, `…/answer`, `…/close`, `GET …/sale-questions` (`hub sale decide\|cancel\|applied\|decisions\|ask\|answer\|close\|questions`) | `write:shift_reports` (the lists: or `read:team`) | Decisions and questions about whose a sale is, in their one home: below |
+| «Чья продажа» (the ledger's feed) | `GET /api/v1/agent/sale-decisions/feed` | `read:money` | Every change of a decision after a cursor, in the order made: what the ledger follows instead of writing its own. Below |
+| Claims | `GET /api/v1/agent/sale-claims`, `POST …/sale-claims/answer` | `write:shift_reports` (the list: or `read:team`) | The claims and decisions of a person or a sale; the other side's answer «со слов» |
 | Keys (for services) | `POST /api/v1/agent/keys/introspect` | `introspect:agent_keys` | Another service asks who an agent's hub key is: below |
 
 A page outside the key's grant is the plane's static 404, the same as one that does not exist. A session never
@@ -108,6 +110,94 @@ ledger's key for its shift reports' feed):
 - An erasure none of whose pages is in the key's grant is left out, and `next` moves past it.
 - After Hub's database is restored from a copy, the erasures since the copy are re-run there and get new ids, and
   Hub's ids start again from the copy's: `docs/runbooks/business-backup.md`, «Restoring for real».
+
+## «Чья продажа» «со слов»: decisions and questions
+
+Hub is the one home of the decisions about whose a sale is and of the questions about it (review R2b-3): the owner's
+decisions of disputes, the ones carried over from the ledger, and what the team's chat agent records «со слов». The
+ledger's own writers (`ledger decision add|applied|cancel`, `ledger question add|answer|drop`, `ledger accruals
+claim|unclaim`) close after the switch and point here. Every write names the Telegram message and its sender
+(`--sender <id> --message <link>`); the person codes are the people registry's (the same as the ledger's).
+
+What the agent ran in the ledger, and what it runs now:
+
+| Was | Now |
+|---|---|
+| `ledger decision add --page P --fan-ref R --kind owner --share C:100 --said-by W --said-at D --note N` | `hub sale decide --sale <Hub id> --kind owner --share C --said-by W --said-at D --note N --sender S --message M` |
+| … `--kind split --share A:50 --share B:50` | `hub sale decide … --kind split --share A:50 --share B:50 …` |
+| … `--kind pot --pot <slug>` | `hub sale decide … --kind pot --pot <slug> …` (Hub's pot name is the ledger's pot slug, `ledger pot list`) |
+| … `--kind exclude` | `hub sale decide … --kind exclude …` |
+| … `--kind off_platform --share C:100` | `hub sale decide --page P --kind off_platform --share C --net <mills> …` (no sale) |
+| a sale not named yet (fan, page, time) | `hub sale decide --page P --fan <id or login> --at <ISO time> --net <mills> …`: the owner ties it later («привязать») |
+| `--supersedes N`, `--answers Q` | the same flags |
+| `ledger decision cancel N --note …` | `hub sale cancel N --note … --sender S --message M` |
+| `ledger decision applied N --person C --date D` | `hub sale applied N --person C --date D` (a post-based report only; a report handed in Hub follows by itself) |
+| `ledger decision list --open --md` | `hub sale decisions --open --md \| jq -r .data.markdown` (the same information; no fan's name copied: the fan as Hub knows it) |
+| `ledger question add --page P … --asked-of owner\|chatters --who W --question Q --note N` | `hub sale ask --sale <id> (or --page P --fan R …) --of owner\|chatters --who W [--person A --person B] --question Q --note N --asked-at D --sender S --message M` |
+| `ledger question answer Q --answer …` | `hub sale answer Q --answer … --sender S --message M` |
+| `ledger question drop Q --note …` | `hub sale close Q --note … --sender S --message M` |
+| `ledger question list --open --md` | `hub sale questions --open --md \| jq -r .data.markdown` |
+
+What a decision does:
+
+- A sale Hub knows (`--sale`, or `--page` with `--ref` the platform's transaction id): exactly the owner's decision of
+  a dispute. Every report handed in Hub that holds the sale gets a new version with what the decision gives its
+  person (settled; the person's later hand-ins keep it), the sale's open claims and questions are decided with it,
+  their matters close, the home is computed again. The ledger's facts carry it (`resolution`, `decision`). A sale with
+  an active decision refuses a second one without `--supersedes <№>` (409 `decision_exists`).
+- A sale not named yet: kept with the words that will find it, in the owner's «привязать» list.
+- `off_platform`: money outside the platform; no sale and no home. The person adds it to a report handed in Hub
+  as «мимо площадки» (`hub shift-report off-platform`); a post-based report takes it from the list.
+- A pot (`--kind pot`): Hub records whose it is («в общак <pot>»), the home follows. **Until the ledger's pots
+  follow Hub's homes, the pot's bookkeeping stays the ledger's: for a pot sale run both** `hub sale decide --kind pot
+  --pot <slug> …` (whose it is) **and** `ledger pot add-sale <slug> …` (the pot's money), as today.
+
+A question asked of the owner reaches the owner as a dispute, titled by page, amount, day and people (never the
+fan). One asked of the chatters waits for their answer and opens no matter; carried over from the ledger and never
+answered, it stays the owner's, titled «Вопрос чаттерам без ответа с <день>: …». Refusals: 400 `bad_decision` (the
+kind's rules), 400 `person_unknown`, 404 a sale or page outside the key's grant, 409 `decision_exists`,
+`not_active`, `question_closed`.
+
+### The ledger's feed of decisions
+
+`GET /api/v1/agent/sale-decisions/feed?since=<next>&limit=<1..500>` (`read:money`): every change of a decision
+about whose a sale is, from every writer (the owner's dispute, this door, the import, a link, a cancel), in the
+order the feed placed it. A change is placed when the feed first finds it committed, after every place given
+before, so a change committed late comes after the cursor and is never passed (the mechanism of the shift reports'
+feed). The answer:
+
+```
+{
+  "changes": [{
+    "seq": 41,                      // its place; the cursor
+    "change": "made",               // made | superseded | cancelled | linked | applied | changed
+    "at": "2026-11-12T18:20:00.000Z",
+    "decision": {                   // the decision as it is now: apply in order, keep by id
+      "id": 12, "transactionId": 7744520, "pageLabel": "mia-1",
+      "kind": "owner",              // owner | split | pot | off_platform | exclude
+      "shares": [{ "person": "anna", "userId": 6, "percent": 100 }],
+      "pot": null,                  // kind pot: the pot's name = the ledger's pot slug
+      "outcome": "said",            // first | second | half | nobody | imported | said
+      "ruleHome": "shift",
+      "state": "active",            // active | superseded | cancelled
+      "source": "agent",            // dispute | ledger | agent
+      "saidBy": "владелец", "saidAt": "2026-11-12T09:00:00.000Z", "decidedAt": "…",
+      "note": "…",                  // the reasoning, as the ledger shows it with a line's agreement
+      "applied": null,              // { "person": "anna", "reportDate": "2026-11-12" } — taken into a post
+      "ledgerDecisionId": null      // the ledger's number of one carried over from it
+    }
+  }],
+  "held": [{ "seq": 44, "decisionId": 15, "pageLabel": "nova-1", "reason": "page_outside_key" }],
+  "next": "43",
+  "serverNow": "…"
+}
+```
+
+No fan's name: the sale by Hub's id and its page. A change of a decision on a page outside the key's pages is
+listed in `held` on every read until the key may read it; then it comes in `changes` at its own older `seq` — take
+every item whatever its seq. What the ledger takes from it: a pot's sale (kind `pot`), a nobody's sale given to a
+person (`owner`, `split` on a sale whose `ruleHome` was `nobody`), a report line's agreement (kind, shares, state,
+`saidBy`, `note`).
 
 ## «Кто этот ключ»: another service accepts a hub key
 

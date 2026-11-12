@@ -275,6 +275,15 @@ export function formatImportPlan(plan: ImportPlan): string {
 
 // ── The import ───────────────────────────────────────────────────────────────
 
+/**
+ * What Hub keeps of a ledger record's words about its sale: enough to find it (page, fan reference, the ledger's own
+ * reference, net, moment, when said), never the fan's name; the ledger's note goes to the decision's own note, the
+ * ledger's ids to their columns (review R2b-3c).
+ */
+function keptRef(ref: LedgerSaleRef): Record<string, unknown> {
+  return { pageLabel: ref.pageLabel, fanRef: ref.fanRef, transactionRef: ref.transactionRef, netMills: ref.netMills, occurredAt: ref.occurredAt, saidAt: ref.saidAt };
+}
+
 /** Writes the plan: decisions first (the questions answered by one point to it), then the questions. Idempotent. */
 export async function applyImport(db: Database, plan: ImportPlan, now: Date): Promise<{ decisions: number; questions: number; days: string[] }> {
   const pages = new Map((await listVisiblePages(db)).map((page) => [page.label, page.id]));
@@ -301,7 +310,7 @@ export async function applyImport(db: Database, plan: ImportPlan, now: Date): Pr
         saidBy: one.saidBy,
         source: "ledger",
         ledgerDecisionId: one.ledgerId,
-        ledgerRef: { ...one.ref, status: one.status, ...(sale === null && one.match.kind === "link" ? { why: one.match.why } : {}) },
+        ledgerRef: { ...keptRef(one.ref), status: one.status, ...(sale === null && one.match.kind === "link" ? { why: one.match.why } : {}) },
       }, now);
       if (saved !== null) {
         decisions += 1;
@@ -334,7 +343,7 @@ export async function applyImport(db: Database, plan: ImportPlan, now: Date): Pr
         ledgerQuestionId: one.ledgerId,
         question: one.question.slice(0, 2000),
         whoText: one.who,
-        ledgerRef: { ...one.ref, askedOf: one.askedOf, ...(one.answer === null ? {} : { answer: one.answer }), ...(sale === null && one.match.kind === "link" ? { why: one.match.why } : {}) },
+        ledgerRef: { ...keptRef(one.ref), askedOf: one.askedOf, ...(one.answer === null ? {} : { answer: one.answer }), ...(sale === null && one.match.kind === "link" ? { why: one.match.why } : {}) },
         decisionId: one.decisionLedgerId === null ? null : hubDecisionOf.get(one.decisionLedgerId) ?? null,
         closedAt: open ? null : now,
       }, now);

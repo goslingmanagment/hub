@@ -96,6 +96,12 @@ function shownReason(line: Line, shiftStart: string): string | null {
   return PLAIN_REASONS.has(line.rule.reason) ? null : line.rule.words;
 }
 
+/** A line's money: what it counts, or — a disputed «моё» — what it claims, said to wait (it counts nothing until settled). */
+function LineMoney({ line, muted = false }: { line: Line; muted?: boolean }) {
+  if ((line.claimedMills ?? 0) > 0) return <span className="shf-claimed">спорно, ждёт решения: <Money mills={line.claimedMills!} /></span>;
+  return <Money mills={line.amountMills} muted={muted} />;
+}
+
 /** What the person said of a line, in a word beside it. */
 function WordChip({ line }: { line: Line }) {
   if (line.alreadyIn !== null) return <Badge tone="off" className="shf-chip">в другом отчёте</Badge>;
@@ -103,12 +109,12 @@ function WordChip({ line }: { line: Line }) {
   if (line.statement === "share") return <Badge tone="info" className="shf-chip">пополам{line.shareWithName ? `: ${line.shareWithName}` : ""}</Badge>;
   if (isClaimed(line)) {
     return line.disputed
-      ? <Tooltip content="По правилу или по чужому отчёту продажа не ваша: она идёт в отчёт, пока коллега не согласится или не решит владелец."><Badge tone="warning" className="shf-chip">добавлена, спорная</Badge></Tooltip>
+      ? <Tooltip content="По правилу или по чужому отчёту продажа не ваша: она в отчёте, но в сумму не входит, пока коллега не согласится или не решит владелец."><Badge tone="warning" className="shf-chip">добавлена, спорная</Badge></Tooltip>
       : <Badge tone="success" className="shf-chip">добавлена</Badge>;
   }
   if (line.statement === "mine") {
     return line.disputed
-      ? <Tooltip content="По правилу продажа не ваша: она идёт в отчёт, пока коллега не согласится или не решит владелец."><Badge tone="warning" className="shf-chip">моё, спорная</Badge></Tooltip>
+      ? <Tooltip content="По правилу продажа не ваша: она в отчёте, но в сумму не входит, пока коллега не согласится или не решит владелец."><Badge tone="warning" className="shf-chip">моё, спорная</Badge></Tooltip>
       : <Badge tone="success" className="shf-chip">моё</Badge>;
   }
   if (line.added) return <Badge tone="neutral" className="shf-chip">долёт</Badge>;
@@ -303,7 +309,7 @@ function MineSale({ line, edit, showFan }: { line: Line; edit: Editing; showFan:
       </div>
       <span className="shf-sale__money">
         {(line.statement === "share" || line.statement === "not_mine") && line.rule.shareMills !== line.amountMills && <Money mills={line.rule.shareMills} muted className="shf-was" />}
-        <ChainMoney saleId={line.transactionId}><Money mills={line.amountMills} muted={off} /></ChainMoney>
+        <ChainMoney saleId={line.transactionId}><LineMoney line={line} muted={off} /></ChainMoney>
       </span>
       <span className="shf-sale__act">{edit.editable && <MineMenu line={line} edit={edit} onNote={() => setNoting(true)} />}</span>
     </li>
@@ -384,7 +390,7 @@ function NearSale({ line, edit }: { line: Line; edit: Editing }) {
         {claims.below}
       </div>
       <span className="shf-sale__money">
-        <ChainMoney saleId={line.transactionId}>{claimed ? <Money mills={line.amountMills} /> : <Money mills={line.netMills} muted />}</ChainMoney>
+        <ChainMoney saleId={line.transactionId}>{claimed ? <LineMoney line={line} /> : <Money mills={line.netMills} muted />}</ChainMoney>
       </span>
       <span className="shf-sale__act">
         {edit.editable && !claiming && (claimed

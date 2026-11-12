@@ -481,7 +481,7 @@ describe("the comparison's range edge", () => {
   const teamSale = (ref: string, at: string, net: number, ...holders: AgentTeamWork[]): AgentTeamSale => ({
     transactionRef: ref, pageLabel: "page-a", platform: "onlyfans", fanRef: "fan-1", kind: "tip", netMills: net, occurredAt: iso(at),
     holders: holders.map((one) => one.ref), ppvSender: null, ppvSentAt: null, ppvWithoutAuthor: false, postTip: false, campaign: false,
-    lastWriterUserId: null, writers: [], marks: [], resolution: null,
+    lastWriterUserId: null, writers: [], marks: [], resolution: null, decision: null,
   });
   const factRow = (ref: string, at: string, net: number, user: number, holder: AgentTeamWork, day: string): LedgerFactHome => ({
     ref, seq: 0, window: "w", at: iso(at), page: "page-a", kind: "tip", netMicros: net * 1000, home: "shift", reason: "holder",

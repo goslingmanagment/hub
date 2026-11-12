@@ -84,8 +84,11 @@ function toCent(mills: number): number {
   return millsToNumber(millsRoundedTo(mills, "cent"));
 }
 
-/** What a line counts after the person's word: the same rule as Hub's (shift-handin-rules.ts `lineAmount`). */
-export function amountAfter(line: Line, statement: ShiftReportStatement | null): { amountMills: number; disputed: boolean } {
+/**
+ * What a line counts after the person's word: the same rule as Hub's (shift-handin-rules.ts `lineAmount`). A disputed
+ * «моё» counts nothing until it is settled and claims the net (`claimedMills`).
+ */
+export function amountAfter(line: Line, statement: ShiftReportStatement | null): { amountMills: number; disputed: boolean; claimedMills?: number } {
   if (line.alreadyIn !== null) return { amountMills: 0, disputed: false };
   if (line.group === "mine" && !isClaimed(line)) {
     if (statement === "not_mine") return { amountMills: 0, disputed: false };
@@ -95,15 +98,19 @@ export function amountAfter(line: Line, statement: ShiftReportStatement | null):
   if (statement !== "mine") return { amountMills: 0, disputed: false };
   // The rule already gives the person a share of a sale they added (agreed, decided): that share, settled.
   if (isClaimed(line) && line.rule.shareMills > 0) return { amountMills: line.rule.shareMills, disputed: false };
-  return { amountMills: line.netMills, disputed: line.rule.home !== "nobody" || (line.facts?.otherReports.length ?? 0) > 0 };
+  const disputed = line.rule.home !== "nobody" || (line.facts?.otherReports.length ?? 0) > 0;
+  return disputed ? { amountMills: 0, disputed: true, claimedMills: line.netMills } : { amountMills: line.netMills, disputed: false };
 }
 
 /** The body with one line's word changed and the sums counted again: what the screen shows until Hub answers. */
 export function withWord(body: ShiftReportBody, transactionId: number, word: { statement: ShiftReportStatement | null; shareWithUserId: number | null; shareWithName: string | null; note: string | null }): ShiftReportBody {
   const lines = body.lines.map((line) => {
     if (line.transactionId !== transactionId) return line;
-    const { amountMills, disputed } = amountAfter(line, word.statement);
-    return { ...line, statement: word.statement, shareWithUserId: word.shareWithUserId, shareWithName: word.shareWithName, note: word.note, amountMills, disputed };
+    const { amountMills, disputed, claimedMills } = amountAfter(line, word.statement);
+    return {
+      ...line, statement: word.statement, shareWithUserId: word.shareWithUserId, shareWithName: word.shareWithName, note: word.note,
+      amountMills, disputed, claimedMills: claimedMills ?? null,
+    };
   });
   // Hub's one rule of sums (shift-handin-rules.ts `pageSums`): a page is its lines rounded to the cent, the total the pages.
   const pages = body.pages.map((page) => ({

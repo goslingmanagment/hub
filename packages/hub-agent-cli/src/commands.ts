@@ -2270,7 +2270,10 @@ function shiftReportNote(report: ShiftReportAnswer): string {
     return `${shift}: the switch «сдаёт смену в системе» is off, so Hub takes no words for this report. It goes the old way:`
       + " the post in «Отчётность».";
   }
-  const draft = report.view === null ? "" : ` The draft counts ${formatUsdFromMills(report.view.totalMills)} now («предварительно»: the rule and the person's words so far).`;
+  const claims = (report.view?.lines ?? []).filter((line) => (line.claimedMills ?? 0) > 0);
+  const claimed = claims.length === 0 ? "" : ` ${claims.length} disputed «моё» claim ${formatUsdFromMills(claims.reduce((sum, line) => sum + (line.claimedMills ?? 0), 0))}`
+    + " and count nothing in the sums until the other side or the owner settles them («спорно, ждёт решения»; amountMills 0, claimedMills).";
+  const draft = report.view === null ? "" : ` The draft counts ${formatUsdFromMills(report.view.totalMills)} now («предварительно»: the rule and the person's words so far).${claimed}`;
   const latest = report.latest;
   if (latest === null) {
     return `${shift}: not handed in yet.${draft} Hand it in on the person's word: hub shift-report submit --shift ${report.shift.id}`
@@ -2295,6 +2298,193 @@ const SHIFT_REPORT_MESSAGE_OPTION: HubOption = {
 };
 const SHIFT_REPORT_SHIFT_OPTION: HubOption = { kind: "number", describe: "The shift's id, shift.id of hub shift-report show (required)" };
 
+/** «Чья продажа» «со слов» (review R2b-3): whose words — the Telegram message and its sender. */
+const SALE_SAID_WORDS: Record<string, HubOption> = {
+  sender: { kind: "number", describe: "The Telegram id of the message's sender (required)" },
+  message: { kind: "string", describe: "The message the words are in (required): https://t.me/c/<chat>/<msg>, or --message=<chat>:<msg>" },
+};
+
+/** The sale a decision or a question names: Hub's id, the page and the platform's id, or the words that will find it. */
+const SALE_SAID_SALE: Record<string, HubOption> = {
+  sale: { kind: "number", describe: "The sale by Hub's id (transactions.id, as hub sale-chain names it)" },
+  page: { kind: "string", describe: "The sale's page; with --ref the platform's transaction id, else the words below" },
+  ref: { kind: "string", describe: "With --page: the platform's transaction id" },
+  fan: { kind: "string", describe: "A sale Hub cannot name yet: the fan's reference (platform id or login, never a name)" },
+  at: { kind: "string", describe: "A sale Hub cannot name yet: when it was bought (ISO time)" },
+  net: { kind: "number", describe: "A sale Hub cannot name yet: its net in mills ($1 = 1000)" },
+};
+
+function saleSaidSale(values: HubOptionValues) {
+  return defined({
+    transactionId: readId(values, "sale"), pageLabel: readString(values, "page"), transactionRef: readString(values, "ref"),
+    fanRef: readString(values, "fan"), occurredAt: readString(values, "at"), netMills: readNumber(values, "net"),
+  });
+}
+
+function saleSaidWords(values: HubOptionValues) {
+  return { telegramUserId: requireId(values, "sender"), sourceRef: requireString(values, "message") };
+}
+
+/** `--share anna:50 --share boris:50`, or one --share anna:100 / --share anna. */
+function saleShares(values: HubOptionValues): Array<{ person: string; percent: number }> {
+  const raw = values.share;
+  const list = raw === undefined ? [] : Array.isArray(raw) ? raw.map(String) : [String(raw)];
+  return list.map((one) => {
+    const [person, percent] = one.split(":");
+    const value = percent === undefined ? 100 : Number(percent);
+    if (person === undefined || person.trim() === "" || !Number.isInteger(value)) throw new HubUsageError(`--share is <code>[:<percent>], got "${one}"`);
+    return { person: person.trim(), percent: value };
+  });
+}
+
+const SALE_SAID_COMMANDS: HubCommand[] = [
+  {
+    name: "sale decide",
+    operation: "agentSaleDecisionAdd",
+    summary:
+      "Record a decision about whose a sale is «со слов» — the owner's ruling or the chatters' agreement — in Hub, the one"
+      + " home of these decisions (it replaces `ledger decision add`). --kind owner (--share <code>, the whole sale), split"
+      + " (--share <code>:<percent> twice or more, 100% in all), pot (--pot <the pot's slug as `ledger pot list` names it>),"
+      + " exclude (nobody's), off_platform (money outside the platform, --share whose report takes it; no sale). A sale Hub"
+      + " knows behaves as the owner's decision of a dispute: the reports holding it get a new version, its open claims and"
+      + " questions are decided, its home is computed again. A sale with an active decision needs --supersedes <its №>."
+      + " --answers <question №> closes the question it answers. Needs write:shift_reports.",
+    example: "hub sale decide --sale 7744520 --kind owner --share maxim --said-by владелец --said-at 2026-11-12 --sender 700000111 --message https://t.me/c/1/2",
+    options: {
+      ...SALE_SAID_SALE,
+      kind: { kind: "string", describe: "owner | split | pot | exclude | off_platform (required)" },
+      share: { kind: "list", describe: "<code>[:<percent>], once per person (owner, split, off_platform)" },
+      pot: { kind: "string", describe: "kind pot: the pot's slug (Hub's pot name is the ledger's pot slug)" },
+      "said-by": { kind: "string", describe: "Who decided (required): владелец, or the chatters who agreed" },
+      "said-at": { kind: "string", describe: "When it was said (required): ГГГГ-ММ-ДД or an ISO time" },
+      note: { kind: "string", describe: "Why, in one or two lines" },
+      supersedes: { kind: "number", describe: "The decision it replaces" },
+      answers: { kind: "number", describe: "The open question it answers" },
+      ...SALE_SAID_WORDS,
+    },
+    run: (client, values) => {
+      const kind = requireString(values, "kind");
+      if (!["owner", "split", "pot", "exclude", "off_platform"].includes(kind)) throw new HubUsageError("--kind is owner, split, pot, exclude or off_platform");
+      return client.agentSaleDecisionAdd({
+        body: {
+          ...saleSaidSale(values), kind: kind as "owner", shares: saleShares(values), ...defined({ pot: readString(values, "pot") }),
+          saidBy: requireString(values, "said-by"), saidAt: requireString(values, "said-at"),
+          ...defined({ note: readString(values, "note"), supersedes: readId(values, "supersedes"), answers: readId(values, "answers") }),
+          ...saleSaidWords(values),
+        },
+      });
+    },
+  },
+  {
+    name: "sale cancel",
+    operation: "agentSaleDecisionCancel",
+    summary: "Cancel a decision «со слов», with why (replaces `ledger decision cancel`). Needs write:shift_reports.",
+    example: "hub sale cancel 12 --note \"передумали\" --sender 700000111 --message https://t.me/c/1/3",
+    options: { note: { kind: "string", describe: "Why (required)" }, ...SALE_SAID_WORDS },
+    arguments: { name: "<decision №>", describe: "The decision's number", min: 1, max: 1 },
+    run: (client, values, _deps, args) => client.agentSaleDecisionCancel({
+      body: { decisionId: Number(args[0]), note: requireString(values, "note"), ...saleSaidWords(values) },
+    }),
+  },
+  {
+    name: "sale applied",
+    operation: "agentSaleDecisionApplied",
+    summary:
+      "Mark a decision taken into a person's post in «Отчётность» of a date, so it is not taken in twice (replaces `ledger"
+      + " decision applied`). A report handed in Hub needs none: its version follows the decision. Needs write:shift_reports.",
+    example: "hub sale applied 12 --person maxim --date 2026-11-12",
+    options: { person: { kind: "string", describe: "The person's code (required)" }, date: { kind: "string", describe: "The report's date (required)" } },
+    arguments: { name: "<decision №>", describe: "The decision's number", min: 1, max: 1 },
+    run: (client, values, _deps, args) => client.agentSaleDecisionApplied({
+      body: { decisionId: Number(args[0]), person: requireString(values, "person"), reportDate: requireString(values, "date") },
+    }),
+  },
+  {
+    name: "sale decisions",
+    operation: "agentSaleDecisions",
+    summary:
+      "The decisions about sales on the key's pages, every source (the owner's disputes, the ones carried over from the"
+      + " ledger, the ones recorded «со слов»), the oldest first. --open — still to be taken into a report; --since a day;"
+      + " --md — `data.markdown` is the list as the memory file has it (replaces `ledger decision list --md`: hub sale"
+      + " decisions --open --md | jq -r .data.markdown). Needs write:shift_reports or read:team.",
+    example: "hub sale decisions --open --md",
+    options: {
+      open: { kind: "boolean", describe: "Only the ones still to be taken into a report" },
+      since: { kind: "string", describe: "Said on this Moscow day or later (ГГГГ-ММ-ДД)" },
+      md: { kind: "boolean", describe: "Also the list as the memory file has it, in data.markdown" },
+    },
+    run: (client, values) => client.agentSaleDecisions({
+      query: { open: values.open === true ? "true" : "false", format: values.md === true ? "md" : "json", ...defined({ since: readString(values, "since") }) },
+    }),
+  },
+  {
+    name: "sale ask",
+    operation: "agentSaleQuestionAsk",
+    summary:
+      "Ask a question about whose a sale is (replaces `ledger question add`): --of owner (it reaches the owner as a dispute,"
+      + " titled by page, amount, day and people — never the fan) or --of chatters (they settle it; no matter). Needs"
+      + " write:shift_reports.",
+    example: "hub sale ask --sale 7719615 --of chatters --who \"ivan-2 и nikita\" --person ivan-2 --person nikita --question \"чья продажа?\" --asked-at 2026-11-12 --sender 700000111 --message https://t.me/c/1/4",
+    options: {
+      ...SALE_SAID_SALE,
+      of: { kind: "string", describe: "owner | chatters (required)" },
+      who: { kind: "string", describe: "Who has to agree, in words" },
+      person: { kind: "list", describe: "A person by code, the first and the second side (up to two)" },
+      question: { kind: "string", describe: "The question (required)" },
+      note: { kind: "string", describe: "The facts" },
+      "asked-at": { kind: "string", describe: "When asked (required): ГГГГ-ММ-ДД or an ISO time" },
+      ...SALE_SAID_WORDS,
+    },
+    run: (client, values) => {
+      const of = requireString(values, "of");
+      if (of !== "owner" && of !== "chatters") throw new HubUsageError("--of is owner or chatters");
+      const raw = values.person;
+      const people = raw === undefined ? [] : Array.isArray(raw) ? raw.map(String) : [String(raw)];
+      return client.agentSaleQuestionAsk({
+        body: {
+          ...saleSaidSale(values), askedOf: of, people, question: requireString(values, "question"), askedAt: requireString(values, "asked-at"),
+          ...defined({ who: readString(values, "who"), note: readString(values, "note") }), ...saleSaidWords(values),
+        },
+      });
+    },
+  },
+  {
+    name: "sale answer",
+    operation: "agentSaleQuestionAnswer",
+    summary:
+      "Close a question with an answer in words when there is nothing to decide (replaces `ledger question answer`); an"
+      + " answer that decides the sale is hub sale decide … --answers <№>. Needs write:shift_reports.",
+    example: "hub sale answer 9 --answer \"продажа не состоялась\" --sender 700000111 --message https://t.me/c/1/5",
+    options: { answer: { kind: "string", describe: "The answer (required)" }, ...SALE_SAID_WORDS },
+    arguments: { name: "<question №>", describe: "The question's number", min: 1, max: 1 },
+    run: (client, values, _deps, args) => client.agentSaleQuestionAnswer({
+      body: { questionId: Number(args[0]), answer: requireString(values, "answer"), ...saleSaidWords(values) },
+    }),
+  },
+  {
+    name: "sale close",
+    operation: "agentSaleQuestionClose",
+    summary: "Close a question without an answer, with why (replaces `ledger question drop`). Needs write:shift_reports.",
+    example: "hub sale close 9 --note \"разобрались сами\" --sender 700000111 --message https://t.me/c/1/6",
+    options: { note: { kind: "string", describe: "Why (required)" }, ...SALE_SAID_WORDS },
+    arguments: { name: "<question №>", describe: "The question's number", min: 1, max: 1 },
+    run: (client, values, _deps, args) => client.agentSaleQuestionClose({
+      body: { questionId: Number(args[0]), note: requireString(values, "note"), ...saleSaidWords(values) },
+    }),
+  },
+  {
+    name: "sale questions",
+    operation: "agentSaleQuestions",
+    summary:
+      "The questions about sales on the key's pages (carried over from the ledger and asked here), the oldest first; --open"
+      + " — still open; --md — `data.markdown`, grouped by whom they wait for (replaces `ledger question list --md`). Needs"
+      + " write:shift_reports or read:team.",
+    example: "hub sale questions --open --md",
+    options: { open: { kind: "boolean", describe: "Only the open ones" }, md: { kind: "boolean", describe: "Also data.markdown" } },
+    run: (client, values) => client.agentSaleQuestions({ query: { open: values.open === true ? "true" : "false", format: values.md === true ? "md" : "json" } }),
+  },
+];
+
 const SHIFT_REPORT_COMMANDS: HubCommand[] = [
   {
     name: "shift-report show",
@@ -2304,7 +2494,7 @@ const SHIFT_REPORT_COMMANDS: HubCommand[] = [
       + " смену в системе»; false: Hub takes no words, their report goes the old way, the post in «Отчётность»), the shift"
       + " (id, pages, reportDate, ongoing), `state` open | submitted, the versions handed in (`latest`, `versions`), the draft"
       + " (`view.lines`: «Ваши продажи» group mine and «Рядом» group near, each with the rule's `words`, the person's"
-      + " `statement` and `note`, what it counts in `amountMills`, `added` for a «долёт» or a sale added by hand, and `facts`"
+      + " `statement` and `note`, what it counts in `amountMills` (a disputed «моё» counts 0 and says its claim in `claimedMills`), `added` for a «долёт» or a sale added by hand, and `facts`"
       + " for «почему»; `view.pages`, `view.totalMills`, `view.offPlatform`, `view.comment`), `afterSubmission` (sales after"
       + " the hand-in), `posts` (the newest version as the post for «Отчётность», one per model) and `colleagues` (whom"
       + " «делим с…» may name). The person by --sender (the Telegram id of whoever sent /smena, when it is their own report)"
@@ -3822,6 +4012,7 @@ export const HUB_COMMANDS: readonly HubCommand[] = [
       return client.agentSaleChain({ query: saleRef !== undefined ? { saleRef } : { pageLabel: page!, transactionRef: ref! } });
     },
   },
+  ...SALE_SAID_COMMANDS,
   {
     name: "report put",
     operation: "agentReportPut",

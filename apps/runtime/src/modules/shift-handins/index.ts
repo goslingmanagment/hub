@@ -167,7 +167,7 @@ export function registerShiftHandinRoutes(server: ApiServer, ctx: ApiModuleConte
     const { principal, scope, pageIds } = await agentScope(request, "agentShiftReportsFeed", ["read:team", "read:money"]);
     let delivered = 0;
     try {
-      const feed = await readShiftReportsFeed(appContext, { pageIds, since: request.query.since, limit: request.query.limit });
+      const feed = await readShiftReportsFeed(appContext, { pageIds, since: request.query.since, limit: request.query.limit, agentKeyId: principal.agentKeyId });
       await writeAgentAudit(db, {
         agentKeyId: principal.agentKeyId,
         operation: "agentShiftReportsFeed",

@@ -1217,6 +1217,11 @@ export const FAN_TEXT_ERASURE_COLUMNS: readonly FanTextErasureColumn[] = [
   { column: "sale_claims.question", stance: "cleared", target: "sale_claims", why: "the ledger question's words" },
   { column: "sale_claims.who_text", stance: "cleared", target: "sale_claims", why: "the ledger's free words of who; the people it named are claimant_user_id and side_user_id" },
   { column: "sale_claims.ledger_ref", stance: "cleared", target: "sale_claims", why: "the ledger's fan, name, note and answer go (`LEDGER_FAN_KEYS`); page, sale reference, sum and times stay" },
+  // A question the agent asks «со слов» (0408): who it is asked of and the message it came in stay, its words go.
+  { column: "sale_claims.asked_of", stance: "no_words", why: ENUM },
+  { column: "sale_claims.source_link", stance: "no_words", why: "the link of the team's own Telegram message the question was recorded from" },
+  { column: "sale_claims.answer_text", stance: "cleared", target: "sale_claims", why: "the words a question was answered with" },
+  { column: "sale_claims.close_note", stance: "cleared", target: "sale_claims", why: "the line of why a question was closed" },
   // The owner's decisions (0404) on the fan's sales, and the ledger's decisions about him not tied to a sale.
   { column: "sale_owner_decisions.kind", stance: "no_words", why: ENUM },
   { column: "sale_owner_decisions.shares", stance: "no_words", why: "the team's shares: user ids and percents" },
@@ -1228,6 +1233,8 @@ export const FAN_TEXT_ERASURE_COLUMNS: readonly FanTextErasureColumn[] = [
   { column: "sale_owner_decisions.source", stance: "no_words", why: ENUM },
   { column: "sale_owner_decisions.ledger_ref", stance: "cleared", target: "sale_owner_decisions", why: "as sale_claims.ledger_ref" },
   { column: "sale_owner_decisions.state", stance: "no_words", why: ENUM },
+  { column: "sale_owner_decisions.source_link", stance: "no_words", why: "the link of the team's own Telegram message the decision was recorded from (0408)" },
+  { column: "sale_owner_decisions.cancel_note", stance: "cleared", target: "sale_owner_decisions", why: "the line of why a decision was cancelled (0408)" },
   // «Мимо площадки» (0400, 0404).
   { column: "off_platform_sales.from_whom", stance: "unlinked", why: OFF_PLATFORM_UNLINKED },
   { column: "off_platform_sales.what_for", stance: "unlinked", why: OFF_PLATFORM_UNLINKED },
@@ -1887,7 +1894,8 @@ async function fanHotTargets(app: Db, scope: ResolvedScope, _lineage: LedgerLine
   // lines of why, the ledger's question and its words about the fan go.
   const ledgerFanKeys = textArray(LEDGER_FAN_KEYS);
   const fanClaimPred = sql`${ofFanSalePred} and (claimant_note is not null or answer_note is not null
-    or question is not null or who_text is not null or coalesce(ledger_ref ?| ${ledgerFanKeys}, false))`;
+    or question is not null or who_text is not null or answer_text is not null or close_note is not null
+    or coalesce(ledger_ref ?| ${ledgerFanKeys}, false))`;
   targets.push({
     plane: "hot",
     target: "sale_claims",
@@ -1895,18 +1903,20 @@ async function fanHotTargets(app: Db, scope: ResolvedScope, _lineage: LedgerLine
     rows: await countOf(app, sql`select count(*)::text as n from sale_claims where ${fanClaimPred}`),
     run: (tx) => execCount(tx, sql`
       update sale_claims
-      set claimant_note = null, answer_note = null, question = null, who_text = null,
+      set claimant_note = null, answer_note = null, question = null, who_text = null, answer_text = null, close_note = null,
           ledger_ref = ledger_ref - ${ledgerFanKeys}, updated_at = now()
       where ${fanClaimPred}`),
   });
-  const fanDecisionPred = sql`${ofFanSalePred} and (note is not null or coalesce(ledger_ref ?| ${ledgerFanKeys}, false))`;
+  const fanDecisionPred = sql`${ofFanSalePred} and (note is not null or cancel_note is not null
+    or coalesce(ledger_ref ?| ${ledgerFanKeys}, false))`;
   targets.push({
     plane: "hot",
     target: "sale_owner_decisions",
     action: "anonymize",
     rows: await countOf(app, sql`select count(*)::text as n from sale_owner_decisions where ${fanDecisionPred}`),
     run: (tx) => execCount(tx, sql`
-      update sale_owner_decisions set note = null, ledger_ref = ledger_ref - ${ledgerFanKeys} where ${fanDecisionPred}`),
+      update sale_owner_decisions set note = null, cancel_note = null, ledger_ref = ledger_ref - ${ledgerFanKeys}
+      where ${fanDecisionPred}`),
   });
 
   // A shift report: the draft's notes on the fan's sales, and the notes of the handed-in versions' lines on them — the

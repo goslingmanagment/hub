@@ -189,8 +189,10 @@ export function statementAllowed(group: DraftGroup, statement: Statement): boole
 }
 
 /**
- * What a line counts and whether it is disputed. «Моё» on a near or an added sale counts the whole net: plainly when
- * the rule gives it to nobody and no other person's report holds it, else disputed. Pure.
+ * What a line counts and whether it is disputed. «Моё» on a near or an added sale counts the whole net plainly when the
+ * rule gives it to nobody and no other person's report holds it. Else it is disputed: it counts NOTHING until it is
+ * settled (the other side's answer, an agreement, the owner's decision; review R2b-2) — the rule's owner keeps their
+ * share meanwhile, so the sale is never paid to both — and the line says what it claims (`claimedMills`). Pure.
  */
 export function lineAmount(input: {
   group: DraftGroup;
@@ -203,7 +205,7 @@ export function lineAmount(input: {
   claimed?: boolean;
   /** Another person's handed-in report holds it. */
   otherReport?: boolean;
-}): { amountMills: number; disputed: boolean } {
+}): { amountMills: number; disputed: boolean; claimedMills?: number } {
   if (input.alreadyIn) return { amountMills: 0, disputed: false };
   if (input.group === "mine" && input.claimed !== true) {
     if (input.statement === "not_mine") return { amountMills: 0, disputed: false };
@@ -213,7 +215,8 @@ export function lineAmount(input: {
   if (input.statement !== "mine") return { amountMills: 0, disputed: false };
   // The rule's home already gives the person a share of a sale they added (agreed, decided): that share, settled.
   if (input.claimed === true && input.shareMills > 0) return { amountMills: input.shareMills, disputed: false };
-  return { amountMills: input.netMills, disputed: input.homeKind !== "nobody" || input.otherReport === true };
+  const disputed = input.homeKind !== "nobody" || input.otherReport === true;
+  return disputed ? { amountMills: 0, disputed: true, claimedMills: input.netMills } : { amountMills: input.netMills, disputed: false };
 }
 
 /**
@@ -352,6 +355,8 @@ export interface PostLine {
   platform: string;
   kind: string;
   amountMills: number;
+  /** What a disputed «моё» claims while it counts nothing; null — not disputed. */
+  claimedMills?: number | null;
   fan: { name: string | null; username: string | null; fanRef: string | null };
   note: string | null;
 }
@@ -390,7 +395,8 @@ function postDate(day: string): string {
  * The report as today's post in «Отчётность», one text per model (a shift on two models' pages is two posts, as
  * the team posts them): the date, the person's #tag, the accounts with their sums, the total, the sales by fan
  * with links and notes, the comment. Off-platform money goes to the comment of the first post, said to wait for
- * the owner, never into the sums. The ledger's post reader reads it as it reads the posts written by hand. Pure.
+ * the owner, never into the sums; a disputed «моё» goes to its model's comment, «спорно, ждёт решения», never into the
+ * sums or the sales either (review R2b-2). The ledger's post reader reads it as it reads the posts written by hand. Pure.
  */
 export function postTexts(input: {
   reportDate: string;
@@ -423,8 +429,13 @@ export function postTexts(input: {
     // By fan: the sales that count, the larger first; a fan with a note though nothing counts.
     type FanSum = { platform: string; fan: PostLine["fan"]; kinds: Map<string, { count: number; mills: number }>; mills: number; notes: string[] };
     const byFan = new Map<string, FanSum>();
+    const claims: string[] = [];
     for (const line of input.lines) {
       if (line.pageLabel === null || modelOfPage.get(line.pageLabel) !== model.slug) continue;
+      if ((line.claimedMills ?? 0) > 0) {
+        claims.push(`Спорно, ждёт решения: ${money(line.claimedMills!)} (${line.pageLabel}, ${fanLink(line.platform, line.fan)})${line.note ? `. ${line.note.trim()}` : ""}`);
+        continue;
+      }
       if (line.amountMills <= 0 && (line.note === null || line.note.trim() === "")) continue;
       const key = `${line.platform}:${line.fan.fanRef ?? line.fan.username ?? line.fan.name ?? "?"}`;
       const fan: FanSum = byFan.get(key) ?? { platform: line.platform, fan: line.fan, kinds: new Map(), mills: 0, notes: [] };
@@ -446,6 +457,7 @@ export function postTexts(input: {
     }
     out.push("", "📝 Комментарий:");
     if (input.comment.trim() !== "") out.push(input.comment.trim());
+    out.push(...claims);
     if (index === 0) {
       for (const line of input.offPlatform) {
         out.push(line.state === "confirmed"

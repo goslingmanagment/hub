@@ -14,6 +14,18 @@ import {
   readSaleNobody,
   readUnlinkedDecisions,
 } from "../../services/sale-claims.ts";
+import {
+  answerSaleQuestion,
+  askSaleQuestion,
+  cancelSaleDecisionSaid,
+  closeSaleQuestion,
+  listSaleDecisionsSaid,
+  listSaleQuestionsSaid,
+  markSaleDecisionTaken,
+  recordSaleDecision,
+  type DoorActor,
+} from "../../services/sale-decisions-door.ts";
+import { readSaleDecisionsFeed } from "../../services/sale-decisions-feed.ts";
 import { handinActorOf, handinAgentActorOf } from "../../services/shift-handins.ts";
 import { beginAgentRequest, writeAgentAudit } from "../agent-read/index.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
@@ -133,4 +145,85 @@ export function registerSaleClaimRoutes(server: ApiServer, ctx: ApiModuleContext
       await scope.finish(delivered);
     }
   });
+
+  // «Чья продажа» «со слов» (review R2b-3): Gengar's decisions and questions, written in Hub — write:shift_reports.
+  async function said<T>(
+    request: Parameters<typeof requireAgentKeyPrincipal>[0],
+    operation: "agentSaleDecisionAdd" | "agentSaleDecisionCancel" | "agentSaleDecisionApplied" | "agentSaleQuestionAsk" | "agentSaleQuestionAnswer" | "agentSaleQuestionClose",
+    words: { telegramUserId?: number; sourceRef?: string },
+    write: (actor: DoorActor) => Promise<T>,
+    summary: (answer: T) => Record<string, number | string>,
+  ): Promise<T> {
+    const principal = await requireAgentKeyPrincipal(request);
+    const scope = await beginAgentRequest(appContext, principal, { operation, requiredCapabilities: ["write:shift_reports"] });
+    const pageIds = scope.pages.map((page) => page.id);
+    let delivered = 0;
+    try {
+      const answer = await write({ agentKeyId: principal.agentKeyId, pageIds, telegramUserId: words.telegramUserId ?? 0, sourceRef: words.sourceRef ?? "" });
+      await writeAgentAudit(db, { agentKeyId: principal.agentKeyId, operation, pageIds: [], verbatimText: false, requestSummary: summary(answer) });
+      delivered = 1;
+      return answer;
+    } finally {
+      await scope.finish(delivered);
+    }
+  }
+
+  async function readSaid<T>(
+    request: Parameters<typeof requireAgentKeyPrincipal>[0],
+    operation: "agentSaleDecisions" | "agentSaleQuestions",
+    read: (pageIds: number[]) => Promise<T>,
+    count: (answer: T) => number,
+  ): Promise<T> {
+    const principal = await requireAgentKeyPrincipal(request);
+    const capability = principal.capabilities.includes("write:shift_reports") ? "write:shift_reports" as const : "read:team" as const;
+    const scope = await beginAgentRequest(appContext, principal, { operation, requiredCapabilities: [capability] });
+    const pageIds = scope.pages.map((page) => page.id);
+    let delivered = 0;
+    try {
+      const answer = await read(pageIds);
+      delivered = count(answer);
+      await writeAgentAudit(db, { agentKeyId: principal.agentKeyId, operation, pageIds, verbatimText: false, requestSummary: { returned: delivered } });
+      return answer;
+    } finally {
+      await scope.finish(delivered);
+    }
+  }
+
+  server.post("/api/v1/agent/sale-decisions", { schema: routeSchemas.agentSaleDecisionAdd }, async (request) =>
+    said(request, "agentSaleDecisionAdd", request.body, (actor) => recordSaleDecision(appContext, actor, request.body),
+      (answer) => ({ decisionId: answer.decision.id, outcome: request.body.kind })));
+  server.post("/api/v1/agent/sale-decisions/cancel", { schema: routeSchemas.agentSaleDecisionCancel }, async (request) =>
+    said(request, "agentSaleDecisionCancel", request.body, (actor) => cancelSaleDecisionSaid(appContext, actor, request.body),
+      (answer) => ({ decisionId: answer.decision.id, outcome: "cancelled" })));
+  server.post("/api/v1/agent/sale-decisions/applied", { schema: routeSchemas.agentSaleDecisionApplied }, async (request) =>
+    said(request, "agentSaleDecisionApplied", {}, (actor) => markSaleDecisionTaken(appContext, actor, request.body),
+      (answer) => ({ decisionId: answer.decision.id, outcome: "applied" })));
+  server.get("/api/v1/agent/sale-decisions", { schema: routeSchemas.agentSaleDecisions }, async (request) =>
+    readSaid(request, "agentSaleDecisions", (pageIds) => listSaleDecisionsSaid(appContext, { pageIds, ...request.query }), (answer) => answer.decisions.length));
+  // The ledger's feed of decisions (review R2b-B): every change after a cursor; read:money.
+  server.get("/api/v1/agent/sale-decisions/feed", { schema: routeSchemas.agentSaleDecisionsFeed }, async (request) => {
+    const principal = await requireAgentKeyPrincipal(request);
+    const scope = await beginAgentRequest(appContext, principal, { operation: "agentSaleDecisionsFeed", requiredCapabilities: ["read:money"] });
+    const pageIds = scope.pages.map((page) => page.id);
+    let delivered = 0;
+    try {
+      const feed = await readSaleDecisionsFeed(appContext, { pageIds, since: request.query.since, limit: request.query.limit, agentKeyId: principal.agentKeyId });
+      delivered = feed.changes.length;
+      await writeAgentAudit(db, { agentKeyId: principal.agentKeyId, operation: "agentSaleDecisionsFeed", pageIds, verbatimText: false, requestSummary: { returned: delivered } });
+      return feed;
+    } finally {
+      await scope.finish(delivered);
+    }
+  });
+  server.post("/api/v1/agent/sale-questions", { schema: routeSchemas.agentSaleQuestionAsk }, async (request) =>
+    said(request, "agentSaleQuestionAsk", request.body, (actor) => askSaleQuestion(appContext, actor, request.body),
+      (answer) => ({ questionId: answer.question.id, outcome: request.body.askedOf })));
+  server.post("/api/v1/agent/sale-questions/answer", { schema: routeSchemas.agentSaleQuestionAnswer }, async (request) =>
+    said(request, "agentSaleQuestionAnswer", request.body, (actor) => answerSaleQuestion(appContext, actor, request.body),
+      (answer) => ({ questionId: answer.question.id, outcome: "answered" })));
+  server.post("/api/v1/agent/sale-questions/close", { schema: routeSchemas.agentSaleQuestionClose }, async (request) =>
+    said(request, "agentSaleQuestionClose", request.body, (actor) => closeSaleQuestion(appContext, actor, request.body),
+      (answer) => ({ questionId: answer.question.id, outcome: "closed" })));
+  server.get("/api/v1/agent/sale-questions", { schema: routeSchemas.agentSaleQuestions }, async (request) =>
+    readSaid(request, "agentSaleQuestions", (pageIds) => listSaleQuestionsSaid(appContext, { pageIds, ...request.query }), (answer) => answer.questions.length));
 }

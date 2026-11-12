@@ -107,11 +107,13 @@ export const shiftReportLineSchema = z.object({
   shareWithUserId: intId.nullable(),
   shareWithName: z.string().nullable(),
   note: z.string().nullable(),
-  /** What the line counts in the report. */
+  /** What the line counts in the report: a disputed «моё» counts 0 until it is settled (review R2b-2). */
   amountMills: mills,
+  /** What a disputed «моё» claims while it counts nothing: «спорно, ждёт решения: $X»; null — not disputed. */
+  claimedMills: mills.nullable().default(null),
   /** «Долёт»: of the days before the shift, by the rule the person's, in no report of theirs yet. */
   added: z.boolean(),
-  /** Claimed while the rule gives it to someone else: counted, until the other side or the owner agrees. */
+  /** «Моё» while the rule gives it to someone else: counted nowhere until the other side or the owner settles it. */
   disputed: z.boolean(),
   /** Another report of the person holds it: it counts 0 here. */
   alreadyIn: z.object({ shiftId: intId, reportDate: businessDate }).nullable(),
@@ -360,8 +362,10 @@ export const agentShiftReportsFeedItemSchema = z.object({
     statement: shiftReportStatementEnum.nullable(),
     shareWithUserId: intId.nullable(),
     note: z.string().nullable(),
-    /** What the line counts in the report. */
+    /** What the line counts in the report: a disputed line counts 0 until it is settled (review R2b-2). */
     amountMills: mills,
+    /** What a disputed «моё» claims while it counts nothing; null — not disputed. */
+    claimedMills: mills.nullable().default(null),
     added: z.boolean(),
     disputed: z.boolean(),
     /** A claim on it settled (package G): agreed — the other side agreed; owner — the owner decided; the amount is what that gives. Null — not settled. */
@@ -379,8 +383,10 @@ export const agentShiftReportsFeedItemSchema = z.object({
    * Null — handed in by the person. Such a version supersedes the one before it like any other.
    */
   madeFor: z.object({
-    kind: z.enum(["claim", "off_platform"]),
+    kind: z.enum(["claim", "off_platform", "decision"]),
     claimId: intId.nullable(),
+    /** A decision recorded «со слов» through the agent's door (kind decision, review R2b-3). */
+    decisionId: intId.nullable().default(null),
     offPlatformId: intId.nullable(),
     transactionId: intId.nullable(),
     outcome: z.string(),
@@ -390,7 +396,23 @@ export const agentShiftReportsFeedItemSchema = z.object({
 
 export const agentShiftReportsFeedResponseSchema = z.object({
   reports: z.array(agentShiftReportsFeedItemSchema),
-  /** Ask again with `since` = this (the last place served); the same as asked when nothing is new. */
+  /**
+   * The versions held back for the key (review R2b-4): each has a line of a page outside the key's pages. Who and when
+   * and which pages, no sums, no lines — the reader records a problem instead of never knowing. A held version is
+   * listed on every read until the key may read its pages; then the next read serves it in `reports`, ahead of the new
+   * ones, at its own `seq` (below the cursor): take every item of `reports` whatever its seq. The cursor passing a held
+   * version never loses it.
+   */
+  held: z.array(z.object({
+    id: intId,
+    seq: intId,
+    shiftId: intId,
+    person: z.string().nullable(),
+    reportDate: z.string(),
+    reason: z.enum(["page_outside_key"]),
+    pageLabels: z.array(z.string()),
+  })).default([]),
+  /** Ask again with `since` = this (the last place read, served or held); the same as asked when nothing is new. */
   next: z.string(),
   serverNow: isoTimestamp,
 });
@@ -527,7 +549,8 @@ export const shiftHandinRouteSchemas = {
     summary: "Every version of every shift report handed in, after a cursor: the ledger's feed (needs read:team and read:money)",
     description: "Database only. A version is served as soon as it is committed, in the order the feed placed it (`seq`): a "
       + "version committed after a later one is placed after it, so `next` never passes a version not served yet. A "
-      + "version with a line on a page outside the key's grant is left out.",
+      + "version with a line on a page outside the key's grant is held back and listed in `held` on every read until the key "
+      + "may read it; then it is served in `reports` at its own place.",
     querystring: agentShiftReportsFeedQuerySchema,
     response: { 200: agentShiftReportsFeedResponseSchema, ...agentErrors },
   },

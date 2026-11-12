@@ -13,6 +13,7 @@ import {
   closeMatter,
   decideOffPlatform,
   findHandinByShift,
+  findHandinShift,
   findHandinPersonBy,
   findHandinPersonOfUser,
   findLatestHandinShift,
@@ -50,6 +51,7 @@ import {
   type HandinVersionMadeFor,
   type MatterActor,
   type SaleClaimRow,
+  type SaleDecisionInsert,
   type SaleDecisionRow,
 } from "@agency_hub_core/db";
 
@@ -250,7 +252,8 @@ async function syncClaimMatters(app: Pick<AppContext, "db" | "logger">, now: Dat
   const wantSide = new Set<string>();
   const wantOwner = new Map<string, SaleClaimRow[]>();
   for (const claim of claims) {
-    if (claim.state === "asked" && claim.sideUserId !== null) {
+    // A question the agent asked the chatters is theirs to settle in their chat: no matter of the side.
+    if (claim.state === "asked" && claim.sideUserId !== null && claim.kind !== "question") {
       const key = `${SALE_CLAIM_KIND}:${claim.id}`;
       wantSide.add(key);
       const sale = claim.transactionId === null ? undefined : sales.get(claim.transactionId);
@@ -293,9 +296,16 @@ async function syncClaimMatters(app: Pick<AppContext, "db" | "logger">, now: Dat
       key,
       kind: SALE_DISPUTE_KIND,
       source: "server",
-      title: sale
-        ? disputeTitle({ names: who, kind: sale.kind, netMills: sale.netMills, day: moscowDay(sale.occurredAt.getTime()) })
-        : `Вопрос «чья продажа» из ledger: ${first.question ? cutAtWord(first.question, 120) : "без продажи"}`,
+      // A dispute's title names the page, the amount, the day and the people — never a fan (review R2b-3c); a question
+      // says it is one, and one asked of the chatters that nobody answered says so and since when (review R2b-6).
+      title: list.every((claim) => claim.kind === "imported" || claim.kind === "question")
+        ? questionTitle({
+          list, pageLabel: label, ref: first.ledgerRef ?? {}, sale,
+          names: who.length > 0 ? who : first.whoText === null ? [] : [first.whoText],
+        })
+        : sale
+          ? disputeTitle({ names: who, kind: sale.kind, netMills: sale.netMills, day: moscowDay(sale.occurredAt.getTime()) })
+          : questionTitle({ list, pageLabel: label, ref: first.ledgerRef ?? {}, sale, names: who.length > 0 ? who : first.whoText === null ? [] : [first.whoText] }),
       object: first.transactionId === null ? { type: "sale_claim", id: String(first.id) } : { type: "transaction", id: String(first.transactionId) },
       pageIds: label === null ? [] : [pages.idOf.get(label)].filter((id): id is number => id !== undefined),
       owner: { role: "owner" },
@@ -315,6 +325,36 @@ async function syncClaimMatters(app: Pick<AppContext, "db" | "logger">, now: Dat
     if (closed.transition === "closed") touched += 1;
   }
   return touched;
+}
+
+/**
+ * The owner's matter of a question, never naming the fan: «Вопрос чаттерам без ответа с 5 нояб.: mia-1, $16.00,
+ * 11 нояб., Аня и Боря» (asked of the chatters, nobody answered), else «Вопрос «чья продажа» из ledger: …» — the page,
+ * the amount, the sale's day, the people.
+ */
+function questionTitle(input: {
+  list: readonly SaleClaimRow[];
+  pageLabel: string | null;
+  ref: Record<string, unknown>;
+  sale: HandinSaleRow | undefined;
+  names: readonly string[];
+}): string {
+  const refAt = typeof input.ref.occurredAt === "string" ? Date.parse(input.ref.occurredAt) : Number.NaN;
+  const at = input.sale?.occurredAt.getTime() ?? refAt;
+  const net = input.sale?.netMills ?? (typeof input.ref.netMills === "number" ? input.ref.netMills : null);
+  const parts = [
+    input.pageLabel,
+    net === null ? null : money(net),
+    Number.isNaN(at) ? null : dayWords(moscowDay(at)),
+    input.names.length > 0 ? input.names.join(" и ") : null,
+  ].filter((part): part is string => part !== null && part !== "");
+  const words = parts.length > 0 ? `: ${parts.join(", ")}` : "";
+  const toChatters = input.list.some((claim) => (claim.askedOf ?? (typeof claim.ledgerRef?.askedOf === "string" ? claim.ledgerRef.askedOf : null)) === "chatters");
+  if (toChatters) {
+    const since = Math.min(...input.list.map((claim) => claim.claimedAt.getTime()));
+    return `Вопрос чаттерам без ответа с ${dayWords(moscowDay(since))}${words}`;
+  }
+  return `Вопрос «чья продажа»${input.list.some((claim) => claim.kind === "imported") ? " из ledger" : ""}${words}`;
 }
 
 function fanName(fan: { name: string | null; username: string | null }): string | null {
@@ -373,7 +413,7 @@ async function nobodyOfWeek(db: Database, weekStart: number, now: Date): Promise
   const unowned = await listUnownedSales(db, { days });
   const ids = unowned.map((sale) => sale.transactionId);
   const counted = new Set((await listCurrentReportsOfSales(db, ids)).flatMap((report) => report.lines
-    .filter((line) => line.transactionId !== null && line.amountMills > 0).map((line) => line.transactionId!)));
+    .filter((line) => line.transactionId !== null && (line.amountMills > 0 || (line.claimedMills ?? 0) > 0)).map((line) => line.transactionId!)));
   const decided = await listActiveSaleDecisions(db, ids);
   return { from, to, days, sales: unowned.filter((sale) => !counted.has(sale.transactionId) && !decided.has(sale.transactionId)) };
 }
@@ -483,6 +523,7 @@ async function settleReport(
     transactionId: input.transactionId, amountMills: input.amountMills, settled: input.settled,
   });
   const dayPaid = input.dayPaid;
+  const shift = await findHandinShift(db, input.shiftId);
   // Telegram's door is an agent's «со слов» alone; the system's version on the owner's word is the owner's Workboard.
   const telegram = input.by.door === "telegram" && input.by.agentKeyId !== null && input.by.telegramMessageRef !== null && input.by.telegramSenderId !== null;
   const version = await insertHandinVersion(db, {
@@ -500,6 +541,7 @@ async function settleReport(
     dayPaid,
     ruleVersion: SALE_RULE.version,
     madeFor: input.madeFor,
+    reportDate: shift?.reportDate ?? handin.reportDate,
     at: input.at,
   });
   await insertHandinEvent(db, {
@@ -649,7 +691,7 @@ export async function decideSaleDispute(
   const { first, second } = partiesOf(open);
   const note = input.note === null || input.note.trim() === "" ? null : input.note.trim();
   if (input.outcome === "dismiss") {
-    if (open.some((claim) => claim.kind !== "imported")) throw new BadRequestError("Only a question carried over from the ledger closes without a decision", { reason: "not_imported" });
+    if (open.some((claim) => claim.kind !== "imported" && claim.kind !== "question")) throw new BadRequestError("Only a question closes without a decision", { reason: "not_imported" });
     for (const claim of open) await updateSaleClaim(db, claim.id, { state: "decided", closedAt: now }, now);
     await runSaleClaims(app, now).catch(() => undefined);
     return { decided: false, versions: [], savedAt: now.toISOString() };
@@ -660,28 +702,63 @@ export async function decideSaleDispute(
   if ((outcome === "second" || outcome === "half") && second === null) throw new BadRequestError("This dispute has no second side", { reason: "no_second" });
   const decision = decisionOfOutcome(outcome, first ?? 0, second);
   const sale = (await listHandinSalesByIds(db, [transactionId]))[0];
+  const applied = await applySaleDecision(app, {
+    transactionId,
+    insert: {
+      kind: decision.kind, shares: decision.shares, pot: null, outcome, note, decidedByUserId: principal.user.id, decidedAt: now,
+      saidBy: null, source: "dispute", ledgerDecisionId: null, ledgerRef: null,
+    },
+    open,
+    madeFor: () => ({ kind: "claim", claimId: open[0]!.id, transactionId, outcome }),
+    amountFor: (report, net) => shareAfter({ netMills: net, userId: report.userId, outcome, first: first ?? 0, second, statement: null }),
+    by: { door: "workboard", actorUserId: principal.user.id, agentKeyId: null, telegramMessageRef: null, telegramSenderId: null },
+  }, sale, now);
+  return { decided: true, versions: applied.versions.map((one) => ({ shiftId: one.shiftId, version: one.version })), savedAt: now.toISOString() };
+}
+
+/**
+ * A decision on a sale, written and followed (review R2b-3b): the active one before it superseded, every open claim and
+ * question of the sale decided with it, every handed-in report holding the sale given what the decision gives its person
+ * (a new version, settled; the ledger asked about paid days before any lock), the sale's home computed again and the
+ * matters closed by the claims' pass. The owner's decision of a dispute and a decision recorded «со слов» through the
+ * agent's door both go here, so they behave the same.
+ */
+export async function applySaleDecision(
+  app: ClaimsApp,
+  input: {
+    transactionId: number;
+    insert: Omit<SaleDecisionInsert, "transactionId" | "pageId" | "ruleHome">;
+    /** The open claims and questions of the sale it decides. */
+    open: readonly SaleClaimRow[];
+    /** Why the reports' new versions were made. */
+    madeFor: (decisionId: number | null) => HandinVersionMadeFor;
+    /** What it gives a report's person, of the sale's net. */
+    amountFor: (report: CurrentReport, net: number) => number;
+    by: SettleBy;
+  },
+  sale: HandinSaleRow | undefined,
+  now: Date,
+): Promise<{ decisionId: number | null; versions: Array<{ shiftId: number; version: number; versionId: number; dayPaid: boolean | null }> }> {
+  const { db } = app;
+  const { transactionId } = input;
   const made: Array<{ shiftId: number; version: number; versionId: number; dayPaid: boolean | null }> = [];
-  const by: SettleBy = { door: "workboard", actorUserId: principal.user.id, agentKeyId: null, telegramMessageRef: null, telegramSenderId: null };
   const paid = await paidDaysOf(app, await listCurrentReportsOfSales(db, [transactionId]));
+  let decisionId: number | null = null;
   await db.transaction(async (tx) => {
     const txDb = tx as unknown as Database;
-    const saved = await insertSaleDecision(txDb, {
-      transactionId, pageId: sale?.pageId ?? null, kind: decision.kind, shares: decision.shares, pot: null, outcome,
-      ruleHome: sale?.home?.home ?? null, note, decidedByUserId: principal.user.id, decidedAt: now, saidBy: null, source: "dispute",
-      ledgerDecisionId: null, ledgerRef: null,
-    }, now);
-    for (const claim of open) await updateSaleClaim(txDb, claim.id, { state: "decided", decisionId: saved?.id ?? null, closedAt: now }, now);
-    // Every report that counts the sale gets what the decision gives its person.
+    const saved = await insertSaleDecision(txDb, { ...input.insert, transactionId, pageId: sale?.pageId ?? null, ruleHome: sale?.home?.home ?? null }, now);
+    decisionId = saved?.id ?? null;
+    for (const claim of input.open) await updateSaleClaim(txDb, claim.id, { state: "decided", decisionId, closedAt: now }, now);
+    // Every report that holds the sale gets what the decision gives its person.
     const reports = await listCurrentReportsOfSales(txDb, [transactionId]);
     const net = reports.flatMap((report) => report.lines).find((line) => line.transactionId === transactionId)?.netMills ?? sale?.netMills ?? 0;
     for (const report of reports) {
       const line = report.lines.find((one) => one.transactionId === transactionId);
-      if (line === undefined || (line.amountMills === 0 && !line.disputed)) continue;
-      const amount = shareAfter({ netMills: net, userId: report.userId, outcome, first: first ?? 0, second, statement: null });
+      const amount = input.amountFor(report, net);
+      if (line === undefined || (line.amountMills === 0 && !line.disputed && amount === 0)) continue;
       const one = await settleReport(txDb, {
         shiftId: report.shiftId, transactionId, amountMills: amount, settled: "owner",
-        madeFor: { kind: "claim", claimId: open[0]!.id, transactionId, outcome }, by, at: now,
-        dayPaid: paid.get(report.shiftId) ?? null,
+        madeFor: input.madeFor(decisionId), by: input.by, at: now, dayPaid: paid.get(report.shiftId) ?? null,
       });
       if (one !== null) made.push(one);
     }
@@ -691,7 +768,7 @@ export async function decideSaleDispute(
   await runSaleClaims(app, now).catch((error: unknown) => {
     app.logger.warn({ transactionId, err: error instanceof Error ? error.message : String(error) }, "sale claims: the pass after a decision failed; the next one will");
   });
-  return { decided: true, versions: made.map((one) => ({ shiftId: one.shiftId, version: one.version })), savedAt: now.toISOString() };
+  return { decisionId, versions: made };
 }
 
 // ── «Мимо площадки» ──────────────────────────────────────────────────────────
@@ -760,7 +837,8 @@ export async function decideOffPlatformLine(
     const version = await insertHandinVersion(txDb, {
       handin, door: "workboard", actorUserId: principal.user.id, agentKeyId: null, telegramMessageRef: null, telegramSenderId: null,
       totalMills: sums.totalMills, pages: sums.pages, lines: current.lines, offPlatform, comment: current.comment, dayPaid,
-      ruleVersion: SALE_RULE.version, madeFor: { kind: "off_platform", offPlatformId: row.id, decision: state }, at: now,
+      ruleVersion: SALE_RULE.version, madeFor: { kind: "off_platform", offPlatformId: row.id, decision: state },
+      reportDate: (await findHandinShift(txDb, row.shiftId))?.reportDate ?? handin.reportDate, at: now,
     });
     await insertHandinEvent(txDb, {
       handinId: handin.id, event: "shift_report.off_platform_decided", door: "workboard", actorUserId: principal.user.id, agentKeyId: null,
@@ -833,7 +911,7 @@ export async function readUnlinkedDecisions(app: ClaimsApp, principal: HumanAuth
       id: decision.id,
       ledgerDecisionId: decision.ledgerDecisionId,
       pageLabel,
-      words: ledgerWords(ref),
+      words: ledgerWords(ref, decision.note),
       saidBy: decision.saidBy,
       shares: decision.shares.map((share) => ({ userId: share.userId, name: names.get(share.userId) ?? `#${share.userId}`, percent: share.percent })),
       kind: decision.kind,
@@ -846,13 +924,13 @@ export async function readUnlinkedDecisions(app: ClaimsApp, principal: HumanAuth
   return { decisions: out, serverNow: now.toISOString() };
 }
 
-/** What the ledger wrote of a record, in one line: the fan, the amount, the moment, why. */
-export function ledgerWords(ref: Record<string, unknown>): string {
+/** The words that name a sale not tied yet, in one line: the fan's reference, the amount, the day, why (the decision's note). */
+export function ledgerWords(ref: Record<string, unknown>, note: string | null = null): string {
   const parts = [
-    typeof ref.fanName === "string" && ref.fanName !== "" ? ref.fanName : typeof ref.fanRef === "string" && ref.fanRef !== "" ? ref.fanRef : null,
+    typeof ref.fanRef === "string" && ref.fanRef !== "" ? ref.fanRef : null,
     typeof ref.netMills === "number" ? money(ref.netMills) : null,
-    typeof ref.occurredAt === "string" ? `${dayWords(moscowDay(Date.parse(ref.occurredAt)))}` : null,
-    typeof ref.note === "string" && ref.note !== "" ? ref.note.slice(0, 200) : null,
+    typeof ref.occurredAt === "string" && !Number.isNaN(Date.parse(ref.occurredAt)) ? `${dayWords(moscowDay(Date.parse(ref.occurredAt)))}` : null,
+    note !== null && note !== "" ? note.slice(0, 200) : null,
   ];
   return parts.filter((part): part is string => part !== null).join(", ");
 }
@@ -972,12 +1050,13 @@ async function disputeOf(app: ClaimsApp, claims: readonly SaleClaimRow[], now: D
   const counted = (userId: number) => {
     const report = reports.find((one) => one.userId === userId);
     const line = report?.lines.find((one) => one.transactionId === transactionId);
-    return { mills: line === undefined ? null : line.amountMills, shiftId: report?.shiftId ?? null };
+    return { mills: line === undefined ? null : line.amountMills, claimed: line?.claimedMills ?? null, shiftId: report?.shiftId ?? null };
   };
   const party = (userId: number, role: "first" | "second") => ({
     userId, name: names.get(userId) ?? `#${userId}`, role,
     says: claims.flatMap((claim) => saysOf(claim, userId, now)),
     countedMills: counted(userId).mills,
+    claimedMills: counted(userId).claimed,
     shiftId: counted(userId).shiftId ?? (role === "second" ? claims.find((claim) => claim.sideUserId === userId)?.sideShiftId ?? null : null),
   });
   const parties = [first === null ? null : party(first, "first"), second === null ? null : party(second, "second")].filter((one): one is NonNullable<typeof one> => one !== null);
@@ -1003,7 +1082,10 @@ async function disputeOf(app: ClaimsApp, claims: readonly SaleClaimRow[], now: D
     }
   }
   if (transactionId !== null) outcomes.push({ outcome: "nobody", label: "Никому", gives: parties.map((one) => ({ userId: one.userId, mills: 0 })) });
-  if (claims.every((claim) => claim.kind === "imported")) outcomes.push({ outcome: "dismiss", label: "Закрыть без решения", gives: [] });
+  if (claims.every((claim) => claim.kind === "imported" || claim.kind === "question")) outcomes.push({ outcome: "dismiss", label: "Закрыть без решения", gives: [] });
+  // Which handed-in reports a decision gives a new version: the window says so instead of promising it of every report.
+  const held = reports.filter((report) => report.lines.some((line) => line.transactionId === transactionId));
+  const heldNames = await listHandinNames(db, held.map((report) => report.userId));
   return {
     sale: sale === undefined ? null : {
       transactionId: sale.transactionId, pageLabel: sale.pageLabel, platform: sale.platform, kind: sale.kind, occurredAt: sale.occurredAt.toISOString(),
@@ -1023,6 +1105,7 @@ async function disputeOf(app: ClaimsApp, claims: readonly SaleClaimRow[], now: D
     facts,
     outcomes,
     decision: decision === undefined ? null : { outcome: decision.outcome, note: decision.note, decidedAt: decision.decidedAt.toISOString(), by: decider },
+    reports: held.map((report) => ({ userId: report.userId, name: heldNames.get(report.userId) ?? `#${report.userId}`, shiftId: report.shiftId, reportDate: report.reportDate })),
     serverNow: now.toISOString(),
   };
 }

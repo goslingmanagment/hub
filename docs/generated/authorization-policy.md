@@ -26,7 +26,7 @@ for at password sign-in (`client: "chat-extension"`): it reaches only the
 73 routes marked "yes", and every route marked "no" refuses it with 403.
 A full device token is not affected.
 
-## Routes (498)
+## Routes (507)
 
 | Method | Path | Route key | Kind | Roles | Page scope | chat-extension token |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -274,6 +274,15 @@ A full device token is not affected.
 | POST | `/api/v1/agent/resolve` | `agentResolve` | `agentKey` | — | — | no |
 | GET | `/api/v1/agent/sale-claims` | `agentSaleClaims` | `agentKey` | — | — | no |
 | POST | `/api/v1/agent/sale-claims/answer` | `agentSaleClaimAnswer` | `agentKey` | — | — | no |
+| GET | `/api/v1/agent/sale-decisions` | `agentSaleDecisions` | `agentKey` | — | — | no |
+| POST | `/api/v1/agent/sale-decisions` | `agentSaleDecisionAdd` | `agentKey` | — | — | no |
+| POST | `/api/v1/agent/sale-decisions/applied` | `agentSaleDecisionApplied` | `agentKey` | — | — | no |
+| POST | `/api/v1/agent/sale-decisions/cancel` | `agentSaleDecisionCancel` | `agentKey` | — | — | no |
+| GET | `/api/v1/agent/sale-decisions/feed` | `agentSaleDecisionsFeed` | `agentKey` | — | — | no |
+| GET | `/api/v1/agent/sale-questions` | `agentSaleQuestions` | `agentKey` | — | — | no |
+| POST | `/api/v1/agent/sale-questions` | `agentSaleQuestionAsk` | `agentKey` | — | — | no |
+| POST | `/api/v1/agent/sale-questions/answer` | `agentSaleQuestionAnswer` | `agentKey` | — | — | no |
+| POST | `/api/v1/agent/sale-questions/close` | `agentSaleQuestionClose` | `agentKey` | — | — | no |
 | POST | `/api/v1/agent/search/messages` | `agentSearchMessages` | `agentKey` | — | — | no |
 | GET | `/api/v1/agent/shift-reports` | `agentShiftReportsFeed` | `agentKey` | — | — | no |
 | GET | `/api/v1/agent/shift-reports/claimable` | `agentShiftReportClaimable` | `agentKey` | — | — | no |

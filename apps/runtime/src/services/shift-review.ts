@@ -51,8 +51,10 @@ import type { ChatterSaleKind } from "@agency_hub_core/contracts";
 import { NotFoundError } from "./errors.ts";
 import { SALE_HOME_REASON_TEXT, type SaleHomeReason } from "./sale-rule.ts";
 import {
-  RULED_SALES_LEAD_MS, creditedPiece, openWindowFrom, piecesByUser, readScreenHomes, readScreensRule, ruledWork, type ScreenHome, type ScreensRule,
+  RULED_SALES_LEAD_MS, homeCredit, openWindowFrom, ownMoneyShares, piecesByUser, readPeopleLogins, readScreenHomes, readScreensRule, ruledWork,
+  type HomeCredit, type ScreenHome, type ScreensRule,
 } from "./sale-rule-screens.ts";
+import { reportDateOfShift } from "./shift-rows.ts";
 import { salesNoShiftHolds, salesOfWork, settleOutsideShifts } from "./team-shift-sales.ts";
 
 /**
@@ -755,15 +757,18 @@ export interface RuledReview {
   salesNetMills: number;
   /** A sale's verdict and holder by its home; one with no home keeps the old ones. */
   settle: (one: SettledSale) => SettledSale;
-  /** The rule gives the sale to a person's work. */
+  /** The rule gives the sale to a person. */
   creditedToPerson: (transactionId: number) => boolean;
+  /** The shares of the shift's report date the rule gives the person with no work to hold them (`ownMoneyShares`). */
+  withoutShift: SettledSale[];
 }
 
 /**
- * What the rule credits a ruled shift: the shares of the homes naming it — of the sales on any page back by the PPV's
- * wait to its end — but those an old shift counts (`oldShiftCounts`, the switch's first days), and every other sale's
- * verdict by its home: a person's — `theirs` and theirs to name; no person's (the pot, a PPV waiting, the owner's
- * decision, nobody) — `none`.
+ * What the rule credits a ruled shift (`homeCredit`): the shares of the homes landing on it — of the sales on any page
+ * back by the PPV's wait to its end, by any of the person's logins — but those an old shift counts (`oldShiftCounts`,
+ * the switch's first days); the person's shares of its report date with no work to hold them (their day's money, not
+ * the shift's); and every other sale's verdict by its home: another work's — `theirs` and whose; a person's with no
+ * work — `none` and the person; no person's (the pot, a PPV waiting, the owner's decision, nobody) — `none`.
  */
 async function ruledReviewOf(app: AppContext, input: {
   rule: ScreensRule;
@@ -780,39 +785,67 @@ async function ruledReviewOf(app: AppContext, input: {
 }): Promise<RuledReview> {
   const { rule, userId, shift, now } = input;
   const end = shift.ongoing ? now.getTime() : shift.endedAt;
+  // A shift's report date: the person's money of that day with no work to hold it shows with it — the whole day is read.
+  const day = shift.kind === "shift" ? reportDateOfShift(shift) : null;
+  const dayEnd = day === null ? 0 : Math.min(now.getTime(), Date.parse(`${day}T00:00:00+03:00`) + DAY_MS);
   const around = await listShiftSales(app.db, {
-    pageIds: input.grantedPageIds ?? "all", from: new Date(shift.startedAt - RULED_SALES_LEAD_MS), to: new Date(end + 1),
+    pageIds: input.grantedPageIds ?? "all", from: new Date(shift.startedAt - RULED_SALES_LEAD_MS), to: new Date(Math.max(end + 1, dayEnd)),
   });
   const byId = new Map<number, ShiftSale>();
   for (const sale of [...around, ...input.listed.map((one) => one.sale), ...input.before, ...input.bought]) byId.set(sale.transactionId, sale);
-  const homes = await readScreenHomes(app.db, { sales: [...byId.values()], openFrom: openWindowFrom(now, input.person.work), now, live: rule.live });
-  const mine = piecesByUser([{ userId, work: shift }]);
+  const [homes, logins] = await Promise.all([
+    readScreenHomes(app.db, { sales: [...byId.values()], openFrom: openWindowFrom(now, input.person.work), now, live: rule.live }),
+    readPeopleLogins(app.db),
+  ]);
+  // A share lands on the person's work by any of their logins: their other logins' work around the shift too.
+  const others = logins.loginsOf(userId).filter((other) => other !== userId);
+  const othersWork = others.length === 0 ? null : await input.everyone();
+  const pieces = piecesByUser<PersonPiece>([
+    ...input.person.work.map((work) => ({ userId, username: input.person.username, work })),
+    ...others.flatMap((other) => (othersWork?.get(other)?.work ?? []).map((work) => ({ userId: other, username: othersWork!.get(other)!.username, work }))),
+  ]);
+  const person = logins.personOf(userId);
+  const creditOf = new Map<number, HomeCredit<PersonPiece>>();
   const credits: ShiftSale[] = [];
+  const own: ShiftSale[] = [];
   for (const [transactionId, home] of homes) {
     const sale = byId.get(transactionId);
-    if (sale === undefined || home.kind !== shift.kind) continue;
-    for (const share of home.shares) if (share.userId === userId && creditedPiece(mine, share) !== null) credits.push({ ...sale, netMills: share.mills });
+    if (sale === undefined) continue;
+    const credit = homeCredit({ home, sale, pieces, logins, counts: (piece) => ruledWork(rule, piece.work) });
+    creditOf.set(transactionId, credit);
+    for (const share of credit.shares) if (share.piece?.work === shift) credits.push({ ...sale, netMills: share.mills });
+    if (day === null) continue;
+    for (const share of ownMoneyShares(rule, sale, credit)) if (share.person === person && share.day === day) own.push({ ...sale, netMills: share.mills });
   }
   // A credit an old shift holds: whether it counts it takes who last wrote (as «Смены»).
-  const people = credits.length === 0 ? new Map<number, PersonWork>() : await input.everyone();
-  const holdersOf = new Map(credits.map((sale) => [sale.transactionId, [...people].flatMap(([id, other]) => other.work
+  const counted = [...credits, ...own];
+  const people = counted.length === 0 ? new Map<number, PersonWork>() : await input.everyone();
+  const holdersOf = new Map(counted.map((sale) => [sale.transactionId, [...people].flatMap(([id, other]) => other.work
     .filter((work) => work.kind === "shift" && workHoldsShiftSale(work, sale))
     .map((work) => ({ userId: id, ruled: ruledWork(rule, work) })))]));
-  const asked = credits.filter((sale) => holdersOf.get(sale.transactionId)!.some((one) => !one.ruled) || !input.listed.some((one) => one.sale.transactionId === sale.transactionId));
+  const asked = counted.filter((sale) => holdersOf.get(sale.transactionId)!.some((one) => !one.ruled) || !input.listed.some((one) => one.sale.transactionId === sale.transactionId));
   const lastWriters = asked.length === 0 ? new Map<number, number>() : await listSaleLastWriters(app.db, { hours: SALE_LAST_WRITER_HOURS, sales: lastWriterQuery(asked) });
-  const kept = credits.filter((sale) => !oldShiftCounts(holdersOf.get(sale.transactionId)!, lastWriters.get(sale.transactionId) ?? null));
+  const oldCounts = (sale: ShiftSale) => oldShiftCounts(holdersOf.get(sale.transactionId)!, lastWriters.get(sale.transactionId) ?? null);
+  const kept = credits.filter((sale) => !oldCounts(sale));
   const keptIds = new Set(kept.map((sale) => sale.transactionId));
+  const oldIds = new Set(counted.filter(oldCounts).map((sale) => sale.transactionId));
   const listedIds = new Set(input.listed.map((one) => one.sale.transactionId));
   const usernames = new Map([[userId, input.person.username], ...[...people].map(([id, other]) => [id, other.username] as const)]);
   const settle = (one: SettledSale): SettledSale => {
-    const home = homes.get(one.sale.transactionId);
-    if (home === undefined) return one;
-    if (keptIds.has(one.sale.transactionId)) return { ...one, held: true, verdict: "mine", holder: null };
-    if ((home.kind === "shift" || home.kind === "visit") && home.shares.length > 0) {
-      const share = home.shares.find((other) => other.userId !== userId) ?? home.shares[0]!;
-      return { ...one, verdict: "theirs", holder: usernames.get(share.userId) ?? `hub:${share.userId}` };
+    const id = one.sale.transactionId;
+    const credit = creditOf.get(id);
+    if (credit === undefined) return one;
+    if (keptIds.has(id)) return { ...one, held: true, verdict: "mine", holder: null };
+    if (oldIds.has(id)) {
+      // The old count has it: the old shift's.
+      const old = holdersOf.get(id)!.find((holder) => !holder.ruled);
+      return { ...one, verdict: "theirs", holder: old === undefined ? one.holder : usernames.get(old.userId) ?? `hub:${old.userId}` };
     }
-    return { ...one, verdict: "none", holder: null };
+    const share = credit.shares.find((other) => other.piece?.work !== shift) ?? credit.shares[0];
+    if (share === undefined) return { ...one, verdict: "none", holder: null };
+    if (share.piece !== null) return { ...one, verdict: "theirs", holder: share.piece.username };
+    // A person's with no work of theirs to hold it; another's work this read does not have.
+    return { ...one, verdict: share.elsewhere ? "theirs" : "none", holder: share.elsewhere ? logins.usernameOf(share.userId) : logins.nameOf(share.userId) };
   };
   return {
     homes,
@@ -821,10 +854,10 @@ async function ruledReviewOf(app: AppContext, input: {
     })),
     salesNetMills: netOf(kept),
     settle,
-    creditedToPerson: (transactionId) => {
-      const home = homes.get(transactionId);
-      return home !== undefined && (home.kind === "shift" || home.kind === "visit") && home.shares.length > 0;
-    },
+    creditedToPerson: (transactionId) => (creditOf.get(transactionId)?.shares.length ?? 0) > 0,
+    withoutShift: own.filter((sale) => !oldCounts(sale)).map((sale) => ({
+      sale, held: false, verdict: "none", holder: logins.nameOf(userId), lastWriter: lastWriters.get(sale.transactionId) ?? null,
+    })),
   };
 }
 
@@ -1055,12 +1088,12 @@ export async function computeShiftReview(
     })
     : null;
   if (byRule !== null) listed.push(...byRule.extra);
-  const factIds = [...new Set([...listed.map((one) => one.sale), ...before.sales, ...bought].map((sale) => sale.transactionId))];
+  const withoutShift = byRule?.withoutShift ?? [];
+  const factIds = [...new Set([...listed.map((one) => one.sale), ...before.sales, ...bought, ...withoutShift.map((one) => one.sale)].map((sale) => sale.transactionId))];
   const facts = new Map((await listSaleFacts(app.db, { transactionIds: factIds })).map((fact) => [fact.transactionId, fact]));
   const beforeSales = salesBeforeShiftOf(query.userId, before, facts);
   const laterSales = await salesAfterShift(app, { userId: query.userId, start, end, bought, facts, now });
-  const rowOf = (raw: SettledSale): TeamShiftReviewResponse["sales"][number] => {
-    const one = byRule === null ? raw : byRule.settle(raw);
+  const rowAsSettled = (one: SettledSale): TeamShiftReviewResponse["sales"][number] => {
     const fact = facts.get(one.sale.transactionId);
     const writers = fact?.writers ?? [];
     const home = byRule?.homes.get(one.sale.transactionId);
@@ -1090,6 +1123,7 @@ export async function computeShiftReview(
       ...(home === undefined ? {} : { home: { kind: home.kind, text: SALE_HOME_REASON_TEXT[home.reason as SaleHomeReason] ?? home.reason } }),
     };
   };
+  const rowOf = (raw: SettledSale) => rowAsSettled(byRule === null ? raw : byRule.settle(raw));
 
   // A minute counts as active when any of the shift's pages had an action in it.
   const activity = new Map<number, boolean>();
@@ -1141,7 +1175,7 @@ export async function computeShiftReview(
     aiUse: aiUse.map((use) => ({ pageLabel: labelOf.get(use.pageId) ?? String(use.pageId), feature: use.feature, count: use.count })),
     unarchived: sends.filter((send) => !send.inArchive && !send.inSocket).length,
     deleted: sends.filter((send) => send.deleted).length,
-    ...(byRule === null ? {} : { ruleFrom: rule!.from }),
+    ...(byRule === null ? {} : { ruleFrom: rule!.from, withoutShiftSales: withoutShift.map(rowAsSettled) }),
     serverNow: now.toISOString(),
   };
   return { review, pagesLeftOut };

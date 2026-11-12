@@ -194,10 +194,9 @@ describe("teamShiftMoney by the one rule", () => {
     expect(byRule.result.team.salesNetMills).toBe(10_000);
     // Not dropped: «вне смен», the owner's to decide.
     const outside = outsideByRule({
-      from: at("2026-11-04T00:00:00Z"), to: NOW.getTime(), sales, rule: decided, oldWay: [],
-      counted: new Set([...byRule.oldCounted, ...byRule.credited]), heldByRuled: new Set(sales.map((one) => one.transactionId)), usernames: new Map(),
+      from: at("2026-11-04T00:00:00Z"), to: NOW.getTime(), sales, rule: decided, oldWay: [], credits: byRule.credits, heldByRuled: new Set(sales.map((one) => one.transactionId)),
     });
-    expect(outsideMoneyByRule(outside, ["2026-11-04"])).toMatchObject({ decideNetMills: 30_000, nobodyNetMills: 0, potNetMills: 0, visitsNetMills: 0 });
+    expect(outsideMoneyByRule(outside, ["2026-11-04"])).toMatchObject({ decideNetMills: 30_000, nobodyNetMills: 0, potNetMills: 0, visitsNetMills: 0, personNetMills: 0 });
 
     const slotted = ruleOf(sales, [homeOf(mine, "shift", [{ userId: 1, shift: first }]), homeOf(shared, "shift", [{ userId: 2, shift: second }])]);
     const bySlot = teamShiftMoney({ days: 7, now: NOW, shifts, lastWriters: new Map(), firstActivity: LONG_AGO, rule: slotted });

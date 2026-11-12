@@ -116,11 +116,11 @@ describe("the report's window and sales added by hand", () => {
     expect(lineAmount({ group: "near", netMills: 4_000, shareMills: 0, homeKind: "nobody", statement: "mine", alreadyIn: false })).toEqual({ amountMills: 4_000, disputed: false });
   });
 
-  it("counts a sale added by hand only with «моё»: plainly when nobody's, disputed when the rule or another report gives it away", () => {
+  it("counts a sale added by hand only with «моё»: plainly when nobody's; disputed — claimed, counting nothing — when the rule or another report gives it away", () => {
     const base = { group: "mine" as const, netMills: 120_000, shareMills: 0, alreadyIn: false, claimed: true };
     expect(lineAmount({ ...base, homeKind: "nobody", statement: "mine" })).toEqual({ amountMills: 120_000, disputed: false });
-    expect(lineAmount({ ...base, homeKind: "shift", statement: "mine" })).toEqual({ amountMills: 120_000, disputed: true });
-    expect(lineAmount({ ...base, homeKind: "nobody", statement: "mine", otherReport: true })).toEqual({ amountMills: 120_000, disputed: true });
+    expect(lineAmount({ ...base, homeKind: "shift", statement: "mine" })).toEqual({ amountMills: 0, disputed: true, claimedMills: 120_000 });
+    expect(lineAmount({ ...base, homeKind: "nobody", statement: "mine", otherReport: true })).toEqual({ amountMills: 0, disputed: true, claimedMills: 120_000 });
     expect(lineAmount({ ...base, homeKind: "nobody", statement: null })).toEqual({ amountMills: 0, disputed: false });
     const added = claimedSale(sale({ transactionId: 22, source: "before", home: { kind: "shift", reason: "last_writer", pot: null, shares: [{ userId: OTHER, workRef: "9:x", shiftId: 7, mills: 120_000 }] } }), context(), false);
     expect(added).toMatchObject({ group: "mine", added: true, claimed: true, toUserId: OTHER, shareMills: 0 });
@@ -135,10 +135,10 @@ describe("what a line counts", () => {
     expect(lineAmount({ ...base, group: "mine", statement: "share" })).toEqual({ amountMills: 20_000, disputed: false });
     expect(lineAmount({ ...base, netMills: 7_201, group: "mine", statement: "share" }).amountMills).toBe(3_601);
   });
-  it("counts «моё» on a near sale whole: plainly when nobody's, disputed when someone else's", () => {
+  it("counts «моё» on a near sale whole when nobody's; when someone else's it is disputed: claimed, counting nothing until settled", () => {
     expect(lineAmount({ ...base, shareMills: 0, homeKind: "nobody", group: "near", statement: "mine" })).toEqual({ amountMills: 40_000, disputed: false });
-    expect(lineAmount({ ...base, shareMills: 0, homeKind: "shift", group: "near", statement: "mine" })).toEqual({ amountMills: 40_000, disputed: true });
-    expect(lineAmount({ ...base, shareMills: 0, homeKind: "pot", group: "near", statement: "mine" })).toEqual({ amountMills: 40_000, disputed: true });
+    expect(lineAmount({ ...base, shareMills: 0, homeKind: "shift", group: "near", statement: "mine" })).toEqual({ amountMills: 0, disputed: true, claimedMills: 40_000 });
+    expect(lineAmount({ ...base, shareMills: 0, homeKind: "pot", group: "near", statement: "mine" })).toEqual({ amountMills: 0, disputed: true, claimedMills: 40_000 });
     expect(lineAmount({ ...base, shareMills: 0, group: "near", statement: null })).toEqual({ amountMills: 0, disputed: false });
   });
   it("counts nothing of a sale another report holds", () => {

@@ -228,7 +228,8 @@ describe("the shift report: who reads, who writes", () => {
     const taken = await asSession("anna", "PUT", `/api/v1/shift-reports/${shiftA}/lines/${open}`, { statement: "mine", note: "фан мой, договорились вчера" });
     expect(taken.statusCode, taken.body).toBe(200);
     const report = shiftReportResponseSchema.parse((await asSession("anna", "GET", `/api/v1/shift-reports/${shiftA}`)).json());
-    expect(report.view?.lines.find((line) => line.transactionId === open)).toMatchObject({ group: "mine", added: true, statement: "mine", amountMills: 16_000 });
+    // Its home is not computed yet: the «моё» is disputed — it claims the net and counts nothing until settled (review R2b-2).
+    expect(report.view?.lines.find((line) => line.transactionId === open)).toMatchObject({ group: "mine", added: true, statement: "mine", amountMills: 0, claimedMills: 16_000, disputed: true });
     expect(report.view?.lines.some((line) => line.transactionId === closed)).toBe(false);
     // A colleague of the page cannot take it for the person, nor list it.
     expect((await asSession("bella", "GET", `/api/v1/shift-reports/${shiftA}/claimable`)).statusCode).toBe(403);

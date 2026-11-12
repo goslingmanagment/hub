@@ -20,17 +20,21 @@ import {
 } from "./chatter-shifts.ts";
 import { perHour, saleKindOf, settleSale } from "./chatter-stats.ts";
 import {
+  LOGINS_ALONE,
   RULED_SALES_LEAD_MS,
-  creditedPiece,
+  homeCredit,
   openWindowFrom,
-  outsideHomeOf,
+  ownMoneyShares,
   piecesByUser,
+  readPeopleLogins,
   readScreenHomes,
   readScreensRule,
   ruledSale,
   ruledSalesFrom,
   ruledWork,
+  type HomeCredit,
   type OutsideHome,
+  type PeopleLogins,
   type ScreenHome,
   type ScreensRule,
 } from "./sale-rule-screens.ts";
@@ -54,10 +58,12 @@ import { reportDateOfShift } from "./shift-rows.ts";
  *
  * From the screens' switch on (sale-rule-screens.ts), a shift of a report date
  * of the switch's day or later is the rule's: its money is what `sale_homes`
- * credits it (a sale at a junction once: the last writer's, the slot's, or the
- * owner's to decide), its day is its report date; `outside` then has the
- * rule's lines too — the pot, a PPV waiting for its sender, the owner's
- * decision. Off, every number is the old count.
+ * credits it (`homeCredit`: a sale at a junction once: the last writer's, the
+ * slot's, or the owner's to decide; a share on its person's shift by any of
+ * their logins), its day is its report date; `outside` then has the rule's
+ * lines too — a person's with no work to hold it (also in their row, on the
+ * sale's day), the pot, a PPV waiting for its sender, the owner's decision.
+ * Off, every number is the old count.
  */
 
 const DAY_MS = 86_400_000;
@@ -197,13 +203,15 @@ export function shiftSalesWindow(input: { days: number; now: Date; until?: strin
 /**
  * The screens' view of the one rule for `teamShiftMoney`: from `from` on (sale-rule-screens.ts), a shift's money is
  * what `homes` credit it. `sales` — every sale a home may credit to a shift of the read, by id (read back by the PPV's
- * wait); `visits` — everyone's look-ins, for the homes that are theirs.
+ * wait); `visits` — everyone's look-ins, for the homes that are theirs; `logins` — whose each login is (absent — each
+ * login its own person).
  */
 export interface RuledShiftsInput {
   rule: ScreensRule;
   homes: ReadonlyMap<number, ScreenHome>;
   sales: ReadonlyMap<number, ShiftSale>;
   visits: readonly PersonPiece[];
+  logins?: PeopleLogins | undefined;
 }
 
 /** A shift's money as the screen counts it, for the screen and the comparison («было и стало»). */
@@ -219,37 +227,73 @@ export interface ShiftMoney extends HeldShift {
   overlapNetMills: number;
 }
 
+/** What the rule credits for «Смены» (`ruledCredits`). */
+export interface RuledCredits {
+  /** The sales an old shift counts (`settleSale` not a colleague's): the rule credits nothing of them. */
+  oldCounted: Set<number>;
+  /** Each ruled shift's credits, each sale with its share of the net. */
+  credits: Map<HeldShift, ShiftSale[]>;
+  /** The sales a ruled shift is credited a share of. */
+  credited: Set<number>;
+  /** Every sale with a home but those an old shift counts: whom and what its home credits (`homeCredit`). */
+  homes: Map<number, HomeCredit<PersonPiece>>;
+}
+
 /**
- * Of the old shifts' sales, the ones they count (`settleSale` not a colleague's), and of the rule's homes, what each
- * ruled shift is credited — the sales an old shift counts aside. Pure.
+ * Of the old shifts' sales, the ones they count (`settleSale` not a colleague's), and of the rule's homes whom and what
+ * each credits (`homeCredit`, on everyone's ruled shifts and look-ins) — the sales an old shift counts aside. Pure.
  */
 export function ruledCredits(input: {
   shifts: readonly HeldShift[];
   ruled: (shift: HeldShift) => boolean;
   settled: (userId: number, sale: ShiftSale) => "mine" | "theirs" | "both";
   rule: RuledShiftsInput;
-}): { oldCounted: Set<number>; credits: Map<HeldShift, ShiftSale[]>; credited: Set<number> } {
+}): RuledCredits {
   const oldCounted = new Set<number>();
   for (const shift of input.shifts) {
     if (input.ruled(shift)) continue;
     for (const sale of shift.held) if (input.settled(shift.userId, sale) !== "theirs") oldCounted.add(sale.transactionId);
   }
-  const byUser = piecesByUser(input.shifts);
+  const pieces = piecesByUser<PersonPiece>([...input.shifts, ...input.rule.visits]);
+  const shifts = new Set<PersonPiece>(input.shifts);
+  const counts = (piece: PersonPiece) => ruledWork(input.rule.rule, piece.work);
+  const logins = input.rule.logins ?? LOGINS_ALONE;
   const credits = new Map<HeldShift, ShiftSale[]>();
   const credited = new Set<number>();
+  const homes = new Map<number, HomeCredit<PersonPiece>>();
   for (const [transactionId, home] of input.rule.homes) {
-    if (home.kind !== "shift" || oldCounted.has(transactionId)) continue;
     const sale = input.rule.sales.get(transactionId);
-    if (sale === undefined) continue;
-    for (const share of home.shares) {
-      const shift = creditedPiece(byUser, share);
-      if (shift === null || !input.ruled(shift)) continue;
+    if (sale === undefined || oldCounted.has(transactionId)) continue;
+    const credit = homeCredit({ home, sale, pieces, logins, counts });
+    homes.set(transactionId, credit);
+    for (const share of credit.shares) {
+      if (share.piece === null || !shifts.has(share.piece)) continue;
+      const shift = share.piece as HeldShift;
       credits.set(shift, [...(credits.get(shift) ?? []), { ...sale, netMills: share.mills }]);
       credited.add(transactionId);
     }
   }
   for (const list of credits.values()) list.sort((a, b) => a.occurredAt.getTime() - b.occurredAt.getTime() || a.transactionId - b.transactionId);
-  return { oldCounted, credits, credited };
+  return { oldCounted, credits, credited, homes };
+}
+
+/** A login's money the rule gives its person with no work to hold it (`ownMoneyShares`), on the sale's day. */
+export interface WithoutShiftCredit {
+  userId: number;
+  day: string;
+  /** The sale with the share's mills as its net. */
+  sale: ShiftSale;
+}
+
+/** Every share of the read the rule gives a person with no work of theirs to hold it. Pure. */
+export function withoutShiftCredits(homes: ReadonlyMap<number, HomeCredit<PersonPiece>>, rule: RuledShiftsInput): WithoutShiftCredit[] {
+  const out: WithoutShiftCredit[] = [];
+  for (const [transactionId, credit] of homes) {
+    const sale = rule.sales.get(transactionId);
+    if (sale === undefined) continue;
+    for (const share of ownMoneyShares(rule.rule, sale, credit)) out.push({ userId: share.userId, day: share.day, sale: { ...sale, netMills: share.mills } });
+  }
+  return out.sort((a, b) => a.sale.occurredAt.getTime() - b.sale.occurredAt.getTime() || a.sale.transactionId - b.sale.transactionId);
 }
 
 /**
@@ -273,12 +317,13 @@ export interface TeamShiftMoneyInput {
   rule?: RuledShiftsInput | undefined;
 }
 
-/** `teamShiftMoney` and each shift's money behind it. Pure. */
+/** `teamShiftMoney` and each shift's money behind it, and what the rule credits. Pure. */
 export function teamShiftMoneyOf(input: TeamShiftMoneyInput): {
   result: Omit<TeamShiftSalesResponse, "serverNow" | "outside">;
   money: ShiftMoney[];
-  oldCounted: ReadonlySet<number>;
-  credited: ReadonlySet<number>;
+  credits: RuledCredits;
+  /** The current window's money of logins with no work to hold it (`withoutShiftCredits`). */
+  withoutShift: WithoutShiftCredit[];
 } {
   const window = shiftSalesWindow(input);
   const { previousFrom, previousTo, dates } = window;
@@ -300,9 +345,13 @@ export function teamShiftMoneyOf(input: TeamShiftMoneyInput): {
   const ruledIn = (shift: HeldShift, days: ReadonlySet<string>, to: number) => days.has(reportDateOfShift(shift.work)) && shift.work.startedAt < to;
   const isCurrent = (shift: HeldShift) => (ruled(shift) ? ruledIn(shift, currentDates, window.to) : inWindow(shift.work));
   const isPrevious = (shift: HeldShift) => (ruled(shift) ? ruledIn(shift, previousDates, previousTo) : inPrevious(shift.work));
-  const byRule = ruleInput === undefined
-    ? { oldCounted: new Set<number>(), credits: new Map<HeldShift, ShiftSale[]>(), credited: new Set<number>() }
+  const byRule: RuledCredits = ruleInput === undefined
+    ? { oldCounted: new Set<number>(), credits: new Map<HeldShift, ShiftSale[]>(), credited: new Set<number>(), homes: new Map() }
     : ruledCredits({ shifts: input.shifts, ruled, settled, rule: ruleInput });
+  // A share no work of its person counts: the login's own money of the sale's day, in its row, never a shift's.
+  const withoutShift = ruleInput === undefined ? [] : withoutShiftCredits(byRule.homes, ruleInput);
+  const withoutShiftNow = withoutShift.filter((one) => currentDates.has(one.day) && one.sale.occurredAt.getTime() < window.to);
+  const withoutShiftBefore = withoutShift.filter((one) => previousDates.has(one.day) && one.sale.occurredAt.getTime() < previousTo);
 
   const money: ShiftMoney[] = input.shifts
     .filter((shift) => isCurrent(shift) || isPrevious(shift))
@@ -329,10 +378,11 @@ export function teamShiftMoneyOf(input: TeamShiftMoneyInput): {
   const current = money.filter((one) => one.current);
   const before = money.filter((one) => !one.current);
 
-  const totalsOf = (list: readonly Money[]): Totals => {
+  const totalsOf = (list: readonly Money[], extra: readonly WithoutShiftCredit[] = []): Totals => {
     const workedMinutes = list.reduce((sum, one) => sum + one.work.workedMinutes, 0);
-    const salesNetMills = list.reduce((sum, one) => sum + one.salesNetMills, 0);
-    return { shifts: list.length, workedMinutes, salesNetMills, sales: list.reduce((sum, one) => sum + one.own.length, 0), perHourMills: perHour(salesNetMills, workedMinutes) };
+    const salesNetMills = list.reduce((sum, one) => sum + one.salesNetMills, 0) + netOf(extra.map((one) => one.sale));
+    const sales = list.reduce((sum, one) => sum + one.own.length, 0) + extra.length;
+    return { shifts: list.length, workedMinutes, salesNetMills, sales, perHourMills: perHour(salesNetMills, workedMinutes) };
   };
   // The team counts a sale once, on the earliest shift that holds it; a ruled shift's share of a split is its own part.
   const teamOf = (list: readonly Money[]) => {
@@ -365,15 +415,20 @@ export function teamShiftMoneyOf(input: TeamShiftMoneyInput): {
 
   const people = new Map<number, string>();
   for (const one of money) people.set(one.userId, one.username);
+  const logins = ruleInput?.logins ?? LOGINS_ALONE;
+  for (const one of [...withoutShiftNow, ...withoutShiftBefore]) if (!people.has(one.userId)) people.set(one.userId, logins.usernameOf(one.userId));
   const chatters = [...people].map(([userId, username]) => {
     const mine = current.filter((one) => one.userId === userId);
+    const ownNow = withoutShiftNow.filter((one) => one.userId === userId);
+    const ownBefore = withoutShiftBefore.filter((one) => one.userId === userId);
     return {
       userId,
       username,
-      ...totalsOf(mine),
+      ...totalsOf(mine, ownNow),
       overlapNetMills: mine.reduce((sum, one) => sum + one.overlapNetMills, 0),
-      previous: covered(input.firstActivity.get(userId)?.getTime()) ? totalsOf(before.filter((one) => one.userId === userId)) : null,
-      daily: dailyOf(mine, (_, ofDay) => ofDay.reduce((sum, one) => sum + one.salesNetMills, 0)),
+      previous: covered(input.firstActivity.get(userId)?.getTime()) ? totalsOf(before.filter((one) => one.userId === userId), ownBefore) : null,
+      daily: dailyOf(mine, (date, ofDay) => ofDay.reduce((sum, one) => sum + one.salesNetMills, 0)
+        + netOf(ownNow.filter((one) => one.day === date).map((one) => one.sale))),
     };
   }).sort((a, b) => b.salesNetMills - a.salesNetMills || b.workedMinutes - a.workedMinutes || a.username.localeCompare(b.username));
 
@@ -392,23 +447,25 @@ export function teamShiftMoneyOf(input: TeamShiftMoneyInput): {
       sales: one.own.length,
     })),
   };
-  return { result, money, oldCounted: byRule.oldCounted, credited: byRule.credited };
+  return { result, money, credits: byRule, withoutShift: withoutShiftNow };
 }
 
-/** A sale of the window outside the shifts' money, with the line it is shown on. */
+/** A sale of the window, or its part, outside the shifts' money, with the line it is shown on. */
 export interface OutsideSale {
+  /** The sale; its net — the part on this line (a split's share). */
   sale: ShiftSale;
   home: OutsideHome;
-  /** A look-in's person. */
+  /** A look-in's person; a person's with no work to hold it: their name. */
   visitBy: string | null;
 }
 
 /**
  * The window's sales outside the shifts' money with the rule on. One the rule places — of the switch's day or later,
- * or held by a ruled shift — is where its home is when that is no person's shift: a look-in, the pot, a PPV waiting
- * for its sender, the owner's decision, nobody. Any other as before: no shift holds it, a look-in's when its person
- * last wrote, else nobody's (`oldWay`, the old settling of the window's unheld sales). A sale a shift counts — old or
- * ruled — is never here, nor one whose home is a person's shift (counted on it, in its own window). Pure.
+ * held by a ruled shift, or credited to one — is where its home puts each part (`homeCredit`) that is no person's
+ * shift: a look-in, a person with no work to hold it (by name), the pot, a PPV waiting for its sender, the owner's
+ * decision, nobody (the rest of a «моё» below the net too). Any other as before: no shift holds it, a look-in's when its
+ * person last wrote, else nobody's (`oldWay`, the old settling of the window's unheld sales). A sale an old shift
+ * counts is never here, nor a part on a person's shift (counted on it, in its own window). Pure.
  */
 export function outsideByRule(input: {
   from: number;
@@ -416,32 +473,40 @@ export function outsideByRule(input: {
   sales: readonly ShiftSale[];
   rule: RuledShiftsInput;
   oldWay: ReadonlyArray<{ sale: ShiftSale; visit: PersonPiece | null }>;
-  /** The sales a shift counts, old or ruled. */
-  counted: ReadonlySet<number>;
+  /** What the rule credits (`ruledCredits`). */
+  credits: Pick<RuledCredits, "oldCounted" | "credited" | "homes">;
   /** The sales a ruled shift holds. */
   heldByRuled: ReadonlySet<number>;
-  usernames: ReadonlyMap<number, string>;
 }): OutsideSale[] {
   const oldWay = new Map(input.oldWay.map((one) => [one.sale.transactionId, one]));
+  const logins = input.rule.logins ?? LOGINS_ALONE;
   const out: OutsideSale[] = [];
   for (const sale of input.sales) {
     const at = sale.occurredAt.getTime();
-    if (at < input.from || at >= input.to || input.counted.has(sale.transactionId)) continue;
-    const home = input.rule.homes.get(sale.transactionId);
-    if (home === undefined || !(ruledSale(input.rule.rule, sale) || input.heldByRuled.has(sale.transactionId))) {
-      const old = oldWay.get(sale.transactionId);
+    const id = sale.transactionId;
+    if (at < input.from || at >= input.to || input.credits.oldCounted.has(id)) continue;
+    const credit = input.credits.homes.get(id);
+    if (credit === undefined || !(ruledSale(input.rule.rule, sale) || input.heldByRuled.has(id) || input.credits.credited.has(id))) {
+      const old = oldWay.get(id);
       if (old !== undefined) out.push({ sale, home: old.visit === null ? "nobody" : "visit", visitBy: old.visit?.username ?? null });
+      // No home for it (its page is not one the rule reads): a ruled shift that holds it counts only homes — nobody's.
+      else if (credit === undefined && input.heldByRuled.has(id)) out.push({ sale, home: "nobody", visitBy: null });
       continue;
     }
-    const line = outsideHomeOf(home);
-    if (line === null) continue;
-    const visitor = line === "visit" ? home.shares[0]?.userId : undefined;
-    out.push({ sale, home: line, visitBy: visitor === undefined ? null : input.usernames.get(visitor) ?? `hub:${visitor}` });
+    for (const share of credit.shares) {
+      const part = { ...sale, netMills: share.mills };
+      if (share.piece !== null) {
+        if (share.piece.work.kind === "visit") out.push({ sale: part, home: "visit", visitBy: share.piece.username });
+      } else if (!share.elsewhere) {
+        out.push({ sale: part, home: "person", visitBy: logins.nameOf(share.userId) });
+      }
+    }
+    if (credit.outside !== null) out.push({ sale: { ...sale, netMills: credit.outside.mills }, home: credit.outside.line, visitBy: null });
   }
   return out;
 }
 
-const RULED_LINES = ["pot", "waiting", "decide"] as const;
+const RULED_LINES = ["person", "pot", "waiting", "decide"] as const;
 
 /** `outsideMoney` with the rule's lines beside the look-ins and nobody's: the pot, a PPV waiting, the owner's decision. Pure. */
 export function outsideMoneyByRule(settled: readonly OutsideSale[], dates: readonly string[]): TeamShiftSalesResponse["outside"] {
@@ -450,10 +515,13 @@ export function outsideMoneyByRule(settled: readonly OutsideSale[], dates: reado
     return {
       visitsNetMills: sumOf("visit"),
       nobodyNetMills: sumOf("nobody"),
-      ...Object.fromEntries(RULED_LINES.map((home) => [`${home}NetMills`, sumOf(home)])) as { potNetMills: number; waitingNetMills: number; decideNetMills: number },
+      ...Object.fromEntries(RULED_LINES.map((home) => [`${home}NetMills`, sumOf(home)])) as {
+        personNetMills: number; potNetMills: number; waitingNetMills: number; decideNetMills: number;
+      },
     };
   };
-  const total = (one: ReturnType<typeof of>) => one.visitsNetMills + one.nobodyNetMills + one.potNetMills + one.waitingNetMills + one.decideNetMills;
+  const total = (one: ReturnType<typeof of>) => one.visitsNetMills + one.nobodyNetMills + one.personNetMills + one.potNetMills + one.waitingNetMills
+    + one.decideNetMills;
   const labels = [...new Set(settled.map((one) => one.sale.pageLabel))];
   return {
     ...of(settled),
@@ -497,6 +565,8 @@ export interface TeamShiftSalesRead {
   response: TeamShiftSalesResponse;
   money: ShiftMoney[];
   outside: OutsideSale[];
+  /** The window's money the rule gives logins' people with no work to hold it (in their rows and `outside`). */
+  withoutShift: WithoutShiftCredit[];
   rule: ScreensRule | null;
   homes: ReadonlyMap<number, ScreenHome>;
 }
@@ -541,6 +611,7 @@ export async function teamShiftSalesRead(
       response: { ...result, outside: outsideMoney(oldWay, window.dates), serverNow: now.toISOString() },
       money,
       outside: oldWay.map((one) => ({ sale: one.sale, home: one.visit === null ? "nobody" : "visit", visitBy: one.visit?.username ?? null })),
+      withoutShift: [],
       rule,
       homes: new Map(),
     };
@@ -556,23 +627,24 @@ export async function teamShiftSalesRead(
     now,
     live: rule.live,
   });
-  const ruleInput: RuledShiftsInput = { rule, homes, sales: new Map(allSales.map((sale) => [sale.transactionId, sale])), visits };
-  const { result, money, oldCounted, credited } = teamShiftMoneyOf({ days, now, until, shifts: held, lastWriters, firstActivity, rule: ruleInput });
-  const usernames = new Map([...people].map(([userId, person]) => [userId, person.username]));
+  const ruleInput: RuledShiftsInput = {
+    rule, homes, sales: new Map(allSales.map((sale) => [sale.transactionId, sale])), visits, logins: await readPeopleLogins(db),
+  };
+  const { result, money, credits, withoutShift } = teamShiftMoneyOf({ days, now, until, shifts: held, lastWriters, firstActivity, rule: ruleInput });
   const outsideSales = outsideByRule({
     from: window.from,
     to: window.to,
     sales,
     rule: ruleInput,
     oldWay,
-    counted: new Set([...oldCounted, ...credited]),
+    credits,
     heldByRuled: new Set(held.filter((shift) => ruledWork(rule, shift.work)).flatMap((shift) => shift.held.map((sale) => sale.transactionId))),
-    usernames,
   });
   return {
     response: { ...result, outside: outsideMoneyByRule(outsideSales, window.dates), ruleFrom: rule.from, serverNow: now.toISOString() },
     money,
     outside: outsideSales,
+    withoutShift,
     rule,
     homes,
   };

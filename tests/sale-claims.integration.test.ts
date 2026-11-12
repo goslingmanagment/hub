@@ -234,7 +234,8 @@ describe("claims of a sale: who answers, who decides, who sees", () => {
       expect((await asSession(who, "POST", "/api/v1/sale-disputes/decide", { transactionId: Number(sale), outcome: "first" })).statusCode).toBe(403);
     }
     const dispute = saleDisputeResponseSchema.parse((await asSession("boss", "GET", `/api/v1/sale-disputes/${sale}`)).json());
-    expect(dispute.parties.map((one) => [one.userId, one.role, one.countedMills])).toEqual([[anna, "first", 16_001], [bella, "second", null]]);
+    // anna's «моё» counts nothing while it is disputed: it claims the net (review R2b-2).
+    expect(dispute.parties.map((one) => [one.userId, one.role, one.countedMills, one.claimedMills])).toEqual([[anna, "first", 0, 16_001], [bella, "second", null, null]]);
     expect(dispute.outcomes.map((one) => one.outcome)).toEqual(["first", "second", "half", "nobody"]);
     // «Пополам» splits 16.001 as the rule does: the odd mill to the lower user id.
     const half = dispute.outcomes.find((one) => one.outcome === "half")!.gives;

@@ -250,6 +250,22 @@ export async function listUnlinkedLoginRows(db: Database): Promise<PersonLoginRo
   return result.rows.map(loginOf);
 }
 
+/** Every Hub login with its person (null — no person holds it) and the person's name: whose a share of a sale is. */
+export async function listLoginPeople(db: Database): Promise<Array<{ userId: number; username: string; personId: number | null; displayName: string | null }>> {
+  const result = await db.execute<Row>(sql`
+    select u.id as user_id, u.username, l.person_id, p.display_name
+      from users u
+      left join person_logins l on l.user_id = u.id
+      left join people p on p.id = l.person_id
+     order by u.id`);
+  return result.rows.map((row) => ({
+    userId: Number(row.user_id),
+    username: String(row.username),
+    personId: nullableNumber(row.person_id),
+    displayName: row.display_name === null || row.display_name === undefined ? null : String(row.display_name),
+  }));
+}
+
 /** The person holding a login, if any. */
 export async function findPersonIdOfLogin(db: Database, userId: number): Promise<number | null> {
   const result = await db.execute<Row>(sql`select person_id from person_logins where user_id = ${userId}`);

@@ -62,6 +62,8 @@ export const saleDisputePartySchema = z.object({
   says: z.array(z.string()),
   /** What their handed-in report counts of the sale now; null — no report holds it. */
   countedMills: mills.nullable(),
+  /** What the party's handed-in report claims while it counts nothing, disputed (review R2b-2); null — none. */
+  claimedMills: mills.nullable().default(null),
   /** Their shift whose report it is; null — none. */
   shiftId: intId.nullable(),
 });
@@ -82,6 +84,11 @@ export const saleDisputeResponseSchema = z.object({
   })),
   /** The owner's decision already standing; null — none. */
   decision: z.object({ outcome: z.string(), note: z.string().nullable(), decidedAt: isoTimestamp, by: z.string().nullable() }).nullable(),
+  /**
+   * The reports handed in Hub that hold the sale (review R2b-3d): each gets a new version with the decision. A report
+   * that is a post in «Отчётность» is recomputed by nobody: the decision is read by the next report.
+   */
+  reports: z.array(z.object({ userId: intId, name: z.string(), shiftId: intId, reportDate: z.string() })).default([]),
   serverNow: isoTimestamp,
 });
 
@@ -171,7 +178,7 @@ export const saleDecisionsUnlinkedResponseSchema = z.object({
     words: z.string(),
     saidBy: z.string().nullable(),
     shares: z.array(z.object({ userId: intId, name: z.string(), percent: z.number().int() })),
-    kind: z.enum(["split", "nobody", "pot"]),
+    kind: z.enum(["split", "nobody", "pot", "off_platform"]),
     candidates: z.array(saleSchema),
   })),
   serverNow: isoTimestamp,
@@ -198,7 +205,7 @@ export const agentSaleClaimsResponseSchema = z.object({
     id: intId,
     transactionId: intId.nullable(),
     pageLabel: z.string().nullable(),
-    kind: z.enum(["split", "nobody", "pot"]),
+    kind: z.enum(["split", "nobody", "pot", "off_platform"]),
     shares: z.array(z.object({ person: z.string().nullable(), name: z.string(), percent: z.number().int() })),
     pot: z.string().nullable(),
     outcome: z.string(),

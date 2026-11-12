@@ -108,6 +108,8 @@ export * from "./routes-sale-claims.ts";
 export * from "./routes-sale-chain.ts";
 // Стирание фана: the ledger's feed of the erasures Hub completed.
 export * from "./routes-erasures.ts";
+// «Чья продажа» «со слов» through Hub (review R2b-3).
+export * from "./routes-sale-decisions.ts";
 
 export * from "./routes-ofapi-banned-words.ts";
 export * from "./routes-model-applications.ts";
