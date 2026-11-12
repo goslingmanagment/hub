@@ -17,6 +17,7 @@ import { formatAiUsd, formatCount, formatDay } from "@agency_hub_core/ui/format"
 import { ruPlural } from "@agency_hub_core/ui/plural";
 import { hubErrorStatus } from "@agency_hub_core/ui/hubClient";
 import { kernel } from "@/shared/hub";
+import { PasswordWayIn } from "@/shared/PasswordWayIn";
 import { ScreenHeader } from "@/shared/ScreenHeader";
 import { useMe } from "@/shared/useMe";
 import "./account.css";
@@ -27,10 +28,23 @@ import "./account.css";
  * where they are signed in, their password, what their AI work cost. Every
  * read and change is the session's own (any live session; Hub scopes it to the
  * person): nothing here an owner could not also open about themselves. A
- * narrow session (from the extension) never gets here: the name menu does not
- * offer it and the address leads home (routes.tsx).
+ * narrow session (from the extension, no password) reads none of it: one panel
+ * with the way to the password instead (NARROW_WEB_SESSION_PASSWORD_ONLY).
  */
 export function AccountScreen() {
+  const { narrow } = useMe();
+  if (narrow) {
+    return (
+      <>
+        <ScreenHeader title="Аккаунт и устройства" />
+        <div className="wb-content account-grid">
+          <Card title="Вы вошли из расширения">
+            <PasswordWayIn text="Устройства, пароль и расходы ИИ открываются после входа на сайте с паролем." />
+          </Card>
+        </div>
+      </>
+    );
+  }
   return (
     <>
       <ScreenHeader title="Аккаунт и устройства" />

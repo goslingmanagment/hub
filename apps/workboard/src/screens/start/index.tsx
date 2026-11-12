@@ -5,8 +5,10 @@ import { PAYOUT_DETAILS_MAX_LENGTH } from "@agency_hub_core/contracts";
 import { Bar, Button, Card, EmptyState, ErrorState, LinkButton, Skeleton, SkeletonText, Textarea, cx } from "@agency_hub_core/ui";
 import { CHATTER_SITE_ORIGIN } from "@agency_hub_core/ui/sites";
 import { copyText } from "@/screens/payouts/copy";
+import { PasswordWayIn } from "@/shared/PasswordWayIn";
 import { ScreenHeader } from "@/shared/ScreenHeader";
 import { useAccountStart, useSetPayoutDetails } from "@/shared/start";
+import { useMe } from "@/shared/useMe";
 import { firstName, leftWords, pagesWords, shiftRules, stepWords } from "./words.js";
 import "./start.css";
 
@@ -158,8 +160,29 @@ function StepMore({ id, done, data }: { id: PersonStartStepId; done: boolean; da
   return null;
 }
 
-/** Where payouts go: the person's own words, saved as written; the step closes on save. */
+/**
+ * Where payouts go: the person's own words, saved as written; the step closes on save. A narrow session (opened from
+ * the extension, no password) shows them and the way to the password, never the form.
+ */
 function Payout({ data }: { data: AccountStartResponse }) {
+  const { narrow } = useMe();
+  if (narrow) return <PayoutRead data={data} />;
+  return <PayoutEdit data={data} />;
+}
+
+function PayoutRead({ data }: { data: AccountStartResponse }) {
+  const saved = data.payoutDetails;
+  return (
+    <div className="start-payout">
+      {saved === null ? <p className="start-text">Ещё не указано.</p> : <p className="start-payout__value">{saved.text}</p>}
+      <div className="start-payout__foot">
+        <PasswordWayIn text={saved === null ? "Чтобы указать, войдите на сайте с паролем." : undefined} />
+      </div>
+    </div>
+  );
+}
+
+function PayoutEdit({ data }: { data: AccountStartResponse }) {
   const saved = data.payoutDetails;
   const save = useSetPayoutDetails();
   const [editing, setEditing] = useState(false);

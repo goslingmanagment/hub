@@ -106,10 +106,15 @@ export async function customLeads(db: Database): Promise<Array<{ userId: number;
   return listUsersWithPersonRight(db, "customs_lead");
 }
 
-/** The viewer of a human principal: their role and pages, and whether their person «ведёт кастомы». */
+/**
+ * The viewer of a human principal: their role and pages, and whether their person «ведёт кастомы». A narrow session
+ * (opened from the extension, no password) reads as a chatter whatever the role, as everywhere it is let in.
+ */
 export async function customViewerOf(app: CustomApp, principal: HumanAuthPrincipal): Promise<CustomViewer> {
   const leads = await customLeads(app.db);
-  const role = principal.user.role === "owner" || principal.user.role === "team_lead" ? principal.user.role : "chatter";
+  const role = principal.narrowDeviceTokenId === undefined && (principal.user.role === "owner" || principal.user.role === "team_lead")
+    ? principal.user.role
+    : "chatter";
   return { userId: principal.user.id, role, pageIds: principal.assignedPageIds, lead: leads.some((lead) => lead.userId === principal.user.id) };
 }
 

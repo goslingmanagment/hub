@@ -12,6 +12,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { fileURLToPath } from "node:url";
 import { kernelOperations } from "../sdk/src/operations.ts";
 import { routeSchemas } from "../contracts/src/routes.ts";
+import { narrowWebSessionAllows } from "../contracts/src/web-session-scopes.ts";
 import { demoError, isDemoReply, type DemoRequest, type DemoRole } from "./core.ts";
 
 // The fixtures load through Vite's module graph on every request, so an edit
@@ -28,6 +29,11 @@ interface Route {
 }
 
 const ROLE_COOKIE = "hub-demo-role";
+/**
+ * The narrow web session the extension opens (no password): `/__demo/role?as=chatter&narrow=1`. `me` says `narrow`,
+ * and every operation off NARROW_WEB_SESSION_OPERATIONS answers Hub's own 403, as the API server does.
+ */
+const NARROW_COOKIE = "hub-demo-narrow";
 /** A screen's other demo state (`hub-demo-scenario=healthy`): set by hand or by a screenshot tool. */
 const SCENARIO_COOKIE = "hub-demo-scenario";
 const ROLES: readonly DemoRole[] = ["owner", "team_lead", "chatter"];
@@ -179,8 +185,12 @@ export function demoApi(options: DemoApiOptions = {}): Plugin {
           // `anon`: nobody signed in, so /login and /join can be shown (`me` answers 401).
           const role = as === "anon" ? "anon" : ROLES.find((item) => item === as) ?? "owner";
           const next = role === "anon" ? null : safeNext(url.searchParams.get("next"));
+          const narrow = role !== "anon" && url.searchParams.get("narrow") === "1";
           response.statusCode = 302;
-          response.setHeader("set-cookie", `${ROLE_COOKIE}=${role}; Path=/; SameSite=Lax`);
+          response.setHeader("set-cookie", [
+            `${ROLE_COOKIE}=${role}; Path=/; SameSite=Lax`,
+            narrow ? `${NARROW_COOKIE}=1; Path=/; SameSite=Lax` : `${NARROW_COOKIE}=; Path=/; SameSite=Lax; Max-Age=0`,
+          ]);
           response.setHeader("location", next ?? home(role));
           response.end();
           return;
@@ -223,6 +233,11 @@ export function demoApi(options: DemoApiOptions = {}): Plugin {
             return;
           }
           const role = ROLES.find((item) => item === roleCookie) ?? "owner";
+          const narrow = readCookie(request, NARROW_COOKIE) === "1";
+          if (narrow && route.key !== "me" && !narrowWebSessionAllows(route.key)) {
+            send(response, 403, { error: "forbidden", message: "This sign-in opens only the team's place", statusCode: 403 });
+            return;
+          }
           const demoRequest: DemoRequest = {
             params, query, body: await readBody(request), now: new Date(), role, scenario: readCookie(request, SCENARIO_COOKIE),
             cookie: (name) => readCookie(request, name),
@@ -260,7 +275,8 @@ export function demoApi(options: DemoApiOptions = {}): Plugin {
             return;
           }
           const status = isDemoReply(result) ? result.status : 200;
-          const body = isDemoReply(result) ? result.body : result;
+          const answered = isDemoReply(result) ? result.body : result;
+          const body = narrow && route.key === "me" && status === 200 ? { ...(answered as object), narrow: true } : answered;
           if (status < 300 && status !== 204) {
             const schema = responseSchema(route.key, status);
             const parsed = schema?.safeParse(body);

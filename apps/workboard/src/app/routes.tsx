@@ -1,4 +1,3 @@
-import { lazy } from "react";
 import { Navigate, createBrowserRouter, useLocation, useParams, type Params, type RouteObject } from "react-router";
 import { START_PATH, startOpen, useAccountStart } from "@/shared/start";
 import { CHATTER, TEAM, homePath, useMe } from "@/shared/useMe";
@@ -28,9 +27,9 @@ export interface ScreenHandle {
  */
 function HomeRedirect() {
   const location = useLocation();
-  const { role, narrow } = useMe();
+  const { role } = useMe();
   const start = useAccountStart();
-  const asks = role === "chatter" && !narrow;
+  const asks = role === "chatter";
   if (asks && start.isPending) return null;
   const pathname = asks && startOpen(start.data) ? START_PATH : homePath(role);
   return <Navigate to={{ pathname, search: location.search }} replace />;
@@ -71,14 +70,6 @@ function MyReportsRedirect() {
   return <Navigate to={{ pathname: "/my/shifts", search: location.search }} replace />;
 }
 
-const AccountScreen = lazy(() => import("../screens/account/index.js").then((m) => ({ default: m.AccountScreen })));
-
-/** A narrow session (from the extension) does not change the account's devices or password: it goes home. */
-function AccountRoute() {
-  const { narrow } = useMe();
-  if (narrow) return <Navigate to="/" replace />;
-  return <AccountScreen />;
-}
 
 /** `/sales` opens its first tab. */
 function SalesRedirect() {
@@ -142,8 +133,9 @@ const chatterScreens: RouteObject[] = [
  */
 const everyoneScreens: RouteObject[] = [
   { path: "customs", lazy: () => import("../screens/customs/index.js").then((m) => ({ Component: m.CustomsBoardScreen })) },
-  // «Аккаунт и устройства» (the console's /account until 12.11): everyone's own, from the name menu; never a narrow session's.
-  { path: "account", element: <AccountRoute /> },
+  // «Аккаунт и устройства» (the console's /account until 12.11): everyone's own, from the name menu; a narrow session
+  // gets the way to the password there instead of the devices and the password.
+  { path: "account", lazy: () => import("../screens/account/index.js").then((m) => ({ Component: m.AccountScreen })) },
   {
     path: "customs/:code",
     handle: { screenKey: (params) => params.code ?? "" } satisfies ScreenHandle,

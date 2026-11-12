@@ -639,6 +639,20 @@
     padding: 24px var(--wb-gutter);
   }
 
+  /* PasswordWayIn: a change a narrow session (from the extension) does not make, and the way to the password. */
+  .wb-password-way {
+    font-size: 14px;
+    line-height: 20px;
+    color: var(--ui-text-2);
+  }
+
+  .wb-password-way__link {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    white-space: nowrap;
+  }
+
   .wb-gate {
     display: grid;
     place-items: center;

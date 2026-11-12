@@ -67,9 +67,10 @@ export function LoginPage() {
   // success decides where to go, after `me` was read back): another name's way
   // back goes on; a chatter on the console's name goes to the team's; everyone
   // else home.
-  // A narrow session (opened from the extension) is not a sign-in another name
-  // takes: for that way back the form is shown.
-  const signedIn = Boolean(auth?.user) && !authQuery.isError && !(isSigninContinuation(returnTo) && auth?.narrow);
+  // A narrow session (opened from the extension, no password) is not a sign-in
+  // here: another name does not take it, and its person comes to this page for
+  // the password (Workboard's PasswordWayIn) — the form is shown, then back.
+  const signedIn = Boolean(auth?.user) && !authQuery.isError && !auth?.narrow;
   if (auth?.user && signedIn && !login.isPending && !login.isSuccess) {
     const home = isSigninContinuation(returnTo)
       ? returnTo
