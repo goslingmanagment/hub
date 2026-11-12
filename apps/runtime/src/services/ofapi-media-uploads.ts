@@ -90,8 +90,11 @@ export async function buildOfapiMediaUploadRequest(
     return null;
   const boundary = `ofapi-${job.id}`,
     filename = encodeURIComponent(source.filename);
+  // `async` is the job's (an album's photo goes without it and answers at
+  // once); a job made before it was a parameter is async.
+  const asyncUpload = job.target.async !== false;
   const head = Buffer.from(
-    `--${boundary}\r\nContent-Disposition: form-data; name="async"\r\n\r\ntrue\r\n--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${filename}"\r\nContent-Type: ${source.mime_type}\r\n\r\n`,
+    `${asyncUpload ? `--${boundary}\r\nContent-Disposition: form-data; name="async"\r\n\r\ntrue\r\n` : ""}--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${filename}"\r\nContent-Type: ${source.mime_type}\r\n\r\n`,
   );
   const bodyBytes = Buffer.concat([
     head,
@@ -114,7 +117,7 @@ export async function buildOfapiMediaUploadRequest(
       method: "POST",
       resource: "media_upload",
       destination: job.target.destination,
-      async: true,
+      async: asyncUpload,
       sourceId: source.id,
       sourceSha256: source.sha256,
       sourceBytes: bytes.length,
@@ -457,12 +460,19 @@ export async function parseCapturedOfapiMediaUpload(
     rejectedCount: 0,
     disposition: {
       kind: "retry",
-      nextAttemptAt: new Date(Date.now() + 60000),
+      nextAttemptAt: new Date(Date.now() + uploadPollGapMs(job)),
       reasonCode: "upload_processing",
       cursor,
     },
   });
   return "success";
+}
+/** A vault album's file still processing after 90 minutes: its album no
+ *  longer waits for it, the free status read goes on every 10 minutes. */
+const ALBUM_SLOW_POLL_AFTER_MS = 90 * 60_000;
+function uploadPollGapMs(job: OfapiCaptureJobRecord): number {
+  const slow = job.budgetScope === "vault_album" && Date.now() - job.createdAt.getTime() > ALBUM_SLOW_POLL_AFTER_MS;
+  return slow ? 10 * 60_000 : 60_000;
 }
 /** Signed completion received before 202 stays journaled until this exact ID is known. */
 export async function reconcileOfapiUploadWebhook(app: AppContext, id: string) {

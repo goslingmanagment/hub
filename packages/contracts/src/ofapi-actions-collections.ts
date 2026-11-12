@@ -23,6 +23,12 @@ export const ofapiCollectionActionOptions = [
   // A read of the page's vault lists (lightweight), 30 a page at most: OnlyFansAPI
   // answers a validation error to more. Hub's album walk reads them all this way.
   z.strictObject({ action: z.literal("vault_lists_list"), pageId, limit: z.number().int().min(1).max(30), offset: z.number().int().min(0).max(1_000_000) }),
+  // Reads of one vault list (an album the draft names by id), of the media one
+  // list holds (`GET /media/vault?list=`, newest first, 10–100 a page) and of one
+  // vault media: what an album holds and whether a file Hub uploaded is still there.
+  z.strictObject({ action: z.literal("vault_list_get"), pageId, listId: z.string().regex(/^[1-9][0-9]{0,19}$/) }),
+  z.strictObject({ action: z.literal("vault_media_list"), pageId, listId: z.string().regex(/^[1-9][0-9]{0,19}$/), limit: z.number().int().min(10).max(100), offset: z.number().int().min(0).max(1_000_000) }),
+  z.strictObject({ action: z.literal("vault_media_get"), pageId, mediaId: nativeId }),
   z.strictObject({ action: z.literal("vault_list_create"), pageId, name: vaultListName }),
   z.strictObject({ action: z.literal("vault_list_update"), pageId, listId, name: vaultListName }),
   z.strictObject({ action: z.literal("vault_list_delete"), pageId, listId }),

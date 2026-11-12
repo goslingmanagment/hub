@@ -1268,6 +1268,8 @@ export async function listSubmittingOnlyfansPublications(db: Database): Promise<
       join publication_dispatches d on d.publication_id = p.id and d.kind = 'create'
       left join page_publishing_settings s on s.page_id = p.page_id
      where p.status = 'submitting' and d.platform = 'onlyfans'
+       -- A vault album is its own executor's (publications-onlyfans-vault.ts), never a post's.
+       and p.kind <> 'vault_album'
      order by p.publish_at, p.id
   `);
   return result.rows.map((row) => ({
@@ -1288,6 +1290,8 @@ export async function listDueOnlyfansPublications(db: Database, input: { now: Da
       join page_publishing_settings s on s.page_id = p.page_id
      where p.status = 'approved' and pg.platform::text = 'onlyfans' and pg.status = 'active'
        and s.enabled and s.autostopped_at is null
+       -- A vault album never becomes a post: its own executor sends it.
+       and p.kind <> 'vault_album'
        and ((p.kind <> 'story' and p.publish_at <= ${input.postsUntil})
          or (p.kind = 'story' and p.publish_at <= ${input.now}))
      order by p.publish_at, p.id
@@ -1310,6 +1314,7 @@ export async function listOnlyfansPublicationsForUpload(db: Database, input: { p
       join page_publishing_settings s on s.page_id = p.page_id
      where p.status = 'approved' and pg.platform::text = 'onlyfans' and pg.status = 'active'
        and s.enabled and s.autostopped_at is null
+       and p.kind <> 'vault_album'
        and exists (select 1 from publication_media m where m.publication_id = p.id and m.source = 'file')
        and ((p.kind <> 'story' and p.publish_at <= ${input.postsUntil})
          or (p.kind = 'story' and p.publish_at <= ${input.storiesUntil}))
@@ -1366,6 +1371,8 @@ export async function countPagePublicationDispatchesSince(db: Database, pageId: 
 export async function countPlatformPublicationDispatchesSince(db: Database, platform: string, since: Date): Promise<number> {
   const result = await db.execute<Row>(sql`
     select count(*) as n from publication_dispatches where platform = ${platform} and created_at >= ${since}
+       -- An album's dispatch is no post's credit: albums spend from their own account.
+       and mode <> 'vault'
   `);
   return num(result.rows[0]?.n ?? 0);
 }
@@ -1451,6 +1458,8 @@ export async function listOnlyfansCheckCandidates(db: Database): Promise<Onlyfan
       left join publication_dispatches d on d.publication_id = p.id and d.kind = 'create'
      where pg.platform::text = 'onlyfans' and p.status in ('scheduled', 'processing', 'unknown')
        and p.approved_revision_id is not null
+       -- An album's outcome is its read back (publications-onlyfans-vault.ts), not a post's check.
+       and p.kind <> 'vault_album'
      order by p.publish_at, p.id
   `);
   return result.rows.map((row) => ({

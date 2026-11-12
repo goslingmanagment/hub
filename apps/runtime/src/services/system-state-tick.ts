@@ -89,6 +89,7 @@ const HUB_SCHEDULE_TITLES: Readonly<Record<string, string>> = {
   "publications.files.retention": "Уборка файлов публикаций",
   "publications.onlyfans": "Публикации на OnlyFans",
   "publications.onlyfans.checks": "Проверка публикаций OnlyFans",
+  "publications.onlyfans.vault": "Альбомы волта OnlyFans",
   "sync.planner": "Старый сбор OnlyFans",
   "system.state": "Состояние: рутины, копии и дела",
   "team.sale-homes": "Чья продажа: дома продаж",

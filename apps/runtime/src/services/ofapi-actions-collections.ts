@@ -39,6 +39,12 @@ export function ofapiCollectionRequest(command: OfapiCollectionAction, accountId
       return request("POST", `${userLists}/${list}/users/${user}/pin`, "ack");
     case "vault_lists_list":
       return { ...request("GET", vaultLists, "read"), query: { limit: String(command.limit), offset: String(command.offset), lightweight: "true" } };
+    case "vault_list_get":
+      return request("GET", `${vaultLists}/${list}`, "read");
+    case "vault_media_list":
+      return { ...request("GET", `${account}/media/vault`, "read"), query: { list: command.listId, limit: String(command.limit), offset: String(command.offset) } };
+    case "vault_media_get":
+      return request("GET", `${account}/media/vault/${encodeURIComponent(command.mediaId)}`, "read");
     case "vault_list_create":
       return request("POST", vaultLists, "resource", { name: command.name });
     case "vault_list_update":
@@ -97,6 +103,13 @@ export function ofapiCollectionResultConfirmed(command: OfapiCollectionAction, r
     case "vault_lists_list":
       return typeof data.hasMore === "boolean" && Array.isArray(data.list)
         && data.list.every(item => returnedId(record(item)?.id) !== null);
+    case "vault_list_get":
+      return returnedId(data.id) === command.listId;
+    case "vault_media_list":
+      return typeof data.hasMore === "boolean" && Array.isArray(data.list)
+        && data.list.every(item => returnedId(record(item)?.id) !== null);
+    case "vault_media_get":
+      return returnedId(data.id) === command.mediaId;
     case "user_list_create":
     case "vault_list_create":
       return returnedId(data.id) !== null;

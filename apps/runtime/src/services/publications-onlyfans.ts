@@ -76,7 +76,8 @@ export async function ensurePublicationsOnlyfansSchedule(boss: QueueCreationClie
   await boss.schedule(PUBLICATIONS_ONLYFANS_QUEUE, "* * * * *", null, { tz: "UTC" });
 }
 
-function stableUuid(seed: string): string {
+/** A UUID that is always the same for one seed: a retry after a crash finds the same action or upload. */
+export function stableUuid(seed: string): string {
   const hex = createHash("sha256").update(seed).digest("hex");
   const variant = ((Number.parseInt(hex[16] ?? "0", 16) & 0x3) | 0x8).toString(16);
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-5${hex.slice(13, 16)}-${variant}${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
@@ -166,6 +167,8 @@ export function onlyfansStillInWindow(mode: PublicationDispatchMode, publishAt: 
  * returned (plan PR 4c).
  */
 export function onlyfansCommandFor(record: PublicationRecord, mode: PublicationDispatchMode, uploaded: ReadonlyMap<string, string> = new Map()): OfapiAction {
+  // A vault album is its own executor's (publications-onlyfans-vault.ts): never a post or a story.
+  if (record.kind === "vault_album") throw new Error(`publication ${record.id}: a vault album is never sent as a post`);
   // Never a free post of what was approved with a price, nor one file set of
   // several attachments: OnlyFans' command here carries neither (spec §6).
   if (record.priceMills !== null) throw new BadRequestError(`publication ${record.id}: an OnlyFans post with a price is not sent until its price at creation is verified`);

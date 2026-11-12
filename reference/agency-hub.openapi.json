@@ -18623,6 +18623,96 @@
                           "action": {
                             "type": "string",
                             "enum": [
+                              "vault_list_get"
+                            ]
+                          },
+                          "pageId": {
+                            "type": "integer",
+                            "exclusiveMinimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "listId": {
+                            "type": "string",
+                            "pattern": "^[1-9][0-9]{0,19}$"
+                          }
+                        },
+                        "required": [
+                          "action",
+                          "pageId",
+                          "listId"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "action": {
+                            "type": "string",
+                            "enum": [
+                              "vault_media_list"
+                            ]
+                          },
+                          "pageId": {
+                            "type": "integer",
+                            "exclusiveMinimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "listId": {
+                            "type": "string",
+                            "pattern": "^[1-9][0-9]{0,19}$"
+                          },
+                          "limit": {
+                            "type": "integer",
+                            "minimum": 10,
+                            "maximum": 100
+                          },
+                          "offset": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 1000000
+                          }
+                        },
+                        "required": [
+                          "action",
+                          "pageId",
+                          "listId",
+                          "limit",
+                          "offset"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "action": {
+                            "type": "string",
+                            "enum": [
+                              "vault_media_get"
+                            ]
+                          },
+                          "pageId": {
+                            "type": "integer",
+                            "exclusiveMinimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "mediaId": {
+                            "type": "string",
+                            "pattern": "^[1-9][0-9]{0,63}$"
+                          }
+                        },
+                        "required": [
+                          "action",
+                          "pageId",
+                          "mediaId"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "action": {
+                            "type": "string",
+                            "enum": [
                               "vault_list_create"
                             ]
                           },
@@ -21961,6 +22051,96 @@
                             "pageId",
                             "limit",
                             "offset"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "action": {
+                              "type": "string",
+                              "enum": [
+                                "vault_list_get"
+                              ]
+                            },
+                            "pageId": {
+                              "type": "integer",
+                              "exclusiveMinimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "listId": {
+                              "type": "string",
+                              "pattern": "^[1-9][0-9]{0,19}$"
+                            }
+                          },
+                          "required": [
+                            "action",
+                            "pageId",
+                            "listId"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "action": {
+                              "type": "string",
+                              "enum": [
+                                "vault_media_list"
+                              ]
+                            },
+                            "pageId": {
+                              "type": "integer",
+                              "exclusiveMinimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "listId": {
+                              "type": "string",
+                              "pattern": "^[1-9][0-9]{0,19}$"
+                            },
+                            "limit": {
+                              "type": "integer",
+                              "minimum": 10,
+                              "maximum": 100
+                            },
+                            "offset": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 1000000
+                            }
+                          },
+                          "required": [
+                            "action",
+                            "pageId",
+                            "listId",
+                            "limit",
+                            "offset"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "action": {
+                              "type": "string",
+                              "enum": [
+                                "vault_media_get"
+                              ]
+                            },
+                            "pageId": {
+                              "type": "integer",
+                              "exclusiveMinimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "mediaId": {
+                              "type": "string",
+                              "pattern": "^[1-9][0-9]{0,63}$"
+                            }
+                          },
+                          "required": [
+                            "action",
+                            "pageId",
+                            "mediaId"
                           ],
                           "additionalProperties": false
                         },
@@ -25657,6 +25837,96 @@
                                   "action": {
                                     "type": "string",
                                     "enum": [
+                                      "vault_list_get"
+                                    ]
+                                  },
+                                  "pageId": {
+                                    "type": "integer",
+                                    "exclusiveMinimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "listId": {
+                                    "type": "string",
+                                    "pattern": "^[1-9][0-9]{0,19}$"
+                                  }
+                                },
+                                "required": [
+                                  "action",
+                                  "pageId",
+                                  "listId"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "action": {
+                                    "type": "string",
+                                    "enum": [
+                                      "vault_media_list"
+                                    ]
+                                  },
+                                  "pageId": {
+                                    "type": "integer",
+                                    "exclusiveMinimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "listId": {
+                                    "type": "string",
+                                    "pattern": "^[1-9][0-9]{0,19}$"
+                                  },
+                                  "limit": {
+                                    "type": "integer",
+                                    "minimum": 10,
+                                    "maximum": 100
+                                  },
+                                  "offset": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 1000000
+                                  }
+                                },
+                                "required": [
+                                  "action",
+                                  "pageId",
+                                  "listId",
+                                  "limit",
+                                  "offset"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "action": {
+                                    "type": "string",
+                                    "enum": [
+                                      "vault_media_get"
+                                    ]
+                                  },
+                                  "pageId": {
+                                    "type": "integer",
+                                    "exclusiveMinimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "mediaId": {
+                                    "type": "string",
+                                    "pattern": "^[1-9][0-9]{0,63}$"
+                                  }
+                                },
+                                "required": [
+                                  "action",
+                                  "pageId",
+                                  "mediaId"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "action": {
+                                    "type": "string",
+                                    "enum": [
                                       "vault_list_create"
                                     ]
                                   },
@@ -29339,6 +29609,96 @@
                             "pageId",
                             "limit",
                             "offset"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "action": {
+                              "type": "string",
+                              "enum": [
+                                "vault_list_get"
+                              ]
+                            },
+                            "pageId": {
+                              "type": "integer",
+                              "exclusiveMinimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "listId": {
+                              "type": "string",
+                              "pattern": "^[1-9][0-9]{0,19}$"
+                            }
+                          },
+                          "required": [
+                            "action",
+                            "pageId",
+                            "listId"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "action": {
+                              "type": "string",
+                              "enum": [
+                                "vault_media_list"
+                              ]
+                            },
+                            "pageId": {
+                              "type": "integer",
+                              "exclusiveMinimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "listId": {
+                              "type": "string",
+                              "pattern": "^[1-9][0-9]{0,19}$"
+                            },
+                            "limit": {
+                              "type": "integer",
+                              "minimum": 10,
+                              "maximum": 100
+                            },
+                            "offset": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 1000000
+                            }
+                          },
+                          "required": [
+                            "action",
+                            "pageId",
+                            "listId",
+                            "limit",
+                            "offset"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "action": {
+                              "type": "string",
+                              "enum": [
+                                "vault_media_get"
+                              ]
+                            },
+                            "pageId": {
+                              "type": "integer",
+                              "exclusiveMinimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "mediaId": {
+                              "type": "string",
+                              "pattern": "^[1-9][0-9]{0,63}$"
+                            }
+                          },
+                          "required": [
+                            "action",
+                            "pageId",
+                            "mediaId"
                           ],
                           "additionalProperties": false
                         },
@@ -33044,6 +33404,96 @@
                             "action": {
                               "type": "string",
                               "enum": [
+                                "vault_list_get"
+                              ]
+                            },
+                            "pageId": {
+                              "type": "integer",
+                              "exclusiveMinimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "listId": {
+                              "type": "string",
+                              "pattern": "^[1-9][0-9]{0,19}$"
+                            }
+                          },
+                          "required": [
+                            "action",
+                            "pageId",
+                            "listId"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "action": {
+                              "type": "string",
+                              "enum": [
+                                "vault_media_list"
+                              ]
+                            },
+                            "pageId": {
+                              "type": "integer",
+                              "exclusiveMinimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "listId": {
+                              "type": "string",
+                              "pattern": "^[1-9][0-9]{0,19}$"
+                            },
+                            "limit": {
+                              "type": "integer",
+                              "minimum": 10,
+                              "maximum": 100
+                            },
+                            "offset": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 1000000
+                            }
+                          },
+                          "required": [
+                            "action",
+                            "pageId",
+                            "listId",
+                            "limit",
+                            "offset"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "action": {
+                              "type": "string",
+                              "enum": [
+                                "vault_media_get"
+                              ]
+                            },
+                            "pageId": {
+                              "type": "integer",
+                              "exclusiveMinimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "mediaId": {
+                              "type": "string",
+                              "pattern": "^[1-9][0-9]{0,63}$"
+                            }
+                          },
+                          "required": [
+                            "action",
+                            "pageId",
+                            "mediaId"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "action": {
+                              "type": "string",
+                              "enum": [
                                 "vault_list_create"
                               ]
                             },
@@ -36740,6 +37190,96 @@
                             "action": {
                               "type": "string",
                               "enum": [
+                                "vault_list_get"
+                              ]
+                            },
+                            "pageId": {
+                              "type": "integer",
+                              "exclusiveMinimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "listId": {
+                              "type": "string",
+                              "pattern": "^[1-9][0-9]{0,19}$"
+                            }
+                          },
+                          "required": [
+                            "action",
+                            "pageId",
+                            "listId"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "action": {
+                              "type": "string",
+                              "enum": [
+                                "vault_media_list"
+                              ]
+                            },
+                            "pageId": {
+                              "type": "integer",
+                              "exclusiveMinimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "listId": {
+                              "type": "string",
+                              "pattern": "^[1-9][0-9]{0,19}$"
+                            },
+                            "limit": {
+                              "type": "integer",
+                              "minimum": 10,
+                              "maximum": 100
+                            },
+                            "offset": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 1000000
+                            }
+                          },
+                          "required": [
+                            "action",
+                            "pageId",
+                            "listId",
+                            "limit",
+                            "offset"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "action": {
+                              "type": "string",
+                              "enum": [
+                                "vault_media_get"
+                              ]
+                            },
+                            "pageId": {
+                              "type": "integer",
+                              "exclusiveMinimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "mediaId": {
+                              "type": "string",
+                              "pattern": "^[1-9][0-9]{0,63}$"
+                            }
+                          },
+                          "required": [
+                            "action",
+                            "pageId",
+                            "mediaId"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "action": {
+                              "type": "string",
+                              "enum": [
                                 "vault_list_create"
                               ]
                             },
@@ -40427,6 +40967,96 @@
                             "pageId",
                             "limit",
                             "offset"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "action": {
+                              "type": "string",
+                              "enum": [
+                                "vault_list_get"
+                              ]
+                            },
+                            "pageId": {
+                              "type": "integer",
+                              "exclusiveMinimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "listId": {
+                              "type": "string",
+                              "pattern": "^[1-9][0-9]{0,19}$"
+                            }
+                          },
+                          "required": [
+                            "action",
+                            "pageId",
+                            "listId"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "action": {
+                              "type": "string",
+                              "enum": [
+                                "vault_media_list"
+                              ]
+                            },
+                            "pageId": {
+                              "type": "integer",
+                              "exclusiveMinimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "listId": {
+                              "type": "string",
+                              "pattern": "^[1-9][0-9]{0,19}$"
+                            },
+                            "limit": {
+                              "type": "integer",
+                              "minimum": 10,
+                              "maximum": 100
+                            },
+                            "offset": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 1000000
+                            }
+                          },
+                          "required": [
+                            "action",
+                            "pageId",
+                            "listId",
+                            "limit",
+                            "offset"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "action": {
+                              "type": "string",
+                              "enum": [
+                                "vault_media_get"
+                              ]
+                            },
+                            "pageId": {
+                              "type": "integer",
+                              "exclusiveMinimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "mediaId": {
+                              "type": "string",
+                              "pattern": "^[1-9][0-9]{0,63}$"
+                            }
+                          },
+                          "required": [
+                            "action",
+                            "pageId",
+                            "mediaId"
                           ],
                           "additionalProperties": false
                         },
