@@ -38,7 +38,7 @@ function Row({ matter, now }: { matter: Matter; now: number }) {
 
 export function MyMatters() {
   const list = useQuery({ ...mattersListQuery, refetchInterval: MINUTE });
-  const matters = (list.data?.matters ?? []).filter((matter) => !isMatterInfoKind(matter.kind));
+  const matters = (list.data?.matters ?? []).filter((matter) => matter.mine && !isMatterInfoKind(matter.kind));
   if (matters.length === 0) return null;
   const now = list.data ? Date.parse(list.data.serverNow) : Date.now();
   return (

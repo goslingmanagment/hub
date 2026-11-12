@@ -148,6 +148,12 @@ export const matterSchema = z.object({
   pageLabels: z.array(z.string()),
   owner: matterOwnerSchema,
   watcherUserIds: z.array(intId),
+  /**
+   * It waits for the viewer themself: their user's, or a role they hold (the owner's, and the team lead's while
+   * nobody holds that role). Otherwise the viewer reads it as oversight: it waits for someone else, and it is in no
+   * count of theirs («Ждут вас», the menu, the extension's icon).
+   */
+  mine: z.boolean(),
   /** The evidence carries money: only the owner is served such a matter. */
   money: z.boolean(),
   /** What the finding saw: ids, states, moments; money only in the owner's matters. */

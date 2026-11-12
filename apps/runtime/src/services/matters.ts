@@ -40,6 +40,7 @@ import {
   listVisibleMatters,
   MatterWriterConflictError,
   openMatter,
+  teamLeadRoleHeld,
   type MatterCheckRow,
   type MatterOwner,
   type MatterOwnerRole,
@@ -49,6 +50,7 @@ import {
 
 import type { AppContext } from "../bootstrap.ts";
 import type { AgentAuthPrincipal, HumanAuthPrincipal } from "./auth.ts";
+import { awaitingGivingOf, customOrdersReadOn } from "./custom-orders/readers.ts";
 import { loadEffectiveConfigField } from "./effective-config.ts";
 import { AppError, ConflictError, NotFoundError } from "./errors.ts";
 
@@ -59,6 +61,12 @@ import { AppError, ConflictError, NotFoundError } from "./errors.ts";
  * their role's on their pages; a chatter their own; a matter with money the
  * owner's alone. A kind Hub mirrors whose source did not answer lately is «не
  * проверено» (`count: null`), never a zero. Database only.
+ *
+ * Reading is not waiting: «Ждут вас», its number on the menu and on the
+ * Home, and the extension's icon count only what waits for the viewer THEMSELF
+ * — their user's matters and those of a role they hold (`heldRolesOf`). The
+ * owner reads every other matter too, as oversight («Ждут других»), counted
+ * nowhere.
  */
 
 // ── When a mirrored kind is known ───────────────────────────────────────────
@@ -167,13 +175,31 @@ export function matterWeight(matter: Pick<MatterRow, "kind" | "evidence">): numb
  */
 export function buildWaitingRows(input: {
   role: MatterOwnerRole;
+  /** The viewer's OWN open matters (`heldRolesOf`): what waits for them, never for someone else. */
   matters: readonly WaitingMatter[];
   kindState: (kind: string) => MatterKindState;
   labelOf: (pageId: number) => string | undefined;
+  /** The owner holds the team lead's role (nobody else does): its rows are his; default — he does. */
+  teamLeadRows?: boolean;
+  /**
+   * The custom orders are the home of customs (`customOrdersReadEnabled`): the customs row is the number of the
+   * viewer's orders paid or shot and not given (null — the read failed), leading to the board; undefined — the old
+   * kind's matters, as before.
+   */
+  customOrders?: number | null;
 }): Pick<MattersWaitingResponse, "rows" | "total" | "failed"> {
   const rows: MattersWaitingRow[] = [];
+  const teamLeadRows = input.teamLeadRows ?? true;
   for (const spec of WAITING_ROW_SPECS) {
     if (input.role === "chatter" || (input.role === "team_lead" && !spec.teamLead)) continue;
+    // The team lead's rows (customs, held sends) are the owner's only while he is the acting team lead.
+    if (input.role === "owner" && spec.teamLead && !teamLeadRows) continue;
+    if (spec.id === "customs" && input.customOrders !== undefined) {
+      if (input.customOrders !== 0) {
+        rows.push({ id: "customs", label: spec.label, count: input.customOrders, capped: false, pageLabel: null, to: "/workboard/customs", matterIds: [] });
+      }
+      continue;
+    }
     const states = spec.kinds.map(input.kindState);
     if (!states.every((state) => state.applicable)) continue;
     const kinds = new Set<string>(spec.kinds);
@@ -225,9 +251,12 @@ export function buildWaitingRows(input: {
  */
 export function buildDecisions(input: {
   role: MatterOwnerRole;
+  /** The viewer's OWN open matters, as for the rows. */
   matters: readonly WaitingMatter[];
   kindState: (kind: string) => MatterKindState;
   pageId: number | null;
+  /** The custom orders are customs' home: their count of the page (or of all), as the customs row; undefined — the old kind. */
+  customOrders?: { onPage: number; all: number } | null;
 }): MattersWaitingResponse["decisions"] {
   const owner = input.role === "owner";
   const onPage = (matter: WaitingMatter) => input.pageId === null || matter.pageIds.length === 0 || matter.pageIds.includes(input.pageId);
@@ -242,7 +271,8 @@ export function buildDecisions(input: {
   const questions = queue(["ledger.sale_question"], owner);
   const posts = queue(["ledger.report_post"], owner);
   const changes = queue(["ledger.paid_day_changed"], owner);
-  const customs = queue(["custom.paid_not_delivered"], staff);
+  const customs = input.customOrders === undefined ? queue(["custom.paid_not_delivered"], staff)
+    : !staff || input.customOrders === null ? { count: null, all: 0 } : { count: input.customOrders.onPage, all: input.customOrders.all };
   const held = queue(["send.held"], staff);
   const reportParts = posts.count === null || changes.count === null ? null : { posts: posts.count, changes: changes.count };
   const reports = reportParts === null ? null : reportParts.posts + reportParts.changes;
@@ -280,6 +310,37 @@ export function matterViewerOf(principal: HumanAuthPrincipal): MatterViewer {
   return { userId: principal.user.id, role, pageIds: principal.assignedPageIds };
 }
 
+/**
+ * The roles whose matters wait for the viewer themself (besides their user's): the owner's own, and the team
+ * lead's while nobody holds that role (he is the acting team lead: the registry and the logins say so, not a
+ * constant); a team lead's; a chatter none.
+ */
+export async function heldRolesOf(app: Pick<AppContext, "db">, viewer: MatterViewer): Promise<MatterOwnerRole[]> {
+  if (viewer.role === "owner") return (await teamLeadRoleHeld(app.db)) ? ["owner"] : ["owner", "team_lead"];
+  if (viewer.role === "team_lead") return ["team_lead"];
+  return [];
+}
+
+/** Whether a matter waits for the viewer themself. */
+export function matterIsMine(matter: Pick<MatterRow, "owner">, viewer: MatterViewer, heldRoles: readonly MatterOwnerRole[]): boolean {
+  return "userId" in matter.owner ? matter.owner.userId === viewer.userId : heldRoles.includes(matter.owner.role);
+}
+
+/**
+ * The customs row while the custom orders are customs' home: the orders paid or shot and not given, of the viewer's
+ * pages (the owner every page), all and on `pageId`; null — the read failed; undefined — the old kind counts.
+ */
+async function customOrdersCount(app: MattersApp, viewer: MatterViewer, pageId: number | null): Promise<{ onPage: number; all: number } | null | undefined> {
+  if (viewer.role === "chatter" || !(await customOrdersReadOn(app))) return undefined;
+  try {
+    const orders = await awaitingGivingOf(app, { pageIds: viewer.role === "owner" ? "all" : viewer.pageIds, limit: 5000 });
+    const onPage = pageId === null ? orders.length : orders.filter((order) => order.pageId === null || order.pageId === pageId).length;
+    return { onPage, all: orders.length };
+  } catch {
+    return null;
+  }
+}
+
 function kindStates(checks: readonly MatterCheckRow[], now: Date): (kind: string) => MatterKindState {
   const byKind = new Map(checks.map((check) => [check.kind, check]));
   return (kind) => {
@@ -300,24 +361,30 @@ async function pageIdOf(app: MattersApp, pageLabel: string | undefined, idOf: Ma
 /** `mattersWaiting`: «Ждут вас» and «Решения» from matters, for a dashboard session. */
 export async function readMattersWaiting(app: MattersApp, principal: HumanAuthPrincipal, query: MattersWaitingQuery, now: Date = new Date()): Promise<MattersWaitingResponse> {
   const viewer = matterViewerOf(principal);
+  const heldRoles = await heldRolesOf(app, viewer);
   const [matters, checks, pages, active] = await Promise.all([
-    // Every open matter of the viewer: the old rows' kinds and, after them, the rest (package K).
-    viewer.role === "chatter" ? Promise.resolve([]) : listVisibleMatters(app.db, { viewer, state: "open", limit: 5000 }),
+    // What waits for the viewer themself: the old rows' kinds and, after them, the rest (package K).
+    viewer.role === "chatter" ? Promise.resolve([]) : listVisibleMatters(app.db, { viewer, state: "open", heldRoles, limit: 5000 }),
     listMatterChecks(app.db),
     listMatterPageLabels(app.db),
     loadEffectiveConfigField(app.db, app.config, "mattersReadEnabled"),
   ]);
   const kindState = kindStates(checks, now);
   const pageId = await pageIdOf(app, query.pageLabel, pages.idOf);
+  const teamLeadRows = heldRoles.includes("team_lead");
+  const orders = teamLeadRows ? await customOrdersCount(app, viewer, pageId) : undefined;
   return {
     active: active === true,
-    ...buildWaitingRows({ role: viewer.role, matters, kindState, labelOf: (id) => pages.labelOf.get(id) }),
-    decisions: buildDecisions({ role: viewer.role, matters, kindState, pageId }),
+    ...buildWaitingRows({
+      role: viewer.role, matters, kindState, labelOf: (id) => pages.labelOf.get(id), teamLeadRows,
+      ...(orders === undefined ? {} : { customOrders: orders === null ? null : orders.all }),
+    }),
+    decisions: buildDecisions({ role: viewer.role, matters, kindState, pageId, ...(orders === undefined ? {} : { customOrders: orders }) }),
     serverNow: now.toISOString(),
   };
 }
 
-function matterWire(row: MatterRow, labelOf: Map<number, string>, usernameOf: Map<number, string>): Matter {
+function matterWire(row: MatterRow, labelOf: Map<number, string>, usernameOf: Map<number, string>, mine: boolean): Matter {
   return {
     id: row.id,
     key: row.key,
@@ -332,6 +399,7 @@ function matterWire(row: MatterRow, labelOf: Map<number, string>, usernameOf: Ma
       ? { kind: "user", userId: row.owner.userId, username: usernameOf.get(row.owner.userId) ?? "" }
       : { kind: "role", role: row.owner.role },
     watcherUserIds: row.watcherUserIds,
+    mine,
     money: row.money,
     evidence: row.evidence,
     link: row.link,
@@ -344,6 +412,7 @@ function matterWire(row: MatterRow, labelOf: Map<number, string>, usernameOf: Ma
 /** `mattersList`: the session's matters, the owner's by kind, with whether each mirrored kind is known. */
 export async function readMattersList(app: MattersApp, principal: HumanAuthPrincipal, query: MattersListQuery, now: Date = new Date()): Promise<MattersListResponse> {
   const viewer = matterViewerOf(principal);
+  const heldRoles = await heldRolesOf(app, viewer);
   const pages = await listMatterPageLabels(app.db);
   const pageId = await pageIdOf(app, query.pageLabel, pages.idOf);
   const [rows, counts, checks] = await Promise.all([
@@ -367,22 +436,28 @@ export async function readMattersList(app: MattersApp, principal: HumanAuthPrinc
       checkedAt: isMirrored ? check?.answeredAt?.toISOString() ?? null : null,
     };
   });
-  return { matters: rows.map((row) => matterWire(row, pages.labelOf, usernameOf)), kinds, serverNow: now.toISOString() };
+  return {
+    matters: rows.map((row) => matterWire(row, pages.labelOf, usernameOf, matterIsMine(row, viewer, heldRoles))),
+    kinds,
+    serverNow: now.toISOString(),
+  };
 }
 
 const CLIENT_MATTERS_LIMIT = 50;
 
-/** The extension's number: the person's open matters, never one with money, never one that only informs. */
+/** The extension's number: what waits for the person themself, never one with money, never one that only informs. */
 export async function countClientMatters(app: Pick<AppContext, "db">, principal: HumanAuthPrincipal): Promise<number> {
-  const counts = await countVisibleOpenMatters(app.db, { viewer: matterViewerOf(principal), withoutMoney: true });
+  const viewer = matterViewerOf(principal);
+  const counts = await countVisibleOpenMatters(app.db, { viewer, withoutMoney: true, heldRoles: await heldRolesOf(app, viewer) });
   return [...counts].reduce((sum, [kind, value]) => sum + (isMatterInfoKind(kind) ? 0 : value), 0);
 }
 
 /** `clientMatters`: the extension's count and the longest waiting of the person's matters; never evidence, never money. */
 export async function readClientMatters(app: MattersApp, principal: HumanAuthPrincipal, now: Date = new Date()): Promise<ClientMattersResponse> {
   const viewer = matterViewerOf(principal);
+  const heldRoles = await heldRolesOf(app, viewer);
   const [rows, count, pages] = await Promise.all([
-    listVisibleMatters(app.db, { viewer, state: "open", withoutMoney: true, limit: CLIENT_MATTERS_LIMIT + MATTER_INFO_KINDS.length }),
+    listVisibleMatters(app.db, { viewer, state: "open", withoutMoney: true, heldRoles, limit: CLIENT_MATTERS_LIMIT + MATTER_INFO_KINDS.length }),
     countClientMatters(app, principal),
     listMatterPageLabels(app.db),
   ]);

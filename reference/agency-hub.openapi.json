@@ -227343,6 +227343,9 @@
                               "maximum": 9007199254740991
                             }
                           },
+                          "mine": {
+                            "type": "boolean"
+                          },
                           "money": {
                             "type": "boolean"
                           },
@@ -227384,6 +227387,7 @@
                           "pageLabels",
                           "owner",
                           "watcherUserIds",
+                          "mine",
                           "money",
                           "evidence",
                           "link",

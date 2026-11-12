@@ -347,6 +347,34 @@ export function matterVisibility(viewer: MatterViewer): SQL {
   return sql`(not m.money and m.owner_user_id = ${viewer.userId})`;
 }
 
+/**
+ * The matters that wait for the viewer THEMSELF, within what they may read: their
+ * user's, or a role they hold (`heldRoles`). Not who may read: the owner reads
+ * every matter, but «Ждут вас» and its number are only what waits for them.
+ */
+export function matterHeldBy(viewer: MatterViewer, heldRoles: readonly MatterOwnerRole[]): SQL {
+  if (heldRoles.length === 0) return sql`(m.owner_user_id = ${viewer.userId})`;
+  return sql`(m.owner_user_id = ${viewer.userId} or m.owner_role = any(${sql.param([...heldRoles])}::text[]))`;
+}
+
+/**
+ * Whether someone holds the team lead's role now: a living login of that role
+ * whose person has not left, or a working person of that role in the registry.
+ * Nobody — the owner is the acting team lead.
+ */
+export async function teamLeadRoleHeld(db: Database): Promise<boolean> {
+  const result = await db.execute<{ held: boolean }>(sql`
+    select (
+      exists (
+        select 1 from users u
+         where u.role = 'team_lead' and u.disabled_at is null and u.deleted_at is null
+           and not exists (select 1 from person_logins l join people p on p.id = l.person_id where l.user_id = u.id and p.state = 'left')
+      )
+      or exists (select 1 from people p where p.role = 'team_lead' and p.state = 'working')
+    ) as held`);
+  return result.rows[0]?.held === true;
+}
+
 export async function listVisibleMatters(
   db: Database,
   input: {
@@ -357,10 +385,13 @@ export async function listVisibleMatters(
     pageId?: number | undefined;
     /** Leave out every matter with money, whoever reads (a narrow door). */
     withoutMoney?: boolean;
+    /** Only what waits for the viewer themself: their user's or one of these roles' (`matterHeldBy`). */
+    heldRoles?: readonly MatterOwnerRole[] | undefined;
     limit: number;
   },
 ): Promise<MatterRow[]> {
   const parts: SQL[] = [sql`m.state = ${input.state}`, matterVisibility(input.viewer)];
+  if (input.heldRoles !== undefined) parts.push(matterHeldBy(input.viewer, input.heldRoles));
   if (input.kinds !== undefined) parts.push(sql`m.kind = any(${sql.param([...input.kinds])}::text[])`);
   if (input.pageId !== undefined) parts.push(sql`(cardinality(m.page_ids) = 0 or ${input.pageId}::bigint = any(m.page_ids))`);
   if (input.withoutMoney) parts.push(sql`not m.money`);
@@ -522,11 +553,12 @@ export async function findMatterPerson(db: Database, username: string): Promise<
 /** The viewer's open matters per kind. */
 export async function countVisibleOpenMatters(
   db: Database,
-  input: { viewer: MatterViewer; withoutMoney?: boolean },
+  input: { viewer: MatterViewer; withoutMoney?: boolean; heldRoles?: readonly MatterOwnerRole[] | undefined },
 ): Promise<Map<string, number>> {
   const result = await db.execute<{ kind: string; open: string | number | bigint }>(sql`
     select m.kind, count(*) as open from matters m
     where m.state = 'open' and ${matterVisibility(input.viewer)} ${input.withoutMoney ? sql`and not m.money` : sql``}
+      ${input.heldRoles === undefined ? sql`` : sql`and ${matterHeldBy(input.viewer, input.heldRoles)}`}
     group by m.kind`);
   return new Map(result.rows.map((row) => [row.kind, Number(row.open)]));
 }

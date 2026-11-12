@@ -52,6 +52,7 @@ function matterOf(seed: Seed, id: number, now: number): Matter {
     pageLabels: seed.pages ?? [],
     owner: seed.owner ?? OWNER_ROLE,
     watcherUserIds: [],
+    mine: false,
     money: seed.money ?? false,
     evidence: seed.evidence ?? {},
     link: seed.link ?? null,
@@ -164,14 +165,33 @@ function visible(request: DemoRequest): Matter[] {
       owner: { kind: "user", userId: chatter.id, username: chatter.username }, agoMs: 5 * HOUR,
     });
   }
+  // What waits for the person who leads customs (the invented agency's: kate.v): the owner reads it as oversight.
+  const lead = DEMO_USERS.find((user) => user.username === "kate.v")!;
+  if (scenario !== "matters-0") {
+    seeds.push(
+      {
+        kind: "custom.not_at_model", key: "custom.not_at_model:CUS-0012", title: "Кастом CUS-0012 оплачен и сутки не у модели: mia-1", pages: ["mia-1"],
+        owner: { kind: "user", userId: lead.id, username: lead.username }, link: "/workboard/customs/CUS-0012", agoMs: 26 * HOUR,
+      },
+      {
+        kind: "custom.overdue", key: "custom.overdue:CUS-0009", title: "Кастом CUS-0009 просрочен: mia-3", pages: ["mia-3"],
+        owner: { kind: "user", userId: lead.id, username: lead.username }, link: "/workboard/customs/CUS-0009", agoMs: 2 * DAY,
+      },
+    );
+  }
   const matters = seeds.map((seed, index) => matterOf(seed, 9000 + index, now));
-  if (request.role === "owner") return matters.filter((matter) => matter.owner.kind === "role");
+  // Whose: the viewer's own user, or a role they hold. The invented agency has team leads, so the owner is not the
+  // acting team lead: the team lead's matters wait for them, and the owner reads them as oversight.
+  const owner = DEMO_USERS.find((user) => user.role === "owner")!;
+  if (request.role === "owner") {
+    return matters.map((matter) => ({ ...matter, mine: matter.owner.kind === "role" ? matter.owner.role === "owner" : matter.owner.userId === owner.id }));
+  }
   const pages = viewerPages(request);
   if (request.role === "team_lead") {
     return matters.filter((matter) => !matter.money && matter.owner.kind === "role" && matter.owner.role === "team_lead"
-      && (matter.pageLabels.length === 0 || matter.pageLabels.some((label) => pages?.includes(label))));
+      && (matter.pageLabels.length === 0 || matter.pageLabels.some((label) => pages?.includes(label)))).map((matter) => ({ ...matter, mine: true }));
   }
-  return matters.filter((matter) => !matter.money && matter.owner.kind === "user" && matter.owner.userId === chatter.id);
+  return matters.filter((matter) => !matter.money && matter.owner.kind === "user" && matter.owner.userId === chatter.id).map((matter) => ({ ...matter, mine: true }));
 }
 
 const MIRRORED = [
@@ -214,8 +234,9 @@ const ROWS: ReadonlyArray<{ id: WaitingAnswer["rows"][number]["id"]; label: stri
 ];
 
 function mattersWaiting(request: DemoRequest): WaitingAnswer {
-  const matters = request.role === "chatter" ? [] : visible(request);
-  const rows = ROWS.filter((row) => request.role === "owner" || row.teamLead || row.id === "other").flatMap((row) => {
+  // Only what waits for the viewer themself; the owner here holds no team lead's role (the agency has team leads).
+  const matters = request.role === "chatter" ? [] : visible(request).filter((matter) => matter.mine);
+  const rows = ROWS.filter((row) => (request.role === "owner" ? !row.teamLead : row.teamLead || row.id === "other")).flatMap((row) => {
     const mine = matters.filter((matter) => row.of(matter.kind));
     if (mine.length === 0) return [];
     const one = row.id === "login" && mine.length === 1 ? mine[0]!.pageLabels[0] ?? null : null;

@@ -194,6 +194,11 @@
     flex: none;
   }
 
+  /* What waits for other people: folded under the list, the owner's oversight. */
+  .wt-others .ui-disclosure__body {
+    margin-top: var(--ui-space-2);
+  }
+
   /* The chatter's strip above «Мои смены». */
   .wt-strip {
     margin-bottom: var(--ui-space-4);

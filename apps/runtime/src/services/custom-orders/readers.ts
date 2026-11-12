@@ -1,4 +1,4 @@
-import { customOrderCode, type TeamCustomsResponse } from "@agency_hub_core/contracts";
+import type { TeamCustomsResponse } from "@agency_hub_core/contracts";
 import { listCustomOrdersAwaitingGiving, type CustomOrderRow } from "@agency_hub_core/db";
 
 import type { AppContext } from "../../bootstrap.ts";
@@ -8,7 +8,8 @@ import { cardOf, priceMillsOf, whatOf } from "./rules.ts";
 /**
  * «Кастомы оплачены, не отданы» once the owner points it at the custom orders
  * (`customOrdersReadEnabled`, off by default): «Ждут вас» and «Решения» (through
- * `teamCustoms`), the morning report's line and the matters mirror. Off, each
+ * `teamCustoms`, and the customs row of «Ждут вас» read from matters), the morning
+ * report's line; the matters mirror then opens nothing of its old kind. Off, each
  * keeps reading the old table as before. The number counts the orders paid (a
  * sale, or the state) or shot and not given.
  */
@@ -54,18 +55,4 @@ export function teamCustomsOfOrders(orders: readonly CustomOrderRow[], now: Date
       }),
     serverNow: now.toISOString(),
   };
-}
-
-/** The mirror's items of `custom.paid_not_delivered` from the orders: keyed by the order's code, never colliding with the old table's ids. */
-export function paidOrderItems(orders: readonly CustomOrderRow[], limit: number) {
-  const items = orders.map((order) => ({
-    key: `custom.paid_not_delivered:${customOrderCode(order.id)}`,
-    title: `Кастом оплачен, не отдан: ${order.pageLabel ?? "страница не подтверждена"}`,
-    object: { type: "custom_order", id: String(order.id) },
-    pageLabels: order.pageLabel === null ? [] : [order.pageLabel],
-    money: false,
-    evidence: { code: customOrderCode(order.id), state: order.state, paidAt: waitsSince(order).toISOString(), acceptedBy: order.acceptedBy },
-    link: `/workboard/customs/${customOrderCode(order.id)}`,
-  }));
-  return { items, capped: orders.length >= limit };
 }
