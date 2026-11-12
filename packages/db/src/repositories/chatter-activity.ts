@@ -1,4 +1,4 @@
-import { sql } from "drizzle-orm";
+import { sql, type SQL } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
 
@@ -9,6 +9,23 @@ import type { Database } from "../client.ts";
 // computed from the minutes when it is read.
 
 const MINUTE_MS = 60_000;
+
+/**
+ * Whether the login `userId` (an SQL expression) is the owner's: a login of the owner role, or one the people registry
+ * gives to a person of the owner role (the owner writes from a chatter login too). The owner is not a chatter: no sale
+ * is the owner's, by a shift or by the last message to the fan (owner, 2026-11-12).
+ */
+export function isOwnerLogin(userId: SQL): SQL {
+  return sql`(exists (select 1 from users owner_u where owner_u.id = ${userId} and owner_u.role = 'owner')
+    or exists (select 1 from person_logins owner_l join people owner_p on owner_p.id = owner_l.person_id
+      where owner_l.user_id = ${userId} and owner_p.role = 'owner'))`;
+}
+
+/** The owner's logins (`isOwnerLogin`). */
+export async function listOwnerLoginIds(db: Database): Promise<Set<number>> {
+  const result = await db.execute<{ id: string | number }>(sql`select u.id from users u where ${isOwnerLogin(sql`u.id`)}`);
+  return new Set(result.rows.map((row) => Number(row.id)));
+}
 
 /** The start of the minute of `at`, as the minutes table keys it. Pure. */
 export function activityMinuteOf(at: Date): Date {
@@ -128,7 +145,9 @@ export async function countAuthoredSendsByMinute(
 
 /**
  * Who last wrote to each sale's fan on its page before it, within `hours`, by
- * the sale's id. A sale with no such message is left out.
+ * the sale's id; the owner's messages are passed over (`isOwnerLogin`): the
+ * chatter who wrote before the owner stepped in is the last. A sale with no
+ * such message is left out.
  */
 export async function listSaleLastWriters(
   db: Database,
@@ -148,6 +167,7 @@ export async function listSaleLastWriters(
       from client_send_attributions a
       where a.page_id = s.page_id and a.fan_ref = s.fan_ref
         and a.observed_at <= s.at and a.observed_at > s.at - make_interval(hours => ${input.hours})
+        and not ${isOwnerLogin(sql`a.user_id`)}
       order by a.observed_at desc
       limit 1
     ) w on true`);
