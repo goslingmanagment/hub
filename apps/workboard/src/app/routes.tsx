@@ -81,6 +81,12 @@ const teamScreens: RouteObject[] = [
     handle: { screenKey: (params) => `${params.userId ?? ""}/${params.shiftStart ?? ""}` } satisfies ScreenHandle,
     lazy: () => import("../screens/review/index.js").then((m) => ({ Component: m.ReviewScreen })),
   },
+  // A shift's report, read (never changed) by the team: from the review and the person's shifts.
+  {
+    path: "shifts/report/:shiftId",
+    handle: { screenKey: (params) => params.shiftId ?? "" } satisfies ScreenHandle,
+    lazy: () => import("../screens/shift/index.js").then((m) => ({ Component: m.ShiftScreen })),
+  },
   { path: "people", lazy: () => import("../screens/people/index.js").then((m) => ({ Component: m.PeopleScreen })) },
   { path: "people/:ref/shifts", element: <PersonShiftsRedirect /> },
   {
@@ -99,6 +105,12 @@ const teamScreens: RouteObject[] = [
 const chatterScreens: RouteObject[] = [
   { path: "my/shifts", lazy: () => import("../screens/my-shifts/index.js").then((m) => ({ Component: m.MyShiftsScreen })) },
   { path: "my/reports", element: <MyReportsRedirect /> },
+  // A shift and its report (ecosystem package F): the person's own to hand in, a colleague's to read.
+  {
+    path: "my/shifts/:shiftId",
+    handle: { screenKey: (params) => params.shiftId ?? "" } satisfies ScreenHandle,
+    lazy: () => import("../screens/shift/index.js").then((m) => ({ Component: m.ShiftScreen })),
+  },
 ];
 
 /**

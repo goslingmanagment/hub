@@ -152,6 +152,14 @@ export const AGENT_CAPABILITIES = [
    * a payment is a person's «Это оплата?»; never «отдали»: that is the chatter's.
    */
   "write:customs",
+  /**
+   * The shift report «со слов» (ecosystem plan 2026-11-12, package F): read a
+   * person's draft as the person sees it, set what they say of a sale, the
+   * comment and «мимо площадки», and hand the shift in — every write with the
+   * Telegram sender's id, which must be the person's, and the hand-in also with
+   * the message it was said in. Gengar's /smena. Never another person's money.
+   */
+  "write:shift_reports",
 ] as const;
 
 export type AgentCapability = (typeof AGENT_CAPABILITIES)[number];

@@ -106,6 +106,16 @@ export const CLIENT_TOKEN_PROFILES = {
       "clientAiLimit",
       // Дела: how many matters wait for the person and the newest of them, no evidence (the badge of a later package).
       "clientMatters",
+      // Отчёт смены (ecosystem package F): the person's shift and its draft, their words on a line, the comment,
+      // «мимо площадки», «Сдать смену», and their shifts with the report's state — the extension's «Смена».
+      "shiftReport",
+      "shiftReportsList",
+      "shiftReportClaimable",
+      "shiftReportLineSet",
+      "shiftReportCommentSet",
+      "shiftReportOffPlatformAdd",
+      "shiftReportOffPlatformWithdraw",
+      "shiftReportSubmit",
       // chatspace-tab-state-v1: the always-on ChatSpace tab's report (the server's own hub user).
       "clientChatspaceTabState",
       // onlyfans-feed-v1: what the page's ChatSpace already received, passed on

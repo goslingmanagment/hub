@@ -34,9 +34,11 @@ export const PERSON_ROLES = ["owner", "team_lead", "chatter", "content_manager",
 export const PERSON_STATES = ["invited", "set_up", "working", "left"] as const;
 /**
  * Narrow rights beside the role. customs_lead — «ведёт кастомы»; records_customs — «записывает кастомы в
- * системе»: the person gets the custom checks' matters (an unrecorded custom, «отдайте фану»), off by default.
+ * системе»: the person gets the custom checks' matters (an unrecorded custom, «отдайте фану»), off by default;
+ * submits_shift — «сдаёт смену в системе»: the person's switch of the shift report in Hub (ecosystem package F;
+ * off — «Мои смены» as before).
  */
-export const PERSON_RIGHTS = ["customs_lead", "records_customs"] as const;
+export const PERSON_RIGHTS = ["customs_lead", "records_customs", "submits_shift"] as const;
 export const PERSON_WEEKDAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"] as const;
 /** Where a record came from: the owner's screen, the one-off import, an agent's accepted proposal. */
 export const PERSON_ORIGINS = ["owner", "import", "proposal"] as const;

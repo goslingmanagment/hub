@@ -61,7 +61,7 @@ interface PersonSpec {
   pages: string[];
   slots: SlotSpec[];
   telegram?: { userId: number; handle: string; tag: string | null };
-  rights?: Array<"customs_lead" | "records_customs">;
+  rights?: Array<"customs_lead" | "records_customs" | "submits_shift">;
   leftDaysAgo?: number;
   note?: string;
   notes?: { code: string; text: string; settledDaysAgo?: number }[];
@@ -160,7 +160,7 @@ interface Rec {
   pages: string[];
   slots: SlotRec[];
   telegram: Person["telegram"];
-  rights: { right: "customs_lead" | "records_customs"; grantedAt: string }[];
+  rights: { right: "customs_lead" | "records_customs" | "submits_shift"; grantedAt: string }[];
   note: string | null;
   notes: PersonImportNote[];
   origin: Person["origin"];

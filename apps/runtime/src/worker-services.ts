@@ -39,6 +39,7 @@ import { MATTERS_MIRROR_QUEUE, runMattersMirror } from "./services/matters-mirro
 import { runMatterChecks } from "./services/matter-checks.ts";
 import { CUSTOM_CHECKS_QUEUE, runCustomOrderChecks } from "./services/custom-orders/checks.ts";
 import { SALE_HOMES_QUEUE, runSaleHomesTick } from "./services/sale-homes.ts";
+import { runShiftReportMatters } from "./services/shift-handin-matters.ts";
 import { SHIFT_ROWS_QUEUE, runShiftRowsTick } from "./services/shift-rows.ts";
 import { SYSTEM_STATE_QUEUE, runSystemStateTick } from "./services/system-state-tick.ts";
 import {
@@ -447,6 +448,10 @@ export async function startWorkerServices(
   // Shifts as rows with a stable id, and whose each sale is by the one rule: in shadow, no screen reads them yet.
   await boss.work(SHIFT_ROWS_QUEUE, CRON_SWEEP_WORK_OPTIONS, async () => {
     await runShiftRowsTick(app);
+    // Отчёт смены: «Сдайте смену» to the person two hours after the shift closed, one line to the owner a day later.
+    await runShiftReportMatters(app).catch((error: unknown) => {
+      app.logger.warn({ err: error instanceof Error ? error.message : String(error) }, "shift report matters failed; the rows are synced");
+    });
   });
   await boss.work(SALE_HOMES_QUEUE, CRON_SWEEP_WORK_OPTIONS, async () => {
     await runSaleHomesTick(app);
