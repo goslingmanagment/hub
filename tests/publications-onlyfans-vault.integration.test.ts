@@ -218,7 +218,7 @@ async function fakeRunUpload(_app: AppContext, _pageId: number, jobId: string) {
     vault.set(id, { isReady: true });
     const credits = typeof answer === "object" ? answer.done : Number(job.target.maxCredits);
     await testDb!.pool.query(
-      `update ofapi_capture_jobs set state = 'complete', completed_at = now(), dispatch_count = 1,
+      `update ofapi_capture_jobs set state = 'complete', completed_at = now(), terminal_observation_id = 1, terminal_observation_received_at = now(), dispatch_count = 1,
               cursor = jsonb_build_object('phase', 'terminal', 'status', 'completed', 'mediaRef', $2::text, 'isReady', false, 'actualCredits', $3::int)
         where id = $1::uuid`, [jobId, id, credits]);
     return;
@@ -414,7 +414,7 @@ describe("money", () => {
     // Its job lives on: the late outcome lands in it.
     vault.set("8888", { isReady: true });
     await testDb!.pool.query(
-      `update ofapi_capture_jobs set state = 'complete', completed_at = now(),
+      `update ofapi_capture_jobs set state = 'complete', completed_at = now(), terminal_observation_id = 1, terminal_observation_received_at = now(),
               cursor = jsonb_build_object('phase', 'terminal', 'status', 'completed', 'mediaRef', '8888', 'actualCredits', 3)
         where id = $1::uuid`, [jobId]);
 
