@@ -33,6 +33,15 @@ for f in business-dump.sh unfinished-inputs.sql; do
   [[ -f $here/$f ]] || { printf 'Missing %s next to %s\n' "$f" "$0" >&2; exit 1; }
 done
 mkdir -p "$base"
+# Nothing here deletes an old copy (how many to keep is the owner's call), so this guard is what
+# keeps a forgotten Mac from filling up: below the floor the run refuses and says so.
+min_free_gb=${HUB_BACKUP_MIN_FREE_GB:-30}
+free_kb=$(df -Pk "$base" | awk 'NR == 2 { print $4 }')
+[[ ${free_kb:-0} -ge $((min_free_gb * 1024 * 1024)) ]] || {
+  printf 'Only %s GB free under %s, need %s: not copying. Old copies are never deleted here.\n' \
+    "$(( ${free_kb:-0} / 1024 / 1024 ))" "$base" "$min_free_gb" >&2
+  exit 1
+}
 # One copy at a time: a second run while one streams would double the load on production.
 lock="$base/.pull-backup.lock"
 shlock -p $$ -f "$lock" || { printf 'Another pull-backup is running (%s)\n' "$lock" >&2; exit 1; }

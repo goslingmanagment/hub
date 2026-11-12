@@ -11,7 +11,7 @@ file of the same copy. A full copy of the raw capture needs bought space and is 
 | The dump | `~/Backups/agency-hub/<UTC>/hub-business.dump` (`pg_dump -Fc`, PostgreSQL 16) |
 | Raw inputs of unfinished work | `~/Backups/agency-hub/<UTC>/hub-unfinished-inputs.sql` (psql script of `COPY` blocks) and the selection that chose them, `unfinished-inputs.sql` |
 | What it is | `~/Backups/agency-hub/<UTC>/manifest.json`: bytes, tables, tables with data, snapshot time, unfinished work by state, hub revision (the API image's source revision), `/api/v1/health` contract hash, duration |
-| How many | every copy is kept: nothing deletes a copy (deleting backups is the owner's call). Each run prints how many copies there are and their total size |
+| How many | every copy is kept: nothing deletes a copy (deleting backups is the owner's call). Each run prints how many copies there are and their total size, and refuses to start when less than 30 GB is free on the Mac's disk (`HUB_BACKUP_MIN_FREE_GB`) |
 | When | daily 05:20 Moscow (02:20 UTC), launchd agent `ru.gosling-agency.hub-backup`, logs in `~/Backups/agency-hub/logs/` |
 
 ## How it works
