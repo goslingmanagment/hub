@@ -26,7 +26,7 @@ for at password sign-in (`client: "chat-extension"`): it reaches only the
 63 routes marked "yes", and every route marked "no" refuses it with 403.
 A full device token is not affected.
 
-## Routes (417)
+## Routes (427)
 
 | Method | Path | Route key | Kind | Roles | Page scope | chat-extension token |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -153,6 +153,12 @@ A full device token is not affected.
 | DELETE | `/api/v1/admin/pages/:pageLabel` | `adminDeletePage` | `owner-session` | — | — | no |
 | PATCH | `/api/v1/admin/pages/:pageLabel` | `adminUpdatePage` | `owner-session` | — | — | no |
 | POST | `/api/v1/admin/pages/:pageLabel/verify` | `adminVerifyPage` | `owner-session` | — | — | no |
+| POST | `/api/v1/admin/people` | `adminPersonCreate` | `owner-session` | — | — | no |
+| GET | `/api/v1/admin/people-proposals` | `adminPeopleProposals` | `owner-session` | — | — | no |
+| POST | `/api/v1/admin/people-proposals/:proposalId/decide` | `adminPersonProposalDecide` | `owner-session` | — | — | no |
+| GET | `/api/v1/admin/people/:code` | `adminPerson` | `owner-session` | — | — | no |
+| PATCH | `/api/v1/admin/people/:code` | `adminPersonUpdate` | `owner-session` | — | — | no |
+| PUT | `/api/v1/admin/people/:code/pay-terms` | `adminPersonPayTermSet` | `owner-session` | — | — | no |
 | GET | `/api/v1/admin/publications` | `adminPublicationList` | `owner-session` | — | — | no |
 | POST | `/api/v1/admin/publications` | `adminPublicationCreate` | `owner-session` | — | — | no |
 | GET | `/api/v1/admin/publications/:id` | `adminPublicationGet` | `owner-session` | — | — | no |
@@ -239,8 +245,11 @@ A full device token is not affected.
 | GET | `/api/v1/agent/pages/:pageLabel/threads/:conversationRef/availability` | `agentThreadAvailability` | `agentKey` | — | page | no |
 | POST | `/api/v1/agent/pages/:pageLabel/threads/:conversationRef/hydration-requests` | `agentHydrationRequestCreate` | `agentKey` | — | page | no |
 | GET | `/api/v1/agent/pages/:pageLabel/threads/:conversationRef/messages` | `agentThreadMessages` | `agentKey` | — | page | no |
+| GET | `/api/v1/agent/people` | `agentPeople` | `agentKey` | — | — | no |
 | GET | `/api/v1/agent/people/:platform/:platformUserId` | `agentPerson` | `agentKey` | — | — | no |
 | GET | `/api/v1/agent/people/:platform/:platformUserId/timeline` | `agentPersonTimeline` | `agentKey` | — | — | no |
+| GET | `/api/v1/agent/people/proposals` | `agentPersonProposals` | `agentKey` | — | — | no |
+| POST | `/api/v1/agent/people/proposals` | `agentPersonProposalCreate` | `agentKey` | — | — | no |
 | GET | `/api/v1/agent/publications/:id` | `agentPublicationGet` | `agentKey` | — | — | no |
 | PUT | `/api/v1/agent/publications/:id` | `agentPublicationUpdate` | `agentKey` | — | — | no |
 | POST | `/api/v1/agent/publications/:id/cancel` | `agentPublicationCancel` | `agentKey` | — | — | no |
@@ -433,6 +442,7 @@ A full device token is not affected.
 | GET | `/api/v1/team/ledger-payouts/prepare` | `teamLedgerPayoutPrepare` | `owner-session` | — | — | no |
 | GET | `/api/v1/team/ledger-questions` | `teamLedgerQuestions` | `owner-session` | — | — | no |
 | GET | `/api/v1/team/ledger-reports` | `teamLedgerReports` | `owner-session` | — | — | no |
+| GET | `/api/v1/team/people` | `teamPeople` | `session` | — | — | no |
 | GET | `/api/v1/team/sales/ppv` | `teamSalesPpv` | `session` | — | — | no |
 | GET | `/api/v1/team/sales/replies` | `teamSalesReplies` | `session` | — | — | no |
 | GET | `/api/v1/team/shift-review` | `teamShiftReview` | `owner-session` | — | — | no |

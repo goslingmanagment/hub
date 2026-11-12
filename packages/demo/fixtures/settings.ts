@@ -44,6 +44,11 @@ function adminPage(page: DemoPage, now: Date) {
  *  team screen knows her, she has never worked a shift. */
 const INVITED: DemoUser = { id: 10, username: "nika.t", role: "chatter", name: "Ника", pages: ["mia-3"], active: true };
 
+/** The owner's second login, a chatter's, for the extension: one person, two logins (people.ts). */
+export const OWNER_CHAT_LOGIN: DemoUser = {
+  id: 11, username: "owner.chat", role: "chatter", name: "Владелец", pages: DEMO_PAGES.map((page) => page.label), active: true,
+};
+
 interface Tenure {
   /** When the account was created (invite issued). */
   joinedDaysAgo: number;
@@ -64,10 +69,11 @@ const TENURE: Readonly<Record<string, Tenure>> = {
   "ivan.p": { joinedDaysAgo: 44, lastActiveHours: 8.5 },
   "lena.r": { joinedDaysAgo: 131, lastActiveHours: 12.4 * 24, disabledDaysAgo: 12 },
   "nika.t": { joinedDaysAgo: 1, lastActiveHours: null },
+  "owner.chat": { joinedDaysAgo: 412, lastActiveHours: 3.2 },
 };
 
 export function teamUsers(): DemoUser[] {
-  return [...DEMO_USERS, INVITED];
+  return [...DEMO_USERS, INVITED, OWNER_CHAT_LOGIN];
 }
 
 function tenure(user: DemoUser): Tenure {

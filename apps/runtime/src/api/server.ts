@@ -76,6 +76,7 @@ import { registerPublicationRoutes } from "../modules/publications/index.ts";
 import { registerAgentTeamRoutes } from "../modules/agent-team/index.ts";
 import { registerMediaLookRoutes } from "../modules/media-looks/index.ts";
 import { registerTeamLedgerRoutes } from "../modules/team-ledger/index.ts";
+import { registerPeopleRoutes } from "../modules/people/index.ts";
 import { registerFanQueueRoutes } from "../modules/fan-queues/index.ts";
 import { registerMatterRoutes } from "../modules/matters/index.ts";
 import { registerOutreachRoutes } from "../modules/outreach/index.ts";
@@ -678,6 +679,8 @@ export async function buildApiServer(appContext: AppContext) {
   registerTeamLedgerRoutes(server, moduleContext);
   // Дела: what waits for a person, by reason key (the session, the extension, an agent key with write:matters).
   registerMatterRoutes(server, moduleContext);
+  // The people registry: the team's list, the owner's card and writes, the agent feed and proposals.
+  registerPeopleRoutes(server, moduleContext);
   // «Рассылки» kept by Hub: the page's outreaches, shared by its team, and each fan's send claimed once.
   registerOutreachRoutes(server, moduleContext);
   // Their files: the upload streams raw bytes to disk (its own body-parser scope).

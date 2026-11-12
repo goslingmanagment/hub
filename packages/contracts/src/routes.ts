@@ -24,6 +24,7 @@ import { shiftReviewRouteSchemas } from "./routes-shift-review.ts";
 import { teamLedgerRouteSchemas } from "./routes-team-ledger.ts";
 import { matterRouteSchemas } from "./routes-matters.ts";
 import { accountReportsRouteSchemas } from "./routes-account-reports.ts";
+import { peopleRouteSchemas } from "./routes-people.ts";
 import {
   PERIOD_OPTIONS,
   SPENDER_PERIOD_OPTIONS,
@@ -7169,6 +7170,7 @@ const baseRouteSchemas = {
   ...teamLedgerRouteSchemas,
   ...matterRouteSchemas,
   ...accountReportsRouteSchemas,
+  ...peopleRouteSchemas,
   adminAiPersonasList: {
     auth: { kind: "owner-session" },
     tags: ["admin"],

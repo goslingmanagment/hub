@@ -210,6 +210,11 @@ const SANCTIONED_DELETER_FILES = [
   // captured fact (the schedule reads they came from are). The nightly
   // retention job deletes frames after 7 days and look rows after 90.
   "packages/db/src/repositories/media-looks.ts",
+  // People registry (0384, ecosystem package A): the owner's edit of a person
+  // takes a login or an agent key off the person and replaces the person's
+  // working pages and rights — agency configuration, audited per edit, never
+  // a captured fact and never on a schedule. People and pay terms are not deleted.
+  "packages/db/src/repositories/people.ts",
   // Fansly Sync Engine hold set (0240, owner decision №26): a page's holds
   // are rows of `sync_holds`, and lifting a hold deletes its row — in the
   // actor's own transaction (an identity proof, an answer after a hold ended,

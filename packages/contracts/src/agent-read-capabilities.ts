@@ -61,6 +61,8 @@ export const AGENT_CAPABILITIES = [
    * writer, the chatters' marks and the owner's split (`agentTeamSales`).
    * The agency ledger's right (ledger release 2, owner 2026-11-09): whose a
    * sale is and what anyone is paid is the ledger's. Needs read:money too.
+   * Alone it reads the people registry's feed (`agentPeople`): who is who,
+   * their logins, working pages, schedule and Telegram — no money.
    */
   "read:team",
   /**
@@ -95,6 +97,19 @@ export const AGENT_CAPABILITIES = [
    * Nothing is read back but the matter's key and state.
    */
   "write:matters",
+  /**
+   * The people registry's pay terms in the people feed (`agentPeople`, which
+   * itself needs read:team): each person's share and fix per shift by model,
+   * with the day each holds from. Money, for the agency ledger's key only
+   * (ecosystem plan 2026-11-12, package A); without it the feed carries none.
+   */
+  "read:pay_terms",
+  /**
+   * Proposing a change about a person, or a new person (`agentPersonProposal`):
+   * the proposal waits for the owner, who accepts or rejects it; an agent never
+   * changes a person itself. Never pay terms (ecosystem plan 2026-11-12).
+   */
+  "propose:people",
 ] as const;
 
 export type AgentCapability = (typeof AGENT_CAPABILITIES)[number];
