@@ -110,6 +110,31 @@ export function parseCardText(text: string): { card: CustomOrderCard; deadlineOn
   return { card: cardOf(draft), deadlineOn, buyer: value("buyer") ?? null, code };
 }
 
+/** «Tom (u100000001)», «Sam (sam_handle)», «handle123», a link: the handle to look the fan up by. */
+export function buyerHandleOf(buyer: string | null | undefined): string | null {
+  if (!buyer) return null;
+  const inParens = /\(([^)]+)\)\s*$/u.exec(buyer.trim());
+  const handle = (inParens ? inParens[1]! : buyer).trim();
+  return handle === "" || /\s\+\s/u.test(handle) ? null : handle;
+}
+
+/**
+ * Whether a buyer's string (an order no fan of the page was matched for keeps it as the card named him) names this
+ * fan: his profile link, @handle, username or the platform's number. A name alone («Том») names nobody.
+ */
+export function buyerNamesFan(buyer: string, fan: { platform: string; platformUserId: string; username: string | null }): boolean {
+  const handle = buyerHandleOf(buyer);
+  if (handle === null) return false;
+  if (handle === fan.platformUserId) return true;
+  const parsed = fanInputOf(fan.platform, handle);
+  if (parsed === null) return false;
+  if (parsed.platformUserId !== null) return parsed.platformUserId === fan.platformUserId;
+  return fan.username !== null && parsed.username !== null && parsed.username.toLowerCase() === fan.username.toLowerCase();
+}
+
+/** The card's fields that hold the fan's own words — what he asked for, the name said, his references: erased with him. */
+export const CUSTOM_CARD_FAN_TEXTS = ["name", "task", "notes", "photos", "clothes", "attachments"] as const;
+
 /** «120$», «$120», «120», «120.50 $» → mills; anything else (several sums, words) → null. */
 export function priceMillsOf(price: string | undefined): number | null {
   if (price === undefined) return null;

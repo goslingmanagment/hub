@@ -15,7 +15,7 @@ import {
 
 import type { AppContext } from "../../bootstrap.ts";
 import { recordCustomOrder } from "./index.ts";
-import { fanInputOf, parseCardText } from "./rules.ts";
+import { buyerHandleOf, fanInputOf, parseCardText } from "./rules.ts";
 
 /**
  * Заказ кастома, the one-off import of the open orders (ecosystem plan
@@ -141,13 +141,7 @@ class Groups {
   }
 }
 
-/** «Tom (u100000001)», «Sam (sam_handle)», «handle123», a link: the handle to look the fan up by. */
-export function buyerHandleOf(buyer: string | null | undefined): string | null {
-  if (!buyer) return null;
-  const inParens = /\(([^)]+)\)\s*$/u.exec(buyer.trim());
-  const handle = (inParens ? inParens[1]! : buyer).trim();
-  return handle === "" || /\s\+\s/u.test(handle) ? null : handle;
-}
+export { buyerHandleOf } from "./rules.ts";
 
 function moscowDayOf(iso: string): string {
   return new Date(Date.parse(iso) + 3 * 3_600_000).toISOString().slice(0, 10);

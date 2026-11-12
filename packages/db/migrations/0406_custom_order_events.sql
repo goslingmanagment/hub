@@ -1,5 +1,5 @@
 -- agency-hub:rollback-compatible — four nullable columns, two indexes, checks every existing row passes, and telegram_ref no longer NOT NULL: the previous image writes every row with its link as before and never names the new columns.
--- 0999_custom_order_events.sql (the number is the train's to give)
+-- 0406_custom_order_events.sql
 --
 -- Заказ кастома, an event's own identity (review of packages I and N, 2026-11-12). A message of an order was
 -- known only by its Telegram link (and ordinal), so an order with no card could take no delivery, and a second

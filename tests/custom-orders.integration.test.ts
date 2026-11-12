@@ -193,6 +193,11 @@ describe("custom orders: who sees and moves what", () => {
     expect(agentCustomOrderResponseSchema.parse((await agent(`/api/v1/agent/custom-orders/${order.code}`, revision)).json()).outcome).toBe("changed");
     const repeat = agentCustomOrderResponseSchema.parse((await agent(`/api/v1/agent/custom-orders/${order.code}`, revision)).json());
     expect(repeat).toMatchObject({ outcome: "unchanged", order: { state: "revision", openRevisions: 1 } });
+    // The daily routine repeats every message it sees: the first delivery again changes nothing — the order stays «правка».
+    const redelivered = agentCustomOrderResponseSchema.parse((await agent(`/api/v1/agent/custom-orders/${order.code}`, {
+      action: "delivery", message: { telegramRef: "tg:2600000001/3/300", excerpt: "6-08 стриптиз.mov" }, part: "video",
+    })).json());
+    expect(redelivered).toMatchObject({ outcome: "unchanged", order: { state: "revision", openRevisions: 1 } });
 
     // The reader's reads and reports (both answered 500 once: their audit lines broke the audit's own shapes).
     const listed = await server!.inject({ method: "GET", url: `/api/v1/agent/custom-orders?code=${order.code}`, headers: { authorization: `Bearer ${WRITER}` } });
@@ -346,8 +351,14 @@ describe("custom orders: who sees and moves what", () => {
     )).rows[0]!.id);
     await testDb.pool.query("insert into page_fans (fan_id, platform_account_id, is_subscriber) values ($1, $2, true)", [fanId, pages["lora-1"]]);
     const id = await recordCustomOrder(app, {
-      pageId: pages["lora-1"]!, fanId, buyer: null, conversationRef: null, card: { task: "Ролик для фана" }, deadlineOn: null,
+      pageId: pages["lora-1"]!, fanId, buyer: null, conversationRef: null, deadlineOn: null,
+      card: { task: "Ролик для Тома, скажи «Том, привет»", notes: "Том просил чёрное", price: "100$", duration: "5 минут" },
       acceptedByUserId: users.alice!, origin: "extension", actor: { door: "extension", userId: users.alice! },
+    });
+    // An order the fan matched no fan of the page for: the card's buyer string names him.
+    const byName = await recordCustomOrder(app, {
+      pageId: pages["lora-1"]!, fanId: null, buyer: "Том (fan_nine)", conversationRef: null, deadlineOn: null,
+      card: { task: "Ещё ролик для Тома", price: "50$" }, acceptedByUserId: null, origin: "import", actor: { door: "system" },
     });
     const code = `K-${id}`;
     expect((await act("carol", code, { action: "at_model" })).statusCode).toBe(200);
@@ -366,6 +377,11 @@ describe("custom orders: who sees and moves what", () => {
     expect(texts).not.toContain("Том");
     expect(detail.history.map((item) => item.event)).toEqual(expect.arrayContaining(["custom_order.delivery", "custom_order.revision"]));
     expect(detail.order).toMatchObject({ state: "revision", fanErased: true, stateNote: null, partsDone: ["video"] });
+    // The card keeps what the order is (its price, its length), not the fan's words.
+    expect(detail.order.card).toEqual({ price: "100$", duration: "5 минут" });
+    const named = customOrderDetailResponseSchema.parse((await get("boss", `/api/v1/custom-orders/K-${byName}`)).json());
+    expect(named.order).toMatchObject({ buyer: null, fanErased: true, card: { price: "50$" } });
+    expect(JSON.stringify(named)).not.toContain("Том");
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("keeps the order through the fan's erasure: its preview says anonymize, and the order stays without the fan", async (context) => {

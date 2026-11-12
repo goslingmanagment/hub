@@ -10,6 +10,7 @@ import {
   matterChanges,
   openMatter,
   touchMatters,
+  type CustomLookalikeRow,
   type CustomOrderRow,
   type MatterActor,
   type MatterOpenInput,
@@ -27,25 +28,30 @@ import { deadlinePassed, dottedDay } from "./rules.ts";
  * pass, Hub's server): every five minutes it reads the orders and the sales and
  * makes the matters what they say, and closes those whose cause is gone.
  *
- *   custom.not_at_model      paid and not at the model for 24 h → the lead
+ *   custom.not_at_model      paid or recorded and not at the model for 24 h, or the model refused it 12 h ago and
+ *                            nobody moved it since → the lead (deadline or not: such an order waits for no one else)
  *   custom.overdue           the deadline's day is over and it is not shot → the lead;
  *   custom.overdue_owner     the same day one line for the owner, with the count
  *   custom.shot_not_given    shot and not given for 12 h → the chatter who accepted it
  *   custom.give_on_shift     … and the person on shift on its page
  *   custom.unrecorded        a tier that includes a custom, or a tip whose note says so, with no order a day
- *                            later → the chatter who led the chat («не кастом» closes it)
+ *                            later → the chatter who led the chat when they record customs, else the lead (an
+ *                            order or «не кастом» closes it)
  *   custom.card_without_order a Telegram card no order has (the reader of the models' groups reports it) → the lead
  *
  * A chatter gets a matter only with the right «записывает кастомы в системе» (records_customs, off by default):
- * the obligation is a background check, never a blocker, and it starts per person. Without a lead the lead's
+ * the obligation is a background check, never a blocker, and it starts per person; until then the lead gets the
+ * chatter's findings, so every finding waits for someone. Without a lead the lead's
  * matters are the team leads' role's. The pass also closes an order given 72 hours ago with no revision: the
  * system never closes an order that was not given. Database only.
  */
 
 export const CUSTOM_CHECKS_QUEUE = "custom-orders.checks";
 const HOUR_MS = 3_600_000;
-/** Paid and not at the model this long → the lead. */
+/** Paid (or recorded) and not at the model this long → the lead. */
 const NOT_AT_MODEL_HOURS = 24;
+/** The model refused and nobody moved the order since (another model, a cancel) this long → the lead. */
+const REFUSED_HOURS = 12;
 /** Shot and not given this long → the chatter. */
 const NOT_GIVEN_HOURS = 12;
 /** A sale that looks like a custom gets its order within this long, or a matter. */
@@ -94,10 +100,15 @@ export function orderFindings(input: {
     const code = customOrderCode(order.id);
     const pageIds = order.pageId === null ? [] : [order.pageId];
     const since = now.getTime() - order.stateAt.getTime();
-    if (order.state === "paid" && since >= NOT_AT_MODEL_HOURS * HOUR_MS) {
+    const waitsAtStart = (order.state === "paid" || order.state === "recorded") && since >= NOT_AT_MODEL_HOURS * HOUR_MS;
+    const refusedLong = order.state === "refused" && since >= REFUSED_HOURS * HOUR_MS;
+    if (waitsAtStart || refusedLong) {
+      const title = order.state === "refused"
+        ? `Кастом ${code}: отказ модели, решите, что дальше: ${pageOf(order)}`
+        : `Кастом ${code} ${order.state === "paid" ? "оплачен" : "записан"} и сутки не у модели: ${pageOf(order)}`;
       out["custom.not_at_model"].push({
-        key: `custom.not_at_model:${code}`, title: `Кастом ${code} оплачен и сутки не у модели: ${pageOf(order)}`,
-        object: orderObject(order), pageIds, owner: lead, evidence: { code, since: order.stateAt.toISOString() }, link: orderLink(order),
+        key: `custom.not_at_model:${code}`, title,
+        object: orderObject(order), pageIds, owner: lead, evidence: { code, state: order.state, since: order.stateAt.toISOString() }, link: orderLink(order),
       });
     }
     if (["recorded", "paid", "at_model", "partly", "revision"].includes(order.state) && deadlinePassed(order.deadlineOn, now)) {
@@ -133,6 +144,26 @@ export function orderFindings(input: {
       owner: { role: "owner" },
       evidence: { count: overdue.length, codes: codes.slice(0, 50) },
       link: "/workboard/customs",
+    });
+  }
+  return out;
+}
+
+/** A sale that looks like a custom and has no order a day later, pure: one matter per sale. */
+export function unrecordedFindings(input: { sales: readonly CustomLookalikeRow[]; recorders: ReadonlySet<number>; lead: MatterOwner }): Finding[] {
+  const out: Finding[] = [];
+  for (const sale of input.sales) {
+    // The chatter who led the chat when they record customs; else the lead — nobody else would see it.
+    const chatter = sale.ledByUserIds.find((userId) => input.recorders.has(userId));
+    const owner: MatterOwner = chatter === undefined ? input.lead : { userId: chatter };
+    out.push({
+      key: `custom.unrecorded:${sale.transactionId}`,
+      title: `Похоже на кастом без заказа: ${sale.kind === "tier" ? "тир с кастомом" : "чаевые с запиской про кастом"}, ${sale.pageLabel}`,
+      object: { type: "transaction", id: String(sale.transactionId) },
+      pageIds: [sale.pageId],
+      owner,
+      evidence: { transactionId: sale.transactionId, kind: sale.kind, at: sale.at.toISOString() },
+      link: `/workboard/customs?sale=${sale.transactionId}`,
     });
   }
   return out;
@@ -234,29 +265,15 @@ export async function runCustomOrderChecks(app: Pick<AppContext, "db" | "logger"
     }
   }
 
-  const orders = await listCustomOrdersInStates(app.db, ["recorded", "paid", "at_model", "partly", "shot", "revision"]);
+  const orders = await listCustomOrdersInStates(app.db, ["recorded", "paid", "at_model", "partly", "shot", "revision", "refused"]);
   const findings = orderFindings({ orders, now, lead, recorders, onShift });
   for (const kind of Object.keys(findings) as Array<keyof typeof findings>) add(await reconcile(app, kind, findings[kind], now));
 
-  // A sale that looks like a custom, a day old and still without an order: its chatter's, with the right.
+  // A sale that looks like a custom, a day old and still without an order: its chatter's with the right, else the lead's.
   const sales = await listCustomLookalikeSales(app.db, {
     from: new Date(now.getTime() - UNRECORDED_DAYS * 24 * HOUR_MS), to: new Date(now.getTime() - UNRECORDED_HOURS * HOUR_MS), limit: 500,
   });
-  const unrecorded: Finding[] = [];
-  for (const sale of sales) {
-    const owner = sale.ledByUserIds.find((userId) => recorders.has(userId));
-    if (owner === undefined) continue;
-    unrecorded.push({
-      key: `custom.unrecorded:${sale.transactionId}`,
-      title: `Похоже на кастом без заказа: ${sale.kind === "tier" ? "тир с кастомом" : "чаевые с запиской про кастом"}, ${sale.pageLabel}`,
-      object: { type: "transaction", id: String(sale.transactionId) },
-      pageIds: [sale.pageId],
-      owner: { userId: owner },
-      evidence: { transactionId: sale.transactionId, kind: sale.kind, at: sale.at.toISOString() },
-      link: `/workboard/customs?sale=${sale.transactionId}`,
-    });
-  }
-  add(await reconcile(app, "custom.unrecorded", unrecorded, now));
+  add(await reconcile(app, "custom.unrecorded", unrecordedFindings({ sales, recorders, lead }), now));
 
   // A reported card that now belongs to an order: its matter closes (the cause is gone).
   const cardMatters = await listOpenMattersOfKinds(app.db, [CARD_KIND]);

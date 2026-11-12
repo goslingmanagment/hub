@@ -390,12 +390,12 @@ export type CustomOrderMessageKindRow = "repost" | "delivery" | "revision" | "co
 export interface CustomOrderMessageRow {
   /** The Telegram message: the row's identity, or the evidence of an event named by `eventRef`; null — none. */
   telegramRef: string | null;
-  /** The sender's own id of the event (0999: ContentOps' delivery or retraction); null — a Telegram message. */
+  /** The sender's own id of the event (0406: ContentOps' delivery or retraction); null — a Telegram message. */
   eventRef: string | null;
   ordinal: number;
   kind: CustomOrderMessageKindRow;
   part: "video" | "photos" | null;
-  /** A delivery: that part whole; null — not said (recorded before 0999). */
+  /** A delivery: that part whole; null — not said (recorded before 0406). */
   complete: boolean | null;
   postedAt: Date | null;
   author: string | null;
