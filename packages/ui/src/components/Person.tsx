@@ -25,13 +25,15 @@ function initialOf(name: string): string {
 /**
  * One way to show a person everywhere: a circle with the initial, the name and
  * a status dot. `hint` is a quiet second line («5 смен, 41 ч»); an empty hint
- * ("" or null) draws no second line. Wrap it in a link outside (Workboard's
- * PersonLink); it is not a link itself.
+ * ("" or null) draws no second line. `nameEnd` stands on the name's line, right
+ * of it (small marks: «расхождения: 2»), so a row stays two lines high. Wrap it
+ * in a link outside (Workboard's PersonLink); it is not a link itself.
  */
-export function Person({ name, status = "away", hint, size = "md", className, title }: {
+export function Person({ name, status = "away", hint, nameEnd, size = "md", className, title }: {
   name: string;
   status?: PersonStatus;
   hint?: ReactNode;
+  nameEnd?: ReactNode;
   size?: "md" | "lg";
   className?: string;
   title?: string;
@@ -44,7 +46,12 @@ export function Person({ name, status = "away", hint, size = "md", className, ti
         {status !== "away" && <span className={cx("ui-person__dot", `ui-person__dot--${status}`)} />}
       </span>
       <span className="ui-person__text">
-        <span className="ui-person__name">{name}</span>
+        {nameEnd === undefined || nameEnd === null || nameEnd === false ? <span className="ui-person__name">{name}</span> : (
+          <span className="ui-person__line">
+            <span className="ui-person__name">{name}</span>
+            <span className="ui-person__end">{nameEnd}</span>
+          </span>
+        )}
         {hint !== undefined && hint !== null && hint !== false && hint !== "" && <span className="ui-person__hint">{hint}</span>}
       </span>
       {status !== "away" && <span className="ui-sr-only">, {word.toLowerCase()}</span>}

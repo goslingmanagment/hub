@@ -1123,6 +1123,27 @@
     white-space: nowrap;
   }
 
+  /* The name and its small marks on one line (`nameEnd`): the name keeps its width; without room the marks wrap under it. */
+  .ui-person__line {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 2px 8px;
+    min-width: 0;
+  }
+
+  .ui-person__line .ui-person__name {
+    flex: 0 0 auto;
+    max-width: 100%;
+  }
+
+  .ui-person__end {
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    gap: 6px;
+  }
+
   .ui-person__hint {
     overflow: hidden;
     color: var(--ui-text-2);

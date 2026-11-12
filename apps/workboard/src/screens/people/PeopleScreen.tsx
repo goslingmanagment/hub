@@ -19,7 +19,7 @@ import { ProposalRow, slotSummary } from "./ScheduleTab.js";
 import { SlowFailed } from "./SlowFailed.js";
 import { usePeopleList, type PeopleList, type PersonNumbers } from "./data.js";
 import { lastSeenOf, liveLogins, onPagesOf, unsettledNotes, useCreatePerson, useOpenProposals, useTeamPeople, type RegistryLogin, type RegistryPerson } from "./registry.js";
-import { capitalized, periodWords, PERSON_ROLE_WORD, PERSON_STATE_WORD, ROLE_WORD, statusOf, versusTitle } from "./words.js";
+import { capitalized, periodWords, PERSON_ROLE_WORD, ROLE_WORD, statusOf, versusTitle } from "./words.js";
 import "./people.css";
 import "./registry.css";
 
@@ -63,9 +63,14 @@ export function PeopleScreen() {
     return page === null || worked || person.workingPages.some((one) => one.pageLabel === page);
   });
   const humans = shown.filter((person) => person.kind === "human");
-  const rows: Row[] = humans
+  // The table is for who works shifts: every chatter (a week without a shift is information too) and anyone else
+  // who had a shift in the period. The rest of the team (the owner, team leads, content managers, contractors) folds below.
+  const team: Row[] = humans
     .filter((person) => person.state === "working" || person.state === "set_up")
     .map((person) => ({ person, numbers: numbers.combine(liveLogins(person).map((login) => login.userId)) }));
+  const rows = team.filter((row) => row.person.role === "chatter" || (row.numbers.work?.shifts ?? 0) > 0);
+  const others = team.filter((row) => !rows.includes(row)).map((row) => row.person)
+    .sort((a, b) => (OTHERS_ORDER[a.role] ?? 9) - (OTHERS_ORDER[b.role] ?? 9) || a.displayName.localeCompare(b.displayName, "ru"));
   const invited = humans.filter((person) => person.state === "invited");
   const left = humans.filter((person) => person.state === "left").sort((a, b) => (b.leftOn ?? "").localeCompare(a.leftOn ?? ""));
   const agents = isOwner ? shown.filter((person) => person.kind === "agent") : [];
@@ -115,7 +120,7 @@ export function PeopleScreen() {
             {numbers.quality === "failed" && <SlowFailed onRetry={numbers.retryQuality} />}
             <div className="registry-toolbar">
               <span className="registry-toolbar__counts">
-                {registry.data ? <TeamCounts working={rows.length} invited={invited.length} left={left.length} /> : <Skeleton width={260} />}
+                {registry.data ? <TeamCounts working={team.length} invited={invited.length} left={left.length} /> : <Skeleton width={260} />}
               </span>
               {isOwner && <Button variant="primary" icon={UserPlus} onClick={() => setInviting(true)}>Пригласить</Button>}
             </div>
@@ -128,6 +133,8 @@ export function PeopleScreen() {
               rowHref={(row) => personCodePath(row.person.code, location.search)}
               rowState={rowState}
               rowQuiet={isQuiet}
+              // The spare width goes to «Человек» (its second line uses it), not shared out between the numbers.
+              fit={false}
               rowClassName={(row) => (row === firstOff && row !== sorted[0] ? "people-row--off" : undefined)}
               sort={sort}
               onSortChange={setSort}
@@ -151,6 +158,14 @@ export function PeopleScreen() {
                 <span className="people-idle__label">Ждут регистрации:</span>
                 {invited.map((person) => <CodeLink key={person.code} person={person} hint={inviteHint(person)} status="invited" />)}
               </div>
+            )}
+            {others.length > 0 && (
+              <Disclosure summary="Остальные" hint={String(others.length)} size="md">
+                <p className="access-text">Кто в команде, но без смен за период: владелец, тимлиды, контент-менеджеры, подрядчики.</p>
+                <div className="people-folded">
+                  {others.map((person) => <CodeLink key={person.code} person={person} hint={otherHint(person)} />)}
+                </div>
+              </Disclosure>
             )}
             {left.length > 0 && (
               <Disclosure summary="Ушли" hint={String(left.length)} size="md">
@@ -246,6 +261,16 @@ function TeamCounts({ working, invited, left }: { working: number; invited: numb
     left > 0 ? `${left} ${left === 1 ? "ушёл" : "ушли"}` : null,
   ].filter(Boolean);
   return <>{parts.join(" · ")}</>;
+}
+
+/** The order of «Остальные»: the owner, then team leads, content managers, contractors, anyone else. */
+const OTHERS_ORDER: Readonly<Record<string, number>> = { owner: 0, team_lead: 1, chatter: 2, content_manager: 3, contractor: 4 };
+
+/** «Тимлид · в сети 2 ч назад», «Подрядчик · без входа в Hub». */
+function otherHint(person: RegistryPerson): string {
+  const seen = lastSeenOf(person);
+  const where = liveLogins(person).length === 0 ? "без входа в Hub" : seen ? `в сети ${whenWords(seen)}` : "входов не было";
+  return `${PERSON_ROLE_WORD[person.role] ?? person.role} · ${where}`;
 }
 
 /** «nika.t · чаттер»: the login waiting for its password. */
@@ -349,18 +374,6 @@ function qualityHint(key: keyof typeof METRICS): ReactNode {
   return <>{METRICS[key].hint} {PER_SHIFT_HINT}</>;
 }
 
-/**
- * The dot and the words of a row: on a shift now («на смене с 21:00»), else the registry's state when it is not
- * «работает» and the last time any login was seen («в сети 2 ч назад»), or that the person has no login.
- */
-function statusOfRow(row: Row): { status: PersonStatus; words: string } {
-  const { person, numbers } = row;
-  if (numbers.now.onShiftSince) return statusOf({ state: "active", disabledAt: null, now: numbers.now });
-  const seen = lastSeenOf(person);
-  const where = liveLogins(person).length === 0 ? "без входа в Hub" : seen ? `в сети ${whenWords(seen)}` : "входов не было";
-  return { status: "away", words: [person.state === "working" ? "" : PERSON_STATE_WORD[person.state], where].filter(Boolean).join(", ") };
-}
-
 function useColumns(list: PeopleList, isOwner: boolean, page: string | null): Column<Row>[] {
   const { period } = usePeriod();
   const versus = versusTitle(period);
@@ -395,25 +408,42 @@ function useColumns(list: PeopleList, isOwner: boolean, page: string | null): Co
         grow: true,
         sortValue: (row) => row.person.displayName,
         cell: (row) => {
-          const { status, words } = statusOfRow(row);
-          const { person } = row;
-          const hint = [person.code, person.role !== "chatter" ? PERSON_ROLE_WORD[person.role]?.toLowerCase() : "", words].filter(Boolean).join(" · ");
+          const { person, numbers } = row;
           const notes = isOwner ? unsettledNotes(person) : 0;
+          const proposals = isOwner ? person.openProposals : 0;
           const slot = slotSummary(person);
-          const schedule = slot.main ?? slot.extra;
+          const going = numbers.now.onShiftSince ? statusOf({ state: "active", disabledAt: null, now: numbers.now }).words : null;
+          // Line 2, one line: the shift going on now (green) and the working pages, then the slot. The rest is the card's.
+          // A slot that does not fit whole is left out of the row (registry.css), never cut to a stub.
+          const head: ReactNode[] = [
+            going ? <span key="live" className="registry-who__live">{going}</span> : null,
+            person.workingPages.length > 0 ? <PageLabels key="pages" labels={person.workingPages.map((one) => one.pageLabel)} max={3} className="registry-who__pages" /> : null,
+          ].filter((part) => part !== null);
+          const marks = notes > 0 || proposals > 0 ? (
+            <>
+              {notes > 0 && <Badge tone="warning" className="registry-mark">расхождения: {notes}</Badge>}
+              {proposals > 0 && <Badge tone="info" className="registry-mark">{proposals === 1 ? "предложение агента" : `предложения агентов: ${proposals}`}</Badge>}
+            </>
+          ) : undefined;
           return (
-            <span className="people-who">
-              <Person name={person.displayName} status={status} hint={hint} />
-              {(person.workingPages.length > 0 || schedule || notes > 0 || (isOwner && person.openProposals > 0)) && (
-                <span className="registry-who__marks">
-                  {person.workingPages.length > 0 && <PageLabels labels={person.workingPages.map((one) => one.pageLabel)} max={3} className="people-who__pages" />}
-                  {slot.main && <span className="registry-who__slot">{slot.main}</span>}
-                  {slot.extra && <span className="registry-who__slot">{slot.extra}</span>}
-                  {notes > 0 && <Badge tone="warning">расхождения: {notes}</Badge>}
-                  {isOwner && person.openProposals > 0 && <Badge tone="info">{person.openProposals === 1 ? "предложение агента" : `предложения агентов: ${person.openProposals}`}</Badge>}
+            <Person
+              name={person.displayName}
+              status={going ? "working" : "away"}
+              nameEnd={marks}
+              hint={head.length === 0 && !slot.main ? undefined : (
+                <span className="registry-who__line">
+                  {head.length > 0 && (
+                    <span className="registry-who__head">
+                      {head.map((part, index) => <span key={index}>{index > 0 && <span className="registry-who__sep" aria-hidden>·</span>}{part}</span>)}
+                    </span>
+                  )}
+                  {slot.main && (
+                    <span className="registry-who__tail">{head.length > 0 && <span className="registry-who__sep" aria-hidden>·</span>}{slot.main}</span>
+                  )}
                 </span>
               )}
-            </span>
+              className="registry-who"
+            />
           );
         },
       },
