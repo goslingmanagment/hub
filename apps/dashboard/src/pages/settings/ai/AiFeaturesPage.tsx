@@ -150,7 +150,7 @@ export function AiFeaturesPage() {
             <p>Потолок в день: предел трат функции по всем сотрудникам за сутки по UTC, с 03:00 по Москве.</p>
             <p>Включено значит разрешено настройками, а не то, что функцией пользуются. Советы написаны по назначению функций, польза в деньгах не измерена.</p>
           </Disclosure>
-          <Link className="link settings-bottom-link" to="/system/dev/config">Все параметры</Link>
+          <Link className="link settings-bottom-link" to="/system/dev#config">Все параметры</Link>
         </div>
       </div>
     </>

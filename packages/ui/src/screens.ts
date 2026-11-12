@@ -533,42 +533,28 @@ export const SCREENS: readonly Screen[] = [
     ],
   },
   {
-    id: "system-dev-log", path: "/system/dev/log", label: "Журнал сбора", title: "Журнал сбора OnlyFans", section: "system", ownerOnly: true,
-    why: "События старого сбора OnlyFans: последние 100 записей.",
+    // Six screens until 12.11 (none opened in 14 days): one page of sections now, each at its anchor;
+    // `#config-<key>` opens «Все параметры» on that key. «Расширение: замеры» keeps its own period, drawn in its section.
+    id: "system-dev", path: "/system/dev", label: "Разработчик", title: "Разработчик", section: "system", ownerOnly: true,
+    why: "Для разработчика: журнал сбора, очередь, база, замеры расширения и все параметры сервера.",
     pageFilter: "none",
-    keywords: "журнал аномалии синка наблюдение",
+    period: { class: "own", options: ["today", "7d", "30d"], default: "7d" },
+    periodInBody: true,
+    keywords: "для разработчика наблюдение",
+    parts: [
+      { id: "log", label: "Журнал сбора", why: "События старого сбора OnlyFans: последние 100 записей.", keywords: "журнал аномалии синка" },
+      { id: "queue", label: "Очередь задач", why: "Фоновые задачи сервера: последние 100 записей." },
+      { id: "database", label: "База данных", why: "Размер таблиц и миграции.", keywords: "db" },
+      { id: "extension", label: "Расширение: замеры", why: "Скорость, версии и счётчики расширения. Без имён людей, страниц и фанов.", keywords: "client health" },
+      { id: "config", label: "Все параметры", why: "Полный список параметров сервера. Меняйте, только если понимаете последствия.", keywords: "конфигурация настройки сервера" },
+    ],
   },
   {
     id: "system-dev-run", path: "/system/dev/log/:runId", label: "Запуск сбора", title: "Запуск сбора", section: "system", ownerOnly: true,
     why: "Один запуск сбора: события и обращения к площадке.",
     pageFilter: "none",
     deep: true, notSearched: true,
-    crumbs: () => [{ label: "Система", to: "/system/collection" }, { label: "Для разработчика", to: "/system/dev/log" }, { label: "Журнал сбора", to: "/system/dev/log" }],
-  },
-  {
-    id: "system-dev-queue", path: "/system/dev/queue", label: "Очередь задач", title: "Очередь задач", section: "system", ownerOnly: true,
-    why: "Фоновые задачи сервера: последние 100 записей.",
-    pageFilter: "none",
-    keywords: "наблюдение",
-  },
-  {
-    id: "system-dev-database", path: "/system/dev/database", label: "База данных", title: "База данных", section: "system", ownerOnly: true,
-    why: "Размер таблиц и миграции.",
-    pageFilter: "none",
-    keywords: "наблюдение db",
-  },
-  {
-    id: "system-dev-extension", path: "/system/dev/extension", label: "Расширение: замеры", title: "Расширение: замеры", section: "system", ownerOnly: true,
-    why: "Скорость, версии и счётчики расширения. Без имён людей, страниц и фанов.",
-    pageFilter: "none",
-    period: { class: "own", options: ["today", "7d", "30d"], default: "7d" },
-    keywords: "client health наблюдение",
-  },
-  {
-    id: "system-dev-config", path: "/system/dev/config", label: "Все параметры", title: "Все параметры", section: "system", ownerOnly: true,
-    why: "Полный список параметров сервера. Меняйте, только если понимаете последствия.",
-    pageFilter: "none",
-    keywords: "конфигурация настройки сервера",
+    crumbs: () => [{ label: "Система", to: "/system/collection" }, { label: "Разработчик", to: "/system/dev" }, { label: "Журнал сбора", to: "/system/dev#log" }],
   },
 
   // ── Карточка страницы: объект, а не ветка меню ─────────────────────────
@@ -791,10 +777,7 @@ export const SECTIONS: readonly Section[] = [
       tab("state", "Состояние", "system-state"),
       tab("people-messages", "Сообщения людям", "system-people-messages"),
       tab("onlyfans-api", "OnlyFans API", "system-onlyfans-api"),
-      {
-        ...tab("dev", "Для разработчика", "system-dev-log", "system-dev-run", "system-dev-queue", "system-dev-database", "system-dev-extension", "system-dev-config"),
-        listedInSideMenu: true,
-      },
+      tab("dev", "Разработчик", "system-dev", "system-dev-run"),
     ],
   },
 ];

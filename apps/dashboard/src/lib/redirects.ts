@@ -116,20 +116,26 @@ export const LEGACY_ROUTES: ReadonlyArray<LegacyRule & { path: string }> = [
   { path: "incidents", to: "/system/failures" }, // 33
   { path: "analytics", to: "/stats", rename: { range: "period" } }, // 34
   { path: "notifications", drop: ["tab"], to: (_, query) => (query.get("tab") === "incidents" ? "/system/failures" : "/settings/notifications") }, // 39, 40
-  { path: "dev", to: "/system/dev/log" }, // 58
-  { path: "dev/log", to: "/system/dev/log" }, // 59
-  { path: "dev/queue", to: "/system/dev/queue" }, // 60
-  { path: "dev/db-stats", to: "/system/dev/database" }, // 61
-  { path: "dev/incidents", to: "/system/dev/log", set: { problems: "1" } }, // 62
+  { path: "dev", to: "/system/dev", anchor: "#log" }, // 58
+  { path: "dev/log", to: "/system/dev", anchor: "#log" }, // 59
+  { path: "dev/queue", to: "/system/dev", anchor: "#queue" }, // 60
+  { path: "dev/db-stats", to: "/system/dev", anchor: "#database" }, // 61
+  { path: "dev/incidents", to: "/system/dev", set: { problems: "1" }, anchor: "#log" }, // 62
   {
     path: "dev/sync-status", // 63, 64
     to: (_, query) => {
       const run = query.get("runId");
       query.delete("runId");
-      return run ? `/system/dev/log/${pathSegment(run)}` : "/system/dev/log";
+      return run ? `/system/dev/log/${pathSegment(run)}` : "/system/dev#log";
     },
   },
-  { path: "dev/client-health", to: "/system/dev/extension" }, // §7.1, row 50
+  { path: "dev/client-health", to: "/system/dev", anchor: "#extension" }, // §7.1, row 50
+  // The six screens of «Для разработчика» are one screen «Разработчик» of sections (12.11); a run stays a page.
+  { path: "system/dev/log", to: "/system/dev", anchor: "#log" },
+  { path: "system/dev/queue", to: "/system/dev", anchor: "#queue" },
+  { path: "system/dev/database", to: "/system/dev", anchor: "#database" },
+  { path: "system/dev/extension", to: "/system/dev", anchor: "#extension" },
+  { path: "system/dev/config", to: "/system/dev", anchor: "#config" },
   // The six screens of the OnlyFans API are one screen of sections (12.11): each old address opens its section.
   { path: "system/onlyfans-api/collection", to: "/system/onlyfans-api", anchor: "#collection" },
   { path: "system/onlyfans-api/tools", to: "/system/onlyfans-api", anchor: "#tools" },
@@ -142,7 +148,6 @@ export const LEGACY_ROUTES: ReadonlyArray<LegacyRule & { path: string }> = [
   { path: "money/costs", to: "/money/costs/ai" },
   { path: "settings/ai", to: "/settings/ai/personas" },
   { path: "system", to: "/system/collection" },
-  { path: "system/dev", to: "/system/dev/log" },
 ];
 
 // Four addresses are alive: the same path is a new screen, some of its old
@@ -177,7 +182,7 @@ const SETTINGS_TAB_TARGET: Readonly<Record<string, string>> = {
   ofapi: "/system/onlyfans-api#tools",
   agentKeys: "/system/agent-keys",
   features: "/settings/ai/features",
-  configuration: "/system/dev/config",
+  configuration: "/system/dev#config",
   engine: "/system/collection",
   sync: "/system/collection",
 };

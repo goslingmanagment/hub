@@ -15,12 +15,8 @@ const AgentReportPage = named(() => import("@/pages/system/reports/AgentReportPa
 const SystemStatePage = named(() => import("@/pages/system/state/SystemStatePage"), "SystemStatePage");
 const PeopleMessagesPage = named(() => import("@/pages/system/people-messages/PeopleMessagesPage"), "PeopleMessagesPage");
 const OnlyfansApiScreen = named(() => import("@/pages/system/onlyfans-api/OnlyfansApiScreen"), "OnlyfansApiScreen");
-const LogPage = named(() => import("@/pages/system/dev/LogPage"), "LogPage");
+const DevScreen = named(() => import("@/pages/system/dev/DevScreen"), "DevScreen");
 const SyncStatusPage = named(() => import("@/pages/system/dev/SyncStatusPage"), "SyncStatusPage");
-const QueuePage = named(() => import("@/pages/system/dev/QueuePage"), "QueuePage");
-const DbStatsPage = named(() => import("@/pages/system/dev/DbStatsPage"), "DbStatsPage");
-const ClientHealthPage = named(() => import("@/pages/system/dev/ClientHealthPage"), "ClientHealthPage");
-const ConfigurationTab = named(() => import("@/pages/settings/ConfigurationTab"), "ConfigurationTab");
 
 export function systemRoutes() {
   return (
@@ -35,12 +31,8 @@ export function systemRoutes() {
         <Route path="system/reports/:slug" element={<AgentReportPage />} />
         <Route path="system/state" element={<SystemStatePage />} />
         <Route path="system/people-messages" element={<PeopleMessagesPage />} />
-        <Route path="system/dev/log" element={<LogPage />} />
+        <Route path="system/dev" element={<DevScreen />} />
         <Route path="system/dev/log/:runId" element={<SyncStatusPage />} />
-        <Route path="system/dev/queue" element={<QueuePage />} />
-        <Route path="system/dev/database" element={<DbStatsPage />} />
-        <Route path="system/dev/extension" element={<ClientHealthPage />} />
-        <Route path="system/dev/config" element={<ConfigurationTab />} />
       </Route>
       {/* One screen of sections; a team lead reads «Медиа» and «Выгрузки» there, as before (their writes are the owner's on the server). */}
       <Route path="system/onlyfans-api" element={<OnlyfansApiScreen />} />

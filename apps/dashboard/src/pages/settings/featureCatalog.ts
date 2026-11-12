@@ -130,7 +130,7 @@ export function configHomeHref(key: string): { to: string; hint: string } {
   if (FEATURE_TUNING_KEYS.has(key)) return { to: "/settings/ai/features#tuning", hint: "Функции ИИ" };
   const feature = HUB_FEATURES.find((candidate) => candidate.keys.includes(key));
   if (feature) return { to: `/settings/ai/features/${encodeURIComponent(feature.id)}#config-${key}`, hint: "Функции ИИ" };
-  return { to: `/system/dev/config#config-${key}`, hint: "Все параметры" };
+  return { to: `/system/dev#config-${key}`, hint: "Все параметры" };
 }
 
 /** A feature's own parameters. The list's `?view=` and `?q=` no longer act and are not carried. */

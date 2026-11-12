@@ -237,7 +237,7 @@ export function extensionItems(counters: ReadonlyArray<{ code: string; total: nu
     pageLabels: [],
     money: false,
     evidence: { code: counter.code, total: counter.total, from: range.from, to: range.to },
-    link: "/system/dev/extension",
+    link: "/system/dev#extension",
   }));
 }
 

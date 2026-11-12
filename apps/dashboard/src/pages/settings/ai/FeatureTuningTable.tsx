@@ -109,7 +109,7 @@ export function FeatureTuningTable({ data, stale }: { data: ConfigViewResponse; 
               Значения видны во «Всех параметрах»:{" "}
               {blocks.map((kind, index) => (
                 <span key={kind}>
-                  <Link className="link" to={`/system/dev/config#config-${TUNING_KEYS[kind]}`}>{KIND_WORD[kind]}</Link>
+                  <Link className="link" to={`/system/dev#config-${TUNING_KEYS[kind]}`}>{KIND_WORD[kind]}</Link>
                   {index < blocks.length - 1 ? ", " : "."}
                 </span>
               ))}

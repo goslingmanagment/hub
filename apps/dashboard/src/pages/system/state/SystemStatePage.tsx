@@ -60,7 +60,7 @@ function ServerBlock({ server, ledger }: { server: SystemStateResponse["server"]
       label: "Очередь задач",
       tone: server.queue.failedLastHour > 0 || queueOld ? "warn" : "ok",
       value: `Ждут ${server.queue.waiting}${server.queue.oldestWaitingAgeMs !== null && server.queue.waiting > 0 ? `, самая старая ${formatSeconds(server.queue.oldestWaitingAgeMs / 1000)}` : ""}; со сбоем за час: ${server.queue.failedLastHour}`,
-      to: "/system/dev/queue",
+      to: "/system/dev#queue",
     },
     {
       label: "Открытые сбои",

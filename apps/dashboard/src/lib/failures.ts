@@ -74,8 +74,8 @@ const BY_ITSELF = "Обычно проходит сам.";
 
 const COLLECTION: FailureFix = { label: "Сбор данных", to: "/system/collection" };
 const AI_MONEY: FailureFix = { label: "Деньги на ИИ", to: "/money/costs/ai" };
-const DATABASE: FailureFix = { label: "База данных", to: "/system/dev/database" };
-const QUEUE: FailureFix = { label: "Очередь задач", to: "/system/dev/queue" };
+const DATABASE: FailureFix = { label: "База данных", to: "/system/dev#database" };
+const QUEUE: FailureFix = { label: "Очередь задач", to: "/system/dev#queue" };
 const OFAPI: FailureFix = { label: "OnlyFans API", to: "/system/onlyfans-api" };
 
 function pageCollection(page: string | null): FailureFix {

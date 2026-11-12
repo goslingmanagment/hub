@@ -216,7 +216,7 @@ export function useWaitingCounts(role: string): WaitingCounts {
       id: "extension",
       label: "Критичные сбои расширения",
       count: failedOr(extension, (data) => data.counters.filter((counter) => counter.code.startsWith("p1.")).reduce((sum, counter) => sum + counter.total, 0)),
-      to: "/system/dev/extension",
+      to: "/system/dev#extension",
     });
     if (ofapi === "on" || ofapiUnanswered) {
       push({

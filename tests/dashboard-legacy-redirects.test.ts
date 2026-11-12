@@ -82,28 +82,34 @@ const REDIRECTS: ReadonlyArray<readonly [number | string, string, string]> = [
   [52, "/settings?tab=sync&page=mia-of", "/system/collection/mia-of"],
   [53, "/settings?tab=ofapi", "/system/onlyfans-api#tools"],
   [54, "/settings?tab=features&feature=voice&view=all&q=a", "/settings/ai/features?feature=voice&view=all&q=a"],
-  [55, "/settings?tab=configuration#config-publishingEnabled", "/system/dev/config#config-publishingEnabled"],
+  [55, "/settings?tab=configuration#config-publishingEnabled", "/system/dev#config-publishingEnabled"],
   [56, "/settings?tab=configuration&feature=voice&view=review&q=a#config-voiceNotesEnabled", "/settings/ai/features/voice?view=review&q=a#config-voiceNotesEnabled"],
   [57, "/settings?tab=agentKeys", "/system/agent-keys"],
-  [58, "/dev", "/system/dev/log"],
-  [59, "/dev/log", "/system/dev/log"],
-  [60, "/dev/queue", "/system/dev/queue"],
-  [61, "/dev/db-stats", "/system/dev/database"],
-  [62, "/dev/incidents", "/system/dev/log?problems=1"],
+  [58, "/dev", "/system/dev#log"],
+  [59, "/dev/log", "/system/dev#log"],
+  [60, "/dev/queue", "/system/dev#queue"],
+  [61, "/dev/db-stats", "/system/dev#database"],
+  [62, "/dev/incidents", "/system/dev?problems=1#log"],
   [63, "/dev/sync-status?runId=42", "/system/dev/log/42"],
-  [64, "/dev/sync-status", "/system/dev/log"],
-  ["7.1, row 50", "/dev/client-health", "/system/dev/extension"],
+  [64, "/dev/sync-status", "/system/dev#log"],
+  ["7.1, row 50", "/dev/client-health", "/system/dev#extension"],
   [65, "/money", "/money/costs/ai"],
   [66, "/money/costs", "/money/costs/ai"],
   [67, "/settings/ai", "/settings/ai/personas"],
   [68, "/system", "/system/collection"],
-  [69, "/system/dev", "/system/dev/log"],
   // L2 (12.11): the six screens of the OnlyFans API are one screen of sections.
   ["OnlyFans API: Правила сбора", "/system/onlyfans-api/collection", "/system/onlyfans-api#collection"],
   ["OnlyFans API: События и ключ", "/system/onlyfans-api/tools", "/system/onlyfans-api#tools"],
   ["OnlyFans API: Медиа", "/system/onlyfans-api/media?page=mia-of", "/system/onlyfans-api?page=mia-of#media"],
   ["OnlyFans API: Выгрузки", "/system/onlyfans-api/exports", "/system/onlyfans-api#exports"],
   ["OnlyFans API: Действия с аккаунтом", "/system/onlyfans-api/actions", "/system/onlyfans-api#actions"],
+  // L2 (12.11): «Для разработчика» is one screen «Разработчик» of sections; a run stays its own page.
+  ["Разработчик: Журнал сбора", "/system/dev/log?severity=error", "/system/dev?severity=error#log"],
+  ["Разработчик: Очередь задач", "/system/dev/queue", "/system/dev#queue"],
+  ["Разработчик: База данных", "/system/dev/database", "/system/dev#database"],
+  ["Разработчик: Расширение, its period", "/system/dev/extension?period=30d", "/system/dev?period=30d#extension"],
+  ["Разработчик: Все параметры", "/system/dev/config", "/system/dev#config"],
+  ["Разработчик: one parameter", "/system/dev/config#config-publishingEnabled", "/system/dev#config-publishingEnabled"],
 ];
 
 describe("old addresses (design/ia.md §8.2)", () => {
@@ -120,7 +126,7 @@ describe("old addresses (design/ia.md §8.2)", () => {
     expect(resolveLegacyUrl("/settings?tab=engine&page=a%2Fb")).toBe("/system/collection/a%2Fb");
   });
 
-  it.each(["/", "/?period=30d", "/?row=mia-1&chart=page:mia-1&sort=decline&period=30d", "/stats", "/stats?period=30d&page=mia-1", "/pages/mia-1", "/pages/mia-1?period=7d", "/pages/mia-1/promo", "/publications?page=mia-1&status=draft&window=all", "/team/applications", "/team/applications/abc", "/account", "/join", "/login"])(
+  it.each(["/", "/?period=30d", "/?row=mia-1&chart=page:mia-1&sort=decline&period=30d", "/stats", "/stats?period=30d&page=mia-1", "/pages/mia-1", "/pages/mia-1?period=7d", "/pages/mia-1/promo", "/publications?page=mia-1&status=draft&window=all", "/team/applications", "/team/applications/abc", "/system/dev", "/system/dev/log/42", "/account", "/join", "/login"])(
     "leaves %s where it is",
     (url) => {
       expect(resolveLegacyUrl(url)).toBeNull();

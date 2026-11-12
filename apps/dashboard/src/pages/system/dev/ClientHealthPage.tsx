@@ -107,8 +107,8 @@ export function ClientHealthPage() {
             <p className="empty-title">За этот период отчётов нет</p>
             <p className="empty-text">
               Отчёты приходят, когда в настройках включены{" "}
-              <Link className="link" to="/system/dev/config#config-chatExtensionEnabled">«Расширение для чата: общий выключатель»</Link> и{" "}
-              <Link className="link" to="/system/dev/config#config-chatExtensionHealthIngestEnabled">«Расширение для чата: отчёты о работе»</Link>,
+              <Link className="link" to="/system/dev#config-chatExtensionEnabled">«Расширение для чата: общий выключатель»</Link> и{" "}
+              <Link className="link" to="/system/dev#config-chatExtensionHealthIngestEnabled">«Расширение для чата: отчёты о работе»</Link>,
               а сотрудник в расширении согласился отправлять технические замеры.
             </p>
           </div>

@@ -239,7 +239,7 @@ const ROWS: ReadonlyArray<{ id: WaitingAnswer["rows"][number]["id"]; label: stri
   { id: "held", label: "Проверить отправки", to: "/workboard/decisions#held", of: (kind) => kind === "send.held", teamLead: true },
   { id: "login", label: "Нужен вход в Fansly", to: "/system/collection?page=all", of: (kind) => kind === "page.login_needed" },
   { id: "failures", label: "Сбои", to: "/system/failures?page=all", of: (kind) => kind === "incident.open" },
-  { id: "extension", label: "Критичные сбои расширения", to: "/system/dev/extension", of: (kind) => kind === "extension.critical" },
+  { id: "extension", label: "Критичные сбои расширения", to: "/system/dev#extension", of: (kind) => kind === "extension.critical" },
   { id: "history", label: "Заявки на историю", to: "/system/history-requests?state=requested&page=all", of: (kind) => kind === "history.request" },
   { id: "people", label: "Люди и доступ", to: "/workboard/decisions#people", of: (kind) => kind.startsWith("people.") && kind !== "people.access_idle" },
   { id: "ledger", label: "Проверки ledger", to: "/workboard/decisions#ledger", of: (kind) => kind === "ledger.check" || kind === "ledger.sheet_column" || kind === "ledger.off_platform" },

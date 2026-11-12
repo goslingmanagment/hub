@@ -125,7 +125,7 @@ const WAITING_ROW_SPECS: readonly WaitingRowSpec[] = [
   { id: "held", kinds: ["send.held"], teamLead: true, label: "Проверить отправки", to: "/workboard/decisions#held" },
   { id: "login", kinds: ["page.login_needed"], teamLead: false, label: "Нужен вход в Fansly", to: "/system/collection?page=all" },
   { id: "failures", kinds: ["incident.open"], teamLead: false, label: "Сбои", to: "/system/failures?page=all" },
-  { id: "extension", kinds: ["extension.critical"], teamLead: false, label: "Критичные сбои расширения", to: "/system/dev/extension" },
+  { id: "extension", kinds: ["extension.critical"], teamLead: false, label: "Критичные сбои расширения", to: "/system/dev#extension" },
   { id: "history", kinds: ["history.request"], teamLead: false, label: "Заявки на историю", to: "/system/history-requests?state=requested&page=all" },
 ];
 

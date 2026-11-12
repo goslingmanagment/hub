@@ -474,7 +474,7 @@ export function OfapiCostsPage() {
               <div className="card-footer justify-start">
                 <span>
                   Цена кредита не задана: её задают при настройке сервера, чтобы видеть стоимость в $.{" "}
-                  <Link className="link" to="/system/dev/config#config-ofapiCreditMicroUsdPrice">Текущее значение</Link>
+                  <Link className="link" to="/system/dev#config-ofapiCreditMicroUsdPrice">Текущее значение</Link>
                 </span>
               </div>
             )}
