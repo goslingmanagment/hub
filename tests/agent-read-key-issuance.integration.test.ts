@@ -197,6 +197,48 @@ describe("agent read plane: key issuance", () => {
     expect(names).toEqual(["customs-audit", "taskindex-server"]);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
+  it("gives an agent one live key at a time, whoever links: issuance and the person's card", async (context) => {
+    if (!testDb || !server) {
+      context.skip();
+      return;
+    }
+    const cookie = await loginCookie("dima", "owner-secret");
+    const issue = (name: string, agentCode?: string) => server!.inject({
+      method: "POST", url: "/api/v1/agent/keys", headers: { cookie },
+      payload: createBody({ name, agentCode, ...(agentCode === undefined ? { capabilities: ["introspect:agent_keys"] } : {}) }),
+    });
+    const first = await issue("audit-first", "audit-bot");
+    expect(first.statusCode, first.body).toBe(200);
+    // A second live key of the same agent would carry the agent's rights in every service: refused, nothing minted.
+    const second = await issue("audit-second", "audit-bot");
+    expect(second.statusCode, second.body).toBe(409);
+    expect(second.json()).toMatchObject({ reason: "agent_holds_live_key" });
+    // A key no agent holds is not the agent's: issued, and the card cannot hand it to the agent while the first lives.
+    const loose = await issue("audit-loose");
+    expect(loose.statusCode, loose.body).toBe(200);
+    const link = (add: number[], remove: number[] = []) => server!.inject({
+      method: "PATCH", url: "/api/v1/admin/people/audit-bot", headers: { cookie },
+      payload: { agentKeys: { ...(add.length > 0 ? { add } : {}), ...(remove.length > 0 ? { remove } : {}) } },
+    });
+    const firstId = (first.json() as { key: { id: number } }).key.id;
+    const looseId = (loose.json() as { key: { id: number } }).key.id;
+    const refused = await link([looseId]);
+    expect(refused.statusCode, refused.body).toBe(409);
+    expect(refused.json()).toMatchObject({ reason: "agent_holds_live_key" });
+    // Taking the live key off and giving the new one in the same change is one key at a time: accepted.
+    const swapped = await link([looseId], [firstId]);
+    expect(swapped.statusCode, swapped.body).toBe(200);
+    // Once the agent's key is revoked, a new one may be issued for it.
+    expect((await server.inject({ method: "POST", url: `/api/v1/agent/keys/${looseId}/revoke`, headers: { cookie } })).statusCode).toBe(200);
+    expect((await issue("audit-third", "audit-bot")).statusCode).toBe(200);
+    const live = await testDb.pool.query(
+      `select k.name from person_agent_keys pak join agent_keys k on k.id = pak.agent_key_id join people p on p.id = pak.person_id
+        where p.code = 'audit-bot' and k.revoked_at is null and k.expires_at > now() order by k.name`);
+    expect(live.rows.map((row) => row.name)).toEqual(["audit-third"]);
+    expect((await testDb.pool.query("select name from agent_keys order by id")).rows.map((row) => row.name))
+      .toEqual(["audit-first", "audit-loose", "audit-third"]);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
   it("sets Cache-Control: no-store on the response that carries the token", async (context) => {
     if (!testDb || !server) {
       context.skip();
