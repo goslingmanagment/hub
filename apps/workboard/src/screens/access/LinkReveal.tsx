@@ -19,12 +19,14 @@ export interface RevealedLink {
   kind: LinkKind;
   secret: string;
   expiresAt: string;
+  /** How the agency calls the person: the message greets them by it. */
+  name?: string;
 }
 
 export function LinkReveal({ link, onClose }: { link: RevealedLink; onClose: () => void }) {
   const [copied, setCopied] = useState<"link" | "message" | null>(null);
   const joinLink = buildJoinLink(currentOrigin(), link.secret);
-  const message = telegramMessage(link.kind, link.username, joinLink);
+  const message = telegramMessage(link.kind, link.username, joinLink, link.name);
 
   async function copy(value: string, what: "link" | "message") {
     try {
@@ -52,7 +54,7 @@ export function LinkReveal({ link, onClose }: { link: RevealedLink; onClose: () 
 
         <div>
           <Field label="Сообщение для Telegram">
-            {(control) => <Textarea {...control} readOnly rows={4} value={message} onFocus={(event) => event.currentTarget.select()} />}
+            {(control) => <Textarea {...control} readOnly rows={6} value={message} onFocus={(event) => event.currentTarget.select()} />}
           </Field>
           <div className="access-reveal__row">
             <Button variant="primary" icon={Copy} onClick={() => void copy(message, "message")}>

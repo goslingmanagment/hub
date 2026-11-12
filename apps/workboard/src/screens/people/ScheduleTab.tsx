@@ -56,7 +56,7 @@ export function ScheduleTab({ person, card, cardFailed, onRetry, isOwner }: {
         <RightsBlock person={person} canEdit={isOwner} />
         {isOwner && person.kind === "human" && (
           <div className="people-grid__wide">
-            {card ? <TermsBlock terms={card.payTerms} onAdd={() => setEditing("terms")} /> : cardFailed ? null : <Card title="Условия оплаты"><SkeletonText lines={3} /></Card>}
+            {card ? <TermsBlock terms={card.payTerms} payout={card.payoutDetails} onAdd={() => setEditing("terms")} /> : cardFailed ? null : <Card title="Условия оплаты"><SkeletonText lines={3} /></Card>}
           </div>
         )}
       </div>
@@ -377,9 +377,9 @@ function RightsBlock({ person, canEdit }: { person: RegistryPerson; canEdit: boo
   );
 }
 
-// ── pay terms (the owner's only) ─────────────────────────────────────────────
+// ── pay terms (the owner's only), and where to transfer as the person wrote it on «Начало» ─────
 
-function TermsBlock({ terms, onAdd }: { terms: readonly PayTerm[]; onAdd: () => void }) {
+function TermsBlock({ terms, payout, onAdd }: { terms: readonly PayTerm[]; payout: OwnerCard["payoutDetails"]; onAdd: () => void }) {
   const today = moscowToday();
   const rows = [...terms].sort((a, b) => a.modelName.localeCompare(b.modelName, "ru") || b.validFrom.localeCompare(a.validFrom));
   const holds = (term: PayTerm) => term.validFrom <= today && (term.validTo === null || term.validTo >= today);
@@ -396,6 +396,7 @@ function TermsBlock({ terms, onAdd }: { terms: readonly PayTerm[]; onAdd: () => 
       description="Видите только вы. Доля от дохода модели и фикс за день со сменой; новые условия с даты заканчивают прежние накануне."
       actions={<Button size="sm" icon={CalendarPlus} onClick={onAdd}>Новые условия с даты</Button>}
       padding={rows.length === 0 ? "md" : "none"}
+      footer={<span className="registry-payout">Куда платить: {payout ? <span className="registry-payout__text">{payout.text}</span> : "человек не написал в Hub"}</span>}
     >
       {rows.length === 0 ? <p className="access-text">Условий оплаты нет.</p> : (
         <Table label="Условия оплаты" frame="bare" columns={columns} rows={rows} rowKey={(term) => String(term.id)} rowQuiet={(term) => !holds(term)} />

@@ -5,6 +5,7 @@ import {
   isMatterInfoKind,
   isCustomOrderCheckKind,
   isMatterMirrorKind,
+  isMatterPersonStartKind,
   isMatterServerKind,
   LEDGER_CHECK_KINDS,
   MATTER_CHECK_KIND_PERIODS,
@@ -137,7 +138,8 @@ const FAMILY_ROW_SPECS: ReadonlyArray<{ id: Extract<WaitingRowId, "people" | "le
 /** The family row a kind no old row counts belongs to; null — an old row's kind, or one that only informs. */
 export function waitingFamilyOf(kind: string): "people" | "ledger" | "other" | null {
   if (isMatterMirrorKind(kind) || isMatterInfoKind(kind)) return null;
-  if (kind.startsWith("people.") && isMatterCheckKind(kind)) return "people";
+  // A newcomer's way (package J): the people's family, as the checks' of people and access.
+  if ((kind.startsWith("people.") && isMatterCheckKind(kind)) || isMatterPersonStartKind(kind)) return "people";
   if ((LEDGER_CHECK_KINDS as readonly string[]).includes(kind)) return "ledger";
   return "other";
 }
@@ -426,9 +428,9 @@ export interface AgentMatterScope {
 /** Opens (or updates, or reopens) an agent's matter by its key. */
 export async function agentOpenMatter(app: MattersApp, scope: AgentMatterScope, body: AgentMatterOpenBody, now: Date = new Date()): Promise<AgentMatterResponse> {
   // The kinds Hub's server keeps — the mirrors', the system state's, the checks' of package K, the custom checks'
-  // of package I and the shift report's of package F — are never an agent's.
+  // of package I, the shift report's of package F and a newcomer's way of package J — are never an agent's.
   if (isMatterMirrorKind(body.kind) || isMatterServerKind(body.kind) || isMatterCheckKind(body.kind) || isCustomOrderCheckKind(body.kind)
-    || isShiftReportMatterKind(body.kind)) {
+    || isShiftReportMatterKind(body.kind) || isMatterPersonStartKind(body.kind)) {
     throw notAgents(body.key);
   }
   const owner: MatterOwner = "user" in body.owner ? { userId: (await personOf(app, body.owner.user)).userId } : { role: body.owner.role };

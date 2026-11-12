@@ -5,7 +5,9 @@ import type { KernelOperationDef, KernelOperationKey } from "@agency_hub_core/co
 export const kernelOperations = {
   accountChatterStats: { method: "GET", path: "/api/v1/account/stats" },
   accountPay: { method: "GET", path: "/api/v1/account/pay" },
+  accountPayoutDetailsSet: { method: "PUT", path: "/api/v1/account/payout-details" },
   accountReports: { method: "GET", path: "/api/v1/account/reports" },
+  accountStart: { method: "GET", path: "/api/v1/account/start" },
   adminAiAccountUpdate: { method: "PATCH", path: "/api/v1/admin/ai/accounts/:accountId" },
   adminAiAccountsList: { method: "GET", path: "/api/v1/admin/ai/accounts" },
   adminAiChatterLimitUpdate: { method: "PUT", path: "/api/v1/admin/ai/chatter-limits/:userId" },

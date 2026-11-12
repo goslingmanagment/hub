@@ -146,6 +146,8 @@ export function LoginPage() {
           </button>
         </form>
       </div>
+      {/* A chatter has nobody else to ask: the owner makes the links (a new password, an invitation). */}
+      {isChatterSite() && <p className="entry-hint entry-login-help">Нет логина или забыли пароль? Попросите у владельца новую ссылку.</p>}
     </div>
   );
 }

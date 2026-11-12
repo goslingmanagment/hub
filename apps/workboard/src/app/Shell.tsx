@@ -1,4 +1,4 @@
-import { ArrowLeft, Banknote, CalendarClock, ChevronsUpDown, Inbox, LogOut, Monitor, Moon, Package, Smartphone, Sun, TrendingUp, Users } from "lucide-react";
+import { ArrowLeft, Banknote, CalendarClock, ChevronsUpDown, Flag, Inbox, LogOut, Monitor, Moon, Package, Smartphone, Sun, TrendingUp, Users } from "lucide-react";
 import { Suspense, type ReactNode } from "react";
 import { NavLink, Navigate, Outlet, useLocation, useMatches, type UIMatch } from "react-router";
 import { CountBadge, ErrorState, Menu, Skeleton, Tooltip, type IconComponent, type MenuEntry } from "@agency_hub_core/ui";
@@ -8,6 +8,7 @@ import { kernel, queryClient, signInHref } from "@/shared/hub";
 import { carryParams } from "@/shared/links";
 import { decisionParts, decisionsElsewhereText, decisionsFailedText, useDecisionCounts } from "@/shared/decisions";
 import { useMattersActive, useWaitingTotal } from "@/shared/matters";
+import { START_PATH, startOpen, useAccountStart } from "@/shared/start";
 import { CHATTER, OWNER, TEAM, useMe, type Role } from "@/shared/useMe";
 import { usePageFilter } from "@/shared/usePageFilter";
 import { useRestoredPeriod } from "@/shared/usePeriod";
@@ -33,6 +34,8 @@ interface NavItem {
  * with their reports; their account is in the menu at the bottom.
  */
 const WORK: readonly NavItem[] = [
+  // A newcomer's way to the first shift: in the menu only while a step is open (Shell).
+  { to: START_PATH, label: "Начало", icon: Flag, roles: CHATTER },
   { to: "/my/shifts", label: "Мои смены", icon: CalendarClock, roles: CHATTER },
   { to: "/shifts", label: "Смены", icon: CalendarClock, roles: TEAM },
   { to: "/people", label: "Люди", icon: Users, roles: TEAM },
@@ -258,12 +261,15 @@ export function Shell() {
   // «←» comes back to the same place of the page; a new screen opens at its top (D16).
   useScrollMemory();
   const screenKey = useScreenKey();
+  const start = useAccountStart();
+  // «Начало» leaves the menu once every step is done (the address still opens it).
+  const work = seenBy(WORK, role).filter((item) => item.to !== START_PATH || startOpen(start.data));
   return (
     <div className="wb-app" data-part={role === "chatter" ? "chatter" : undefined}>
       <aside className="wb-side">
         <Brand />
         <nav aria-label="Разделы Workboard" className="wb-nav">
-          {seenBy(WORK, role).map((item) => (
+          {work.map((item) => (
             item.to === "/decisions" ? <DecisionsRow key={item.to} item={item} /> : <NavRow key={item.to} item={item} />
           ))}
           {/* The line parts work from the rest; with nothing after it (a chatter), there is no line. */}

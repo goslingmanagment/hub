@@ -12,6 +12,7 @@ import type {
 
 import { demoError, iso, isoDay, daysAgo, hoursAgo, queryString, type DemoHandlers, type DemoReply, type DemoRequest } from "../core.ts";
 import { DEMO_MODELS, DEMO_PAGES, demoPage } from "../world.ts";
+import { NEWCOMER, demoStartForCard, newcomerLogin, newcomerPages } from "./person-start.ts";
 import { ownerOnly } from "./settings-common.ts";
 import { OWNER_CHAT_LOGIN, demoLastActiveAt, teamUsers } from "./settings.ts";
 
@@ -110,8 +111,8 @@ const PEOPLE: readonly PersonSpec[] = [
   { id: 9, code: "lena", name: "Лена", kind: "human", role: "chatter", state: "left", logins: [9], pages: ["mia-2", "nova-1"],
     slots: [{ start: "16:00", end: "00:00", weekdays: WEEK, fromDays: 131, toDays: 12 }], leftDaysAgo: 12,
     telegram: { userId: 700_000_009, handle: "lena_r", tag: "#лена" }, terms: [{ model: "mia-hart", share: 2000, fix: 0, fromDays: 131 }] },
-  { id: 10, code: "nika", name: "Ника", kind: "human", role: "chatter", state: "invited", logins: [10], pages: ["mia-3"], slots: [],
-    onboarding: [{ step: "Приглашение отправлено", doneDays: 1 }, { step: "Пароль по ссылке", doneDays: null }, { step: "Первая смена", doneDays: null }] },
+  // The newcomer: her way to the first shift is read live («Ввод», person-start.ts), nothing noted by hand.
+  { id: 10, code: "nika", name: "Ника", kind: "human", role: "chatter", state: "invited", logins: [10], pages: ["mia-3"], slots: [] },
   { id: 11, code: "sonya", name: "Соня", kind: "human", role: "content_manager", state: "working", logins: [], pages: [], slots: [],
     telegram: { userId: 700_000_011, handle: "sonya_content", tag: null }, note: "Без входа хаба: работает в ContentOps и своим ключом агента." },
   { id: 12, code: "traffic-tim", name: "Тимур (трафик)", kind: "human", role: "contractor", state: "working", logins: [], pages: [], slots: [] },
@@ -286,20 +287,23 @@ function currentOf(slots: readonly PersonScheduleSlot[], today: string): PersonS
   return holding ?? slots.find((slot) => slot.validFrom !== null && slot.validFrom > today) ?? null;
 }
 
-function loginsOf(rec: Rec, reg: Registry, now: Date): Person["logins"] {
+function loginsOf(rec: Rec, reg: Registry, now: Date, scenario: string | undefined): Person["logins"] {
   const users = teamUsers();
   return rec.logins.flatMap((id) => {
     const made = reg.logins.find((one) => one.id === id);
     if (made) return [{ userId: made.id, username: made.username, role: made.role, state: "invited" as const, lastSeenAt: null }];
     const user = users.find((one) => one.id === id);
     if (!user) return [];
+    // Ника at a later stage of «Начало» (person-start.ts): her login has its password and was seen.
+    const newcomer = id === NEWCOMER.userId ? newcomerLogin(scenario, now) : null;
+    if (newcomer) return [{ userId: user.id, username: user.username, role: user.role, ...newcomer }];
     const lastSeenAt = demoLastActiveAt(user, now);
     const state = !user.active || rec.state === "left" ? "disabled" as const : lastSeenAt === null ? "invited" as const : "active" as const;
     return [{ userId: user.id, username: user.username, role: user.role, state, lastSeenAt }];
   });
 }
 
-function personOf(rec: Rec, reg: Registry, now: Date): Person {
+function personOf(rec: Rec, reg: Registry, now: Date, scenario?: string): Person {
   const today = isoDay(now);
   const slots = rec.slots.map((slot) => slotView(rec, slot));
   const general = currentOf(slots.filter((slot) => slot.pageId === null), today);
@@ -313,7 +317,7 @@ function personOf(rec: Rec, reg: Registry, now: Date): Person {
     state: rec.state,
     leftOn: rec.leftOn,
     telegram: rec.telegram,
-    logins: loginsOf(rec, reg, now),
+    logins: loginsOf(rec, reg, now, scenario),
     agentKeys: rec.keys.map((key) => ({ agentKeyId: key.id, name: key.name, state: key.state })),
     workingPages: rec.pages.flatMap((label) => {
       const page = DEMO_PAGES.find((one) => one.label === label);
@@ -353,12 +357,18 @@ function termsOf(rec: Rec): PersonPayTerm[] {
   });
 }
 
-function cardOf(rec: Rec, reg: Registry, now: Date): AdminPerson {
+function cardOf(rec: Rec, reg: Registry, request: DemoRequest): AdminPerson {
+  const now = request.now;
+  // «Ввод» and where to pay (person-start.ts): Ника's by the scenario's stage, the rest work already.
+  const pages = rec.code === NEWCOMER.code ? newcomerPages(request.scenario) : rec.pages;
+  const start = demoStartForCard({ code: rec.code, kind: rec.kind, state: rec.state, pages, hasLogin: rec.logins.length > 0 }, request);
   return {
-    person: personOf(rec, reg, now),
+    person: personOf(rec, reg, now, request.scenario),
     scheduleSlots: rec.slots.map((slot) => slotView(rec, slot)),
     payTerms: termsOf(rec),
     proposals: reg.proposals.filter((one) => one.personCode === rec.code),
+    start: start.start,
+    payoutDetails: start.payoutDetails,
     serverNow: iso(now),
   };
 }
@@ -434,7 +444,12 @@ function setTerm(rec: Rec, body: AdminPersonPayTermBody, now: Date): DemoReply |
 }
 
 function specOf(request: DemoRequest): Rec | undefined {
-  return world(request.now).people.find((rec) => rec.code === request.params.code);
+  const people = world(request.now).people;
+  const code = request.params.code;
+  // On Hub the ledger's code of a person is the registry's; the demo's ledger names chatters by login (team-ledger.ts),
+  // so «Выплаты» asking a person's card by it gets the login's person here.
+  const login = teamUsers().find((user) => user.username === code);
+  return people.find((rec) => rec.code === code) ?? (login ? people.find((rec) => rec.logins.includes(login.id)) : undefined);
 }
 
 export const peopleHandlers: DemoHandlers = {
@@ -442,7 +457,7 @@ export const peopleHandlers: DemoHandlers = {
     if (request.role === "chatter") return demoError(403, "Forbidden", "Список людей — для владельца и тимлидов");
     const reg = world(request.now);
     return {
-      people: [...reg.people].sort((a, b) => a.name.localeCompare(b.name, "ru")).map((rec) => personOf(rec, reg, request.now)),
+      people: [...reg.people].sort((a, b) => a.name.localeCompare(b.name, "ru")).map((rec) => personOf(rec, reg, request.now, request.scenario)),
       unlinkedLogins: [],
       serverNow: iso(request.now),
     };
@@ -452,7 +467,7 @@ export const peopleHandlers: DemoHandlers = {
     const refused = ownerOnly(request);
     if (refused) return refused;
     const rec = specOf(request);
-    return rec ? cardOf(rec, world(request.now), request.now) : demoError(404, "Not Found", `No person «${request.params.code}»`);
+    return rec ? cardOf(rec, world(request.now), request) : demoError(404, "Not Found", `No person «${request.params.code}»`);
   },
 
   adminPersonCreate: (request) => {
@@ -493,7 +508,7 @@ export const peopleHandlers: DemoHandlers = {
     }
     reg.nextId += 1;
     reg.people.push(rec);
-    return { ...cardOf(rec, reg, request.now), invite };
+    return { ...cardOf(rec, reg, request), invite };
   },
 
   adminPersonUpdate: (request) => {
@@ -502,7 +517,7 @@ export const peopleHandlers: DemoHandlers = {
     const rec = specOf(request);
     if (!rec) return demoError(404, "Not Found", `No person «${request.params.code}»`);
     const failed = applyUpdate(rec, (request.body ?? {}) as AdminPersonUpdateBody, request.now);
-    return failed ?? cardOf(rec, world(request.now), request.now);
+    return failed ?? cardOf(rec, world(request.now), request);
   },
 
   adminPersonPayTermSet: (request) => {
@@ -511,7 +526,7 @@ export const peopleHandlers: DemoHandlers = {
     const rec = specOf(request);
     if (!rec) return demoError(404, "Not Found", `No person «${request.params.code}»`);
     const failed = setTerm(rec, (request.body ?? {}) as AdminPersonPayTermBody, request.now);
-    return failed ?? cardOf(rec, world(request.now), request.now);
+    return failed ?? cardOf(rec, world(request.now), request);
   },
 
   adminPersonImportNoteSettle: (request) => {
@@ -524,7 +539,7 @@ export const peopleHandlers: DemoHandlers = {
     if (!note || note.code !== body.code) return demoError(409, "Conflict", "The person's import notes are not as read: read them again");
     rec.notes[body.index] = { ...note, settledAt: body.settled ? iso(request.now) : null };
     rec.updatedAt = iso(request.now);
-    return cardOf(rec, world(request.now), request.now);
+    return cardOf(rec, world(request.now), request);
   },
 
   adminPeopleProposals: (request) => {

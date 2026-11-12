@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "rea
 import { useLocation } from "react-router";
 import { useInspectAccountLink, useRedeemAccountLink } from "@/api/queries";
 import { KernelApiError } from "@/api/sdk";
-import { CHATTER_HOME } from "@/lib/navigation";
+import { CHATTER_HOME, NEWCOMER_START } from "@/lib/navigation";
 import { CHATTER_SITE_ORIGIN } from "@/lib/sites";
 import {
   LINK_UNUSABLE_MESSAGE,
@@ -33,6 +33,22 @@ function Card({ children }: { children: ReactNode }) {
       <h1 className="entry-logo"><span>Chat</span>Goose</h1>
       <div className="entry-card entry-card-wide">{children}</div>
     </div>
+  );
+}
+
+/**
+ * The invitation is used and the newcomer is signed in on this name (the
+ * redeem set the session): on to Workboard's «Начало», which shows what is
+ * left before the first shift. A page load: Workboard is its own app.
+ */
+function ToStart() {
+  useEffect(() => {
+    window.location.replace(NEWCOMER_START);
+  }, []);
+  return (
+    <Card>
+      <p role="status" className="entry-text">Пароль сохранён. Открываем «Начало»…</p>
+    </Card>
   );
 }
 
@@ -86,6 +102,9 @@ export function JoinPage() {
   if (link.state !== "active") return <Unusable message={LINK_UNUSABLE_MESSAGE} />;
 
   const username = redeem.data?.username ?? link.username;
+
+  // A newcomer goes on to «Начало», signed in; a new password after a reset keeps «Готово» (they know the way).
+  if (redeem.isSuccess && link.kind === "invite") return <ToStart />;
 
   if (redeem.isSuccess) {
     const offers = clientOffersForPlatforms(link.platforms);

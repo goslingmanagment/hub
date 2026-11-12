@@ -1,8 +1,12 @@
 import { hoursAgo, iso, type DemoHandlers, type DemoRequest } from "../core.ts";
 import { DEMO_OFAPI_OFF_AT, DEMO_PAGES, demoUserByRole, type DemoPage } from "../world.ts";
+import { NEWCOMER, newcomerPages, signedInAsNewcomer } from "./person-start.ts";
 
 function principal(request: DemoRequest) {
-  const user = demoUserByRole(request.role);
+  // A newcomer's stage named (person-start.ts): the chatter is Ника, with the pages of that stage.
+  const user = signedInAsNewcomer(request)
+    ? { id: NEWCOMER.userId, username: NEWCOMER.username, role: "chatter" as const, pages: newcomerPages(request.scenario) }
+    : demoUserByRole(request.role);
   return {
     authMethod: "session" as const,
     user: {

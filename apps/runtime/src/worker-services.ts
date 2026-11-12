@@ -42,6 +42,7 @@ import { SALE_HOMES_QUEUE, runSaleHomesTick } from "./services/sale-homes.ts";
 import { runShiftReportMatters } from "./services/shift-handin-matters.ts";
 import { SHIFT_ROWS_QUEUE, runShiftRowsTick } from "./services/shift-rows.ts";
 import { SYSTEM_STATE_QUEUE, runSystemStateTick } from "./services/system-state-tick.ts";
+import { PEOPLE_START_QUEUE, runPeopleStartTick } from "./services/people/start-tick.ts";
 import {
   OBSERVATIONS_PARTITIONS_QUEUE,
   runObservationsPartitionCheck,
@@ -460,6 +461,11 @@ export async function startWorkerServices(
   await boss.work(SYSTEM_STATE_QUEUE, CRON_SWEEP_WORK_OPTIONS, async () => {
     const tally = await runSystemStateTick(app);
     if (tally.opened + tally.closed > 0) app.logger.info(tally, "System state pass complete");
+  });
+  // «Начало»: the newcomers' way read, the owner's matters (no page; on one place for 48 hours) made what they are now.
+  await boss.work(PEOPLE_START_QUEUE, CRON_SWEEP_WORK_OPTIONS, async () => {
+    const tally = await runPeopleStartTick(app);
+    if (tally.opened + tally.closed > 0) app.logger.info(tally, "People start pass complete");
   });
 
   await boss.work(DB_DISK_USAGE_CHECK_QUEUE, CRON_SWEEP_WORK_OPTIONS, async () => {

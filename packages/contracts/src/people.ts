@@ -1,6 +1,7 @@
 import { userRoles } from "@agency_hub_core/shared";
 import { z } from "zod";
 
+import { payoutDetailsSchema, personStartSchema } from "./person-start.ts";
 import { businessDate, intId, isoDateTime, isoTimestamp, mills, platformEnum } from "./primitives.ts";
 
 /**
@@ -379,6 +380,10 @@ export const adminPersonResponseSchema = z.object({
   payTerms: z.array(personPayTermSchema),
   /** The person's proposals, newest first. */
   proposals: z.array(personProposalSchema),
+  /** «Ввод»: the newcomer's way to the first shift as Hub sees it (person-start.ts); null — no login, not a human. */
+  start: personStartSchema.nullable(),
+  /** Where the person's payouts go, as they wrote it on «Начало». Money-adjacent: the owner's card only. */
+  payoutDetails: payoutDetailsSchema,
   serverNow: isoTimestamp,
 });
 

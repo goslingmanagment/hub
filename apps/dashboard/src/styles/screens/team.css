@@ -152,6 +152,7 @@
   .entry-caption { margin-top: 16px; text-align: center; font-size: 14px; line-height: 20px; color: var(--color-text-secondary); }
   .entry-login { margin-top: 4px; text-align: center; font-size: 28px; line-height: 36px; font-weight: 600; word-break: break-all; }
   .entry-hint { margin-top: 8px; text-align: center; font-size: 14px; line-height: 20px; color: var(--color-text-secondary); }
+  .entry-login-help { margin-top: -8px; max-width: 380px; }
   .entry-after { margin-top: 24px; padding-top: 24px; border-top: 1px solid var(--color-border-light); }
   .entry-submit { width: 100%; min-height: 40px; }
   @media (max-width: 479px) {
