@@ -13,6 +13,7 @@ import {
   MATTER_INFO_KINDS,
   PEOPLE_CHECK_KINDS,
   isShiftReportMatterKind,
+  isReportPostMatterKind,
   type AgentMatterCloseBody,
   type AgentMatterCommentBody,
   type AgentMatterCommentResponse,
@@ -84,6 +85,8 @@ export function matterMirrorPeriodMs(kind: MatterMirrorKind): number {
 export function matterKindPeriodMs(kind: string): number | null {
   if (isMatterMirrorKind(kind)) return matterMirrorPeriodMs(kind);
   if (isMatterCheckKind(kind)) return MATTER_CHECK_KIND_PERIODS[kind] * MINUTE;
+  // A chatter's post to fix: the mirror's ledger read of the reports, every five minutes.
+  if (isReportPostMatterKind(kind)) return 5 * MINUTE;
   return null;
 }
 
@@ -510,7 +513,7 @@ export async function agentOpenMatter(app: MattersApp, scope: AgentMatterScope, 
   // The kinds Hub's server keeps — the mirrors', the system state's, the checks' of package K, the custom checks'
   // of package I, the shift report's of package F and a newcomer's way of package J — are never an agent's.
   if (isMatterMirrorKind(body.kind) || isMatterServerKind(body.kind) || isMatterCheckKind(body.kind) || isCustomOrderCheckKind(body.kind)
-    || isShiftReportMatterKind(body.kind) || isMatterPersonStartKind(body.kind)) {
+    || isShiftReportMatterKind(body.kind) || isMatterPersonStartKind(body.kind) || isReportPostMatterKind(body.kind)) {
     throw notAgents(body.key);
   }
   const owner: MatterOwner = "user" in body.owner ? { userId: (await personOf(app, body.owner.user)).userId } : { role: body.owner.role };

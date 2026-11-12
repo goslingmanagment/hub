@@ -137,3 +137,35 @@ export async function readPeopleCheckSnapshot(db: Database, input: { today: stri
     activitySince: nullableDate(since.rows[0]?.since ?? null),
   };
 }
+
+// ── Whose a post in «Отчётность» is ──────────────────────────────────────────
+
+/**
+ * The living chatter login of each person code (the ledger's slug is the registry's code): a login not disabled or
+ * deleted, of role chatter, the oldest of them when a person has several. A code with no such login is left out.
+ */
+export async function listChatterLoginsOfPeople(db: Database, codes: readonly string[]): Promise<Map<string, number>> {
+  if (codes.length === 0) return new Map();
+  const result = await db.execute<Row>(sql`
+    select distinct on (p.code) p.code, u.id as user_id
+      from people p
+      join person_logins l on l.person_id = p.id
+      join users u on u.id = l.user_id
+     where p.code = any(${sql.param([...new Set(codes)])}::text[])
+       and u.role = 'chatter' and u.disabled_at is null and u.deleted_at is null
+     order by p.code, u.id`);
+  return new Map(result.rows.map((row) => [String(row.code), Number(row.user_id)]));
+}
+
+/** The shift of a login on a report day (`${userId}:${day}` → its id): the latest that is not dropped or merged. */
+export async function listShiftIdsByUserDay(db: Database, pairs: ReadonlyArray<{ userId: number; day: string }>): Promise<Map<string, number>> {
+  if (pairs.length === 0) return new Map();
+  const result = await db.execute<Row>(sql`
+    select distinct on (s.user_id, s.report_date) s.user_id, s.report_date::text as report_date, s.id
+      from shifts s
+      join unnest(${sql.param(pairs.map((pair) => String(pair.userId)))}::bigint[], ${sql.param(pairs.map((pair) => pair.day))}::date[])
+        as asked(user_id, report_date) on asked.user_id = s.user_id and asked.report_date = s.report_date
+     where s.state in ('going', 'closed')
+     order by s.user_id, s.report_date, s.started_at desc, s.id desc`);
+  return new Map(result.rows.map((row) => [`${Number(row.user_id)}:${String(row.report_date).slice(0, 10)}`, Number(row.id)]));
+}
