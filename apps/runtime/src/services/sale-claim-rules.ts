@@ -33,6 +33,8 @@ export interface ReportLine {
   pageLabel: string | null;
   netMills: number;
   amountMills: number;
+  /** What a disputed «моё» claims while it counts nothing (review R2b-2). */
+  claimedMills?: number | null;
   group: "mine" | "near";
   statement: "mine" | "not_mine" | "share" | null;
   shareWithUserId: number | null;
@@ -73,7 +75,8 @@ export interface DerivedClaim {
   sideShiftId: number | null;
 }
 
-const counts = (line: ReportLine) => line.transactionId !== null && line.amountMills > 0;
+/** A line that holds its sale: it counts, or it claims it while disputed (counting nothing until settled). */
+const counts = (line: ReportLine) => line.transactionId !== null && (line.amountMills > 0 || (line.claimedMills ?? 0) > 0);
 
 /** The claims the newest versions of the handed-in reports make. Pure. */
 export function deriveClaims(reports: readonly ReportView[]): DerivedClaim[] {
@@ -145,7 +148,7 @@ export function deriveClaims(reports: readonly ReportView[]): DerivedClaim[] {
 
 /** What a stored claim is, as `claimStands` reads it. */
 export interface ClaimView {
-  kind: "claim" | "double" | "imported";
+  kind: "claim" | "double" | "imported" | "question";
   transactionId: number | null;
   claimantUserId: number | null;
   claimantHandinId: number | null;
@@ -162,10 +165,12 @@ export interface ClaimView {
  */
 export function claimStands(claim: ClaimView, reports: readonly ReportView[]): boolean {
   if (claim.kind === "imported") return claim.state === "owner";
+  // A question the agent asked stands until it is answered, decided or closed.
+  if (claim.kind === "question") return claim.state === "owner" || claim.state === "asked";
   if (claim.transactionId === null) return false;
   const own = reports.find((report) => report.handinId === claim.claimantHandinId);
   const line = own?.lines.find((one) => one.transactionId === claim.transactionId);
-  if (line === undefined || line.amountMills <= 0) return false;
+  if (line === undefined || (line.amountMills <= 0 && (line.claimedMills ?? 0) <= 0)) return false;
   if (claim.kind === "claim") return true;
   const held = reports.flatMap((report) => report.lines.filter((one) => one.transactionId === claim.transactionId && one.amountMills > 0));
   return held.reduce((sum, one) => sum + one.amountMills, 0) > line.netMills;
@@ -208,7 +213,8 @@ export function ruleMarksOf(input: { reports: readonly ReportView[]; claims: rea
 
 /** An owner's decision as the rule reads it. */
 export interface DecisionView {
-  kind: "split" | "nobody" | "pot";
+  /** off_platform names no sale: never an input of the rule. */
+  kind: "split" | "nobody" | "pot" | "off_platform";
   shares: ReadonlyArray<{ userId: number; percent: number }>;
   pot: string | null;
   /** The sale's home when decided. */
@@ -221,6 +227,7 @@ export interface DecisionView {
  * applies); «никому» and a pot are their own inputs. Pure.
  */
 export function ruleDecisionOf(decision: DecisionView): { resolution: Array<{ userId: number; percent: number }> | null; claimedBy: number | null; ownerNobody: boolean; ownerPot: string | null } {
+  if (decision.kind === "off_platform") return { resolution: null, claimedBy: null, ownerNobody: false, ownerPot: null };
   if (decision.kind === "nobody") return { resolution: null, claimedBy: null, ownerNobody: true, ownerPot: null };
   if (decision.kind === "pot") return { resolution: null, claimedBy: null, ownerNobody: false, ownerPot: decision.pot };
   const shares = decision.shares.filter((share) => share.percent > 0);
@@ -272,7 +279,7 @@ export function settledShareOf(input: {
   decision: Pick<DecisionView, "kind" | "shares"> | null;
   agreed: ReadonlyArray<{ claimantUserId: number | null; sideUserId: number | null; statement: "mine" | "share" | null }>;
 }): { amountMills: number; settled: "owner" | "agreed" } | null {
-  if (input.decision !== null) {
+  if (input.decision !== null && input.decision.kind !== "off_platform") {
     if (input.decision.kind !== "split") return { amountMills: 0, settled: "owner" };
     const shares = splitShares(input.netMills, input.decision.shares.filter((share) => share.percent > 0));
     return { amountMills: shares.filter((share) => input.userIds.has(share.userId)).reduce((sum, share) => sum + share.mills, 0), settled: "owner" };
@@ -296,9 +303,12 @@ export function settledVersion(input: {
   amountMills: number;
   settled: "agreed" | "owner";
 }): { lines: ReportLine[]; pages: Array<{ pageLabel: string; amountMills: number }>; totalMills: number } {
-  const lines = input.lines.map((line) => (line.transactionId === input.transactionId
-    ? { ...line, amountMills: input.amountMills, disputed: false, settled: input.settled }
-    : line));
+  const lines = input.lines.map((line) => {
+    if (line.transactionId !== input.transactionId) return line;
+    // Settled: it counts what the settlement gives, and claims nothing any more.
+    const { claimedMills: _claimed, ...rest } = line;
+    return { ...rest, amountMills: input.amountMills, disputed: false, settled: input.settled };
+  });
   return { lines, ...reportSums(lines, input.pages, input.offPlatform) };
 }
 

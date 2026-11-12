@@ -154,6 +154,9 @@ export const AGENT_READ_AUDIT_SUMMARY_SHAPES = {
   customOrderId: "count",
   /** Заявки (write:shift_reports, package G): which claim an answer «со слов» was for; the answer in `outcome`. */
   claimId: "count",
+  /** «Чья продажа» «со слов» (write:shift_reports, review R2b-3): the decision and the question written; the kind in `outcome`. */
+  decisionId: "count",
+  questionId: "count",
 } as const satisfies Record<string, AgentReadAuditSummaryShape>;
 
 export type AgentReadAuditSummaryKey = keyof typeof AGENT_READ_AUDIT_SUMMARY_SHAPES;

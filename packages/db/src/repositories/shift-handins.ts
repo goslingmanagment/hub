@@ -315,8 +315,13 @@ export interface HandinVersionLine {
   amountMills: number;
   /** Outside the shift's window, added to it: a sale of the last 7 days no report of the person held («долёт»). */
   added: boolean;
-  /** Counted as the person claims it while the rule gives it to someone else: until the other side or the owner agrees. */
+  /**
+   * «Моё» on a sale the rule or another person's report gives to someone else: it counts nothing (`amountMills` 0) until
+   * the other side or the owner settles it, and `claimedMills` says what it claims (review R2b-2).
+   */
   disputed: boolean;
+  /** What a disputed line claims (the sale's net); absent — not disputed. */
+  claimedMills?: number;
   /** A claim on it settled (0404): the other side agreed, or the owner decided; the amount is what that gives. Absent — not settled. */
   settled?: "agreed" | "owner";
 }
@@ -342,7 +347,9 @@ export interface HandinVersionOffPlatform {
  */
 export type HandinVersionMadeFor =
   | { kind: "claim"; claimId: number; transactionId: number; outcome: "agreed" | "first" | "second" | "half" | "nobody" }
-  | { kind: "off_platform"; offPlatformId: number; decision: "confirmed" | "rejected" };
+  | { kind: "off_platform"; offPlatformId: number; decision: "confirmed" | "rejected" }
+  /** A decision about the sale recorded «со слов» through the agent's door (review R2b-3). */
+  | { kind: "decision"; decisionId: number; transactionId: number; outcome: "said" };
 
 export interface HandinVersionRow {
   id: number;
@@ -363,10 +370,13 @@ export interface HandinVersionRow {
   ruleVersion: string;
   /** Made by the system on a decision; null — handed in by the person. */
   madeFor: HandinVersionMadeFor | null;
+  /** The shift's report date when this version was made (0408); null — a version older than the column. */
+  reportDate: string | null;
 }
 
 const VERSION_COLUMNS = sql`v.id, v.handin_id, v.version, v.submitted_at, v.door, v.actor_user_id, v.agent_key_id, v.telegram_message_ref,
-  v.telegram_sender_id, v.total_mills, v.pages, v.lines, v.off_platform, v.comment, v.day_paid, v.rule_version, v.made_for`;
+  v.telegram_sender_id, v.total_mills, v.pages, v.lines, v.off_platform, v.comment, v.day_paid, v.rule_version, v.made_for,
+  to_char(v.report_date, 'YYYY-MM-DD') as version_report_date`;
 
 function versionOf(row: Row): HandinVersionRow {
   return {
@@ -387,6 +397,7 @@ function versionOf(row: Row): HandinVersionRow {
     dayPaid: row.day_paid === null || row.day_paid === undefined ? null : Boolean(row.day_paid),
     ruleVersion: String(row.rule_version),
     madeFor: madeForOf(row.made_for),
+    reportDate: text(row.version_report_date),
   };
 }
 
@@ -418,6 +429,8 @@ export async function insertHandinVersion(
     ruleVersion: string;
     /** Made by the system on a decision (0404); absent — the person handed it in. */
     madeFor?: HandinVersionMadeFor | null;
+    /** The shift's report date now (`shifts.report_date`): the version's, and the report's from now on. */
+    reportDate: string;
     at: Date;
   },
 ): Promise<HandinVersionRow> {
@@ -426,16 +439,18 @@ export async function insertHandinVersion(
   const madeFor = input.madeFor == null ? null : JSON.stringify(input.madeFor);
   const result = await db.execute<Row>(sql`
     insert into shift_handin_versions (handin_id, version, submitted_at, door, actor_user_id, agent_key_id, telegram_message_ref,
-      telegram_sender_id, total_mills, pages, lines, off_platform, comment, day_paid, rule_version, made_for)
+      telegram_sender_id, total_mills, pages, lines, off_platform, comment, day_paid, rule_version, made_for, report_date)
     values (${input.handin.id}, ${version}, ${at}::timestamptz, ${input.door}, ${input.actorUserId}, ${input.agentKeyId},
       ${input.telegramMessageRef}, ${input.telegramSenderId}, ${input.totalMills}, ${JSON.stringify(input.pages)}::jsonb,
       ${JSON.stringify(input.lines)}::jsonb, ${JSON.stringify(input.offPlatform)}::jsonb, ${input.comment}, ${input.dayPaid},
-      ${input.ruleVersion}, ${madeFor}::jsonb)
+      ${input.ruleVersion}, ${madeFor}::jsonb, ${input.reportDate}::date)
     returning id, handin_id, version, submitted_at, door, actor_user_id, agent_key_id, telegram_message_ref,
-      telegram_sender_id, total_mills, pages, lines, off_platform, comment, day_paid, rule_version, made_for`);
+      telegram_sender_id, total_mills, pages, lines, off_platform, comment, day_paid, rule_version, made_for,
+      to_char(report_date, 'YYYY-MM-DD') as version_report_date`);
+  // The report's date is its newest version's: the one place every reader takes it from once it is handed in.
   await db.execute(sql`
     update shift_handins set state = 'submitted', current_version = ${version}, submitted_at = ${at}::timestamptz,
-      updated_at = clock_timestamp()
+      report_date = ${input.reportDate}::date, updated_at = clock_timestamp()
     where id = ${input.handin.id}`);
   return versionOf(result.rows[0]!);
 }
@@ -503,33 +518,88 @@ export async function placeHandinVersionsInFeed(db: Database): Promise<number> {
   });
 }
 
-/** The versions placed after a place of the feed, in the feed's order, those with a line off the pages left out. */
-export async function listHandinVersionsAfter(
-  db: Database,
-  input: { afterSeq: number; limit: number; pageIds: readonly number[] },
-): Promise<Array<HandinVersionRow & { seq: number; shiftId: number; userId: number; personCode: string | null; reportDate: string }>> {
+/** A version of the feed as it is served. */
+export type HandinFeedRow = HandinVersionRow & { seq: number; shiftId: number; userId: number; personCode: string | null; reportDate: string };
+
+/** A version the feed held back for the key's pages: who and when, and the pages outside them; no sums, no lines. */
+export interface HandinFeedHeld {
+  id: number;
+  seq: number;
+  shiftId: number;
+  person: string | null;
+  reportDate: string;
+  /** The version's pages outside the key's pages. */
+  pageLabels: string[];
+}
+
+/** Feed rows by a condition, in the feed's order, each with the version's pages outside `pageIds`. */
+async function feedRows(db: Database, where: ReturnType<typeof sql>, pageIds: readonly number[], limit: number) {
   const result = await db.execute<Row>(sql`
-    select ${VERSION_COLUMNS}, f.seq, h.shift_id, h.user_id, p.code as person_code, to_char(h.report_date, 'YYYY-MM-DD') as report_date
+    select ${VERSION_COLUMNS}, f.seq, h.shift_id, h.user_id, p.code as person_code,
+      to_char(coalesce(v.report_date, h.report_date), 'YYYY-MM-DD') as report_date,
+      array(
+        select distinct line ->> 'pageLabel' from jsonb_array_elements(v.lines) as line
+        join pages pg on pg.label = line ->> 'pageLabel'
+        where not (pg.id = any(${ids(pageIds)}))
+        order by 1
+      ) as outside
     from shift_handin_feed f
     join shift_handin_versions v on v.id = f.version_id
     join shift_handins h on h.id = v.handin_id
     left join people p on p.id = h.person_id
-    where f.seq > ${input.afterSeq}
-      and not exists (
-        select 1 from jsonb_array_elements(v.lines) as line
-        join pages pg on pg.label = line ->> 'pageLabel'
-        where not (pg.id = any(${ids(input.pageIds)}))
-      )
+    where ${where}
     order by f.seq
-    limit ${input.limit}`);
-  return result.rows.map((row) => ({
-    ...versionOf(row),
-    seq: num(row.seq),
-    shiftId: num(row.shift_id),
-    userId: num(row.user_id),
-    personCode: text(row.person_code),
-    reportDate: String(row.report_date),
-  }));
+    limit ${limit}`);
+  const served: HandinFeedRow[] = [];
+  const held: HandinFeedHeld[] = [];
+  for (const row of result.rows) {
+    const outside = (Array.isArray(row.outside) ? row.outside : []).map(String);
+    const base = { seq: num(row.seq), shiftId: num(row.shift_id), userId: num(row.user_id), personCode: text(row.person_code), reportDate: String(row.report_date) };
+    if (outside.length > 0) {
+      held.push({ id: num(row.id), seq: base.seq, shiftId: base.shiftId, person: base.personCode, reportDate: base.reportDate, pageLabels: outside });
+      continue;
+    }
+    served.push({ ...versionOf(row), ...base });
+  }
+  const lastRow = result.rows.at(-1);
+  return { served, held, last: lastRow === undefined ? null : num(lastRow.seq) };
+}
+
+/**
+ * The versions placed after a place of the feed, in the feed's order, up to `limit` places: those of the pages served;
+ * a version with a line of a page outside them is held back (review R2b-4). `last` — the last place read, held or not:
+ * the next cursor.
+ */
+export async function listHandinVersionsAfter(
+  db: Database,
+  input: { afterSeq: number; limit: number; pageIds: readonly number[] },
+): Promise<{ served: HandinFeedRow[]; held: HandinFeedHeld[]; last: number | null }> {
+  return feedRows(db, sql`f.seq > ${input.afterSeq}`, input.pageIds, input.limit);
+}
+
+/**
+ * The versions the feed held back for an agent key (0408 `shift_handin_feed_held`), read again for its pages now:
+ * `served` — the key may read them now (released from the list), `held` — still held.
+ */
+export async function takeHandinFeedHeld(db: Database, input: { agentKeyId: number; pageIds: readonly number[] }): Promise<{ served: HandinFeedRow[]; held: HandinFeedHeld[] }> {
+  const kept = await db.execute<Row>(sql`select version_id from shift_handin_feed_held where agent_key_id = ${input.agentKeyId}`);
+  const versionIds = kept.rows.map((row) => num(row.version_id));
+  if (versionIds.length === 0) return { served: [], held: [] };
+  const read = await feedRows(db, sql`f.version_id = any(${ids(versionIds)})`, input.pageIds, versionIds.length);
+  if (read.served.length > 0) {
+    await db.execute(sql`
+      delete from shift_handin_feed_held where agent_key_id = ${input.agentKeyId} and version_id = any(${ids(read.served.map((row) => row.id))})`);
+  }
+  return { served: read.served, held: read.held };
+}
+
+/** Keeps the versions held back for an agent key: listed on its every read until it may read them. */
+export async function holdHandinFeedVersions(db: Database, input: { agentKeyId: number; versionIds: readonly number[] }): Promise<void> {
+  if (input.versionIds.length === 0) return;
+  await db.execute(sql`
+    insert into shift_handin_feed_held (agent_key_id, version_id)
+    select ${input.agentKeyId}, unnest(${ids(input.versionIds)})
+    on conflict do nothing`);
 }
 
 // ── Who the report is of ─────────────────────────────────────────────────────
@@ -727,7 +797,7 @@ export async function listHandinOtherReports(
     cross join lateral jsonb_array_elements(v.lines) as line
     where h.state = 'submitted' and not (h.user_id = any(${ids(input.exceptUserIds)}))
       and (line ->> 'transactionId')::bigint = any(${ids(input.transactionIds)})
-      and coalesce((line ->> 'amountMills')::bigint, 0) > 0`);
+      and (coalesce((line ->> 'amountMills')::bigint, 0) > 0 or coalesce((line ->> 'claimedMills')::bigint, 0) > 0)`);
   const out = new Map<number, Array<{ userId: number; shiftId: number; reportDate: string }>>();
   for (const row of result.rows) {
     const list = out.get(num(row.transaction_id)) ?? [];

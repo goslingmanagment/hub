@@ -6,6 +6,7 @@ import {
   type AgentTeamWork,
 } from "@agency_hub_core/contracts";
 import {
+  listActiveSaleDecisions,
   listConfirmedMarkKeys,
   listSaleFacts,
   listSaleLastWriters,
@@ -59,6 +60,16 @@ export function holdersOf(
     .map(({ userId, work }) => workRef(userId, work));
 }
 
+/** A sale's decision as the facts carry it: a split's shares are the owner's `resolution`; any kind is `decision`. */
+function decided(
+  decision: { kind: string; shares: ReadonlyArray<{ userId: number; percent: number }>; pot: string | null } | undefined,
+  old: Array<{ userId: number; percent: number }> | null,
+): Pick<AgentTeamSale, "resolution" | "decision"> {
+  if (decision === undefined || (decision.kind !== "split" && decision.kind !== "nobody" && decision.kind !== "pot")) return { resolution: old, decision: null };
+  const resolution = decision.kind === "split" ? decision.shares.filter((share) => share.percent > 0).map((share) => ({ userId: share.userId, percent: share.percent })) : null;
+  return { resolution, decision: { kind: decision.kind, pot: decision.kind === "pot" ? decision.pot : null } };
+}
+
 export async function readAgentTeamSales(
   db: Database,
   input: { from: Date; to: Date; now: Date; pages: ReadonlyArray<{ id: number; label: string }> },
@@ -80,6 +91,9 @@ export async function readAgentTeamSales(
   const marks = await listShiftMarks(db, { transactionIds: ids });
   const confirmed = await listConfirmedMarkKeys(db, { transactionIds: ids });
   const resolutions = await listShiftResolutions(db, { transactionIds: ids });
+  // Hub's own decisions of the sales (review R2b-5): the one home of «чья продажа» — the owner's disputes, the ones
+  // carried over from the ledger and the ones recorded «со слов» — reach the ledger's rule here.
+  const decisions = await listActiveSaleDecisions(db, ids);
   const factOf = new Map(facts.map((fact) => [fact.transactionId, fact]));
   const marksOf = new Map<number, AgentTeamSale["marks"]>();
   for (const mark of marks) {
@@ -132,7 +146,7 @@ export async function readAgentTeamSales(
       lastWriterUserId: lastWriter,
       writers: fact?.writers ?? [],
       marks: marksOf.get(sale.transactionId) ?? [],
-      resolution: resolutions.get(sale.transactionId) ?? null,
+      ...decided(decisions.get(sale.transactionId), resolutions.get(sale.transactionId) ?? null),
     };
   });
 

@@ -117,7 +117,9 @@ export function DisputeModal({ transactionId, claimId, onClose }: { transactionI
                   <h3 className="wt-party__name">{party.name}</h3>
                   <ul className="wt-party__says">{party.says.map((line) => <li key={line}>{line}</li>)}</ul>
                   <p className="wt-party__counted">
-                    {party.countedMills === null ? "в сданном отчёте этой продажи нет" : <>в сданном отчёте: <Money mills={party.countedMills} /></>}
+                    {party.countedMills === null ? "в сданном отчёте этой продажи нет"
+                      : (party.claimedMills ?? 0) > 0 ? <>в сданном отчёте: спорно, ждёт решения: <Money mills={party.claimedMills!} /></>
+                        : <>в сданном отчёте: <Money mills={party.countedMills} /></>}
                   </p>
                 </section>
               ))}
@@ -158,7 +160,13 @@ export function DisputeModal({ transactionId, claimId, onClose }: { transactionI
               <p className="wt-modal__hint">
                 {data.home?.kind === "before_rule"
                   ? "Продажа раньше 2 нояб., до правила: решение запишется для истории, но чья она и отчёты не изменятся."
-                  : "Решение встанет выше правила. Сданные отчёты, где есть эта продажа, получат новую версию с вашим решением; люди сдавать заново не будут."}
+                  : <>
+                    {"Решение встанет выше правила. "}
+                    {data.reports.length > 0
+                      ? `Новую версию с вашим решением получат отчёты, сданные в системе (сдавать заново не нужно): ${data.reports.map((one) => `${one.name} за ${formatDay(one.reportDate)}`).join(", ")} `
+                      : "Отчётов, сданных в системе, с этой продажей нет. "}
+                    {"Отчёт постом в «Отчётности» никто не пересчитает: решение возьмёт следующий отчёт."}
+                  </>}
               </p>
             </section>
           )}

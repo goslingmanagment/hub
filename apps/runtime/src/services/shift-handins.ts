@@ -41,7 +41,9 @@ import {
   listHandinShifts,
   listHandinsOfShifts,
   listHandinVersions,
+  holdHandinFeedVersions,
   listHandinVersionsAfter,
+  takeHandinFeedHeld,
   placeHandinVersionsInFeed,
   listMatterPageLabels,
   listOffPlatform,
@@ -565,6 +567,8 @@ export function draftLines(facts: Pick<DraftFacts, "classified" | "senders"> & P
       disputed,
       alreadyIn: one.alreadyIn,
       ...(settled === null ? {} : { settled: settled.settled }),
+      // A disputed «моё» counts nothing until settled and says what it claims (review R2b-2).
+      ...(settled === null && plain.claimedMills !== undefined ? { claimedMills: plain.claimedMills } : {}),
     };
   });
 }
@@ -633,6 +637,7 @@ function wireLine(line: HandinVersionLine, context: ViewContext): ShiftReportLin
     shareWithName: line.shareWithUserId === null ? null : context.names.get(line.shareWithUserId) ?? null,
     note: line.note,
     amountMills: line.amountMills,
+    claimedMills: line.claimedMills ?? null,
     added: line.added,
     disputed: line.disputed,
     alreadyIn: line.alreadyIn,
@@ -703,6 +708,7 @@ function bodyOf(input: {
 export function madeForWords(madeFor: HandinVersionMadeFor | null, actorName: string | null): string | null {
   if (madeFor === null) return null;
   if (madeFor.kind === "off_platform") return madeFor.decision === "confirmed" ? "владелец подтвердил «мимо площадки»" : "владелец отклонил «мимо площадки»";
+  if (madeFor.kind === "decision") return "решение о продаже, записанное со слов";
   switch (madeFor.outcome) {
     case "agreed": return `согласие${actorName ? `: ${actorName}` : " второй стороны"}`;
     case "first":
@@ -723,7 +729,7 @@ function versionSummary(version: HandinVersionRow, names: Map<number, string>, k
     : names.get(version.actorUserId ?? -1) ?? "";
   const why = version.madeFor;
   const madeFor = cutTo === null || why === null ? why
-    : why.kind === "claim" && version.lines.some((line) => line.transactionId === why.transactionId && line.pageLabel !== null && cutTo.has(line.pageLabel))
+    : why.kind !== "off_platform" && version.lines.some((line) => line.transactionId === why.transactionId && line.pageLabel !== null && cutTo.has(line.pageLabel))
       ? why
       : null;
   return {
@@ -756,6 +762,7 @@ function modelPostsOf(version: HandinVersionRow, subject: Pick<Subject, "shift" 
       platform: line.pageLabel === null ? "fansly" : context.catalog.info.get(line.pageLabel)?.platform ?? "fansly",
       kind: line.kind,
       amountMills: line.amountMills,
+      claimedMills: line.claimedMills ?? null,
       fan: context.fans.get(line.transactionId) ?? { fanRef: null, name: null, username: null },
       note: line.note,
     }])),
@@ -918,6 +925,14 @@ export async function readAgentShiftReport(app: HandinApp, principal: AgentAuthP
   return readSubject(app, actor, subject, now);
 }
 
+/**
+ * A report's date, the one rule every reader follows (review R2b-1): once handed in, its newest version's — the shift's
+ * date at that hand-in, which `shift_handins.report_date` follows; before that, the shift's own date now (the draft).
+ */
+export function reportDateOf(shift: { reportDate: string }, handin: { state: string; reportDate: string } | null): string {
+  return handin !== null && handin.state === "submitted" ? handin.reportDate : shift.reportDate;
+}
+
 /** How many open drafts `shiftReportsList` computes for their total. */
 const LIST_DRAFTS_MAX = 7;
 
@@ -979,7 +994,7 @@ export async function listShiftReports(
         startedAt: shift.startedAt.toISOString(),
         endedAt: shift.endedAt.toISOString(),
         ongoing: shift.state === "going",
-        reportDate: shift.reportDate,
+        reportDate: reportDateOf(shift, handin),
         pages: shiftPageLabels(shift),
         state: handin?.state ?? "open",
         version: version?.version ?? null,
@@ -1225,6 +1240,8 @@ export async function submitShiftReport(
       comment: handin.comment,
       dayPaid,
       ruleVersion: SALE_RULE.version,
+      // The shift's date now, not the date of the report's first word: a night shift moves into the day it ended in.
+      reportDate: subject.shift.reportDate,
       at: now,
     });
     await insertHandinEvent(db, {
@@ -1294,12 +1311,23 @@ export async function saleLineFacts(app: HandinApp, shiftId: number, transaction
  */
 export async function readShiftReportsFeed(
   app: HandinApp,
-  input: { pageIds: readonly number[]; since?: string | undefined; limit: number },
+  input: { pageIds: readonly number[]; since?: string | undefined; limit: number; agentKeyId?: number | undefined },
   now: Date = new Date(),
 ): Promise<AgentShiftReportsFeedResponse> {
   const afterSeq = input.since === undefined ? 0 : Number(input.since);
   await placeHandinVersionsInFeed(app.db);
-  const rows = await listHandinVersionsAfter(app.db, { afterSeq, limit: input.limit, pageIds: input.pageIds });
+  const read = await listHandinVersionsAfter(app.db, { afterSeq, limit: input.limit, pageIds: input.pageIds });
+  // Held back for the key's pages (review R2b-4): kept per key, listed on its every read until it may read them, then
+  // served once, ahead of the new ones, at their own place — the cursor passing them never loses them.
+  let late: typeof read.served = [];
+  let held = read.held;
+  if (input.agentKeyId !== undefined) {
+    const before = await takeHandinFeedHeld(app.db, { agentKeyId: input.agentKeyId, pageIds: input.pageIds });
+    await holdHandinFeedVersions(app.db, { agentKeyId: input.agentKeyId, versionIds: read.held.map((one) => one.id) });
+    late = before.served;
+    held = [...before.held.filter((one) => !read.held.some((other) => other.id === one.id)), ...read.held];
+  }
+  const rows = [...late, ...read.served];
   return {
     reports: rows.map((row) => ({
       id: row.id,
@@ -1326,6 +1354,7 @@ export async function readShiftReportsFeed(
         shareWithUserId: line.shareWithUserId,
         note: line.note,
         amountMills: line.amountMills,
+        claimedMills: line.claimedMills ?? null,
         added: line.added,
         disputed: line.disputed,
         settled: line.settled ?? null,
@@ -1337,13 +1366,15 @@ export async function readShiftReportsFeed(
       madeFor: row.madeFor === null ? null : {
         kind: row.madeFor.kind,
         claimId: row.madeFor.kind === "claim" ? row.madeFor.claimId : null,
+        decisionId: row.madeFor.kind === "decision" ? row.madeFor.decisionId : null,
         offPlatformId: row.madeFor.kind === "off_platform" ? row.madeFor.offPlatformId : null,
-        transactionId: row.madeFor.kind === "claim" ? row.madeFor.transactionId : null,
-        outcome: row.madeFor.kind === "claim" ? row.madeFor.outcome : row.madeFor.decision,
+        transactionId: row.madeFor.kind === "claim" || row.madeFor.kind === "decision" ? row.madeFor.transactionId : null,
+        outcome: row.madeFor.kind === "off_platform" ? row.madeFor.decision : row.madeFor.outcome,
         byUserId: row.actorUserId,
       },
     })),
-    next: String(rows.at(-1)?.seq ?? afterSeq),
+    held: held.map((one) => ({ ...one, reason: "page_outside_key" as const })),
+    next: String(read.last ?? afterSeq),
     serverNow: now.toISOString(),
   };
 }

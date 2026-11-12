@@ -219,13 +219,15 @@ export function demoOwnShare(now: Date, transactionId: number, userId: number): 
 export function demoClaimedLines(now: Date, userId: number, shiftId: number): ShiftReportLine[] {
   return world(now).claims.filter((claim) => claim.claimant.id === userId && claim.claimantShiftId === shiftId && claim.statement === "mine").map((claim) => {
     const outcome = demoLineOutcome(now, claim.transactionId, userId);
-    const amount = outcome === null ? claim.sale.netMills : outcome.amountMills;
+    const disputed = claim.state === "asked" || claim.state === "owner";
+    // A disputed «моё» counts nothing until it is settled, and says what it claims (as Hub, review R2b-2).
+    const amount = outcome !== null ? outcome.amountMills : disputed ? 0 : claim.sale.netMills;
     return {
       transactionId: claim.transactionId, group: "mine", pageLabel: claim.pageLabel, platform: claim.sale.platform, kind: claim.sale.kind,
       occurredAt: claim.sale.occurredAt, netMills: claim.sale.netMills, fan: claim.sale.fan,
       rule: { home: "shift", reason: outcome?.reason ?? "holder", words: outcome?.words ?? `по правилу ${claim.side.name}`, toUserId: claim.side.id, toName: claim.side.name, shareMills: 0 },
-      statement: "mine", shareWithUserId: null, shareWithName: null, note: claim.note, amountMills: amount, added: true,
-      disputed: claim.state === "asked" || claim.state === "owner", alreadyIn: null,
+      statement: "mine", shareWithUserId: null, shareWithName: null, note: claim.note, amountMills: amount,
+      claimedMills: outcome === null && disputed ? claim.sale.netMills : null, added: true, disputed: outcome === null && disputed, alreadyIn: null,
       facts: null,
     };
   });
@@ -359,10 +361,16 @@ function disputeOf(claim: DemoClaim, now: Date): KernelOperationResponse<"saleDi
     sale: { transactionId: claim.transactionId, pageLabel: claim.pageLabel, platform: claim.sale.platform, kind: claim.sale.kind, occurredAt: claim.sale.occurredAt, netMills: net, fan: claim.sale.fan },
     home: { kind: "shift", reason: "slot_owner", words: "стык смен, никто из них не писал фану: смене, чей слот идёт", shares: [{ userId: claim.side.id, name: claim.side.name, mills: net }] },
     parties: [
-      { userId: claim.claimant.id, name: claim.claimant.name, role: "first", says: says(claim.claimant), countedMills: net, shiftId: claim.claimantShiftId },
-      { userId: claim.side.id, name: claim.side.name, role: "second", says: says(claim.side), countedMills: net, shiftId: claim.sideShiftId },
+      // The claimant's «моё» counts nothing while it is disputed: it claims the net (review R2b-2).
+      { userId: claim.claimant.id, name: claim.claimant.name, role: "first", says: says(claim.claimant), countedMills: 0, claimedMills: net, shiftId: claim.claimantShiftId },
+      { userId: claim.side.id, name: claim.side.name, role: "second", says: says(claim.side), countedMills: net, claimedMills: null, shiftId: claim.sideShiftId },
     ],
     claims: [wire(claim)],
+    // Both reports are handed in Hub in the demo: a decision gives each a new version.
+    reports: [
+      { userId: claim.claimant.id, name: claim.claimant.name, shiftId: claim.claimantShiftId, reportDate: claim.sale.occurredAt.slice(0, 10) },
+      { userId: claim.side.id, name: claim.side.name, shiftId: claim.sideShiftId, reportDate: claim.sale.occurredAt.slice(0, 10) },
+    ],
     facts: {
       ppv: claim.sale.kind === "message_purchase" ? { senderUserId: claim.side.id, senderName: claim.side.name, sentAt: new Date(Date.parse(claim.sale.occurredAt) - 50 * MINUTE_MS).toISOString(), withoutAuthor: false } : null,
       lastWriter: { userId: kate.id, name: kate.name, at: new Date(Date.parse(claim.sale.occurredAt) - 70 * MINUTE_MS).toISOString(), within48h: true },

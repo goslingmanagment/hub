@@ -87,8 +87,17 @@ const agentTeamSaleSchema = z.object({
     /** The chatter's confirmed shift report holds it: only a confirmed mark is credited (a draft changes nothing). */
     confirmed: z.boolean(),
   })),
-  /** The owner's split of a disputed sale, percent per person; null — none. */
+  /**
+   * The owner's split of the sale, percent per person; null — none. Hub's active decision of the sale (the owner's
+   * dispute, one carried over from the ledger, one recorded «со слов» through the agent's door) when it shares the
+   * sale out — a nobody's sale given to a person included; else what the old shift-report tables held (nothing now).
+   */
   resolution: z.array(z.object({ userId: intId, percent: z.number().int().min(0).max(100) })).nullable(),
+  /**
+   * Hub's active decision of the sale, of any kind (review R2b-5): split — its shares are `resolution`; nobody — «не
+   * считается никому»; pot — into the pot named. Null — the owner decided nothing.
+   */
+  decision: z.object({ kind: z.enum(["split", "nobody", "pot"]), pot: z.string().nullable() }).nullable().default(null),
 });
 
 export const agentTeamSalesResponseSchema = z.object({

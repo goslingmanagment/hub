@@ -84,7 +84,9 @@ the owner's machine (outside this repository); a change that moves a home or add
   `reportSums`; the ledger takes versions through `agentShiftReportsFeed` and accrues, Hub never does.
 - **What people say about a sale**: claims, agreements and the owner's decisions (`services/sale-claims.ts`, tables
   `sale_claims`, `sale_owner_decisions`). They reach the rule as its inputs (`sale-homes.ts`), never around it; a
-  claim alone moves no home.
+  claim alone moves no home. Hub is their only home: what the chat agent records «со слов» comes through
+  `services/sale-decisions-door.ts` (`hub sale decide|ask|…`), a decision on a known sale through the owner's own path
+  (`applySaleDecision`); the ledger reads them from Hub and writes none.
 - **A sale's chain of money** (whose, shift, report, accrual, payout): one read, `services/sale-chain.ts`
   (`saleChain`, agents `agentSaleChain` / `hub sale-chain`), it computes nothing anew and says «неизвестно» when a
   source does not answer. Shown only by `SaleChainTrigger` (`packages/ui/src/components/SaleChain.tsx`): the sale's amount.
