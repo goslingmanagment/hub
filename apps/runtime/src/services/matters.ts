@@ -117,8 +117,8 @@ interface WaitingRowSpec {
 
 /** «Ждут вас»'s rows: the same words, order and links as apps/dashboard/src/api/waiting.ts. */
 const WAITING_ROW_SPECS: readonly WaitingRowSpec[] = [
-  { id: "drafts", kinds: ["publication.draft"], teamLead: false, label: "Посты на утверждение", to: "/publications?status=draft&window=all&page=all" },
-  { id: "unknown", kinds: ["publication.unknown"], teamLead: false, label: "Публикации: исход неизвестен", to: "/publications?status=unknown&window=all&page=all" },
+  { id: "drafts", kinds: ["publication.draft"], teamLead: false, label: "Посты на утверждение", to: "/content/publications?status=draft&window=all&page=all" },
+  { id: "unknown", kinds: ["publication.unknown"], teamLead: false, label: "Публикации: исход неизвестен", to: "/content/publications?status=unknown&window=all&page=all" },
   { id: "questions", kinds: ["ledger.sale_question"], teamLead: false, label: "Чья продажа: вопросы ждут вашего слова", to: "/workboard/decisions#questions" },
   { id: "reports", kinds: ["ledger.report_post", "ledger.paid_day_changed"], teamLead: false, label: "Отчёты смен ждут решения", to: "/workboard/decisions#reports" },
   { id: "customs", kinds: ["custom.paid_not_delivered"], teamLead: true, label: "Кастомы оплачены, не отданы", to: "/workboard/decisions#customs" },

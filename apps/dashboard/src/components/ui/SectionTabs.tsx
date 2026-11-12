@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import { Link, useLocation } from "react-router";
 
 export interface SectionTabItem {
@@ -10,12 +10,14 @@ export interface SectionTabItem {
 
 /** A row of sibling screens that read as one section. Links, not buttons: each
  *  tab keeps its URL. `sub` is the quieter second row inside a tab. */
-export function SectionTabs({ items, label, sub = false, current: currentTo }: {
+export function SectionTabs({ items, label, sub = false, current: currentTo, end }: {
   items: readonly SectionTabItem[];
   label: string;
   sub?: boolean;
   /** The current item's `to`, when the row knows better than the address. */
   current?: string | undefined;
+  /** At the row's far end: the section's places in another product. */
+  end?: ReactNode;
 }) {
   const location = useLocation();
   const currentRef = useRef<HTMLAnchorElement>(null);
@@ -42,6 +44,7 @@ export function SectionTabs({ items, label, sub = false, current: currentTo }: {
           {item.label}
         </Link>
       ))}
+      {end}
     </nav>
   );
 }

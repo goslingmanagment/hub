@@ -53,7 +53,7 @@ function sectionGroup(section: Section): CommandGroup {
 /** Where a screen sits, in the menu's words. The name of a tab says it itself. */
 function screenHint(section: Section, screen: Screen): string {
   const tab = tabOfScreen(section, screen.id);
-  if (section.id === "home" || section.id === "waiting" || section.id === "publications") return "";
+  if (section.id === "home" || section.id === "waiting") return "";
   return tab && tab.label !== screen.label ? `${section.label} · ${tab.label}` : section.label;
 }
 

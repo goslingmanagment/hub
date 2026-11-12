@@ -186,8 +186,8 @@ export function useWaitingCounts(role: string): WaitingCounts {
 
   if (owner) {
     const draftCount = failedOr(drafts, (data) => data.publications.length);
-    push({ id: "drafts", label: "Посты на утверждение", count: draftCount, capped: draftCount === LIST_LIMIT, to: "/publications?status=draft&window=all&page=all" });
-    push({ id: "unknown", label: "Публикации: исход неизвестен", count: failedOr(unknown, (data) => data.publications.length), to: "/publications?status=unknown&window=all&page=all" });
+    push({ id: "drafts", label: "Посты на утверждение", count: draftCount, capped: draftCount === LIST_LIMIT, to: "/content/publications?status=draft&window=all&page=all" });
+    push({ id: "unknown", label: "Публикации: исход неизвестен", count: failedOr(unknown, (data) => data.publications.length), to: "/content/publications?status=unknown&window=all&page=all" });
     push({ id: "questions", label: "Чья продажа: вопросы ждут вашего слова", count: failedOr(questions, (count) => count), to: workboardHref("decisions", "", "questions") });
     push({ id: "reports", label: "Отчёты смен ждут решения", count: failedOr(reports, (count) => count), to: workboardHref("decisions", "", "reports") });
   }

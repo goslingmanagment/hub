@@ -126,7 +126,7 @@ const FEATURE_TUNING_KEYS: ReadonlySet<string> = new Set(["aiFeatureModels", "ai
  */
 export function configHomeHref(key: string): { to: string; hint: string } {
   if (key === "fanslyDefaultDelayMs") return { to: `/system/collection#config-${key}`, hint: "Сбор данных" };
-  if (key === "publishingEnabled" || key === "publishingOnlyfansEnabled") return { to: "/publications?panel=settings", hint: "Настройки публикации" };
+  if (key === "publishingEnabled" || key === "publishingOnlyfansEnabled") return { to: "/content/publications?panel=settings", hint: "Настройки публикации" };
   if (FEATURE_TUNING_KEYS.has(key)) return { to: "/settings/ai/features#tuning", hint: "Функции ИИ" };
   const feature = HUB_FEATURES.find((candidate) => candidate.keys.includes(key));
   if (feature) return { to: `/settings/ai/features/${encodeURIComponent(feature.id)}#config-${key}`, hint: "Функции ИИ" };

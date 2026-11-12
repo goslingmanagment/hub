@@ -32,7 +32,7 @@ const REDIRECTS: ReadonlyArray<readonly [number | string, string, string]> = [
   [20, "/ofapi-credits", "/money/costs/onlyfans-api"],
   [21, "/usage", "/money/costs/ai"],
   [22, "/ai-spend", "/money/costs/ai"],
-  [23, "/publication-settings", "/publications?panel=settings"],
+  [23, "/publication-settings", "/content/publications?panel=settings"],
   // 24–31 and «Команда» itself: Workboard's screens (lib/workboard.ts, old-new-map.md §5). Today is 2026-11-10.
   [24, "/team", "/workboard/shifts"],
   [25, "/team/authors?days=1", "/workboard/shifts?authors=1"],
@@ -117,6 +117,10 @@ const REDIRECTS: ReadonlyArray<readonly [number | string, string, string]> = [
   ["the card: Вход в Fansly", "/pages/mia-1/browser-login", "/settings/pages/mia-1/login"],
   ["the card: Продвижение", "/pages/mia-of/promo", "/traffic/promo?page=mia-of"],
   ["the card: Рассылки", "/pages/mia-1/mass-messages?offset=20", "/content/mass-messages?offset=20&page=mia-1"],
+  // L2 (12.11): Публикации are a tab of «Контент».
+  ["Публикации, a publication open", "/publications?page=mia-1&status=draft&window=all&publication=55", "/content/publications?page=mia-1&status=draft&window=all&publication=55"],
+  ["Публикации, the settings panel", "/publications?panel=settings", "/content/publications?panel=settings"],
+  ["Контент itself", "/content", "/content/publications"],
 ];
 
 describe("old addresses (design/ia.md §8.2)", () => {
@@ -133,7 +137,7 @@ describe("old addresses (design/ia.md §8.2)", () => {
     expect(resolveLegacyUrl("/settings?tab=engine&page=a%2Fb")).toBe("/system/collection/a%2Fb");
   });
 
-  it.each(["/", "/?period=30d", "/?row=mia-1&chart=page:mia-1&sort=decline&period=30d", "/stats", "/stats?period=30d&page=mia-1", "/traffic/promo?page=mia-of", "/content/mass-messages?page=mia-1", "/settings/pages/mia-1/account", "/settings/pages/mia-1/login", "/publications?page=mia-1&status=draft&window=all", "/team/applications", "/team/applications/abc", "/system/dev", "/system/dev/log/42", "/account", "/join", "/login"])(
+  it.each(["/", "/?period=30d", "/?row=mia-1&chart=page:mia-1&sort=decline&period=30d", "/stats", "/stats?period=30d&page=mia-1", "/traffic/promo?page=mia-of", "/content/mass-messages?page=mia-1", "/settings/pages/mia-1/account", "/settings/pages/mia-1/login", "/content/publications?page=mia-1&status=draft&window=all", "/team/applications", "/team/applications/abc", "/system/dev", "/system/dev/log/42", "/account", "/join", "/login"])(
     "leaves %s where it is",
     (url) => {
       expect(resolveLegacyUrl(url)).toBeNull();

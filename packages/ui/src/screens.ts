@@ -71,7 +71,7 @@ export interface ScreenPeriod {
   default?: PeriodKey;
 }
 
-export type SectionId = "home" | "waiting" | "money" | "fans" | "stats" | "publications" | "traffic" | "team" | "applications" | "settings" | "system";
+export type SectionId = "home" | "waiting" | "money" | "fans" | "stats" | "content" | "traffic" | "team" | "applications" | "settings" | "system";
 
 export interface Crumb {
   label: string;
@@ -313,9 +313,10 @@ export const SCREENS: readonly Screen[] = [
     keywords: "аналитика трафик",
   },
 
-  // ── Публикации ─────────────────────────────────────────────────────────
+  // ── Контент ────────────────────────────────────────────────────────────
+  // Публикации and Рассылки here; План, Приехало and Библиотека are ContentOps' (links of the section).
   {
-    id: "publications", path: "/publications", label: "Публикации", title: "Публикации", section: "publications", ownerOnly: true,
+    id: "publications", path: "/content/publications", label: "Публикации", title: "Публикации", section: "content", ownerOnly: true,
     why: "Что и когда выйдет на стенах страниц.",
     pageFilter: "any", platforms: REPORTED,
     platformsNote: "Hub не публикует в Telegram.",
@@ -324,7 +325,7 @@ export const SCREENS: readonly Screen[] = [
   },
   {
     // A page's mass messages (a tab of the page's card until 12.11).
-    id: "content-mass-messages", path: "/content/mass-messages", label: "Рассылки", title: "Рассылки", section: "publications", ownerOnly: true,
+    id: "content-mass-messages", path: "/content/mass-messages", label: "Рассылки", title: "Рассылки", section: "content", ownerOnly: true,
     why: "Массовые рассылки страницы: что ушло, кому и сколько принесло.",
     pageFilter: "one", onePageWay: "picker", platforms: FANSLY,
     platformsNote: "Рассылки Hub собирает только у страниц Fansly.", platformsShort: "только Fansly",
@@ -701,6 +702,11 @@ export interface Section {
   count?: MenuCount;
   /** Under the rule at the bottom of the menu. */
   lower?: boolean;
+  /**
+   * The section's places in another product, after its tabs: they open it on the
+   * model of the chosen page (ContentOps keeps a model's content at `/<model>/<path>`).
+   */
+  outside?: { site: "contentops"; label: string; links: readonly { label: string; path: string }[] };
   nav: "tabs" | "side" | "none";
   tabs: readonly SectionTab[];
 }
@@ -745,8 +751,14 @@ export const SECTIONS: readonly Section[] = [
     ],
   },
   {
-    id: "publications", label: "Публикации", title: "Публикации", icon: "Newspaper", ownerOnly: true, nav: "tabs",
+    // «Публикации» until 12.11: the content, the hub's part and ContentOps' (the model of the chosen page).
+    id: "content", label: "Контент", title: "Контент", icon: "Newspaper", ownerOnly: true, nav: "tabs",
     tabs: [tab("publications", "Публикации", "publications"), tab("mass-messages", "Рассылки", "content-mass-messages")],
+    outside: { site: "contentops", label: "ContentOps", links: [
+      { label: "План", path: "plan" },
+      { label: "Приехало", path: "inbox" },
+      { label: "Библиотека", path: "library" },
+    ] },
   },
   {
     id: "traffic", label: "Трафик", title: "Трафик", icon: "Megaphone", ownerOnly: true, nav: "tabs",

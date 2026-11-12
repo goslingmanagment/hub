@@ -41,7 +41,7 @@ function pageCommands(pages: readonly CommandPage[], role: Role): Command[] {
       ] : []),
       ...(owner && isFansly ? [{ label: "Статистика", to: `/stats?page=${encodeURIComponent(page.label)}`, keywords: "аналитика" }] : []),
       ...(owner && hasData ? [
-        { label: "Публикации", to: `/publications?page=${encodeURIComponent(page.label)}` },
+        { label: "Публикации", to: `/content/publications?page=${encodeURIComponent(page.label)}` },
         { label: "Сбор данных", to: buildPageCollectionRoute(page.label), keywords: "синк" },
       ] : []),
       ...(owner && isFansly ? [{ label: "Войти в Fansly", to: buildPageSectionRoute(page.label, "browser-login"), keywords: "вход в браузер" }] : []),

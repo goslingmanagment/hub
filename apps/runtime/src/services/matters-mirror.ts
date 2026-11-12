@@ -119,7 +119,7 @@ export function publicationItems(
     pageLabels: [publication.pageLabel],
     money: false,
     evidence: { publicationId: publication.id, kind: publication.kind, publishAt: publication.publishAt, version: publication.version },
-    link: `/publications?status=${status}&window=all&page=all`,
+    link: `/content/publications?status=${status}&window=all&page=all`,
   }));
 }
 

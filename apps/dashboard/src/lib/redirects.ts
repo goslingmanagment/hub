@@ -118,7 +118,10 @@ export const LEGACY_ROUTES: ReadonlyArray<LegacyRule & { path: string }> = [
   { path: "ofapi-credits", to: "/money/costs/onlyfans-api" }, // 20
   { path: "usage", to: "/money/costs/ai" }, // 21
   { path: "ai-spend", to: "/money/costs/ai" }, // 22
-  { path: "publication-settings", to: "/publications", set: { panel: "settings" } }, // 23
+  { path: "publication-settings", to: "/content/publications", set: { panel: "settings" } }, // 23
+  // Публикации are a tab of «Контент» since 12.11: the old address with every parameter and its anchor.
+  { path: "publications", to: "/content/publications" },
+  { path: "content", to: "/content/publications" },
   // 24–31, the old addresses of «Команда»: Workboard's now (lib/workboard.ts).
   { path: "agent-hydration", to: "/system/history-requests" }, // 32
   { path: "incidents", to: "/system/failures" }, // 33
