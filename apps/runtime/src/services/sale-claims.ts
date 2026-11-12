@@ -42,6 +42,7 @@ import {
   listVisiblePages,
   lockSaleSettlements,
   openMatter,
+  reopenSaleClaim,
   supersedeSaleDecision,
   updateSaleClaim,
   type CurrentReport,
@@ -93,7 +94,8 @@ import { SHIFT_REPORT_AFTER_PAID_KIND, draftLineOfSale, ledgerDayPaid, saleLineF
  *    11 нояб.» that opens their shift report at that line — or, nobody to ask
  *    (or the other side not handing shifts in in Hub), goes to the owner at
  *    once; a sale counted for more than its net is the owner's at once;
- *  - a claim whose report no longer counts the sale is withdrawn; one asked 24
+ *  - a claim whose report no longer counts the sale is withdrawn (and asked
+ *    again, in the same row, when the report makes it again); one asked 24
  *    hours ago and not answered goes to the owner;
  *  - the owner's matters: ONE per disputed sale, one per report with «мимо
  *    площадки» waiting, one line a week of the sales nobody claimed on the
@@ -183,9 +185,9 @@ export async function runSaleClaims(app: Pick<AppContext, "db" | "logger">, now:
   const people = await listHandinPeopleOfUsers(db, [...new Set(derived.flatMap((one) => (one.sideUserId === null ? [] : [one.sideUserId])))]);
   for (const claim of derived) {
     const existing = known.get(claimKey(claim.claimantHandinId, claim.transactionId, claim.sideUserId));
-    if (existing !== undefined) {
+    if (existing !== undefined && existing.state !== "withdrawn") {
       if (existing.claimantVersion !== claim.claimantVersion && OPEN_STATES.includes(existing.state as typeof OPEN_STATES[number])) {
-        await updateSaleClaim(db, existing.id, { claimantVersion: claim.claimantVersion, claimantNote: claim.note }, now);
+        await updateSaleClaim(db, existing.id, { claimantVersion: claim.claimantVersion, claimantNote: claim.note }, now, { ifState: existing.state });
       }
       continue;
     }
@@ -194,38 +196,46 @@ export async function runSaleClaims(app: Pick<AppContext, "db" | "logger">, now:
     // The side answers on their shift report: a person who hands shifts in in Hub. Anyone else — the owner decides.
     const askable = claim.kind === "claim" && side !== null && side.submitsShiftSince !== null && side.state !== "left";
     const why = claim.kind === "double" ? "double" as const : askable ? null : "no_side" as const;
-    const inserted = await insertSaleClaim(db, {
-      transactionId: claim.transactionId,
+    const asked = { state: why === null ? "asked" as const : "owner" as const, escalatedAt: why === null ? null : now, escalatedWhy: why };
+    const said = {
       pageId: sale?.pageId ?? null,
       kind: claim.kind,
-      claimantUserId: claim.claimantUserId,
-      claimantHandinId: claim.claimantHandinId,
       claimantVersion: claim.claimantVersion,
       statement: claim.statement,
       shareWithUserId: claim.shareWithUserId,
       claimantNote: claim.note,
       claimedAt: new Date(claim.claimedAt),
-      sideUserId: claim.sideUserId,
       sideShiftId: await sideShiftOf(db, claim, sale),
-      state: why === null ? "asked" : "owner",
-      escalatedAt: why === null ? null : now,
-      escalatedWhy: why,
+    };
+    if (existing !== undefined) {
+      // Withdrawn — its report had stopped counting the sale — and made again: there is one row per report, sale and
+      // side, so the same row is the claim again, asked as a new one is (`reopenSaleClaim`).
+      if (await reopenSaleClaim(db, existing.id, { ...said, pageId: said.pageId ?? existing.pageId, ...asked }, now)) tally.opened += 1;
+      continue;
+    }
+    const inserted = await insertSaleClaim(db, {
+      ...said,
+      transactionId: claim.transactionId,
+      claimantUserId: claim.claimantUserId,
+      claimantHandinId: claim.claimantHandinId,
+      sideUserId: claim.sideUserId,
+      ...asked,
     }, now);
     if (inserted !== null) tally.opened += 1;
   }
 
-  // The open claims: withdrawn when the report no longer counts the sale, the owner's after a day of silence.
+  // The open claims: withdrawn when the report no longer counts the sale, the owner's after a day of silence. The pass
+  // is outside the settlements' turn: each write goes through only while the claim is in the state read here, so an
+  // answer or a decision committed since is never written over — and only what was really changed is counted.
   const open = await listSaleClaims(db, { states: [...OPEN_STATES], kinds: ["claim", "double"] });
   const holding = (await listCurrentReportsOfSales(db, [...new Set(open.flatMap((claim) => (claim.transactionId === null ? [] : [claim.transactionId])))])).map(viewOf);
   for (const claim of open) {
     if (!claimStands(claim, holding)) {
-      await updateSaleClaim(db, claim.id, { state: "withdrawn", closedAt: now }, now);
-      tally.withdrawn += 1;
+      if (await updateSaleClaim(db, claim.id, { state: "withdrawn", closedAt: now }, now, { ifState: claim.state })) tally.withdrawn += 1;
       continue;
     }
     if (claim.state === "asked" && now.getTime() - claim.createdAt.getTime() >= CLAIM_SILENCE_MS) {
-      await updateSaleClaim(db, claim.id, { state: "owner", escalatedAt: now, escalatedWhy: "silence" }, now);
-      tally.escalated += 1;
+      if (await updateSaleClaim(db, claim.id, { state: "owner", escalatedAt: now, escalatedWhy: "silence" }, now, { ifState: "asked" })) tally.escalated += 1;
     }
   }
 
@@ -1111,7 +1121,8 @@ export async function linkUnlinkedDecision(app: ClaimsApp, principal: HumanAuthP
   const sale = (await listHandinSalesByIds(app.db, [input.transactionId]))[0];
   if (sale === undefined) throw new NotFoundError("No such sale");
   const decision = (await listSaleDecisions(app.db, { ids: [input.decisionId] }))[0];
-  if (decision === undefined || !decision.needsLink) throw new NotFoundError("No such decision waiting for a sale");
+  // One cancelled or replaced meanwhile waits for no sale: refused before anything is written.
+  if (decision === undefined || !decision.needsLink || decision.state !== "active") throw new NotFoundError("No such decision waiting for a sale");
   const pageLabel = typeof decision.ledgerRef?.pageLabel === "string" ? decision.ledgerRef.pageLabel : null;
   if (pageLabel !== null && pageLabel !== sale.pageLabel) throw new BadRequestError("The sale is of another page", { reason: "page_mismatch" });
   // Tied to its sale, it rules the sale from now exactly as a decision made on it (and replaces the one that ruled it):

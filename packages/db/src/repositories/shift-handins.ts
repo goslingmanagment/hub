@@ -478,7 +478,9 @@ export async function listCurrentHandinVersions(db: Database, handinIds: readonl
 
 /**
  * The sales a person's reports hold now: every sale line of the newest version of each submitted report of the
- * person's logins whose report date is `since` or later, by transaction id — which report holds it.
+ * person's logins whose report date is `since` or later, by transaction id — which report holds it. A line that only
+ * says the sale is in another report of the person (`alreadyIn`: it counts nothing here) holds nothing — the report
+ * it points at does, whichever of the two was handed in last.
  */
 export async function listReportedSales(
   db: Database,
@@ -491,7 +493,7 @@ export async function listReportedSales(
     join shift_handin_versions v on v.handin_id = h.id and v.version = h.current_version
     cross join lateral jsonb_array_elements(v.lines) as line
     where h.user_id = any(${ids(input.userIds)}) and h.state = 'submitted' and h.report_date >= ${input.since}::date
-      and line ->> 'transactionId' is not null
+      and line ->> 'transactionId' is not null and line ->> 'alreadyIn' is null
     order by h.submitted_at`);
   const out = new Map<number, { handinId: number; shiftId: number; reportDate: string }>();
   for (const row of result.rows) {

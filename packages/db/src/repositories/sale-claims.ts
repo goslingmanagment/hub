@@ -30,8 +30,9 @@ function jsonOf<T>(value: unknown, fallback: T): T {
  * The writers of whose a sale is and of what a report counts of it take their turn: a decision made, replaced, cancelled
  * or tied to its sale, an agreement of two sides, and a hand-in — which writes what those give. Taken first in the
  * writer's transaction, before any row (so: this lock, then decisions and claims, then reports) and held to its commit.
- * Under it a hand-in reads the decisions and agreements of its sales as they stay until it commits, and a decision
- * finds every version handed in: neither writes over what the other has just written. Never across a call to the ledger.
+ * Under it a hand-in reads what it writes from — the decisions and agreements of its sales, the person's other reports —
+ * as it stays until it commits, and a decision finds every version handed in: neither writes over what the other has
+ * just written, and two hand-ins of one person never take the same sale. Never across a call to the ledger.
  */
 export async function lockSaleSettlements(db: Database): Promise<void> {
   await db.execute(sql`select pg_advisory_xact_lock(hashtextextended('sale_settlements', 0))`);
@@ -288,7 +289,11 @@ export async function insertSaleClaim(db: Database, input: SaleClaimInsert, at: 
   return id === undefined ? null : findSaleClaim(db, num(id));
 }
 
-/** Changes a claim: the fields given, and when. */
+/**
+ * Changes a claim: the fields given, and when. `ifState` — only while the claim is in the state the caller read it in:
+ * a writer outside the settlements' turn (the claims' pass) never writes over what was committed after its read.
+ * False — nothing was changed: no such claim, or it is in another state now.
+ */
 export async function updateSaleClaim(
   db: Database,
   id: number,
@@ -297,7 +302,8 @@ export async function updateSaleClaim(
     | "escalatedAt" | "escalatedWhy" | "decisionId" | "closedAt" | "claimantVersion" | "claimantNote" | "sideShiftId" | "transactionId" | "pageId"
     | "answerText" | "closeNote" | "question">>,
   at: Date,
-): Promise<void> {
+  options: { ifState?: SaleClaimState } = {},
+): Promise<boolean> {
   const sets = [sql`updated_at = ${at.toISOString()}::timestamptz`];
   const put = (column: string, value: unknown, cast = "") => sets.push(sql`${sql.raw(column)} = ${value}${sql.raw(cast)}`);
   const iso = (value: Date | null | undefined) => (value == null ? null : value.toISOString());
@@ -324,7 +330,35 @@ export async function updateSaleClaim(
   if (patch.answerText !== undefined) put("answer_text", patch.answerText);
   if (patch.closeNote !== undefined) put("close_note", patch.closeNote);
   if (patch.question !== undefined) put("question", patch.question);
-  await db.execute(sql`update sale_claims set ${sql.join(sets, sql`, `)} where id = ${id}`);
+  const only = options.ifState === undefined ? sql`` : sql` and state = ${options.ifState}`;
+  const result = await db.execute(sql`update sale_claims set ${sql.join(sets, sql`, `)} where id = ${id}${only}`);
+  return (result.rowCount ?? 0) > 0;
+}
+
+/**
+ * A withdrawn claim its report makes again: the same row is the claim again (there is one row per report, sale and
+ * side), written as a new one would be — the kind and the word, the note, the version and the moment of now, asked of
+ * the side or the owner's at once — and with nothing of its first life: no answer, no decision, not closed, and asked
+ * now (`created_at`: the day the side has to answer counts from it). False — it is not withdrawn: nothing changed.
+ */
+export async function reopenSaleClaim(
+  db: Database,
+  id: number,
+  input: Pick<SaleClaimInsert, "pageId" | "kind" | "claimantVersion" | "statement" | "shareWithUserId" | "claimantNote" | "claimedAt" | "sideShiftId" | "state">
+    & { escalatedAt: Date | null; escalatedWhy: SaleClaimEscalation | null },
+  at: Date,
+): Promise<boolean> {
+  const now = at.toISOString();
+  const result = await db.execute(sql`
+    update sale_claims set page_id = ${input.pageId}, kind = ${input.kind}, claimant_version = ${input.claimantVersion},
+      statement = ${input.statement}, share_with_user_id = ${input.shareWithUserId}, claimant_note = ${input.claimantNote},
+      claimed_at = ${input.claimedAt.toISOString()}::timestamptz, side_shift_id = ${input.sideShiftId}, state = ${input.state},
+      escalated_at = ${input.escalatedAt?.toISOString() ?? null}::timestamptz, escalated_why = ${input.escalatedWhy},
+      answer = null, answer_note = null, answered_at = null, answered_by_user_id = null, answered_by_agent_key_id = null,
+      answer_door = null, answer_ref = null, decision_id = null, closed_at = null,
+      created_at = ${now}::timestamptz, updated_at = ${now}::timestamptz
+    where id = ${id} and state = 'withdrawn' and kind in ('claim', 'double')`);
+  return (result.rowCount ?? 0) > 0;
 }
 
 // ── The owner's decisions ────────────────────────────────────────────────────
@@ -515,9 +549,14 @@ export async function markSaleDecisionApplied(db: Database, input: { id: number;
 
 /**
  * Links an imported decision the ledger's text did not tie to a sale: it takes the sale and becomes the sale's active
- * decision (one before it superseded). False — not one waiting for a link.
+ * decision (one before it superseded). False — not one waiting for a link, or no longer active (cancelled, replaced):
+ * then nothing is written, and the sale keeps the decision that rules it. The decision's own row is taken first, so
+ * it stays what it was read as until the caller's transaction ends.
  */
 export async function linkSaleDecision(db: Database, input: { id: number; transactionId: number; pageId: number; at: Date }): Promise<boolean> {
+  const waiting = await db.execute<Row>(sql`
+    select id from sale_owner_decisions where id = ${input.id} and needs_link and state = 'active' for update`);
+  if (waiting.rows.length === 0) return false;
   await db.execute(sql`
     update sale_owner_decisions set state = 'superseded', superseded_at = ${input.at.toISOString()}::timestamptz
     where transaction_id = ${input.transactionId} and state = 'active' and id <> ${input.id}`);

@@ -71,8 +71,6 @@ import {
   type HandinVersionOffPlatform,
   type HandinVersionRow,
   type OffPlatformRow,
-  type SaleClaimRow,
-  type SaleDecisionRow,
 } from "@agency_hub_core/db";
 
 import type { AppContext } from "../bootstrap.ts";
@@ -240,19 +238,6 @@ interface DraftFacts {
   senders: Map<number, number>;
   /** What a sale the owner decided or the sides agreed on gives the person, by transaction (review R2-a). */
   settled: Map<number, { amountMills: number; settled: "owner" | "agreed" }>;
-  /** What settled the draft's sales when it was read (`settlementsOf`): a hand-in checks it again before it writes. */
-  settledBy: string;
-}
-
-/**
- * What settles the sales named now: the owner's active decision and the agreed claims of each, and `stamp` — one word
- * that changes when any of them does (a decision made, replaced or cancelled; an agreement made or overridden).
- */
-async function settlementsOf(db: Database, saleIds: readonly number[]): Promise<{ decisions: Map<number, SaleDecisionRow>; agreed: SaleClaimRow[]; stamp: string }> {
-  const decisions = await listActiveSaleDecisions(db, saleIds);
-  const agreed = await listSaleClaims(db, { transactionIds: saleIds, states: ["agreed"] });
-  const stamp = [...[...decisions.values()].map((one) => `d${one.id}`), ...agreed.map((claim) => `c${claim.id}`)].sort().join(" ");
-  return { decisions, agreed, stamp };
 }
 
 /** The shift's own work among the rule's works: the person's shift that ran with it the longest. */
@@ -392,7 +377,9 @@ async function draftFacts(
   const since = new Date(window.from - (HANDIN_LOOKBACK_DAYS + 3) * DAY_MS).toISOString().slice(0, 10);
   const reported = await listReportedSales(db, { userIds: subject.userIds, since });
   const switchOnAt = subject.person?.submitsShiftSince?.getTime() ?? null;
-  const context = { shiftId: shift.id, workRef, userIds: new Set(subject.userIds), switchOnAt, submittedShiftIds, reported, handinId: handin?.id ?? null };
+  // The sales the person's words here say «не моё» of: each stays their own line (shift-handin-rules.ts).
+  const notMine = new Set(marks.filter((mark) => mark.statement === "not_mine").map((mark) => mark.transactionId));
+  const context = { shiftId: shift.id, workRef, userIds: new Set(subject.userIds), switchOnAt, submittedShiftIds, reported, handinId: handin?.id ?? null, notMine };
 
   const classified: ClassifiedSale[] = [];
   const seen = new Set<number>();
@@ -401,6 +388,14 @@ async function draftFacts(
     const one = classifySale(sale, context);
     if (one === null) continue;
     seen.add(sale.transactionId);
+    classified.push(one);
+  }
+  // One of them the draft no longer reads — of the days before the shift, its home naming the person no more — is
+  // read by its id: the word keeps it a line of the report it was said in.
+  for (const row of await listHandinSalesByIds(db, [...notMine].filter((id) => !seen.has(id)))) {
+    const one = classifySale(saleOfRow(row), context);
+    if (one === null) continue;
+    seen.add(row.transactionId);
     classified.push(one);
   }
 
@@ -423,7 +418,8 @@ async function draftFacts(
   // A sale the owner decided or the two sides agreed on: the person's line counts what that gives them, settled, in
   // every later draft — their old «моё» no longer takes the money back, nor opens the dispute again (review R2-a).
   const saleIds = classified.map((one) => one.sale.transactionId);
-  const { decisions, agreed, stamp } = await settlementsOf(db, saleIds);
+  const decisions = await listActiveSaleDecisions(db, saleIds);
+  const agreed = await listSaleClaims(db, { transactionIds: saleIds, states: ["agreed"] });
   const settled = new Map<number, { amountMills: number; settled: "owner" | "agreed" }>();
   for (const one of classified) {
     const id = one.sale.transactionId;
@@ -441,7 +437,6 @@ async function draftFacts(
     works: new Map(works.map((work) => [work.ref, { userId: work.userId, kind: work.kind }])),
     senders,
     settled,
-    settledBy: stamp,
   };
 }
 
@@ -623,6 +618,8 @@ interface ViewContext {
 function wireLine(line: HandinVersionLine, context: ViewContext): ShiftReportLine | null {
   if (line.transactionId === null || line.pageLabel === null) return null;
   const toName = line.rule.toUserId === null ? null : context.names.get(line.rule.toUserId) ?? null;
+  // The person's own line the rule gives them nothing of — their «не моё» keeps it theirs: the words say whose the sale is.
+  const givenAway = line.group === "mine" && line.statement === "not_mine" && line.rule.shareMills === 0;
   return {
     transactionId: line.transactionId,
     group: line.group,
@@ -636,7 +633,7 @@ function wireLine(line: HandinVersionLine, context: ViewContext): ShiftReportLin
       home: line.rule.home,
       reason: line.rule.reason,
       words: reasonWords({
-        group: line.group,
+        group: givenAway ? "near" : line.group,
         added: line.added,
         claimed: line.group === "mine" && line.added && line.statement === "mine",
         reason: line.rule.reason as SaleHomeReason,
@@ -1234,15 +1231,16 @@ export const SHIFT_REPORTS_MISSING_KIND = "shift.reports.missing";
 export const SHIFT_REPORT_AFTER_PAID_KIND = "shift.report.after_paid";
 
 /**
- * `shiftReportSubmit`: «Сдать смену». The draft is computed now, the person's words read under the report's lock,
+ * `shiftReportSubmit`: «Сдать смену». The draft is computed and the person's words read in the write's transaction,
  * and the next version written; the matter «Сдайте смену» closes. A version after the ledger paid the day is kept
  * and raises a matter for the owner.
  *
- * The draft's facts are read before the wait for the ledger (up to 20 s) and the version is written after it, in the
- * turn of the sales' settlements (`lockSaleSettlements`) and under the report's lock. What a decision, an agreement or a
- * cancel changed in between is never written from the old read: when the decisions or agreements of the draft's sales,
- * or the report itself, are not what they were, the facts are read again there — the lock is never held across the
- * ledger's call, and nothing settles a sale between that read and the commit.
+ * The ledger is asked first, before any lock (up to 20 s): whether the day is paid needs only the shift and the report
+ * as they stand. Then the version is written in one transaction, in the turn of the sales' settlements
+ * (`lockSaleSettlements`) and under the report's lock, and the facts it is written from are read there and nowhere
+ * else. The turn serialises hand-ins and settlements, so whatever happened during the wait — a decision, an agreement,
+ * a cancel, another report of the person taking a «долёт» — is what the version counts, and nothing changes between
+ * that read and the commit. Nothing read before the lock is written; the lock is never held across the ledger's call.
  */
 export async function submitShiftReport(
   app: HandinApp,
@@ -1254,21 +1252,20 @@ export async function submitShiftReport(
   const { subject, catalog } = await writableSubject(app, actor, input.shiftId);
   if (actor.kind === "agent" && actor.sourceRef === null) throw new BadRequestError("A report is handed in «со слов» only with the message", { reason: "source_ref_required" });
   const existing = await findHandinByShift(app.db, subject.shift.id);
-  const read = await draftFacts(app.db, subject, existing, catalog, now, existing === null ? [] : await listHandinMarks(app.db, existing.id));
   // Whether the report's day is paid: the day every reader takes the report on (`reportDateOf`) — the day it was handed in
   // on before, the shift's day for a first hand-in.
   const paidDay = reportDateOf(subject.shift, existing);
   const dayPaid = await (options.dayPaid ?? ((one) => ledgerDayPaid(app, one)))({ personCode: subject.person?.code ?? null, reportDate: paidDay });
   const who = writer(actor);
 
-  const version = await app.db.transaction(async (tx) => {
+  const { version, pages } = await app.db.transaction(async (tx) => {
     const db = tx as unknown as Database;
     await lockSaleSettlements(db);
     const handin = await handinFor(db, subject);
     const marks = await listHandinMarks(db, handin.id);
-    const settledNow = await settlementsOf(db, read.classified.map((one) => one.sale.transactionId));
-    const stale = settledNow.stamp !== read.settledBy || handin.currentVersion !== (existing?.currentVersion ?? null);
-    const facts = stale ? await draftFacts(db, subject, handin, catalog, now, marks) : read;
+    // The facts the version is written from, read here, in the turn: the decisions and agreements of its sales and the
+    // person's other reports as they stay until this commits.
+    const facts = await draftFacts(db, subject, handin, catalog, now, marks);
     const lines = draftLines(facts, marks);
     const offPlatform = offPlatformOfRows(await listOffPlatform(db, handin.id), catalog.labelOf);
     const sums = linesPageSums(lines, facts.pages, offPlatform);
@@ -1299,7 +1296,7 @@ export async function submitShiftReport(
       },
       at: now,
     });
-    return made;
+    return { version: made, pages: facts.pages };
   });
 
   const system = { door: "system" as const };
@@ -1307,7 +1304,7 @@ export async function submitShiftReport(
     app.logger.warn({ shiftId: subject.shift.id, err: error instanceof Error ? error.message : String(error) }, "shift report: the matter «Сдайте смену» did not close");
   });
   if (dayPaid === true) {
-    const pageIds = read.pages.map((label) => catalog.idOf.get(label)).filter((id): id is number => id !== undefined);
+    const pageIds = pages.map((label) => catalog.idOf.get(label)).filter((id): id is number => id !== undefined);
     await openMatter(app.db, {
       key: `${SHIFT_REPORT_AFTER_PAID_KIND}:${version.id}`,
       kind: SHIFT_REPORT_AFTER_PAID_KIND,

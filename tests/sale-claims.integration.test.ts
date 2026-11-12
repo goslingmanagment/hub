@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { saleClaimAnswerResponseSchema, saleDisputeResponseSchema, shiftReportResponseSchema } from "@agency_hub_core/contracts";
-import { assignUserToPage, createFanslyPage, createModel, insertAgentKey } from "@agency_hub_core/db";
+import { assignUserToPage, createFanslyPage, createModel, insertAgentKey, insertSaleClaim } from "@agency_hub_core/db";
 import { sha256Hex } from "@agency_hub_core/shared";
 
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
@@ -9,6 +9,7 @@ import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import { AGENT_KEY_TOKEN_PREFIX, createUserAccount, setUserPassword } from "../apps/runtime/src/services/auth.ts";
 import { runSaleClaims } from "../apps/runtime/src/services/sale-claims.ts";
 import { startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
+import { waitForRowLockWait } from "./helpers/lock-waits.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 import { fixtureUserId } from "./helpers/user-identity.ts";
 
@@ -17,7 +18,8 @@ import { fixtureUserId } from "./helpers/user-identity.ts";
 // and the owner cannot answer for them; an agent «со слов» only with the message and the side as its sender. Only the
 // owner reads and decides a dispute; the decision gives each counting report a new version with what it gives, the odd
 // mill as the rule gives it. A chatter's matters carry only the sale's amount, and a chatter of another page sees
-// nothing of it. Money and rights: required.
+// nothing of it. A claim withdrawn and made again asks the other side again, in the same row. The pass writes a claim
+// only as it read it: a decision or an answer committed meanwhile is never written over. Money and rights: required.
 
 vi.mock("argon2", () => import("./helpers/cheap-argon2.ts"));
 
@@ -306,6 +308,85 @@ describe("claims of a sale: who answers, who decides, who sees", () => {
       const opened = await asKey("matters", "POST", "/api/v1/agent/matters", { key: `${kind}:1`, kind, title: "x", owner: { role: "owner" } });
       expect(opened.statusCode, opened.body).toBe(409);
       expect(opened.json().reason).toBe("matter_not_agents");
+    }
+  });
+
+  it("asks the other side again when a claim that was withdrawn is made again", async (context) => {
+    if (!testDb) return context.skip();
+    const sale = await bellasSale("tx-claim-again", 9_000);
+    const claimId = await annaClaims(sale, "мой фан");
+    const rows = async () => (await testDb!.pool.query(
+      `select id::int as id, state, claimant_note, claimant_version, answer, answer_note, answered_at, escalated_at, escalated_why, closed_at
+       from sale_claims where transaction_id = $1 order by id`,
+      [sale],
+    )).rows as Array<Record<string, unknown>>;
+    const matter = async (key: string) => (await testDb!.pool.query("select state from matters where reason_key = $1", [key])).rows[0]?.state as string | undefined;
+    const say = async (body: Record<string, unknown>) => {
+      const said = await asSession("anna", "PUT", `/api/v1/shift-reports/${shiftA}/lines/${sale}`, body);
+      expect(said.statusCode, said.body).toBe(200);
+      const submitted = await asSession("anna", "POST", `/api/v1/shift-reports/${shiftA}/submit`);
+      expect(submitted.statusCode, submitted.body).toBe(200);
+      await runSaleClaims(app);
+    };
+    // bella does not agree: the claim is the owner's, with her answer.
+    const disagreed = await asSession("bella", "POST", `/api/v1/sale-claims/${claimId}/answer`, { answer: "disagree", note: "писала ему последней" });
+    expect(disagreed.statusCode, disagreed.body).toBe(200);
+    expect(await rows()).toEqual([expect.objectContaining({ id: claimId, state: "owner", answer: "disagree", escalated_why: "disagree" })]);
+
+    // anna takes the word back and hands in: her report no longer counts the sale, the claim is withdrawn.
+    await say({ statement: null });
+    expect(await rows()).toEqual([expect.objectContaining({ id: claimId, state: "withdrawn" })]);
+    expect(await matter(`sale.dispute:${sale}`)).toBe("closed");
+    const before = (await rows())[0]!;
+    // Days pass; she says «моё» again and hands in. The same row is the claim again, asked of bella as a new one is:
+    // the answer and the escalation of its first life are gone, and the day she has to answer counts from now.
+    await testDb.pool.query("update sale_claims set created_at = created_at - interval '3 days' where id = $1", [claimId]);
+    await say({ statement: "mine", note: "всё-таки мой" });
+    expect(await rows()).toEqual([expect.objectContaining({
+      id: claimId, state: "asked", claimant_note: "всё-таки мой", answer: null, answer_note: null, answered_at: null,
+      escalated_at: null, escalated_why: null, closed_at: null,
+    })]);
+    expect(Number((await rows())[0]!.claimant_version)).toBeGreaterThan(Number(before.claimant_version));
+    expect(await matter(`sale.claim:${claimId}`)).toBe("open");
+    expect(await matter(`sale.dispute:${sale}`)).toBe("closed");
+    const report = shiftReportResponseSchema.parse((await asSession("bella", "GET", `/api/v1/shift-reports/${shiftB}`)).json());
+    expect(report.claims.find((claim) => claim.id === claimId)).toMatchObject({ direction: "incoming", canAnswer: true, state: "asked", note: "всё-таки мой" });
+    // She can answer it as any claim.
+    const agreed = await asSession("bella", "POST", `/api/v1/sale-claims/${claimId}/answer`, { answer: "agree" });
+    expect(agreed.statusCode, agreed.body).toBe(200);
+    expect((await newestLine(shiftA, sale))!.line).toMatchObject({ amountMills: 9_000, disputed: false, settled: "agreed" });
+  });
+
+  it("writes a claim only as the pass read it: a decision or an answer committed meanwhile stays", async (context) => {
+    if (!testDb) return context.skip();
+    // One claim that stands and was asked more than a day ago: the pass would take it to the owner for silence.
+    const silent = await annaClaims(await bellasSale("tx-claim-silent", 7_000), "мой");
+    await testDb.pool.query("update sale_claims set created_at = created_at - interval '25 hours' where id = $1", [silent]);
+    // And one whose report does not count its sale: the pass would withdraw it.
+    const handin = Number((await testDb.pool.query("select id from shift_handins where shift_id = $1", [shiftA])).rows[0].id);
+    const gone = (await insertSaleClaim(app.db, {
+      transactionId: await bellasSale("tx-claim-gone", 6_000), pageId: pageOne, kind: "claim", claimantUserId: anna, claimantHandinId: handin,
+      claimantVersion: 1, statement: "mine", shareWithUserId: null, claimantNote: "мой", claimedAt: new Date(), sideUserId: bella, sideShiftId: shiftB, state: "asked",
+    }, new Date()))!.id;
+    const states = async () => (await testDb!.pool.query("select id::int as id, state from sale_claims where id = any($1::bigint[]) order by id", [[silent, gone]])).rows;
+
+    // A decision of one and an answer to the other are being committed while the pass runs: it reads both claims as
+    // asked, and its first write waits for their rows.
+    const meanwhile = await testDb.pool.connect();
+    try {
+      await meanwhile.query("begin");
+      await meanwhile.query("update sale_claims set state = 'decided', closed_at = now() where id = $1", [gone]);
+      await meanwhile.query("update sale_claims set state = 'agreed', answer = 'agree', answered_at = now(), closed_at = now() where id = $1", [silent]);
+      const pass = runSaleClaims(app);
+      await waitForRowLockWait(testDb.pool, ["%update sale_claims set%"], { blocked: pass });
+      await meanwhile.query("commit");
+      const tally = await pass;
+      // What was committed stands, and the pass counts nothing it did not change.
+      expect(await states()).toEqual([{ id: silent, state: "agreed" }, { id: gone, state: "decided" }]);
+      expect(tally).toMatchObject({ withdrawn: 0, escalated: 0 });
+    } finally {
+      await meanwhile.query("rollback").catch(() => undefined);
+      meanwhile.release();
     }
   });
 });

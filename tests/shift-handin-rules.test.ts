@@ -81,11 +81,32 @@ describe("which sales a shift's draft holds", () => {
     expect(classifySale(late(), context({ submittedShiftIds: new Set([99]) }))).toMatchObject({ group: "mine", added: true, shareMills: 12_000 });
     // Before the switch: the old way (the post) had it.
     expect(classifySale(late(), context({ submittedShiftIds: new Set([99]), switchOnAt: START }))).toBeNull();
-    // A report of the person holds it already.
+    // Another report of the person holds it already.
     expect(classifySale(late(), context({ submittedShiftIds: new Set([99]), reported: new Map([[6, { handinId: 3, shiftId: 99, reportDate: "2026-11-09" }]]) }))).toBeNull();
+    // This very report holds it — it was handed in with it: the next draft keeps the line (a hand-in again, a decision cancelled).
+    expect(classifySale(late(), context({ submittedShiftIds: new Set([99]), reported: new Map([[6, { handinId: 5, shiftId: SHIFT, reportDate: "2026-11-11" }]]) })))
+      .toMatchObject({ group: "mine", added: true, shareMills: 12_000, alreadyIn: null });
     // A look-in's sale has no report of its own.
     const lookIn = late({ home: { kind: "visit", reason: "look_in_last_writer", pot: null, shares: [{ userId: ME, workRef: "7:visit", shiftId: null, mills: 12_000 }] } });
     expect(classifySale(lookIn, context())).toMatchObject({ group: "mine", added: true });
+  });
+
+  it("keeps a sale the person said «не моё» of as their own line with the word, whatever the rule made of it since", () => {
+    // Its home's only person said «не моё»: by the rule it is nobody's now. Without the word it is a sale nearby.
+    const nobodys = { kind: "nobody" as const, reason: "agreed" as const, pot: null, shares: [] };
+    const held = sale({ transactionId: 31, home: nobodys });
+    expect(classifySale(held, context())).toMatchObject({ group: "near" });
+    const kept = classifySale(held, context({ notMine: new Set([31]) }));
+    expect(kept).toMatchObject({ group: "mine", added: false, shareMills: 0, toUserId: null });
+    // A «долёт» the person said it of, read by id once its home names them no more: outside the window, still theirs.
+    const late = sale({ transactionId: 32, source: "before", heldByShift: false, home: nobodys });
+    expect(classifySale(late, context())).toBeNull();
+    expect(classifySale(late, context({ notMine: new Set([32]) }))).toMatchObject({ group: "mine", added: true, shareMills: 0 });
+    // The line carries the word and counts nothing.
+    const [line] = draftLines({ classified: [kept!], senders: new Map() }, [{ transactionId: 31, statement: "not_mine", shareWithUserId: null, note: null, updatedAt: new Date() }]);
+    expect(line).toMatchObject({ group: "mine", statement: "not_mine", amountMills: 0, disputed: false });
+    // While the rule still gives them a share nothing changes: it is theirs by the rule, the word on it.
+    expect(classifySale(sale({ transactionId: 33 }), context({ notMine: new Set([33]) }))).toMatchObject({ group: "mine", shareMills: 40_000 });
   });
 
   it("marks a sale another report of the person holds: it counts nothing here", () => {

@@ -15,8 +15,8 @@ import { weekdayOfDay, type RuleSlot, type SaleHomeKind, type SaleHomeReason } f
  *    a sale of the 7 days before the shift the rule gives to the person, that
  *    came after the switch was on, whose own shift's report was submitted
  *    without it (or that belongs to no shift: a look-in, a claim), and that the
- *    newest version of none of the person's reports holds (owner, 2026-11-02:
- *    such a sale goes into today's report);
+ *    newest version of no other report of the person holds (owner, 2026-11-02:
+ *    such a sale goes into today's report, and stays in it);
  *  - «Рядом» (`near`): the other sales the shift held — someone else's, a pot's,
  *    nobody's, waiting, the owner's to decide.
  *  - «Рядом» covers the report's window: the actual shift together with the
@@ -25,6 +25,11 @@ import { weekdayOfDay, type RuleSlot, type SaleHomeKind, type SaleHomeReason } f
  *  - a sale the person adds by hand («Добавить → продажу»: of the last 7 days, on
  *    a page they may open, in no report of theirs) stands under its page marked
  *    «добавлена».
+ *  - a sale the person said «не моё» of stays among «Ваши продажи» with the word
+ *    until they take it back, whatever the rule made of it since: said by
+ *    everyone of its home, the word makes the sale nobody's, and a line set aside
+ *    would take the word back out of the rule's inputs — the home would flip at
+ *    every hand-in.
  * A line's amount is the person's share by the rule unless the person says
  * otherwise: «не моё» 0, «делим с…» half the net, «моё» on a near or added sale
  * the whole net (on a nobody's sale plainly; on one the rule or another
@@ -79,10 +84,12 @@ export interface DraftContext {
   switchOnAt: number | null;
   /** The person's shifts whose report is submitted. */
   submittedShiftIds: ReadonlySet<number>;
-  /** The sales the newest versions of the person's reports hold, and which report. */
+  /** The sales the newest versions of the person's reports hold, and which report (a line that only points at another report holds nothing). */
   reported: ReadonlyMap<number, { handinId: number; shiftId: number; reportDate: string }>;
   /** This shift's report; null — none yet. */
   handinId: number | null;
+  /** The sales the person's words in this report say «не моё» of: each stays their own line. */
+  notMine?: ReadonlySet<number>;
 }
 
 export type DraftGroup = "mine" | "near";
@@ -96,7 +103,7 @@ export interface ClassifiedSale {
   claimed?: boolean;
   /** Another person's handed-in report holds it (a claim on it is disputed). */
   otherReport?: boolean;
-  /** The person's share by the rule (mine), else 0. */
+  /** The person's share by the rule (mine), else 0 — also on their own line the rule gives them nothing of now (their «не моё» keeps it). */
   shareMills: number;
   /** Whose the rule says it is when it is not the person's (the first share's person); null — nobody's or a pot's. */
   toUserId: number | null;
@@ -118,11 +125,18 @@ export function classifySale(sale: DraftSale, context: DraftContext): Classified
   if (ownThisShift) return mine(false);
   if (own !== null) {
     // The person's on another work of theirs: «долёт» after the switch, when that work's own report will not hold it —
-    // a look-in or a claim (no shift row), or a shift handed in without it — and no report of the person holds it.
+    // a look-in or a claim (no shift row), or a shift handed in without it — and no other report of the person holds
+    // it. This report's own «долёт» stays its line in every later draft: a hand-in again, a decision cancelled.
     if (context.switchOnAt === null || sale.occurredAt < context.switchOnAt) return null;
     if (own.shiftId !== null && !context.submittedShiftIds.has(own.shiftId)) return null;
-    if (reported !== undefined) return null;
+    if (alreadyIn !== null) return null;
     return mine(true);
+  }
+  // The person said «не моё» of it in this report: it stays their own line with the word, counting nothing, whatever the
+  // rule made of the sale since — often by that very word (everyone of its home said it: nobody's). As a sale nearby,
+  // or as no line at all, the word would leave the rule's inputs and the home would flip back at the next hand-in.
+  if (context.notMine?.has(sale.transactionId) === true) {
+    return { sale, group: "mine", added: sale.source !== "window", shareMills: 0, toUserId: other?.userId ?? null, alreadyIn };
   }
   if (sale.source === "window" && (sale.heldByShift || sale.inReportWindow)) {
     return { sale, group: "near", added: false, shareMills: 0, toUserId: other?.userId ?? null, alreadyIn };

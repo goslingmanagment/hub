@@ -182,6 +182,11 @@ export async function agentUpdateCustomOrder(app: AgentApp, scope: AgentCustomSc
       break;
     case "at_model": {
       const card = body.telegramRef === undefined ? undefined : ref(body.telegramRef);
+      // The routine repeats every message it sees. The card the order already holds, named again once the order is
+      // past «записан» and «оплачен», changes nothing — above all it never takes a model's refusal back: only a new
+      // card (the order posted to a model again) or a person's «Передать модели» sends a refused order there.
+      const beforeModel = order.state === "recorded" || order.state === "paid";
+      if (!beforeModel && card !== undefined && order.telegramRefs.includes(card)) return unchanged();
       if (STEP_FROM.at_model.includes(order.state)) {
         step = { action: "at_model", telegramRef: card };
         break;

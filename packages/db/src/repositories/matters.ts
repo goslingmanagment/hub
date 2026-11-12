@@ -333,6 +333,18 @@ export async function listOpenMattersOfKinds(db: Database, kinds: readonly strin
 }
 
 /**
+ * The matters of the kinds that are closed in one way (`how`), whoever owned them: what a mirror closed that way and may
+ * have to open again — a cause it called gone that is there after all.
+ */
+export async function listClosedMattersOfKinds(db: Database, input: { kinds: readonly string[]; how: MatterCloseHow }): Promise<MatterRow[]> {
+  if (input.kinds.length === 0) return [];
+  const found = await db.execute<MatterDbRow>(sql`
+    select ${COLUMNS} from matters
+    where state = 'closed' and closed_how = ${input.how} and kind = any(${sql.param([...input.kinds])}::text[]) order by closed_at, id`);
+  return found.rows.map(matterOf);
+}
+
+/**
  * Who reads a matter (the rights of every door): the owner — every matter; a
  * team lead — their own, and their role's on their pages (a matter of no page
  * is every page's); a chatter — their own. Nobody but the owner reads a matter

@@ -65,6 +65,8 @@ itself. A question about whose a sale is goes to the person in words, and only t
 - `hub shift-report line --shift <id> --sale <transactionId> --statement not_mine|share|mine|rule`: the person's word
   on a sale. «не моё» and «делим с…» (`--share-with` a colleague, by user id or name) go on «Ваши продажи»; «моё»
   (with `--note`, one line of why) goes on «Рядом» or adds a sale from `claimable`; `rule` takes the word back.
+  A «не моё» stays on its line, among «Ваши продажи» and counting nothing, in every later version until `rule`
+  takes it back — also when the word itself made the sale nobody's (everyone of its home said it).
 - `hub shift-report comment --shift <id> --text "…"`: the comment, the person's text word for word.
 - `hub shift-report off-platform --shift <id> --amount <dollars> --from-whom … --what-for …`: «мимо площадки». It
   waits for the owner and is never in the sums before the owner confirms it.
@@ -204,9 +206,12 @@ What a decision does:
 - A sale not named yet: kept with the words that will find it, in the owner's «привязать» list.
 - `off_platform`: money outside the platform; no sale and no home. The person adds it to a report handed in Hub
   as «мимо площадки» (`hub shift-report off-platform`); a post-based report takes it from the list.
-- A pot (`--kind pot`): Hub records whose it is («в общак <pot>»), the home follows. **Until the ledger's pots
-  follow Hub's homes, the pot's bookkeeping stays the ledger's: for a pot sale run both** `hub sale decide --kind pot
-  --pot <slug> …` (whose it is) **and** `ledger pot add-sale <slug> …` (the pot's money), as today.
+- A pot (`--kind pot`): Hub records whose it is («в общак <pot>»), the home follows — and the pot's money follows
+  the decision. For a sale of the day the ledger's setting `sale_decisions_hub_from` names, or later, `hub sale
+  decide --kind pot --pot <slug> …` alone gives the sale to the pot: the ledger's job `hub-decisions` reads the
+  decision and writes the pot's purchase from it (within the hour; a decision cancelled or replaced takes the
+  purchase off). `ledger pot add-sale <slug> …` is only for a sale of a day before that one and for money Hub does
+  not see. **Never both for one sale**: the purchase would be counted twice.
 
 A question asked of the owner reaches the owner as a dispute, titled by page, amount, day and people (never the
 fan). One asked of the chatters waits for their answer and opens no matter; carried over from the ledger and never

@@ -400,6 +400,29 @@ describe("custom orders: who sees and moves what", () => {
     expect(await step(partlyOnce, partly)).toMatchObject({ outcome: "unchanged", order: { state: "shot" } });
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
+  it("leaves the model's refusal standing when the routine names the order's own card again: only a new card sends it to a model", async (context) => {
+    if (!testDb || !server) return context.skip();
+    const id = await recordCustomOrder(app, {
+      pageId: pages["lora-1"]!, fanId: null, buyer: null, conversationRef: null, card: { task: "Ролик, карточка и отказ" }, deadlineOn: null, state: "paid",
+      acceptedByUserId: users.alice!, origin: "extension", actor: { door: "extension", userId: users.alice! },
+    });
+    const code = `K-${id}`;
+    // An order still «оплачен»: its card posted for the model, named by the routine, takes it to the model, as before.
+    const card = group(1601);
+    expect(await step(code, { action: "at_model", telegramRef: card })).toMatchObject({ outcome: "changed", order: { state: "at_model" } });
+    // The model refuses. The next day the routine names the same card again: nothing changes, the refusal stands…
+    const refusal = { action: "refused", ref: group(1602), reason: "не снимаю такое" };
+    expect((await step(code, refusal)).order.state).toBe("refused");
+    expect(await step(code, { action: "at_model", telegramRef: card })).toMatchObject({ outcome: "unchanged", order: { state: "refused" } });
+    // …and the refusal's own repeat is still nothing new.
+    expect(await step(code, refusal)).toMatchObject({ outcome: "unchanged", order: { state: "refused" } });
+    // A new card — the order posted to a model again — sends it there, and so does the lead's «Передать модели».
+    expect(await step(code, { action: "at_model", telegramRef: group(1603) })).toMatchObject({ outcome: "changed", order: { state: "at_model" } });
+    expect((await step(code, { ...refusal, ref: group(1604) })).order.state).toBe("refused");
+    expect((await act("carol", code, { action: "at_model" })).statusCode).toBe(200);
+    expect(await step(code, { action: "at_model", telegramRef: card })).toMatchObject({ outcome: "unchanged", order: { state: "at_model" } });
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
   it("keeps «снят» a person set by hand when a delivery is taken back afterwards: the retraction is a line of the history", async (context) => {
     if (!testDb || !server) return context.skip();
     const history = async (code: string) => customOrderDetailResponseSchema.parse((await get("boss", `/api/v1/custom-orders/${code}`)).json()).history.map((item) => item.event);

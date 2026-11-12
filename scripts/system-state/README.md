@@ -29,7 +29,9 @@ key with only `write:system_state` is best; `--credentials`/`--hub-url` override
 
 In the review: `"skip": true` on what should not be watched; on a job whose «nothing to do» means its input is empty
 (an inbox nobody forwards to), `"skipped": "empty_input"` and `"emptyThresholdSeconds"`. A routine the reporter no
-longer sends is retired in Hub (kept, no longer watched).
+longer sends is retired in Hub (kept, no longer watched). A gateway job that paces itself (`pacing.max` beside an
+«every» schedule) gets half of `pacing.max` as its period, not `everyMs`: it may choose to wait that long, and Hub
+calls a routine silent after twice its period.
 
 Hub judges: silent after twice the period and 10 minutes without a run; failing after two failed runs in a row;
 empty input past the threshold; a copy older than 36 hours; the reporter itself silent for 30 minutes inside the
