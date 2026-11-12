@@ -44,9 +44,9 @@ const nullableNum = (value: unknown): number | null => (value === null || value 
 export async function requestOnlyfansVaultListWalk(db: Database, input: { pageId: number; userId: number }): Promise<void> {
   await db.execute(sql`
     insert into onlyfans_vault_list_walks (page_id, requested_at, requested_by_user_id, updated_at)
-    values (${input.pageId}, now(), ${input.userId}, now())
+    values (${input.pageId}, date_trunc('milliseconds', now()), ${input.userId}, now())
     on conflict (page_id) do update set
-      requested_at = coalesce(onlyfans_vault_list_walks.requested_at, now()),
+      requested_at = coalesce(onlyfans_vault_list_walks.requested_at, date_trunc('milliseconds', now())),
       requested_by_user_id = excluded.requested_by_user_id, updated_at = now()
   `);
 }
@@ -100,7 +100,10 @@ export async function applyOnlyfansVaultListWalk(db: Database, input: {
   const at = sql`${input.seenAt.toISOString()}::timestamptz`;
   const answered = input.answeredRequestAt === null
     ? sql`false`
-    : sql`onlyfans_vault_list_walks.requested_at <= ${input.answeredRequestAt.toISOString()}::timestamptz`;
+    // To the millisecond, as the Date that names the request: a request stored with
+    // microseconds was never "at or before" its own Date, stayed pending, and the
+    // minutely job walked the page again every minute.
+    : sql`date_trunc('milliseconds', onlyfans_vault_list_walks.requested_at) <= ${input.answeredRequestAt.toISOString()}::timestamptz`;
   return db.transaction(async (tx) => {
     if (lists.length > 0) {
       await tx.execute(sql`

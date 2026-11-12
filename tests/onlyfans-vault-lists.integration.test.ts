@@ -7,6 +7,7 @@ import {
   findPageVaultAlbumRefs,
   getOnlyfansVaultListWalk,
   listOnlyfansVaultLists,
+  requestOnlyfansVaultListWalk,
   type OnlyfansVaultListInput,
 } from "@agency_hub_core/db";
 
@@ -40,6 +41,26 @@ describe("OnlyFans vault lists", () => {
 
   afterAll(async () => {
     await testDb?.stop();
+  });
+
+  it("a walk answers its request: the request does not stay pending and is not walked again", async (context) => {
+    if (!testDb) return context.skip();
+    const user = await testDb.pool.query<{ id: string }>(
+      "insert into users (username, role) values ('vault-lists-owner', 'owner') returning id",
+    );
+    await requestOnlyfansVaultListWalk(app.db, { pageId, userId: Number(user.rows[0]!.id) });
+    // A request as production held it: its moment with microseconds, which a Date does not carry.
+    await testDb.pool.query(
+      "update onlyfans_vault_list_walks set requested_at = date_trunc('milliseconds', now()) + interval '112 microseconds' where page_id = $1",
+      [pageId],
+    );
+    // The job reads the request's moment as a Date and answers with it.
+    const requestedAt = (await getOnlyfansVaultListWalk(app.db, pageId))?.requestedAt ?? null;
+    expect(requestedAt).not.toBeNull();
+    await applyOnlyfansVaultListWalk(app.db, {
+      pageId, seenAt: new Date(), lists: [], complete: true, requests: 1, failure: null, answeredRequestAt: requestedAt,
+    });
+    expect((await getOnlyfansVaultListWalk(app.db, pageId))?.requestedAt).toBeNull();
   });
 
   it("marks missing only after a complete walk, and clears it when the list is seen again", async (context) => {
