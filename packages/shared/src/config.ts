@@ -254,6 +254,8 @@ const envSchema = z.object({
   FAN_FACTS_DAILY_MICRO_USD_LIMIT: z.coerce.number().int().min(0).default(2_000_000),
   PUBLISHING_ONLYFANS_ENABLED: booleanSchema.default(false),
   PUBLISHING_ONLYFANS_DAILY_CREDITS: z.coerce.number().int().min(0).max(10000).default(50),
+  ONLYFANS_VAULT_DAILY_CREDITS: z.coerce.number().int().min(0).max(1000000).default(0),
+  ONLYFANS_VAULT_RESERVE_CREDITS: z.coerce.number().int().min(0).max(1000000).default(2000),
   AI_MEDIA_DESCRIBE_PAGE_POLICIES: z.string().default("{}"),
   AI_MEDIA_DESCRIBE_MODEL: z.enum(["anthropic:claude-sonnet-5", "anthropic:claude-haiku-4-5"])
     .default("anthropic:claude-sonnet-5"),
@@ -611,6 +613,10 @@ export interface AppConfig {
   publishingOnlyfansEnabled?: boolean;
   /** OnlyFansAPI credits publications may spend per UTC day, inside the global daily budget. */
   publishingOnlyfansDailyCredits?: number;
+  /** OnlyFansAPI credits vault album uploads may spend per UTC day, outside the common day budget (0 pauses them). */
+  onlyfansVaultDailyCredits?: number;
+  /** OnlyFansAPI balance a vault album upload leaves untouched for reads. */
+  onlyfansVaultReserveCredits?: number;
   /** JSON keyed by exact page label: {"since": ISO, "until"?: ISO}. "{}" = none. */
   aiMediaDescribePagePolicies?: string;
   aiMediaDescribeModel?: "anthropic:claude-sonnet-5" | "anthropic:claude-haiku-4-5";
@@ -961,6 +967,8 @@ export function loadConfig(
     fanFactsDailyMicroUsdLimit: parsed.FAN_FACTS_DAILY_MICRO_USD_LIMIT,
     publishingOnlyfansEnabled: parsed.PUBLISHING_ONLYFANS_ENABLED,
     publishingOnlyfansDailyCredits: parsed.PUBLISHING_ONLYFANS_DAILY_CREDITS,
+    onlyfansVaultDailyCredits: parsed.ONLYFANS_VAULT_DAILY_CREDITS,
+    onlyfansVaultReserveCredits: parsed.ONLYFANS_VAULT_RESERVE_CREDITS,
     aiMediaDescribePagePolicies: parsed.AI_MEDIA_DESCRIBE_PAGE_POLICIES,
     aiMediaDescribeModel: parsed.AI_MEDIA_DESCRIBE_MODEL,
     aiMediaDescribeDailyImageLimit: parsed.AI_MEDIA_DESCRIBE_DAILY_IMAGE_LIMIT,

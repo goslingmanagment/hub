@@ -234,6 +234,9 @@ export async function createOwnerOfapiMediaUpload(
   app: AppContext,
   input: z.infer<typeof ofapiMediaUploadSchema>,
   actorUserId: number,
+  // `vault_album`: an OnlyFans vault album's upload, on the albums' own
+  // credit account (onlyfansVaultDailyCredits / onlyfansVaultReserveCredits).
+  options: { budgetScope?: "bulk" | "vault_album" } = {},
 ) {
   const source = await requireOfapiMediaSource(
     app,
@@ -331,7 +334,7 @@ export async function createOwnerOfapiMediaUpload(
         maxCredits: input.maxCredits,
         async: true,
       },
-      budgetScope: "bulk",
+      budgetScope: options.budgetScope ?? "bulk",
       originPrincipalId: actorUserId,
       createdBy: "owner",
       maxCalls: 100,

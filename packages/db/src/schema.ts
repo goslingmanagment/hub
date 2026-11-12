@@ -2345,6 +2345,11 @@ export const ofapiCreditState = pgTable("ofapi_credit_state", {
   interactiveSpentCredits: integer("interactive_spent_credits").default(0).notNull(),
   bulkSpentCredits: integer("bulk_spent_credits").default(0).notNull(),
   governedUnsettledCredits: integer("governed_unsettled_credits").default(0).notNull(),
+  // OnlyFans vault albums' own day counter (scope `vault_album`): outside
+  // spend_day/spent_credits and the per-user counters, so uploads never eat
+  // the reads' daily limit and reads never eat the albums'.
+  vaultAlbumSpendDay: date("vault_album_spend_day"),
+  vaultAlbumSpentCredits: integer("vault_album_spent_credits").default(0).notNull(),
   floorProbeNotBefore: timestamp("floor_probe_not_before", { withTimezone: true }),
   lastBalance: integer("last_balance"),
   lastBalanceAt: timestamp("last_balance_at", { withTimezone: true }),
@@ -2370,7 +2375,11 @@ export type OfapiCaptureJobGoal =
   | "connect_to_anchor"
   | "bounded_tail";
 export type OfapiCaptureJobState = (typeof ofapiCaptureJobStates)[number];
-export type OfapiBudgetScope = "live" | "interactive" | "bulk";
+/**
+ * `vault_album` — uploads of OnlyFans vault albums: their own day ceiling and
+ * counter, outside the common day counter and the per-user counters.
+ */
+export type OfapiBudgetScope = "live" | "interactive" | "bulk" | "vault_album";
 export type OfapiCaptureCreatedBy =
   | "owner"
   | "cohort_seed"

@@ -818,6 +818,8 @@ interface CreditStateRow extends Record<string, unknown> {
   interactive_spent_credits: unknown;
   bulk_spent_credits: unknown;
   governed_unsettled_credits: unknown;
+  vault_album_spend_day: string | Date | null;
+  vault_album_spent_credits: unknown;
   floor_probe_not_before: string | Date | null;
   last_balance: unknown;
   last_balance_at: string | Date | null;
@@ -853,7 +855,21 @@ function scopeSpentToday(row: CreditStateRow, scope: OfapiBudgetScope, day: stri
           ? asNumber(row.backfill_spent_credits, "backfill_spent_credits")
           : 0
       );
+    case "vault_album":
+      return dateOnly(row.vault_album_spend_day) === day
+        ? asNumber(row.vault_album_spent_credits, "vault_album_spent_credits")
+        : 0;
   }
+}
+
+/**
+ * A scope with its own credit account: its credits stay out of the common day
+ * counter (spend_day / spent_credits) and out of every per-user counter for
+ * the whole life of a reservation. Only the balance floor and freshness, the
+ * unsettled pool and the scope's own day counter see them.
+ */
+function isSeparateCreditAccount(scope: OfapiBudgetScope) {
+  return scope === "vault_album";
 }
 
 function resolveDenialRetryAt(
@@ -974,6 +990,11 @@ export async function reserveOfapiRequestAttempt(
   const principalCallCap = Math.max(0, Math.trunc(input.principalCallCap ?? Number.MAX_SAFE_INTEGER));
   const principalCreditCap = normalizeCredits(input.principalCreditCap ?? Number.MAX_SAFE_INTEGER);
   const principalId = input.originPrincipalId ?? null;
+  const separateAccount = isSeparateCreditAccount(input.budgetScope);
+  // The attempt still names its principal (and window, by the attempt's
+  // shape check); a separate account just never reads or moves the
+  // principal's day counters.
+  const principalCounted = principalId !== null && !separateAccount;
 
   if (input.deadlineAt.getTime() <= now.getTime()) {
     return db.transaction(async (tx) => {
@@ -1031,7 +1052,7 @@ export async function reserveOfapiRequestAttempt(
       blocked_until: string | Date | null;
     } | null = null;
     let principalWindow = principalId === null ? null : utcDayWindow(now);
-    if (principalId !== null && principalWindow) {
+    if (principalCounted && principalWindow) {
       await database.execute(sql`
         insert into ofapi_principal_budget_state (
           principal_user_id, window_started_at, updated_at
@@ -1114,7 +1135,7 @@ export async function reserveOfapiRequestAttempt(
     }
 
     principalWindow = principalId === null ? null : utcDayWindow(now);
-    if (principalId !== null && principalWindow && principal) {
+    if (principalCounted && principalWindow && principal) {
       const storedWindow = asDate(principal.window_started_at, "window_started_at");
       if (storedWindow.getTime() > principalWindow.getTime()) {
         throw new OfapiCaptureInvariantError(
@@ -1145,6 +1166,9 @@ export async function reserveOfapiRequestAttempt(
     for (const [name, value] of [
       ["spend_day", credit.spend_day],
       ["governed_scope_day", credit.governed_scope_day],
+      ...(separateAccount
+        ? [["vault_album_spend_day", credit.vault_album_spend_day] as const]
+        : []),
     ] as const) {
       const storedDay = dateOnly(value);
       if (storedDay !== null && storedDay > day) {
@@ -1193,13 +1217,13 @@ export async function reserveOfapiRequestAttempt(
       denial = "deadline";
     } else if (paused.rows.length > 0) {
       denial = "persistent_pause";
-    } else if (globalSpent + estimate > globalCap) {
+    } else if (!separateAccount && globalSpent + estimate > globalCap) {
       denial = "global_cap";
     } else if (scopeSpent + estimate > scopeCap) {
       denial = "scope_cap";
-    } else if (principalUsedCalls + 1 > principalCallCap) {
+    } else if (!separateAccount && principalUsedCalls + 1 > principalCallCap) {
       denial = "principal_call_cap";
-    } else if (principalUsedCredits + estimate > principalCreditCap) {
+    } else if (!separateAccount && principalUsedCredits + estimate > principalCreditCap) {
       denial = "principal_credit_cap";
     } else if (job?.maxCalls !== null && job && job.attemptCount + 1 > job.maxCalls) {
       denial = "job_cap";
@@ -1225,7 +1249,7 @@ export async function reserveOfapiRequestAttempt(
       if (
         denial !== "deadline" &&
         !eligibleProbeBlockedByHardCap &&
-        principalId !== null &&
+        principalCounted &&
         principal
       ) {
         const previousDenials = asNumber(
@@ -1277,38 +1301,52 @@ export async function reserveOfapiRequestAttempt(
       principalUsedCallsBefore: principalUsedCalls,
       principalUsedCreditsBefore: principalUsedCredits,
       isFloorProbe,
+      // Named only on a separate account: the global and principal figures
+      // above were not checked and the reservation moves none of them.
+      ...(separateAccount ? { separateCreditAccount: true } : {}),
     };
 
-    await database.execute(sql`
-      update ofapi_credit_state
-      set spend_day = ${day}::date,
-          spent_credits = ${globalSpent + estimate},
-          governed_scope_day = ${day}::date,
-          live_spent_credits = case
-            when ${input.budgetScope} = 'live' then
-              ${dateOnly(credit.governed_scope_day) === day ? asNumber(credit.live_spent_credits, "live_spent_credits") : 0}::int + ${estimate}::int
-            else ${dateOnly(credit.governed_scope_day) === day ? asNumber(credit.live_spent_credits, "live_spent_credits") : 0}
-          end,
-          interactive_spent_credits = case
-            when ${input.budgetScope} = 'interactive' then
-              ${dateOnly(credit.governed_scope_day) === day ? asNumber(credit.interactive_spent_credits, "interactive_spent_credits") : 0}::int + ${estimate}::int
-            else ${dateOnly(credit.governed_scope_day) === day ? asNumber(credit.interactive_spent_credits, "interactive_spent_credits") : 0}
-          end,
-          bulk_spent_credits = case
-            when ${input.budgetScope} = 'bulk' then
-              ${dateOnly(credit.governed_scope_day) === day ? asNumber(credit.bulk_spent_credits, "bulk_spent_credits") : 0}::int + ${estimate}::int
-            else ${dateOnly(credit.governed_scope_day) === day ? asNumber(credit.bulk_spent_credits, "bulk_spent_credits") : 0}
-          end,
-          governed_unsettled_credits = governed_unsettled_credits + ${estimate},
-          floor_probe_not_before = case
-            when ${isFloorProbe} then ${new Date(now.getTime() + Math.max(60_000, input.floorProbeCooldownMs ?? 60 * 60 * 1000))}
-            else floor_probe_not_before
-          end,
-          updated_at = ${now}
-      where id = 1
-    `);
+    if (separateAccount) {
+      await database.execute(sql`
+        update ofapi_credit_state
+        set vault_album_spend_day = ${day}::date,
+            vault_album_spent_credits = ${scopeSpent + estimate},
+            governed_unsettled_credits = governed_unsettled_credits + ${estimate},
+            updated_at = ${now}
+        where id = 1
+      `);
+    } else {
+      await database.execute(sql`
+        update ofapi_credit_state
+        set spend_day = ${day}::date,
+            spent_credits = ${globalSpent + estimate},
+            governed_scope_day = ${day}::date,
+            live_spent_credits = case
+              when ${input.budgetScope} = 'live' then
+                ${dateOnly(credit.governed_scope_day) === day ? asNumber(credit.live_spent_credits, "live_spent_credits") : 0}::int + ${estimate}::int
+              else ${dateOnly(credit.governed_scope_day) === day ? asNumber(credit.live_spent_credits, "live_spent_credits") : 0}
+            end,
+            interactive_spent_credits = case
+              when ${input.budgetScope} = 'interactive' then
+                ${dateOnly(credit.governed_scope_day) === day ? asNumber(credit.interactive_spent_credits, "interactive_spent_credits") : 0}::int + ${estimate}::int
+              else ${dateOnly(credit.governed_scope_day) === day ? asNumber(credit.interactive_spent_credits, "interactive_spent_credits") : 0}
+            end,
+            bulk_spent_credits = case
+              when ${input.budgetScope} = 'bulk' then
+                ${dateOnly(credit.governed_scope_day) === day ? asNumber(credit.bulk_spent_credits, "bulk_spent_credits") : 0}::int + ${estimate}::int
+              else ${dateOnly(credit.governed_scope_day) === day ? asNumber(credit.bulk_spent_credits, "bulk_spent_credits") : 0}
+            end,
+            governed_unsettled_credits = governed_unsettled_credits + ${estimate},
+            floor_probe_not_before = case
+              when ${isFloorProbe} then ${new Date(now.getTime() + Math.max(60_000, input.floorProbeCooldownMs ?? 60 * 60 * 1000))}
+              else floor_probe_not_before
+            end,
+            updated_at = ${now}
+        where id = 1
+      `);
+    }
 
-    if (principalId !== null && principalWindow) {
+    if (principalCounted && principalWindow) {
       await database.execute(sql`
         update ofapi_principal_budget_state
         set used_calls = used_calls + 1,
@@ -1488,9 +1526,14 @@ async function adjustReservationCounters(
   await db.execute(sql`
     update ofapi_credit_state
     set spent_credits = case
-          when spend_day = ${input.reservationDay}::date
+          when spend_day = ${input.reservationDay}::date and ${input.budgetScope} <> 'vault_album'
             then greatest(0, spent_credits + ${globalDelta})
           else spent_credits
+        end,
+        vault_album_spent_credits = case
+          when vault_album_spend_day = ${input.reservationDay}::date and ${input.budgetScope} = 'vault_album'
+            then greatest(0, vault_album_spent_credits + ${scopeDelta})
+          else vault_album_spent_credits
         end,
         live_spent_credits = case
           when governed_scope_day = ${input.reservationDay}::date and ${input.budgetScope} = 'live'
@@ -1527,7 +1570,11 @@ async function adjustReservationCounters(
     where id = 1
   `);
 
-  if (input.principalId !== null && input.principalWindowStartedAt) {
+  if (
+    input.principalId !== null &&
+    input.principalWindowStartedAt &&
+    !isSeparateCreditAccount(input.budgetScope)
+  ) {
     await db.execute(sql`
       update ofapi_principal_budget_state
       set used_calls = greatest(0, used_calls - ${input.releaseReservation ? 1 : 0}),

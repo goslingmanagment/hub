@@ -1373,6 +1373,12 @@ export async function executeOfapiCaptureJobChunk(
       app.config.ofapiMirrorGlobalDailyCreditBudget
         ?? OFAPI_MIRROR_BUDGET_DEFAULTS.globalDailyCreditBudget,
     );
+    // Vault albums spend from their own account: their own day ceiling, a
+    // balance reserve kept for reads above the floor, and no common or
+    // per-user day counter (the repository holds that for the whole life of
+    // the reservation).
+    const vaultAlbum = job.budgetScope === "vault_album";
+    const creditFloor = Math.max(0, app.config.ofapiCreditFloor ?? 500);
     const reservation = await reserveOfapiRequestAttempt(app.db, {
       ownerKind: "capture_job",
       ownerId: job.id,
@@ -1388,11 +1394,15 @@ export async function executeOfapiCaptureJobChunk(
       requestShape: requestPlan.request,
       reservedCredits: requestPlan.reservedCredits,
       globalDailyCap,
-      scopeDailyCap: globalDailyCap,
-      creditFloor: Math.max(0, app.config.ofapiCreditFloor ?? 500),
+      scopeDailyCap: vaultAlbum
+        ? Math.max(0, app.config.onlyfansVaultDailyCredits ?? 0)
+        : globalDailyCap,
+      creditFloor: vaultAlbum
+        ? Math.max(creditFloor, app.config.onlyfansVaultReserveCredits ?? 2000)
+        : creditFloor,
       balanceMaxAgeMs: BALANCE_MAX_AGE_MS,
       allowFloorProbe: job.budgetScope === "live",
-      ...(job.originPrincipalId === null
+      ...(job.originPrincipalId === null || vaultAlbum
         ? {}
         : {
           principalCallCap: Math.max(
@@ -1452,7 +1462,9 @@ export async function executeOfapiCaptureJobChunk(
         query: requestPlan.query,
         bodyBytes: requestPlan.bodyBytes,
         contentType: requestPlan.contentType,
-        priorityClass: job.budgetScope === "bulk" ? "bulk" : "interactive",
+        priorityClass: job.budgetScope === "bulk" || job.budgetScope === "vault_album"
+          ? "bulk"
+          : "interactive",
         deadlineAt,
         timeoutMs: requestPlan.timeoutMs,
         maxResponseBytes: requestPlan.maxResponseBytes,
