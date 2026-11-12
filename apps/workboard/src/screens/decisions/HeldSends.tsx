@@ -74,7 +74,7 @@ export function HeldSection({ items, total, serverNow, platformOf, fanOf, onOpen
   const columns: Column<HeldSend>[] = [
     { key: "fan", header: "Фан", width: 210, cell: (row) => <FanCell fan={fanOf(row)} fanRef={row.fanRef} pageLabel={row.pageLabel} platform={platformOf(row.pageLabel)} showLogin={collides(row)} /> },
     { key: "what", header: "Что отправляли", headerWrap: false, cell: (row) => <What item={row} /> },
-    { key: "who", header: "Кто отправлял", headerWrap: false, width: 180, cell: (row) => <PersonLink userId={row.userId} name={row.username} backLabel="Решения" /> },
+    { key: "who", header: "Кто отправлял", headerWrap: false, width: 180, cell: (row) => <PersonLink userId={row.userId} name={row.username} backLabel="Ждут вас" /> },
     {
       key: "when",
       header: "Когда",

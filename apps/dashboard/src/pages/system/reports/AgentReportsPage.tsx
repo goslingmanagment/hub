@@ -6,7 +6,7 @@ import { NoAnswerPanel, StatusPanel } from "@/components/shared/StatusPanel";
 import { TableSkeleton } from "@/components/shared/TableSkeleton";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { formatCount, formatMomentAgo } from "@/lib/format";
-import { pathSegment } from "@/lib/path";
+import { pathSegment } from "@agency_hub_core/ui/path";
 import { isPlainRowClick } from "@/lib/rowClick";
 
 /**

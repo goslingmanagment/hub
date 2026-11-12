@@ -1,17 +1,44 @@
 /**
- * The console's map in one table (design/ia.md §1.3): every screen with its
- * address, its words, who sees it, what the page filter and the period do on
- * it. The menu, the tabs, the crumbs, the search and the browser tab all read
- * these tables, so a screen is named the same everywhere and a new one has one
- * place to go.
+ * The owner's place in one table (design/ia.md §1.3, ecosystem plan §3.1): every
+ * screen of the console, and Workboard's screens, with its address, its words,
+ * who sees it, what the page filter and the period do on it. The menu of both
+ * apps, the tabs, the crumbs, the search and the browser tab all read these
+ * tables, so a screen is named the same everywhere and a new one has one place
+ * to go: a new screen of «Команда» is one row here (section `team`), and both
+ * apps list it.
+ *
+ * Addresses are the host's: a console screen's path, a Workboard screen's under
+ * /workboard/ (Hub serves Workboard there on the same name).
  */
 import { matchPath } from "react-router";
 import type { Platform } from "@agency_hub_core/shared";
 import { decodedPath, pathSegment } from "./path.js";
-import type { PeriodKey } from "./period.js";
-import { WORKBOARD_HREF } from "./workboard.js";
 
 export type Role = "owner" | "team_lead" | string;
+
+/** The console's period values (apps/dashboard/src/lib/period.ts names and orders them). */
+export type PeriodKey = "today" | "24h" | "3d" | "7d" | "14d" | "30d" | "90d" | "180d" | "365d" | "all" | "day" | "week" | "month";
+
+/** Which app draws a screen: the console, or Workboard at /workboard/ on the same host (a page load between them). */
+export type ScreenApp = "console" | "workboard";
+
+/** Workboard's address on the host: its Vite `base` (apps/workboard/src/base.ts). */
+export const WORKBOARD_PATH = "/workboard/";
+
+/** The icons of the menu (lucide-react names; components/Place.tsx draws them). */
+export type MenuIcon =
+  | "House" | "Inbox" | "Wallet" | "Heart" | "ChartColumn" | "Newspaper" | "Megaphone" | "ClipboardList"
+  | "CalendarClock" | "Users" | "TrendingUp" | "Banknote" | "Package" | "Flag" | "Settings" | "Wrench";
+
+/** Where a menu item's number comes from: one read for both apps (place.ts). */
+export type MenuCount = "waiting";
+
+/**
+ * A row a menu lists only while something about the person is true; the app
+ * that draws the menu answers it (absent: listed whenever the role may open it):
+ * - `newcomer` — a newcomer with a step of «Начало» still open (Workboard's `accountStart`).
+ */
+export type MenuWhen = "newcomer";
 
 /**
  * What the page filter does on a screen:
@@ -44,7 +71,7 @@ export interface ScreenPeriod {
   default?: PeriodKey;
 }
 
-export type SectionId = "home" | "money" | "fans" | "stats" | "publications" | "traffic" | "team" | "applications" | "settings" | "system" | "page";
+export type SectionId = "home" | "waiting" | "money" | "fans" | "stats" | "publications" | "traffic" | "team" | "applications" | "settings" | "system" | "page";
 
 export interface Crumb {
   label: string;
@@ -62,7 +89,15 @@ export interface Screen {
   /** One sentence, up to 90 characters: what question the screen answers. */
   why: string;
   section: SectionId;
+  /** Workboard draws it (absent: the console). */
+  app?: "workboard";
   ownerOnly?: boolean;
+  /** Who opens it, when it is not the owner and team leads (`ownerOnly`: the owner alone). */
+  roles?: readonly Role[];
+  /** Where a menu lists the screen as itself (a screen of «Команда», Workboard's own menu). */
+  icon?: MenuIcon;
+  /** Listed only while this holds; its address opens whatever the menu says. */
+  when?: MenuWhen;
   pageFilter: PageFilterMode;
   onePageWay?: OnePageWay;
   /** The platforms whose pages have this kind of data. Absent: all of them. */
@@ -107,7 +142,7 @@ function fansForcedPeriod(search: URLSearchParams): ForcedPeriod | null {
   return { key: "all", title: "Этот фильтр смотрит на всю историю", note: "За всё время: этот фильтр смотрит на всю историю" };
 }
 
-/** Every screen of the console. The order inside a section is the order of its tabs. */
+/** Every screen of the owner's place: the console's, and Workboard's that a menu lists. The order inside a section is the order of its tabs. */
 export const SCREENS: readonly Screen[] = [
   {
     id: "home", path: "/", label: "Главная", title: "Главная", section: "home",
@@ -116,6 +151,15 @@ export const SCREENS: readonly Screen[] = [
     platformsNote: "Hub не собирает данные Telegram.",
     period: { class: "shared", options: COMMON_PERIODS },
     keywords: "обзор старт сводка доход выручка деньги заработок тренды",
+  },
+
+  // ── Ждут вас ───────────────────────────────────────────────────────────
+  // Workboard's list of what waits for the owner (it was «Решения»); its number is the one read of «Ждут вас» (place.ts).
+  {
+    id: "waiting", path: "/workboard/decisions", label: "Ждут вас", title: "Ждут вас", section: "waiting", app: "workboard", icon: "Inbox",
+    why: "Что ждёт вашего слова: вопросы, отчёты смен, кастомы, отправки.",
+    pageFilter: "any",
+    keywords: "решения чья продажа вопросы генгар отчёты посты не разобраны оплаченный день изменён кастомы проверить отправки зависшие",
   },
 
   // ── Деньги ─────────────────────────────────────────────────────────────
@@ -264,8 +308,58 @@ export const SCREENS: readonly Screen[] = [
     keywords: "трафик каналы подрядчики циклы доска сводка агент",
   },
 
+  // ── Команда: Workboard ─────────────────────────────────────────────────
+  // The team's screens are Workboard's (owner, 2026-11-10). A row here is an item under «Команда» for the
+  // owner and team leads, and an item of Workboard's own menu for whoever opens it there (a chatter: «Мои смены»).
+  {
+    // A newcomer's way to the first shift (package J), and their home until every step is done.
+    id: "start", path: "/workboard/start", label: "Начало", title: "Начало", section: "team", app: "workboard", roles: ["chatter"], icon: "Flag", when: "newcomer",
+    why: "Шаги до первой смены: расширение, вход, страницы, первая работа, куда платить.",
+    pageFilter: "none",
+    notSearched: true,
+  },
+  {
+    id: "my-shifts", path: "/workboard/my/shifts", label: "Мои смены", title: "Мои смены", section: "team", app: "workboard", roles: ["chatter"], icon: "CalendarClock",
+    why: "Свои смены и отчёты по ним.",
+    pageFilter: "none",
+    notSearched: true,
+  },
+  {
+    id: "shifts", path: "/workboard/shifts", label: "Смены", title: "Смены", section: "team", app: "workboard", icon: "CalendarClock",
+    why: "Кто работал, сколько продал и как работал.",
+    pageFilter: "any",
+    keywords: "команда заработок кто работал на смене неделя журнал разбор смены без автора",
+  },
+  {
+    id: "people", path: "/workboard/people", label: "Люди", title: "Люди", section: "team", app: "workboard", icon: "Users",
+    why: "Кто в команде: работа, продажи, доступ и входы, график и условия.",
+    pageFilter: "any",
+    keywords: "чаттеры сотрудники кабинет чаттера числа доступ приглашение пользователи устройства логины страницы",
+  },
+  {
+    // Заказы кастомов (package I): the owner and the person who leads customs see every order, a team lead and a
+    // chatter the orders of their pages (Hub decides).
+    id: "customs", path: "/workboard/customs", label: "Кастомы", title: "Кастомы", section: "team", app: "workboard", roles: ["owner", "team_lead", "chatter"], icon: "Package",
+    why: "Заказы кастомов: что заказано, оплачено, снято и отдано.",
+    pageFilter: "any",
+    keywords: "кастомы заказы кастомов съёмка видео фото ведущий кастомы отдать оплачен",
+  },
+  {
+    id: "sales", path: "/workboard/sales", label: "Что продаёт", title: "Что продаёт", section: "team", app: "workboard", icon: "TrendingUp",
+    why: "Что и по какой цене покупают, как быстро отвечают.",
+    pageFilter: "any",
+    keywords: "продажи цена скорость ответа ppv платные возврат фанов подходы приветствия кто ждал пустые часы рассылки",
+  },
+  {
+    // People's pay is the owner's alone (the ledger's answer reaches no other session).
+    id: "payouts", path: "/workboard/payouts", label: "Выплаты", title: "Выплаты", section: "team", app: "workboard", ownerOnly: true, icon: "Banknote",
+    why: "Сколько начислено, к выплате и выплачено каждому.",
+    pageFilter: "any",
+    keywords: "долги начислено выплачено отчёты смен отчётность сумма изменена пост не разобран",
+  },
+
   // ── Анкеты ─────────────────────────────────────────────────────────
-  // «Команда» is Workboard now (lib/workboard.ts); the questionnaires stayed here, at their old addresses.
+  // The questionnaires stayed in the console when «Команда» became Workboard, at their old addresses.
   {
     id: "team-applications", path: "/team/applications", label: "Анкеты", title: "Анкеты моделей", section: "applications", ownerOnly: true,
     why: "Кто сейчас заполняет анкету модели на сайте, кто бросил, кто отправил.",
@@ -556,8 +650,21 @@ export function forcedPeriodOf(screen: Screen, search: URLSearchParams): ForcedP
   return screen.forcedPeriod?.(search) ?? null;
 }
 
+/** Without `roles`, a screen is the owner's and team leads' (`ownerOnly`: the owner's alone), never a chatter's. */
 export function screenVisible(screen: Screen, role: Role): boolean {
+  if (screen.roles) return screen.roles.includes(role);
+  if (role === "chatter") return false;
   return !screen.ownerOnly || role === "owner";
+}
+
+/** The app that draws a screen. */
+export function appOf(screen: Pick<Screen, "app">): ScreenApp {
+  return screen.app ?? "console";
+}
+
+/** The app an address of the host belongs to: Workboard's are under /workboard/. */
+export function addressApp(to: string): ScreenApp {
+  return to === WORKBOARD_PATH.slice(0, -1) || to.startsWith(WORKBOARD_PATH) ? "workboard" : "console";
 }
 
 // ── The tree: tabs and the menu ──────────────────────────────────────────
@@ -579,11 +686,15 @@ export interface Section {
   label: string;
   /** The screen header's title: the section, not the tab. */
   title: string;
-  icon: "House" | "Wallet" | "Heart" | "ChartColumn" | "CalendarClock" | "Megaphone" | "Users" | "ClipboardList" | "Settings" | "Wrench";
+  icon: MenuIcon;
   ownerOnly?: boolean;
-  /** The item leaves the console for another app on this host (Workboard): a full
-   *  navigation in the same tab, no screens of its own here. */
-  href?: string;
+  /**
+   * The menu lists the section's screens as items of their own, under the
+   * section's name (a heading, not a link): «Команда». Its tabs are its screens.
+   */
+  group?: boolean;
+  /** The menu item's number (one read for both apps, place.ts). */
+  count?: MenuCount;
   /** Under the rule at the bottom of the menu. */
   lower?: boolean;
   nav: "tabs" | "side" | "none";
@@ -592,10 +703,16 @@ export interface Section {
 
 const tab = (id: string, label: string, ...screens: string[]): SectionTab => ({ id, label, screens });
 
+/** The menu's order is this table's: Главная, Ждут вас, the console's sections, «Команда» last above the rule. */
 export const SECTIONS: readonly Section[] = [
   {
     id: "home", label: "Главная", title: "Главная", icon: "House", nav: "none",
     tabs: [tab("home", "Главная", "home")],
+  },
+  {
+    // One list of what waits for the owner (Workboard's, at its old address), right under Главная.
+    id: "waiting", label: "Ждут вас", title: "Ждут вас", icon: "Inbox", nav: "none", count: "waiting",
+    tabs: [tab("waiting", "Ждут вас", "waiting")],
   },
   {
     id: "money", label: "Деньги", title: "Деньги", icon: "Wallet", nav: "tabs",
@@ -624,7 +741,7 @@ export const SECTIONS: readonly Section[] = [
     ],
   },
   {
-    id: "publications", label: "Публикации", title: "Публикации", icon: "CalendarClock", ownerOnly: true, nav: "none",
+    id: "publications", label: "Публикации", title: "Публикации", icon: "Newspaper", ownerOnly: true, nav: "none",
     tabs: [tab("publications", "Публикации", "publications")],
   },
   {
@@ -632,13 +749,14 @@ export const SECTIONS: readonly Section[] = [
     tabs: [tab("summary", "Сводка", "traffic")],
   },
   {
-    // Workboard: the owner's and the team leads' control of the team (owner, 2026-11-10).
-    id: "team", label: "Команда", title: "Команда", icon: "Users", nav: "none", href: WORKBOARD_HREF,
-    tabs: [],
-  },
-  {
     id: "applications", label: "Анкеты", title: "Анкеты моделей", icon: "ClipboardList", ownerOnly: true, nav: "none",
     tabs: [tab("applications", "Анкеты", "team-applications", "team-application")],
+  },
+  {
+    // Workboard's screens, listed in place (owner, 2026-11-10: the team's control). Each row of the table's
+    // section «team» is one item here, in the table's order.
+    id: "team", label: "Команда", title: "Команда", icon: "Users", nav: "none", group: true,
+    tabs: SCREENS.filter((screen) => screen.section === "team").map((screen) => tab(screen.id, screen.label, screen.id)),
   },
   {
     id: "settings", label: "Настройки", title: "Настройки", icon: "Settings", ownerOnly: true, lower: true, nav: "side",
@@ -688,17 +806,106 @@ export function tabOfScreen(section: Section, screenId: string): SectionTab | nu
   return section.tabs.find((item) => item.screens.includes(screenId)) ?? null;
 }
 
-/** Where a menu item leads for this role. */
-export function sectionHome(section: Section, role: Role): string {
-  if (section.href) return section.href;
+/** The screen a menu item opens for this role: the first of its first tab. */
+function homeScreen(section: Section, role: Role): Screen | undefined {
   const first = visibleSectionTabs(section, role)[0];
-  const screen = first ? tabRow(first, role)[0] : undefined;
-  return screen?.path ?? "/";
+  return first ? tabRow(first, role)[0] : undefined;
 }
 
-/** The menu of this role: Главная · Деньги · Фаны · Команда for a team lead. */
+/** Where a menu item leads for this role. */
+export function sectionHome(section: Section, role: Role): string {
+  return homeScreen(section, role)?.path ?? "/";
+}
+
+/** The sections of this role's menu: Главная · Ждут вас · Деньги · Фаны · Команда for a team lead. */
 export function menuOf(role: Role): Section[] {
-  return SECTIONS.filter((section) => !section.ownerOnly || role === "owner");
+  return SECTIONS.filter((section) => (!section.ownerOnly || role === "owner") && visibleSectionTabs(section, role).length > 0);
+}
+
+// ── The menu of the owner's place, item by item ──────────────────────────
+
+/** A row with a condition is listed only while the app says it holds. */
+function listed(screen: Screen, holds: Partial<Record<MenuWhen, boolean>>): boolean {
+  return screen.when === undefined || holds[screen.when] === true;
+}
+
+/** One item of the menu: a section, or a screen of a group («Команда»). */
+export interface MenuItem {
+  /** The section's id; a group's screen's own id. */
+  id: string;
+  label: string;
+  icon: MenuIcon;
+  /** Where it leads for this role: an address of the host. */
+  to: string;
+  /** The app at that address: another app's item is a page load, nothing else differs. */
+  app: ScreenApp;
+  /** The group it is listed under («Команда»). */
+  group?: string;
+  count?: MenuCount;
+}
+
+/**
+ * The menu of the owner's place for a role, the same in the console and in
+ * Workboard: the items above the rule and under it. A section without a screen
+ * the role may open is not there.
+ */
+export function placeMenu(role: Role, holds: Partial<Record<MenuWhen, boolean>> = {}): { upper: MenuItem[]; lower: MenuItem[] } {
+  const upper: MenuItem[] = [];
+  const lower: MenuItem[] = [];
+  // The owner's place is the owner's and team leads'; a chatter's menu is Workboard's own (`teamMenu`).
+  if (role === "chatter") return { upper, lower };
+  for (const section of menuOf(role)) {
+    const home = homeScreen(section, role);
+    const items: MenuItem[] = section.group
+      ? visibleSectionTabs(section, role).flatMap((item) => tabRow(item, role).slice(0, 1)).filter((screen) => listed(screen, holds)).map((screen) => ({
+        id: screen.id, label: screen.label, icon: screen.icon ?? section.icon, to: screen.path, app: appOf(screen), group: section.label,
+      }))
+      : home ? [{
+        id: section.id, label: section.label, icon: section.icon, to: home.path, app: appOf(home), ...(section.count ? { count: section.count } : {}),
+      }] : [];
+    (section.lower ? lower : upper).push(...items);
+  }
+  return { upper, lower };
+}
+
+/**
+ * Workboard's own short menu (the team's place: a chatter, anyone on the team's
+ * name): the Workboard screens the role opens, in the table's order, with
+ * their own icons. Never a section of the console.
+ */
+export function teamMenu(role: Role, holds: Partial<Record<MenuWhen, boolean>> = {}): MenuItem[] {
+  return menuOf(role).flatMap((section) => visibleSectionTabs(section, role).flatMap((item) => tabRow(item, role).slice(0, 1)))
+    .filter((screen) => appOf(screen) === "workboard" && listed(screen, holds))
+    .map((screen) => {
+      const section = sectionById(screen.section);
+      return {
+        id: section?.group ? screen.id : screen.section, label: screen.label, icon: screen.icon ?? section?.icon ?? "Inbox", to: screen.path, app: "workboard" as const,
+        ...(section?.count ? { count: section.count } : {}),
+      };
+    });
+}
+
+/** The first two segments of a Workboard address (`/workboard/people/7` → `/workboard/people`): a screen and everything under it. */
+function workboardBranch(pathname: string): string | null {
+  const parts = decodedPath(pathname).split("/");
+  return parts[1] === WORKBOARD_PATH.slice(1, -1) && parts[2] ? `/${parts[1]}/${parts[2]}` : null;
+}
+
+/**
+ * The menu item an address lights: its section's, or within a group its own
+ * screen's. A Workboard address lights the screen it is under (a person's card
+ * lights «Люди», a review «Смены»); an address with no item lights nothing.
+ */
+export function menuItemAt(pathname: string): string | null {
+  let screen = matchScreen(pathname)?.screen ?? null;
+  if (!screen) {
+    const branch = workboardBranch(pathname);
+    screen = branch === null ? null : SCREENS.find((candidate) => appOf(candidate) === "workboard" && workboardBranch(candidate.path) === branch) ?? null;
+  }
+  if (!screen) return null;
+  const section = sectionById(screen.section);
+  if (!section) return null;
+  return section.group ? screen.id : section.id;
 }
 
 // ── A page's card ────────────────────────────────────────────────────────

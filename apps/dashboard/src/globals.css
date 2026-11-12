@@ -1,5 +1,11 @@
+/* The shared design system's layer sits between the reset and the console's own, as in Workboard. */
+@layer theme, base, ui, components, utilities;
 @import "tailwindcss";
 @import "./styles/tokens.css";
+/* The frame of the owner's place is packages/ui's, the same file as Workboard's: its tokens, its components, its frame. */
+@import "../../../packages/ui/src/styles/tokens.css";
+@import "../../../packages/ui/src/styles/components.css";
+@import "../../../packages/ui/src/styles/place.css";
 @import "./styles/ui.css";
 @import "./pages/settings/settings-ui.css";
 @import "./styles/screens/home-money.css";
@@ -20,7 +26,6 @@
 
 :root {
   color-scheme: light dark;
-  --sidebar-width: 224px;
   --bar-height: 56px;
   --content-max: 1280px;
   --gutter: 32px;

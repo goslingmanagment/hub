@@ -19,7 +19,7 @@ import {
   type Screen,
   type Section,
   type SectionTab,
-} from "@/lib/sections";
+} from "@agency_hub_core/ui/screens";
 import { PageScopeGate } from "./PageScopeGate.js";
 import { PageFilterChip } from "./PageFilterChip.js";
 import { PeriodControl, PeriodMissingNote } from "./PeriodControl.js";
@@ -164,7 +164,7 @@ function FilterNotices() {
  * The frame of every screen of the console: crumbs on a deep screen, the header
  * that stays over the scroll (the title, the screen's button, the period, the
  * page chip), one sentence of why, the dates, the section's tabs and the screen.
- * Reads one table, lib/sections.ts.
+ * Reads one table, packages/ui/src/screens.ts.
  */
 export function ScreenFrame() {
   usePageFilterSync();

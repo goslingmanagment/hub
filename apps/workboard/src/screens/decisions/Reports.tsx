@@ -16,7 +16,7 @@ import { PostLink, postEvidence, postHint, postProblemWords } from "@/shared/rep
  */
 
 function Who({ person }: { person: TeamLedgerReportPerson }) {
-  if (person.hubUser) return <PersonLink userId={person.hubUser.userId} name={person.hubUser.username} backLabel="Решения" />;
+  if (person.hubUser) return <PersonLink userId={person.hubUser.userId} name={person.hubUser.username} backLabel="Ждут вас" />;
   return <Person name={person.name} hint={person.slug === null ? "ledger не знает, чей пост" : "не связан с Hub"} />;
 }
 

@@ -48,7 +48,7 @@ function useColumns({ serverNow, platformOf, fanOf, userIdOf, rows }: Pick<Custo
   // Who wrote it down, by name only: the row's one time is how long it waits (С10 — no «записал 29 окт.» beside «9 дней назад»).
   const whoCell = (row: Custom) => {
     const id = userIdOf(row.createdBy);
-    return id === null ? <Person name={row.createdBy} /> : <PersonLink userId={id} name={row.createdBy} backLabel="Решения" />;
+    return id === null ? <Person name={row.createdBy} /> : <PersonLink userId={id} name={row.createdBy} backLabel="Ждут вас" />;
   };
   return (since: "paid" | "created"): Column<Custom>[] => [
     { key: "fan", header: "Фан", cell: fanCell, width: 240 },

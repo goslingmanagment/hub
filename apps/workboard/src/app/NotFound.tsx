@@ -10,7 +10,7 @@ export function NotFoundScreen() {
       <ScreenHeader title="Такого экрана нет" />
       <div className="wb-content">
         <EmptyState title="Адрес не ведёт ни к одному экрану" action={<LinkButton to={homePath(role)}>{chatter ? "К моим отчётам" : "К сменам"}</LinkButton>}>
-          {chatter ? "Возможно, ссылка устарела. Ваши отчёты в меню." : "Возможно, ссылка устарела. Смены, люди и решения — в меню слева."}
+          {chatter ? "Возможно, ссылка устарела. Ваши отчёты в меню." : "Возможно, ссылка устарела. Все экраны в меню слева."}
         </EmptyState>
       </div>
     </>

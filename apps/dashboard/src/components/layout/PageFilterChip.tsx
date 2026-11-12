@@ -3,7 +3,7 @@ import { Check, ChevronDown, X } from "lucide-react";
 import { Link, useNavigate } from "react-router";
 import { PLATFORM_WORD } from "@/components/shared/PlatformBadge";
 import { buildPageRoute } from "@/lib/navigation";
-import type { Screen } from "@/lib/sections";
+import type { Screen } from "@agency_hub_core/ui/screens";
 import { useDashboardShell } from "./DashboardShellContext.js";
 import { usePageFilter } from "./usePageFilter.js";
 

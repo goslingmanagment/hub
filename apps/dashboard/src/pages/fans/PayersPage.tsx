@@ -27,7 +27,7 @@ import { Skeleton } from "@/components/ui/Skeleton";
 import { formatCount, formatDateTime, formatDayRange, formatMills } from "@/lib/format";
 import { buildFanProfileNavigation } from "@/lib/navigation";
 import { listOffset } from "@/lib/overviewNavigation";
-import { pathSegment } from "@/lib/path";
+import { pathSegment } from "@agency_hub_core/ui/path";
 import { PLATFORM_DISPLAY_NAME, resolveExternalLink, type ExternalLinkPlatform } from "@/lib/platformUrls";
 import { ruPlural } from "@/lib/plural";
 import { isPlainRowClick } from "@/lib/rowClick";

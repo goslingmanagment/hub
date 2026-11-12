@@ -1,5 +1,7 @@
 import { useEffect, type ReactNode } from "react";
 import { PeriodControl, useFullWindow } from "@agency_hub_core/ui";
+import { placeName } from "@agency_hub_core/ui/place";
+import { useFace } from "./face.js";
 import { Freshness } from "./Freshness.js";
 import { BackLink, type BackTarget } from "./links.js";
 import { PageFilter, PageFilterSlot } from "./PageFilter.js";
@@ -8,7 +10,7 @@ import { usePeriod } from "./usePeriod.js";
 export interface ScreenHeaderProps {
   /** h1: the screen's name («Смены»), or the object itself on a deep screen («alex.k»). Never «Команда». */
   title: ReactNode;
-  /** The browser tab: «Смены — Workboard». Defaults to the title when it is text. */
+  /** The browser tab: «Смены — Hub» in the owner's place, «Мои смены — Workboard» in the team's. Defaults to the title when it is text. */
   documentTitle?: string;
   /** «←» of a deep screen (useBackTarget). */
   back?: BackTarget;
@@ -53,9 +55,11 @@ export function ScreenHeader({ title, documentTitle, back, period = false, pageF
   const { spec, period: resolved, today, setPeriod } = usePeriod();
   useFullWindow(fill);
   const name = documentTitle ?? (typeof title === "string" ? title : undefined);
+  // The owner's place is «Hub» in both apps; the team's is «Workboard».
+  const place = placeName(useFace());
   useEffect(() => {
-    if (name) document.title = `${name} — Workboard`;
-  }, [name]);
+    if (name) document.title = `${name} — ${place}`;
+  }, [name, place]);
 
   // The dates themselves stand in the period control; here only what they are compared with.
   const dates = period ? (

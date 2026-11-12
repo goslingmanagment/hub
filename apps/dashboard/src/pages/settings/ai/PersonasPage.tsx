@@ -9,7 +9,7 @@ import { PageHeader } from "@/components/ui/PageHeader";
 import { RowMenu } from "@/components/ui/RowMenu";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { formatMomentAgo } from "@/lib/format";
-import { pathSegment } from "@/lib/path";
+import { pathSegment } from "@agency_hub_core/ui/path";
 import { StaleNotice } from "../StaleNotice.js";
 import { ArchivePersonaConfirm } from "./ArchivePersonaConfirm.js";
 

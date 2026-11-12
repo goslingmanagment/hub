@@ -19,10 +19,10 @@ import { WaitingScreen } from "../waiting/index";
 import "./decisions.css";
 
 /**
- * The address `/decisions`: while the owner's switch `mattersReadEnabled` is
- * off, Решения exactly as before; on, the list «Ждут вас» read from matters
- * (screens/waiting). Until the switch is known, the same skeleton Решения
- * shows while its queues load.
+ * The address `/decisions`, «Ждут вас» (it was Решения): while the owner's
+ * switch `mattersReadEnabled` is off, its four queues exactly as before; on,
+ * the list read from matters (screens/waiting). Until the switch is known, the
+ * same skeleton the queues show while they load. One name either way.
  */
 export function DecisionsScreen() {
   const { role } = useMe();
@@ -31,10 +31,10 @@ export function DecisionsScreen() {
   if (active === null) {
     return (
       <>
-        <ScreenHeader title="Решения" pageFilter meta={<Skeleton width={260} />} />
+        <ScreenHeader title="Ждут вас" pageFilter meta={<Skeleton width={260} />} />
         <div className="wb-content">
           <Section title={<Skeleton width={220} height={24} />}>
-            <Table label="Решения загружаются" columns={SKELETON_COLUMNS} rows={[]} rowKey={() => ""} loading skeletonRows={3} skeletonLines={2} className="decisions-skeleton" />
+            <Table label="Ждут вас: загружается" columns={SKELETON_COLUMNS} rows={[]} rowKey={() => ""} loading skeletonRows={3} skeletonLines={2} className="decisions-skeleton" />
           </Section>
         </div>
       </>
@@ -44,7 +44,7 @@ export function DecisionsScreen() {
 }
 
 /**
- * Решения (spec §4.6): what waits for the owner's decision — the questions «whose
+ * The four queues (it was Решения, spec §4.6): what waits for the owner's decision — the questions «whose
  * is this sale» the chat agent asked him, the shift reports' questions (posts
  * the ledger could not parse, paid days whose report changed),
  * customs paid and not delivered, held sends. Each section is there only while
@@ -134,7 +134,7 @@ function DecisionsByQueue() {
 
   const header = (
     <ScreenHeader
-      title="Решения"
+      title="Ждут вас"
       pageFilter
       meta={decisions.loading ? <Skeleton width={260} /> : (
         <>
@@ -179,7 +179,7 @@ function DecisionsByQueue() {
       <div className="wb-content">
         {decisions.loading ? (
           <Section title={<Skeleton width={220} height={24} />}>
-            <Table label="Решения загружаются" columns={SKELETON_COLUMNS} rows={[]} rowKey={() => ""} loading skeletonRows={3} skeletonLines={2} className="decisions-skeleton" />
+            <Table label="Ждут вас: загружается" columns={SKELETON_COLUMNS} rows={[]} rowKey={() => ""} loading skeletonRows={3} skeletonLines={2} className="decisions-skeleton" />
           </Section>
         ) : (
           <>

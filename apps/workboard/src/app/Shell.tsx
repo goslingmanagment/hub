@@ -1,54 +1,27 @@
 import { ArrowLeft, Banknote, CalendarClock, ChevronsUpDown, Flag, Inbox, LogOut, Monitor, Moon, Package, Smartphone, Sun, TrendingUp, Users } from "lucide-react";
-import { Suspense, type ReactNode } from "react";
+import { Suspense, useState, type ReactNode } from "react";
 import { NavLink, Navigate, Outlet, useLocation, useMatches, type UIMatch } from "react-router";
-import { CountBadge, ErrorState, Menu, Skeleton, Tooltip, type IconComponent, type MenuEntry } from "@agency_hub_core/ui";
+import { useQuery } from "@tanstack/react-query";
+import { CountBadge, ErrorState, Menu, Skeleton, type IconComponent, type MenuEntry } from "@agency_hub_core/ui";
+import { PlaceFrame } from "@agency_hub_core/ui/components/Place";
+import { carriedHref, placeName, waitingCount, waitingQuery, workboardDays, type MenuCountView } from "@agency_hub_core/ui/place";
+import { menuItemAt, placeMenu, teamMenu, type MenuIcon, type MenuItem } from "@agency_hub_core/ui/screens";
 import { THEME_OPTIONS, useThemeStore, type ThemePreference } from "@agency_hub_core/ui/theme";
 import { NO_SILENT_SIGNIN, peerOriginOf, siteOf } from "@agency_hub_core/ui/sites";
+import { useFace } from "@/shared/face";
 import { kernel, queryClient, signInHref } from "@/shared/hub";
 import { carryParams } from "@/shared/links";
-import { decisionParts, decisionsElsewhereText, decisionsFailedText, useDecisionCounts } from "@/shared/decisions";
-import { useMattersActive, useWaitingTotal } from "@/shared/matters";
-import { START_PATH, startOpen, useAccountStart } from "@/shared/start";
-import { CHATTER, OWNER, TEAM, useMe, type Role } from "@/shared/useMe";
+import { startOpen, useAccountStart } from "@/shared/start";
+import { TEAM, useMe, type Role } from "@/shared/useMe";
 import { usePageFilter } from "@/shared/usePageFilter";
 import { useRestoredPeriod } from "@/shared/usePeriod";
 import { useScrollMemory } from "@/shared/scroll";
 import { ErrorBoundary } from "./ErrorBoundary.js";
-import type { ScreenHandle } from "./routes.js";
+import { WorkboardPalette } from "./Palette.js";
+import { BASENAME, type ScreenHandle } from "./routes.js";
 
-interface NavItem {
-  to: string;
-  label: string;
-  icon: IconComponent;
-  /** Who sees it (shared/useMe.ts); its screen is behind the same roles (routes.tsx). */
-  roles: readonly Role[];
-}
-
-/**
- * The sidebar, by work (spec §3). Labels are final unless the owner renames
- * them. Every item carries the period and the page filter (spec §3 r2, D3): a
- * screen that does not need them keeps them in its address and does not show
- * them, so the next screen opens on the same dates. The team (the owner and
- * team leads) and a chatter see their own items only: a chatter's part of
- * Workboard is theirs alone (owner, 2026-11-10) — «Мои смены», their shifts
- * with their reports; their account is in the menu at the bottom.
- */
-const WORK: readonly NavItem[] = [
-  // A newcomer's way to the first shift: in the menu only while a step is open (Shell).
-  { to: START_PATH, label: "Начало", icon: Flag, roles: CHATTER },
-  { to: "/my/shifts", label: "Мои смены", icon: CalendarClock, roles: CHATTER },
-  { to: "/shifts", label: "Смены", icon: CalendarClock, roles: TEAM },
-  { to: "/people", label: "Люди", icon: Users, roles: TEAM },
-  { to: "/sales", label: "Что продаёт", icon: TrendingUp, roles: TEAM },
-  { to: "/decisions", label: "Решения", icon: Inbox, roles: TEAM },
-  // Заказы кастомов: everyone's; Hub shows each person the orders they may see.
-  { to: "/customs", label: "Кастомы", icon: Package, roles: [...TEAM, ...CHATTER] },
-  // People's pay is the owner's alone (the ledger's answer reaches no other session).
-  { to: "/payouts", label: "Выплаты", icon: Banknote, roles: OWNER },
-];
-
-/** Under the line, before the way out. «Доступ» lives in «Люди» now (a person's card, «Доступ и входы»). */
-const ADMIN: readonly NavItem[] = [];
+/** Workboard's own menu draws the table's icons (packages/ui/src/screens.ts) with its own components. */
+const ICON: Readonly<Partial<Record<MenuIcon, IconComponent>>> = { CalendarClock, Users, TrendingUp, Inbox, Banknote, Package, Flag };
 
 /**
  * The way out to the console, for the team (a page load): on this host, or —
@@ -89,12 +62,22 @@ function Brand() {
   );
 }
 
-function NavRow({ item, end }: { item: NavItem; end?: ReactNode }) {
+/** The router's basename as a prefix of the host's addresses: "" when Workboard is served at the root. */
+function base(): string {
+  return BASENAME === "/" ? "" : BASENAME;
+}
+
+/** A Workboard address of the table (`/workboard/shifts`) as this router's path (`/shifts`). */
+function routerPath(to: string): string {
+  return base() && to.startsWith(`${base()}/`) ? to.slice(base().length) : to;
+}
+
+function NavRow({ item, end }: { item: MenuItem; end?: ReactNode }) {
   const location = useLocation();
   const search = carryParams(location.search).toString();
-  const Icon = item.icon;
+  const Icon = ICON[item.icon] ?? Inbox;
   return (
-    <NavLink to={{ pathname: item.to, search: search ? `?${search}` : "" }} className="wb-nav__item">
+    <NavLink to={{ pathname: routerPath(item.to), search: search ? `?${search}` : "" }} className="wb-nav__item">
       <Icon size={18} strokeWidth={1.75} aria-hidden className="wb-nav__icon" />
       <span className="wb-nav__label">{item.label}</span>
       {end}
@@ -102,60 +85,22 @@ function NavRow({ item, end }: { item: NavItem; end?: ReactNode }) {
   );
 }
 
-/**
- * The badge of Решения: what waits on the chosen page — the number Решения
- * shows after the click — the other pages in its hint (D17). A queue that did
- * not answer is a quiet «?» beside it, never a silent zero; while a queue is
- * still read, nothing at all (never a partial sum that grows a moment later).
- */
-function DecisionsCount() {
-  const { page } = usePageFilter();
-  const counts = useDecisionCounts({ page });
-  if (!counts.settled) return null;
-  const failed = decisionsFailedText(counts);
-  const elsewhere = decisionsElsewhereText(counts.elsewhere);
-  if (counts.total === 0 && failed === null && elsewhere === null) return null;
-  const lines = [
-    counts.total > 0 ? `Ждут решения${page ? ` на ${page}` : ""}: ${decisionParts(counts, "").map((part) => part.text).join(", ")}` : page ? `На ${page} решений нет` : null,
-    elsewhere ? `${elsewhere.charAt(0).toUpperCase()}${elsewhere.slice(1)}` : null,
-    // With some numbers shown, the failed queue may add to them; with none, nothing is known.
-    failed ? (counts.total > 0 || counts.elsewhere > 0 ? `${failed}: решений может быть больше` : `${failed}. Hub не ответил — это не ноль`) : null,
-  ].filter((line): line is string => line !== null);
-  // Nothing here but something on the other pages: the number of those, quiet.
-  const shown = counts.total > 0 ? counts.total : counts.elsewhere;
-  return (
-    <Tooltip content={lines.map((line) => <span key={line} className="wb-nav__tip-line">{line}</span>)} align="start">
-      <span className="wb-nav__count" aria-label={lines.join(". ")}>
-        {shown > 0 && <CountBadge value={shown} quiet={counts.total === 0} />}
-        {failed && <span className="wb-nav__unknown" aria-hidden>?</span>}
-      </span>
-    </Tooltip>
-  );
+/** «Ждут вас»: the one read both apps show (packages/ui/src/place.ts), in Workboard's own menu. */
+function useWaitingCount(enabled: boolean): MenuCountView | null {
+  const read = useQuery({ ...waitingQuery(kernel), enabled });
+  return enabled ? waitingCount(read) : null;
 }
 
-/**
- * The badge of «Ждут вас» while the owner's switch reads matters: everything
- * that waits for the person (never what only informs), on every page; a kind
- * not checked is a quiet «?», never a silent zero.
- */
-function WaitingCount() {
-  const { total, failed, settled } = useWaitingTotal();
-  if (!settled || (total === 0 && !failed)) return null;
-  const line = [total > 0 ? `Ждут вас: ${total}` : null, failed ? "Не всё удалось проверить: это не ноль" : null].filter(Boolean).join(". ");
+function TeamCount({ view, label }: { view: MenuCountView | null; label: string }) {
+  if (!view || (view.value === 0 && !view.unknown)) return null;
+  const said = [view.value > 0 ? `${label}: ${view.value}` : null, view.unknown ? "не всё удалось проверить, это не ноль" : null]
+    .filter((part): part is string => part !== null).join(". ");
   return (
-    <Tooltip content={<span className="wb-nav__tip-line">{line}</span>} align="start">
-      <span className="wb-nav__count" aria-label={line}>
-        {total > 0 && <CountBadge value={total} />}
-        {failed && <span className="wb-nav__unknown" aria-hidden>?</span>}
-      </span>
-    </Tooltip>
+    <span className="wb-nav__count" aria-label={said} title={said}>
+      {view.value > 0 && <CountBadge value={view.value} />}
+      {view.unknown && <span className="wb-nav__unknown" aria-hidden>?</span>}
+    </span>
   );
-}
-
-/** «Решения», or «Ждут вас» with its own count once the switch reads matters. */
-function DecisionsRow({ item }: { item: NavItem }) {
-  const { active } = useMattersActive();
-  return active ? <NavRow item={{ ...item, label: "Ждут вас" }} end={<WaitingCount />} /> : <NavRow item={item} end={<DecisionsCount />} />;
 }
 
 /**
@@ -194,17 +139,7 @@ function Account() {
       onSelect: () => setTheme(option.value),
     })),
     { separator: true },
-    {
-      label: "Выйти",
-      icon: LogOut,
-      onSelect: () => {
-        void kernel.logout().catch(() => undefined).finally(() => {
-          queryClient.clear();
-          // Signed out: the sign-in page does not ask the other name (no silent sign-back-in).
-          window.location.assign(`${signInHref(import.meta.env.BASE_URL)}&${NO_SILENT_SIGNIN.param}=${NO_SILENT_SIGNIN.value}`);
-        });
-      },
-    },
+    { label: "Выйти", icon: LogOut, onSelect: signOut },
   ];
   const avatar = <span className="wb-account__avatar" aria-hidden>{name.slice(0, 1).toUpperCase()}</span>;
   const text = (
@@ -248,55 +183,113 @@ export function ScreenFallback() {
   );
 }
 
+/** The team's place: Workboard's own short menu (packages/ui/src/screens.ts `teamMenu`), as it was. */
+function TeamSide() {
+  const { role } = useMe();
+  // «Начало» is listed while a newcomer has a step open (the address still opens it).
+  const start = useAccountStart();
+  const items = role === null ? [] : teamMenu(role, { newcomer: startOpen(start.data) });
+  const waiting = useWaitingCount(items.some((item) => item.count === "waiting"));
+  return (
+    <aside className="wb-side">
+      <Brand />
+      <nav aria-label="Разделы Workboard" className="wb-nav">
+        {items.map((item) => (
+          <NavRow key={item.id} item={item} end={item.count === "waiting" ? <TeamCount view={waiting} label={item.label} /> : undefined} />
+        ))}
+        {/* The line parts work from the way out; with nothing after it (a chatter), there is no line. */}
+        {seenBy(EXITS, role).length > 0 && <div className="wb-nav__sep" role="separator" />}
+        {seenBy(EXITS, role).map((exit) => (
+          <a key={exit.label} href={exit.href()} className="wb-nav__item wb-nav__item--quiet">
+            <ArrowLeft size={18} strokeWidth={1.75} aria-hidden className="wb-nav__icon" />
+            <span className="wb-nav__label">{exit.label}</span>
+          </a>
+        ))}
+      </nav>
+      <div className="wb-side__foot">
+        <Account />
+      </div>
+    </aside>
+  );
+}
+
 /**
- * Workboard's frame: the sidebar by work on the left (sticky, full height), the
- * screen on the right using all the width there is. A broken screen keeps the
- * sidebar.
+ * The owner's place: the frame and the menu of the console (packages/ui
+ * Place.tsx), drawn here. Workboard's items keep the period and the page of
+ * this screen; the console's carry the page and the period they share.
+ */
+function PlaceShell({ children }: { children: ReactNode }) {
+  const { user, role, accountRole } = useMe();
+  const location = useLocation();
+  const { page } = usePageFilter();
+  const [searchOpen, setSearchOpen] = useState(false);
+  const waiting = useWaitingCount(true);
+  const own = carryParams(location.search).toString();
+  const days = workboardDays(new URLSearchParams(location.search));
+  const hrefOf = (item: MenuItem) => (item.app === "workboard" ? `${item.to}${own ? `?${own}` : ""}` : carriedHref(item, { page, days }));
+  if (!user || role === null) return null;
+  return (
+    <>
+      {searchOpen && <WorkboardPalette role={role} onClose={() => setSearchOpen(false)} />}
+      <PlaceFrame
+        here={{ app: "workboard", basename: base() }}
+        brand={placeName("place")}
+        menu={placeMenu(role)}
+        current={menuItemAt(`${base()}${location.pathname}`)}
+        hrefOf={hrefOf}
+        counts={{ waiting }}
+        account={{ name: user.username, role: accountRole, signOut }}
+        searchOpen={searchOpen}
+        setSearchOpen={setSearchOpen}
+      >
+        {children}
+      </PlaceFrame>
+    </>
+  );
+}
+
+/** Signed out: the sign-in page does not ask the other name (no silent sign-back-in). */
+function signOut() {
+  void kernel.logout().catch(() => undefined).finally(() => {
+    queryClient.clear();
+    window.location.assign(`${signInHref(import.meta.env.BASE_URL)}&${NO_SILENT_SIGNIN.param}=${NO_SILENT_SIGNIN.value}`);
+  });
+}
+
+/**
+ * Workboard's frame: the sidebar on the left (sticky, full height), the screen
+ * on the right using all the width there is. The owner and team leads on the
+ * console's name are in the owner's place — the console's frame and menu, one
+ * place; everyone else in the team's, with Workboard's own short menu. A broken
+ * screen keeps the frame.
  */
 export function Shell() {
   const { role } = useMe();
+  const face = useFace();
   const location = useLocation();
   // A bare address opens the period last used in this tab (D3); the address then says it — a chatter's too.
   const restored = useRestoredPeriod();
   // «←» comes back to the same place of the page; a new screen opens at its top (D16).
   useScrollMemory();
   const screenKey = useScreenKey();
-  const start = useAccountStart();
-  // «Начало» leaves the menu once every step is done (the address still opens it).
-  const work = seenBy(WORK, role).filter((item) => item.to !== START_PATH || startOpen(start.data));
+  const main = (
+    <main className="wb-main">
+      {restored !== null ? (
+        <Navigate replace to={{ pathname: location.pathname, search: restored, hash: location.hash }} state={location.state as unknown} />
+      ) : (
+        <ErrorBoundary key={screenKey} resetKey={location.pathname} fallback={<div className="wb-content"><ErrorState title="Не удалось открыть экран" onRetry={() => window.location.reload()}>Что-то сломалось в самом экране. Перезагрузка обычно помогает; данные в Hub не тронуты.</ErrorState></div>}>
+          <Suspense fallback={<ScreenFallback />}>
+            <Outlet />
+          </Suspense>
+        </ErrorBoundary>
+      )}
+    </main>
+  );
+  if (face === "place") return <PlaceShell>{main}</PlaceShell>;
   return (
     <div className="wb-app" data-part={role === "chatter" ? "chatter" : undefined}>
-      <aside className="wb-side">
-        <Brand />
-        <nav aria-label="Разделы Workboard" className="wb-nav">
-          {work.map((item) => (
-            item.to === "/decisions" ? <DecisionsRow key={item.to} item={item} /> : <NavRow key={item.to} item={item} />
-          ))}
-          {/* The line parts work from the rest; with nothing after it (a chatter), there is no line. */}
-          {seenBy(ADMIN, role).length + seenBy(EXITS, role).length > 0 && <div className="wb-nav__sep" role="separator" />}
-          {seenBy(ADMIN, role).map((item) => <NavRow key={item.to} item={item} />)}
-          {seenBy(EXITS, role).map((exit) => (
-            <a key={exit.label} href={exit.href()} className="wb-nav__item wb-nav__item--quiet">
-              <ArrowLeft size={18} strokeWidth={1.75} aria-hidden className="wb-nav__icon" />
-              <span className="wb-nav__label">{exit.label}</span>
-            </a>
-          ))}
-        </nav>
-        <div className="wb-side__foot">
-          <Account />
-        </div>
-      </aside>
-      <main className="wb-main">
-        {restored !== null ? (
-          <Navigate replace to={{ pathname: location.pathname, search: restored, hash: location.hash }} state={location.state as unknown} />
-        ) : (
-          <ErrorBoundary key={screenKey} resetKey={location.pathname} fallback={<div className="wb-content"><ErrorState title="Не удалось открыть экран" onRetry={() => window.location.reload()}>Что-то сломалось в самом экране. Перезагрузка обычно помогает; данные в Hub не тронуты.</ErrorState></div>}>
-            <Suspense fallback={<ScreenFallback />}>
-              <Outlet />
-            </Suspense>
-          </ErrorBoundary>
-        )}
-      </main>
+      <TeamSide />
+      {main}
     </div>
   );
 }

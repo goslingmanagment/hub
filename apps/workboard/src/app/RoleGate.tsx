@@ -1,6 +1,8 @@
 import { useEffect } from "react";
 import { Outlet } from "react-router";
 import { EmptyState, LinkButton } from "@agency_hub_core/ui";
+import { placeName } from "@agency_hub_core/ui/place";
+import { useFace } from "@/shared/face";
 import { homePath, useMe, type Role } from "@/shared/useMe";
 
 /**
@@ -17,9 +19,10 @@ export function RoleGate({ roles }: { roles: readonly Role[] }) {
 }
 
 function useWorkboardTitle() {
+  const place = placeName(useFace());
   useEffect(() => {
-    document.title = "Workboard";
-  }, []);
+    document.title = place;
+  }, [place]);
 }
 
 function NotForChatter() {

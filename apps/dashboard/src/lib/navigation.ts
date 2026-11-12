@@ -1,4 +1,4 @@
-import { pathSegment } from "./path.js";
+import { pathSegment } from "@agency_hub_core/ui/path";
 import { NO_SILENT_SIGNIN, isChatterSite, isConsoleSite, peerSiteOrigin, signInHopHref, silentSignInHref } from "./sites.js";
 import type { Period, PeriodOption } from "../stores/periodStore.js";
 

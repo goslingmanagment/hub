@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { resolveLegacyUrl } from "../apps/dashboard/src/lib/redirects.ts";
-import { matchScreen, SCREENS, SECTIONS, screenById } from "../apps/dashboard/src/lib/sections.ts";
+import { matchScreen, SCREENS, SECTIONS, screenById } from "../packages/ui/src/screens.ts";
 
 // A promise to the owner (design/ia.md §8.2): every old address keeps working
 // and lands where it always did, with its parameters and its anchor. One row per

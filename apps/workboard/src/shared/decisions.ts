@@ -131,7 +131,7 @@ export interface DecisionCounts {
 }
 
 /**
- * The counts of Решения for the sidebar and the «Ждут решения» line. With
+ * The counts of the queues of «Ждут вас» (it was Решения) for the «Ждут решения» line. With
  * `page` (the header's filter) they are that page's — what Решения itself shows
  * after the click — and `elsewhere` says what waits on the others.
  */

@@ -13,7 +13,7 @@ import { Notice } from "@/components/ui/Notice";
 export const named = <T extends string>(load: () => Promise<Record<T, ComponentType>>, name: T) =>
   lazy(() => load().then((module) => ({ default: module[name] })));
 
-/** Every screen behind it is the owner's: hidden in the menu (lib/sections.ts) and
+/** Every screen behind it is the owner's: hidden in the menu (packages/ui/src/screens.ts) and
  *  refused here, both. The server's own check stays the real protection. */
 export function Owner() {
   return <OwnerRoute><Outlet /></OwnerRoute>;
