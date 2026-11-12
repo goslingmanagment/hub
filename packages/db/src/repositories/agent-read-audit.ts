@@ -137,6 +137,9 @@ export const AGENT_READ_AUDIT_SUMMARY_SHAPES = {
   /** Agent reports (write:reports, package O): which page and its version after the publish. The body
    *  enters as `textSha256`/`textLength` (its UTF-8 bytes), never its words. */
   reportSlug: "identifier",
+  /** The shift report «со слов» (write:shift_reports, package F): which shift, which version a hand-in made. Words and
+   *  amounts stay in the report itself. */
+  shiftId: "count",
   reportVersion: "count",
   /** «Кто этот ключ» (0396): the key a service asked about (its id; null — no such key), and the answer in
    *  `outcome` (`active`, `inactive`). */

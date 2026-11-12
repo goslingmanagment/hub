@@ -11,6 +11,7 @@ import {
   MATTER_CHECK_KINDS,
   MATTER_INFO_KINDS,
   PEOPLE_CHECK_KINDS,
+  isShiftReportMatterKind,
   type AgentMatterCloseBody,
   type AgentMatterCommentBody,
   type AgentMatterCommentResponse,
@@ -424,9 +425,10 @@ export interface AgentMatterScope {
 
 /** Opens (or updates, or reopens) an agent's matter by its key. */
 export async function agentOpenMatter(app: MattersApp, scope: AgentMatterScope, body: AgentMatterOpenBody, now: Date = new Date()): Promise<AgentMatterResponse> {
-  // The kinds Hub's server keeps — the mirrors', the system state's, the checks' of package K and the custom checks'
-  // of package I — are never an agent's.
-  if (isMatterMirrorKind(body.kind) || isMatterServerKind(body.kind) || isMatterCheckKind(body.kind) || isCustomOrderCheckKind(body.kind)) {
+  // The kinds Hub's server keeps — the mirrors', the system state's, the checks' of package K, the custom checks'
+  // of package I and the shift report's of package F — are never an agent's.
+  if (isMatterMirrorKind(body.kind) || isMatterServerKind(body.kind) || isMatterCheckKind(body.kind) || isCustomOrderCheckKind(body.kind)
+    || isShiftReportMatterKind(body.kind)) {
     throw notAgents(body.key);
   }
   const owner: MatterOwner = "user" in body.owner ? { userId: (await personOf(app, body.owner.user)).userId } : { role: body.owner.role };

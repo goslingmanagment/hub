@@ -93,6 +93,7 @@ export * from "./routes-people.ts";
 // Система → «Состояние»: the routines and copies of every place (package P), spread by routes.ts.
 export * from "./system-state.ts";
 export * from "./routes-system-state.ts";
+export * from "./routes-shift-handins.ts";
 
 export * from "./routes-ofapi-banned-words.ts";
 export * from "./routes-model-applications.ts";

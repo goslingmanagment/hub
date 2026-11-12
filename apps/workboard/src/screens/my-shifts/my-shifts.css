@@ -305,4 +305,18 @@
     }
 
   }
+
+  /* A draft's total, not handed in yet (Hub's shift report). */
+  .mys-pre {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 6px;
+    white-space: nowrap;
+  }
+
+  .mys-pre__word {
+    color: var(--ui-warn-text);
+    font-size: var(--ui-fs-13);
+    line-height: var(--ui-lh-13);
+  }
 }

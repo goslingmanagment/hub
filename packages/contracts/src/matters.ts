@@ -79,6 +79,18 @@ export function isMatterServerKind(kind: string): kind is MatterServerKind {
   return SERVER_KIND_SET.has(kind);
 }
 
+/**
+ * Отчёт смены (package F): the kinds of the shift report's own check, the server their one writer — a shift not
+ * handed in two hours after it closed (the person's), the owner's one line of them a day later, a report handed in
+ * after the ledger paid its day (the owner's). Kept apart from MATTER_SERVER_KINDS: «Состояние» closes every open
+ * matter of those that its own pass did not find.
+ */
+export const SHIFT_REPORT_MATTER_KINDS = ["shift.report.missing", "shift.reports.missing", "shift.report.after_paid"] as const;
+const SHIFT_REPORT_KIND_SET: ReadonlySet<string> = new Set(SHIFT_REPORT_MATTER_KINDS);
+export function isShiftReportMatterKind(kind: string): boolean {
+  return SHIFT_REPORT_KIND_SET.has(kind);
+}
+
 export const MATTER_STATES = ["open", "closed"] as const;
 export const MATTER_CLOSED_HOWS = ["resolved", "withdrawn", "cause_gone"] as const;
 export const MATTER_SOURCE_NAMES = ["server", "agent", "ledger", "contentops", "person"] as const;

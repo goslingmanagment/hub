@@ -1,5 +1,6 @@
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
-import type { AccountReportsResponse, ChatterStats } from "@agency_hub_core/contracts";
+import type { AccountReportsResponse, ChatterStats, ShiftReportsListResponse } from "@agency_hub_core/contracts";
+import { addDays } from "@agency_hub_core/ui/moscow";
 import { kernel } from "@/shared/hub";
 import type { MyShiftsWindow, StatsShift } from "./model.js";
 
@@ -13,7 +14,9 @@ export * from "./model.js";
  * from the session, never from the query) and carry sales only — no rates, pay,
  * payouts or debts, nothing of anyone else:
  *   - `accountChatterStats` { days, until? } — the shifts of the period's window;
- *   - `accountReports` { from, to } — the ledger's reports of those days.
+ *   - `accountReports` { from, to } — the ledger's reports of those days;
+ *   - `shiftReportsList` { from, to } — the shift rows with the state of their report in Hub (ecosystem package F):
+ *     empty while the person's switch «сдаёт смену в системе» is off, and then nothing on the screen changes.
  * Query keys start with "my-shifts".
  */
 
@@ -21,6 +24,8 @@ export interface MyShiftsData {
   stats: ChatterStats;
   /** null — the reports did not come (the ledger is away: 503, or another failure). The shifts still show. */
   reports: AccountReportsResponse | null;
+  /** The shifts' reports handed in in Hub; null — not read (the screen stays as before). */
+  hub: ShiftReportsListResponse | null;
 }
 
 /**
@@ -34,12 +39,17 @@ export function useMyShifts(window: MyShiftsWindow, current: boolean) {
   const query = useQuery({
     queryKey: ["my-shifts", "period", window.days, window.until ?? null, window.reportsFrom, window.reportsTo],
     queryFn: async (): Promise<MyShiftsData> => {
-      const [stats, reports] = await Promise.allSettled([
+      const [stats, reports, hub] = await Promise.allSettled([
         kernel.accountChatterStats({ query: { days: window.days, ...(window.until ? { until: window.until } : {}) } }),
         kernel.accountReports({ query: { from: window.reportsFrom, to: window.reportsTo } }),
+        kernel.shiftReportsList({ query: { from: addDays(window.from, -1), to: window.to } }),
       ]);
       if (stats.status === "rejected") throw stats.reason;
-      return { stats: stats.value, reports: reports.status === "fulfilled" ? reports.value : null };
+      return {
+        stats: stats.value,
+        reports: reports.status === "fulfilled" ? reports.value : null,
+        hub: hub.status === "fulfilled" ? hub.value : null,
+      };
     },
     placeholderData: keepPreviousData,
     staleTime: 60_000,

@@ -7,6 +7,7 @@ import { pageHandlers } from "./page.ts";
 import { peopleHandlers } from "./people.ts";
 import { publishOfHandlers } from "./publish-of.ts";
 import { settingsHandlers } from "./settings.ts";
+import { shiftReportHandlers } from "./shift-reports.ts";
 import { shellHandlers } from "./shell.ts";
 import { systemHandlers } from "./system.ts";
 import { teamHandlers } from "./team.ts";
@@ -36,6 +37,8 @@ const AREAS: Readonly<Record<string, DemoHandlers>> = {
   matters: mattersHandlers,
   // Workboard «Кастомы»: the board, an order and its steps, kept in memory (wb-customs.ts).
   customs: wbCustomsHandlers,
+  // Отчёт смены: the demo chatter's shift rows, drafts and versions, kept in memory with every write (shift-reports.ts).
+  "shift-reports": shiftReportHandlers,
   settings: settingsHandlers,
   system: systemHandlers,
 };
