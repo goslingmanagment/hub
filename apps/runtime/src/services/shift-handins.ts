@@ -60,6 +60,8 @@ import {
   type HandinSaleRow,
   type HandinShift,
   type HandinVersionLine,
+  type HandinVersionMadeFor,
+  type HandinVersionOffPlatform,
   type HandinVersionRow,
   type OffPlatformRow,
 } from "@agency_hub_core/db";
@@ -68,6 +70,8 @@ import type { AppContext } from "../bootstrap.ts";
 import type { AgentAuthPrincipal, HumanAuthPrincipal } from "./auth.ts";
 import { BadRequestError, ConflictError, ForbiddenError, NotFoundError } from "./errors.ts";
 import { readLedgerPayouts } from "./ledger-payouts.ts";
+import { reportSums } from "./sale-claim-rules.ts";
+import { claimsOfReport, runSaleClaims } from "./sale-claims.ts";
 import { SALE_RULE, slotRuns, type RuleSlot, type SaleHomeKind, type SaleHomeReason } from "./sale-rule.ts";
 import { computeSaleHomes, registrySlots, ruleWorksOf } from "./sale-homes.ts";
 import {
@@ -75,7 +79,6 @@ import {
   claimedSale,
   classifySale,
   lineAmount,
-  pageSums,
   postTexts,
   reasonWords,
   slotWindowOf,
@@ -535,9 +538,24 @@ export function draftLines(facts: Pick<DraftFacts, "classified" | "senders">, ma
   });
 }
 
-/** The page sums of lines: the person's lines and the claimed ones. Pure. */
-export function linesPageSums(lines: readonly HandinVersionLine[], shiftPages: readonly string[]) {
-  return pageSums(lines.filter((line) => line.group === "mine" || line.amountMills !== 0), shiftPages);
+/**
+ * The page sums of lines: the person's lines and the claimed ones, and on its page each «мимо площадки» the owner
+ * confirmed (package G; sale-claim-rules.ts `reportSums`, the same `pageSums`). Pure.
+ */
+export function linesPageSums(
+  lines: readonly HandinVersionLine[],
+  shiftPages: readonly string[],
+  offPlatform: ReadonlyArray<{ amountMills: number; state: string; pageLabel?: string | null }> = [],
+) {
+  return reportSums(lines, shiftPages, offPlatform);
+}
+
+/** A report's «мимо площадки» lines as a version keeps them: a confirmed one with the label of its page. */
+function offPlatformOfRows(rows: readonly OffPlatformRow[], labelOf: ReadonlyMap<number, string>): HandinVersionOffPlatform[] {
+  return rows.map((row) => ({
+    id: row.id, amountMills: row.amountMills, fromWhom: row.fromWhom, whatFor: row.whatFor, state: row.state,
+    pageLabel: row.state === "confirmed" && row.pageId !== null ? labelOf.get(row.pageId) ?? null : null,
+  }));
 }
 
 // ── Views ────────────────────────────────────────────────────────────────────
@@ -591,15 +609,18 @@ function wireLine(line: HandinVersionLine, context: ViewContext): ShiftReportLin
   };
 }
 
-function offPlatformWire(row: Pick<OffPlatformRow, "id" | "amountMills" | "fromWhom" | "whatFor" | "state">) {
-  return { id: row.id, amountMills: row.amountMills, fromWhom: row.fromWhom, whatFor: row.whatFor, state: row.state === "withdrawn" ? "rejected" as const : row.state };
+function offPlatformWire(row: HandinVersionOffPlatform) {
+  return {
+    id: row.id, amountMills: row.amountMills, fromWhom: row.fromWhom, whatFor: row.whatFor,
+    state: row.state === "withdrawn" ? "rejected" as const : row.state, pageLabel: row.pageLabel ?? null,
+  };
 }
 
 function bodyOf(input: {
   source: "draft" | "version";
   version: HandinVersionRow | null;
   lines: readonly HandinVersionLine[];
-  offPlatform: ReadonlyArray<Pick<OffPlatformRow, "id" | "amountMills" | "fromWhom" | "whatFor" | "state">>;
+  offPlatform: readonly HandinVersionOffPlatform[];
   comment: string;
   shiftPages: readonly string[];
   cutTo: Set<string> | null;
@@ -608,7 +629,8 @@ function bodyOf(input: {
 }): ShiftReportBody {
   const visible = input.cutTo === null ? input.lines : input.lines.filter((line) => line.pageLabel !== null && input.cutTo!.has(line.pageLabel));
   const pages = input.cutTo === null ? input.shiftPages : input.shiftPages.filter((page) => input.cutTo!.has(page));
-  const sums = linesPageSums(visible, pages);
+  // A colleague reads the report's sales, not what the person says came past the platform: nor its sums.
+  const sums = linesPageSums(visible, pages, input.cutTo === null ? input.offPlatform : []);
   return {
     source: input.source,
     version: input.version?.version ?? null,
@@ -625,15 +647,31 @@ function bodyOf(input: {
   };
 }
 
+/** Why the system made a version, in plain words: «согласие: Алекс», «решение владельца: пополам». */
+export function madeForWords(madeFor: HandinVersionMadeFor | null, actorName: string | null): string | null {
+  if (madeFor === null) return null;
+  if (madeFor.kind === "off_platform") return madeFor.decision === "confirmed" ? "владелец подтвердил «мимо площадки»" : "владелец отклонил «мимо площадки»";
+  switch (madeFor.outcome) {
+    case "agreed": return `согласие${actorName ? `: ${actorName}` : " второй стороны"}`;
+    case "first":
+    case "second": return "решение владельца по спору о продаже";
+    case "half": return "решение владельца: пополам";
+    case "nobody": return "решение владельца: никому";
+    default: return null;
+  }
+}
+
 function versionSummary(version: HandinVersionRow, names: Map<number, string>, keyNames: Map<number, string>) {
+  const actor = version.agentKeyId !== null
+    ? `${keyNames.get(version.agentKeyId) ?? "агент"}, со слов`
+    : names.get(version.actorUserId ?? -1) ?? "";
   return {
     version: version.version,
     submittedAt: version.submittedAt.toISOString(),
     door: version.door,
-    by: version.agentKeyId !== null
-      ? `${keyNames.get(version.agentKeyId) ?? "агент"}, со слов`
-      : names.get(version.actorUserId ?? -1) ?? "",
+    by: actor,
     totalMills: version.totalMills,
+    madeFor: madeForWords(version.madeFor, version.agentKeyId !== null ? null : names.get(version.actorUserId ?? -1) ?? null),
   };
 }
 
@@ -703,7 +741,7 @@ async function readSubject(app: HandinApp, actor: HandinActor, subject: Subject,
   const marks = handin === null || !wantsDraft ? [] : await listHandinMarks(db, handin.id);
   const facts = wantsDraft ? await draftFacts(db, subject, handin, catalog, now, marks) : null;
   const draft = facts === null ? null : draftLines(facts, marks);
-  const offPlatform = handin === null ? [] : await listOffPlatform(db, handin.id);
+  const offPlatform = handin === null ? [] : offPlatformOfRows(await listOffPlatform(db, handin.id), catalog.labelOf);
 
   const lineIds = [...(draft ?? []), ...(latest?.lines ?? [])].flatMap((line) => (line.transactionId === null ? [] : [line.transactionId]));
   const nameIds = [
@@ -744,6 +782,17 @@ async function readSubject(app: HandinApp, actor: HandinActor, subject: Subject,
     })
     : [];
 
+  // The claims of the report's sales (package G): someone's claim of the person's sale, the person's own, answered here.
+  const claims = await claimsOfReport(db, {
+    shiftId: subject.shift.id,
+    handinId: handin?.id ?? null,
+    userIds: subject.userIds,
+    lineIds: [...new Set(lineIds)],
+    own,
+    readerUserId: actor.kind === "person" ? actor.userId : subject.shift.userId,
+    cutToPageIds: access.cutTo === null ? null : new Set([...access.cutTo].map((label) => catalog.idOf.get(label)).filter((id): id is number => id !== undefined)),
+  });
+
   return {
     shift: {
       id: subject.shift.id,
@@ -766,6 +815,7 @@ async function readSubject(app: HandinApp, actor: HandinActor, subject: Subject,
     afterSubmission,
     posts: own && latest !== null ? postsOf(latest, subject, context) : [],
     colleagues,
+    claims,
     serverNow: now.toISOString(),
   };
 }
@@ -851,7 +901,8 @@ export async function listShiftReports(
       const handin = handins.get(shift.id) ?? null;
       const marks = handin === null ? [] : await listHandinMarks(db, handin.id);
       const facts = await draftFacts(db, subject, handin, catalog, now, marks);
-      drafts.set(shift.id, linesPageSums(draftLines(facts, marks), facts.pages).totalMills);
+      const offPlatform = handin === null ? [] : offPlatformOfRows(await listOffPlatform(db, handin.id), catalog.labelOf);
+      drafts.set(shift.id, linesPageSums(draftLines(facts, marks), facts.pages, offPlatform).totalMills);
     }
   }
   return {
@@ -1099,8 +1150,8 @@ export async function submitShiftReport(
     const handin = await handinFor(db, subject);
     const marks = await listHandinMarks(db, handin.id);
     const lines = draftLines(facts, marks);
-    const sums = linesPageSums(lines, facts.pages);
-    const offPlatform = (await listOffPlatform(db, handin.id)).map((row) => ({ id: row.id, amountMills: row.amountMills, fromWhom: row.fromWhom, whatFor: row.whatFor, state: row.state }));
+    const offPlatform = offPlatformOfRows(await listOffPlatform(db, handin.id), catalog.labelOf);
+    const sums = linesPageSums(lines, facts.pages, offPlatform);
     const made = await insertHandinVersion(db, {
       handin,
       door: who.door,
@@ -1150,7 +1201,28 @@ export async function submitShiftReport(
       app.logger.warn({ shiftId: subject.shift.id, err: error instanceof Error ? error.message : String(error) }, "shift report: the owner's matter «после выплаты» did not open");
     });
   }
+  // A statement that touches another person reaches them now, not at the next pass (package G).
+  await runSaleClaims(app, now).catch((error: unknown) => {
+    app.logger.warn({ shiftId: subject.shift.id, err: error instanceof Error ? error.message : String(error) }, "shift report: the claims pass after a hand-in failed; the next one will");
+  });
   return readSubject(app, actor, subject, now);
+}
+
+/**
+ * The facts of one sale as a shift's draft reads them (`ShiftReportLineFacts`: the PPV's sender, the last writer, the
+ * holders and whose slot ran, another report holding it): what the owner's dispute shows, read, not decided again.
+ * Null — the sale is not a line of that shift's draft.
+ */
+export async function saleLineFacts(app: HandinApp, shiftId: number, transactionId: number, now: Date = new Date()): Promise<ShiftReportLineFacts | null> {
+  const subject = await subjectOf(app.db, shiftId);
+  const catalog = await pageCatalog(app.db);
+  const handin = await findHandinByShift(app.db, subject.shift.id);
+  const marks = handin === null ? [] : await listHandinMarks(app.db, handin.id);
+  const facts = await draftFacts(app.db, subject, handin, catalog, now, marks);
+  const one = facts.classified.find((line) => line.sale.transactionId === transactionId);
+  if (one === undefined) return null;
+  const details = await lineDetails(app.db, subject, { ...facts, classified: [one] }, catalog);
+  return details.get(transactionId) ?? null;
 }
 
 // ── The ledger's feed ────────────────────────────────────────────────────────
@@ -1192,11 +1264,20 @@ export async function readShiftReportsFeed(
         amountMills: line.amountMills,
         added: line.added,
         disputed: line.disputed,
+        settled: line.settled ?? null,
       }])),
       offPlatform: row.offPlatform.filter((line) => line.state !== "withdrawn").map((line) => offPlatformWire(line)),
       comment: row.comment,
       dayPaid: row.dayPaid,
       ruleVersion: row.ruleVersion,
+      madeFor: row.madeFor === null ? null : {
+        kind: row.madeFor.kind,
+        claimId: row.madeFor.kind === "claim" ? row.madeFor.claimId : null,
+        offPlatformId: row.madeFor.kind === "off_platform" ? row.madeFor.offPlatformId : null,
+        transactionId: row.madeFor.kind === "claim" ? row.madeFor.transactionId : null,
+        outcome: row.madeFor.kind === "claim" ? row.madeFor.outcome : row.madeFor.decision,
+        byUserId: row.actorUserId,
+      },
     })),
     next: String(rows.at(-1)?.id ?? afterId),
     serverNow: now.toISOString(),

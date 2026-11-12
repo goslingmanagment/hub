@@ -39,6 +39,20 @@ export interface ReportRow {
   blocking: TeamLedgerReportPost | null;
   /** Pages of a posted day that are not in the post (and no flag says why). */
   missing: string[];
+  /** The shown pages in the report handed in in Hub (package G); null — none handed in in Hub (then the row is as before). */
+  hubMills: number | null;
+  /** How the post and the report in Hub compare: equal to the cent, differ (a page apart, or one has a page the other lacks); null — no report in Hub. */
+  hub: "equal" | "differs" | null;
+}
+
+/** The report in Hub against the post, over the shown pages (the ledger's v_report_pages.hub_state). */
+function hubOf(pages: readonly TeamLedgerReportPage[]): { hubMills: number | null; hub: ReportRow["hub"] } {
+  const known = pages.filter((page) => page.hubState !== null && page.hubState !== undefined);
+  if (known.length === 0) return { hubMills: null, hub: null };
+  const hubMills = sum(pages.map((page) => page.hubMills ?? null));
+  const posted = pages.some((page) => page.postedMills !== null);
+  const differs = posted && known.some((page) => page.hubState !== "hub_equal");
+  return { hubMills, hub: differs ? "differs" : "equal" };
 }
 
 const sum = (values: ReadonlyArray<number | null>): number | null => {
@@ -76,6 +90,7 @@ function rowOfDay(day: TeamLedgerReportDay, posts: ReadonlyMap<number, TeamLedge
     blocking,
     // A flag on the day's post says why a page is out; without one the page is simply not in the post.
     missing: anyPosted && own.length === 0 ? pages.filter((one) => one.postedMills === null && one.state === "draft_only").map((one) => one.pageLabel) : [],
+    ...hubOf(pages),
   };
 }
 
@@ -94,6 +109,8 @@ function rowOfPost(post: TeamLedgerReportPost): ReportRow {
     posts: [post],
     blocking: post.blocking ? post : null,
     missing: [],
+    hubMills: null,
+    hub: null,
   };
 }
 
@@ -117,7 +134,7 @@ export function reportRows(answer: Pick<TeamLedgerReportsResponse, "reports" | "
 
 /** A row worth the owner's look: a sum the chatter changed, or a post the ledger could not use in full. */
 export function hasQuestion(row: ReportRow): boolean {
-  return row.state === "unparsed" || row.state === "changed" || row.posts.length > 0;
+  return row.state === "unparsed" || row.state === "changed" || row.posts.length > 0 || row.hub === "differs";
 }
 
 export interface ReportFacts {
@@ -126,6 +143,9 @@ export interface ReportFacts {
   postedMills: number | null;
   changed: number;
   unparsed: number;
+  /** Days handed in in Hub, and how many of them differ from their post. */
+  hub: number;
+  hubDiffers: number;
 }
 
 export function reportFacts(rows: readonly ReportRow[]): ReportFacts {
@@ -134,6 +154,8 @@ export function reportFacts(rows: readonly ReportRow[]): ReportFacts {
     postedMills: sum(rows.map((row) => row.postedMills)),
     changed: rows.filter((row) => row.state === "changed").length,
     unparsed: rows.filter((row) => row.state === "unparsed").length,
+    hub: rows.filter((row) => row.hub !== null).length,
+    hubDiffers: rows.filter((row) => row.hub === "differs").length,
   };
 }
 

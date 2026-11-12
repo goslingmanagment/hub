@@ -33,7 +33,8 @@ const INFO: ReadonlySet<string> = new Set(MATTER_INFO_KINDS);
 
 export function groupOf(kind: string): WaitingGroupId {
   if (INFO.has(kind)) return "info";
-  if (kind === "ledger.sale_question") return "questions";
+  if (kind === "ledger.sale_question" || kind === "sale.dispute" || kind === "sale.nobody_week" || kind === "sale.decisions.unlinked") return "questions";
+  if (kind === "off_platform.pending") return "reports";
   if (kind === "ledger.report_post" || kind === "ledger.paid_day_changed") return "reports";
   if (kind === "report.post_fix") return "reports";
   if (kind.startsWith("custom.")) return "customs";

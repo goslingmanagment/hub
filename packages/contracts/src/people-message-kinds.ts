@@ -146,9 +146,9 @@ export const PEOPLE_MESSAGE_KIND_SPECS: readonly PeopleMessageKindSpec[] = [
     template: "‹Кто› считает продажу ‹сумма› на ‹страница› своей. Подтвердите договорённость или ответьте в Workboard: ‹ссылка›",
     cap: 5,
     quiet: true,
-    connected: false,
-    triggerNote: "Срабатывание придёт вместе с заявками «моё / делим»: сейчас их в системе нет, и вид не может сработать, даже включённый.",
-    needs: [TOKEN_NEED, PERSON_NEED, "Заявки «моё / делим» в системе"],
+    connected: true,
+    triggerNote: null,
+    needs: [TOKEN_NEED, PERSON_NEED],
     onSentence: "С этой минуты вторая сторона заявки «моё / делим» получает от бота одно сообщение в личку со ссылкой, где согласиться. Ночью сообщение ждёт утра.",
   },
   {

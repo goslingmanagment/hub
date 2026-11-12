@@ -26,7 +26,9 @@ import { shiftReportsOf } from "./account-reports.ts";
 
 type Answer = KernelOperationResponse<"teamLedgerReports">;
 type Day = Answer["reports"][number];
-type Page = Day["pages"][number];
+type WirePage = Day["pages"][number];
+/** A page as the fixture makes it: the report handed in in Hub is added at the answer (HUB_TWISTS). */
+type Page = Omit<WirePage, "hubMills" | "hubState" | "basis"> & Partial<Pick<WirePage, "hubMills" | "hubState" | "basis">>;
 type Post = Answer["posts"][number];
 type Draft = NonNullable<Day["draft"]>;
 
@@ -51,6 +53,21 @@ const TWISTS: Readonly<Record<string, Readonly<Record<number, Twist>>>> = {
   "olya.m": { 5: { kind: "blocked", flag: "date_mismatch" } },
 };
 
+/**
+ * Days handed in in Hub too (package G, the ledger's v_report_pages.hub_*): kate.v's equals her post to the cent;
+ * alex.k's is his draft, while his post raised the first page by hand (+$15.00): the post and Hub differ.
+ */
+const HUB_TWISTS: Readonly<Record<string, Readonly<Record<number, number>>>> = { "alex.k": { 1: -15_000 }, "kate.v": { 1: 0 } };
+
+function withHub(pages: readonly Page[], delta: number | undefined): WirePage[] {
+  return pages.map((page, position): WirePage => {
+    if (delta === undefined) return { ...page, hubMills: null, hubState: null, basis: "post" };
+    const hubMills = Math.max(0, (page.postedMills ?? page.draftMills ?? 0) + (position === 0 ? delta : 0));
+    const hubState = page.postedMills === null ? "hub_only" : hubMills === page.postedMills ? "hub_equal" : "hub_changed";
+    return { ...page, hubMills, hubState, basis: "post" };
+  });
+}
+
 /** The model of a page, as the ledger names it: «Mia» for mia-1. */
 export function demoModelOf(page: string): string {
   const name = page.split("-")[0] ?? "mia";
@@ -67,6 +84,8 @@ export interface DemoReportDay {
   posts: Post[];
   /** A paid day whose post changed after the payout: what the day was paid by (the posted sum then). */
   paidAsMills: number | null;
+  /** The day handed in in Hub too: how far its first page lies from the post; undefined — not handed in in Hub. */
+  hubDelta?: number;
 }
 
 const cents = (value: number) => millsToNumber(millsRoundedTo(value, "cent"));
@@ -163,7 +182,8 @@ export function demoReportDays(now: Date): DemoReportDay[] {
         if (unknown !== undefined) posts.push(postOf({ id: msgId, at: postedAt, user, sender: user.name, date, draft: drafted, flags: ["unknown_page"], unknown }));
         if (twist?.kind === "changed" && twist.paid) paidAsMills = drafted.reduce((sum, page) => sum + (page.draftMills ?? 0), 0);
       }
-      days.push({ user, date, shift, draft, pages, posts, paidAsMills });
+      const hubDelta = HUB_TWISTS[user.username]?.[index];
+      days.push({ user, date, shift, draft, pages, posts, paidAsMills, ...(hubDelta === undefined ? {} : { hubDelta }) });
     }
   }
   days.sort((left, right) => right.date.localeCompare(left.date) || left.user.username.localeCompare(right.user.username));
@@ -218,9 +238,10 @@ function teamLedgerReports(request: DemoRequest): Answer | DemoReply {
       key: `person:${day.user.username}:${day.date}`,
       person: { slug: day.user.username, hubUser: { userId: day.user.id, username: day.user.username }, name: day.user.username },
       reportDate: day.date,
-      pages: day.pages,
+      pages: withHub(day.pages, day.hubDelta),
       postedMills: sum(day.pages.map((page) => page.postedMills)),
       draftMills: sum(day.pages.map((page) => page.draftMills)),
+      hubMills: day.hubDelta === undefined ? null : sum(withHub(day.pages, day.hubDelta).map((page) => page.hubMills)),
       postedAt: day.pages.map((page) => page.postedAt).filter((at): at is string => at !== null).sort().at(-1) ?? null,
       draft: day.draft,
       postIds: day.posts.map((post) => post.id),

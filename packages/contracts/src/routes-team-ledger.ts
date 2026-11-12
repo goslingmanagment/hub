@@ -233,6 +233,12 @@ export const teamLedgerReportPageSchema = z.object({
   /** posted_equal · posted_changed · post_only · draft_only; another value as the ledger wrote it. */
   state: z.string(),
   postedAt: isoTimestamp.nullable(),
+  /** The page in the report handed in in Hub for the person and day (their shifts added); null — none. */
+  hubMills: mills.nullable().default(null),
+  /** How the post compares with it: hub_equal · hub_changed · hub_only · hub_missing; null — no report in Hub. */
+  hubState: z.string().nullable().default(null),
+  /** What the day accrues from: hub · post; null — the ledger did not say. */
+  basis: z.string().nullable().default(null),
 });
 
 /** A post in «Отчётность» the ledger could not use in full (a flag on it). */
@@ -271,6 +277,8 @@ export const teamLedgerReportDaySchema = z.object({
   postedMills: mills.nullable(),
   /** The pages' drafted amounts added up; null — no draft. */
   draftMills: mills.nullable(),
+  /** The pages of the report handed in in Hub added up; null — none handed in in Hub. */
+  hubMills: mills.nullable().default(null),
   /** The latest post that touched a page of the day; null — none. */
   postedAt: isoTimestamp.nullable(),
   /** The agent's current draft, as the chatter sees it in «Мои смены»; null — written without the agent. */

@@ -16,6 +16,7 @@ import { useMe } from "@/shared/useMe";
 import { usePageFilter } from "@/shared/usePageFilter";
 import { usePages } from "@/shared/usePages";
 import { ResolveSendModal } from "../decisions/HeldSends";
+import { DisputeModal, NobodyModal, OffPlatformModal, UnlinkedModal } from "./Disputes";
 import { useFanNames, type Custom, type FanRefOnPage, type HeldSend, type KnownFan } from "../decisions/data";
 import { WAITING_GROUPS, groupOf, groupOfAnchor, uncheckedWords, waitedFor, waitingSince, type WaitingGroupId } from "./kinds";
 import "./waiting.css";
@@ -52,6 +53,8 @@ interface Context {
   held: (id: string) => HeldSend | undefined;
   fanOf: (fan: FanRefOnPage) => KnownFan | undefined;
   openSend: (attemptId: string) => void;
+  /** Opens one of package G's windows: a dispute, «мимо площадки», the week's nobody's sales, the unlinked decisions. */
+  open: (param: "dispute" | "claim" | "offPlatform" | "nobody" | "unlinked", value: string) => void;
 }
 
 const text = (value: unknown): string | null => (typeof value === "string" && value.trim() !== "" ? value : null);
@@ -153,6 +156,42 @@ function lineOf(matter: Matter, context: Context): Line {
         about: [send ? fanWords(context.fanOf(send), send.fanRef) : null, ...pages, sentBy ? `отправлял ${sentBy}` : null].filter((part): part is string => part !== null),
         action: <Button size="sm" variant="secondary" onClick={() => context.openSend(attemptId)}>Разобрать</Button>,
       };
+    }
+    case "sale.dispute": {
+      const net = number(evidence.netMills);
+      const why = Array.isArray(evidence.why) ? evidence.why : [];
+      const reason = why.includes("disagree") ? "вторая сторона не согласна" : why.includes("silence") ? "вторая сторона не ответила за сутки"
+        : why.includes("double") ? "продажа посчитана в двух отчётах" : why.includes("imported") ? "вопрос из ledger" : "спросить некого";
+      const transactionId = number(evidence.transactionId);
+      return {
+        ...base,
+        about: [...pages, net === null ? null : formatMills(net), reason].filter((part): part is string => part !== null),
+        action: (
+          <Button size="sm" variant="secondary" onClick={() => (transactionId !== null ? context.open("dispute", String(transactionId)) : context.open("claim", String(matter.object?.id ?? "")))}>
+            Решить
+          </Button>
+        ),
+      };
+    }
+    case "off_platform.pending": {
+      const lines = Array.isArray(evidence.lines) ? (evidence.lines as Array<{ amountMills?: unknown; fromWhom?: unknown; whatFor?: unknown }>) : [];
+      const shiftId = number(evidence.shiftId);
+      return {
+        ...base,
+        about: [...lines.slice(0, 2).map((line) => `${lines.length > 1 && typeof line.amountMills === "number" ? `${formatMills(line.amountMills)} ` : ""}от ${String(line.fromWhom ?? "")}: ${String(line.whatFor ?? "")}`), "со слов чаттера"],
+        action: shiftId === null ? null : <Button size="sm" variant="secondary" onClick={() => context.open("offPlatform", String(shiftId))}>Разобрать</Button>,
+      };
+    }
+    case "sale.nobody_week": {
+      const week = text(evidence.week);
+      return {
+        ...base,
+        about: ["никто не взял в отчёт", "дни, где сданы все смены"],
+        action: week === null ? null : <Button size="sm" variant="secondary" onClick={() => context.open("nobody", week)}>Посмотреть</Button>,
+      };
+    }
+    case "sale.decisions.unlinked": {
+      return { ...base, about: ["перенесены из ledger, продажа по тексту не нашлась"], action: <Button size="sm" variant="secondary" onClick={() => context.open("unlinked", "1")}>Привязать</Button> };
     }
     case "extension.critical": {
       const total = number(evidence.total);
@@ -315,13 +354,26 @@ export function WaitingScreen() {
     else next.set("send", value);
     return next;
   });
+  const setParam = (param: string, value: string | null) => setSearch((current) => {
+    const next = new URLSearchParams(current);
+    if (value === null) next.delete(param);
+    else next.set(param, value);
+    return next;
+  });
   const context: Context = {
     question: (id) => questions.data?.owner.find((one) => one.id === id),
     custom: (id) => customs.data?.customs.find((one) => one.id === id),
     held: (id) => held.data?.items.find((one) => one.attemptId === id),
     fanOf,
     openSend: (id) => setSend(id),
+    open: (param, value) => setParam(param, value),
   };
+  // Package G's windows, by the address (a matter's link lands on its window).
+  const disputeParam = Number(search.get("dispute"));
+  const claimParam = Number(search.get("claim"));
+  const offPlatformParam = Number(search.get("offPlatform"));
+  const nobodyParam = search.get("nobody");
+  const unlinkedParam = search.get("unlinked") !== null;
   // The open resolve keeps the record it was opened with while Hub answers (as on «Решения»).
   const lastSend = useRef<HeldSend | null>(null);
   const foundSend = attemptId ? held.data?.items.find((one) => one.attemptId === attemptId) : undefined;
@@ -433,6 +485,19 @@ export function WaitingScreen() {
           </>
         )}
       </div>
+      {isOwner && (Number.isSafeInteger(disputeParam) && disputeParam > 0 || Number.isSafeInteger(claimParam) && claimParam > 0) && (
+        <DisputeModal
+          key={`${disputeParam}:${claimParam}`}
+          transactionId={disputeParam > 0 ? disputeParam : null}
+          claimId={disputeParam > 0 ? null : claimParam}
+          onClose={() => { setParam("dispute", null); setParam("claim", null); }}
+        />
+      )}
+      {isOwner && Number.isSafeInteger(offPlatformParam) && offPlatformParam > 0 && (
+        <OffPlatformModal key={offPlatformParam} shiftId={offPlatformParam} onClose={() => setParam("offPlatform", null)} />
+      )}
+      {isOwner && nobodyParam !== null && /^\d{4}-\d{2}-\d{2}$/.test(nobodyParam) && <NobodyModal key={nobodyParam} week={nobodyParam} onClose={() => setParam("nobody", null)} />}
+      {isOwner && unlinkedParam && <UnlinkedModal onClose={() => setParam("unlinked", null)} />}
       {openSend && held.data && (
         <ResolveSendModal
           key={openSend.attemptId}

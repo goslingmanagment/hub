@@ -47,8 +47,31 @@ function PostedCell({ row }: { row: ReportRow }) {
   return <Money mills={row.postedMills} strong />;
 }
 
+/**
+ * A day handed in in Hub (package G): «Сдан в системе» with its sum, and how the post compares — equal, apart (the
+ * owner's to look at), or no post at all. The post's own state follows when it needs the owner.
+ */
+function HubState({ row }: { row: ReportRow }) {
+  const compare = row.postedMills === null
+    ? <span className="payouts-sub">поста нет</span>
+    : row.hub === "differs"
+      ? <span className="payouts-sub payouts-drift">в посте <Money mills={row.postedMills} />: пост и отчёт в системе расходятся</span>
+      : <span className="payouts-sub">пост совпадает</span>;
+  return (
+    <span className="payouts-state">
+      <span className="payouts-state__line">
+        <Badge tone="success" bare className="payouts-state__badge">Сдан в системе</Badge>
+        {row.hubMills !== null && <Money mills={row.hubMills} />}
+      </span>
+      {compare}
+      {row.blocking && <span className="payouts-sub payouts-drift">пост не разобран: {postProblemWords(row.blocking)}</span>}
+    </span>
+  );
+}
+
 /** The state in words; colour only where the owner has something to look at or do. */
 function StateCell({ row }: { row: ReportRow }) {
+  if (row.hub !== null) return <HubState row={row} />;
   const notes = row.posts.filter((post) => !post.blocking).flatMap((post) => post.flags.map(postFlagWord));
   const note = notes.length > 0 ? `в посте: ${notes.join(", ")}` : row.missing.length > 0 ? `нет в посте: ${row.missing.join(", ")}` : null;
   const word = (() => {
@@ -109,6 +132,11 @@ function FactsLine({ all, postsRead, questionsOnly, onQuestionsOnly }: {
     { label: "В постах", value: <Money mills={facts.postedMills} />, strong: true, hint: "Отправленные суммы отчётов периода — то, по чему ledger начисляет. Посты, которые он не разобрал, сюда не входят." },
     { label: "Сумма изменена", value: facts.changed === 0 ? "нет" : String(facts.changed), hint: "Чаттер поменял сумму в посте после черновика агента." },
     ...(postsRead ? [{ label: "Пост не разобран", value: facts.unparsed === 0 ? "нет" : String(facts.unparsed) }] : []),
+    ...(facts.hub > 0 ? [{
+      label: "Сдано в системе",
+      value: facts.hubDiffers === 0 ? String(facts.hub) : `${facts.hub}, с постом расходятся ${facts.hubDiffers}`,
+      hint: "Отчёты, сданные в Hub. Пока ledger начисляет по постам, это сверка: расхождение значит, что пост и отчёт в системе дают разные суммы.",
+    }] : []),
   ];
   return (
     <div className="payouts-facts">
