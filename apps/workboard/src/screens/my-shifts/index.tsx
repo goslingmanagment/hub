@@ -146,7 +146,7 @@ function StateCell({ row }: { row: MyShiftRow }) {
     case "posted":
       return (
         <span className="mys-state">
-          <Badge tone="success" bare className="mys-state__badge">Отправлен</Badge>
+          <Badge tone="success" bare className="mys-state__badge">Пост отправлен</Badge>
           {/* The chatter's right, not an alarm: said quietly, under the word. */}
           {row.draftMills !== null && <span className="mys-state__was">в черновике было {formatMills(row.draftMills)}</span>}
         </span>

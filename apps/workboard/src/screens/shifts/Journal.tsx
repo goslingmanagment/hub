@@ -8,9 +8,12 @@ import { CHATTER_SHIFT_PAGE_MIN_MESSAGES } from "@agency_hub_core/contracts";
 import { personPath, shiftPath, useRowBackState } from "@/shared/links";
 import { METRICS, formatAiUnedited, formatReplyMedian, formatUnanswered } from "@/shared/metrics";
 import { NO_NORMS, manyUnanswered, muchAi, slowReply, type JournalShift, type ShiftsModel, type TeamNorms } from "./data.js";
+import type { ReportNote } from "./reports.js";
 
 /** Rows shown before «Показать все»: a week of a whole team fits. */
 const FIRST_ROWS = 50;
+
+const NO_NOTES: ReadonlyMap<string, ReportNote> = new Map();
 
 /** A line of a header never ends on these: «ИИ / без правки», not «ИИ без / правки». */
 const PREPOSITION = /^(без|к|с|в|на|по|до|от|и)$/i;
@@ -137,12 +140,35 @@ function WhenHint({ shift }: { shift: JournalShift }) {
   return shift.when.payDayNote ? <>{shift.when.payDayNote}<br />{messages}</> : <>{messages}</>;
 }
 
+/** A shift's sales by the rule; under them, where the day's report pays by another sum, that sum (reports.ts). */
+function SalesCell({ shift, note }: { shift: JournalShift; note: ReportNote | undefined }) {
+  const money = shift.overlapNetMills > 0 ? (
+    <Tooltip content={`Из них ${formatMills(shift.overlapNetMills)} на двоих: эти продажи видны и у другого чаттера, никто из двоих не писал этому фану`} align="end">
+      <span className="shifts-journal__shared"><Money mills={shift.salesNetMills} strong /></span>
+    </Tooltip>
+  ) : <Money mills={shift.salesNetMills} strong />;
+  if (note === undefined) return money;
+  return (
+    <span className="shifts-journal__money">
+      {money}
+      <Tooltip
+        content={note.ofDay
+          ? "Отчёт дня (пост или сданный отчёт) даёт за все смены этого дня другую сумму: начисляют по нему. Продажи смен здесь — по правилу «чья продажа»."
+          : "Отчёт дня (пост или сданный отчёт) даёт другую сумму: начисляют по нему. Продажи смены здесь — по правилу «чья продажа»."}
+        align="end"
+      >
+        <span className="shifts-journal__report">{note.ofDay ? "в отчёте за день" : "в отчёте"} {formatMills(note.reportMills)}</span>
+      </Tooltip>
+    </span>
+  );
+}
+
 /** «Обычно у команды — 3 мин 49 с»: why a number is marked. */
 function usual(text: string): string {
   return `Заметно хуже обычной смены команды за этот период. Обычно — ${text}`;
 }
 
-function columnsOf(state: QualityState, norms: TeamNorms, page: string | null): Column<JournalShift>[] {
+function columnsOf(state: QualityState, norms: TeamNorms, page: string | null, notes: ReadonlyMap<string, ReportNote>, ruled: boolean, isOwner: boolean): Column<JournalShift>[] {
   // E1: with a page picked, the quality columns still count the whole shift — said at the columns themselves.
   const scope = (hint: string) => (page ? `${hint} По всей смене, не только ${page}.` : hint);
   return [
@@ -181,13 +207,13 @@ function columnsOf(state: QualityState, norms: TeamNorms, page: string | null): 
     {
       key: "sales",
       header: "Продажи",
+      // The rule's sum, not the pay's: people are paid by the day's report (the owner sees it where it differs).
+      ...(ruled ? { hint: isOwner
+        ? "По правилу «чья продажа». Начисляют по отчёту дня: где в нём другая сумма, она под числом — «в отчёте»."
+        : "По правилу «чья продажа». Начисляют по отчёту дня, его сумма может отличаться." } : {}),
       numeric: true,
       sortValue: (shift) => shift.salesNetMills,
-      cell: (shift) => (shift.overlapNetMills > 0 ? (
-        <Tooltip content={`Из них ${formatMills(shift.overlapNetMills)} на двоих: эти продажи видны и у другого чаттера, никто из двоих не писал этому фану`} align="end">
-          <span className="shifts-journal__shared"><Money mills={shift.salesNetMills} strong /></span>
-        </Tooltip>
-      ) : <Money mills={shift.salesNetMills} strong />),
+      cell: (shift) => <SalesCell shift={shift} note={notes.get(shift.key)} />,
     },
     {
       // «Продажи» over «Отработал», the two columns to its left: said on the value, not as a dotted term.
@@ -265,7 +291,7 @@ function columnsOf(state: QualityState, norms: TeamNorms, page: string | null): 
  * quality numbers are the review's own (D1: same rules, same words). Sort by
  * any column; an outlier against the team's usual shift gets one calm mark.
  */
-export function Journal({ model, isOwner, quality, onRetryQuality, retryingQuality, loading = false, refreshing = false, page }: {
+export function Journal({ model, isOwner, quality, onRetryQuality, retryingQuality, loading = false, refreshing = false, page, reportNotes = NO_NOTES, ruled = false }: {
   model: ShiftsModel | undefined;
   isOwner: boolean;
   quality: QualityState;
@@ -274,13 +300,17 @@ export function Journal({ model, isOwner, quality, onRetryQuality, retryingQuali
   loading?: boolean;
   refreshing?: boolean;
   page: string | null;
+  /** «в отчёте $…» by the shift's key (reports.ts); the owner's only. */
+  reportNotes?: ReadonlyMap<string, ReportNote>;
+  /** The sales are counted by the rule «чья продажа» (`ruleFrom`): the column says so. */
+  ruled?: boolean;
 }) {
   const location = useLocation();
   const { sort, setSort, all, setAll } = useJournalAddress();
   const rowState = useRowBackState("Смены");
   const rows = sorted(model?.journal ?? [], sort);
   const shown = all ? rows : rows.slice(0, FIRST_ROWS);
-  const columns = columnsOf(quality, model?.norms ?? NO_NORMS, page);
+  const columns = columnsOf(quality, model?.norms ?? NO_NORMS, page, reportNotes, ruled, isOwner);
 
   const description = [
     isOwner ? "Строка открывает разбор смены." : "Строка открывает карточку чаттера.",

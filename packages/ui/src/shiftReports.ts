@@ -48,10 +48,10 @@ export function savedLine(report: Pick<AccountReport, "reportDate" | "savedAt" |
   return `собран ${when} · версия ${report.version} из ${report.versions}`;
 }
 
-/** A report's state (the ledger's `status`) in a word. */
+/** A report's state (the ledger's `status`) in a word. A post's is «Пост отправлен»; one handed in in Hub is «Сдан». */
 export const REPORT_STATUS_WORDS = {
   draft: "Собран",
-  posted: "Отправлен",
+  posted: "Пост отправлен",
   superseded: "Заменён",
 } as const;
 

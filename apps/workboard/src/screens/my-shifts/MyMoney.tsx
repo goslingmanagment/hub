@@ -17,7 +17,7 @@ import "./my-money.css";
 function AccrualLine({ day }: { day: MoneyDay }) {
   const state = day.state === "paid" ? "оплачено" : day.paidMills > 0 ? `к выплате ${formatMills(day.unpaidMills)}` : "ждёт выплаты";
   return (
-    <Tooltip content={`Начислено за день этой смены по отправленному отчёту, вместе с долей общака: ${state}.`} align="end">
+    <Tooltip content={`Начислено за день этой смены по отчёту дня (пост или сданный отчёт), вместе с долей общака: ${state}.`} align="end">
       <span className={day.state === "paid" ? "mym-line" : "mym-line mym-line--due"}>
         начислено {formatMills(day.amountMills)}{day.state === "paid" ? ", оплачено" : ""}
       </span>
@@ -52,8 +52,8 @@ function MoneyBlock({ read }: { read: MyMoneyRead }) {
     {
       label: "Начислено за период",
       value: <Money mills={pay.accruedMills} />,
-      meta: pay.reportsFrom ? `с ${formatDay(pay.reportsFrom)} по отправленным отчётам` : undefined,
-      hint: "Что начислено за дни смен этого периода: по отправленному отчёту смены, вместе с долей общака.",
+      meta: pay.reportsFrom ? `с ${formatDay(pay.reportsFrom)} по отчётам смен` : undefined,
+      hint: "Что начислено за дни смен этого периода: по отчёту дня (пост или сданный отчёт), вместе с долей общака.",
     },
     {
       label: "К выплате",
@@ -63,10 +63,11 @@ function MoneyBlock({ read }: { read: MyMoneyRead }) {
       hint: "Всё начисленное и ещё не выплаченное на сегодня, за любые дни, не только за этот период.",
     },
     {
-      label: "Выплачено",
+      // The payouts made on the period's days, whatever days they paid for: not «paid for this period».
+      label: "Выплачено в эти дни",
       value: <Money mills={pay.paidMills} />,
       meta: pay.lastPayout ? `последняя выплата ${formatDay(pay.lastPayout.date)}, ${formatMills(pay.lastPayout.amountMills)}` : "выплат ещё не было",
-      hint: "Выплаты за дни этого периода.",
+      hint: "Выплаты, сделанные в дни этого периода. Они могли закрыть и более ранние дни.",
     },
   ];
   return (

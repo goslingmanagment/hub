@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { ShiftRowFacts, ShiftRowRecord } from "@agency_hub_core/db";
 import { dayOfWork } from "../apps/runtime/src/services/chatter-shifts.ts";
+import { shiftReportDay } from "../packages/look/src/moscow.ts";
 import { planShiftRows, reportDateOfShift } from "../apps/runtime/src/services/shift-rows.ts";
 
 // A shift as a row with a stable id (shift-rows.ts): its id survives a start that moves, two pieces that merge and a
@@ -38,6 +39,12 @@ describe("the report date of a shift (ledger internal/payroll/source_test.go)", 
   ];
   it.each(cases)("%s — %s is reported on %s", (start, end, want) => {
     expect(reportDateOfShift({ startedAt: msk(start).getTime(), endedAt: msk(end).getTime() })).toBe(want);
+  });
+
+  // Workboard dates a shift's accrual by the same function, from the ISO strings Hub sends.
+  it.each(cases)("Workboard too: %s — %s is reported on %s", (start, end, want) => {
+    expect(shiftReportDay(msk(start).toISOString(), msk(end).toISOString())).toBe(want);
+    expect(shiftReportDay(msk(start), msk(end).getTime())).toBe(want);
   });
 
   it("differs from the day the screens give a shift only for an evening start that mostly lies after midnight", () => {

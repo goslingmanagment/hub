@@ -83,6 +83,14 @@ export const teamLedgerPayoutsResponseSchema = z.object({
   factsFrom: businessDate.nullable(),
   /** From this day on the days are accrued from the posted shift reports; null — not switched (or a ledger that does not say). */
   reportsFrom: businessDate.nullable(),
+  /**
+   * From this day on a day's accrual takes the person's pay terms from Hub's people registry (the ledger's
+   * `payroll_terms_hub_from`); null — not switched (or a ledger that does not say): the payout sheets' headers price
+   * the days, and the terms on «Люди → График и условия» price nobody's day yet.
+   */
+  termsHubFrom: businessDate.nullable(),
+  /** From this day on a reports day accrues from the report handed in in Hub (`payroll_basis_hub_from`); null — from the posts. */
+  basisHubFrom: businessDate.nullable(),
   /** When the ledger answered. */
   generatedAt: isoTimestamp,
   people: z.array(teamLedgerPayoutPersonSchema),
@@ -351,6 +359,7 @@ export const teamLedgerMonthQuerySchema = z.object({ month: ledgerMonthSchema })
 
 /** One model's line of the month card. Money in mills of the ledger's whole cents. */
 export const teamLedgerMonthModelSchema = z.object({
+  /** The model by the name of Hub's model record (as Главная names it); the ledger's own word when Hub has no such model. */
   model: z.string(),
   pagesNetMills: mills,
   offPlatformMills: mills,

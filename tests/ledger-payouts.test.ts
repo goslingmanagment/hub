@@ -151,6 +151,17 @@ describe("readLedgerPayouts", () => {
     expect(after.people[1]!.pendingChanges).toEqual([{ id: 8, day: "2026-11-01", model: "", postedMills: 10_000, newMills: 9_000, reason: "" }]);
   });
 
+  it("says which switches price the days: the terms and the basis from Hub, null while off or not said", async () => {
+    const window = { from: "2026-11-02", to: "2026-11-08" };
+    // A ledger of today says nothing: the payout sheets price the days, the posts are the reports.
+    const before = await readLedgerPayouts(app(), window, { fetchImpl: fetchReturning(200, ledgerAnswer()) });
+    expect({ terms: before.termsHubFrom, basis: before.basisHubFrom }).toEqual({ terms: null, basis: null });
+    const off = await readLedgerPayouts(app(), window, { fetchImpl: fetchReturning(200, ledgerAnswer({ termsHubFrom: null, basisHubFrom: null })) });
+    expect({ terms: off.termsHubFrom, basis: off.basisHubFrom }).toEqual({ terms: null, basis: null });
+    const on = await readLedgerPayouts(app(), window, { fetchImpl: fetchReturning(200, ledgerAnswer({ termsHubFrom: "2026-12-01", basisHubFrom: "2026-11-20" })) });
+    expect({ terms: on.termsHubFrom, basis: on.basisHubFrom }).toEqual({ terms: "2026-12-01", basis: "2026-11-20" });
+  });
+
   it("is a 503 on a pending change it cannot read in full: a decision about money is never half-shown", async () => {
     const [alex] = ledgerAnswer().people;
     const broken = ledgerAnswer({ people: [{ ...alex, pending_changes: [{ id: 7, day: "2026-11-03", posted_micros: 45_670_000 }] }] });

@@ -93,7 +93,7 @@ const PEOPLE: readonly PersonSpec[] = [
     notes: [
       { code: "pages_differ", text: "рабочие страницы карточки: mia-1; доступ хаба (kate.v): mia-1, mia-3; только в доступе: mia-3" },
       { code: "telegram_missing", text: "в карточке нет Telegram, в ledger есть: взят из ledger" },
-      { code: "tab_fix_unknown", text: "вкладка «Mia выплаты»: «Фикс/см» ledger не знает: взят 0, проверьте", settledDaysAgo: 1 },
+      { code: "tab_fix_unread", text: "вкладка «Mia выплаты»: «Фикс/см» не прочитано, условия модели Mia не заведены: задайте их в карточке", settledDaysAgo: 1 },
     ],
     origin: "import", terms: [{ model: "mia-hart", share: 2500, fix: 0, fromDays: 110 }] },
   { id: 6, code: "den", name: "Денис", kind: "human", role: "chatter", state: "working", logins: [6], pages: ["nova-1"],

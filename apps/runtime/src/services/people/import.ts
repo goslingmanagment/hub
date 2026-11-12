@@ -104,7 +104,10 @@ export const peopleImportArgsSchema = z.object({
       name: text,
       code: text.nullable(),
       shareBasisPoints: z.number().int().min(0).max(10_000).nullable(),
+      /** The fix as read; null — not read (the cell is not a sum): no term is made of the tab. */
       fixPerShiftMills: z.number().int().min(0).nullable(),
+      /** The «Фикс/см» cell as the tab has it, for the owner's report when its value was not read. */
+      fixCell: text.nullable().optional(),
       status: text.nullable().optional(),
     })).max(500).default([]),
   }).default({ people: [], reportAuthors: [], payrollTabs: [] }),
@@ -400,13 +403,19 @@ export function planPeopleImport(args: PeopleImportArgs, catalog: ImportCatalog)
     if (modelSlug === null) { say("tab_model_unknown", tab.code, `${where}: модели «${tab.model}» в хабе нет`); continue; }
     if (tab.shareBasisPoints === null) { say("tab_no_rate", tab.code, `${where}: в шапке нет «Ставка %»`); continue; }
     if (!args.termsValidFrom) continue;
-    if (tab.fixPerShiftMills === null) say("tab_fix_unknown", tab.code, `${where}: «Фикс/см» ledger не знает: взят 0, проверьте`);
+    // A fix not read is no term, never a zero: once the ledger takes the terms from Hub, a zero is a rate paid. The
+    // cell's text may be money: the report's detail only.
+    if (tab.fixPerShiftMills === null) {
+      const cell = tab.fixCell === undefined || tab.fixCell === null ? "ячейки в файле аргументов нет" : `в ячейке: «${tab.fixCell}»`;
+      say("tab_fix_unread", tab.code, `${where}: «Фикс/см» не прочитано, условия модели ${modelSlug} не заведены: задайте их в карточке`, cell);
+      continue;
+    }
     const terms = termsOf.get(tab.code) ?? [];
     if (terms.some((term) => term.modelSlug === modelSlug)) {
       say("tab_twice", tab.code, `${where}: у человека уже есть вкладка модели ${modelSlug}; условия взяты из первой`);
       continue;
     }
-    terms.push({ modelSlug, validFrom: args.termsValidFrom, shareBasisPoints: tab.shareBasisPoints, fixPerShiftMills: tab.fixPerShiftMills ?? 0 });
+    terms.push({ modelSlug, validFrom: args.termsValidFrom, shareBasisPoints: tab.shareBasisPoints, fixPerShiftMills: tab.fixPerShiftMills });
     termsOf.set(tab.code, terms);
   }
 
@@ -693,7 +702,7 @@ const GROUPS: { title: string; codes: string[] }[] = [
   { title: "Рабочие страницы и доступ", codes: ["pages_differ", "page_unknown", "chatter_without_pages", "models_differ"] },
   { title: "Карточки /OS и ledger", codes: ["card_missing", "ledger_missing", "status_differs", "name_differs", "schedule_differs", "status_unknown", "status_rough", "role_guess", "schedule_unreadable", "workdays_unreadable", "page_slot_person_missing", "page_slot_unreadable"] },
   { title: "Telegram и теги отчёта", codes: ["telegram_missing", "telegram_no_id", "telegram_unreadable", "telegram_twice", "tag_twice", "report_author_unknown", "report_author_unreadable"] },
-  { title: "Вкладки выплат и условия", codes: ["tab_unmapped", "tab_person_missing", "tab_unreadable", "tab_model_unknown", "tab_no_rate", "tab_fix_unknown", "tab_twice", "rate_differs"] },
+  { title: "Вкладки выплат и условия", codes: ["tab_unmapped", "tab_person_missing", "tab_unreadable", "tab_model_unknown", "tab_no_rate", "tab_fix_unread", "tab_twice", "rate_differs"] },
   { title: "Ключи агентов", codes: ["agent_key_unlinked", "agent_key_missing", "agent_key_twice"] },
 ];
 

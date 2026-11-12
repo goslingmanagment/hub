@@ -1,8 +1,9 @@
 import { MOSCOW_TIME_ZONE, resolvePeriodBounds } from "@agency_hub_core/shared";
+import { monthCheck } from "../apps/dashboard/src/pages/money/month/check.ts";
 import { monthWindow } from "../apps/dashboard/src/pages/money/month/window.ts";
 import { describe, expect, it } from "vitest";
 
-import { monthCardOf, monthDays, readTeamLedgerMonth } from "../apps/runtime/src/services/ledger-month.ts";
+import { hubModelNameOf, monthCardOf, monthDays, readTeamLedgerMonth } from "../apps/runtime/src/services/ledger-month.ts";
 
 // Деньги → Месяц: the ledger's month card on Hub's screen to the cent (its money through payMillsOf), and the honest
 // states of a ledger that does not serve the month yet or does not answer.
@@ -17,6 +18,7 @@ const card = {
 };
 
 const app = (fetchImpl: typeof fetch) => ({
+  db: undefined as never,
   config: { ledgerPayoutsKey: "test-key", ledgerUrl: "http://ledger.test" } as never,
   logger: { warn: () => undefined } as never,
   fetchImpl,
@@ -57,11 +59,11 @@ describe("the ledger's month card on Hub", () => {
 
   it("an older ledger without the read is «not served», not an error; a ledger that does not answer is a 503", async () => {
     const { fetchImpl, ...ctx } = app(answer(404));
-    await expect(readTeamLedgerMonth(ctx, { month: "2026-11" }, { fetchImpl })).resolves.toMatchObject({ served: false, card: null, from: "2026-11-01", to: "2026-11-30" });
+    await expect(readTeamLedgerMonth(ctx, { month: "2026-11" }, { fetchImpl, models: [] })).resolves.toMatchObject({ served: false, card: null, from: "2026-11-01", to: "2026-11-30" });
     const down = app(answer(500));
-    await expect(readTeamLedgerMonth(down, { month: "2026-11" }, { fetchImpl: down.fetchImpl })).rejects.toThrow(/answered GET/);
+    await expect(readTeamLedgerMonth(down, { month: "2026-11" }, { fetchImpl: down.fetchImpl, models: [] })).rejects.toThrow(/answered GET/);
     const ok = app(answer(200, card));
-    await expect(readTeamLedgerMonth(ok, { month: "2026-11" }, { fetchImpl: ok.fetchImpl })).resolves.toMatchObject({ served: true, card: { pagesNetMills: 12_539_230 } });
+    await expect(readTeamLedgerMonth(ok, { month: "2026-11" }, { fetchImpl: ok.fetchImpl, models: [] })).resolves.toMatchObject({ served: true, card: { pagesNetMills: 12_539_230 } });
   });
 
   it("Hub's own income of the month is asked up to the next month's first day: the read's upper bound is exclusive", () => {
@@ -76,5 +78,36 @@ describe("the ledger's month card on Hub", () => {
   it("a month is its Moscow days", () => {
     expect(monthDays("2026-02")).toEqual({ from: "2026-02-01", to: "2026-02-28" });
     expect(monthDays("2028-02")).toEqual({ from: "2028-02-01", to: "2028-02-29" });
+  });
+
+  it("names a model by Hub's model record, the one name Главная shows; a model Hub has not keeps the ledger's word", () => {
+    const models = [{ slug: "Mia", name: "Mia Hart" }, { slug: "Nova", name: "Nova Lane" }, { slug: "Ivvy", name: "Ivvy Rose" }];
+    expect(hubModelNameOf("Mia", models)).toBe("Mia Hart");
+    expect(hubModelNameOf("nova lane", models)).toBe("Nova Lane");
+    // A payout sheet spelling the name with one letter where the record doubles it is the same model.
+    expect(hubModelNameOf("Ivy", models)).toBe("Ivvy Rose");
+    expect(hubModelNameOf("Zara", models)).toBe("Zara");
+    // Two records that read the same so: neither is guessed.
+    expect(hubModelNameOf("Ivy", [...models, { slug: "Iivy", name: "Iivy Two" }])).toBe("Ivy");
+    const shown = monthCardOf({ ...card, models: [{ ...card.models[0]!, model: "Mia" }] }, "2026-11", { models });
+    expect(shown.models[0]).toMatchObject({ model: "Mia Hart" });
+  });
+});
+
+describe("«Доход страниц» against Главная", () => {
+  const asOf = "2026-11-12T15:31:00Z";
+  it("equal to the cent is equal, in any month", () => {
+    expect(monthCheck({ pagesNetMills: 1_000_004, hubMills: 1_000_001, current: true, asOf })).toEqual({ kind: "equal" });
+    expect(monthCheck({ pagesNetMills: 1_000_000, hubMills: 1_000_000, current: false, asOf })).toEqual({ kind: "equal" });
+  });
+
+  it("in the month going on, a ledger behind Главная is its hour of lag: when it took the facts, no difference named", () => {
+    expect(monthCheck({ pagesNetMills: 900_000, hubMills: 1_000_000, current: true, asOf })).toEqual({ kind: "behind", asOf });
+    expect(monthCheck({ pagesNetMills: 900_000, hubMills: 1_000_000, current: true, asOf: null })).toEqual({ kind: "behind", asOf: null });
+  });
+
+  it("a ledger ahead of Главная, and any difference of a month that is over, is named", () => {
+    expect(monthCheck({ pagesNetMills: 1_100_000, hubMills: 1_000_000, current: true, asOf })).toEqual({ kind: "differs", deltaMills: 100_000 });
+    expect(monthCheck({ pagesNetMills: 900_000, hubMills: 1_000_000, current: false, asOf })).toEqual({ kind: "differs", deltaMills: -100_000 });
   });
 });

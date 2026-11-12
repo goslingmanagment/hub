@@ -7,9 +7,10 @@ import {
   type ShiftRowsPlan,
   type ShiftRowsSyncResult,
 } from "@agency_hub_core/db";
+import { shiftReportDay } from "@agency_hub_core/look";
 
 import type { AppContext } from "../bootstrap.ts";
-import { moscowDayOf, readPeopleWork, type ComputedWork } from "./chatter-shifts.ts";
+import { readPeopleWork, type ComputedWork } from "./chatter-shifts.ts";
 import { ensureQueueCreated, type QueueCreationClient } from "./sync-queue.ts";
 
 /**
@@ -27,22 +28,16 @@ import { ensureQueueCreated, type QueueCreationClient } from "./sync-queue.ts";
  */
 
 const DAY_MS = 86_400_000;
-const HOUR_MS = 3_600_000;
 
 /** How far back each run looks: a shift that ended earlier is no longer changed by the job (a CLI run can). */
 export const SHIFT_ROWS_LOOKBACK_DAYS = 2;
 
 /**
- * The Moscow day a shift is reported on (ledger internal/payroll/source.go `ReportDate`): the day it starts, except
- * that a shift starting within two hours before midnight that mostly lies in the next day belongs to the next day — a
- * night entered at 23:54 is the morning's. Pure.
+ * The Moscow day a shift is reported on (ledger internal/payroll/source.go `ReportDate`): `shiftReportDay`, the one
+ * function Hub and Workboard put a shift's report on. Pure.
  */
 export function reportDateOfShift(work: { startedAt: number; endedAt: number }): string {
-  const day = moscowDayOf(work.startedAt);
-  const midnight = Date.parse(`${day}T00:00:00+03:00`) + DAY_MS;
-  const before = midnight - work.startedAt;
-  if (before <= 2 * HOUR_MS && work.endedAt > midnight && work.endedAt - midnight > before) return moscowDayOf(midnight);
-  return day;
+  return shiftReportDay(work.startedAt, work.endedAt);
 }
 
 /** A computed shift as its row holds it. Pure. */

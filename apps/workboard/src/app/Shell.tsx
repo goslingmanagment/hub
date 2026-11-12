@@ -11,6 +11,7 @@ import { NO_SILENT_SIGNIN, peerOriginOf, siteOf } from "@agency_hub_core/ui/site
 import { useFace } from "@/shared/face";
 import { kernel, queryClient, signInHref } from "@/shared/hub";
 import { carryParams } from "@/shared/links";
+import { usePeopleIndex } from "@/shared/people";
 import { startOpen, useAccountStart } from "@/shared/start";
 import { TEAM, useMe, type Role } from "@/shared/useMe";
 import { usePageFilter } from "@/shared/usePageFilter";
@@ -114,6 +115,20 @@ function useScreenKey(): string {
 }
 
 /**
+ * The signed-in person's name, as every screen names people: the registry's display name of the person holding the
+ * login (the team's registry; a chatter's own «Начало» read), the login itself only when no person holds it. The
+ * login stays the subject of the account screen.
+ */
+function useOwnName(): string | null {
+  const { user, role } = useMe();
+  const people = usePeopleIndex();
+  const start = useAccountStart();
+  if (!user) return null;
+  if (role === "chatter") return start.data?.person?.displayName ?? user.username;
+  return people.nameOf(user.id, user.username);
+}
+
+/**
  * Who is signed in, at the sidebar's foot, and their menu: the theme and the
  * way out; a chatter's also leads to their account (devices, password). A
  * chatter's whole row is the menu's button — on a phone it is the strip's
@@ -124,8 +139,9 @@ function Account() {
   const navigate = useNavigate();
   const theme = useThemeStore((state) => state.theme);
   const setTheme = useThemeStore((state) => state.setTheme);
+  const own = useOwnName();
   if (!user) return null;
-  const name = user.username;
+  const name = own ?? user.username;
   const chatter = role === "chatter";
   // A narrow session (from the extension) finds there the way to the password, not the devices and the password.
   const items: MenuEntry[] = [
@@ -224,6 +240,7 @@ function PlaceShell({ children }: { children: ReactNode }) {
   const { page } = usePageFilter();
   const [searchOpen, setSearchOpen] = useState(false);
   const waiting = useWaitingCount(true);
+  const ownName = useOwnName();
   const own = carryParams(location.search).toString();
   const days = workboardDays(new URLSearchParams(location.search));
   const hrefOf = (item: MenuItem) => (item.app === "workboard" ? `${item.to}${own ? `?${own}` : ""}` : carriedHref(item, { page, days }));
@@ -238,7 +255,7 @@ function PlaceShell({ children }: { children: ReactNode }) {
         current={menuItemAt(`${base()}${location.pathname}`)}
         hrefOf={hrefOf}
         counts={{ waiting }}
-        account={{ name: user.username, role: accountRole, signOut, onAccount: () => navigate("/account") }}
+        account={{ name: ownName ?? user.username, role: accountRole, signOut, onAccount: () => navigate("/account") }}
         searchOpen={searchOpen}
         setSearchOpen={setSearchOpen}
       >
