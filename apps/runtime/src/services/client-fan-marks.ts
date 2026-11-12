@@ -13,6 +13,7 @@ import {
   latestFanslyBlocklistReadAt,
   listFanListMemberships,
   readFanListsReadAt,
+  readFanPageAccountStates,
   readOtherPages,
   readOtherPagesByRefs,
   type FanListMembershipRow,
@@ -38,6 +39,8 @@ import { blocklistHandleKey } from "./fansly-blocklist/handles.ts";
  * - `otherPages`: other Fansly pages, any model, where he paid or lately wrote:
  *   the page, the sum, when he wrote and whether he subscribes or follows, also
  *   for a page the caller does not work.
+ * - `accountState`: his account as the asked page knows it (`fanAccountState`,
+ *   0374), on OnlyFans too.
  *
  * Not only a fan of the asked page: a fan the sync has not linked yet is the
  * one a warning matters for most, and neither answer holds a message or a note
@@ -101,12 +104,17 @@ export async function readClientFanMarks(
   // A cookie session → 403: the marks are a client's.
   requireApiKeyUser(principal);
   const page = await requireClientGrantedPage(app, principal, await findPageSummaryByLabel(app.db, input.pageLabel), FAN_MARKS_FEATURE);
+  const fan = await findCardFan(app.db, page.platform, input.fanRef);
+  // The asked page's own account state of the fan (fan-account-state-v1): this
+  // page's link only, whatever the lists of the other pages say.
+  const accountState = fan === null
+    ? null
+    : (await readFanPageAccountStates(app.db, { pageId: page.id, fanIds: [fan.id] })).get(fan.id) ?? null;
   const empty: ClientFanMarksResponse = {
-    pageLabel: page.label, fanRef: input.fanRef, lists: [], blocklist: [], listsReadAt: null, blocklistReadAt: null,
+    pageLabel: page.label, fanRef: input.fanRef, lists: [], blocklist: [], listsReadAt: null, blocklistReadAt: null, accountState,
   };
   if (page.platform !== "fansly") return empty;
 
-  const fan = await findCardFan(app.db, "fansly", input.fanRef);
   const memberships = fan === null ? [] : await listFanListMemberships(app.db, fan.id);
   const keys = [input.query.username, fan?.username ?? undefined].flatMap((name) => {
     const key = name === undefined ? null : blocklistHandleKey(name);

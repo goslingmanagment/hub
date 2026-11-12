@@ -173,7 +173,8 @@ export function registerSyncPublicLookupCommands(sync: Command, deps: SyncPublic
         deps.print(`budget: ${status.budget.sentLastDay}/${status.budget.dayBudget} requests in 24 h, last ${status.budget.lastSentAt ?? "never"}`);
         deps.print(`demand: ${status.demand.total} fans (owner's re-check ${status.demand.byDemand.deleted_mark}, `
           + `owner's list ${status.demand.byDemand.owner_list}, `
-          + `episode partners ${status.demand.byDemand.episode_partner}, page lookup misses ${status.demand.byDemand.page_lookup_miss})`);
+          + `episode partners ${status.demand.byDemand.episode_partner}, page lookup misses ${status.demand.byDemand.page_lookup_miss}, `
+          + `renewed page misses ${status.demand.byDemand.page_miss_renewed}, marked fans a page sees ${status.demand.byDemand.marked_seen})`);
         const p = status.progress;
         deps.print(`re-check of the deleted marks: ${p.queuePending} pending, ${p.queueDone} done — `
           + `${p.queueMarksCleared} found and taken off, ${p.queueNotFound} not found and kept; ${p.marksRemaining} marks remain`);

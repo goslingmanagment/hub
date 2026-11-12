@@ -121,7 +121,23 @@ or a plan that waits on `dependency` and makes the other work due. Fan profiles 
 (`fan-profiles.lookup`): the asking apply merges the fan ids into the walk row's `params.ids`, and each step reads up
 to 100 of them not looked up through the page within the day. Every asked id gets the page's own answer
 (`page_fans.account_probe_*`); an id the answer omits marks nothing on the shared fan row, since a fan who blocked the
-page is omitted too.
+page is omitted too. The answer is dated when it ARRIVED (the observation's journal instant, `ApplyInput.observation`),
+however late it is applied, and no writer of the pair (the lookups, the probe, the OnlyFans account check) lets an
+answer replace a newer one. When the page's «not seen» streak began is `page_fans.account_miss_since` (0374), which a
+trigger keeps from the pair for every writer, the previous image's too (null on a «not seen» row: the start is unknown).
+
+The page's answer is kept fresh for the fans whose answer matters by its own standing walk, `fan-profiles.recheck`
+(0374), not by the lookup walk's day of reuse: each pass derives the due ids from the database
+(`listFanslyAccountRecheckDue`, so a restart or a reason that arrives during a request loses nothing) and asks up to 100
+through the page, in this order, the oldest first within each: a chatter's browser's word that disagreed with the
+page's answer and is newer than it (`page_fans.account_client_seen*`, from `clientFanBadges` `accountSeen` — a signal,
+never written into the page's answer), the partners of the page's open chat-unavailability episodes (from the first
+refusal) whose answer is absent or older than the episode's opening, and the paying fans whose answer is absent or over
+72 hours old (gone ones too). At most one request of it a page in 5 minutes, counted from its own admissions in the
+journal; a pass with nothing due asks nothing and rests 5 minutes. The answer is stored as any lookup's
+(`storeLookupAnswer`: names, notes, the stamp and the page's answer), and a reason stays due until an answer that
+arrived after it is applied. The account state the clients read (`fanAccountState`: seen, deleted, blocked, unchecked)
+is one function over that answer, its streak's start and the public check below (OnlyFans: the contactability).
 
 A DM thread has three writers, each with its own columns: the conversation list (`dm-conversations.*`, through
 `upsertPageDmConversationListFields`: partner and fan, flags, unread count, the `last_message_*` head, visibility, the
@@ -570,8 +586,11 @@ who blocked a page is still returned; a deleted account is not.
 - **Whom** (`pickFanslyPublicLookupBatch`): the owner's queue first (`sync public-lookup recheck-marks`, owner decision
   Р2 (а): the fans carrying the legacy deleted mark), then the partners of established unavailability episodes, then
   the fans a page's lookup missed (`page_fans.account_probe_resolved = false`) — those two only when never checked or
-  checked over 7 days ago. One id once however many pages and reasons name it, up to `fanslyPublicLookupBatchSize`
-  (≤ 100) ids a request.
+  checked over 7 days ago — then the fans a page stopped seeing after their latest check (`page_miss_renewed`: the
+  page's `account_miss_since` is known and newer than the check, and the check is over a day old), then the fans
+  carrying the legacy deleted mark whom a page sees with an answer newer than their latest check (`marked_seen`: only a
+  found answer takes the mark off, and the reader asked only about fans a page does not see). One id once however many
+  pages and reasons name it, up to `fanslyPublicLookupBatchSize` (≤ 100) ids a request, within the same budget.
 - **Journal before parse**: the `fansly_send_log` row before the send, completed after it; the raw answer committed
   to `observations` (`account_id` null, kind `account_lookup_public` — `:failed` for a body that is not a successful
   envelope; every asked id in `requestedIds`: the fan erasure's page-less contract, `PAGELESS_FAN_OBSERVATION_KINDS`)
@@ -585,6 +604,9 @@ who blocked a page is still returned; a deleted account is not.
   public-lookup resume` resumes it, and a Retry-After still ahead is waited for.
 - **Cause**: the chatters' `chatAccess.cause` and `agentThreadAvailability.cause` read the partner's check
   (`readChatPartnerPublicChecks`): found → `probably_blocked`, not found → `probably_deleted`, none → `unchecked`.
+  A fan's account state on a page (`accountState` of the Spenders items and the fan marks, `fanAccountState`) reads it
+  too, but only a check made at or after the page's «not seen» streak began (any check while the start is unknown):
+  found → `blocked`, not found → `deleted`, else `unchecked`.
 
 ## Ownership
 

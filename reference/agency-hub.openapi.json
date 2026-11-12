@@ -170584,7 +170584,7 @@
         "tags": [
           "client"
         ],
-        "description": "Database-only; Hub asks neither Fansly nor FBuddy. A device token's, for an active Fansly page granted to the caller (else 409 `client_feature_disabled` / `not_granted`; another platform `platform_unsupported`). Up to 300 fans, each with what the browser just read: `fbuddyTier` (FBuddy's spending tier across creators; null: FBuddy has none for the fan) and `recentSpender` (Fansly's «Recent Spender» mark), each sent only when its source answered. Only fans already linked to the page are kept. A badge is the fan's, not the page's: one fan has one tier and one mark on every page. New and changed values are journaled once and kept with the moment of the change; a value Hub already has writes nothing but, at most once a day, the moment it was confirmed.",
+        "description": "Database-only; Hub asks neither Fansly nor FBuddy. A device token's, for an active Fansly page granted to the caller (else 409 `client_feature_disabled` / `not_granted`; another platform `platform_unsupported`). Up to 300 fans, each with what the browser just read: `fbuddyTier` (FBuddy's spending tier across creators; null: FBuddy has none for the fan) and `recentSpender` (Fansly's «Recent Spender» mark), each sent only when its source answered. Only fans already linked to the page are kept. A badge is the fan's, not the page's: one fan has one tier and one mark on every page. New and changed values are journaled once and kept with the moment of the change; a value Hub already has writes nothing but, at most once a day, the moment it was confirmed. `accountSeen` (fan-account-state-v1; a fan may come with it alone): whether the page's session returned the fan's account to the tab. It is a signal, never the page's answer: only a word that disagrees with the page's own answer is journaled and kept (once while the page has not answered again), and it makes the page ask about the fan again itself.",
         "requestBody": {
           "required": true,
           "content": {
@@ -170621,6 +170621,9 @@
                           ]
                         },
                         "recentSpender": {
+                          "type": "boolean"
+                        },
+                        "accountSeen": {
                           "type": "boolean"
                         }
                       },
@@ -170675,6 +170678,11 @@
                       "maximum": 9007199254740991
                     },
                     "skipped": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "accountSignals": {
                       "type": "integer",
                       "minimum": 0,
                       "maximum": 9007199254740991
@@ -178573,7 +178581,7 @@
         "tags": [
           "client"
         ],
-        "description": "Read-only and database-only: no platform request, no queued work. A device token's, for an active page granted to the caller (else 409 `client_feature_disabled` / `not_granted`); a cookie session is 403. `lists`: the fan's current memberships in a user list whose label says «бомж», on every active Fansly page of the agency (also pages the caller does not work, `granted: false`), the asked page first, then by model; Hub reads each page's lists every 6 hours. `blocklist`: posts of the Telegram group FANSLY BLOCKLIST, read by Hub's own account, whose fansly.com link names the fan — `username` (the fan's current username as the page shows it) or the username Hub holds, exactly, any case — not deleted, the newest first, at most 5, each text cut at 600 characters. `listsReadAt` is the oldest last full read of the lists among the active Fansly pages (null until every one read them); `blocklistReadAt` the reader's last full read (null while it is off or never read). An OnlyFans page answers empty lists.",
+        "description": "Read-only and database-only: no platform request, no queued work. A device token's, for an active page granted to the caller (else 409 `client_feature_disabled` / `not_granted`); a cookie session is 403. `lists`: the fan's current memberships in a user list whose label says «бомж», on every active Fansly page of the agency (also pages the caller does not work, `granted: false`), the asked page first, then by model; Hub reads each page's lists every 6 hours. `blocklist`: posts of the Telegram group FANSLY BLOCKLIST, read by Hub's own account, whose fansly.com link names the fan — `username` (the fan's current username as the page shows it) or the username Hub holds, exactly, any case — not deleted, the newest first, at most 5, each text cut at 600 characters. `listsReadAt` is the oldest last full read of the lists among the active Fansly pages (null until every one read them); `blocklistReadAt` the reader's last full read (null while it is off or never read). An OnlyFans page answers empty lists. `accountState` (fan-account-state-v1): the fan's account as the asked page knows it — `seen`, `deleted`, `blocked` or `unchecked`, `since` when the page stopped seeing him, `checkedAt` its latest answer — or null when it never answered about him.",
         "parameters": [
           {
             "schema": {
@@ -178750,6 +178758,42 @@
                         ],
                         "additionalProperties": false
                       }
+                    },
+                    "accountState": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "state": {
+                              "type": "string",
+                              "enum": [
+                                "seen",
+                                "deleted",
+                                "blocked",
+                                "unchecked"
+                              ]
+                            },
+                            "since": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "checkedAt": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "state",
+                            "since",
+                            "checkedAt"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
                     }
                   },
                   "required": [
@@ -213367,6 +213411,42 @@
                               "string",
                               "null"
                             ]
+                          },
+                          "accountState": {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "state": {
+                                    "type": "string",
+                                    "enum": [
+                                      "seen",
+                                      "deleted",
+                                      "blocked",
+                                      "unchecked"
+                                    ]
+                                  },
+                                  "since": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  },
+                                  "checkedAt": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "state",
+                                  "since",
+                                  "checkedAt"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
                           }
                         },
                         "required": [
@@ -245623,6 +245703,42 @@
                             "type": [
                               "string",
                               "null"
+                            ]
+                          },
+                          "accountState": {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "state": {
+                                    "type": "string",
+                                    "enum": [
+                                      "seen",
+                                      "deleted",
+                                      "blocked",
+                                      "unchecked"
+                                    ]
+                                  },
+                                  "since": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  },
+                                  "checkedAt": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "state",
+                                  "since",
+                                  "checkedAt"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "null"
+                              }
                             ]
                           }
                         },

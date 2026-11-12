@@ -1035,7 +1035,8 @@ export const pageFans = pgTable(
     // 0224: the Fansly account lookup through this page whose result Hub
     // stored, and the page's last answer for the fan — the DM partner probe's
     // or a lookup's, returned or omitted (fan-hydration.ts,
-    // sync/fansly/resources/fan-profiles.ts). Neither is asked again within a day.
+    // sync/fansly/resources/fan-profiles.ts). Neither is asked again within a
+    // day. An answer is dated when it arrived and never replaces a newer one.
     accountLookupAt: timestamp("account_lookup_at", { withTimezone: true }),
     accountProbeAt: timestamp("account_probe_at", { withTimezone: true }),
     accountProbeResolved: boolean("account_probe_resolved"),
@@ -1043,6 +1044,15 @@ export const pageFans = pgTable(
     // check (services/ofapi-fan-account-check.ts); null on every Fansly row.
     accountContactability: text("account_contactability")
       .$type<"contactable" | "unavailable" | "restricted" | "blocked" | "gone" | "unknown">(),
+    // 0374: the start of the current «not seen» streak of the page's answer
+    // (the trigger `page_fans_account_miss_since` is its one writer; null on a
+    // «not seen» row: the start is unknown), and the latest chatter's browser
+    // observation that disagreed with the page's answer and when Hub received
+    // it (clientFanBadges `accountSeen`): a signal for `fan-profiles.recheck`,
+    // never the page's answer (repositories/fan-account-state.ts).
+    accountMissSince: timestamp("account_miss_since", { withTimezone: true }),
+    accountClientSeen: boolean("account_client_seen"),
+    accountClientSeenAt: timestamp("account_client_seen_at", { withTimezone: true }),
     // 0341: the fan's lifetime sums by type as OnlyFans counts them (gross
     // dollars: tips, subscriptions, messages, posts, streams, total), from the
     // page's own fan read in ChatSpace (services/client-onlyfans-feed.ts), and

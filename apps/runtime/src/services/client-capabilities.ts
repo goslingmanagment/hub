@@ -212,6 +212,10 @@ export const SERVED_CLIENT_CAPABILITIES: readonly ClientHubCapabilityName[] = [
   // POST …/fan-badges: FBuddy's spending tier and Fansly's «Recent Spender» mark of the page's fans, as a chatter's
   // browser read them (Fansly pages). No owner switch: an extension without it keeps the badges to itself.
   "fan-badges-v1",
+  // A fan's account on the page (0374): `accountState` on the Spenders items and the fan marks, and POST …/fan-badges
+  // takes `accountSeen` — whether the page's session returned the fan's account to the tab, a signal that makes the
+  // page's own re-check due (services/client-fan-badges.ts). A client sends it only to a hub that lists this.
+  "fan-account-state-v1",
 ];
 
 /**

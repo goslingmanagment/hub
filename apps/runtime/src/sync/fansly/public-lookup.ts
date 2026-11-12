@@ -10,8 +10,8 @@ import {
   createDb,
   FANSLY_PUBLIC_LOOKUP_LOCK_KEY,
   FANSLY_PUBLIC_LOOKUP_LOCK_NAMESPACE,
-  FANSLY_PUBLIC_LOOKUP_RECHECK_AFTER_MS,
   FANSLY_PUBLIC_LOOKUP_SEND_SOURCE,
+  fanslyPublicLookupDemandWindows,
   fanslyPublicLookupObservationKey,
   holdsFanslyPublicLookupLock,
   insertObservation,
@@ -555,10 +555,7 @@ export class FanslyPublicLookupReader {
 
     const limit = Math.min(Math.max(Math.trunc(effective.fanslyPublicLookupBatchSize ?? FANSLY_PUBLIC_ACCOUNT_LOOKUP_MAX_IDS), 1),
       FANSLY_PUBLIC_ACCOUNT_LOOKUP_MAX_IDS);
-    const batch = await pickFanslyPublicLookupBatch(db, {
-      limit,
-      recheckBefore: new Date(now.getTime() - FANSLY_PUBLIC_LOOKUP_RECHECK_AFTER_MS),
-    });
+    const batch = await pickFanslyPublicLookupBatch(db, { limit, ...fanslyPublicLookupDemandWindows(now) });
     if (batch.length === 0) return { kind: "idle" };
     const ids = batch.map((candidate) => candidate.platformUserId);
     const params = { ids };

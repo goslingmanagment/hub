@@ -202,6 +202,9 @@ export const CLIENT_HUB_CAPABILITY_NAMES = [
   "outreach-store-v1",
   // Fan badges: `clientFanBadges` takes FBuddy's tier and Fansly's blue card of the fans a tab just read.
   "fan-badges-v1",
+  // A fan's account on the page: `accountState` on the Spenders items and the fan marks; `clientFanBadges` takes
+  // `accountSeen`, whether the page's session returned the fan's account to the tab.
+  "fan-account-state-v1",
 ] as const;
 /**
  * Append-only. `client_outdated` (the caller's `x-client-version` is below the
@@ -2933,6 +2936,34 @@ export const clientFanLinkDecideResponseSchema = z.object({
   card: clientFanCardResponseSchema,
 });
 
+// ── A fan's account on a page (fan-account-state-v1) ────────────────────────
+//
+// What the page knows of a fan's account, from the page's own answer (its
+// session's `GET /account?ids=`), when it stopped seeing him, and why: the
+// session-less public check made after that (Fansly) or the page's
+// contactability (OnlyFans). One page's answer: the same fan may be `seen` on
+// another page. Hub keeps it fresh itself (a paying fan's answer is at most 72
+// hours old; a chat Fansly stopped serving and a chatter's browser that saw
+// otherwise make it due at once).
+
+/**
+ * - `seen`: the page's latest answer returned the account;
+ * - `deleted`: the page does not see him and the account is gone (Fansly: the
+ *   public check made after he went missing found no account);
+ * - `blocked`: the page does not see him but the account exists — he blocked
+ *   the page;
+ * - `unchecked`: the page does not see him and Hub does not know why yet.
+ */
+export const CLIENT_FAN_ACCOUNT_STATES = ["seen", "deleted", "blocked", "unchecked"] as const;
+
+export const clientFanAccountStateSchema = z.object({
+  state: z.enum(CLIENT_FAN_ACCOUNT_STATES),
+  /** When the page stopped seeing him; null when he is seen, or the start is unknown (before 2026-11). */
+  since: isoTimestamp.nullable(),
+  /** When the page's latest answer about him arrived. */
+  checkedAt: isoTimestamp,
+});
+
 // ── Fan marks (clientFanMarks) ───────────────────────────────────────────────
 //
 // Two warnings about the open Fansly fan in the chat header: «💩 Бомж» — a
@@ -2988,6 +3019,9 @@ export const clientFanMarksResponseSchema = z.object({
   blocklistReadAt: isoTimestamp.nullable(),
   /** The other Fansly pages where he paid or lately wrote, the biggest money first. Absent or empty: none. Absent on OnlyFans. */
   otherPages: z.array(clientOtherPageSchema).optional(),
+  /** His account as the asked page knows it (fan-account-state-v1); null: the page never answered about him, or he
+   *  is not linked to it. Absent from a hub before it. */
+  accountState: clientFanAccountStateSchema.nullable().optional(),
 });
 
 // ── Other pages of fans a client lists itself (clientOtherPages) ─────────────
@@ -3228,22 +3262,28 @@ export const clientFanBadgesBodySchema = z.object({
    * - `fbuddyTier`: FBuddy's spending tier of the fan, summed over every creator who shares spend with FBuddy, read
    *   from FBuddy in the chatter's own FBuddy sign-in; null when FBuddy answered and has no tier for the fan;
    * - `recentSpender`: Fansly's own «Recent Spender» mark of the fan's account (the blue card), read from Fansly in
-   *   the page's session.
+   *   the page's session;
+   * - `accountSeen` (fan-account-state-v1): whether the page's session returned the fan's account to the tab
+   *   (`GET /account?ids=`). A fan may come with it alone.
    */
   fans: z.array(z.object({
     fanRef: clientFanRefSchema,
     fbuddyTier: z.enum(CLIENT_FBUDDY_TIERS).nullable().optional(),
     recentSpender: z.boolean().optional(),
+    accountSeen: z.boolean().optional(),
   }).strict()).min(1).max(CLIENT_FAN_BADGES_MAX),
 }).strict();
 
 export const clientFanBadgesResponseSchema = z.object({
   /** Fans of the page with a badge Hub did not have, or had another value of: kept now. */
   changed: count,
-  /** Fans whose badges Hub already had as reported. */
+  /** Fans whose badges Hub already had as reported, or who came with `accountSeen` alone. */
   unchanged: count,
-  /** Fans not linked to the page (yet), or sent with neither badge. */
+  /** Fans not linked to the page (yet), or sent with nothing. */
   skipped: count,
+  /** Of the linked fans, those whose `accountSeen` disagreed with the page's own answer: kept as a signal, and the
+   *  page asks about them again. Absent from a hub before fan-account-state-v1. */
+  accountSignals: count.optional(),
   serverNow: isoTimestamp,
 });
 
@@ -4206,7 +4246,9 @@ export const clientRouteSchemas = {
       + "as the page shows it) or the username Hub holds, exactly, any case — not deleted, the newest first, at "
       + "most 5, each text cut at 600 characters. `listsReadAt` is the oldest last full read of the lists among the "
       + "active Fansly pages (null until every one read them); `blocklistReadAt` the reader's last full read (null "
-      + "while it is off or never read). An OnlyFans page answers empty lists.",
+      + "while it is off or never read). An OnlyFans page answers empty lists. `accountState` (fan-account-state-v1): "
+      + "the fan's account as the asked page knows it — `seen`, `deleted`, `blocked` or `unchecked`, `since` when "
+      + "the page stopped seeing him, `checkedAt` its latest answer — or null when it never answered about him.",
     params: clientPageFanParamsSchema,
     querystring: clientFanMarksQuerySchema,
     response: {
@@ -4354,7 +4396,10 @@ export const clientRouteSchemas = {
       + "Spender» mark), each sent only when its source answered. Only fans already linked to the page are kept. "
       + "A badge is the fan's, not the page's: one fan has one tier and one mark on every page. New and changed "
       + "values are journaled once and kept with the moment of the change; a value Hub already has writes nothing "
-      + "but, at most once a day, the moment it was confirmed.",
+      + "but, at most once a day, the moment it was confirmed. `accountSeen` (fan-account-state-v1; a fan may come "
+      + "with it alone): whether the page's session returned the fan's account to the tab. It is a signal, never the "
+      + "page's answer: only a word that disagrees with the page's own answer is journaled and kept (once while "
+      + "the page has not answered again), and it makes the page ask about the fan again itself.",
     params: clientPageParamsSchema,
     body: clientFanBadgesBodySchema,
     response: {
@@ -4759,6 +4804,7 @@ export type ClientFanCardPage = z.infer<typeof clientFanCardPageSchema>;
 export type ClientFanCardResponse = z.infer<typeof clientFanCardResponseSchema>;
 export type ClientFanMarksQuery = z.infer<typeof clientFanMarksQuerySchema>;
 export type ClientFanMarksResponse = z.infer<typeof clientFanMarksResponseSchema>;
+export type ClientFanAccountState = z.infer<typeof clientFanAccountStateSchema>;
 export type ClientOtherPagesBody = z.infer<typeof clientOtherPagesBodySchema>;
 export type ClientOtherPagesResponse = z.infer<typeof clientOtherPagesResponseSchema>;
 export type ClientFanLinkDecideBody = z.infer<typeof clientFanLinkDecideBodySchema>;

@@ -2,7 +2,7 @@ import {
   countFanslyPublicLookupDemand,
   enqueueFanslyPublicLookupDeletedMarks,
   enqueueFanslyPublicLookupFans,
-  FANSLY_PUBLIC_LOOKUP_RECHECK_AFTER_MS,
+  fanslyPublicLookupDemandWindows,
   insertAuditEvent,
   pickFanslyPublicLookupBatch,
   readFanslyPublicLookupClocks,
@@ -115,8 +115,7 @@ export async function readSyncPublicLookupStatus(ctx: OwnerContext, input: { now
     u: 0,
     retryNotBefore: state.retryNotBefore,
   });
-  const recheckBefore = new Date(now.getTime() - FANSLY_PUBLIC_LOOKUP_RECHECK_AFTER_MS);
-  const demand = await countFanslyPublicLookupDemand(ctx.db, { recheckBefore });
+  const demand = await countFanslyPublicLookupDemand(ctx.db, fanslyPublicLookupDemandWindows(now));
   const progress = await readFanslyPublicLookupProgress(ctx.db);
   const enabled = effective.fanslyPublicLookupEnabled === true;
   const batch = batchSizeOf(effective);
@@ -158,10 +157,7 @@ export async function readSyncPublicLookupQueue(
   input: { limit: number; now?: Date },
 ): Promise<FanslyPublicLookupCandidate[]> {
   const now = input.now ?? new Date();
-  return pickFanslyPublicLookupBatch(ctx.db, {
-    limit: input.limit,
-    recheckBefore: new Date(now.getTime() - FANSLY_PUBLIC_LOOKUP_RECHECK_AFTER_MS),
-  });
+  return pickFanslyPublicLookupBatch(ctx.db, { limit: input.limit, ...fanslyPublicLookupDemandWindows(now) });
 }
 
 /** `sync public-lookup enable | disable`: the live switch, through the

@@ -549,12 +549,20 @@ export async function markFanPageAccountLookups(
     ));
 }
 
+/** The page's answer `answeredAt` (when the answer arrived) is applied only
+ * over an answer no newer than it: an old answer applied late never replaces a
+ * newer one. Every writer of `account_probe_*` takes it. */
+function notNewerAnswerThan(answeredAt: Date) {
+  return sql`(${fanPages.accountProbeAt} is null or ${fanPages.accountProbeAt} <= ${answeredAt})`;
+}
+
 /** Records, on the page links of the fans one account lookup through the page
  * asked about, that lookup's answer in the pair the DM partner probe keeps:
  * resolved when Fansly returned the account, unresolved when it did not. The
  * answer is the page's own fact — a fan who blocked the page is not returned
  * to it either — so the shared fan row is not touched (arena "vanished chat"
- * D2). A fan not linked to the page keeps no answer. */
+ * D2). A fan not linked to the page keeps no answer. `answeredAt` is when the
+ * answer arrived; a link holding a newer answer keeps it. */
 export async function recordFanPageAccountLookupAnswers(
   db: Database,
   input: { platformAccountId: number; answeredAt: Date; resolvedFanIds: number[]; unresolvedFanIds: number[] },
@@ -568,6 +576,7 @@ export async function recordFanPageAccountLookupAnswers(
       .where(and(
         eq(fanPages.platformAccountId, input.platformAccountId),
         inArray(fanPages.fanId, fanIds),
+        notNewerAnswerThan(input.answeredAt),
       ));
   }
 }
@@ -600,7 +609,8 @@ export async function readFanslyAccountProbe(
 }
 
 /** Records the probe's answer on the partner's page link. A partner not linked
- * to the page keeps no answer, and the next probe asks again. */
+ * to the page keeps no answer, and the next probe asks again. `probedAt` is
+ * when the answer arrived; a link holding a newer answer keeps it. */
 export async function recordFanslyAccountProbe(
   db: Database,
   input: { platformAccountId: number; platformUserId: string; probedAt: Date; resolved: boolean },
@@ -617,6 +627,7 @@ export async function recordFanslyAccountProbe(
           eq(fans.platformUserId, input.platformUserId),
         )),
       ),
+      notNewerAnswerThan(input.probedAt),
     ));
 }
 
@@ -657,7 +668,8 @@ export type FanPageContactability = NonNullable<typeof fanPages.$inferSelect.acc
  * the ask time; an answered fan gets the page's answer — seen unless the
  * account is gone or blocked from the page — and whether the page can
  * message him. A fan the answer left out keeps his previous answer and is
- * asked again after the recheck window. */
+ * asked again after the recheck window. `answeredAt` is when the answer
+ * arrived; a link holding a newer answer keeps it. */
 export async function recordOnlyfansAccountCheck(
   db: Database,
   input: {
@@ -687,6 +699,7 @@ export async function recordOnlyfansAccountCheck(
       .where(and(
         eq(fanPages.platformAccountId, input.platformAccountId),
         inArray(fanPages.fanId, fanIds),
+        notNewerAnswerThan(input.answeredAt),
       ));
   }
 }

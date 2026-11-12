@@ -628,6 +628,14 @@ export interface RankedSpenderRow {
    *  ranking covers a single page; null on a multi-page ranking. */
   accountProbeAt: Date | null;
   accountProbeResolved: boolean | null;
+  /** What the page's account state is read from beside that answer
+   *  (`fanAccountState`, 0374): the start of its «not seen» streak, the
+   *  OnlyFans contactability and the fan's public check — single page only,
+   *  like the answer. */
+  accountMissSince: Date | string | null;
+  accountContactability: string | null;
+  publicFound: boolean | null;
+  publicCheckedAt: Date | string | null;
 }
 
 /** A fan none of the scope's pages can reach: every page link of his in scope
@@ -786,7 +794,17 @@ export interface PageSpenderAutoListFanRow {
   /** The page's latest Fansly account answer for the fan (page_fans). */
   accountProbeAt: Date | null;
   accountProbeResolved: boolean | null;
+  /** The rest of the page's account state (`fanAccountState`, 0374). */
+  accountMissSince: Date | string | null;
+  accountContactability: string | null;
+  publicFound: boolean | null;
+  publicCheckedAt: Date | string | null;
 }
+
+// The fan's session-less public check (0259): raw columns, as `fans` maps
+// none of the reader's own (a query that joins `fans` itself reads them).
+const fanPublicFoundSql = sql<boolean | null>`${fans}.public_found`;
+const fanPublicCheckedAtSql = sql<Date | string | null>`${fans}.public_checked_at`;
 
 function lastSubscriptionEndedAtSql(pageId: number) {
   return sql<Date | null>`(
@@ -1061,6 +1079,10 @@ export async function listPageFansByLifetimeGrossBucket(
     lastTransactionAt: spenderLifetimePage.lastTransactionAt,
     accountProbeAt: fanPages.accountProbeAt,
     accountProbeResolved: fanPages.accountProbeResolved,
+    accountMissSince: fanPages.accountMissSince,
+    accountContactability: fanPages.accountContactability,
+    publicFound: fanPublicFoundSql,
+    publicCheckedAt: fanPublicCheckedAtSql,
   }).from(fanPages)
     .innerJoin(fans, eq(fans.id, fanPages.fanId))
     .leftJoin(spenderLifetimePage, and(
@@ -1163,6 +1185,10 @@ export async function listPageFansByWindowGrossBucket(
     lastTransactionAt: lastTransactionAtSql,
     accountProbeAt: fanPages.accountProbeAt,
     accountProbeResolved: fanPages.accountProbeResolved,
+    accountMissSince: fanPages.accountMissSince,
+    accountContactability: fanPages.accountContactability,
+    publicFound: fanPublicFoundSql,
+    publicCheckedAt: fanPublicCheckedAtSql,
   }).from(windowMetrics)
     .innerJoin(fanPages, and(
       eq(fanPages.platformAccountId, input.pageId),
@@ -1524,6 +1550,14 @@ export async function listRankedSpenders(
     lifetimeLastTransactionAt: ranked.lifetimeLastTransactionAt,
     accountProbeAt: singlePageId === null ? sql<Date | null>`null` : fanPages.accountProbeAt,
     accountProbeResolved: singlePageId === null ? sql<boolean | null>`null` : fanPages.accountProbeResolved,
+    accountMissSince: singlePageId === null ? sql<Date | null>`null` : fanPages.accountMissSince,
+    accountContactability: singlePageId === null ? sql<string | null>`null` : fanPages.accountContactability,
+    publicFound: singlePageId === null
+      ? sql<boolean | null>`null`
+      : sql<boolean | null>`(select pub.public_found from fans pub where pub.id = ${ranked.fanId})`,
+    publicCheckedAt: singlePageId === null
+      ? sql<Date | string | null>`null`
+      : sql<Date | string | null>`(select pub.public_checked_at from fans pub where pub.id = ${ranked.fanId})`,
   }).from(ranked)
     .leftJoinLateral(primaryConversation, sql`true`)
     .leftJoinLateral(latestTransaction, sql`true`)

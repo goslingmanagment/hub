@@ -15,6 +15,7 @@ import type {
   SpenderSeriesResponse,
 } from "@agency_hub_core/contracts";
 import {
+  fanAccountState,
   findPageSummaryByLabel,
   findVisibleFanByIdentity,
   findVisibleFansByPlatformUserIds,
@@ -631,6 +632,8 @@ export async function getPageSpenderAutoListDetail(
       lifetimeCreatorNetAmountMills: millsToNumber(item.lifetimeCreatorNetAmountMills),
       lastTransactionAt: serializeTimestamp(item.lastTransactionAt),
       accountLookupMissAt: serializeAccountLookupMiss(item),
+      // The page's account state (`fanAccountState`, 0374), from the same row: null on a multi-page list.
+      accountState: fanAccountState(item),
     })),
     limit: query.limit,
     offset: query.offset,
@@ -882,6 +885,8 @@ export async function getSpenderList(
         now,
       }),
       accountLookupMissAt: serializeAccountLookupMiss(item),
+      // The page's account state (`fanAccountState`, 0374), from the same row: null on a multi-page list.
+      accountState: fanAccountState(item),
     })),
     limit: query.limit,
     offset: query.offset,

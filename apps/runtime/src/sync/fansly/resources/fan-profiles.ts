@@ -1,9 +1,12 @@
 import {
+  latestResourceAdmissionAt,
+  listFanslyAccountRecheckDue,
   listFanslyFanPageIdentityBackfillTargets,
   listFanslyFansLookedUpSince,
   readFanslyAccountProbe,
   recordFanslyAccountProbe,
   type Database,
+  type FanslyAccountRecheckReason,
   type SyncWorkRow,
 } from "@agency_hub_core/db";
 import {
@@ -45,6 +48,18 @@ import { recordOf } from "../lib/values.ts";
 //   asks for it any more; a row an older image left open still runs.
 // - alias-backfill (planned goal, owner): every fan of the page in keyset
 //   batches of 100 — the old CLI, now journaled, transactional and paced.
+// - recheck (standing walk of the page, 0374): the page's answer kept fresh
+//   for the fans whose answer matters, whoever names them. Each pass derives
+//   the due ids from the database (`listFanslyAccountRecheckDue`: a chatter's
+//   browser that disagreed with the page's answer, the partners of the page's
+//   open chat-unavailability episodes, the paying fans whose answer is over 72
+//   hours old) and asks up to 100 of them, at most one request a page in 5
+//   minutes; a pass with nothing due asks nothing. Its own due rule is the
+//   freshness: it takes no part in the lookup walk's day of reuse.
+//
+// Every answer is dated when it ARRIVED (the observation's journal instant),
+// however late it is applied, and never replaces a newer answer of the page
+// (`page_fans.account_probe_*`, the writers' guard).
 
 export const FAN_PROFILES_LOOKUP_KEY = "fan-profiles.lookup";
 
@@ -93,15 +108,18 @@ function requestedIds(request: RequestPlan): string[] {
 /** Store one accepted `/account?ids=` answer: profiles, notes and aliases of
  *  the returned accounts, every asked id stamped as looked up with the page's
  *  own answer (returned or omitted) — one transaction. An omitted id marks
- *  nothing on the shared fan row (arena "vanished chat" D2). */
+ *  nothing on the shared fan row (arena "vanished chat" D2). `answeredAt` is
+ *  when the answer arrived (`ApplyInput.observation.receivedAt`), not when it
+ *  is applied: a late apply never dates it fresher, and a link holding a
+ *  newer answer keeps it. */
 async function storeLookupAnswer(
   tx: Database,
-  input: { pageId: number; requested: readonly string[]; accounts: readonly FanslyAccount[]; now: Date },
+  input: { pageId: number; requested: readonly string[]; accounts: readonly FanslyAccount[]; answeredAt: Date },
 ) {
   const stored = await upsertHydratedFansForPageDetailed(tx, {
     platformAccountId: input.pageId,
     accounts: [...input.accounts],
-    lookup: { lookedUpAt: input.now, platformUserIds: [...input.requested] },
+    lookup: { lookedUpAt: input.answeredAt, platformUserIds: [...input.requested] },
   });
   return {
     requested: input.requested.length,
@@ -136,7 +154,7 @@ export const fanProfilesLookupModule: ResourceModule = {
       pageId: input.pageId,
       requested,
       accounts: input.parsed as FanslyAccount[],
-      now: input.now,
+      answeredAt: input.observation.receivedAt,
     });
     // What is left after this answer's stamps (same transaction): the walk
     // goes on, or closes when nothing it was asked for is due.
@@ -186,7 +204,7 @@ export const fanProfilesProbeModule: ResourceModule = {
       await recordFanslyAccountProbe(tx, {
         platformAccountId: input.pageId,
         platformUserId: partner,
-        probedAt: input.now,
+        probedAt: input.observation.receivedAt,
         resolved: resolution === "resolved",
       });
     }
@@ -247,7 +265,7 @@ export const fanProfilesAliasBackfillModule: ResourceModule = {
       pageId: input.pageId,
       requested,
       accounts: input.parsed as FanslyAccount[],
-      now: input.now,
+      answeredAt: input.observation.receivedAt,
     });
     const previous = aliasCursor(input.work.cursor);
     const cursor: AliasBackfillCursor = {
@@ -261,5 +279,69 @@ export const fanProfilesAliasBackfillModule: ResourceModule = {
     };
     // The next plan reads the next keyset batch, or closes the walk.
     return { work: { satisfiesRevision: false, nextDueAt: input.now, cursor }, followups: [] };
+  },
+};
+
+// ── recheck ─────────────────────────────────────────────────────────────────
+
+export const FAN_PROFILES_RECHECK_KEY = "fan-profiles.recheck";
+
+/** At most one request of the re-check a page in this long; also how long a
+ *  pass with nothing due rests. */
+export const FAN_PROFILES_RECHECK_EVERY_MS = 5 * 60_000;
+
+/** What one re-check request asked, by reason (`RequestPlan.step`). */
+type RecheckStep = Partial<Record<FanslyAccountRecheckReason, number>>;
+
+function recheckStepOf(value: unknown): RecheckStep {
+  const record = recordOf(value);
+  const step: RecheckStep = {};
+  for (const reason of ["client_signal", "episode_partner", "payer"] as const) {
+    const count = record[reason];
+    if (typeof count === "number" && Number.isSafeInteger(count) && count > 0) step[reason] = count;
+  }
+  return step;
+}
+
+export const fanProfilesRecheckModule: ResourceModule = {
+  async plan(_work, ctx): Promise<StepPlan> {
+    const rest = new Date(ctx.now.getTime() + FAN_PROFILES_RECHECK_EVERY_MS);
+    // Its own pace, from the journal: whatever became of the last request.
+    const last = await latestResourceAdmissionAt(ctx.db, {
+      pageId: ctx.pageId,
+      resource: FAN_PROFILES_RECHECK_KEY,
+      since: new Date(ctx.now.getTime() - FAN_PROFILES_RECHECK_EVERY_MS),
+    });
+    if (last !== null) {
+      return { kind: "wait", reason: "not_due", until: new Date(last.getTime() + FAN_PROFILES_RECHECK_EVERY_MS) };
+    }
+    const due = await listFanslyAccountRecheckDue(ctx.db, { pageId: ctx.pageId, now: ctx.now, limit: BATCH });
+    if (due.length === 0) return { kind: "wait", reason: "not_due", until: rest };
+    const step: RecheckStep = {};
+    for (const candidate of due) step[candidate.reason] = (step[candidate.reason] ?? 0) + 1;
+    return { kind: "request", request: { ...lookupRequest(due.map((candidate) => candidate.platformUserId)), step } };
+  },
+
+  async apply(tx, input: ApplyInput): Promise<ApplyResult> {
+    const requested = requestedIds(input.request);
+    const stored = await storeLookupAnswer(tx, {
+      pageId: input.pageId,
+      requested,
+      accounts: input.parsed as FanslyAccount[],
+      answeredAt: input.observation.receivedAt,
+    });
+    const result = { ...stored, asked: recheckStepOf(input.request.step) };
+    // The walk row stays: its next pass, a request's pace later, reads what is
+    // due then (a reason that arrived during this one included).
+    return {
+      work: {
+        satisfiesRevision: true,
+        nextDueAt: new Date(input.now.getTime() + FAN_PROFILES_RECHECK_EVERY_MS),
+        cursor: { last: { answeredAt: input.observation.receivedAt.toISOString(), ...result } },
+        result,
+      },
+      followups: [],
+      counters: { profiles_returned: stored.returned, profiles_missing: stored.fallback },
+    };
   },
 };

@@ -320,6 +320,25 @@ function pageMisses(page: DemoPage, item: PageFan): boolean {
   return hashString(`miss:${page.label}:${item.fan.platformUserId}`) % 23 === 0;
 }
 
+/** When the page last answered about a fan it does not see (`accountLookupMissAt` too). */
+function pageMissAt(item: PageFan, now: Date): string {
+  return iso(daysAgo(now, 2 + (hashString(item.fan.platformUserId) % 9), 8));
+}
+
+const DEMO_MISS_STATES = ["deleted", "blocked", "unchecked"] as const;
+
+/** The fan's account as the page knows it (fan-account-state-v1): a paying fan's
+ *  answer is at most 3 days old; a miss names a cause and, mostly, when it began. */
+function pageAccountState(page: DemoPage, item: PageFan, now: Date) {
+  const hash = hashString(`state:${page.label}:${item.fan.platformUserId}`);
+  if (!pageMisses(page, item)) {
+    return { state: "seen" as const, since: null, checkedAt: iso(hoursAgo(now, 1 + (hash % 70))) };
+  }
+  const checkedAt = pageMissAt(item, now);
+  const since = hash % 4 === 0 ? null : iso(new Date(Date.parse(checkedAt) - (1 + (hash % 20)) * DAY_MS));
+  return { state: DEMO_MISS_STATES[hash % DEMO_MISS_STATES.length]!, since, checkedAt };
+}
+
 function bucketOf(row: SpenderRow, window: Window): Bucket | undefined {
   const amount = window.fromDay === null ? row.lifetime.grossAmountMills : row.window.grossAmountMills;
   return BUCKETS.find((bucket) => amount >= bucket.min && (bucket.max === null || amount < bucket.max));
@@ -719,7 +738,8 @@ export const pageFanHandlers: DemoHandlers = {
           lifetimeGrossAmountMills: row.lifetime.grossAmountMills,
           lifetimeCreatorNetAmountMills: row.lifetime.creatorNetAmountMills,
           lastTransactionAt: row.lifetime.lastTransactionAt,
-          accountLookupMissAt: null,
+          accountLookupMissAt: pageMisses(page, row.item) ? pageMissAt(row.item, request.now) : null,
+          accountState: pageAccountState(page, row.item, request.now),
         };
       }),
     };
@@ -891,7 +911,8 @@ export const pageFanHandlers: DemoHandlers = {
             : null,
           retentionStatus: row.retention,
           // A page answers for itself: over several pages the server says nothing.
-          accountLookupMissAt: scope.kind === "page" && pageMisses(row.page, row.item) ? iso(daysAgo(request.now, 2 + (hashString(row.item.fan.platformUserId) % 9), 8)) : null,
+          accountLookupMissAt: scope.kind === "page" && pageMisses(row.page, row.item) ? pageMissAt(row.item, request.now) : null,
+          accountState: scope.kind === "page" ? pageAccountState(row.page, row.item, request.now) : null,
         };
       }),
     };
