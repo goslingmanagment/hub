@@ -93,7 +93,7 @@ const REDIRECTS: ReadonlyArray<readonly [number | string, string, string]> = [
   [63, "/dev/sync-status?runId=42", "/system/dev/log/42"],
   [64, "/dev/sync-status", "/system/dev#log"],
   ["7.1, row 50", "/dev/client-health", "/system/dev#extension"],
-  [65, "/money", "/money/costs/ai"],
+  [65, "/money", "/money/month"],
   [66, "/money/costs", "/money/costs/ai"],
   [67, "/settings/ai", "/settings/ai/personas"],
   [68, "/system", "/system/collection"],
