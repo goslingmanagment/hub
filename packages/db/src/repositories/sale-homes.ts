@@ -122,13 +122,50 @@ export async function setSaleRuleSwitch(db: Database, input: { screensFrom: stri
     on conflict (id) do update set screens_from = excluded.screens_from, set_by = excluded.set_by, set_at = excluded.set_at`);
 }
 
-/** When each user left the team (disabled or deleted), for the PPV of a sender no longer in it; absent — still in it. */
-export async function listUsersLeftAt(db: Database, userIds: readonly number[]): Promise<Map<number, Date>> {
-  if (userIds.length === 0) return new Map();
-  const result = await db.execute<{ id: string | number; left_at: Date | string }>(sql`
-    select id, least(disabled_at, deleted_at) as left_at from users
-    where id = any(${sql.param(userIds.map(String))}::bigint[]) and (disabled_at is not null or deleted_at is not null)`);
-  return new Map(result.rows.map((row) => [Number(row.id), new Date(row.left_at)]));
+/** What says a user left the team, for the PPV of a sender no longer in it: their login's end, their person's state. */
+export interface UserLeaveFacts {
+  userId: number;
+  disabledAt: Date | null;
+  deletedAt: Date | null;
+  /**
+   * The login's person in the people registry (0384) is `left`: the day they left (`left_on`, YYYY-MM-DD; null —
+   * unknown) and when the registry came to say so (the audit of the edit or import that made them `left` since they
+   * last were anything else; without one, the record's last change). Null — no person, or one not `left`.
+   */
+  personLeft: { leftOn: string | null; recordedAt: Date } | null;
+}
+
+const PERSON_STATE_EVENTS = sql`('person.created', 'person.updated')`;
+
+/** The leave facts of every given user who has one (absent — still in the team). */
+export async function listUserLeaveFacts(db: Database, userIds: readonly number[]): Promise<UserLeaveFacts[]> {
+  if (userIds.length === 0) return [];
+  const result = await db.execute<{
+    id: string | number; disabled_at: Date | string | null; deleted_at: Date | string | null; person_left: boolean | null;
+    left_on: string | null; left_recorded_at: Date | string | null;
+  }>(sql`
+    select u.id, u.disabled_at, u.deleted_at, (p.state = 'left') as person_left, to_char(p.left_on, 'YYYY-MM-DD') as left_on,
+      case when p.state = 'left' then coalesce((
+        select min(a.created_at) from audit_events a
+        where a.event_type in ${PERSON_STATE_EVENTS} and a.metadata ->> 'code' = p.code and a.metadata ->> 'state' = 'left'
+          and a.created_at > coalesce((
+            select max(b.created_at) from audit_events b
+            where b.event_type in ${PERSON_STATE_EVENTS} and b.metadata ->> 'code' = p.code and b.metadata ->> 'state' <> 'left'
+          ), '-infinity'::timestamptz)
+      ), p.updated_at) end as left_recorded_at
+    from users u
+    left join person_logins l on l.user_id = u.id
+    left join people p on p.id = l.person_id
+    where u.id = any(${sql.param(userIds.map(String))}::bigint[])
+      and (u.disabled_at is not null or u.deleted_at is not null or p.state = 'left')
+    order by u.id`);
+  const at = (value: Date | string | null) => (value === null ? null : new Date(value));
+  return result.rows.map((row) => ({
+    userId: Number(row.id),
+    disabledAt: at(row.disabled_at),
+    deletedAt: at(row.deleted_at),
+    personLeft: row.person_left === true ? { leftOn: row.left_on, recordedAt: new Date(row.left_recorded_at!) } : null,
+  }));
 }
 
 /** The platform's own reference of each sale (`transactions.transaction_id`), by Hub's id: how the ledger's layouts name a sale. */

@@ -4,6 +4,9 @@ import {
   createModel,
   createOnlyFansPage,
   findShiftRowAt,
+  insertPersonLogin,
+  insertPersonRow,
+  insertPersonScheduleSlot,
   listSaleHomes,
   listShiftRows,
   readSaleRuleSwitch,
@@ -16,6 +19,7 @@ import {
 
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import { createUserAccount } from "../apps/runtime/src/services/auth.ts";
+import { registrySlots, usersLeftAt } from "../apps/runtime/src/services/sale-homes.ts";
 import { planShiftRows, reportDateOfShift } from "../apps/runtime/src/services/shift-rows.ts";
 import { startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
@@ -23,7 +27,8 @@ import { INTEGRATION_TEST_TIMEOUT_MS } from "./helpers/timeouts.ts";
 import { fixtureUserId } from "./helpers/user-identity.ts";
 
 // The shadow tables of the one rule (0379–0381): a shift row keeps its id across syncs and its old address resolves; a
-// sale's home is written only when it changed; the screens' switch is off until set.
+// sale's home is written only when it changed; the screens' switch is off until set. The rule's inputs from the people
+// registry (0384): a person's slots for every login of theirs, and when a sender left the team.
 
 vi.mock("argon2", () => import("./helpers/cheap-argon2.ts"));
 
@@ -111,6 +116,56 @@ describe("the one rule's shadow tables", () => {
     expect(await upsertSaleHomes(app.db, [landed], msk("2026-11-12 09:00"))).toBe(1);
     const [stored] = await listSaleHomes(app.db, { from: msk("2026-11-11 00:00"), to: msk("2026-11-12 00:00") });
     expect(stored).toMatchObject({ home: "shift", reason: "ppv_sender_next_shift", shares: landed.shares, computedAt: msk("2026-11-12 09:00") });
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("reads the registry's slots for every login of a person, and leaving from the person beside the login", async (context) => {
+    if (!testDb) return context.skip();
+    const login = async (username: string) => {
+      await createUserAccount(app, { username, role: "chatter" }, { source: "cli" });
+      return fixtureUserId(app, username);
+    };
+    const [evening, eveningSecond, gone, goneUndated, disabled, stays] = [
+      await login("evening-a"), await login("evening-b"), await login("gone"), await login("gone-undated"), await login("disabled"), await login("stays"),
+    ];
+    const person = (code: string, state: "working" | "left", leftOn: string | null) => insertPersonRow(app.db, {
+      code, displayName: code, kind: "human", role: "chatter", state, leftOn, telegramUserId: null, telegramHandle: null, reportTag: null,
+      onboarding: [], note: null, importNotes: [], origin: "owner", createdByUserId: null,
+    });
+    const working = await person("person-evening", "working", null);
+    const left = await person("person-gone", "left", "2026-11-04");
+    const leftUndated = await person("person-gone-undated", "left", null);
+    const stayed = await person("person-stays", "working", null);
+    for (const [personId, userId] of [[working.id, evening], [working.id, eveningSecond], [left.id, gone], [leftUndated.id, goneUndated], [stayed.id, stays]] as const) {
+      await insertPersonLogin(app.db, { personId, userId, linkedByUserId: null });
+    }
+    await insertPersonScheduleSlot(app.db, {
+      personId: working.id, pageId: null, startMinute: 1080, endMinute: 120, weekdays: ["mon", "tue", "wed", "thu", "fri"], validFrom: null, createdByUserId: null,
+    });
+
+    const slots = await registrySlots(app.db).slotsFor({ from: msk("2026-11-09 00:00"), to: msk("2026-11-16 00:00") });
+    const evenings = { pageId: null, startMinute: 1080, endMinute: 120, weekdays: ["mon", "tue", "wed", "thu", "fri"], validFrom: null, validTo: null };
+    expect(slots).toEqual([{ personId: evening, ...evenings }, { personId: eveningSecond, ...evenings }]);
+
+    // The undated leaving: the first «left» since the person was last anything else, a later edit restating it aside.
+    const audit = (state: string, at: string) => q(
+      "insert into audit_events (source, event_type, metadata, created_at) values ('cli', 'person.updated', $1::jsonb, $2)",
+      [JSON.stringify({ code: "person-gone-undated", changed: ["state"], state }), msk(at)],
+    );
+    await audit("left", "2026-11-02 10:00");
+    await audit("working", "2026-11-03 10:00");
+    await audit("left", "2026-11-07 10:00");
+    await audit("left", "2026-11-09 10:00");
+    await q("update users set disabled_at = $1 where id = $2", [msk("2026-11-06 12:00"), disabled]);
+    // A login's own end beside its person's: the first.
+    await q("update users set disabled_at = $1 where id = $2", [msk("2026-11-03 09:00"), gone]);
+
+    expect(await usersLeftAt(app.db, [evening, gone, goneUndated, disabled, stays])).toEqual(new Map([
+      [gone, msk("2026-11-03 09:00").getTime()],
+      [goneUndated, msk("2026-11-07 10:00").getTime()],
+      [disabled, msk("2026-11-06 12:00").getTime()],
+    ]));
+    await q("update users set disabled_at = null where id = $1", [gone]);
+    expect((await usersLeftAt(app.db, [gone])).get(gone)).toBe(msk("2026-11-04 00:00").getTime());
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("keeps the screens' switch off until a date is set", async (context) => {

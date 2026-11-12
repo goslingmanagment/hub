@@ -5,9 +5,9 @@ import { InvalidArgumentError, type Command } from "commander";
 import { createDb, createPool, readSaleRuleSwitch, setSaleRuleSwitch } from "@agency_hub_core/db";
 
 import { createAppContext } from "../bootstrap.ts";
-import { refreshSaleHomes } from "./sale-homes.ts";
+import { NO_SLOTS, refreshSaleHomes, registrySlots, type SaleSlotProvider } from "./sale-homes.ts";
 import { formatSaleRuleComparison, ledgerCli, runSaleRuleComparison } from "./sale-rule-compare.ts";
-import type { RuleSlot } from "./sale-rule.ts";
+import { RULE_WEEKDAYS, type RuleSlot, type RuleWeekday } from "./sale-rule.ts";
 import { syncShiftRowsSince } from "./shift-rows.ts";
 
 /**
@@ -35,6 +35,25 @@ function parseDays(value: string): number {
 
 const mskStart = (day: string) => new Date(`${day}T00:00:00+03:00`);
 
+/** A slots file's RuleSlot[]; a slot without `weekdays` runs every day (files written before the registry). */
+export function slotsOfFile(value: unknown): RuleSlot[] {
+  if (!Array.isArray(value)) throw new Error("--slots: a JSON array of slots");
+  const days: ReadonlySet<string> = new Set(RULE_WEEKDAYS);
+  return value.map((one: Partial<RuleSlot> & { weekdays?: unknown }, at): RuleSlot => {
+    if (typeof one.personId !== "number" || typeof one.startMinute !== "number" || typeof one.endMinute !== "number") {
+      throw new Error(`--slots: slot ${at} needs personId, startMinute, endMinute`);
+    }
+    const weekdays = one.weekdays ?? null;
+    if (weekdays !== null && !(Array.isArray(weekdays) && weekdays.every((day) => days.has(String(day))))) {
+      throw new Error(`--slots: slot ${at} has weekdays other than ${RULE_WEEKDAYS.join(", ")}`);
+    }
+    return {
+      personId: one.personId, pageId: one.pageId ?? null, startMinute: one.startMinute, endMinute: one.endMinute,
+      weekdays: weekdays as RuleWeekday[] | null, validFrom: one.validFrom ?? null, validTo: one.validTo ?? null,
+    };
+  });
+}
+
 /** A connection string whose every session is read-only, whatever the string already sets. */
 export function readOnlyConnectionString(url: string): string {
   const parsed = new URL(url);
@@ -50,7 +69,11 @@ export function registerSaleRuleCommands(program: Command): void {
     .requiredOption("--from <day>", "first Moscow day, YYYY-MM-DD", parseDay)
     .option("--to <day>", "last Moscow day, YYYY-MM-DD (default: --from)", parseDay)
     .requiredOption("--ledger-bin <path>", "the ledger CLI: `ledger sql --json`, SELECT only, its own credentials")
-    .option("--slots <file>", "the people's schedule slots, JSON (sale-rule.ts RuleSlot[]); default: none")
+    .option(
+      "--slots <registry|none|file>",
+      "the people's schedule slots: registry (the people registry, as the job), none, or a JSON file of sale-rule.ts RuleSlot[]",
+      "registry",
+    )
     .option("--json", "the whole comparison as JSON")
     .action(async (options) => {
       const url = process.env.DATABASE_URL;
@@ -58,13 +81,16 @@ export function registerSaleRuleCommands(program: Command): void {
       const first = options.from as string;
       const last = (options.to as string | undefined) ?? first;
       if (last < first) throw new Error("--to is before --from");
-      const slots = options.slots === undefined ? [] : JSON.parse(await readFile(String(options.slots), "utf8")) as RuleSlot[];
+      const given = String(options.slots);
+      const fromFile = given === "registry" || given === "none" ? null : slotsOfFile(JSON.parse(await readFile(given, "utf8")));
       const pool = createPool(readOnlyConnectionString(url), { applicationName: "hub-sale-rule-compare" });
       try {
         const db = createDb(pool);
         const check = await pool.query<{ default_transaction_read_only: string }>("show default_transaction_read_only");
         if (check.rows[0]?.default_transaction_read_only !== "on") throw new Error("the session is not read-only: refusing to run");
-        const report = await runSaleRuleComparison(db, { first, last, now: new Date(), ledger: ledgerCli(String(options.ledgerBin)), slots });
+        const slots: SaleSlotProvider = fromFile !== null ? { slotsFor: async () => fromFile } : given === "registry" ? registrySlots(db) : NO_SLOTS;
+        const slotsSource = fromFile !== null ? "file" : given === "registry" ? "registry" : "none";
+        const report = await runSaleRuleComparison(db, { first, last, now: new Date(), ledger: ledgerCli(String(options.ledgerBin)), slots, slotsSource });
         console.log(options.json ? JSON.stringify(report, null, 2) : formatSaleRuleComparison(report));
       } finally {
         await pool.end();
@@ -73,7 +99,7 @@ export function registerSaleRuleCommands(program: Command): void {
 
   program
     .command("sale-homes:refresh")
-    .description("Recompute whose each sale of the Moscow days is (sale_homes), as the hourly job does for two weeks")
+    .description("Recompute whose each sale of the Moscow days is (sale_homes) by the people registry's slots, as the hourly job does for two weeks")
     .requiredOption("--from <day>", "first Moscow day, YYYY-MM-DD", parseDay)
     .option("--to <day>", "last Moscow day, YYYY-MM-DD (default: today)", parseDay)
     .action(async (options) => {

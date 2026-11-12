@@ -137,18 +137,25 @@ export const SALE_HOME_REASON_TEXT: Readonly<Record<SaleHomeReason, string>> = {
   owner_claim: "ничья, отдана по слову владельца",
 };
 
+/** The days of the week a slot runs on, as the people registry writes them (0384 `person_schedule_slots.weekdays`). */
+export const RULE_WEEKDAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"] as const;
+export type RuleWeekday = (typeof RULE_WEEKDAYS)[number];
+
 /**
- * A person's schedule slot: daily from `startMinute` to `endMinute` of the Moscow day (minutes from 00:00; a slot
- * whose end is not after its start crosses midnight), on one page (`pageId`) or on every page (null), valid on the
- * Moscow days [validFrom, validTo] of its start (null — open). A slot of a page stands for the person on that page
- * instead of their every-page slot: an earlier end on one page (today: an evening slot that ends at 00:00 on one of its two pages).
- * `personId` names the person as a work does (`RuleWork.userId`, Hub's users.id); the provider maps its people to it.
+ * A person's schedule slot: from `startMinute` to `endMinute` of the Moscow day (minutes from 00:00; a slot whose end
+ * is not after its start crosses midnight), on one page (`pageId`) or on every page (null), on the Moscow days of its
+ * start that are within [validFrom, validTo] (null — open) and are one of its `weekdays` (null — every day). A slot of
+ * a page valid on a day stands for the person on that page that day instead of their every-page slot: an earlier end on
+ * one page (today: an evening slot that ends at 00:00 on one of its two pages). `personId` names the person as a work
+ * does (`RuleWork.userId`, Hub's users.id); the provider maps its people to it.
  */
 export interface RuleSlot {
   personId: number;
   pageId: number | null;
   startMinute: number;
   endMinute: number;
+  /** The days of its start it runs on; null — every day. */
+  weekdays: readonly RuleWeekday[] | null;
   /** YYYY-MM-DD (Moscow) or null. */
   validFrom: string | null;
   validTo: string | null;
@@ -261,25 +268,37 @@ export function homesOfSales(
 
 const MINUTES_OF_DAY = 1440;
 
+/** The day of the week of a Moscow day (YYYY-MM-DD). Pure. */
+export function weekdayOfDay(day: string): RuleWeekday {
+  return RULE_WEEKDAYS[(new Date(`${day}T00:00:00Z`).getUTCDay() + 6) % 7]!;
+}
+
 /**
- * Whether a person's schedule slot on a page runs at an instant: their slot of that page if they have one, else
- * their every-page one, that holds the instant and is valid on the day it began. Pure.
+ * Whether a person's schedule slot on a page runs at an instant: a slot that began today or, crossing midnight, the
+ * day before, among the person's lines of the day it began — their lines of that page valid that day if any, else
+ * their every-page ones — and that runs on that day's weekday. Pure.
  */
 export function slotRuns(slots: readonly RuleSlot[], input: { personId: number; pageId: number | null; at: number }): boolean {
   const own = slots.filter((slot) => slot.personId === input.personId);
-  const ofPage = input.pageId === null ? [] : own.filter((slot) => slot.pageId === input.pageId);
-  const valid = ofPage.length > 0 ? ofPage : own.filter((slot) => slot.pageId === null);
   const day = moscowDayOf(input.at);
   const minute = Math.floor((input.at - Date.parse(`${day}T00:00:00+03:00`)) / 60_000);
-  const dayBefore = moscowDayOf(input.at - DAY_MS);
-  const validOn = (slot: RuleSlot, on: string) => (slot.validFrom === null || slot.validFrom <= on) && (slot.validTo === null || on <= slot.validTo);
-  return valid.some((slot) => {
-    const length = (slot.endMinute - slot.startMinute + MINUTES_OF_DAY) % MINUTES_OF_DAY;
-    if (length === 0) return false;
-    if (minute >= slot.startMinute && minute - slot.startMinute < length) return validOn(slot, day);
-    // Begun the day before, past midnight.
-    return minute + MINUTES_OF_DAY - slot.startMinute < length && validOn(slot, dayBefore);
+  // Begun today; or the day before, `minute` past its midnight being a day more of minutes from its start.
+  const begun = [{ on: day, minute }, { on: moscowDayOf(input.at - DAY_MS), minute: minute + MINUTES_OF_DAY }];
+  return begun.some(({ on, minute: sinceMidnight }) => {
+    const weekday = weekdayOfDay(on);
+    return linesOn(own, input.pageId, on).some((slot) => {
+      const length = (slot.endMinute - slot.startMinute + MINUTES_OF_DAY) % MINUTES_OF_DAY;
+      return length > 0 && sinceMidnight >= slot.startMinute && sinceMidnight - slot.startMinute < length
+        && (slot.weekdays === null || slot.weekdays.includes(weekday));
+    });
   });
+}
+
+/** A person's lines on a page for a Moscow day: the page's own valid that day, else the every-page ones valid that day. */
+function linesOn(own: readonly RuleSlot[], pageId: number | null, on: string): RuleSlot[] {
+  const valid = own.filter((slot) => (slot.validFrom === null || slot.validFrom <= on) && (slot.validTo === null || on <= slot.validTo));
+  const ofPage = pageId === null ? [] : valid.filter((slot) => slot.pageId === pageId);
+  return ofPage.length > 0 ? ofPage : valid.filter((slot) => slot.pageId === null);
 }
 
 const homeOf = (
