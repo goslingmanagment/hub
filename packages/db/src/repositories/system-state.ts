@@ -170,7 +170,6 @@ export interface SystemReportInput {
 /** The reporter's row after this report: a report after a silence starts its stretch again. */
 async function touchReporter(db: Database, input: SystemReportInput): Promise<SystemReporterRow> {
   const at = input.at.toISOString();
-  const silentSeconds = Math.max(1, Math.round(input.silentAfterMs / 1000));
   const result = await db.execute<ReporterDbRow>(sql`
     insert into system_reporters (reporter, place, agent_key_id, last_report_at, online_since, reporter_read_at, version, updated_at)
     values (${input.reporter}, ${input.place}, ${input.agentKeyId}, ${at}::timestamptz, ${at}::timestamptz, ${iso(input.readAt)}::timestamptz,
@@ -179,7 +178,8 @@ async function touchReporter(db: Database, input: SystemReportInput): Promise<Sy
       place = excluded.place,
       agent_key_id = excluded.agent_key_id,
       online_since = case
-        when system_reporters.last_report_at < excluded.last_report_at - make_interval(secs => ${silentSeconds}) then excluded.last_report_at
+        when system_reporters.last_report_at < excluded.last_report_at - ${Math.max(1, Math.trunc(input.silentAfterMs))}::bigint * interval '1 millisecond'
+          then excluded.last_report_at
         else system_reporters.online_since end,
       last_report_at = greatest(system_reporters.last_report_at, excluded.last_report_at),
       reporter_read_at = excluded.reporter_read_at,

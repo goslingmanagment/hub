@@ -280,6 +280,7 @@ export function cronMaxGapSeconds(expression: string): number | null {
   const anyDay = fields[2] === "*";
   const anyWeekday = fields[4] === "*";
   const start = Date.UTC(2026, 0, 5); // a Monday
+  /** Whole minutes from the start: the gaps are whole minutes, no float. */
   const fires: number[] = [];
   for (let day = 0; day < 62; day += 1) {
     const date = new Date(start + day * 86_400_000);
@@ -289,13 +290,13 @@ export function cronMaxGapSeconds(expression: string): number | null {
     // Both restricted: either matches (cron's own rule).
     if (!(anyDay || anyWeekday ? dayOk && weekdayOk : dayOk || weekdayOk)) continue;
     for (const hour of [...hours].sort((a, b) => a - b)) {
-      for (const minute of [...minutes].sort((a, b) => a - b)) fires.push(date.getTime() + (hour * 60 + minute) * 60_000);
+      for (const minute of [...minutes].sort((a, b) => a - b)) fires.push(day * 1440 + hour * 60 + minute);
     }
   }
   if (fires.length < 2) return ROUTINE_PERIOD_MAX_SECONDS;
   let gap = 0;
   for (let index = 1; index < fires.length; index += 1) gap = Math.max(gap, fires[index]! - fires[index - 1]!);
-  return Math.min(Math.max(60, Math.round(gap / 1000)), ROUTINE_PERIOD_MAX_SECONDS);
+  return Math.min(Math.max(60, gap * 60), ROUTINE_PERIOD_MAX_SECONDS);
 }
 
 // ── The reporter's door (write:system_state) ───────────────────────────────
