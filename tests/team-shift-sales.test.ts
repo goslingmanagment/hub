@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 
 import type { ShiftSale } from "@agency_hub_core/db";
 import type { ComputedWork } from "../apps/runtime/src/services/chatter-shifts.ts";
+import { ruleWorkRef, type ScreenHome, type ScreensRule } from "../apps/runtime/src/services/sale-rule-screens.ts";
 import {
-  contestedSales, outsideMoney, salesNoShiftHolds, salesOfWork, settleOutsideShifts, shiftSalesWindow, teamShiftMoney, type HeldShift,
+  contestedSales, outsideByRule, outsideMoney, outsideMoneyByRule, salesNoShiftHolds, salesOfWork, settleOutsideShifts, shiftSalesWindow, teamShiftMoney,
+  teamShiftMoneyOf, type HeldShift, type RuledShiftsInput,
 } from "../apps/runtime/src/services/team-shift-sales.ts";
 
 // The team's money by shift: a sale two shifts hold is the last writer's; neither
@@ -159,5 +161,81 @@ describe("the money outside shifts", () => {
   it("leaves the shifts' money alone", () => {
     const money = teamShiftMoney({ days: 1, now: NOW, shifts, lastWriters: new Map(), firstActivity: LONG_AGO });
     expect(money.team.salesNetMills).toBe(inShift!.netMills);
+  });
+});
+
+// From the screens' switch on (sale-rule-screens.ts) a shift of a report date of the switch's day or later has what
+// the rule's homes credit it: a junction sale once, never for both; a week before the switch stays as it was.
+describe("teamShiftMoney by the one rule", () => {
+  const RULED: ScreensRule = { from: "2026-11-04", live: false };
+  const homeOf = (sale: ShiftSale, kind: ScreenHome["kind"], shares: Array<{ userId: number; shift: ComputedWork }> = []): [number, ScreenHome] => [
+    sale.transactionId,
+    { transactionId: sale.transactionId, kind, reason: kind === "decide" ? "no_last_writer" : "holder", shares: shares.map(({ userId, shift }) => ({ userId, workRef: ruleWorkRef(userId, shift), mills: sale.netMills })) },
+  ];
+  const ruleOf = (sales: readonly ShiftSale[], homes: Array<[number, ScreenHome]>, rule = RULED): RuledShiftsInput => ({
+    rule, homes: new Map(homes), sales: new Map(sales.map((one) => [one.transactionId, one])), visits: [],
+  });
+
+  it("counts a junction sale nobody wrote to once: the owner's to decide, or the slot's", () => {
+    const shared = sale("2026-11-04T08:00:00Z", 30_000);
+    const mine = sale("2026-11-04T07:00:00Z", 10_000);
+    const sales = [mine, shared];
+    const first = work("2026-11-04T06:00:00Z", "2026-11-04T10:00:00Z");
+    const second = work("2026-11-04T07:30:00Z", "2026-11-04T11:00:00Z");
+    const shifts = [held(1, first, sales), held(2, second, sales)];
+    const before = teamShiftMoney({ days: 7, now: NOW, shifts, lastWriters: new Map(), firstActivity: LONG_AGO });
+    expect(before.chatters.map((one) => [one.userId, one.salesNetMills, one.overlapNetMills])).toEqual([[1, 40_000, 30_000], [2, 30_000, 30_000]]);
+
+    const decided = ruleOf(sales, [homeOf(mine, "shift", [{ userId: 1, shift: first }]), homeOf(shared, "decide")]);
+    const byRule = teamShiftMoneyOf({ days: 7, now: NOW, shifts, lastWriters: new Map(), firstActivity: LONG_AGO, rule: decided });
+    const byUser = new Map(byRule.result.chatters.map((one) => [one.userId, one]));
+    expect(byUser.get(1)).toMatchObject({ salesNetMills: 10_000, overlapNetMills: 0, sales: 1 });
+    expect(byUser.get(2)).toMatchObject({ salesNetMills: 0, overlapNetMills: 0, sales: 0 });
+    expect(byRule.result.team.salesNetMills).toBe(10_000);
+    // Not dropped: «вне смен», the owner's to decide.
+    const outside = outsideByRule({
+      from: at("2026-11-04T00:00:00Z"), to: NOW.getTime(), sales, rule: decided, oldWay: [],
+      counted: new Set([...byRule.oldCounted, ...byRule.credited]), heldByRuled: new Set(sales.map((one) => one.transactionId)), usernames: new Map(),
+    });
+    expect(outsideMoneyByRule(outside, ["2026-11-04"])).toMatchObject({ decideNetMills: 30_000, nobodyNetMills: 0, potNetMills: 0, visitsNetMills: 0 });
+
+    const slotted = ruleOf(sales, [homeOf(mine, "shift", [{ userId: 1, shift: first }]), homeOf(shared, "shift", [{ userId: 2, shift: second }])]);
+    const bySlot = teamShiftMoney({ days: 7, now: NOW, shifts, lastWriters: new Map(), firstActivity: LONG_AGO, rule: slotted });
+    expect(bySlot.chatters.map((one) => [one.userId, one.salesNetMills, one.overlapNetMills])).toEqual([[2, 30_000, 0], [1, 10_000, 0]]);
+    expect(bySlot.team.salesNetMills).toBe(40_000);
+    expect(bySlot.shifts.map((one) => one.overlapNetMills)).toEqual([0, 0]);
+  });
+
+  it("leaves every shift before the switch as it was", () => {
+    const sales = [sale("2026-11-02T08:00:00Z", 5_000), sale("2026-11-03T08:00:00Z", 7_000), sale("2026-11-03T09:00:00Z", 9_000)];
+    const monday = work("2026-11-02T06:00:00Z", "2026-11-02T10:00:00Z");
+    const tuesday = work("2026-11-03T06:00:00Z", "2026-11-03T10:00:00Z");
+    const shifts = [held(1, monday, sales), held(1, tuesday, sales), held(2, work("2026-11-03T08:30:00Z", "2026-11-03T11:00:00Z"), sales)];
+    const input = { days: 7, now: NOW, until: "2026-11-08", shifts, lastWriters: new Map<number, number>(), firstActivity: LONG_AGO };
+    // Homes that would move everything, from a day after these shifts: nothing moves.
+    const homes = sales.map((one) => homeOf(one, "pot"));
+    const after = teamShiftMoney({ ...input, rule: ruleOf(sales, homes, { from: "2026-11-04", live: false }) });
+    expect(after).toEqual(teamShiftMoney(input));
+  });
+
+  it("does not count again a sale an old shift counts, and dates a ruled shift by its report date", () => {
+    // The evening before the switch holds a PPV bought at 22:00 whose sender's next shift is after it.
+    const ppv = { ...sale("2026-11-03T19:00:00Z", 24_000), kind: "message_purchase" };
+    const late = sale("2026-11-04T19:30:00Z", 6_000);
+    const sales = [ppv, late];
+    const evening = work("2026-11-03T15:00:00Z", "2026-11-03T20:30:00Z");
+    // 21:00 on the 4th to 05:00 on the 5th (Moscow): most of it after midnight, begun more than two hours before it.
+    const night = work("2026-11-04T18:00:00Z", "2026-11-05T02:00:00Z");
+    const now = new Date("2026-11-05T09:00:00Z");
+    const shifts = [held(1, evening, sales), held(2, night, sales)];
+    const rule = ruleOf(sales, [homeOf(ppv, "shift", [{ userId: 2, shift: night }]), homeOf(late, "shift", [{ userId: 2, shift: night }])]);
+    const money = teamShiftMoney({ days: 7, now, until: "2026-11-08", shifts, lastWriters: new Map(), firstActivity: LONG_AGO, rule });
+    const byUser = new Map(money.chatters.map((one) => [one.userId, one]));
+    expect(byUser.get(1)!.salesNetMills).toBe(24_000);
+    expect(byUser.get(2)!.salesNetMills).toBe(6_000);
+    expect(money.team.salesNetMills).toBe(30_000);
+    // The old count dates it by its middle (the 5th); the rule by its report date (the day it began, the 4th).
+    expect(money.shifts.find((one) => one.userId === 2)!.date).toBe("2026-11-04");
+    expect(teamShiftMoney({ days: 7, now, until: "2026-11-08", shifts, lastWriters: new Map(), firstActivity: LONG_AGO }).shifts.find((one) => one.userId === 2)!.date).toBe("2026-11-05");
   });
 });

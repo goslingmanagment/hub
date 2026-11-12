@@ -2,13 +2,17 @@ import {
   listFansWaitingSince,
   listFirstChatterActivities,
   listPageOpenCustoms,
+  listShiftSales,
   listWinBackResults,
   type PageWaitingRow,
 } from "@agency_hub_core/db";
+import { formatUsdFromMills } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
-import { dayOfShift, moscowDayOf, readPeopleWork } from "./chatter-shifts.ts";
+import { dayOfShift, moscowDayOf, netOf, readPeopleWork } from "./chatter-shifts.ts";
 import { awaitingGivingOf, customOrdersReadOn, waitsSince } from "./custom-orders/readers.ts";
+import { openWindowFrom, readScreenHomes, readScreensRule, ruledSale, ruledWork } from "./sale-rule-screens.ts";
+import { reportDateOfShift } from "./shift-rows.ts";
 
 /**
  * Chat Memory week 5 (docs/plans/2026-10-24-chat-memory/week-5.md §3): the
@@ -17,6 +21,11 @@ import { awaitingGivingOf, customOrdersReadOn, waitsSince } from "./custom-order
  * back of the last two weeks. A line shows only when it has something; nothing
  * at all — no block. (Hub's own marks and their disputes are gone: what a shift
  * pays is the chatter's posted report, which the agency ledger reads.)
+ *
+ * From the screens' switch on (sale-rule-screens.ts) a shift of a report date of
+ * the switch's day or later is counted on its report date, and the day's sales
+ * whose home is the owner's to decide (several shifts held one, none of their
+ * people wrote last, no slot settles it) are a line of their own.
  */
 
 const DAY_MS = 86_400_000;
@@ -31,6 +40,8 @@ export interface TeamBlockFacts {
   oldestCustomPaidAt: Date | null;
   waiting: PageWaitingRow[];
   winBack: { attempts: number; matured72h: number; replied72h: number; matured7d: number; bought7d: number };
+  /** With the screens' switch on: the day's sales that wait for the owner's decision whose they are. */
+  decide?: { sales: number; netMills: number };
 }
 
 function escapeHtml(text: string) {
@@ -41,6 +52,9 @@ function escapeHtml(text: string) {
 export function renderTeamBlock(facts: TeamBlockFacts, now: Date): string[] {
   const lines: string[] = [];
   if (facts.shifts > 0) lines.push(`Смены за сутки: ${facts.shifts}`);
+  if (facts.decide !== undefined && facts.decide.sales > 0) {
+    lines.push(`Ждут вашего решения, чья продажа: ${facts.decide.sales} на ${formatUsdFromMills(facts.decide.netMills)}`);
+  }
   if (facts.customsOpen > 0) {
     const oldest = facts.oldestCustomPaidAt === null ? "" : ` · самый старый оплачен ${Math.floor((now.getTime() - facts.oldestCustomPaidAt.getTime()) / DAY_MS)} дн назад`;
     lines.push(`Кастомы не отданы: ${facts.customsOpen}${oldest}`);
@@ -61,20 +75,30 @@ export function renderTeamBlock(facts: TeamBlockFacts, now: Date): string[] {
 
 /** The facts of the block for the business day [from, to), as of `now`. */
 export async function loadTeamBlockFacts(app: Pick<AppContext, "db"> & Partial<Pick<AppContext, "config">>, input: { from: Date; to: Date; now: Date }): Promise<TeamBlockFacts> {
-  const [people, firstActivity] = await Promise.all([
+  const [people, firstActivity, rule] = await Promise.all([
     readPeopleWork(app.db, { from: new Date(input.from.getTime() - DAY_MS), to: input.now, now: input.now, pages: "all" }),
     listFirstChatterActivities(app.db),
+    readScreensRule(app.db),
   ]);
-  // The shifts of the day as every other screen dates them (`dayOfShift`).
+  // The shifts of the day as every other screen dates them (`dayOfShift`; by the rule, the report date).
   const firstDay = moscowDayOf(input.from.getTime());
   const lastDay = moscowDayOf(input.to.getTime() - 1);
   let shifts = 0;
   for (const [userId, person] of people) {
     shifts += person.work.filter((shift) => {
       if (shift.kind !== "shift") return false;
-      const day = dayOfShift(shift, firstActivity.get(userId)?.getTime());
+      const day = ruledWork(rule, shift) ? reportDateOfShift(shift) : dayOfShift(shift, firstActivity.get(userId)?.getTime());
       return day >= firstDay && day <= lastDay;
     }).length;
+  }
+  let decide: TeamBlockFacts["decide"];
+  if (rule !== null) {
+    const sales = (await listShiftSales(app.db, { pageIds: "all", from: input.from, to: input.to })).filter((sale) => ruledSale(rule, sale));
+    const homes = await readScreenHomes(app.db, {
+      sales, openFrom: openWindowFrom(input.now, [...people.values()].flatMap((person) => person.work)), now: input.now, live: rule.live,
+    });
+    const waiting = sales.filter((sale) => homes.get(sale.transactionId)?.kind === "decide");
+    decide = { sales: waiting.length, netMills: netOf(waiting) };
   }
   const [customs, waiting, winBack] = await Promise.all([
     listPageOpenCustoms(app.db, { pageIds: "all", limit: 500 }),
@@ -92,6 +116,7 @@ export async function loadTeamBlockFacts(app: Pick<AppContext, "db"> & Partial<P
   paid.sort((a, b) => a.getTime() - b.getTime());
   return {
     shifts,
+    ...(decide === undefined ? {} : { decide }),
     customsOpen: paidOpen,
     oldestCustomPaidAt: paid[0] ?? null,
     waiting,

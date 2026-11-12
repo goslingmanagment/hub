@@ -154,7 +154,7 @@ export function ShiftsScreen() {
         {body}
         <div className="shifts-foot">
           <AuthorlessLine days={authorshipDays} page={page} enabled={period.current} partial={authorshipDays < period.shownDays} />
-          <HowItCounts page={page} />
+          <HowItCounts page={page} ruleFrom={sales.data?.ruleFrom ?? null} />
         </div>
       </div>
     </>

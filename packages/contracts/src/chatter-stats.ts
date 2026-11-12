@@ -165,6 +165,11 @@ export const chatterStatsSchema = z.object({
     /** The longest such run in this window and the one before it. */
     longestStreakDays: count,
   }),
+  /**
+   * The first Moscow day counted by the one rule of whose a sale is (the screens' switch): a shift of that report date
+   * or later has the sales their homes give it (none counts for two), dated by its report date. Absent — off.
+   */
+  ruleFrom: businessDate.optional(),
   serverNow: isoTimestamp,
 });
 
@@ -201,6 +206,12 @@ export const teamShiftSalesQuerySchema = z.object({
   /** One page only: the shifts made of the work on it, its sales. */
   pageLabel: z.string().min(1).max(120).optional(),
 });
+
+/** Where «вне смен» shows a sale: a look-in's, the page's pot, a PPV waiting for its sender, the owner's decision, nobody's. */
+export const OUTSIDE_SALE_HOMES = ["visit", "pot", "waiting", "decide", "nobody"] as const;
+
+/** The one rule's lines of «вне смен» (with `ruleFrom` only). */
+const ruleLines = { potNetMills: mills.optional(), waitingNetMills: mills.optional(), decideNetMills: mills.optional() };
 
 const dayMoneySchema = z.object({
   date: businessDate,
@@ -245,13 +256,17 @@ export const teamShiftSalesResponseSchema = z.object({
   /**
    * The window's sales no shift holds, outside the money above: `visits` — a look-in's, its person the last to write to
    * the fan (as a visit's sales); `nobody` — the rest. By the Moscow day of the sale (one per day of the window, the
-   * oldest first) and by page (the most first), and each sale, the oldest first.
+   * oldest first) and by page (the most first), and each sale, the oldest first. With `ruleFrom`, a sale the rule places
+   * is where its home is when that is no person's shift, with three lines more: `pot` — the page's pot (a tip under a
+   * post, a Campaign contribution); `waiting` — a PPV waiting for its sender's next shift; `decide` — several shifts held
+   * it and none of their people wrote last, no slot settles it: the owner's to decide.
    */
   outside: z.object({
     visitsNetMills: mills,
     nobodyNetMills: mills,
-    daily: z.array(z.object({ date: businessDate, visitsNetMills: mills, nobodyNetMills: mills })),
-    pages: z.array(z.object({ pageLabel: z.string(), visitsNetMills: mills, nobodyNetMills: mills })),
+    ...ruleLines,
+    daily: z.array(z.object({ date: businessDate, visitsNetMills: mills, nobodyNetMills: mills, ...ruleLines })),
+    pages: z.array(z.object({ pageLabel: z.string(), visitsNetMills: mills, nobodyNetMills: mills, ...ruleLines })),
     sales: z.array(z.object({
       at: isoTimestamp,
       pageLabel: z.string(),
@@ -260,8 +275,16 @@ export const teamShiftSalesResponseSchema = z.object({
       netMills: mills,
       /** The look-in's person; null — nobody's. */
       visitBy: z.string().nullable(),
+      /** With `ruleFrom`: its line. */
+      home: z.enum(OUTSIDE_SALE_HOMES).optional(),
     })),
   }),
+  /**
+   * The first Moscow day the window counts by the one rule of whose a sale is (the screens' switch): a shift of that
+   * report date or later has the money its sales' homes give it, dated by its report date; an earlier one keeps the old
+   * count. Absent — off: the old count throughout.
+   */
+  ruleFrom: businessDate.optional(),
   serverNow: isoTimestamp,
 });
 

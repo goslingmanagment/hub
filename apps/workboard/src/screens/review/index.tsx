@@ -92,7 +92,12 @@ function salesHint(index: ReviewIndex): { hint: ReactNode; bar: NonNullable<Tile
   ].filter((row) => row.mills > 0);
   const around = [
     money.beforeNetMills > 0 ? { key: "before", label: "до смены, ничьи", mills: money.beforeNetMills } : null,
-    ...money.later.map((one) => ({ key: `later-${one.holder ?? ""}`, label: `PPV смены куплены позже${one.holder === null ? ", ничьи" : `, у ${one.holder}`}`, mills: one.netMills })),
+    ...money.notCounted.map((one) => ({ key: `home-${one.label}`, label: `в смену, ${one.label}`, mills: one.netMills })),
+    ...money.later.map((one) => ({
+      key: `later-${one.tail ?? one.holder ?? ""}`,
+      label: `PPV смены куплены позже, ${one.tail ?? (one.holder === null ? "ничьи" : `у ${one.holder}`)}`,
+      mills: one.netMills,
+    })),
   ].filter((row) => row !== null);
   const hint = (
     <span className="review-money">
