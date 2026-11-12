@@ -104,6 +104,8 @@ export * from "./people-message-kinds.ts";
 export * from "./routes-people-messages.ts";
 export * from "./sale-claims.ts";
 export * from "./routes-sale-claims.ts";
+// Цепочка продажи (package T): from one sale, whose it is down to its payout.
+export * from "./routes-sale-chain.ts";
 
 export * from "./routes-ofapi-banned-words.ts";
 export * from "./routes-model-applications.ts";

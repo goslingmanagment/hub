@@ -27,6 +27,7 @@ import { ruPlural } from "@agency_hub_core/ui/plural";
 import { clockOf } from "@agency_hub_core/ui/shiftReports";
 import { shiftDurationHint, shiftWhen } from "@agency_hub_core/ui/shiftWhen";
 import { useBackTarget } from "@/shared/links";
+import { ChainMoney } from "@/shared/saleChain";
 import { ScreenHeader } from "@/shared/ScreenHeader";
 import { useMe } from "@/shared/useMe";
 import {
@@ -302,7 +303,7 @@ function MineSale({ line, edit, showFan }: { line: Line; edit: Editing; showFan:
       </div>
       <span className="shf-sale__money">
         {(line.statement === "share" || line.statement === "not_mine") && line.rule.shareMills !== line.amountMills && <Money mills={line.rule.shareMills} muted className="shf-was" />}
-        <Money mills={line.amountMills} muted={off} />
+        <ChainMoney saleId={line.transactionId}><Money mills={line.amountMills} muted={off} /></ChainMoney>
       </span>
       <span className="shf-sale__act">{edit.editable && <MineMenu line={line} edit={edit} onNote={() => setNoting(true)} />}</span>
     </li>
@@ -383,7 +384,7 @@ function NearSale({ line, edit }: { line: Line; edit: Editing }) {
         {claims.below}
       </div>
       <span className="shf-sale__money">
-        {claimed ? <Money mills={line.amountMills} /> : <Money mills={line.netMills} muted />}
+        <ChainMoney saleId={line.transactionId}>{claimed ? <Money mills={line.amountMills} /> : <Money mills={line.netMills} muted />}</ChainMoney>
       </span>
       <span className="shf-sale__act">
         {edit.editable && !claiming && (claimed

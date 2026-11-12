@@ -3,6 +3,7 @@ import type { ShiftReportClaim } from "@agency_hub_core/contracts";
 import { Button, Fan, Money, TextInput, toast } from "@agency_hub_core/ui";
 import { formatDateTime, formatDay, formatMills } from "@agency_hub_core/ui/format";
 import { clockOf } from "@agency_hub_core/ui/shiftReports";
+import { ChainMoney } from "@/shared/saleChain";
 import { useClaimAnswer } from "./data";
 
 /**
@@ -166,7 +167,7 @@ export function LooseClaims({ claims, shiftId }: { claims: readonly ShiftReportC
               </p>
               <ClaimOnLine claim={claim} shiftId={shiftId} netMills={claim.sale?.netMills ?? 0} />
             </div>
-            <span className="shf-sale__money">{claim.sale && <Money mills={claim.sale.netMills} muted />}</span>
+            <span className="shf-sale__money">{claim.sale && claim.transactionId !== null && <ChainMoney saleId={claim.transactionId}><Money mills={claim.sale.netMills} muted /></ChainMoney>}</span>
             <span className="shf-sale__act" />
           </li>
         ))}

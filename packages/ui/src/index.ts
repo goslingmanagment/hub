@@ -32,6 +32,7 @@ export { cx } from "./components/cx.js";
 export { DELTA_SMALL_BASE_COUNT, DELTA_SMALL_BASE_MILLS, Delta, deltaText, readDelta, type DeltaProps, type DeltaReading, type DeltaRule } from "./components/Delta.js";
 export { Disclosure } from "./components/Disclosure.js";
 export { Drawer, SidePanel, type DrawerProps, type PanelSize, type SidePanelProps } from "./components/Drawer.js";
+export { SaleChain, SaleChainTrigger, type ChainLinkRenderer } from "./components/SaleChain.js";
 export { Duration } from "./components/Duration.js";
 export { Facts, type FactItem } from "./components/Facts.js";
 export { Checkbox, Field, Select, Switch, Textarea, TextInput } from "./components/Field.js";

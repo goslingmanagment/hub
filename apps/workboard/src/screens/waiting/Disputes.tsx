@@ -5,6 +5,7 @@ import { Badge, Button, ErrorState, Fan, Modal, Money, Notice, PageLabel, Select
 import { formatDateTime, formatDay, formatMills } from "@agency_hub_core/ui/format";
 import { ruPlural } from "@agency_hub_core/ui/plural";
 import { kernel } from "@/shared/hub";
+import { ChainMoney } from "@/shared/saleChain";
 
 /**
  * «Ждут вас» of the owner, package G: the dispute of a sale (both statements,
@@ -65,7 +66,7 @@ function SaleLine({ sale }: { sale: NonNullable<SaleDisputeResponse["sale"]> }) 
       <Fan name={sale.fan.name} username={sale.fan.username} fanRef={sale.fan.fanRef ?? ""} showLogin />
       <span className="wt-sale__kind">{kindWord(sale.kind)}</span>
       <span className="wt-sale__when">{formatDateTime(sale.occurredAt)}</span>
-      <Money mills={sale.netMills} strong className="wt-sale__money" />
+      <span className="wt-sale__money"><ChainMoney saleId={sale.transactionId}><Money mills={sale.netMills} strong /></ChainMoney></span>
     </p>
   );
 }

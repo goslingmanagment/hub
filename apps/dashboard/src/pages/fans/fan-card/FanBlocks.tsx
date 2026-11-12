@@ -11,6 +11,7 @@ import {
 } from "@/api/queries";
 import { kernel } from "@/api/sdk";
 import { FanIntelligenceMarkdown } from "@/components/page/FanIntelligenceMarkdown";
+import { ChainMoney } from "@/components/shared/ChainMoney";
 import { ChatPreviewPanel } from "@/components/shared/ChatPreviewPanel";
 import { Pagination } from "@/components/shared/Pagination";
 import { NoAnswerPanel } from "@/components/shared/StatusPanel";
@@ -342,7 +343,11 @@ export function FanOperations({ pageLabel, platformUserId, offset, onOffset }: {
                     <td>{transactionTypeLabel(tx.canonicalType)}</td>
                     <td className="status-col"><TransactionState state={tx.transactionState} /></td>
                     <td className="num muted">{formatMills(tx.amountMills)}</td>
-                    <td className="num">{tx.netAmountMills < 0 ? formatSignedMills(tx.netAmountMills) : formatMills(tx.netAmountMills)}</td>
+                    <td className="num">
+                      {tx.netAmountMills > 0
+                        ? <ChainMoney pageLabel={pageLabel} transactionRef={tx.transactionId}>{formatMills(tx.netAmountMills)}</ChainMoney>
+                        : tx.netAmountMills < 0 ? formatSignedMills(tx.netAmountMills) : formatMills(tx.netAmountMills)}
+                    </td>
                   </tr>
                 ))}
               </tbody>
