@@ -9,7 +9,7 @@
 -- `user_page_assignments`, `agent_keys`).
 --
 -- people — one person:
---   code               the stable code: the same in ledger (`people.slug`) and /OS (the card's file name), e.g. `grisha`
+--   code               the stable code: the same in ledger (`people.slug`) and /OS (the card's file name), e.g. `alex`
 --   display_name       how the agency calls the person
 --   kind               human | agent | service (a server-side or test login with no person behind it)
 --   role               owner | team_lead | chatter | content_manager | contractor for a human; agent for an agent;
@@ -18,7 +18,7 @@
 --   left_on            the day the person left; only with state left, and may stay unknown
 --   telegram_user_id   the person's Telegram id (one person per id)
 --   telegram_handle    the @handle without the @
---   report_tag         the tag of the person's shift report post, e.g. `#maxim` (one person per tag)
+--   report_tag         the tag of the person's shift report post, e.g. `#alex` (one person per tag)
 --   onboarding         the onboarding steps as noted: [{step, doneAt, note}]
 --   note               the owner's line about the person
 --   import_notes       what the import found that disagrees, for the owner to settle: [{code, text}]

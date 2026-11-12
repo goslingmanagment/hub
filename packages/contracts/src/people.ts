@@ -8,7 +8,7 @@ import { businessDate, intId, isoDateTime, isoTimestamp, mills, platformEnum } f
  * record per person of the agency — a human and an agent are the same kind of
  * record, and so is the holder of service and test logins (kind `service`).
  * A login is not a person: one person holds any number of Hub logins
- * (the owner: `admin` and a chatter login), an agent person holds agent keys,
+ * (the owner: a console login and a chatter login), an agent person holds agent keys,
  * and a model or a contractor holds none. The code is the one ledger and /OS
  * already use (the card's file name), a field of its own: nothing here ever
  * renames or changes a login (`users.username`) — scripts match chatters by it.
@@ -62,7 +62,7 @@ export const personCodeSchema = z.string().regex(
 export const personCodeParamsSchema = z.object({ code: personCodeSchema });
 const slotTime = z.string().regex(PERSON_SLOT_TIME_PATTERN, "a time is HH:MM by Moscow time (an end may be 24:00)");
 const telegramHandle = z.string().trim().regex(/^@?[A-Za-z0-9_]{3,64}$/, "a Telegram handle is latin letters, digits and _");
-const reportTag = z.string().trim().regex(/^#[^\s#]{1,63}$/, "a report tag is # and one word, e.g. #maxim");
+const reportTag = z.string().trim().regex(/^#[^\s#]{1,63}$/, "a report tag is # and one word, e.g. #alex");
 
 // ── what a person is ─────────────────────────────────────────────────────────
 
@@ -139,7 +139,7 @@ export const personTelegramSchema = z.object({
   userId: z.number().int().positive().nullable(),
   /** Without the @. */
   handle: z.string().nullable(),
-  /** The tag of the person's shift report post, e.g. `#maxim`. */
+  /** The tag of the person's shift report post, e.g. `#alex`. */
   reportTag: z.string().nullable(),
 });
 

@@ -136,7 +136,7 @@ export const peopleImportArgsSchema = z.object({
   })).max(200).default([]),
   /** Logins other systems write for a person (an agent's table, …): checked against Hub's. */
   otherLogins: z.array(z.object({ source: text, code: text, username: text })).max(200).default([]),
-  /** A model name of ledger or the sheets → Hub's model slug (`lily` → `Lilly`). */
+  /** A model name of ledger or the sheets → Hub's model slug (e.g. `mia` → `Mia-Hart`). */
   modelAliases: z.record(z.string(), z.string()).default({}),
   /** The first day the imported pay terms hold; without it no terms are imported. */
   termsValidFrom: day.optional(),

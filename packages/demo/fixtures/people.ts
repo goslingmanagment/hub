@@ -94,7 +94,7 @@ const PEOPLE: readonly PersonSpec[] = [
     onboarding: [{ step: "Приглашение отправлено", doneDays: 1 }, { step: "Пароль по ссылке", doneDays: null }, { step: "Первая смена", doneDays: null }] },
   { id: 11, code: "sonya", name: "Соня", kind: "human", role: "content_manager", state: "working", logins: [], pages: [], slots: [],
     telegram: { userId: 700_000_011, handle: "sonya_content", tag: null }, note: "Без входа хаба: работает в ContentOps и своим ключом агента." },
-  { id: 12, code: "traffic-max", name: "Макс (трафик)", kind: "human", role: "contractor", state: "working", logins: [], pages: [], slots: [] },
+  { id: 12, code: "traffic-tim", name: "Тимур (трафик)", kind: "human", role: "contractor", state: "working", logins: [], pages: [], slots: [] },
   { id: 13, code: "helper-bot", name: "Помощник в чате", kind: "agent", role: "agent", state: "working", logins: [], pages: [], slots: [],
     keys: [{ id: 10, name: "Очереди фанов", state: "active" }, { id: 7, name: "Исследователь архива", state: "active" }] },
   { id: 14, code: "contentops", name: "Сервер ContentOps", kind: "agent", role: "agent", state: "working", logins: [], pages: [], slots: [],
