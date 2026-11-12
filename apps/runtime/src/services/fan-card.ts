@@ -12,14 +12,9 @@ import {
   type ClientFanLinkDecideResponse,
 } from "@agency_hub_core/contracts";
 import {
-  changeFanCustom,
   changeFanFact,
+  findCustomOrder,
   findFanConversationRef,
-  findFanCustom,
-  insertFanCustom,
-  listCustomDeliverySuggestions,
-  listCustomPaymentSuggestions,
-  listPersonCustoms,
   findCardFan,
   findFanFact,
   isPersonOnPage,
@@ -41,6 +36,7 @@ import type { AppContext } from "../bootstrap.ts";
 import { canAccessPage, requireApiKeyUser, type HumanAuthPrincipal } from "./auth.ts";
 import { requireClientGrantedPage } from "./client-switches.ts";
 import { ClientFeatureDisabledError, ConflictError, ForbiddenError, NotFoundError } from "./errors.ts";
+import { extensionCardCustoms, extensionChangeCustom, extensionRecordCustom } from "./custom-orders/extension.ts";
 
 /**
  * Chat Memory week 2 (docs/plans/2026-10-24-chat-memory/week-2.md §1–2): the
@@ -64,11 +60,6 @@ import { ClientFeatureDisabledError, ConflictError, ForbiddenError, NotFoundErro
  */
 
 export const FAN_CARD_FEATURE = "fan-card";
-/** Chat Memory week 4: ended customs stay on the card this long. */
-const CUSTOMS_RECENT_DAYS = 30;
-/** Tips of this many days are offered as a custom's payment. */
-const CUSTOM_PAYMENT_DAYS = 30;
-const CUSTOM_SUGGESTIONS = 5;
 /** Suggestions a decision is checked against: more than the card shows, so a pair just past its tail still counts. */
 const DECIDABLE_SUGGESTIONS = 50;
 
@@ -136,20 +127,10 @@ async function cardOf(
   const facts = (await listPersonFacts(app.db, personIds)).filter((fact) => canAccessPage(principal, fact.pageId));
   // The message each fact comes from, so a chatter checks it without opening the chat.
   const quotes = await listFactQuotes(app.db, facts);
-  const customs = (await listPersonCustoms(app.db, { fanIds: personIds, now, recentDays: CUSTOMS_RECENT_DAYS }))
-    .filter((custom) => canAccessPage(principal, custom.pageId));
-  const askedPage = input.pageId === undefined ? null : input.pageId;
-  const payments = askedPage === null ? [] : await listCustomPaymentSuggestions(app.db, {
-    pageId: askedPage, fanIds: personIds, now, days: CUSTOM_PAYMENT_DAYS, limit: CUSTOM_SUGGESTIONS,
+  // Package I: the customs are the custom orders, in the extension's old shapes (custom-orders/extension.ts).
+  const { customs, customPayments } = await extensionCardCustoms(app, principal, {
+    personIds, askedPageId: input.pageId === undefined ? null : input.pageId, now,
   });
-  const deliveries = new Map<number, Awaited<ReturnType<typeof listCustomDeliverySuggestions>>>();
-  for (const custom of customs) {
-    if ((custom.state === "ordered" || custom.state === "paid") && custom.conversationRef !== null) {
-      deliveries.set(custom.id, await listCustomDeliverySuggestions(app.db, {
-        pageId: custom.pageId, conversationRef: custom.conversationRef, since: custom.paidAt ?? custom.createdAt, limit: CUSTOM_SUGGESTIONS,
-      }));
-    }
-  }
   const personSet = new Set(personIds);
 
   return {
@@ -179,26 +160,8 @@ async function cardOf(
       createdAt: fact.createdAt.toISOString(),
       quote: quoteOf(quotes.get(`${fact.pageId}:${fact.platform}:${fact.messageRef}`)),
     })),
-    customs: customs.map((custom) => ({
-      id: custom.id,
-      pageLabel: custom.pageLabel,
-      granted: canAccessPage(principal, custom.pageId),
-      description: custom.description,
-      priceMills: custom.priceMills,
-      state: custom.state,
-      paymentMills: custom.paymentMills,
-      paidAt: iso(custom.paidAt),
-      deliveredMessageRef: custom.deliveredMessageRef,
-      deliveredAt: iso(custom.deliveredAt),
-      createdBy: custom.createdBy,
-      createdAt: custom.createdAt.toISOString(),
-      deliveryCandidates: (deliveries.get(custom.id) ?? []).map((message) => ({
-        messageRef: message.messageRef, at: message.at.toISOString(), mediaCount: message.mediaCount, priceMills: message.priceMills,
-      })),
-    })),
-    customPayments: payments.map((payment) => ({
-      paymentRef: String(payment.transactionId), amountMills: payment.amountMills, at: payment.at.toISOString(), note: payment.note,
-    })),
+    customs,
+    customPayments,
     serverNow: now.toISOString(),
   };
 }
@@ -354,18 +317,12 @@ export async function createClientFanCustom(
   const person = fan === null ? [] : (await listPersonFans(app.db, fan.id)).map((one) => one.id);
   // Only a fan of this page (he or an account joined to him has it), like the card.
   if (fan === null || !(await isPersonOnPage(app.db, person, page.id))) throw new NotFoundError("The fan is not known");
-  let payment: { transactionId: number; at: Date } | null = null;
-  if (input.body.paymentRef !== undefined) {
-    const offered = await listCustomPaymentSuggestions(app.db, { pageId: page.id, fanIds: person, now: new Date(), days: CUSTOM_PAYMENT_DAYS, limit: 50 });
-    const found = offered.find((one) => String(one.transactionId) === input.body.paymentRef);
-    if (found === undefined) throw new ConflictError("The payment is not suggested for this fan", { reason: "not_suggested" });
-    payment = { transactionId: found.transactionId, at: found.at };
-  }
   // The chat: on Fansly the fan's thread of the page, on OnlyFans the fan.
   const conversationRef = page.platform === "onlyfans" ? fan.platformUserId : await findFanConversationRef(app.db, page.id, fan.id);
-  await paymentTaken(() => insertFanCustom(app.db, {
-    pageId: page.id, fanId: fan.id, conversationRef, description: input.body.description, priceMills: input.body.priceMills ?? null,
-    paymentTransactionId: payment?.transactionId ?? null, paidAt: payment?.at ?? null, userId: principal.user.id,
+  // Package I: a custom order, accepted by the chatter (custom-orders/extension.ts).
+  await paymentTaken(() => extensionRecordCustom(app, principal, {
+    pageId: page.id, fanId: fan.id, personIds: person, conversationRef, description: input.body.description,
+    priceMills: input.body.priceMills ?? null, paymentRef: input.body.paymentRef,
   }));
   return { changed: true, card: await cardOf(app, principal, { pageLabel: page.label, fanRef: input.fanRef, fan, pageId: page.id }) };
 }
@@ -379,32 +336,14 @@ export async function changeClientFanCustom(
   requireApiKeyUser(principal);
   const page = await requireClientGrantedPage(app, principal, await findPageSummaryByLabel(app.db, input.pageLabel), FAN_CARD_FEATURE);
   const fan = await findCardFan(app.db, page.platform, input.fanRef);
-  const custom = await findFanCustom(app.db, input.customId);
+  const custom = await findCustomOrder(app.db, input.customId);
   const person = fan === null ? [] : (await listPersonFans(app.db, fan.id)).map((one) => one.id);
-  if (fan === null || custom === null || !person.includes(custom.fanId) || !(await isPersonOnPage(app.db, person, page.id))) {
+  if (fan === null || custom === null || custom.fanId === null || custom.pageId === null || !person.includes(custom.fanId)
+    || !(await isPersonOnPage(app.db, person, page.id))) {
     throw new NotFoundError("The custom was not found");
   }
   if (!canAccessPage(principal, custom.pageId)) throw new ClientFeatureDisabledError(FAN_CARD_FEATURE, "not_granted");
-  const body = input.body;
-  let changed: boolean;
-  if (body.action === "paid") {
-    const offered = await listCustomPaymentSuggestions(app.db, { pageId: custom.pageId, fanIds: person, now: new Date(), days: CUSTOM_PAYMENT_DAYS, limit: 50 });
-    const found = offered.find((one) => String(one.transactionId) === body.paymentRef);
-    if (found === undefined) throw new ConflictError("The payment is not suggested for this custom", { reason: "not_suggested" });
-    changed = await paymentTaken(() => changeFanCustom(app.db, {
-      customId: custom.id, userId: principal.user.id, change: { action: "paid", paymentTransactionId: found.transactionId, paidAt: found.at },
-    }));
-  } else if (body.action === "delivered") {
-    const offered = custom.conversationRef === null ? [] : await listCustomDeliverySuggestions(app.db, {
-      pageId: custom.pageId, conversationRef: custom.conversationRef, since: custom.paidAt ?? custom.createdAt, limit: 50,
-    });
-    const found = offered.find((one) => one.messageRef === body.messageRef);
-    if (found === undefined) throw new ConflictError("The message is not suggested for this custom", { reason: "not_suggested" });
-    changed = await changeFanCustom(app.db, { customId: custom.id, userId: principal.user.id, change: { action: "delivered", messageRef: found.messageRef, deliveredAt: found.at } });
-  } else if (body.action === "cancel") {
-    changed = await changeFanCustom(app.db, { customId: custom.id, userId: principal.user.id, change: { action: "cancel" } });
-  } else {
-    changed = await changeFanCustom(app.db, { customId: custom.id, userId: principal.user.id, change: { action: "edit", description: body.description, priceMills: body.priceMills } });
-  }
+  // Package I: a step of the custom order (custom-orders/extension.ts); a sale another order took a moment ago is 409.
+  const changed = await paymentTaken(() => extensionChangeCustom(app, principal, { orderId: custom.id, body: input.body }));
   return { changed, card: await cardOf(app, principal, { pageLabel: page.label, fanRef: input.fanRef, fan, pageId: page.id }) };
 }

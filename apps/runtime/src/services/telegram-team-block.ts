@@ -8,6 +8,7 @@ import {
 
 import type { AppContext } from "../bootstrap.ts";
 import { dayOfShift, moscowDayOf, readPeopleWork } from "./chatter-shifts.ts";
+import { awaitingGivingOf, customOrdersReadOn, waitsSince } from "./custom-orders/readers.ts";
 
 /**
  * Chat Memory week 5 (docs/plans/2026-10-24-chat-memory/week-5.md §3): the
@@ -59,7 +60,7 @@ export function renderTeamBlock(facts: TeamBlockFacts, now: Date): string[] {
 }
 
 /** The facts of the block for the business day [from, to), as of `now`. */
-export async function loadTeamBlockFacts(app: Pick<AppContext, "db">, input: { from: Date; to: Date; now: Date }): Promise<TeamBlockFacts> {
+export async function loadTeamBlockFacts(app: Pick<AppContext, "db"> & Partial<Pick<AppContext, "config">>, input: { from: Date; to: Date; now: Date }): Promise<TeamBlockFacts> {
   const [people, firstActivity] = await Promise.all([
     readPeopleWork(app.db, { from: new Date(input.from.getTime() - DAY_MS), to: input.now, now: input.now, pages: "all" }),
     listFirstChatterActivities(app.db),
@@ -80,11 +81,18 @@ export async function loadTeamBlockFacts(app: Pick<AppContext, "db">, input: { f
     listFansWaitingSince(app.db, { now: input.now, minWaitHours: WAITING_HOURS, maxDays: WAITING_MAX_DAYS }),
     listWinBackResults(app.db, { from: new Date(input.now.getTime() - WIN_BACK_DAYS * DAY_MS), to: input.now, now: input.now, pages: "all" }),
   ]);
-  const paidOpen = customs.filter((custom) => custom.state === "paid");
-  const paid = paidOpen.map((custom) => custom.paidAt).filter((at): at is Date => at !== null).sort((a, b) => a.getTime() - b.getTime());
+  let paidOpen = customs.filter((custom) => custom.state === "paid").length;
+  let paid = customs.filter((custom) => custom.state === "paid").map((custom) => custom.paidAt).filter((at): at is Date => at !== null);
+  // Package I: behind the owner's setting, the custom orders paid or shot and not given; off — the old table.
+  if (await customOrdersReadOn(app)) {
+    const orders = await awaitingGivingOf(app, { pageIds: "all", limit: 500 });
+    paidOpen = orders.length;
+    paid = orders.map(waitsSince);
+  }
+  paid.sort((a, b) => a.getTime() - b.getTime());
   return {
     shifts,
-    customsOpen: paidOpen.length,
+    customsOpen: paidOpen,
     oldestCustomPaidAt: paid[0] ?? null,
     waiting,
     winBack: {

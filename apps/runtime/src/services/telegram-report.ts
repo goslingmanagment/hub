@@ -424,7 +424,7 @@ function sortByYesterday(left: ReportRow, right: ReportRow) {
  * not at the run time's 03:00 MSK.
  */
 export async function buildDailyRevenueTelegramReport(
-  app: Pick<AppContext, "db"> & Partial<Pick<AppContext, "logger">>,
+  app: Pick<AppContext, "db"> & Partial<Pick<AppContext, "logger" | "config">>,
   now = new Date(),
   factsAt = new Date(),
   language: NotificationLanguage = "en",

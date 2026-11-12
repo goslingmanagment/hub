@@ -989,7 +989,7 @@ async function execCount(tx: Db["db"], query: SQL): Promise<number> {
 
 /** Non-cascade FKs to fans need a curated stance; an unmapped one means a
  * new table joined the fan graph without an erasure decision — fail loudly. */
-const FAN_FK_CURATED = new Set(["transactions", "page_dm_threads", "page_fan_identities", "fan_earnings_stats", "fan_links"]);
+const FAN_FK_CURATED = new Set(["transactions", "page_dm_threads", "page_fan_identities", "fan_earnings_stats", "fan_links", "custom_orders"]);
 
 /** How the fan-scope plan reaches a fan-ref column's row. */
 export type FanRefErasureReach =
@@ -1697,6 +1697,22 @@ async function fanHotTargets(app: Db, scope: ResolvedScope, _lineage: LedgerLine
       delete from ai_media_descriptions where ${mediaDescriptionPred}`),
   });
 
+  // Custom orders (0399, package I): the order is the agency's work and stays; what names the fan goes — the
+  // link to him, the buyer's string, his chat, the name said in the video and the card's posted text. The order
+  // shows «фан стёрт» from then on (`fan_erased_at`). Before the fans row goes (its FK would only null the link).
+  const customOrderPred = sql`fan_id = ${fanId}`;
+  targets.push({
+    plane: "hot",
+    target: "custom_orders",
+    action: "anonymize",
+    rows: await countOf(app, sql`select count(*)::text as n from custom_orders where ${customOrderPred}`),
+    run: (tx) => execCount(tx, sql`
+      update custom_orders
+      set fan_id = null, buyer = null, conversation_ref = null, source_text = null, card = card - 'name',
+          fan_erased_at = coalesce(fan_erased_at, now()), updated_at = now(), version = version + 1
+      where ${customOrderPred}`),
+  });
+
   // Transactions: the money moved — anonymize, never delete (fan scope).
   const txnPred = sql`fan_id = ${fanId} or (platform_account_id in ${scope.pageIds}
     and (correlation_account_id = ${ref} or sender_id = ${ref}))`;
@@ -1878,6 +1894,8 @@ async function pageHotTargets(app: Db, scope: ResolvedScope): Promise<WorkTarget
     ["client_outreaches", "page_id"],
     // Chat Memory week 4: the page's customs (0310).
     ["fan_customs", "page_id"],
+    // Custom orders (0399): the page's orders; their payments, cards and messages go with them by FK.
+    ["custom_orders", "page_id"],
     // Chat Memory week 4: the page's shift-report marks, confirmed lines and the owner's splits (0311).
     ["shift_report_marks", "page_id"],
     ["shift_report_lines", "page_id"],

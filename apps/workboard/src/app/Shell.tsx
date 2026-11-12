@@ -1,4 +1,4 @@
-import { ArrowLeft, Banknote, CalendarClock, ChevronsUpDown, Inbox, LogOut, Monitor, Moon, Smartphone, Sun, TrendingUp, Users } from "lucide-react";
+import { ArrowLeft, Banknote, CalendarClock, ChevronsUpDown, Inbox, LogOut, Monitor, Moon, Package, Smartphone, Sun, TrendingUp, Users } from "lucide-react";
 import { Suspense, type ReactNode } from "react";
 import { NavLink, Navigate, Outlet, useLocation, useMatches, type UIMatch } from "react-router";
 import { CountBadge, ErrorState, Menu, Skeleton, Tooltip, type IconComponent, type MenuEntry } from "@agency_hub_core/ui";
@@ -38,6 +38,8 @@ const WORK: readonly NavItem[] = [
   { to: "/people", label: "Люди", icon: Users, roles: TEAM },
   { to: "/sales", label: "Что продаёт", icon: TrendingUp, roles: TEAM },
   { to: "/decisions", label: "Решения", icon: Inbox, roles: TEAM },
+  // Заказы кастомов: everyone's; Hub shows each person the orders they may see.
+  { to: "/customs", label: "Кастомы", icon: Package, roles: [...TEAM, ...CHATTER] },
   // People's pay is the owner's alone (the ledger's answer reaches no other session).
   { to: "/payouts", label: "Выплаты", icon: Banknote, roles: OWNER },
 ];

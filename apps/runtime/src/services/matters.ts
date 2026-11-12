@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import {
   isMatterCheckKind,
   isMatterInfoKind,
+  isCustomOrderCheckKind,
   isMatterMirrorKind,
   isMatterServerKind,
   LEDGER_CHECK_KINDS,
@@ -423,8 +424,11 @@ export interface AgentMatterScope {
 
 /** Opens (or updates, or reopens) an agent's matter by its key. */
 export async function agentOpenMatter(app: MattersApp, scope: AgentMatterScope, body: AgentMatterOpenBody, now: Date = new Date()): Promise<AgentMatterResponse> {
-  // The kinds Hub's server keeps — the mirrors', the system state's and the checks' of package K — are never an agent's.
-  if (isMatterMirrorKind(body.kind) || isMatterServerKind(body.kind) || isMatterCheckKind(body.kind)) throw notAgents(body.key);
+  // The kinds Hub's server keeps — the mirrors', the system state's, the checks' of package K and the custom checks'
+  // of package I — are never an agent's.
+  if (isMatterMirrorKind(body.kind) || isMatterServerKind(body.kind) || isMatterCheckKind(body.kind) || isCustomOrderCheckKind(body.kind)) {
+    throw notAgents(body.key);
+  }
   const owner: MatterOwner = "user" in body.owner ? { userId: (await personOf(app, body.owner.user)).userId } : { role: body.owner.role };
   const watcherUserIds: number[] = [];
   for (const watcher of body.watchers ?? []) watcherUserIds.push((await personOf(app, watcher)).userId);

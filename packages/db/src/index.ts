@@ -42,6 +42,8 @@ export * from "./repositories/fan-lists.ts";
 export * from "./repositories/fansly-blocklist.ts";
 // Chat Memory week 4: customs (0310).
 export * from "./repositories/fan-customs.ts";
+// Заказ кастома (0399, package I): orders, their payments and cards, the checks' reads.
+export * from "./repositories/custom-orders.ts";
 export * from "./repositories/matters.ts";
 export * from "./repositories/matter-checks.ts";
 // Agent reports: named markdown pages an agent key publishes (0390, package O).

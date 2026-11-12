@@ -26,6 +26,7 @@ import { ensureShiftRowsQueue, ensureShiftRowsSchedule } from "./shift-rows.ts";
 import { ensureSystemStateQueue, ensureSystemStateSchedule } from "./system-state-tick.ts";
 import { ensureObservationsPartitionQueue, ensureObservationsPartitionSchedule } from "./observations-partitions.ts";
 import { ensureMattersMirrorQueue, ensureMattersMirrorSchedule } from "./matters-mirror.ts";
+import { ensureCustomChecksQueue, ensureCustomChecksSchedule } from "./custom-orders/checks.ts";
 import { ensureCapturePayloadParityQueue, ensureCapturePayloadParitySchedule } from "./capture-payload-parity.ts";
 import { ensureOfapiChargebacksQueue, ensureOfapiChargebacksSchedule } from "./ofapi-chargebacks-sync.ts";
 import { ensureOfapiFanAccountCheckQueue, ensureOfapiFanAccountCheckSchedule } from "./ofapi-fan-account-check.ts";
@@ -121,6 +122,7 @@ export async function ensureAllQueues(
   await ensureModelApplicationAbandonSweepQueue(boss, createdQueues);
   await ensureClientSendArchiveSweepQueue(boss, createdQueues);
   await ensureMattersMirrorQueue(boss, createdQueues);
+  await ensureCustomChecksQueue(boss, createdQueues);
   await ensureShiftRowsQueue(boss, createdQueues);
   await ensureSaleHomesQueue(boss, createdQueues);
   await ensureSystemStateQueue(boss, createdQueues);
@@ -184,6 +186,7 @@ export async function registerAllSchedules(
     ensureModelApplicationAbandonSweepSchedule(boss),
     ensureClientSendArchiveSweepSchedule(boss),
     ensureMattersMirrorSchedule(boss),
+    ensureCustomChecksSchedule(boss),
     ensureShiftRowsSchedule(boss),
     ensureSaleHomesSchedule(boss),
     ensureSystemStateSchedule(boss),

@@ -245,6 +245,8 @@ const envSchema = z.object({
   // «Состояние» (package P): the Moscow hours the Mac's reporter is watched in; its silence outside them is no matter.
   SYSTEM_MAC_HOURS_FROM: z.coerce.number().int().min(0).max(23).default(10),
   SYSTEM_MAC_HOURS_TO: z.coerce.number().int().min(0).max(23).default(3),
+  // Заказ кастома (package I): «Ждут вас», «Решения», the morning report and the matters mirror count the custom orders.
+  CUSTOM_ORDERS_READ_ENABLED: booleanSchema.default(false),
   FAN_FACTS_ENABLED: booleanSchema.default(false),
   FAN_FACTS_PAGES: z.string().default(""),
   // The pages whose Fansly list of cross-page spenders Hub keeps (JSON keyed
@@ -602,6 +604,8 @@ export interface AppConfig {
   systemMacHoursFrom?: number;
   /** …to this one (before it; less than `from` — past midnight). */
   systemMacHoursTo?: number;
+  /** Заказ кастома: «Кастомы оплачены, не отданы» counts the custom orders (paid or shot, not given); off — the old table. */
+  customOrdersReadEnabled?: boolean;
   /** Chat Memory: the facts lane (one AI run per quiet conversation). */
   fanFactsEnabled?: boolean;
   /** Comma-separated page labels the facts lane reads; empty = none. */
@@ -969,6 +973,7 @@ export function loadConfig(
     mattersReadEnabled: parsed.MATTERS_READ_ENABLED,
     systemMacHoursFrom: parsed.SYSTEM_MAC_HOURS_FROM,
     systemMacHoursTo: parsed.SYSTEM_MAC_HOURS_TO,
+    customOrdersReadEnabled: parsed.CUSTOM_ORDERS_READ_ENABLED,
     fanFactsEnabled: parsed.FAN_FACTS_ENABLED,
     fanFactsPages: parsed.FAN_FACTS_PAGES,
     crossSpendersLists: parsed.CROSS_SPENDERS_LISTS,

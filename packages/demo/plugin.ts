@@ -225,6 +225,7 @@ export function demoApi(options: DemoApiOptions = {}): Plugin {
           const role = ROLES.find((item) => item === roleCookie) ?? "owner";
           const demoRequest: DemoRequest = {
             params, query, body: await readBody(request), now: new Date(), role, scenario: readCookie(request, SCENARIO_COOKIE),
+            cookie: (name) => readCookie(request, name),
           };
 
           let handlers: Record<string, ((request: DemoRequest) => unknown) | undefined>;

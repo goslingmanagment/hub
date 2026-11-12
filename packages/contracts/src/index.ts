@@ -25,6 +25,10 @@ export * from "./routes-matters.ts";
 // Agent reports: named markdown pages an agent key publishes (package O), spread by routes.ts.
 export * from "./agent-reports.ts";
 export * from "./routes-agent-reports.ts";
+// Заказ кастома (package I), spread by routes.ts.
+export * from "./custom-orders.ts";
+export * from "./custom-order-rules.ts";
+export * from "./routes-custom-orders.ts";
 export * from "./agent-team.ts";
 export * from "./agent-doors.ts";
 // «Рассылки» kept by Hub (outreach-store-v1), spread by routes.ts.

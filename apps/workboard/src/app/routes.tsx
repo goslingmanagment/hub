@@ -102,6 +102,19 @@ const chatterScreens: RouteObject[] = [
 ];
 
 /**
+ * Кастомы (package I): everyone's — the lead and the owner see every order, a
+ * team lead and a chatter the orders of their pages (Hub decides).
+ */
+const everyoneScreens: RouteObject[] = [
+  { path: "customs", lazy: () => import("../screens/customs/index.js").then((m) => ({ Component: m.CustomsBoardScreen })) },
+  {
+    path: "customs/:code",
+    handle: { screenKey: (params) => params.code ?? "" } satisfies ScreenHandle,
+    lazy: () => import("../screens/customs/index.js").then((m) => ({ Component: m.CustomOrderScreen })),
+  },
+];
+
+/**
  * Every address, each group behind its role guard (RoleGate): a screen of the
  * team never mounts for a chatter, nor a chatter's for the team — one rule
  * here, not one per screen. A new chatter screen is one line of `chatterScreens`
@@ -111,6 +124,7 @@ const screens: RouteObject[] = [
   { index: true, element: <HomeRedirect /> },
   { element: <RoleGate roles={TEAM} />, children: teamScreens },
   { element: <RoleGate roles={CHATTER} />, children: chatterScreens },
+  { element: <RoleGate roles={[...TEAM, ...CHATTER]} />, children: everyoneScreens },
   // The specimen of packages/ui: the demo and dev servers only, never a production build.
   ...(import.meta.env.DEV
     ? [{ path: "__specimen", lazy: () => import("../screens/specimen/SpecimenScreen.js").then((m) => ({ Component: m.SpecimenScreen })) }]

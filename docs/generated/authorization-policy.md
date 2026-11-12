@@ -26,7 +26,7 @@ for at password sign-in (`client: "chat-extension"`): it reaches only the
 64 routes marked "yes", and every route marked "no" refuses it with 403.
 A full device token is not affected.
 
-## Routes (450)
+## Routes (459)
 
 | Method | Path | Route key | Kind | Roles | Page scope | chat-extension token |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -208,6 +208,10 @@ A full device token is not affected.
 | POST | `/api/v1/admin/users/by-id/:userId/terminate-access` | `adminTerminateAllAccess` | `owner-session` | — | — | no |
 | GET | `/api/v1/agent/capabilities` | `agentCapabilities` | `agentKey` | — | — | no |
 | GET | `/api/v1/agent/coverage` | `agentCoverage` | `agentKey` | — | — | no |
+| GET | `/api/v1/agent/custom-orders` | `agentCustomOrders` | `agentKey` | — | — | no |
+| POST | `/api/v1/agent/custom-orders` | `agentCustomOrderCreate` | `agentKey` | — | — | no |
+| POST | `/api/v1/agent/custom-orders/:code` | `agentCustomOrderUpdate` | `agentKey` | — | — | no |
+| POST | `/api/v1/agent/custom-orders/cards` | `agentCustomCards` | `agentKey` | — | — | no |
 | GET | `/api/v1/agent/fan-queues` | `agentFanQueueList` | `agentKey` | — | — | no |
 | GET | `/api/v1/agent/fan-queues/:queueId` | `agentFanQueueGet` | `agentKey` | — | — | no |
 | PATCH | `/api/v1/agent/fan-queues/:queueId` | `agentFanQueueUpdate` | `agentKey` | — | — | no |
@@ -353,6 +357,11 @@ A full device token is not affected.
 | GET | `/api/v1/client/pages/:pageLabel/spenders/stats` | `clientSpenderStats` | `apiKey` | — | page | yes |
 | GET | `/api/v1/client/pages/:pageLabel/win-back` | `clientWinBack` | `apiKey` | — | page | yes |
 | POST | `/api/v1/client/pages/:pageLabel/win-back/attempts` | `clientWinBackAttempt` | `apiKey` | — | page | yes |
+| GET | `/api/v1/custom-orders` | `customOrdersBoard` | `any-session` | — | — | no |
+| POST | `/api/v1/custom-orders` | `customOrderCreate` | `any-session` | — | — | no |
+| GET | `/api/v1/custom-orders/:code` | `customOrder` | `any-session` | — | — | no |
+| POST | `/api/v1/custom-orders/:code` | `customOrderAct` | `any-session` | — | — | no |
+| POST | `/api/v1/custom-orders/sales/:transactionRef/dismiss` | `customSaleDismiss` | `any-session` | — | — | no |
 | GET | `/api/v1/fans/:platform/:platformUserId` | `crossPageFanDetail` | `session` | — | — | no |
 | PATCH | `/api/v1/fans/:platform/:platformUserId/flags` | `setFanFlags` | `owner-session` | — | — | no |
 | GET | `/api/v1/fans/:platform/:platformUserId/transactions` | `crossPageFanTransactions` | `session` | — | — | no |

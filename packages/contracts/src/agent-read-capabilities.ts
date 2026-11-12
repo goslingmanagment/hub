@@ -143,6 +143,15 @@ export const AGENT_CAPABILITIES = [
    * Reads nothing of a page: the key's page grant does not widen it.
    */
   "introspect:agent_keys",
+  /**
+   * Custom orders (ecosystem plan 2026-11-12, package I): create an order from
+   * the card's fields and the fan's link (Gengar's `/tz`), update its fields,
+   * write what the model's group says (partly shot, shot, a revision, a
+   * refusal) with the model's message, attach a Telegram card, report the
+   * cards no order has, and read the orders of the key's pages. Never money:
+   * a payment is a person's «Это оплата?»; never «отдали»: that is the chatter's.
+   */
+  "write:customs",
 ] as const;
 
 export type AgentCapability = (typeof AGENT_CAPABILITIES)[number];

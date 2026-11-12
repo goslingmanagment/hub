@@ -117,6 +117,8 @@ export const QUEUE_RETENTION_SETTINGS: readonly QueueRetentionSetting[] = [
   { queue: "client.send-custody.archive-sweep", retentionClass: "heartbeat-cron", retentionSeconds: HEARTBEAT_RETENTION_SECONDS, deleteAfterSeconds: HEARTBEAT_RETENTION_SECONDS },
   // Every minute; each tick reads the sources of «Ждут вас» and «Решения» anew (the ledger's every five).
   { queue: "matters.mirror", retentionClass: "heartbeat-cron", retentionSeconds: HEARTBEAT_RETENTION_SECONDS, deleteAfterSeconds: HEARTBEAT_RETENTION_SECONDS },
+  // Every 5 minutes; each tick reads the custom orders and the sales anew (custom-orders/checks.ts).
+  { queue: "custom-orders.checks", retentionClass: "heartbeat-cron", retentionSeconds: HEARTBEAT_RETENTION_SECONDS, deleteAfterSeconds: HEARTBEAT_RETENTION_SECONDS },
   // Every 10 minutes; each tick computes the last two days' shifts anew (shift-rows.ts).
   { queue: "team.shift-rows", retentionClass: "heartbeat-cron", retentionSeconds: HEARTBEAT_RETENTION_SECONDS, deleteAfterSeconds: HEARTBEAT_RETENTION_SECONDS },
   // Hourly; each tick recomputes this week's and last week's sale homes anew (sale-homes.ts).
