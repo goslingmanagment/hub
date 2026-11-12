@@ -93,7 +93,7 @@ async function authority(app: AppContext, command: OfapiAction, frozen?: Frozen,
   if (frozen && (frozen.accountId !== accountId || frozen.credential !== fingerprint(app))) throw new ConflictError("Account binding or credential changed since preparation");
   const generation = await checkOfapiCurrentBinding(db, command.pageId, accountId, frozen?.generation);
   const request = ofapiActionRequest(command, accountId);
-  await assertOfapiConfiguredAccess(app.db, fingerprint(app), { operation: operation(command.action), method: request.method, accountId });
+  await assertOfapiConfiguredAccess(app.db, fingerprint(app), { operation: operation(command.action), method: request.method, pathname: request.path, accountId });
   return { page, accountId, generation, request };
 }
 

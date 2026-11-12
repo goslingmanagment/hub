@@ -734,7 +734,7 @@ export function createOfapiClient(input: {
   onCollectionResponse?: (requestId: string, actualCredits: number | null) => Promise<void>;
   onCollectionCancelled?: (requestId: string) => Promise<void>;
   credentialPolicy?: { expectedTeamSlug: string | null };
-  beforeOperationRequest?: (request: { operation: string; accountId: string | null; method: string }) => Promise<void>;
+  beforeOperationRequest?: (request: { operation: string; accountId: string | null; method: string; pathname: string }) => Promise<void>;
   beforeAccountRequest?: (pageId: number | null | undefined, accountId: string, generation?: number) => Promise<number>;
   onAccountResponse?: (accountId: string, generation: number, status: number, body: string) => Promise<void>;
   onAdminResponse?: (response: { operation: string; status: number; body: string; receivedAt: Date; headers?: Record<string, string>; pageId?: number | null; accountId?: string }) => Promise<void | OfapiAdminCapture>;
@@ -749,7 +749,7 @@ export function createOfapiClient(input: {
   const onCreditSpend = input.onCreditSpend ?? null;
   async function authorizeOperation(operation: string, method: string, pathname: string) {
     const segment = pathname.split("/")[1];
-    await input.beforeOperationRequest?.({ operation, method,
+    await input.beforeOperationRequest?.({ operation, method, pathname: pathname.split("?")[0]!,
       accountId: segment?.startsWith("acct_") ? decodeURIComponent(segment) : null });
   }
   let pendingCreditReceipts = new Map<string, OfapiCreditSpendObservation>();

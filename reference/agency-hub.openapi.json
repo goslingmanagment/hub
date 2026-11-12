@@ -56553,7 +56553,8 @@
                               "webhooks",
                               "exports",
                               "uploads",
-                              "links"
+                              "links",
+                              "vault"
                             ]
                           }
                         },
@@ -56829,7 +56830,7 @@
                   "capabilities": {
                     "anyOf": [
                       {
-                        "maxItems": 6,
+                        "maxItems": 7,
                         "type": "array",
                         "items": {
                           "type": "string",
@@ -56839,7 +56840,8 @@
                             "webhooks",
                             "exports",
                             "uploads",
-                            "links"
+                            "links",
+                            "vault"
                           ]
                         }
                       },
@@ -56918,7 +56920,8 @@
                               "webhooks",
                               "exports",
                               "uploads",
-                              "links"
+                              "links",
+                              "vault"
                             ]
                           }
                         },

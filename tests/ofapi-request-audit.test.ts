@@ -17,7 +17,7 @@ describe("OFAPI request audit regressions", () => {
     await expect(client.listChats({}, ACCOUNT, {})).rejects.toThrow("local permission denied");
     expect(fetch).toHaveBeenCalledTimes(1);
     expect(admission).toHaveBeenCalledTimes(2);
-    expect(admission).toHaveBeenLastCalledWith({ operation: "ofapi_chats", accountId: ACCOUNT, method: "GET" });
+    expect(admission).toHaveBeenLastCalledWith({ operation: "ofapi_chats", accountId: ACCOUNT, method: "GET", pathname: `/${ACCOUNT}/chats` });
     const beforeDispatch = vi.fn(async () => true);
     await expect(client.dispatchGovernedRaw!({}, {
       attemptId: "test", operation: "test", method: "GET", pathname: `/${ACCOUNT}/posts`,

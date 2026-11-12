@@ -1,8 +1,8 @@
 import { useState } from "react";
 import { applyOfapiKeyScope, readOfapiKeyScope } from "@/api/ofapiVendor";
 
-const capabilities = ["reads", "commands", "webhooks", "exports", "uploads", "links"] as const;
-const capabilityLabels = { reads: "Чтение", commands: "Команды", webhooks: "События", exports: "Экспорты", uploads: "Загрузки", links: "Ссылки и пиксели" };
+const capabilities = ["reads", "commands", "webhooks", "exports", "uploads", "links", "vault"] as const;
+const capabilityLabels = { reads: "Чтение", commands: "Команды", webhooks: "События", exports: "Экспорты", uploads: "Загрузки", links: "Ссылки и пиксели", vault: "Волт: заливка и альбомы" };
 const preflightLabels: Record<string, string> = {
   verified: "подтверждена", unknown: "не проверена", mismatch: "не совпадает", denied: "доступ запрещён",
 };
