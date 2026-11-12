@@ -27,6 +27,13 @@ import {
   agentCustomOrderCreateBodySchema,
   agentCustomOrderUpdateBodySchema,
   CUSTOM_ORDER_STATES,
+  agentShiftReportCommentBodySchema,
+  agentShiftReportLineBodySchema,
+  agentShiftReportOffPlatformBodySchema,
+  agentShiftReportSubmitBodySchema,
+  SHIFT_REPORT_COMMENT_MAX,
+  SHIFT_REPORT_NOTE_MAX,
+  SHIFT_REPORT_STATEMENTS,
   agentResolveHintEnum,
   agentSenderRoleEnum,
   agentSyncResourceKeyEnum,
@@ -48,7 +55,7 @@ import {
   type AgentThreadAvailabilityCause,
   type AgentThreadAvailabilityResponse,
 } from "@agency_hub_core/contracts";
-import { PUBLICATION_VAULT_ALBUM_MEDIA_MAX, PUBLICATION_VAULT_ALBUM_TITLE_MAX } from "@agency_hub_core/shared";
+import { formatUsdFromMills, PUBLICATION_VAULT_ALBUM_MEDIA_MAX, PUBLICATION_VAULT_ALBUM_TITLE_MAX } from "@agency_hub_core/shared";
 import { KernelApiError, type KernelClient, type KernelOperationResponse } from "@kernel/sdk";
 
 import {
@@ -2158,6 +2165,283 @@ const CUSTOM_COMMANDS: HubCommand[] = [
   },
 ];
 
+// --- shift reports «со слов» (write:shift_reports) ---------------------------
+
+const SHIFT_REPORT_CAPABILITY_HINT =
+  "This key lacks write:shift_reports: the owner grants it to the key (dashboard, Система, Доступ ИИ-агентов)";
+
+/** The one 403 an agent key with the capability gets here: the person's switch is off. */
+const SHIFT_REPORT_SWITCH_OFF =
+  "The person's switch «сдаёт смену в системе» is off: Hub takes no words for their report, nothing was written."
+  + " Their report goes the old way: the post in «Отчётность»";
+
+/** What a refusal of the shift reports' door means, and what to do. */
+function shiftReportHint(error: { status: number | null; code: string | null }): string | null {
+  const reason = refusalReason(error);
+  if (error.status === 403 && error.code !== "forbidden") return SHIFT_REPORT_CAPABILITY_HINT;
+  if (error.status === 403) return SHIFT_REPORT_SWITCH_OFF;
+  if (error.status === 409 && reason === "sender_not_person") {
+    return "sender_not_person: the message's sender is not this person (their Telegram id in the people registry). Write"
+      + " only what the person said in their own message; a colleague's or a lead's message about them is not their word";
+  }
+  if (error.status === 400 && reason === "source_ref_required") return "A shift is handed in «со слов» only with the person's message: --message <link>";
+  if (error.status === 400 && reason === "note_required") return "note_required: «моё» needs one line of why, in the person's words: --note";
+  if (error.status === 400 && reason === "statement_not_allowed") {
+    return "statement_not_allowed: a line of «Ваши продажи» (group mine) takes not_mine or share, a line of «Рядом» (group"
+      + " near) and a sale added by hand take mine, rule takes any word back. Read the line's group in hub shift-report show";
+  }
+  if (error.status === 400 && (reason === "share_with_missing" || reason === "share_with_unknown")) {
+    return `${reason}: «делим с…» names a colleague of the sale's page, one of \`colleagues\` in hub shift-report show`;
+  }
+  if (error.status === 404 && reason === "not_claimable") {
+    return "not_claimable: this sale cannot be added by hand: it is not in hub shift-report claimable (another report of the"
+      + " person holds it, its page is not theirs, or it is older than 7 days)";
+  }
+  if (error.status === 404) {
+    return "Not found: no such person (Telegram id or code in the people registry) or shift, the person has no shift yet, a"
+      + " page of the shift is outside this key's grant, or the sale is not a line of the draft (read hub shift-report show)";
+  }
+  return null;
+}
+
+/** `--statement`: the person's word on a line; `rule` takes it back (the rule's word stands). */
+const SHIFT_REPORT_LINE_WORDS = [...SHIFT_REPORT_STATEMENTS, "rule"] as const;
+
+/** A positive whole id from `--<name>`, or undefined. */
+function readId(values: HubOptionValues, name: string): number | undefined {
+  return values[name] === undefined ? undefined : requireId(values, name);
+}
+
+/** Whose words: the sender of the Telegram message (must be the person) and the message itself. */
+function shiftReportWords(values: HubOptionValues, messageRequired: boolean) {
+  return defined({
+    telegramUserId: requireId(values, "sender"),
+    sourceRef: messageRequired ? requireString(values, "message") : readString(values, "message"),
+  });
+}
+
+/** `--share-with`: the colleague's user id, or their name as the report's `colleagues` print it (then the report is read first). */
+async function shiftReportShareWith(client: KernelClient, raw: string, shiftId: number): Promise<number> {
+  const text = raw.trim();
+  if (/^\d+$/.test(text) && Number.isSafeInteger(Number(text)) && Number(text) > 0) return Number(text);
+  const report = await client.agentShiftReport({ query: { shiftId } });
+  const wanted = text.toLocaleLowerCase("ru");
+  const found = report.colleagues.filter((one) => one.name.trim().toLocaleLowerCase("ru") === wanted);
+  if (found.length === 1) return found[0]!.userId;
+  throw new HubUsageError(
+    found.length === 0
+      ? `--share-with "${raw}" is none of this shift's colleagues: give one of theirs, by name or user id`
+      : `--share-with "${raw}" names ${found.length} colleagues: give the user id`,
+    { colleagues: report.colleagues },
+  );
+}
+
+type ShiftReportAnswer = KernelOperationResponse<"agentShiftReport">;
+
+/** One line over a report: whether Hub takes the person's words, and what stands now. */
+function shiftReportNote(report: ShiftReportAnswer): string {
+  const shift = `Shift ${report.shift.id} of ${report.shift.personName}, ${report.shift.reportDate}`;
+  if (!report.enabled) {
+    return `${shift}: the switch «сдаёт смену в системе» is off, so Hub takes no words for this report. It goes the old way:`
+      + " the post in «Отчётность».";
+  }
+  const draft = report.view === null ? "" : ` The draft counts ${formatUsdFromMills(report.view.totalMills)} now («предварительно»: the rule and the person's words so far).`;
+  const latest = report.latest;
+  if (latest === null) {
+    return `${shift}: not handed in yet.${draft} Hand it in on the person's word: hub shift-report submit --shift ${report.shift.id}`
+      + " --sender <their Telegram id> --message <their message>.";
+  }
+  const handed = `handed in, version ${latest.version} at ${latest.submittedAt} (${latest.door}), ${formatUsdFromMills(latest.totalMills)}`;
+  if (report.state === "open") return `${shift}: ${handed}, opened again since.${draft} submit makes version ${latest.version + 1}.`;
+  const after = report.afterSubmission === null
+    ? ""
+    : ` After the hand-in ${report.afterSubmission.count} more sale(s) for ${formatUsdFromMills(report.afterSubmission.mills)}: submit again`
+      + " to add them («Досдать»).";
+  return `${shift}: ${handed}. The post for «Отчётность» is data.posts[].text, one per model.${after}`;
+}
+
+const SHIFT_REPORT_SENDER_OPTION: HubOption = {
+  kind: "number",
+  describe: "The Telegram id of the message's sender (required): must be the person's own (people registry), else 409 sender_not_person",
+};
+const SHIFT_REPORT_MESSAGE_OPTION: HubOption = {
+  kind: "string",
+  describe: "The person's message the words are in: https://t.me/c/<chat>/<msg>, or --message=<chat>:<msg> (with = when the chat id starts with -)",
+};
+const SHIFT_REPORT_SHIFT_OPTION: HubOption = { kind: "number", describe: "The shift's id, shift.id of hub shift-report show (required)" };
+
+const SHIFT_REPORT_COMMANDS: HubCommand[] = [
+  {
+    name: "shift-report show",
+    operation: "agentShiftReport",
+    summary:
+      "A person's shift report as they see it in Workboard, to write their words into it: `enabled` (their switch «сдаёт"
+      + " смену в системе»; false: Hub takes no words, their report goes the old way, the post in «Отчётность»), the shift"
+      + " (id, pages, reportDate, ongoing), `state` open | submitted, the versions handed in (`latest`, `versions`), the draft"
+      + " (`view.lines`: «Ваши продажи» group mine and «Рядом» group near, each with the rule's `words`, the person's"
+      + " `statement` and `note`, what it counts in `amountMills`, `added` for a «долёт» or a sale added by hand, and `facts`"
+      + " for «почему»; `view.pages`, `view.totalMills`, `view.offPlatform`, `view.comment`), `afterSubmission` (sales after"
+      + " the hand-in), `posts` (the newest version as the post for «Отчётность», one per model) and `colleagues` (whom"
+      + " «делим с…» may name). The person by --sender (the Telegram id of whoever sent /smena, when it is their own report)"
+      + " or --person; the shift by --shift, else the person's latest. Reading needs no message. Exit 0 — answered (read"
+      + " `enabled` and the `note`); 4 — refused or no answer. Needs write:shift_reports.",
+    example: "hub shift-report show --sender 700000111",
+    options: {
+      sender: { kind: "number", describe: "The person by their Telegram id (the sender of /smena)" },
+      person: { kind: "string", describe: "Or the person by their code in the people registry" },
+      shift: { kind: "number", describe: "The shift's id; absent — the person's latest shift" },
+    },
+    hint: shiftReportHint,
+    run: async (client, values) => {
+      const query = defined({ telegramUserId: readId(values, "sender"), person: readString(values, "person"), shiftId: readId(values, "shift") });
+      if (Object.keys(query).length === 0) throw new HubUsageError("name the person (--sender or --person) or the shift (--shift)");
+      const report = await client.agentShiftReport({ query });
+      return new HubNotedResult(report, shiftReportNote(report));
+    },
+  },
+  {
+    name: "shift-report claimable",
+    operation: "agentShiftReportClaimable",
+    summary:
+      "«Добавить → продажу»: the sales of the last 7 days the person may add to this report by hand, on the pages they may"
+      + " open and this key's grant, held by no report of theirs: nobody's first («ничья», home nobody: it counts plainly"
+      + " when added), then the newest; `words` says whose each is by the rule (one of someone else counts, marked disputed)."
+      + " Add one with hub shift-report line --sale <transactionId> --statement mine --note \"<why, in their words>\"."
+      + " Exit 0 — answered; 4 — refused (403: their switch is off; 409 sender_not_person) or no answer. Needs"
+      + " write:shift_reports.",
+    example: "hub shift-report claimable --shift 4512 --sender 700000111",
+    options: {
+      shift: SHIFT_REPORT_SHIFT_OPTION,
+      sender: { kind: "number", describe: "The Telegram id of the person asking (required): must be the person's own" },
+    },
+    hint: shiftReportHint,
+    run: (client, values) => client.agentShiftReportClaimable({
+      query: { shiftId: requireId(values, "shift"), telegramUserId: requireId(values, "sender") },
+    }),
+  },
+  {
+    name: "shift-report line",
+    operation: "agentShiftReportLineSet",
+    summary:
+      "Set the person's word on one sale of the draft, from their message: --statement not_mine («не моё», counts 0) or"
+      + " share («делим с…», half the net, --share-with the colleague) on a line of «Ваши продажи»; mine («это моё», --note"
+      + " with one line of why) on a line of «Рядом» or on a sale of hub shift-report claimable, which adds it to the report"
+      + " (counted, disputed when the rule gives it to someone else); rule takes the word back. --note alone: send the"
+      + " line's current word with it (rule when `statement` is null). Saved at once; the draft is recounted. Only the"
+      + " person's own words in their own message, never the agent's inference. Exit 0 — saved; 4 — refused (403: their"
+      + " switch is off; 409 sender_not_person; 400 statement_not_allowed, note_required, share_with_unknown; 404"
+      + " not_claimable) or no answer. Needs write:shift_reports.",
+    example: 'hub shift-report line --shift 4512 --sale 98765 --statement not_mine --note "PPV отправлял сменщик" --sender 700000111 --message https://t.me/c/2600000001/2001',
+    options: {
+      shift: SHIFT_REPORT_SHIFT_OPTION,
+      sale: { kind: "number", describe: "The sale: transactionId of a line in show, or of a sale in claimable (required)" },
+      statement: { kind: "string", describe: `The person's word (required): ${SHIFT_REPORT_LINE_WORDS.join(" | ")}` },
+      "share-with": { kind: "string", describe: "With share: the colleague, by user id or by name as show's `colleagues` print it" },
+      note: { kind: "string", describe: `A note on the line in the person's words, up to ${SHIFT_REPORT_NOTE_MAX} characters; required with mine` },
+      sender: SHIFT_REPORT_SENDER_OPTION,
+      message: SHIFT_REPORT_MESSAGE_OPTION,
+    },
+    hint: shiftReportHint,
+    run: async (client, values) => {
+      const shiftId = requireId(values, "shift");
+      const transactionId = requireId(values, "sale");
+      const word = requireEnum(values, "statement", SHIFT_REPORT_LINE_WORDS);
+      const statement = word === "rule" ? null : word;
+      const shareWith = readString(values, "share-with");
+      if (statement === "share" && shareWith === undefined) throw new HubUsageError("--statement share names the colleague: --share-with <user id or name>");
+      if (statement !== "share" && shareWith !== undefined) throw new HubUsageError("--share-with goes only with --statement share");
+      const words = shiftReportWords(values, false);
+      const draft = { shiftId, transactionId, statement, note: readString(values, "note"), ...words };
+      checkedDraft(agentShiftReportLineBodySchema, defined(draft));
+      const shareWithUserId = shareWith === undefined ? undefined : await shiftReportShareWith(client, shareWith, shiftId);
+      return client.agentShiftReportLineSet({ body: checkedDraft(agentShiftReportLineBodySchema, defined({ ...draft, shareWithUserId })) });
+    },
+  },
+  {
+    name: "shift-report comment",
+    operation: "agentShiftReportCommentSet",
+    summary:
+      "Set the draft's comment (for the next shift and the owner) to the person's own text, word for word; --text \"\""
+      + ` empties it. Up to ${SHIFT_REPORT_COMMENT_MAX} characters, saved at once. Exit 0 — saved; 4 — refused (403: their switch`
+      + " is off; 409 sender_not_person) or no answer. Needs write:shift_reports.",
+    example: 'hub shift-report comment --shift 4512 --text "фан ждёт видео к пятнице" --sender 700000111 --message https://t.me/c/2600000001/2002',
+    options: {
+      shift: SHIFT_REPORT_SHIFT_OPTION,
+      text: { kind: "string", describe: "The comment, the person's words (required)" },
+      sender: SHIFT_REPORT_SENDER_OPTION,
+      message: SHIFT_REPORT_MESSAGE_OPTION,
+    },
+    hint: shiftReportHint,
+    run: (client, values) => {
+      const comment = readString(values, "text");
+      if (comment === undefined) throw new HubUsageError("--text is required: the person's comment (\"\" empties it)");
+      return client.agentShiftReportCommentSet({
+        body: checkedDraft(agentShiftReportCommentBodySchema, { shiftId: requireId(values, "shift"), comment, ...shiftReportWords(values, false) }),
+      });
+    },
+  },
+  {
+    name: "shift-report off-platform",
+    operation: "agentShiftReportOffPlatformAdd",
+    summary:
+      "Add «мимо площадки»: money that came past the platform (Telegram, crypto), with --amount in dollars, --from-whom and"
+      + " --what-for, as the person said it. It waits for the owner and is never in the report's sums before the owner"
+      + " confirms it; the post shows it in the comment as «ждёт подтверждения владельца». Exit 0 — added (`line`); 4 —"
+      + " refused (403: their switch is off; 409 sender_not_person) or no answer. Needs write:shift_reports.",
+    example: 'hub shift-report off-platform --shift 4512 --amount 50 --from-whom "фан из тг" --what-for "кастом" --sender 700000111 --message https://t.me/c/2600000001/2003',
+    options: {
+      shift: SHIFT_REPORT_SHIFT_OPTION,
+      amount: { kind: "string", describe: "How much, in dollars (required): 50 or 49.99" },
+      "from-whom": { kind: "string", describe: "From whom, as the person said it (required)" },
+      "what-for": { kind: "string", describe: "What for (required)" },
+      sender: SHIFT_REPORT_SENDER_OPTION,
+      message: SHIFT_REPORT_MESSAGE_OPTION,
+    },
+    hint: shiftReportHint,
+    run: (client, values) => {
+      const amountMills = hubDollarsToMills(values, "amount", "positive");
+      if (amountMills === undefined) throw new HubUsageError("--amount is required: dollars, 50 or 49.99");
+      return client.agentShiftReportOffPlatformAdd({
+        body: checkedDraft(agentShiftReportOffPlatformBodySchema, {
+          shiftId: requireId(values, "shift"),
+          amountMills,
+          fromWhom: requireString(values, "from-whom"),
+          whatFor: requireString(values, "what-for"),
+          ...shiftReportWords(values, false),
+        }),
+      });
+    },
+  },
+  {
+    name: "shift-report submit",
+    operation: "agentShiftReportSubmit",
+    summary:
+      "Hand the shift in «со слов»: the draft as it is now becomes the report's next version, door telegram, with the"
+      + " person's message and its sender recorded. Never without both: --message (their message saying to hand it in) and"
+      + " --sender (its sender, who must be the person). A shift still going may be handed in; again later makes the next"
+      + " version («Досдать»). A day the ledger already paid is still handed in: Hub keeps the version and tells the owner"
+      + " (this answer does not say whether the day was paid). The ledger reads the version itself. The answer is the"
+      + " report as show prints it: give the person `posts[].text` for «Отчётность». Exit 0 — handed in; 4 — refused (403:"
+      + " their switch is off; 409 sender_not_person) or no answer. Needs write:shift_reports.",
+    example: "hub shift-report submit --shift 4512 --sender 700000111 --message https://t.me/c/2600000001/2004",
+    options: {
+      shift: SHIFT_REPORT_SHIFT_OPTION,
+      sender: { kind: "number", describe: "The Telegram id of the message's sender (required): must be the person's own" },
+      message: { kind: "string", describe: "The person's message to hand the shift in (required): https://t.me/c/<chat>/<msg>, or --message=<chat>:<msg> (with = when the chat id starts with -)" },
+    },
+    hint: shiftReportHint,
+    run: async (client, values) => {
+      const body = checkedDraft(agentShiftReportSubmitBodySchema, { shiftId: requireId(values, "shift"), ...shiftReportWords(values, true) });
+      const report = await client.agentShiftReportSubmit({ body });
+      const latest = report.latest;
+      return new HubNotedResult(report, latest === null
+        ? shiftReportNote(report)
+        : `Handed in «со слов»: version ${latest.version}, ${formatUsdFromMills(latest.totalMills)}. The ledger reads this version`
+          + " itself: save nothing else for this shift. Give the person data.posts[].text for «Отчётность» (one per model).");
+    },
+  },
+];
+
 // --- agent reports (write:reports) -----------------------------------------
 
 const REPORT_CAPABILITY_HINT =
@@ -3517,6 +3801,7 @@ export const HUB_COMMANDS: readonly HubCommand[] = [
   },
   ...MATTER_COMMANDS,
   ...CUSTOM_COMMANDS,
+  ...SHIFT_REPORT_COMMANDS,
 ];
 
 /** A command by its words: one (`threads`) or two (`report put`). */

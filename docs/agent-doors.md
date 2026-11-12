@@ -32,11 +32,55 @@ capture, delivery) is `agent-read-skill.md`; the CLI is `hub` (`hub <command> --
 | Content | `hub publication-*`, `post-*`, `media-look`, `vault-album-draft` | `write:publication_drafts`, `approve:*`, `withdraw:publications`, `delete:posts`, `look:media`, `read:content` | `agent-read-skill.md`, «Drafting wall posts» and after |
 | Fan queues | `hub queue-*` | `write:fan_queues` | Queues for chatters, on the word of the person who asked |
 | Custom orders | `GET/POST /api/v1/agent/custom-orders`, `POST …/custom-orders/:code`, `POST …/custom-orders/cards` (`hub custom list\|create\|step\|cards`) | `write:customs` | Record an order from the card (Gengar's `/tz`), write what the models' group says (at the model, deliveries in parts, revisions, refusals, cancels, messages), report cards with no order. Never a payment or «отдали»: those are people's |
-| Shift reports, claims | — | — | No agent door on Hub yet: each comes with its own package. Until then the ledger holds them |
+| Shift reports «со слов» | `GET /api/v1/agent/shift-reports/draft`, `GET …/claimable`, `POST …/line`, `…/comment`, `…/off-platform`, `…/submit` (`hub shift-report show\|claimable\|line\|comment\|off-platform\|submit`) | `write:shift_reports` | Gengar's `/smena` fills and hands in the report of a person whose switch «сдаёт смену в системе» is on, from the person's own words: below |
+| Shift reports (the ledger's feed) | `GET /api/v1/agent/shift-reports` | `read:team` + `read:money` | Every version handed in, after a cursor: what the ledger accrues and pays from |
+| Claims | — | — | No agent door on Hub yet: it comes with its own package. Until then the ledger holds them |
 | Keys (for services) | `POST /api/v1/agent/keys/introspect` | `introspect:agent_keys` | Another service asks who an agent's hub key is: below |
 
 A page outside the key's grant is the plane's static 404, the same as one that does not exist. A session never
 gets through any of these doors; an agent key never gets through a session's.
+
+## Shift reports «со слов»
+
+The shift report is one object in Hub with three doors to one service: the person's Workboard, the chat extension,
+and this one, for an agent writing the person's words from their Telegram messages (Gengar's `/smena`). The
+report is the person's: the agent writes only what the person said in their own message, never what it inferred
+itself. A question about whose a sale is goes to the person in words, and only their answer is written.
+
+- `hub shift-report show --sender <their Telegram id>` (or `--person <code>`, `--shift <id>`; without `--shift`
+  the person's latest shift): the report as the person sees it. `enabled` is their switch: false means Hub takes
+  no words for them and their report goes the old way (the post in «Отчётность»). It also carries the draft's lines
+  («Ваши продажи», «Рядом») with the rule's words and the facts behind them, the versions handed in, `posts` (the
+  newest version as the post for «Отчётность», one per model) and `colleagues` (whom «делим с…» may name).
+  Reading needs no message.
+- `hub shift-report claimable --shift <id> --sender <id>`: the sales of the last 7 days the person may add by hand,
+  nobody's first.
+- `hub shift-report line --shift <id> --sale <transactionId> --statement not_mine|share|mine|rule`: the person's word
+  on a sale. «не моё» and «делим с…» (`--share-with` a colleague, by user id or name) go on «Ваши продажи»; «моё»
+  (with `--note`, one line of why) goes on «Рядом» or adds a sale from `claimable`; `rule` takes the word back.
+- `hub shift-report comment --shift <id> --text "…"`: the comment, the person's text word for word.
+- `hub shift-report off-platform --shift <id> --amount <dollars> --from-whom … --what-for …`: «мимо площадки». It
+  waits for the owner and is never in the sums before the owner confirms it.
+- `hub shift-report submit --shift <id> --sender <id> --message <link>`: hands the shift in as its next version,
+  door `telegram`, with the message and its sender recorded. It never goes without both. A shift still going can be
+  handed in, and a later hand-in is the next version.
+
+Every write carries `--sender`, the Telegram id of the message's sender, which must be the person's in the people
+registry, and preferably `--message`, the message itself. The refusals, as `hub` prints them (`error.reason`,
+`error.hint`):
+
+- 403 `forbidden`: the person's switch «сдаёт смену в системе» is off. Nothing is written; their report goes the
+  old way. A 403 with another code is a key without `write:shift_reports`.
+- 409 `sender_not_person`: the sender is not the person (a colleague's or a lead's message about them included).
+- 400 `source_ref_required`: a hand-in without the message. 400 `note_required`, `statement_not_allowed`,
+  `share_with_missing`, `share_with_unknown`: a word the line does not take; 404 `not_claimable`: a sale that cannot
+  be added by hand.
+- A day the ledger already paid is not refused: the version is kept and the owner gets the matter «Отчёт смены
+  после выплаты». The agent's answer does not say whether the day was paid.
+
+What stays the ledger's: accrued and paid. The ledger reads every handed-in version itself from its feed
+(`GET /api/v1/agent/shift-reports`); nothing about a shift handed in here is saved to the ledger another way. A
+person whose switch is off reports exactly as before.
 
 ## «Кто этот ключ»: another service accepts a hub key
 
