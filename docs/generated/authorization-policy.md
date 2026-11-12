@@ -23,13 +23,14 @@ body remain handler-checked and are noted per route in the service layer.
 
 The `chat-extension token` column is the narrow device token a client asks
 for at password sign-in (`client: "chat-extension"`): it reaches only the
-64 routes marked "yes", and every route marked "no" refuses it with 403.
+72 routes marked "yes", and every route marked "no" refuses it with 403.
 A full device token is not affected.
 
-## Routes (450)
+## Routes (476)
 
 | Method | Path | Route key | Kind | Roles | Page scope | chat-extension token |
 | --- | --- | --- | --- | --- | --- | --- |
+| GET | `/api/v1/account/pay` | `accountPay` | `any-session` | — | — | no |
 | GET | `/api/v1/account/reports` | `accountReports` | `any-session` | — | — | no |
 | GET | `/api/v1/account/stats` | `accountChatterStats` | `any-session` | — | — | no |
 | GET | `/api/v1/admin/ai/accounts` | `adminAiAccountsList` | `owner-session` | — | — | no |
@@ -208,6 +209,10 @@ A full device token is not affected.
 | POST | `/api/v1/admin/users/by-id/:userId/terminate-access` | `adminTerminateAllAccess` | `owner-session` | — | — | no |
 | GET | `/api/v1/agent/capabilities` | `agentCapabilities` | `agentKey` | — | — | no |
 | GET | `/api/v1/agent/coverage` | `agentCoverage` | `agentKey` | — | — | no |
+| GET | `/api/v1/agent/custom-orders` | `agentCustomOrders` | `agentKey` | — | — | no |
+| POST | `/api/v1/agent/custom-orders` | `agentCustomOrderCreate` | `agentKey` | — | — | no |
+| POST | `/api/v1/agent/custom-orders/:code` | `agentCustomOrderUpdate` | `agentKey` | — | — | no |
+| POST | `/api/v1/agent/custom-orders/cards` | `agentCustomCards` | `agentKey` | — | — | no |
 | GET | `/api/v1/agent/fan-queues` | `agentFanQueueList` | `agentKey` | — | — | no |
 | GET | `/api/v1/agent/fan-queues/:queueId` | `agentFanQueueGet` | `agentKey` | — | — | no |
 | PATCH | `/api/v1/agent/fan-queues/:queueId` | `agentFanQueueUpdate` | `agentKey` | — | — | no |
@@ -265,6 +270,13 @@ A full device token is not affected.
 | PUT | `/api/v1/agent/reports/:slug` | `agentReportPut` | `agentKey` | — | — | no |
 | POST | `/api/v1/agent/resolve` | `agentResolve` | `agentKey` | — | — | no |
 | POST | `/api/v1/agent/search/messages` | `agentSearchMessages` | `agentKey` | — | — | no |
+| GET | `/api/v1/agent/shift-reports` | `agentShiftReportsFeed` | `agentKey` | — | — | no |
+| GET | `/api/v1/agent/shift-reports/claimable` | `agentShiftReportClaimable` | `agentKey` | — | — | no |
+| POST | `/api/v1/agent/shift-reports/comment` | `agentShiftReportCommentSet` | `agentKey` | — | — | no |
+| GET | `/api/v1/agent/shift-reports/draft` | `agentShiftReport` | `agentKey` | — | — | no |
+| POST | `/api/v1/agent/shift-reports/line` | `agentShiftReportLineSet` | `agentKey` | — | — | no |
+| POST | `/api/v1/agent/shift-reports/off-platform` | `agentShiftReportOffPlatformAdd` | `agentKey` | — | — | no |
+| POST | `/api/v1/agent/shift-reports/submit` | `agentShiftReportSubmit` | `agentKey` | — | — | no |
 | GET | `/api/v1/agent/sync/pages` | `agentSyncStatus` | `agentKey` | — | — | no |
 | PUT | `/api/v1/agent/system/copies` | `agentSystemCopies` | `agentKey` | — | — | no |
 | PUT | `/api/v1/agent/system/routines` | `agentSystemRoutines` | `agentKey` | — | — | no |
@@ -353,6 +365,11 @@ A full device token is not affected.
 | GET | `/api/v1/client/pages/:pageLabel/spenders/stats` | `clientSpenderStats` | `apiKey` | — | page | yes |
 | GET | `/api/v1/client/pages/:pageLabel/win-back` | `clientWinBack` | `apiKey` | — | page | yes |
 | POST | `/api/v1/client/pages/:pageLabel/win-back/attempts` | `clientWinBackAttempt` | `apiKey` | — | page | yes |
+| GET | `/api/v1/custom-orders` | `customOrdersBoard` | `any-session` | — | — | no |
+| POST | `/api/v1/custom-orders` | `customOrderCreate` | `any-session` | — | — | no |
+| GET | `/api/v1/custom-orders/:code` | `customOrder` | `any-session` | — | — | no |
+| POST | `/api/v1/custom-orders/:code` | `customOrderAct` | `any-session` | — | — | no |
+| POST | `/api/v1/custom-orders/sales/:transactionRef/dismiss` | `customSaleDismiss` | `any-session` | — | — | no |
 | GET | `/api/v1/fans/:platform/:platformUserId` | `crossPageFanDetail` | `session` | — | — | no |
 | PATCH | `/api/v1/fans/:platform/:platformUserId/flags` | `setFanFlags` | `owner-session` | — | — | no |
 | GET | `/api/v1/fans/:platform/:platformUserId/transactions` | `crossPageFanTransactions` | `session` | — | — | no |
@@ -444,6 +461,14 @@ A full device token is not affected.
 | GET | `/api/v1/public/vault-upload-files/:token` | `publicVaultUploadFile` | `public` | — | — | — |
 | GET | `/api/v1/reports` | `reportsList` | `session` | — | — | no |
 | GET | `/api/v1/reports/:slug` | `reportGet` | `session` | — | — | no |
+| GET | `/api/v1/shift-reports` | `shiftReportsList` | `any` | — | — | yes |
+| GET | `/api/v1/shift-reports/:shiftId` | `shiftReport` | `any` | — | — | yes |
+| GET | `/api/v1/shift-reports/:shiftId/claimable` | `shiftReportClaimable` | `any` | — | — | yes |
+| PUT | `/api/v1/shift-reports/:shiftId/comment` | `shiftReportCommentSet` | `any` | — | — | yes |
+| PUT | `/api/v1/shift-reports/:shiftId/lines/:transactionId` | `shiftReportLineSet` | `any` | — | — | yes |
+| POST | `/api/v1/shift-reports/:shiftId/off-platform` | `shiftReportOffPlatformAdd` | `any` | — | — | yes |
+| DELETE | `/api/v1/shift-reports/:shiftId/off-platform/:offPlatformId` | `shiftReportOffPlatformWithdraw` | `any` | — | — | yes |
+| POST | `/api/v1/shift-reports/:shiftId/submit` | `shiftReportSubmit` | `any` | — | — | yes |
 | GET | `/api/v1/sync/history-requests` | `syncHistoryRequests` | `owner-session` | — | — | no |
 | GET | `/api/v1/sync/history-requests/:requestRef` | `syncHistoryRequestGet` | `owner-session` | — | — | no |
 | POST | `/api/v1/sync/history-requests/:requestRef/cancel` | `syncHistoryRequestCancel` | `owner-session` | — | — | no |
@@ -462,6 +487,7 @@ A full device token is not affected.
 | GET | `/api/v1/team/empty-hours` | `teamEmptyHours` | `session` | — | — | no |
 | GET | `/api/v1/team/greetings` | `teamGreetings` | `session` | — | — | no |
 | GET | `/api/v1/team/ledger-payouts` | `teamLedgerPayouts` | `owner-session` | — | — | no |
+| GET | `/api/v1/team/ledger-payouts/person` | `teamLedgerPayoutPerson` | `owner-session` | — | — | no |
 | GET | `/api/v1/team/ledger-payouts/prepare` | `teamLedgerPayoutPrepare` | `owner-session` | — | — | no |
 | GET | `/api/v1/team/ledger-questions` | `teamLedgerQuestions` | `owner-session` | — | — | no |
 | GET | `/api/v1/team/ledger-reports` | `teamLedgerReports` | `owner-session` | — | — | no |

@@ -25,8 +25,11 @@ import { shiftReviewRouteSchemas } from "./routes-shift-review.ts";
 import { teamLedgerRouteSchemas } from "./routes-team-ledger.ts";
 import { matterRouteSchemas } from "./routes-matters.ts";
 import { agentReportRouteSchemas } from "./routes-agent-reports.ts";
+import { accountPayRouteSchemas } from "./routes-account-pay.ts";
+import { customOrderRouteSchemas } from "./routes-custom-orders.ts";
 import { accountReportsRouteSchemas } from "./routes-account-reports.ts";
 import { peopleRouteSchemas } from "./routes-people.ts";
+import { shiftHandinRouteSchemas } from "./routes-shift-handins.ts";
 // One sign-in across the names Hub serves: the one-time code between names (ecosystem plan §3.2).
 import { signinRouteSchemas } from "./routes-signin.ts";
 // Система → «Состояние»: every routine and copy, from the owner's place (ecosystem plan, package P).
@@ -7182,9 +7185,12 @@ const baseRouteSchemas = {
   ...matterRouteSchemas,
   ...agentReportRouteSchemas,
   ...accountReportsRouteSchemas,
+  ...accountPayRouteSchemas,
   ...peopleRouteSchemas,
   ...signinRouteSchemas,
   ...systemStateRouteSchemas,
+  ...customOrderRouteSchemas,
+  ...shiftHandinRouteSchemas,
   adminAiPersonasList: {
     auth: { kind: "owner-session" },
     tags: ["admin"],

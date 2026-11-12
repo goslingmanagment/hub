@@ -29,6 +29,8 @@ export interface DemoRequest {
   role: DemoRole;
   /** A screen's other demo state, from the `hub-demo-scenario` cookie (Система → Состояние: `healthy`). */
   scenario?: string | undefined;
+  /** A cookie of the demo browser: a fixture's own switch (the board «Кастомы» reads `hub-demo-customs`). */
+  cookie?: (name: string) => string | undefined;
 }
 
 /** An answer with a status other than 200 (an error, a 201, an empty 204).

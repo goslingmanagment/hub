@@ -25,6 +25,10 @@ export * from "./routes-matters.ts";
 // Agent reports: named markdown pages an agent key publishes (package O), spread by routes.ts.
 export * from "./agent-reports.ts";
 export * from "./routes-agent-reports.ts";
+// Заказ кастома (package I), spread by routes.ts.
+export * from "./custom-orders.ts";
+export * from "./custom-order-rules.ts";
+export * from "./routes-custom-orders.ts";
 export * from "./agent-team.ts";
 export * from "./agent-doors.ts";
 // «Рассылки» kept by Hub (outreach-store-v1), spread by routes.ts.
@@ -80,6 +84,8 @@ export * from "./routes-shift-review.ts";
 export * from "./routes-team-ledger.ts";
 // The chatter's own shift reports from the agency ledger (`GET /api/v1/account/reports`), spread by routes.ts.
 export * from "./routes-account-reports.ts";
+// «Мои деньги»: the chatter's own pay behind the person's switch (`GET /api/v1/account/pay`), spread by routes.ts.
+export * from "./routes-account-pay.ts";
 // Its quality numbers, one definition for the review's screen and «Смены» (`teamChatterNumbers`).
 export * from "./shift-review-rules.ts";
 export * from "./shift-review-audit.ts";
@@ -89,6 +95,7 @@ export * from "./routes-people.ts";
 // Система → «Состояние»: the routines and copies of every place (package P), spread by routes.ts.
 export * from "./system-state.ts";
 export * from "./routes-system-state.ts";
+export * from "./routes-shift-handins.ts";
 
 export * from "./routes-ofapi-banned-words.ts";
 export * from "./routes-model-applications.ts";

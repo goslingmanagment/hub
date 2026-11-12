@@ -142,9 +142,14 @@ export interface ReviewMoney {
   split: SalesSplit;
   /** Before the shift, no shift's: sales to the chatter's fans from the last shift's end to this one's start. */
   beforeNetMills: number;
-  /** The chatter's PPVs of the shift bought after it, by the shift that held each purchase (null — none). */
-  later: Array<{ holder: string | null; netMills: number }>;
+  /** The chatter's PPVs of the shift bought after it, by the shift that held each purchase (null — none; `tail` — the rule's line). */
+  later: Array<{ holder: string | null; tail?: string; netMills: number }>;
+  /** By the one rule (`ruleFrom`): the shift's sales no person's shift has, by their line (the pot, waiting, the owner's decision). */
+  notCounted: Array<{ label: string; netMills: number }>;
 }
+
+/** The one rule's line of a sale no person's shift has (`home.kind`). */
+const HOME_LINES: Partial<Record<string, string>> = { pot: "общак", waiting: "ждёт смены отправителя", decide: "ждёт решения", nobody: "ничья" };
 
 /** `teamShiftReviewIndex` (phase 2). */
 export interface ReviewIndex {
@@ -241,13 +246,25 @@ export function indexOf(data: TeamShiftReviewResponse, waits: readonly ReviewWai
     .sort((a, b) => (b.minutes - b.pauseMinutes) - (a.minutes - a.pauseMinutes))
     .slice(0, 3)
     .sort((a, b) => a.from - b.from);
-  const later = new Map<string | null, number>();
-  for (const sale of data.laterSales) later.set(sale.holderName, (later.get(sale.holderName) ?? 0) + Number(sale.netMills));
+  const later = new Map<string, { holder: string | null; tail?: string; netMills: number }>();
+  for (const sale of data.laterSales) {
+    const tail = sale.holderName === null && sale.home !== undefined ? HOME_LINES[sale.home.kind] : undefined;
+    const key = tail ?? `holder:${sale.holderName ?? ""}`;
+    const known = later.get(key) ?? { holder: sale.holderName, ...(tail === undefined ? {} : { tail }), netMills: 0 };
+    known.netMills += Number(sale.netMills);
+    later.set(key, known);
+  }
+  const notCounted = new Map<string, number>();
+  for (const sale of data.sales) {
+    const label = sale.verdict === "none" && sale.home !== undefined ? HOME_LINES[sale.home.kind] : undefined;
+    if (label !== undefined) notCounted.set(label, (notCounted.get(label) ?? 0) + Number(sale.netMills));
+  }
   const money: ReviewMoney = {
     origins: salesByOrigin(data),
     split: salesSplit(data),
     beforeNetMills: data.beforeSales.reduce((sum, sale) => sum + Number(sale.netMills), 0),
-    later: [...later].map(([holder, netMills]) => ({ holder, netMills })),
+    later: [...later.values()],
+    notCounted: [...notCounted].map(([label, netMills]) => ({ label, netMills })),
   };
   return { shift, totals, money, minutes, sales: sales.sort((a, b) => a.at - b.at), silences: silent, chats: rows };
 }

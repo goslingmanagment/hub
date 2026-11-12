@@ -215,6 +215,9 @@ const SANCTIONED_DELETER_FILES = [
   // working pages and rights — agency configuration, audited per edit, never
   // a captured fact and never on a schedule. People and pay terms are not deleted.
   "packages/db/src/repositories/people.ts",
+  // Custom orders (package I): a person's «Убрать» of a sale wrongly linked as an order's payment, and a
+  // cancelled order giving its sales back. The link only; the sale itself (transactions) is never touched.
+  "packages/db/src/repositories/custom-orders.ts",
   // Fansly Sync Engine hold set (0240, owner decision №26): a page's holds
   // are rows of `sync_holds`, and lifting a hold deletes its row — in the
   // actor's own transaction (an identity proof, an answer after a hold ended,

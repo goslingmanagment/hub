@@ -18,6 +18,16 @@ import { BadRequestError, NotFoundError, ServiceUnavailableError } from "./error
 
 const LEDGER_TIMEOUT_MS = 20_000;
 const DAY_MS = 86_400_000;
+/** The ledger's own limits (payroll/payouts.go): the debts are rebuilt every hour, the sheets collected every hour. */
+const DEBTS_STALE_MS = 2 * 60 * 60_000;
+const SHEETS_STALE_MS = 3 * 60 * 60_000;
+
+/** Whether a ledger moment is older than `limit` at `now`; never (null) or unreadable — old. */
+export function olderThan(at: string | null, limit: number, now: Date): boolean {
+  if (at === null) return true;
+  const time = Date.parse(at);
+  return Number.isNaN(time) || now.getTime() - time > limit;
+}
 
 export const micros = z.number().int();
 /** Go writes an empty slice as null. */
@@ -96,6 +106,22 @@ const ledgerPayoutsSchema = z.object({
 /** The ledger's micro-dollars as Hub's mills: pay is kept to the cent, so nothing is lost. */
 export function millsOf(value: number): number {
   return millsToNumber(microUsdToMills(microUsdFromDbInt(value)));
+}
+
+/**
+ * The ledger's micro-dollars of PAY as mills of the ledger's own whole cents (its money.RoundCents: half to even):
+ * a debt, an accrual or a payout reads on the screen exactly as `ledger payables` and `ledger payout prepare` print
+ * it, never a cent off by Hub's truncation of the thousandths. Pay only: the reports' drafts keep their thousandths.
+ */
+export function payMillsOf(value: number): number {
+  let cents = Math.trunc(value / 10_000);
+  let rest = value % 10_000;
+  if (rest < 0) {
+    cents -= 1;
+    rest += 10_000;
+  }
+  if (rest > 5_000 || (rest === 5_000 && cents % 2 !== 0)) cents += 1;
+  return cents * 10;
 }
 
 /** A window of Moscow days the ledger takes: `from` not after `to`, at most `maxDays` of them; else a 400. */
@@ -190,6 +216,7 @@ export async function readLedgerPayouts(
     throw new ServiceUnavailableError("The ledger's GET /v1/payouts answered in a shape Hub does not know");
   }
   const ledger = parsed.data;
+  const now = options.now ?? new Date();
 
   const hubUserOf = hubUsersOf(await listUsers(app.db));
   const dayOrNull = (value: string | null | undefined) => (value !== null && value !== undefined && BUSINESS_DAY.test(value) ? value : null);
@@ -207,18 +234,23 @@ export async function readLedgerPayouts(
       aliases: person.aliases,
       status: person.status,
       hubUser: hubUserOf(person.hubUserId ?? person.hub_user_id ?? null, [person.slug, person.name, ...person.aliases]),
-      days: person.days.map((day) => ({ date: day.date, model: day.model, amountMills: millsOf(day.amountMicros), worked: day.worked, source: day.source })),
-      accruedMills: millsOf(person.accruedMicros),
-      paidMills: millsOf(person.paidMicros),
-      balanceMills: millsOf(person.balanceMicros),
-      toPayMills: person.toPayMicros === null ? null : millsOf(person.toPayMicros),
+      days: person.days.map((day) => ({ date: day.date, model: day.model, amountMills: payMillsOf(day.amountMicros), worked: day.worked, source: day.source })),
+      accruedMills: payMillsOf(person.accruedMicros),
+      paidMills: payMillsOf(person.paidMicros),
+      balanceMills: payMillsOf(person.balanceMicros),
+      toPayMills: person.toPayMicros === null ? null : payMillsOf(person.toPayMicros),
       oldestUnpaidDate: person.oldestUnpaidDate,
-      unpaidDays: person.unpaidDays.map((day) => ({ date: day.date, kind: day.kind, model: day.model ?? null, unpaidMills: millsOf(day.unpaidMicros) })),
-      unentered: { days: person.unentered.days, shareMills: millsOf(person.unentered.shareMicros), unknown: person.unentered.unknown },
-      pendingChanges: (person.pendingChanges ?? person.pending_changes ?? []).map((change) => ({ id: change.id, day: change.day, model: change.model, postedMills: millsOf(change.postedMicros), newMills: millsOf(change.newMicros), reason: change.reason })),
+      unpaidDays: person.unpaidDays.map((day) => ({ date: day.date, kind: day.kind, model: day.model ?? null, unpaidMills: payMillsOf(day.unpaidMicros) })),
+      unentered: { days: person.unentered.days, shareMills: payMillsOf(person.unentered.shareMicros), unknown: person.unentered.unknown },
+      pendingChanges: (person.pendingChanges ?? person.pending_changes ?? []).map((change) => ({ id: change.id, day: change.day, model: change.model, postedMills: payMillsOf(change.postedMicros), newMills: payMillsOf(change.newMicros), reason: change.reason })),
     })),
-    checks: ledger.checks,
-    serverNow: (options.now ?? new Date()).toISOString(),
+    checks: {
+      ...ledger.checks,
+      // Each number names its own source: the debts are the ledger's rebuild, «в таблице» alone is the sheets'.
+      debtsStale: olderThan(ledger.checks.lastRebuildAt, DEBTS_STALE_MS, now),
+      sheetsStale: olderThan(ledger.checks.lastSheetsCollectAt, SHEETS_STALE_MS, now),
+    },
+    serverNow: now.toISOString(),
   };
 }
 
@@ -230,7 +262,7 @@ const ledgerPrepareSchema = z.object({
   nothing: z.string().optional(),
   toPayMicros: micros.nullable(),
   period: z.object({ from: z.string(), to: z.string() }).nullable(),
-  lines: list(z.object({ kind: z.string(), model: z.string().optional(), text: z.string(), shownMicros: micros })),
+  lines: list(z.object({ kind: z.string(), model: z.string().optional(), text: z.string(), shownMicros: micros, from: z.string().optional(), to: z.string().optional() })),
   flags: list(z.object({ kind: z.string(), blocker: z.boolean(), text: z.string() })),
   blockers: z.number().int().nonnegative(),
   suggestion: z.object({ transferMicros: micros, aboveTableMicros: micros, note: z.string() }).nullable(),
@@ -258,16 +290,23 @@ export async function readLedgerPayoutPrepare(
     slug: brief.slug,
     name: brief.name,
     generatedAt: brief.generatedAt,
-    amountMills: millsOf(brief.amountMicros),
+    amountMills: payMillsOf(brief.amountMicros),
     nothing: brief.nothing ?? null,
-    toPayMills: brief.toPayMicros === null ? null : millsOf(brief.toPayMicros),
+    toPayMills: brief.toPayMicros === null ? null : payMillsOf(brief.toPayMicros),
     period: brief.period,
-    lines: brief.lines.map((line) => ({ kind: line.kind, model: line.model ?? null, text: line.text, shownMills: millsOf(line.shownMicros) })),
+    lines: brief.lines.map((line) => ({
+      kind: line.kind,
+      model: line.model ?? null,
+      text: line.text,
+      shownMills: payMillsOf(line.shownMicros),
+      from: line.from !== undefined && BUSINESS_DAY.test(line.from) ? line.from : null,
+      to: line.to !== undefined && BUSINESS_DAY.test(line.to) ? line.to : null,
+    })),
     flags: brief.flags,
     blockers: brief.blockers,
     suggestion: brief.suggestion === null ? null : {
-      transferMills: millsOf(brief.suggestion.transferMicros),
-      aboveTableMills: millsOf(brief.suggestion.aboveTableMicros),
+      transferMills: payMillsOf(brief.suggestion.transferMicros),
+      aboveTableMills: payMillsOf(brief.suggestion.aboveTableMicros),
       note: brief.suggestion.note,
     },
     message: brief.message ?? null,

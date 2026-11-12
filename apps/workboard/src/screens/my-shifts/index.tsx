@@ -28,6 +28,7 @@ import { ruPlural } from "@agency_hub_core/ui/plural";
 import { REPORT_DRAFT_NEXT, reportStatusWord } from "@agency_hub_core/ui/shiftReports";
 import { shiftDurationHint, shiftWhen } from "@agency_hub_core/ui/shiftWhen";
 import { ReportBody, useReportEdge } from "@/shared/ReportBody";
+import { useRowBackState } from "@/shared/links";
 import { ScreenHeader } from "@/shared/ScreenHeader";
 import { MyMatters } from "../waiting/MyMatters";
 import { usePeriod } from "@/shared/usePeriod";
@@ -45,6 +46,7 @@ import {
   type MyShiftsFacts,
   type StatsShift,
 } from "./data";
+import { useMyMoneyParts } from "./MyMoney";
 import "./my-shifts.css";
 
 /**
@@ -122,6 +124,13 @@ function WorkedCell({ row }: { row: MyShiftRow }) {
 }
 
 function TotalCell({ row }: { row: MyShiftRow }) {
+  if (row.totalMills !== null && row.preliminary) {
+    return (
+      <Tooltip content="Черновик отчёта: сумма по правилу и вашим отметкам. Станет итоговой, когда вы сдадите смену." align="end">
+        <span className="mys-pre"><Money mills={row.totalMills} /> <span className="mys-pre__word">предварительно</span></span>
+      </Tooltip>
+    );
+  }
   if (row.totalMills !== null) return <Money mills={row.totalMills} strong />;
   if (row.hubMills === null) return <span className="ui-muted">—</span>;
   return (
@@ -158,6 +167,19 @@ function StateCell({ row }: { row: MyShiftRow }) {
       );
     case "ongoing":
       return <span className="mys-state"><Badge tone="info" bare className="mys-state__badge">Идёт</Badge></span>;
+    case "due":
+      return (
+        <span className="mys-state">
+          <Badge tone="warning" className="mys-state__badge">Сдайте смену</Badge>
+        </span>
+      );
+    case "handed":
+      return (
+        <span className="mys-state">
+          <Badge tone="success" bare className="mys-state__badge">Сдан</Badge>
+          {row.hub?.submittedAt && <span className="mys-state__was">в {formatTimeOfDay(row.hub.submittedAt)}{row.hub.version !== null && row.hub.version > 1 ? `, версия ${row.hub.version}` : ""}</span>}
+        </span>
+      );
     case "other":
       return <span className="mys-state"><Badge tone="off" bare className="mys-state__badge">{reportStatusWord(row.report?.status ?? "")}</Badge></span>;
     case "unknown":
@@ -292,8 +314,12 @@ export function MyShiftsScreen() {
   const reports = data?.reports?.reports ?? null;
   // The drafts came, the posts did not: the drafts show, and nothing is claimed of a shift without one.
   const postsRead = data?.reports?.postsRead ?? true;
-  const rows = useMemo(() => (data ? joinShifts({ shifts: data.stats.shifts, reports, postsRead, window }) : undefined), [data, reports, postsRead, window]);
+  const rows = useMemo(() => (data ? joinShifts({ shifts: data.stats.shifts, reports, postsRead, window, hub: data.hub }) : undefined), [data, reports, postsRead, window]);
+  // A shift whose report is Hub's opens its own screen (ecosystem package F); the others open in place, as before.
+  const backHere = useRowBackState("Мои смены");
   const facts = useMemo(() => (rows ? factsOf(rows, reports !== null && postsRead) : undefined), [rows, reports, postsRead]);
+  // «Мои деньги» (ecosystem package H1): nothing until the person's switch is on.
+  const money = useMyMoneyParts(window, COLUMNS, rows);
   const unavailable: Unavailable = data === undefined ? null : data.reports === null ? "reports" : postsRead ? null : "posts";
 
   // The shift going on is shown once: as the journal's first row when the period holds it, else above the journal
@@ -343,10 +369,12 @@ export function MyShiftsScreen() {
         <Table
           label="Мои смены"
           className="mys-journal"
-          columns={COLUMNS}
+          columns={money.columns}
           rows={rows ?? []}
           rowKey={(row) => row.key}
-          rowDetail={(row) => (row.report ? <ReportBody report={row.report} /> : null)}
+          rowHref={(row) => (row.hub === null ? undefined : `/my/shifts/${row.hub.shiftId}`)}
+          rowState={backHere}
+          rowDetail={(row) => (row.hub === null && row.report ? <ReportBody report={row.report} /> : null)}
           openKeys={open}
           onOpenChange={toggle}
           loading={!rows}
@@ -388,6 +416,7 @@ export function MyShiftsScreen() {
           </Notice>
         )}
         {nowShift && <NowRow shift={nowShift} />}
+        {money.block}
         {body}
       </div>
     </>

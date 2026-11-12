@@ -7,6 +7,7 @@ import { pageHandlers } from "./page.ts";
 import { peopleHandlers } from "./people.ts";
 import { publishOfHandlers } from "./publish-of.ts";
 import { settingsHandlers } from "./settings.ts";
+import { shiftReportHandlers } from "./shift-reports.ts";
 import { shellHandlers } from "./shell.ts";
 import { systemHandlers } from "./system.ts";
 import { teamHandlers } from "./team.ts";
@@ -15,6 +16,7 @@ import { teamQuestionsHandlers } from "./team-questions.ts";
 import { teamReportsHandlers } from "./team-reports.ts";
 import { wbSalesHandlers } from "./wb-sales.ts";
 import { wbAdminHandlers, wbHeldHandlers } from "./wb-admin.ts";
+import { wbCustomsHandlers } from "./wb-customs.ts";
 
 const AREAS: Readonly<Record<string, DemoHandlers>> = {
   shell: shellHandlers,
@@ -33,6 +35,10 @@ const AREAS: Readonly<Record<string, DemoHandlers>> = {
   people: peopleHandlers,
   // «Ждут вас» from matters (packages D and K); `hub-demo-scenario=matters-0|matters-6|matters-40|matters-off` (matters.ts).
   matters: mattersHandlers,
+  // Workboard «Кастомы»: the board, an order and its steps, kept in memory (wb-customs.ts).
+  customs: wbCustomsHandlers,
+  // Отчёт смены: the demo chatter's shift rows, drafts and versions, kept in memory with every write (shift-reports.ts).
+  "shift-reports": shiftReportHandlers,
   settings: settingsHandlers,
   system: systemHandlers,
 };

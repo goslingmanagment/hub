@@ -22,6 +22,7 @@ import { useShiftReview, useShiftsAround, type ReviewFilter, type ReviewIndex, t
 import { Evidence } from "./Evidence.js";
 import { LOOK, focusOf, ordered } from "./look.js";
 import { Pulse } from "./Pulse.js";
+import { ReportLink } from "./ReportLink.js";
 import { ShiftStepper } from "./ShiftStepper.js";
 import { Transcript } from "./Transcript.js";
 import { useReviewParams, type ReviewChange, type ReviewParams } from "./useReviewParams.js";
@@ -92,7 +93,12 @@ function salesHint(index: ReviewIndex): { hint: ReactNode; bar: NonNullable<Tile
   ].filter((row) => row.mills > 0);
   const around = [
     money.beforeNetMills > 0 ? { key: "before", label: "до смены, ничьи", mills: money.beforeNetMills } : null,
-    ...money.later.map((one) => ({ key: `later-${one.holder ?? ""}`, label: `PPV смены куплены позже${one.holder === null ? ", ничьи" : `, у ${one.holder}`}`, mills: one.netMills })),
+    ...money.notCounted.map((one) => ({ key: `home-${one.label}`, label: `в смену, ${one.label}`, mills: one.netMills })),
+    ...money.later.map((one) => ({
+      key: `later-${one.tail ?? one.holder ?? ""}`,
+      label: `PPV смены куплены позже, ${one.tail ?? (one.holder === null ? "ничьи" : `у ${one.holder}`)}`,
+      mills: one.netMills,
+    })),
   ].filter((row) => row !== null);
   const hint = (
     <span className="review-money">
@@ -544,6 +550,7 @@ function Loaded({ model, params, update, back, updatedAt, refreshing, onRefresh 
         actions={(
           <span className="review-actions">
             {shift.ongoing && <LiveRefresh updatedAt={updatedAt} onRefresh={onRefresh} refreshing={refreshing} />}
+            <ReportLink userId={shift.userId} start={shift.start} end={shift.end} label={`${shift.username}, ${when.days}`} />
             <ShiftStepper shift={shift} />
           </span>
         )}

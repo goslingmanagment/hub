@@ -205,6 +205,23 @@
     font-weight: inherit;
   }
 
+  /* A line of the calculation as the ledger writes it: its formula in figures, a posting's reason under it. */
+  .payouts-line {
+    display: block;
+    font-variant-numeric: tabular-nums;
+    overflow-wrap: anywhere;
+  }
+
+  /* «в таблице $…, 4 ч назад»: the sheets' age, said only where the sheets are the source. */
+  .payouts-stale {
+    color: var(--ui-text-3);
+  }
+
+  /* A fine or an advance: what takes off the debt. */
+  .payouts-minus {
+    color: var(--ui-text-2);
+  }
+
   .payouts-flags {
     display: flex;
     flex-direction: column;
