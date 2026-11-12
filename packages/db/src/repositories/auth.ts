@@ -26,6 +26,8 @@ export interface CreateAuthSessionInput {
   userId: number;
   tokenDigest: string;
   expiresAt: Date;
+  /** 0388: a narrow web session's device token; absent — a full session. */
+  narrowDeviceTokenId?: number;
 }
 
 export interface InsertAuditEventInput {

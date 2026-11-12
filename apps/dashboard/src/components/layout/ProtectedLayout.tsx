@@ -5,7 +5,7 @@ import { useAuthMe, usePages } from "@/api/queries";
 import { KernelApiError } from "@/api/sdk";
 import { ErrorBoundary } from "@/components/shared/ErrorBoundary";
 import { QueryNotice } from "@/components/shared/QueryNotice";
-import { CABINET_PATH, buildLoginRoute, chatterExit, isWorkboardPath } from "@/lib/navigation";
+import { CABINET_PATH, buildLoginRoute, chatterExit, leavesTheConsole } from "@/lib/navigation";
 import { isPaletteShortcut } from "@/lib/paletteShortcut";
 import { isChatterSite } from "@/lib/sites";
 import { LeaveForWorkboard } from "@/routes/ToWorkboard";
@@ -126,11 +126,11 @@ function ConsoleLayout() {
   // Every page behind this layout is owner or team-lead work and
   // answers 403 for a chatter. Send them to their own home — «Мои смены» in
   // Workboard, another app: a page load — instead of rendering a console full
-  // of refusals; or, on the console's own name, to the sign-in page that turns
-  // them away.
+  // of refusals; on the console's own name, to that home on the team's name,
+  // signed in on the way.
   if (data.user.role === "chatter") {
     const exit = chatterExit();
-    return isWorkboardPath(exit) ? <LeaveForWorkboard href={exit} /> : <Navigate to={exit} replace />;
+    return leavesTheConsole(exit) ? <LeaveForWorkboard href={exit} /> : <Navigate to={exit} replace />;
   }
 
   const shellValue = {

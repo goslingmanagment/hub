@@ -62,6 +62,21 @@ import {
 import { findPageSummaryByLabel } from "@agency_hub_core/db";
 
 export const SESSION_COOKIE_NAME = "agency_hub_core_session";
+
+/**
+ * A narrow web session's token carries its own prefix and its own digest form.
+ * A build from before narrow sessions looks a cookie up by `sha256(token)`
+ * alone, finds no row for this one and refuses it: after a rollback a narrow
+ * session can never be read as a full one.
+ */
+export const NARROW_SESSION_TOKEN_PREFIX = "agency_hub_narrow_";
+
+/** The `auth_sessions.token_digest` of a session cookie's value. */
+export function sessionTokenDigest(sessionToken: string): string {
+  return sessionToken.startsWith(NARROW_SESSION_TOKEN_PREFIX)
+    ? sha256Hex(`narrow-web-session:${sessionToken}`)
+    : sha256Hex(sessionToken);
+}
 /** How much of a bearer is safe to show an operator (and to store as the
  * lookup-free display prefix). Exported so a fixture cannot drift from it. */
 export const KEY_PREFIX_DISPLAY_LENGTH = 10;
@@ -126,6 +141,13 @@ export interface HumanAuthPrincipal {
    * (client-token-profile.ts). Absent = a full principal, as before.
    */
   clientProfile?: ClientTokenProfile;
+  /**
+   * A NARROW web session (opened from the extension, web-session-scopes.ts):
+   * the device token it lives by, from the session row. Present only for one:
+   * the API server refuses every route outside NARROW_WEB_SESSION_OPERATIONS
+   * and `requireDashboardUser` refuses it. Absent = a full session, as before.
+   */
+  narrowDeviceTokenId?: number;
 }
 
 /**
@@ -1002,15 +1024,10 @@ export async function loginWithPassword(
 ) {
   // Session row + audit dual-write commit together (review R1-7): an audit
   // failure must not leave a usable-but-undisclosed session row behind a 500.
-  const sessionToken = randomToken(32);
+  let sessionToken = "";
   let expiresAt = new Date(0);
   const user = await verifyPasswordAndLockUser(app, input, async (dbTx, locked) => {
-    expiresAt = new Date(Date.now() + app.config.sessionTtlDays * 24 * 60 * 60 * 1000);
-    await createAuthSession(dbTx, {
-      userId: locked.id,
-      tokenDigest: sha256Hex(sessionToken),
-      expiresAt,
-    });
+    ({ sessionToken, expiresAt } = await createWebSessionTx(app, dbTx, { userId: locked.id }));
 
     await recordAudit({ db: dbTx }, {
       source: "api",
@@ -1035,9 +1052,61 @@ export async function loginWithPassword(
   };
 }
 
+/**
+ * A new web session row in the caller's transaction: its token (the cookie's
+ * value, returned once, never stored) and expiry, fixed now. A narrow session
+ * names the device token it lives by and gets a token of its own form
+ * (`NARROW_SESSION_TOKEN_PREFIX`).
+ */
+export async function createWebSessionTx(
+  app: Pick<AppContext, "config">,
+  dbTx: AppContext["db"],
+  input: { userId: number; narrowDeviceTokenId?: number },
+) {
+  const sessionToken = input.narrowDeviceTokenId === undefined
+    ? randomToken(32)
+    : `${NARROW_SESSION_TOKEN_PREFIX}${randomToken(32)}`;
+  // Time is sampled after the caller's lock wait.
+  const expiresAt = new Date(Date.now() + app.config.sessionTtlDays * 24 * 60 * 60 * 1000);
+  const created = await createAuthSession(dbTx, {
+    userId: input.userId,
+    tokenDigest: sessionTokenDigest(sessionToken),
+    expiresAt,
+    ...(input.narrowDeviceTokenId === undefined ? {} : { narrowDeviceTokenId: input.narrowDeviceTokenId }),
+  });
+  return { sessionToken, expiresAt, sessionId: created.id };
+}
+
+/**
+ * The session row behind a cookie's value while it can still sign in: not
+ * revoked, not expired, and — a narrow one — its device token still alive and
+ * still the same person's. Reads only (no touch). Null otherwise.
+ */
+export async function findLiveSession(app: Pick<AppContext, "db">, sessionToken: string) {
+  const session = await findAuthSessionByDigest(app.db, sessionTokenDigest(sessionToken));
+  const now = new Date();
+  if (!session || session.revokedAt || session.expiresAt <= now) {
+    return null;
+  }
+  const narrowDeviceTokenId = session.narrowDeviceTokenId ?? null;
+  // The token's form and the row agree, or it is nobody (belt: the digests already differ).
+  if ((narrowDeviceTokenId !== null) !== sessionToken.startsWith(NARROW_SESSION_TOKEN_PREFIX)) {
+    return null;
+  }
+  if (narrowDeviceTokenId !== null) {
+    // A narrow session dies with its device token: revoked (by its person, the
+    // owner, a password reset, a deactivation) or expired.
+    const device = await findDeviceTokenForUser(app.db, { deviceTokenId: narrowDeviceTokenId, userId: session.userId });
+    if (!device || device.revokedAt || device.expiresAt <= now) {
+      return null;
+    }
+  }
+  return { ...session, narrowDeviceTokenId };
+}
+
 export async function authenticateSessionToken(app: AppContext, sessionToken: string) {
-  const session = await findAuthSessionByDigest(app.db, sha256Hex(sessionToken));
-  if (!session || session.revokedAt || session.expiresAt <= new Date()) {
+  const session = await findLiveSession(app, sessionToken);
+  if (!session) {
     return null;
   }
 
@@ -1053,23 +1122,43 @@ export async function authenticateSessionToken(app: AppContext, sessionToken: st
     user,
     assignedPageIds: user.assignedPages.map((page) => page.id),
     authSessionId: session.id,
+    ...(session.narrowDeviceTokenId === null ? {} : { narrowDeviceTokenId: session.narrowDeviceTokenId }),
   } satisfies AuthPrincipal;
 }
 
-/** The session is still an owner's — not revoked, not expired, its user an
- *  active owner: when it expires (a session's expiry is fixed at its
+/**
+ * Who a cookie's session is, for a check that must not write (nginx's
+ * `auth_request` on every request of a name): a live FULL session's user, or
+ * null. A narrow session is null here: it opens the team's place alone.
+ */
+export async function readSessionIdentity(app: AppContext, sessionToken: string) {
+  const session = await findLiveSession(app, sessionToken);
+  if (!session || session.narrowDeviceTokenId !== null) {
+    return null;
+  }
+  const user = await findUserById(app.db, session.userId);
+  if (!user || user.disabledAt || user.deletedAt || !roleCanUseSession(user.role)) {
+    return null;
+  }
+  return { sessionId: session.id, expiresAt: session.expiresAt, user: { id: user.id, username: user.username, role: user.role } };
+}
+
+/** The session is still an owner's — not revoked, not expired, not narrow, its
+ *  user an active owner: when it expires (a session's expiry is fixed at its
  *  login), or null when it is not. Reads only (no touch): for a check that
  *  repeats while a connection the session opened lives (the page browser's
  *  screen). */
 export async function ownerSessionExpiry(app: AppContext, sessionToken: string): Promise<Date | null> {
-  const session = await findAuthSessionByDigest(app.db, sha256Hex(sessionToken));
-  if (!session || session.revokedAt || session.expiresAt <= new Date()) return null;
+  const session = await findLiveSession(app, sessionToken);
+  if (!session || session.narrowDeviceTokenId !== null) return null;
   const user = await getAuthenticatedUserById(app, session.userId);
   return user !== null && user.role === "owner" ? session.expiresAt : null;
 }
 
 export async function logoutSessionToken(app: AppContext, sessionToken: string) {
-  const session = await findAuthSessionByDigest(app.db, sha256Hex(sessionToken));
+  // One session row behind every name it was planted on (signin-handoff.ts):
+  // revoking it signs the browser out of all of them at once.
+  const session = await findAuthSessionByDigest(app.db, sessionTokenDigest(sessionToken));
   if (!session || session.revokedAt) {
     return false;
   }
@@ -1108,6 +1197,11 @@ export function requireDashboardUser(
 ): asserts principal is HumanAuthPrincipal {
   if (principal.authMethod !== "session") {
     throw new ForbiddenError("Dashboard routes require a cookie session");
+  }
+  // A narrow web session opens the team's place alone — an owner's device too:
+  // no owner or team route, screen, stream or document, whatever the role.
+  if (principal.narrowDeviceTokenId !== undefined) {
+    throw new ForbiddenError("This sign-in opens only the team's place");
   }
   if (!roleCanUseDashboard(principal.user.role)) {
     throw new ForbiddenError("This role cannot access dashboard routes");

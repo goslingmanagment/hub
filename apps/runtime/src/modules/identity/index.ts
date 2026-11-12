@@ -38,6 +38,7 @@ import {
 import { userForClosedEnum } from "../../services/closed-platform-responses.ts";
 import { NotFoundError } from "../../services/errors.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
+import { registerSigninRoutes } from "./signin.ts";
 
 // Identity module (target §6.1): auth, sessions, users, devices and links.
 // Handlers relocated verbatim from server.ts; guards stay
@@ -115,6 +116,8 @@ export function registerIdentityRoutes(server: ApiServer, ctx: ApiModuleContext)
     return {
       authMethod: principal.authMethod,
       user: principal.authMethod === "device_token" ? userForClosedEnum(principal.user) : principal.user,
+      // A narrow web session says so: Workboard opens the team's place alone for it.
+      ...(principal.narrowDeviceTokenId === undefined ? {} : { narrow: true as const }),
     };
   });
 
@@ -298,11 +301,15 @@ export function registerIdentityRoutes(server: ApiServer, ctx: ApiModuleContext)
   server.post("/api/v1/auth/links/redeem", {
     schema: routeSchemas.authRedeemAccountLink,
     config: { rateLimit: { max: 10, timeWindow: 60_000 } },
-  }, async (request) => {
-    return redeemAccountLink(appContext, {
+  }, async (request, reply) => {
+    // /join signs the newcomer in: the session is made in the redeem's own
+    // transaction (account-links.ts), its cookie set on the name the link was opened on.
+    const redeemed = await redeemAccountLink(appContext, {
       token: request.body.token,
       password: request.body.password,
     });
+    applyCookie(reply, redeemed.sessionToken, appContext);
+    return { username: redeemed.username };
   });
 
   // Р2: the single client sign-in — no cookie, one call.
@@ -353,6 +360,9 @@ export function registerIdentityRoutes(server: ApiServer, ctx: ApiModuleContext)
     const principal = await requirePrincipal(request);
     return revokeAllOwnDevices(appContext, principal, auditCtx(principal));
   });
+
+  // One sign-in across the names: the one-time code between names (signin.ts).
+  registerSigninRoutes(server, ctx);
 
   server.get("/api/v1/auth/usage", {
     schema: routeSchemas.authMyUsage,

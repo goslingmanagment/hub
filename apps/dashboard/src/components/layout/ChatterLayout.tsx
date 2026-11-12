@@ -1,9 +1,10 @@
 import { Navigate, Outlet, useLocation } from "react-router";
 import { useAuthMe, useLogout } from "@/api/queries";
 import { KernelApiError } from "@/api/sdk";
-import { buildLoginRoute, chatterExit } from "@/lib/navigation";
+import { CHATTER_HOME, buildLoginRoute, chatterExit, leavesTheConsole } from "@/lib/navigation";
 import { clearDashboardSession } from "@/lib/queryClient";
 import { isConsoleSite } from "@/lib/sites";
+import { LeaveForWorkboard } from "@/routes/ToWorkboard";
 
 // The shell for /account. A chatter has no owner console, so
 // there is no sidebar and no page catalogue here — one line of chrome above a
@@ -13,7 +14,7 @@ import { isConsoleSite } from "@/lib/sites";
 // The console's own production name serves no cabinet at all: the account
 // lives on the chatters' site, and a session does not carry between the two
 // names. There this layout only sends people on — an owner or a team lead to
-// the console, a chatter to the sign-in page that turns them away.
+// the console, a chatter to their place on the team's name, signed in.
 
 export function ChatterLayout() {
   const location = useLocation();
@@ -52,7 +53,14 @@ export function ChatterLayout() {
   }
 
   if (isConsoleSite()) {
-    return <Navigate to={data.user.role === "chatter" ? chatterExit() : "/"} replace />;
+    const exit = data.user.role === "chatter" ? chatterExit() : "/";
+    return leavesTheConsole(exit) ? <LeaveForWorkboard href={exit} /> : <Navigate to={exit} replace />;
+  }
+
+  // A narrow session (opened from the extension) opens the team's place alone:
+  // the account's devices and password are not its to change.
+  if (data.narrow) {
+    return <LeaveForWorkboard href={CHATTER_HOME} />;
   }
 
   async function handleLogout() {

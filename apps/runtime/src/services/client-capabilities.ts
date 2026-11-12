@@ -216,6 +216,9 @@ export const SERVED_CLIENT_CAPABILITIES: readonly ClientHubCapabilityName[] = [
   // takes `accountSeen` — whether the page's session returned the fan's account to the tab, a signal that makes the
   // page's own re-check due (services/client-fan-badges.ts). A client sends it only to a hub that lists this.
   "fan-account-state-v1",
+  // POST /api/v1/auth/web-link: a one-time link into the team's place that opens a narrow web session
+  // (services/signin-handoff.ts). No owner switch here: the extension's button has its own.
+  "web-link-v1",
 ];
 
 /**

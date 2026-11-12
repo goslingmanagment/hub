@@ -25,6 +25,8 @@ import { teamLedgerRouteSchemas } from "./routes-team-ledger.ts";
 import { matterRouteSchemas } from "./routes-matters.ts";
 import { accountReportsRouteSchemas } from "./routes-account-reports.ts";
 import { peopleRouteSchemas } from "./routes-people.ts";
+// One sign-in across the names Hub serves: the one-time code between names (ecosystem plan §3.2).
+import { signinRouteSchemas } from "./routes-signin.ts";
 import {
   PERIOD_OPTIONS,
   SPENDER_PERIOD_OPTIONS,
@@ -308,6 +310,9 @@ export const adminTerminateAllAccessResponseSchema = z.object({
 export const authStateSchema = z.object({
   authMethod: z.enum(["session", "device_token"]),
   user: authUserSchema,
+  /** Present only on a NARROW web session (opened from the extension, web-session-scopes.ts):
+   *  it opens the team's place alone, whatever `user.role` says. */
+  narrow: z.literal(true).optional(),
 });
 
 const serviceHealthStatusEnum = z.enum(["ok", "degraded"]);
@@ -7171,6 +7176,7 @@ const baseRouteSchemas = {
   ...matterRouteSchemas,
   ...accountReportsRouteSchemas,
   ...peopleRouteSchemas,
+  ...signinRouteSchemas,
   adminAiPersonasList: {
     auth: { kind: "owner-session" },
     tags: ["admin"],

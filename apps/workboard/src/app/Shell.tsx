@@ -3,6 +3,7 @@ import { Suspense, type ReactNode } from "react";
 import { NavLink, Navigate, Outlet, useLocation, useMatches, type UIMatch } from "react-router";
 import { CountBadge, ErrorState, Menu, Skeleton, Tooltip, type IconComponent, type MenuEntry } from "@agency_hub_core/ui";
 import { THEME_OPTIONS, useThemeStore, type ThemePreference } from "@agency_hub_core/ui/theme";
+import { peerOriginOf, siteOf } from "@agency_hub_core/ui/sites";
 import { kernel, queryClient, signInHref } from "@/shared/hub";
 import { carryParams } from "@/shared/links";
 import { decisionParts, decisionsElsewhereText, decisionsFailedText, useDecisionCounts } from "@/shared/decisions";
@@ -44,9 +45,18 @@ const ADMIN: readonly NavItem[] = [
   { to: "/access", label: "Доступ", icon: KeyRound, roles: OWNER },
 ];
 
-/** The way out to the other app on this host (a page load): the console, for the team. */
-const EXITS: readonly { href: string; label: string; roles: readonly Role[] }[] = [
-  { href: "/", label: "Hub", roles: TEAM },
+/**
+ * The way out to the console, for the team (a page load): on this host, or —
+ * on the team's name, where the console is not served — on the console's own
+ * name (the owner's place; the sign-in was planted there too).
+ */
+function consoleHref(): string {
+  const origin = window.location.origin;
+  return siteOf(origin) === "team" ? `${peerOriginOf(origin) ?? ""}/` : "/";
+}
+
+const EXITS: readonly { href: () => string; label: string; roles: readonly Role[] }[] = [
+  { href: consoleHref, label: "Hub", roles: TEAM },
 ];
 
 /** A chatter's account — devices, password, their AI spend — is the console's page on this host (a page load). */
@@ -137,14 +147,15 @@ function useScreenKey(): string {
  * last item, and their only way to the account.
  */
 function Account() {
-  const { user, role } = useMe();
+  const { user, role, accountRole, narrow } = useMe();
   const theme = useThemeStore((state) => state.theme);
   const setTheme = useThemeStore((state) => state.setTheme);
   if (!user) return null;
   const name = user.username;
   const chatter = role === "chatter";
+  // A narrow session (from the extension) does not change the account's devices or password.
   const items: MenuEntry[] = [
-    ...(chatter ? [{ label: "Аккаунт и устройства", icon: Smartphone, onSelect: () => window.location.assign(ACCOUNT_HREF) }, { separator: true as const }] : []),
+    ...(chatter && !narrow ? [{ label: "Аккаунт и устройства", icon: Smartphone, onSelect: () => window.location.assign(ACCOUNT_HREF) }, { separator: true as const }] : []),
     { group: "Тема" },
     ...THEME_OPTIONS.map((option) => ({
       label: option.label,
@@ -168,7 +179,7 @@ function Account() {
   const text = (
     <span className="wb-account__text">
       <span className="wb-account__name">{name}</span>
-      <span className="wb-account__role">{ROLE_WORD[role ?? ""] ?? role}</span>
+      <span className="wb-account__role">{ROLE_WORD[accountRole ?? ""] ?? accountRole}</span>
     </span>
   );
   if (chatter) {
@@ -231,7 +242,7 @@ export function Shell() {
           {seenBy(ADMIN, role).length + seenBy(EXITS, role).length > 0 && <div className="wb-nav__sep" role="separator" />}
           {seenBy(ADMIN, role).map((item) => <NavRow key={item.to} item={item} />)}
           {seenBy(EXITS, role).map((exit) => (
-            <a key={exit.href} href={exit.href} className="wb-nav__item wb-nav__item--quiet">
+            <a key={exit.label} href={exit.href()} className="wb-nav__item wb-nav__item--quiet">
               <ArrowLeft size={18} strokeWidth={1.75} aria-hidden className="wb-nav__icon" />
               <span className="wb-nav__label">{exit.label}</span>
             </a>

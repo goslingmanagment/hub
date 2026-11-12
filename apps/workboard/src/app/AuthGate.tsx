@@ -1,7 +1,7 @@
-import type { ReactNode } from "react";
+import { useEffect, type ReactNode } from "react";
 import { Button, EmptyState, ErrorState, Spinner } from "@agency_hub_core/ui";
 import { hubErrorStatus } from "@agency_hub_core/ui/hubClient";
-import { CHATTER_SITE_ORIGIN, CONSOLE_ORIGIN } from "@agency_hub_core/ui/sites";
+import { peerOriginOf, signInHopHref, siteOf } from "@agency_hub_core/ui/sites";
 import { signInHref } from "@/shared/hub";
 import { useMe } from "@/shared/useMe";
 
@@ -10,10 +10,8 @@ import { useMe } from "@/shared/useMe";
  * console's sign-in on this host, and back here after it (hub.ts does the
  * redirect on the 401). A chatter is let in to their own part of Workboard
  * (owner, 2026-11-10; the routes and the menu keep them there) — on the
- * chatters' site. The console's own name is the owner's and the team leads'
- * door: its sign-in ends a chatter's session (the console's LoginPage), and a
- * chatter session left from before the names were split opens nothing here
- * either.
+ * team's name. A chatter on the console's name is taken there, to the same
+ * screen, signed in on the way (the session crosses by a one-time code).
  */
 export function AuthGate({ children }: { children: ReactNode }) {
   const me = useMe();
@@ -46,15 +44,24 @@ export function AuthGate({ children }: { children: ReactNode }) {
     );
   }
 
-  if (me.role === "chatter" && window.location.origin === CONSOLE_ORIGIN) {
-    return (
-      <div className="wb-gate">
-        <EmptyState title="Это вход для владельца и тимлидов" action={<a className="ui-btn" href={`${CHATTER_SITE_ORIGIN}/account`}>Открыть ChatGoose</a>}>
-          Твой кабинет и отчёты — в ChatGoose.
-        </EmptyState>
-      </div>
-    );
+  const team = me.role === "chatter" && siteOf(window.location.origin) === "console" ? peerOriginOf(window.location.origin) : null;
+  if (team !== null) {
+    return <ToTeamsName team={team} />;
   }
 
   return <>{children}</>;
+}
+
+/** A chatter on the console's name: the same screen on the team's name, signed in on the way (a page load). */
+function ToTeamsName({ team }: { team: string }) {
+  useEffect(() => {
+    const { pathname, search, hash } = window.location;
+    window.location.replace(signInHopHref(team, `${team}${pathname}${search}${hash}`));
+  }, [team]);
+  return (
+    <div className="wb-gate" role="status">
+      <Spinner />
+      <span>Открываем ChatGoose…</span>
+    </div>
+  );
 }

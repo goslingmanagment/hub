@@ -32,6 +32,10 @@ export * from "./publication-files.ts";
 export * from "./routes-publication-files.ts";
 // Narrow device-token profiles (the chat extension's route allowlist, H-3).
 export * from "./client-token-scopes.ts";
+// One sign-in across the names (the one-time code between names), spread by routes.ts,
+// and the narrow web session's route allowlist.
+export * from "./routes-signin.ts";
+export * from "./web-session-scopes.ts";
 export * from "./authorization-policy.ts";
 export * from "./sdk-runtime.ts";
 export * from "./contract-hash.ts";

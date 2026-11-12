@@ -174,6 +174,8 @@ export * from "./repositories/dm-message-candidate.ts";
 export * from "./repositories/dm-message-archive.ts";
 export * from "./repositories/fans.ts";
 export * from "./repositories/auth.ts";
+// One-time sign-in codes between the names Hub serves (0388).
+export * from "./repositories/auth-handoff.ts";
 export * from "./repositories/fan-page-identity.ts";
 export * from "./repositories/fan-profiles.ts";
 export * from "./repositories/fan-metadata.ts";

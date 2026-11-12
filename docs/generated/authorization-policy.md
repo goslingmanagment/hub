@@ -23,10 +23,10 @@ body remain handler-checked and are noted per route in the service layer.
 
 The `chat-extension token` column is the narrow device token a client asks
 for at password sign-in (`client: "chat-extension"`): it reaches only the
-63 routes marked "yes", and every route marked "no" refuses it with 403.
+64 routes marked "yes", and every route marked "no" refuses it with 403.
 A full device token is not affected.
 
-## Routes (427)
+## Routes (434)
 
 | Method | Path | Route key | Kind | Roles | Page scope | chat-extension token |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -278,12 +278,19 @@ A full device token is not affected.
 | GET | `/api/v1/auth/devices` | `authListDevices` | `any-session` | — | — | no |
 | DELETE | `/api/v1/auth/devices/:deviceId` | `authRevokeDevice` | `any-session` | — | — | no |
 | POST | `/api/v1/auth/devices/revoke-all` | `authRevokeAllDevices` | `any-session` | — | — | no |
+| GET | `/api/v1/auth/introspect` | `authIntrospect` | `public` | — | — | — |
 | POST | `/api/v1/auth/links/inspect` | `authInspectAccountLink` | `public` | — | — | — |
 | POST | `/api/v1/auth/links/redeem` | `authRedeemAccountLink` | `public` | — | — | — |
 | POST | `/api/v1/auth/login` | `login` | `public` | — | — | — |
 | POST | `/api/v1/auth/logout` | `logout` | `public` | — | — | — |
 | GET | `/api/v1/auth/me` | `me` | `any` | — | — | yes |
+| GET | `/api/v1/auth/sso` | `authSso` | `public` | — | — | — |
+| GET | `/api/v1/auth/sso/accept` | `authSsoAccept` | `public` | — | — | — |
+| GET | `/api/v1/auth/sso/begin` | `authSsoBegin` | `public` | — | — | — |
+| POST | `/api/v1/auth/sso/check` | `authSsoCheck` | `agentKey` | — | — | no |
+| POST | `/api/v1/auth/sso/redeem` | `authSsoRedeem` | `agentKey` | — | — | no |
 | GET | `/api/v1/auth/usage` | `authMyUsage` | `any-session` | — | — | no |
+| POST | `/api/v1/auth/web-link` | `authWebLink` | `device-token` | — | — | yes |
 | GET | `/api/v1/chatspace-browser/screen` | `chatspaceBrowserScreenOpen` | `owner-session` | — | — | no |
 | GET | `/api/v1/chatspace-browser/screen/*` | `chatspaceBrowserScreen` | `owner-session` | — | — | no |
 | GET | `/api/v1/client-send-custody` | `clientSendCustodyList` | `session` | — | — | no |

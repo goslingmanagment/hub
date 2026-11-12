@@ -2,6 +2,7 @@ import { fixtureUserId } from "./helpers/user-identity.ts";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { createFanslyPage, createModel, findUserByUsername } from "@agency_hub_core/db";
+import { sha256Hex } from "@agency_hub_core/shared";
 
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
@@ -222,10 +223,11 @@ describe("redeem", () => {
       pageLabels: ["lora-fansly"],
     }, OWNER_AUDIT);
 
+    // /join signs the person in: the redeem also made a session (the route sets its cookie).
     expect(await redeemAccountLink(setup.app, {
       token: invited.link.token,
       password: STRONG_PASSWORD,
-    })).toEqual({ username: "grisha" });
+    })).toMatchObject({ username: "grisha", sessionToken: expect.any(String) });
 
     const session = await loginWithPassword(setup.app, {
       username: "grisha",
@@ -329,16 +331,21 @@ describe("redeem", () => {
       userId: await fixtureUserId(setup.app, "nikita"),
       kind: "invite",
     }, OWNER_AUDIT);
-    await redeemAccountLink(setup.app, { token: invite.token, password: "brand-new-secret-7" });
+    const redeemed = await redeemAccountLink(setup.app, { token: invite.token, password: "brand-new-secret-7" });
 
     expect(await countRows(
       setup.testDb,
       "select count(*)::text as count from device_tokens where revoked_at is null",
     )).toBe(0);
+    // The old session is ended; the one left is the redeem's own (the newcomer is signed in).
     expect(await countRows(
       setup.testDb,
       "select count(*)::text as count from auth_sessions where revoked_at is null",
-    )).toBe(0);
+    )).toBe(1);
+    expect(await countRows(
+      setup.testDb,
+      `select count(*)::text as count from auth_sessions where revoked_at is null and token_digest = '${sha256Hex(redeemed.sessionToken)}'`,
+    )).toBe(1);
     expect(device.token).toMatch(/^agency_hub_device_/);
     await expect(loginWithPassword(setup.app, {
       username: "nikita",

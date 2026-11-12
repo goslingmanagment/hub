@@ -1,10 +1,9 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useNavigate, Navigate, useSearchParams } from "react-router";
-import { useLogin, useLogout, useAuthMe } from "@/api/queries";
+import { useLogin, useAuthMe } from "@/api/queries";
 import { KernelApiError } from "@/api/sdk";
-import { isWorkboardPath, resolveLoginReturnPath, resolveRoleHome } from "@/lib/navigation";
-import { clearDashboardSession } from "@/lib/queryClient";
-import { CHATTER_SITE_ORIGIN, isChatterSite, isConsoleSite } from "@/lib/sites";
+import { afterSignIn, chatterExit, isSigninContinuation, leavesTheConsole, resolveLoginReturnPath, resolveRoleHome } from "@/lib/navigation";
+import { isChatterSite, isConsoleSite } from "@/lib/sites";
 
 // One sign-in screen for two names. A chatter signs in to the product they
 // use, so on their site it carries that product's wordmark — the one
@@ -15,16 +14,20 @@ function Wordmark() {
     : <><span>Agency</span>Hub</>;
 }
 
-/** Back to Workboard after the sign-in: another app on this host, so a page load. */
+/** Back to Workboard, or on to the other name, after the sign-in: outside the console's router, so a page load. */
 function LeaveFor({ href }: { href: string }) {
   useEffect(() => {
     window.location.replace(href);
   }, [href]);
   return (
     <div className="entry-screen">
-      <div role="status" className="text-sm text-text-secondary">Открываем Workboard…</div>
+      <div role="status" className="text-sm text-text-secondary">{isWorkboardPathOnly(href) ? "Открываем Workboard…" : "Входим…"}</div>
     </div>
   );
+}
+
+function isWorkboardPathOnly(href: string): boolean {
+  return leavesTheConsole(href) && !isSigninContinuation(href);
 }
 
 export function LoginPage() {
@@ -32,25 +35,15 @@ export function LoginPage() {
   const [params] = useSearchParams();
   const returnTo = resolveLoginReturnPath(params.get("next"));
   const login = useLogin();
-  const logout = useLogout();
   const authQuery = useAuthMe();
   const { data: auth, isLoading: authLoading } = authQuery;
   const submitting = useRef(false);
+  const [leaving, setLeaving] = useState<string | null>(null);
 
-  // Two doors. The console's own name is the owner's and the team leads' way
-  // in; a chatter login belongs to ChatGoose and is not accepted here. A
-  // session of one — made by this form a moment ago, or left in the browser
-  // from before the names were split — is ended, and the form says where that
-  // login is at home. No cabinet opens under the console's name.
-  const turnedAway = isConsoleSite() && !authQuery.isError && auth?.user.role === "chatter";
-  const [wasTurnedAway, setWasTurnedAway] = useState(false);
-  const endSession = logout.mutate;
-  useEffect(() => {
-    if (!turnedAway) return;
-    setWasTurnedAway(true);
-    endSession(undefined, { onSuccess: () => clearDashboardSession() });
-  }, [turnedAway, endSession]);
-
+  // One door for two names. A sign-in on either is planted on the other on the
+  // way (afterSignIn); a chatter who signs in on the console's name — or comes
+  // to it with a session — is taken to their own place on the team's name,
+  // signed in. Nobody is signed out here.
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
 
@@ -62,9 +55,20 @@ export function LoginPage() {
     );
   }
 
-  if (auth?.user && !authQuery.isError && !turnedAway) {
-    const home = resolveRoleHome(auth.user.role, returnTo);
-    return isWorkboardPath(home) ? <LeaveFor href={home} /> : <Navigate to={home} replace />;
+  if (leaving !== null) return <LeaveFor href={leaving} />;
+
+  // Already signed in on this name (not by this form a moment ago: its own
+  // success decides where to go, after `me` was read back): another name's way
+  // back goes on; a chatter on the console's name goes to the team's; everyone
+  // else home.
+  // A narrow session (opened from the extension) is not a sign-in another name
+  // takes: for that way back the form is shown.
+  const signedIn = Boolean(auth?.user) && !authQuery.isError && !(isSigninContinuation(returnTo) && auth?.narrow);
+  if (auth?.user && signedIn && !login.isPending && !login.isSuccess) {
+    const home = isSigninContinuation(returnTo)
+      ? returnTo
+      : auth.user.role === "chatter" && isConsoleSite() ? chatterExit() : resolveRoleHome(auth.user.role, returnTo);
+    return leavesTheConsole(home) ? <LeaveFor href={home} /> : <Navigate to={home} replace />;
   }
 
   function handleSubmit(e: FormEvent) {
@@ -75,12 +79,9 @@ export function LoginPage() {
       { username, password },
       {
         onSuccess: (state) => {
-          // Turned away above, once the session it has just made is read back.
-          if (isConsoleSite() && state.user.role === "chatter") return;
-          setWasTurnedAway(false);
-          const home = resolveRoleHome(state.user.role, returnTo);
-          if (isWorkboardPath(home)) window.location.replace(home);
-          else navigate(home, { replace: true });
+          const next = afterSignIn(state.user.role, returnTo);
+          if (leavesTheConsole(next)) setLeaving(next);
+          else navigate(next, { replace: true });
         },
         onSettled: () => { submitting.current = false; },
       },
@@ -94,12 +95,6 @@ export function LoginPage() {
       </h1>
       <div className="entry-card">
         {authQuery.isError && !(authQuery.error instanceof KernelApiError && authQuery.error.status === 401) && <p role="alert" className="notice notice-warning mb-4">Не удалось проверить текущую сессию. Можно повторить вход.</p>}
-        {(turnedAway || wasTurnedAway) && (
-          <p role="alert" className="notice mb-4">
-            Это вход в консоль. Аккаунт ChatGoose — на{" "}
-            <a href={`${CHATTER_SITE_ORIGIN}/account`} className="link">chatgoose.gosling-agency.ru</a>.
-          </p>
-        )}
         <form onSubmit={handleSubmit} className="flex flex-col gap-4" aria-busy={login.isPending}>
           <div className="flex flex-col gap-2">
             <label htmlFor="username" className="field-label mb-0">
