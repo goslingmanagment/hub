@@ -83,6 +83,7 @@ import { registerPeopleRoutes } from "../modules/people/index.ts";
 import { registerFanQueueRoutes } from "../modules/fan-queues/index.ts";
 import { registerMatterRoutes } from "../modules/matters/index.ts";
 import { registerAgentReportRoutes } from "../modules/agent-reports/index.ts";
+import { registerSystemStateRoutes } from "../modules/system-state/index.ts";
 import { registerOutreachRoutes } from "../modules/outreach/index.ts";
 import { registerPublicationFileRoutes } from "../modules/publication-files/index.ts";
 import { registerVoiceRoutes } from "../modules/voice/index.ts";
@@ -704,6 +705,8 @@ export async function buildApiServer(appContext: AppContext) {
   registerTeamLedgerRoutes(server, moduleContext);
   // Дела: what waits for a person, by reason key (the session, the extension, an agent key with write:matters).
   registerMatterRoutes(server, moduleContext);
+  // Система → «Состояние»: every routine and copy for the owner; a reporter's list by its agent key (write:system_state).
+  registerSystemStateRoutes(server, moduleContext);
   // The people registry: the team's list, the owner's card and writes, the agent feed and proposals.
   registerPeopleRoutes(server, moduleContext);
   // Agent reports: named markdown pages an agent key publishes (write:reports), read by session.

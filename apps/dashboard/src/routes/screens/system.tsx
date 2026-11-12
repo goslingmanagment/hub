@@ -12,6 +12,7 @@ const HistoryRequestsPage = named(() => import("@/pages/system/history/HistoryRe
 const AgentKeysPage = named(() => import("@/pages/system/agent-keys/AgentKeysPage"), "AgentKeysPage");
 const AgentReportsPage = named(() => import("@/pages/system/reports/AgentReportsPage"), "AgentReportsPage");
 const AgentReportPage = named(() => import("@/pages/system/reports/AgentReportPage"), "AgentReportPage");
+const SystemStatePage = named(() => import("@/pages/system/state/SystemStatePage"), "SystemStatePage");
 const StatePage = named(() => import("@/pages/system/onlyfans-api/StatePage"), "StatePage");
 const RulesPage = named(() => import("@/pages/system/onlyfans-api/rules/CollectionTab"), "CollectionTab");
 const ToolsPage = named(() => import("@/pages/system/onlyfans-api/ToolsPage"), "ToolsPage");
@@ -36,6 +37,7 @@ export function systemRoutes() {
         <Route path="system/agent-keys" element={<AgentKeysPage />} />
         <Route path="system/reports" element={<AgentReportsPage />} />
         <Route path="system/reports/:slug" element={<AgentReportPage />} />
+        <Route path="system/state" element={<SystemStatePage />} />
         <Route path="system/onlyfans-api" element={<StatePage />} />
         <Route path="system/onlyfans-api/collection" element={<RulesPage />} />
         <Route path="system/onlyfans-api/tools" element={<ToolsPage />} />

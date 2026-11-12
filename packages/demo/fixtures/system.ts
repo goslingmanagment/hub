@@ -17,6 +17,7 @@ import {
 } from "./system-ofapi.ts";
 import { demoPageSyncBlocks, demoSyncHistoryRequests, demoSyncOverview, demoSyncPages } from "./system-sync.ts";
 import { reportHandlers } from "./system-reports.ts";
+import { demoSystemState } from "./system-state.ts";
 
 type Capability =
   | "read:messages" | "read:money" | "read:observations_envelope" | "read:datasets" | "request:hydration"
@@ -93,4 +94,7 @@ export const systemHandlers: DemoHandlers = {
   adminQueueJobs: (request) => demoQueueJobs(request),
   adminDbStats: (request) => demoDbStats(request),
   adminClientHealth: (request) => demoClientHealth(request),
+
+  // System → «Состояние»: the routines and copies (the `hub-demo-scenario` cookie: healthy, mac-silent).
+  systemState: (request) => demoSystemState(request),
 };

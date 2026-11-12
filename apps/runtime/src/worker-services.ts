@@ -38,6 +38,7 @@ import {
 import { MATTERS_MIRROR_QUEUE, runMattersMirror } from "./services/matters-mirror.ts";
 import { SALE_HOMES_QUEUE, runSaleHomesTick } from "./services/sale-homes.ts";
 import { SHIFT_ROWS_QUEUE, runShiftRowsTick } from "./services/shift-rows.ts";
+import { SYSTEM_STATE_QUEUE, runSystemStateTick } from "./services/system-state-tick.ts";
 import {
   OBSERVATIONS_PARTITIONS_QUEUE,
   runObservationsPartitionCheck,
@@ -429,6 +430,11 @@ export async function startWorkerServices(
   });
   await boss.work(SALE_HOMES_QUEUE, CRON_SWEEP_WORK_OPTIONS, async () => {
     await runSaleHomesTick(app);
+  });
+  // «Состояние»: Hub's own schedules and the ledger reported, every routine, copy and reporter judged into matters.
+  await boss.work(SYSTEM_STATE_QUEUE, CRON_SWEEP_WORK_OPTIONS, async () => {
+    const tally = await runSystemStateTick(app);
+    if (tally.opened + tally.closed > 0) app.logger.info(tally, "System state pass complete");
   });
 
   await boss.work(DB_DISK_USAGE_CHECK_QUEUE, CRON_SWEEP_WORK_OPTIONS, async () => {

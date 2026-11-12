@@ -1,0 +1,32 @@
+{
+  "reporter": "mac",
+  "place": "mac",
+  "hub": { "credentials": "~/.config/hub/system-state.credentials" },
+  "openclaw": {
+    "database": "~/.openclaw/state/openclaw.sqlite",
+    "jobs": [
+      { "key": "mac.openclaw.watchdog", "job": "watchdog:v1", "title": "Сторож сбоев", "periodSeconds": 300 },
+      { "key": "mac.openclaw.heartbeat", "job": "heartbeat-example", "title": "Проактивная проверка (агент владельца)", "periodSeconds": 120 },
+      {
+        "key": "mac.openclaw.inbox", "job": "inbox-example:v1", "title": "Почта площадки", "periodSeconds": 7200,
+        "skipped": "empty_input", "emptyThresholdSeconds": 259200
+      },
+      { "key": "mac.openclaw.reminder", "job": "reminder-example:v1", "title": "Личное напоминание", "periodSeconds": 86400, "skip": true }
+    ]
+  },
+  "launchd": [
+    { "key": "mac.launchd.ledger-reports", "label": "ru.example.ledger-reports", "title": "Ledger: посты из чата отчётов", "periodSeconds": 900 },
+    { "key": "mac.launchd.hub-backup", "label": "ru.example.hub-backup", "title": "Копия базы Hub на мак", "periodSeconds": 86400 },
+    { "key": "mac.launchd.tunnel", "label": "ru.example.contentops-tunnel", "title": "Туннель к ContentOps", "periodSeconds": 300, "keepAlive": true }
+  ],
+  "claude": {
+    "sessions": "~/Library/Application Support/Claude/claude-code-sessions",
+    "tasks": [
+      { "key": "mac.claude.hiring-daily", "task": "hiring-daily", "title": "Найм: утренний разбор (задача Claude)", "periodSeconds": 86400 }
+    ]
+  },
+  "copies": [
+    { "key": "copy.agency-hub", "title": "База Hub", "source": "agency-de", "destination": "мак: ~/Backups/agency-hub", "dir": "~/Backups/agency-hub" },
+    { "key": "copy.ledger", "title": "База ledger", "source": "agency-de", "destination": "мак: ~/Backups/ledger", "dir": "~/Backups/ledger" }
+  ]
+}

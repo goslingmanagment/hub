@@ -78,6 +78,9 @@ table, a screen or a computation, find the thing's home here — a second home f
   cookie-authenticated change is taken only from the console's and the team's names (`api/origin-check.ts`). Other
   services redeem a code with their own key (`signin:<service>`), they never get the session.
 - **Pages agents write for people**: agent reports (`services/agent-reports.ts`, `hub report put`).
+- **Whether routines and copies work**: «Система → Состояние» (`services/system-state.ts`, tables `system_routines`,
+  `system_copies`): a reporter sends its whole list (`write:system_state`, the Mac's is `scripts/system-state/`), Hub
+  adds its own schedules and judges; a problem is a matter.
 - Lists in CHECK constraints (agent-key capabilities, person rights) are rewritten whole by every migration that
   widens them: at rebase take the union with main's. A migration's number must be above main's highest: the runner
   refuses a lower one once a higher one is applied.

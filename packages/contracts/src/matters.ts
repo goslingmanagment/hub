@@ -56,6 +56,29 @@ export function isMatterMirrorKind(kind: string): kind is MatterMirrorKind {
   return MIRROR_KIND_SET.has(kind);
 }
 
+/**
+ * The kinds Hub's server opens by its own rules (not mirrored from a list),
+ * each the one writer of its kind: an agent key opens or closes none of them.
+ */
+export const MATTER_SERVER_KINDS = [
+  /** A routine with no run for twice its period and ten minutes («Состояние», package P). */
+  "routine.silent",
+  /** A routine that failed twice in a row. */
+  "routine.failed",
+  /** A routine whose input stayed empty longer than its reporter's threshold. */
+  "routine.empty",
+  /** A copy older than 36 hours. */
+  "copy.stale",
+  /** A reporter (the Mac's) silent for 30 minutes inside its hours. */
+  "reporter.silent",
+] as const;
+export type MatterServerKind = (typeof MATTER_SERVER_KINDS)[number];
+
+const SERVER_KIND_SET: ReadonlySet<string> = new Set(MATTER_SERVER_KINDS);
+export function isMatterServerKind(kind: string): kind is MatterServerKind {
+  return SERVER_KIND_SET.has(kind);
+}
+
 export const MATTER_STATES = ["open", "closed"] as const;
 export const MATTER_CLOSED_HOWS = ["resolved", "withdrawn", "cause_gone"] as const;
 export const MATTER_SOURCE_NAMES = ["server", "agent", "ledger", "contentops", "person"] as const;

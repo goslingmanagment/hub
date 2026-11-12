@@ -3514,7 +3514,8 @@ export const agentKeys = pgTable(
         'signin:contentops',
         'signin:taskindex',
         'signin:monitor',
-        'write:reports'
+        'write:reports',
+        'write:system_state'
       ]::text[]
     `),
     expiresAtCheck: check("agent_keys_expires_at_check", sql`

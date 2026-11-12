@@ -28,6 +28,8 @@ import { accountReportsRouteSchemas } from "./routes-account-reports.ts";
 import { peopleRouteSchemas } from "./routes-people.ts";
 // One sign-in across the names Hub serves: the one-time code between names (ecosystem plan §3.2).
 import { signinRouteSchemas } from "./routes-signin.ts";
+// Система → «Состояние»: every routine and copy, from the owner's place (ecosystem plan, package P).
+import { systemStateRouteSchemas } from "./routes-system-state.ts";
 import {
   PERIOD_OPTIONS,
   SPENDER_PERIOD_OPTIONS,
@@ -7179,6 +7181,7 @@ const baseRouteSchemas = {
   ...accountReportsRouteSchemas,
   ...peopleRouteSchemas,
   ...signinRouteSchemas,
+  ...systemStateRouteSchemas,
   adminAiPersonasList: {
     auth: { kind: "owner-session" },
     tags: ["admin"],

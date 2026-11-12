@@ -23,6 +23,7 @@ import {
 } from "./client-send-custody-archive.ts";
 import { ensureSaleHomesQueue, ensureSaleHomesSchedule } from "./sale-homes.ts";
 import { ensureShiftRowsQueue, ensureShiftRowsSchedule } from "./shift-rows.ts";
+import { ensureSystemStateQueue, ensureSystemStateSchedule } from "./system-state-tick.ts";
 import { ensureObservationsPartitionQueue, ensureObservationsPartitionSchedule } from "./observations-partitions.ts";
 import { ensureMattersMirrorQueue, ensureMattersMirrorSchedule } from "./matters-mirror.ts";
 import { ensureCapturePayloadParityQueue, ensureCapturePayloadParitySchedule } from "./capture-payload-parity.ts";
@@ -120,6 +121,7 @@ export async function ensureAllQueues(
   await ensureMattersMirrorQueue(boss, createdQueues);
   await ensureShiftRowsQueue(boss, createdQueues);
   await ensureSaleHomesQueue(boss, createdQueues);
+  await ensureSystemStateQueue(boss, createdQueues);
 }
 
 export async function registerAllSchedules(
@@ -181,5 +183,6 @@ export async function registerAllSchedules(
     ensureMattersMirrorSchedule(boss),
     ensureShiftRowsSchedule(boss),
     ensureSaleHomesSchedule(boss),
+    ensureSystemStateSchedule(boss),
   ]);
 }

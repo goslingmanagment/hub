@@ -28,6 +28,8 @@ interface Route {
 }
 
 const ROLE_COOKIE = "hub-demo-role";
+/** A screen's other demo state (`hub-demo-scenario=healthy`): set by hand or by a screenshot tool. */
+const SCENARIO_COOKIE = "hub-demo-scenario";
 const ROLES: readonly DemoRole[] = ["owner", "team_lead", "chatter"];
 
 function compile(): Route[] {
@@ -221,7 +223,9 @@ export function demoApi(options: DemoApiOptions = {}): Plugin {
             return;
           }
           const role = ROLES.find((item) => item === roleCookie) ?? "owner";
-          const demoRequest: DemoRequest = { params, query, body: await readBody(request), now: new Date(), role };
+          const demoRequest: DemoRequest = {
+            params, query, body: await readBody(request), now: new Date(), role, scenario: readCookie(request, SCENARIO_COOKIE),
+          };
 
           let handlers: Record<string, ((request: DemoRequest) => unknown) | undefined>;
           try {
