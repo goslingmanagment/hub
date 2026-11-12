@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
+import { isOwnerLogin } from "./chatter-activity.ts";
 
 // Whose each sale is by the one rule (0380 `sale_homes`, apps/runtime
 // services/sale-rule.ts and sale-homes.ts) and the screens' switch to it
@@ -166,6 +167,27 @@ export async function listUserLeaveFacts(db: Database, userIds: readonly number[
     deletedAt: at(row.deleted_at),
     personLeft: row.person_left === true ? { leftOn: row.left_on, recordedAt: new Date(row.left_recorded_at!) } : null,
   }));
+}
+
+/**
+ * Of these sales, the ones whose fan one of the owner's logins (`isOwnerLogin`) wrote to on the page within `hours`
+ * before the sale: the sales whose last writer the owner's messages no longer are (2026-11-12). For the comparison only.
+ */
+export async function listSalesOwnerWroteTo(
+  db: Database,
+  input: { hours: number; sales: ReadonlyArray<{ transactionId: number; pageId: number; fanRef: string; at: Date }> },
+): Promise<Set<number>> {
+  if (input.sales.length === 0) return new Set();
+  const rows = input.sales.map((sale) => ({ id: sale.transactionId, page_id: sale.pageId, fan_ref: sale.fanRef, at: sale.at.toISOString() }));
+  const result = await db.execute<{ id: string | number }>(sql`
+    select s.id from jsonb_to_recordset(${JSON.stringify(rows)}::jsonb) as s(id bigint, page_id bigint, fan_ref text, at timestamptz)
+    where exists (
+      select 1 from client_send_attributions a
+      where a.page_id = s.page_id and a.fan_ref = s.fan_ref
+        and a.observed_at <= s.at and a.observed_at > s.at - make_interval(hours => ${input.hours})
+        and ${isOwnerLogin(sql`a.user_id`)}
+    )`);
+  return new Set(result.rows.map((row) => Number(row.id)));
 }
 
 /** The platform's own reference of each sale (`transactions.transaction_id`), by Hub's id: how the ledger's layouts name a sale. */

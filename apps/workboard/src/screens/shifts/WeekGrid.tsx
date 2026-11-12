@@ -287,16 +287,29 @@ export function WeekGrid({ model, isOwner, versus, loading = false, refreshing =
  * the grid's money; one quiet figure beside its title, by page on hover.
  */
 function Outside({ outside }: { outside: ShiftsModel["outside"] }) {
-  const total = outside.visitsNetMills + outside.nobodyNetMills;
+  // The one rule's lines (with `ruleFrom`): the pot, a PPV waiting for its sender, the owner's decision.
+  const ruled = (one: { potNetMills?: number; waitingNetMills?: number; decideNetMills?: number }) =>
+    (one.potNetMills ?? 0) + (one.waitingNetMills ?? 0) + (one.decideNetMills ?? 0);
+  const total = outside.visitsNetMills + outside.nobodyNetMills + ruled(outside);
   if (total <= 0) return null;
+  const lines: Array<[string, number | undefined]> = [
+    ["в заходах", outside.visitsNetMills],
+    ["общак", outside.potNetMills],
+    ["ждут смены отправителя", outside.waitingNetMills],
+    ["ждут решения", outside.decideNetMills],
+    ["ничьи", outside.nobodyNetMills],
+  ];
   const hint = (
     <span className="shifts-outside__hint">
-      <span>Продажи страниц, которые не держала ни одна смена: в продажи за смены и в выплаты они не входят.</span>
-      {outside.visitsNetMills > 0 && <span className="shifts-outside__row">в заходах<Money mills={outside.visitsNetMills} /></span>}
-      {outside.nobodyNetMills > 0 && <span className="shifts-outside__row">ничьи<Money mills={outside.nobodyNetMills} /></span>}
+      <span>
+        {outside.potNetMills === undefined
+          ? "Продажи страниц, которые не держала ни одна смена: в продажи за смены и в выплаты они не входят."
+          : "Продажи страниц, которые правило не отдало ни одной смене: в продажи за смены и в выплаты они не входят."}
+      </span>
+      {lines.map(([label, mills]) => (mills ?? 0) > 0 && <span key={label} className="shifts-outside__row">{label}<Money mills={mills!} /></span>)}
       {outside.pages.map((page) => (
         <span key={page.pageLabel} className="shifts-outside__row shifts-outside__row--page">
-          <span>{page.pageLabel}</span><Money mills={page.visitsNetMills + page.nobodyNetMills} />
+          <span>{page.pageLabel}</span><Money mills={page.visitsNetMills + page.nobodyNetMills + ruled(page)} />
         </span>
       ))}
     </span>

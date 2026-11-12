@@ -39,6 +39,18 @@ import {
   type ComputedWork,
   type PersonWork,
 } from "./chatter-shifts.ts";
+import {
+  RULED_SALES_LEAD_MS,
+  creditedPiece,
+  openWindowFrom,
+  piecesByUser,
+  readScreenHomes,
+  readScreensRule,
+  ruledSalesFrom,
+  ruledWork,
+  type ScreensRule,
+} from "./sale-rule-screens.ts";
+import { reportDateOfShift } from "./shift-rows.ts";
 import { DELAY_BOUNDS, byDelayOf, byPriceOf } from "./team-sales.ts";
 
 /**
@@ -208,11 +220,26 @@ export function statsWindow(input: { days: number; now: Date; until?: string | u
   };
 }
 
+/**
+ * Whether an old shift (one the rule does not count) counts a sale its shifts hold: `settleSale` gives it to one of the
+ * old holders — they are alone, or wrote last, or the last writer is none of the holders. Then a ruled shift does not
+ * count it again. Pure.
+ */
+export function oldShiftCounts(holders: ReadonlyArray<{ userId: number; ruled: boolean }>, lastWriter: number | null): boolean {
+  const users = [...new Set(holders.map((one) => one.userId))];
+  return holders.some((one) => !one.ruled && settleSale(one.userId, users.filter((other) => other !== one.userId), lastWriter) !== "theirs");
+}
+
 export async function computeChatterStats(
   db: Database,
-  input: { userId: number; username: string; pages: readonly StatsPage[]; days: number; until?: string | undefined; now: Date },
+  input: {
+    userId: number; username: string; pages: readonly StatsPage[]; days: number; until?: string | undefined; now: Date;
+    /** The screens' switch as given (null — off); absent — as stored. */
+    rule?: ScreensRule | null;
+  },
 ): Promise<ChatterStats> {
   const { userId, now } = input;
+  const rule = input.rule !== undefined ? input.rule : await readScreensRule(db);
   const { from, to, previousFrom } = statsWindow(input);
   // A reply's day for a purchase must be over (as «Продажи»).
   const repliesTo = new Date(Math.max(Math.min(to.getTime(), now.getTime() - DAY_MS), from.getTime()));
@@ -225,14 +252,25 @@ export async function computeChatterStats(
     findFirstChatterActivity(db, userId),
     readPeopleWork(db, { from: readFrom, to: readTo, now, pages: pageIds, userId }),
   ]);
-  const work = (people.get(userId)?.work ?? []).filter((one) => middleOfWork(one) >= previousFrom.getTime() && middleOfWork(one) < to.getTime());
+  // By the rule (sale-rule-screens.ts): a shift by its report date, a look-in by its day, begun before the window's end.
+  const ruled = (one: ComputedWork) => ruledWork(rule, one);
+  const ruledDay = (one: ComputedWork) => (one.kind === "shift" ? reportDateOfShift(one) : dayOfWork(one));
+  const firstDay = moscowDayOf(from.getTime());
+  const inPeriod = (one: ComputedWork) => (ruled(one)
+    ? ruledDay(one) >= moscowDayOf(previousFrom.getTime()) && ruledDay(one) <= moscowDayOf(to.getTime() - 1) && one.startedAt < to.getTime()
+    : middleOfWork(one) >= previousFrom.getTime() && middleOfWork(one) < to.getTime());
+  const work = (people.get(userId)?.work ?? []).filter(inPeriod);
   const sales = work.length === 0 ? [] : await listShiftSales(db, { pageIds, from: readFrom, to: readTo });
   const held = work.map((one) => ({ work: one, sales: sales.filter((sale) => workHoldsShiftSale(one, sale)) }));
+  const ruledHeld = rule !== null && work.some(ruled) ? await ruledCreditsOf(db, { rule, userId, work, sales, pageIds, readFrom, now }) : null;
   const heldSales = held.flatMap((one) => one.sales);
+  const creditedSales = ruledHeld === null ? [] : [...ruledHeld.credits.values()].flat();
 
   const [team, sendsRead, ppvRows, replyRows, reports] = await Promise.all([
     // Whose shifts hold these sales too.
-    heldSales.length === 0 ? Promise.resolve(new Map<number, PersonWork>()) : readPeopleWork(db, { from: readFrom, to: readTo, now, pages: pageIds }),
+    heldSales.length === 0 && creditedSales.length === 0
+      ? Promise.resolve(new Map<number, PersonWork>())
+      : readPeopleWork(db, { from: ruledHeld === null ? readFrom : new Date(Math.min(readFrom.getTime(), ...creditedSales.map((sale) => sale.occurredAt.getTime() - DAY_MS))), to: readTo, now, pages: pageIds }),
     listAuthoredSends(db, { userId, pageIds, from: new Date(from.getTime() - DAY_MS), to: readTo }),
     listPpvFacts(db, { from, to, pages: pageIds, burstMinFans: MASS_SEND_MIN_CHATS }),
     repliesTo <= from
@@ -249,25 +287,43 @@ export async function computeChatterStats(
     for (const sale of heldSales) if (shifts.some((one) => workHoldsShiftSale(one, sale))) push(othersOf, sale.transactionId, otherId);
   }
   const visitSales = new Set(held.filter((one) => one.work.kind === "visit").flatMap((one) => one.sales.map((sale) => sale.transactionId)));
+  // A ruled shift's credit an old shift holds: whether that one counts it takes who last wrote (as «Смены»).
+  const oldHoldersOf = new Map<number, Array<{ userId: number; ruled: boolean }>>();
+  for (const sale of creditedSales) {
+    const holders = [...team].flatMap(([otherId, other]) => other.work
+      .filter((one) => one.kind === "shift" && workHoldsShiftSale(one, sale))
+      .map((one) => ({ userId: otherId, ruled: ruled(one) })));
+    if (holders.some((one) => !one.ruled)) oldHoldersOf.set(sale.transactionId, holders);
+  }
   const lastWriters = await listSaleLastWriters(db, {
     hours: SALE_LAST_WRITER_HOURS,
-    sales: lastWriterQuery(heldSales.filter((sale) => othersOf.has(sale.transactionId) || visitSales.has(sale.transactionId))),
+    sales: lastWriterQuery([
+      ...heldSales.filter((sale) => othersOf.has(sale.transactionId) || visitSales.has(sale.transactionId)),
+      ...creditedSales.filter((sale) => oldHoldersOf.has(sale.transactionId) && !othersOf.has(sale.transactionId) && !visitSales.has(sale.transactionId)),
+    ]),
   });
   const settled = (sale: ShiftSale) => settleSale(userId, othersOf.get(sale.transactionId) ?? [], lastWriters.get(sale.transactionId) ?? null);
+  const oldCounts = (sale: ShiftSale) => {
+    const holders = oldHoldersOf.get(sale.transactionId);
+    return holders !== undefined && oldShiftCounts(holders, lastWriters.get(sale.transactionId) ?? null);
+  };
 
-  const dayOf = (shift: ComputedWork) => dayOfShift(shift, activitySince?.getTime());
+  const dayOf = (shift: ComputedWork) => (ruled(shift) ? reportDateOfShift(shift) : dayOfShift(shift, activitySince?.getTime()));
   const withSales = held.map((one) => ({
     work: one.work,
-    sales: one.sales.filter((sale) => (one.work.kind === "shift" ? settled(sale) !== "theirs" : lastWriters.get(sale.transactionId) === userId)),
+    sales: ruled(one.work)
+      ? (ruledHeld?.credits.get(one.work) ?? []).filter((sale) => !oldCounts(sale))
+      : one.sales.filter((sale) => (one.work.kind === "shift" ? settled(sale) !== "theirs" : lastWriters.get(sale.transactionId) === userId)),
   }));
-  const inWindow = (one: { work: ComputedWork }) => middleOfWork(one.work) >= from.getTime();
+  const inWindow = (one: { work: ComputedWork }) => (ruled(one.work) ? ruledDay(one.work) >= firstDay : middleOfWork(one.work) >= from.getTime());
   const counted = withSales.filter((one) => one.work.kind === "shift");
   const current = counted.filter(inWindow);
   const before = counted.filter((one) => !inWindow(one));
   const visits = withSales.filter((one) => one.work.kind === "visit" && inWindow(one));
   const currentSales = current.flatMap((one) => one.sales);
   const together = new Map<number, string[]>();
-  for (const sale of currentSales) {
+  // A sale the rule settles counts for one person; only the old count gives a sale to both.
+  for (const sale of current.filter((one) => !ruled(one.work)).flatMap((one) => one.sales)) {
     if (settled(sale) === "both") together.set(sale.transactionId, othersOf.get(sale.transactionId)!.map((otherId) => usernames.get(otherId)!));
   }
   const sends = sendsRead.filter((send) => send.at >= from && send.at < to);
@@ -443,8 +499,44 @@ export async function computeChatterStats(
       streakDays: streaks.current,
       longestStreakDays: streaks.longest,
     },
+    ...(rule === null ? {} : { ruleFrom: rule.from }),
     serverNow: now.toISOString(),
   };
+}
+
+/**
+ * What the rule credits each of one person's ruled works (`work`): the shares of the homes of the sales on `pageIds`
+ * that name them, back by the PPV's wait before the read (`readFrom`), each with its share of the net.
+ */
+async function ruledCreditsOf(db: Database, input: {
+  rule: ScreensRule;
+  userId: number;
+  work: readonly ComputedWork[];
+  sales: readonly ShiftSale[];
+  pageIds: readonly number[];
+  readFrom: Date;
+  now: Date;
+}): Promise<{ credits: Map<ComputedWork, ShiftSale[]> }> {
+  const { rule, userId } = input;
+  const from = Math.max(ruledSalesFrom(rule), input.readFrom.getTime() - RULED_SALES_LEAD_MS);
+  const earlier = from < input.readFrom.getTime() ? await listShiftSales(db, { pageIds: input.pageIds, from: new Date(from), to: input.readFrom }) : [];
+  const all = [...earlier, ...input.sales].filter((sale) => sale.occurredAt.getTime() >= from);
+  const homes = await readScreenHomes(db, { sales: all, openFrom: openWindowFrom(input.now, input.work), now: input.now, live: rule.live });
+  const byId = new Map(all.map((sale) => [sale.transactionId, sale]));
+  const byUser = piecesByUser(input.work.filter((one) => ruledWork(rule, one)).map((one) => ({ userId, work: one })));
+  const credits = new Map<ComputedWork, ShiftSale[]>();
+  for (const [transactionId, home] of homes) {
+    const sale = byId.get(transactionId);
+    if (sale === undefined || (home.kind !== "shift" && home.kind !== "visit")) continue;
+    for (const share of home.shares) {
+      if (share.userId !== userId) continue;
+      const piece = creditedPiece(byUser, share);
+      if (piece === null || (piece.work.kind === "visit") !== (home.kind === "visit")) continue;
+      credits.set(piece.work, [...(credits.get(piece.work) ?? []), { ...sale, netMills: share.mills }]);
+    }
+  }
+  for (const list of credits.values()) list.sort((a, b) => a.occurredAt.getTime() - b.occurredAt.getTime() || a.transactionId - b.transactionId);
+  return { credits };
 }
 
 /** The caller's own statistics, on the pages they work now. Any cookie session. */

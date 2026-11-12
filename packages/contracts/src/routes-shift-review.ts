@@ -20,7 +20,7 @@
 import { z } from "zod";
 
 import { CHATTER_SALE_KINDS } from "./chatter-stats.ts";
-import { errorResponseSchema, intId, isoDateTime, isoTimestamp, mills } from "./primitives.ts";
+import { businessDate, errorResponseSchema, intId, isoDateTime, isoTimestamp, mills } from "./primitives.ts";
 
 const count = z.number().int().nonnegative();
 
@@ -60,6 +60,8 @@ export const SHIFT_REVIEW_ORIGINS = ["ai", "fix", "own"] as const;
 export const SHIFT_REVIEW_MARKS = ["dash", "cyrillic", "leak"] as const;
 export const SHIFT_REVIEW_AUTHORS = ["me", "other", "none", "auto"] as const;
 export const SHIFT_REVIEW_SALE_VERDICTS = ["mine", "both", "theirs", "none"] as const;
+/** A sale's home by the one rule of whose a sale is (apps/runtime services/sale-rule.ts, `sale_homes`). */
+export const SALE_HOME_KINDS = ["shift", "visit", "pot", "waiting", "decide", "nobody", "before_rule", "unknown"] as const;
 export const SHIFT_REVIEW_SALE_ORIGINS = ["own", "colleague_ppv", "no_author_ppv", "other_wrote", "nobody_wrote_48h", "post_tip", "campaign"] as const;
 
 export const teamShiftReviewQuerySchema = z.object({
@@ -219,6 +221,12 @@ const shiftReviewSaleSchema = z.object({
    * contribution. A PPV with a known author goes by it, whoever wrote last.
    */
   origin: z.enum(SHIFT_REVIEW_SALE_ORIGINS),
+  /**
+   * With `ruleFrom`: the sale's home by the one rule — `kind` (a person's `shift` or `visit`, the page's `pot`, a PPV
+   * `waiting` for its sender, the owner's to `decide`, `nobody`'s, `before_rule`, `unknown`) and why, in the owner's
+   * words. `verdict` and `holderName` then say the same.
+   */
+  home: z.object({ kind: z.enum(SALE_HOME_KINDS), text: z.string() }).optional(),
 });
 
 export const teamShiftReviewResponseSchema = z.object({
@@ -309,6 +317,12 @@ export const teamShiftReviewResponseSchema = z.object({
    * the ones deleted within SHIFT_REVIEW_DELETED_UNSEEN_SECONDS whose text the archive never got: those are only here.
    */
   deleted: count,
+  /**
+   * The first Moscow day of the one rule of whose a sale is (the screens' switch), when this shift is counted by it (its
+   * report date is that day or later): `salesNetMills` is what the sales' homes give it, `sales` holds every sale
+   * credited to it (a PPV bought before it that waited for the person too), each with its `home`. Absent — the old count.
+   */
+  ruleFrom: businessDate.optional(),
   serverNow: isoTimestamp,
 });
 

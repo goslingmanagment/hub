@@ -1385,6 +1385,10 @@
                       ],
                       "additionalProperties": false
                     },
+                    "ruleFrom": {
+                      "type": "string",
+                      "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                    },
                     "serverNow": {
                       "type": "string"
                     }
@@ -182232,6 +182236,32 @@
                                   "post_tip",
                                   "campaign"
                                 ]
+                              },
+                              "home": {
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "enum": [
+                                      "shift",
+                                      "visit",
+                                      "pot",
+                                      "waiting",
+                                      "decide",
+                                      "nobody",
+                                      "before_rule",
+                                      "unknown"
+                                    ]
+                                  },
+                                  "text": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "kind",
+                                  "text"
+                                ],
+                                "additionalProperties": false
                               }
                             },
                             "required": [
@@ -182365,6 +182395,32 @@
                                   "post_tip",
                                   "campaign"
                                 ]
+                              },
+                              "home": {
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "enum": [
+                                      "shift",
+                                      "visit",
+                                      "pot",
+                                      "waiting",
+                                      "decide",
+                                      "nobody",
+                                      "before_rule",
+                                      "unknown"
+                                    ]
+                                  },
+                                  "text": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "kind",
+                                  "text"
+                                ],
+                                "additionalProperties": false
                               }
                             },
                             "required": [
@@ -182498,6 +182554,32 @@
                                   "post_tip",
                                   "campaign"
                                 ]
+                              },
+                              "home": {
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "enum": [
+                                      "shift",
+                                      "visit",
+                                      "pot",
+                                      "waiting",
+                                      "decide",
+                                      "nobody",
+                                      "before_rule",
+                                      "unknown"
+                                    ]
+                                  },
+                                  "text": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "kind",
+                                  "text"
+                                ],
+                                "additionalProperties": false
                               }
                             },
                             "required": [
@@ -182648,6 +182730,10 @@
                           "type": "integer",
                           "minimum": 0,
                           "maximum": 9007199254740991
+                        },
+                        "ruleFrom": {
+                          "type": "string",
+                          "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
                         },
                         "serverNow": {
                           "type": "string"
@@ -270071,6 +270157,10 @@
                               ],
                               "additionalProperties": false
                             },
+                            "ruleFrom": {
+                              "type": "string",
+                              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                            },
                             "serverNow": {
                               "type": "string"
                             }
@@ -274941,6 +275031,32 @@
                               "post_tip",
                               "campaign"
                             ]
+                          },
+                          "home": {
+                            "type": "object",
+                            "properties": {
+                              "kind": {
+                                "type": "string",
+                                "enum": [
+                                  "shift",
+                                  "visit",
+                                  "pot",
+                                  "waiting",
+                                  "decide",
+                                  "nobody",
+                                  "before_rule",
+                                  "unknown"
+                                ]
+                              },
+                              "text": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "text"
+                            ],
+                            "additionalProperties": false
                           }
                         },
                         "required": [
@@ -275074,6 +275190,32 @@
                               "post_tip",
                               "campaign"
                             ]
+                          },
+                          "home": {
+                            "type": "object",
+                            "properties": {
+                              "kind": {
+                                "type": "string",
+                                "enum": [
+                                  "shift",
+                                  "visit",
+                                  "pot",
+                                  "waiting",
+                                  "decide",
+                                  "nobody",
+                                  "before_rule",
+                                  "unknown"
+                                ]
+                              },
+                              "text": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "text"
+                            ],
+                            "additionalProperties": false
                           }
                         },
                         "required": [
@@ -275207,6 +275349,32 @@
                               "post_tip",
                               "campaign"
                             ]
+                          },
+                          "home": {
+                            "type": "object",
+                            "properties": {
+                              "kind": {
+                                "type": "string",
+                                "enum": [
+                                  "shift",
+                                  "visit",
+                                  "pot",
+                                  "waiting",
+                                  "decide",
+                                  "nobody",
+                                  "before_rule",
+                                  "unknown"
+                                ]
+                              },
+                              "text": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "text"
+                            ],
+                            "additionalProperties": false
                           }
                         },
                         "required": [
@@ -275357,6 +275525,10 @@
                       "type": "integer",
                       "minimum": 0,
                       "maximum": 9007199254740991
+                    },
+                    "ruleFrom": {
+                      "type": "string",
+                      "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
                     },
                     "serverNow": {
                       "type": "string"
@@ -276009,6 +276181,21 @@
                           "minimum": -9007199254740991,
                           "maximum": 9007199254740991
                         },
+                        "potNetMills": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "waitingNetMills": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "decideNetMills": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
                         "daily": {
                           "type": "array",
                           "items": {
@@ -276024,6 +276211,21 @@
                                 "maximum": 9007199254740991
                               },
                               "nobodyNetMills": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "potNetMills": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "waitingNetMills": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "decideNetMills": {
                                 "type": "integer",
                                 "minimum": -9007199254740991,
                                 "maximum": 9007199254740991
@@ -276051,6 +276253,21 @@
                                 "maximum": 9007199254740991
                               },
                               "nobodyNetMills": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "potNetMills": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "waitingNetMills": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "decideNetMills": {
                                 "type": "integer",
                                 "minimum": -9007199254740991,
                                 "maximum": 9007199254740991
@@ -276100,6 +276317,16 @@
                                   "string",
                                   "null"
                                 ]
+                              },
+                              "home": {
+                                "type": "string",
+                                "enum": [
+                                  "visit",
+                                  "pot",
+                                  "waiting",
+                                  "decide",
+                                  "nobody"
+                                ]
                               }
                             },
                             "required": [
@@ -276122,6 +276349,10 @@
                         "sales"
                       ],
                       "additionalProperties": false
+                    },
+                    "ruleFrom": {
+                      "type": "string",
+                      "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
                     },
                     "serverNow": {
                       "type": "string"

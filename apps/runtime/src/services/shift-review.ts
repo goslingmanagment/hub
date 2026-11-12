@@ -44,11 +44,15 @@ import {
 import type { AppContext } from "../bootstrap.ts";
 import { requireOwner, type AuthPrincipal } from "./auth.ts";
 import {
-  SALE_LAST_WRITER_HOURS, lastWriterQuery, readPeopleWork, salesHeldBy, workHoldsShiftSale, type ComputedWork, type PersonPiece, type PersonWork,
+  SALE_LAST_WRITER_HOURS, lastWriterQuery, netOf, readPeopleWork, salesHeldBy, workHoldsShiftSale, type ComputedWork, type PersonPiece, type PersonWork,
 } from "./chatter-shifts.ts";
-import { saleKindOf, saleOriginOf, settleSale } from "./chatter-stats.ts";
+import { oldShiftCounts, saleKindOf, saleOriginOf, settleSale } from "./chatter-stats.ts";
 import type { ChatterSaleKind } from "@agency_hub_core/contracts";
 import { NotFoundError } from "./errors.ts";
+import { SALE_HOME_REASON_TEXT, type SaleHomeReason } from "./sale-rule.ts";
+import {
+  RULED_SALES_LEAD_MS, creditedPiece, openWindowFrom, piecesByUser, readScreenHomes, readScreensRule, ruledWork, type ScreenHome, type ScreensRule,
+} from "./sale-rule-screens.ts";
 import { salesNoShiftHolds, salesOfWork, settleOutsideShifts } from "./team-shift-sales.ts";
 
 /**
@@ -743,6 +747,87 @@ async function salesAfterShift(
   });
 }
 
+/** A ruled shift's sales by their homes (sale-rule-screens.ts). */
+export interface RuledReview {
+  homes: ReadonlyMap<number, ScreenHome>;
+  /** The sales credited to the shift that are not among the ones on its pages within it (a PPV bought before it). */
+  extra: SettledSale[];
+  salesNetMills: number;
+  /** A sale's verdict and holder by its home; one with no home keeps the old ones. */
+  settle: (one: SettledSale) => SettledSale;
+  /** The rule gives the sale to a person's work. */
+  creditedToPerson: (transactionId: number) => boolean;
+}
+
+/**
+ * What the rule credits a ruled shift: the shares of the homes naming it — of the sales on any page back by the PPV's
+ * wait to its end — but those an old shift counts (`oldShiftCounts`, the switch's first days), and every other sale's
+ * verdict by its home: a person's — `theirs` and theirs to name; no person's (the pot, a PPV waiting, the owner's
+ * decision, nobody) — `none`.
+ */
+async function ruledReviewOf(app: AppContext, input: {
+  rule: ScreensRule;
+  userId: number;
+  shift: ComputedWork;
+  person: PersonWork;
+  everyone: () => Promise<ReadonlyMap<number, PersonWork>>;
+  now: Date;
+  listed: readonly SettledSale[];
+  before: readonly ShiftSale[];
+  bought: readonly ShiftSale[];
+  /** An agent key's pages: credits on those alone (as the old count reads only them); absent — every page. */
+  grantedPageIds?: readonly number[] | undefined;
+}): Promise<RuledReview> {
+  const { rule, userId, shift, now } = input;
+  const end = shift.ongoing ? now.getTime() : shift.endedAt;
+  const around = await listShiftSales(app.db, {
+    pageIds: input.grantedPageIds ?? "all", from: new Date(shift.startedAt - RULED_SALES_LEAD_MS), to: new Date(end + 1),
+  });
+  const byId = new Map<number, ShiftSale>();
+  for (const sale of [...around, ...input.listed.map((one) => one.sale), ...input.before, ...input.bought]) byId.set(sale.transactionId, sale);
+  const homes = await readScreenHomes(app.db, { sales: [...byId.values()], openFrom: openWindowFrom(now, input.person.work), now, live: rule.live });
+  const mine = piecesByUser([{ userId, work: shift }]);
+  const credits: ShiftSale[] = [];
+  for (const [transactionId, home] of homes) {
+    const sale = byId.get(transactionId);
+    if (sale === undefined || home.kind !== shift.kind) continue;
+    for (const share of home.shares) if (share.userId === userId && creditedPiece(mine, share) !== null) credits.push({ ...sale, netMills: share.mills });
+  }
+  // A credit an old shift holds: whether it counts it takes who last wrote (as «Смены»).
+  const people = credits.length === 0 ? new Map<number, PersonWork>() : await input.everyone();
+  const holdersOf = new Map(credits.map((sale) => [sale.transactionId, [...people].flatMap(([id, other]) => other.work
+    .filter((work) => work.kind === "shift" && workHoldsShiftSale(work, sale))
+    .map((work) => ({ userId: id, ruled: ruledWork(rule, work) })))]));
+  const asked = credits.filter((sale) => holdersOf.get(sale.transactionId)!.some((one) => !one.ruled) || !input.listed.some((one) => one.sale.transactionId === sale.transactionId));
+  const lastWriters = asked.length === 0 ? new Map<number, number>() : await listSaleLastWriters(app.db, { hours: SALE_LAST_WRITER_HOURS, sales: lastWriterQuery(asked) });
+  const kept = credits.filter((sale) => !oldShiftCounts(holdersOf.get(sale.transactionId)!, lastWriters.get(sale.transactionId) ?? null));
+  const keptIds = new Set(kept.map((sale) => sale.transactionId));
+  const listedIds = new Set(input.listed.map((one) => one.sale.transactionId));
+  const usernames = new Map([[userId, input.person.username], ...[...people].map(([id, other]) => [id, other.username] as const)]);
+  const settle = (one: SettledSale): SettledSale => {
+    const home = homes.get(one.sale.transactionId);
+    if (home === undefined) return one;
+    if (keptIds.has(one.sale.transactionId)) return { ...one, held: true, verdict: "mine", holder: null };
+    if ((home.kind === "shift" || home.kind === "visit") && home.shares.length > 0) {
+      const share = home.shares.find((other) => other.userId !== userId) ?? home.shares[0]!;
+      return { ...one, verdict: "theirs", holder: usernames.get(share.userId) ?? `hub:${share.userId}` };
+    }
+    return { ...one, verdict: "none", holder: null };
+  };
+  return {
+    homes,
+    extra: kept.filter((sale) => !listedIds.has(sale.transactionId)).map((sale) => ({
+      sale: byId.get(sale.transactionId)!, held: true, verdict: "mine", holder: null, lastWriter: lastWriters.get(sale.transactionId) ?? null,
+    })),
+    salesNetMills: netOf(kept),
+    settle,
+    creditedToPerson: (transactionId) => {
+      const home = homes.get(transactionId);
+      return home !== undefined && (home.kind === "shift" || home.kind === "visit") && home.shares.length > 0;
+    },
+  };
+}
+
 export async function readTeamShiftReview(
   app: AppContext,
   principal: AuthPrincipal,
@@ -962,13 +1047,23 @@ export async function computeShiftReview(
   });
   // The facts of every sale the review weighs, in one read: the ones shown, the ones before it and the PPVs bought after it.
   const bought = shift.kind === "shift" ? await purchasesAfterShift(app, { end, ppvFans, now }) : [];
+  // From the screens' switch on (sale-rule-screens.ts), a ruled shift's sales are where their homes put them.
+  const rule = await readScreensRule(app.db);
+  const byRule = ruledWork(rule, shift)
+    ? await ruledReviewOf(app, {
+      rule: rule!, userId: query.userId, shift, person, everyone, now, listed: [...listed], before: before.sales, bought, grantedPageIds: options.grantedPageIds,
+    })
+    : null;
+  if (byRule !== null) listed.push(...byRule.extra);
   const factIds = [...new Set([...listed.map((one) => one.sale), ...before.sales, ...bought].map((sale) => sale.transactionId))];
   const facts = new Map((await listSaleFacts(app.db, { transactionIds: factIds })).map((fact) => [fact.transactionId, fact]));
   const beforeSales = salesBeforeShiftOf(query.userId, before, facts);
   const laterSales = await salesAfterShift(app, { userId: query.userId, start, end, bought, facts, now });
-  const rowOf = (one: SettledSale): TeamShiftReviewResponse["sales"][number] => {
+  const rowOf = (raw: SettledSale): TeamShiftReviewResponse["sales"][number] => {
+    const one = byRule === null ? raw : byRule.settle(raw);
     const fact = facts.get(one.sale.transactionId);
     const writers = fact?.writers ?? [];
+    const home = byRule?.homes.get(one.sale.transactionId);
     return {
       saleRef: String(one.sale.transactionId),
       at: one.sale.occurredAt.toISOString(),
@@ -992,6 +1087,7 @@ export async function computeShiftReview(
         campaign: fact?.campaign ?? false,
         lastWriter: one.lastWriter,
       }),
+      ...(home === undefined ? {} : { home: { kind: home.kind, text: SALE_HOME_REASON_TEXT[home.reason as SaleHomeReason] ?? home.reason } }),
     };
   };
 
@@ -1024,14 +1120,14 @@ export async function computeShiftReview(
         allFans: allFans.has(page.label),
         sales: salesOfPage.get(page.id) ?? { netMills: 0, byKind: [] },
       })),
-      salesNetMills: heldNetMills(sales),
+      salesNetMills: byRule === null ? heldNetMills(sales) : byRule.salesNetMills,
     },
     previousAt: previous === null ? null : new Date(previous.startedAt).toISOString(),
     nextAt: found.next === null ? null : new Date(found.next.startedAt).toISOString(),
     activity: [...activity].sort((a, b) => a[0] - b[0]).map(([ms, input]) => ({ at: new Date(ms).toISOString(), input })),
     chats: out,
-    sales: listed.map(rowOf),
-    beforeSales: beforeSales.map(rowOf),
+    sales: (byRule === null ? listed : listed.sort((a, b) => a.sale.occurredAt.getTime() - b.sale.occurredAt.getTime() || a.sale.transactionId - b.sale.transactionId)).map(rowOf),
+    beforeSales: (byRule === null ? beforeSales : beforeSales.filter((one) => !byRule.creditedToPerson(one.sale.transactionId))).map(rowOf),
     laterSales: laterSales.map(rowOf),
     waits,
     follows: follows.filter((follow) => follow.at.getTime() >= start && follow.at.getTime() <= end).map((follow) => ({
@@ -1045,6 +1141,7 @@ export async function computeShiftReview(
     aiUse: aiUse.map((use) => ({ pageLabel: labelOf.get(use.pageId) ?? String(use.pageId), feature: use.feature, count: use.count })),
     unarchived: sends.filter((send) => !send.inArchive && !send.inSocket).length,
     deleted: sends.filter((send) => send.deleted).length,
+    ...(byRule === null ? {} : { ruleFrom: rule!.from }),
     serverNow: now.toISOString(),
   };
   return { review, pagesLeftOut };

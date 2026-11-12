@@ -1,5 +1,5 @@
 import { Disclosure } from "@agency_hub_core/ui";
-import { formatDuration } from "@agency_hub_core/ui/format";
+import { formatDay, formatDuration } from "@agency_hub_core/ui/format";
 import {
   CHATTER_SHIFT_CLOSED_GRACE_MINUTES,
   CHATTER_SHIFT_EDGE_NEAR_MINUTES,
@@ -23,7 +23,7 @@ function lower(text: string): string {
   return `${text.charAt(0).toLowerCase()}${text.slice(1)}`;
 }
 
-export function HowItCounts({ page }: { page: string | null }) {
+export function HowItCounts({ page, ruleFrom }: { page: string | null; ruleFrom: string | null }) {
   return (
     <Disclosure summary="Как это считается">
       <div className="shifts-how wb-readable">
@@ -44,6 +44,15 @@ export function HowItCounts({ page }: { page: string | null }) {
           «Вся команда» каждая продажа одна. «В час» — продажи на отработанное время без пауз. Проценты — к такому же
           периоду прямо перед выбранным; у идущей недели — к прошлой на это же время.
         </p>
+        {ruleFrom !== null && (
+          <p>
+            <b>С {formatDay(ruleFrom)}</b> продажа считается по одному правилу, как в отчётах смен: PPV — тому, кто его отправил (купили в
+            чужую смену — в его следующую смену, до 7 дней); чаевые под постом и Campaign — в общак; остальное — смене, которая держала
+            страницу, а если держали двое — тому, кто последним писал фану, иначе тому, чей слот графика идёт, иначе продажа ждёт вашего
+            решения. Каждая продажа засчитана одной смене. Смена с этого дня относится к дате отчёта: к дню начала, а начатая меньше чем за
+            два часа до полуночи и в основном после неё — к следующему дню. Общак, ждущие смены отправителя и решения — во «вне смен».
+          </p>
+        )}
         <p>
           Три числа качества считаются так же, как в разборе смены, и у одной смены везде одинаковы
           {page ? ". С выбранной страницей они — по всей смене, на всех её страницах" : ""}:
