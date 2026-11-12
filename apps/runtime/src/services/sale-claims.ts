@@ -736,9 +736,9 @@ export async function decideOffPlatformLine(
   const state = input.decision === "confirm" ? "confirmed" as const : "rejected" as const;
   const note = input.note === null || input.note.trim() === "" ? null : input.note.trim();
   const person = await findHandinPersonOfUser(db, row.userId);
-  // Asked before the report is locked: the ledger's HTTP never runs under the lock.
-  const reportDate = (await findHandinByShift(db, row.shiftId))?.reportDate ?? null;
-  const dayPaid = reportDate === null ? null : await ledgerDayPaid(app, { personCode: person?.code ?? null, reportDate });
+  // Asked before the report is locked, and only of a report handed in: the ledger's HTTP never runs under the lock.
+  const report = await findHandinByShift(db, row.shiftId);
+  const dayPaid = report === null || report.state !== "submitted" ? null : await ledgerDayPaid(app, { personCode: person?.code ?? null, reportDate: report.reportDate });
   let made: { version: number; versionId: number; dayPaid: boolean | null; shiftId: number } | null = null;
   await db.transaction(async (tx) => {
     const txDb = tx as unknown as Database;
