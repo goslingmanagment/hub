@@ -184,6 +184,32 @@
   .pub-drawer-why { margin-top: 8px; font-size: 14px; line-height: 20px; color: var(--color-text-secondary); }
   .pub-drawer-skeleton { display: grid; gap: 14px; padding-top: 8px; }
 
+  /* ── A vault album's run (OnlyFans) ──────────────────────────────────── */
+  .pub-album-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .pub-album-bar { position: relative; height: 6px; border-radius: 3px; background: var(--color-hover); overflow: hidden; }
+  .pub-album-bar span { position: absolute; inset: 0 auto 0 0; border-radius: 3px; background: var(--color-green); }
+  .pub-album-bar .pub-album-bar-spent { top: auto; height: 2px; background: var(--color-accent); }
+  .pub-album-left { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; font-size: 14px; line-height: 20px; }
+  .pub-album-tag { color: var(--color-text-secondary); }
+  .pub-album-tag b { font-weight: 600; }
+  .pub-album-tag.is-danger b { color: var(--color-danger-text); }
+  .pub-album-tag.is-warning b { color: var(--color-warning-text); }
+  .pub-album-files { max-height: 360px; overflow-y: auto; font-size: 14px; line-height: 20px; }
+  .pub-album-files li { align-items: baseline; }
+  .pub-album-files .pub-files-n { flex-basis: 28px; }
+  .pub-album-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--color-text-primary); }
+  .pub-album-size { flex: 0 0 auto; color: var(--color-text-muted); }
+  .pub-album-state { flex: 0 0 120px; text-align: right; white-space: nowrap; color: var(--color-text-secondary); }
+  .pub-album-state.is-good { color: var(--color-green); }
+  .pub-album-state.is-info { color: var(--color-accent); font-weight: 500; }
+  .pub-album-state.is-danger { color: var(--color-danger-text); }
+  .pub-album-state.is-warning { color: var(--color-warning-text); }
+  .pub-album-state.is-muted { color: var(--color-text-muted); }
+  .pub-album-reason { display: grid; gap: 2px; margin-top: -12px; font-size: 14px; line-height: 20px; color: var(--color-text-secondary); }
+  .pub-album-reason li[title] { text-decoration: underline dotted var(--color-border-strong); text-underline-offset: 3px; cursor: help; width: fit-content; }
+  .pub-album-ceiling { display: grid; gap: 8px; padding-block: 12px; }
+  .pub-album-ceiling .switch-text { display: grid; gap: 2px; }
+
   /* ── The settings' panel ─────────────────────────────────────────────── */
   .pub-switches { border-block: 1px solid var(--color-border-light); }
   .pub-switch + .pub-switch { border-top: 1px solid var(--color-border-light); }

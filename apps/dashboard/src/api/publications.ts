@@ -136,6 +136,8 @@ export function useCancelPublication() {
 
 export type PublicationResolveBody =
   | { outcome: "went_out"; state: "scheduled" | "published"; platformPostRef: string }
+  /** A vault album: it has no post. */
+  | { outcome: "went_out" }
   | { outcome: "did_not_go_out" };
 
 export function useResolvePublication() {

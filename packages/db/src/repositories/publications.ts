@@ -2023,6 +2023,8 @@ export async function listOnlyfansPublicationsWithUploads(db: Database): Promise
       join page_publishing_settings s on s.page_id = p.page_id
      where p.status = 'approved' and pg.platform::text = 'onlyfans' and pg.status = 'active'
        and s.enabled and s.autostopped_at is null
+       -- An album owes no post's create: its credits are its own account's.
+       and p.kind <> 'vault_album'
        and exists (select 1 from publication_uploads u where u.publication_id = p.id and u.revision_id = p.approved_revision_id)
   `);
   return result.rows.map((row) => num(row.id));

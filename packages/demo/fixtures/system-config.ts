@@ -67,6 +67,8 @@ const RUNNING: Readonly<Record<string, Scalar>> = {
   // As on production: both publishing switches on (publications group).
   publishingEnabled: true,
   publishingOnlyfansEnabled: true,
+  // OnlyFans vault albums (publish-of-albums.ts): their own day ceiling.
+  onlyfansVaultDailyCredits: 15_000,
 };
 
 /** Owner's overrides from the console (live/boot keys only), with their row version. */

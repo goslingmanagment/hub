@@ -150,6 +150,70 @@ export const publicationExtraAttachmentSchema = z.object({
   subscribersOnly: z.boolean(),
 });
 
+// --- An OnlyFans vault album's run and price (8-docs 2026-11-12-of-vault-album, PR 5) ---
+
+/** One file of an OnlyFans album, in the approval's order (first file first). */
+export const publicationAlbumFileSchema = z.object({
+  /** The draft's name, the file's own, or its place. */
+  name: z.string(),
+  bytes: z.number().int().nonnegative(),
+  /**
+   * pending: not worked on yet; in_album: the album holds it already; reused:
+   * Hub uploaded these bytes to the page before (added by its id, not paid);
+   * uploading; uploaded; failed: refused; unknown: its upload may have gone;
+   * too_big: over what OnlyFansAPI takes, added by hand; not_tried: the
+   * uploads stopped before it.
+   */
+  state: z.enum(["pending", "in_album", "reused", "uploading", "uploaded", "failed", "unknown", "too_big", "not_tried"]),
+  /** Its upload's price (or the one read of a reused file); 0 when nothing is uploaded. */
+  credits: z.number().int().nonnegative(),
+});
+
+/** The albums' credit account (OnlyFansAPI) as it stands now. */
+export const publicationAlbumAccountSchema = z.object({
+  /** The albums' day ceiling `onlyfansVaultDailyCredits`; 0 is a pause. */
+  dailyCredits: z.number().int().nonnegative(),
+  spentToday: z.number().int().nonnegative(),
+  /** What is left today: the ceiling less what the albums spent and what the running ones may still spend. */
+  left: z.number().int().nonnegative(),
+  /** The last OnlyFansAPI balance Hub read; null: never read. */
+  balance: z.number().int().nullable(),
+  /** Display only: what 1,000 credits cost, in US cents (`onlyfansCreditCentsPer1000`). */
+  centsPer1000: z.number().int().positive(),
+});
+
+/**
+ * An OnlyFans vault album's run (null for anything else): its step, its files
+ * by outcome and the credits — the price by the estimate (the one the
+ * executor kept with the run once it started; before, the same function's
+ * price of the files as they stand) and what it spent.
+ */
+export const publicationAlbumRunSchema = z.object({
+  /** null: not started (a draft or an approved album). done: settled. */
+  step: z.enum(["album", "contents", "uploads", "add", "read", "done"]).nullable(),
+  files: z.number().int().nonnegative(),
+  /** Uploaded by this run. */
+  done: z.number().int().nonnegative(),
+  /** Taken without paying: in the album already, or uploaded by Hub before. */
+  reused: z.number().int().nonnegative(),
+  refused: z.number().int().nonnegative(),
+  unknown: z.number().int().nonnegative(),
+  notTried: z.number().int().nonnegative(),
+  tooBig: z.number().int().nonnegative(),
+  /** The file uploading now. */
+  currentFile: z.string().nullable(),
+  estimateCredits: z.number().int().nonnegative(),
+  spentCredits: z.number().int().nonnegative(),
+  /** Why the uploads stopped: three_failures, price_exceeded, authorization_refused. */
+  stopReason: z.string().nullable(),
+  fileList: z.array(publicationAlbumFileSchema),
+  /** The albums' account, for a draft or an approved album (what the approval window weighs the price against). */
+  account: publicationAlbumAccountSchema.nullable(),
+  /** The largest file the album sends by a link (onlyfansVaultLinkMaxMb, in bytes): a larger one is added by hand. */
+  linkMaxBytes: z.number().int().positive(),
+});
+export type PublicationAlbumRun = z.infer<typeof publicationAlbumRunSchema>;
+
 export const publicationSchema = z.object({
   id: intId,
   pageLabel: z.string(),
@@ -202,6 +266,8 @@ export const publicationSchema = z.object({
    * deleted_after_publish / unknown).
    */
   deletion: z.object({ state: z.string(), errorCode: z.string().nullable(), at: z.string() }).nullable(),
+  /** An OnlyFans vault album's run and price (list and detail; null elsewhere and for anything else). */
+  albumRun: publicationAlbumRunSchema.nullable().optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
   statusChangedAt: z.string(),
@@ -282,12 +348,14 @@ export const publicationApproveResponseSchema = z.object({
   })),
 });
 
-/** The person's answer to "unknown" (spec §8.2). */
+/** The person's answer to "unknown" (spec §8.2). A post that went out names
+ *  its id and where it is; a vault album (either platform) has no post: it
+ *  goes out with neither, and becomes published. */
 export const publicationResolveBodySchema = z.discriminatedUnion("outcome", [
   z.strictObject({
     outcome: z.literal("went_out"),
-    state: z.enum(["scheduled", "published"]),
-    platformPostRef: z.string().regex(/^[0-9A-Za-z_-]{1,64}$/),
+    state: z.enum(["scheduled", "published"]).optional(),
+    platformPostRef: z.string().regex(/^[0-9A-Za-z_-]{1,64}$/).optional(),
   }),
   z.strictObject({ outcome: z.literal("did_not_go_out") }),
 ]);
@@ -530,3 +598,57 @@ export const agentPublicationTargetsResponseSchema = z.object({
   })),
 });
 export type AgentPublicationTargetsResponse = z.infer<typeof agentPublicationTargetsResponseSchema>;
+
+// --- The price of an OnlyFans vault album before «да» (8-docs 2026-11-12-of-vault-album, PR 5) ---
+
+export const agentVaultAlbumQuoteBodySchema = z.strictObject({
+  /** The album's title (the draft's text). */
+  title: z.string().trim().min(1).max(200),
+  /** The album the draft names by id, when it does. */
+  albumRef: z.string().regex(/^[0-9A-Za-z_-]{1,64}$/).nullable().optional(),
+  /** The files in the folder's order, first on top. */
+  files: z.array(z.strictObject({
+    sha256: z.string().regex(/^[0-9a-f]{64}$/),
+    byteSize: z.number().int().positive(),
+    name: z.string().min(1).max(255),
+  })).min(1).max(PUBLICATION_VAULT_ALBUM_MEDIA_MAX),
+});
+
+export const agentVaultAlbumQuoteResponseSchema = z.object({
+  platform: platformEnum,
+  album: z.object({
+    /** new: Hub will create it; found: the page's album with this title (or the one named); similar: none exact, these alike. */
+    kind: z.enum(["new", "found", "similar"]),
+    albumRef: z.string().nullable(),
+    /** How many files the found album holds, as Hub last walked it (null: not known). */
+    mediaCount: z.number().int().nullable(),
+    /** Up to five of the page's albums with the same letters (case, spaces and emoji aside). */
+    similar: z.array(z.object({ albumRef: z.string(), title: z.string(), mediaCount: z.number().int().nullable() })),
+    /** When Hub last walked the page's albums whole (OnlyFans); null: never. */
+    knownAt: z.string().nullable(),
+    /** What Hub knows is older than an hour or absent: a walk is asked for (the minutely job answers it); ask again later. */
+    walkRequested: z.boolean(),
+  }),
+  files: z.array(z.object({
+    position: z.number().int().nonnegative(),
+    name: z.string(),
+    byteSize: z.number().int(),
+    credits: z.number().int().nonnegative(),
+    /** Hub uploaded these bytes to the page before: taken by id, not paid, keeps its old date. */
+    onPage: z.boolean(),
+    /** Over what OnlyFansAPI takes: will not go, added by hand after the album. */
+    tooBig: z.boolean(),
+  })),
+  /** The album's order top first (file positions) when it will not be the folder's; null: the folder's. */
+  expectedOrder: z.array(z.number().int().nonnegative()).nullable(),
+  credits: z.number().int().nonnegative(),
+  /** Display only: credits at `onlyfansCreditCentsPer1000`. */
+  usd: z.number().nonnegative(),
+  /** The albums' account (OnlyFans); null on Fansly. */
+  account: publicationAlbumAccountSchema.nullable(),
+  /** The largest file sent by a link (onlyfansVaultLinkMaxMb, bytes); null on Fansly. */
+  linkMaxBytes: z.number().int().positive().nullable(),
+  /** Whether an approved album would start now, and why not (the executor's own admission). */
+  sending: z.object({ on: z.boolean(), why: z.string().nullable() }),
+});
+export type AgentVaultAlbumQuoteResponse = z.infer<typeof agentVaultAlbumQuoteResponseSchema>;

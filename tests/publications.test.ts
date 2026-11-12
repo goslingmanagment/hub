@@ -80,7 +80,7 @@ describe("publications: a vault album (0323)", () => {
     expect(() => normalizePublicationDraft(body({ media: Array.from({ length: 21 }, (_, index) => ({ source: "vault" as const, mediaRef: `m${index}` })) }), CONTEXT)).toThrow(/at most 20 files/);
   });
 
-  it("refuses what an album is not: no title, no files, a price, walls, two albums of that title, OnlyFans", () => {
+  it("refuses what an album is not: no title, no files, a price, walls, two albums of that title", () => {
     expect(() => normalizePublicationDraft(album({ text: " " }), CONTEXT)).toThrow(/title/);
     expect(() => normalizePublicationDraft(album({ text: "a\nb" }), CONTEXT)).toThrow(/one line/);
     expect(() => normalizePublicationDraft(album({ media: [] }), CONTEXT)).toThrow(/at least one file/);
@@ -88,7 +88,28 @@ describe("publications: a vault album (0323)", () => {
     expect(() => normalizePublicationDraft(album({ wallRefs: ["w-2"] }), CONTEXT)).toThrow(/no previews, price/);
     expect(() => normalizePublicationDraft(album({ media: [{ source: "vault", mediaRef: "m1" }, { source: "vault", mediaRef: "m1" }] }), CONTEXT)).toThrow(/twice/);
     expect(() => normalizePublicationDraft(album(), { ...CONTEXT, vaultAlbumRefs: ["al1", "al2"] })).toThrow(/2 vault albums titled/);
-    expect(() => normalizePublicationDraft(album(), { ...CONTEXT, page: ONLYFANS })).toThrow(/cannot publish vault_album/);
+  });
+
+  it("opens for OnlyFans (8-docs 2026-11-12-of-vault-album): the page's custom list with its title, or one named by id", () => {
+    const of = { ...CONTEXT, page: ONLYFANS, walls: [] };
+    expect(normalizePublicationDraft(album(), of)).toMatchObject({ kind: "vault_album", vaultAlbumRef: null });
+    expect(normalizePublicationDraft(album(), { ...of, vaultAlbumRefs: ["901"] }).vaultAlbumRef).toBe("901");
+    expect(normalizePublicationDraft(album({ vaultAlbumRef: "902" }), { ...of, vaultAlbumKnown: true }).vaultAlbumRef).toBe("902");
+    expect(() => normalizePublicationDraft(album({ vaultAlbumRef: "903" }), { ...of, vaultAlbumKnown: false })).toThrow(/not an album of this page Hub knows/);
+  });
+
+  it("an OnlyFans album: a file over 100 MB goes by a link, one over the link's limit is added by hand; a post still blocks at 100 MB", () => {
+    const of = { ...CONTEXT, page: ONLYFANS, walls: [] };
+    const sized = (byteSize: number) => new Map([[10, { id: 10, modelId: 7, contentSha256: "a".repeat(64), byteSize, bytesDeletedAt: null }]]);
+    const albumContent = normalizePublicationDraft(album({ media: [{ source: "file", fileId: 10 }] }), of);
+    expect(codes(albumContent, { page: ONLYFANS, files: sized(600_000_000) })).toEqual([]);
+    const found = evaluatePublicationFindings(albumContent, facts({ page: ONLYFANS, files: sized(1_800_000_000) }));
+    expect(found.map((finding) => `${finding.code}:${finding.severity}`)).toEqual(["onlyfans_file_too_large:warning"]);
+    expect(found[0]?.detail).toMatchObject({ byHand: 1, maxBytes: 1_000_000_000 });
+    // The live limit comes in through the facts.
+    expect(codes(albumContent, { page: ONLYFANS, files: sized(600_000_000), vaultLinkMaxBytes: 500_000_000 })).toEqual(["onlyfans_file_too_large:warning"]);
+    const post = normalizePublicationDraft(body({ kind: "subscriber_post", media: [{ source: "file", fileId: 10 }] }), of);
+    expect(codes(post, { page: ONLYFANS, files: sized(600_000_000) })).toEqual(["onlyfans_file_too_large:blocking"]);
   });
 
   it("named by its id (audit, 2026-11-04): an album of the page Hub knows, whatever its title; only an album names one", () => {

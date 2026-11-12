@@ -12,6 +12,7 @@ import { Drawer } from "@/components/ui/Drawer";
 import { KeyValue, type KeyValueRow } from "@/components/ui/KeyValue";
 import { Notice } from "@/components/ui/Notice";
 import { Skeleton } from "@/components/ui/Skeleton";
+import { Stat, StatGrid } from "@/components/ui/StatGrid";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { buildPageRoute } from "@/lib/navigation";
 import { buildPostUrl } from "@/lib/platformUrls";
@@ -42,6 +43,93 @@ import {
   type Names,
   type PagePublishing,
 } from "./publicationsView.js";
+import {
+  ALBUM_FILE_STATE,
+  albumLanded,
+  albumReasonParts,
+  bytesLabel,
+  creditsLabel,
+  stopWord,
+  usdLabel,
+} from "./publicationsAlbum.js";
+
+type AlbumRun = NonNullable<PublicationWire["albumRun"]>;
+
+/**
+ * An OnlyFans album's run: how many files are in, what it spent of its price,
+ * then every file in the folder's order with its size and outcome. Numbers
+ * first; the words of a state are one or two.
+ */
+function AlbumRunBlock({ run, status }: { run: AlbumRun; status: PublicationWire["status"] }) {
+  const cents = run.account?.centsPer1000 ?? 149;
+  const started = run.step !== null;
+  const spentShare = run.estimateCredits === 0 ? 0 : Math.min(100, Math.round((run.spentCredits / run.estimateCredits) * 100));
+  const landedShare = run.files === 0 ? 0 : Math.round(((run.done + run.reused) / run.files) * 100);
+  const left = [
+    run.refused > 0 ? ["Отказ", run.refused, "danger"] : null,
+    run.unknown > 0 ? ["Исход неизвестен", run.unknown, "warning"] : null,
+    run.tooBig > 0 ? [`Руками, больше ${bytesLabel(run.linkMaxBytes)}`, run.tooBig, "warning"] : null,
+    run.notTried > 0 ? ["Не пробовали", run.notTried, "muted"] : null,
+  ].filter((entry): entry is [string, number, string] => entry !== null);
+  return (
+    <Block title="Альбом">
+      <StatGrid className="pub-album-stats">
+        {started ? (
+          <Stat
+            label="Залито"
+            value={<span className="tabular-nums">{albumLanded(run)}</span>}
+            meta={run.currentFile !== null && status === "submitting" ? `сейчас ${run.currentFile}` : run.reused > 0 ? `${run.reused} без оплаты` : undefined}
+          />
+        ) : (
+          <Stat label="Файлов" value={<span className="tabular-nums">{run.files}</span>} meta={run.reused > 0 ? `${run.reused} уже на странице` : undefined} />
+        )}
+        <Stat
+          label={started ? "Потрачено" : "Цена"}
+          value={<span className="tabular-nums">{(started ? run.spentCredits : run.estimateCredits).toLocaleString("ru-RU")}</span>}
+          meta={started ? `из ${creditsLabel(run.estimateCredits)}` : `кредитов ${usdLabel(run.estimateCredits, cents)}`}
+        />
+      </StatGrid>
+      {started && status === "submitting" && (
+        <div className="pub-album-bar" role="progressbar" aria-valuenow={landedShare} aria-valuemin={0} aria-valuemax={100} aria-label="Залито">
+          <span style={{ width: `${landedShare}%` }} />
+          <span className="pub-album-bar-spent" style={{ width: `${spentShare}%` }} title={`Потрачено ${spentShare} % цены`} />
+        </div>
+      )}
+      {left.length > 0 && (
+        <p className="pub-album-left">
+          {left.map(([word, value, tone]) => <span key={word} className={`pub-album-tag is-${tone}`}>{word} <b className="tabular-nums">{value}</b></span>)}
+          {run.stopReason !== null && <span className="pub-muted" title={run.stopReason}>· {stopWord(run.stopReason)}</span>}
+        </p>
+      )}
+      <ol className="pub-files pub-album-files">
+        {run.fileList.map((file, index) => {
+          const state = ALBUM_FILE_STATE[file.state];
+          return (
+            <li key={`${index}:${file.name}`}>
+              <span className="pub-files-n">{index + 1}</span>
+              <span className="pub-album-name">{file.name}</span>
+              <span className="pub-album-size tabular-nums">{bytesLabel(file.bytes)}</span>
+              {(started || file.state !== "pending") && <span className={`pub-album-state is-${state.tone}`}>{state.word}</span>}
+            </li>
+          );
+        })}
+      </ol>
+    </Block>
+  );
+}
+
+/** An album's reason, part by part; the files each part names in a hint. */
+function AlbumReason({ reason }: { reason: string | null }) {
+  const parts = albumReasonParts(reason);
+  if (parts === null || parts.length < 2) return null;
+  return (
+    <ul className="pub-album-reason">
+      {parts.map((part, index) => (
+        <li key={index} title={part.names.length > 0 ? part.names.join(", ") : undefined}>{part.text}</li>
+      ))}
+    </ul>
+  );
+}
 
 function useNames(): Names {
   const users = useAdminUsers();
@@ -152,7 +240,7 @@ export function PublicationDrawer({ id, row, todayKey, pageState, username, acti
     { label: "Страница", value: <Link className="link" to={buildPageRoute(shown.pageLabel)}>{shown.pageLabel}, {platformName(shown.platform)}</Link> },
     { label: "Тип", value: `${KIND_LABELS[shown.kind]}${shown.repost ? ", перезалив" : ""}` },
     { label: "Выход", value: momentLabel(shown.publishAt, todayKey) },
-    { label: "На стене до", value: shown.expiresAt === null ? "без срока" : momentLabel(shown.expiresAt, todayKey) },
+    ...(shown.kind === "vault_album" ? [] : [{ label: "На стене до", value: shown.expiresAt === null ? "без срока" : momentLabel(shown.expiresAt, todayKey) }]),
   ];
   if (shown.priceMills !== null) {
     properties.push({ label: shown.kind === "subscriber_post" ? "Цена для остальных" : "Цена", value: <span className="tabular-nums">{priceLabel(shown.priceMills)}</span> });
@@ -234,16 +322,19 @@ export function PublicationDrawer({ id, row, todayKey, pageState, username, acti
           <StatusBadge status={status} />
           {reason !== null && <span>{reason.charAt(0).toUpperCase() + reason.slice(1)}</span>}
         </p>
+        {shown.albumRun == null && <AlbumReason reason={shown.statusReason} />}
         {notice}
         <KeyValue rows={properties} className="pub-drawer-kv" />
 
-        <Block title="Текст">
+        <Block title={shown.kind === "vault_album" ? "Название" : "Текст"}>
           {shown.text.trim() === ""
             ? <p className="pub-muted">Без текста</p>
             : <p className="pub-drawer-text">{shown.text}</p>}
         </Block>
 
-        <Block title="Файлы">
+        {shown.albumRun != null && <AlbumRunBlock run={shown.albumRun} status={shown.status} />}
+
+        {shown.albumRun == null && <Block title="Файлы">
           {files.length === 0 && previews.length === 0 && shown.extraAttachments.length === 0
             ? <p className="pub-muted">Без файлов</p>
             : (
@@ -266,7 +357,7 @@ export function PublicationDrawer({ id, row, todayKey, pageState, username, acti
                 ))}
               </div>
             )}
-        </Block>
+        </Block>}
 
         {findings.length > 0 && (
           <Block title={shown.status === "draft" ? "Замечания" : "Замечания при утверждении"}>

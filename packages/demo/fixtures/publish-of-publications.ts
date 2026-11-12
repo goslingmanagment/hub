@@ -11,6 +11,7 @@ import type { KernelOperationResponse } from "@agency_hub_core/contracts";
 
 import { hashString, iso, pick, rng, intBetween, mills } from "../core.ts";
 import { DEMO_DATA_PAGES, DEMO_PAGES, type DemoPage } from "../world.ts";
+import { demoOnlyfansAlbums } from "./publish-of-albums.ts";
 import { DAY_MS, HOUR_MS, demoDigits, demoSha, mskAt, mskDayKey, ofStop } from "./publish-of-common.ts";
 
 type Publication = KernelOperationResponse<"adminPublicationList">["publications"][number];
@@ -371,6 +372,8 @@ export function demoPublications(now: Date): Built[] {
       built.push(replacement);
     }
   }
+  // OnlyFans vault albums, one per outcome (8-docs 2026-11-12-of-vault-album).
+  built.push(...demoOnlyfansAlbums(now));
   built.sort((left, right) => Date.parse(left.publication.publishAt) - Date.parse(right.publication.publishAt) || left.publication.id - right.publication.id);
   return built;
 }

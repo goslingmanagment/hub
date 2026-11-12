@@ -29,6 +29,8 @@ import {
   type PublicationWithdrawer,
 } from "../../services/publications.ts";
 import { listPublicationPageMediaWire } from "../../services/publication-media.ts";
+import { vaultLinkMaxBytes } from "../../services/publications-onlyfans-vault.ts";
+import { quoteVaultAlbum, withOnlyfansAlbumRuns } from "../../services/publications-onlyfans-vault-quote.ts";
 import { listFanslyQueueWire } from "../../services/publications-fansly-checks.ts";
 import { deleteFanslyPublication } from "../../services/publications-fansly-delete.ts";
 import { deletePagePost, withdrawPagePost, type PostCommandPage, type PostCommandResult } from "../../services/post-commands.ts";
@@ -100,7 +102,7 @@ export function registerPublicationRoutes(server: ApiServer, ctx: ApiModuleConte
     await requirePrincipal(request);
     const { pageLabel, status, from, to, limit } = request.query;
     const pageIds = pageLabel === undefined ? null : [(await pageByLabel(pageLabel)).id];
-    return { publications: await listPublicationsWire(db, { pageIds, status, from, to, limit }) };
+    return { publications: await withOnlyfansAlbumRuns(appContext, await listPublicationsWire(db, { pageIds, status, from, to, limit })) };
   });
 
   server.post("/api/v1/admin/publications", { schema: routeSchemas.adminPublicationCreate }, async (request) => {
@@ -108,7 +110,7 @@ export function registerPublicationRoutes(server: ApiServer, ctx: ApiModuleConte
     const { pageLabel, ...body } = request.body;
     const page = await pageByLabel(pageLabel);
     return createPublicationDraft(db, {
-      pageId: page.id, body, author: { kind: "human", userId: principal.user.id }, idempotencyKey: null,
+      pageId: page.id, body, author: { kind: "human", userId: principal.user.id }, idempotencyKey: null, vaultLinkMaxBytes: await vaultLinkMaxBytes(appContext),
     });
   });
 
@@ -190,19 +192,20 @@ export function registerPublicationRoutes(server: ApiServer, ctx: ApiModuleConte
 
   server.post("/api/v1/admin/publications/approve", { schema: routeSchemas.adminPublicationApprove }, async (request) => {
     const principal = await requirePrincipal(request);
-    return { results: await approvePublications(db, { items: request.body.items, userId: principal.user.id }) };
+    return { results: await approvePublications(db, { items: request.body.items, userId: principal.user.id, vaultLinkMaxBytes: await vaultLinkMaxBytes(appContext) }) };
   });
 
   server.get("/api/v1/admin/publications/:id", { schema: routeSchemas.adminPublicationGet }, async (request) => {
     await requirePrincipal(request);
-    return getPublicationDetail(db, request.params.id);
+    const [detail] = await withOnlyfansAlbumRuns(appContext, [await getPublicationDetail(db, request.params.id, { vaultLinkMaxBytes: await vaultLinkMaxBytes(appContext) })]);
+    return detail!;
   });
 
   server.put("/api/v1/admin/publications/:id", { schema: routeSchemas.adminPublicationUpdate }, async (request) => {
     const principal = await requirePrincipal(request);
     const { version, ...body } = request.body;
     return updatePublicationDraft(db, {
-      id: request.params.id, version, body, actor: { kind: "human", userId: principal.user.id },
+      id: request.params.id, version, body, actor: { kind: "human", userId: principal.user.id }, vaultLinkMaxBytes: await vaultLinkMaxBytes(appContext),
     });
   });
 
@@ -293,7 +296,7 @@ export function registerPublicationRoutes(server: ApiServer, ctx: ApiModuleConte
       if (!page) throw staticNotFound();
       const { idempotencyKey, ...body } = request.body;
       const publication = await createPublicationDraft(db, {
-        pageId: page.id, body, author: { kind: "agent", agentKeyId: principal.agentKeyId }, idempotencyKey,
+        pageId: page.id, body, author: { kind: "agent", agentKeyId: principal.agentKeyId }, idempotencyKey, vaultLinkMaxBytes: await vaultLinkMaxBytes(appContext),
       });
       await writeAgentAudit(db, {
         agentKeyId: principal.agentKeyId,
@@ -318,7 +321,7 @@ export function registerPublicationRoutes(server: ApiServer, ctx: ApiModuleConte
       const page = scope.pages.find((candidate) => candidate.pageLabel === request.params.pageLabel);
       if (!page) throw staticNotFound();
       const { status, from, to, limit } = request.query;
-      return { publications: await listPublicationsWire(db, { pageIds: [page.id], status, from, to, limit }) };
+      return { publications: await withOnlyfansAlbumRuns(appContext, await listPublicationsWire(db, { pageIds: [page.id], status, from, to, limit })) };
     }, (result) => result.publications.length);
   });
 
@@ -434,7 +437,7 @@ export function registerPublicationRoutes(server: ApiServer, ctx: ApiModuleConte
           keyset: { afterUpdatedAt: listed.last.updatedAt, afterId: listed.last.id },
         }, scope.signing)
         : null;
-      return { publications: listed.publications, nextCursor };
+      return { publications: await withOnlyfansAlbumRuns(appContext, listed.publications), nextCursor };
     }, (result) => result.publications.length);
   });
 
@@ -627,11 +630,33 @@ export function registerPublicationRoutes(server: ApiServer, ctx: ApiModuleConte
     }, () => 1);
   });
 
+  // The price of a vault album before «да» (8-docs 2026-11-12-of-vault-album): nothing goes to the
+  // platform; an old list of the page's albums asks the minutely job for a walk, as the key's owner.
+  server.post("/api/v1/agent/pages/:pageLabel/vault-album-quote", { schema: routeSchemas.agentVaultAlbumQuote }, async (request) => {
+    const { principal, scope } = await agentScope(request, "agentVaultAlbumQuote");
+    return settled(scope, async () => {
+      const page = scope.pages.find((candidate) => candidate.pageLabel === request.params.pageLabel);
+      if (!page) throw staticNotFound();
+      const key = await getAgentKeyById(db, principal.agentKeyId);
+      if (key?.createdBy == null) throw new ConflictError("this key names no owner to read the page's albums as: issue a new key");
+      const quote = await quoteVaultAlbum(appContext, { page: { id: page.id, platform: page.platform }, body: request.body, actorUserId: key.createdBy });
+      await writeAgentAudit(db, {
+        agentKeyId: principal.agentKeyId,
+        operation: "agentVaultAlbumQuote",
+        pageIds: [page.id],
+        verbatimText: false,
+        requestSummary: { files: request.body.files.length, credits: quote.credits, album: quote.album.kind, walkRequested: quote.album.walkRequested },
+      });
+      return quote;
+    }, () => 1);
+  });
+
   server.get("/api/v1/agent/publications/:id", { schema: routeSchemas.agentPublicationGet }, async (request) => {
     const { scope } = await agentScope(request, "agentPublicationGet");
     return settled(scope, async () => {
       try {
-        return await getPublicationDetail(db, request.params.id, { allowedPageIds: scope.pages.map((page) => page.id) });
+        const [detail] = await withOnlyfansAlbumRuns(appContext, [await getPublicationDetail(db, request.params.id, { allowedPageIds: scope.pages.map((page) => page.id), vaultLinkMaxBytes: await vaultLinkMaxBytes(appContext) })]);
+        return detail!;
       } catch (error) {
         if (error instanceof NotFoundError) throw staticNotFound();
         throw error;
@@ -656,6 +681,7 @@ export function registerPublicationRoutes(server: ApiServer, ctx: ApiModuleConte
       const results = await approvePublications(db, {
         items: request.body.items,
         approver: { kind: "agent", agentKeyId: principal.agentKeyId, ownerUserId: key.createdBy, allowedPageIds: pageIds, vaultAlbumsOnly },
+        vaultLinkMaxBytes: await vaultLinkMaxBytes(appContext),
       });
       await writeAgentAudit(db, {
         agentKeyId: principal.agentKeyId,
@@ -680,6 +706,7 @@ export function registerPublicationRoutes(server: ApiServer, ctx: ApiModuleConte
           actor: { kind: "agent", agentKeyId: principal.agentKeyId },
           onlyAuthorAgentKeyId: principal.agentKeyId,
           allowedPageIds: scope.pages.map((page) => page.id),
+          vaultLinkMaxBytes: await vaultLinkMaxBytes(appContext),
         });
       } catch (error) {
         if (error instanceof NotFoundError) throw staticNotFound();

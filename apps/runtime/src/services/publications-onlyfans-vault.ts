@@ -465,8 +465,8 @@ export async function runOnlyfansVaultAlbumTick(app: AppContext, options: Onlyfa
   }
 
   // Admission: the albums whose time came, one running album per page.
-  let runningCredits = (await listRunningOnlyfansVaultAlbumRuns(app.db)).reduce((sum, run) => sum + onlyfansVaultRunCreditsLeft(run), 0);
-  const credit = await readOnlyfansVaultCreditFacts(app.db, now);
+  const account = await onlyfansVaultAccountFacts(app, config, now);
+  let runningCredits = account.runningCredits;
   const keyAllowsVault = await vaultKeyAllows(app);
   for (const candidate of await listDueOnlyfansVaultAlbums(app.db, now)) {
     if (Date.now() >= deadline) break;
@@ -480,9 +480,8 @@ export async function runOnlyfansVaultAlbumTick(app: AppContext, options: Onlyfa
       continue;
     }
     const admitted = await admitOne(ctx, candidate.id, {
-      switchesHold, keyAllowsVault, dailyCredits: Math.max(0, config.onlyfansVaultDailyCredits ?? 0),
-      reserve: Math.max(Math.max(0, app.config.ofapiCreditFloor ?? 500), config.onlyfansVaultReserveCredits ?? 2000),
-      spentToday: credit.spentToday, balance: credit.balance, runningCredits,
+      switchesHold, keyAllowsVault, dailyCredits: account.dailyCredits, reserve: account.reserve,
+      spentToday: account.spentToday, balance: account.balance, runningCredits,
     });
     if (admitted !== null) {
       busyPages.add(candidate.pageId);
@@ -490,6 +489,24 @@ export async function runOnlyfansVaultAlbumTick(app: AppContext, options: Onlyfa
     }
   }
   return report;
+}
+
+/** The albums' account as the admission weighs a price (the quote shows the same): the day ceiling, the
+ *  balance kept for reads, today's spend, the last balance, what the running albums may still spend. */
+export async function onlyfansVaultAccountFacts(
+  app: AppContext,
+  config: Pick<AppContext["config"], "onlyfansVaultDailyCredits" | "onlyfansVaultReserveCredits">,
+  now: Date,
+): Promise<{ dailyCredits: number; reserve: number; spentToday: number; balance: number | null; runningCredits: number }> {
+  const running = await listRunningOnlyfansVaultAlbumRuns(app.db);
+  const credit = await readOnlyfansVaultCreditFacts(app.db, now);
+  return {
+    dailyCredits: Math.max(0, config.onlyfansVaultDailyCredits ?? 0),
+    reserve: Math.max(Math.max(0, app.config.ofapiCreditFloor ?? 500), config.onlyfansVaultReserveCredits ?? 2000),
+    spentToday: credit.spentToday,
+    balance: credit.balance,
+    runningCredits: running.reduce((sum, run) => sum + onlyfansVaultRunCreditsLeft(run), 0),
+  };
 }
 
 interface RunContext {
@@ -500,7 +517,8 @@ interface RunContext {
   runUpload: (app: AppContext, pageId: number, jobId: string) => Promise<void>;
 }
 
-async function vaultKeyAllows(app: AppContext): Promise<boolean> {
+/** Whether Hub's OnlyFansAPI key, as declared, lets vault writes through (the quote asks it too). */
+export async function vaultKeyAllows(app: AppContext): Promise<boolean> {
   if (!app.config.ofapiApiKey) return false;
   const fingerprint = createHash("sha256").update(app.config.ofapiApiKey).digest("hex");
   const declaration = await getOfapiKeyDeclaration(app.db, fingerprint).catch(() => undefined);
@@ -584,12 +602,17 @@ async function albumFiles(app: AppContext, pageId: number, form: ApprovedForm): 
   const fileIds = form.media.flatMap((media) => (media.source === "file" && media.fileId !== null ? [media.fileId] : []));
   const facts = new Map((await getFanslyWriteFileFacts(app.db, fileIds)).map((file) => [file.id, file]));
   const shas = form.media.flatMap((media) => (media.fileSha256 === null ? [] : [media.fileSha256]));
+  return buildVaultAlbumFiles(form, facts, await onlyfansVaultReusable(app.db, pageId, shas), { linkMaxBytes: await vaultLinkMaxBytes(app) });
+}
+
+/** The page's vault media Hub uploaded of these bytes before (by sha256, its newest done upload): reused, not paid. */
+export async function onlyfansVaultReusable(db: Database, pageId: number, shas: readonly string[]): Promise<Map<string, { mediaRef: string; uploadedAt: Date | null }>> {
   const reusable = new Map<string, { mediaRef: string; uploadedAt: Date | null }>();
-  for (const upload of await listOnlyfansVaultUploadsOf(app.db, pageId, shas)) {
+  for (const upload of await listOnlyfansVaultUploadsOf(db, pageId, shas)) {
     const outcome = vaultUploadOutcome(upload);
     if (outcome.kind === "done" && !reusable.has(upload.sha256)) reusable.set(upload.sha256, { mediaRef: outcome.mediaRef, uploadedAt: outcome.at });
   }
-  return buildVaultAlbumFiles(form, facts, reusable, { linkMaxBytes: await vaultLinkMaxBytes(app) });
+  return reusable;
 }
 
 /** The largest file an album sends by a link, from the live setting onlyfansVaultLinkMaxMb (decimal MB). */

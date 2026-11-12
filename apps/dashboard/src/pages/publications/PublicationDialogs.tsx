@@ -33,6 +33,7 @@ import {
   type PagePublishing,
   type ResolveDraft,
 } from "./publicationsView.js";
+import { bytesLabel, creditsLabel, usdLabel } from "./publicationsAlbum.js";
 
 /** Where a page lives, from the catalog: the place a write lands, named from the object. */
 export interface PagePlace {
@@ -53,22 +54,24 @@ export function ApproveOneDialog({ publication, place, page, ofapiOn, todayKey, 
   onConfirm: () => void;
   onClose: () => void;
 }) {
+  const run = publication.albumRun ?? null;
   const facts: ConfirmFact[] = [
     { label: "Куда", value: placeLabel(publication.pageLabel, publication.platform, place?.modelName) },
     { label: "Что именно", value: whatLabel(publication) },
     ...(publication.priceMills !== null ? [{ label: "Цена", value: priceLabel(publication.priceMills) }] : []),
     { label: "Когда", value: momentLabel(publication.publishAt, todayKey) },
     { label: "Кто увидит", value: audienceLabel(publication) },
-    ...(publication.platform === "onlyfans" && ofapiOn ? [{ label: "Сколько стоит", value: "1 кредит за пост, загрузка новых файлов около 3 кредитов за МБ" }] : []),
+    ...(run !== null ? albumPriceFacts(run) : []),
+    ...(publication.platform === "onlyfans" && ofapiOn && run === null ? [{ label: "Сколько стоит", value: "1 кредит за пост, загрузка новых файлов около 3 кредитов за МБ" }] : []),
     { label: "Отменить", value: cancelLabel([publication.kind]) },
     ...(page?.notPublishing ? [{ label: "Страница сейчас", value: `${page.badge.word}: пост не выйдет, пока её не включат` }] : []),
   ];
   return (
     <ConfirmModal
-      title={`Утвердить пост на ${publication.pageLabel}?`}
+      title={publication.kind === "vault_album" ? `Утвердить альбом на ${publication.pageLabel}?` : `Утвердить пост на ${publication.pageLabel}?`}
       message={publication.kind === "vault_album" ? "Hub сам соберёт альбом в медиатеке страницы." : "Пост выйдет сам в указанное время."}
       facts={facts}
-      confirmLabel="Утвердить пост"
+      confirmLabel={publication.kind === "vault_album" ? "Утвердить альбом" : "Утвердить пост"}
       pendingLabel="Утверждаем…"
       tone="primary"
       isPending={isPending}
@@ -76,6 +79,27 @@ export function ApproveOneDialog({ publication, place, page, ofapiOn, todayKey, 
       onClose={onClose}
     />
   );
+}
+
+/**
+ * An OnlyFans album's price before «да»: the sum (the executor's own price of
+ * the files as they stand), what is left of the albums' day ceiling, and the
+ * files that go by hand. A number and a short caption each.
+ */
+function albumPriceFacts(run: NonNullable<PublicationWire["albumRun"]>): ConfirmFact[] {
+  const account = run.account;
+  const cents = account?.centsPer1000 ?? 149;
+  const facts: ConfirmFact[] = [{ label: "Цена", value: `${creditsLabel(run.estimateCredits)} ${usdLabel(run.estimateCredits, cents)}` }];
+  if (account !== null) {
+    const fits = account.dailyCredits > 0 && run.estimateCredits <= account.left;
+    const left = account.dailyCredits === 0
+      ? "Потолок альбомов 0 — альбом подождёт"
+      : `${creditsLabel(account.left)} из ${account.dailyCredits.toLocaleString("ru-RU")}${fits ? "" : " — не хватает, альбом подождёт"}`;
+    facts.push({ label: "Осталось сегодня", value: left });
+  }
+  if (run.tooBig > 0) facts.push({ label: "Руками", value: `${run.tooBig} — больше ${bytesLabel(run.linkMaxBytes)}, встанут сверху` });
+  if (run.reused > 0) facts.push({ label: "Без оплаты", value: `${run.reused} — уже на странице` });
+  return facts;
 }
 
 // ── B. Approve the selection ────────────────────────────────────────────────
@@ -291,7 +315,8 @@ export function ResolveDialog({ publication, username, todayKey, onClose }: {
   const outcomeName = useId();
   const stateName = useId();
   const refId = useId();
-  const form = resolveForm(draft);
+  const album = publication.kind === "vault_album";
+  const form = resolveForm(draft, album);
   const closeUnlessPending = () => { if (!resolve.isPending) onClose(); };
   const wall = buildProfileUrl(publication.platform, username);
 
@@ -301,30 +326,36 @@ export function ResolveDialog({ publication, username, todayKey, onClose }: {
     resolve.mutate({ id: publication.id, body: form.body }, {
       onSuccess: (result) => {
         toast.success(result.replacement === null
-          ? "Записано: пост ушёл"
-          : "Записано: пост не ушёл. Новый черновик ждёт утверждения");
+          ? album ? "Записано: альбом собран" : "Записано: пост ушёл"
+          : album ? "Записано: альбом не собран. Новый черновик ждёт утверждения" : "Записано: пост не ушёл. Новый черновик ждёт утверждения");
         onClose();
       },
       onError: (error) => { setFailure(actionFailure(error)); setFailureReason(actionFailureReason(error)); },
     });
   }
 
-  const choices = [
-    ["went_out", "Пост ушёл", "Укажите его номер на площадке и где он: в расписании или уже на стене."],
-    ["did_not_go_out", "Пост не ушёл", "Hub отметит «Не вышел» и создаст новый черновик со ссылкой на этот. Его нужно будет утвердить заново."],
-  ] as const;
+  const choices = album
+    ? [
+      ["went_out", "Альбом собран", "Все файлы на месте и в нужном порядке: Hub отметит «Вышел»."],
+      ["did_not_go_out", "Альбом не собран", "Hub отметит «Не вышел» и создаст новый черновик. Залитое останется в медиатеке, повтор за него не платит."],
+    ] as const
+    : [
+      ["went_out", "Пост ушёл", "Укажите его номер на площадке и где он: в расписании или уже на стене."],
+      ["did_not_go_out", "Пост не ушёл", "Hub отметит «Не вышел» и создаст новый черновик со ссылкой на этот. Его нужно будет утвердить заново."],
+    ] as const;
 
   return (
-    <ModalShell title="Ушёл ли пост?" onClose={closeUnlessPending} size="short">
+    <ModalShell title={album ? "Собран ли альбом?" : "Ушёл ли пост?"} onClose={closeUnlessPending} size="short">
       <form onSubmit={(event) => { event.preventDefault(); submit(); }}>
         <p className="dialog-text">
-          Hub отправил пост на площадку, но ответа не получил. Сам он отправку не повторит. Откройте стену и расписание
-          страницы на площадке и найдите этот пост около указанного времени.
+          {album
+            ? "Hub не смог подтвердить альбом и сам ничего не перешлёт. Откройте медиатеку страницы и посмотрите альбом."
+            : "Hub отправил пост на площадку, но ответа не получил. Сам он отправку не повторит. Откройте стену и расписание страницы на площадке и найдите этот пост около указанного времени."}
         </p>
         <dl className="confirm-facts">
           <dt>Страница</dt><dd>{publication.pageLabel}, {platformName(publication.platform)}</dd>
           <dt>Выход</dt><dd>{momentLabel(publication.publishAt, todayKey)}</dd>
-          <dt>Пост</dt><dd>{KIND_LABELS[publication.kind]}: {textStart(publication.text, 80)}</dd>
+          <dt>{album ? "Альбом" : "Пост"}</dt><dd>{KIND_LABELS[publication.kind]}: {textStart(publication.text, 80)}</dd>
           <dt>Файлы</dt><dd>{mediaSummary(publication.media).replace(/^б/, "Б")}</dd>
         </dl>
         {wall !== null && (
@@ -351,7 +382,7 @@ export function ResolveDialog({ publication, username, todayKey, onClose }: {
           ))}
         </fieldset>
 
-        {draft.outcome === "went_out" && (
+        {draft.outcome === "went_out" && !album && (
           <div className="pub-form-block">
             <div>
               <label htmlFor={refId} className="field-label">Номер поста на площадке</label>
@@ -384,7 +415,7 @@ export function ResolveDialog({ publication, username, todayKey, onClose }: {
           </div>
         )}
 
-        {draft.outcome === "did_not_go_out" && (
+        {draft.outcome === "did_not_go_out" && !album && (
           <Notice tone="warning" className="pub-form-block">
             Проверьте и стену, и расписание, прежде чем записать «не ушёл»: если пост всё-таки там, новый черновик после
             утверждения выложит его второй раз.

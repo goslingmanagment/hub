@@ -96,6 +96,8 @@ export const PUBLICATION_STATUS: Readonly<Record<string, StatusWord>> = {
   scheduled: status("В расписании", "moving"),
   processing: status("Обрабатывается", "moving"),
   published: status("Вышел", "good"),
+  /** A vault album out with files left out (its reason names them). */
+  publishedInPart: status("Вышел не весь", "attention"),
   unknown: status("Исход неизвестен", "attention"),
   missed: status("Пропущен", "attention"),
   not_published: status("Не вышел", "broken"),

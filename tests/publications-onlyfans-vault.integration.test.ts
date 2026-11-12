@@ -7,15 +7,16 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 
 import type { PublicationContentBody } from "@agency_hub_core/contracts";
 import {
+  applyOnlyfansVaultListWalk,
   createModel,
   createOnlyFansPage,
   getOfapiCaptureJob,
   getOnlyfansVaultAlbumRun,
   getPublication,
+  listOnlyfansCheckCandidates,
   saveOnlyfansVaultAlbumRun,
   setPageOfapiAccountId,
 } from "@agency_hub_core/db";
-import { PUBLICATION_PLATFORM_KINDS } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import { createUserAccount } from "../apps/runtime/src/services/auth.ts";
@@ -25,7 +26,8 @@ import { runOfapiMediaUploadSweep } from "../apps/runtime/src/services/ofapi-med
 import { uploadPublicationFile } from "../apps/runtime/src/services/publication-files.ts";
 import { onlyfansCommandFor, runOnlyfansPublishingTick } from "../apps/runtime/src/services/publications-onlyfans.ts";
 import { runOnlyfansVaultAlbumTick } from "../apps/runtime/src/services/publications-onlyfans-vault.ts";
-import { approvePublications, createPublicationDraft } from "../apps/runtime/src/services/publications.ts";
+import { quoteVaultAlbum } from "../apps/runtime/src/services/publications-onlyfans-vault-quote.ts";
+import { approvePublications, createPublicationDraft, resolveUnknownPublication } from "../apps/runtime/src/services/publications.ts";
 import {
   resetIntegrationDatabase,
   startIntegrationTestDatabase,
@@ -40,11 +42,10 @@ import { createTestAppContext } from "./helpers/runtime.ts";
  * Every write gets one attempt — a lost answer to the create, an upload or the
  * add never brings a second one; a late upload outcome is taken by a re-send
  * without paying again; nothing leaves while the albums are switched off; an
- * album is never a post.
+ * album is never a post; the price named before «да» is the price kept.
  *
- * The kind `vault_album` is still closed for OnlyFans (the next PR opens it):
- * these tests open it for themselves to make albums through the real draft
- * and approval. Uploads run through a fake runner (`runUpload`) that writes
+ * Albums are made through the real draft and approval. Uploads run through a
+ * fake runner (`runUpload`) that writes
  * the job's outcome as OnlyFansAPI's answer would leave it; the switch test
  * drives the real runner with a transport that must never be called.
  */
@@ -91,8 +92,6 @@ function albumMedia(listId: string) {
     .map((id) => ({ id: Number(id), type: "photo", isReady: vault.get(id)?.isReady ?? false, hasError: false }));
 }
 
-let opened: string[] = [];
-
 beforeAll(async () => {
   testDb = await startIntegrationTestDatabase();
 }, 120_000);
@@ -103,7 +102,6 @@ afterAll(async () => {
 
 afterEach(async () => {
   vi.unstubAllGlobals();
-  (PUBLICATION_PLATFORM_KINDS as unknown as Record<string, string[]>).onlyfans = opened;
   if (root) await rm(root, { recursive: true, force: true });
 });
 
@@ -112,11 +110,6 @@ beforeEach(async (context) => {
     context.skip();
     return;
   }
-  // Open the kind for these tests only (closed for OnlyFans until the next PR).
-  const kinds = PUBLICATION_PLATFORM_KINDS as unknown as Record<string, string[]>;
-  opened = kinds.onlyfans!;
-  kinds.onlyfans = [...opened, "vault_album"];
-
   await resetIntegrationDatabase(testDb.pool);
   app = createTestAppContext(testDb);
   root = await mkdtemp(path.join(tmpdir(), "vault-album-"));
@@ -516,5 +509,80 @@ describe("never a post", () => {
     const id = await approvedAlbum(1);
     const album = (await getPublication(app.db, id))!;
     expect(() => onlyfansCommandFor(album, "now")).toThrow(/never sent as a post/);
+  });
+
+  it("an approved album is never picked by the post sender; an unknown one is never a post's check", async () => {
+    const id = await approvedAlbum(2);
+    await runOnlyfansPublishingTick(app);
+    expect(postsSent).toBe(0);
+    expect((await statusOf(id))?.status).toBe("approved");
+    expect(await uploadJobsOf(id)).toBe(0);
+    await testDb!.pool.query("update publications set status = 'unknown' where id = $1", [id]);
+    expect((await listOnlyfansCheckCandidates(app.db)).map((candidate) => candidate.id)).not.toContain(id);
+  });
+});
+
+describe("the price before «да»", () => {
+  async function sha(fileId: number) {
+    return (await testDb!.pool.query<{ content_sha256: string; byte_size: string; original_name: string }>(
+      "select content_sha256, byte_size, original_name from publication_files where id = $1", [fileId])).rows[0]!;
+  }
+  async function quoteOf(count: number, title = "White robe") {
+    const files = [];
+    for (const fileId of fileIds.slice(0, count)) {
+      const row = await sha(fileId);
+      files.push({ sha256: row.content_sha256, byteSize: Number(row.byte_size), name: row.original_name });
+    }
+    return quoteVaultAlbum(app, { page: { id: pageId, platform: "onlyfans" }, body: { title, files }, actorUserId: ownerId });
+  }
+
+  it("names the price the executor keeps with the run — for new files and for files Hub uploaded before", async () => {
+    const first = await quoteOf(3);
+    expect(first.files.map((file) => file.onPage)).toEqual([false, false, false]);
+    const id = await approvedAlbum(3);
+    await runAlbum(1);
+    expect((await getOnlyfansVaultAlbumRun(app.db, id))?.priceCredits).toBe(first.credits);
+    await runAlbum();
+    expect((await statusOf(id))?.status).toBe("published");
+
+    // Again with two more: the three are on the page now, taken without paying.
+    const second = await quoteOf(5, "Second robe");
+    expect(second.files.map((file) => file.onPage)).toEqual([true, true, true, false, false]);
+    // The new two go on top; the old three keep their dates below (the folder's first was uploaded last).
+    expect(second.expectedOrder).toEqual([3, 4, 0, 1, 2]);
+    expect(second.files.slice(0, 3).map((file) => file.credits)).toEqual([1, 1, 1]);
+    const again = await approvedAlbum(5, "Second robe");
+    await runAlbum(1);
+    expect((await getOnlyfansVaultAlbumRun(app.db, again))?.priceCredits).toBe(second.credits);
+  });
+
+  it("finds the exact title, offers similar ones otherwise, and asks for a walk when the lists are old", async () => {
+    await applyOnlyfansVaultListWalk(app.db, {
+      pageId, seenAt: new Date(Date.now() - 2 * 60 * MIN), complete: true, requests: 1, failure: null, answeredRequestAt: null,
+      lists: [
+        { listRef: "8001", name: "White robe", type: "custom", mediaCount: 4 },
+        { listRef: "8002", name: "Black robe 🖤", type: "custom", mediaCount: 7 },
+        { listRef: "8003", name: "Messages", type: "messages", mediaCount: 90 },
+      ],
+    });
+    const found = await quoteOf(1, "White robe");
+    expect(found.album).toMatchObject({ kind: "found", albumRef: "8001", mediaCount: 4, walkRequested: true });
+    const walks = await testDb!.pool.query<{ requested_at: Date | null }>("select requested_at from onlyfans_vault_list_walks where page_id = $1", [pageId]);
+    expect(walks.rows[0]?.requested_at).not.toBeNull();
+    const similar = await quoteOf(1, "BLACK robe");
+    expect(similar.album).toMatchObject({ kind: "similar", albumRef: null, similar: [{ albumRef: "8002", title: "Black robe 🖤", mediaCount: 7 }] });
+    expect((await quoteOf(1, "Green robe")).album.kind).toBe("new");
+  });
+});
+
+describe("«it went out» for an album", () => {
+  it("needs no post id: published with none; a post id is refused", async () => {
+    const id = await approvedAlbum(1);
+    await testDb!.pool.query("update publications set status = 'unknown' where id = $1", [id]);
+    await expect(resolveUnknownPublication(app.db, { id, userId: ownerId, answer: { outcome: "went_out", state: "published", platformPostRef: "123" } }))
+      .rejects.toThrow(/has no post/);
+    const { publication, replacement } = await resolveUnknownPublication(app.db, { id, userId: ownerId, answer: { outcome: "went_out" } });
+    expect(publication).toMatchObject({ status: "published", platformPostRef: null });
+    expect(replacement).toBeNull();
   });
 });
