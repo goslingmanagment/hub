@@ -76,20 +76,32 @@ async function held(input: { page?: number; userId?: number; group?: ClientClaim
 }
 type Held = Awaited<ReturnType<typeof held>>;
 
-/** The extension's report of the send, the receipt's id (client_send_attributions). */
-async function attribute(send: Held, messageId: string, input: { offsetMs?: number; userId?: number; chat?: string } = {}) {
+/**
+ * The extension's report of the send, the receipt's id (client_send_attributions): `offsetMs` is the reporting
+ * computer's clock (observed_at), `recordedOffsetMs` Hub's receipt (recorded_at), both from the dispatch.
+ */
+async function attribute(
+  send: Held,
+  messageId: string,
+  input: { offsetMs?: number; recordedOffsetMs?: number; userId?: number; chat?: string } = {},
+) {
   await harness.pool.query(
     `insert into client_send_attributions (platform, page_id, platform_message_id, fan_ref, conversation_ref, user_id, source,
-       priced, with_media, observed_at, composed_with)
-     values ('fansly', $1, $2, $3, $4, $5, 'fansly-extension', false, false, $6, 'hi')`,
+       priced, with_media, observed_at, recorded_at, composed_with)
+     values ('fansly', $1, $2, $3, $4, $5, 'fansly-extension', false, false, $6, $7, 'hi')`,
     [send.page, messageId, send.fanRef, input.chat ?? send.chat, input.userId ?? me,
-      new Date(send.dispatchedAt.getTime() + (input.offsetMs ?? -800))],
+      new Date(send.dispatchedAt.getTime() + (input.offsetMs ?? -800)),
+      new Date(send.dispatchedAt.getTime() + (input.recordedOffsetMs ?? 1_500))],
   );
 }
 
-/** The page's own archive copy of the message (message_archive). */
-async function archive(send: Held, messageId: string, input: { sentByMe?: boolean; deleted?: boolean; chat?: string } = {}) {
-  const occurredAt = new Date(send.dispatchedAt.getTime() - 300);
+/** The page's own archive copy of the message (message_archive), dated by Fansly `offsetMs` from the dispatch. */
+async function archive(
+  send: Held,
+  messageId: string,
+  input: { sentByMe?: boolean; deleted?: boolean; chat?: string; offsetMs?: number } = {},
+) {
+  const occurredAt = new Date(send.dispatchedAt.getTime() + (input.offsetMs ?? -300));
   await harness.pool.query(
     `insert into message_archive (account_id, platform, conversation_ref, message_ref, sender_role, is_sent_by_me, occurred_at,
        text_plain, deleted_at)
@@ -157,11 +169,42 @@ describe("closing a held Fansly greeting on the archive's copy", () => {
     expect(await greeting(send)).toMatchObject({ confirmed_at: sentAt, first_message_ref: messageId });
   });
 
+  it("closes a send whose computer's clock runs ahead, on Fansly's time of the message", async () => {
+    // The install of 2026-11-09: its report reads 38 s after the dispatch, Hub got it in 2 s, Fansly dates the message
+    // within a second of the dispatch.
+    const send = await held();
+    const messageId = nextId();
+    await attribute(send, messageId, { offsetMs: 38_000, recordedOffsetMs: 2_000 });
+    const sentAt = await archive(send, messageId, { offsetMs: -700 });
+    expect(await closeHeldSendOnArchiveProof(harness.db, ref(send))).toEqual({ outcome: "closed" });
+    expect(await custody(send.attemptId)).toEqual({ state: "sent", platform_message_id: messageId });
+    expect(await greeting(send)).toMatchObject({ confirmed_at: sentAt, first_message_ref: messageId, first_attempt_id: send.attemptId });
+    const journal = await proofs(send);
+    expect(journal).toHaveLength(1);
+    expect(journal[0].payload).toMatchObject({
+      rule: "archive-copy.v2", platformMessageId: messageId,
+      attribution: {
+        observedAt: new Date(send.dispatchedAt.getTime() + 38_000).toISOString(),
+        recordedAt: new Date(send.dispatchedAt.getTime() + 2_000).toISOString(),
+      },
+      archive: { occurredAt: sentAt.toISOString() },
+    });
+  });
+
   it("leaves a send untouched when any part of the proof is missing", async () => {
     const cases: Array<[string, (send: Held, messageId: string) => Promise<void>]> = [
       ["no_attribution", async (send, messageId) => { await archive(send, messageId); }],
       ["no_attribution", async (send, messageId) => { await attribute(send, messageId, { userId: other }); await archive(send, messageId); }],
-      ["no_attribution", async (send, messageId) => { await attribute(send, messageId, { offsetMs: 31_000 }); await archive(send, messageId); }],
+      ["no_attribution", async (send, messageId) => { await attribute(send, messageId); await archive(send, messageId, { offsetMs: 31_000 }); }],
+      // The greeting never went out: the chatter's message to the fan 50 s before, from a computer 41 s ahead,
+      // reads 9 s before the dispatch on that computer. Fansly dates it 50 s before: not this send.
+      ["no_attribution", async (send) => {
+        const earlier = nextId();
+        await attribute(send, earlier, { offsetMs: -9_000, recordedOffsetMs: -49_000 });
+        await archive(send, earlier, { offsetMs: -50_000 });
+      }],
+      // Reported when no copy is there yet, but long after the dispatch: not a candidate.
+      ["no_attribution", async (send, messageId) => { await attribute(send, messageId, { recordedOffsetMs: 60_000 }); }],
       ["not_in_archive", async (send, messageId) => { await attribute(send, messageId); }],
       ["not_in_archive", async (send, messageId) => { await attribute(send, messageId); await archive(send, messageId, { deleted: true }); }],
       ["not_in_archive", async (send, messageId) => { await attribute(send, messageId); await archive(send, messageId, { sentByMe: false }); }],
@@ -169,7 +212,12 @@ describe("closing a held Fansly greeting on the archive's copy", () => {
       ["ambiguous", async (send, messageId) => {
         const hand = nextId();
         await attribute(send, messageId); await archive(send, messageId);
-        await attribute(send, hand, { offsetMs: 9_000 }); await archive(send, hand);
+        await attribute(send, hand, { offsetMs: 9_000, recordedOffsetMs: 9_500 }); await archive(send, hand, { offsetMs: 9_000 });
+      }],
+      ["ambiguous", async (send, messageId) => {
+        // The hand message's copy is not in the archive yet: its report, received in the window, is a candidate.
+        await attribute(send, messageId); await archive(send, messageId);
+        await attribute(send, nextId(), { offsetMs: 9_000, recordedOffsetMs: 9_500 });
       }],
     ];
     for (const [reason, prepare] of cases) {
