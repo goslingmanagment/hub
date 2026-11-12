@@ -51,6 +51,7 @@ import {
 } from "../sync/fansly/publish/uploads.ts";
 import { loadEffectiveConfig } from "./effective-config.ts";
 import { verifyApprovedPublication } from "./publications.ts";
+import { vaultAlbumReason } from "./publications-vault-album-reason.ts";
 import { ensureQueueCreated, type QueueCreationClient } from "./sync-queue.ts";
 
 // Wall posts on Fansly (docs/plans/2026-10-23-wall-posts, plan PR 9): every
@@ -353,21 +354,12 @@ export interface FanslyPack {
   cards: readonly FanslyPackCard[];
 }
 
-/** What a failure's reason says, short: `upload_part_unknown`,
- *  `upload_create:fansly_http_400`. */
-function shortWhy(reason: string): string {
-  return reason.replace(/^not_sent:/, "").split(":").slice(0, 2).join(":");
-}
-
-/** The most a pack's reason says: every file of a 300-file album by its name
- *  fits (audit, 2026-11-03: the agent reports from it what did not land). */
-const PACK_REASON_MAX = 20_000;
-
 /** The reason a vault album ends with, by its files' names: those that
  *  failed for themselves; then, as its read back showed it (0352), the files
  *  the album does not hold, the first card not where the approval puts it
  *  (its place from the top, 1 first, and the file due there), the cards left
- *  with another name — or why it could not be read back. Null: none. */
+ *  with another name — or why it could not be read back. Null: none. The
+ *  builder is shared with OnlyFans albums (publications-vault-album-reason.ts). */
 export function fanslyPackReason(input: {
   failures: ReadonlyArray<{ item: string; settle: FanslyUploadSettle }>;
   names: ReadonlyMap<string, string>;
@@ -380,22 +372,15 @@ export function fanslyPackReason(input: {
   /** Why the album was not read back. */
   unread?: string | null;
 }): string | null {
-  const name = (item: string) => input.names.get(item) ?? item;
-  const parts: string[] = [];
-  if (input.failures.length > 0) {
-    const named = input.failures.map((failure) => `${name(failure.item)}=${shortWhy(failure.settle.reason)}`);
-    parts.push(`files_failed:${input.failures.length}/${input.members}:${named.join(",")}`);
-  }
-  if (input.unread != null) parts.push(`album_not_read:${input.unread}`);
-  const missing = input.missing ?? [];
-  if (missing.length > 0) parts.push(`files_missing:${missing.length}:${missing.map(name).join(",")}`);
-  if (input.misplaced != null) parts.push(`order_differs:${input.misplaced.position}:${name(input.misplaced.item)}`);
-  if (input.notRenamed.length > 0) {
-    parts.push(`cards_not_renamed:${input.notRenamed.length}:${input.notRenamed.map(name).join(",")}`);
-  }
-  if (parts.length === 0) return null;
-  const reason = parts.join(";");
-  return reason.length > PACK_REASON_MAX ? `${reason.slice(0, PACK_REASON_MAX - 1)}…` : reason;
+  return vaultAlbumReason({
+    failures: input.failures.map((failure) => ({ item: failure.item, why: failure.settle.reason })),
+    names: input.names,
+    members: input.members,
+    notRenamed: input.notRenamed,
+    ...(input.missing === undefined ? {} : { missing: input.missing }),
+    ...(input.misplaced === undefined ? {} : { misplaced: input.misplaced }),
+    ...(input.unread === undefined ? {} : { unread: input.unread }),
+  });
 }
 
 /**

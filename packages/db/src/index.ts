@@ -74,6 +74,7 @@ export * from "./schema.ts";
 export * from "./repositories/creator-raw-media.ts";
 export * from "./repositories/vault-album-scans.ts";
 export * from "./repositories/onlyfans-vault-lists.ts";
+export * from "./repositories/onlyfans-vault-album-runs.ts";
 export * from "./repositories/ofapi-post-media-replay.ts";
 export * from "./repositories/ofapi-credit-receipts.ts";
 export * from "./schema-guard.ts";

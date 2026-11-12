@@ -74,6 +74,10 @@ import {
   runOnlyfansPublishingTick,
 } from "./services/publications-onlyfans.ts";
 import {
+  PUBLICATIONS_ONLYFANS_VAULT_QUEUE,
+  runOnlyfansVaultAlbumTick,
+} from "./services/publications-onlyfans-vault.ts";
+import {
   PUBLICATIONS_ONLYFANS_CHECKS_QUEUE,
   runOnlyfansChecksTick,
 } from "./services/publications-onlyfans-checks.ts";
@@ -626,6 +630,17 @@ export async function startWorkerServices(
     const report = await runOnlyfansPublishingTick(app);
     if (report.sent + report.settled + report.missed + report.returnedToDraft > 0) {
       app.logger?.info({ component: "publications_onlyfans", ...report }, "publications: OnlyFans tick");
+    }
+  });
+
+  // Every minute: approved OnlyFans vault albums (8-docs 2026-11-12-of-vault-album,
+  // plan PR 4), apart from the posts: the album found or created, files up one
+  // at a time (up to 45 s inside the minute), added in one request, read back.
+  // Nothing leaves while publishingEnabled or publishingOnlyfansVaultEnabled is off.
+  await boss.work(PUBLICATIONS_ONLYFANS_VAULT_QUEUE, { batchSize: 1 }, async () => {
+    const report = await runOnlyfansVaultAlbumTick(app);
+    if (report.started + report.settled + report.missed + report.returnedToDraft + report.uploadsStarted > 0) {
+      app.logger?.info({ component: "publications_onlyfans_vault", ...report }, "publications: OnlyFans vault album tick");
     }
   });
 

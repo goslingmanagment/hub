@@ -428,3 +428,86 @@ export async function readOnlyfansVaultLists(ctx: OnlyfansReadContext, maxReques
     return { ok: true, list: Array.isArray(data?.list) ? data.list : [], hasMore: data?.hasMore === true, intentId: read.intentId };
   }, maxRequests);
 }
+
+// ---------------------------------------------------------------------------
+// One vault album and its files (8-docs 2026-11-12-of-vault-album, plan PR 4):
+// the album a draft names by id (GET /media/vault/lists/{id}), the media one
+// album holds (GET /media/vault?list=, newest first, 100 a page) and one vault
+// media (GET /media/vault/{id}) — whether a file Hub uploaded is still there.
+// ---------------------------------------------------------------------------
+
+/** One vault media as an album's read sees it; null = the read did not say. */
+export interface OnlyfansVaultMedia {
+  id: string;
+  type: string | null;
+  isReady: boolean | null;
+  hasError: boolean | null;
+  createdAt: Date | null;
+}
+
+export function parseOnlyfansVaultMedia(raw: unknown): OnlyfansVaultMedia | null {
+  const media = object(raw);
+  const id = idOf(media?.id);
+  if (!media || !id) return null;
+  return {
+    id,
+    type: typeof media.type === "string" ? media.type : null,
+    isReady: typeof media.isReady === "boolean" ? media.isReady : null,
+    hasError: typeof media.hasError === "boolean" ? media.hasError : null,
+    createdAt: dateOf(media.createdAt),
+  };
+}
+
+/** GET /media/vault/lists/{id}: the list, null when OnlyFans says there is none, or a failure. */
+export async function readOnlyfansVaultListById(ctx: OnlyfansReadContext, listId: string): Promise<OnlyfansByIdRead<OnlyfansVaultList>> {
+  const read = await readAction(ctx, { action: "vault_list_get", pageId: ctx.pageId, listId } as OfapiAction);
+  if (read.kind === "failed") return { ok: false, reason: read.reason, intentIds: [read.intentId] };
+  if (read.kind === "absent") return { ok: true, found: null, intentIds: [read.intentId] };
+  const list = parseOnlyfansVaultList(read.data);
+  return list ? { ok: true, found: list, intentIds: [read.intentId] } : { ok: false, reason: "vault_list_unreadable", intentIds: [read.intentId] };
+}
+
+/** GET /media/vault/{id}: the media, null when OnlyFans says there is none, or a failure. */
+export async function readOnlyfansVaultMediaById(ctx: OnlyfansReadContext, mediaId: string): Promise<OnlyfansByIdRead<OnlyfansVaultMedia>> {
+  const read = await readAction(ctx, { action: "vault_media_get", pageId: ctx.pageId, mediaId } as OfapiAction);
+  if (read.kind === "failed") return { ok: false, reason: read.reason, intentIds: [read.intentId] };
+  if (read.kind === "absent") return { ok: true, found: null, intentIds: [read.intentId] };
+  const media = parseOnlyfansVaultMedia(read.data);
+  return media ? { ok: true, found: media, intentIds: [read.intentId] } : { ok: false, reason: "vault_media_unreadable", intentIds: [read.intentId] };
+}
+
+export const ONLYFANS_VAULT_MEDIA_PAGE = 100;
+/** An album of 300 files and what it held before: ten pages is plenty. */
+export const ONLYFANS_VAULT_MEDIA_MAX_REQUESTS = 10;
+
+export type OnlyfansVaultListMediaRead = { ok: true; items: OnlyfansVaultMedia[]; intentIds: string[] } | OnlyfansReadFailure;
+
+/**
+ * Every media one vault list holds, newest first (OnlyFans' own order), read
+ * whole: by offset until a page says there is no more. Anything short of the
+ * end — a page that failed or does not parse, the request budget, a media
+ * seen twice (the list moved under the read) — is a failure: an album's
+ * contents are never concluded from part of it.
+ */
+export async function readOnlyfansVaultListMedia(ctx: OnlyfansReadContext, listId: string, maxRequests = ONLYFANS_VAULT_MEDIA_MAX_REQUESTS): Promise<OnlyfansVaultListMediaRead> {
+  const items: OnlyfansVaultMedia[] = [];
+  const seen = new Set<string>();
+  const intentIds: string[] = [];
+  for (let offset = 0; intentIds.length < maxRequests; offset += ONLYFANS_VAULT_MEDIA_PAGE) {
+    const read = await readAction(ctx, { action: "vault_media_list", pageId: ctx.pageId, listId, limit: ONLYFANS_VAULT_MEDIA_PAGE, offset } as OfapiAction);
+    intentIds.push(read.intentId);
+    if (read.kind !== "confirmed") return { ok: false, reason: read.kind === "failed" ? read.reason : "vault_list_absent", intentIds };
+    const data = object(read.data);
+    const list = Array.isArray(data?.list) ? data.list : [];
+    for (const raw of list) {
+      const media = parseOnlyfansVaultMedia(raw);
+      if (!media) return { ok: false, reason: "vault_media_unreadable", intentIds };
+      if (seen.has(media.id)) return { ok: false, reason: "order_moved", intentIds };
+      seen.add(media.id);
+      items.push(media);
+    }
+    if (data?.hasMore !== true) return { ok: true, items, intentIds };
+    if (list.length === 0) return { ok: false, reason: "empty_page_with_more", intentIds };
+  }
+  return { ok: false, reason: "read_budget", intentIds };
+}

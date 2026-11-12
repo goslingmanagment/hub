@@ -256,6 +256,8 @@ const envSchema = z.object({
   PUBLISHING_ONLYFANS_DAILY_CREDITS: z.coerce.number().int().min(0).max(10000).default(50),
   ONLYFANS_VAULT_DAILY_CREDITS: z.coerce.number().int().min(0).max(1000000).default(0),
   ONLYFANS_VAULT_RESERVE_CREDITS: z.coerce.number().int().min(0).max(1000000).default(2000),
+  PUBLISHING_ONLYFANS_VAULT_ENABLED: booleanSchema.default(false),
+  ONLYFANS_CREDIT_CENTS_PER_1000: z.coerce.number().int().min(1).max(100000).default(149),
   AI_MEDIA_DESCRIBE_PAGE_POLICIES: z.string().default("{}"),
   AI_MEDIA_DESCRIBE_MODEL: z.enum(["anthropic:claude-sonnet-5", "anthropic:claude-haiku-4-5"])
     .default("anthropic:claude-sonnet-5"),
@@ -617,6 +619,10 @@ export interface AppConfig {
   onlyfansVaultDailyCredits?: number;
   /** OnlyFansAPI balance a vault album upload leaves untouched for reads. */
   onlyfansVaultReserveCredits?: number;
+  /** OnlyFans vault albums go up (under publishingEnabled and the page's own switch). */
+  publishingOnlyfansVaultEnabled?: boolean;
+  /** What 1,000 OnlyFansAPI credits cost in US cents: for showing an album's price in dollars only. */
+  onlyfansCreditCentsPer1000?: number;
   /** JSON keyed by exact page label: {"since": ISO, "until"?: ISO}. "{}" = none. */
   aiMediaDescribePagePolicies?: string;
   aiMediaDescribeModel?: "anthropic:claude-sonnet-5" | "anthropic:claude-haiku-4-5";
@@ -969,6 +975,8 @@ export function loadConfig(
     publishingOnlyfansDailyCredits: parsed.PUBLISHING_ONLYFANS_DAILY_CREDITS,
     onlyfansVaultDailyCredits: parsed.ONLYFANS_VAULT_DAILY_CREDITS,
     onlyfansVaultReserveCredits: parsed.ONLYFANS_VAULT_RESERVE_CREDITS,
+    publishingOnlyfansVaultEnabled: parsed.PUBLISHING_ONLYFANS_VAULT_ENABLED,
+    onlyfansCreditCentsPer1000: parsed.ONLYFANS_CREDIT_CENTS_PER_1000,
     aiMediaDescribePagePolicies: parsed.AI_MEDIA_DESCRIBE_PAGE_POLICIES,
     aiMediaDescribeModel: parsed.AI_MEDIA_DESCRIBE_MODEL,
     aiMediaDescribeDailyImageLimit: parsed.AI_MEDIA_DESCRIBE_DAILY_IMAGE_LIMIT,

@@ -1267,6 +1267,36 @@ export const DEMO_CONFIG_DESCRIPTORS: readonly DemoConfigDescriptor[] = [
     "destructive": false
   },
   {
+    "key": "publishingOnlyfansVaultEnabled",
+    "envName": "PUBLISHING_ONLYFANS_VAULT_ENABLED",
+    "configField": "publishingOnlyfansVaultEnabled",
+    "kind": "boolean",
+    "subsystem": "OFAPI",
+    "label": "Vault albums: OnlyFans",
+    "default": "false",
+    "editability": "editable",
+    "runtimeApply": "live",
+    "comparable": true,
+    "note": "OnlyFans half of vault albums, under publishingEnabled and each page's own switch. On, approved albums go up: the album found by its exact title or created, files uploaded one at a time, every file added in one request, the album read back. Off holds every album where it is (an upload already queued does not leave either). Read live every minute and right before each write.",
+    "costWarning": "On uploads approved OnlyFans vault albums through OnlyFansAPI at about 3 credits per MB, on the albums' own day ceiling.",
+    "destructive": false
+  },
+  {
+    "key": "onlyfansCreditCentsPer1000",
+    "envName": "ONLYFANS_CREDIT_CENTS_PER_1000",
+    "configField": "onlyfansCreditCentsPer1000",
+    "kind": "number",
+    "subsystem": "OFAPI",
+    "label": "OnlyFansAPI: price of 1,000 credits (cents)",
+    "default": "149",
+    "editability": "editable",
+    "runtimeApply": "live",
+    "comparable": true,
+    "note": "What 1,000 OnlyFansAPI credits cost, in US cents: an album's price is shown in dollars by it. Display only; nothing is spent or limited by it.",
+    "costWarning": null,
+    "destructive": false
+  },
+  {
     "key": "publicationFilesDir",
     "envName": "PUBLICATION_FILES_DIR",
     "configField": "publicationFilesDir",

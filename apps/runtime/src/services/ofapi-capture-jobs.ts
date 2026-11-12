@@ -1,4 +1,5 @@
 import { buildOfapiMediaUploadRequest, parseCapturedOfapiMediaUpload, type OfapiMediaRequestPlan } from "./ofapi-media-uploads.ts";
+import { onlyfansVaultUploadAlbum, onlyfansVaultWriteHold } from "./publications-onlyfans-vault-hold.ts";
 import { loadEffectiveConfig } from "./effective-config.ts";
 import { isOfapiTypedExportProfile, ofapiTypedExportCategory, type OfapiCollectionContext } from "@agency_hub_core/shared";
 import { settleOfapiCollectionRequest } from "@agency_hub_core/db";
@@ -1337,6 +1338,18 @@ export async function executeOfapiCaptureJobChunk(
     await blockJob(app, job, "transport_unavailable", "OFAPI client is not configured");
     return { kind: "blocked", pageId, jobId: job.id };
   }
+  // A vault album's upload (8-docs 2026-11-12-of-vault-album, plan §2.4): the
+  // common sweep picks it by itself, so right before its write the runner asks
+  // again whether the albums are on, the approval stands and the spend is
+  // allowed. Held, it never leaves; the album's executor resumes it.
+  // A status read (cursor set) is a free read of a started upload: it goes.
+  const album = job.kind === "media_upload" && job.cursor === null ? onlyfansVaultUploadAlbum(job.target) : null;
+  const albumHold = album === null ? async () => null : () => onlyfansVaultWriteHold(app, { ...album, upload: { credits: Number(job.target.maxCredits ?? 0) } });
+  const held = await albumHold();
+  if (held !== null) {
+    await blockJob(app, job, "vault_album_held", held);
+    return { kind: "blocked", pageId, jobId: job.id };
+  }
 
   const collectionContext: OfapiCollectionContext | undefined = job.kind === "media_upload" && typeof job.target.collectionJobId === "string"
     ? { category: "vault_files", purpose: "one_off", jobId: job.target.collectionJobId, reservedCredits: requestPlan.reservedCredits }
@@ -1472,8 +1485,10 @@ export async function executeOfapiCaptureJobChunk(
         deadlineAt,
         timeoutMs: requestPlan.timeoutMs,
         maxResponseBytes: requestPlan.maxResponseBytes,
+        // The album's hold once more after any wait for the transport: held,
+        // the attempt is released before anything leaves.
         beforeDispatch: async () =>
-          await markOfapiAttemptDispatching(app.db, {
+          await albumHold() === null && await markOfapiAttemptDispatching(app.db, {
             attemptId: reservation.attemptId,
             fenceToken: reservation.fenceToken,
             jobLeaseToken: leaseToken,

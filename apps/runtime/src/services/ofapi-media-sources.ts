@@ -236,7 +236,15 @@ export async function createOwnerOfapiMediaUpload(
   actorUserId: number,
   // `vault_album`: an OnlyFans vault album's upload, on the albums' own
   // credit account (onlyfansVaultDailyCredits / onlyfansVaultReserveCredits).
-  options: { budgetScope?: "bulk" | "vault_album" } = {},
+  // `async: false`: the upload answers at once (a vault photo); absent, true.
+  // `album`: the album publication and approval the upload belongs to — the
+  // runner checks them again right before the write
+  // (publications-onlyfans-vault-hold.ts).
+  options: {
+    budgetScope?: "bulk" | "vault_album";
+    async?: boolean;
+    album?: { publicationId: number; revisionId: number };
+  } = {},
 ) {
   const source = await requireOfapiMediaSource(
     app,
@@ -284,6 +292,9 @@ export async function createOwnerOfapiMediaUpload(
       requestId: input.requestId,
       maxCredits: input.maxCredits,
       expectedPolicyRevision: input.expectedPolicyRevision,
+      // Only when set, so the frozen target of an upload made before is unchanged.
+      ...(options.async === false ? { async: false } : {}),
+      ...(options.album === undefined ? {} : { publicationId: options.album.publicationId, revisionId: options.album.revisionId }),
     };
     const prior = (
       await database.execute<{ id: string }>(
@@ -332,7 +343,7 @@ export async function createOwnerOfapiMediaUpload(
         mimeType: source.mime_type,
         destination: input.destination,
         maxCredits: input.maxCredits,
-        async: true,
+        async: options.async !== false,
       },
       budgetScope: options.budgetScope ?? "bulk",
       originPrincipalId: actorUserId,
