@@ -4,6 +4,7 @@ import {
   findSaleIdByPlatformRef,
   insertSaleClaim,
   insertSaleDecision,
+  isOwnerTelegramUser,
   listActiveSaleDecisions,
   listCurrentReportsOfSales,
   listHandinNames,
@@ -42,8 +43,8 @@ import { applySaleDecision, cancelSaleDecisionApplied, runSaleClaims } from "./s
  * A key changes only what is its own to change (final review, round 2). A number it names — the decision a new one
  * replaces, the question it answers, the decision it cancels or marks — is read in the transaction that writes, and must
  * be of the key's pages (one of another page, or of no page, answers exactly as a number that does not exist), about
- * the very sale of the new decision (with no sale: the same page and fan), and not the owner's own: a decision the owner
- * made in Workboard is changed only by the owner there.
+ * the very sale of the new decision (with no sale: the same page and fan). A decision the owner made himself in
+ * Workboard is cancelled or replaced only on the owner's own message (`refuseOwners`), and then goes the same path.
  */
 
 type DoorApp = Pick<AppContext, "db" | "config" | "logger">;
@@ -63,11 +64,16 @@ const notFound = () => new NotFoundError("Not found");
 /** Whether an object is the key's to change: it names a page, and the page is of the key's grant. */
 const ofKeysPages = (actor: Pick<DoorActor, "pageIds">, pageId: number | null) => pageId !== null && actor.pageIds.includes(pageId);
 
-/** A decision the owner made himself, in the interface: the door answers where it is changed, and changes nothing. */
-function refuseOwners(decision: Pick<SaleDecisionRow, "id" | "source">): void {
-  if (decision.source !== "dispute") return;
+/**
+ * A decision the owner made himself, in the interface, is changed only on the owner's own word: the write is recorded
+ * from his message — its sender is the Telegram account the people registry gives a person whose role is owner
+ * (`isOwnerTelegramUser`; an owner with no Telegram id there has no such message). Anyone else's message changes
+ * nothing, and the refusal says how it is changed.
+ */
+async function refuseOwners(db: Database, actor: Pick<DoorActor, "telegramUserId">, decision: Pick<SaleDecisionRow, "id" | "source">): Promise<void> {
+  if (decision.source !== "dispute" || (await isOwnerTelegramUser(db, actor.telegramUserId))) return;
   throw new ConflictError(
-    `Decision ${decision.id} is the owner's own, made in Workboard: only the owner changes it, there («Ждут вас», /workboard/decisions)`,
+    `Решение ${decision.id}: решение владельца меняет только он сам: запишите его слова с его сообщением (--sender — Telegram id владельца, --message — его сообщение)`,
     { reason: "owner_decision" },
   );
 }
@@ -202,8 +208,8 @@ export async function recordSaleDecision(
     let supersedes: number | null = null;
     const active = knownSale === null ? null : (await listActiveSaleDecisions(txDb, [knownSale.transactionId])).get(knownSale.transactionId) ?? null;
     if (active !== null) {
-      // A sale with an active decision: the owner's own stays; another's is replaced only when named.
-      refuseOwners(active);
+      // A sale with an active decision: the owner's own is replaced only on his own message; any is replaced only when named.
+      await refuseOwners(txDb, actor, active);
       if (input.supersedes !== active.id) {
         throw new ConflictError(`The sale has an active decision ${active.id}: name it in supersedes (--supersedes ${active.id})`, { reason: "decision_exists" });
       }
@@ -212,7 +218,7 @@ export async function recordSaleDecision(
       if (replaced === null || replaced.state !== "active" || !ofKeysPages(actor, replaced.pageId)) {
         throw new ConflictError("The decision it replaces is not active", { reason: "not_active" });
       }
-      refuseOwners(replaced);
+      await refuseOwners(txDb, actor, replaced);
       // The sale's own active decision is the one a decision of a sale replaces; with no sale, one of the same page and fan.
       if (knownSale !== null || !sameSaleOf(about, replaced)) {
         throw new ConflictError(`Decision ${replaced.id} is about another sale: a decision replaces the active one of its own sale`, { reason: "other_sale" });
@@ -281,9 +287,9 @@ export async function cancelSaleDecisionSaid(app: DoorApp, actor: DoorActor, inp
   const cancelled = await cancelSaleDecisionApplied(app, {
     decisionId: input.decisionId,
     note: input.note,
-    check: (decision) => {
+    check: async (decision, db) => {
       if (decision === null || !ofKeysPages(actor, decision.pageId)) throw notFound();
-      refuseOwners(decision);
+      await refuseOwners(db, actor, decision);
       return decision;
     },
     by: { door: "telegram", actorUserId: null, agentKeyId: actor.agentKeyId, telegramMessageRef: actor.sourceRef, telegramSenderId: actor.telegramUserId },

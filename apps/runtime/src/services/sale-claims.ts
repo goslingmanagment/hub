@@ -875,21 +875,22 @@ function waitsAgain(claim: SaleClaimRow, now: Date): Pick<SaleClaimRow, "state" 
  * a question always, a claim when the reports make it again. A day the ledger paid raises the owner's matter as after a
  * decision (asked before any lock).
  * `check` — the caller's own check of the decision as the transaction reads it (the agent's door: its page, whose it
- * is); it throws to refuse and is asked once before the ledger too, so a refusal costs no call.
+ * is and whose message cancels it), on the connection it is read on; it throws to refuse and is asked once before the
+ * ledger too, so a refusal costs no call.
  */
 export async function cancelSaleDecisionApplied(
   app: ClaimsApp,
-  input: { decisionId: number; note: string; by: SettleBy; check: (decision: SaleDecisionRow | null) => SaleDecisionRow },
+  input: { decisionId: number; note: string; by: SettleBy; check: (decision: SaleDecisionRow | null, db: Database) => Promise<SaleDecisionRow> },
   now: Date,
 ): Promise<{ versions: MadeVersion[] }> {
   const { db } = app;
-  const before = input.check((await listSaleDecisions(db, { ids: [input.decisionId] }))[0] ?? null);
+  const before = await input.check((await listSaleDecisions(db, { ids: [input.decisionId] }))[0] ?? null, db);
   const paid = before.transactionId === null ? new Map<number, boolean | null>() : await paidDaysOf(app, await listCurrentReportsOfSales(db, [before.transactionId]));
   const made: MadeVersion[] = [];
   await db.transaction(async (tx) => {
     const txDb = tx as unknown as Database;
     await lockSaleSettlements(txDb);
-    const decision = input.check((await listSaleDecisions(txDb, { ids: [input.decisionId] }))[0] ?? null);
+    const decision = await input.check((await listSaleDecisions(txDb, { ids: [input.decisionId] }))[0] ?? null, txDb);
     if (!(await cancelSaleDecision(txDb, { id: decision.id, note: input.note, at: now }))) {
       throw new ConflictError("Only an active decision is cancelled", { reason: "not_active" });
     }

@@ -393,28 +393,77 @@ describe("«чья продажа» and the shift report, the final review's sec
     expect((await newest(shift, disputed)).line).toMatchObject({ amountMills: 10_000, disputed: false, settled: "owner" });
   });
 
-  it("leaves the owner's own decision to the owner: a key neither cancels nor replaces it (9)", async (context) => {
+  it("changes the owner's own decision only on the owner's own message: his Telegram id as the sender (9)", async (context) => {
     if (!testDb) return context.skip();
-    const shift = await shiftRow(anna, 198);
-    const disputed = await sale(pageOne, 13_000, 105);
-    await say(shift, disputed, "мой");
-    await submit(shift);
-    const decided = await asSession("boss", "POST", "/api/v1/sale-disputes/decide", { transactionId: disputed, outcome: "first" });
-    expect(decided.statusCode, decided.body).toBe(200);
-    const owners = Number((await q("select id from sale_owner_decisions where transaction_id = $1 and state = 'active'", [disputed])).rows[0].id);
-    const said = { telegramUserId: WORDS.telegramUserId, sourceRef: WORDS.sourceRef };
-    const refusals = [
-      await asKey("one", "POST", "/api/v1/agent/sale-decisions/cancel", { decisionId: owners, note: "ошибка", ...said }),
-      await asKey("one", "POST", "/api/v1/agent/sale-decisions", { transactionId: disputed, kind: "exclude", supersedes: owners, ...WORDS }),
-      await asKey("one", "POST", "/api/v1/agent/sale-decisions", { transactionId: disputed, kind: "exclude", ...WORDS }),
+    const OWNER_SENDER = 700_000_900;
+    const CHATTER_SENDER = 700_000_902;
+    /** anna's «моё» on a sale of bella's, handed in, and the owner's «первому» in Workboard: his own decision, anna's whole. */
+    const ownersDecision = async (hoursAgo: number, minutesAgo: number, net: number) => {
+      const shift = await shiftRow(anna, hoursAgo);
+      const disputed = await sale(pageOne, net, minutesAgo);
+      await say(shift, disputed, "мой");
+      await submit(shift);
+      const decided = await asSession("boss", "POST", "/api/v1/sale-disputes/decide", { transactionId: disputed, outcome: "first" });
+      expect(decided.statusCode, decided.body).toBe(200);
+      const id = Number((await q("select id from sale_owner_decisions where transaction_id = $1 and state = 'active'", [disputed])).rows[0].id);
+      return { shift, disputed, id };
+    };
+    const first = await ownersDecision(198, 105, 13_000);
+    const from = (sender: number) => ({ telegramUserId: sender, sourceRef: "https://t.me/c/1/31" });
+    const tries = async (sender: number) => [
+      await asKey("one", "POST", "/api/v1/agent/sale-decisions/cancel", { decisionId: first.id, note: "передумал", ...from(sender) }),
+      await asKey("one", "POST", "/api/v1/agent/sale-decisions", { transactionId: first.disputed, kind: "exclude", supersedes: first.id, saidBy: "владелец", saidAt: "2026-11-12", ...from(sender) }),
+      await asKey("one", "POST", "/api/v1/agent/sale-decisions", { transactionId: first.disputed, kind: "exclude", saidBy: "владелец", saidAt: "2026-11-12", ...from(sender) }),
     ];
-    for (const refused of refusals) {
-      expect([refused.statusCode, refused.json().reason], refused.body).toEqual([409, "owner_decision"]);
-      expect(refused.json().message).toContain("Workboard");
-    }
-    expect((await q("select id::int as id, state, source from sale_owner_decisions where transaction_id = $1 order by id", [disputed])).rows).toEqual([{ id: owners, state: "active", source: "dispute" }]);
-    expect((await newest(shift, disputed)).line).toMatchObject({ amountMills: 13_000, settled: "owner" });
-    expect((await newest(shift, disputed)).version).toBe(2);
+    const refusedAll = async (sender: number, why: string) => {
+      for (const refused of await tries(sender)) {
+        expect([refused.statusCode, refused.json().reason], `${why}: ${refused.body}`).toEqual([409, "owner_decision"]);
+        expect(refused.json().message, why).toContain("решение владельца меняет только он сам: запишите его слова с его сообщением");
+      }
+    };
+    const untouched = async () => {
+      expect((await q("select id::int as id, state, source from sale_owner_decisions where transaction_id = $1 order by id", [first.disputed])).rows)
+        .toEqual([{ id: first.id, state: "active", source: "dispute" }]);
+      expect(await newest(first.shift, first.disputed)).toMatchObject({ version: 2, line: expect.objectContaining({ amountMills: 13_000, settled: "owner" }) });
+    };
+
+    // The registry names its owner with no Telegram id: nobody's message is the owner's — never an open door.
+    const person = await asSession("boss", "POST", "/api/v1/admin/people", {
+      code: "boss", displayName: "boss", role: "owner", state: "working", logins: { add: [await fixtureUserId(app, "boss")] },
+    });
+    expect(person.statusCode, person.body).toBe(200);
+    await q("update people set telegram_user_id = $1 where code = 'anna'", [CHATTER_SENDER]);
+    await refusedAll(OWNER_SENDER, "no Telegram id of the owner in the registry");
+    await untouched();
+
+    // The registry knows the owner's Telegram id. A message of anyone else — a chatter, a stranger — still changes nothing.
+    await q("update people set telegram_user_id = $1 where code = 'boss'", [OWNER_SENDER]);
+    await refusedAll(CHATTER_SENDER, "a chatter's message");
+    await refusedAll(WORDS.telegramUserId, "a stranger's message");
+    await untouched();
+
+    // The owner's own message replaces it — named in supersedes, as any decision is — and the report follows.
+    const unnamed = await asKey("one", "POST", "/api/v1/agent/sale-decisions", {
+      transactionId: first.disputed, kind: "owner", shares: [{ person: "bella", percent: 100 }], saidBy: "владелец", saidAt: "2026-11-12", ...from(OWNER_SENDER),
+    });
+    expect([unnamed.statusCode, unnamed.json().reason], unnamed.body).toEqual([409, "decision_exists"]);
+    const replaced = await asKey("one", "POST", "/api/v1/agent/sale-decisions", {
+      transactionId: first.disputed, kind: "owner", shares: [{ person: "bella", percent: 100 }], supersedes: first.id, saidBy: "владелец", saidAt: "2026-11-12", ...from(OWNER_SENDER),
+    });
+    expect(replaced.statusCode, replaced.body).toBe(200);
+    expect(replaced.json().versions).toEqual([{ shiftId: first.shift, version: 3 }]);
+    expect((await q("select state from sale_owner_decisions where id = $1", [first.id])).rows[0].state).toBe("superseded");
+    expect((await newest(first.shift, first.disputed)).line).toMatchObject({ amountMills: 0, disputed: false, settled: "owner" });
+
+    // And cancels one: the report goes back to what rules without it.
+    const second = await ownersDecision(318, 128, 12_500);
+    const strangers = await asKey("one", "POST", "/api/v1/agent/sale-decisions/cancel", { decisionId: second.id, note: "ошибка", ...from(CHATTER_SENDER) });
+    expect([strangers.statusCode, strangers.json().reason]).toEqual([409, "owner_decision"]);
+    const cancelled = await asKey("one", "POST", "/api/v1/agent/sale-decisions/cancel", { decisionId: second.id, note: "передумал", ...from(OWNER_SENDER) });
+    expect(cancelled.statusCode, cancelled.body).toBe(200);
+    expect(cancelled.json().versions).toEqual([{ shiftId: second.shift, version: 3 }]);
+    expect((await q("select state from sale_owner_decisions where id = $1", [second.id])).rows[0].state).toBe("cancelled");
+    expect((await newest(second.shift, second.disputed)).line).toMatchObject({ amountMills: 0, disputed: true, claimedMills: 12_500 });
   });
 
   it("keeps a decision open for the person it gives the sale to while only someone else's report holds the line (12)", async (context) => {

@@ -183,9 +183,12 @@ What a decision does:
   same page and fan. `--answers <№>` names an open question about the same sale (or, neither naming a sale, the same
   page and fan). Anything else of the key's pages is 409 `other_sale`; a number of another page answers exactly as
   one that does not exist (409 `not_active`, `question_closed`). All of it is checked in the transaction that writes.
-- A decision the owner made himself in Workboard is the owner's: a key neither cancels nor replaces it (409
-  `owner_decision`, the message says where the owner changes it). A key cancels and replaces what a key recorded
-  and what was carried over from the ledger.
+- **To change a decision the owner made himself in Workboard, record the owner's own words with the owner's own
+  message**: `--sender` is the owner's Telegram id (the one the people registry holds for the person whose role is
+  owner), `--message` his message. Then `hub sale cancel <№> …` and `hub sale decide … --supersedes <№>` go the
+  usual way, and the reports follow. With any other sender — a chatter's or a lead's message retelling him, an owner
+  whose Telegram id the registry does not hold — it is 409 `owner_decision` and nothing changes. What a key recorded
+  and what was carried over from the ledger a key cancels and replaces on any message.
 - `hub sale cancel`: the decision is cancelled and, in the same transaction, every report handed in Hub that it had
   settled gets a new version with what rules now — an agreement of the two sides, else the rule with the person's
   own word (a disputed «моё» counts nothing again) — exactly what handing in again would write. A decision it had
@@ -208,7 +211,7 @@ answered, it stays the owner's, titled «Вопрос чаттерам без о
 and, on its own line, its note (`--note`): free words of the team, shown in `--md` as written. Refusals: 400
 `bad_decision` (the kind's rules), 400 `person_unknown`, 404 a sale, a page, a decision or a question outside the
 key's grant (one that names no page included), 409 `decision_exists`, `not_active`, `question_closed`, `other_sale`,
-`owner_decision`.
+`owner_decision` (the owner's own decision, and the message is not the owner's).
 
 Carried over from the ledger (`sale-claims:import`, on the server): run again with fresh files it writes nothing
 twice and completes what an earlier run left out — a decision the ledger marked taken into a post (`applied`: the

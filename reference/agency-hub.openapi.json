@@ -177853,7 +177853,7 @@
         "tags": [
           "agent"
         ],
-        "description": "Database only. A sale Hub knows: it behaves as the owner's decision of a dispute — the reports holding it get a new version, the open claims and questions of the sale are decided, the home is computed again. A sale with an active decision needs `supersedes` (409 `decision_exists`). A sale not named yet waits for the owner to tie it. What it replaces and answers is checked in the transaction that writes: of the key's pages, about the same sale (409 `other_sale`), not the owner's own decision (409 `owner_decision`).",
+        "description": "Database only. A sale Hub knows: it behaves as the owner's decision of a dispute — the reports holding it get a new version, the open claims and questions of the sale are decided, the home is computed again. A sale with an active decision needs `supersedes` (409 `decision_exists`). A sale not named yet waits for the owner to tie it. What it replaces and answers is checked in the transaction that writes: of the key's pages, about the same sale (409 `other_sale`). A decision the owner made himself in Workboard is replaced only when the message's sender (`telegramUserId`) is the owner's Telegram account in the people registry (else 409 `owner_decision`).",
         "requestBody": {
           "required": true,
           "content": {
@@ -179423,7 +179423,7 @@
         "tags": [
           "agent"
         ],
-        "description": "Database only. The sale's home is computed again without it, and every report handed in that the decision settled gets a new version with what rules now (`versions`): an agreement of the two sides, else the rule with the person's own word. The claims and questions it decided wait again. The owner's own decision is not a key's to cancel (409 `owner_decision`).",
+        "description": "Database only. The sale's home is computed again without it, and every report handed in that the decision settled gets a new version with what rules now (`versions`): an agreement of the two sides, else the rule with the person's own word. The claims and questions it decided wait again. A decision the owner made himself in Workboard is cancelled only when the message's sender (`telegramUserId`) is the owner's Telegram account in the people registry (else 409 `owner_decision`).",
         "requestBody": {
           "required": true,
           "content": {

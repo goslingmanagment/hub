@@ -51,8 +51,9 @@ export const agentSaleDecisionBodySchema = z.object({
   note: z.string().trim().min(1).max(4000).optional(),
   /**
    * The decision it replaces: the active one of the very sale (it must be named); for a decision that names no sale,
-   * an active one of the same page and fan. Never the owner's own (409 `owner_decision`), never another sale's (409
-   * `other_sale`); one of a page outside the key's answers as one that does not exist (409 `not_active`).
+   * an active one of the same page and fan. The owner's own decision only when `telegramUserId` is the owner's (else 409
+   * `owner_decision`), never another sale's (409 `other_sale`); one of a page outside the key's answers as one that does
+   * not exist (409 `not_active`).
    */
   supersedes: intId.optional(),
   /**
@@ -254,7 +255,8 @@ export const saleDecisionRouteSchemas = {
       + "new version, the open claims and questions of the sale are decided, the home is computed again. A sale with an active "
       + "decision needs `supersedes` (409 `decision_exists`). A sale not named yet waits for the owner to tie it. What it "
       + "replaces and answers is checked in the transaction that writes: of the key's pages, about the same sale (409 "
-      + "`other_sale`), not the owner's own decision (409 `owner_decision`).",
+      + "`other_sale`). A decision the owner made himself in Workboard is replaced only when the message's sender "
+      + "(`telegramUserId`) is the owner's Telegram account in the people registry (else 409 `owner_decision`).",
     body: agentSaleDecisionBodySchema,
     response: { 200: agentSaleDecisionWriteResponseSchema, ...agentErrors },
   },
@@ -263,8 +265,9 @@ export const saleDecisionRouteSchemas = {
     summary: "Cancel a decision recorded «со слов» or carried over, with why (needs write:shift_reports)",
     description: "Database only. The sale's home is computed again without it, and every report handed in that the decision "
       + "settled gets a new version with what rules now (`versions`): an agreement of the two sides, else the rule with the "
-      + "person's own word. The claims and questions it decided wait again. The owner's own decision is not a key's to "
-      + "cancel (409 `owner_decision`).",
+      + "person's own word. The claims and questions it decided wait again. A decision the owner made himself in Workboard "
+      + "is cancelled only when the message's sender (`telegramUserId`) is the owner's Telegram account in the people "
+      + "registry (else 409 `owner_decision`).",
     body: agentSaleDecisionCancelBodySchema,
     response: { 200: agentSaleDecisionWriteResponseSchema, ...agentErrors },
   },
