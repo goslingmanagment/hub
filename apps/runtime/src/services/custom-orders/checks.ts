@@ -1,6 +1,7 @@
 import { customOrderCode, type CustomOrderCheckKind } from "@agency_hub_core/contracts";
 import {
   closeMatter,
+  listClosedMattersOfKinds,
   listCustomLookalikeSales,
   listCustomOrderCardOwners,
   listCustomOrdersInStates,
@@ -41,7 +42,8 @@ import { deadlinePassed, dottedDay } from "./rules.ts";
  *                            later → the chatter who led the chat when they record customs, else the lead. Only
  *                            what happens to the sale closes it: an order (resolved), «не кастом» (withdrawn),
  *                            the sale itself gone (cause_gone). The week the pass looks back is for finding new
- *                            sales: a matter whose sale still has neither an order nor a word stays open
+ *                            sales: a matter whose sale still has neither an order nor a word stays open — and one
+ *                            closed as cause_gone whose sale is there after all, still such a sale, opens again
  *   custom.card_without_order a Telegram card no order has (the reader of the models' groups reports it) → the lead
  *
  * A chatter gets a matter only with the right «записывает кастомы в системе» (records_customs, off by default):
@@ -282,10 +284,14 @@ export async function runCustomOrderChecks(app: Pick<AppContext, "db" | "logger"
   // lead's. New ones are looked for in the last week; the sales of the matters already open are read whatever their
   // day, so a matter is kept (and its owner followed) while its sale has neither an order nor «не кастом».
   const waiting = await listOpenMattersOfKinds(app.db, [CUSTOM_UNRECORDED_KIND]);
+  // So are the sales of the matters closed as «cause gone»: the rule as it was closed a matter that way when its sale
+  // only left the week, though it had neither an order nor a word. Such a sale is found again below and its matter
+  // opens again; one that is really gone — or has an order or «не кастом» now — is not found, and stays closed.
+  const lapsed = await listClosedMattersOfKinds(app.db, { kinds: [CUSTOM_UNRECORDED_KIND], how: "cause_gone" });
   const saleIds = (matters: typeof waiting) => matters.map((matter) => unrecordedSaleOf(matter.key)).filter((id): id is number => id !== null);
   const sales = await listCustomLookalikeSales(app.db, {
     from: new Date(now.getTime() - UNRECORDED_DAYS * 24 * HOUR_MS), to: new Date(now.getTime() - UNRECORDED_HOURS * HOUR_MS), limit: 500,
-    alsoIds: saleIds(waiting),
+    alsoIds: [...saleIds(waiting), ...saleIds(lapsed)],
   });
   const unrecorded = unrecordedFindings({ sales, recorders, lead });
   add(await reconcile(app, CUSTOM_UNRECORDED_KIND, unrecorded, now, () => true));

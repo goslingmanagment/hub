@@ -13,8 +13,9 @@ import { INTEGRATION_TEST_TIMEOUT_MS } from "./helpers/timeouts.ts";
 
 // Заказ кастома, the check «похоже на кастом без заказа» (final review, round 2): its matter closed itself a week
 // after the sale though nothing had happened — the sale only left the window the pass looks for new sales in. Only
-// an order or «не кастом» closes it, and the board takes both on such a sale whatever its day. Every name and
-// number is made up.
+// an order or «не кастом» closes it, and the board takes both on such a sale whatever its day. A matter that rule
+// had closed that way before it was mended (cause gone, the sale still waiting) opens again. Every name and number
+// is made up.
 
 vi.mock("argon2", () => import("./helpers/cheap-argon2.ts"));
 
@@ -108,5 +109,38 @@ describe("custom checks: a sale that looks like a custom with no order", () => {
     expect(await matterOf(notCustom)).toEqual({ state: "closed", closedHow: "withdrawn" });
     expect(await matterOf(recorded)).toEqual({ state: "closed", closedHow: "resolved" });
     expect(await matterOf(refunded)).toEqual({ state: "closed", closedHow: "cause_gone" });
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("opens again a matter closed as «cause gone» whose sale still waits, and no other", async (context) => {
+    if (!testDb || !server) return context.skip();
+    const lost = await customTip("tip-lost");
+    const refunded = await customTip("tip-lost-refunded");
+    const recorded = await customTip("tip-lost-recorded");
+    const notCustom = await customTip("tip-lost-not-custom");
+    const all = [lost, refunded, recorded, notCustom];
+    await runCustomOrderChecks(app, new Date(SOLD_AT.getTime() + 30 * HOUR));
+    for (const sale of all) expect(await matterOf(sale), `sale ${sale}`).toEqual({ state: "open", closedHow: null });
+
+    // One is «не кастом», one has an order, one was refunded; nothing happened to the first.
+    const dismissed = await post(`/api/v1/custom-orders/sales/${notCustom}/dismiss`);
+    expect(dismissed.statusCode, dismissed.body).toBe(200);
+    const written = await post("/api/v1/custom-orders", { transactionRef: String(recorded), card: { task: "Ролик по чаевым" } });
+    expect(written.statusCode, written.body).toBe(200);
+    await testDb.pool.query("update transactions set is_active = false where id = $1", [refunded]);
+    // The rule as it was: a week after the sale it had closed each of these matters as «cause gone», whatever had
+    // become of the sale.
+    await testDb.pool.query(
+      "update matters set state = 'closed', closed_how = 'cause_gone', closed_at = $2::timestamptz where reason_key = any($1::text[])",
+      [all.map((sale) => `custom.unrecorded:${sale}`), new Date(SOLD_AT.getTime() + 8 * DAY).toISOString()],
+    );
+    for (const sale of all) expect(await matterOf(sale), `sale ${sale}`).toEqual({ state: "closed", closedHow: "cause_gone" });
+
+    // The pass looks at the sales of such matters again: the one that still waits is a matter again, the rest stay closed.
+    await runCustomOrderChecks(app, new Date());
+    expect(await matterOf(lost)).toEqual({ state: "open", closedHow: null });
+    for (const sale of [refunded, recorded, notCustom]) expect(await matterOf(sale), `sale ${sale}`).toEqual({ state: "closed", closedHow: "cause_gone" });
+    // And the board lists it again, where the matter's link leads.
+    const board = customOrdersBoardResponseSchema.parse((await server.inject({ method: "GET", url: "/api/v1/custom-orders", headers: { cookie } })).json());
+    expect(board.lookalikes.map((sale) => Number(sale.transactionRef))).toContain(lost);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 });
