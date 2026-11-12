@@ -52,7 +52,7 @@ function cookieSet(response: Injected, name: string): string | undefined {
   return response.cookies.find((cookie) => cookie.name === name)?.value;
 }
 
-async function request(method: "GET" | "POST" | "DELETE", url: string, options: {
+async function request(method: "GET" | "POST" | "PUT" | "DELETE", url: string, options: {
   cookies?: Cookies;
   headers?: Record<string, string>;
   payload?: object;
@@ -437,6 +437,43 @@ describe("the narrow web session from the extension", () => {
       cookies: { [SESSION_COOKIE_NAME]: session! },
     });
     expect(String(hop.headers.location)).toMatch(new RegExp(`^${TEAM}/login\\?`));
+  });
+
+  it("opens a chatter's «Кастомы» and «Начало», never writes where payouts go, and reads as a chatter", async (context) => {
+    if (!server) return context.skip();
+    const { session } = await narrowSession("chatter-a", "chatter-a-password-for-tests");
+    const cookies = { [SESSION_COOKIE_NAME]: session! };
+    const board = await request("GET", `${TEAM}/api/v1/custom-orders`, { cookies });
+    expect(board.statusCode, board.body).toBe(200);
+    expect((board.json() as { viewer: { owner: boolean } }).viewer.owner).toBe(false);
+    expect((await request("GET", `${TEAM}/api/v1/pages`, { cookies })).statusCode).toBe(200);
+    const start = await request("GET", `${TEAM}/api/v1/account/start`, { cookies });
+    expect(start.statusCode, start.body).toBe(200);
+    expect(start.json()).toMatchObject({ username: "chatter-a" });
+    // Where a person is paid does not change from a session that needed no password.
+    const payout = await request("PUT", `${TEAM}/api/v1/account/payout-details`, {
+      cookies, headers: { origin: TEAM }, payload: { text: "somewhere else" },
+    });
+    expect(payout.statusCode).toBe(403);
+    expect((payout.json() as { message?: string }).message).toBe(NARROW_WEB_SESSION_REFUSAL_MESSAGE);
+    for (const url of ["/api/v1/auth/devices", "/api/v1/auth/usage"]) {
+      expect((await request("GET", `${TEAM}${url}`, { cookies })).statusCode, url).toBe(403);
+    }
+
+    // An owner's device: the board as a chatter's, never every order with the owner's steps.
+    const owner = await narrowSession("owner", "owner-password-for-tests");
+    const ownersBoard = await request("GET", `${TEAM}/api/v1/custom-orders`, { cookies: { [SESSION_COOKIE_NAME]: owner.session! } });
+    expect(ownersBoard.statusCode, ownersBoard.body).toBe(200);
+    expect((ownersBoard.json() as { viewer: { owner: boolean } }).viewer.owner).toBe(false);
+
+    // «Войти с паролем» from the narrow session: the form signs in, a full session replaces it in this browser.
+    const login = await request("POST", `${TEAM}/api/v1/auth/login`, {
+      cookies, headers: { origin: TEAM }, payload: { username: "chatter-a", password: "chatter-a-password-for-tests" },
+    });
+    expect(login.statusCode, login.body).toBe(200);
+    const full = cookieSet(login, SESSION_COOKIE_NAME)!;
+    expect(full).not.toBe(session);
+    expect((await me(TEAM, full)).json()).not.toHaveProperty("narrow");
   });
 
   it("dies with its device token", async (context) => {

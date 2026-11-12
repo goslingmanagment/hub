@@ -663,6 +663,13 @@ export function partOfAnchor(parts: readonly ScreenPart[], hash: string): Screen
   return parts.find((part) => anchor === part.id || anchor.startsWith(`${part.id}-`)) ?? null;
 }
 
+/**
+ * The name menu's own screen (at the foot of either app's menu, everyone's): «Аккаунт и устройства», a Workboard
+ * screen that no section lists. With the menu above it is what a chatter can open from Workboard's frame
+ * (tests/narrow-session-screens.test.ts walks both).
+ */
+export const NAME_MENU_ACCOUNT = { id: "account", path: "/workboard/account", label: "Аккаунт и устройства" } as const;
+
 /** Without `roles`, a screen is the owner's and team leads' (`ownerOnly`: the owner's alone), never a chatter's. */
 export function screenVisible(screen: Screen, role: Role): boolean {
   if (screen.roles) return screen.roles.includes(role);

@@ -6,8 +6,8 @@ import { useMe } from "./useMe.js";
 /**
  * «Начало», a newcomer's way to the first shift (`accountStart`: the session's
  * own person, never anyone else's). The menu, the home address and the screen
- * read the same entry. A narrow session (from the extension) has no «Начало»:
- * Hub refuses it the read, so it is never asked.
+ * read the same entry, a narrow session (from the extension) too; it only does
+ * not write where payouts go (`accountPayoutDetailsSet` needs the password).
  */
 
 export const START_KEY = ["account", "start"] as const;
@@ -15,11 +15,11 @@ export const START_KEY = ["account", "start"] as const;
 export const START_PATH = "/start";
 
 export function useAccountStart() {
-  const { role, narrow } = useMe();
+  const { role } = useMe();
   return useQuery({
     queryKey: START_KEY,
     queryFn: () => kernel.accountStart(),
-    enabled: role === "chatter" && !narrow,
+    enabled: role === "chatter",
     staleTime: 30_000,
     // A step closes when Hub sees it: the screen reads again while it is open.
     refetchInterval: (query) => (startOpen(query.state.data) ? 60_000 : false),

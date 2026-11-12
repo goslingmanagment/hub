@@ -5,7 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import { CountBadge, ErrorState, Menu, Skeleton, type IconComponent, type MenuEntry } from "@agency_hub_core/ui";
 import { PlaceFrame } from "@agency_hub_core/ui/components/Place";
 import { carriedHref, placeName, waitingCount, waitingQuery, workboardDays, type MenuCountView } from "@agency_hub_core/ui/place";
-import { menuItemAt, placeMenu, teamMenu, type MenuIcon, type MenuItem } from "@agency_hub_core/ui/screens";
+import { NAME_MENU_ACCOUNT, menuItemAt, placeMenu, teamMenu, type MenuIcon, type MenuItem } from "@agency_hub_core/ui/screens";
 import { THEME_OPTIONS, useThemeStore, type ThemePreference } from "@agency_hub_core/ui/theme";
 import { NO_SILENT_SIGNIN, peerOriginOf, siteOf } from "@agency_hub_core/ui/sites";
 import { useFace } from "@/shared/face";
@@ -120,16 +120,16 @@ function useScreenKey(): string {
  * last item, and their only way to the account.
  */
 function Account() {
-  const { user, role, accountRole, narrow } = useMe();
+  const { user, role, accountRole } = useMe();
   const navigate = useNavigate();
   const theme = useThemeStore((state) => state.theme);
   const setTheme = useThemeStore((state) => state.setTheme);
   if (!user) return null;
   const name = user.username;
   const chatter = role === "chatter";
-  // A narrow session (from the extension) does not change the account's devices or password.
+  // A narrow session (from the extension) finds there the way to the password, not the devices and the password.
   const items: MenuEntry[] = [
-    ...(chatter && !narrow ? [{ label: "Аккаунт и устройства", icon: Smartphone, onSelect: () => navigate("/account") }, { separator: true as const }] : []),
+    ...(chatter ? [{ label: NAME_MENU_ACCOUNT.label, icon: Smartphone, onSelect: () => navigate("/account") }, { separator: true as const }] : []),
     { group: "Тема" },
     ...THEME_OPTIONS.map((option) => ({
       label: option.label,

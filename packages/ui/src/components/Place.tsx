@@ -34,7 +34,7 @@ import { Menu, type MenuEntry } from "./Menu.js";
 import { useFocusScope } from "./focus.js";
 import { PALETTE_ARIA_SHORTCUT, PALETTE_SHORTCUT, isPaletteShortcut } from "../paletteShortcut.js";
 import { roleWord, type MenuCountView } from "../place.js";
-import { addressApp, type MenuCount, type MenuIcon, type MenuItem, type ScreenApp } from "../screens.js";
+import { NAME_MENU_ACCOUNT, addressApp, type MenuCount, type MenuIcon, type MenuItem, type ScreenApp } from "../screens.js";
 import { THEME_OPTIONS, useThemeStore, type ThemePreference } from "../theme.js";
 
 /**
@@ -167,7 +167,7 @@ function Account({ account }: { account: PlaceAccount }) {
   const theme = useThemeStore((state) => state.theme);
   const setTheme = useThemeStore((state) => state.setTheme);
   const items: MenuEntry[] = [
-    ...(account.onAccount ? [{ label: "Аккаунт и устройства", icon: Smartphone, onSelect: account.onAccount }, { separator: true as const }] : []),
+    ...(account.onAccount ? [{ label: NAME_MENU_ACCOUNT.label, icon: Smartphone, onSelect: account.onAccount }, { separator: true as const }] : []),
     { group: "Тема" },
     ...THEME_OPTIONS.map((option) => ({
       label: option.label,

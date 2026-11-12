@@ -22,12 +22,8 @@ export function mattersWaitingQuery(pageLabel: string | null = null) {
   });
 }
 
-/** The person's open matters, the longest waiting first (the owner's every one). */
-export const mattersListQuery = queryOptions({
-  queryKey: ["matters", "list", "open"] as const,
-  queryFn: () => kernel.mattersList({ query: { state: "open", limit: 500 } }),
-  staleTime: 30_000,
-});
+/** The person's open matters (shared/myMatters.ts, the chatter's screens import it from there). */
+export { mattersListQuery } from "./myMatters.js";
 
 export interface MattersSwitch {
   /** null while the switch is not known yet; an unanswered read is «off»: the screens keep their own reads. */

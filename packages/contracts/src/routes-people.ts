@@ -49,7 +49,8 @@ export const peopleRouteSchemas = {
     summary: "«Начало»: the caller's own way from the invitation to the first shift, each step closed by what Hub sees",
     description: "Workboard «Начало». The person of the session's login (null when the login is nobody's): the extension "
       + "installed and signed in, the pages opened, the first active minute, where payouts go — the caller's own, "
-      + "never anyone else's. A narrow session (from the extension) is refused. Database only.",
+      + "never anyone else's. A narrow session (from the extension) reads it too; writing where payouts go needs a "
+      + "password (accountPayoutDetailsSet is refused to it). Database only.",
     response: { 200: accountStartResponseSchema, ...sessionErrors },
   },
   accountPayoutDetailsSet: {
