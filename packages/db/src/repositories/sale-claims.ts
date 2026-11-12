@@ -30,8 +30,9 @@ function jsonOf<T>(value: unknown, fallback: T): T {
  * The writers of whose a sale is and of what a report counts of it take their turn: a decision made, replaced, cancelled
  * or tied to its sale, an agreement of two sides, and a hand-in — which writes what those give. Taken first in the
  * writer's transaction, before any row (so: this lock, then decisions and claims, then reports) and held to its commit.
- * Under it a hand-in reads the decisions and agreements of its sales as they stay until it commits, and a decision
- * finds every version handed in: neither writes over what the other has just written. Never across a call to the ledger.
+ * Under it a hand-in reads what it writes from — the decisions and agreements of its sales, the person's other reports —
+ * as it stays until it commits, and a decision finds every version handed in: neither writes over what the other has
+ * just written, and two hand-ins of one person never take the same sale. Never across a call to the ledger.
  */
 export async function lockSaleSettlements(db: Database): Promise<void> {
   await db.execute(sql`select pg_advisory_xact_lock(hashtextextended('sale_settlements', 0))`);
@@ -515,9 +516,14 @@ export async function markSaleDecisionApplied(db: Database, input: { id: number;
 
 /**
  * Links an imported decision the ledger's text did not tie to a sale: it takes the sale and becomes the sale's active
- * decision (one before it superseded). False — not one waiting for a link.
+ * decision (one before it superseded). False — not one waiting for a link, or no longer active (cancelled, replaced):
+ * then nothing is written, and the sale keeps the decision that rules it. The decision's own row is taken first, so
+ * it stays what it was read as until the caller's transaction ends.
  */
 export async function linkSaleDecision(db: Database, input: { id: number; transactionId: number; pageId: number; at: Date }): Promise<boolean> {
+  const waiting = await db.execute<Row>(sql`
+    select id from sale_owner_decisions where id = ${input.id} and needs_link and state = 'active' for update`);
+  if (waiting.rows.length === 0) return false;
   await db.execute(sql`
     update sale_owner_decisions set state = 'superseded', superseded_at = ${input.at.toISOString()}::timestamptz
     where transaction_id = ${input.transactionId} and state = 'active' and id <> ${input.id}`);

@@ -81,8 +81,11 @@ describe("which sales a shift's draft holds", () => {
     expect(classifySale(late(), context({ submittedShiftIds: new Set([99]) }))).toMatchObject({ group: "mine", added: true, shareMills: 12_000 });
     // Before the switch: the old way (the post) had it.
     expect(classifySale(late(), context({ submittedShiftIds: new Set([99]), switchOnAt: START }))).toBeNull();
-    // A report of the person holds it already.
+    // Another report of the person holds it already.
     expect(classifySale(late(), context({ submittedShiftIds: new Set([99]), reported: new Map([[6, { handinId: 3, shiftId: 99, reportDate: "2026-11-09" }]]) }))).toBeNull();
+    // This very report holds it — it was handed in with it: the next draft keeps the line (a hand-in again, a decision cancelled).
+    expect(classifySale(late(), context({ submittedShiftIds: new Set([99]), reported: new Map([[6, { handinId: 5, shiftId: SHIFT, reportDate: "2026-11-11" }]]) })))
+      .toMatchObject({ group: "mine", added: true, shareMills: 12_000, alreadyIn: null });
     // A look-in's sale has no report of its own.
     const lookIn = late({ home: { kind: "visit", reason: "look_in_last_writer", pot: null, shares: [{ userId: ME, workRef: "7:visit", shiftId: null, mills: 12_000 }] } });
     expect(classifySale(lookIn, context())).toMatchObject({ group: "mine", added: true });

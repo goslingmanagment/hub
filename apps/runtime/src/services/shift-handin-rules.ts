@@ -15,8 +15,8 @@ import { weekdayOfDay, type RuleSlot, type SaleHomeKind, type SaleHomeReason } f
  *    a sale of the 7 days before the shift the rule gives to the person, that
  *    came after the switch was on, whose own shift's report was submitted
  *    without it (or that belongs to no shift: a look-in, a claim), and that the
- *    newest version of none of the person's reports holds (owner, 2026-11-02:
- *    such a sale goes into today's report);
+ *    newest version of no other report of the person holds (owner, 2026-11-02:
+ *    such a sale goes into today's report, and stays in it);
  *  - «Рядом» (`near`): the other sales the shift held — someone else's, a pot's,
  *    nobody's, waiting, the owner's to decide.
  *  - «Рядом» covers the report's window: the actual shift together with the
@@ -118,10 +118,11 @@ export function classifySale(sale: DraftSale, context: DraftContext): Classified
   if (ownThisShift) return mine(false);
   if (own !== null) {
     // The person's on another work of theirs: «долёт» after the switch, when that work's own report will not hold it —
-    // a look-in or a claim (no shift row), or a shift handed in without it — and no report of the person holds it.
+    // a look-in or a claim (no shift row), or a shift handed in without it — and no other report of the person holds
+    // it. This report's own «долёт» stays its line in every later draft: a hand-in again, a decision cancelled.
     if (context.switchOnAt === null || sale.occurredAt < context.switchOnAt) return null;
     if (own.shiftId !== null && !context.submittedShiftIds.has(own.shiftId)) return null;
-    if (reported !== undefined) return null;
+    if (alreadyIn !== null) return null;
     return mine(true);
   }
   if (sale.source === "window" && (sale.heldByShift || sale.inReportWindow)) {

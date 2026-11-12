@@ -1111,7 +1111,8 @@ export async function linkUnlinkedDecision(app: ClaimsApp, principal: HumanAuthP
   const sale = (await listHandinSalesByIds(app.db, [input.transactionId]))[0];
   if (sale === undefined) throw new NotFoundError("No such sale");
   const decision = (await listSaleDecisions(app.db, { ids: [input.decisionId] }))[0];
-  if (decision === undefined || !decision.needsLink) throw new NotFoundError("No such decision waiting for a sale");
+  // One cancelled or replaced meanwhile waits for no sale: refused before anything is written.
+  if (decision === undefined || !decision.needsLink || decision.state !== "active") throw new NotFoundError("No such decision waiting for a sale");
   const pageLabel = typeof decision.ledgerRef?.pageLabel === "string" ? decision.ledgerRef.pageLabel : null;
   if (pageLabel !== null && pageLabel !== sale.pageLabel) throw new BadRequestError("The sale is of another page", { reason: "page_mismatch" });
   // Tied to its sale, it rules the sale from now exactly as a decision made on it (and replaces the one that ruled it):
