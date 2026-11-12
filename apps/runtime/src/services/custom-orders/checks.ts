@@ -23,7 +23,7 @@ import {
 import type { AppContext } from "../../bootstrap.ts";
 import { ensureQueueCreated, type QueueCreationClient } from "../sync-queue.ts";
 import { applyCustomStep } from "./index.ts";
-import { customsLeadOwner } from "./readers.ts";
+import { CUSTOM_UNRECORDED_KIND, customsLeadOwner, unrecordedKey, unrecordedSaleOf } from "./readers.ts";
 import { deadlinePassed, dottedDay } from "./rules.ts";
 
 /**
@@ -63,7 +63,6 @@ const NOT_GIVEN_HOURS = 12;
 const UNRECORDED_HOURS = 24;
 /** … a new one is looked for this far back (a matter already open is followed whatever its sale's day). */
 const UNRECORDED_DAYS = 7;
-const UNRECORDED_KIND = "custom.unrecorded";
 /** How a matter about such a sale closes, by what became of the sale; a sale that still waits closes nothing. */
 const UNRECORDED_CLOSES: Readonly<Record<CustomSaleFate, MatterCloseHow | null>> = {
   recorded: "resolved", dismissed: "withdrawn", gone: "cause_gone", waits: null,
@@ -167,7 +166,7 @@ export function unrecordedFindings(input: { sales: readonly CustomLookalikeRow[]
     const chatter = sale.ledByUserIds.find((userId) => input.recorders.has(userId));
     const owner: MatterOwner = chatter === undefined ? input.lead : { userId: chatter };
     out.push({
-      key: `custom.unrecorded:${sale.transactionId}`,
+      key: unrecordedKey(sale.transactionId),
       title: `Похоже на кастом без заказа: ${sale.kind === "tier" ? "тир с кастомом" : "чаевые с запиской про кастом"}, ${sale.pageLabel}`,
       object: { type: "transaction", id: String(sale.transactionId) },
       pageIds: [sale.pageId],
@@ -282,21 +281,21 @@ export async function runCustomOrderChecks(app: Pick<AppContext, "db" | "logger"
   // A sale that looks like a custom, a day old and still without an order: its chatter's with the right, else the
   // lead's. New ones are looked for in the last week; the sales of the matters already open are read whatever their
   // day, so a matter is kept (and its owner followed) while its sale has neither an order nor «не кастом».
-  const waiting = await listOpenMattersOfKinds(app.db, [UNRECORDED_KIND]);
-  const saleOf = (key: string) => Number(key.slice(UNRECORDED_KIND.length + 1));
+  const waiting = await listOpenMattersOfKinds(app.db, [CUSTOM_UNRECORDED_KIND]);
+  const saleIds = (matters: typeof waiting) => matters.map((matter) => unrecordedSaleOf(matter.key)).filter((id): id is number => id !== null);
   const sales = await listCustomLookalikeSales(app.db, {
     from: new Date(now.getTime() - UNRECORDED_DAYS * 24 * HOUR_MS), to: new Date(now.getTime() - UNRECORDED_HOURS * HOUR_MS), limit: 500,
-    alsoIds: waiting.map((matter) => saleOf(matter.key)).filter((id) => Number.isSafeInteger(id)),
+    alsoIds: saleIds(waiting),
   });
   const unrecorded = unrecordedFindings({ sales, recorders, lead });
-  add(await reconcile(app, UNRECORDED_KIND, unrecorded, now, () => true));
+  add(await reconcile(app, CUSTOM_UNRECORDED_KIND, unrecorded, now, () => true));
   // A matter whose sale is not among them closes only by what became of the sale, and says which.
   const found = new Set(unrecorded.map((finding) => finding.key));
   const left = waiting.filter((matter) => !found.has(matter.key));
-  const fates = await listCustomSaleFates(app.db, left.map((matter) => saleOf(matter.key)).filter((id) => Number.isSafeInteger(id)));
+  const fates = await listCustomSaleFates(app.db, saleIds(left));
   const stillWaiting: string[] = [];
   for (const matter of left) {
-    const how = UNRECORDED_CLOSES[fates.get(saleOf(matter.key)) ?? "gone"];
+    const how = UNRECORDED_CLOSES[fates.get(unrecordedSaleOf(matter.key) ?? 0) ?? "gone"];
     if (how === null) {
       stillWaiting.push(matter.key);
       continue;
