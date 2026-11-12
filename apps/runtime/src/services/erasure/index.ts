@@ -1876,6 +1876,8 @@ async function pageHotTargets(app: Db, scope: ResolvedScope): Promise<WorkTarget
     ["shift_report_resolutions", "page_id"],
     // …and the credits they wrote, with their pay days (0318).
     ["shift_report_credits", "page_id"],
+    // Whose each of the page's sales is by the one rule (0380).
+    ["sale_homes", "page_id"],
     // Chat Memory week 2: the facts lane's runs over the page's chats (0313).
     ["fan_fact_runs", "page_id"],
     // …and the page's chats an owner's rebuild reads again (0322).
