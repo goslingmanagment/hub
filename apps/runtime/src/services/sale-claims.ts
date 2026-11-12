@@ -801,29 +801,10 @@ export async function applySaleDecision(
     if (also.supersedes != null && !(await supersedeSaleDecision(txDb, { id: also.supersedes, at: now }))) {
       throw new ConflictError("The decision it replaces is not active", { reason: "not_active" });
     }
-    const open = await listSaleClaims(txDb, { transactionIds: [transactionId], states: ["owner", "asked", "agreed"] });
-    for (const id of new Set([...open.map((claim) => claim.id), ...(also.answers == null ? [] : [also.answers])])) {
-      await updateSaleClaim(txDb, id, { state: "decided", decisionId, closedAt: now }, now);
-    }
-    // Every report that holds the sale gets what the decision gives its person.
-    const reports = await listCurrentReportsOfSales(txDb, [transactionId]);
-    const people = await listHandinPeopleOfUsers(txDb, reports.map((report) => report.userId));
-    const net = reports.flatMap((report) => report.lines).find((line) => line.transactionId === transactionId)?.netMills ?? sale?.netMills ?? 0;
-    for (const report of reports) {
-      const line = report.lines.find((one) => one.transactionId === transactionId);
-      // Another report of the person holds the sale: it counts there, nothing here.
-      if (line === undefined || line.alreadyIn != null) continue;
-      const amount = settledShareOf({
-        netMills: net, userIds: new Set(people.get(report.userId)?.userIds ?? [report.userId]),
-        decision: { kind: input.insert.kind, shares: input.insert.shares }, agreed: [],
-      })?.amountMills ?? 0;
-      if (line.amountMills === 0 && !line.disputed && amount === 0) continue;
-      const one = await settleReport(txDb, {
-        shiftId: report.shiftId, transactionId, to: { amountMills: amount, settled: "owner" },
-        madeFor: input.madeFor(decisionId), by: input.by, at: now, dayPaid: paid.get(report.shiftId) ?? null,
-      });
-      if (one !== null) made.push(one);
-    }
+    made.push(...await followDecision(txDb, {
+      transactionId, decisionId, decision: { kind: input.insert.kind, shares: input.insert.shares }, answers: also.answers ?? null,
+      madeFor: input.madeFor(decisionId), by: input.by, at: now, paid, saleNet: sale?.netMills ?? 0,
+    }));
   });
   await afterPaid(app, made, now);
   await refreshHomeOf(app, sale?.occurredAt ?? null, now);
@@ -831,6 +812,47 @@ export async function applySaleDecision(
     app.logger.warn({ transactionId, err: error instanceof Error ? error.message : String(error) }, "sale claims: the pass after a decision failed; the next one will");
   });
   return { decisionId, versions: made };
+}
+
+/**
+ * In the caller's transaction (the settlements' turn taken), a decision that rules a sale from now is followed: every
+ * claim and question of the sale open now is decided with it (and `answers`, a question the sale's own do not hold),
+ * and every handed-in report that holds the sale gets what it gives the report's person — their share under any of
+ * their logins; a line another report of the person already holds stays at nothing here. Made on the sale, or tied to
+ * it: the same.
+ */
+async function followDecision(
+  txDb: Database,
+  input: {
+    transactionId: number; decisionId: number | null; answers?: number | null;
+    decision: { kind: SaleDecisionRow["kind"]; shares: ReadonlyArray<{ userId: number; percent: number }> };
+    madeFor: HandinVersionMadeFor; by: SettleBy; at: Date; paid: ReadonlyMap<number, boolean | null>; saleNet: number;
+  },
+): Promise<MadeVersion[]> {
+  const { transactionId, decisionId, at } = input;
+  const made: MadeVersion[] = [];
+  const open = await listSaleClaims(txDb, { transactionIds: [transactionId], states: ["owner", "asked", "agreed"] });
+  for (const id of new Set([...open.map((claim) => claim.id), ...(input.answers == null ? [] : [input.answers])])) {
+    await updateSaleClaim(txDb, id, { state: "decided", decisionId, closedAt: at }, at);
+  }
+  const reports = await listCurrentReportsOfSales(txDb, [transactionId]);
+  const people = await listHandinPeopleOfUsers(txDb, reports.map((report) => report.userId));
+  const net = reports.flatMap((report) => report.lines).find((line) => line.transactionId === transactionId)?.netMills ?? input.saleNet;
+  for (const report of reports) {
+    const line = report.lines.find((one) => one.transactionId === transactionId);
+    // Another report of the person holds the sale: it counts there, nothing here.
+    if (line === undefined || line.alreadyIn != null) continue;
+    const amount = settledShareOf({
+      netMills: net, userIds: new Set(people.get(report.userId)?.userIds ?? [report.userId]), decision: input.decision, agreed: [],
+    })?.amountMills ?? 0;
+    if (line.amountMills === 0 && !line.disputed && amount === 0) continue;
+    const one = await settleReport(txDb, {
+      shiftId: report.shiftId, transactionId, to: { amountMills: amount, settled: "owner" },
+      madeFor: input.madeFor, by: input.by, at, dayPaid: input.paid.get(report.shiftId) ?? null,
+    });
+    if (one !== null) made.push(one);
+  }
+  return made;
 }
 
 /** Where a claim a decision had closed waits again: where it was — the other side's to answer, or the owner's. */
@@ -1091,13 +1113,28 @@ export async function linkUnlinkedDecision(app: ClaimsApp, principal: HumanAuthP
   if (decision === undefined || !decision.needsLink) throw new NotFoundError("No such decision waiting for a sale");
   const pageLabel = typeof decision.ledgerRef?.pageLabel === "string" ? decision.ledgerRef.pageLabel : null;
   if (pageLabel !== null && pageLabel !== sale.pageLabel) throw new BadRequestError("The sale is of another page", { reason: "page_mismatch" });
+  // Tied to its sale, it rules the sale from now exactly as a decision made on it (and replaces the one that ruled it):
+  // the sale's open claims are decided with it and the reports that hold the sale get what it gives. The ledger is
+  // asked about paid days before any lock.
+  const paid = await paidDaysOf(app, await listCurrentReportsOfSales(app.db, [sale.transactionId]));
+  const made: MadeVersion[] = [];
   const linked = await app.db.transaction(async (tx) => {
     const txDb = tx as unknown as Database;
     await lockSaleSettlements(txDb);
-    return linkSaleDecision(txDb, { id: input.decisionId, transactionId: sale.transactionId, pageId: sale.pageId, at: now });
+    if (!(await linkSaleDecision(txDb, { id: input.decisionId, transactionId: sale.transactionId, pageId: sale.pageId, at: now }))) return false;
+    made.push(...await followDecision(txDb, {
+      transactionId: sale.transactionId, decisionId: decision.id, decision,
+      madeFor: { kind: "decision", decisionId: decision.id, transactionId: sale.transactionId, outcome: "said" },
+      by: { door: "workboard", actorUserId: principal.user.id, agentKeyId: null, telegramMessageRef: null, telegramSenderId: null },
+      at: now, paid, saleNet: sale.netMills,
+    }));
+    return true;
   });
+  await afterPaid(app, made, now);
   if (linked) await refreshHomeOf(app, sale.occurredAt, now);
-  await syncUnlinkedDecisions(app, now);
+  await runSaleClaims(app, now).catch((error: unknown) => {
+    app.logger.warn({ decisionId: input.decisionId, err: error instanceof Error ? error.message : String(error) }, "sale claims: the pass after a decision was tied to its sale failed; the next one will");
+  });
   return { linked, savedAt: now.toISOString() };
 }
 

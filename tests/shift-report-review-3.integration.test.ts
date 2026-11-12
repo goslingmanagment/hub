@@ -516,6 +516,28 @@ describe("«чья продажа» and the shift report, the final review's sec
     expect((await claimOf(disputed)).map((claim) => [claim.state, claim.decision_id])).toEqual([["asked", null]]);
   });
 
+  it("follows a decision tied to its sale as one made on it: the claim decided, the report given what it gives (3)", async (context) => {
+    if (!testDb) return context.skip();
+    const shift = await shiftRow(anna, 294);
+    const disputed = await sale(pageOne, 17_000, 125);
+    await say(shift, disputed, "мой");
+    await submit(shift);
+    expect((await newest(shift, disputed)).line).toMatchObject({ amountMills: 0, disputed: true, claimedMills: 17_000 });
+    // Carried over from the ledger with words that found no sale: anna's whole. The owner ties it to the sale.
+    const carried = Number((await q(
+      `insert into sale_owner_decisions (transaction_id, page_id, kind, shares, outcome, decided_at, said_by, source, ledger_decision_id, ledger_ref, needs_link)
+       values (null, $1, 'split', $2::jsonb, 'imported', now(), 'владелец', 'ledger', 9101, '{"pageLabel":"mia-1","fanRef":"fan-y"}'::jsonb, true) returning id`,
+      [pageOne, JSON.stringify([{ userId: anna, percent: 100 }])],
+    )).rows[0].id);
+    const tied = await asSession("boss", "POST", `/api/v1/sale-decisions/${carried}/link`, { transactionId: disputed });
+    expect(tied.statusCode, tied.body).toBe(200);
+    expect(tied.json().linked).toBe(true);
+    const after = await newest(shift, disputed);
+    expect(after).toMatchObject({ version: 2, made_for: { kind: "decision", decisionId: carried, transactionId: disputed, outcome: "said" } });
+    expect(after.line).toMatchObject({ amountMills: 17_000, disputed: false, settled: "owner" });
+    expect(await claimOf(disputed)).toEqual([expect.objectContaining({ state: "decided", decision_id: carried })]);
+  });
+
   it("raises the owner's matter when a cancel changes a report of a day the ledger paid (3)", async (context) => {
     if (!testDb) return context.skip();
     const shift = await shiftRow(anna, 174);
