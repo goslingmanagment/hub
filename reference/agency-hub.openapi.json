@@ -376,6 +376,221 @@
         }
       }
     },
+    "/api/v1/account/payout-details": {
+      "put": {
+        "summary": "Write where the caller's own payouts go (free text; empty clears it)",
+        "tags": [
+          "client"
+        ],
+        "description": "The person of the session's login writes their own; read back by them and by the owner's card only. Not checked, not a wallet. Audited without the text. 409 when the login is nobody's in the registry.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "text": {
+                    "type": "string",
+                    "maxLength": 500
+                  }
+                },
+                "required": [
+                  "text"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "payoutDetails": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "text": {
+                              "type": "string"
+                            },
+                            "updatedAt": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "text",
+                            "updatedAt"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "payoutDetails"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/account/reports": {
       "get": {
         "summary": "The caller's own shift reports from the agency ledger: drafted and posted pages, amounts, sales counted and held out",
@@ -807,6 +1022,347 @@
             }
           },
           "503": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/account/start": {
+      "get": {
+        "summary": "«Начало»: the caller's own way from the invitation to the first shift, each step closed by what Hub sees",
+        "tags": [
+          "client"
+        ],
+        "description": "Workboard «Начало». The person of the session's login (null when the login is nobody's): the extension installed and signed in, the pages opened, the first active minute, where payouts go — the caller's own, never anyone else's. A narrow session (from the extension) is refused. Database only.",
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "person": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "code": {
+                              "type": "string"
+                            },
+                            "displayName": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "code",
+                            "displayName"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "username": {
+                      "type": "string"
+                    },
+                    "start": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "newcomer": {
+                              "type": "boolean"
+                            },
+                            "signedUp": {
+                              "type": "boolean"
+                            },
+                            "steps": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "step": {
+                                    "type": "string",
+                                    "enum": [
+                                      "install",
+                                      "extension",
+                                      "pages",
+                                      "activity",
+                                      "payout"
+                                    ]
+                                  },
+                                  "done": {
+                                    "type": "boolean"
+                                  },
+                                  "doneAt": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "step",
+                                  "done",
+                                  "doneAt"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
+                            "done": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "total": {
+                              "type": "integer",
+                              "exclusiveMinimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "current": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "enum": [
+                                    "install",
+                                    "extension",
+                                    "pages",
+                                    "activity",
+                                    "payout"
+                                  ]
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "since": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "stuck": {
+                              "type": "boolean"
+                            },
+                            "extension": {
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "label": {
+                                      "type": "string"
+                                    },
+                                    "signedInAt": {
+                                      "type": "string"
+                                    },
+                                    "active": {
+                                      "type": "boolean"
+                                    }
+                                  },
+                                  "required": [
+                                    "label",
+                                    "signedInAt",
+                                    "active"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "pages": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "pageLabel": {
+                                    "type": "string"
+                                  },
+                                  "platform": {
+                                    "type": "string",
+                                    "enum": [
+                                      "fansly",
+                                      "onlyfans",
+                                      "telegram"
+                                    ]
+                                  },
+                                  "modelName": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "pageLabel",
+                                  "platform",
+                                  "modelName"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
+                            "firstActivity": {
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "at": {
+                                      "type": "string"
+                                    },
+                                    "pageLabel": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "at",
+                                    "pageLabel"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            }
+                          },
+                          "required": [
+                            "newcomer",
+                            "signedUp",
+                            "steps",
+                            "done",
+                            "total",
+                            "current",
+                            "since",
+                            "stuck",
+                            "extension",
+                            "pages",
+                            "firstActivity"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "payoutDetails": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "text": {
+                              "type": "string"
+                            },
+                            "updatedAt": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "text",
+                            "updatedAt"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "submitsShift": {
+                      "type": "boolean"
+                    },
+                    "serverNow": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "person",
+                    "username",
+                    "start",
+                    "payoutDetails",
+                    "submitsShift",
+                    "serverNow"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
             "description": "Default Response",
             "content": {
               "application/json": {
@@ -73771,6 +74327,208 @@
                         "additionalProperties": false
                       }
                     },
+                    "start": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "newcomer": {
+                              "type": "boolean"
+                            },
+                            "signedUp": {
+                              "type": "boolean"
+                            },
+                            "steps": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "step": {
+                                    "type": "string",
+                                    "enum": [
+                                      "install",
+                                      "extension",
+                                      "pages",
+                                      "activity",
+                                      "payout"
+                                    ]
+                                  },
+                                  "done": {
+                                    "type": "boolean"
+                                  },
+                                  "doneAt": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "step",
+                                  "done",
+                                  "doneAt"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
+                            "done": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "total": {
+                              "type": "integer",
+                              "exclusiveMinimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "current": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "enum": [
+                                    "install",
+                                    "extension",
+                                    "pages",
+                                    "activity",
+                                    "payout"
+                                  ]
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "since": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "stuck": {
+                              "type": "boolean"
+                            },
+                            "extension": {
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "label": {
+                                      "type": "string"
+                                    },
+                                    "signedInAt": {
+                                      "type": "string"
+                                    },
+                                    "active": {
+                                      "type": "boolean"
+                                    }
+                                  },
+                                  "required": [
+                                    "label",
+                                    "signedInAt",
+                                    "active"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "pages": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "pageLabel": {
+                                    "type": "string"
+                                  },
+                                  "platform": {
+                                    "type": "string",
+                                    "enum": [
+                                      "fansly",
+                                      "onlyfans",
+                                      "telegram"
+                                    ]
+                                  },
+                                  "modelName": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "pageLabel",
+                                  "platform",
+                                  "modelName"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
+                            "firstActivity": {
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "at": {
+                                      "type": "string"
+                                    },
+                                    "pageLabel": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "at",
+                                    "pageLabel"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            }
+                          },
+                          "required": [
+                            "newcomer",
+                            "signedUp",
+                            "steps",
+                            "done",
+                            "total",
+                            "current",
+                            "since",
+                            "stuck",
+                            "extension",
+                            "pages",
+                            "firstActivity"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "payoutDetails": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "text": {
+                              "type": "string"
+                            },
+                            "updatedAt": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "text",
+                            "updatedAt"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
                     "serverNow": {
                       "type": "string"
                     },
@@ -73832,6 +74590,8 @@
                     "scheduleSlots",
                     "payTerms",
                     "proposals",
+                    "start",
+                    "payoutDetails",
                     "serverNow",
                     "invite"
                   ],
@@ -76062,6 +76822,208 @@
                         "additionalProperties": false
                       }
                     },
+                    "start": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "newcomer": {
+                              "type": "boolean"
+                            },
+                            "signedUp": {
+                              "type": "boolean"
+                            },
+                            "steps": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "step": {
+                                    "type": "string",
+                                    "enum": [
+                                      "install",
+                                      "extension",
+                                      "pages",
+                                      "activity",
+                                      "payout"
+                                    ]
+                                  },
+                                  "done": {
+                                    "type": "boolean"
+                                  },
+                                  "doneAt": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "step",
+                                  "done",
+                                  "doneAt"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
+                            "done": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "total": {
+                              "type": "integer",
+                              "exclusiveMinimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "current": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "enum": [
+                                    "install",
+                                    "extension",
+                                    "pages",
+                                    "activity",
+                                    "payout"
+                                  ]
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "since": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "stuck": {
+                              "type": "boolean"
+                            },
+                            "extension": {
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "label": {
+                                      "type": "string"
+                                    },
+                                    "signedInAt": {
+                                      "type": "string"
+                                    },
+                                    "active": {
+                                      "type": "boolean"
+                                    }
+                                  },
+                                  "required": [
+                                    "label",
+                                    "signedInAt",
+                                    "active"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "pages": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "pageLabel": {
+                                    "type": "string"
+                                  },
+                                  "platform": {
+                                    "type": "string",
+                                    "enum": [
+                                      "fansly",
+                                      "onlyfans",
+                                      "telegram"
+                                    ]
+                                  },
+                                  "modelName": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "pageLabel",
+                                  "platform",
+                                  "modelName"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
+                            "firstActivity": {
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "at": {
+                                      "type": "string"
+                                    },
+                                    "pageLabel": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "at",
+                                    "pageLabel"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            }
+                          },
+                          "required": [
+                            "newcomer",
+                            "signedUp",
+                            "steps",
+                            "done",
+                            "total",
+                            "current",
+                            "since",
+                            "stuck",
+                            "extension",
+                            "pages",
+                            "firstActivity"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "payoutDetails": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "text": {
+                              "type": "string"
+                            },
+                            "updatedAt": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "text",
+                            "updatedAt"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
                     "serverNow": {
                       "type": "string"
                     }
@@ -76071,6 +77033,8 @@
                     "scheduleSlots",
                     "payTerms",
                     "proposals",
+                    "start",
+                    "payoutDetails",
                     "serverNow"
                   ],
                   "additionalProperties": false
@@ -77384,6 +78348,208 @@
                         "additionalProperties": false
                       }
                     },
+                    "start": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "newcomer": {
+                              "type": "boolean"
+                            },
+                            "signedUp": {
+                              "type": "boolean"
+                            },
+                            "steps": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "step": {
+                                    "type": "string",
+                                    "enum": [
+                                      "install",
+                                      "extension",
+                                      "pages",
+                                      "activity",
+                                      "payout"
+                                    ]
+                                  },
+                                  "done": {
+                                    "type": "boolean"
+                                  },
+                                  "doneAt": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "step",
+                                  "done",
+                                  "doneAt"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
+                            "done": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "total": {
+                              "type": "integer",
+                              "exclusiveMinimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "current": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "enum": [
+                                    "install",
+                                    "extension",
+                                    "pages",
+                                    "activity",
+                                    "payout"
+                                  ]
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "since": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "stuck": {
+                              "type": "boolean"
+                            },
+                            "extension": {
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "label": {
+                                      "type": "string"
+                                    },
+                                    "signedInAt": {
+                                      "type": "string"
+                                    },
+                                    "active": {
+                                      "type": "boolean"
+                                    }
+                                  },
+                                  "required": [
+                                    "label",
+                                    "signedInAt",
+                                    "active"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "pages": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "pageLabel": {
+                                    "type": "string"
+                                  },
+                                  "platform": {
+                                    "type": "string",
+                                    "enum": [
+                                      "fansly",
+                                      "onlyfans",
+                                      "telegram"
+                                    ]
+                                  },
+                                  "modelName": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "pageLabel",
+                                  "platform",
+                                  "modelName"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
+                            "firstActivity": {
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "at": {
+                                      "type": "string"
+                                    },
+                                    "pageLabel": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "at",
+                                    "pageLabel"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            }
+                          },
+                          "required": [
+                            "newcomer",
+                            "signedUp",
+                            "steps",
+                            "done",
+                            "total",
+                            "current",
+                            "since",
+                            "stuck",
+                            "extension",
+                            "pages",
+                            "firstActivity"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "payoutDetails": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "text": {
+                              "type": "string"
+                            },
+                            "updatedAt": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "text",
+                            "updatedAt"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
                     "serverNow": {
                       "type": "string"
                     }
@@ -77393,6 +78559,8 @@
                     "scheduleSlots",
                     "payTerms",
                     "proposals",
+                    "start",
+                    "payoutDetails",
                     "serverNow"
                   ],
                   "additionalProperties": false
@@ -78454,6 +79622,208 @@
                         "additionalProperties": false
                       }
                     },
+                    "start": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "newcomer": {
+                              "type": "boolean"
+                            },
+                            "signedUp": {
+                              "type": "boolean"
+                            },
+                            "steps": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "step": {
+                                    "type": "string",
+                                    "enum": [
+                                      "install",
+                                      "extension",
+                                      "pages",
+                                      "activity",
+                                      "payout"
+                                    ]
+                                  },
+                                  "done": {
+                                    "type": "boolean"
+                                  },
+                                  "doneAt": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "step",
+                                  "done",
+                                  "doneAt"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
+                            "done": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "total": {
+                              "type": "integer",
+                              "exclusiveMinimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "current": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "enum": [
+                                    "install",
+                                    "extension",
+                                    "pages",
+                                    "activity",
+                                    "payout"
+                                  ]
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "since": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "stuck": {
+                              "type": "boolean"
+                            },
+                            "extension": {
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "label": {
+                                      "type": "string"
+                                    },
+                                    "signedInAt": {
+                                      "type": "string"
+                                    },
+                                    "active": {
+                                      "type": "boolean"
+                                    }
+                                  },
+                                  "required": [
+                                    "label",
+                                    "signedInAt",
+                                    "active"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "pages": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "pageLabel": {
+                                    "type": "string"
+                                  },
+                                  "platform": {
+                                    "type": "string",
+                                    "enum": [
+                                      "fansly",
+                                      "onlyfans",
+                                      "telegram"
+                                    ]
+                                  },
+                                  "modelName": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "pageLabel",
+                                  "platform",
+                                  "modelName"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
+                            "firstActivity": {
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "at": {
+                                      "type": "string"
+                                    },
+                                    "pageLabel": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "at",
+                                    "pageLabel"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            }
+                          },
+                          "required": [
+                            "newcomer",
+                            "signedUp",
+                            "steps",
+                            "done",
+                            "total",
+                            "current",
+                            "since",
+                            "stuck",
+                            "extension",
+                            "pages",
+                            "firstActivity"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "payoutDetails": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "text": {
+                              "type": "string"
+                            },
+                            "updatedAt": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "text",
+                            "updatedAt"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
                     "serverNow": {
                       "type": "string"
                     }
@@ -78463,6 +79833,8 @@
                     "scheduleSlots",
                     "payTerms",
                     "proposals",
+                    "start",
+                    "payoutDetails",
                     "serverNow"
                   ],
                   "additionalProperties": false
@@ -79541,6 +80913,208 @@
                         "additionalProperties": false
                       }
                     },
+                    "start": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "newcomer": {
+                              "type": "boolean"
+                            },
+                            "signedUp": {
+                              "type": "boolean"
+                            },
+                            "steps": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "step": {
+                                    "type": "string",
+                                    "enum": [
+                                      "install",
+                                      "extension",
+                                      "pages",
+                                      "activity",
+                                      "payout"
+                                    ]
+                                  },
+                                  "done": {
+                                    "type": "boolean"
+                                  },
+                                  "doneAt": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "step",
+                                  "done",
+                                  "doneAt"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
+                            "done": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "total": {
+                              "type": "integer",
+                              "exclusiveMinimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "current": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "enum": [
+                                    "install",
+                                    "extension",
+                                    "pages",
+                                    "activity",
+                                    "payout"
+                                  ]
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "since": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "stuck": {
+                              "type": "boolean"
+                            },
+                            "extension": {
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "label": {
+                                      "type": "string"
+                                    },
+                                    "signedInAt": {
+                                      "type": "string"
+                                    },
+                                    "active": {
+                                      "type": "boolean"
+                                    }
+                                  },
+                                  "required": [
+                                    "label",
+                                    "signedInAt",
+                                    "active"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "pages": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "pageLabel": {
+                                    "type": "string"
+                                  },
+                                  "platform": {
+                                    "type": "string",
+                                    "enum": [
+                                      "fansly",
+                                      "onlyfans",
+                                      "telegram"
+                                    ]
+                                  },
+                                  "modelName": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "pageLabel",
+                                  "platform",
+                                  "modelName"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
+                            "firstActivity": {
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "at": {
+                                      "type": "string"
+                                    },
+                                    "pageLabel": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "at",
+                                    "pageLabel"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            }
+                          },
+                          "required": [
+                            "newcomer",
+                            "signedUp",
+                            "steps",
+                            "done",
+                            "total",
+                            "current",
+                            "since",
+                            "stuck",
+                            "extension",
+                            "pages",
+                            "firstActivity"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "payoutDetails": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "text": {
+                              "type": "string"
+                            },
+                            "updatedAt": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "text",
+                            "updatedAt"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
                     "serverNow": {
                       "type": "string"
                     }
@@ -79550,6 +81124,8 @@
                     "scheduleSlots",
                     "payTerms",
                     "proposals",
+                    "start",
+                    "payoutDetails",
                     "serverNow"
                   ],
                   "additionalProperties": false

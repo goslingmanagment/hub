@@ -117,7 +117,10 @@ export function InvitePerson({ people, create, onClose, onCreated, onAdded }: {
     create.mutate(body, {
       onSuccess: (created) => {
         if (created.invite) {
-          onCreated({ userId: created.invite.userId, username: created.invite.username, kind: "invite", secret: created.invite.link.token, expiresAt: created.invite.link.expiresAt }, created);
+          onCreated({
+            userId: created.invite.userId, username: created.invite.username, kind: "invite", secret: created.invite.link.token,
+            expiresAt: created.invite.link.expiresAt, name: created.person.displayName,
+          }, created);
         } else {
           onAdded(created);
         }

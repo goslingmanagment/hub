@@ -7,7 +7,8 @@
 // again when the owner accepts it — through the very same edit.
 //
 // Pay terms are money: they are read here only for the owner's card and for a
-// key with read:pay_terms; nothing else of this file carries them.
+// key with read:pay_terms; nothing else of this file carries them. Where a
+// person's payouts go (start.ts) is the owner's card's too, never the feed's.
 
 import {
   PERSON_SLOT_MAX_MINUTES,
@@ -82,6 +83,7 @@ import type { AppContext } from "../../bootstrap.ts";
 import { createInvite } from "../account-links.ts";
 import { recordAudit, withAuditTransaction, type AuditContext, type HumanAuthPrincipal } from "../auth.ts";
 import { BadRequestError, ConflictError, NotFoundError } from "../errors.ts";
+import { readStartForOwner } from "./start.ts";
 
 type Db = AppContext["db"];
 
@@ -289,11 +291,14 @@ async function personDetail(db: Db, row: PersonRow, now: Date): Promise<AdminPer
   const parts = await loadParts(db, [row.id]);
   const terms = await listPersonPayTermRows(db, [row.id]);
   const proposals = await listPersonProposalRows(db, { personId: row.id });
+  const start = await readStartForOwner(db, row, now);
   return {
     person: personView(row, parts, now),
     scheduleSlots: (parts.slots.get(row.id) ?? []).map(slotView),
     payTerms: termViews(terms),
     proposals: proposals.map(proposalView),
+    start: start.start,
+    payoutDetails: start.payoutDetails,
     serverNow: now.toISOString(),
   };
 }

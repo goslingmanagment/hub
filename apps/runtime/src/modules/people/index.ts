@@ -14,6 +14,7 @@ import {
   settlePersonImportNote,
   updatePerson,
 } from "../../services/people/index.ts";
+import { readAccountStart, setOwnPayoutDetails } from "../../services/people/start.ts";
 import { auditCtx } from "../../api/request-auth.ts";
 import { beginAgentRequest, withAgentTimeout, writeAgentAudit } from "../agent-read/index.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
@@ -23,7 +24,8 @@ import type { ApiModuleContext, ApiServer } from "../context.ts";
  * doors to one service: the team's list for a session (owner and team lead, no
  * money), the owner's card and every write for the owner's session, and for
  * an agent key the feed (read:team; pay terms only with read:pay_terms) and
- * proposals (propose:people) that wait for the owner. Database only.
+ * proposals (propose:people) that wait for the owner; and a person's own
+ * «Начало» with where their payouts go (any session, their own only). Database only.
  */
 
 const AGENT_PEOPLE_TIMEOUT_MS = 10_000;
@@ -32,6 +34,18 @@ export function registerPeopleRoutes(server: ApiServer, ctx: ApiModuleContext) {
   const { appContext } = ctx;
   const { requirePrincipal, requireAgentKeyPrincipal } = ctx.auth;
   const db = appContext.db;
+
+  // --- The person's own («Начало») -------------------------------------------
+
+  server.get("/api/v1/account/start", { schema: routeSchemas.accountStart }, async (request) => {
+    const principal = await requirePrincipal(request);
+    return readAccountStart(appContext, principal);
+  });
+
+  server.put("/api/v1/account/payout-details", { schema: routeSchemas.accountPayoutDetailsSet }, async (request) => {
+    const principal = await requirePrincipal(request);
+    return setOwnPayoutDetails(appContext, principal, request.body, auditCtx(principal));
+  });
 
   // --- Sessions ------------------------------------------------------------
 

@@ -1,4 +1,5 @@
 import { Navigate, createBrowserRouter, useLocation, useParams, type Params, type RouteObject } from "react-router";
+import { START_PATH, startOpen, useAccountStart } from "@/shared/start";
 import { CHATTER, TEAM, homePath, useMe } from "@/shared/useMe";
 import { AuthGate } from "./AuthGate.js";
 import { NotFoundScreen } from "./NotFound.js";
@@ -19,11 +20,19 @@ export interface ScreenHandle {
   screenKey?: (params: Params) => string;
 }
 
-/** `/` is Смены for the team and «Мои смены» for a chatter, with whatever the address carried. */
+/**
+ * `/` is Смены for the team and «Мои смены» for a chatter, with whatever the
+ * address carried — and «Начало» for a newcomer with a step still open (it
+ * leaves once every step is done). The start's read is a chatter's only.
+ */
 function HomeRedirect() {
   const location = useLocation();
-  const { role } = useMe();
-  return <Navigate to={{ pathname: homePath(role), search: location.search }} replace />;
+  const { role, narrow } = useMe();
+  const start = useAccountStart();
+  const asks = role === "chatter" && !narrow;
+  if (asks && start.isPending) return null;
+  const pathname = asks && startOpen(start.data) ? START_PATH : homePath(role);
+  return <Navigate to={{ pathname, search: location.search }} replace />;
 }
 
 /**
@@ -101,8 +110,12 @@ const teamScreens: RouteObject[] = [
   { path: "access", element: <AccessRedirect /> },
 ];
 
-/** A chatter's own part of Workboard (owner, 2026-11-10): their shifts with their reports, sales only — no pay, nobody else's. */
+/**
+ * A chatter's own part of Workboard (owner, 2026-11-10): their shifts with their reports, sales only — no pay, nobody
+ * else's; and a newcomer's «Начало» (package J).
+ */
 const chatterScreens: RouteObject[] = [
+  { path: "start", lazy: () => import("../screens/start/index.js").then((m) => ({ Component: m.StartScreen })) },
   { path: "my/shifts", lazy: () => import("../screens/my-shifts/index.js").then((m) => ({ Component: m.MyShiftsScreen })) },
   { path: "my/reports", element: <MyReportsRedirect /> },
   // A shift and its report (ecosystem package F): the person's own to hand in, a colleague's to read.

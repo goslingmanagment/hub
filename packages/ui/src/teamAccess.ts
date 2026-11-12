@@ -1,4 +1,4 @@
-import { CHATTER_SITE_ORIGIN, chatterSiteOriginFor } from "./sites.js";
+import { chatterSiteOriginFor } from "./sites.js";
 
 /**
  * The people's access, without React: who is in what state, the one-time join
@@ -44,9 +44,6 @@ export function daysToHours(days: number): number {
 /** The chatters' site (/join opens there) and the one that goes with a console's origin: ./sites.ts. */
 export { CHATTER_SITE_ORIGIN, chatterSiteOriginFor } from "./sites.js";
 
-/** The chatters' guide (the old /fansly/start.html answers 301). */
-export const START_GUIDE_URL = `${CHATTER_SITE_ORIGIN}/start.html`;
-
 /** The secret travels in the fragment: it never reaches a server log as a path. */
 export function buildJoinLink(consoleOrigin: string, secret: string): string {
   return `${chatterSiteOriginFor(consoleOrigin)}/join#${secret}`;
@@ -56,11 +53,20 @@ export function currentOrigin(): string {
   return typeof window === "undefined" ? "" : window.location.origin;
 }
 
-export function telegramMessage(kind: LinkKind, username: string, link: string): string {
+/**
+ * The message the owner copies and sends from his own Telegram (in his own
+ * voice, «ты»). An invitation's link signs the newcomer in and opens «Начало»
+ * in Workboard, which shows what is left before the first shift (the extension
+ * to install and sign in to among it), so the message carries no guide link.
+ */
+export function telegramMessage(kind: LinkKind, username: string, link: string, name?: string | null): string {
+  const hello = name?.trim() ? `Привет, ${name.trim()}!` : "Привет!";
+  // The login on a line of its own: no dot after it to copy by mistake.
   if (kind === "password_reset") {
-    return `Привет! Ссылка для нового пароля ChatGoose: ${link}. Открой и придумай новый пароль. Логин: ${username}.`;
+    return `${hello} Ссылка для нового пароля ChatGoose:\n${link}\nЛогин: ${username}\nОткрой ссылку и придумай новый пароль.`;
   }
-  return `Привет! Твой аккаунт ChatGoose: ${link}. Открой, придумай пароль. Логин: ${username}. Как начать: ${START_GUIDE_URL}`;
+  return `${hello} Твой аккаунт ChatGoose готов.\nСсылка: ${link}\nЛогин: ${username}\n`
+    + "Открой ссылку и придумай пароль: дальше сайт сам покажет, что осталось сделать до первой смены.";
 }
 
 /** Capitalised for a list's first word. */

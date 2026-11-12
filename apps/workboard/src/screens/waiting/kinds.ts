@@ -38,7 +38,8 @@ export function groupOf(kind: string): WaitingGroupId {
   if (kind.startsWith("custom.")) return "customs";
   if (kind === "send.held") return "held";
   if (kind.startsWith("publication.")) return "publications";
-  if (kind.startsWith("people.")) return "people";
+  // The people checks' (package K) and a newcomer's way (package J: `person.no_pages`, `person.onboarding_stuck`).
+  if (kind.startsWith("people.") || kind.startsWith("person.")) return "people";
   if (kind === "ledger.check" || kind === "ledger.sheet_column" || kind === "ledger.off_platform") return "ledger";
   if (kind === "page.login_needed" || kind === "incident.open" || kind === "extension.critical" || kind === "history.request") return "system";
   // The system state's (routines, copies, the Mac's reporter): the same place as the failures.

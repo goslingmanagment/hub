@@ -66,7 +66,9 @@ Hub is the home of the agency's WORK objects; the ledger keeps accounting, Conte
 table, a screen or a computation, find the thing's home here — a second home for the same thing is a bug.
 - **People**: the registry (`apps/runtime/src/services/people`, tables `people`, `person_*`). A login is not a person
   (`person_logins`); never rename `users.username`: scripts outside the repo match by it. Pay terms are money:
-  owner-only, never serialised into anyone else's session.
+  owner-only, never serialised into anyone else's session. Where a person is paid (`person_payout_details`, written by
+  the person on Workboard «Начало», `services/people/start.ts`) is the person's own session's and the owner's card's only.
+  A newcomer's way to the first shift is read live from the facts (`start.ts`), never ticked by hand.
 - **Whose a sale is**: only `apps/runtime/src/services/sale-rule.ts`, written to `sale_homes` (`sale-homes.ts`);
   schedule slots and «left the team» come from the people registry. Never compute it anywhere else. Screens follow
   it from the date in `sale_rule_switch` (null: the old computation).

@@ -4,6 +4,7 @@ import type { TeamLedgerPayoutPersonResponse, TeamLedgerPayoutPrepareResponse } 
 import { millsToDollarsNumber } from "@agency_hub_core/shared";
 import { Button, Money, Notice, Skeleton, Table, Tooltip, type Column } from "@agency_hub_core/ui";
 import { formatDay, formatDayRange } from "@agency_hub_core/ui/format";
+import { useOwnerCard } from "@/screens/people/registry";
 import { copyText } from "./copy";
 import { usePayoutPrepare } from "./ledger";
 
@@ -93,6 +94,7 @@ export function PayoutBrief({ slug, name, adjustments, fallback }: {
         </span>
         {brief.suggestion && brief.suggestion.aboveTableMills !== 0 && <span className="payouts-sub">{brief.suggestion.note}</span>}
       </div>
+      <PayoutTo slug={slug} />
       {blockers.length > 0 && (
         <Notice tone="warning" title={blockers.length === 1 ? "Перед выплатой разобраться" : `Перед выплатой разобраться: ${blockers.length}`}>
           <ul className="payouts-flags">
@@ -122,5 +124,24 @@ export function PayoutBrief({ slug, name, adjustments, fallback }: {
         </>
       )}
     </section>
+  );
+}
+
+/**
+ * Where to transfer, as the person wrote it on «Начало» (the people registry,
+ * the owner's card): the ledger's code of a person is the registry's. Nothing
+ * when the registry has no such person or did not answer.
+ */
+function PayoutTo({ slug }: { slug: string }) {
+  const card = useOwnerCard(slug, true);
+  if (!card.data) return null;
+  const details = card.data.payoutDetails;
+  return (
+    <div className="payouts-transfer">
+      <span className="payouts-transfer__label">Куда</span>
+      {details
+        ? <span className="payouts-to">{details.text}</span>
+        : <span className="payouts-sub">Человек не написал в Hub, куда платить: спросите в личных сообщениях.</span>}
+    </div>
   );
 }

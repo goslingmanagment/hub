@@ -188,6 +188,15 @@
     gap: 2px;
   }
 
+  .payouts-to {
+    color: var(--ui-text);
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    user-select: all;
+  }
+
   .payouts-transfer__label {
     color: var(--ui-text-3);
     font-size: var(--ui-fs-13);

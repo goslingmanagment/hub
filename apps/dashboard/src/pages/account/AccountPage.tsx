@@ -103,7 +103,7 @@ function Devices() {
       {devices.isLoading && <Lines />}
       {devices.isError && <Retry text="Не удалось загрузить список." busy={devices.isFetching} onRetry={() => void devices.refetch()} />}
       {devices.data?.length === 0 && (
-        <p className="ac-muted">Пока ни одного устройства. Войдите в расширении или в приложении, и оно появится здесь.</p>
+        <p className="ac-muted">Пока ни одного устройства. Войдите в расширении, и оно появится здесь.</p>
       )}
       {devices.data && devices.data.length > 0 && (
         <ul className="ac-rows">

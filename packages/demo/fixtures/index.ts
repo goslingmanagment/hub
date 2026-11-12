@@ -5,6 +5,7 @@ import { mattersHandlers } from "./matters.ts";
 import { moneyHandlers } from "./money.ts";
 import { pageHandlers } from "./page.ts";
 import { peopleHandlers } from "./people.ts";
+import { personStartHandlers } from "./person-start.ts";
 import { publishOfHandlers } from "./publish-of.ts";
 import { settingsHandlers } from "./settings.ts";
 import { shiftReportHandlers } from "./shift-reports.ts";
@@ -39,6 +40,8 @@ const AREAS: Readonly<Record<string, DemoHandlers>> = {
   customs: wbCustomsHandlers,
   // Отчёт смены: the demo chatter's shift rows, drafts and versions, kept in memory with every write (shift-reports.ts).
   "shift-reports": shiftReportHandlers,
+  // «Начало»: a newcomer's way to the first shift, by the scenario's stage, and where they are paid (person-start.ts).
+  "person-start": personStartHandlers,
   settings: settingsHandlers,
   system: systemHandlers,
 };

@@ -91,6 +91,25 @@ export function isShiftReportMatterKind(kind: string): boolean {
   return SHIFT_REPORT_KIND_SET.has(kind);
 }
 
+/**
+ * A newcomer's way to the first shift («Начало», package J), the kinds of its
+ * own pass (people-start-tick.ts) — apart from MATTER_SERVER_KINDS on purpose:
+ * «Состояние» closes every open matter of that list its own pass did not find.
+ * Hub's server is the one writer: an agent key opens or closes none of them.
+ */
+export const MATTER_PERSON_START_KINDS = [
+  /** A newcomer with no page opened to their login: the owner assigns one. */
+  "person.no_pages",
+  /** A newcomer on the same step of «Начало» for 48 hours (or the invitation not opened for as long). */
+  "person.onboarding_stuck",
+] as const;
+export type MatterPersonStartKind = (typeof MATTER_PERSON_START_KINDS)[number];
+
+const PERSON_START_KIND_SET: ReadonlySet<string> = new Set(MATTER_PERSON_START_KINDS);
+export function isMatterPersonStartKind(kind: string): kind is MatterPersonStartKind {
+  return PERSON_START_KIND_SET.has(kind);
+}
+
 export const MATTER_STATES = ["open", "closed"] as const;
 export const MATTER_CLOSED_HOWS = ["resolved", "withdrawn", "cause_gone"] as const;
 export const MATTER_SOURCE_NAMES = ["server", "agent", "ledger", "contentops", "person"] as const;

@@ -325,3 +325,110 @@
     white-space: normal;
   }
 }
+
+@layer components {
+  /* ------------------------------------------------- «Ввод» of a newcomer (Intake.tsx) */
+
+  .intake-steps {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 12px 16px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  @media (max-width: 1100px) {
+    .intake-steps {
+      grid-template-columns: minmax(0, 1fr);
+      gap: 10px;
+    }
+  }
+
+  .intake-step {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    min-width: 0;
+  }
+
+  .intake-mark {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    margin-top: 0;
+    border: 1px solid var(--ui-line-strong);
+    border-radius: 999px;
+    background: var(--ui-surface);
+  }
+
+  .intake-step--done .intake-mark {
+    border-color: var(--ui-good-line);
+    background: var(--ui-good-soft);
+    color: var(--ui-good);
+  }
+
+  .intake-step--current .intake-mark {
+    border: 2px solid var(--ui-accent-fill);
+  }
+
+  .intake-step__body {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+  }
+
+  .intake-step__title {
+    color: var(--ui-text);
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+  }
+
+  .intake-step--current .intake-step__title {
+    font-weight: 600;
+  }
+
+  .intake-step:not(.intake-step--done) .intake-step__title {
+    color: var(--ui-text-2);
+  }
+
+  .intake-step--current:not(.intake-step--done) .intake-step__title {
+    color: var(--ui-text);
+  }
+
+  .intake-step__detail {
+    color: var(--ui-text-3);
+    font-size: var(--ui-fs-13);
+    line-height: var(--ui-lh-13);
+    overflow-wrap: anywhere;
+  }
+
+  .intake-late {
+    color: var(--ui-warn-text);
+  }
+
+  .intake-sr {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+}
+
+@layer components {
+  .registry-payout {
+    color: var(--ui-text-2);
+    overflow-wrap: anywhere;
+  }
+
+  .registry-payout__text {
+    color: var(--ui-text);
+    white-space: pre-wrap;
+  }
+}

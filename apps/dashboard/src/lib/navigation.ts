@@ -184,6 +184,8 @@ export const CABINET_PATH = "/account";
  * page load, never the console's router.
  */
 export const CHATTER_HOME = "/workboard/";
+/** Workboard's «Начало»: where /join lands a newcomer, signed in (package J). */
+export const NEWCOMER_START = "/workboard/start";
 
 /** «Мои смены» itself: where the account page and the cabinet's old tabs lead a chatter. */
 export const CHATTER_SHIFTS = "/workboard/my/shifts";

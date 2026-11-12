@@ -91,6 +91,7 @@ export * from "./shift-review-rules.ts";
 export * from "./shift-review-audit.ts";
 // The people registry (team list, the owner's card and writes, the agent feed and proposals), spread by routes.ts.
 export * from "./people.ts";
+export * from "./person-start.ts";
 export * from "./routes-people.ts";
 // Система → «Состояние»: the routines and copies of every place (package P), spread by routes.ts.
 export * from "./system-state.ts";
