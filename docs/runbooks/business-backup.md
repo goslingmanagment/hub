@@ -103,7 +103,8 @@ the copy are known only to the owner: Hub keeps no other record of them.
 The ledger reads Hub by cursors, and a restored Hub's ids start again from the copy's: handed-in report
 versions (and their places in the shift reports' feed) and erasures get ids the ledger has already seen, so it
 would take new versions for ones it stored and step over new erasures behind its cursor. Before the ledger reads
-Hub's feeds again, follow the ledger's own note on a Hub restore (in the ledger repository).
+Hub's feeds again, follow the ledger's own note on a Hub restore (the ledger repository's `AGENTS.md`, «Опасно» → «После
+восстановления хаба из копии»).
 
 ## ContentOps database
 

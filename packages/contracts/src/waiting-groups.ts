@@ -24,7 +24,7 @@ export const WAITING_GROUPS: readonly WaitingGroup[] = [
   { id: "customs", title: "Кастомы" },
   { id: "held", title: "Зависшие отправки" },
   { id: "publications", title: "Публикации" },
-  // ContentOps' findings (`contentops.*`): decided in ContentOps, each line opens it there.
+  // ContentOps' findings (`contentops.*`) and the content routines' (`content.*`): each line opens where it is decided.
   { id: "content", title: "Контент" },
   { id: "people", title: "Люди и доступ" },
   { id: "ledger", title: "Проверки ledger" },
@@ -48,7 +48,8 @@ export function waitingGroupOf(kind: string): WaitingGroupId {
   if (kind.startsWith("custom.")) return "customs";
   if (kind === "send.held") return "held";
   if (kind.startsWith("publication.")) return "publications";
-  if (kind.startsWith("contentops.")) return "content";
+  // ContentOps' findings and the content routines' own (`content.*`: a week to approve, a gap in the schedule).
+  if (kind.startsWith("contentops.") || kind.startsWith("content.")) return "content";
   // The people checks' (package K) and a newcomer's way (package J: `person.no_pages`, `person.onboarding_stuck`).
   if (kind.startsWith("people.") || kind.startsWith("person.")) return "people";
   if (LEDGER_KINDS.has(kind)) return "ledger";

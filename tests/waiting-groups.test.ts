@@ -40,6 +40,7 @@ describe("«Ждут вас»: one table of groups", () => {
     expect(info.sort()).toEqual([...MATTER_INFO_KINDS].sort());
     // ContentOps' findings are an agent's kinds by prefix.
     expect(waitingGroupOf("contentops.custom_copy")).toBe("content");
+    expect(waitingGroupOf("content.week_approve")).toBe("content");
     expect(WAITING_GROUPS.map((group) => group.id)).toContain(waitingGroupOf("an.agent_kind"));
   });
 
