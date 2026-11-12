@@ -1,10 +1,11 @@
-import { queryOptions, useQueries } from "@tanstack/react-query";
+import { queryOptions, useQueries, useQuery } from "@tanstack/react-query";
 import { formatCount } from "@agency_hub_core/ui/format";
 import { moscowToday } from "@agency_hub_core/ui/moscow";
 import { ruPlural } from "@agency_hub_core/ui/plural";
 import { pendingChangesOf, postOnPage, reportQuestionsWindow, unparsedPostsToDecide } from "@agency_hub_core/ui/shiftReports";
 import { kernel } from "./hub.js";
 import { carryParams } from "./links.js";
+import { mattersWaitingQuery, useMattersActive } from "./matters.js";
 import { useMe } from "./useMe.js";
 
 /**
@@ -137,18 +138,30 @@ export interface DecisionCounts {
 export function useDecisionCounts(options: { page?: string | null } = {}): DecisionCounts {
   const page = options.page ?? null;
   const { isOwner, user } = useMe();
-  const signedIn = user !== undefined;
+  // The owner's switch (package K): on, the four queues are counted from matters in one read; off, as before.
+  const { active } = useMattersActive();
+  const signedIn = user !== undefined && active === false;
+  const fromMatters = useQuery({ ...mattersWaitingQuery(page), enabled: user !== undefined && active === true, refetchInterval: MINUTE });
   const [questions, posts, changes, customs, held, heldOnPage] = useQueries({
     queries: [
-      { ...saleQuestionsQuery, enabled: isOwner, refetchInterval: LEDGER_EVERY },
-      { ...reportPostsQuery(), enabled: isOwner, refetchInterval: LEDGER_EVERY },
-      { ...reportChangesQuery(), enabled: isOwner, refetchInterval: LEDGER_EVERY },
+      { ...saleQuestionsQuery, enabled: isOwner && signedIn, refetchInterval: LEDGER_EVERY },
+      { ...reportPostsQuery(), enabled: isOwner && signedIn, refetchInterval: LEDGER_EVERY },
+      { ...reportChangesQuery(), enabled: isOwner && signedIn, refetchInterval: LEDGER_EVERY },
       { ...customsQuery, enabled: signedIn, refetchInterval: MINUTE },
       { ...heldSendsQuery(), enabled: signedIn, refetchInterval: MINUTE },
       // The page's own count of held sends: Hub cuts it (the list of every page above says what the others hold).
       { ...heldSendsQuery({ limit: 1, offset: 0, pageLabel: page ?? "" }), enabled: signedIn && page !== null, refetchInterval: MINUTE },
     ],
   });
+  if (active === true) {
+    const retryMatters = () => void fromMatters.refetch();
+    const data = fromMatters.data?.decisions;
+    if (!data) {
+      const failed = fromMatters.isError ? [...DECISION_QUEUES] : [];
+      return { questions: null, reports: null, reportParts: null, customs: null, held: null, total: 0, page, elsewhere: 0, loading: fromMatters.isLoading, settled: fromMatters.isError, failed, complete: false, retry: retryMatters };
+    }
+    return { ...data, page, loading: false, settled: true, failed: [...data.failed], complete: data.failed.length === 0, retry: retryMatters };
+  }
   const heldRead = page === null ? held : heldOnPage;
   const loading = questions.isLoading || posts.isLoading || changes.isLoading || customs.isLoading || held.isLoading || (page !== null && heldOnPage.isLoading);
   const retry = () => {

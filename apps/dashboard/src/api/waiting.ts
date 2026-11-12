@@ -32,7 +32,8 @@ import { reportQuestionsQueryOptions, saleQuestionsQueryOptions, teamCustomsQuer
  * none: without `?page=` it shows every page.
  */
 export interface WaitingRow {
-  id: "drafts" | "unknown" | "questions" | "reports" | "customs" | "held" | "login" | "failures" | "extension" | "history";
+  /** The old rows; while the owner's switch reads matters, also «Люди и доступ», «Проверки ledger», «Другие дела» (package K). */
+  id: "drafts" | "unknown" | "questions" | "reports" | "customs" | "held" | "login" | "failures" | "extension" | "history" | "people" | "ledger" | "other";
   label: string;
   /** null: the read failed, or the state it depends on could not be checked. */
   count: number | null;
@@ -106,7 +107,19 @@ export interface WaitingCounts {
 }
 
 export function useWaitingCounts(role: string): WaitingCounts {
-  const owner = role === "owner";
+  const team = role === "owner" || role === "team_lead";
+  // The owner's switch (`mattersReadEnabled`, packages D and K): on, the rows are read from matters in one request;
+  // off — or not answered — every row reads its own source exactly as before. Until it is known, no row is read.
+  const fromMatters = useQuery({
+    queryKey: ["matters", "waiting", ""],
+    queryFn: () => kernel.mattersWaiting({ query: {} }),
+    enabled: team,
+    refetchInterval: MINUTE,
+    meta: { suppressGlobalError: true },
+  });
+  const active = fromMatters.data?.active === true;
+  const legacy = !team || (!active && (fromMatters.data !== undefined || fromMatters.isError));
+  const owner = role === "owner" && legacy;
   const { status: ofapi, isLoading: ofapiLoading, refetch: refetchOfapi } = useOfapiStatusQuery(role);
   const today = toBusinessDate(new Date(), MOSCOW_TIME_ZONE);
   const week = clientHealthRange("7d", today);
@@ -118,19 +131,20 @@ export function useWaitingCounts(role: string): WaitingCounts {
       // The ledger's reads are heavier and change with the posts' collection: every five minutes is enough.
       { ...saleQuestionsQueryOptions, enabled: owner, refetchInterval: 5 * MINUTE },
       { ...reportQuestionsQueryOptions(today), enabled: owner, refetchInterval: 5 * MINUTE },
-      { ...teamCustomsQueryOptions, refetchInterval: MINUTE },
-      { ...clientHeldSendsQueryOptions({ state: "held", limit: 1, offset: 0 }), refetchInterval: MINUTE },
+      { ...teamCustomsQueryOptions, enabled: legacy, refetchInterval: MINUTE },
+      { ...clientHeldSendsQueryOptions({ state: "held", limit: 1, offset: 0 }), enabled: legacy, refetchInterval: MINUTE },
       {
         queryKey: ["syncBlocks", "overview"],
         queryFn: () => kernel.syncOverview(),
-        enabled: owner,
+        // Read for the owner whatever the switch: the pages that need a login are said beside the count elsewhere too.
+        enabled: role === "owner",
         refetchInterval: MINUTE,
         meta: { suppressGlobalError: true },
       },
       {
         queryKey: ["syncEngine", "pages"],
         queryFn: () => kernel.syncPages(),
-        enabled: owner,
+        enabled: role === "owner",
         refetchInterval: MINUTE,
         meta: { suppressGlobalError: true },
       },
@@ -215,7 +229,21 @@ export function useWaitingCounts(role: string): WaitingCounts {
   }
 
   const queries = [drafts, unknown, questions, reports, customs, held, overview, enginePages, incidents, extension, history];
-  const loading = ofapiLoading || queries.some((query) => query.isLoading);
+  if (active && fromMatters.data) {
+    // The same rows, counts and links from matters (services/matters.ts buildWaitingRows), and the new kinds after them.
+    const matterRows: WaitingRow[] = fromMatters.data.rows.map((row) => ({
+      id: row.id, label: row.label, count: row.count, capped: row.capped, page: row.pageLabel ?? undefined, to: row.to,
+    }));
+    return {
+      rows: matterRows,
+      total: fromMatters.data.total,
+      failed: matterRows.filter((row) => row.count === null),
+      loading: false,
+      loginPages,
+      refetchAll: () => void fromMatters.refetch(),
+    };
+  }
+  const loading = (team && !legacy) || ofapiLoading || queries.some((query) => query.isLoading);
   const refetchAll = () => {
     refetchOfapi();
     for (const query of queries) void query.refetch();

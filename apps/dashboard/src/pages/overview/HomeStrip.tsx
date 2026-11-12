@@ -21,6 +21,9 @@ const SHORT_LABEL: Readonly<Record<WaitingRow["id"], string>> = {
   failures: "Сбои",
   extension: "Сбои расширения",
   history: "Заявки на историю",
+  people: "Люди и доступ",
+  ledger: "Проверки ledger",
+  other: "Другие дела",
 };
 
 const DOT: Partial<Readonly<Record<WaitingRow["id"], string>>> = {

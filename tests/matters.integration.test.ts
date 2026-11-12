@@ -227,11 +227,15 @@ describe("matters", () => {
     const owner = await waiting("boss");
     expect(owner.active).toBe(false);
     expect(owner.rows.find((row) => row.id === "failures")).toMatchObject({ count: 1, to: "/system/failures?page=all" });
-    expect(owner.rows.filter((row) => row.count === null).map((row) => row.id)).toEqual(["questions", "reports"]);
-    expect(owner.failed).toEqual(["questions", "reports"]);
+    // The checks of package K never ran here (their pass is runMatterChecks): «не проверено» too, never a zero.
+    expect(owner.rows.filter((row) => row.count === null).map((row) => row.id)).toEqual(["questions", "reports", "people", "ledger"]);
+    expect(owner.failed).toEqual(["questions", "reports", "people", "ledger"]);
     expect(owner.decisions).toMatchObject({ questions: null, reports: null, customs: 0, held: 0, failed: ["questions", "reports"] });
-    // A team lead's «Ждут вас» is customs and held sends, both empty: no row, nothing failed.
-    expect(await waiting("lead")).toMatchObject({ rows: [], total: 0, failed: [] });
+    // A team lead's «Ждут вас» is customs and held sends, both empty, and the rest of their own and their role's on
+    // their pages in «Другие дела» (package K): the role's matter on lora-1 of the rights test; nothing failed.
+    const lead = await waiting("lead");
+    expect(lead.rows.map((row) => [row.id, row.count])).toEqual([["other", 1]]);
+    expect(lead).toMatchObject({ total: 1, failed: [] });
 
     const checks = new Map((await listMatterChecks(app.db)).map((check) => [check.kind, check]));
     expect(checks.get("incident.open")).toMatchObject({ legacyCount: 1, matterCount: 1, mismatchSince: null, error: null });

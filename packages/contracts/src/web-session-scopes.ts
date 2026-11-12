@@ -24,6 +24,8 @@ export const NARROW_WEB_SESSION_OPERATIONS = [
   "me",
   "accountChatterStats",
   "accountReports",
+  // The chatter's strip «Ждут вас» above «Мои смены»: a narrow session reads as a chatter (their own, never money).
+  "mattersList",
 ] as const satisfies readonly KernelOperationKey[];
 
 /** Whether a narrow web session may call the route with this key. */

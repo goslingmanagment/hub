@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
+import { NARROW_WEB_SESSION_OPERATIONS } from "@agency_hub_core/contracts";
 import { insertAgentKey } from "@agency_hub_core/db";
 import { sha256Hex } from "@agency_hub_core/shared";
 
@@ -411,7 +412,8 @@ describe("the narrow web session from the extension", () => {
         cookies: { [SESSION_COOKIE_NAME]: session! },
         ...(row.method === "GET" || row.method === "DELETE" ? {} : { payload: {} }),
       });
-      const allowed = ["me", "accountChatterStats", "accountReports"].includes(row.routeKey);
+      // The list itself (web-session-scopes.ts): a route that joins it in its own PR is walked as answered here.
+      const allowed = (NARROW_WEB_SESSION_OPERATIONS as readonly string[]).includes(row.routeKey);
       const refused = response.statusCode === 403 && (response.json() as { message?: string }).message === NARROW_WEB_SESSION_REFUSAL_MESSAGE;
       if (allowed) answered[row.routeKey] = response.statusCode;
       else if (!refused) leaked.push(`${row.method} ${row.url} → ${response.statusCode}`);
@@ -420,6 +422,10 @@ describe("the narrow web session from the extension", () => {
     expect(walked).toBeGreaterThan(300);
     expect(answered.me).toBe(200);
     expect(answered.accountChatterStats).toBe(200);
+    // «Ждут вас» of the chatter's strip: an owner's narrow session reads as a chatter (their own, never money).
+    expect(answered.mattersList).toBe(200);
+    const mine = await request("GET", `${TEAM}/api/v1/matters`, { cookies: { [SESSION_COOKIE_NAME]: session! } });
+    expect((mine.json() as { kinds: Array<{ kind: string }> }).kinds.some((kind) => kind.kind.startsWith("people.") || kind.kind.startsWith("ledger."))).toBe(false);
 
     // The API document and the page browser's screen go through the dashboard guard: refused too.
     const docs = await request("GET", `${TEAM}/documentation/json`, { cookies: { [SESSION_COOKIE_NAME]: session! } });

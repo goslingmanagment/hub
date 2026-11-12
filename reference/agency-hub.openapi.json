@@ -190145,7 +190145,7 @@
         "tags": [
           "client"
         ],
-        "description": "Database-only: no platform request, no queued work. A device token's (a cookie session is 403). Sent once a minute while a tab of a granted page is open, and once with `closed` when the last tab closes or the person signs out. Each named page that is the caller's records its minute as open and the minute of the last activity as active; a page that is not the caller's, or does not exist, is skipped. No content of a page travels: only that a page was open and when the person was last active on it. The shift is computed from these minutes (`teamShifts`).",
+        "description": "Database-only: no platform request, no queued work. A device token's (a cookie session is 403). Sent once a minute while a tab of a granted page is open, and once with `closed` when the last tab closes or the person signs out. Each named page that is the caller's records its minute as open and the minute of the last activity as active; a page that is not the caller's, or does not exist, is skipped. No content of a page travels: only that a page was open and when the person was last active on it. The shift is computed from these minutes (`teamShifts`). The answer carries the count of the person's open matters (`matters`, as `clientMatters` counts them) for the extension's icon.",
         "requestBody": {
           "required": true,
           "content": {
@@ -190215,6 +190215,11 @@
                   "type": "object",
                   "properties": {
                     "recorded": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "matters": {
                       "type": "integer",
                       "minimum": 0,
                       "maximum": 9007199254740991
@@ -214430,7 +214435,10 @@
                               "login",
                               "failures",
                               "extension",
-                              "history"
+                              "history",
+                              "people",
+                              "ledger",
+                              "other"
                             ]
                           },
                           "label": {
@@ -214500,7 +214508,10 @@
                           "login",
                           "failures",
                           "extension",
-                          "history"
+                          "history",
+                          "people",
+                          "ledger",
+                          "other"
                         ]
                       }
                     },

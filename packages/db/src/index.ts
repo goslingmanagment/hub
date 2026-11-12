@@ -43,6 +43,7 @@ export * from "./repositories/fansly-blocklist.ts";
 // Chat Memory week 4: customs (0310).
 export * from "./repositories/fan-customs.ts";
 export * from "./repositories/matters.ts";
+export * from "./repositories/matter-checks.ts";
 // Agent reports: named markdown pages an agent key publishes (0390, package O).
 export * from "./repositories/agent-reports.ts";
 // «Состояние»: reporters, their routines and copies, and Hub's own schedules (0391).

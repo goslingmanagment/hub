@@ -1,6 +1,7 @@
 import type { DemoHandlers } from "../core.ts";
 import { accountHandlers } from "./account.ts";
 import { costsAttentionHandlers } from "./costs-attention.ts";
+import { mattersHandlers } from "./matters.ts";
 import { moneyHandlers } from "./money.ts";
 import { pageHandlers } from "./page.ts";
 import { peopleHandlers } from "./people.ts";
@@ -30,6 +31,8 @@ const AREAS: Readonly<Record<string, DemoHandlers>> = {
   "wb-admin": wbAdminHandlers,
   // The people registry: the team's list, the owner's card with pay terms, and its writes (people.ts).
   people: peopleHandlers,
+  // «Ждут вас» from matters (packages D and K); `hub-demo-scenario=matters-0|matters-6|matters-40|matters-off` (matters.ts).
+  matters: mattersHandlers,
   settings: settingsHandlers,
   system: systemHandlers,
 };

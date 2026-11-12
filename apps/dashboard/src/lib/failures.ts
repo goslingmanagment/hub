@@ -1,4 +1,5 @@
 import type { NotificationsIncidentItem } from "@agency_hub_core/contracts";
+import { INCIDENT_KIND_WORDS } from "@agency_hub_core/look";
 
 import { buildPageSectionRoute } from "@/lib/navigation";
 
@@ -20,36 +21,11 @@ export function isOfapiOffFailure(item: Pick<NotificationsIncidentItem, "kind" |
 
 export type FailureKind = NotificationsIncidentItem["kind"];
 
-/** The name of a failure by its kind (design/ia.md §5.2). */
-export const FAILURE_KIND_LABELS = {
-  auth_blocked: "Вход заблокирован",
-  proxy_failed: "Прокси не работает",
-  proxy_missing: "Нет прокси",
-  stream_failed_threshold: "Сбор падает 3 раза подряд",
-  ofapi_auth: "OnlyFans API: доступ отклонён",
-  ofapi_binding_conflict: "OnlyFans API: конфликт привязки",
-  ofapi_low_credit: "Мало кредитов OnlyFans API",
-  ofapi_webhook_silence: "События OnlyFans API замолчали",
-  ofapi_burn_rate: "Кредиты сгорают необычно быстро",
-  db_disk_usage: "База: мало места",
-  observations_partitions: "База: разделы журнала",
-  wrong_transactions_writer: "Операции пишет не тот процесс",
-  read_gateway_capture: "Сбор: шлюз чтения",
-  golden_signal_lag: "Отставание ключевых метрик",
-  scheduler_silent: "Планировщик молчит",
-  ops_sampler_silent: "Сбор метрик молчит",
-  sync_silent: "Сбор Fansly молчит",
-  fansly_sync_engine: "Сбор Fansly: сбой",
-  ofapi_chargebacks_reconcile_failed: "Сверка возвратов OnlyFans",
-  ofapi_link_stats_reconcile_failed: "Сверка статистики ссылок OnlyFans",
-  ai_provider_billing: "ИИ: проблема с оплатой",
-  ai_provider_failed: "ИИ: поставщик не отвечает",
-  capture_payload_parity: "Расхождение сохранённых данных",
-  publishing_stopped: "Hub остановил публикацию",
-  publication_not_published: "Пост не вышел",
-  ofapi_platform_notice: "OnlyFans написал странице",
-  chatspace_tab: "Вкладка ChatSpace на сервере",
-} satisfies Record<FailureKind, string>;
+/**
+ * The name of a failure by its kind (design/ia.md §5.2): the one dictionary in packages/look (the list «Ждут вас»
+ * names failures from it too); here only the check that every kind of the contract has its name.
+ */
+export const FAILURE_KIND_LABELS = INCIDENT_KIND_WORDS satisfies Record<FailureKind, string>;
 
 export function failureKindLabel(kind: string): string {
   return (FAILURE_KIND_LABELS as Record<string, string>)[kind] ?? "Сбой";

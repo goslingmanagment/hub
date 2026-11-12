@@ -66,6 +66,7 @@ import {
 } from "./services/agent-keys.ts";
 import { registerSyncEngineCommands } from "./sync/cli.ts";
 import { registerPeopleCommands } from "./services/people/cli.ts";
+import { registerMatterCheckCommands } from "./services/matter-checks-cli.ts";
 import { AiGatewayTerminalStreamConsumer, buildAiGatewayTerminalRecord } from "./services/ai-gateway.ts";
 import {
   applyLiveConfigPatches,
@@ -4046,6 +4047,7 @@ export function buildProgram() {
 
   // The people registry's one-off import (an argument file from the owner's Mac; dry run unless --apply).
   registerPeopleCommands(program);
+  registerMatterCheckCommands(program);
 
   const config = program
     .command("config")

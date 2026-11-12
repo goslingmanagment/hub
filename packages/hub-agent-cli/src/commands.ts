@@ -20,6 +20,9 @@ import {
   agentFanQueueCreateBodySchema,
   agentFanQueuePreviewBodySchema,
   agentFanQueueUpdateBodySchema,
+  agentMatterCloseBodySchema,
+  agentMatterCommentBodySchema,
+  agentMatterOpenBodySchema,
   agentResolveHintEnum,
   agentSenderRoleEnum,
   agentSyncResourceKeyEnum,
@@ -32,6 +35,9 @@ import {
   publicationUpdateBodySchema,
   sortDirEnum,
   millsFromDollars,
+  MATTER_CLOSED_HOWS,
+  MATTER_OWNER_ROLE_NAMES,
+  matterKindOfKey,
   type AgentCrossSpendersResponse,
   type AgentHistoryDepth,
   type AgentHistoryFanRef,
@@ -451,6 +457,8 @@ export interface HubCommand {
   name: string;
   operation: string;
   summary: string;
+  /** One command line that works, shown by `--help`. */
+  example?: string;
   options: Record<string, HubOption>;
   /** Several calls of `operation` (see the header). */
   composite?: true;
@@ -1725,6 +1733,136 @@ async function draftVaultAlbum(client: KernelClient, values: HubOptionValues, de
 
 
 // --- fan queues (docs/plans/2026-10-29-fan-queues) ---------------------------------
+
+// --- matters (write:matters) ------------------------------------------------
+
+const MATTER_CAPABILITY_HINT =
+  "This key lacks write:matters: the owner grants it to the key (dashboard, Система, Доступ ИИ-агентов)";
+
+/** What a refusal of the matters' door means, and what to do. */
+function matterHint(error: { status: number | null; code: string | null }): string | null {
+  if (error.status === 403 && error.code !== "forbidden") return MATTER_CAPABILITY_HINT;
+  if (error.status === 409 && error.code === "matter_not_agents") {
+    return "Hub's server keeps this kind (a mirror of «Ждут вас», a check, a shift report…) or another writer holds the key:"
+      + " open your own kind (words with dots, e.g. reminder.team) under its own key";
+  }
+  if (error.status === 409 && error.code === "person_unknown") return "No living Hub login of that name: check --user / --watcher / --on-behalf-of";
+  if (error.status === 404) return "No such matter, or a page outside this key's grant";
+  return null;
+}
+
+/** `--evidence-file <path>` or `-` (stdin): one JSON object. */
+function readEvidence(values: HubOptionValues, deps: HubRunDeps): Record<string, unknown> | undefined {
+  const path = readString(values, "evidence-file");
+  if (path === undefined) return undefined;
+  const text = deps.readFile(path === "-" ? "/dev/stdin" : path);
+  if (text === null) throw new HubUsageError(`--evidence-file ${path} cannot be read`);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw new HubUsageError(`--evidence-file ${path} is not JSON`);
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) throw new HubUsageError(`--evidence-file ${path} is not a JSON object`);
+  return parsed as Record<string, unknown>;
+}
+
+/** `matter open`'s body: the key's kind is the key's own (`<kind>:<ref>`); whom it waits for is a login or a role. */
+function matterOpenBody(values: HubOptionValues, deps: HubRunDeps, key: string) {
+  const user = readString(values, "user");
+  const role = readEnum(values, "role", MATTER_OWNER_ROLE_NAMES);
+  if ((user === undefined) === (role === undefined)) throw new HubUsageError("say whom it waits for: --user <login> or --role owner | team_lead | chatter");
+  const kind = matterKindOfKey(key);
+  if (kind === "") throw new HubUsageError("the key is <kind>:<ref>, e.g. reminder.team:alice-2026-11-12");
+  const object = readString(values, "object");
+  if (object !== undefined && !/^[a-z][a-z0-9_]*:.+$/.test(object)) throw new HubUsageError("--object is <type>:<id>, e.g. fan:123456");
+  return checkedDraft(agentMatterOpenBodySchema, defined({
+    key,
+    kind,
+    title: requireString(values, "title"),
+    owner: user !== undefined ? { user } : { role: role! },
+    watchers: readList(values, "watcher"),
+    object: object === undefined ? undefined : { type: object.slice(0, object.indexOf(":")), id: object.slice(object.indexOf(":") + 1) },
+    pageLabels: readList(values, "page"),
+    evidence: readEvidence(values, deps),
+    money: readFlag(values, "money") ? true : undefined,
+    link: readString(values, "link"),
+    onBehalfOf: readString(values, "on-behalf-of"),
+  }));
+}
+
+const MATTER_KEY_ARGUMENT = { name: "key", describe: "the reason key, <kind>:<ref> (the same finding, the same key)", min: 1, max: 1 };
+
+const MATTER_COMMANDS: HubCommand[] = [
+  {
+    name: "matter open",
+    operation: "agentMatterOpen",
+    summary:
+      "Say that something waits for a person: a matter by its reason key, for a login (--user) or a role (--role), shown in"
+      + " «Ждут вас» (a chatter's also on the extension's icon). The same key again updates it (`transition`: updated or"
+      + " unchanged), a closed one reopens. Only the agent's own kinds: one Hub's server keeps is refused (409"
+      + " matter_not_agents). Exit 0 — Hub keeps it (read `transition`); 4 — refused or no answer. Needs write:matters.",
+    example: 'hub matter open reminder.team:alice-2026-11-12 --title "Ответьте в «Обучалке» про смену 11 нояб." --user alice --page lora-2',
+    arguments: MATTER_KEY_ARGUMENT,
+    options: {
+      title: { kind: "string", describe: "What waits, as the person reads it (required), up to 300 characters" },
+      user: { kind: "string", describe: "Whom it waits for: a Hub login (or --role)" },
+      role: { kind: "string", describe: `Whom it waits for: a role (or --user): ${MATTER_OWNER_ROLE_NAMES.join(" | ")}` },
+      page: { kind: "list", describe: "A page it is about, of this key's grant (repeatable); none — every page's" },
+      "evidence-file": { kind: "string", describe: "What the finding saw: a JSON object from a file, or - for stdin (up to 4 KB; no fan names, no message texts)" },
+      money: { kind: "boolean", describe: "The evidence carries money: only the owner reads the matter" },
+      link: { kind: "string", describe: "Where it is done: a path of the console or Workboard (/workboard/…)" },
+      object: { kind: "string", describe: "What it is about, <type>:<id> (e.g. fan:123456)" },
+      watcher: { kind: "list", describe: "A Hub login who sees it too (repeatable)" },
+      "on-behalf-of": { kind: "string", describe: "The Hub login on whose word the agent writes" },
+    },
+    hint: matterHint,
+    run: (client, values, deps, args) => client.agentMatterOpen({ body: matterOpenBody(values, deps, args[0]!) }),
+  },
+  {
+    name: "matter close",
+    operation: "agentMatterClose",
+    summary:
+      "Close the agent's own matter by its key: --how resolved (done, the default) | withdrawn (the agent was wrong) |"
+      + " cause_gone (the cause went away by itself). A closed one stays as it was (`transition`: unchanged). Exit 0 —"
+      + " closed or already closed; 4 — no such matter, another writer's, or no answer. Needs write:matters.",
+    example: 'hub matter close reminder.team:alice-2026-11-12 --how resolved --note "ответила в 18:40"',
+    arguments: MATTER_KEY_ARGUMENT,
+    options: {
+      how: { kind: "string", describe: `How it ended: ${MATTER_CLOSED_HOWS.join(" | ")} (default resolved)` },
+      note: { kind: "string", describe: "A line for the matter's history, up to 500 characters" },
+      "on-behalf-of": { kind: "string", describe: "The Hub login on whose word the agent writes" },
+    },
+    hint: matterHint,
+    run: (client, values, _deps, args) => client.agentMatterClose({
+      body: checkedDraft(agentMatterCloseBodySchema, defined({
+        key: args[0]!,
+        how: readEnum(values, "how", MATTER_CLOSED_HOWS) ?? "resolved",
+        note: readString(values, "note"),
+        onBehalfOf: readString(values, "on-behalf-of"),
+      })),
+    }),
+  },
+  {
+    name: "matter comment",
+    operation: "agentMatterComment",
+    summary:
+      "Add a line to a matter's history by its key (any writer's matter of this key's pages); the text stays in Hub, the"
+      + " audit keeps only its digest. Exit 0 — written; 4 — no such matter or no answer. Needs write:matters.",
+    example: 'hub matter comment reminder.team:alice-2026-11-12 --text "Сказала: ответит вечером" --on-behalf-of alice',
+    arguments: MATTER_KEY_ARGUMENT,
+    options: {
+      text: { kind: "string", describe: "The line (required), up to 2000 characters" },
+      "on-behalf-of": { kind: "string", describe: "The Hub login on whose word the agent writes" },
+    },
+    hint: matterHint,
+    run: (client, values, _deps, args) => client.agentMatterComment({
+      body: checkedDraft(agentMatterCommentBodySchema, defined({
+        key: args[0]!, text: requireString(values, "text"), onBehalfOf: readString(values, "on-behalf-of"),
+      })),
+    }),
+  },
+];
 
 // --- agent reports (write:reports) -----------------------------------------
 
@@ -3083,6 +3221,7 @@ export const HUB_COMMANDS: readonly HubCommand[] = [
     hint: reportHint,
     run: (client) => client.agentReportList(),
   },
+  ...MATTER_COMMANDS,
 ];
 
 /** A command by its words: one (`threads`) or two (`report put`). */

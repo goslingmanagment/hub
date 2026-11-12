@@ -20,6 +20,7 @@ export * from "./fan-queues.ts";
 export * from "./routes-fan-queues.ts";
 // Дела: what waits for a person, by reason key (package D), spread by routes.ts.
 export * from "./matters.ts";
+export * from "./matter-checks.ts";
 export * from "./routes-matters.ts";
 // Agent reports: named markdown pages an agent key publishes (package O), spread by routes.ts.
 export * from "./agent-reports.ts";

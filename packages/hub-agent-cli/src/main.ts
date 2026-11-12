@@ -127,6 +127,7 @@ function usageDocument(
       ...(command
         ? {
           command: command.name,
+          ...(command.example === undefined ? {} : { example: command.example }),
           ...(command.arguments === undefined
             ? {}
             : { arguments: `${command.arguments.name}: ${command.arguments.describe} (bare words after the command; -- before one that starts with -)` }),

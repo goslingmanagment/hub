@@ -12,6 +12,7 @@ import {
 import { pageScopeFor } from "../../api/request-auth.ts";
 import { recordChatspaceTabState } from "../../services/chatspace-tab-watch.ts";
 import { listTeamShifts, recordClientActivity } from "../../services/chatter-shifts.ts";
+import { countClientMatters } from "../../services/matters.ts";
 import { readTeamChatterNumbers } from "../../services/chatter-numbers.ts";
 import { readTeamAuthorship } from "../../services/team-authorship.ts";
 import { readTeamCustoms } from "../../services/team-customs.ts";
@@ -34,7 +35,13 @@ export function registerClientActivityRoutes(server: ApiServer, ctx: ApiModuleCo
   }, async (request): Promise<ClientActivityResponse> => {
     // requirePrincipal: no principal → 401, an agent key → 403. The service refuses a cookie session (403).
     const principal = await requirePrincipal(request);
-    return recordClientActivity(appContext, principal, request.body);
+    const beat = await recordClientActivity(appContext, principal, request.body);
+    // The number on the extension's icon rides the beat (package K); a count that fails never fails the beat.
+    const matters = await countClientMatters(appContext, principal).catch((error: unknown) => {
+      request.log.warn({ err: error }, "client activity: the person's matters could not be counted");
+      return undefined;
+    });
+    return matters === undefined ? beat : { ...beat, matters };
   });
 
   // The always-on ChatSpace tab's report (apps/chatspace-browser): kept for

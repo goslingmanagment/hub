@@ -36,6 +36,7 @@ import {
   runClientSendArchiveSweep,
 } from "./services/client-send-custody-archive.ts";
 import { MATTERS_MIRROR_QUEUE, runMattersMirror } from "./services/matters-mirror.ts";
+import { runMatterChecks } from "./services/matter-checks.ts";
 import { SALE_HOMES_QUEUE, runSaleHomesTick } from "./services/sale-homes.ts";
 import { SHIFT_ROWS_QUEUE, runShiftRowsTick } from "./services/shift-rows.ts";
 import { SYSTEM_STATE_QUEUE, runSystemStateTick } from "./services/system-state-tick.ts";
@@ -427,6 +428,14 @@ export async function startWorkerServices(
     const tally = await runMattersMirror(app);
     if (tally.opened + tally.closed + tally.failed.length + tally.mismatched.length > 0) {
       app.logger.info(tally, "Matters mirror pass complete");
+    }
+    // The checks of package K ride the same minute; each kind asks its source on its own period.
+    const checks = await runMatterChecks(app).catch((error: unknown) => {
+      app.logger.error({ err: error }, "Matter checks pass failed");
+      return null;
+    });
+    if (checks && checks.tally.opened + checks.tally.closed + checks.tally.failed.length > 0) {
+      app.logger.info(checks.tally, "Matter checks pass complete");
     }
   });
   // Shifts as rows with a stable id, and whose each sale is by the one rule: in shadow, no screen reads them yet.
