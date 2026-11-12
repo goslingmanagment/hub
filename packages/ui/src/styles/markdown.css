@@ -1,0 +1,151 @@
+/*
+ * A page an agent wrote (components/Markdown.tsx), in the app's own type.
+ *
+ * Both apps draw it: Workboard reads the shared `--ui-*` tokens, the console
+ * (which does not load tokens.css) its own `--color-*`, so every value names
+ * both. Reading text is 15 on 22, headings step up from it, a table is the
+ * apps' data table with hairlines and scrolls inside its frame, code is the
+ * monospace of the console's ids.
+ */
+@layer ui {
+  .ui-md {
+    --md-text: var(--ui-text, var(--color-text-primary));
+    --md-text-2: var(--ui-text-2, var(--color-text-secondary));
+    --md-line: var(--ui-line, var(--color-border));
+    --md-line-soft: var(--ui-line-soft, var(--color-border-light));
+    --md-line-strong: var(--ui-line-strong, var(--color-border-strong));
+    --md-ground: var(--ui-bg, var(--color-bg));
+    --md-hover: var(--ui-hover-soft, var(--color-hover-alt));
+    --md-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+
+    min-width: 0;
+    max-width: 100%;
+    font-size: 15px;
+    line-height: 22px;
+    color: var(--md-text);
+    overflow-wrap: break-word;
+  }
+
+  /* The rules below are `:where()`-light, so the page's first and last block
+     lose their outer space whatever they are. */
+  .ui-md > :first-child { margin-top: 0; }
+  .ui-md > :last-child { margin-bottom: 0; }
+
+  /* ── Headings: 20, 17, 15 in 600, then 15 in the second ink ─────────── */
+  .ui-md :where(.ui-md__h1, .ui-md__h2, .ui-md__h3, .ui-md__h4, .ui-md__h5, .ui-md__h6) {
+    margin: 24px 0 8px;
+    font-weight: 600;
+    letter-spacing: -0.005em;
+    color: var(--md-text);
+  }
+  .ui-md :where(.ui-md__h1) { font-size: 20px; line-height: 28px; }
+  .ui-md :where(.ui-md__h2) { font-size: 17px; line-height: 24px; }
+  .ui-md :where(.ui-md__h3) { margin-top: 16px; font-size: 15px; line-height: 22px; }
+  .ui-md :where(.ui-md__h4, .ui-md__h5, .ui-md__h6) { margin-top: 16px; font-size: 15px; line-height: 22px; color: var(--md-text-2); }
+
+  .ui-md p { margin: 0 0 12px; }
+
+  /* ── Lists ───────────────────────────────────────────────────────────── */
+  .ui-md ul,
+  .ui-md ol { margin: 0 0 12px; padding-left: 24px; }
+  .ui-md ul { list-style: disc; }
+  .ui-md ol { list-style: decimal; }
+  .ui-md ul ul { list-style: circle; }
+  .ui-md li { margin: 4px 0; }
+  .ui-md li > ul,
+  .ui-md li > ol { margin: 4px 0 0; }
+  .ui-md li::marker { color: var(--md-text-2); }
+
+  /* ── Inline ──────────────────────────────────────────────────────────── */
+  .ui-md strong { font-weight: 600; }
+  .ui-md em { font-style: italic; }
+  .ui-md del { color: var(--md-text-2); }
+  /* Not the accent: links inside text, as the console's `.link`. */
+  .ui-md a {
+    color: var(--md-text);
+    text-decoration: underline;
+    text-decoration-color: var(--md-line-strong);
+    text-underline-offset: 3px;
+    transition: text-decoration-color 150ms;
+  }
+  .ui-md a:hover { text-decoration-color: currentColor; }
+  .ui-md code {
+    padding: 1px 4px;
+    border-radius: 4px;
+    background: var(--md-ground);
+    font-family: var(--md-mono);
+    font-size: 14px;
+    line-height: 20px;
+  }
+
+  /* ── Blocks ──────────────────────────────────────────────────────────── */
+  .ui-md pre {
+    margin: 0 0 12px;
+    padding: 12px 16px;
+    overflow-x: auto;
+    border: 1px solid var(--md-line);
+    border-radius: 8px;
+    background: var(--md-ground);
+  }
+  .ui-md pre code {
+    padding: 0;
+    background: none;
+    white-space: pre;
+  }
+  .ui-md blockquote {
+    margin: 0 0 12px;
+    padding-left: 12px;
+    border-left: 3px solid var(--md-line-strong);
+    color: var(--md-text-2);
+  }
+  .ui-md hr {
+    margin: 24px 0;
+    border: 0;
+    border-top: 1px solid var(--md-line);
+  }
+
+  /* ── Tables: the data table, scrolling inside its own frame ──────────── */
+  .ui-md :where(.ui-md__table) {
+    max-width: 100%;
+    margin: 0 0 16px;
+    overflow-x: auto;
+    border: 1px solid var(--md-line);
+    border-radius: 8px;
+  }
+  .ui-md table {
+    min-width: 100%;
+    border-collapse: collapse;
+    font-size: 15px;
+    line-height: 22px;
+  }
+  .ui-md th {
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--md-line);
+    font-size: 14px;
+    font-weight: 500;
+    line-height: 20px;
+    text-align: left;
+    white-space: nowrap;
+    color: var(--md-text-2);
+  }
+  .ui-md td {
+    padding: 8px 12px;
+    border-top: 1px solid var(--md-line-soft);
+    vertical-align: top;
+    color: var(--md-text);
+  }
+  .ui-md tbody tr:first-child td { border-top: 0; }
+  .ui-md tbody tr:hover td { background: var(--md-hover); }
+  .ui-md th:first-child,
+  .ui-md td:first-child { padding-left: 16px; }
+  .ui-md th:last-child,
+  .ui-md td:last-child { padding-right: 16px; }
+  /* A short cell stays on one line; a long one wraps, never squeezed below a phrase. */
+  .ui-md td.ui-md__short { white-space: nowrap; }
+  .ui-md td.ui-md__long { min-width: 8em; }
+  /* A date, a range, a sum, a time: never broken across lines (`2026-07-` / `04`). */
+  .ui-md .ui-md__num { white-space: nowrap; }
+  .ui-md .ui-md__left { text-align: left; }
+  .ui-md .ui-md__center { text-align: center; }
+  .ui-md .ui-md__right { text-align: right; font-variant-numeric: tabular-nums; }
+}

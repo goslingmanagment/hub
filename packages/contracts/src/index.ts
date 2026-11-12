@@ -21,6 +21,9 @@ export * from "./routes-fan-queues.ts";
 // Дела: what waits for a person, by reason key (package D), spread by routes.ts.
 export * from "./matters.ts";
 export * from "./routes-matters.ts";
+// Agent reports: named markdown pages an agent key publishes (package O), spread by routes.ts.
+export * from "./agent-reports.ts";
+export * from "./routes-agent-reports.ts";
 export * from "./agent-team.ts";
 // «Рассылки» kept by Hub (outreach-store-v1), spread by routes.ts.
 export * from "./outreach.ts";

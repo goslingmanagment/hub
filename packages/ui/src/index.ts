@@ -15,6 +15,7 @@
  *   @agency_hub_core/ui/heldSends   a held send and its resolve, in words, for the send's platform
  *   @agency_hub_core/ui/shiftReports shift reports and the posts in «Отчётность» in words, and what of them waits for the owner
  *   @agency_hub_core/ui/sites       the production names of the console and the chatters' site
+ *   @agency_hub_core/ui/markdown    markdown into a tree the app draws itself (Markdown), no HTML, no images
  */
 export { Badge, CountBadge, StatusDot, type Tone } from "./components/Badge.js";
 export { Bar } from "./components/Bar.js";
@@ -32,6 +33,7 @@ export { Fan, collidingFanNames, fanFallback, fanNameCollides, fanText, type Fan
 export { HeatGrid, type HeatGridProps, type HeatGridRow, type HeatStep } from "./components/HeatGrid.js";
 export { Kbd } from "./components/Kbd.js";
 export { KeyValue } from "./components/KeyValue.js";
+export { Markdown } from "./components/Markdown.js";
 export { Menu, type MenuAction, type MenuEntry, type MenuProps, type TriggerProps } from "./components/Menu.js";
 export { Confirm, Modal, type ConfirmFact, type ConfirmProps, type ModalProps } from "./components/Modal.js";
 export { Count, Money, type MoneyProps } from "./components/Money.js";

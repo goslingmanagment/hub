@@ -26,7 +26,7 @@ for at password sign-in (`client: "chat-extension"`): it reaches only the
 64 routes marked "yes", and every route marked "no" refuses it with 403.
 A full device token is not affected.
 
-## Routes (434)
+## Routes (438)
 
 | Method | Path | Route key | Kind | Roles | Page scope | chat-extension token |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -256,6 +256,8 @@ A full device token is not affected.
 | POST | `/api/v1/agent/publications/:id/withdraw` | `agentPublicationWithdraw` | `agentKey` | — | — | no |
 | POST | `/api/v1/agent/publications/approve` | `agentPublicationApprove` | `agentKey` | — | — | no |
 | GET | `/api/v1/agent/publications/changes` | `agentPublicationChanges` | `agentKey` | — | — | no |
+| GET | `/api/v1/agent/reports` | `agentReportList` | `agentKey` | — | — | no |
+| PUT | `/api/v1/agent/reports/:slug` | `agentReportPut` | `agentKey` | — | — | no |
 | POST | `/api/v1/agent/resolve` | `agentResolve` | `agentKey` | — | — | no |
 | POST | `/api/v1/agent/search/messages` | `agentSearchMessages` | `agentKey` | — | — | no |
 | GET | `/api/v1/agent/sync/pages` | `agentSyncStatus` | `agentKey` | — | — | no |
@@ -429,6 +431,8 @@ A full device token is not affected.
 | GET | `/api/v1/pages/:pageLabel/voice-notes/:id` | `voiceNoteStatus` | `apiKey` | — | page | yes |
 | GET | `/api/v1/pages/:pageLabel/voice-notes/:id/audio` | `voiceNoteAudio` | `apiKey` | — | page | yes |
 | GET | `/api/v1/pages/:pageLabel/voice-notes/allowance` | `voiceNoteAllowance` | `apiKey` | — | page | yes |
+| GET | `/api/v1/reports` | `reportsList` | `session` | — | — | no |
+| GET | `/api/v1/reports/:slug` | `reportGet` | `session` | — | — | no |
 | GET | `/api/v1/sync/history-requests` | `syncHistoryRequests` | `owner-session` | — | — | no |
 | GET | `/api/v1/sync/history-requests/:requestRef` | `syncHistoryRequestGet` | `owner-session` | — | — | no |
 | POST | `/api/v1/sync/history-requests/:requestRef/cancel` | `syncHistoryRequestCancel` | `owner-session` | — | — | no |

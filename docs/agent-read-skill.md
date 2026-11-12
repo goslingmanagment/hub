@@ -1304,6 +1304,8 @@ Global flags: `--base-url`, `--fail-on-partial`, `--pretty`, `--help`.
 | `hub queue-show` | One fan queue with its results by person, skips and drops. |
 | `hub queue-edit` | Pause, resume, finish, limits, people, moving a person's fans; on the word of the asker, the owner or a team lead. |
 | `hub queue-add` | Add fans to a fan queue by a rule or a list. |
+| `hub report put <slug>` | Publish a page people read in the app from a markdown file (`--title`, `--section traffic\|team\|content\|system`, `--file`, `--valid-hours N`, `--team-leads`): `traffic` is the owner's «Трафик → Сводка», every page is in «Система → Отчёты агентов». The same slug again replaces the page. Needs `write:reports`. |
+| `hub report list` | The published pages without their text: slug, title, version, when, by which key, stale or not. Needs `write:reports`. |
 
 Two operations are deliberately absent: observation PAYLOADS and hydration
 DECISIONS are owner only. Your key cannot reach them, and a command for them would

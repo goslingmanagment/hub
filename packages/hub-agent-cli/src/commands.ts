@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 
 import {
   AGENT_CLAIM_FIELDS,
+  AGENT_REPORT_SECTIONS,
   agentCoverageStatusEnum,
   agentCrossSpendersAudienceEnum,
   agentDatasetEnum,
@@ -12,6 +13,7 @@ import {
   agentMessageDirectionEnum,
   agentObservationSourceEnum,
   agentPublicationCreateBodySchema,
+  agentReportPutBodySchema,
   agentFanQueueAppendBodySchema,
   agentFanQueueCreateBodySchema,
   agentFanQueuePreviewBodySchema,
@@ -1487,6 +1489,27 @@ async function draftVaultAlbum(client: KernelClient, values: HubOptionValues, de
 
 // --- fan queues (docs/plans/2026-10-29-fan-queues) ---------------------------------
 
+// --- agent reports (write:reports) -----------------------------------------
+
+const REPORT_CAPABILITY_HINT =
+  "This key lacks write:reports: the owner grants it to the key (dashboard, Система, Доступ ИИ-агентов)";
+
+function reportHint(error: { status: number | null; code: string | null }): string | null {
+  return error.status === 403 && error.code !== "forbidden" ? REPORT_CAPABILITY_HINT : null;
+}
+
+/** `report put`'s body: the markdown from --file, the words from the flags. */
+function reportBody(values: HubOptionValues, deps: HubRunDeps) {
+  const validHours = readNumber(values, "valid-hours");
+  return checkedDraft(agentReportPutBodySchema, defined({
+    title: requireString(values, "title"),
+    section: requireEnum(values, "section", AGENT_REPORT_SECTIONS),
+    body: readTextFile(deps, requireString(values, "file")),
+    teamLeads: readFlag(values, "team-leads") ? true : undefined,
+    validHours,
+  }));
+}
+
 const QUEUE_CAPABILITY_HINT =
   "This key lacks write:fan_queues: the owner grants it to the key (cli.js agent-keys:capabilities)";
 
@@ -2708,8 +2731,36 @@ export const HUB_COMMANDS: readonly HubCommand[] = [
       return client.agentFanQueueAppend({ params: { queueId: requireId(values, "id") }, body: checkedDraft(agentFanQueueAppendBodySchema, body) });
     },
   },
+  {
+    name: "report put",
+    operation: "agentReportPut",
+    summary:
+      "Publish a page people read in the app, by its slug (a bare word: traffic), from a markdown file: the owner reads"
+      + " it (`traffic` is Трафик → Сводка; every page is in Система → Отчёты агентов), team leads too with --team-leads."
+      + " The same slug again replaces the page; the same text keeps its version. Needs write:reports.",
+    arguments: { name: "slug", describe: "the page's slug: lowercase letters, digits and hyphens", min: 1, max: 1 },
+    options: {
+      title: { kind: "string", describe: "The page's title (required)" },
+      section: { kind: "string", describe: `Where it belongs (required): ${AGENT_REPORT_SECTIONS.join(" | ")}` },
+      file: { kind: "string", describe: "The markdown file (required), up to 256 KB: headings, lists, tables, links, code" },
+      "valid-hours": { kind: "number", describe: "The page is shown as stale this many hours after publishing" },
+      "team-leads": { kind: "boolean", describe: "Team leads read it too (default: the owner only)" },
+    },
+    hint: reportHint,
+    run: (client, values, deps, args) => client.agentReportPut({ params: { slug: args[0]! }, body: reportBody(values, deps) }),
+  },
+  {
+    name: "report list",
+    operation: "agentReportList",
+    summary: "The published pages without their text: slug, title, section, version, when, by which key, stale or not."
+      + " Needs write:reports.",
+    options: {},
+    hint: reportHint,
+    run: (client) => client.agentReportList(),
+  },
 ];
 
+/** A command by its words: one (`threads`) or two (`report put`). */
 export function findHubCommand(name: string): HubCommand | undefined {
   return HUB_COMMANDS.find((command) => command.name === name);
 }

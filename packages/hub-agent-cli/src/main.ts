@@ -242,7 +242,11 @@ export async function runHubCli(deps: HubCliDeps): Promise<HubCliResult> {
     };
   }
 
-  const commandName = globals.positionals[0];
+  // A command is one word (`threads`) or two (`report put`): the longer name wins.
+  const [firstWord, secondWord] = globals.positionals;
+  const twoWords = firstWord !== undefined && secondWord !== undefined ? findHubCommand(`${firstWord} ${secondWord}`) : undefined;
+  const commandWords = twoWords === undefined ? 1 : 2;
+  const commandName = twoWords === undefined ? firstWord : `${firstWord} ${secondWord}`;
   if (commandName === undefined || globals.values.help === true) {
     const command = commandName === undefined ? undefined : findHubCommand(commandName);
     return {
@@ -287,12 +291,12 @@ export async function runHubCli(deps: HubCliDeps): Promise<HubCliResult> {
       allowPositionals: true,
       strict: true,
     });
-    // EXACTLY the command word. `parseArgs` collects trailing positionals and
+    // EXACTLY the command word(s). `parseArgs` collects trailing positionals and
     // says nothing about them, so `hub threads lora-2` used to run a query over
     // every granted page and exit 0: a scope typo silently WIDENING the answer,
     // which is the false-completeness family this whole plane exists to prevent.
     // Only a command that declares its bare words (local paths) takes them.
-    args = parsed.positionals.slice(1);
+    args = parsed.positionals.slice(commandWords);
     const accepted = command.arguments;
     if (accepted === undefined && args.length > 0) {
       const stray = args.map((value) => `"${value}"`).join(", ");

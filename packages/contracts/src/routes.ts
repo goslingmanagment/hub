@@ -23,6 +23,7 @@ import { aiOpenerRouteSchemas } from "./routes-ai-openers.ts";
 import { shiftReviewRouteSchemas } from "./routes-shift-review.ts";
 import { teamLedgerRouteSchemas } from "./routes-team-ledger.ts";
 import { matterRouteSchemas } from "./routes-matters.ts";
+import { agentReportRouteSchemas } from "./routes-agent-reports.ts";
 import { accountReportsRouteSchemas } from "./routes-account-reports.ts";
 import { peopleRouteSchemas } from "./routes-people.ts";
 // One sign-in across the names Hub serves: the one-time code between names (ecosystem plan §3.2).
@@ -7174,6 +7175,7 @@ const baseRouteSchemas = {
   ...shiftReviewRouteSchemas,
   ...teamLedgerRouteSchemas,
   ...matterRouteSchemas,
+  ...agentReportRouteSchemas,
   ...accountReportsRouteSchemas,
   ...peopleRouteSchemas,
   ...signinRouteSchemas,

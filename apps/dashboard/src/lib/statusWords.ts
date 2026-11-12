@@ -213,3 +213,9 @@ export const MODEL_APPLICATION_STATUS: Readonly<Record<"filling" | "abandoned" |
   abandoned: status("Бросила", "attention"),
   sent: status("Отправлена", "good"),
 };
+
+/** Трафик → Сводка, Система → Отчёты агентов: a page an agent published, against the validity it gave it. */
+export const AGENT_REPORT_STATUS = {
+  fresh: status("Свежий", "good"),
+  stale: status("Устарел", "attention"),
+} as const satisfies Record<string, StatusWord>;

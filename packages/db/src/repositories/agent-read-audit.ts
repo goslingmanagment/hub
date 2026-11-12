@@ -129,6 +129,10 @@ export const AGENT_READ_AUDIT_SUMMARY_SHAPES = {
    *  people feed carried pay terms (read:pay_terms). */
   proposalId: "count",
   payTerms: "flag",
+  /** Agent reports (write:reports, package O): which page and its version after the publish. The body
+   *  enters as `textSha256`/`textLength` (its UTF-8 bytes), never its words. */
+  reportSlug: "identifier",
+  reportVersion: "count",
 } as const satisfies Record<string, AgentReadAuditSummaryShape>;
 
 export type AgentReadAuditSummaryKey = keyof typeof AGENT_READ_AUDIT_SUMMARY_SHAPES;
