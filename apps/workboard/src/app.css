@@ -203,7 +203,7 @@
     gap: 6px;
   }
 
-  /* A queue of Решения that did not answer: a quiet question, not an alarm (D17). */
+  /* A count of «Ждут вас» that could not be checked: a quiet question, not an alarm (D17). */
   .wb-nav__unknown {
     display: inline-grid;
     place-items: center;
@@ -214,10 +214,6 @@
     color: var(--ui-text-3);
     font-size: var(--ui-fs-13);
     line-height: 1;
-  }
-
-  .wb-nav__tip-line {
-    display: block;
   }
 
   .wb-nav__sep {

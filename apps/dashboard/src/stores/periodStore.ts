@@ -3,7 +3,7 @@ import { persist } from "zustand/middleware";
 
 /**
  * The one remembered reporting period of the console. Every screen of the
- * shared class reads it (lib/sections.ts), so 30 days chosen on Главная are
+ * shared class reads it (packages/ui/src/screens.ts), so 30 days chosen on Главная are
  * still 30 days on Fans and on a page's card. A `?period=` in the URL wins on
  * the screen it is on, and only a choice by hand is remembered: a link opens
  * what its sender saw and changes nothing else.

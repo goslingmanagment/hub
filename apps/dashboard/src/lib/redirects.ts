@@ -8,7 +8,7 @@
  */
 import { matchPath } from "react-router";
 import { ALL_PAGES_PARAM } from "./pageParam.js";
-import { decodedPath, pathSegment } from "./path.js";
+import { decodedPath, pathSegment } from "@agency_hub_core/ui/path";
 import { teamToWorkboard, workboardHref } from "./workboard.js";
 
 export type RouteParams = Readonly<Record<string, string | undefined>>;

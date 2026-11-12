@@ -2,7 +2,7 @@ import { useCallback, useEffect } from "react";
 import { useLocation, useNavigate, useParams, useSearchParams } from "react-router";
 import type { Platform } from "@agency_hub_core/shared";
 import { ALL_PAGES_PARAM, pageFromSearch } from "@/lib/pageParam";
-import { matchScreen, pageFilterOf, type OnePageWay, type PageFilterMode, type Screen } from "@/lib/sections";
+import { matchScreen, pageFilterOf, type OnePageWay, type PageFilterMode, type Screen } from "@agency_hub_core/ui/screens";
 import { usePageFilterStore } from "@/stores/pageFilterStore";
 import { useDashboardShell } from "./DashboardShellContext.js";
 

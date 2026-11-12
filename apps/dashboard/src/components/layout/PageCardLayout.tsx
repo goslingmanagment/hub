@@ -13,7 +13,7 @@ import { Skeleton } from "@/components/ui/Skeleton";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { ScreenFrameContext, type ScreenFrame } from "@/components/ui/screenFrame";
 import { buildPageCollectionRoute, buildPageRoute, buildPageSectionRoute, decodeRouteSegment } from "@/lib/navigation";
-import { matchScreen, pageCardTabs } from "@/lib/sections";
+import { matchScreen, pageCardTabs } from "@agency_hub_core/ui/screens";
 import { usePageCollection, type PageCollection } from "@/pages/page-card/usePageCollection";
 import { OtherPageChip } from "./PageFilterChip.js";
 import { PeriodControl, PeriodMissingNote } from "./PeriodControl.js";

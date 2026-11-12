@@ -16,6 +16,12 @@
  *   @agency_hub_core/ui/shiftReports shift reports and the posts in «Отчётность» in words, and what of them waits for the owner
  *   @agency_hub_core/ui/sites       the production names of the console and the chatters' site
  *   @agency_hub_core/ui/markdown    markdown into a tree the app draws itself (Markdown), no HTML, no images
+ *   @agency_hub_core/ui/screens     the owner's place in one table: every screen of both apps, the sections, the menus
+ *   @agency_hub_core/ui/place       which place a session is in, what a link to the other app carries, the menu's number
+ *   @agency_hub_core/ui/palette     the search (⌘K) over the screens of both apps
+ *   @agency_hub_core/ui/path        an address's path as the router matches it
+ * The frame of the owner's place and its search window, both apps': components/Place.tsx,
+ * components/Palette.tsx, styles/place.css (the console imports that file and the tokens and components).
  */
 export { Badge, CountBadge, StatusDot, type Tone } from "./components/Badge.js";
 export { Bar } from "./components/Bar.js";

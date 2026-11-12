@@ -1,6 +1,7 @@
 /*
  * The shared design system's styles, in one import:
- *   tokens (light and dark), base (ground, type, focus), components.
+ *   tokens (light and dark), base (ground, type, focus), components, the
+ *   frame of the owner's place (the console loads that part too).
  * Everything sits in `@layer ui`. The order below puts it after the reset and
  * before an app's utilities, so a utility class on a component wins.
  */
@@ -11,3 +12,4 @@
 @import "./styles/components.css";
 @import "./styles/data.css";
 @import "./styles/markdown.css";
+@import "./styles/place.css";

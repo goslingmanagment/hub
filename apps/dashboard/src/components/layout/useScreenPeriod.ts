@@ -1,7 +1,7 @@
 import { useCallback } from "react";
 import { useLocation, useSearchParams } from "react-router";
 import { periodDays, periodParam, resolvePeriod, type PeriodKey, type ResolvedPeriod } from "@/lib/period";
-import { forcedPeriodOf, matchScreen, type ForcedPeriod, type ScreenPeriod } from "@/lib/sections";
+import { forcedPeriodOf, matchScreen, type ForcedPeriod, type ScreenPeriod } from "@agency_hub_core/ui/screens";
 import { usePeriodStore, type Period } from "@/stores/periodStore";
 
 export interface ScreenPeriodView extends ResolvedPeriod {

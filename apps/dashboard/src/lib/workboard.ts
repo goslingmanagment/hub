@@ -1,7 +1,8 @@
 /**
  * Workboard (apps/workboard): the team's control, served by Hub on this host at
  * /workboard/ with the same sign-in. It replaced the console's «Команда»
- * (owner, 2026-11-10): the menu item leads there, and every old `/team/*`
+ * (owner, 2026-11-10): its screens are listed under «Команда» in the one menu
+ * of the owner's place (packages/ui/src/screens.ts), and every old `/team/*`
  * address lands on its Workboard screen with what it carried — the person, the
  * dates, the page, the tab (8-docs/2026-11-07-workboard/old-new-map.md §5).
  * Only «Анкеты» (`/team/applications`) stay in the console.
@@ -10,11 +11,12 @@
  * is a plain `<a href>` and an old address leaves with `location.replace`.
  */
 import { addDays, isMoscowDay, moscowToday, type MoscowDay } from "@agency_hub_core/ui/moscow";
+import { decodedPath } from "@agency_hub_core/ui/path";
+import { WORKBOARD_PATH } from "@agency_hub_core/ui/screens";
 import { ALL_PAGES_PARAM } from "./pageParam.js";
-import { decodedPath } from "./path.js";
 
 /** Workboard's address on this host: its Vite `base` (apps/workboard/src/base.ts). */
-export const WORKBOARD_HREF = "/workboard/";
+export const WORKBOARD_HREF = WORKBOARD_PATH;
 
 /** A Workboard address: `workboardHref("people/7", search)` → `/workboard/people/7?…`. */
 export function workboardHref(path = "", search: URLSearchParams | string = "", hash = ""): string {
@@ -32,16 +34,6 @@ export function isWorkboardHref(to: string): boolean {
 export function workboardPersonHref(userId: number, works = true): string {
   return workboardHref(`people/${userId}${works ? "" : "/access"}`);
 }
-
-/** Workboard's screens, for the console's search: the old words find them too. */
-export const WORKBOARD_SCREENS: ReadonlyArray<{ path: string; label: string; keywords: string; ownerOnly?: boolean }> = [
-  { path: "shifts", label: "Смены", keywords: "команда заработок кто работал на смене неделя журнал разбор смены без автора" },
-  { path: "people", label: "Люди", keywords: "чаттеры сотрудники кабинет чаттера числа" },
-  { path: "sales/price", label: "Что продаёт", keywords: "продажи цена скорость ответа ppv платные возврат фанов подходы приветствия кто ждал пустые часы рассылки" },
-  { path: "decisions", label: "Решения", keywords: "чья продажа вопросы генгар отчёты посты не разобраны оплаченный день изменён кастомы проверить отправки зависшие" },
-  { path: "payouts", label: "Выплаты", keywords: "долги начислено выплачено отчёты смен отчётность сумма изменена пост не разобран", ownerOnly: true },
-  { path: "access", label: "Доступ", keywords: "сотрудники приглашение пользователи устройства логины страницы", ownerOnly: true },
-];
 
 /**
  * The console's `?period=` as Workboard's period (map §5): it has 14 and 30
