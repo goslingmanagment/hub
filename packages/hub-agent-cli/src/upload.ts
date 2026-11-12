@@ -228,6 +228,13 @@ export async function hashHubFiles(input: {
       lastLine = at;
       input.progress(`hub: read ${formatHubBytes(done + read)} of ${formatHubBytes(total)}`);
     });
+    // Its size again: a file still being written (a copy, an unpack) is longer by now, and only
+    // its start was read — it would go up cut, as a whole file (review, 2026-11-12).
+    const after = await input.files.stat(item.path);
+    if (after === null || after.size !== item.byteSize) {
+      throw new Error(`${item.path} changed while it was read (${item.byteSize} bytes, now ${after === null ? "gone" : `${after.size}`}):`
+        + " it is still being written, wait until it is whole");
+    }
     done += item.byteSize;
     out.push({ ...item, sha256 });
   }

@@ -1529,6 +1529,11 @@ async function draftVaultAlbum(client: KernelClient, values: HubOptionValues, de
   const targets = await client.agentPublicationTargets({ params: { pageLabel } });
   const onlyfans = targets.platform === "onlyfans";
   if (targets.platform !== "fansly" && !onlyfans) throw new HubUsageError(`vault albums are Fansly's and OnlyFans'; ${pageLabel} is a ${targets.platform} page`);
+  if (!onlyfans && newAlbum) {
+    // Unread there, it would promise a new album and fill the page's same-titled one (review, 2026-11-12).
+    throw new HubUsageError("--new-album is OnlyFans' (a similar title found there): on Fansly the files go into the page's album with"
+      + " exactly this title, and into a new one when it has none — for a new album give another --title");
+  }
   if (onlyfans && !dryRun && maxCredits === null) {
     throw new HubUsageError("an OnlyFans album costs OnlyFansAPI credits: run --dry-run first, name its price to the owner, and on"
       + " their «да» run this with --max-credits <that price> (the run stops before any byte when the price is higher)");
@@ -1616,7 +1621,8 @@ async function draftVaultAlbum(client: KernelClient, values: HubOptionValues, de
       next: priced === null
         ? "Nothing uploaded or drafted. Show the owner the order (position 1 is the top of the album), the count and the"
           + " size" + (inHub.length > 0 ? ` (${inHub.length} of the files are in Hub already, inHub: they do not go up again)` : "")
-          + "; on their word run the same command without --dry-run."
+          + "; on their word run the same command without --dry-run. Which album is not said here: on Fansly the files go into"
+          + " the page's album with exactly this title, and into a new one when it has none."
         : vaultQuoteNext(priced, inHub.length),
     }, 0, { calls, failed: 0 });
   }

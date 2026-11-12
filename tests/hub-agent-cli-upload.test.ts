@@ -111,7 +111,7 @@ function stubHub(entries: Record<string, Buffer>) {
   return { hub, client, upload };
 }
 
-async function draft(stub: ReturnType<typeof stubHub>, entries: Record<string, Buffer>, extra: string[] = []) {
+async function draft(stub: ReturnType<typeof stubHub>, entries: Record<string, Buffer>, extra: string[] = [], files: HubLocalFiles = folder(entries)) {
   const lines: string[] = [];
   const sleeps: number[] = [];
   let clock = Date.parse("2026-11-04T20:00:00Z");
@@ -121,7 +121,7 @@ async function draft(stub: ReturnType<typeof stubHub>, entries: Record<string, B
     readFile: () => null,
     fileMode: () => null,
     createHubClient: () => stub.client as never,
-    files: folder(entries),
+    files,
     upload: stub.upload,
     sleep: async (ms) => {
       sleeps.push(ms);
@@ -195,6 +195,26 @@ describe("vault-album-draft after a break", () => {
     expect(run.result.exitCode).toBe(0);
     expect(stub.hub.sent).toEqual(["a.jpg", "b.jpg"]);
     expect(run.lines.some((line) => line.startsWith("hub: could not ask Hub which files it holds"))).toBe(true);
+  });
+
+  it("refuses a file that grew while it was read: only its start would go up, as a whole file", async () => {
+    const entries: Record<string, Buffer> = { "a.mp4": mp4("the start") };
+    const stub = stubHub(entries);
+    const whole = folder(entries);
+    // The copy into the folder is still going while the CLI reads the file.
+    const files: HubLocalFiles = {
+      ...whole,
+      sha256: async (path, byteSize, onBytes) => {
+        const hash = await whole.sha256(path, byteSize, onBytes);
+        entries["a.mp4"] = Buffer.concat([entries["a.mp4"]!, Buffer.from(", and the rest of it")]);
+        return hash;
+      },
+    };
+    const run = await draft(stub, entries, [], files);
+    expect(run.result.exitCode).not.toBe(0);
+    expect(JSON.stringify(run.result.document)).toContain("still being written");
+    expect(stub.hub.sent).toEqual([]);
+    expect(stub.hub.drafts).toEqual([]);
   });
 
   it("never says «nothing drafted» when Hub answered the draft but this copy of the CLI could not read it", async () => {

@@ -65,7 +65,8 @@ describe("OnlyFans vault lists", () => {
 
   it("marks missing only after a complete walk, and clears it when the list is seen again", async (context) => {
     if (!testDb) return context.skip();
-    await walk(1, [album("101", "Autumn"), album("102", "Mirror")], true);
+    // A platform's title may end with a space; a pack's title never does, and still names it.
+    await walk(1, [album("101", "Autumn"), album("102", "Mirror ")], true);
     expect(await findPageVaultAlbumRefs(app.db, pageId, "Mirror")).toEqual(["102"]);
 
     // Cut short without "Mirror": nothing is missing.
