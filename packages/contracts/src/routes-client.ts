@@ -4556,7 +4556,9 @@ export const clientRouteSchemas = {
     summary: "A chatter marks a custom paid, delivered, cancelled, or edits it",
     description: "Database-only. A device token's; the custom must be of the fan's card and of a page the caller works. "
       + "`paid` takes a tip of `customPayments`, `delivered` a message of the custom's `deliveryCandidates` (else 409 "
-      + "`not_suggested`). A delivered or cancelled custom is final: a change answers `changed: false`.",
+      + "`not_suggested`). A delivered or cancelled custom is final: a change answers `changed: false`. A step that is "
+      + "not the caller's — cancelling or editing an order another person took — is 409 `not_allowed`, as on the board; "
+      + "their own order they cancel at any step before it is given.",
     params: clientFanCustomParamsSchema,
     body: clientFanCustomChangeBodySchema,
     response: {

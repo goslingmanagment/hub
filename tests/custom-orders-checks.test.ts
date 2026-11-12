@@ -17,7 +17,7 @@ function order(id: number, fields: Partial<CustomOrderRow>): CustomOrderRow {
     id, pageId: 1, pageLabel: "lora-1", platform: "fansly", modelName: "Lora", fanId: 7, fanRef: "7400000001", fanUsername: "fan_one",
     fanDisplayName: null, buyer: null, fanErasedAt: null, conversationRef: null, card: { task: "Заказ" }, deadlineOn: null, state: "recorded",
     stateAt: NOW, stateNote: null, stateRef: null, givenMessageRef: null, givenAt: null, acceptedByUserId: 11, acceptedBy: "alice",
-    acceptedByName: "Alice", origin: "agent", contentopsRef: null, sourceText: null, partsDone: [], personFields: [], version: 1, openRevisions: 0,
+    acceptedByName: "Alice", origin: "agent", contentopsRef: null, sourceText: null, partsDone: [], shotByHandAt: null, personFields: [], version: 1, openRevisions: 0,
     createdAt: NOW, updatedAt: NOW, paidGrossMills: 0, paidNetMills: 0, payments: 0, firstPaidAt: null, telegramRefs: [], ...fields,
   };
 }

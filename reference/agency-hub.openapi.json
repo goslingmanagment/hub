@@ -110359,6 +110359,13 @@
                         "minLength": 1,
                         "maxLength": 500
                       },
+                      "part": {
+                        "type": "string",
+                        "enum": [
+                          "video",
+                          "photos"
+                        ]
+                      },
                       "onBehalfOf": {
                         "type": "string",
                         "minLength": 1,
@@ -215967,7 +215974,7 @@
         "tags": [
           "client"
         ],
-        "description": "Database-only. A device token's; the custom must be of the fan's card and of a page the caller works. `paid` takes a tip of `customPayments`, `delivered` a message of the custom's `deliveryCandidates` (else 409 `not_suggested`). A delivered or cancelled custom is final: a change answers `changed: false`.",
+        "description": "Database-only. A device token's; the custom must be of the fan's card and of a page the caller works. `paid` takes a tip of `customPayments`, `delivered` a message of the custom's `deliveryCandidates` (else 409 `not_suggested`). A delivered or cancelled custom is final: a change answers `changed: false`. A step that is not the caller's — cancelling or editing an order another person took — is 409 `not_allowed`, as on the board; their own order they cancel at any step before it is given.",
         "requestBody": {
           "required": true,
           "content": {
@@ -232212,6 +232219,13 @@
                         "type": "string",
                         "minLength": 1,
                         "maxLength": 500
+                      },
+                      "part": {
+                        "type": "string",
+                        "enum": [
+                          "video",
+                          "photos"
+                        ]
                       }
                     },
                     "required": [
