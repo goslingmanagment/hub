@@ -62,6 +62,8 @@ export const saleDisputePartySchema = z.object({
   says: z.array(z.string()),
   /** What their handed-in report counts of the sale now; null — no report holds it. */
   countedMills: mills.nullable(),
+  /** What the party's handed-in report claims while it counts nothing, disputed (review R2b-2); null — none. */
+  claimedMills: mills.nullable().default(null),
   /** Their shift whose report it is; null — none. */
   shiftId: intId.nullable(),
 });

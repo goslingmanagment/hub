@@ -179948,6 +179948,19 @@
                                   "minimum": -9007199254740991,
                                   "maximum": 9007199254740991
                                 },
+                                "claimedMills": {
+                                  "default": null,
+                                  "anyOf": [
+                                    {
+                                      "type": "integer",
+                                      "minimum": -9007199254740991,
+                                      "maximum": 9007199254740991
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
                                 "added": {
                                   "type": "boolean"
                                 },
@@ -179982,6 +179995,7 @@
                                 "shareWithUserId",
                                 "note",
                                 "amountMills",
+                                "claimedMills",
                                 "added",
                                 "disputed",
                                 "settled"
@@ -181432,6 +181446,19 @@
                                     "minimum": -9007199254740991,
                                     "maximum": 9007199254740991
                                   },
+                                  "claimedMills": {
+                                    "default": null,
+                                    "anyOf": [
+                                      {
+                                        "type": "integer",
+                                        "minimum": -9007199254740991,
+                                        "maximum": 9007199254740991
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
                                   "added": {
                                     "type": "boolean"
                                   },
@@ -181694,6 +181721,7 @@
                                   "shareWithName",
                                   "note",
                                   "amountMills",
+                                  "claimedMills",
                                   "added",
                                   "disputed",
                                   "alreadyIn",
@@ -183519,6 +183547,19 @@
                                     "minimum": -9007199254740991,
                                     "maximum": 9007199254740991
                                   },
+                                  "claimedMills": {
+                                    "default": null,
+                                    "anyOf": [
+                                      {
+                                        "type": "integer",
+                                        "minimum": -9007199254740991,
+                                        "maximum": 9007199254740991
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
                                   "added": {
                                     "type": "boolean"
                                   },
@@ -183781,6 +183822,7 @@
                                   "shareWithName",
                                   "note",
                                   "amountMills",
+                                  "claimedMills",
                                   "added",
                                   "disputed",
                                   "alreadyIn",
@@ -268574,6 +268616,19 @@
                               }
                             ]
                           },
+                          "claimedMills": {
+                            "default": null,
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
                           "shiftId": {
                             "anyOf": [
                               {
@@ -268593,6 +268648,7 @@
                           "role",
                           "says",
                           "countedMills",
+                          "claimedMills",
                           "shiftId"
                         ],
                         "additionalProperties": false
@@ -269825,6 +269881,19 @@
                               }
                             ]
                           },
+                          "claimedMills": {
+                            "default": null,
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
                           "shiftId": {
                             "anyOf": [
                               {
@@ -269844,6 +269913,7 @@
                           "role",
                           "says",
                           "countedMills",
+                          "claimedMills",
                           "shiftId"
                         ],
                         "additionalProperties": false
@@ -272490,6 +272560,19 @@
                                     "minimum": -9007199254740991,
                                     "maximum": 9007199254740991
                                   },
+                                  "claimedMills": {
+                                    "default": null,
+                                    "anyOf": [
+                                      {
+                                        "type": "integer",
+                                        "minimum": -9007199254740991,
+                                        "maximum": 9007199254740991
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
                                   "added": {
                                     "type": "boolean"
                                   },
@@ -272752,6 +272835,7 @@
                                   "shareWithName",
                                   "note",
                                   "amountMills",
+                                  "claimedMills",
                                   "added",
                                   "disputed",
                                   "alreadyIn",
@@ -275238,6 +275322,19 @@
                                     "minimum": -9007199254740991,
                                     "maximum": 9007199254740991
                                   },
+                                  "claimedMills": {
+                                    "default": null,
+                                    "anyOf": [
+                                      {
+                                        "type": "integer",
+                                        "minimum": -9007199254740991,
+                                        "maximum": 9007199254740991
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
                                   "added": {
                                     "type": "boolean"
                                   },
@@ -275500,6 +275597,7 @@
                                   "shareWithName",
                                   "note",
                                   "amountMills",
+                                  "claimedMills",
                                   "added",
                                   "disputed",
                                   "alreadyIn",

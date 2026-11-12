@@ -315,8 +315,13 @@ export interface HandinVersionLine {
   amountMills: number;
   /** Outside the shift's window, added to it: a sale of the last 7 days no report of the person held («долёт»). */
   added: boolean;
-  /** Counted as the person claims it while the rule gives it to someone else: until the other side or the owner agrees. */
+  /**
+   * «Моё» on a sale the rule or another person's report gives to someone else: it counts nothing (`amountMills` 0) until
+   * the other side or the owner settles it, and `claimedMills` says what it claims (review R2b-2).
+   */
   disputed: boolean;
+  /** What a disputed line claims (the sale's net); absent — not disputed. */
+  claimedMills?: number;
   /** A claim on it settled (0404): the other side agreed, or the owner decided; the amount is what that gives. Absent — not settled. */
   settled?: "agreed" | "owner";
 }
@@ -363,10 +368,13 @@ export interface HandinVersionRow {
   ruleVersion: string;
   /** Made by the system on a decision; null — handed in by the person. */
   madeFor: HandinVersionMadeFor | null;
+  /** The shift's report date when this version was made (0999); null — a version older than the column. */
+  reportDate: string | null;
 }
 
 const VERSION_COLUMNS = sql`v.id, v.handin_id, v.version, v.submitted_at, v.door, v.actor_user_id, v.agent_key_id, v.telegram_message_ref,
-  v.telegram_sender_id, v.total_mills, v.pages, v.lines, v.off_platform, v.comment, v.day_paid, v.rule_version, v.made_for`;
+  v.telegram_sender_id, v.total_mills, v.pages, v.lines, v.off_platform, v.comment, v.day_paid, v.rule_version, v.made_for,
+  to_char(v.report_date, 'YYYY-MM-DD') as version_report_date`;
 
 function versionOf(row: Row): HandinVersionRow {
   return {
@@ -387,6 +395,7 @@ function versionOf(row: Row): HandinVersionRow {
     dayPaid: row.day_paid === null || row.day_paid === undefined ? null : Boolean(row.day_paid),
     ruleVersion: String(row.rule_version),
     madeFor: madeForOf(row.made_for),
+    reportDate: text(row.version_report_date),
   };
 }
 
@@ -418,6 +427,8 @@ export async function insertHandinVersion(
     ruleVersion: string;
     /** Made by the system on a decision (0404); absent — the person handed it in. */
     madeFor?: HandinVersionMadeFor | null;
+    /** The shift's report date now (`shifts.report_date`): the version's, and the report's from now on. */
+    reportDate: string;
     at: Date;
   },
 ): Promise<HandinVersionRow> {
@@ -426,16 +437,18 @@ export async function insertHandinVersion(
   const madeFor = input.madeFor == null ? null : JSON.stringify(input.madeFor);
   const result = await db.execute<Row>(sql`
     insert into shift_handin_versions (handin_id, version, submitted_at, door, actor_user_id, agent_key_id, telegram_message_ref,
-      telegram_sender_id, total_mills, pages, lines, off_platform, comment, day_paid, rule_version, made_for)
+      telegram_sender_id, total_mills, pages, lines, off_platform, comment, day_paid, rule_version, made_for, report_date)
     values (${input.handin.id}, ${version}, ${at}::timestamptz, ${input.door}, ${input.actorUserId}, ${input.agentKeyId},
       ${input.telegramMessageRef}, ${input.telegramSenderId}, ${input.totalMills}, ${JSON.stringify(input.pages)}::jsonb,
       ${JSON.stringify(input.lines)}::jsonb, ${JSON.stringify(input.offPlatform)}::jsonb, ${input.comment}, ${input.dayPaid},
-      ${input.ruleVersion}, ${madeFor}::jsonb)
+      ${input.ruleVersion}, ${madeFor}::jsonb, ${input.reportDate}::date)
     returning id, handin_id, version, submitted_at, door, actor_user_id, agent_key_id, telegram_message_ref,
-      telegram_sender_id, total_mills, pages, lines, off_platform, comment, day_paid, rule_version, made_for`);
+      telegram_sender_id, total_mills, pages, lines, off_platform, comment, day_paid, rule_version, made_for,
+      to_char(report_date, 'YYYY-MM-DD') as version_report_date`);
+  // The report's date is its newest version's: the one place every reader takes it from once it is handed in.
   await db.execute(sql`
     update shift_handins set state = 'submitted', current_version = ${version}, submitted_at = ${at}::timestamptz,
-      updated_at = clock_timestamp()
+      report_date = ${input.reportDate}::date, updated_at = clock_timestamp()
     where id = ${input.handin.id}`);
   return versionOf(result.rows[0]!);
 }
@@ -509,7 +522,8 @@ export async function listHandinVersionsAfter(
   input: { afterSeq: number; limit: number; pageIds: readonly number[] },
 ): Promise<Array<HandinVersionRow & { seq: number; shiftId: number; userId: number; personCode: string | null; reportDate: string }>> {
   const result = await db.execute<Row>(sql`
-    select ${VERSION_COLUMNS}, f.seq, h.shift_id, h.user_id, p.code as person_code, to_char(h.report_date, 'YYYY-MM-DD') as report_date
+    select ${VERSION_COLUMNS}, f.seq, h.shift_id, h.user_id, p.code as person_code,
+      to_char(coalesce(v.report_date, h.report_date), 'YYYY-MM-DD') as report_date
     from shift_handin_feed f
     join shift_handin_versions v on v.id = f.version_id
     join shift_handins h on h.id = v.handin_id
@@ -727,7 +741,7 @@ export async function listHandinOtherReports(
     cross join lateral jsonb_array_elements(v.lines) as line
     where h.state = 'submitted' and not (h.user_id = any(${ids(input.exceptUserIds)}))
       and (line ->> 'transactionId')::bigint = any(${ids(input.transactionIds)})
-      and coalesce((line ->> 'amountMills')::bigint, 0) > 0`);
+      and (coalesce((line ->> 'amountMills')::bigint, 0) > 0 or coalesce((line ->> 'claimedMills')::bigint, 0) > 0)`);
   const out = new Map<number, Array<{ userId: number; shiftId: number; reportDate: string }>>();
   for (const row of result.rows) {
     const list = out.get(num(row.transaction_id)) ?? [];

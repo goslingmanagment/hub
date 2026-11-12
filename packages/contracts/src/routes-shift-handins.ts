@@ -107,11 +107,13 @@ export const shiftReportLineSchema = z.object({
   shareWithUserId: intId.nullable(),
   shareWithName: z.string().nullable(),
   note: z.string().nullable(),
-  /** What the line counts in the report. */
+  /** What the line counts in the report: a disputed «моё» counts 0 until it is settled (review R2b-2). */
   amountMills: mills,
+  /** What a disputed «моё» claims while it counts nothing: «спорно, ждёт решения: $X»; null — not disputed. */
+  claimedMills: mills.nullable().default(null),
   /** «Долёт»: of the days before the shift, by the rule the person's, in no report of theirs yet. */
   added: z.boolean(),
-  /** Claimed while the rule gives it to someone else: counted, until the other side or the owner agrees. */
+  /** «Моё» while the rule gives it to someone else: counted nowhere until the other side or the owner settles it. */
   disputed: z.boolean(),
   /** Another report of the person holds it: it counts 0 here. */
   alreadyIn: z.object({ shiftId: intId, reportDate: businessDate }).nullable(),
@@ -360,8 +362,10 @@ export const agentShiftReportsFeedItemSchema = z.object({
     statement: shiftReportStatementEnum.nullable(),
     shareWithUserId: intId.nullable(),
     note: z.string().nullable(),
-    /** What the line counts in the report. */
+    /** What the line counts in the report: a disputed line counts 0 until it is settled (review R2b-2). */
     amountMills: mills,
+    /** What a disputed «моё» claims while it counts nothing; null — not disputed. */
+    claimedMills: mills.nullable().default(null),
     added: z.boolean(),
     disputed: z.boolean(),
     /** A claim on it settled (package G): agreed — the other side agreed; owner — the owner decided; the amount is what that gives. Null — not settled. */

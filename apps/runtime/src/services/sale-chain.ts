@@ -171,12 +171,13 @@ export function shiftLinkOf(input: { shift: HandinShift | null; workRef: string 
 /** The report's link from Hub's handed-in version holding the sale. Pure. */
 export function hubReportLinkOf(input: { report: CurrentReport; transactionId: number; own: boolean; sums: ChainSums }): SaleChainLink {
   const line = input.report.lines.find((one) => one.transactionId === input.transactionId)!;
-  const counted = line.amountMills > 0 ? `засчитано ${money(line.amountMills)}` : "в отчёте с нулём";
+  const claimed = line.claimedMills ?? 0;
+  const counted = claimed > 0 ? `спорно, ждёт решения: ${money(claimed)}` : line.amountMills > 0 ? `засчитано ${money(line.amountMills)}` : "в отчёте с нулём";
   const statement = line.statement === "not_mine" ? ", «не моё»" : line.statement === "share" ? ", «делим»" : line.statement === "mine" ? ", «моё»" : "";
   const path = input.own ? `/workboard/my/shifts/${input.report.shiftId}?sale=${input.transactionId}` : `/workboard/shifts/report/${input.report.shiftId}?sale=${input.transactionId}`;
   return {
     state: line.disputed ? "open" : "done",
-    words: `сдан в системе: версия ${input.report.version}, ${formatDateTime(input.report.submittedAt.toISOString())}; ${input.sums.hubLine ? counted : line.amountMills > 0 ? "засчитана" : "не засчитана"}${statement}${line.disputed ? ", спорная" : ""}`,
+    words: `сдан в системе: версия ${input.report.version}, ${formatDateTime(input.report.submittedAt.toISOString())}; ${input.sums.hubLine ? counted : claimed > 0 ? "спорно, ждёт решения" : line.amountMills > 0 ? "засчитана" : "не засчитана"}${statement}`,
     link: path,
     amountMills: input.sums.hubLine ? line.amountMills : null,
   };
@@ -333,12 +334,12 @@ export async function readSaleChain(
       pay: viewer.kind === "owner" || (own && ownPay?.seesOwnPaySince != null),
     };
     const shift = share.shiftId === null ? null : await findHandinShift(db, share.shiftId);
-    const reportDate = shift?.reportDate ?? new Date(sale.occurredAt.getTime() + 3 * 3_600_000).toISOString().slice(0, 10);
     const person = codes.get(userId) ?? null;
     const logins = person?.userIds ?? [userId];
-
     // Отчёт: Hub's handed-in version holding the sale first, else the ledger's report of the day.
     const handedIn = reports.filter((report) => logins.includes(report.userId)).at(-1) ?? null;
+    // The report's date as every reader takes it (shift-handins.ts `reportDateOf`): the handed-in version's, else the shift's.
+    const reportDate = handedIn?.reportDate ?? shift?.reportDate ?? new Date(sale.occurredAt.getTime() + 3 * 3_600_000).toISOString().slice(0, 10);
     let report: SaleChainLink;
     let model: string | null = null;
     const postLink = viewer.kind === "owner" ? `/workboard/payouts?tab=reports` : own ? "/workboard/my/shifts" : null;

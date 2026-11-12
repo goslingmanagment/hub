@@ -117,7 +117,9 @@ export function DisputeModal({ transactionId, claimId, onClose }: { transactionI
                   <h3 className="wt-party__name">{party.name}</h3>
                   <ul className="wt-party__says">{party.says.map((line) => <li key={line}>{line}</li>)}</ul>
                   <p className="wt-party__counted">
-                    {party.countedMills === null ? "в сданном отчёте этой продажи нет" : <>в сданном отчёте: <Money mills={party.countedMills} /></>}
+                    {party.countedMills === null ? "в сданном отчёте этой продажи нет"
+                      : (party.claimedMills ?? 0) > 0 ? <>в сданном отчёте: спорно, ждёт решения: <Money mills={party.claimedMills!} /></>
+                        : <>в сданном отчёте: <Money mills={party.countedMills} /></>}
                   </p>
                 </section>
               ))}

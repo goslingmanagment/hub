@@ -89,10 +89,12 @@ function plainLine(sale: DemoSale, user: DemoUser, word: Word | undefined): Shif
   const statement = word?.statement ?? null;
   let amountMills = near ? 0 : sale.netMills;
   let disputed = false;
+  let claimedMills: number | null = null;
   if (!near && statement === "not_mine") amountMills = 0;
   if (!near && statement === "share") amountMills = millsToNumber(millsPercentOf(sale.netMills, 50));
+  // A disputed «моё» counts nothing until it is settled, and says what it claims (as Hub, review R2b-2).
   if (near && statement === "mine") {
-    amountMills = sale.netMills;
+    claimedMills = sale.netMills;
     disputed = true;
   }
   const words = near
@@ -114,6 +116,7 @@ function plainLine(sale: DemoSale, user: DemoUser, word: Word | undefined): Shif
     shareWithName: word?.shareWithName ?? null,
     note: word?.note ?? null,
     amountMills,
+    claimedMills,
     added: false,
     disputed,
     alreadyIn: null,
@@ -161,7 +164,8 @@ function claimedLine(sale: Claimable, word: Word): ShiftReportLine {
     transactionId: sale.transactionId, group: "mine", pageLabel: sale.pageLabel, platform: sale.platform, kind: sale.kind, occurredAt: sale.occurredAt,
     netMills: sale.netMills, fan: sale.fan,
     rule: { home: sale.home, reason: sale.home === "nobody" ? "no_holder" : "last_writer", words: sale.home === "nobody" ? "по правилу ничья" : sale.words, toUserId: null, toName: null, shareMills: 0 },
-    statement: "mine", shareWithUserId: null, shareWithName: null, note: word.note, amountMills: sale.netMills, added: true, disputed: sale.home !== "nobody", alreadyIn: null,
+    statement: "mine", shareWithUserId: null, shareWithName: null, note: word.note,
+    amountMills: sale.home === "nobody" ? sale.netMills : 0, claimedMills: sale.home === "nobody" ? null : sale.netMills, added: true, disputed: sale.home !== "nobody", alreadyIn: null,
     facts: { ppv: null, lastWriter: null, writers: [], holders: null, ownSlotRunning: null, otherReports: [], pot: null, renewalOf: null },
   };
 }

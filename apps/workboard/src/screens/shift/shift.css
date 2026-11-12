@@ -303,6 +303,13 @@
     font-weight: 400;
   }
 
+  /* A disputed «моё»: what it claims, counted nowhere until settled (review R2b-2). */
+  .shf-claimed {
+    color: var(--ui-warn-text);
+    font-weight: 400;
+    white-space: nowrap;
+  }
+
   .shf-chip {
     align-self: center;
   }

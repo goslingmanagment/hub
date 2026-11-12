@@ -565,6 +565,8 @@ export function draftLines(facts: Pick<DraftFacts, "classified" | "senders"> & P
       disputed,
       alreadyIn: one.alreadyIn,
       ...(settled === null ? {} : { settled: settled.settled }),
+      // A disputed «моё» counts nothing until settled and says what it claims (review R2b-2).
+      ...(settled === null && plain.claimedMills !== undefined ? { claimedMills: plain.claimedMills } : {}),
     };
   });
 }
@@ -633,6 +635,7 @@ function wireLine(line: HandinVersionLine, context: ViewContext): ShiftReportLin
     shareWithName: line.shareWithUserId === null ? null : context.names.get(line.shareWithUserId) ?? null,
     note: line.note,
     amountMills: line.amountMills,
+    claimedMills: line.claimedMills ?? null,
     added: line.added,
     disputed: line.disputed,
     alreadyIn: line.alreadyIn,
@@ -756,6 +759,7 @@ function modelPostsOf(version: HandinVersionRow, subject: Pick<Subject, "shift" 
       platform: line.pageLabel === null ? "fansly" : context.catalog.info.get(line.pageLabel)?.platform ?? "fansly",
       kind: line.kind,
       amountMills: line.amountMills,
+      claimedMills: line.claimedMills ?? null,
       fan: context.fans.get(line.transactionId) ?? { fanRef: null, name: null, username: null },
       note: line.note,
     }])),
@@ -918,6 +922,14 @@ export async function readAgentShiftReport(app: HandinApp, principal: AgentAuthP
   return readSubject(app, actor, subject, now);
 }
 
+/**
+ * A report's date, the one rule every reader follows (review R2b-1): once handed in, its newest version's — the shift's
+ * date at that hand-in, which `shift_handins.report_date` follows; before that, the shift's own date now (the draft).
+ */
+export function reportDateOf(shift: { reportDate: string }, handin: { state: string; reportDate: string } | null): string {
+  return handin !== null && handin.state === "submitted" ? handin.reportDate : shift.reportDate;
+}
+
 /** How many open drafts `shiftReportsList` computes for their total. */
 const LIST_DRAFTS_MAX = 7;
 
@@ -979,7 +991,7 @@ export async function listShiftReports(
         startedAt: shift.startedAt.toISOString(),
         endedAt: shift.endedAt.toISOString(),
         ongoing: shift.state === "going",
-        reportDate: shift.reportDate,
+        reportDate: reportDateOf(shift, handin),
         pages: shiftPageLabels(shift),
         state: handin?.state ?? "open",
         version: version?.version ?? null,
@@ -1225,6 +1237,8 @@ export async function submitShiftReport(
       comment: handin.comment,
       dayPaid,
       ruleVersion: SALE_RULE.version,
+      // The shift's date now, not the date of the report's first word: a night shift moves into the day it ended in.
+      reportDate: subject.shift.reportDate,
       at: now,
     });
     await insertHandinEvent(db, {
@@ -1326,6 +1340,7 @@ export async function readShiftReportsFeed(
         shareWithUserId: line.shareWithUserId,
         note: line.note,
         amountMills: line.amountMills,
+        claimedMills: line.claimedMills ?? null,
         added: line.added,
         disputed: line.disputed,
         settled: line.settled ?? null,

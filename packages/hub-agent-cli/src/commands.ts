@@ -2270,7 +2270,10 @@ function shiftReportNote(report: ShiftReportAnswer): string {
     return `${shift}: the switch «сдаёт смену в системе» is off, so Hub takes no words for this report. It goes the old way:`
       + " the post in «Отчётность».";
   }
-  const draft = report.view === null ? "" : ` The draft counts ${formatUsdFromMills(report.view.totalMills)} now («предварительно»: the rule and the person's words so far).`;
+  const claims = (report.view?.lines ?? []).filter((line) => (line.claimedMills ?? 0) > 0);
+  const claimed = claims.length === 0 ? "" : ` ${claims.length} disputed «моё» claim ${formatUsdFromMills(claims.reduce((sum, line) => sum + (line.claimedMills ?? 0), 0))}`
+    + " and count nothing in the sums until the other side or the owner settles them («спорно, ждёт решения»; amountMills 0, claimedMills).";
+  const draft = report.view === null ? "" : ` The draft counts ${formatUsdFromMills(report.view.totalMills)} now («предварительно»: the rule and the person's words so far).${claimed}`;
   const latest = report.latest;
   if (latest === null) {
     return `${shift}: not handed in yet.${draft} Hand it in on the person's word: hub shift-report submit --shift ${report.shift.id}`
@@ -2304,7 +2307,7 @@ const SHIFT_REPORT_COMMANDS: HubCommand[] = [
       + " смену в системе»; false: Hub takes no words, their report goes the old way, the post in «Отчётность»), the shift"
       + " (id, pages, reportDate, ongoing), `state` open | submitted, the versions handed in (`latest`, `versions`), the draft"
       + " (`view.lines`: «Ваши продажи» group mine and «Рядом» group near, each with the rule's `words`, the person's"
-      + " `statement` and `note`, what it counts in `amountMills`, `added` for a «долёт» or a sale added by hand, and `facts`"
+      + " `statement` and `note`, what it counts in `amountMills` (a disputed «моё» counts 0 and says its claim in `claimedMills`), `added` for a «долёт» or a sale added by hand, and `facts`"
       + " for «почему»; `view.pages`, `view.totalMills`, `view.offPlatform`, `view.comment`), `afterSubmission` (sales after"
       + " the hand-in), `posts` (the newest version as the post for «Отчётность», one per model) and `colleagues` (whom"
       + " «делим с…» may name). The person by --sender (the Telegram id of whoever sent /smena, when it is their own report)"

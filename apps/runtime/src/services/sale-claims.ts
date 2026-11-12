@@ -13,6 +13,7 @@ import {
   closeMatter,
   decideOffPlatform,
   findHandinByShift,
+  findHandinShift,
   findHandinPersonBy,
   findHandinPersonOfUser,
   findLatestHandinShift,
@@ -373,7 +374,7 @@ async function nobodyOfWeek(db: Database, weekStart: number, now: Date): Promise
   const unowned = await listUnownedSales(db, { days });
   const ids = unowned.map((sale) => sale.transactionId);
   const counted = new Set((await listCurrentReportsOfSales(db, ids)).flatMap((report) => report.lines
-    .filter((line) => line.transactionId !== null && line.amountMills > 0).map((line) => line.transactionId!)));
+    .filter((line) => line.transactionId !== null && (line.amountMills > 0 || (line.claimedMills ?? 0) > 0)).map((line) => line.transactionId!)));
   const decided = await listActiveSaleDecisions(db, ids);
   return { from, to, days, sales: unowned.filter((sale) => !counted.has(sale.transactionId) && !decided.has(sale.transactionId)) };
 }
@@ -483,6 +484,7 @@ async function settleReport(
     transactionId: input.transactionId, amountMills: input.amountMills, settled: input.settled,
   });
   const dayPaid = input.dayPaid;
+  const shift = await findHandinShift(db, input.shiftId);
   // Telegram's door is an agent's «со слов» alone; the system's version on the owner's word is the owner's Workboard.
   const telegram = input.by.door === "telegram" && input.by.agentKeyId !== null && input.by.telegramMessageRef !== null && input.by.telegramSenderId !== null;
   const version = await insertHandinVersion(db, {
@@ -500,6 +502,7 @@ async function settleReport(
     dayPaid,
     ruleVersion: SALE_RULE.version,
     madeFor: input.madeFor,
+    reportDate: shift?.reportDate ?? handin.reportDate,
     at: input.at,
   });
   await insertHandinEvent(db, {
@@ -760,7 +763,8 @@ export async function decideOffPlatformLine(
     const version = await insertHandinVersion(txDb, {
       handin, door: "workboard", actorUserId: principal.user.id, agentKeyId: null, telegramMessageRef: null, telegramSenderId: null,
       totalMills: sums.totalMills, pages: sums.pages, lines: current.lines, offPlatform, comment: current.comment, dayPaid,
-      ruleVersion: SALE_RULE.version, madeFor: { kind: "off_platform", offPlatformId: row.id, decision: state }, at: now,
+      ruleVersion: SALE_RULE.version, madeFor: { kind: "off_platform", offPlatformId: row.id, decision: state },
+      reportDate: (await findHandinShift(txDb, row.shiftId))?.reportDate ?? handin.reportDate, at: now,
     });
     await insertHandinEvent(txDb, {
       handinId: handin.id, event: "shift_report.off_platform_decided", door: "workboard", actorUserId: principal.user.id, agentKeyId: null,
@@ -972,12 +976,13 @@ async function disputeOf(app: ClaimsApp, claims: readonly SaleClaimRow[], now: D
   const counted = (userId: number) => {
     const report = reports.find((one) => one.userId === userId);
     const line = report?.lines.find((one) => one.transactionId === transactionId);
-    return { mills: line === undefined ? null : line.amountMills, shiftId: report?.shiftId ?? null };
+    return { mills: line === undefined ? null : line.amountMills, claimed: line?.claimedMills ?? null, shiftId: report?.shiftId ?? null };
   };
   const party = (userId: number, role: "first" | "second") => ({
     userId, name: names.get(userId) ?? `#${userId}`, role,
     says: claims.flatMap((claim) => saysOf(claim, userId, now)),
     countedMills: counted(userId).mills,
+    claimedMills: counted(userId).claimed,
     shiftId: counted(userId).shiftId ?? (role === "second" ? claims.find((claim) => claim.sideUserId === userId)?.sideShiftId ?? null : null),
   });
   const parties = [first === null ? null : party(first, "first"), second === null ? null : party(second, "second")].filter((one): one is NonNullable<typeof one> => one !== null);
