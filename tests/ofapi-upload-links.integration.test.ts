@@ -379,7 +379,9 @@ describe("a link", () => {
       await server.close();
     }
 
-    await expect(resolveOfapiUploadLink(app, `${token.slice(0, -1)}A`, { fetch: null })).rejects.toMatchObject({ statusCode: 404 });
+    // Another token of the same shape: its first character changed (the last one may already be an "A").
+    const another = `${token.startsWith("A") ? "B" : "A"}${token.slice(1)}`;
+    await expect(resolveOfapiUploadLink(app, another, { fetch: null })).rejects.toMatchObject({ statusCode: 404 });
     await expect(resolveOfapiUploadLink(app, token, { fetch: null, now: new Date(Date.now() + OFAPI_UPLOAD_LINK_TTL_MS + MIN) }))
       .rejects.toMatchObject({ statusCode: 404 });
 
