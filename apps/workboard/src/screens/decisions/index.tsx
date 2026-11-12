@@ -59,6 +59,10 @@ function DecisionsByQueue() {
   const location = useLocation();
   const navigate = useNavigate();
   const pages = usePages();
+  // The old address of the customs (`/decisions#customs`, «Ждут вас» links it) leads to the board «Кастомы».
+  useEffect(() => {
+    if (location.hash === "#customs") navigate({ pathname: "/customs", search: location.search }, { replace: true });
+  }, [location.hash, location.search, navigate]);
   const decisions = useDecisions({ owner: isOwner, page });
   const { view } = decisions;
   // A login to its id, for the customs' «who wrote it» (the owner's people list; a team lead reads plain names).

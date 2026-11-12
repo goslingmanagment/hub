@@ -185,7 +185,11 @@ export function proposalLines(proposal: Pick<Proposal, "change">): string[] {
       lines.push(`без графика${where}${when}`);
     }
   }
-  if (Array.isArray(fields.rights)) lines.push((fields.rights as string[]).includes("customs_lead") ? "ведёт кастомы" : "без узких прав");
+  if (Array.isArray(fields.rights)) {
+    const rights = fields.rights as string[];
+    const words = [rights.includes("customs_lead") ? "ведёт кастомы" : null, rights.includes("records_customs") ? "записывает кастомы в системе" : null].filter(Boolean);
+    lines.push(words.length > 0 ? words.join(", ") : "без узких прав");
+  }
   if (typeof fields.note === "string") lines.push(`заметка: ${fields.note}`);
   const logins = fields.logins as { add?: unknown[]; remove?: unknown[] } | undefined;
   if (logins) lines.push(`входы: ${[logins.add?.length ? `связать ${logins.add.length}` : "", logins.remove?.length ? `отвязать ${logins.remove.length}` : ""].filter(Boolean).join(", ")}`);
@@ -332,23 +336,39 @@ function scheduleLines(person: RegistryPerson, slots: readonly Slot[] | null): S
   });
 }
 
+/** The narrow rights, each a switch of its own; a change keeps the other rights as they are. */
+const RIGHT_SWITCHES: ReadonlyArray<{ right: RegistryPerson["rights"][number]["right"]; label: string; hint: string; on: string; off: string; held: string }> = [
+  { right: "customs_lead", label: "Ведёт кастомы", hint: "Записывает кастомы, следит за сроками и сдачей.", on: "ведёт кастомы", off: "больше не ведёт кастомы", held: "Ведёт кастомы." },
+  {
+    right: "records_customs", label: "Записывает кастомы в системе", hint: "Получает дела по кастомам: «отдайте фану», продажа похожа на кастом без заказа.",
+    on: "записывает кастомы в системе", off: "больше не получает дела по кастомам", held: "Записывает кастомы в системе.",
+  },
+];
+
 function RightsBlock({ person, canEdit }: { person: RegistryPerson; canEdit: boolean }) {
   const update = useUpdatePerson(person.code);
-  const leads = person.rights.some((right) => right.right === "customs_lead");
+  const held = new Set(person.rights.map((right) => right.right));
+  const toggle = (right: (typeof RIGHT_SWITCHES)[number], on: boolean) => {
+    const rights = [...held].filter((one) => one !== right.right);
+    update.mutate({ rights: on ? [...rights, right.right] : rights }, {
+      onSuccess: () => toast.success(`${person.displayName} ${on ? right.on : right.off}`),
+      onError: () => toast.error("Не удалось изменить права: Hub вернул ошибку."),
+    });
+  };
   return (
     <Card title="Права" description="Узкие права рядом с ролью.">
-      {canEdit && person.kind === "human" ? (
+      {canEdit && person.kind === "human" ? <div className="registry-rights">{RIGHT_SWITCHES.map((right) => (
         <Switch
-          label="Ведёт кастомы"
-          hint="Записывает кастомы, следит за сроками и сдачей."
-          checked={leads}
+          key={right.right}
+          label={right.label}
+          hint={right.hint}
+          checked={held.has(right.right)}
           pending={update.isPending}
-          onChange={(on) => update.mutate({ rights: on ? ["customs_lead"] : [] }, {
-            onSuccess: () => toast.success(on ? `${person.displayName} ведёт кастомы` : `${person.displayName} больше не ведёт кастомы`),
-            onError: () => toast.error("Не удалось изменить права: Hub вернул ошибку."),
-          })}
+          onChange={(on) => toggle(right, on)}
         />
-      ) : <p className="access-text">{leads ? "Ведёт кастомы." : "Узких прав нет."}</p>}
+      ))}</div> : (
+        <p className="access-text">{RIGHT_SWITCHES.filter((right) => held.has(right.right)).map((right) => right.held).join(" ") || "Узких прав нет."}</p>
+      )}
     </Card>
   );
 }

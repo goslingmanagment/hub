@@ -1,0 +1,323 @@
+/*
+ * Кастомы: the board's columns and cards, the order's page. What the shared
+ * components do not say themselves; tokens only. Below 1100 px the five
+ * columns scroll sideways, each keeps a readable width; on a phone they stack.
+ */
+@layer components {
+  .cus {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  .cus-muted {
+    color: var(--ui-text-2);
+  }
+
+  .cus-late {
+    color: var(--ui-bad-text);
+    font-weight: 500;
+  }
+
+  .cus-count {
+    margin-left: 6px;
+    color: var(--ui-text-3);
+    font-weight: 500;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* ------------------------------------------------------------ The board */
+
+  /* Five columns side by side, as the steps go; a narrower screen scrolls them sideways. A long column scrolls
+     inside itself, so the board stays one screen tall with sixty orders as with six. */
+  .cus-board {
+    display: grid;
+    grid-auto-flow: column;
+    grid-auto-columns: minmax(208px, 1fr);
+    gap: 12px;
+    align-items: start;
+    overflow-x: auto;
+    padding-bottom: 4px;
+  }
+
+  .cus-col {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-width: 0;
+    max-height: max(480px, calc(100dvh - 240px));
+    overflow-y: auto;
+    padding: 0 12px 12px;
+    background: var(--ui-hover-soft);
+    border: 1px solid var(--ui-line-soft);
+    border-radius: var(--ui-radius-lg);
+  }
+
+  .cus-col__title {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    margin: 0;
+    padding: 12px 0 4px;
+    background: inherit;
+    font-size: var(--ui-fs-15);
+    line-height: var(--ui-lh-15);
+    font-weight: 600;
+  }
+
+  .cus-col__empty {
+    margin: 0;
+    color: var(--ui-text-3);
+    font-size: var(--ui-fs-14);
+  }
+
+  .cus-card {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 10px 12px;
+    color: var(--ui-text);
+    text-decoration: none;
+    background: var(--ui-surface);
+    border: 1px solid var(--ui-line);
+    border-radius: var(--ui-radius);
+    box-shadow: var(--ui-shadow-raised);
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+  }
+
+  .cus-card:hover {
+    border-color: var(--ui-line-strong);
+  }
+
+  .cus-card:focus-visible {
+    outline: var(--ui-focus);
+    outline-offset: 2px;
+  }
+
+  .cus-card__top,
+  .cus-card__meta,
+  .cus-card__foot {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 4px 8px;
+  }
+
+  .cus-card__fan {
+    font-weight: 600;
+    overflow-wrap: anywhere;
+  }
+
+  .cus-card__code {
+    color: var(--ui-text-3);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .cus-card__what {
+    display: -webkit-box;
+    overflow: hidden;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+  }
+
+  .cus-card__foot {
+    font-size: var(--ui-fs-13);
+    line-height: var(--ui-lh-13);
+  }
+
+  .cus-paid {
+    color: var(--ui-text-2);
+  }
+
+  /* ------------------------------------------------------- Sales that look like a custom */
+
+  .cus-sales,
+  .cus-list,
+  .cus-history {
+    display: flex;
+    flex-direction: column;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .cus-sale {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 16px;
+    padding: 8px 0;
+    border-top: 1px solid var(--ui-line-soft);
+  }
+
+  .cus-sale:first-child {
+    border-top: 0;
+  }
+
+  .cus-sale--picked {
+    background: var(--ui-mark-soft);
+  }
+
+  .cus-sale__who {
+    flex: 1 1 160px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 8px;
+    align-items: center;
+    font-weight: 500;
+  }
+
+  .cus-sale__what {
+    flex: 2 1 240px;
+    overflow-wrap: anywhere;
+    color: var(--ui-text-2);
+  }
+
+  .cus-sale__actions {
+    display: flex;
+    gap: 8px;
+    margin-left: auto;
+  }
+
+  /* ------------------------------------------------------------ The order */
+
+  .cus-facts,
+  .cus-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 16px;
+  }
+
+  .cus-actions {
+    gap: 8px;
+  }
+
+  .cus-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+    gap: 16px;
+    align-items: start;
+  }
+
+  .cus-side {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    min-width: 0;
+  }
+
+  .cus-pre {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+
+  .cus-card-text {
+    margin: 8px 0 0;
+    padding: 12px;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    font: inherit;
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+    background: var(--ui-hover-soft);
+    border-radius: var(--ui-radius);
+  }
+
+  .cus-links {
+    display: flex;
+    gap: 8px;
+    margin: 12px 0 0;
+    color: var(--ui-text-2);
+  }
+
+  .cus-sub {
+    margin: 16px 0 4px;
+    font-size: var(--ui-fs-14);
+    font-weight: 600;
+  }
+
+  .cus-list__row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 12px;
+    padding: 8px 0;
+    border-top: 1px solid var(--ui-line-soft);
+  }
+
+  .cus-list__row:first-child {
+    border-top: 0;
+  }
+
+  .cus-list__row > :last-child:is(button) {
+    margin-left: auto;
+  }
+
+  .cus-list__row--text {
+    align-items: baseline;
+  }
+
+  .cus-history li {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 12px;
+    padding: 6px 0;
+    border-top: 1px solid var(--ui-line-soft);
+    font-size: var(--ui-fs-14);
+  }
+
+  .cus-history li:first-child {
+    border-top: 0;
+  }
+
+  .cus-form {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .cus-form--grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .cus-form__wide {
+    grid-column: 1 / -1;
+  }
+
+  .cus-fan-form {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    align-items: stretch;
+  }
+
+  .cus-fan-form > button {
+    align-self: flex-start;
+  }
+
+  @media (max-width: 1100px) {
+    .cus-grid {
+      grid-template-columns: minmax(0, 1fr);
+    }
+  }
+
+  @media (max-width: 640px) {
+    .cus-board {
+      grid-auto-flow: row;
+      grid-auto-columns: auto;
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .cus-col {
+      max-height: none;
+    }
+
+    .cus-form--grid {
+      grid-template-columns: minmax(0, 1fr);
+    }
+  }
+}

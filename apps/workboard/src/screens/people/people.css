@@ -3,6 +3,13 @@
  * ribbon, the two-line numbers of a row, the sales blocks. Tokens only.
  */
 @layer components {
+  /* The narrow rights, a switch each, one under another. */
+  .registry-rights {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
   /* ------------------------------------------------- A number with its change under it */
 
   .people-num {

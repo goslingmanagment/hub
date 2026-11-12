@@ -32,8 +32,11 @@ export const PERSON_KINDS = ["human", "agent", "service"] as const;
 export const PERSON_ROLES = ["owner", "team_lead", "chatter", "content_manager", "contractor", "agent", "service"] as const;
 /** invited → set_up (оформлен) → working → left. */
 export const PERSON_STATES = ["invited", "set_up", "working", "left"] as const;
-/** Narrow rights beside the role. customs_lead — «ведёт кастомы». */
-export const PERSON_RIGHTS = ["customs_lead"] as const;
+/**
+ * Narrow rights beside the role. customs_lead — «ведёт кастомы»; records_customs — «записывает кастомы в
+ * системе»: the person gets the custom checks' matters (an unrecorded custom, «отдайте фану»), off by default.
+ */
+export const PERSON_RIGHTS = ["customs_lead", "records_customs"] as const;
 export const PERSON_WEEKDAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"] as const;
 /** Where a record came from: the owner's screen, the one-off import, an agent's accepted proposal. */
 export const PERSON_ORIGINS = ["owner", "import", "proposal"] as const;

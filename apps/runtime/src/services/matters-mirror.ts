@@ -34,6 +34,7 @@ import { MOSCOW_TIME_ZONE, toBusinessDate } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
 import { readSyncPageStatuses } from "../sync/inspect.ts";
+import { awaitingGivingOf, customOrdersReadOn, paidOrderItems } from "./custom-orders/readers.ts";
 import { toSyncPageStatusWire } from "../sync/requests/wire.ts";
 import { getClientHealthView } from "./client-health-view.ts";
 import { readLedgerPayouts } from "./ledger-payouts.ts";
@@ -490,6 +491,11 @@ export async function runMattersMirror(
     return [{ kind: "send.held", items: heldSendItems(list.items.map((item) => ({ ...item, createdAt: item.createdAt.toISOString() }))) }];
   });
   await read(["custom.paid_not_delivered"], async () => {
+    // Package I: behind the owner's setting, the custom orders paid or shot and not given; off — the old table.
+    if (await customOrdersReadOn(app)) {
+      const paid = paidOrderItems(await awaitingGivingOf(app, { pageIds: "all", limit: CUSTOMS_LIMIT }), CUSTOMS_LIMIT);
+      return [{ kind: "custom.paid_not_delivered", items: paid.items, capped: paid.capped }];
+    }
     const customs = await listPageOpenCustoms(app.db, { pageIds: "all", limit: CUSTOMS_LIMIT });
     const paid = paidCustomItems(customs.map((custom) => ({ ...custom, paidAt: custom.paidAt?.toISOString() ?? null })));
     return [{ kind: "custom.paid_not_delivered", items: paid.items, capped: paid.capped }];

@@ -147,6 +147,8 @@ export const AGENT_READ_AUDIT_SUMMARY_SHAPES = {
   credits: "count",
   albumKind: "identifier",
   walkRequested: "flag",
+  /** Заказ кастома (write:customs, package I): which order. Its card and history stay in the order. */
+  customOrderId: "count",
 } as const satisfies Record<string, AgentReadAuditSummaryShape>;
 
 export type AgentReadAuditSummaryKey = keyof typeof AGENT_READ_AUDIT_SUMMARY_SHAPES;

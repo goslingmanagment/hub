@@ -7,7 +7,6 @@ import {
 import {
   findPageSummaryByLabel,
   listHandoffFans,
-  listPageOpenCustoms,
   listPageOpenPromises,
   listPageSpenderAwaitingReply,
   listRecentPageAuthors,
@@ -16,6 +15,7 @@ import {
 import type { AppContext } from "../bootstrap.ts";
 import { requireApiKeyUser, type HumanAuthPrincipal } from "./auth.ts";
 import { inConversationOf } from "./client-in-conversation.ts";
+import { extensionHandoffCustoms } from "./custom-orders/extension.ts";
 import { requireClientGrantedPage } from "./client-switches.ts";
 
 /**
@@ -45,7 +45,8 @@ export async function readClientHandoff(
     listRecentPageAuthors(app.db, { pageId: page.id, now, minutes: IN_CONVERSATION_MINUTES, lostMinutes: CLIENT_ACTIVITY_LOST_MINUTES }),
     listPageSpenderAwaitingReply(app.db, { pageId: page.id, limit: WAITING_HEAD, everyone: true, now }),
     listPageOpenPromises(app.db, { pageId: page.id, limit: PROMISES_LIMIT }),
-    listPageOpenCustoms(app.db, { pageIds: [page.id], limit: PROMISES_LIMIT }),
+    // Package I: the page's custom orders in work, in the old shape.
+    extensionHandoffCustoms(app.db, { pageId: page.id, limit: PROMISES_LIMIT }),
   ]);
   const talking = new Map(inConversationOf(authors, principal.user.id).map((fan) => [fan.fanRef, fan.chatters.map((chatter) => chatter.name)]));
   return {
@@ -71,14 +72,7 @@ export async function readClientHandoff(
         lastFanMessageAt: item.lastFanMessageAt.toISOString(),
       })),
     },
-    customs: customs.map((custom) => ({
-      fanRef: custom.fanRef,
-      conversationRef: custom.conversationRef,
-      description: custom.description,
-      state: custom.state,
-      paidAt: custom.paidAt === null ? null : custom.paidAt.toISOString(),
-      createdAt: custom.createdAt.toISOString(),
-    })),
+    customs,
     promises: promises.map((promise) => ({
       fanRef: promise.fanRef,
       conversationRef: promise.conversationRef,
