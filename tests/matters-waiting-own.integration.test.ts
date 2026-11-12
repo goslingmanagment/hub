@@ -101,6 +101,10 @@ describe("«Ждут вас»: what waits for the viewer themself", () => {
     if (!testDb) return context.skip();
     // Nobody holds the team lead's role: the owner is the acting team lead.
     expect(await otherCount("boss")).toBe(3);
+    // His number is the list's: the sum of the Home's chips (the groups), and these own matters are all in them.
+    const answer = mattersWaitingResponseSchema.parse((await asSession("boss", "/api/v1/matters/waiting")).json());
+    expect(answer.total).toBe(answer.groups.reduce((sum, group) => sum + group.count, 0));
+    expect(answer.groups.find((group) => group.id === "other")?.count).toBe(3);
     expect(await clientCount("boss")).toBe(3);
     // He still reads every matter, each said whether it is his.
     expect(await list("boss")).toEqual([
@@ -155,6 +159,9 @@ describe("«Ждут вас»: what waits for the viewer themself", () => {
     expect((await list("boss")).find(([key]) => key === "own.test:team-lead")).toEqual(["own.test:team-lead", false]);
 
     expect(await otherCount("lead")).toBe(1);
+    // A team lead's answer is as before: the number is the sum of the rows.
+    const lead = mattersWaitingResponseSchema.parse((await asSession("lead", "/api/v1/matters/waiting")).json());
+    expect(lead.total).toBe(lead.rows.reduce((sum, row) => sum + (row.count ?? 0), 0));
     expect(await list("lead")).toEqual([["own.test:team-lead", true]]);
     expect(await list("alice")).toEqual([["own.test:alice", true]]);
     expect(await clientCount("alice")).toBe(1);

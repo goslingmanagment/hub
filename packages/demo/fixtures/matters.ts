@@ -1,4 +1,6 @@
-import type { KernelOperationResponse, Matter } from "@agency_hub_core/contracts";
+import {
+  MATTER_INFO_KINDS, WAITING_GROUPS, waitingGroupLink, waitingGroupOf, waitingToneOf, worstWaitingTone, type KernelOperationResponse, type Matter,
+} from "@agency_hub_core/contracts";
 
 import { isDemoReply, type DemoHandlers, type DemoRequest } from "../core.ts";
 import { DEMO_USERS } from "../world.ts";
@@ -284,10 +286,18 @@ function mattersWaiting(request: DemoRequest): WaitingAnswer {
   const held = count(["send.held"], true);
   const total = (questions ?? 0) + (posts ?? 0) + (changes ?? 0) + (customs ?? 0) + (held ?? 0);
   const all = matters.filter((matter) => ["ledger.sale_question", "ledger.report_post", "custom.paid_not_delivered", "send.held"].includes(matter.kind)).length;
+  // The list's groups, as Hub counts them (the one table): the owner's Home chips and his number.
+  const waiting = matters.filter((matter) => !MATTER_INFO_KINDS.includes(matter.kind));
+  const groups = request.role === "chatter" ? [] : WAITING_GROUPS.filter((group) => group.id !== "info").flatMap((group) => {
+    const inGroup = waiting.filter((matter) => waitingGroupOf(matter.kind) === group.id);
+    const tone = worstWaitingTone(inGroup.map((matter) => waitingToneOf(matter.kind)));
+    return inGroup.length === 0 ? [] : [{ id: group.id, title: group.title, count: inGroup.length, checked: true, tone, to: waitingGroupLink(group.id) }];
+  });
   return {
     active: request.scenario !== "matters-off",
     rows,
-    total: rows.reduce((sum, row) => sum + (row.count ?? 0), 0),
+    groups,
+    total: owner ? groups.reduce((sum, group) => sum + group.count, 0) : rows.reduce((sum, row) => sum + (row.count ?? 0), 0),
     failed: [],
     decisions: {
       questions,

@@ -78,6 +78,28 @@ the owner's machine (outside this repository); a change that moves a home or add
 - **What waits for a person**: a matter (`services/matters.ts`, table `matters`): opened and closed by its reason
   key, one writer per kind, closes itself when the cause is gone. No new list, counter or inbox beside it. An
   object's history goes to `object_events`.
+- **A shift's report**: `services/shift-handins.ts` (tables `shift_handin_*`; a handed-in version is immutable, the
+  newest is the report). Three doors, one service: Workboard «Смена», the extension (it opens the same screen), an
+  agent key «со слов» (`hub shift-report …`). Behind the person's right `submits_shift`. Sums only through
+  `reportSums`; the ledger takes versions through `agentShiftReportsFeed` and accrues, Hub never does.
+- **What people say about a sale**: claims, agreements and the owner's decisions (`services/sale-claims.ts`, tables
+  `sale_claims`, `sale_owner_decisions`). They reach the rule as its inputs (`sale-homes.ts`), never around it; a
+  claim alone moves no home.
+- **A custom order**: `services/custom-orders/` (table `custom_orders`, code `K-123`): one order from the fan's chat
+  to the fan's hands. Doors: the extension's fan panel, Workboard «Кастомы», agents (`hub custom …`); ContentOps
+  reads orders and reports files, it never closes one. Its checks (`custom-orders/checks.ts`) are the one writer of
+  what waits about an order; who leads customs is `customsLeadOwner` (`custom-orders/readers.ts`).
+- **People's pay**: the ledger's. Hub only reads it (`ledgerGet`: a person's days, the payout calculation, checks,
+  report days, the month card) and shows it; `payMillsOf` (`services/ledger-payouts.ts`) is the one conversion. No
+  pay number is computed in Hub, and none reaches a session that does not see it today.
+- **What the server says to people in Telegram**: `services/people-messages/` (outbox `people_messages`). Two locks:
+  the env token and the enabled kinds; a kind is a row in `packages/contracts/src/people-message-kinds.ts`. No other
+  code sends a person a message; nothing about a fan goes into a personal message.
+- **The menu and every screen's address**: ONE table, `packages/ui/src/screens.ts`, for the console and Workboard. A
+  screen is a row there; an address that moved gets a redirect, never a second screen.
+- **The groups of «Ждут вас»**: one table, `packages/contracts/src/waiting-groups.ts` (which group a kind is in, the
+  group's title, order and tone). The Home's chips, the menu's number and the list are built from it; a new kind
+  gets its group there (a test fails when one has none), never a second mapping on a screen.
 - **Sign-in**: `services/signin-handoff.ts`. Cookies are host-only; a session crosses names by a one-time code; a
   cookie-authenticated change is taken only from the console's and the team's names (`api/origin-check.ts`). Other
   services redeem a code with their own key (`signin:<service>`), they never get the session.

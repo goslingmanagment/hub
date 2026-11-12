@@ -188,6 +188,13 @@ export const SCREENS: readonly Screen[] = [
 
   // ── Деньги ─────────────────────────────────────────────────────────────
   {
+    // The agency's month as the ledger keeps it (its month card, read by Hub); its first line beside Главная's income.
+    id: "money-month", path: "/money/month", label: "Месяц", title: "Деньги: месяц", section: "money", ownerOnly: true,
+    why: "Месяц агентства по ledger: доход страниц, мимо площадок, оборот и где заработанное сейчас.",
+    pageFilter: "all",
+    keywords: "месяц карточка месяца ledger оборот заработано пришло едет мимо площадок доход страниц",
+  },
+  {
     id: "transactions", path: "/money/transactions", label: "Операции", title: "Операции", section: "money",
     why: "Из каких операций сложилась сумма.",
     pageFilter: "any", platforms: REPORTED,
@@ -736,6 +743,7 @@ export const SECTIONS: readonly Section[] = [
   {
     id: "money", label: "Деньги", title: "Деньги", icon: "Wallet", nav: "tabs",
     tabs: [
+      tab("month", "Месяц", "money-month"),
       tab("costs", "Расходы", "costs-ai", "costs-anthropic", "costs-onlyfans-api"),
       tab("transactions", "Операции", "transactions"),
     ],
