@@ -61,6 +61,30 @@ chatters' AI features, the owner's dashboard. Production is `agency-de` (`root@1
 - The money, deletion, erasure and test-DB isolation guards say in their error message which file and line
   to add to — do as it says.
 
+## One home for each thing
+Hub is the home of the agency's WORK objects; the ledger keeps accounting, ContentOps keeps files. Before adding a
+table, a screen or a computation, find the thing's home here — a second home for the same thing is a bug.
+- **People**: the registry (`apps/runtime/src/services/people`, tables `people`, `person_*`). A login is not a person
+  (`person_logins`); never rename `users.username`: scripts outside the repo match by it. Pay terms are money:
+  owner-only, never serialised into anyone else's session.
+- **Whose a sale is**: only `apps/runtime/src/services/sale-rule.ts`, written to `sale_homes` (`sale-homes.ts`);
+  schedule slots and «left the team» come from the people registry. Never compute it anywhere else. Screens follow
+  it from the date in `sale_rule_switch` (null: the old computation).
+- **Shifts**: rows with a stable id in `shifts` (`shift-rows.ts`); what a shift IS stays `chatter-shifts.ts`.
+- **What waits for a person**: a matter (`services/matters.ts`, table `matters`): opened and closed by its reason
+  key, one writer per kind, closes itself when the cause is gone. No new list, counter or inbox beside it. An
+  object's history goes to `object_events`.
+- **Sign-in**: `services/signin-handoff.ts`. Cookies are host-only; a session crosses names by a one-time code; a
+  cookie-authenticated change is taken only from the console's and the team's names (`api/origin-check.ts`). Other
+  services redeem a code with their own key (`signin:<service>`), they never get the session.
+- **Pages agents write for people**: agent reports (`services/agent-reports.ts`, `hub report put`).
+- Lists in CHECK constraints (agent-key capabilities, person rights) are rewritten whole by every migration that
+  widens them: at rebase take the union with main's. A migration's number must be above main's highest: the runner
+  refuses a lower one once a higher one is applied.
+- Copies of the data: `docs/runbooks/business-backup.md`. Do not deploy while the nightly dump runs (05:20 Moscow,
+  about 13 minutes): a migration would wait behind it. Each deploy answers 502 to chatters' extensions for 2–3
+  seconds: batch merged work into one deploy rather than deploying every PR.
+
 ## Good to know
 - What AI money went to (Hub's ledger, by feature/model/effort/window/chatter/page/key/branch, unit costs, dearest calls,
   setting changes): `ssh root@152.53.191.242 'docker exec agency-hub-api-1 node /app/apps/runtime/dist/cli.js ai:spend --from YYYY-MM-DD [--to …] [--json]'`
