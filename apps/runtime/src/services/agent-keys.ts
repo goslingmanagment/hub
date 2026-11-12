@@ -1,19 +1,29 @@
 import {
   AgentKeyConstraintError,
   AgentKeyLifetimeError,
+  findAgentKeyIntrospection,
   findPageSummaryByLabel,
+  findPersonRowByCode,
   getAgentKeyById,
   insertAgentKey,
+  insertPersonAgentKey,
+  listAgentKeyLastCalls,
+  listAgentKeyPeople,
   listAgentKeys,
   listPagesByIds,
   revokeAgentKey,
   setAgentKeyCapabilities,
+  type AgentKeyPersonRow,
   type AgentKeyRow,
 } from "@agency_hub_core/db";
 import {
   AGENT_CAPABILITIES,
+  AGENT_KEY_INTROSPECT_CACHE_SECONDS,
+  AGENT_KEY_INTROSPECT_STALE_SECONDS,
+  isServiceKeyCapabilities,
   type AgentCapability,
   type AgentKeyCreateBody,
+  type AgentKeyIntrospectResponse,
   type AgentKeyItem,
 } from "@agency_hub_core/contracts";
 import { randomToken, sha256Hex } from "@agency_hub_core/shared";
@@ -45,6 +55,11 @@ import { BadRequestError, ConflictError, NotFoundError } from "./errors.ts";
  *    the whole new set replaces the old one, the change and its audit row (before
  *    and after) commit together, and the key sees it on its next request because
  *    the authenticator reads the row on every request and caches nothing.
+ * 4. **A key belongs to an agent** (ecosystem plan §3.3): issuance names the
+ *    agent person (kind agent, not gone) and links it in the same transaction
+ *    as the key and its audit. Only a service's own key (sign-in and «who is
+ *    this key» alone) may have none. A key issued before the registry is linked
+ *    on the person's card, never re-issued.
  */
 
 /** How much of the token body is shown in listings (api-key precedent). */
@@ -68,7 +83,12 @@ export function canonicalCapabilities(capabilities: readonly string[]): AgentCap
  * The wire shape of one key. `pageLabels` is resolved from the stored ids; the
  * digest has no representation here at all.
  */
-function agentKeyItem(row: AgentKeyRow, labelById: ReadonlyMap<number, string>): AgentKeyItem {
+interface AgentKeyExtras {
+  agent: AgentKeyPersonRow | null;
+  lastCall: { at: Date; operation: string } | null;
+}
+
+function agentKeyItem(row: AgentKeyRow, labelById: ReadonlyMap<number, string>, extras: AgentKeyExtras): AgentKeyItem {
   const now = Date.now();
   return {
     id: row.id,
@@ -85,7 +105,33 @@ function agentKeyItem(row: AgentKeyRow, labelById: ReadonlyMap<number, string>):
     revokedAt: row.revokedAt?.toISOString() ?? null,
     lastUsedAt: row.lastUsedAt?.toISOString() ?? null,
     isActive: row.revokedAt === null && row.expiresAt.getTime() > now,
+    agent: extras.agent === null ? null : { code: extras.agent.code, displayName: extras.agent.displayName, state: extras.agent.state },
+    lastCall: extras.lastCall === null ? null : { at: extras.lastCall.at.toISOString(), operation: extras.lastCall.operation },
   };
+}
+
+async function keyExtras(app: AppContext, rows: readonly AgentKeyRow[]) {
+  const [people, lastCalls] = await Promise.all([
+    listAgentKeyPeople(app.db),
+    listAgentKeyLastCalls(app.db, rows.map((row) => row.id)),
+  ]);
+  return (row: AgentKeyRow): AgentKeyExtras => ({ agent: people.get(row.id) ?? null, lastCall: lastCalls.get(row.id) ?? null });
+}
+
+/**
+ * The agent a new key belongs to: a person of kind agent, not gone. None only
+ * for a service's own key (`AGENT_KEY_SERVICE_CAPABILITIES` alone).
+ */
+async function agentForIssuance(app: AppContext, input: AgentKeyCreateBody) {
+  if (input.agentCode === undefined) {
+    if (isServiceKeyCapabilities(input.capabilities)) return null;
+    throw new BadRequestError("Name the agent the key belongs to (`agentCode`): only a service's own key may have none");
+  }
+  const person = await findPersonRowByCode(app.db, input.agentCode);
+  if (!person) throw new NotFoundError(`No person «${input.agentCode}»`);
+  if (person.kind !== "agent") throw new BadRequestError(`«${input.agentCode}» is not an agent: a key belongs to an agent`);
+  if (person.state === "left") throw new BadRequestError(`The agent «${input.agentCode}» is gone`);
+  return person;
 }
 
 async function resolvePageLabels(app: AppContext, rows: readonly AgentKeyRow[]) {
@@ -142,6 +188,8 @@ export async function issueAgentKey(
     }
   }
 
+  const agent = await agentForIssuance(app, input);
+
   const tokenBody = randomToken(24);
   const token = `${AGENT_KEY_TOKEN_PREFIX}${tokenBody}`;
   const keyPrefix = `${AGENT_KEY_TOKEN_PREFIX}${tokenBody.slice(0, AGENT_KEY_DISPLAY_LENGTH)}`;
@@ -167,6 +215,9 @@ export async function issueAgentKey(
         createdBy: audit.actorUserId ?? null,
         createdAt,
       });
+      if (agent !== null) {
+        await insertPersonAgentKey(dbTx, { personId: agent.id, agentKeyId: created.id, linkedByUserId: audit.actorUserId ?? null });
+      }
 
       // The prefix, not the token: the audit trail is not a second copy of the
       // secret.
@@ -180,6 +231,7 @@ export async function issueAgentKey(
           capabilities: created.capabilities,
           pageLabels: input.pageLabels,
           expiresAt: created.expiresAt.toISOString(),
+          agentCode: agent?.code ?? null,
         },
       });
 
@@ -189,13 +241,14 @@ export async function issueAgentKey(
     rethrowAsHttp(error);
   }
 
-  return { token, key: agentKeyItem(row, labelById) };
+  const agentRow = agent === null ? null : { agentKeyId: row.id, personId: agent.id, code: agent.code, displayName: agent.displayName, state: agent.state };
+  return { token, key: agentKeyItem(row, labelById, { agent: agentRow, lastCall: null }) };
 }
 
 export async function listAgentKeysDetailed(app: AppContext): Promise<AgentKeyItem[]> {
   const rows = await listAgentKeys(app.db);
-  const labelById = await resolvePageLabels(app, rows);
-  return rows.map((row) => agentKeyItem(row, labelById));
+  const [labelById, extras] = await Promise.all([resolvePageLabels(app, rows), keyExtras(app, rows)]);
+  return rows.map((row) => agentKeyItem(row, labelById, extras(row)));
 }
 
 export async function revokeAgentKeyById(
@@ -301,6 +354,37 @@ export async function updateAgentKeyCapabilities(
     return updated;
   });
 
-  const labelById = await resolvePageLabels(app, [row]);
-  return agentKeyItem(row, labelById);
+  const [labelById, extras] = await Promise.all([resolvePageLabels(app, [row]), keyExtras(app, [row])]);
+  return agentKeyItem(row, labelById, extras(row));
+}
+
+/**
+ * «Кто этот ключ» for another service (`agentKeyIntrospect`): by the sha256 a
+ * service computed of the key an agent showed it. Active only for a live key
+ * (not revoked, not expired) of an agent person who is not gone; anything else
+ * — unknown, revoked, expired, a key no agent holds — is the same bare
+ * `active: false`, so the answer tells a digest's holder nothing it could not
+ * already tell. Reads only: the presented key's `last_used_at` and expiry stay
+ * as they are, since the agent did not call Hub.
+ */
+export async function introspectAgentKey(
+  app: Pick<AppContext, "db">,
+  keyDigest: string,
+  now = new Date(),
+): Promise<AgentKeyIntrospectResponse & { subjectKeyId: number | null }> {
+  const cache = { cacheSeconds: AGENT_KEY_INTROSPECT_CACHE_SECONDS, staleSeconds: AGENT_KEY_INTROSPECT_STALE_SECONDS } as const;
+  const row = await findAgentKeyIntrospection(app.db, keyDigest);
+  if (
+    row === null || row.revokedAt !== null || row.expiresAt.getTime() <= now.getTime()
+    || row.person === null || row.person.kind !== "agent" || row.person.state === "left"
+  ) {
+    return { active: false, ...cache, subjectKeyId: row?.agentKeyId ?? null };
+  }
+  return {
+    active: true,
+    agent: { code: row.person.code, displayName: row.person.displayName },
+    expiresAt: row.expiresAt.toISOString(),
+    ...cache,
+    subjectKeyId: row.agentKeyId,
+  };
 }

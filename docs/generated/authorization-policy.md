@@ -26,7 +26,7 @@ for at password sign-in (`client: "chat-extension"`): it reaches only the
 64 routes marked "yes", and every route marked "no" refuses it with 403.
 A full device token is not affected.
 
-## Routes (444)
+## Routes (448)
 
 | Method | Path | Route key | Kind | Roles | Page scope | chat-extension token |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -222,6 +222,7 @@ A full device token is not affected.
 | POST | `/api/v1/agent/keys` | `agentKeyCreate` | `owner-session` | — | — | no |
 | PATCH | `/api/v1/agent/keys/:id` | `agentKeyUpdate` | `owner-session` | — | — | no |
 | POST | `/api/v1/agent/keys/:id/revoke` | `agentKeyRevoke` | `owner-session` | — | — | no |
+| POST | `/api/v1/agent/keys/introspect` | `agentKeyIntrospect` | `agentKey` | — | — | no |
 | POST | `/api/v1/agent/matters` | `agentMatterOpen` | `agentKey` | — | — | no |
 | POST | `/api/v1/agent/matters/close` | `agentMatterClose` | `agentKey` | — | — | no |
 | POST | `/api/v1/agent/matters/comment` | `agentMatterComment` | `agentKey` | — | — | no |
@@ -266,7 +267,10 @@ A full device token is not affected.
 | GET | `/api/v1/agent/sync/pages` | `agentSyncStatus` | `agentKey` | — | — | no |
 | PUT | `/api/v1/agent/system/copies` | `agentSystemCopies` | `agentKey` | — | — | no |
 | PUT | `/api/v1/agent/system/routines` | `agentSystemRoutines` | `agentKey` | — | — | no |
+| POST | `/api/v1/agent/team/fan-watch` | `agentFanWatch` | `agentKey` | — | — | no |
+| POST | `/api/v1/agent/team/sale-context` | `agentSaleContext` | `agentKey` | — | — | no |
 | POST | `/api/v1/agent/team/sales` | `agentTeamSales` | `agentKey` | — | — | no |
+| GET | `/api/v1/agent/team/shift-review` | `agentShiftReview` | `agentKey` | — | — | no |
 | GET | `/api/v1/agent/threads` | `agentThreads` | `agentKey` | — | — | no |
 | POST | `/api/v1/ai/features/:feature` | `aiFeatureStream` | `apiKey` | — | — | yes |
 | POST | `/api/v1/ai/gateway/stream` | `aiGatewayStream` | `owner-session` | — | — | no |

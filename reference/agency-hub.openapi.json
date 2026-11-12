@@ -97860,7 +97860,8 @@
                                   "signin:taskindex",
                                   "signin:monitor",
                                   "write:reports",
-                                  "write:system_state"
+                                  "write:system_state",
+                                  "introspect:agent_keys"
                                 ]
                               },
                               "granted": {
@@ -97877,6 +97878,29 @@
                         "expiresAt": {
                           "type": "string",
                           "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?(Z|[+-]\\d{2}:\\d{2})$"
+                        },
+                        "agent": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "code": {
+                                  "type": "string"
+                                },
+                                "displayName": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "code",
+                                "displayName"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
                         }
                       },
                       "required": [
@@ -98398,7 +98422,8 @@
                                 "signin:taskindex",
                                 "signin:monitor",
                                 "write:reports",
-                                "write:system_state"
+                                "write:system_state",
+                                "introspect:agent_keys"
                               ]
                             }
                           },
@@ -117456,9 +117481,13 @@
                     "minLength": 1,
                     "maxLength": 200
                   },
+                  "agentCode": {
+                    "type": "string",
+                    "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"
+                  },
                   "capabilities": {
                     "minItems": 1,
-                    "maxItems": 22,
+                    "maxItems": 23,
                     "type": "array",
                     "items": {
                       "type": "string",
@@ -117484,7 +117513,8 @@
                         "signin:taskindex",
                         "signin:monitor",
                         "write:reports",
-                        "write:system_state"
+                        "write:system_state",
+                        "introspect:agent_keys"
                       ]
                     }
                   },
@@ -117571,7 +117601,8 @@
                               "signin:taskindex",
                               "signin:monitor",
                               "write:reports",
-                              "write:system_state"
+                              "write:system_state",
+                              "introspect:agent_keys"
                             ]
                           }
                         },
@@ -117613,6 +117644,63 @@
                         },
                         "isActive": {
                           "type": "boolean"
+                        },
+                        "agent": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "code": {
+                                  "type": "string"
+                                },
+                                "displayName": {
+                                  "type": "string"
+                                },
+                                "state": {
+                                  "type": "string",
+                                  "enum": [
+                                    "invited",
+                                    "set_up",
+                                    "working",
+                                    "left"
+                                  ]
+                                }
+                              },
+                              "required": [
+                                "code",
+                                "displayName",
+                                "state"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "lastCall": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "at": {
+                                  "type": "string",
+                                  "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?(Z|[+-]\\d{2}:\\d{2})$"
+                                },
+                                "operation": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "at",
+                                "operation"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
                         }
                       },
                       "required": [
@@ -117625,7 +117713,9 @@
                         "createdAt",
                         "revokedAt",
                         "lastUsedAt",
-                        "isActive"
+                        "isActive",
+                        "agent",
+                        "lastCall"
                       ],
                       "additionalProperties": false
                     }
@@ -117873,7 +117963,8 @@
                             "signin:taskindex",
                             "signin:monitor",
                             "write:reports",
-                            "write:system_state"
+                            "write:system_state",
+                            "introspect:agent_keys"
                           ]
                         }
                       },
@@ -117915,6 +118006,63 @@
                       },
                       "isActive": {
                         "type": "boolean"
+                      },
+                      "agent": {
+                        "anyOf": [
+                          {
+                            "type": "object",
+                            "properties": {
+                              "code": {
+                                "type": "string"
+                              },
+                              "displayName": {
+                                "type": "string"
+                              },
+                              "state": {
+                                "type": "string",
+                                "enum": [
+                                  "invited",
+                                  "set_up",
+                                  "working",
+                                  "left"
+                                ]
+                              }
+                            },
+                            "required": [
+                              "code",
+                              "displayName",
+                              "state"
+                            ],
+                            "additionalProperties": false
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "lastCall": {
+                        "anyOf": [
+                          {
+                            "type": "object",
+                            "properties": {
+                              "at": {
+                                "type": "string",
+                                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?(Z|[+-]\\d{2}:\\d{2})$"
+                              },
+                              "operation": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "at",
+                              "operation"
+                            ],
+                            "additionalProperties": false
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
                       }
                     },
                     "required": [
@@ -117927,7 +118075,9 @@
                       "createdAt",
                       "revokedAt",
                       "lastUsedAt",
-                      "isActive"
+                      "isActive",
+                      "agent",
+                      "lastCall"
                     ],
                     "additionalProperties": false
                   }
@@ -118008,6 +118158,275 @@
         }
       }
     },
+    "/api/v1/agent/keys/introspect": {
+      "post": {
+        "summary": "Another service asks who an agent's hub key is (needs introspect:agent_keys): the agent's code, active or not, expiry",
+        "tags": [
+          "agent"
+        ],
+        "description": "The service sends the sha256 of the key an agent showed it, as the bearer of its own key; never the agent's key. The answer carries no key material, no capabilities and no pages; it holds 60 s, and an active one may be kept up to an hour while Hub cannot be reached.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "keyDigest": {
+                    "type": "string",
+                    "minLength": 64,
+                    "maxLength": 64,
+                    "pattern": "^[0-9a-f]{64}$"
+                  }
+                },
+                "required": [
+                  "keyDigest"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "agentKeyAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "active": {
+                          "type": "boolean",
+                          "enum": [
+                            true
+                          ]
+                        },
+                        "agent": {
+                          "type": "object",
+                          "properties": {
+                            "code": {
+                              "type": "string"
+                            },
+                            "displayName": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "code",
+                            "displayName"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "expiresAt": {
+                          "type": "string",
+                          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?(Z|[+-]\\d{2}:\\d{2})$"
+                        },
+                        "cacheSeconds": {
+                          "type": "number",
+                          "enum": [
+                            60
+                          ]
+                        },
+                        "staleSeconds": {
+                          "type": "number",
+                          "enum": [
+                            3600
+                          ]
+                        }
+                      },
+                      "required": [
+                        "active",
+                        "agent",
+                        "expiresAt",
+                        "cacheSeconds",
+                        "staleSeconds"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "active": {
+                          "type": "boolean",
+                          "enum": [
+                            false
+                          ]
+                        },
+                        "cacheSeconds": {
+                          "type": "number",
+                          "enum": [
+                            60
+                          ]
+                        },
+                        "staleSeconds": {
+                          "type": "number",
+                          "enum": [
+                            3600
+                          ]
+                        }
+                      },
+                      "required": [
+                        "active",
+                        "cacheSeconds",
+                        "staleSeconds"
+                      ],
+                      "additionalProperties": false
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/agent/keys/{id}": {
       "patch": {
         "summary": "Replace a live agent key's capabilities (takes effect on its next request; audited)",
@@ -118022,7 +118441,7 @@
                 "type": "object",
                 "properties": {
                   "capabilities": {
-                    "maxItems": 22,
+                    "maxItems": 23,
                     "type": "array",
                     "items": {
                       "type": "string",
@@ -118048,7 +118467,8 @@
                         "signin:taskindex",
                         "signin:monitor",
                         "write:reports",
-                        "write:system_state"
+                        "write:system_state",
+                        "introspect:agent_keys"
                       ]
                     }
                   }
@@ -118123,7 +118543,8 @@
                           "signin:taskindex",
                           "signin:monitor",
                           "write:reports",
-                          "write:system_state"
+                          "write:system_state",
+                          "introspect:agent_keys"
                         ]
                       }
                     },
@@ -118165,6 +118586,63 @@
                     },
                     "isActive": {
                       "type": "boolean"
+                    },
+                    "agent": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "code": {
+                              "type": "string"
+                            },
+                            "displayName": {
+                              "type": "string"
+                            },
+                            "state": {
+                              "type": "string",
+                              "enum": [
+                                "invited",
+                                "set_up",
+                                "working",
+                                "left"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "code",
+                            "displayName",
+                            "state"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "lastCall": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "at": {
+                              "type": "string",
+                              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?(Z|[+-]\\d{2}:\\d{2})$"
+                            },
+                            "operation": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "at",
+                            "operation"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
                     }
                   },
                   "required": [
@@ -118177,7 +118655,9 @@
                     "createdAt",
                     "revokedAt",
                     "lastUsedAt",
-                    "isActive"
+                    "isActive",
+                    "agent",
+                    "lastCall"
                   ],
                   "additionalProperties": false
                 }
@@ -170579,6 +171059,907 @@
         }
       }
     },
+    "/api/v1/agent/team/fan-watch": {
+      "post": {
+        "summary": "Watched fans' new messages on the key's pages and when the page last wrote to them (needs read:messages; tips with read:money)",
+        "tags": [
+          "agent"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "watches": {
+                    "minItems": 1,
+                    "maxItems": 50,
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "pageLabel": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 200
+                        },
+                        "username": {
+                          "type": "string",
+                          "pattern": "^[A-Za-z0-9_.-]{1,64}$"
+                        },
+                        "since": {
+                          "type": "string",
+                          "format": "date-time",
+                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                        },
+                        "archivedAfter": {
+                          "type": "string",
+                          "format": "date-time",
+                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                        }
+                      },
+                      "required": [
+                        "pageLabel",
+                        "username",
+                        "since"
+                      ],
+                      "additionalProperties": false
+                    }
+                  }
+                },
+                "required": [
+                  "watches"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "agentKeyAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "watches": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "pageLabel": {
+                            "type": "string"
+                          },
+                          "username": {
+                            "type": "string"
+                          },
+                          "chats": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "fanMessages": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "ref": {
+                                  "type": "string"
+                                },
+                                "at": {
+                                  "type": "string"
+                                },
+                                "archivedAt": {
+                                  "type": "string"
+                                },
+                                "text": {
+                                  "type": "string"
+                                },
+                                "media": {
+                                  "type": "boolean"
+                                },
+                                "tipMills": {
+                                  "anyOf": [
+                                    {
+                                      "type": "integer",
+                                      "minimum": -9007199254740991,
+                                      "maximum": 9007199254740991
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                }
+                              },
+                              "required": [
+                                "ref",
+                                "at",
+                                "archivedAt",
+                                "text",
+                                "media",
+                                "tipMills"
+                              ],
+                              "additionalProperties": false
+                            }
+                          },
+                          "more": {
+                            "type": "boolean"
+                          },
+                          "pageLastAt": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "pageLabel",
+                          "username",
+                          "chats",
+                          "fanMessages",
+                          "more",
+                          "pageLastAt"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "serverNow": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "watches",
+                    "serverNow"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/agent/team/sale-context": {
+      "post": {
+        "summary": "Each sale's fan, the PPV it bought and who wrote to the fan before it, for a shift report's check (needs read:team and read:money; the PPV's text with read:messages)",
+        "tags": [
+          "agent"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "sales": {
+                    "minItems": 1,
+                    "maxItems": 500,
+                    "type": "array",
+                    "items": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "saleRef": {
+                              "type": "string",
+                              "pattern": "^\\d{1,19}$"
+                            }
+                          },
+                          "required": [
+                            "saleRef"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "pageLabel": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 200
+                            },
+                            "transactionRef": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 200
+                            }
+                          },
+                          "required": [
+                            "pageLabel",
+                            "transactionRef"
+                          ],
+                          "additionalProperties": false
+                        }
+                      ]
+                    }
+                  }
+                },
+                "required": [
+                  "sales"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "agentKeyAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "sales": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "saleRef": {
+                            "type": "string"
+                          },
+                          "pageLabel": {
+                            "type": "string"
+                          },
+                          "transactionRef": {
+                            "type": "string"
+                          },
+                          "kind": {
+                            "type": "string",
+                            "enum": [
+                              "ppv",
+                              "tip",
+                              "subscription",
+                              "post"
+                            ]
+                          },
+                          "occurredAt": {
+                            "type": "string"
+                          },
+                          "grossMills": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          },
+                          "netMills": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          },
+                          "fanRef": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "fanUsername": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "ppv": {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "sentAt": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  },
+                                  "sender": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  },
+                                  "text": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "sentAt",
+                                  "sender",
+                                  "text"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "postTip": {
+                            "type": "boolean"
+                          },
+                          "campaign": {
+                            "type": "boolean"
+                          },
+                          "writers48h": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "name": {
+                                  "type": "string"
+                                },
+                                "messages": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                }
+                              },
+                              "required": [
+                                "name",
+                                "messages"
+                              ],
+                              "additionalProperties": false
+                            }
+                          },
+                          "writers7d": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "name": {
+                                  "type": "string"
+                                },
+                                "messages": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                }
+                              },
+                              "required": [
+                                "name",
+                                "messages"
+                              ],
+                              "additionalProperties": false
+                            }
+                          },
+                          "lastWriter": {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "name": {
+                                    "type": "string"
+                                  },
+                                  "at": {
+                                    "type": "string"
+                                  },
+                                  "within48h": {
+                                    "type": "boolean"
+                                  }
+                                },
+                                "required": [
+                                  "name",
+                                  "at",
+                                  "within48h"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
+                        },
+                        "required": [
+                          "saleRef",
+                          "pageLabel",
+                          "transactionRef",
+                          "kind",
+                          "occurredAt",
+                          "grossMills",
+                          "netMills",
+                          "fanRef",
+                          "fanUsername",
+                          "ppv",
+                          "postTip",
+                          "campaign",
+                          "writers48h",
+                          "writers7d",
+                          "lastWriter"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "notFound": {
+                      "type": "array",
+                      "items": {
+                        "anyOf": [
+                          {
+                            "type": "object",
+                            "properties": {
+                              "saleRef": {
+                                "type": "string",
+                                "pattern": "^\\d{1,19}$"
+                              }
+                            },
+                            "required": [
+                              "saleRef"
+                            ],
+                            "additionalProperties": false
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "pageLabel": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 200
+                              },
+                              "transactionRef": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 200
+                              }
+                            },
+                            "required": [
+                              "pageLabel",
+                              "transactionRef"
+                            ],
+                            "additionalProperties": false
+                          }
+                        ]
+                      }
+                    },
+                    "serverNow": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "sales",
+                    "notFound",
+                    "serverNow"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/agent/team/sales": {
       "post": {
         "summary": "The team's work and every sale on the key's pages in a window (at most 31 days), with the facts whose a sale is read from: who held the page, the bought PPV's sender, a post tip or Campaign, the last writer, the chatters' marks and the owner's split. Facts only (needs read:team and read:money)",
@@ -171061,6 +172442,1789 @@
             }
           },
           "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/agent/team/shift-review": {
+      "get": {
+        "summary": "«Разбор смены» of one shift on the key's pages and the shift audit's numbers from it (needs read:team and read:money; texts with read:messages)",
+        "tags": [
+          "agent"
+        ],
+        "description": "The shift of `userId` (or of the person `person`'s login) that holds `at`, as the owner's review reads it, cut to the key's pages; the AI's own texts are never in it. 404 when there is no shift there. Database only.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+            },
+            "in": "query",
+            "name": "at",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "in": "query",
+            "name": "userId",
+            "required": false
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"
+            },
+            "in": "query",
+            "name": "person",
+            "required": false
+          }
+        ],
+        "security": [
+          {
+            "agentKeyAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "review": {
+                      "type": "object",
+                      "properties": {
+                        "shift": {
+                          "type": "object",
+                          "properties": {
+                            "userId": {
+                              "type": "integer",
+                              "exclusiveMinimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "username": {
+                              "type": "string"
+                            },
+                            "kind": {
+                              "type": "string",
+                              "enum": [
+                                "shift",
+                                "visit"
+                              ]
+                            },
+                            "startedAt": {
+                              "type": "string"
+                            },
+                            "endedAt": {
+                              "type": "string"
+                            },
+                            "ongoing": {
+                              "type": "boolean"
+                            },
+                            "workedMinutes": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "pauses": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "from": {
+                                    "type": "string"
+                                  },
+                                  "to": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "from",
+                                  "to"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
+                            "lastInputAt": {
+                              "type": "string"
+                            },
+                            "lastBeatAt": {
+                              "type": "string"
+                            },
+                            "pages": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "pageLabel": {
+                                    "type": "string"
+                                  },
+                                  "platform": {
+                                    "type": "string"
+                                  },
+                                  "messages": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "worked": {
+                                    "type": "boolean"
+                                  },
+                                  "allFans": {
+                                    "type": "boolean"
+                                  },
+                                  "sales": {
+                                    "type": "object",
+                                    "properties": {
+                                      "netMills": {
+                                        "type": "integer",
+                                        "minimum": -9007199254740991,
+                                        "maximum": 9007199254740991
+                                      },
+                                      "byKind": {
+                                        "type": "array",
+                                        "items": {
+                                          "type": "object",
+                                          "properties": {
+                                            "kind": {
+                                              "type": "string",
+                                              "enum": [
+                                                "ppv",
+                                                "tip",
+                                                "subscription",
+                                                "post"
+                                              ]
+                                            },
+                                            "count": {
+                                              "type": "integer",
+                                              "minimum": 0,
+                                              "maximum": 9007199254740991
+                                            },
+                                            "netMills": {
+                                              "type": "integer",
+                                              "minimum": -9007199254740991,
+                                              "maximum": 9007199254740991
+                                            }
+                                          },
+                                          "required": [
+                                            "kind",
+                                            "count",
+                                            "netMills"
+                                          ],
+                                          "additionalProperties": false
+                                        }
+                                      }
+                                    },
+                                    "required": [
+                                      "netMills",
+                                      "byKind"
+                                    ],
+                                    "additionalProperties": false
+                                  }
+                                },
+                                "required": [
+                                  "pageLabel",
+                                  "platform",
+                                  "messages",
+                                  "worked"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
+                            "salesNetMills": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            }
+                          },
+                          "required": [
+                            "userId",
+                            "username",
+                            "kind",
+                            "startedAt",
+                            "endedAt",
+                            "ongoing",
+                            "workedMinutes",
+                            "pauses",
+                            "lastInputAt",
+                            "lastBeatAt",
+                            "pages",
+                            "salesNetMills"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "previousAt": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "nextAt": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "activity": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "at": {
+                                "type": "string"
+                              },
+                              "input": {
+                                "type": "boolean"
+                              }
+                            },
+                            "required": [
+                              "at",
+                              "input"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "chats": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "key": {
+                                "type": "string"
+                              },
+                              "pageLabel": {
+                                "type": "string"
+                              },
+                              "platform": {
+                                "type": "string"
+                              },
+                              "conversationRef": {
+                                "type": "string"
+                              },
+                              "fanRef": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "fanUsername": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "fanDisplayName": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "fanLifetimeNetMills": {
+                                "anyOf": [
+                                  {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "shiftNetMills": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "earlierHidden": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "fanLastBefore": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "followedAt": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "ai": {
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "feature": {
+                                      "type": "string"
+                                    },
+                                    "count": {
+                                      "type": "integer",
+                                      "minimum": 0,
+                                      "maximum": 9007199254740991
+                                    }
+                                  },
+                                  "required": [
+                                    "feature",
+                                    "count"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              },
+                              "messages": {
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "ref": {
+                                      "type": "string"
+                                    },
+                                    "at": {
+                                      "type": "string"
+                                    },
+                                    "side": {
+                                      "type": "string",
+                                      "enum": [
+                                        "fan",
+                                        "page"
+                                      ]
+                                    },
+                                    "text": {
+                                      "type": "string"
+                                    },
+                                    "priceMills": {
+                                      "anyOf": [
+                                        {
+                                          "type": "integer",
+                                          "minimum": -9007199254740991,
+                                          "maximum": 9007199254740991
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "bought": {
+                                      "type": [
+                                        "boolean",
+                                        "null"
+                                      ]
+                                    },
+                                    "tipMills": {
+                                      "anyOf": [
+                                        {
+                                          "type": "integer",
+                                          "minimum": -9007199254740991,
+                                          "maximum": 9007199254740991
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "media": {
+                                      "type": "integer",
+                                      "minimum": 0,
+                                      "maximum": 9007199254740991
+                                    },
+                                    "inShift": {
+                                      "type": "boolean"
+                                    },
+                                    "by": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string",
+                                          "enum": [
+                                            "me",
+                                            "other",
+                                            "none",
+                                            "auto"
+                                          ]
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "mass": {
+                                      "type": "boolean"
+                                    },
+                                    "unarchived": {
+                                      "type": "boolean"
+                                    },
+                                    "deletedAt": {
+                                      "type": "string"
+                                    },
+                                    "byName": {
+                                      "type": [
+                                        "string",
+                                        "null"
+                                      ]
+                                    },
+                                    "mine": {
+                                      "anyOf": [
+                                        {
+                                          "type": "object",
+                                          "properties": {
+                                            "composedWith": {
+                                              "type": [
+                                                "string",
+                                                "null"
+                                              ]
+                                            },
+                                            "part": {
+                                              "type": "integer",
+                                              "minimum": 2,
+                                              "maximum": 9007199254740991
+                                            },
+                                            "edited": {
+                                              "type": [
+                                                "boolean",
+                                                "null"
+                                              ]
+                                            },
+                                            "origin": {
+                                              "anyOf": [
+                                                {
+                                                  "type": "string",
+                                                  "enum": [
+                                                    "ai",
+                                                    "fix",
+                                                    "own"
+                                                  ]
+                                                },
+                                                {
+                                                  "type": "null"
+                                                }
+                                              ]
+                                            },
+                                            "aiShare": {
+                                              "type": [
+                                                "number",
+                                                "null"
+                                              ]
+                                            },
+                                            "aiFeature": {
+                                              "type": [
+                                                "string",
+                                                "null"
+                                              ]
+                                            },
+                                            "aiText": {
+                                              "type": [
+                                                "string",
+                                                "null"
+                                              ]
+                                            },
+                                            "draft": {
+                                              "type": [
+                                                "string",
+                                                "null"
+                                              ]
+                                            },
+                                            "fixExpanded": {
+                                              "type": "boolean"
+                                            },
+                                            "replySeconds": {
+                                              "anyOf": [
+                                                {
+                                                  "type": "integer",
+                                                  "minimum": 0,
+                                                  "maximum": 9007199254740991
+                                                },
+                                                {
+                                                  "type": "null"
+                                                }
+                                              ]
+                                            },
+                                            "repeats": {
+                                              "type": "integer",
+                                              "minimum": 0,
+                                              "maximum": 9007199254740991
+                                            },
+                                            "marks": {
+                                              "type": "array",
+                                              "items": {
+                                                "type": "string",
+                                                "enum": [
+                                                  "dash",
+                                                  "cyrillic",
+                                                  "leak"
+                                                ]
+                                              }
+                                            }
+                                          },
+                                          "required": [
+                                            "composedWith",
+                                            "edited",
+                                            "origin",
+                                            "aiShare",
+                                            "aiFeature",
+                                            "aiText",
+                                            "draft",
+                                            "replySeconds",
+                                            "repeats",
+                                            "marks"
+                                          ],
+                                          "additionalProperties": false
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    }
+                                  },
+                                  "required": [
+                                    "ref",
+                                    "at",
+                                    "side",
+                                    "text",
+                                    "priceMills",
+                                    "bought",
+                                    "tipMills",
+                                    "media",
+                                    "inShift",
+                                    "by",
+                                    "mass",
+                                    "byName",
+                                    "mine"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              }
+                            },
+                            "required": [
+                              "key",
+                              "pageLabel",
+                              "platform",
+                              "conversationRef",
+                              "fanRef",
+                              "fanUsername",
+                              "fanDisplayName",
+                              "fanLifetimeNetMills",
+                              "shiftNetMills",
+                              "earlierHidden",
+                              "messages"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "sales": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "saleRef": {
+                                "type": "string"
+                              },
+                              "at": {
+                                "type": "string"
+                              },
+                              "pageLabel": {
+                                "type": "string"
+                              },
+                              "fanRef": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "fanName": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "chatKey": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "kind": {
+                                "type": "string",
+                                "enum": [
+                                  "ppv",
+                                  "tip",
+                                  "subscription",
+                                  "post"
+                                ]
+                              },
+                              "netMills": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "verdict": {
+                                "type": "string",
+                                "enum": [
+                                  "mine",
+                                  "both",
+                                  "theirs",
+                                  "none"
+                                ]
+                              },
+                              "holderName": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "ppvSender": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "ppvSentAt": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "lastWriter": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "writers": {
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "name": {
+                                      "type": "string"
+                                    },
+                                    "messages": {
+                                      "type": "integer",
+                                      "minimum": 0,
+                                      "maximum": 9007199254740991
+                                    }
+                                  },
+                                  "required": [
+                                    "name",
+                                    "messages"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              },
+                              "origin": {
+                                "type": "string",
+                                "enum": [
+                                  "own",
+                                  "colleague_ppv",
+                                  "no_author_ppv",
+                                  "other_wrote",
+                                  "nobody_wrote_48h",
+                                  "post_tip",
+                                  "campaign"
+                                ]
+                              }
+                            },
+                            "required": [
+                              "saleRef",
+                              "at",
+                              "pageLabel",
+                              "fanRef",
+                              "fanName",
+                              "chatKey",
+                              "kind",
+                              "netMills",
+                              "verdict",
+                              "holderName",
+                              "ppvSender",
+                              "ppvSentAt",
+                              "lastWriter",
+                              "writers",
+                              "origin"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "beforeSales": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "saleRef": {
+                                "type": "string"
+                              },
+                              "at": {
+                                "type": "string"
+                              },
+                              "pageLabel": {
+                                "type": "string"
+                              },
+                              "fanRef": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "fanName": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "chatKey": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "kind": {
+                                "type": "string",
+                                "enum": [
+                                  "ppv",
+                                  "tip",
+                                  "subscription",
+                                  "post"
+                                ]
+                              },
+                              "netMills": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "verdict": {
+                                "type": "string",
+                                "enum": [
+                                  "mine",
+                                  "both",
+                                  "theirs",
+                                  "none"
+                                ]
+                              },
+                              "holderName": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "ppvSender": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "ppvSentAt": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "lastWriter": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "writers": {
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "name": {
+                                      "type": "string"
+                                    },
+                                    "messages": {
+                                      "type": "integer",
+                                      "minimum": 0,
+                                      "maximum": 9007199254740991
+                                    }
+                                  },
+                                  "required": [
+                                    "name",
+                                    "messages"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              },
+                              "origin": {
+                                "type": "string",
+                                "enum": [
+                                  "own",
+                                  "colleague_ppv",
+                                  "no_author_ppv",
+                                  "other_wrote",
+                                  "nobody_wrote_48h",
+                                  "post_tip",
+                                  "campaign"
+                                ]
+                              }
+                            },
+                            "required": [
+                              "saleRef",
+                              "at",
+                              "pageLabel",
+                              "fanRef",
+                              "fanName",
+                              "chatKey",
+                              "kind",
+                              "netMills",
+                              "verdict",
+                              "holderName",
+                              "ppvSender",
+                              "ppvSentAt",
+                              "lastWriter",
+                              "writers",
+                              "origin"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "laterSales": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "saleRef": {
+                                "type": "string"
+                              },
+                              "at": {
+                                "type": "string"
+                              },
+                              "pageLabel": {
+                                "type": "string"
+                              },
+                              "fanRef": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "fanName": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "chatKey": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "kind": {
+                                "type": "string",
+                                "enum": [
+                                  "ppv",
+                                  "tip",
+                                  "subscription",
+                                  "post"
+                                ]
+                              },
+                              "netMills": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "verdict": {
+                                "type": "string",
+                                "enum": [
+                                  "mine",
+                                  "both",
+                                  "theirs",
+                                  "none"
+                                ]
+                              },
+                              "holderName": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "ppvSender": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "ppvSentAt": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "lastWriter": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "writers": {
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "name": {
+                                      "type": "string"
+                                    },
+                                    "messages": {
+                                      "type": "integer",
+                                      "minimum": 0,
+                                      "maximum": 9007199254740991
+                                    }
+                                  },
+                                  "required": [
+                                    "name",
+                                    "messages"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              },
+                              "origin": {
+                                "type": "string",
+                                "enum": [
+                                  "own",
+                                  "colleague_ppv",
+                                  "no_author_ppv",
+                                  "other_wrote",
+                                  "nobody_wrote_48h",
+                                  "post_tip",
+                                  "campaign"
+                                ]
+                              }
+                            },
+                            "required": [
+                              "saleRef",
+                              "at",
+                              "pageLabel",
+                              "fanRef",
+                              "fanName",
+                              "chatKey",
+                              "kind",
+                              "netMills",
+                              "verdict",
+                              "holderName",
+                              "ppvSender",
+                              "ppvSentAt",
+                              "lastWriter",
+                              "writers",
+                              "origin"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "waits": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "chat": {
+                                "type": "string"
+                              },
+                              "since": {
+                                "type": "string"
+                              },
+                              "from": {
+                                "type": "string"
+                              },
+                              "to": {
+                                "type": "string"
+                              },
+                              "by": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "enum": [
+                                      "me",
+                                      "other",
+                                      "none"
+                                    ]
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "pending": {
+                                "type": "boolean"
+                              }
+                            },
+                            "required": [
+                              "chat",
+                              "since",
+                              "from",
+                              "to",
+                              "by"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "follows": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "pageLabel": {
+                                "type": "string"
+                              },
+                              "fanRef": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "fanUsername": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "chatKey": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "at": {
+                                "type": "string"
+                              },
+                              "kind": {
+                                "type": "string",
+                                "enum": [
+                                  "follow",
+                                  "subscription"
+                                ]
+                              }
+                            },
+                            "required": [
+                              "pageLabel",
+                              "fanRef",
+                              "fanUsername",
+                              "chatKey",
+                              "at",
+                              "kind"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "aiUse": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "pageLabel": {
+                                "type": "string"
+                              },
+                              "feature": {
+                                "type": "string"
+                              },
+                              "count": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              }
+                            },
+                            "required": [
+                              "pageLabel",
+                              "feature",
+                              "count"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "unarchived": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "deleted": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "serverNow": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "shift",
+                        "previousAt",
+                        "nextAt",
+                        "activity",
+                        "chats",
+                        "sales",
+                        "beforeSales",
+                        "laterSales",
+                        "waits",
+                        "unarchived",
+                        "deleted",
+                        "serverNow"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "numbers": {
+                      "type": "object",
+                      "properties": {
+                        "pages": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "pageLabel": {
+                                "type": "string"
+                              },
+                              "chats": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "messages": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "fanMessages": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "massMessages": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "unauthored": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "others": {
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "name": {
+                                      "type": "string"
+                                    },
+                                    "messages": {
+                                      "type": "integer",
+                                      "minimum": 0,
+                                      "maximum": 9007199254740991
+                                    }
+                                  },
+                                  "required": [
+                                    "name",
+                                    "messages"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              },
+                              "ppvSent": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "ppvBought": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "replies": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "replyMedianSeconds": {
+                                "anyOf": [
+                                  {
+                                    "type": "number",
+                                    "minimum": 0
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "repliesOver15": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "longestReplySeconds": {
+                                "anyOf": [
+                                  {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "longestReplyChat": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "waitingAtStart": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "waitingAtStartWritten": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "waitingAtEnd": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "fanUnattended": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "follows": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "followsWritten": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "followsWrittenSoon": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "reactivations": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "reactivationsAnswered": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "salesNetMills": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "tipsNetMills": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "subscriptionsNetMills": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "ppvPurchases": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "ai": {
+                                "type": "object",
+                                "propertyNames": {
+                                  "type": "string"
+                                },
+                                "additionalProperties": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                }
+                              }
+                            },
+                            "required": [
+                              "pageLabel",
+                              "chats",
+                              "messages",
+                              "fanMessages",
+                              "massMessages",
+                              "unauthored",
+                              "others",
+                              "ppvSent",
+                              "ppvBought",
+                              "replies",
+                              "replyMedianSeconds",
+                              "repliesOver15",
+                              "longestReplySeconds",
+                              "longestReplyChat",
+                              "waitingAtStart",
+                              "waitingAtStartWritten",
+                              "waitingAtEnd",
+                              "fanUnattended",
+                              "follows",
+                              "followsWritten",
+                              "followsWrittenSoon",
+                              "reactivations",
+                              "reactivationsAnswered",
+                              "salesNetMills",
+                              "tipsNetMills",
+                              "subscriptionsNetMills",
+                              "ppvPurchases",
+                              "ai"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "total": {
+                          "type": "object",
+                          "properties": {
+                            "chats": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "messages": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "fanMessages": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "massMessages": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "unauthored": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "others": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "name": {
+                                    "type": "string"
+                                  },
+                                  "messages": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  }
+                                },
+                                "required": [
+                                  "name",
+                                  "messages"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
+                            "ppvSent": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "ppvBought": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "replies": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "replyMedianSeconds": {
+                              "anyOf": [
+                                {
+                                  "type": "number",
+                                  "minimum": 0
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "repliesOver15": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "longestReplySeconds": {
+                              "anyOf": [
+                                {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "longestReplyChat": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "waitingAtStart": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "waitingAtStartWritten": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "waitingAtEnd": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "fanUnattended": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "follows": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "followsWritten": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "followsWrittenSoon": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "reactivations": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "reactivationsAnswered": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "salesNetMills": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "tipsNetMills": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "subscriptionsNetMills": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "ppvPurchases": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "ai": {
+                              "type": "object",
+                              "propertyNames": {
+                                "type": "string"
+                              },
+                              "additionalProperties": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              }
+                            }
+                          },
+                          "required": [
+                            "chats",
+                            "messages",
+                            "fanMessages",
+                            "massMessages",
+                            "unauthored",
+                            "others",
+                            "ppvSent",
+                            "ppvBought",
+                            "replies",
+                            "replyMedianSeconds",
+                            "repliesOver15",
+                            "longestReplySeconds",
+                            "longestReplyChat",
+                            "waitingAtStart",
+                            "waitingAtStartWritten",
+                            "waitingAtEnd",
+                            "fanUnattended",
+                            "follows",
+                            "followsWritten",
+                            "followsWrittenSoon",
+                            "reactivations",
+                            "reactivationsAnswered",
+                            "salesNetMills",
+                            "tipsNetMills",
+                            "subscriptionsNetMills",
+                            "ppvPurchases",
+                            "ai"
+                          ],
+                          "additionalProperties": false
+                        }
+                      },
+                      "required": [
+                        "pages",
+                        "total"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "texts": {
+                      "type": "boolean"
+                    },
+                    "pagesLeftOut": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "required": [
+                    "review",
+                    "numbers",
+                    "texts",
+                    "pagesLeftOut"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
             "description": "Default Response",
             "content": {
               "application/json": {
@@ -258173,6 +261337,54 @@
                               },
                               "allFans": {
                                 "type": "boolean"
+                              },
+                              "sales": {
+                                "type": "object",
+                                "properties": {
+                                  "netMills": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "byKind": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "object",
+                                      "properties": {
+                                        "kind": {
+                                          "type": "string",
+                                          "enum": [
+                                            "ppv",
+                                            "tip",
+                                            "subscription",
+                                            "post"
+                                          ]
+                                        },
+                                        "count": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "netMills": {
+                                          "type": "integer",
+                                          "minimum": -9007199254740991,
+                                          "maximum": 9007199254740991
+                                        }
+                                      },
+                                      "required": [
+                                        "kind",
+                                        "count",
+                                        "netMills"
+                                      ],
+                                      "additionalProperties": false
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "netMills",
+                                  "byKind"
+                                ],
+                                "additionalProperties": false
                               }
                             },
                             "required": [
@@ -258293,6 +261505,39 @@
                             "type": "integer",
                             "minimum": 0,
                             "maximum": 9007199254740991
+                          },
+                          "fanLastBefore": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "followedAt": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "ai": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "feature": {
+                                  "type": "string"
+                                },
+                                "count": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                }
+                              },
+                              "required": [
+                                "feature",
+                                "count"
+                              ],
+                              "additionalProperties": false
+                            }
                           },
                           "messages": {
                             "type": "array",
@@ -258973,6 +262218,79 @@
                           "from",
                           "to",
                           "by"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "follows": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "pageLabel": {
+                            "type": "string"
+                          },
+                          "fanRef": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "fanUsername": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "chatKey": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "at": {
+                            "type": "string"
+                          },
+                          "kind": {
+                            "type": "string",
+                            "enum": [
+                              "follow",
+                              "subscription"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "pageLabel",
+                          "fanRef",
+                          "fanUsername",
+                          "chatKey",
+                          "at",
+                          "kind"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "aiUse": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "pageLabel": {
+                            "type": "string"
+                          },
+                          "feature": {
+                            "type": "string"
+                          },
+                          "count": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          }
+                        },
+                        "required": [
+                          "pageLabel",
+                          "feature",
+                          "count"
                         ],
                         "additionalProperties": false
                       }

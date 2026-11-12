@@ -152,6 +152,8 @@ export * from "./repositories/capture-payload-erasure.ts";
 // never a payload.
 export * from "./repositories/capture-rewrite.ts";
 export * from "./repositories/agent-keys.ts";
+// Agents as participants (0396): whose a key is, its last call, «who is this key», the agents' ready reads.
+export * from "./repositories/agent-doors.ts";
 export * from "./repositories/agent-read-audit.ts";
 export * from "./repositories/agent-post-delete-slots.ts";
 // Agent Read Plane witnesses: the TYPE and NOTHING ELSE. The mint helpers stay

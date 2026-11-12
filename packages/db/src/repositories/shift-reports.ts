@@ -71,6 +71,8 @@ export interface SaleFacts {
   ppvWithoutAuthor: boolean;
   /** When the PPV message the fan bought was sent; null — not a PPV, or its message not found. */
   ppvSentAt: Date | null;
+  /** That PPV message's platform id; null — not a PPV, or its message not found. */
+  ppvMessageRef: string | null;
   /** A tip under a wall post (Fansly: `creator_post_tips` by the tip's id), not in a chat. */
   postTip: boolean;
   /** An OnlyFans tip that is a contribution to the page's Campaign: the fan's message «… $X to your Campaign» with it. */
@@ -196,6 +198,7 @@ export async function listSaleFacts(db: Database, input: { transactionIds: reado
     ppvSender: row.ppv_user_id === null ? null : { userId: Number(row.ppv_user_id), username: row.ppv_username ?? "" },
     ppvWithoutAuthor: row.ppv_message_ref !== null && row.ppv_user_id === null,
     ppvSentAt: row.ppv_sent_at === null ? null : new Date(row.ppv_sent_at),
+    ppvMessageRef: row.ppv_message_ref,
     postTip: row.post_tip === true,
     campaign: row.campaign === true,
     writers: (row.writers ?? []).map((writer) => ({ userId: Number(writer.user_id), username: writer.username, messages: Number(writer.messages) })),

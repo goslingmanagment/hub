@@ -11,6 +11,7 @@ import { ofLinksRouteSchemas } from "./routes-of-links.ts";
 import { pageBrowserRouteSchemas } from "./routes-page-browser.ts";
 import { publicationRouteSchemas } from "./routes-publications.ts";
 import { mediaLookRouteSchemas } from "./routes-media-looks.ts";
+import { agentDoorRouteSchemas } from "./agent-doors.ts";
 import { agentTeamRouteSchemas } from "./agent-team.ts";
 import { fanQueueRouteSchemas } from "./routes-fan-queues.ts";
 import { outreachRouteSchemas } from "./routes-outreach.ts";
@@ -51,7 +52,7 @@ import { agentExportPolicyEnum, agentRouteSchemas, agentSyncWaitingReasonEnum } 
 // Owner administration of the plane's KEYS. A sibling module rather than part of
 // the read plane: issuing a credential carries no evidence envelope, and folding
 // it into agentRouteSchemas would have meant loosening that module's pins.
-import { agentKeyAdminRouteSchemas } from "./routes-agent-keys.ts";
+import { agentKeyAdminRouteSchemas, agentKeyIntrospectRouteSchemas } from "./routes-agent-keys.ts";
 // The Fansly Sync Engine's owner routes (history requests). Owner-session, no
 // agent envelope, so a sibling module for the same reason as the keys above.
 import { syncRouteSchemas } from "./routes-sync.ts";
@@ -5967,6 +5968,8 @@ const baseRouteSchemas = {
   ...mediaLookRouteSchemas,
   ...fanQueueRouteSchemas,
   ...agentTeamRouteSchemas,
+  ...agentDoorRouteSchemas,
+  ...agentKeyIntrospectRouteSchemas,
   ...outreachRouteSchemas,
   ...chatterStatsRouteSchemas,
   ...publicationFileRouteSchemas,

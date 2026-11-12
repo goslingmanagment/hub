@@ -24,6 +24,8 @@ import {
   listChatsFanWroteRussian,
   listChatterActivityMinutes,
   listPagesByLabels,
+  listShiftAiUse,
+  listShiftFollows,
   listSentGenerationLinks,
   listShiftReviewFans,
   listShiftReviewGenerations,
@@ -45,6 +47,7 @@ import {
   SALE_LAST_WRITER_HOURS, lastWriterQuery, readPeopleWork, salesHeldBy, workHoldsShiftSale, type ComputedWork, type PersonPiece, type PersonWork,
 } from "./chatter-shifts.ts";
 import { saleKindOf, saleOriginOf, settleSale } from "./chatter-stats.ts";
+import type { ChatterSaleKind } from "@agency_hub_core/contracts";
 import { NotFoundError } from "./errors.ts";
 import { salesNoShiftHolds, salesOfWork, settleOutsideShifts } from "./team-shift-sales.ts";
 
@@ -746,6 +749,41 @@ export async function readTeamShiftReview(
   query: TeamShiftReviewQuery,
 ): Promise<TeamShiftReviewResponse> {
   requireOwner(principal);
+  return (await computeShiftReview(app, query)).review;
+}
+
+/** Every sale on each page within the shift, whoever's: net, and by kind. Pure. */
+export function pageSalesOf(settled: readonly SettledSale[], start: number, end: number): Map<number, { netMills: number; byKind: Array<{ kind: ChatterSaleKind; count: number; netMills: number }> }> {
+  const out = new Map<number, { netMills: number; kinds: Map<ChatterSaleKind, { count: number; netMills: number }> }>();
+  for (const { sale } of settled) {
+    const at = sale.occurredAt.getTime();
+    if (at < start || at > end) continue;
+    const page = out.get(sale.pageId) ?? { netMills: 0, kinds: new Map() };
+    const kind = saleKindOf(sale.kind);
+    const one = page.kinds.get(kind) ?? { count: 0, netMills: 0 };
+    one.count += 1;
+    one.netMills += sale.netMills;
+    page.kinds.set(kind, one);
+    page.netMills += sale.netMills;
+    out.set(sale.pageId, page);
+  }
+  return new Map([...out].map(([pageId, page]) => [pageId, {
+    netMills: page.netMills,
+    byKind: [...page.kinds].map(([kind, one]) => ({ kind, ...one })).sort((a, b) => a.kind.localeCompare(b.kind)),
+  }]));
+}
+
+/**
+ * «Разбор смены» of one shift (the owner's screen, and an agent key's door
+ * `agentShiftReview`). `grantedPageIds` — an agent key's pages: the review reads
+ * only those (the shift's own boundaries still come from all its work), and
+ * says which of the shift's pages it left out.
+ */
+export async function computeShiftReview(
+  app: AppContext,
+  query: TeamShiftReviewQuery,
+  options: { grantedPageIds?: readonly number[] } = {},
+): Promise<{ review: TeamShiftReviewResponse; pagesLeftOut: string[] }> {
   const now = new Date();
   const at = Date.parse(query.at);
   // The person's work SHIFT_REVIEW_NEIGHBOUR_DAYS around `at`, for the shifts before and after too, and a day more: a shift
@@ -770,8 +808,13 @@ export async function readTeamShiftReview(
 
   const labels = shiftPageLabels(shift);
   const known = await listPagesByLabels(app.db, labels);
-  const pages = labels.flatMap((label) => known.filter((page) => page.label === label));
+  const granted = options.grantedPageIds === undefined ? null : new Set(options.grantedPageIds);
+  const shiftPages = labels.flatMap((label) => known.filter((page) => page.label === label));
+  const pages = granted === null ? shiftPages : shiftPages.filter((page) => granted.has(page.id));
+  const pagesLeftOut = labels.filter((label) => !pages.some((page) => page.label === label));
   const pageIds = pages.map((page) => page.id);
+  // The person's pages whose sales the shift may hold: on an agent's door, the key's alone.
+  const personPageIds = granted === null ? person.pageIds : new Map([...person.pageIds].filter(([, id]) => granted.has(id)));
   // A page the shift works (holds the sales of) brings in all its fans' chats, going on or over alike, and so does one
   // with fewer of the person's messages nobody else kept then (`pagesWithAllFans`); a page only looked at, just the chats
   // the person wrote in. A look-in works none.
@@ -787,7 +830,7 @@ export async function readTeamShiftReview(
   const workedPageIds = pages.filter((page) => allFans.has(page.label)).map((page) => page.id);
   const labelOf = new Map(pages.map((page) => [page.id, page.label]));
 
-  const [rows, sends, generations, autoTexts, minutes, sales, before] = await Promise.all([
+  const [rows, sends, generations, autoTexts, minutes, sales, before, follows, aiUse] = await Promise.all([
     listShiftReviewMessages(app.db, {
       userId: query.userId, pageIds, workedPageIds, from, to, horizonHours: SHIFT_REVIEW_WAIT_HORIZON_HOURS, burstMinChats: MASS_SEND_MIN_CHATS,
       deletedUnseenSeconds: SHIFT_REVIEW_DELETED_UNSEEN_SECONDS, broadcastOwnWords: SHIFT_REVIEW_BROADCAST_OWN_WORDS,
@@ -798,10 +841,14 @@ export async function readTeamShiftReview(
     }),
     listAllAutomatedTexts(app.db),
     listChatterActivityMinutes(app.db, { from, to, pages: pageIds, userId: query.userId }),
-    shiftSales(app, { userId: query.userId, shift, personPageIds: person.pageIds, pageIds, from, to, everyone }),
+    shiftSales(app, { userId: query.userId, shift, personPageIds, pageIds, from, to, everyone }),
     shift.kind === "shift"
       ? nobodysBeforeShift(app, { start, previousEnd: found.previous?.endedAt ?? null, pageIds, everyone })
       : Promise.resolve({ sales: [], lastWriters: new Map<number, number>() }),
+    // The pages' new followers from the wait horizon before the shift (a chat's last follow says whether its fan was
+    // quiet) to its end, and the person's AI events of the shift (the shift audit's).
+    listShiftFollows(app.db, { pageIds, from: new Date(start - SHIFT_REVIEW_WAIT_HORIZON_HOURS * 3_600_000), to }),
+    listShiftAiUse(app.db, { userId: query.userId, pageIds, from, to }),
   ]);
   const links = await listSentGenerationLinks(app.db, {
     refs: sends.map((send) => send.ref), from: new Date(start - 5 * MINUTE_MS), to: new Date(end + 60 * MINUTE_MS),
@@ -835,6 +882,15 @@ export async function readTeamShiftReview(
     }
   }
 
+  // Each chat's last follow (by its thread, else its fan), for whether its fan was quiet.
+  const followedAtOf = new Map<string, number>();
+  for (const follow of follows) {
+    const at = follow.at.getTime();
+    for (const key of [follow.conv === null ? null : `${follow.pageId}:${follow.conv}`, `${follow.pageId}|fan:${follow.fanId}`]) {
+      if (key !== null && at > (followedAtOf.get(key) ?? 0)) followedAtOf.set(key, at);
+    }
+  }
+
   const out: ShiftReviewChat[] = [];
   const waits: TeamShiftReviewResponse["waits"] = [];
   const chatOfFan = new Map<string, string>();
@@ -843,6 +899,13 @@ export async function readTeamShiftReview(
     const pageLabel = labelOf.get(chat.pageId) ?? String(chat.pageId);
     const fan = fanOf.get(key);
     const fanRef = fan?.fanRef ?? chat.messages.find((message) => !message.sent && message.fanNativeId !== null)?.fanNativeId ?? null;
+    const fanLastBefore = chat.messages.filter((message) => !message.sent && seenMessage(message) && message.at.getTime() < start).at(-1) ?? null;
+    const followedAt = followedAtOf.get(key) ?? (fan?.fanId == null ? undefined : followedAtOf.get(`${chat.pageId}|fan:${fan.fanId}`));
+    const aiByFeature = new Map<string, number>();
+    for (const generation of chatGenerationsOf(generations, chat, fanRef)) {
+      const made = generation.createdAt.getTime();
+      if (made >= start && made <= end) aiByFeature.set(generation.feature, (aiByFeature.get(generation.feature) ?? 0) + 1);
+    }
     waits.push(...waitRowsOf(chat, pageLabel, start, end));
     const facts = chat.shown.map((message) => ruleMessageOf(message, chat, start, end));
     const origins = chatOriginsOf({
@@ -863,6 +926,9 @@ export async function readTeamShiftReview(
       fanLifetimeNetMills: fan?.lifetimeNetMills ?? null,
       shiftNetMills: fan?.shiftNetMills ?? 0,
       earlierHidden: chat.earlierHidden,
+      fanLastBefore: fanLastBefore === null ? null : fanLastBefore.at.toISOString(),
+      followedAt: followedAt === undefined ? null : new Date(followedAt).toISOString(),
+      ai: [...aiByFeature].map(([feature, count]) => ({ feature, count })).sort((a, b) => a.feature.localeCompare(b.feature)),
       messages: chat.shown.map((message, index): ShiftReviewMessage => {
         const fact = facts[index]!;
         const origin = origins[index] ?? null;
@@ -936,7 +1002,12 @@ export async function readTeamShiftReview(
     activity.set(ms, (activity.get(ms) ?? false) || minute.input);
   }
 
-  return {
+  const salesOfPage = pageSalesOf(sales, start, end);
+  const chatKeyOf = (pageId: number, conv: string | null, fanId: number) => {
+    const byConv = conv === null ? undefined : out.find((chat) => chat.pageLabel === labelOf.get(pageId) && chat.conversationRef === conv);
+    return byConv?.key ?? chatOfFan.get(`${pageId}:${fanId}`) ?? null;
+  };
+  const review: TeamShiftReviewResponse = {
     shift: {
       userId: query.userId,
       username: person.username,
@@ -951,6 +1022,7 @@ export async function readTeamShiftReview(
       pages: pages.map((page) => ({
         pageLabel: page.label, platform: page.platform, messages: shift.messages.get(page.label) ?? 0, worked: worked(page.label),
         allFans: allFans.has(page.label),
+        sales: salesOfPage.get(page.id) ?? { netMills: 0, byKind: [] },
       })),
       salesNetMills: heldNetMills(sales),
     },
@@ -962,10 +1034,20 @@ export async function readTeamShiftReview(
     beforeSales: beforeSales.map(rowOf),
     laterSales: laterSales.map(rowOf),
     waits,
+    follows: follows.filter((follow) => follow.at.getTime() >= start && follow.at.getTime() <= end).map((follow) => ({
+      pageLabel: labelOf.get(follow.pageId) ?? String(follow.pageId),
+      fanRef: follow.fanRef,
+      fanUsername: follow.username,
+      chatKey: chatKeyOf(follow.pageId, follow.conv, follow.fanId),
+      at: follow.at.toISOString(),
+      kind: follow.kind,
+    })),
+    aiUse: aiUse.map((use) => ({ pageLabel: labelOf.get(use.pageId) ?? String(use.pageId), feature: use.feature, count: use.count })),
     unarchived: sends.filter((send) => !send.inArchive && !send.inSocket).length,
     deleted: sends.filter((send) => send.deleted).length,
     serverNow: now.toISOString(),
   };
+  return { review, pagesLeftOut };
 }
 
 function firstInShift(chat: ShiftReviewChat): number {

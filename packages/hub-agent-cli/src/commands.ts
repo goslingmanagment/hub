@@ -7,6 +7,8 @@ import {
   agentCoverageStatusEnum,
   agentCrossSpendersAudienceEnum,
   agentDatasetEnum,
+  agentFanWatchBodySchema,
+  agentSaleContextBodySchema,
   agentDatasetFilterOpEnum,
   agentHistoryItemStateEnum,
   agentHistoryRequestStateEnum,
@@ -516,6 +518,16 @@ function readTextFile(deps: HubRunDeps, path: string): string {
     throw new HubUsageError(`--file ${path} cannot be read`);
   }
   return text;
+}
+
+/** A JSON body from --file. */
+function readJsonFile(deps: HubRunDeps, path: string): unknown {
+  try {
+    return JSON.parse(readTextFile(deps, path));
+  } catch (error) {
+    if (error instanceof HubUsageError) throw error;
+    throw new HubUsageError(`--file ${path} is not JSON`);
+  }
 }
 
 /** `--all` XOR `--latest N`: the depth is required (plan §4.1). */
@@ -2729,6 +2741,70 @@ export const HUB_COMMANDS: readonly HubCommand[] = [
       const body = queueBody(values, deps, { requestedBy: readString(values, "requested-by") });
       if (typeof body.requestedBy !== "string") throw new HubUsageError("--requested-by is required: whose word adds the fans");
       return client.agentFanQueueAppend({ params: { queueId: requireId(values, "id") }, body: checkedDraft(agentFanQueueAppendBodySchema, body) });
+    },
+  },
+  {
+    name: "shift-review",
+    operation: "agentShiftReview",
+    summary:
+      "«Разбор смены» of one shift on this key's pages, and the «Обучалка» shift audit's numbers counted from it"
+      + " (`numbers`): the shift of --user-id (a Hub login) or --person (a people registry code) that holds --at."
+      + " Needs read:team and read:money; message texts with read:messages. The AI's own texts are never in it.",
+    options: {
+      at: { kind: "string", describe: "A moment inside the shift, ISO with an offset (required): 2026-11-11T09:00:00+03:00" },
+      "user-id": { kind: "number", describe: "The Hub login whose shift it is" },
+      person: { kind: "string", describe: "Or the person's code (people registry): their login whose shift holds --at" },
+    },
+    run: (client, values) => {
+      const userId = readNumber(values, "user-id");
+      const person = readString(values, "person");
+      if ((userId === undefined) === (person === undefined)) throw new HubUsageError("give exactly one of --user-id and --person");
+      return client.agentShiftReview({ query: { at: requireString(values, "at"), ...defined({ userId, person }) } });
+    },
+  },
+  {
+    name: "fan-watch",
+    operation: "agentFanWatch",
+    summary:
+      "Watched fans' new messages on this key's pages and when the page last wrote to them: one watch by --page,"
+      + " --username, --since (and --archived-after, the newest archivedAt already seen), or many from --file"
+      + " ({\"watches\": [...]}). Needs read:messages; tips with read:money.",
+    options: {
+      file: { kind: "string", describe: "A JSON body {\"watches\": [{pageLabel, username, since, archivedAfter?}]}" },
+      page: { kind: "string", describe: "The page's label" },
+      username: { kind: "string", describe: "The fan's username on the platform" },
+      since: { kind: "string", describe: "The watch's start, ISO with an offset" },
+      "archived-after": { kind: "string", describe: "Only messages the archive took after this (ISO with an offset)" },
+    },
+    run: (client, values, deps) => {
+      const file = readString(values, "file");
+      const body = file !== undefined
+        ? readJsonFile(deps, file)
+        : { watches: [defined({
+          pageLabel: requireString(values, "page"), username: requireString(values, "username"), since: requireString(values, "since"),
+          archivedAfter: readString(values, "archived-after"),
+        })] };
+      return client.agentFanWatch({ body: checkedDraft(agentFanWatchBodySchema, body) });
+    },
+  },
+  {
+    name: "sale-context",
+    operation: "agentSaleContext",
+    summary:
+      "For a shift report's check: each sale's fan, the PPV it bought (sender, time; its text with read:messages) and"
+      + " who wrote to the fan in the 48 hours, the 7 days and last in the 60 days before it. Sales by Hub's id"
+      + " (--sale-ref, repeatable) or from --file ({\"sales\": [{saleRef} | {pageLabel, transactionRef}]}). Needs"
+      + " read:team and read:money.",
+    options: {
+      file: { kind: "string", describe: "A JSON body {\"sales\": [...]}: Hub's saleRef, or a page's platform transactionRef" },
+      "sale-ref": { kind: "list", describe: "Hub's id of a sale (repeatable)" },
+    },
+    run: (client, values, deps) => {
+      const file = readString(values, "file");
+      const body = file !== undefined
+        ? readJsonFile(deps, file)
+        : { sales: (readList(values, "sale-ref") ?? []).map((saleRef) => ({ saleRef })) };
+      return client.agentSaleContext({ body: checkedDraft(agentSaleContextBodySchema, body) });
     },
   },
   {

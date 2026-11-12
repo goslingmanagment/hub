@@ -3958,7 +3958,8 @@ export function buildProgram() {
     .requiredOption("--page <label...>", "the pages it reaches")
     .requiredOption("--days <days>", "days until it expires, at most 365", parsePositiveInt)
     .requiredOption("--owner-user-id <id>", "the active owner who asked for it", parsePositiveInt)
-    .action(async (keyName: string, options: { capability: string[]; page: string[]; days: number; ownerUserId: number }) => {
+    .option("--agent <code>", "the agent person it belongs to (people registry); only a service's own key may have none")
+    .action(async (keyName: string, options: { capability: string[]; page: string[]; days: number; ownerUserId: number; agent?: string }) => {
       const capabilities = options.capability.map((value) => {
         if (!isAgentCapability(value)) {
           throw new Error(`Unknown capability ${value}. Expected one of ${AGENT_CAPABILITIES.join(", ")}`);
@@ -3973,12 +3974,13 @@ export function buildProgram() {
         }
         const issued = await issueAgentKey(
           app,
-          { name: keyName, capabilities, pageLabels: options.page, expiresInDays: options.days },
+          { name: keyName, capabilities, pageLabels: options.page, expiresInDays: options.days, ...(options.agent ? { agentCode: options.agent } : {}) },
           { source: "cli", actorUserId: owner.id },
         );
         console.log(JSON.stringify({
           token: issued.token,
           name: issued.key.name,
+          agent: issued.key.agent?.code ?? null,
           capabilities: issued.key.capabilities,
           pageLabels: issued.key.pageLabels,
           expiresAt: issued.key.expiresAt,

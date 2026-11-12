@@ -138,6 +138,9 @@ export const AGENT_READ_AUDIT_SUMMARY_SHAPES = {
    *  enters as `textSha256`/`textLength` (its UTF-8 bytes), never its words. */
   reportSlug: "identifier",
   reportVersion: "count",
+  /** «Кто этот ключ» (0396): the key a service asked about (its id; null — no such key), and the answer in
+   *  `outcome` (`active`, `inactive`). */
+  subjectKeyId: "count",
 } as const satisfies Record<string, AgentReadAuditSummaryShape>;
 
 export type AgentReadAuditSummaryKey = keyof typeof AGENT_READ_AUDIT_SUMMARY_SHAPES;

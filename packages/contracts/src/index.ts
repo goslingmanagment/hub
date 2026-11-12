@@ -25,6 +25,7 @@ export * from "./routes-matters.ts";
 export * from "./agent-reports.ts";
 export * from "./routes-agent-reports.ts";
 export * from "./agent-team.ts";
+export * from "./agent-doors.ts";
 // «Рассылки» kept by Hub (outreach-store-v1), spread by routes.ts.
 export * from "./outreach.ts";
 export * from "./routes-outreach.ts";
@@ -80,6 +81,7 @@ export * from "./routes-team-ledger.ts";
 export * from "./routes-account-reports.ts";
 // Its quality numbers, one definition for the review's screen and «Смены» (`teamChatterNumbers`).
 export * from "./shift-review-rules.ts";
+export * from "./shift-review-audit.ts";
 // The people registry (team list, the owner's card and writes, the agent feed and proposals), spread by routes.ts.
 export * from "./people.ts";
 export * from "./routes-people.ts";

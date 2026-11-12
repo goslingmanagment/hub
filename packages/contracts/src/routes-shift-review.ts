@@ -160,8 +160,28 @@ const shiftReviewChatSchema = z.object({
   shiftNetMills: mills,
   /** Messages before the shift that are not sent (only the last SHIFT_REVIEW_CONTEXT_MESSAGES are). */
   earlierHidden: count,
+  /**
+   * The fan's last message (that the page could see) before the shift, within SHIFT_REVIEW_WAIT_HORIZON_HOURS; null —
+   * none so recent (the fan had been silent longer, or never wrote). The shift audit's «реактивация» reads it.
+   */
+  fanLastBefore: isoTimestamp.nullable().optional(),
+  /** When the fan last followed the page (OnlyFans: first subscribed), from SHIFT_REVIEW_WAIT_HORIZON_HOURS before the shift to its end; null — not then. */
+  followedAt: isoTimestamp.nullable().optional(),
+  /** The chatter's AI texts made in this chat within the shift, by feature. */
+  ai: z.array(z.object({ feature: z.string(), count })).optional(),
   /** Oldest first. */
   messages: z.array(shiftReviewMessageSchema),
+});
+
+/** A new follower of a page of the shift within it: a Fansly follow, an OnlyFans fan's first subscription to the page. */
+const shiftReviewFollowSchema = z.object({
+  pageLabel: z.string(),
+  fanRef: z.string().nullable(),
+  fanUsername: z.string().nullable(),
+  /** The fan's chat in `chats`; null — not among them. */
+  chatKey: z.string().nullable(),
+  at: isoTimestamp,
+  kind: z.enum(["follow", "subscription"]),
 });
 
 const shiftReviewSaleSchema = z.object({
@@ -224,7 +244,17 @@ export const teamShiftReviewResponseSchema = z.object({
      * (owner, 2026-11-08) for SHIFT_REVIEW_SEAM_MINUTES or more. Any other page, and every page of a look-in, brings in just the chats the person wrote in.
      * `allFans` absent — as `worked`.
      */
-    pages: z.array(z.object({ pageLabel: z.string(), platform: z.string(), messages: count, worked: z.boolean(), allFans: z.boolean().optional() })),
+    pages: z.array(z.object({
+      pageLabel: z.string(), platform: z.string(), messages: count, worked: z.boolean(), allFans: z.boolean().optional(),
+      /**
+       * Every sale on the page within the shift, whoever's (the page's money, as the shift audit counts it), net, and by
+       * kind. Whose each is — `sales`; the shift's — `salesNetMills`. Absent — not read.
+       */
+      sales: z.object({
+        netMills: mills,
+        byKind: z.array(z.object({ kind: z.enum(CHATTER_SALE_KINDS), count, netMills: mills })),
+      }).optional(),
+    })),
     /**
      * The shift's sales, net, as «Смены → Заработок» settles them: the sales on its pages while it held them
      * (`salesHeldBy`), less those a colleague's overlapping shift held too when the colleague last wrote to the fan.
@@ -268,6 +298,10 @@ export const teamShiftReviewResponseSchema = z.object({
     by: z.enum(["me", "other", "none"]).nullable(),
     pending: z.boolean().optional(),
   })),
+  /** The new followers of the shift's pages within it, oldest first. Absent — not read. */
+  follows: z.array(shiftReviewFollowSchema).optional(),
+  /** The chatter's AI events on the shift's pages within it, by page and feature (`ai_usage_events`). Absent — not read. */
+  aiUse: z.array(z.object({ pageLabel: z.string(), feature: z.string(), count })).optional(),
   /** The chatter's messages of the shift neither the archive nor the page's socket holds yet (no text, not in `chats`). */
   unarchived: count,
   /**
@@ -284,6 +318,7 @@ export type ShiftReviewChat = z.infer<typeof shiftReviewChatSchema>;
 export type ShiftReviewMessage = z.infer<typeof shiftReviewMessageSchema>;
 export type ShiftReviewMine = z.infer<typeof shiftReviewMineSchema>;
 export type ShiftReviewSale = z.infer<typeof shiftReviewSaleSchema>;
+export type ShiftReviewFollow = z.infer<typeof shiftReviewFollowSchema>;
 export type ShiftReviewSaleOrigin = (typeof SHIFT_REVIEW_SALE_ORIGINS)[number];
 
 export const shiftReviewRouteSchemas = {
