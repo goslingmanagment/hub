@@ -2,10 +2,13 @@ import { createHash } from "node:crypto";
 
 import type { ClientFanBadgesBody, ClientFanBadgesResponse, ClientFbuddyTier } from "@agency_hub_core/contracts";
 import {
+  clientAccountSignalIsNews,
   findPageSummaryByLabel,
   findVisibleFansByPlatformUserIds,
   insertObservation,
   readFanBadges,
+  readFanPageAccountAnswers,
+  recordFanPageClientAccountSignals,
   writeFanBadges,
   type Database,
   type FanBadgeStoredTier,
@@ -28,6 +31,14 @@ import { clientCaptureProducer } from "./ingest-observations.ts";
  * Hub already has, confirmed less than a day ago, writes no row and journals nothing. A change is journaled first (one
  * observation per report, only the changed fans and fields), then kept with the moment of the change.
  *
+ * `accountSeen` (fan-account-state-v1, 0374): whether the page's session returned the fan's account to the tab
+ * (`GET /account?ids=`). It is a signal, never the page's answer — `page_fans.account_probe_*` takes a fan out of the
+ * fan queues and the outreach audiences, so only the page's own read writes it. Only a word that DISAGREES with the
+ * page's stored answer (not seen while the page sees him or never asked; seen while the page does not) is journaled,
+ * in the same observation, and kept on the page link with Hub's clock (`account_client_seen*`), which makes the page's
+ * re-check (`fan-profiles.recheck`) due; the same word again while the page has not answered since is nothing. Its fans
+ * are every fan linked to the page, the legacy-marked ones too (`readFanPageAccountAnswers`); the badges keep theirs.
+ *
  * Database only: nothing here asks a platform or sends anything.
  */
 
@@ -40,13 +51,16 @@ const CONFIRM_EVERY_MS = 24 * 60 * 60_000;
 interface ReportedBadges {
   tier: FanBadgeStoredTier | undefined;
   recentSpender: boolean | undefined;
+  accountSeen: boolean | undefined;
 }
 
-/** The journal's entry of a fan: only its changed badges, as the client sent them (`fbuddyTier: null` — FBuddy has none). */
+/** The journal's entry of a fan: only its changed badges, as the client sent them (`fbuddyTier: null` — FBuddy has none),
+ *  and `accountSeen` when it disagreed with the page's answer. */
 interface JournaledBadges {
   fanRef: string;
   fbuddyTier?: ClientFbuddyTier | null;
   recentSpender?: boolean;
+  accountSeen?: boolean;
 }
 
 const wireTierOf = (tier: FanBadgeStoredTier): ClientFbuddyTier | null => (tier === "none" ? null : tier);
@@ -62,12 +76,13 @@ export async function recordClientFanBadges(
   if (page.platform !== "fansly") throw new ClientFeatureDisabledError(FAN_BADGES_FEATURE, "platform_unsupported");
   const now = new Date();
 
-  // One entry per fan, the last one wins; an entry with neither badge says nothing.
+  // One entry per fan, the last one wins; an entry with nothing says nothing.
   const reported = new Map<string, ReportedBadges>();
   for (const entry of input.body.fans) {
     reported.set(entry.fanRef, {
       tier: entry.fbuddyTier === undefined ? undefined : entry.fbuddyTier ?? "none",
       recentSpender: entry.recentSpender,
+      accountSeen: entry.accountSeen,
     });
   }
   const refs = [...reported].flatMap(([fanRef, badges]) => (
@@ -78,16 +93,25 @@ export async function recordClientFanBadges(
   });
   const stored = await readFanBadges(app.db, fans.map((fan) => fan.fanId));
 
+  // The browser's word on each account, against the page's own answer: every fan linked to the page.
+  const signalRefs = [...reported].flatMap(([fanRef, badges]) => (badges.accountSeen === undefined ? [] : [fanRef]));
+  const links = signalRefs.length === 0 ? [] : await readFanPageAccountAnswers(app.db, {
+    pageId: page.id, platform: page.platform, platformUserIds: signalRefs,
+  });
+  const signals: Array<{ fanId: number; fanRef: string; seen: boolean }> = [];
+  for (const link of links) {
+    const seen = reported.get(link.platformUserId)?.accountSeen;
+    if (seen !== undefined && clientAccountSignalIsNews(seen, link)) signals.push({ fanId: link.fanId, fanRef: link.platformUserId, seen });
+  }
+
   // Per field: changed — Hub has no value or another one; due — changed, or the same value confirmed over a day ago.
   const confirmBefore = new Date(now.getTime() - CONFIRM_EVERY_MS);
   const stale = (checkedAt: Date | null | undefined) => checkedAt == null || checkedAt < confirmBefore;
   const journaled: JournaledBadges[] = [];
   const writes: FanBadgesWrite[] = [];
-  let linked = 0;
   for (const fan of fans) {
     const badges = reported.get(fan.platformUserId);
     if (badges === undefined) continue;
-    linked += 1;
     const row = stored.get(fan.fanId);
     const { tier, recentSpender } = badges;
     const tierChanged = tier !== undefined && row?.fbuddyTier !== tier;
@@ -110,7 +134,15 @@ export async function recordClientFanBadges(
     }
   }
 
-  if (writes.length > 0) {
+  // A disagreeing word joins its fan's entry in the journal (one entry per fan).
+  const changedFans = journaled.length;
+  for (const signal of signals) {
+    const entry = journaled.find((candidate) => candidate.fanRef === signal.fanRef);
+    if (entry === undefined) journaled.push({ fanRef: signal.fanRef, accountSeen: signal.seen });
+    else entry.accountSeen = signal.seen;
+  }
+
+  if (writes.length > 0 || signals.length > 0) {
     const header = request.headers["x-client-version"];
     const producer = clientCaptureProducer(principal, typeof header === "string" ? header : null);
     await app.db.transaction(async (transaction) => {
@@ -131,14 +163,19 @@ export async function recordClientFanBadges(
           actorPrincipalId: principal.user.id,
         });
       }
-      await writeFanBadges(tx, { now, confirmBefore, fans: writes });
+      if (writes.length > 0) await writeFanBadges(tx, { now, confirmBefore, fans: writes });
+      // Never the page's answer: only the signal columns of the page link.
+      await recordFanPageClientAccountSignals(tx, { pageId: page.id, at: now, signals });
     });
   }
 
+  // A fan counts once: linked by its badges or by its page link.
+  const linkedRefs = new Set([...fans.map((fan) => fan.platformUserId), ...links.map((link) => link.platformUserId)]);
   return {
-    changed: journaled.length,
-    unchanged: linked - journaled.length,
-    skipped: reported.size - linked,
+    changed: changedFans,
+    unchanged: linkedRefs.size - changedFans,
+    skipped: reported.size - linkedRefs.size,
+    accountSignals: signals.length,
     serverNow: now.toISOString(),
   };
 }

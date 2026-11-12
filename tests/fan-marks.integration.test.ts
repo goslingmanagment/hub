@@ -304,6 +304,16 @@ describe("clientFanMarks", () => {
     expect(first.blocklist[0]!.text.endsWith("…")).toBe(true);
     // ari-1 never finished a walk; the reader is off in this process.
     expect([first.listsReadAt, first.blocklistReadAt]).toEqual([null, null]);
+    // Not linked to lora-1 yet: no account state.
+    expect(first.accountState).toBeNull();
+
+    // lora-1's own answer: not seen since 1 Nov; the public check after it found the account — he blocked the page.
+    await q(`insert into page_fans (fan_id, platform_account_id, account_probe_at, account_probe_resolved)
+             select id, $1, '2026-11-01T00:00:00Z', false from fans where platform = 'fansly' and platform_user_id = '9001'`, [lora]);
+    await q("update fans set public_checked_at = '2026-11-02T00:00:00Z', public_found = true where platform = 'fansly' and platform_user_id = '9001'");
+    expect((await marks("lora-1", "9001")).accountState).toEqual({
+      state: "blocked", since: "2026-11-01T00:00:00.000Z", checkedAt: "2026-11-01T00:00:00.000Z",
+    });
 
     // The username the page shows now finds his posts under it too.
     await q("insert into page_fan_list_walks (page_id, generation, completed_at, lists_walked, members_seen) values ($1, 1, '2026-10-27T03:00:00Z', 1, 1)", [ari]);
@@ -321,7 +331,7 @@ describe("clientFanMarks", () => {
 
     // OnlyFans: nothing to mark. A page the caller does not work: refused.
     expect(await marks("lora-of", "9001")).toEqual({
-      pageLabel: "lora-of", fanRef: "9001", lists: [], blocklist: [], listsReadAt: null, blocklistReadAt: null,
+      pageLabel: "lora-of", fanRef: "9001", lists: [], blocklist: [], listsReadAt: null, blocklistReadAt: null, accountState: null,
     });
     expect((await read("ari-1", "9001")).statusCode).toBe(403);
     expect((await read("lora-1", "9001", "has space")).statusCode).toBe(200);

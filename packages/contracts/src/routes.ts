@@ -50,6 +50,7 @@ import { agentKeyAdminRouteSchemas } from "./routes-agent-keys.ts";
 import { syncRouteSchemas } from "./routes-sync.ts";
 // The chat extension's routes (client bootstrap and what follows); same spread.
 import {
+  clientFanAccountStateSchema,
   clientFanCardResponseSchema,
   clientNumericIdSchema,
   clientOpenToken,
@@ -1267,6 +1268,15 @@ const spenderLastTransactionSchema = z.object({
 // than one page. Optional: a server before it omits the key.
 const accountLookupMissAtSchema = isoTimestamp.nullable().optional();
 
+// The fan's account as THIS page knows it (fan-account-state-v1): `seen`,
+// `deleted`, `blocked` or `unchecked` (the page does not see him and Hub does
+// not know why yet), `since` when the page stopped seeing him (null: seen, or
+// the start is unknown), `checkedAt` its latest answer. Like
+// `accountLookupMissAt`, only this page's row: null when the page never
+// answered about him or the list spans more than one page. Optional: a server
+// before it omits the key.
+const accountStateSchema = clientFanAccountStateSchema.nullable().optional();
+
 const spenderListItemSchema = z.object({
   fan: spenderFanSchema,
   metrics: spenderMetricsSchema,
@@ -1276,6 +1286,7 @@ const spenderListItemSchema = z.object({
   lastTransaction: spenderLastTransactionSchema,
   retentionStatus: spenderRetentionStatusEnum.exclude(["all"]),
   accountLookupMissAt: accountLookupMissAtSchema,
+  accountState: accountStateSchema,
 });
 
 export const spenderListResponseSchema = z.object({
@@ -1320,6 +1331,7 @@ const pageSpenderAutoListFanSchema = z.object({
   lifetimeCreatorNetAmountMills: mills,
   lastTransactionAt: isoTimestamp.nullable(),
   accountLookupMissAt: accountLookupMissAtSchema,
+  accountState: accountStateSchema,
 });
 
 export const pageSpenderAutoListDetailResponseSchema = z.object({

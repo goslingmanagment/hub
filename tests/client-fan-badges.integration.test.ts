@@ -105,7 +105,7 @@ describe("fan badges from a chatter's browser", () => {
     ];
     try {
       // The last entry of a fan wins; a fan sent with neither badge and one not linked to the page are skipped.
-      expect(await ok(first)).toEqual({ changed: 2, unchanged: 0, skipped: 2 });
+      expect(await ok(first)).toEqual({ changed: 2, unchanged: 0, skipped: 2, accountSignals: 0 });
       expect(await journal()).toEqual([{
         pageLabel: "lora-1",
         fans: [{ fanRef: GOLD, fbuddyTier: "gold", recentSpender: true }, { fanRef: NO_TIER, fbuddyTier: null }],
@@ -116,14 +116,14 @@ describe("fan badges from a chatter's browser", () => {
       expect(kept[1]).toMatchObject({ recent_spender_since: null, recent_spender_checked_at: null });
 
       // The same report again: no journal, no row written.
-      expect(await ok(first)).toEqual({ changed: 0, unchanged: 2, skipped: 2 });
+      expect(await ok(first)).toEqual({ changed: 0, unchanged: 2, skipped: 2, accountSignals: 0 });
       expect(await journal()).toHaveLength(1);
       expect(await stored()).toEqual(kept);
 
       // Confirmed over a day ago: only the moment of the confirmation moves, still no journal.
       await q("update fan_badges set fbuddy_tier_checked_at = now() - interval '2 days', fbuddy_tier_since = now() - interval '3 days'");
       const old = (await stored())[0]!;
-      expect(await ok([{ fanRef: GOLD, fbuddyTier: "gold" }])).toEqual({ changed: 0, unchanged: 1, skipped: 0 });
+      expect(await ok([{ fanRef: GOLD, fbuddyTier: "gold" }])).toEqual({ changed: 0, unchanged: 1, skipped: 0, accountSignals: 0 });
       const confirmed = (await stored())[0]!;
       expect(confirmed.fbuddy_tier_since).toEqual(old.fbuddy_tier_since);
       expect(confirmed.fbuddy_tier_checked_at.getTime()).toBeGreaterThan(old.fbuddy_tier_checked_at.getTime());
@@ -131,7 +131,7 @@ describe("fan badges from a chatter's browser", () => {
       expect(await journal()).toHaveLength(1);
 
       // Another tier: journaled alone, with a new moment; the mark keeps its own.
-      expect(await ok([{ fanRef: GOLD, fbuddyTier: "silver", recentSpender: true }])).toEqual({ changed: 1, unchanged: 0, skipped: 0 });
+      expect(await ok([{ fanRef: GOLD, fbuddyTier: "silver", recentSpender: true }])).toEqual({ changed: 1, unchanged: 0, skipped: 0, accountSignals: 0 });
       expect((await journal())[1]).toMatchObject({ fans: [{ fanRef: GOLD, fbuddyTier: "silver" }] });
       const changed = (await stored())[0]!;
       expect(changed.fbuddy_tier).toBe("silver");
@@ -160,5 +160,86 @@ describe("fan badges from a chatter's browser", () => {
     });
     expect(byFan.get(NO_TIER)).toMatchObject({ fbuddyTier: "none", recentSpender: null, recentSpenderCheckedAt: null });
     expect(byFan.get(QUIET)).toMatchObject({ fbuddyTier: null, fbuddyTierCheckedAt: null, recentSpender: null, recentSpenderCheckedAt: null });
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  // fan-account-state-v1: `accountSeen`, whether the page's session returned
+  // the fan's account to the tab. A signal, never the page's answer: only a
+  // word that disagrees with the page's answer is journaled and kept.
+  it("keeps and journals only a browser's word that disagrees with the page's answer, never as the page's answer", async (context) => {
+    if (!testDb || !server) return context.skip();
+    const SEEN = "438766025723355011";
+    const MISSED = "438766025723355012";
+    const AGREES = "438766025723355013";
+    const NEVER_ASKED = "438766025723355014";
+    const MARKED = "438766025723355015";
+    for (const ref of [SEEN, MISSED, AGREES, NEVER_ASKED, MARKED]) await fan(ref);
+    const answer = async (ref: string, resolved: boolean) => q(
+      `update page_fans set account_probe_at = now() - interval '1 hour', account_probe_resolved = $3
+        where platform_account_id = $2 and fan_id = (select id from fans where platform = 'fansly' and platform_user_id = $1)`,
+      [ref, fanslyPage, resolved],
+    );
+    await answer(SEEN, true);
+    await answer(MISSED, false);
+    await answer(AGREES, false);
+    await answer(MARKED, false);
+    // The legacy deleted mark: the badges' selection leaves him out, the signal's does not.
+    await q("update fans set deleted_detected_at = now() where platform = 'fansly' and platform_user_id = $1", [MARKED]);
+    const links = async () => (await q(`
+      select f.platform_user_id as ref, pf.account_probe_at, pf.account_probe_resolved, pf.account_client_seen, pf.account_client_seen_at
+        from page_fans pf join fans f on f.id = pf.fan_id
+       where pf.platform_account_id = $1 order by f.platform_user_id`, [fanslyPage])).rows;
+    const answers = async () => (await links()).map((row) => [row.ref, row.account_probe_at?.toISOString() ?? null, row.account_probe_resolved]);
+    const pageAnswers = await answers();
+    const journaledBefore = (await journal()).length;
+
+    const report = [
+      // A badge change and a disagreement (the page never asked about him): one entry.
+      { fanRef: GOLD, fbuddyTier: "platinum", accountSeen: false },
+      { fanRef: SEEN, accountSeen: false },
+      { fanRef: MISSED, accountSeen: true },
+      { fanRef: AGREES, accountSeen: false },
+      // «Never asked + seen» is nothing.
+      { fanRef: NEVER_ASKED, accountSeen: true },
+      { fanRef: MARKED, accountSeen: true },
+      { fanRef: UNLINKED, accountSeen: false },
+    ];
+    expect(await ok(report)).toEqual({ changed: 1, unchanged: 5, skipped: 1, accountSignals: 4 });
+    const journaled = await journal();
+    expect(journaled).toHaveLength(journaledBefore + 1);
+    expect(journaled.at(-1)).toEqual({
+      pageLabel: "lora-1",
+      fans: [
+        { fanRef: GOLD, fbuddyTier: "platinum", accountSeen: false },
+        { fanRef: SEEN, accountSeen: false },
+        { fanRef: MISSED, accountSeen: true },
+        { fanRef: MARKED, accountSeen: true },
+      ],
+      reportedAt: expect.any(String),
+    });
+    const kept = await links();
+    expect(kept.map((row) => [row.ref, row.account_client_seen])).toEqual([
+      [GOLD, false], [NO_TIER, null], [QUIET, null], [SEEN, false], [MISSED, true], [AGREES, null], [NEVER_ASKED, null], [MARKED, true],
+    ]);
+    // Hub's clock, and never the page's answer.
+    for (const row of kept.filter((link) => link.account_client_seen !== null)) {
+      expect(Math.abs(row.account_client_seen_at.getTime() - Date.now())).toBeLessThan(60_000);
+    }
+    expect(await answers()).toEqual(pageAnswers);
+
+    // The same words again while the page has not answered since: nothing.
+    expect(await ok(report)).toEqual({ changed: 0, unchanged: 6, skipped: 1, accountSignals: 0 });
+    expect(await journal()).toHaveLength(journaledBefore + 1);
+
+    // A word alone is journaled too, once the page answered after the last one.
+    await q(
+      `update page_fans set account_probe_at = account_client_seen_at + interval '1 millisecond', account_probe_resolved = true
+        where platform_account_id = $2 and fan_id = (select id from fans where platform = 'fansly' and platform_user_id = $1)`,
+      [SEEN, fanslyPage],
+    );
+    expect(await ok([{ fanRef: SEEN, accountSeen: false }])).toEqual({ changed: 0, unchanged: 1, skipped: 0, accountSignals: 1 });
+    expect((await journal()).at(-1)).toMatchObject({ fans: [{ fanRef: SEEN, accountSeen: false }] });
+    const seen = (await links()).find((row) => row.ref === SEEN)!;
+    expect(seen.account_client_seen_at.getTime()).toBeGreaterThan(seen.account_probe_at.getTime());
+    expect(seen.account_probe_resolved).toBe(true);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 });

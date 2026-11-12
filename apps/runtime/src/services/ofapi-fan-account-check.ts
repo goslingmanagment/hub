@@ -144,8 +144,12 @@ async function checkPage(
       return { ...result, status: "blocked", reason: block };
     }
     let page: OfapiListPage;
+    // The answer is dated when it arrived (never fresher than it is): a link
+    // holding a newer answer keeps it (recordOnlyfansAccountCheck).
+    let answeredAt: Date;
     try {
       page = await app.ofapi!.getUserDetailsList!(context, input.ofapiAccountId, userIds);
+      answeredAt = new Date();
     } catch (error) {
       if (error instanceof OfapiCollectionPolicyError) {
         // Refused before anything was sent: release the estimate, and the
@@ -183,7 +187,7 @@ async function checkPage(
     await app.db.transaction(async (tx) => {
       await recordOnlyfansAccountCheck(tx as unknown as Database, {
         platformAccountId: input.pageId,
-        answeredAt: new Date(),
+        answeredAt,
         askedFanIds: batch.map((fan) => fan.fanId),
         answers,
       });

@@ -23,13 +23,30 @@ export const FANSLY_PUBLIC_LOOKUP_SEND_SOURCE = "public_lookup";
 export const FANSLY_PUBLIC_LOOKUP_STOP_REASONS = ["rate_limited", "auth_refused", "network", "off_contract", "indeterminate"] as const;
 export type FanslyPublicLookupStopReason = (typeof FANSLY_PUBLIC_LOOKUP_STOP_REASONS)[number];
 
-/** Why a fan is asked about. */
-export const FANSLY_PUBLIC_LOOKUP_DEMANDS = ["deleted_mark", "owner_list", "episode_partner", "page_lookup_miss"] as const;
+/** Why a fan is asked about. `page_miss_renewed`: a page stopped seeing him
+ *  after his latest check (0374, `page_fans.account_miss_since`);
+ *  `marked_seen`: he carries the legacy deleted mark and a page sees him with
+ *  an answer newer than his latest check. */
+export const FANSLY_PUBLIC_LOOKUP_DEMANDS = [
+  "deleted_mark", "owner_list", "episode_partner", "page_lookup_miss", "page_miss_renewed", "marked_seen",
+] as const;
 export type FanslyPublicLookupDemand = (typeof FANSLY_PUBLIC_LOOKUP_DEMANDS)[number];
 
 /** A derived demand (an episode's partner, a page's lookup miss) asks again
  *  only once the fan's latest check is older than this. */
 export const FANSLY_PUBLIC_LOOKUP_RECHECK_AFTER_MS = 7 * 24 * 60 * 60 * 1000;
+
+/** A page's renewed miss (`page_miss_renewed`) asks only once the fan's
+ *  latest check is older than this too. */
+export const FANSLY_PUBLIC_LOOKUP_RENEWED_MISS_AFTER_MS = 24 * 60 * 60 * 1000;
+
+/** The two instants the reader's demand is judged by, at `now`. */
+export function fanslyPublicLookupDemandWindows(now: Date): { recheckBefore: Date; renewedMissBefore: Date } {
+  return {
+    recheckBefore: new Date(now.getTime() - FANSLY_PUBLIC_LOOKUP_RECHECK_AFTER_MS),
+    renewedMissBefore: new Date(now.getTime() - FANSLY_PUBLIC_LOOKUP_RENEWED_MISS_AFTER_MS),
+  };
+}
 
 /** The reader's advisory lock `(58216, 1)` (two-int4 form: classid, objid,
  *  objsubid 2): one pass at a time across every process. 58211–58215 are
@@ -385,15 +402,18 @@ type CandidateSqlRow = {
 
 /** The demand of the reader as one SQL: every Fansly fan that needs an answer,
  *  with its reasons and its priority (the owner's queue first, then the
- *  partners of established episodes, then the page lookup misses). */
-function demandSql(input: { recheckBefore: Date }) {
+ *  partners of established episodes, then the page lookup misses, then the
+ *  renewed misses, then the marked fans a page sees). `aged`: a demand that
+ *  asks only when the fan was never checked or his check is older than
+ *  `recheckBefore`; the others carry their own freshness rule. */
+function demandSql(input: { recheckBefore: Date; renewedMissBefore: Date }) {
   return sql`
     with demand as (
-      select q.fan_id, q.reason as demand, 0 as priority, q.enqueued_at as since
+      select q.fan_id, q.reason as demand, 0 as priority, q.enqueued_at as since, false as aged
         from fansly_public_lookup_queue q
        where q.done_at is null
       union all
-      select coalesce(t.fan_id, fp.id), 'episode_partner', 1, e.established_at
+      select coalesce(t.fan_id, fp.id), 'episode_partner', 1, e.established_at, true
         from page_dm_thread_unavailability e
         join page_dm_threads t on t.id = e.thread_id
         left join fans fp
@@ -407,9 +427,29 @@ function demandSql(input: { recheckBefore: Date }) {
       -- of the column is null: 71 520 rows expected for 51 (prod 2026-10-10),
       -- which hash-joined every Fansly fan, regex and all. IS FALSE is priced
       -- from the column's own frequencies and matches 0268's partial index.
-      select pf.fan_id, 'page_lookup_miss', 2, pf.account_probe_at
+      select pf.fan_id, 'page_lookup_miss', 2, pf.account_probe_at, true
         from page_fans pf
        where pf.account_probe_resolved is false
+      union all
+      -- A page stopped seeing him after his latest check (its streak's start is
+      -- known, 0374): that check says nothing of why. Once a day at most.
+      select pf.fan_id, 'page_miss_renewed', 3, pf.account_miss_since, false
+        from page_fans pf
+        join fans f on f.id = pf.fan_id
+       where pf.account_probe_resolved is false
+         and pf.account_miss_since is not null
+         and f.public_checked_at < pf.account_miss_since
+         and f.public_checked_at < ${input.renewedMissBefore}::timestamptz
+      union all
+      -- The legacy deleted mark on a fan a page sees again, with an answer newer
+      -- than his latest check: only a found answer takes the mark off.
+      select pf.fan_id, 'marked_seen', 4, pf.account_probe_at, false
+        from fans f
+        join page_fans pf on pf.fan_id = f.id
+       where f.platform = 'fansly'
+         and f.deleted_detected_at is not null
+         and pf.account_probe_resolved is true
+         and (f.public_checked_at is null or pf.account_probe_at > f.public_checked_at)
     ), due as (
       select d.fan_id, min(d.priority) as priority, min(d.since) as since,
              array_agg(distinct d.demand order by d.demand) as demands
@@ -417,7 +457,7 @@ function demandSql(input: { recheckBefore: Date }) {
         join fans f on f.id = d.fan_id
        where f.platform = 'fansly'
          and (
-           d.priority = 0
+           not d.aged
            or f.public_checked_at is null
            or f.public_checked_at < ${input.recheckBefore}::timestamptz
          )
@@ -440,12 +480,15 @@ function demandSql(input: { recheckBefore: Date }) {
  * and reasons name it: the owner's queue first (oldest request first), then
  * the partners of established unavailability episodes, then the fans a page's
  * lookup missed — the latter two only when the fan was never checked or its
- * latest check is older than `recheckBefore`. Only Fansly fans whose id is
- * digits. Plain read.
+ * latest check is older than `recheckBefore` — then the fans a page stopped
+ * seeing after their latest check, once that check is also older than
+ * `renewedMissBefore`, then the fans carrying the legacy deleted mark whom a
+ * page sees with an answer newer than their latest check. Only Fansly fans
+ * whose id is digits. Plain read.
  */
 export async function pickFanslyPublicLookupBatch(
   db: Database,
-  input: { limit: number; recheckBefore: Date },
+  input: { limit: number; recheckBefore: Date; renewedMissBefore: Date },
 ): Promise<FanslyPublicLookupCandidate[]> {
   if (!Number.isSafeInteger(input.limit) || input.limit < 1) throw new Error(`limit must be a positive integer (${input.limit})`);
   const result = await db.execute<CandidateSqlRow>(sql`
@@ -466,14 +509,24 @@ export async function pickFanslyPublicLookupBatch(
 /** How much demand there is, by reason (a fan counts under each of its reasons). */
 export async function countFanslyPublicLookupDemand(
   db: Database,
-  input: { recheckBefore: Date },
+  input: { recheckBefore: Date; renewedMissBefore: Date },
 ): Promise<{ total: number; byDemand: Record<FanslyPublicLookupDemand, number> }> {
-  const result = await db.execute<{ total: number; deletedMark: number; ownerList: number; episodePartner: number; pageLookupMiss: number }>(sql`
+  const result = await db.execute<{
+    total: number;
+    deletedMark: number;
+    ownerList: number;
+    episodePartner: number;
+    pageLookupMiss: number;
+    pageMissRenewed: number;
+    markedSeen: number;
+  }>(sql`
     select count(*)::int as total,
            count(*) filter (where 'deleted_mark' = any(c.demands))::int as "deletedMark",
            count(*) filter (where 'owner_list' = any(c.demands))::int as "ownerList",
            count(*) filter (where 'episode_partner' = any(c.demands))::int as "episodePartner",
-           count(*) filter (where 'page_lookup_miss' = any(c.demands))::int as "pageLookupMiss"
+           count(*) filter (where 'page_lookup_miss' = any(c.demands))::int as "pageLookupMiss",
+           count(*) filter (where 'page_miss_renewed' = any(c.demands))::int as "pageMissRenewed",
+           count(*) filter (where 'marked_seen' = any(c.demands))::int as "markedSeen"
       from (${demandSql(input)}) c
   `);
   const row = result.rows[0];
@@ -484,6 +537,8 @@ export async function countFanslyPublicLookupDemand(
       owner_list: Number(row?.ownerList ?? 0),
       episode_partner: Number(row?.episodePartner ?? 0),
       page_lookup_miss: Number(row?.pageLookupMiss ?? 0),
+      page_miss_renewed: Number(row?.pageMissRenewed ?? 0),
+      marked_seen: Number(row?.markedSeen ?? 0),
     },
   };
 }

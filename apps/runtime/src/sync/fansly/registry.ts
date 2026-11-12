@@ -85,7 +85,7 @@ const payoutsModule = (variant: "daily" | "walk") => async (): Promise<ResourceM
   (await import("./resources/payouts.ts")).payoutsModule(variant);
 const dmMessagesModule = (variant: "head" | "catchup" | "history") => async (): Promise<ResourceModule> =>
   (await import("./resources/dm-messages.ts")).dmMessagesModule(variant);
-const fanProfilesModule = (variant: "lookup" | "probe" | "alias-backfill") => async (): Promise<ResourceModule> => {
+const fanProfilesModule = (variant: "lookup" | "probe" | "alias-backfill" | "recheck") => async (): Promise<ResourceModule> => {
   const resources = await import("./resources/fan-profiles.ts");
   switch (variant) {
     case "lookup":
@@ -94,6 +94,8 @@ const fanProfilesModule = (variant: "lookup" | "probe" | "alias-backfill") => as
       return resources.fanProfilesProbeModule;
     case "alias-backfill":
       return resources.fanProfilesAliasBackfillModule;
+    case "recheck":
+      return resources.fanProfilesRecheckModule;
   }
 };
 
@@ -432,6 +434,23 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     proof: "snapshot", walk: "subject-queue", http: true, evidence: false, fence: "none",
     operations: ["accounts.by_ids"],
     module: fanProfilesModule("lookup"),
+  },
+  {
+    // A standing walk of the page (0374): the page's own answer about the
+    // fans whose answer matters, kept fresh whoever names them — a chatter's
+    // browser that disagreed with it, the partners of the page's open chat
+    // unavailability episodes, the paying fans whose answer is over 72 hours
+    // old. Each pass derives the due ids from the database and asks up to 100
+    // (`listFanslyAccountRecheckDue`); at most one request a page in 5
+    // minutes, counted from its own journal (`FAN_PROFILES_RECHECK_EVERY_MS`),
+    // a pass with nothing due asks nothing, and paying fans alone, fewer than
+    // a hundred, are asked at most once in 6 hours. Not the lookup walk's day
+    // of reuse: its due rule is its freshness.
+    key: "fan-profiles.recheck", file: "fan-profiles", subject: "page", kind: "goal", class: "planned",
+    triggers: ["poll"], standing: { recheckMs: 5 * MINUTE }, slo: {},
+    proof: "snapshot", walk: "subject-queue", http: true, evidence: false, fence: "none",
+    operations: ["accounts.by_ids"],
+    module: fanProfilesModule("recheck"),
   },
   {
     // Drain-only: no apply of this build asks for it — a lookup miss excludes

@@ -1360,6 +1360,28 @@ export async function countSendsSince(
   return counts;
 }
 
+/**
+ * The newest admission of a resource's request on a page after `since` (null:
+ * none) — what a resource that keeps its own pace reads (`fan-profiles.recheck`:
+ * at most one request in 5 minutes). Every admitted attempt counts, whatever
+ * became of it. A short range scan of `sync_attempts_page_admitted`.
+ */
+export async function latestResourceAdmissionAt(
+  db: Database,
+  input: { pageId: number; resource: string; since: Date },
+): Promise<Date | null> {
+  const result = await db.execute<{ at: Date | string | null }>(sql`
+    select max(a.admitted_at) as at
+      from sync_attempts a
+     where a.page_id = ${input.pageId}
+       and not a.shadow
+       and a.admitted_at > ${input.since}::timestamptz
+       and a.resource = ${input.resource}
+  `);
+  const at = result.rows[0]?.at ?? null;
+  return at === null ? null : new Date(at);
+}
+
 /** What one class of a page sent on one wire operation within a window. */
 export interface SyncRouteUse {
   class: SyncEngineWorkClass;

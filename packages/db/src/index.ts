@@ -18,6 +18,8 @@ export * from "./repositories/client-deleted-messages.ts";
 export * from "./repositories/client-note-attributions.ts";
 // FBuddy's tier and Fansly's «Recent Spender» mark of a fan, from chatters' browsers (fan-badges-v1, 0373).
 export * from "./repositories/fan-badges.ts";
+// A fan's account state on a page, a chatter's browser signal and the page's re-check (fan-account-state-v1, 0374).
+export * from "./repositories/fan-account-state.ts";
 // Chat Memory: a chatter's activity in the chat extension, for the shift (0306).
 export * from "./repositories/chatter-activity.ts";
 export * from "./repositories/chatspace-tab-reports.ts";
