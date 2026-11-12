@@ -12,6 +12,7 @@ import {
   useDecideProposal,
   useSetPayTerm,
   useSettleImportNote,
+  useTermsHubFrom,
   useUpdatePerson,
   type OwnerCard,
   type PayTerm,
@@ -41,6 +42,7 @@ export function ScheduleTab({ person, card, cardFailed, onRetry, isOwner }: {
 }) {
   const [editing, setEditing] = useState<"person" | "pages" | "schedule" | "terms" | null>(null);
   const waiting = isOwner && card ? <WaitingBlock person={card.person} proposals={card.proposals} /> : null;
+  const termsHubFrom = useTermsHubFrom(isOwner && person.kind === "human");
   return (
     <div className="registry-tab">
       {isOwner && cardFailed && !card && (
@@ -56,7 +58,7 @@ export function ScheduleTab({ person, card, cardFailed, onRetry, isOwner }: {
         <RightsBlock person={person} canEdit={isOwner} />
         {isOwner && person.kind === "human" && (
           <div className="people-grid__wide">
-            {card ? <TermsBlock terms={card.payTerms} payout={card.payoutDetails} onAdd={() => setEditing("terms")} /> : cardFailed ? null : <Card title="Условия оплаты"><SkeletonText lines={3} /></Card>}
+            {card ? <TermsBlock terms={card.payTerms} payout={card.payoutDetails} termsHubFrom={termsHubFrom} onAdd={() => setEditing("terms")} /> : cardFailed ? null : <Card title="Условия оплаты"><SkeletonText lines={3} /></Card>}
           </div>
         )}
       </div>
@@ -264,6 +266,13 @@ function SlotLine({ slot, today, quiet = false }: { slot: Slot; today: string; q
 }
 
 /**
+ * Where the shift report takes a person's slot from, while it is not this card: the agency's knowledge base (the
+ * person's card in /OS) — Hub's people mirror there still writes in shadow. Remove the line (null) when the mirror is
+ * switched on and the report reads the slot from here.
+ */
+const SLOT_SOURCE_NOTE: string | null = "Пока отчёт смены берёт слот из карточки человека в базе знаний: график отсюда дойдёт туда, когда включат зеркало.";
+
+/**
  * The slots, by line: the person's line for every page, then each page that has its own; under each line its earlier and
  * later slots (the owner's card has them all; a team lead sees what holds now).
  */
@@ -273,7 +282,7 @@ function ScheduleBlock({ person, slots, onEdit }: { person: RegistryPerson; slot
   return (
     <Card
       title="График"
-      description="Время московское. Слот решает, чья продажа на стыке смен."
+      description={<>Время московское. Слот решает, чья продажа на стыке смен.{SLOT_SOURCE_NOTE && <span className="registry-source">{SLOT_SOURCE_NOTE}</span>}</>}
       actions={onEdit && <Button size="sm" variant="ghost" icon={CalendarPlus} onClick={onEdit}>Изменить с даты</Button>}
     >
       {lines.length === 0 ? <p className="access-text">Графика нет.</p> : (
@@ -379,8 +388,21 @@ function RightsBlock({ person, canEdit }: { person: RegistryPerson; canEdit: boo
 
 // ── pay terms (the owner's only), and where to transfer as the person wrote it on «Начало» ─────
 
-function TermsBlock({ terms, payout, onAdd }: { terms: readonly PayTerm[]; payout: OwnerCard["payoutDetails"]; onAdd: () => void }) {
+/**
+ * The terms card's one quiet line while the ledger does not price the days by these terms (its switch
+ * `payroll_terms_hub_from`, `termsHubFrom`): the payout sheets accrue. Gone once the ledger says the day has come;
+ * nothing while its word is not known.
+ */
+function termsSourceLine(termsHubFrom: string | null | undefined, today: string): string | null {
+  if (termsHubFrom === undefined || (termsHubFrom !== null && termsHubFrom <= today)) return null;
+  return termsHubFrom === null
+    ? "Пока начисляет таблица выплат: условия отсюда начнут действовать с даты включения."
+    : `Пока начисляет таблица выплат: условия отсюда начнут действовать с ${formatDay(termsHubFrom)}.`;
+}
+
+function TermsBlock({ terms, payout, termsHubFrom, onAdd }: { terms: readonly PayTerm[]; payout: OwnerCard["payoutDetails"]; termsHubFrom: string | null | undefined; onAdd: () => void }) {
   const today = moscowToday();
+  const source = termsSourceLine(termsHubFrom, today);
   const rows = [...terms].sort((a, b) => a.modelName.localeCompare(b.modelName, "ru") || b.validFrom.localeCompare(a.validFrom));
   const holds = (term: PayTerm) => term.validFrom <= today && (term.validTo === null || term.validTo >= today);
   const columns: Column<PayTerm>[] = [
@@ -393,7 +415,7 @@ function TermsBlock({ terms, payout, onAdd }: { terms: readonly PayTerm[]; payou
   return (
     <Card
       title="Условия оплаты"
-      description="Видите только вы. Доля от дохода модели и фикс за день со сменой; новые условия с даты заканчивают прежние накануне."
+      description={<>Видите только вы. Доля от дохода модели и фикс за день со сменой; новые условия с даты заканчивают прежние накануне.{source && <span className="registry-source">{source}</span>}</>}
       actions={<Button size="sm" icon={CalendarPlus} onClick={onAdd}>Новые условия с даты</Button>}
       padding={rows.length === 0 ? "md" : "none"}
       footer={<span className="registry-payout">Куда платить: {payout ? <span className="registry-payout__text">{payout.text}</span> : "человек не написал в Hub"}</span>}

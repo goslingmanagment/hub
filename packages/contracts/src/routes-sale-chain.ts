@@ -32,7 +32,7 @@ export const SALE_CHAIN_STATES = ["done", "wait", "open", "none", "unknown"] as 
 
 export const saleChainLinkSchema = z.object({
   state: z.enum(SALE_CHAIN_STATES),
-  /** One line in Russian: «сдан в системе: версия 2, 11 нояб., 23:10», «к выплате», «неизвестно: ledger не ответил». */
+  /** One line in Russian: «сдан: версия 2, 11 нояб., 23:10», «к выплате», «неизвестно: ledger не ответил». */
   words: z.string(),
   /** Where it is seen: a Workboard or console path; null — no screen of it for this reader. */
   link: z.string().nullable(),

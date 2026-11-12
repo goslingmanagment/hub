@@ -5,7 +5,7 @@ import type {
   TeamLedgerReportDay,
   TeamLedgerReportsResponse,
 } from "@agency_hub_core/contracts";
-import { formatDateTime } from "@agency_hub_core/look";
+import { formatDateTime, moscowDayOf, moscowToday } from "@agency_hub_core/look";
 import { formatUsdFromMills } from "@agency_hub_core/shared";
 import {
   findHandinShift,
@@ -176,7 +176,7 @@ export function hubReportLinkOf(input: { report: CurrentReport; transactionId: n
   const path = input.own ? `/workboard/my/shifts/${input.report.shiftId}?sale=${input.transactionId}` : `/workboard/shifts/report/${input.report.shiftId}?sale=${input.transactionId}`;
   return {
     state: line.disputed ? "open" : "done",
-    words: `сдан в системе: версия ${input.report.version}, ${formatDateTime(input.report.submittedAt.toISOString())}; ${input.sums.hubLine ? counted : line.amountMills > 0 ? "засчитана" : "не засчитана"}${statement}${line.disputed ? ", спорная" : ""}`,
+    words: `сдан: версия ${input.report.version}, ${formatDateTime(input.report.submittedAt.toISOString())}; ${input.sums.hubLine ? counted : line.amountMills > 0 ? "засчитана" : "не засчитана"}${statement}${line.disputed ? ", спорная" : ""}`,
     link: path,
     amountMills: input.sums.hubLine ? line.amountMills : null,
   };
@@ -333,7 +333,7 @@ export async function readSaleChain(
       pay: viewer.kind === "owner" || (own && ownPay?.seesOwnPaySince != null),
     };
     const shift = share.shiftId === null ? null : await findHandinShift(db, share.shiftId);
-    const reportDate = shift?.reportDate ?? new Date(sale.occurredAt.getTime() + 3 * 3_600_000).toISOString().slice(0, 10);
+    const reportDate = shift?.reportDate ?? moscowDayOf(sale.occurredAt);
     const person = codes.get(userId) ?? null;
     const logins = person?.userIds ?? [userId];
 
@@ -363,7 +363,7 @@ export async function readSaleChain(
     if (person === null) {
       why = "вход не связан с человеком в реестре";
     } else {
-      const today = new Date(now.getTime() + 3 * 3_600_000).toISOString().slice(0, 10);
+      const today = moscowToday(now);
       const monthOn = new Date(Date.parse(`${reportDate}T00:00:00Z`) + 30 * 86_400_000).toISOString().slice(0, 10);
       const until = today < monthOn ? today : monthOn;
       const payTo = until < reportDate ? reportDate : until;

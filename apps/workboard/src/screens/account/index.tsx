@@ -18,7 +18,9 @@ import { ruPlural } from "@agency_hub_core/ui/plural";
 import { hubErrorStatus } from "@agency_hub_core/ui/hubClient";
 import { kernel } from "@/shared/hub";
 import { PasswordWayIn } from "@/shared/PasswordWayIn";
+import { PayoutDetails } from "@/shared/PayoutDetails";
 import { ScreenHeader } from "@/shared/ScreenHeader";
+import { useAccountStart } from "@/shared/start";
 import { useMe } from "@/shared/useMe";
 import "./account.css";
 
@@ -30,6 +32,8 @@ import "./account.css";
  * person): nothing here an owner could not also open about themselves. A
  * narrow session (from the extension, no password) reads none of it: one panel
  * with the way to the password instead (NARROW_WEB_SESSION_PASSWORD_ONLY).
+ * Where payouts go is everyone's here, as on a newcomer's «Начало» (the same
+ * card; a narrow session reads it, with the way to the password).
  */
 export function AccountScreen() {
   const { narrow } = useMe();
@@ -41,6 +45,7 @@ export function AccountScreen() {
           <Card title="Вы вошли из расширения">
             <PasswordWayIn text="Устройства, пароль и расходы ИИ открываются после входа на сайте с паролем." />
           </Card>
+          <Payout />
         </div>
       </>
     );
@@ -50,6 +55,7 @@ export function AccountScreen() {
       <ScreenHeader title="Аккаунт и устройства" />
       <div className="wb-content account-grid">
         <WhoAmI />
+        <Payout />
         <Devices />
         <ChangePassword />
         <Spend />
@@ -60,6 +66,18 @@ export function AccountScreen() {
 }
 
 const DEVICES_KEY = ["account", "devices"] as const;
+
+/** «Куда переводить выплаты»: a person's own (`accountStart`); a login no person holds has none, so no card. */
+function Payout() {
+  const start = useAccountStart(true);
+  if (start.isPending) return <Card title="Куда переводить выплаты"><SkeletonText lines={2} /></Card>;
+  if (!start.data || start.data.person === null) return null;
+  return (
+    <Card title="Куда переводить выплаты" description="Как вы получаете деньги: например, UID в Bybit или адрес кошелька USDT и сеть.">
+      <PayoutDetails data={start.data} />
+    </Card>
+  );
+}
 
 function WhoAmI() {
   const { user } = useMe();

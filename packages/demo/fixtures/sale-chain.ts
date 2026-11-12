@@ -190,7 +190,7 @@ function person(share: Home["shares"][number], sale: Sale, home: Home, viewer: V
     const said = line.statement === "not_mine" ? ", «не моё»" : line.statement === "share" ? ", «делим»" : line.statement === "mine" ? ", «моё»" : "";
     report = {
       state: line.disputed ? "open" : "done",
-      words: `сдан в системе: версия ${entry.handed.version}, ${when(entry.handed.submittedAt)}; ${counted}${said}${line.disputed ? ", спорная" : ""}`,
+      words: `сдан: версия ${entry.handed.version}, ${when(entry.handed.submittedAt)}; ${counted}${said}${line.disputed ? ", спорная" : ""}`,
       link: reportPath, amountMills: line.amountMills,
     };
   } else if (entry !== null && entry.back > SWITCH_DAYS) {

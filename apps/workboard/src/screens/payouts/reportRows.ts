@@ -13,9 +13,9 @@ import { postOnPage } from "@agency_hub_core/ui/shiftReports";
  * The state of a row, in words on the screen:
  * - `unparsed` «Пост не разобран» — a post of the day is out of the pay base (a blocking flag): the owner's to act on;
  * - `changed` «Сумма изменена» — posted, the chatter changed the amount after the draft (the outlier the owner looks for);
- * - `draft` «Собран, не отправлен» — the agent composed it, the chatter has not posted it yet;
+ * - `draft` «Собран, пост не отправлен» — the agent composed it, the chatter has not posted it yet;
  * - `post_only` «Без черновика» — posted, written without the agent;
- * - `posted` «Отправлен» — posted as drafted.
+ * - `posted` «Пост отправлен» — posted as drafted (the post's word; a report handed in in Hub is «Сдан»).
  */
 export type ReportRowState = "unparsed" | "changed" | "draft" | "post_only" | "posted";
 

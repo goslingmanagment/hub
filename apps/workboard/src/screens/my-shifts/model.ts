@@ -133,7 +133,8 @@ export function comparisonOf(window: Pick<MyShiftsWindow, "days" | "previous">, 
 
 /**
  * The state of a row, in words on the screen:
- * - `posted` «Отправлен» — the chatter posted it in «Отчётность», with a draft or without;
+ * - `posted` «Пост отправлен» — the chatter posted it in «Отчётность», with a draft or without (the post's word:
+ *   a report handed in in Hub is «Сдан», below);
  * - `draft` «Собран» — check it and send it (the one to act on);
  * - `missing` «Отчёта нет» — the shift ended, and there is neither a draft nor a post (to act on);
  * - `ongoing` «Идёт» — no report while the shift goes on;

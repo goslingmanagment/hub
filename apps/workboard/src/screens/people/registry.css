@@ -422,6 +422,12 @@
 }
 
 @layer components {
+  /* «Пока начисляет таблица выплат…»: where the money or the slot is still taken from, one quiet line. */
+  .registry-source {
+    display: block;
+    margin-top: 4px;
+  }
+
   .registry-payout {
     color: var(--ui-text-2);
     overflow-wrap: anywhere;

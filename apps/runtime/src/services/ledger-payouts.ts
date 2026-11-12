@@ -96,6 +96,9 @@ const ledgerPayoutsSchema = z.object({
   facts_from: z.string().nullish(),
   reportsFrom: z.string().nullish(),
   reports_from: z.string().nullish(),
+  // Which switches price the days (ledger: payroll_terms_hub_from, payroll_basis_hub_from); null or absent — off.
+  termsHubFrom: z.string().nullish(),
+  basisHubFrom: z.string().nullish(),
   checks: z.object({
     stale: z.boolean(),
     lastSheetsCollectAt: z.string().nullable(),
@@ -103,7 +106,11 @@ const ledgerPayoutsSchema = z.object({
   }),
 });
 
-/** The ledger's micro-dollars as Hub's mills: pay is kept to the cent, so nothing is lost. */
+/**
+ * The ledger's micro-dollars of SALES (a report's pages and lines, a post's sums, a sale's net) as Hub's mills, the
+ * thousandths kept as a sale has them. Never pay: a debt, an accrual or a payout is `payMillsOf`, the one conversion
+ * of people's pay.
+ */
 export function millsOf(value: number): number {
   return millsToNumber(microUsdToMills(microUsdFromDbInt(value)));
 }
@@ -227,6 +234,8 @@ export async function readLedgerPayouts(
     accrualFrom: ledger.accrualFrom,
     factsFrom: dayOrNull(ledger.factsFrom ?? ledger.facts_from),
     reportsFrom: dayOrNull(ledger.reportsFrom ?? ledger.reports_from),
+    termsHubFrom: dayOrNull(ledger.termsHubFrom),
+    basisHubFrom: dayOrNull(ledger.basisHubFrom),
     generatedAt: ledger.generatedAt,
     people: ledger.people.map((person) => ({
       slug: person.slug,

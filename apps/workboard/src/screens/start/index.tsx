@@ -1,14 +1,14 @@
-import { Check, Copy, ExternalLink, Pencil } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { Check, Copy, ExternalLink } from "lucide-react";
+import type { ReactNode } from "react";
+import { Navigate } from "react-router";
 import type { AccountStartResponse, PersonStartStepId } from "@agency_hub_core/contracts";
-import { PAYOUT_DETAILS_MAX_LENGTH } from "@agency_hub_core/contracts";
-import { Bar, Button, Card, EmptyState, ErrorState, LinkButton, Skeleton, SkeletonText, Textarea, cx } from "@agency_hub_core/ui";
+import { Bar, Button, Card, ErrorState, LinkButton, Skeleton, SkeletonText, cx } from "@agency_hub_core/ui";
 import { CHATTER_SITE_ORIGIN } from "@agency_hub_core/ui/sites";
 import { copyText } from "@/screens/payouts/copy";
-import { PasswordWayIn } from "@/shared/PasswordWayIn";
+import { PayoutDetails } from "@/shared/PayoutDetails";
 import { ScreenHeader } from "@/shared/ScreenHeader";
-import { useAccountStart, useSetPayoutDetails } from "@/shared/start";
-import { useMe } from "@/shared/useMe";
+import { useAccountStart } from "@/shared/start";
+import { homePath, useMe } from "@/shared/useMe";
 import { firstName, leftWords, pagesWords, shiftRules, stepWords } from "./words.js";
 import "./start.css";
 
@@ -22,10 +22,13 @@ const INSTALL_HREF = `${CHATTER_SITE_ORIGIN}/#install`;
  * go — never ticked by hand; the one open line carries its one action. Beside
  * them, how a shift is handed in and the Telegram groups. Once every line is
  * done the menu drops «Начало» and Workboard opens «Мои смены»; this address
- * still answers, with «Всё готово».
+ * still answers a newcomer, with «Всё готово». Anyone else (a person at work
+ * for months, a login of nobody) is led home: where payouts go is theirs on
+ * «Аккаунт и устройства».
  */
 export function StartScreen() {
-  const read = useAccountStart();
+  const { role } = useMe();
+  const read = useAccountStart(true);
   const data = read.data;
 
   if (!data) {
@@ -45,20 +48,8 @@ export function StartScreen() {
   }
 
   const start = data.start;
-  if (data.person === null || start === null) {
-    return (
-      <>
-        <ScreenHeader title="Начало" />
-        <div className="wb-content">
-          <Card>
-            <EmptyState title="Здесь пусто" action={<LinkButton variant="primary" to="/my/shifts">Мои смены</LinkButton>}>
-              Этот вход не связан с человеком в команде: «Начало» есть только у новых людей. Смены и отчёты в «Мои смены».
-            </EmptyState>
-          </Card>
-        </div>
-      </>
-    );
-  }
+  // «Начало» is a newcomer's: anyone else is not told «остался 1 шаг до первой смены».
+  if (data.person === null || start === null || !start.newcomer) return <Navigate to={homePath(role)} replace />;
 
   const done = start.done === start.total;
   return (
@@ -156,74 +147,8 @@ function StepMore({ id, done, data }: { id: PersonStartStepId; done: boolean; da
       </ul>
     );
   }
-  if (id === "payout") return <Payout data={data} />;
+  if (id === "payout") return <PayoutDetails data={data} />;
   return null;
-}
-
-/**
- * Where payouts go: the person's own words, saved as written; the step closes on save. A narrow session (opened from
- * the extension, no password) shows them and the way to the password, never the form.
- */
-function Payout({ data }: { data: AccountStartResponse }) {
-  const { narrow } = useMe();
-  if (narrow) return <PayoutRead data={data} />;
-  return <PayoutEdit data={data} />;
-}
-
-function PayoutRead({ data }: { data: AccountStartResponse }) {
-  const saved = data.payoutDetails;
-  return (
-    <div className="start-payout">
-      {saved === null ? <p className="start-text">Ещё не указано.</p> : <p className="start-payout__value">{saved.text}</p>}
-      <div className="start-payout__foot">
-        <PasswordWayIn text={saved === null ? "Чтобы указать, войдите на сайте с паролем." : undefined} />
-      </div>
-    </div>
-  );
-}
-
-function PayoutEdit({ data }: { data: AccountStartResponse }) {
-  const saved = data.payoutDetails;
-  const save = useSetPayoutDetails();
-  const [editing, setEditing] = useState(false);
-  const [text, setText] = useState(saved?.text ?? "");
-  const open = saved === null || editing;
-  if (!open) {
-    return (
-      <div className="start-payout">
-        <p className="start-payout__value">{saved.text}</p>
-        <div className="start-payout__foot">
-          <span className="start-quiet">Видите только вы и владелец.</span>
-          <Button size="sm" variant="ghost" icon={Pencil} onClick={() => { setText(saved.text); setEditing(true); }}>Изменить</Button>
-        </div>
-      </div>
-    );
-  }
-  const tooLong = text.length > PAYOUT_DETAILS_MAX_LENGTH;
-  const submit = () => {
-    if (tooLong || (text.trim() === "" && saved === null)) return;
-    save.mutate(text, { onSuccess: () => setEditing(false) });
-  };
-  return (
-    <form className="start-payout" onSubmit={(event) => { event.preventDefault(); submit(); }}>
-      <label className="start-sr" htmlFor="start-payout-text">Куда переводить выплаты</label>
-      <Textarea
-        id="start-payout-text"
-        rows={2}
-        value={text}
-        maxLength={PAYOUT_DETAILS_MAX_LENGTH + 50}
-        placeholder="Например: Bybit, UID 12 345 678"
-        disabled={save.isPending}
-        onChange={(event) => { setText(event.target.value); save.reset(); }}
-      />
-      {tooLong && <p className="ui-field__error" role="alert">Не длиннее {PAYOUT_DETAILS_MAX_LENGTH} знаков.</p>}
-      {save.isError && <p className="ui-field__error" role="alert">Не сохранилось: Hub не ответил. Попробуйте ещё раз.</p>}
-      <div className="start-actions">
-        <Button type="submit" variant="primary" loading={save.isPending} disabled={tooLong || (text.trim() === "" && saved === null)}>Сохранить</Button>
-        {editing && <Button variant="ghost" disabled={save.isPending} onClick={() => setEditing(false)}>Отмена</Button>}
-      </div>
-    </form>
-  );
 }
 
 function ShiftRules({ submitsShift }: { submitsShift: boolean }) {

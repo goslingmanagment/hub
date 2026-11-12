@@ -21,9 +21,9 @@ export const accountPayQuerySchema = z.object({
 });
 
 export const accountPaySchema = z.object({
-  /** The window's days added up (to the ledger's cent, once). */
+  /** The window's `days` added up as they are shown (each day to the ledger's cent): never a cent apart from its rows. */
   accruedMills: mills,
-  /** The payouts dated in the window, added up. */
+  /** The payouts made on the window's days (each to its cent) added up, whatever days they paid for. */
   paidMills: mills,
   /** «К выплате»: what the agency owes now (plus), or paid ahead (minus). */
   balanceMills: mills,

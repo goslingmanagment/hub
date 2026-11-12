@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link, useSearchParams } from "react-router";
-import { MOSCOW_TIME_ZONE, millsToWholeCents, toBusinessDate } from "@agency_hub_core/shared";
+import { MOSCOW_TIME_ZONE, toBusinessDate } from "@agency_hub_core/shared";
 import type { TeamLedgerMonthCard } from "@agency_hub_core/contracts";
 import { kernel, KernelApiError } from "@/api/sdk";
 import { NoAnswerPanel, StatusPanel } from "@/components/shared/StatusPanel";
@@ -10,6 +10,7 @@ import { PageHeader } from "@/components/ui/PageHeader";
 import { PeriodStepper } from "@/components/ui/PeriodStepper";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { formatDateTime, formatMills } from "@/lib/format";
+import { monthCheck } from "./check";
 import { monthWindow, stepMonth } from "./window";
 
 /** The ledger's money, or «—» where it has none (a field it did not count is never a zero). */
@@ -109,19 +110,21 @@ export function MonthPage() {
           />
         </div>
       ) : (
-        <Card card={data.card} hub={hub} />
+        <Card card={data.card} hub={hub} current={month === current} />
       )}
     </div>
   );
 }
 
-function Card({ card, hub }: {
+function Card({ card, hub, current }: {
   card: TeamLedgerMonthCard;
   hub: { data?: { netEarningsMills: number } | undefined; isError: boolean; isLoading: boolean; refetch: () => unknown };
+  /** The month goes on: the ledger takes the facts once an hour. */
+  current: boolean;
 }) {
   const hubMills = hub.data?.netEarningsMills ?? null;
   // To the cent: the ledger keeps whole cents, Hub keeps mills; both are compared as the cents they print.
-  const delta = hubMills === null || card.pagesNetMills === null ? null : (millsToWholeCents(card.pagesNetMills) - millsToWholeCents(hubMills)) * 10;
+  const check = hubMills === null || card.pagesNetMills === null ? null : monthCheck({ pagesNetMills: card.pagesNetMills, hubMills, current, asOf: card.asOf });
   return (
     <>
       {card.status === "unknown" && (
@@ -143,12 +146,20 @@ function Card({ card, hub }: {
                     Главную за месяц проверить не удалось. <button type="button" className="link" onClick={() => void hub.refetch()}>Повторить</button>
                   </span>
                 )
-                  : delta === 0 ? <span className="month-equal">равно Главной: {formatMills(hubMills)}</span>
-                    : (
-                      <span className="month-differs">
-                        Главная за этот месяц: {formatMills(hubMills)}, ledger {delta! > 0 ? "больше" : "меньше"} на {formatMills(Math.abs(delta!))}
+                  : check?.kind === "equal" ? <span className="month-equal">равно Главной: {formatMills(hubMills)}</span>
+                    // The month goes on: a ledger behind Главная is its hourly take of the facts, not a difference.
+                    : check?.kind === "behind" ? (
+                      <span className="text-text-muted">
+                        Главная сейчас: {formatMills(hubMills)}. {check.asOf
+                          ? `Ledger взял факты по ${formatDateTime(check.asOf)} и берёт новые раз в час: разница — продажи после этого, не расхождение.`
+                          : "Ledger берёт факты раз в час: разница — продажи после его последнего раза, не расхождение."}
                       </span>
-                    )}
+                    )
+                      : check?.kind === "differs" ? (
+                        <span className="month-differs">
+                          Главная за этот месяц: {formatMills(hubMills)}, ledger {check.deltaMills > 0 ? "больше" : "меньше"} на {formatMills(Math.abs(check.deltaMills))}
+                        </span>
+                      ) : null}
             </p>
           </div>
           <div className="month-side">

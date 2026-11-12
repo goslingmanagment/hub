@@ -63,6 +63,27 @@ export function mondayOf(day: MoscowDay): MoscowDay {
   return addDays(day, -weekdayIndex(day));
 }
 
+const DAY_MS = 86_400_000;
+const TWO_HOURS_MS = 2 * 3_600_000;
+/** Moscow keeps UTC+3 all year (no summer time since 2014): the shifts' hot paths count on it without a formatter. */
+const MOSCOW_OFFSET_MS = 3 * 3_600_000;
+
+/**
+ * The Moscow day a shift is reported on and paid by — the ledger's `ReportDate` (internal/payroll/source.go), the one
+ * day every system puts a shift's report on: the day it starts, except that a shift starting within two hours before
+ * midnight that mostly lies in the next day belongs to the next day (a night entered at 23:54 is the morning's).
+ */
+export function shiftReportDay(startedAt: string | number | Date, endedAt: string | number | Date): MoscowDay {
+  const start = typeof startedAt === "number" ? startedAt : new Date(startedAt).getTime();
+  const end = typeof endedAt === "number" ? endedAt : new Date(endedAt).getTime();
+  const local = start + MOSCOW_OFFSET_MS;
+  // The instant of the Moscow midnight after the start.
+  const midnight = local - (((local % DAY_MS) + DAY_MS) % DAY_MS) + DAY_MS - MOSCOW_OFFSET_MS;
+  const before = midnight - start;
+  const reported = before <= TWO_HOURS_MS && end > midnight && end - midnight > before ? midnight : start;
+  return new Date(reported + MOSCOW_OFFSET_MS).toISOString().slice(0, 10);
+}
+
 /** The instant a Moscow day starts at, as ISO: `2026-11-02` → `2026-11-01T21:00:00.000Z`. */
 export function moscowDayStart(day: MoscowDay): string {
   return businessDateToUtcStart(day, MOSCOW_TIME_ZONE).toISOString();

@@ -50,19 +50,20 @@ function PostedCell({ row }: { row: ReportRow }) {
 }
 
 /**
- * A day handed in in Hub (package G): «Сдан в системе» with its sum, and how the post compares — equal, apart (the
+ * A day handed in in Hub (package G): «Сдан» — the chatter's own word for the report they hand in — with its sum, and
+ * how the post compares — equal, apart (the
  * owner's to look at), or no post at all. The post's own state follows when it needs the owner.
  */
 function HubState({ row }: { row: ReportRow }) {
   const compare = row.postedMills === null
     ? <span className="payouts-sub">поста нет</span>
     : row.hub === "differs"
-      ? <span className="payouts-sub payouts-drift">в посте <Money mills={row.postedMills} />: пост и отчёт в системе расходятся</span>
+      ? <span className="payouts-sub payouts-drift">в посте <Money mills={row.postedMills} />: пост и сданный отчёт расходятся</span>
       : <span className="payouts-sub">пост совпадает</span>;
   return (
     <span className="payouts-state">
       <span className="payouts-state__line">
-        <Badge tone="success" bare className="payouts-state__badge">Сдан в системе</Badge>
+        <Badge tone="success" bare className="payouts-state__badge">Сдан</Badge>
         {row.hubMills !== null && <Money mills={row.hubMills} />}
       </span>
       {compare}
@@ -97,11 +98,11 @@ function StateCell({ row }: { row: ReportRow }) {
           </>
         );
       case "draft":
-        return <Badge tone="off" bare className="payouts-state__badge">Собран, не отправлен</Badge>;
+        return <Badge tone="off" bare className="payouts-state__badge">Собран, пост не отправлен</Badge>;
       case "post_only":
         return <Badge tone="info" bare className="payouts-state__badge">Без черновика</Badge>;
       case "posted":
-        return <Badge tone="success" bare className="payouts-state__badge payouts-state__badge--quiet">Отправлен</Badge>;
+        return <Badge tone="success" bare className="payouts-state__badge payouts-state__badge--quiet">Пост отправлен</Badge>;
     }
   })();
   return (
@@ -135,9 +136,9 @@ function FactsLine({ all, postsRead, questionsOnly, onQuestionsOnly }: {
     { label: "Сумма изменена", value: facts.changed === 0 ? "нет" : String(facts.changed), hint: "Чаттер поменял сумму в посте после черновика агента." },
     ...(postsRead ? [{ label: "Пост не разобран", value: facts.unparsed === 0 ? "нет" : String(facts.unparsed) }] : []),
     ...(facts.hub > 0 ? [{
-      label: "Сдано в системе",
+      label: "Сдано",
       value: facts.hubDiffers === 0 ? String(facts.hub) : `${facts.hub}, с постом расходятся ${facts.hubDiffers}`,
-      hint: "Отчёты, сданные в Hub. Пока ledger начисляет по постам, это сверка: расхождение значит, что пост и отчёт в системе дают разные суммы.",
+      hint: "Отчёты, сданные в Hub. Пока ledger начисляет по постам, это сверка: расхождение значит, что пост и сданный отчёт дают разные суммы.",
     }] : []),
   ];
   return (

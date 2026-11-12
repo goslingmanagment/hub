@@ -17,7 +17,9 @@
  *     demo they equal the review of the same shift). It knows no page filter and is slow on a whole team: the
  *     quality columns fill in later;
  *   - `teamAuthorship` { days ≤ 7 } — messages without an author (a data check, shown only for a current period);
- *   - waiting decisions: `useDecisionCounts({ page })` from src/shared/decisions.ts (the line WaitingLine.tsx).
+ *   - waiting decisions: `useDecisionCounts({ page })` from src/shared/decisions.ts (the line WaitingLine.tsx);
+ *   - `teamLedgerReports` { from, to } — the owner's: the period's reports as the ledger reads them, the entry
+ *     «Выплаты → Отчёты» shares, for «в отчёте $…» alone (reports.ts); an error is no line, never a state.
  * Query keys start with "shifts". Polls only while the tab is visible (queryClient's default):
  * a minute for «now» and a current period, never for a closed one.
  */
@@ -450,6 +452,22 @@ export function useShiftsPeriod({ window, page, current }: ShiftsParams) {
     refetchInterval: current ? 5 * MINUTE : false,
   });
   return { sales, numbers };
+}
+
+/**
+ * The period's reports as the ledger reads them (`teamLedgerReports`, the owner's): one request for the window, the
+ * entry «Выплаты → Отчёты» uses for the same days. Only for «в отчёте $…»: the ledger away is no line, nothing else.
+ */
+export function useShiftsReports(window: ShiftsWindow, enabled: boolean) {
+  const days = { from: window.from, to: window.to };
+  const query = useQuery({
+    queryKey: ["payouts", "reports", days] as const,
+    queryFn: () => kernel.teamLedgerReports({ query: days }),
+    enabled,
+    staleTime: MINUTE,
+    retry: false,
+  });
+  return enabled && query.data !== undefined && query.data.from === days.from && query.data.to === days.to ? query.data : null;
 }
 
 /**

@@ -58,7 +58,8 @@ const ledgerPersonPaySchema = z.object({
   checks: z.object({ stale: z.boolean(), lastRebuildAt: z.string().nullable() }),
 });
 
-type LedgerPersonPay = z.infer<typeof ledgerPersonPaySchema>;
+/** The ledger's GET /v1/payouts/person answer, parsed. */
+export type LedgerPersonPay = z.infer<typeof ledgerPersonPaySchema>;
 
 const stateOf = (value: string): LedgerDayState => (value === "paid" || value === "to_pay" ? value : "none");
 const dayOrNull = (value: string) => (DAY.test(value) ? value : null);
@@ -137,7 +138,7 @@ export async function readTeamLedgerPayoutPerson(
  * answer says so and carries no sums. On, the ledger's read of that person's code alone, the days added up by date
  * (every model of a day is one accrual on the screen) and nothing of the journal: no document numbers, no posts, no
  * memo, no model. The query names the window only; the ledger is read from the day before it (a night begun that
- * evening is dated by it), and the window's sums are added up in micro-dollars and rounded once, as the ledger does.
+ * evening is dated by it); the window's totals are the sums of the rows the screen shows (`ownPayOf`).
  */
 export async function readAccountPay(
   app: Pick<AppContext, "db" | "config" | "logger">,
@@ -155,8 +156,16 @@ export async function readAccountPay(
   const read = { from: previousBusinessDate(query.from), to: query.to };
   const pay = await readLedgerPersonPay(app, person.code, read, { client: "account-pay", ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}) });
   if (pay === undefined) return { ...off, enabled: true };
-  const inWindow = (date: string) => date >= query.from && date <= query.to;
+  return { enabled: true, from: query.from, to: query.to, pay: ownPayOf(pay, query), serverNow };
+}
 
+/**
+ * The person's own sums from the ledger's answer: the days by date (every model of a day added up in micro-dollars,
+ * then to the ledger's cent, as a row shows it), and the window's totals as the sums of what is shown — the window's
+ * day rows, each payout to its cent — so a total is never a cent apart from its rows. Pure.
+ */
+export function ownPayOf(pay: LedgerPersonPay, window: { from: string; to: string }): NonNullable<AccountPayResponse["pay"]> {
+  const inWindow = (date: string) => date >= window.from && date <= window.to;
   const byDate = new Map<string, { amount: number; paid: number; unpaid: number }>();
   for (const one of pay.days) {
     const sum = byDate.get(one.date) ?? { amount: 0, paid: 0, unpaid: 0 };
@@ -175,20 +184,14 @@ export async function readAccountPay(
       unpaidMills: payMillsOf(sum.unpaid),
     }));
   return {
-    enabled: true,
-    from: query.from,
-    to: query.to,
-    pay: {
-      accruedMills: payMillsOf(pay.days.filter((one) => inWindow(one.date)).reduce((sum, one) => sum + one.amountMicros, 0)),
-      paidMills: payMillsOf(pay.payouts.filter((one) => inWindow(one.date)).reduce((sum, one) => sum + one.amountMicros, 0)),
-      balanceMills: payMillsOf(pay.balanceMicros),
-      oldestUnpaidDate: pay.oldestUnpaidDate,
-      lastPayout: pay.lastPayout === null ? null : { date: pay.lastPayout.date, amountMills: payMillsOf(pay.lastPayout.amountMicros) },
-      days,
-      reportsFrom: dayOrNull(pay.reportsFrom),
-      stale: pay.checks.stale,
-      generatedAt: pay.generatedAt,
-    },
-    serverNow,
+    accruedMills: days.filter((one) => inWindow(one.date)).reduce((sum, one) => sum + one.amountMills, 0),
+    paidMills: pay.payouts.filter((one) => inWindow(one.date)).reduce((sum, one) => sum + payMillsOf(one.amountMicros), 0),
+    balanceMills: payMillsOf(pay.balanceMicros),
+    oldestUnpaidDate: pay.oldestUnpaidDate,
+    lastPayout: pay.lastPayout === null ? null : { date: pay.lastPayout.date, amountMills: payMillsOf(pay.lastPayout.amountMicros) },
+    days,
+    reportsFrom: dayOrNull(pay.reportsFrom),
+    stale: pay.checks.stale,
+    generatedAt: pay.generatedAt,
   };
 }

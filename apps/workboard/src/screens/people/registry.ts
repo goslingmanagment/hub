@@ -11,6 +11,8 @@
  *     proposals. Money: never asked for in a team lead's session.
  *   - `adminPeopleProposals` { state: open } — the owner's: an agent's proposal
  *     of a new person waits on the list (it has no card yet).
+ *   - `teamLedgerPayouts` { today } — the owner's: only the ledger's word on
+ *     which terms price the days (`termsHubFrom`), for the terms card's line.
  *
  * Writes (the owner's): `adminPersonCreate` — a person with the invitation and
  * the pay terms in one call; `adminPersonUpdate` — working pages, a slot from
@@ -29,6 +31,7 @@ import type {
   KernelOperationResponse,
 } from "@agency_hub_core/contracts";
 import { KernelApiError } from "@agency_hub_core/ui/hubClient";
+import { moscowToday } from "@agency_hub_core/ui/moscow";
 import { kernel } from "@/shared/hub";
 import { usersQuery } from "@/shared/reads";
 import { PEOPLE_REGISTRY_KEY, teamPeopleQuery } from "@agency_hub_core/ui/people";
@@ -70,6 +73,23 @@ export function useOpenProposals(enabled: boolean) {
     enabled,
     staleTime: MINUTE,
   });
+}
+
+/**
+ * Since when the ledger prices a day by the terms of this registry (`termsHubFrom` of `teamLedgerPayouts`, its switch
+ * `payroll_terms_hub_from`): a day; null — not switched, the payout sheets price the days; undefined — not known yet
+ * (asking, or the ledger did not answer). The owner's only.
+ */
+export function useTermsHubFrom(enabled: boolean): string | null | undefined {
+  const today = moscowToday();
+  const query = useQuery({
+    queryKey: ["people", "terms-hub-from", today] as const,
+    queryFn: () => kernel.teamLedgerPayouts({ query: { from: today, to: today } }),
+    enabled,
+    staleTime: 10 * MINUTE,
+    retry: false,
+  });
+  return query.data?.termsHubFrom;
 }
 
 /** The card the write answered with goes into the cache; the list and the proposals are read again. */
