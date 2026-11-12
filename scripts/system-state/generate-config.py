@@ -93,6 +93,26 @@ def job_title(name: str, display: Optional[str]) -> str:
     return re.sub(r"\s*\((каждые|каждый)[^)]*\)\s*$", "", title) or title
 
 
+def duration_seconds(text: Any) -> Optional[int]:
+    """«30m», «8h» (also seconds and days) as seconds; None — not such a text."""
+    match = re.fullmatch(r"\s*(\d+(?:\.\d+)?)\s*([smhd])\s*", text) if isinstance(text, str) else None
+    if match is None:
+        return None
+    seconds = int(float(match.group(1)) * {"s": 1, "m": 60, "h": 3600, "d": 86400}[match.group(2)])
+    return seconds if seconds > 0 else None
+
+
+def every_period(job: Dict[str, Any], schedule: Dict[str, Any]) -> int:
+    """The period of an «every» job. One that paces itself (`pacing.max` beside its schedule) sets its own next run
+    anywhere up to that long, whatever `everyMs` says: its period is half of `pacing.max`, so Hub's «silent after twice
+    the period and 10 minutes» is the longest wait the job may choose. No readable `pacing.max`: `everyMs`."""
+    pacing = job.get("pacing")
+    longest = duration_seconds(pacing.get("max")) if isinstance(pacing, dict) else None
+    if longest is not None:
+        return max(60, longest // 2)
+    return max(60, int((schedule.get("everyMs") or 0) / 1000))
+
+
 def openclaw_jobs(database: Path) -> Dict[str, Any]:
     jobs: List[Dict[str, Any]] = []
     skipped: List[Dict[str, Any]] = []
@@ -116,7 +136,7 @@ def openclaw_jobs(database: Path) -> Dict[str, Any]:
             skipped.append({"job": declaration, "why": "личное"})
             continue
         if kind == "every":
-            period = max(60, int((schedule.get("everyMs") or 0) / 1000))
+            period = every_period(job, schedule)
         elif kind == "cron":
             period = cron_max_gap_seconds(schedule.get("expr", "")) or 86400
         else:
