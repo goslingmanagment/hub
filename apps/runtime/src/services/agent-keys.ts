@@ -488,6 +488,6 @@ export async function updateAgentKeyPages(
     return updated;
   });
 
-  const labelById = await resolvePageLabels(app, [row]);
-  return agentKeyItem(row, labelById);
+  const [labelById, extras] = await Promise.all([resolvePageLabels(app, [row]), keyExtras(app, [row])]);
+  return agentKeyItem(row, labelById, extras(row));
 }
