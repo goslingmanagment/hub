@@ -54,8 +54,9 @@ import { recordOf } from "../lib/values.ts";
 //   browser that disagreed with the page's answer, the partners of the page's
 //   open chat-unavailability episodes, the paying fans whose answer is over 72
 //   hours old) and asks up to 100 of them, at most one request a page in 5
-//   minutes; a pass with nothing due asks nothing. Its own due rule is the
-//   freshness: it takes no part in the lookup walk's day of reuse.
+//   minutes; a pass with nothing due asks nothing, and paying fans alone,
+//   fewer than a hundred, are asked at most once in 6 hours. Its own due rule
+//   is the freshness: it takes no part in the lookup walk's day of reuse.
 //
 // Every answer is dated when it ARRIVED (the observation's journal instant),
 // however late it is applied, and never replaces a newer answer of the page
@@ -290,6 +291,13 @@ export const FAN_PROFILES_RECHECK_KEY = "fan-profiles.recheck";
  *  pass with nothing due rests. */
 export const FAN_PROFILES_RECHECK_EVERY_MS = 5 * 60_000;
 
+/** A request that would name paying fans alone, and fewer than a full batch,
+ *  waits until the page's re-check has been quiet this long: their answers
+ *  come due one by one all day, and one request names up to a hundred. A
+ *  browser's word or an episode's partner is never held by it, and takes the
+ *  due payers along. */
+export const FAN_PROFILES_RECHECK_PAYERS_EVERY_MS = 6 * 60 * 60_000;
+
 /** What one re-check request asked, by reason (`RequestPlan.step`). */
 type RecheckStep = Partial<Record<FanslyAccountRecheckReason, number>>;
 
@@ -317,6 +325,15 @@ export const fanProfilesRecheckModule: ResourceModule = {
     }
     const due = await listFanslyAccountRecheckDue(ctx.db, { pageId: ctx.pageId, now: ctx.now, limit: BATCH });
     if (due.length === 0) return { kind: "wait", reason: "not_due", until: rest };
+    if (due.length < BATCH && due.every((candidate) => candidate.reason === "payer")) {
+      const lately = await latestResourceAdmissionAt(ctx.db, {
+        pageId: ctx.pageId,
+        resource: FAN_PROFILES_RECHECK_KEY,
+        since: new Date(ctx.now.getTime() - FAN_PROFILES_RECHECK_PAYERS_EVERY_MS),
+      });
+      // Looked at again a pass later: a word or a partner that comes meanwhile is asked then.
+      if (lately !== null) return { kind: "wait", reason: "not_due", until: rest };
+    }
     const step: RecheckStep = {};
     for (const candidate of due) step[candidate.reason] = (step[candidate.reason] ?? 0) + 1;
     return { kind: "request", request: { ...lookupRequest(due.map((candidate) => candidate.platformUserId)), step } };

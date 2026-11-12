@@ -132,9 +132,11 @@ The page's answer is kept fresh for the fans whose answer matters by its own sta
 through the page, in this order, the oldest first within each: a chatter's browser's word that disagreed with the
 page's answer and is newer than it (`page_fans.account_client_seen*`, from `clientFanBadges` `accountSeen` — a signal,
 never written into the page's answer), the partners of the page's open chat-unavailability episodes (from the first
-refusal) whose answer is absent or older than the episode's opening, and the paying fans whose answer is absent or over
-72 hours old (gone ones too). At most one request of it a page in 5 minutes, counted from its own admissions in the
-journal; a pass with nothing due asks nothing and rests 5 minutes. The answer is stored as any lookup's
+refusal; only partners linked to the page, where the answer is kept) whose answer is absent or older than the episode's
+opening, and the paying fans whose answer is absent or over 72 hours old (gone ones too). At most one request of it a
+page in 5 minutes, counted from its own admissions in the journal; a pass with nothing due asks nothing and rests 5
+minutes; paying fans alone, fewer than a hundred, are asked at most once in 6 hours (their answers come due one by one,
+and one request names a hundred). The answer is stored as any lookup's
 (`storeLookupAnswer`: names, notes, the stamp and the page's answer), and a reason stays due until an answer that
 arrived after it is applied. The account state the clients read (`fanAccountState`: seen, deleted, blocked, unchecked)
 is one function over that answer, its streak's start and the public check below (OnlyFans: the contactability).

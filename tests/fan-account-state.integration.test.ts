@@ -233,7 +233,7 @@ describe("the page's re-check (fan-profiles.recheck)", () => {
     const partnerFan = await linkedFan(pageId, PARTNER);
     await answer(pageId, PARTNER, true, ago(11 * HOUR));
     await episode(await thread("750000000000000001", PARTNER, partnerFan), ago(10 * HOUR));
-    // A partner Hub has no fan row for: asked by the thread's partner id.
+    // A partner with no link to the page is not asked: nothing would keep his answer.
     await episode(await thread("750000000000000002", PARTNER_UNLINKED, null), ago(20 * HOUR));
     const freshFan = await linkedFan(pageId, PARTNER_FRESH);
     await answer(pageId, PARTNER_FRESH, false, ago(HOUR));
@@ -253,7 +253,6 @@ describe("the page's re-check (fan-profiles.recheck)", () => {
     expect(due).toEqual([
       { platformUserId: SIGNAL_OLD, reason: "client_signal" },
       { platformUserId: SIGNAL_NEW, reason: "client_signal" },
-      { platformUserId: PARTNER_UNLINKED, reason: "episode_partner" },
       { platformUserId: PARTNER, reason: "episode_partner" },
       { platformUserId: PAYER_NEVER, reason: "payer" },
       { platformUserId: PAYER_GONE, reason: "payer" },

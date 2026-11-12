@@ -264,7 +264,9 @@ export interface FanslyAccountRecheckCandidate {
  *    answer, or with no answer (the oldest word first);
  * 2. `episode_partner` — the partner of an OPEN unavailability episode of the
  *    page's chats (from its first refusal, paying or not) whose page answer is
- *    absent or older than the episode's opening (the oldest episode first);
+ *    absent or older than the episode's opening (the oldest episode first).
+ *    Only a partner linked to the page: the answer is kept on the link, so one
+ *    without it could never be settled and would be asked at every pass;
  * 3. `payer` — a fan who paid the page (`total_creator_net_mills > 0`) whose
  *    page answer is absent or older than 72 hours, a gone one too (never asked
  *    first, then the oldest answer).
@@ -288,14 +290,11 @@ export async function listFanslyAccountRecheckDue(
          and pf.account_client_seen_at is not null
          and (pf.account_probe_at is null or pf.account_client_seen_at > pf.account_probe_at)
       union all
-      select coalesce(fb.platform_user_id, t.partner_platform_user_id), 1, e.opened_at
+      select f.platform_user_id, 1, e.opened_at
         from page_dm_thread_unavailability e
         join page_dm_threads t on t.id = e.thread_id
-        left join fans fb on fb.id = t.fan_id
-        left join fans fp
-          on t.fan_id is null and fp.platform = 'fansly' and fp.platform_user_id = t.partner_platform_user_id
-        left join page_fans pf
-          on pf.platform_account_id = t.platform_account_id and pf.fan_id = coalesce(t.fan_id, fp.id)
+        join page_fans pf on pf.platform_account_id = t.platform_account_id and pf.fan_id = t.fan_id
+        join fans f on f.id = pf.fan_id
        where t.platform_account_id = ${input.pageId}
          and e.ended_at is null
          and (pf.account_probe_at is null or pf.account_probe_at < e.opened_at)

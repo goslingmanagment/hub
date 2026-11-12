@@ -443,8 +443,9 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     // old. Each pass derives the due ids from the database and asks up to 100
     // (`listFanslyAccountRecheckDue`); at most one request a page in 5
     // minutes, counted from its own journal (`FAN_PROFILES_RECHECK_EVERY_MS`),
-    // and a pass with nothing due asks nothing. Not the lookup walk's day of
-    // reuse: its due rule is its freshness.
+    // a pass with nothing due asks nothing, and paying fans alone, fewer than
+    // a hundred, are asked at most once in 6 hours. Not the lookup walk's day
+    // of reuse: its due rule is its freshness.
     key: "fan-profiles.recheck", file: "fan-profiles", subject: "page", kind: "goal", class: "planned",
     triggers: ["poll"], standing: { recheckMs: 5 * MINUTE }, slo: {},
     proof: "snapshot", walk: "subject-queue", http: true, evidence: false, fence: "none",
