@@ -181,3 +181,22 @@ jq -c --arg path "$target" --argjson copies "$copies" --argjson copiesBytes "$to
   '{ok: true, path: $path, bytes, tables, tablesWithData, actionLogRows: .rows.action_log,
     contentItems: .rows.content_items, contentopsVersion, postgresVersion, durationSeconds,
     copies: $copies, copiesBytes: $copiesBytes}' "$target/manifest.json"
+
+# Tell ContentOps that its database has a copy, so its «Состояние» can say when (it cannot read Hub's system state:
+# that is the owner's session only). Optional: without the env file nothing is sent. The file is the owner's, outside
+# the repository: CONTENTOPS_URL and CONTENTOPS_TOKEN (a ContentOps agent token of a staff agent). A failed report
+# never fails the copy: the copy is made and checked by now.
+report_env=${CONTENTOPS_BACKUP_REPORT_ENV:-$HOME/.config/agency/contentops-backup-report.env}
+if [[ -r $report_env ]]; then
+  (
+    set -a; . "$report_env"; set +a
+    [[ -n ${CONTENTOPS_URL:-} && -n ${CONTENTOPS_TOKEN:-} ]] || { printf 'copy report: %s has no CONTENTOPS_URL or CONTENTOPS_TOKEN\n' "$report_env" >&2; exit 0; }
+    jq '{repository: "mac", dump_key: (.createdAt + "/" + .file),
+         db_snapshot_at: (.createdAt | strptime("%Y%m%dT%H%M%SZ") | todate), dump_sha256: .sha256, dump_bytes: .bytes}' \
+      "$target/manifest.json" \
+      | curl --noproxy '*' -fsS -m 30 -o /dev/null -X POST -H "authorization: Bearer $CONTENTOPS_TOKEN" \
+          -H "idempotency-key: $(uuidgen)" -H 'content-type: application/json' --data @- \
+          "${CONTENTOPS_URL%/}/api/v1/admin/backup-checkpoints" \
+      || printf 'copy report: ContentOps did not take it (the copy itself is fine)\n' >&2
+  ) || true
+fi
