@@ -11,6 +11,7 @@ import {
   readPersonForOwner,
   readTeamPeople,
   setPersonPayTerm,
+  settlePersonImportNote,
   updatePerson,
 } from "../../services/people/index.ts";
 import { auditCtx } from "../../api/request-auth.ts";
@@ -56,6 +57,11 @@ export function registerPeopleRoutes(server: ApiServer, ctx: ApiModuleContext) {
   server.put("/api/v1/admin/people/:code/pay-terms", { schema: routeSchemas.adminPersonPayTermSet }, async (request) => {
     const principal = await requirePrincipal(request);
     return setPersonPayTerm(appContext, request.params.code, request.body, auditCtx(principal));
+  });
+
+  server.post("/api/v1/admin/people/:code/import-notes/settle", { schema: routeSchemas.adminPersonImportNoteSettle }, async (request) => {
+    const principal = await requirePrincipal(request);
+    return settlePersonImportNote(appContext, request.params.code, request.body, auditCtx(principal));
   });
 
   server.get("/api/v1/admin/people-proposals", { schema: routeSchemas.adminPeopleProposals }, async (request) => {

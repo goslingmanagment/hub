@@ -48,7 +48,7 @@ export function SalesTab({ userId, name }: { userId: number; name: string }) {
   }
   // What the price and speed blocks are of, once: the person's numbers are every page's; part of an old period may be out of reach.
   const scope = [
-    page ? `${name} — по всем страницам (Hub не делит чаттера по страницам), черта — команда на ${page}` : null,
+    page ? `${name}: по всем страницам (Hub не делит чаттера по страницам), черта: команда на ${page}` : null,
     rates.window.clipped || !rates.window.exact ? `за ${formatDayRange(rates.window.from, rates.window.to)}: дальше Hub не читает` : null,
   ].filter(Boolean).join("; ");
 
@@ -66,7 +66,7 @@ export function SalesTab({ userId, name }: { userId: number; name: string }) {
         <Fans sales={sales} />
       </Card>
       {scope && <p className="people-note people-grid__wide">Цена и скорость ответа: {scope}.</p>}
-      <Card title="Цена платных сообщений" description="Сколько из отправленных купили. Черта — вся команда, как в «Что продаёт».">
+      <Card title="Цена платных сообщений" description="Сколько из отправленных купили. Черта: вся команда, как в «Что продаёт».">
         <Rates
           rows={rates.byPrice}
           state={rates.price}
@@ -217,7 +217,7 @@ function Rates({ rows, state, min, words, unit, empty, onRetry }: {
               emptyHint="Таких не было"
               detail={team === null ? null : `команда ${shareText(team)}`}
               detailWidth={120}
-              hint={mine === null ? undefined : `${label}: купили ${formatCount(row.hits)} из ${formatCount(row.base)} ${ruPlural(row.base, ...unit)} — ${shareText(mine)}${team === null ? "" : `; вся команда — ${shareText(team)}`}${row.base < min ? `. Меньше ${min} — мало, чтобы судить` : ""}`}
+              hint={mine === null ? undefined : `${label}: купили ${formatCount(row.hits)} из ${formatCount(row.base)} ${ruPlural(row.base, ...unit)}, ${shareText(mine)}${team === null ? "" : `; вся команда: ${shareText(team)}`}${row.base < min ? `. Меньше ${min}: мало, чтобы судить` : ""}`}
             />
           </li>
         );

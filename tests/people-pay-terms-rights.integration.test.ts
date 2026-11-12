@@ -22,6 +22,7 @@ const KEYS = {
   team: `${AGENT_KEY_TOKEN_PREFIX}people-team-only`,
   terms: `${AGENT_KEY_TOKEN_PREFIX}people-team-terms`,
   none: `${AGENT_KEY_TOKEN_PREFIX}people-no-team`,
+  propose: `${AGENT_KEY_TOKEN_PREFIX}people-propose`,
 } as const;
 const SHARE = 2345;
 const FIX = 7_000;
@@ -49,7 +50,9 @@ describe("people registry: pay terms reach the owner only", () => {
     const model = await createModel(app.db, { slug: "mia", name: "Mia" });
     const page = (await createFanslyPage(app.db, { modelId: model!.id, label: "mia-1" }))!.id;
     const owner = await fixtureUserId(app, "boss");
-    const grants: Record<keyof typeof KEYS, string[]> = { team: ["read:team"], terms: ["read:team", "read:pay_terms"], none: ["read:content"] };
+    const grants: Record<keyof typeof KEYS, string[]> = {
+      team: ["read:team"], terms: ["read:team", "read:pay_terms"], none: ["read:content"], propose: ["propose:people"],
+    };
     for (const [name, token] of Object.entries(KEYS) as [keyof typeof KEYS, string][]) {
       await insertAgentKey(testDb.db, {
         name: `people-${name}`,
@@ -101,6 +104,13 @@ describe("people registry: pay terms reach the owner only", () => {
         modelSlug: "mia", validFrom: "2026-11-02", shareBasisPoints: 9_000, fixPerShiftMills: 0,
       })).statusCode).toBe(403);
       expect((await asSession(who, "GET", "/api/v1/admin/people-proposals")).statusCode).toBe(403);
+      expect((await asSession(who, "POST", "/api/v1/admin/people/chat/import-notes/settle", {
+        index: 0, code: "pages_differ", settled: true,
+      })).statusCode).toBe(403);
+      expect((await asSession(who, "POST", "/api/v1/admin/people", {
+        code: `by-${who}`, displayName: "x", role: "chatter",
+        payTerms: [{ modelSlug: "mia", validFrom: "2026-11-02", shareBasisPoints: 9_000, fixPerShiftMills: 0 }],
+      })).statusCode).toBe(403);
     }
     // The team's list is the team lead's, and it has no money in it at all.
     const list = await asSession("lead", "GET", "/api/v1/team/people");
@@ -130,5 +140,46 @@ describe("people registry: pay terms reach the owner only", () => {
     expect((await asKey("terms", "POST", "/api/v1/agent/people/proposals", {
       kind: "update", personCode: "chat", change: { note: "x" }, reason: "x",
     })).statusCode).toBe(403);
+  });
+
+  it("sets the terms of a new person in the owner's one call, and the team lead's list still has no money", async (context) => {
+    if (!testDb) return context.skip();
+    const created = await asSession("boss", "POST", "/api/v1/admin/people", {
+      code: "newbie", displayName: "Новичок", role: "chatter", state: "set_up", workingPageLabels: ["mia-1"],
+      invite: { username: "newbie", pageLabels: ["mia-1"] },
+      payTerms: [{ modelSlug: "mia", validFrom: "2026-11-10", shareBasisPoints: SHARE, fixPerShiftMills: FIX }],
+    });
+    expect(created.statusCode, created.body).toBe(200);
+    expect(adminPersonResponseSchema.parse(created.json()).payTerms).toEqual([
+      expect.objectContaining({ modelSlug: "mia", validFrom: "2026-11-10", shareBasisPoints: SHARE, fixPerShiftMills: FIX }),
+    ]);
+    // A refused term leaves no person, no login, no invite behind.
+    const refused = await asSession("boss", "POST", "/api/v1/admin/people", {
+      code: "ghost", displayName: "Нет", role: "chatter", invite: { username: "ghost", pageLabels: [] },
+      payTerms: [{ modelSlug: "no-such-model", validFrom: "2026-11-10", shareBasisPoints: SHARE, fixPerShiftMills: 0 }],
+    });
+    expect(refused.statusCode).toBe(404);
+    expect((await asSession("boss", "GET", "/api/v1/admin/people/ghost")).statusCode).toBe(404);
+    const list = await asSession("lead", "GET", "/api/v1/team/people");
+    expect(list.statusCode, list.body).toBe(200);
+    for (const word of MONEY_WORDS) expect(list.body).not.toContain(word);
+    expect(list.json().people.map((person: { code: string }) => person.code).sort()).toEqual(["chat", "newbie"]);
+  });
+
+  it("never lets an agent's proposal carry pay terms, even once the owner accepts it", async (context) => {
+    if (!testDb) return context.skip();
+    const proposed = await asKey("propose", "POST", "/api/v1/agent/people/proposals", {
+      kind: "create", reason: "новый человек в команде",
+      person: {
+        code: "proposed", displayName: "Предложенный", role: "chatter",
+        payTerms: [{ modelSlug: "mia", validFrom: "2026-11-10", shareBasisPoints: 9_999, fixPerShiftMills: 1 }],
+      },
+    });
+    expect(proposed.statusCode, proposed.body).toBe(200);
+    expect(proposed.body).not.toContain("9999");
+    const decided = await asSession("boss", "POST", `/api/v1/admin/people-proposals/${proposed.json().proposal.id}/decide`, { decision: "accept" });
+    expect(decided.statusCode, decided.body).toBe(200);
+    const card = adminPersonResponseSchema.parse((await asSession("boss", "GET", "/api/v1/admin/people/proposed")).json());
+    expect(card.payTerms).toEqual([]);
   });
 });

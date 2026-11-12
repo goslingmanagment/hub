@@ -84,6 +84,7 @@ export const kernelOperations = {
   adminPeopleProposals: { method: "GET", path: "/api/v1/admin/people-proposals" },
   adminPerson: { method: "GET", path: "/api/v1/admin/people/:code" },
   adminPersonCreate: { method: "POST", path: "/api/v1/admin/people" },
+  adminPersonImportNoteSettle: { method: "POST", path: "/api/v1/admin/people/:code/import-notes/settle" },
   adminPersonPayTermSet: { method: "PUT", path: "/api/v1/admin/people/:code/pay-terms" },
   adminPersonProposalDecide: { method: "POST", path: "/api/v1/admin/people-proposals/:proposalId/decide" },
   adminPersonUpdate: { method: "PATCH", path: "/api/v1/admin/people/:code" },

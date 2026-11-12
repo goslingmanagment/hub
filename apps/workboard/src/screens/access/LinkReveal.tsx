@@ -33,13 +33,13 @@ export function LinkReveal({ link, onClose }: { link: RevealedLink; onClose: () 
       toast.success("Скопировано");
       window.setTimeout(() => setCopied(null), 2000);
     } catch {
-      toast.error("Буфер обмена недоступен — выделите текст и скопируйте вручную, не закрывая окно.");
+      toast.error("Буфер обмена недоступен: выделите текст и скопируйте вручную, не закрывая окно.");
     }
   }
 
   return (
     <Modal
-      title={link.kind === "password_reset" ? `Ссылка для нового пароля — ${link.username}` : `Приглашение для ${link.username}`}
+      title={link.kind === "password_reset" ? `Ссылка для нового пароля: ${link.username}` : `Приглашение для ${link.username}`}
       onClose={onClose}
       explicitCloseOnly
       size="form"
@@ -47,7 +47,7 @@ export function LinkReveal({ link, onClose }: { link: RevealedLink; onClose: () 
     >
       <div className="access-reveal">
         <Notice tone="warning">
-          Ссылка показывается один раз. Скопируйте её сейчас и отправьте человеку в Telegram — заново её не посмотреть, можно только создать новую.
+          Ссылка показывается один раз. Скопируйте её сейчас и отправьте человеку в Telegram: заново её не посмотреть, можно только создать новую.
         </Notice>
 
         <div>

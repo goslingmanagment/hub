@@ -101,6 +101,8 @@ export const personLoginSchema = z.object({
   role: loginRoleEnum,
   /** active — signs in; invited — the invite link is not used yet; disabled; deleted. */
   state: z.enum(["active", "invited", "disabled", "deleted"]),
+  /** The login's latest use: a device sign-in (the extension, the app) or a web session, whichever is later; null — never. */
+  lastSeenAt: isoTimestamp.nullable(),
 });
 
 export const personAgentKeySchema = z.object({
@@ -133,6 +135,8 @@ export const personImportNoteSchema = z.object({
   code: z.string(),
   /** It in words, for the owner. */
   text: z.string(),
+  /** When the owner marked it «Сверено» (looked into, nothing more to do); null — not yet. */
+  settledAt: isoTimestamp.nullable(),
 });
 
 export const personTelegramSchema = z.object({
@@ -250,6 +254,14 @@ export const personInviteInputSchema = z.object({
   expiresInHours: z.number().int().min(1).max(720).optional(),
 });
 
+export const adminPersonPayTermBodySchema = z.object({
+  modelSlug: z.string().min(1),
+  validFrom: businessDate,
+  shareBasisPoints: z.number().int().min(0).max(10_000),
+  fixPerShiftMills: mills.min(0).max(Number.MAX_SAFE_INTEGER),
+  note: z.string().trim().max(500).nullable().optional(),
+});
+
 export const adminPersonCreateBodySchema = z.object({
   code: personCodeSchema,
   kind: personKindEnum.optional(),
@@ -266,6 +278,8 @@ export const adminPersonCreateBodySchema = z.object({
   agentKeys: personFields.agentKeys.optional(),
   /** Invite a login for the person in the same transaction (a human only). */
   invite: personInviteInputSchema.optional(),
+  /** Pay terms set in the same transaction (a human only; one per model). Money: the owner's only — never in a proposal. */
+  payTerms: z.array(adminPersonPayTermBodySchema).max(20).optional(),
 });
 
 export const adminPersonUpdateBodySchema = z.object({
@@ -283,12 +297,11 @@ export const adminPersonUpdateBodySchema = z.object({
   agentKeys: personFields.agentKeys.optional(),
 }).refine((body) => Object.values(body).some((value) => value !== undefined), "nothing to change");
 
-export const adminPersonPayTermBodySchema = z.object({
-  modelSlug: z.string().min(1),
-  validFrom: businessDate,
-  shareBasisPoints: z.number().int().min(0).max(10_000),
-  fixPerShiftMills: mills.min(0).max(Number.MAX_SAFE_INTEGER),
-  note: z.string().trim().max(500).nullable().optional(),
+/** «Сверено» on one import note of a person (or taken back): the note by its place in the list and its code. */
+export const adminPersonImportNoteSettleBodySchema = z.object({
+  index: z.number().int().min(0).max(1_000),
+  code: z.string().min(1).max(100),
+  settled: z.boolean(),
 });
 
 // ── agents' proposals ────────────────────────────────────────────────────────
@@ -303,9 +316,9 @@ const proposalWords = {
 };
 
 const proposalUpdate = z.object({ kind: z.literal("update"), personCode: personCodeSchema, change: adminPersonUpdateBodySchema });
-const proposalCreate = z.object({ kind: z.literal("create"), person: adminPersonCreateBodySchema.omit({ invite: true }) });
+const proposalCreate = z.object({ kind: z.literal("create"), person: adminPersonCreateBodySchema.omit({ invite: true, payTerms: true }) });
 
-/** What a proposal changes: the owner's edit of an existing person, or a new person (never an invitation). */
+/** What a proposal changes: the owner's edit of an existing person, or a new person (never an invitation, never pay terms). */
 export const personProposalChangeSchema = z.discriminatedUnion("kind", [proposalUpdate, proposalCreate]);
 
 export const agentPersonProposalBodySchema = z.discriminatedUnion("kind", [
@@ -451,6 +464,8 @@ export type PersonScheduleInput = z.infer<typeof personScheduleInputSchema>;
 export type AdminPersonCreateBody = z.infer<typeof adminPersonCreateBodySchema>;
 export type AdminPersonUpdateBody = z.infer<typeof adminPersonUpdateBodySchema>;
 export type AdminPersonPayTermBody = z.infer<typeof adminPersonPayTermBodySchema>;
+export type AdminPersonImportNoteSettleBody = z.infer<typeof adminPersonImportNoteSettleBodySchema>;
+export type PersonImportNote = z.infer<typeof personImportNoteSchema>;
 export type PersonProposalChange = z.infer<typeof personProposalChangeSchema>;
 export type AgentPersonProposalBody = z.infer<typeof agentPersonProposalBodySchema>;
 export type AgentPerson = z.infer<typeof agentPersonSchema>;

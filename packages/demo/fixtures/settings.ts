@@ -80,6 +80,12 @@ function tenure(user: DemoUser): Tenure {
   return TENURE[user.username] ?? { joinedDaysAgo: 60, lastActiveHours: 24 };
 }
 
+/** A demo login's last use, as «Доступ» shows it (the people registry's «last seen»); null — never. */
+export function demoLastActiveAt(user: DemoUser, now: Date): string | null {
+  const hours = tenure(user).lastActiveHours;
+  return hours === null ? null : iso(hoursAgo(now, hours));
+}
+
 function adminUser(user: DemoUser, now: Date) {
   const facts = tenure(user);
   return {

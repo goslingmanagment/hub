@@ -24,19 +24,19 @@ const TABS: readonly { tab: Exclude<PersonTab, "shifts">; label: string }[] = [
 ];
 
 /**
- * Человек `/people/:userId` (spec §4.4): one card instead of the console's two
- * («Чаттер» and «Сотрудник»). The header says who it is now — status, role,
- * pages, AI spend of the period — and stays the same on every tab, so the tabs
- * never move; the tabs: Работа (the verdict, the shifts by the hour, every
- * shift), Продажи (how they sell against the team), Доступ (the owner's only).
+ * The card of a LOGIN no person of the registry holds (`/people/:userId`, see
+ * PersonRoute.tsx): a test or service login, or one not linked yet — the card
+ * Человек was before the registry (spec §4.4), so its numbers and every access
+ * control stay in reach. The header says who it is now — status, role, pages,
+ * AI spend of the period — and stays the same on every tab; the tabs: Работа,
+ * Продажи, Доступ (the owner's only).
  */
-export function PersonScreen() {
-  const { userId: raw, tab } = useParams();
+export function LoginCard({ userId: id }: { userId: number }) {
+  const { tab } = useParams();
   const { isOwner } = useMe();
   const location = useLocation();
   const { period, today } = usePeriod();
   const { page } = usePageFilter();
-  const id = Number(raw);
   const valid = Number.isInteger(id) && id > 0;
   const current = TABS.find((item) => item.tab === tab && (item.tab !== "access" || isOwner))?.tab ?? "work";
   const fallbackSearch = carryParams(location.search).toString();

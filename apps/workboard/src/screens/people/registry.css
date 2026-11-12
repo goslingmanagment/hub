@@ -1,0 +1,288 @@
+/*
+ * The registry's parts of «Люди» and the person's card (registry.ts): the
+ * marks under a name, the slot cell, the card's tabs «Доступ и входы» and
+ * «График и условия», the forms' working pages and slot. Tokens only; the
+ * shapes are those of «Доступ» (access.css) and «Люди» (people.css).
+ */
+@layer components {
+  /* ------------------------------------------------- The list */
+
+  /* Under the name: the working pages (the first is the main one) and what waits for the owner, in one quiet line. */
+  .registry-who__marks {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 8px;
+    min-width: 0;
+    padding-left: 44px;
+  }
+
+  /* people.css hides the pages under a name below 1680 px; in the registry's list they are always there. */
+  .registry-table .people-who__pages {
+    display: inline-flex;
+    min-width: 0;
+    color: var(--ui-text-2);
+    white-space: nowrap;
+  }
+
+  .registry-table .people-who {
+    grid-template-columns: minmax(0, 1fr);
+    row-gap: 4px;
+    min-width: 220px;
+  }
+
+  .registry-who__slot {
+    color: var(--ui-text-2);
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+
+  /* Above the table: how many are in the team, waiting, gone; and the owner's «Пригласить». */
+  .registry-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px 24px;
+  }
+
+  .registry-toolbar__counts {
+    color: var(--ui-text-2);
+    font-size: var(--ui-fs-15);
+  }
+
+  /* ------------------------------------------------- The card */
+
+  .registry-tab {
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+  }
+
+  .registry-waiting {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  .registry-items .access-list__main {
+    gap: 4px;
+  }
+
+  .registry-items .ui-badge {
+    vertical-align: 1px;
+  }
+
+  .registry-actions {
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    flex-shrink: 0;
+  }
+
+  .registry-code {
+    font-family: var(--ui-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+    font-size: 0.92em;
+    color: var(--ui-text-2);
+  }
+
+  .registry-strong {
+    font-weight: 600;
+  }
+
+  .registry-login-title {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 8px;
+  }
+
+  .registry-login-title .registry-code {
+    color: var(--ui-text);
+    font-size: 1em;
+  }
+
+  .registry-login-pick {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 12px;
+  }
+
+  /* The slots of a line: the one holding now, the others folded under it. */
+  .registry-lines {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  .registry-line {
+    display: grid;
+    grid-template-columns: 160px minmax(0, 1fr);
+    gap: 4px 16px;
+    align-items: baseline;
+  }
+
+  .registry-line__name {
+    color: var(--ui-text-2);
+    font-size: var(--ui-fs-14);
+  }
+
+  .registry-slot-lines {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .registry-slot-line {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 4px 12px;
+  }
+
+  .registry-slot-line__hours {
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .registry-slot-line--quiet {
+    color: var(--ui-text-2);
+  }
+
+  .registry-slot-line--quiet .registry-slot-line__hours {
+    font-weight: 400;
+  }
+
+  @media (max-width: 900px) {
+    .registry-line {
+      grid-template-columns: minmax(0, 1fr);
+    }
+  }
+
+  /* ------------------------------------------------- The forms */
+
+  .registry-form__row {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 16px;
+    align-items: start;
+  }
+
+  .registry-form__lead {
+    margin: -4px 0 4px;
+  }
+
+  .registry-form__from {
+    margin-top: 12px;
+  }
+
+  .registry-pages {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  /* The chosen working pages in their order: «1 mia-1 основная», «2 mia-2 ↑ ×». */
+  .registry-order {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .registry-order__row {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 32px;
+    padding: 0 4px 0 10px;
+    border: 1px solid var(--ui-line);
+    border-radius: var(--ui-radius);
+  }
+
+  .registry-order--read {
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .registry-order--read .registry-order__row {
+    padding: 0;
+    border: 0;
+    min-height: 0;
+    gap: 10px;
+  }
+
+  .registry-order__place {
+    min-width: 1.2em;
+    color: var(--ui-text-3);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .registry-slot {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .registry-slot__hours {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    gap: 12px 16px;
+  }
+
+  .registry-slot__time {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .registry-slot__time .ui-input {
+    width: 140px;
+  }
+
+  .registry-slot__days {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 16px;
+  }
+
+  .registry-terms-form {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding-top: 8px;
+  }
+
+  .registry-terms-form__row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    gap: 12px 16px;
+  }
+
+  .registry-terms-form__model {
+    min-width: 120px;
+    padding-bottom: 8px;
+    font-weight: 600;
+  }
+
+  .registry-terms-form__row .registry-slot__time .ui-input {
+    width: 120px;
+  }
+}
+
+@layer components {
+  /* In a form's page picker a model's words may take two lines: «Mia Hart / вся модель · 6 страниц». */
+  .registry-pages .access-invite__model .access-words {
+    flex-wrap: wrap;
+    white-space: normal;
+  }
+}

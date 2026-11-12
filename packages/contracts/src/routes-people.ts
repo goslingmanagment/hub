@@ -3,6 +3,7 @@ import {
   adminPeopleProposalsResponseSchema,
   adminPersonCreateBodySchema,
   adminPersonCreateResponseSchema,
+  adminPersonImportNoteSettleBodySchema,
   adminPersonPayTermBodySchema,
   adminPersonProposalDecideBodySchema,
   adminPersonProposalDecideResponseSchema,
@@ -54,9 +55,9 @@ export const peopleRouteSchemas = {
   },
   adminPersonCreate: {
     auth: { kind: "owner-session" }, tags: ["admin"],
-    summary: "Create a person, and with `invite` their login and invite link in the same transaction",
-    description: "A failure on any part (a taken code, login, Telegram id or tag, a missing page) leaves nothing behind. The raw "
-      + "invite token is returned exactly once.",
+    summary: "Create a person, and with `invite` their login and invite link, with `payTerms` their pay terms, in the same transaction",
+    description: "A failure on any part (a taken code, login, Telegram id or tag, a missing page or model) leaves nothing behind. "
+      + "The raw invite token is returned exactly once.",
     body: adminPersonCreateBodySchema,
     response: { 200: adminPersonCreateResponseSchema, ...ownerErrors },
   },
@@ -76,6 +77,14 @@ export const peopleRouteSchemas = {
       + "before and after.",
     params: personCodeParamsSchema,
     body: adminPersonPayTermBodySchema,
+    response: { 200: adminPersonResponseSchema, ...ownerErrors },
+  },
+  adminPersonImportNoteSettle: {
+    auth: { kind: "owner-session" }, tags: ["admin"],
+    summary: "Mark one of a person's import notes «Сверено» (or take it back): the owner looked into the disagreement",
+    description: "The note is named by its place in the list and its code; 409 when they no longer match. Audited.",
+    params: personCodeParamsSchema,
+    body: adminPersonImportNoteSettleBodySchema,
     response: { 200: adminPersonResponseSchema, ...ownerErrors },
   },
   adminPeopleProposals: {

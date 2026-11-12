@@ -70646,11 +70646,11 @@
     },
     "/api/v1/admin/people": {
       "post": {
-        "summary": "Create a person, and with `invite` their login and invite link in the same transaction",
+        "summary": "Create a person, and with `invite` their login and invite link, with `payTerms` their pay terms, in the same transaction",
         "tags": [
           "admin"
         ],
-        "description": "A failure on any part (a taken code, login, Telegram id or tag, a missing page) leaves nothing behind. The raw invite token is returned exactly once.",
+        "description": "A failure on any part (a taken code, login, Telegram id or tag, a missing page or model) leaves nothing behind. The raw invite token is returned exactly once.",
         "requestBody": {
           "required": true,
           "content": {
@@ -70973,6 +70973,50 @@
                       "username",
                       "pageLabels"
                     ]
+                  },
+                  "payTerms": {
+                    "maxItems": 20,
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "modelSlug": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "validFrom": {
+                          "type": "string",
+                          "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                        },
+                        "shareBasisPoints": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 10000
+                        },
+                        "fixPerShiftMills": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "note": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "maxLength": 500
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "modelSlug",
+                        "validFrom",
+                        "shareBasisPoints",
+                        "fixPerShiftMills"
+                      ]
+                    }
                   }
                 },
                 "required": [
@@ -71115,13 +71159,20 @@
                                   "disabled",
                                   "deleted"
                                 ]
+                              },
+                              "lastSeenAt": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
                               }
                             },
                             "required": [
                               "userId",
                               "username",
                               "role",
-                              "state"
+                              "state",
+                              "lastSeenAt"
                             ],
                             "additionalProperties": false
                           }
@@ -71479,11 +71530,18 @@
                               },
                               "text": {
                                 "type": "string"
+                              },
+                              "settledAt": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
                               }
                             },
                             "required": [
                               "code",
-                              "text"
+                              "text",
+                              "settledAt"
                             ],
                             "additionalProperties": false
                           }
@@ -72613,13 +72671,20 @@
                                       "disabled",
                                       "deleted"
                                     ]
+                                  },
+                                  "lastSeenAt": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
                                   }
                                 },
                                 "required": [
                                   "userId",
                                   "username",
                                   "role",
-                                  "state"
+                                  "state",
+                                  "lastSeenAt"
                                 ],
                                 "additionalProperties": false
                               }
@@ -72977,11 +73042,18 @@
                                   },
                                   "text": {
                                     "type": "string"
+                                  },
+                                  "settledAt": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
                                   }
                                 },
                                 "required": [
                                   "code",
-                                  "text"
+                                  "text",
+                                  "settledAt"
                                 ],
                                 "additionalProperties": false
                               }
@@ -73372,13 +73444,20 @@
                                   "disabled",
                                   "deleted"
                                 ]
+                              },
+                              "lastSeenAt": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
                               }
                             },
                             "required": [
                               "userId",
                               "username",
                               "role",
-                              "state"
+                              "state",
+                              "lastSeenAt"
                             ],
                             "additionalProperties": false
                           }
@@ -73736,11 +73815,18 @@
                               },
                               "text": {
                                 "type": "string"
+                              },
+                              "settledAt": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
                               }
                             },
                             "required": [
                               "code",
-                              "text"
+                              "text",
+                              "settledAt"
                             ],
                             "additionalProperties": false
                           }
@@ -74674,13 +74760,20 @@
                                   "disabled",
                                   "deleted"
                                 ]
+                              },
+                              "lastSeenAt": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
                               }
                             },
                             "required": [
                               "userId",
                               "username",
                               "role",
-                              "state"
+                              "state",
+                              "lastSeenAt"
                             ],
                             "additionalProperties": false
                           }
@@ -75038,11 +75131,1085 @@
                               },
                               "text": {
                                 "type": "string"
+                              },
+                              "settledAt": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
                               }
                             },
                             "required": [
                               "code",
-                              "text"
+                              "text",
+                              "settledAt"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "origin": {
+                          "type": "string",
+                          "enum": [
+                            "owner",
+                            "import",
+                            "proposal"
+                          ]
+                        },
+                        "openProposals": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "createdAt": {
+                          "type": "string"
+                        },
+                        "updatedAt": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "code",
+                        "displayName",
+                        "kind",
+                        "role",
+                        "state",
+                        "leftOn",
+                        "telegram",
+                        "logins",
+                        "agentKeys",
+                        "workingPages",
+                        "schedule",
+                        "pageSchedules",
+                        "rights",
+                        "onboarding",
+                        "note",
+                        "importNotes",
+                        "origin",
+                        "openProposals",
+                        "createdAt",
+                        "updatedAt"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "scheduleSlots": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "integer",
+                            "exclusiveMinimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "personId": {
+                            "type": "integer",
+                            "exclusiveMinimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "pageId": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "exclusiveMinimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "pageLabel": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "startMinute": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 1439
+                          },
+                          "endMinute": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 1440
+                          },
+                          "start": {
+                            "type": "string"
+                          },
+                          "end": {
+                            "type": "string"
+                          },
+                          "weekdays": {
+                            "anyOf": [
+                              {
+                                "type": "array",
+                                "items": {
+                                  "type": "string",
+                                  "enum": [
+                                    "mon",
+                                    "tue",
+                                    "wed",
+                                    "thu",
+                                    "fri",
+                                    "sat",
+                                    "sun"
+                                  ]
+                                }
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "validFrom": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "validTo": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "personId",
+                          "pageId",
+                          "pageLabel",
+                          "startMinute",
+                          "endMinute",
+                          "start",
+                          "end",
+                          "weekdays",
+                          "validFrom",
+                          "validTo"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "payTerms": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "integer",
+                            "exclusiveMinimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "modelSlug": {
+                            "type": "string"
+                          },
+                          "modelName": {
+                            "type": "string"
+                          },
+                          "validFrom": {
+                            "type": "string",
+                            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                          },
+                          "validTo": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "shareBasisPoints": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 10000
+                          },
+                          "fixPerShiftMills": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          },
+                          "note": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "updatedAt": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "modelSlug",
+                          "modelName",
+                          "validFrom",
+                          "validTo",
+                          "shareBasisPoints",
+                          "fixPerShiftMills",
+                          "note",
+                          "updatedAt"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "proposals": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "integer",
+                            "exclusiveMinimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "kind": {
+                            "type": "string",
+                            "enum": [
+                              "update",
+                              "create"
+                            ]
+                          },
+                          "personCode": {
+                            "type": "string"
+                          },
+                          "change": {
+                            "type": "object",
+                            "propertyNames": {
+                              "type": "string"
+                            },
+                            "additionalProperties": {}
+                          },
+                          "reason": {
+                            "type": "string"
+                          },
+                          "requestedBy": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "sourceRef": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "agentKeyName": {
+                            "type": "string"
+                          },
+                          "state": {
+                            "type": "string",
+                            "enum": [
+                              "open",
+                              "accepted",
+                              "rejected",
+                              "withdrawn"
+                            ]
+                          },
+                          "createdAt": {
+                            "type": "string"
+                          },
+                          "decidedAt": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "decisionNote": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "kind",
+                          "personCode",
+                          "change",
+                          "reason",
+                          "requestedBy",
+                          "sourceRef",
+                          "agentKeyName",
+                          "state",
+                          "createdAt",
+                          "decidedAt",
+                          "decisionNote"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "serverNow": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "person",
+                    "scheduleSlots",
+                    "payTerms",
+                    "proposals",
+                    "serverNow"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/people/{code}/import-notes/settle": {
+      "post": {
+        "summary": "Mark one of a person's import notes «Сверено» (or take it back): the owner looked into the disagreement",
+        "tags": [
+          "admin"
+        ],
+        "description": "The note is named by its place in the list and its code; 409 when they no longer match. Audited.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "index": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 1000
+                  },
+                  "code": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 100
+                  },
+                  "settled": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "index",
+                  "code",
+                  "settled"
+                ]
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"
+            },
+            "in": "path",
+            "name": "code",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "person": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "integer",
+                          "exclusiveMinimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "code": {
+                          "type": "string"
+                        },
+                        "displayName": {
+                          "type": "string"
+                        },
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "human",
+                            "agent",
+                            "service"
+                          ]
+                        },
+                        "role": {
+                          "type": "string",
+                          "enum": [
+                            "owner",
+                            "team_lead",
+                            "chatter",
+                            "content_manager",
+                            "contractor",
+                            "agent",
+                            "service"
+                          ]
+                        },
+                        "state": {
+                          "type": "string",
+                          "enum": [
+                            "invited",
+                            "set_up",
+                            "working",
+                            "left"
+                          ]
+                        },
+                        "leftOn": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "telegram": {
+                          "type": "object",
+                          "properties": {
+                            "userId": {
+                              "anyOf": [
+                                {
+                                  "type": "integer",
+                                  "exclusiveMinimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "handle": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "reportTag": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "userId",
+                            "handle",
+                            "reportTag"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "logins": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "userId": {
+                                "type": "integer",
+                                "exclusiveMinimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "username": {
+                                "type": "string"
+                              },
+                              "role": {
+                                "type": "string",
+                                "enum": [
+                                  "owner",
+                                  "team_lead",
+                                  "chatter"
+                                ]
+                              },
+                              "state": {
+                                "type": "string",
+                                "enum": [
+                                  "active",
+                                  "invited",
+                                  "disabled",
+                                  "deleted"
+                                ]
+                              },
+                              "lastSeenAt": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              }
+                            },
+                            "required": [
+                              "userId",
+                              "username",
+                              "role",
+                              "state",
+                              "lastSeenAt"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "agentKeys": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "agentKeyId": {
+                                "type": "integer",
+                                "exclusiveMinimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "name": {
+                                "type": "string"
+                              },
+                              "state": {
+                                "type": "string",
+                                "enum": [
+                                  "active",
+                                  "expired",
+                                  "revoked"
+                                ]
+                              }
+                            },
+                            "required": [
+                              "agentKeyId",
+                              "name",
+                              "state"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "workingPages": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "pageLabel": {
+                                "type": "string"
+                              },
+                              "platform": {
+                                "type": "string",
+                                "enum": [
+                                  "fansly",
+                                  "onlyfans",
+                                  "telegram"
+                                ]
+                              },
+                              "modelSlug": {
+                                "type": "string"
+                              },
+                              "modelName": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "pageLabel",
+                              "platform",
+                              "modelSlug",
+                              "modelName"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "schedule": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "id": {
+                                  "type": "integer",
+                                  "exclusiveMinimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                "personId": {
+                                  "type": "integer",
+                                  "exclusiveMinimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                "pageId": {
+                                  "anyOf": [
+                                    {
+                                      "type": "integer",
+                                      "exclusiveMinimum": 0,
+                                      "maximum": 9007199254740991
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "pageLabel": {
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
+                                },
+                                "startMinute": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 1439
+                                },
+                                "endMinute": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 1440
+                                },
+                                "start": {
+                                  "type": "string"
+                                },
+                                "end": {
+                                  "type": "string"
+                                },
+                                "weekdays": {
+                                  "anyOf": [
+                                    {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "string",
+                                        "enum": [
+                                          "mon",
+                                          "tue",
+                                          "wed",
+                                          "thu",
+                                          "fri",
+                                          "sat",
+                                          "sun"
+                                        ]
+                                      }
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "validFrom": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "validTo": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                }
+                              },
+                              "required": [
+                                "id",
+                                "personId",
+                                "pageId",
+                                "pageLabel",
+                                "startMinute",
+                                "endMinute",
+                                "start",
+                                "end",
+                                "weekdays",
+                                "validFrom",
+                                "validTo"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "pageSchedules": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "integer",
+                                "exclusiveMinimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "personId": {
+                                "type": "integer",
+                                "exclusiveMinimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "pageId": {
+                                "anyOf": [
+                                  {
+                                    "type": "integer",
+                                    "exclusiveMinimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "pageLabel": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "startMinute": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 1439
+                              },
+                              "endMinute": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 1440
+                              },
+                              "start": {
+                                "type": "string"
+                              },
+                              "end": {
+                                "type": "string"
+                              },
+                              "weekdays": {
+                                "anyOf": [
+                                  {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string",
+                                      "enum": [
+                                        "mon",
+                                        "tue",
+                                        "wed",
+                                        "thu",
+                                        "fri",
+                                        "sat",
+                                        "sun"
+                                      ]
+                                    }
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "validFrom": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "validTo": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "personId",
+                              "pageId",
+                              "pageLabel",
+                              "startMinute",
+                              "endMinute",
+                              "start",
+                              "end",
+                              "weekdays",
+                              "validFrom",
+                              "validTo"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "rights": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "right": {
+                                "type": "string",
+                                "enum": [
+                                  "customs_lead"
+                                ]
+                              },
+                              "grantedAt": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "right",
+                              "grantedAt"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "onboarding": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "step": {
+                                "type": "string"
+                              },
+                              "doneAt": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "note": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              }
+                            },
+                            "required": [
+                              "step",
+                              "doneAt",
+                              "note"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "note": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "importNotes": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "code": {
+                                "type": "string"
+                              },
+                              "text": {
+                                "type": "string"
+                              },
+                              "settledAt": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              }
+                            },
+                            "required": [
+                              "code",
+                              "text",
+                              "settledAt"
                             ],
                             "additionalProperties": false
                           }
@@ -75744,13 +76911,20 @@
                                   "disabled",
                                   "deleted"
                                 ]
+                              },
+                              "lastSeenAt": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
                               }
                             },
                             "required": [
                               "userId",
                               "username",
                               "role",
-                              "state"
+                              "state",
+                              "lastSeenAt"
                             ],
                             "additionalProperties": false
                           }
@@ -76108,11 +77282,18 @@
                               },
                               "text": {
                                 "type": "string"
+                              },
+                              "settledAt": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
                               }
                             },
                             "required": [
                               "code",
-                              "text"
+                              "text",
+                              "settledAt"
                             ],
                             "additionalProperties": false
                           }
@@ -254693,13 +255874,20 @@
                                     "disabled",
                                     "deleted"
                                   ]
+                                },
+                                "lastSeenAt": {
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
                                 }
                               },
                               "required": [
                                 "userId",
                                 "username",
                                 "role",
-                                "state"
+                                "state",
+                                "lastSeenAt"
                               ],
                               "additionalProperties": false
                             }
@@ -255057,11 +256245,18 @@
                                 },
                                 "text": {
                                   "type": "string"
+                                },
+                                "settledAt": {
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
                                 }
                               },
                               "required": [
                                 "code",
-                                "text"
+                                "text",
+                                "settledAt"
                               ],
                               "additionalProperties": false
                             }
@@ -255141,13 +256336,20 @@
                               "disabled",
                               "deleted"
                             ]
+                          },
+                          "lastSeenAt": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
                           }
                         },
                         "required": [
                           "userId",
                           "username",
                           "role",
-                          "state"
+                          "state",
+                          "lastSeenAt"
                         ],
                         "additionalProperties": false
                       }

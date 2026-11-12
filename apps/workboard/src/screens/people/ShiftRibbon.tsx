@@ -298,7 +298,7 @@ function RibbonTip({ hover, shifts, visits, canOpen }: { hover: Hover; shifts: r
         </>
       )}
       <div className="people-tip__note"><PageLabels labels={pagesInOrder(shift.pages)} max={4} /></div>
-      {canOpen && <div className="people-tip__hint">Нажмите — откроется разбор смены</div>}
+      {canOpen && <div className="people-tip__hint">Нажмите, чтобы открыть разбор смены</div>}
     </div>
   );
 }

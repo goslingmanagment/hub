@@ -48,7 +48,7 @@ export function WorkTab({ card, userId }: { card: PersonCard; userId: number }) 
       <Verdict work={work} quality={person.quality} failed={card.quality === "failed"} username={person.username} />
       <Section
         title="Смены по часам"
-        description={isOwner ? "Время московское. Нажмите на смену — откроется её разбор." : "Время московское."}
+        description={isOwner ? "Время московское. Нажмите на смену, чтобы открыть её разбор." : "Время московское."}
       >
         <Card>
           <ShiftRibbon
@@ -64,7 +64,7 @@ export function WorkTab({ card, userId }: { card: PersonCard; userId: number }) 
           />
         </Card>
       </Section>
-      <Section title="Смены" {...(isOwner ? { description: "Числа каждой смены — те же, что в её разборе." } : {})}>
+      <Section title="Смены" {...(isOwner ? { description: "Числа каждой смены те же, что в её разборе." } : {})}>
         <ShiftTable card={card} userId={userId} canOpen={isOwner} />
         <Below card={card} />
       </Section>
@@ -93,7 +93,7 @@ function Verdict({ work, quality, failed, username }: { work: PeriodWork; qualit
   const pending = quality === undefined && !failed;
   const number = (text: string) => (pending ? <Skeleton width={72} height={24} radius={6} /> : text);
   const within = quality && quality.replies > 0 ? quality.repliesWithinHour / quality.replies : null;
-  const against = work.previous === null ? `Сравнить не с чем: за ${period.previousLabel} у Hub нет всей работы ${username}.` : `Под числом — изменение ${versus}.`;
+  const against = work.previous === null ? `Сравнить не с чем: за ${period.previousLabel} у Hub нет всей работы ${username}.` : `Под числом изменение ${versus}.`;
   const allPages = page ? " По всей смене, на всех её страницах." : "";
   const tiles: Tile[] = [
     {
@@ -122,7 +122,7 @@ function Verdict({ work, quality, failed, username }: { work: PeriodWork; qualit
       label: METRICS.reply.label,
       value: number(quality ? formatReplyMedian(quality.replyMedianSeconds) : "—"),
       sub: "в среднем за смену",
-      hint: [METRICS.reply.hint, PER_SHIFT_HINT, within !== null && within < 0.95 ? `${formatPercent(within * 100)} ответов — быстрее часа.` : "", allPages].filter(Boolean).join(" "),
+      hint: [METRICS.reply.hint, PER_SHIFT_HINT, within !== null && within < 0.95 ? `${formatPercent(within * 100)} ответов быстрее часа.` : "", allPages].filter(Boolean).join(" "),
     },
     {
       label: METRICS.unanswered.label,
@@ -153,7 +153,7 @@ function Below({ card }: { card: PersonCard }) {
     const minutes = card.visits.reduce((sum, visit) => sum + visit.workedMinutes, 0);
     lines.push(
       <p key="visits" className="people-note">
-        <Tooltip content={`Работа меньше смены (от ${formatDuration(CHATTER_SHIFT_MIN_WORKED_MINUTES)} и ${CHATTER_SHIFT_MIN_MESSAGES} сообщений): в таблицу и в продажи не входит. На ленте — тонкая линия.`} align="start">
+        <Tooltip content={`Работа меньше смены (от ${formatDuration(CHATTER_SHIFT_MIN_WORKED_MINUTES)} и ${CHATTER_SHIFT_MIN_MESSAGES} сообщений): в таблицу и в продажи не входит. На ленте это тонкая линия.`} align="start">
           <span>Вне смен: {card.visits.length} {ruPlural(card.visits.length, "раз", "раза", "раз")}, {formatDuration(minutes)}</span>
         </Tooltip>
       </p>,
@@ -163,7 +163,7 @@ function Below({ card }: { card: PersonCard }) {
   if (page) {
     lines.push(
       <p key="page" className="people-note">
-        Фильтр {page} сужает смены и продажи. {METRICS.reply.label}, без ответа к концу и ИИ без правки — по всей смене: Hub пока не делит их по
+        Фильтр {page} сужает смены и продажи. {METRICS.reply.label}, без ответа к концу и ИИ без правки считаются по всей смене: Hub пока не делит их по
         страницам.
       </p>,
     );
@@ -177,11 +177,11 @@ function HowItCounts() {
     <Disclosure summary="Как это считается">
       <div className="people-help">
         <p>
-          Смена — работа в расширении под своим входом: от {formatDuration(CHATTER_SHIFT_MIN_WORKED_MINUTES)} и {CHATTER_SHIFT_MIN_MESSAGES} сообщений,
-          конец — час без действий. Ночная смена подписана обоими днями («вс, 1–2 нояб. 21:00–05:49»), а в сетке «Смен» и в
-          выплатах стоит в дне, где прошла большая её часть. Длительность — время работы без пауз.
+          Смена: работа в расширении под своим входом, от {formatDuration(CHATTER_SHIFT_MIN_WORKED_MINUTES)} и {CHATTER_SHIFT_MIN_MESSAGES} сообщений,
+          конец после часа без действий. Ночная смена подписана обоими днями («вс, 1–2 нояб. 21:00–05:49»), а в сетке «Смен» и в
+          выплатах стоит в дне, где прошла большая её часть. Длительность: время работы без пауз.
         </p>
-        <p>Продажи — деньги после комиссии площадки на страницах, где человек писал в смене. Это ориентир, а не основание для оплаты.</p>
+        <p>Продажи: деньги после комиссии площадки на страницах, где человек писал в смене. Это ориентир, а не основание для оплаты.</p>
         <p><b>{METRICS.reply.label}.</b> {METRICS.reply.hint}</p>
         <p><b>{METRICS.unanswered.label}.</b> {METRICS.unanswered.hint}</p>
         <p><b>{METRICS.aiUnedited.label}.</b> {METRICS.aiUnedited.hint}</p>
@@ -213,7 +213,7 @@ function NoShifts({ card }: { card: PersonCard }) {
   }
   const earlier = before && before.shifts > 0
     ? `До этого, ${period.previousLabel}: ${before.shifts} ${ruPlural(before.shifts, "смена", "смены", "смен")}, продажи ${formatMills(before.salesNetMills)}.`
-    : `Смена — работа в расширении под своим входом: от ${formatDuration(CHATTER_SHIFT_MIN_WORKED_MINUTES)} и ${CHATTER_SHIFT_MIN_MESSAGES} сообщений.`;
+    : `Смена: работа в расширении под своим входом, от ${formatDuration(CHATTER_SHIFT_MIN_WORKED_MINUTES)} и ${CHATTER_SHIFT_MIN_MESSAGES} сообщений.`;
   if (person.state === "disabled") {
     return (
       <Card>
