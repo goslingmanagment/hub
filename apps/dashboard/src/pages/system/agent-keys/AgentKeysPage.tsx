@@ -52,6 +52,7 @@ const CAPABILITY_HELP: Readonly<Record<AgentCapability, string>> = {
   "signin:contentops": "«Войти через хаб» для сервера ContentOps: обменять одноразовый код входа на «кто это и владелец ли» и потом проверять, жив ли этот вход. Сессию Hub сервер не получает, страниц это право не касается",
   "signin:taskindex": "«Войти через хаб» для сервера TaskIndex: обменять одноразовый код входа на «кто это и владелец ли» и потом проверять, жив ли этот вход. Сессию Hub сервер не получает, страниц это право не касается",
   "signin:monitor": "«Войти через хаб» для сервера server-monitor: обменять одноразовый код входа на «кто это и владелец ли» и потом проверять, жив ли этот вход. Сессию Hub сервер не получает, страниц это право не касается",
+  "write:reports": "Публиковать страницы-отчёты: сводку трафика и другие доски агента. Их читает владелец, а тимлиды только те, что агент им открыл. Данных Hub через это право агент не читает",
 };
 
 const CAPABILITY_SHORT: Readonly<Record<AgentCapability, string>> = {
@@ -75,6 +76,7 @@ const CAPABILITY_SHORT: Readonly<Record<AgentCapability, string>> = {
   "signin:contentops": "Вход через Hub для ContentOps",
   "signin:taskindex": "Вход через Hub для TaskIndex",
   "signin:monitor": "Вход через Hub для server-monitor",
+  "write:reports": "Публиковать отчёты",
 };
 
 const INPUT = "input";

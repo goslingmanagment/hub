@@ -14,6 +14,7 @@ import { publicationsRoutes } from "./routes/screens/publications.js";
 import { settingsRoutes } from "./routes/screens/settings.js";
 import { statsRoutes } from "./routes/screens/stats.js";
 import { systemRoutes } from "./routes/screens/system.js";
+import { trafficRoutes } from "./routes/screens/traffic.js";
 import { applicationsRoutes } from "./routes/screens/applications.js";
 import { ToWorkboard } from "./routes/ToWorkboard.js";
 
@@ -49,6 +50,7 @@ export function App() {
                 {fansRoutes()}
                 {statsRoutes()}
                 {publicationsRoutes()}
+                {trafficRoutes()}
                 {applicationsRoutes()}
                 {settingsRoutes()}
                 {systemRoutes()}

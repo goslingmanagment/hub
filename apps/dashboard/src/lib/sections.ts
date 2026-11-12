@@ -44,7 +44,7 @@ export interface ScreenPeriod {
   default?: PeriodKey;
 }
 
-export type SectionId = "home" | "money" | "fans" | "stats" | "publications" | "team" | "applications" | "settings" | "system" | "page";
+export type SectionId = "home" | "money" | "fans" | "stats" | "publications" | "traffic" | "team" | "applications" | "settings" | "system" | "page";
 
 export interface Crumb {
   label: string;
@@ -255,6 +255,15 @@ export const SCREENS: readonly Screen[] = [
     keywords: "посты стена расписание утвердить настройки публикации",
   },
 
+  // ── Трафик ─────────────────────────────────────────────────────────────
+  // The traffic routine stays on the owner's Mac; its daily summary comes here as an agent's report (package O).
+  {
+    id: "traffic", path: "/traffic", label: "Сводка", title: "Трафик: сводка", section: "traffic", ownerOnly: true,
+    why: "Каналы трафика: что работает и что ждёт решения. Сводку пишет агент трафика.",
+    pageFilter: "none",
+    keywords: "трафик каналы подрядчики циклы доска сводка агент",
+  },
+
   // ── Анкеты ─────────────────────────────────────────────────────────
   // «Команда» is Workboard now (lib/workboard.ts); the questionnaires stayed here, at their old addresses.
   {
@@ -370,6 +379,19 @@ export const SCREENS: readonly Screen[] = [
     why: "Ключи агентов и их права.",
     pageFilter: "none",
     keywords: "ключи агентов",
+  },
+  {
+    id: "system-reports", path: "/system/reports", label: "Отчёты агентов", title: "Отчёты агентов", section: "system", ownerOnly: true,
+    why: "Страницы, которые публикуют агенты: что есть и когда обновлялось.",
+    pageFilter: "none",
+    keywords: "отчёты агентов доски сводки страницы агентов трафик",
+  },
+  {
+    id: "system-report", path: "/system/reports/:slug", label: "Отчёт агента", title: "Отчёт агента", section: "system", ownerOnly: true,
+    why: "Страница, которую опубликовал агент.",
+    pageFilter: "none",
+    deep: true, notSearched: true,
+    crumbs: () => [{ label: "Система", to: "/system/collection" }, { label: "Отчёты агентов", to: "/system/reports" }],
   },
   {
     id: "system-onlyfans-api", path: "/system/onlyfans-api", label: "Состояние", title: "OnlyFans API", section: "system", ownerOnly: true,
@@ -551,7 +573,7 @@ export interface Section {
   label: string;
   /** The screen header's title: the section, not the tab. */
   title: string;
-  icon: "House" | "Wallet" | "Heart" | "ChartColumn" | "CalendarClock" | "Users" | "ClipboardList" | "Settings" | "Wrench";
+  icon: "House" | "Wallet" | "Heart" | "ChartColumn" | "CalendarClock" | "Megaphone" | "Users" | "ClipboardList" | "Settings" | "Wrench";
   ownerOnly?: boolean;
   /** The item leaves the console for another app on this host (Workboard): a full
    *  navigation in the same tab, no screens of its own here. */
@@ -600,6 +622,10 @@ export const SECTIONS: readonly Section[] = [
     tabs: [tab("publications", "Публикации", "publications")],
   },
   {
+    id: "traffic", label: "Трафик", title: "Трафик", icon: "Megaphone", ownerOnly: true, nav: "tabs",
+    tabs: [tab("summary", "Сводка", "traffic")],
+  },
+  {
     // Workboard: the owner's and the team leads' control of the team (owner, 2026-11-10).
     id: "team", label: "Команда", title: "Команда", icon: "Users", nav: "none", href: WORKBOARD_HREF,
     tabs: [],
@@ -623,6 +649,7 @@ export const SECTIONS: readonly Section[] = [
       tab("failures", "Сбои", "system-failures"),
       tab("history", "Заявки на историю", "system-history-requests"),
       tab("agent-keys", "Доступ ИИ-агентов", "system-agent-keys"),
+      tab("reports", "Отчёты агентов", "system-reports", "system-report"),
       {
         ...tab("onlyfans-api", "OnlyFans API", "system-onlyfans-api", "system-onlyfans-collection", "system-onlyfans-tools", "system-onlyfans-media", "system-onlyfans-exports", "system-onlyfans-actions"),
       },

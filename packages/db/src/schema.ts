@@ -3510,7 +3510,11 @@ export const agentKeys = pgTable(
         'look:media',
         'write:matters',
         'read:pay_terms',
-        'propose:people'
+        'propose:people',
+        'signin:contentops',
+        'signin:taskindex',
+        'signin:monitor',
+        'write:reports'
       ]::text[]
     `),
     expiresAtCheck: check("agent_keys_expires_at_check", sql`

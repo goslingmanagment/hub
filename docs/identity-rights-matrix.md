@@ -143,6 +143,15 @@ from matters (`/matters/waiting`) is the dashboard session's. A key with
 pages, for living people; the kinds Hub's server mirrors are 409 for it. The
 rows are held by `matters.integration`.
 
+Agent reports (`/reports…`, package O of the ecosystem plan): a key with
+`write:reports` publishes a named markdown page by its slug and lists what is
+published (`/agent/reports…`), each publish leaving an `agent_read_audit` row
+with the body's digest and length. A person reads by session: the owner every
+report, a team lead only the ones the agent opened to team leads (another is the
+same 404 as a missing one), a chatter's session none (403); a device token, an
+agent key and an anonymous request are refused. The rows are held by
+`agent-reports.integration`.
+
 Agent keys are the owner's too: only the owner's cookie session issues, lists,
 revokes and changes one. A live key's capabilities change in place (owner,
 2026-10-24): the whole new set replaces the old one, the key sees it on its

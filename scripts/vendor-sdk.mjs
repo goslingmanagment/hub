@@ -176,6 +176,9 @@ for (const file of [
   // Media looks (look:media): the barrel re-exports both and routes.ts spreads the routes in.
   "media-looks.ts",
   "routes-media-looks.ts",
+  // Agent reports (write:reports): the barrel re-exports both and routes.ts spreads the routes in.
+  "agent-reports.ts",
+  "routes-agent-reports.ts",
   "sdk-runtime.ts",
   "authorization-policy.ts",
   "contract-hash.ts",

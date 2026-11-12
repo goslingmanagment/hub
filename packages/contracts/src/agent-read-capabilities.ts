@@ -121,6 +121,12 @@ export const AGENT_CAPABILITIES = [
   "signin:contentops",
   "signin:taskindex",
   "signin:monitor",
+  /**
+   * Agent reports (ecosystem plan, package O): publish a named markdown page
+   * by its slug — the traffic routine's daily summary, a board — that people
+   * read in the app. Nothing of the hub's data is read through it.
+   */
+  "write:reports",
 ] as const;
 
 export type AgentCapability = (typeof AGENT_CAPABILITIES)[number];

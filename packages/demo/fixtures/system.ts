@@ -16,11 +16,12 @@ import {
   demoWebhookPolicy,
 } from "./system-ofapi.ts";
 import { demoPageSyncBlocks, demoSyncHistoryRequests, demoSyncOverview, demoSyncPages } from "./system-sync.ts";
+import { reportHandlers } from "./system-reports.ts";
 
 type Capability =
   | "read:messages" | "read:money" | "read:observations_envelope" | "read:datasets" | "request:hydration"
   | "write:publication_drafts" | "approve:publications" | "write:fan_queues" | "read:content" | "read:team"
-  | "withdraw:publications" | "delete:posts" | "look:media";
+  | "withdraw:publications" | "delete:posts" | "look:media" | "write:reports";
 
 /** The agents' read keys: the research agent, ContentOps (its own content only), the queue builder, and two that ended. */
 function agentKeys(request: DemoRequest) {
@@ -56,6 +57,9 @@ function agentKeys(request: DemoRequest) {
     key(7, "Исследователь архива", "Xk4q9TzP2w", ["read:messages", "read:money", "read:datasets", "read:observations_envelope", "request:hydration"], all, 41, 79, 0.3),
     key(9, "ContentOps", "m3RfV8bN1c", ["read:content", "write:publication_drafts", "approve:publications", "withdraw:publications", "look:media"], ["mia-1", "mia-2", "mia-3", "nova-1", "ivy-1", "ivy-2"], 8, 82, 2.6),
     key(10, "Очереди фанов", "Q7pLs2dYe9", ["read:datasets", "read:money", "write:fan_queues"], ["mia-1", "mia-2", "nova-1"], 5, 85, 19),
+    // The agents that publish report pages (system-reports.ts): the traffic routine and the boards.
+    key(11, "Трафик", "Tf3kW8mZr2", ["write:reports"], ["mia-1"], 4, 86, 2.6),
+    key(12, "Доски агентства", "Bd9xQ1nVs6", ["write:reports"], ["mia-1"], 3, 87, 0.7),
     key(4, "Разбор страниц Ivy (разовый)", "aZ5h0KcW3u", ["read:messages", "read:datasets"], ["ivy-1", "ivy-2"], 62, -2, 300),
     key(3, "Старый агент отчётов", "Tr8vN6eJq1", ["read:money", "read:datasets"], ["mia-1", "nova-1"], 120, 245, 2_100, 33),
   ].sort((left, right) => Number(right.isActive) - Number(left.isActive) || right.id - left.id);
@@ -63,6 +67,8 @@ function agentKeys(request: DemoRequest) {
 
 /** Demo answers of this area's screens (see demo/core.ts). */
 export const systemHandlers: DemoHandlers = {
+  // Система → Отчёты агентов, Трафик → Сводка: the pages agents publish.
+  ...reportHandlers,
   // System → «Fansly» / «OnlyFans»
   syncOverview: (request) => demoSyncOverview(request),
   pageSyncBlocks: (request) => demoPageSyncBlocks(request),
