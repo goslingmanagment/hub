@@ -20,11 +20,25 @@ export const CONTENTOPS_ORIGIN = "https://contentops.gosling-agency.ru";
 
 /**
  * A model's place in ContentOps. Its models are Hub's model slugs in lower
- * case (`Lora` → `/lora/…`); with no model, ContentOps opens where its person
- * was last.
+ * case (`Lora` → `/lora/…`); with no model, ContentOps' own start (its root
+ * opens where its person was last: a section has no address without a model).
  */
 export function contentopsHref(modelSlug: string | null, path: string): string {
   return modelSlug ? `${CONTENTOPS_ORIGIN}/${encodeURIComponent(modelSlug.toLowerCase())}/${path}` : `${CONTENTOPS_ORIGIN}/`;
+}
+
+/**
+ * The models ContentOps holds, as Hub knows it: the models of the pages granted
+ * to ContentOps' own sign-in key (a live agent key with `signin:contentops`,
+ * the one ContentOps signs people in and reads Hub with). Lower-case slugs, as
+ * ContentOps writes them. No model names are kept anywhere else.
+ */
+export function contentopsModelsOf(
+  keys: ReadonlyArray<{ isActive: boolean; capabilities: readonly string[]; pageLabels: readonly string[] }>,
+  pages: ReadonlyArray<{ label: string; modelSlug: string }>,
+): ReadonlySet<string> {
+  const granted = new Set(keys.filter((key) => key.isActive && key.capabilities.includes("signin:contentops")).flatMap((key) => key.pageLabels));
+  return new Set(pages.filter((page) => granted.has(page.label)).map((page) => page.modelSlug.toLowerCase()));
 }
 
 const PRODUCTION_CONSOLE_ORIGINS: ReadonlySet<string> = new Set([CONSOLE_ORIGIN, LEGACY_CONSOLE_ORIGIN]);

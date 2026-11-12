@@ -9,10 +9,11 @@ import { kernel } from "./sdk.js";
 
 const AGENT_KEYS_QUERY_KEY = ["admin", "agentKeys"] as const;
 
-export function useAgentKeys() {
+export function useAgentKeys(enabled = true) {
   return useQuery({
     queryKey: AGENT_KEYS_QUERY_KEY,
     queryFn: () => kernel.agentKeyList(),
+    enabled,
   });
 }
 

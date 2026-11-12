@@ -342,6 +342,64 @@ export const teamLedgerQuestionsResponseSchema = z.object({
   serverNow: isoTimestamp,
 });
 
+// ── The month card (Деньги → Месяц) ─────────────────────────────────────────
+
+/** A calendar month, «2026-11»: Moscow days. */
+export const ledgerMonthSchema = z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/);
+
+export const teamLedgerMonthQuerySchema = z.object({ month: ledgerMonthSchema });
+
+/** One model's line of the month card. Money in mills of the ledger's whole cents. */
+export const teamLedgerMonthModelSchema = z.object({
+  model: z.string(),
+  pagesNetMills: mills,
+  offPlatformMills: mills,
+  earnedMills: mills,
+  arrivedMills: mills,
+  ridingMills: mills,
+});
+
+/**
+ * The ledger's month card as its hub read serves it (GET /v1/payouts/month/{month}, ledger#85): no expenses, no
+ * decision figure, no owner's draws. `pagesNetMills` is the card's «Оборот» less what came past the platforms, the
+ * «не согласовано» pages included: the pages' income after the platforms' commission as the ledger read it from Hub;
+ * the screen sets it beside Hub's own income of the same Moscow month. The totals are the ledger's own (its lines
+ * are rounded one by one, so the models may sum a cent apart). Nothing here is counted by Hub.
+ */
+export const teamLedgerMonthCardSchema = z.object({
+  /**
+   * `unknown`: the month was never computed (every money field null) or a check of the card failed (the figures stay,
+   * `reason` says what): never hide them.
+   */
+  status: z.enum(["proven", "unknown"]),
+  reason: z.string().nullable(),
+  /** The ledger's cut the card is of. */
+  asOf: isoTimestamp.nullable(),
+  computedAt: isoTimestamp.nullable(),
+  pagesNetMills: mills.nullable(),
+  offPlatformMills: mills.nullable(),
+  turnoverMills: mills.nullable(),
+  earnedMills: mills.nullable(),
+  arrivedMills: mills.nullable(),
+  ridingMills: mills.nullable(),
+  holdMills: mills.nullable(),
+  stuckMills: mills.nullable(),
+  onPageMills: mills.nullable(),
+  models: z.array(teamLedgerMonthModelSchema),
+  notes: z.array(z.string()),
+});
+
+export const teamLedgerMonthResponseSchema = z.object({
+  month: ledgerMonthSchema,
+  /** The month's Moscow days, both included. */
+  from: businessDate,
+  to: businessDate,
+  /** false: the ledger does not serve the month card to Hub's key yet (an older ledger): `card` is null for that. */
+  served: z.boolean(),
+  card: teamLedgerMonthCardSchema.nullable(),
+  serverNow: isoTimestamp,
+});
+
 export type TeamLedgerPayoutsResponse = z.infer<typeof teamLedgerPayoutsResponseSchema>;
 export type TeamLedgerPayoutPrepareResponse = z.infer<typeof teamLedgerPayoutPrepareResponseSchema>;
 export type TeamLedgerPayoutPerson = z.infer<typeof teamLedgerPayoutPersonSchema>;
@@ -355,8 +413,26 @@ export type TeamLedgerReportPost = z.infer<typeof teamLedgerReportPostSchema>;
 export type TeamLedgerReportPerson = z.infer<typeof teamLedgerReportPersonSchema>;
 export type TeamLedgerQuestion = z.infer<typeof teamLedgerQuestionSchema>;
 export type TeamLedgerQuestionsResponse = z.infer<typeof teamLedgerQuestionsResponseSchema>;
+export type TeamLedgerMonthResponse = z.infer<typeof teamLedgerMonthResponseSchema>;
+export type TeamLedgerMonthCard = z.infer<typeof teamLedgerMonthCardSchema>;
 
 export const teamLedgerRouteSchemas = {
+  teamLedgerMonth: {
+    auth: { kind: "owner-session" },
+    tags: ["admin"],
+    summary: "The agency's month card from the ledger: the pages' income, past the platforms, turnover, earned and where it is",
+    description: "Read from the ledger's GET /v1/payouts/month/{month} with Hub's payouts key; the money is the ledger's to "
+      + "the cent. `served: false` — the ledger does not serve the month yet (it answered 403 or 404); 503 — the ledger is "
+      + "not connected or did not answer.",
+    querystring: teamLedgerMonthQuerySchema,
+    response: {
+      200: teamLedgerMonthResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      503: errorResponseSchema,
+    },
+  },
   teamLedgerPayouts: {
     auth: { kind: "owner-session" },
     tags: ["admin"],
