@@ -165,7 +165,61 @@ export const agentSaleQuestionsResponseSchema = z.object({
 
 export const agentSaleQuestionWriteResponseSchema = z.object({ question: agentSaleQuestionSchema, savedAt: isoTimestamp });
 
+export const agentSaleDecisionsFeedQuerySchema = z.object({
+  /** The `next` of the previous answer; absent — from the first change. */
+  since: z.string().regex(/^\d{1,18}$/).optional(),
+  limit: z.coerce.number().int().min(1).max(500).default(200),
+});
+
+/** A decision as the feed carries it: as it is now, no fan's name. */
+export const agentSaleDecisionFeedDecisionSchema = z.object({
+  id: intId,
+  /** The sale by Hub's id; null — not tied to a sale yet (or off_platform, which names none). */
+  transactionId: intId.nullable(),
+  pageLabel: z.string().nullable(),
+  kind: z.enum(SALE_DECISION_KINDS),
+  shares: z.array(z.object({ person: z.string().nullable(), userId: intId, percent: z.number().int() })),
+  /** kind pot: the pot's name — the ledger's pot slug. */
+  pot: z.string().nullable(),
+  /** first | second | half | nobody (a dispute), imported (from the ledger), said (recorded «со слов»). */
+  outcome: z.string(),
+  /** The sale's home by the rule when it was decided. */
+  ruleHome: z.string().nullable(),
+  state: z.enum(["active", "superseded", "cancelled"]),
+  source: z.enum(["dispute", "ledger", "agent"]),
+  saidBy: z.string().nullable(),
+  saidAt: isoTimestamp.nullable(),
+  decidedAt: isoTimestamp,
+  /** Why, as written: the ledger shows it with a report line's agreement. */
+  note: z.string().nullable(),
+  /** Taken into a person's post of a date; null — not. */
+  applied: z.object({ person: z.string().nullable(), reportDate: z.string() }).nullable(),
+  /** The ledger's own number of a decision carried over from it; null — made in Hub. */
+  ledgerDecisionId: intId.nullable(),
+});
+
+export const agentSaleDecisionsFeedResponseSchema = z.object({
+  /**
+   * Every change after the cursor, in the order the feed placed them (`seq`): made, superseded, cancelled, linked (tied
+   * to its sale), applied, changed. Each carries the decision as it is now: apply in order, keep by decision id. A
+   * change held back for the key's pages earlier comes here, once the key may read it, at its own older `seq`: take
+   * every item whatever its seq.
+   */
+  changes: z.array(z.object({
+    seq: intId,
+    change: z.enum(["made", "superseded", "cancelled", "linked", "applied", "changed"]),
+    at: isoTimestamp,
+    decision: agentSaleDecisionFeedDecisionSchema,
+  })),
+  /** Changes of a decision on a page outside the key's pages: listed on every read until the key may read them. */
+  held: z.array(z.object({ seq: intId, decisionId: intId, pageLabel: z.string().nullable(), reason: z.enum(["page_outside_key"]) })).default([]),
+  /** Ask again with `since` = this (the last place read). */
+  next: z.string(),
+  serverNow: isoTimestamp,
+});
+
 export type AgentSaleDecision = z.infer<typeof agentSaleDecisionSchema>;
+export type AgentSaleDecisionsFeedResponse = z.infer<typeof agentSaleDecisionsFeedResponseSchema>;
 export type AgentSaleQuestion = z.infer<typeof agentSaleQuestionSchema>;
 
 const agentErrors = {
@@ -204,6 +258,14 @@ export const saleDecisionRouteSchemas = {
     description: "Database only. Every source: the owner's disputes, the ones carried over from the ledger, the ones recorded «со слов».",
     querystring: agentSaleDecisionsQuerySchema,
     response: { 200: agentSaleDecisionsResponseSchema, ...agentErrors },
+  },
+  agentSaleDecisionsFeed: {
+    auth: { kind: "agentKey" }, tags: ["agent"],
+    summary: "Every change of a decision about whose a sale is, after a cursor: what the ledger follows (needs read:money)",
+    description: "Database only. A change is placed when the feed first finds it committed, after every place given before: "
+      + "a change committed late comes after the cursor, never passed. No fan's name.",
+    querystring: agentSaleDecisionsFeedQuerySchema,
+    response: { 200: agentSaleDecisionsFeedResponseSchema, ...agentErrors },
   },
   agentSaleQuestionAsk: {
     auth: { kind: "agentKey" }, tags: ["agent"],

@@ -25,6 +25,7 @@ import {
   recordSaleDecision,
   type DoorActor,
 } from "../../services/sale-decisions-door.ts";
+import { readSaleDecisionsFeed } from "../../services/sale-decisions-feed.ts";
 import { handinActorOf, handinAgentActorOf } from "../../services/shift-handins.ts";
 import { beginAgentRequest, writeAgentAudit } from "../agent-read/index.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
@@ -199,6 +200,21 @@ export function registerSaleClaimRoutes(server: ApiServer, ctx: ApiModuleContext
       (answer) => ({ decisionId: answer.decision.id, outcome: "applied" })));
   server.get("/api/v1/agent/sale-decisions", { schema: routeSchemas.agentSaleDecisions }, async (request) =>
     readSaid(request, "agentSaleDecisions", (pageIds) => listSaleDecisionsSaid(appContext, { pageIds, ...request.query }), (answer) => answer.decisions.length));
+  // The ledger's feed of decisions (review R2b-B): every change after a cursor; read:money.
+  server.get("/api/v1/agent/sale-decisions/feed", { schema: routeSchemas.agentSaleDecisionsFeed }, async (request) => {
+    const principal = await requireAgentKeyPrincipal(request);
+    const scope = await beginAgentRequest(appContext, principal, { operation: "agentSaleDecisionsFeed", requiredCapabilities: ["read:money"] });
+    const pageIds = scope.pages.map((page) => page.id);
+    let delivered = 0;
+    try {
+      const feed = await readSaleDecisionsFeed(appContext, { pageIds, since: request.query.since, limit: request.query.limit, agentKeyId: principal.agentKeyId });
+      delivered = feed.changes.length;
+      await writeAgentAudit(db, { agentKeyId: principal.agentKeyId, operation: "agentSaleDecisionsFeed", pageIds, verbatimText: false, requestSummary: { returned: delivered } });
+      return feed;
+    } finally {
+      await scope.finish(delivered);
+    }
+  });
   server.post("/api/v1/agent/sale-questions", { schema: routeSchemas.agentSaleQuestionAsk }, async (request) =>
     said(request, "agentSaleQuestionAsk", request.body, (actor) => askSaleQuestion(appContext, actor, request.body),
       (answer) => ({ questionId: answer.question.id, outcome: request.body.askedOf })));
