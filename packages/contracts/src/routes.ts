@@ -495,6 +495,30 @@ export const revenueQuerySchema = z.union([
   customRevenueQuerySchema,
 ]);
 
+/**
+ * The overview's custom window may be cut at an instant: `until` counts only what occurred before it,
+ * [from, min(to, until)). «Деньги → Месяц» asks Hub's own income of a month up to the ledger's cut (its card's
+ * `asOf`), to set like beside like. A part of a day is read from the transactions, the same rows the Moscow-dated
+ * rollup is built from; the answer has no comparison.
+ */
+const customOverviewRevenueQuerySchema = z.object({
+  period: z.literal("custom"),
+  windowAt: revenueInstantSchema.optional(),
+  from: businessDate,
+  to: businessDate,
+  until: revenueInstantSchema.optional().describe(
+    "Count only what occurred before this instant (exclusive), inside the window. Read from the transactions; no comparison.",
+  ),
+}).refine((value) => value.from <= value.to, {
+  message: "`from` must be on or before `to`",
+  path: ["to"],
+});
+
+export const overviewRevenueQuerySchema = z.union([
+  standardRevenueQuerySchema,
+  customOverviewRevenueQuerySchema,
+]);
+
 /** Hub counts its days in Moscow. `utcDays` counts a page's custom window in UTC
  *  days instead — Fansly's own days, to set Hub's money beside Fansly's
  *  statistics (the stats screen's reconciliation). Read from the transactions;
@@ -6606,7 +6630,7 @@ const baseRouteSchemas = {
     auth: { kind: "session" },
     tags: ["revenue"],
     summary: "Get agency or visible-scope revenue overview",
-    querystring: revenueQuerySchema,
+    querystring: overviewRevenueQuerySchema,
     response: {
       200: overviewRevenueResponseSchema,
       401: errorResponseSchema,

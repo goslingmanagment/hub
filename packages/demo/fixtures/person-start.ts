@@ -1,4 +1,4 @@
-import type { KernelOperationResponse, PayoutDetails, PersonStart, PersonStartStepId } from "@agency_hub_core/contracts";
+import type { KernelOperationResponse, OwnPayoutDetails, PayoutDetails, PersonStart, PersonStartStepId } from "@agency_hub_core/contracts";
 import { PAYOUT_DETAILS_MAX_LENGTH, PERSON_START_STEPS, PERSON_START_STUCK_HOURS } from "@agency_hub_core/contracts";
 
 import { demoError, hoursAgo, iso, daysAgo, type DemoHandlers, type DemoRequest } from "../core.ts";
@@ -75,6 +75,11 @@ const written = new Map<string, { text: string; updatedAt: string } | null>();
 
 function payoutOf(code: string, fallback: { text: string; updatedAt: string } | null): PayoutDetails {
   return written.has(code) ? written.get(code)! : fallback;
+}
+
+/** As the person's own session reads it: a narrow one (from the extension) is told it is written and when, never the text, as on Hub. */
+function ownPayout(details: PayoutDetails, request: DemoRequest): OwnPayoutDetails {
+  return details === null || request.narrow !== true ? details : { text: null, updatedAt: details.updatedAt };
 }
 
 function startOf(stage: Stage, now: Date): PersonStart {
@@ -165,15 +170,15 @@ export const personStartHandlers: DemoHandlers = {
       // Her own write closes the step at once, and clearing it opens it again, as on Hub.
       if ((payoutDetails !== null) !== stage.payout) start = startOf({ ...stage, payout: payoutDetails !== null }, now);
       return {
-        person: { code: NEWCOMER.code, displayName: NEWCOMER.name }, username: NEWCOMER.username, start, payoutDetails,
-        submitsShift: false, serverNow: iso(now),
+        person: { code: NEWCOMER.code, displayName: NEWCOMER.name }, username: NEWCOMER.username, start,
+        payoutDetails: ownPayout(payoutDetails, request), submitsShift: false, serverNow: iso(now),
       };
     }
     if (request.role !== "chatter") return { person: null, username: request.role === "owner" ? "owner" : "lead.marta", start: null, payoutDetails: null, submitsShift: false, serverNow: iso(now) };
     const payoutDetails = payoutOf("alex", { text: WORKING_PAYOUTS.alex!, updatedAt: iso(daysAgo(now, 40)) });
     return {
       person: { code: "alex", displayName: "Алекс" }, username: "alex.k", start: workingStart(["mia-1", "mia-2"], payoutDetails !== null, now),
-      payoutDetails, submitsShift: false, serverNow: iso(now),
+      payoutDetails: ownPayout(payoutDetails, request), submitsShift: false, serverNow: iso(now),
     };
   },
 

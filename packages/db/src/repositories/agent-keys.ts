@@ -20,7 +20,9 @@ import { agentKeys } from "../schema.ts";
  *    must issue a new one. The clamp is written `least(greatest(current, slid),
  *    cap)` — an earlier revision put `greatest` on the outside, which PRESERVED
  *    an expiry already past the ceiling and made the cap advisory. Enforcement is
- *    also a table CHECK, so no path can mint an over-long key.
+ *    also a table CHECK, so no path can mint an over-long key. A REPLACED key
+ *    (`replaced_at` set: a new key was issued in its place) does not slide at
+ *    all: its end is the grace day it was given, however much it is still used.
  * 3. **A revoked or expired key is inert.** Every mutation carries the
  *    `revoked_at is null and expires_at > now` guard, so touching a dead key
  *    neither stamps `last_used_at` nor resurrects its expiry; the caller gets
@@ -283,7 +285,8 @@ export interface AgentKeyUseResult {
 
 /**
  * Records a use: stamps `last_used_at` and slides `expires_at` to now + 90 days,
- * CLAMPED to created_at + 365 days.
+ * CLAMPED to created_at + 365 days. A replaced key (`replaced_at` set) keeps the
+ * end it was given: it works out its grace day and no use extends it.
  *
  * Order matters: `least(greatest(current, slid), cap)`. Putting `greatest` on the
  * outside — as the first revision did — preserves an expiry that already sits
@@ -305,10 +308,10 @@ export async function recordAgentKeyUse(
     .update(agentKeys)
     .set({
       lastUsedAt: now,
-      expiresAt: sql`least(
+      expiresAt: sql`case when ${agentKeys.replacedAt} is not null then ${agentKeys.expiresAt} else least(
         greatest(${agentKeys.expiresAt}, ${slid}::timestamptz),
         ${agentKeys.createdAt} + ${`${AGENT_KEY_MAX_LIFETIME_DAYS} days`}::interval
-      )`,
+      ) end`,
     })
     .where(and(
       eq(agentKeys.id, input.id),
@@ -318,6 +321,7 @@ export async function recordAgentKeyUse(
     .returning({
       lastUsedAt: agentKeys.lastUsedAt,
       expiresAt: agentKeys.expiresAt,
+      replacedAt: agentKeys.replacedAt,
     });
 
   const row = rows[0];
@@ -328,9 +332,9 @@ export async function recordAgentKeyUse(
     lastUsedAt: row.lastUsedAt,
     // An expiry SHORTER than the requested slide can only come from the ceiling:
     // the inner `greatest` never returns less than `slid`, so anything smaller is
-    // the outer clamp having bitten.
+    // the outer clamp having bitten. (A replaced key did not slide at all.)
     expiresAt: row.expiresAt,
-    cappedByMaxLifetime: row.expiresAt.getTime() < slid.getTime(),
+    cappedByMaxLifetime: row.replacedAt === null && row.expiresAt.getTime() < slid.getTime(),
   };
 }
 

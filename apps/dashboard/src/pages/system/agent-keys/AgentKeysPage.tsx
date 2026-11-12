@@ -8,6 +8,7 @@ import {
   useCreateAgentKey,
   useKeyAgents,
   useLinkAgentKey,
+  useReplaceAgentKey,
   useRevokeAgentKey,
   useUpdateAgentKeyCapabilities,
 } from "@/api/queries";
@@ -34,6 +35,11 @@ import { freshOf, platformName, RowChevron } from "../shared.js";
  * issuance names the agent, and a key issued before the people registry is
  * linked to its agent on the agent's card. The key's one showing can only be
  * closed by its button (design/screens/system.md §6).
+ *
+ * An agent holds one live key. Its rights change here in place and its pages
+ * in place from the CLI, so a new key is issued only to REPLACE the live one
+ * («Выпустить на замену»): the same agent, pages and rights, and the old key
+ * works one more day and ends by itself. While both work neither changes.
  */
 
 const CAPABILITY_HELP: Readonly<Record<AgentCapability, string>> = {
@@ -132,13 +138,38 @@ function CapabilityCheckboxes({
   );
 }
 
+/** Why Hub refused a write of this screen (the 409's `reason`), in the owner's words; anything else is the fallback. */
+const REFUSALS: Readonly<Record<string, string>> = {
+  name_taken: "Ключ с таким названием уже есть: выберите другое",
+  key_without_agent: "У этого ключа нет агента: такой ключ не заменяют. Выпустите новый рядом и потом отзовите старый",
+  agent_key_being_replaced: "Идёт замена ключа: пока работает старый, права и страницы обоих не меняются. Отзовите старый ключ или дождитесь, пока он отключится",
+  agent_key_replacement_refused: "Ключ изменился или уже не действует. Обновите список и повторите",
+};
+
 /**
- * One live key per agent (Hub refuses a second: the services give a key its agent's rights): the toast says why a link
- * or an issuance was refused.
+ * One live key per agent (Hub refuses a second: the services give a key its agent's rights): the toast says why a
+ * write was refused. `holdsLiveKey` — what «the agent already holds a live key» means for this write.
  */
-function refusedText(error: unknown, fallback: string): string {
+function refusedText(error: unknown, fallback: string, holdsLiveKey: string): string {
   const reason = error instanceof KernelApiError ? (error.body as { reason?: unknown } | null)?.reason : undefined;
-  return reason === "agent_holds_live_key" ? "У агента уже есть действующий ключ: сначала отзовите его" : fallback;
+  if (reason === "agent_holds_live_key") return holdsLiveKey;
+  return typeof reason === "string" ? REFUSALS[reason] ?? fallback : fallback;
+}
+
+/**
+ * The other key of a replacement in its day: the agent's other working key, when one of the two is marked replaced.
+ * The two are equal and Hub changes neither in place until the old one ends.
+ */
+function pairOf(key: AgentKeyItem, keys: readonly AgentKeyItem[]): AgentKeyItem | null {
+  if (!key.isActive || key.agent === null) return null;
+  return keys.find((other) => other.id !== key.id && other.isActive && other.agent?.code === key.agent?.code
+    && (other.replacedAt !== null || key.replacedAt !== null)) ?? null;
+}
+
+/** The agent's working key that is in no replacement yet: the one a new key would be issued in place of. */
+function heldBy(agentCode: string, keys: readonly AgentKeyItem[]): AgentKeyItem | null {
+  const live = keys.filter((key) => key.isActive && key.agent?.code === agentCode);
+  return live.find((key) => key.replacedAt === null) ?? live[0] ?? null;
 }
 
 /** Whose a key is, in a line: the agent, a service's own key, or nobody yet. */
@@ -153,7 +184,8 @@ function lastCallLine(key: AgentKeyItem): string {
 }
 
 function keyStatus(key: AgentKeyItem) {
-  return key.isActive ? AGENT_KEY_STATUS.active! : key.revokedAt ? AGENT_KEY_STATUS.revoked! : AGENT_KEY_STATUS.expired!;
+  if (key.isActive) return key.replacedAt ? AGENT_KEY_STATUS.replaced! : AGENT_KEY_STATUS.active!;
+  return key.revokedAt ? AGENT_KEY_STATUS.revoked! : AGENT_KEY_STATUS.expired!;
 }
 
 export function AgentKeysPage() {
@@ -173,10 +205,11 @@ export function AgentKeysPage() {
 function AgentKeysSection({ creating, onCreating }: { creating: boolean; onCreating: (value: boolean) => void }) {
   const query = useAgentKeys();
   const { data: keys, isLoading, isError } = query;
-  const [issuedToken, setIssuedToken] = useState<{ token: string; name: string } | null>(null);
+  const [issuedToken, setIssuedToken] = useState<{ token: string; name: string; note?: string } | null>(null);
   const [revoking, setRevoking] = useState<AgentKeyItem | null>(null);
   const [editing, setEditing] = useState<AgentKeyItem | null>(null);
   const [linking, setLinking] = useState<AgentKeyItem | null>(null);
+  const [replacing, setReplacing] = useState<AgentKeyItem | null>(null);
   const [open, setOpen] = useState<number | null>(null);
   const revoke = useRevokeAgentKey();
   // OWNED BY THE SCREEN, NOT THE MODAL. TanStack runs a per-call `mutate` callback
@@ -184,6 +217,8 @@ function AgentKeysSection({ creating, onCreating }: { creating: boolean; onCreat
   // mutation would DISCARD the token handoff if the owner dismissed it mid-flight:
   // the server commits the key, nobody ever sees the only copy of its token.
   const create = useCreateAgentKey();
+  // The same for a replacement: its result carries the new key's only token.
+  const replace = useReplaceAgentKey();
 
   function handleRevoke() {
     if (!revoking) return;
@@ -212,6 +247,10 @@ function AgentKeysSection({ creating, onCreating }: { creating: boolean; onCreat
             Каждый ключ принадлежит агенту из «Людей» и даёт ему только отмеченные страницы и только отмеченные права. Без
             агента бывает только ключ сервиса: вход через хаб и проверка чужих ключей. Пока ключом пользуются, срок
             продлевается, но не дальше 365 дней с выпуска.
+          </p>
+          <p className="card-description sys-measure">
+            У агента один действующий ключ. Его права и страницы меняются на месте, без нового ключа. Новый ключ выпускают
+            на замену старому: он получает те же права и страницы, а старый работает ещё сутки и отключается сам.
           </p>
         </div>
       </div>
@@ -245,9 +284,18 @@ function AgentKeysSection({ creating, onCreating }: { creating: boolean; onCreat
               {items.map((key) => {
                 const isOpen = open === key.id;
                 const toggleRow = () => setOpen(isOpen ? null : key.id);
+                // A replacement in its day: the agent's two keys are equal, and Hub changes neither in place.
+                const pair = pairOf(key, items);
                 const menu = [
                   ...(key.isActive && key.agent === null ? [{ label: "Указать агента", onSelect: () => setLinking(key) }] : []),
-                  ...(key.isActive ? [{ label: "Изменить права", onSelect: () => setEditing(key) }] : []),
+                  ...(key.isActive ? [{
+                    label: "Изменить права", onSelect: () => setEditing(key),
+                    disabled: pair !== null, hint: pair ? "идёт замена: пока работает старый ключ, права не меняются" : undefined,
+                  }] : []),
+                  ...(key.isActive && key.agent !== null && key.agent.state !== "left" ? [{
+                    label: "Выпустить на замену", onSelect: () => setReplacing(key),
+                    disabled: pair !== null, hint: pair ? "замена уже идёт: у агента два действующих ключа" : undefined,
+                  }] : []),
                   ...(key.revokedAt === null ? [{ label: "Отозвать", onSelect: () => setRevoking(key), danger: true }] : []),
                 ];
                 return (
@@ -262,7 +310,7 @@ function AgentKeysSection({ creating, onCreating }: { creating: boolean; onCreat
                       <td>{firstTwo(key.pageLabels)}</td>
                       <td>
                         <span className="sys-key-until">до {formatDateTime(key.expiresAt, { yearUnlessCurrent: true })}</span>
-                        <span className="cell-second">{lastCallLine(key)}</span>
+                        <span className="cell-second">{key.isActive && key.replacedAt ? "заменён: отключится сам" : lastCallLine(key)}</span>
                       </td>
                       <td className="status-col"><StatusBadge status={keyStatus(key)} /></td>
                       <td className="sys-actions" onClick={(event) => event.stopPropagation()}>
@@ -291,6 +339,17 @@ function AgentKeysSection({ creating, onCreating }: { creating: boolean; onCreat
                               {/* Other services know a key only by its agent (Hub's «кто этот ключ»): without one it is no agent there. */}
                               {!key.agent && <p className="text-sm text-text-secondary">ключ без агента: в сервисах не действует</p>}
                             </div>
+                            {key.isActive && (key.replacedAt || pair) && (
+                              <div>
+                                <p className="sys-label">Замена</p>
+                                <p>
+                                  {key.replacedAt
+                                    ? `Ключу выпущена замена${pair ? ` («${pair.name}»)` : ""}. Этот работает до ${formatDateTime(key.expiresAt, { yearUnlessCurrent: true })} и отключится сам: срок больше не продлевается. Когда новый ключ поставлен, этот можно отозвать раньше.`
+                                    : `Выпущен на замену ключу «${pair!.name}»: тот работает до ${formatDateTime(pair!.expiresAt, { yearUnlessCurrent: true })}.`}
+                                </p>
+                                {pair && <p className="text-sm text-text-secondary">Пока работают оба ключа, их права и страницы не меняются.</p>}
+                              </div>
+                            )}
                             <div>
                               <p className="sys-label">Последний вызов</p>
                               <p>
@@ -323,6 +382,7 @@ function AgentKeysSection({ creating, onCreating }: { creating: boolean; onCreat
       {creating && (
         <CreateAgentKeyModal
           create={create}
+          keys={items}
           onClose={() => onCreating(false)}
           onIssued={(token, name) => {
             onCreating(false);
@@ -332,17 +392,32 @@ function AgentKeysSection({ creating, onCreating }: { creating: boolean; onCreat
       )}
 
       {issuedToken && (
-        <TokenRevealModal token={issuedToken.token} name={issuedToken.name} onClose={() => setIssuedToken(null)} />
+        <TokenRevealModal token={issuedToken.token} name={issuedToken.name} note={issuedToken.note} onClose={() => setIssuedToken(null)} />
       )}
 
       {editing && <EditAgentKeyCapabilitiesModal agentKey={editing} onClose={() => setEditing(null)} />}
+
+      {replacing && (
+        <ReplaceAgentKeyModal
+          agentKey={replacing}
+          replace={replace}
+          onClose={() => setReplacing(null)}
+          onIssued={(token, name, note) => {
+            setReplacing(null);
+            setIssuedToken({ token, name, note });
+          }}
+        />
+      )}
 
       {linking && <LinkAgentKeyModal agentKey={linking} onClose={() => setLinking(null)} />}
 
       {revoking && (
         <ConfirmModal
           title={`Отозвать ключ «${revoking.name}»?`}
-          message="Ключ перестанет работать сразу. Отзыв нельзя отменить: при необходимости выпустите новый ключ."
+          message={revoking.isActive && revoking.agent !== null && !revoking.replacedAt && pairOf(revoking, items) === null
+            // The agent's one working key: revoking it first is downtime, a replacement is not.
+            ? "Ключ перестанет работать сразу, и у агента не останется действующего ключа. Отзыв нельзя отменить. Чтобы заменить ключ без простоя, сначала выпустите новый на замену: «Выпустить на замену» в меню ключа."
+            : "Ключ перестанет работать сразу. Отзыв нельзя отменить."}
           facts={[
             { label: "Что именно", value: `ключ «${revoking.name}», страницы ${revoking.pageLabels.join(", ")}` },
             { label: "Отменить", value: "нельзя" },
@@ -361,10 +436,13 @@ function AgentKeysSection({ creating, onCreating }: { creating: boolean; onCreat
 
 function CreateAgentKeyModal({
   create,
+  keys,
   onClose,
   onIssued,
 }: {
   create: ReturnType<typeof useCreateAgentKey>;
+  /** The keys of the list: an agent who holds a working one gets no second key beside it. */
+  keys: readonly AgentKeyItem[];
   onClose: () => void;
   onIssued: (token: string, name: string) => void;
 }) {
@@ -388,15 +466,18 @@ function CreateAgentKeyModal({
     }, {
       onSuccess: (result) => onIssued(result.token, result.key.name),
       onError: (error) => {
-        toast.error(refusedText(error, "Не удалось выпустить ключ"));
+        toast.error(refusedText(error, "Не удалось выпустить ключ", "У агента уже есть действующий ключ. Новый выпускают ему на замену: «Выпустить на замену» в меню ключа"));
       },
     });
   }
 
   // Without an agent only a service's own key: sign-in and «who is this key» alone.
   const serviceKey = isServiceKeyCapabilities(capabilities);
+  // One working key per agent: Hub refuses a second beside it, so the form says where a new key comes from instead.
+  const held = agentCode === "" || agentCode === SERVICE_KEY ? null : heldBy(agentCode, keys);
   const canSubmit = name.trim().length > 0
     && agentCode !== "" && (agentCode !== SERVICE_KEY || serviceKey)
+    && held === null
     && capabilities.length > 0
     && pageLabels.length > 0
     && Boolean(pages) && !pagesError
@@ -430,6 +511,12 @@ function CreateAgentKeyModal({
           <AgentSelect agents={agents} value={agentCode} onChange={setAgentCode} allowNone />
           {agentCode === SERVICE_KEY && capabilities.length > 0 && !serviceKey && (
             <p className="field-hint mt-1">Без агента выпускается только ключ сервиса: вход через хаб и проверка чужих ключей. Выберите агента.</p>
+          )}
+          {held && (
+            <p className="field-hint mt-1" role="status">
+              У этого агента уже есть действующий ключ «{held.name}», а ключ у агента один. Права и страницы меняются у него на
+              месте; новый ключ выпускают ему на замену: «Выпустить на замену» в меню ключа.
+            </p>
           )}
         </Field>
 
@@ -492,7 +579,8 @@ function CreateAgentKeyModal({
 
 /**
  * «Изменить права»: the whole new set of a live key's capabilities. Its pages are
- * not editable here: a page is added only by issuing a new key.
+ * not editable here: they change in place too, from the CLI (`agent-keys:pages`).
+ * A new key is issued only to replace one.
  */
 function EditAgentKeyCapabilitiesModal({
   agentKey,
@@ -517,8 +605,8 @@ function EditAgentKeyCapabilitiesModal({
         toast.success(`Права ключа «${agentKey.name}» изменены`);
         onClose();
       },
-      onError: () => {
-        toast.error("Не удалось изменить права ключа");
+      onError: (error) => {
+        toast.error(refusedText(error, "Не удалось изменить права ключа", "Не удалось изменить права ключа"));
       },
     });
   }
@@ -533,8 +621,10 @@ function EditAgentKeyCapabilitiesModal({
     <ModalShell title={`Права ключа «${agentKey.name}»`} onClose={closeUnlessPending} closeLabel="Закрыть">
       <form className="space-y-6" onSubmit={handleSubmit}>
         <p className="text-sm text-text-secondary">
-          Новые права действуют со следующего запроса агента: выпускать ключ заново не нужно. Страницы
-          остаются прежними: {agentKey.pageLabels.join(", ")}. Чтобы добавить страницу, выпустите новый ключ.
+          Новые права действуют со следующего запроса агента: выпускать ключ заново не нужно. Страницы ключа
+          здесь не меняются: {agentKey.pageLabels.join(", ")}. Их тоже добавляют и убирают на месте, без нового ключа:
+          командой <code className="sys-code">agent-keys:pages</code> на сервере, скажите агенту. Новый ключ нужен только
+          на замену старому.
         </p>
 
         <fieldset>
@@ -558,6 +648,97 @@ function EditAgentKeyCapabilitiesModal({
           </button>
           <button type="submit" disabled={unchanged || update.isPending} className="btn btn-primary">
             {update.isPending ? "Сохраняем…" : "Сохранить"}
+          </button>
+        </div>
+      </form>
+    </ModalShell>
+  );
+}
+
+/**
+ * «Выпустить на замену»: a new key in place of the agent's working one. Nothing of the grant is chosen here: the new
+ * key is the same agent's with the same rights and pages, and the old one works one more day and ends by itself.
+ */
+function ReplaceAgentKeyModal({
+  agentKey,
+  replace,
+  onClose,
+  onIssued,
+}: {
+  agentKey: AgentKeyItem;
+  replace: ReturnType<typeof useReplaceAgentKey>;
+  onClose: () => void;
+  onIssued: (token: string, name: string, note: string) => void;
+}) {
+  const [name, setName] = useState("");
+  const [expiresInDays, setExpiresInDays] = useState(90);
+  const sameName = name.trim() === agentKey.name;
+  const canSubmit = name.trim().length > 0 && !sameName
+    && Number.isInteger(expiresInDays) && expiresInDays >= 1 && expiresInDays <= 365
+    && !replace.isPending;
+
+  function handleSubmit(event: React.FormEvent) {
+    event.preventDefault();
+    if (!canSubmit) return;
+    replace.mutate({ id: agentKey.id, name: name.trim(), expiresInDays }, {
+      onSuccess: (result) => onIssued(
+        result.token,
+        result.key.name,
+        `Старый ключ «${result.replaced.name}» работает до ${formatDateTime(result.replaced.expiresAt, { yearUnlessCurrent: true })} и отключится сам. Поставьте новый ключ вместо него за это время.`,
+      ),
+      onError: (error) => {
+        toast.error(refusedText(error, "Не удалось выпустить ключ на замену", "У агента уже два действующих ключа: отзовите старый или дождитесь, пока он отключится"));
+      },
+    });
+  }
+
+  // While the key is being minted there is nothing useful to go back to (as at issuance).
+  const closeUnlessPending = () => {
+    if (!replace.isPending) onClose();
+  };
+
+  return (
+    <ModalShell title={`Замена ключа «${agentKey.name}»`} onClose={closeUnlessPending} closeLabel="Закрыть" size="short">
+      <form className="space-y-6" onSubmit={handleSubmit}>
+        <div className="space-y-2 text-sm text-text-secondary">
+          <p>
+            Новый ключ будет у того же агента{agentKey.agent ? ` (${agentKey.agent.displayName})` : ""}, с теми же правами и
+            страницами: {agentKey.pageLabels.join(", ")}.
+          </p>
+          <p>
+            Старый ключ не отзывается: он проработает ещё сутки и отключится сам. За это время поставьте новый ключ там, где
+            стоит старый; после этого старый можно отозвать раньше. Пока работают оба, права и страницы у них не меняются.
+          </p>
+        </div>
+
+        <Field label="Название нового ключа">
+          <input
+            value={name}
+            maxLength={200}
+            onChange={(event) => setName(event.target.value)}
+            placeholder={`Например, ${agentKey.name} (новый)`}
+            className={INPUT}
+          />
+          {sameName && <p className="field-hint mt-1">Название должно отличаться: «{agentKey.name}» остаётся у старого ключа.</p>}
+        </Field>
+
+        <div className="grid gap-3 sm:grid-cols-3">
+          <Field label="Срок, дней">
+            <input
+              type="number"
+              min={1}
+              max={365}
+              value={expiresInDays}
+              onChange={(event) => setExpiresInDays(Number(event.target.value))}
+              className={INPUT}
+            />
+          </Field>
+        </div>
+
+        <div className="flex items-center justify-end gap-2">
+          <button type="button" onClick={closeUnlessPending} disabled={replace.isPending} className="btn">Отмена</button>
+          <button type="submit" disabled={!canSubmit} className="btn btn-primary">
+            {replace.isPending ? "Выпускаем…" : "Выпустить на замену"}
           </button>
         </div>
       </form>
@@ -613,7 +794,7 @@ function LinkAgentKeyModal({ agentKey, onClose }: { agentKey: AgentKeyItem; onCl
         onClose();
       },
       onError: (error) => {
-        toast.error(refusedText(error, "Не удалось указать агента"));
+        toast.error(refusedText(error, "Не удалось указать агента", "У агента уже есть действующий ключ: сначала отзовите его"));
       },
     });
   }
@@ -645,10 +826,13 @@ function LinkAgentKeyModal({ agentKey, onClose }: { agentKey: AgentKeyItem; onCl
 function TokenRevealModal({
   token,
   name,
+  note,
   onClose,
 }: {
   token: string;
   name: string;
+  /** What else the owner has to know while the key is on the screen: a replacement's old key and when it ends. */
+  note?: string | undefined;
   onClose: () => void;
 }) {
   const [copied, setCopied] = useState(false);
@@ -671,6 +855,7 @@ function TokenRevealModal({
           Ключ показывается один раз. Hub хранит только его отпечаток: потерянный ключ выпускают заново,
           восстановить его нельзя.
         </Notice>
+        {note && <p className="text-sm text-text-secondary">{note}</p>}
         <div className="flex flex-wrap items-center gap-2">
           <code className="sys-token">
             {token}

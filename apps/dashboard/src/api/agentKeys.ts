@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type { AgentKeyCreateBody, AgentKeyUpdateBody } from "@agency_hub_core/contracts";
+import type { AgentKeyCreateBody, AgentKeyReplaceBody, AgentKeyUpdateBody } from "@agency_hub_core/contracts";
 
 import { kernel } from "./sdk.js";
 
@@ -22,6 +22,19 @@ export function useCreateAgentKey() {
   return useMutation({
     meta: { suppressGlobalError: true },
     mutationFn: (body: AgentKeyCreateBody) => kernel.agentKeyCreate({ body }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: AGENT_KEYS_QUERY_KEY }),
+  });
+}
+
+/**
+ * A key issued as the replacement of an agent's live key (`id`): the same agent, pages and rights, and the old key
+ * works one more day. The new key's token is in the RESULT and nowhere else, as at issuance.
+ */
+export function useReplaceAgentKey() {
+  const qc = useQueryClient();
+  return useMutation({
+    meta: { suppressGlobalError: true },
+    mutationFn: ({ id, ...body }: { id: number } & AgentKeyReplaceBody) => kernel.agentKeyReplace({ params: { id }, body }),
     onSuccess: () => qc.invalidateQueries({ queryKey: AGENT_KEYS_QUERY_KEY }),
   });
 }

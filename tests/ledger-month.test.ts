@@ -1,6 +1,6 @@
 import { MOSCOW_TIME_ZONE, resolvePeriodBounds } from "@agency_hub_core/shared";
 import { monthCheck } from "../apps/dashboard/src/pages/money/month/check.ts";
-import { monthWindow } from "../apps/dashboard/src/pages/money/month/window.ts";
+import { monthCut, monthWindow } from "../apps/dashboard/src/pages/money/month/window.ts";
 import { describe, expect, it } from "vitest";
 
 import { hubModelNameOf, monthCardOf, monthDays, readTeamLedgerMonth } from "../apps/runtime/src/services/ledger-month.ts";
@@ -95,19 +95,35 @@ describe("the ledger's month card on Hub", () => {
 });
 
 describe("«Доход страниц» against Главная", () => {
-  const asOf = "2026-11-12T15:31:00Z";
-  it("equal to the cent is equal, in any month", () => {
-    expect(monthCheck({ pagesNetMills: 1_000_004, hubMills: 1_000_001, current: true, asOf })).toEqual({ kind: "equal" });
-    expect(monthCheck({ pagesNetMills: 1_000_000, hubMills: 1_000_000, current: false, asOf })).toEqual({ kind: "equal" });
+  // The ledger's card is of its cut (`asOf`): what occurred before it. Hub's own income is set beside it over the
+  // same stretch of the month, so a difference is a difference whether the month goes on or is over.
+  const cut = "2026-11-12T15:31:00.000Z";
+
+  it("the card's cut inside the month is where Hub's income is asked up to; a card of the whole month has none", () => {
+    expect(monthCut("2026-11", cut)).toBe(cut);
+    // November in Moscow ends at 2026-11-30T21:00Z: its last instant is inside, the next month's first is not.
+    expect(monthCut("2026-11", "2026-11-30T20:59:59.999Z")).toBe("2026-11-30T20:59:59.999Z");
+    expect(monthCut("2026-11", "2026-11-30T21:00:00.000Z")).toBeNull();
+    expect(monthCut("2026-10", cut)).toBeNull();
+    expect(monthCut("2026-11", null)).toBeNull();
+    expect(monthCut("2026-11", "not a date")).toBeNull();
   });
 
-  it("in the month going on, a ledger behind Главная is its hour of lag: when it took the facts, no difference named", () => {
-    expect(monthCheck({ pagesNetMills: 900_000, hubMills: 1_000_000, current: true, asOf })).toEqual({ kind: "behind", asOf });
-    expect(monthCheck({ pagesNetMills: 900_000, hubMills: 1_000_000, current: true, asOf: null })).toEqual({ kind: "behind", asOf: null });
+  it("equal to the cent is equal: of the whole month, or so far when the card is of a cut inside it", () => {
+    expect(monthCheck({ pagesNetMills: 1_000_004, hubMills: 1_000_001, cut: null })).toEqual({ kind: "equal" });
+    expect(monthCheck({ pagesNetMills: 1_000_004, hubMills: 1_000_001, cut })).toEqual({ kind: "equal_so_far", cut });
   });
 
-  it("a ledger ahead of Главная, and any difference of a month that is over, is named", () => {
-    expect(monthCheck({ pagesNetMills: 1_100_000, hubMills: 1_000_000, current: true, asOf })).toEqual({ kind: "differs", deltaMills: 100_000 });
-    expect(monthCheck({ pagesNetMills: 900_000, hubMills: 1_000_000, current: false, asOf })).toEqual({ kind: "differs", deltaMills: -100_000 });
+  it("a ledger short of Hub's income as of its own cut is a difference in the month going on too, never «the hour of lag»", () => {
+    // A page that fell out of the ledger's sync: by the cut Hub had 1 000.00, the ledger 900.00.
+    expect(monthCheck({ pagesNetMills: 900_000, hubMills: 1_000_000, cut })).toEqual({ kind: "differs", deltaMills: -100_000, cut });
+    expect(monthCheck({ pagesNetMills: 1_100_000, hubMills: 1_000_000, cut })).toEqual({ kind: "differs", deltaMills: 100_000, cut });
+    // A month that is over, as before.
+    expect(monthCheck({ pagesNetMills: 900_000, hubMills: 1_000_000, cut: null })).toEqual({ kind: "differs", deltaMills: -100_000, cut: null });
+  });
+
+  it("Hub's income up to the cut is the month's window with the cut as its end moment", () => {
+    expect(monthWindow("2026-11", cut)).toEqual({ from: "2026-11-01", to: "2026-12-01", until: cut });
+    expect(monthWindow("2026-11", null)).toEqual({ from: "2026-11-01", to: "2026-12-01" });
   });
 });

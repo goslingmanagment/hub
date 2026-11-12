@@ -92,6 +92,11 @@ export const agentKeyItemSchema = z.object({
   lastUsedAt: agentIsoTimestamp.nullable(),
   /** Neither revoked nor past its expiry, evaluated when the list was read. */
   isActive: z.boolean(),
+  /**
+   * When a replacement was issued for this key (agentKeyReplace): it works until `expiresAt` — the grace day, which
+   * use no longer slides — and ends by itself. Null: not replaced.
+   */
+  replacedAt: agentIsoTimestamp.nullable(),
   /** The agent the key belongs to; null — none (a service's own key, or one issued before the registry). */
   agent: agentKeyAgentSchema.nullable(),
   /** The key's newest audited call; null — none recorded. */
@@ -132,11 +137,36 @@ export const agentKeyParamsSchema = z.object({
 }).strict();
 
 /**
+ * A key issued AS THE REPLACEMENT of the agent's live key (`:id`). An agent holds one live key at a time, so a key
+ * is not replaced by issuing a second one beside it; and revoking first means downtime (a key a service also signs
+ * in with would close every session of that service at once). The new key is the same agent's and takes the old
+ * key's pages and capabilities EXACTLY — nothing of the grant is in this body — and the old key is not revoked: it
+ * works one more day (the repository's AGENT_KEY_REPLACEMENT_GRACE_HOURS) and ends by itself. Until then neither
+ * key changes in place.
+ */
+export const agentKeyReplaceBodySchema = z.object({
+  /** The new key's own name; the replaced key keeps its name. */
+  name: z.string().min(1).max(200),
+  /** Days from issuance, as at issuance: the ceiling is the repository's, reported as a 400. */
+  expiresInDays: z.number().int().min(1).max(10_000)
+    .default(AGENT_KEY_DEFAULT_LIFETIME_DAYS),
+}).strict();
+
+export const agentKeyReplaceResponseSchema = z.object({
+  /** The new key's token: returned this once, as at issuance. */
+  token: z.string(),
+  key: agentKeyItemSchema,
+  /** The key it replaces, as it is now: still active, `replacedAt` set, `expiresAt` the end of its grace. */
+  replaced: agentKeyItemSchema,
+}).strict();
+
+/**
  * The WHOLE new capability set of a live key, not a diff: what the owner sees
  * ticked is what the key holds afterwards. Empty is allowed (a key that keeps
  * its pages but may read nothing); a repeated name is a 400 rather than folded,
- * like an unknown one. The page grant is not part of this body: pages are still
- * widened only by issuing a new key.
+ * like an unknown one. The page grant is not part of this body: a key's pages
+ * change in place too, from the CLI (`agent-keys:pages`); a new key is issued
+ * only to replace one (agentKeyReplace).
  */
 export const agentKeyUpdateBodySchema = z.object({
   capabilities: z.array(agentKeyCapabilityEnum).max(AGENT_CAPABILITIES.length)
@@ -255,6 +285,25 @@ export const agentKeyAdminRouteSchemas = {
       409: errorResponseSchema,
     },
   },
+  agentKeyReplace: {
+    auth: { kind: "owner-session" },
+    tags: ["agent"],
+    summary: "Issue a key as the replacement of an agent's live key: the same agent, pages and capabilities; the old key works one more day",
+    description: "Returns the new key's raw token exactly once. The replaced key is not revoked: its expiry becomes 24 hours "
+      + "ahead (never later than it was), stops sliding on use, and it ends by itself; revoke it earlier once the new key "
+      + "is installed. 409: the key is revoked, expired or no agent's (`key_without_agent`); the agent already holds "
+      + "two live keys, a replacement in flight (`agent_holds_live_key`); the name is taken.",
+    params: agentKeyParamsSchema,
+    body: agentKeyReplaceBodySchema,
+    response: {
+      200: agentKeyReplaceResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+      409: errorResponseSchema,
+    },
+  },
   agentKeyRevoke: {
     auth: { kind: "owner-session" },
     tags: ["agent"],
@@ -273,6 +322,8 @@ export type AgentKeyItem = z.infer<typeof agentKeyItemSchema>;
 export type AgentKeyCreateBody = z.infer<typeof agentKeyCreateBodySchema>;
 export type AgentKeyCreateResponse = z.infer<typeof agentKeyCreateResponseSchema>;
 export type AgentKeyUpdateBody = z.infer<typeof agentKeyUpdateBodySchema>;
+export type AgentKeyReplaceBody = z.infer<typeof agentKeyReplaceBodySchema>;
+export type AgentKeyReplaceResponse = z.infer<typeof agentKeyReplaceResponseSchema>;
 export type AgentKeyRevokeResponse = z.infer<typeof agentKeyRevokeResponseSchema>;
 export type AgentKeyAgent = z.infer<typeof agentKeyAgentSchema>;
 export type AgentKeyIntrospectBody = z.infer<typeof agentKeyIntrospectBodySchema>;

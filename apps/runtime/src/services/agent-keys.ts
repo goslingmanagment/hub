@@ -2,7 +2,10 @@ import {
   AgentKeyConstraintError,
   AgentHoldsLiveKeyError,
   AgentKeyLifetimeError,
+  AgentKeyReplacementError,
   findAgentKeyIntrospection,
+  findAgentKeyPerson,
+  findReplacementPairKey,
   findPageSummaryByLabel,
   findPersonRowByCode,
   getAgentKeyById,
@@ -27,6 +30,8 @@ import {
   type AgentKeyCreateBody,
   type AgentKeyIntrospectResponse,
   type AgentKeyItem,
+  type AgentKeyReplaceBody,
+  type AgentKeyReplaceResponse,
 } from "@agency_hub_core/contracts";
 import { randomToken, sha256Hex } from "@agency_hub_core/shared";
 
@@ -50,7 +55,7 @@ import { BadRequestError, ConflictError, NotFoundError } from "./errors.ts";
  *    exactly one place where each rule is decided.
  * 3. **The page grant is explicit page ids, resolved from labels at issuance.**
  *    A page created tomorrow is granted by nothing, and a key's pages are widened
- *    only by an explicit owner act (a new key, or `updateAgentKeyPages`). Labels
+ *    only by an explicit owner act (`updateAgentKeyPages`, in place). Labels
  *    are resolved through the same `findPageSummaryByLabel` the rest of the admin
  *    surface uses, so an unknown or inactive label is a 404 rather than a silently
  *    narrower key. CAPABILITIES change in place (owner, 2026-10-24):
@@ -64,6 +69,13 @@ import { BadRequestError, ConflictError, NotFoundError } from "./errors.ts";
  *    as the key and its audit. Only a service's own key (sign-in and «who is
  *    this key» alone) may have none. A key issued before the registry is linked
  *    on the person's card, never re-issued.
+ * 5. **An agent holds one live key, and a key is replaced without downtime.**
+ *    The rule is the link's writer's (`insertPersonAgentKey`), not this file's.
+ *    Pages and capabilities change in place, so a new key is issued only to
+ *    REPLACE one (`replaceAgentKey`): the same agent, pages and capabilities,
+ *    taken from the old key and never from the caller; the old key works one
+ *    more day and ends by itself. For that day the two are equal, and they stay
+ *    so: neither changes in place while the other lives.
  */
 
 /** How much of the token body is shown in listings (api-key precedent). */
@@ -109,6 +121,7 @@ function agentKeyItem(row: AgentKeyRow, labelById: ReadonlyMap<number, string>, 
     revokedAt: row.revokedAt?.toISOString() ?? null,
     lastUsedAt: row.lastUsedAt?.toISOString() ?? null,
     isActive: row.revokedAt === null && row.expiresAt.getTime() > now,
+    replacedAt: row.replacedAt?.toISOString() ?? null,
     agent: extras.agent === null ? null : { code: extras.agent.code, displayName: extras.agent.displayName, state: extras.agent.state },
     lastCall: extras.lastCall === null ? null : { at: extras.lastCall.at.toISOString(), operation: extras.lastCall.operation },
   };
@@ -159,16 +172,20 @@ async function resolvePageLabels(app: AppContext, rows: readonly AgentKeyRow[]) 
  * rather than chained: `cause` is serialized by the logger too.
  */
 function rethrowAsHttp(error: unknown): never {
-  // One live key per agent (people.ts insertPersonAgentKey): the owner revokes the old key first.
+  // One live key per agent (people.ts insertPersonAgentKey): a new key is issued as the replacement of the live one.
   if (error instanceof AgentHoldsLiveKeyError) {
     throw new ConflictError(error.message, { reason: "agent_holds_live_key" });
+  }
+  // The key to replace ended or changed between the read and the link: nothing was minted, the owner tries again.
+  if (error instanceof AgentKeyReplacementError) {
+    throw new ConflictError(error.message, { reason: "agent_key_replacement_refused" });
   }
   if (error instanceof AgentKeyLifetimeError) {
     throw new BadRequestError(error.message);
   }
   if (error instanceof AgentKeyConstraintError) {
     if (error.constraint === "agent_keys_name_key") {
-      throw new ConflictError(error.message);
+      throw new ConflictError(error.message, { reason: "name_taken" });
     }
     throw new BadRequestError(error.message);
   }
@@ -176,6 +193,108 @@ function rethrowAsHttp(error: unknown): never {
     "agent key write failed; driver detail suppressed because it embeds the bound "
     + `parameters, including the key digest (${error instanceof Error ? error.name : typeof error})`,
   );
+}
+
+/** What a key is minted with: resolved by the caller, never read from a request here. */
+interface MintInput {
+  name: string;
+  capabilities: readonly string[];
+  pageIds: number[];
+  /** As the audit row names the grant. */
+  pageLabels: string[];
+  labelById: ReadonlyMap<number, string>;
+  expiresInDays: number;
+  /** The agent the key belongs to; null — a service's own key. */
+  agent: { id: number; code: string; displayName: string; state: AgentKeyPersonRow["state"] } | null;
+  /** The agent's live key this one replaces (`replaceAgentKey`); null — a first key. */
+  replaces: AgentKeyRow | null;
+}
+
+/**
+ * Mints one key: the row, its link to the agent and the audit, in one transaction. Returns the raw token (its only
+ * appearance) and, for a replacement, the replaced key as the link's writer left it.
+ */
+async function mintAgentKey(
+  app: AppContext,
+  input: MintInput,
+  audit: AgentKeyAudit,
+): Promise<{ token: string; key: AgentKeyItem; replaced: AgentKeyRow | null }> {
+  const { agent, replaces } = input;
+  const tokenBody = randomToken(24);
+  const token = `${AGENT_KEY_TOKEN_PREFIX}${tokenBody}`;
+  const keyPrefix = `${AGENT_KEY_TOKEN_PREFIX}${tokenBody.slice(0, AGENT_KEY_DISPLAY_LENGTH)}`;
+  const createdAt = new Date();
+
+  // THE ROW AND ITS AUDIT COMMIT TOGETHER (review round 2). An earlier revision
+  // wrote the key first and audited after, reasoning that a failed audit should
+  // not destroy a minted credential. That reasoning is backwards: the token
+  // reaches the owner only through THIS response, so a failure after the insert
+  // leaves a live key nobody holds, unauditable, and blocking its own name with a
+  // unique-constraint 409 on the retry. An orphaned credential is worse than a
+  // failed issuance, and only one of the two is recoverable.
+  let minted: { row: AgentKeyRow; replaced: AgentKeyRow | null };
+  try {
+    minted = await withAuditTransaction(app, async (dbTx) => {
+      const created = await insertAgentKey(dbTx, {
+        name: input.name,
+        keyPrefix,
+        keyDigest: sha256Hex(token),
+        capabilities: [...input.capabilities],
+        pageIds: input.pageIds,
+        expiresAt: new Date(createdAt.getTime() + input.expiresInDays * DAY_MS),
+        createdBy: audit.actorUserId ?? null,
+        createdAt,
+      });
+      if (agent !== null) {
+        await insertPersonAgentKey(dbTx, {
+          personId: agent.id, agentKeyId: created.id, linkedByUserId: audit.actorUserId ?? null,
+          ...(replaces === null ? {} : { replacesKeyId: replaces.id }),
+        });
+      }
+
+      // The prefix, not the token: the audit trail is not a second copy of the
+      // secret.
+      await recordAudit({ db: dbTx }, {
+        ...audit,
+        eventType: "agent_key.issued",
+        metadata: {
+          agentKeyId: created.id,
+          name: created.name,
+          keyPrefix,
+          capabilities: created.capabilities,
+          pageLabels: input.pageLabels,
+          expiresAt: created.expiresAt.toISOString(),
+          agentCode: agent?.code ?? null,
+          ...(replaces === null ? {} : { replacesKeyId: replaces.id, replacesKeyName: replaces.name }),
+        },
+      });
+
+      // The replaced key's own row of the trail: what its end was, and what the link's writer made it.
+      const replaced = replaces === null ? null : await getAgentKeyById(dbTx, replaces.id);
+      if (replaces !== null && replaced !== null) {
+        await recordAudit({ db: dbTx }, {
+          ...audit,
+          eventType: "agent_key.replaced",
+          metadata: {
+            agentKeyId: replaced.id,
+            name: replaced.name,
+            keyPrefix: replaced.keyPrefix,
+            replacedByKeyId: created.id,
+            replacedByKeyName: created.name,
+            expiresAt: replaced.expiresAt.toISOString(),
+            previousExpiresAt: replaces.expiresAt.toISOString(),
+          },
+        });
+      }
+
+      return { row: created, replaced };
+    });
+  } catch (error) {
+    rethrowAsHttp(error);
+  }
+
+  const agentRow = agent === null ? null : { agentKeyId: minted.row.id, personId: agent.id, code: agent.code, displayName: agent.displayName, state: agent.state };
+  return { token, key: agentKeyItem(minted.row, input.labelById, { agent: agentRow, lastCall: null }), replaced: minted.replaced };
 }
 
 export async function issueAgentKey(
@@ -197,60 +316,77 @@ export async function issueAgentKey(
   }
 
   const agent = await agentForIssuance(app, input);
+  const { token, key } = await mintAgentKey(app, {
+    name: input.name, capabilities: input.capabilities, pageIds, pageLabels: input.pageLabels, labelById,
+    expiresInDays: input.expiresInDays, agent, replaces: null,
+  }, audit);
+  return { token, key };
+}
 
-  const tokenBody = randomToken(24);
-  const token = `${AGENT_KEY_TOKEN_PREFIX}${tokenBody}`;
-  const keyPrefix = `${AGENT_KEY_TOKEN_PREFIX}${tokenBody.slice(0, AGENT_KEY_DISPLAY_LENGTH)}`;
-  const createdAt = new Date();
-
-  // THE ROW AND ITS AUDIT COMMIT TOGETHER (review round 2). An earlier revision
-  // wrote the key first and audited after, reasoning that a failed audit should
-  // not destroy a minted credential. That reasoning is backwards: the token
-  // reaches the owner only through THIS response, so a failure after the insert
-  // leaves a live key nobody holds, unauditable, and blocking its own name with a
-  // unique-constraint 409 on the retry. An orphaned credential is worse than a
-  // failed issuance, and only one of the two is recoverable.
-  let row: AgentKeyRow;
-  try {
-    row = await withAuditTransaction(app, async (dbTx) => {
-      const created = await insertAgentKey(dbTx, {
-        name: input.name,
-        keyPrefix,
-        keyDigest: sha256Hex(token),
-        capabilities: [...input.capabilities],
-        pageIds,
-        expiresAt: new Date(createdAt.getTime() + input.expiresInDays * DAY_MS),
-        createdBy: audit.actorUserId ?? null,
-        createdAt,
-      });
-      if (agent !== null) {
-        await insertPersonAgentKey(dbTx, { personId: agent.id, agentKeyId: created.id, linkedByUserId: audit.actorUserId ?? null });
-      }
-
-      // The prefix, not the token: the audit trail is not a second copy of the
-      // secret.
-      await recordAudit({ db: dbTx }, {
-        ...audit,
-        eventType: "agent_key.issued",
-        metadata: {
-          agentKeyId: created.id,
-          name: created.name,
-          keyPrefix,
-          capabilities: created.capabilities,
-          pageLabels: input.pageLabels,
-          expiresAt: created.expiresAt.toISOString(),
-          agentCode: agent?.code ?? null,
-        },
-      });
-
-      return created;
-    });
-  } catch (error) {
-    rethrowAsHttp(error);
+/**
+ * Issues a key as the replacement of an agent's live key (`agentKeyReplace`, the CLI's `agent-keys:replace`).
+ *
+ * The new key's agent, pages and capabilities are the old key's, read here and never taken from the caller: the two
+ * are equal, so the services, which give a key its agent's rights, give the pair nothing a single key did not have.
+ * The old key is not revoked — that is the downtime this path exists to avoid: the link's writer
+ * (`insertPersonAgentKey`) makes its end the grace ahead and stops it sliding, and refuses when the old key is not
+ * the agent's one live key or the grants differ (it changed between this read and the link).
+ *
+ * A key no agent holds is not held to one at a time: there is nothing to replace, a second one is issued beside it.
+ */
+export async function replaceAgentKey(
+  app: AppContext,
+  input: { id: number } & AgentKeyReplaceBody,
+  audit: AgentKeyAudit,
+): Promise<AgentKeyReplaceResponse> {
+  const existing = await getAgentKeyById(app.db, input.id);
+  if (!existing) {
+    throw new NotFoundError(`Agent key ${input.id} not found`);
+  }
+  if (existing.revokedAt !== null) {
+    throw new ConflictError(`Agent key "${existing.name}" is revoked: there is nothing to replace; issue a new key`);
+  }
+  if (existing.expiresAt.getTime() <= Date.now()) {
+    throw new ConflictError(`Agent key "${existing.name}" has expired: there is nothing to replace; issue a new key`);
+  }
+  const agent = await findAgentKeyPerson(app.db, existing.id);
+  if (agent === null) {
+    throw new ConflictError(
+      `Agent key "${existing.name}" belongs to no agent, so it is not held to one key at a time: issue a new key, then revoke this one`,
+      { reason: "key_without_agent" },
+    );
+  }
+  if (agent.state === "left") {
+    throw new BadRequestError(`The agent «${agent.code}» is gone`);
   }
 
-  const agentRow = agent === null ? null : { agentKeyId: row.id, personId: agent.id, code: agent.code, displayName: agent.displayName, state: agent.state };
-  return { token, key: agentKeyItem(row, labelById, { agent: agentRow, lastCall: null }) };
+  const labelById = await resolvePageLabels(app, [existing]);
+  const { token, key, replaced } = await mintAgentKey(app, {
+    name: input.name,
+    capabilities: existing.capabilities,
+    pageIds: [...existing.pageIds],
+    pageLabels: existing.pageIds.map((pageId) => labelById.get(pageId) ?? `#${pageId}`),
+    labelById,
+    expiresInDays: input.expiresInDays,
+    agent: { id: agent.personId, code: agent.code, displayName: agent.displayName, state: agent.state },
+    replaces: existing,
+  }, audit);
+  const extras = await keyExtras(app, [replaced ?? existing]);
+  return { token, key, replaced: agentKeyItem(replaced ?? existing, labelById, extras(replaced ?? existing)) };
+}
+
+/**
+ * A replacement's grace day: the agent holds two live keys, equal by construction. Neither changes in place until the
+ * old one ends (or is revoked), or the pair would stop being equal while both still carry the agent's rights.
+ */
+async function refuseDuringReplacement(db: Parameters<typeof findReplacementPairKey>[0], key: AgentKeyRow): Promise<void> {
+  const other = await findReplacementPairKey(db, key.id);
+  if (other === null) return;
+  throw new ConflictError(
+    `Agent key "${key.name}" is in a replacement with "${other.name}": until the old key ends the two stay equal; `
+      + "revoke the old key first, then change the new one",
+    { reason: "agent_key_being_replaced" },
+  );
 }
 
 export async function listAgentKeysDetailed(app: AppContext): Promise<AgentKeyItem[]> {
@@ -336,6 +472,7 @@ export async function updateAgentKeyCapabilities(
     if (before.length === after.length && before.every((capability, index) => capability === after[index])) {
       return existing;
     }
+    await refuseDuringReplacement(dbTx, existing);
 
     let updated: AgentKeyRow | null;
     try {
@@ -468,6 +605,7 @@ export async function updateAgentKeyPages(
     if (before.length === after.length && before.every((pageLabel, index) => pageLabel === after[index])) {
       return existing;
     }
+    await refuseDuringReplacement(dbTx, existing);
 
     let updated: AgentKeyRow | null;
     try {

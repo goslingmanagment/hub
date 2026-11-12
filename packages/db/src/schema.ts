@@ -3498,6 +3498,9 @@ export const agentKeys = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     revokedAt: timestamp("revoked_at", { withTimezone: true }),
     lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
+    /** When a replacement was issued for this key: `expiresAt` is final from then (the grace day) and use no
+     *  longer slides it. Null: not replaced. Written only by `insertPersonAgentKey` (repositories/people.ts). */
+    replacedAt: timestamp("replaced_at", { withTimezone: true }),
   },
   (table) => ({
     expiryIdx: index("agent_keys_expiry_idx").on(table.expiresAt),

@@ -120,7 +120,8 @@ const PEOPLE: readonly PersonSpec[] = [
   { id: 13, code: "helper-bot", name: "Помощник в чате", kind: "agent", role: "agent", state: "working", logins: [], pages: [], slots: [],
     keys: [{ id: 7, name: "Исследователь архива", state: "active" }] },
   { id: 14, code: "contentops", name: "Сервер ContentOps", kind: "agent", role: "agent", state: "working", logins: [], pages: [], slots: [],
-    keys: [{ id: 9, name: "ContentOps", state: "active" }] },
+    // In the middle of a replacement (system.ts): the new key and the old one, which works out its day.
+    keys: [{ id: 9, name: "ContentOps", state: "active" }, { id: 14, name: "ContentOps, декабрь", state: "active" }] },
   { id: 15, code: "capture-server", name: "Сервер захвата", kind: "service", role: "service", state: "working", logins: [], pages: [], slots: [],
     note: "Служебный: проверки «вход без человека» и «смена без отчёта» его не трогают." },
   // One live key per agent (Hub refuses a second): the queue builder is an agent of its own.
