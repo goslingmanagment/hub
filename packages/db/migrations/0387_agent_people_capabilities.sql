@@ -5,6 +5,9 @@
 --   read:pay_terms  — the people feed (`agentPeople`, read:team) carries each person's pay terms too: money,
 --                     for the agency ledger's key only;
 --   propose:people  — an agent proposes a change about a person (or a new person); it waits for the owner.
+--
+-- The list keeps `write:matters` (0383, package D, merged before this one): the check is rewritten whole, so it
+-- carries every capability of the migrations before it.
 
 set local lock_timeout = '5s';
 
@@ -26,6 +29,7 @@ alter table agent_keys
       'withdraw:publications',
       'delete:posts',
       'look:media',
+      'write:matters',
       'read:pay_terms',
       'propose:people'
     ]::text[]

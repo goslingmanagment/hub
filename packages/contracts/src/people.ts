@@ -6,7 +6,8 @@ import { businessDate, intId, isoDateTime, isoTimestamp, mills, platformEnum } f
 /**
  * The people registry (ecosystem plan 2026-11-12, package A), in shadow: one
  * record per person of the agency — a human and an agent are the same kind of
- * record (and a service login's holder is one too, kind `service`). A login is not a person: one person holds any number of Hub logins
+ * record, and so is the holder of service and test logins (kind `service`).
+ * A login is not a person: one person holds any number of Hub logins
  * (the owner: `admin` and a chatter login), an agent person holds agent keys,
  * and a model or a contractor holds none. The code is the one ledger and /OS
  * already use (the card's file name), a field of its own: nothing here ever

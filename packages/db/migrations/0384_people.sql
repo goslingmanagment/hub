@@ -2,9 +2,9 @@
 -- 0384_people.sql
 --
 -- The people registry (ecosystem plan 2026-11-12, package A), in shadow: one
--- record per person of the agency, a human and an agent alike (and a service login's holder, kind service). A login is not
--- a person: the owner holds two logins, a content manager none, a model or a
--- contractor none at all. Nothing reads this yet but its own routes, the agent
+-- record per person of the agency, a human and an agent alike, and the holder
+-- of service and test logins (kind service). A login is not a person: the
+-- owner holds two logins, a content manager none, a contractor none at all. Nothing reads this yet but its own routes, the agent
 -- feed and the one-off import; access stays where it is (`users`,
 -- `user_page_assignments`, `agent_keys`).
 --
