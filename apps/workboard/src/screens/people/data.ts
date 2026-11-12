@@ -314,6 +314,17 @@ function useNow() {
   });
 }
 
+/** Who of these logins is on a shift now, and when their last shift ended (the shifts of the last 7 days, every page). */
+export function usePeopleNow(userIds: readonly number[]): { now: PersonNow; known: boolean } {
+  const now = useNow();
+  const nows = userIds.map((id) => nowOf(id, now.data?.shifts, [], { periodToday: false, periodDays: 0 }));
+  const going = nows.map((one) => one.onShiftSince).filter((at): at is string => at !== null).sort()[0] ?? null;
+  return {
+    now: { onShiftSince: going, lastShiftEnd: latest(...nows.map((one) => one.lastShiftEnd)), quietDays: Math.max(0, ...nows.map((one) => one.quietDays)) },
+    known: now.data !== undefined || now.isError,
+  };
+}
+
 /** The accounts (`adminListUsers`): the owner's only. */
 function useAccounts(enabled: boolean) {
   return useQuery({
@@ -386,6 +397,43 @@ export interface PeopleList {
   stale: boolean;
   refresh: () => void;
   retryQuality: () => void;
+  /**
+   * One person's numbers over all of their logins (the registry's person,
+   * registry.ts): the period's work summed, the quality the average over every
+   * finished shift of every login, the AI spend summed, now from the shifts of
+   * any of them. `work` null — no login of theirs worked the period or the window before.
+   */
+  combine: (userIds: readonly number[]) => PersonNumbers;
+}
+
+/** A person's numbers of the period, whatever logins they hold (`PeopleList.combine`). */
+export interface PersonNumbers {
+  now: PersonNow;
+  work: PeriodWork | null;
+  quality: PeriodQuality | null | undefined;
+  aiSpendMicroUsd: number | null | undefined;
+}
+
+function totalsOf(parts: readonly WorkTotals[]): WorkTotals {
+  const salesNetMills = millsToNumber(sumMills(parts.map((part) => part.salesNetMills)));
+  const workedMinutes = parts.reduce((sum, part) => sum + part.workedMinutes, 0);
+  return {
+    shifts: parts.reduce((sum, part) => sum + part.shifts, 0),
+    workedMinutes,
+    salesNetMills,
+    perHourMills: perHourMills(salesNetMills, workedMinutes),
+  };
+}
+
+/** The work of several logins as one: summed; the window before is known when any login's is. */
+function sumWork(parts: readonly PeriodWork[]): PeriodWork {
+  if (parts.length === 1) return parts[0]!;
+  const previous = parts.flatMap((part) => (part.previous ? [part.previous] : []));
+  return {
+    ...totalsOf(parts),
+    overlapNetMills: millsToNumber(sumMills(parts.map((part) => part.overlapNetMills))),
+    previous: previous.length === 0 ? null : totalsOf(previous),
+  };
 }
 
 export function usePeopleList(period: ResolvedPeriod, page: string | null): PeopleList {
@@ -472,6 +520,23 @@ export function usePeopleList(period: ResolvedPeriod, page: string | null): Peop
       }
     },
     retryQuality: () => void numbers.refetch(),
+    combine: (userIds) => {
+      const chatters = sales.data?.chatters ?? [];
+      const mine = userIds.flatMap((id) => {
+        const chatter = chatters.find((one) => one.userId === id);
+        return chatter ? [workOf(chatter)] : [];
+      });
+      const counted = userIds.flatMap((id) => numbersById.get(id)?.shifts ?? []);
+      const nows = userIds.map((id) => nowOf(id, now.data?.shifts, periodShifts, reach));
+      const going = nows.map((one) => one.onShiftSince).filter((at): at is string => at !== null).sort()[0] ?? null;
+      const spent = spendState === "ready" ? userIds.map((id) => spend.data!.get(String(id))).filter((value): value is number => typeof value === "number") : [];
+      return {
+        now: { onShiftSince: going, lastShiftEnd: latest(...nows.map((one) => one.lastShiftEnd)), quietDays: Math.max(0, ...nows.map((one) => one.quietDays)) },
+        work: mine.length === 0 ? null : sumWork(mine),
+        quality: qualityState !== "ready" ? undefined : mine.length === 0 ? null : qualityOf(counted),
+        aiSpendMicroUsd: spendState !== "ready" ? undefined : spent.length === 0 ? null : spent.reduce((sum, value) => sum + value, 0),
+      };
+    },
   };
 }
 

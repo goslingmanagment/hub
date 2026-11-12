@@ -1,9 +1,19 @@
-import type { KernelOperationResponse, PersonPayTerm, PersonProposal, PersonScheduleSlot } from "@agency_hub_core/contracts";
+import type {
+  AdminPersonCreateBody,
+  AdminPersonImportNoteSettleBody,
+  AdminPersonPayTermBody,
+  AdminPersonUpdateBody,
+  KernelOperationResponse,
+  PersonImportNote,
+  PersonPayTerm,
+  PersonProposal,
+  PersonScheduleSlot,
+} from "@agency_hub_core/contracts";
 
-import { demoError, iso, isoDay, daysAgo, hoursAgo, queryString, type DemoHandlers, type DemoRequest } from "../core.ts";
-import { DEMO_PAGES, demoPage } from "../world.ts";
+import { demoError, iso, isoDay, daysAgo, hoursAgo, queryString, type DemoHandlers, type DemoReply, type DemoRequest } from "../core.ts";
+import { DEMO_MODELS, DEMO_PAGES, demoPage } from "../world.ts";
 import { ownerOnly } from "./settings-common.ts";
-import { OWNER_CHAT_LOGIN, teamUsers } from "./settings.ts";
+import { OWNER_CHAT_LOGIN, demoLastActiveAt, teamUsers } from "./settings.ts";
 
 /**
  * The people registry in the invented agency (contracts people.ts): one record
@@ -13,19 +23,25 @@ import { OWNER_CHAT_LOGIN, teamUsers } from "./settings.ts";
  * keys and a capture server held as a service. One chatter's working pages are
  * narrower than her access, as in life, and one has an earlier end on one page.
  * The owner's card carries the pay terms (money: the owner's only); the team's
- * list never does. Writes are accepted and change nothing: a reload shows the
- * agency as before.
+ * list never does.
+ *
+ * The owner's writes (a new person with an invitation, an edit, a slot or pay
+ * terms from a day, «Сверено», an agent's proposal decided) change this registry
+ * in memory until the dev server restarts, like «Что продаёт»'s approaches
+ * (wb-sales.ts): the screen can be walked through end to end. Nothing else of
+ * the invented world follows (a new person has no shifts, devices or links).
  */
 
 type TeamPeople = KernelOperationResponse<"teamPeople">;
 type Person = TeamPeople["people"][number];
 type AdminPerson = KernelOperationResponse<"adminPerson">;
+type Weekdays = PersonScheduleSlot["weekdays"];
 
 interface SlotSpec {
   page?: string;
   start: string;
   end: string;
-  weekdays: PersonScheduleSlot["weekdays"];
+  weekdays: Weekdays;
   /** Days back the slot began; null — not known. */
   fromDays: number | null;
   /** Days back it ended; absent — it holds. */
@@ -48,20 +64,20 @@ interface PersonSpec {
   rights?: "customs_lead"[];
   leftDaysAgo?: number;
   note?: string;
-  notes?: Person["importNotes"];
+  notes?: { code: string; text: string; settledDaysAgo?: number }[];
   origin?: Person["origin"];
   onboarding?: { step: string; doneDays: number | null }[];
   /** Pay terms: share in basis points, fix per shift in mills, from N days back. */
   terms?: { model: string; share: number; fix: number; fromDays: number }[];
 }
 
-const WEEK: PersonScheduleSlot["weekdays"] = ["mon", "tue", "wed", "thu", "fri"];
-const LATE: PersonScheduleSlot["weekdays"] = ["wed", "thu", "fri", "sat", "sun"];
-const SIX: PersonScheduleSlot["weekdays"] = ["mon", "tue", "wed", "thu", "fri", "sat"];
+const WEEK: Weekdays = ["mon", "tue", "wed", "thu", "fri"];
+const LATE: Weekdays = ["wed", "thu", "fri", "sat", "sun"];
+const SIX: Weekdays = ["mon", "tue", "wed", "thu", "fri", "sat"];
 
 const PEOPLE: readonly PersonSpec[] = [
   { id: 1, code: "owner", name: "Владелец", kind: "human", role: "owner", state: "working", logins: [1, OWNER_CHAT_LOGIN.id], pages: [], slots: [],
-    telegram: { userId: 700_000_001, handle: "owner_demo", tag: null }, note: "Второй вход — для расширения." },
+    telegram: { userId: 700_000_001, handle: "owner_demo", tag: null }, note: "Второй вход: для расширения." },
   { id: 2, code: "marta", name: "Марта", kind: "human", role: "team_lead", state: "working", logins: [2], pages: [], slots: [],
     telegram: { userId: 700_000_002, handle: "marta_lead", tag: null } },
   { id: 3, code: "oleg", name: "Олег", kind: "human", role: "team_lead", state: "working", logins: [3], pages: [], slots: [],
@@ -73,7 +89,11 @@ const PEOPLE: readonly PersonSpec[] = [
   { id: 5, code: "kate", name: "Катя", kind: "human", role: "chatter", state: "working", logins: [5], pages: ["mia-1"],
     slots: [{ start: "16:00", end: "00:00", weekdays: LATE, fromDays: 40 }],
     telegram: { userId: 700_000_005, handle: "kate_v", tag: "#катя" }, rights: ["customs_lead"],
-    notes: [{ code: "pages_differ", text: "рабочие страницы карточки: mia-1; доступ хаба (kate.v): mia-1, mia-3; только в доступе: mia-3" }],
+    notes: [
+      { code: "pages_differ", text: "рабочие страницы карточки: mia-1; доступ хаба (kate.v): mia-1, mia-3; только в доступе: mia-3" },
+      { code: "telegram_missing", text: "в карточке нет Telegram, в ledger есть: взят из ledger" },
+      { code: "tab_fix_unknown", text: "вкладка «Mia выплаты»: «Фикс/см» ledger не знает: взят 0, проверьте", settledDaysAgo: 1 },
+    ],
     origin: "import", terms: [{ model: "mia-hart", share: 2500, fix: 0, fromDays: 110 }] },
   { id: 6, code: "den", name: "Денис", kind: "human", role: "chatter", state: "working", logins: [6], pages: ["nova-1"],
     slots: [{ start: "00:00", end: "08:00", weekdays: WEEK, fromDays: 90 }],
@@ -103,87 +123,117 @@ const PEOPLE: readonly PersonSpec[] = [
     note: "Служебный: проверки «вход без человека» и «смена без отчёта» его не трогают." },
 ];
 
-const MODEL_NAMES: Readonly<Record<string, string>> = { "mia-hart": "Mia Hart", "nova-lane": "Nova Lane", "ivy-rose": "Ivy Rose" };
+const MODEL_NAMES: Readonly<Record<string, string>> = Object.fromEntries(DEMO_MODELS.map((model) => [model.slug, model.name]));
 
-function slotsOf(spec: PersonSpec, now: Date): PersonScheduleSlot[] {
-  return spec.slots.map((slot, index) => {
-    const page = slot.page ? demoPage(slot.page) : undefined;
-    const minute = (value: string) => Number(value.slice(0, 2)) * 60 + Number(value.slice(3));
-    return {
+// ── the registry in memory ───────────────────────────────────────────────────
+
+interface SlotRec {
+  id: number;
+  page: string | null;
+  start: string;
+  end: string;
+  weekdays: Weekdays;
+  validFrom: string | null;
+  validTo: string | null;
+}
+
+interface TermRec {
+  id: number;
+  model: string;
+  share: number;
+  fix: number;
+  validFrom: string;
+  note: string | null;
+  updatedAt: string;
+}
+
+interface Rec {
+  id: number;
+  code: string;
+  name: string;
+  kind: Person["kind"];
+  role: Person["role"];
+  state: Person["state"];
+  leftOn: string | null;
+  logins: number[];
+  keys: { id: number; name: string; state: "active" | "expired" | "revoked" }[];
+  pages: string[];
+  slots: SlotRec[];
+  telegram: Person["telegram"];
+  rights: { right: "customs_lead"; grantedAt: string }[];
+  note: string | null;
+  notes: PersonImportNote[];
+  origin: Person["origin"];
+  onboarding: Person["onboarding"];
+  terms: TermRec[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** A login the demo's invitation made: it has no password yet, no device, no shift. */
+interface NewLogin {
+  id: number;
+  username: string;
+  role: "chatter" | "team_lead";
+}
+
+interface Registry {
+  people: Rec[];
+  proposals: PersonProposal[];
+  logins: NewLogin[];
+  nextId: number;
+}
+
+let registry: Registry | null = null;
+
+function recOf(spec: PersonSpec, now: Date): Rec {
+  return {
+    id: spec.id,
+    code: spec.code,
+    name: spec.name,
+    kind: spec.kind,
+    role: spec.role,
+    state: spec.state,
+    leftOn: spec.leftDaysAgo === undefined ? null : isoDay(daysAgo(now, spec.leftDaysAgo)),
+    logins: [...spec.logins],
+    keys: [...(spec.keys ?? [])],
+    pages: [...spec.pages],
+    slots: spec.slots.map((slot, index) => ({
       id: spec.id * 10 + index,
-      personId: spec.id,
-      pageId: page?.id ?? null,
-      pageLabel: page?.label ?? null,
-      startMinute: minute(slot.start),
-      endMinute: minute(slot.end),
+      page: slot.page ?? null,
       start: slot.start,
       end: slot.end,
       weekdays: slot.weekdays,
       validFrom: slot.fromDays === null ? null : isoDay(daysAgo(now, slot.fromDays)),
       validTo: slot.toDays === undefined ? null : isoDay(daysAgo(now, slot.toDays)),
-    };
-  });
-}
-
-function personOf(spec: PersonSpec, now: Date): Person {
-  const users = teamUsers();
-  const slots = slotsOf(spec, now);
-  const holding = (slot: PersonScheduleSlot) => slot.validTo === null;
-  return {
-    id: spec.id,
-    code: spec.code,
-    displayName: spec.name,
-    kind: spec.kind,
-    role: spec.role,
-    state: spec.state,
-    leftOn: spec.leftDaysAgo === undefined ? null : isoDay(daysAgo(now, spec.leftDaysAgo)),
+    })),
     telegram: spec.telegram
       ? { userId: spec.telegram.userId, handle: spec.telegram.handle, reportTag: spec.telegram.tag }
       : { userId: null, handle: null, reportTag: null },
-    logins: spec.logins.flatMap((id) => {
-      const user = users.find((one) => one.id === id);
-      if (!user) return [];
-      const state = !user.active || spec.state === "left" ? "disabled" as const : spec.state === "invited" ? "invited" as const : "active" as const;
-      return [{ userId: user.id, username: user.username, role: user.role, state }];
-    }),
-    agentKeys: (spec.keys ?? []).map((key) => ({ agentKeyId: key.id, name: key.name, state: key.state })),
-    workingPages: spec.pages.flatMap((label) => {
-      const page = DEMO_PAGES.find((one) => one.label === label);
-      return page ? [{ pageLabel: page.label, platform: page.platform, modelSlug: page.modelSlug, modelName: page.modelName }] : [];
-    }),
-    schedule: slots.find((slot) => slot.pageId === null && holding(slot)) ?? null,
-    pageSchedules: slots.filter((slot) => slot.pageId !== null && holding(slot)),
     rights: (spec.rights ?? []).map((right) => ({ right, grantedAt: iso(daysAgo(now, 25)) })),
-    onboarding: (spec.onboarding ?? []).map((step) => ({ step: step.step, doneAt: step.doneDays === null ? null : iso(daysAgo(now, step.doneDays)), note: null })),
     note: spec.note ?? null,
-    importNotes: spec.notes ?? [],
+    notes: (spec.notes ?? []).map((note) => ({
+      code: note.code, text: note.text, settledAt: note.settledDaysAgo === undefined ? null : iso(daysAgo(now, note.settledDaysAgo)),
+    })),
     origin: spec.origin ?? "owner",
-    openProposals: proposalsOf(now).filter((one) => one.personCode === spec.code && one.state === "open").length,
+    onboarding: (spec.onboarding ?? []).map((step) => ({ step: step.step, doneAt: step.doneDays === null ? null : iso(daysAgo(now, step.doneDays)), note: null })),
+    terms: (spec.terms ?? []).map((term, index) => ({
+      id: spec.id * 10 + index, model: term.model, share: term.share, fix: term.fix,
+      validFrom: isoDay(daysAgo(now, term.fromDays)), note: null, updatedAt: iso(daysAgo(now, term.fromDays)),
+    })),
     createdAt: iso(daysAgo(now, 30)),
     updatedAt: iso(hoursAgo(now, spec.id * 3)),
   };
 }
 
-function termsOf(spec: PersonSpec, now: Date): PersonPayTerm[] {
-  const terms = spec.terms ?? [];
-  return terms.map((term, index) => {
-    const next = terms.slice(index + 1).find((other) => other.model === term.model);
-    return {
-      id: spec.id * 10 + index,
-      modelSlug: term.model,
-      modelName: MODEL_NAMES[term.model] ?? term.model,
-      validFrom: isoDay(daysAgo(now, term.fromDays)),
-      validTo: next ? isoDay(daysAgo(now, next.fromDays + 1)) : null,
-      shareBasisPoints: term.share,
-      fixPerShiftMills: term.fix,
-      note: null,
-      updatedAt: iso(daysAgo(now, term.fromDays)),
-    };
-  });
-}
-
-function proposalsOf(now: Date): PersonProposal[] {
+function seedProposals(now: Date): PersonProposal[] {
   return [
+    {
+      id: 3, kind: "create", personCode: "vika",
+      change: { kind: "create", person: { code: "vika", displayName: "Вика", role: "content_manager", state: "set_up", telegram: { handle: "vika_content" } } },
+      reason: "Вика начала разбирать кастомы Mia, просила завести её в Hub", requestedBy: "sonya", sourceRef: "чат контента",
+      agentKeyName: "Очереди фанов", state: "open", createdAt: iso(hoursAgo(now, 26)), decidedAt: null, decisionNote: null,
+    },
     {
       id: 2, kind: "update", personCode: "den",
       change: { kind: "update", personCode: "den", change: { schedule: { from: isoDay(daysAgo(now, -2)), slot: { start: "02:00", end: "10:00", weekdays: WEEK } } } },
@@ -199,25 +249,200 @@ function proposalsOf(now: Date): PersonProposal[] {
   ];
 }
 
-function cardOf(spec: PersonSpec, now: Date): AdminPerson {
+function world(now: Date): Registry {
+  registry ??= { people: PEOPLE.map((spec) => recOf(spec, now)), proposals: seedProposals(now), logins: [], nextId: 100 };
+  return registry;
+}
+
+// ── views ────────────────────────────────────────────────────────────────────
+
+function minute(value: string): number {
+  return Number(value.slice(0, 2)) * 60 + Number(value.slice(3));
+}
+
+function slotView(rec: Rec, slot: SlotRec): PersonScheduleSlot {
+  const page = slot.page ? demoPage(slot.page) : undefined;
   return {
-    person: personOf(spec, now),
-    scheduleSlots: slotsOf(spec, now),
-    payTerms: termsOf(spec, now),
-    proposals: proposalsOf(now).filter((one) => one.personCode === spec.code),
+    id: slot.id,
+    personId: rec.id,
+    pageId: page?.id ?? null,
+    pageLabel: page?.label ?? null,
+    startMinute: minute(slot.start),
+    endMinute: minute(slot.end),
+    start: slot.start,
+    end: slot.end,
+    weekdays: slot.weekdays,
+    validFrom: slot.validFrom,
+    validTo: slot.validTo,
+  };
+}
+
+/** The slot of a line holding today, else the next one to begin (the service's `currentSlot`). */
+function currentOf(slots: readonly PersonScheduleSlot[], today: string): PersonScheduleSlot | null {
+  let holding: PersonScheduleSlot | null = null;
+  for (const slot of slots) {
+    if ((slot.validFrom === null || slot.validFrom <= today) && (slot.validTo === null || slot.validTo >= today)) holding = slot;
+  }
+  return holding ?? slots.find((slot) => slot.validFrom !== null && slot.validFrom > today) ?? null;
+}
+
+function loginsOf(rec: Rec, reg: Registry, now: Date): Person["logins"] {
+  const users = teamUsers();
+  return rec.logins.flatMap((id) => {
+    const made = reg.logins.find((one) => one.id === id);
+    if (made) return [{ userId: made.id, username: made.username, role: made.role, state: "invited" as const, lastSeenAt: null }];
+    const user = users.find((one) => one.id === id);
+    if (!user) return [];
+    const lastSeenAt = demoLastActiveAt(user, now);
+    const state = !user.active || rec.state === "left" ? "disabled" as const : lastSeenAt === null ? "invited" as const : "active" as const;
+    return [{ userId: user.id, username: user.username, role: user.role, state, lastSeenAt }];
+  });
+}
+
+function personOf(rec: Rec, reg: Registry, now: Date): Person {
+  const today = isoDay(now);
+  const slots = rec.slots.map((slot) => slotView(rec, slot));
+  const general = currentOf(slots.filter((slot) => slot.pageId === null), today);
+  const pageIds = [...new Set(slots.flatMap((slot) => (slot.pageId === null ? [] : [slot.pageId])))];
+  return {
+    id: rec.id,
+    code: rec.code,
+    displayName: rec.name,
+    kind: rec.kind,
+    role: rec.role,
+    state: rec.state,
+    leftOn: rec.leftOn,
+    telegram: rec.telegram,
+    logins: loginsOf(rec, reg, now),
+    agentKeys: rec.keys.map((key) => ({ agentKeyId: key.id, name: key.name, state: key.state })),
+    workingPages: rec.pages.flatMap((label) => {
+      const page = DEMO_PAGES.find((one) => one.label === label);
+      return page ? [{ pageLabel: page.label, platform: page.platform, modelSlug: page.modelSlug, modelName: page.modelName }] : [];
+    }),
+    schedule: general,
+    pageSchedules: pageIds.flatMap((pageId) => {
+      const slot = currentOf(slots.filter((one) => one.pageId === pageId), today);
+      return slot ? [slot] : [];
+    }),
+    rights: rec.rights,
+    onboarding: rec.onboarding,
+    note: rec.note,
+    importNotes: rec.notes,
+    origin: rec.origin,
+    openProposals: reg.proposals.filter((one) => one.personCode === rec.code && one.state === "open").length,
+    createdAt: rec.createdAt,
+    updatedAt: rec.updatedAt,
+  };
+}
+
+function termsOf(rec: Rec): PersonPayTerm[] {
+  const terms = [...rec.terms].sort((a, b) => a.validFrom.localeCompare(b.validFrom));
+  return terms.map((term, index) => {
+    const next = terms.slice(index + 1).find((other) => other.model === term.model);
+    return {
+      id: term.id,
+      modelSlug: term.model,
+      modelName: MODEL_NAMES[term.model] ?? term.model,
+      validFrom: term.validFrom,
+      validTo: next ? dayBefore(next.validFrom) : null,
+      shareBasisPoints: term.share,
+      fixPerShiftMills: term.fix,
+      note: term.note,
+      updatedAt: term.updatedAt,
+    };
+  });
+}
+
+function cardOf(rec: Rec, reg: Registry, now: Date): AdminPerson {
+  return {
+    person: personOf(rec, reg, now),
+    scheduleSlots: rec.slots.map((slot) => slotView(rec, slot)),
+    payTerms: termsOf(rec),
+    proposals: reg.proposals.filter((one) => one.personCode === rec.code),
     serverNow: iso(now),
   };
 }
 
-function specOf(request: DemoRequest): PersonSpec | undefined {
-  return PEOPLE.find((spec) => spec.code === request.params.code);
+// ── the writes, with the service's own checks ────────────────────────────────
+
+function dayBefore(day: string): string {
+  const [year, month, date] = day.split("-").map(Number);
+  return new Date(Date.UTC(year!, month! - 1, date! - 1)).toISOString().slice(0, 10);
+}
+
+/** A change of the person, as the service's edit (people/index.ts `resolveChange` + `applyChange`); an error is the service's refusal. */
+function applyUpdate(rec: Rec, body: AdminPersonUpdateBody, now: Date): DemoReply | null {
+  if (body.workingPageLabels) {
+    const missing = body.workingPageLabels.filter((label) => !DEMO_PAGES.some((page) => page.label === label));
+    if (missing.length > 0) return demoError(404, "Not Found", `No active page ${missing.map((label) => `«${label}»`).join(", ")}`);
+  }
+  if (body.schedule) {
+    const { from, slot } = body.schedule;
+    const page = body.schedule.pageLabel ?? null;
+    if (slot) {
+      const length = (minute(slot.end) - minute(slot.start) + 1440) % 1440;
+      if (length < 60 || length > 16 * 60) return demoError(400, "Bad Request", `A shift lasts 1 to 16 hours: ${slot.start}-${slot.end} does not`);
+    }
+    const line = rec.slots.filter((one) => one.page === page);
+    const latest = line.at(-1);
+    if (from === null && latest) return demoError(400, "Bad Request", "The person has a schedule: give the day the change begins");
+    if (from !== null && latest?.validFrom != null && latest.validFrom > from) {
+      return demoError(400, "Bad Request", `The schedule has a slot from ${latest.validFrom}: a change begins after it`);
+    }
+    if (from !== null && latest?.validFrom === from && slot === null) {
+      return demoError(400, "Bad Request", `A slot begins on ${from}: give the slot itself, or another day`);
+    }
+    if (latest && from !== null && latest.validFrom === from && slot) {
+      Object.assign(latest, { start: slot.start, end: slot.end, weekdays: slot.weekdays ?? null });
+    } else {
+      if (latest && from !== null && (latest.validTo === null || latest.validTo >= from)) latest.validTo = dayBefore(from);
+      if (slot) {
+        rec.slots.push({ id: rec.id * 10 + rec.slots.length + 100, page, start: slot.start, end: slot.end, weekdays: slot.weekdays ?? null, validFrom: from, validTo: null });
+      }
+    }
+  }
+  if (body.displayName !== undefined) rec.name = body.displayName.trim();
+  if (body.role !== undefined) rec.role = body.role;
+  if (body.state !== undefined) rec.state = body.state;
+  if (body.leftOn !== undefined) rec.leftOn = body.leftOn;
+  else if (rec.state !== "left") rec.leftOn = null;
+  if (body.telegram) {
+    const { userId, handle, reportTag } = body.telegram;
+    rec.telegram = {
+      userId: userId === undefined ? rec.telegram.userId : userId,
+      handle: handle === undefined ? rec.telegram.handle : handle === null ? null : handle.replace(/^@/, ""),
+      reportTag: reportTag === undefined ? rec.telegram.reportTag : reportTag,
+    };
+  }
+  if (body.workingPageLabels) rec.pages = [...body.workingPageLabels];
+  if (body.rights) rec.rights = [...new Set(body.rights)].map((right) => rec.rights.find((one) => one.right === right) ?? { right, grantedAt: iso(now) });
+  if (body.note !== undefined) rec.note = body.note === null || body.note.trim() === "" ? null : body.note.trim();
+  rec.updatedAt = iso(now);
+  return null;
+}
+
+function setTerm(rec: Rec, body: AdminPersonPayTermBody, now: Date): DemoReply | null {
+  if (rec.kind !== "human") return demoError(400, "Bad Request", `Only a human has pay terms, not a ${rec.kind}`);
+  const model = DEMO_MODELS.find((one) => one.slug === body.modelSlug);
+  if (!model) return demoError(404, "Not Found", `No model «${body.modelSlug}»`);
+  const same = rec.terms.find((term) => term.model === model.slug && term.validFrom === body.validFrom);
+  const values = { share: body.shareBasisPoints, fix: body.fixPerShiftMills, note: body.note?.trim() || null, updatedAt: iso(now) };
+  if (same) Object.assign(same, values);
+  else rec.terms.push({ id: rec.id * 10 + rec.terms.length + 100, model: model.slug, validFrom: body.validFrom, ...values });
+  rec.updatedAt = iso(now);
+  return null;
+}
+
+function specOf(request: DemoRequest): Rec | undefined {
+  return world(request.now).people.find((rec) => rec.code === request.params.code);
 }
 
 export const peopleHandlers: DemoHandlers = {
   teamPeople: (request) => {
     if (request.role === "chatter") return demoError(403, "Forbidden", "Список людей — для владельца и тимлидов");
+    const reg = world(request.now);
     return {
-      people: PEOPLE.map((spec) => personOf(spec, request.now)),
+      people: [...reg.people].sort((a, b) => a.name.localeCompare(b.name, "ru")).map((rec) => personOf(rec, reg, request.now)),
       unlinkedLogins: [],
       serverNow: iso(request.now),
     };
@@ -226,75 +451,119 @@ export const peopleHandlers: DemoHandlers = {
   adminPerson: (request) => {
     const refused = ownerOnly(request);
     if (refused) return refused;
-    const spec = specOf(request);
-    return spec ? cardOf(spec, request.now) : demoError(404, "Not Found", `No person «${request.params.code}»`);
+    const rec = specOf(request);
+    return rec ? cardOf(rec, world(request.now), request.now) : demoError(404, "Not Found", `No person «${request.params.code}»`);
   },
 
   adminPersonCreate: (request) => {
     const refused = ownerOnly(request);
     if (refused) return refused;
-    const body = (request.body ?? {}) as { code?: string; displayName?: string; role?: Person["role"]; invite?: { username?: string } };
-    if (PEOPLE.some((spec) => spec.code === body.code)) return demoError(409, "Conflict", "Another person has this code");
-    const spec: PersonSpec = {
-      id: 99, code: body.code ?? "new", name: body.displayName ?? "Новый человек", kind: "human", role: body.role ?? "chatter",
-      state: "invited", logins: [], pages: [], slots: [],
-    };
-    const card = cardOf(spec, request.now);
+    const reg = world(request.now);
+    const body = (request.body ?? {}) as AdminPersonCreateBody;
+    if (reg.people.some((rec) => rec.code === body.code)) return demoError(409, "Conflict", "Another person has this code");
     const username = body.invite?.username;
-    return {
-      ...card,
-      invite: username
-        ? { userId: 99, username, link: { id: 99, keyPrefix: "dmoNEW1234", token: "demo-invite-token-not-real", expiresAt: iso(daysAgo(request.now, -7)) } }
-        : null,
+    if (username && [...teamUsers(), ...reg.logins].some((user) => user.username.toLowerCase() === username.toLowerCase())) {
+      return demoError(409, "Conflict", "Username already exists");
+    }
+    const id = reg.nextId;
+    const rec: Rec = {
+      id, code: body.code, name: body.displayName.trim(), kind: body.kind ?? "human", role: body.role, state: body.state ?? "invited",
+      leftOn: null, logins: [], keys: [], pages: [], slots: [], telegram: { userId: null, handle: null, reportTag: null }, rights: [],
+      note: null, notes: [], origin: "owner", onboarding: [], terms: [], createdAt: iso(request.now), updatedAt: iso(request.now),
     };
+    const failed = applyUpdate(rec, {
+      ...(body.telegram ? { telegram: body.telegram } : {}),
+      ...(body.workingPageLabels ? { workingPageLabels: body.workingPageLabels } : {}),
+      ...(body.schedule ? { schedule: body.schedule } : {}),
+      ...(body.rights ? { rights: body.rights } : {}),
+      ...(body.note !== undefined ? { note: body.note } : {}),
+    }, request.now);
+    if (failed) return failed;
+    for (const term of body.payTerms ?? []) {
+      const refusedTerm = setTerm(rec, term, request.now);
+      if (refusedTerm) return refusedTerm;
+    }
+    let invite: KernelOperationResponse<"adminPersonCreate">["invite"] = null;
+    if (username) {
+      const login: NewLogin = { id: id + 1000, username, role: body.invite?.role ?? "chatter" };
+      reg.logins.push(login);
+      rec.logins.push(login.id);
+      const hours = body.invite?.expiresInHours ?? 168;
+      invite = { userId: login.id, username, link: { id: id + 2000, keyPrefix: "dmoNEW1234", token: "demo-invite-token-not-real", expiresAt: iso(hoursAgo(request.now, -hours)) } };
+    }
+    reg.nextId += 1;
+    reg.people.push(rec);
+    return { ...cardOf(rec, reg, request.now), invite };
   },
 
   adminPersonUpdate: (request) => {
     const refused = ownerOnly(request);
     if (refused) return refused;
-    const spec = specOf(request);
-    if (!spec) return demoError(404, "Not Found", `No person «${request.params.code}»`);
-    const body = (request.body ?? {}) as { displayName?: string; state?: Person["state"]; workingPageLabels?: string[] };
-    const card = cardOf({
-      ...spec,
-      ...(body.displayName === undefined ? {} : { name: body.displayName }),
-      ...(body.state === undefined ? {} : { state: body.state }),
-      ...(body.workingPageLabels === undefined ? {} : { pages: body.workingPageLabels }),
-    }, request.now);
-    return card;
+    const rec = specOf(request);
+    if (!rec) return demoError(404, "Not Found", `No person «${request.params.code}»`);
+    const failed = applyUpdate(rec, (request.body ?? {}) as AdminPersonUpdateBody, request.now);
+    return failed ?? cardOf(rec, world(request.now), request.now);
   },
 
   adminPersonPayTermSet: (request) => {
     const refused = ownerOnly(request);
     if (refused) return refused;
-    const spec = specOf(request);
-    if (!spec) return demoError(404, "Not Found", `No person «${request.params.code}»`);
-    if (spec.kind !== "human") return demoError(400, "Bad Request", `Only a human has pay terms, not a ${spec.kind}`);
-    const body = (request.body ?? {}) as { modelSlug?: string; shareBasisPoints?: number; fixPerShiftMills?: number };
-    return cardOf({
-      ...spec,
-      terms: [...(spec.terms ?? []), { model: body.modelSlug ?? "mia-hart", share: body.shareBasisPoints ?? 0, fix: body.fixPerShiftMills ?? 0, fromDays: 0 }],
-    }, request.now);
+    const rec = specOf(request);
+    if (!rec) return demoError(404, "Not Found", `No person «${request.params.code}»`);
+    const failed = setTerm(rec, (request.body ?? {}) as AdminPersonPayTermBody, request.now);
+    return failed ?? cardOf(rec, world(request.now), request.now);
+  },
+
+  adminPersonImportNoteSettle: (request) => {
+    const refused = ownerOnly(request);
+    if (refused) return refused;
+    const rec = specOf(request);
+    if (!rec) return demoError(404, "Not Found", `No person «${request.params.code}»`);
+    const body = (request.body ?? {}) as AdminPersonImportNoteSettleBody;
+    const note = rec.notes[body.index];
+    if (!note || note.code !== body.code) return demoError(409, "Conflict", "The person's import notes are not as read: read them again");
+    rec.notes[body.index] = { ...note, settledAt: body.settled ? iso(request.now) : null };
+    rec.updatedAt = iso(request.now);
+    return cardOf(rec, world(request.now), request.now);
   },
 
   adminPeopleProposals: (request) => {
     const refused = ownerOnly(request);
     if (refused) return refused;
     const state = queryString(request, "state") ?? "open";
-    return { proposals: proposalsOf(request.now).filter((one) => one.state === state) };
+    return { proposals: world(request.now).proposals.filter((one) => one.state === state) };
   },
 
   adminPersonProposalDecide: (request) => {
     const refused = ownerOnly(request);
     if (refused) return refused;
-    const proposal = proposalsOf(request.now).find((one) => one.id === Number(request.params.proposalId));
+    const reg = world(request.now);
+    const index = reg.proposals.findIndex((one) => one.id === Number(request.params.proposalId));
+    const proposal = reg.proposals[index];
     if (!proposal) return demoError(404, "Not Found", "No proposal");
     if (proposal.state !== "open") return demoError(409, "Conflict", `The proposal is ${proposal.state} already`);
-    const decision = (request.body as { decision?: string } | null)?.decision === "reject" ? "rejected" as const : "accepted" as const;
-    const spec = PEOPLE.find((one) => one.code === proposal.personCode);
-    return {
-      proposal: { ...proposal, state: decision, decidedAt: iso(request.now), decisionNote: null },
-      person: spec ? personOf(spec, request.now) : null,
-    };
+    const body = (request.body ?? {}) as { decision?: string; note?: string };
+    const accept = body.decision !== "reject";
+    let rec = reg.people.find((one) => one.code === proposal.personCode);
+    if (accept) {
+      const change = proposal.change as { kind: string; change?: AdminPersonUpdateBody; person?: AdminPersonCreateBody };
+      if (change.kind === "update" && rec && change.change) {
+        const failed = applyUpdate(rec, change.change, request.now);
+        if (failed) return demoError(409, "Conflict", "The change no longer applies");
+      } else if (change.kind === "create" && change.person) {
+        const person = change.person;
+        rec = {
+          id: reg.nextId, code: person.code, name: person.displayName, kind: person.kind ?? "human", role: person.role, state: person.state ?? "invited",
+          leftOn: null, logins: [], keys: [], pages: [], slots: [], telegram: { userId: null, handle: null, reportTag: null }, rights: [],
+          note: null, notes: [], origin: "proposal", onboarding: [], terms: [], createdAt: iso(request.now), updatedAt: iso(request.now),
+        };
+        applyUpdate(rec, { ...(person.telegram ? { telegram: person.telegram } : {}), ...(person.workingPageLabels ? { workingPageLabels: person.workingPageLabels } : {}) }, request.now);
+        reg.nextId += 1;
+        reg.people.push(rec);
+      }
+    }
+    const decided: PersonProposal = { ...proposal, state: accept ? "accepted" : "rejected", decidedAt: iso(request.now), decisionNote: body.note?.trim() || null };
+    reg.proposals[index] = decided;
+    return { proposal: decided, person: rec && (accept || proposal.kind === "update") ? personOf(rec, reg, request.now) : null };
   },
 };

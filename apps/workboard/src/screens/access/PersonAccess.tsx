@@ -127,7 +127,7 @@ function PersonAccessBody({ user, variant, meId, onChanged, onDeleted, onEditInM
       actionPlacement="below"
       action={<Button variant="primary" size="sm" icon={RotateCcw} onClick={() => ask({ kind: "reactivate" })}>Восстановить доступ</Button>}
     >
-      Логин и история сохранены — восстановите доступ, если возвращается тот же человек.
+      Логин и история сохранены: восстановите доступ, если возвращается тот же человек.
     </Notice>
   ) : status === "invited" ? (
     // The invite's two ways on, side by side (З3): send it again, or call it off. The link itself only says how long it lives.
@@ -213,7 +213,7 @@ function PagesBlock({ user, variant, pageAccess, onEditInMatrix }: {
     // Hub gives the owner no page filter: ticks would change nothing (D11).
     return (
       <Block title="Страницы" variant={variant}>
-        <p className="access-text">Владелец видит все страницы — назначать их не нужно.</p>
+        <p className="access-text">Владелец видит все страницы, назначать их не нужно.</p>
       </Block>
     );
   }
@@ -300,7 +300,7 @@ function LinksBlock({ user, variant, onAsk }: { user: AdminUser; variant: "page"
       {links.isLoading && !links.data && <SkeletonText lines={2} />}
       {links.data && active.length === 0 && !disabled && (
         <p className="access-text">
-          {status === "invited" ? "Действующей ссылки нет: отправьте приглашение заново." : status === "active" ? "Действующих ссылок нет. Пароль задан — человек входит сам." : "Действующих ссылок нет."}
+          {status === "invited" ? "Действующей ссылки нет: отправьте приглашение заново." : status === "active" ? "Действующих ссылок нет. Пароль задан: человек входит сам." : "Действующих ссылок нет."}
         </p>
       )}
       {active.length > 0 && (
@@ -428,7 +428,7 @@ function EndBlock({ user, variant, canDelete, busy, onAsk }: { user: AdminUser; 
     <Block title={disabled || status === "invited" ? "Аккаунт" : "Закрыть доступ"} variant={variant}>
       {owner && (
         <p className="access-text">
-          Владельца нельзя деактивировать и нельзя завершить все его входы — иначе консоль осталась бы без хозяина. Пароль владелец меняет сам.
+          Владельца нельзя деактивировать и нельзя завершить все его входы: иначе консоль осталась бы без хозяина. Пароль владелец меняет сам.
         </p>
       )}
       {/* An invite is called off in its notice above (З3): here only the account itself. */}
@@ -503,7 +503,7 @@ function Question({ asking, user, createLink, onClose, onLink, onChanged, onDele
     switch (asking.kind) {
       case "revokeAllDevices":
         return {
-          title: `${REVOCATION_LABEL.allDevices} — ${name}?`,
+          title: `${REVOCATION_LABEL.allDevices}: ${name}?`,
           message: "Расширение и приложение на всех устройствах перестанут работать и попросят войти заново. Вход в консоль и пароль не затрагиваются.",
           confirmLabel: "Отозвать",
           pending: revokeAllDevices.isPending,
@@ -514,7 +514,7 @@ function Question({ asking, user, createLink, onClose, onLink, onChanged, onDele
         };
       case "terminateAccess":
         return {
-          title: `${REVOCATION_LABEL.allAccess} — ${name}?`,
+          title: `${REVOCATION_LABEL.allAccess}: ${name}?`,
           message: "Завершатся входы на всех устройствах, вход в консоль и все действующие ссылки. Человек останется в команде и сможет войти заново со своим паролем.",
           confirmLabel: "Завершить",
           pending: terminateAccess.isPending,
@@ -528,8 +528,8 @@ function Question({ asking, user, createLink, onClose, onLink, onChanged, onDele
         return {
           title: asking.kind === "cancelInvite" ? `Отменить приглашение ${name}?` : `Отключить доступ ${name}?`,
           message: asking.kind === "cancelInvite"
-            ? "Ссылка-приглашение перестанет работать, человек перейдёт в «Отключённые». Логин (он останется занят), роль и страницы сохранятся — доступ можно будет восстановить."
-            : "Все входы и ссылки перестанут работать, сотрудник перейдёт в «Отключённые». Логин (он останется занят), история, роль и страницы сохранятся — доступ можно будет восстановить.",
+            ? "Ссылка-приглашение перестанет работать. Логин (он останется занят), роль и страницы сохранятся: доступ можно будет восстановить."
+            : "Все входы и ссылки перестанут работать. Логин (он останется занят), история, роль и страницы сохранятся: доступ можно будет восстановить.",
           confirmLabel: asking.kind === "cancelInvite" ? "Отменить приглашение" : "Отключить доступ",
           pending: deactivate.isPending,
           run: async () => {
@@ -553,7 +553,7 @@ function Question({ asking, user, createLink, onClose, onLink, onChanged, onDele
         };
       case "device":
         return {
-          title: `${REVOCATION_LABEL.device} — ${name}?`,
+          title: `${REVOCATION_LABEL.device}: ${name}?`,
           message: `Расширение или приложение на этом устройстве у ${name} попросит войти заново. Другие устройства, консоль и пароль не затрагиваются.`,
           facts: [
             { label: "Кого", value: name },
@@ -568,7 +568,7 @@ function Question({ asking, user, createLink, onClose, onLink, onChanged, onDele
         };
       case "link":
         return {
-          title: `Отозвать ссылку — ${name}?`,
+          title: `Отозвать ссылку: ${name}?`,
           message: user.registrationState === "invited"
             ? "Ссылка перестанет открываться. Пароль ещё не задан: войти человек не сможет, пока вы не создадите новое приглашение."
             : "Ссылка перестанет открываться. Пароль и входы на устройствах не затрагиваются.",
@@ -586,7 +586,7 @@ function Question({ asking, user, createLink, onClose, onLink, onChanged, onDele
           message: "Новая ссылка отменяет прежнюю. Когда человек задаст пароль, все прежние входы завершатся.",
           facts: [
             { label: "Кому", value: name },
-            { label: "Что дальше", value: "Hub создаст ссылку и покажет её один раз — с готовым сообщением для Telegram." },
+            { label: "Что дальше", value: "Hub создаст ссылку и покажет её один раз, с готовым сообщением для Telegram." },
           ],
           confirmLabel: asking.linkKind === "invite" ? "Создать приглашение" : "Создать ссылку",
           tone: "primary" as const,
@@ -666,7 +666,7 @@ function DeleteQuestion({ user, onClose, onDeleted }: { user: AdminUser; onClose
       )}
     >
       <p className="ui-modal__text">
-        Все его входы, ссылки и доступ к страницам будут отозваны, аккаунт удалится без возможности восстановления. Логин освободится — новый
+        Все его входы, ссылки и доступ к страницам будут отозваны, аккаунт удалится без возможности восстановления. Логин освободится: новый
         сотрудник с этим логином получит отдельный аккаунт, а история работы и финансовые записи останутся за прежним сотрудником.
       </p>
       <div className="ui-field">

@@ -27,13 +27,29 @@ function HomeRedirect() {
 }
 
 /**
- * `/people/:userId/shifts` is Работа now (D2: the shift table lives there): the
+ * `/people/:ref/shifts` is Работа now (D2: the shift table lives there): the
  * same person, period and page, and the same «←».
  */
 function PersonShiftsRedirect() {
   const location = useLocation();
-  const { userId } = useParams();
-  return <Navigate to={{ pathname: `/people/${userId ?? ""}`, search: location.search, hash: location.hash }} state={location.state as unknown} replace />;
+  const { ref } = useParams();
+  return <Navigate to={{ pathname: `/people/${ref ?? ""}`, search: location.search, hash: location.hash }} state={location.state as unknown} replace />;
+}
+
+/**
+ * «Доступ» is inside «Люди» now: a person's logins, pages, devices and links
+ * are the card's «Доступ и входы», the invitation is «Люди → Пригласить».
+ * `/access` opens the list; `/access?person=<login>` that login's person on
+ * «Доступ и входы»; the period and the page go along.
+ */
+function AccessRedirect() {
+  const location = useLocation();
+  const search = new URLSearchParams(location.search);
+  const person = search.get("person");
+  search.delete("person");
+  const query = search.toString();
+  const pathname = person && /^\d+$/.test(person) ? `/people/${person}/access` : "/people";
+  return <Navigate to={{ pathname, search: query ? `?${query}` : "" }} replace />;
 }
 
 /**
@@ -54,8 +70,9 @@ function SalesRedirect() {
 /**
  * The team's screens, the owner's and team leads' (spec §3–4), one folder per
  * group under src/screens/, each loaded on first visit. Deep pages: Разбор
- * смены `/shifts/:userId/:shiftStart`, Человек `/people/:userId[/sales|access]`
- * (`/shifts` redirects to Работа).
+ * смены `/shifts/:userId/:shiftStart`, Человек `/people/:ref[/sales|access|schedule]`
+ * — a person's code, or a login's number that lands on its person (`/shifts`
+ * redirects to Работа).
  */
 const teamScreens: RouteObject[] = [
   { path: "shifts", lazy: () => import("../screens/shifts/index.js").then((m) => ({ Component: m.ShiftsScreen })) },
@@ -65,17 +82,17 @@ const teamScreens: RouteObject[] = [
     lazy: () => import("../screens/review/index.js").then((m) => ({ Component: m.ReviewScreen })),
   },
   { path: "people", lazy: () => import("../screens/people/index.js").then((m) => ({ Component: m.PeopleScreen })) },
-  { path: "people/:userId/shifts", element: <PersonShiftsRedirect /> },
+  { path: "people/:ref/shifts", element: <PersonShiftsRedirect /> },
   {
-    path: "people/:userId/:tab?",
-    handle: { screenKey: (params) => params.userId ?? "" } satisfies ScreenHandle,
+    path: "people/:ref/:tab?",
+    handle: { screenKey: (params) => params.ref ?? "" } satisfies ScreenHandle,
     lazy: () => import("../screens/people/index.js").then((m) => ({ Component: m.PersonScreen })),
   },
   { path: "sales", element: <SalesRedirect /> },
   { path: "sales/:tab", lazy: () => import("../screens/sales/index.js").then((m) => ({ Component: m.SalesScreen })) },
   { path: "decisions", lazy: () => import("../screens/decisions/index.js").then((m) => ({ Component: m.DecisionsScreen })) },
   { path: "payouts", lazy: () => import("../screens/payouts/index.js").then((m) => ({ Component: m.PayoutsScreen })) },
-  { path: "access", lazy: () => import("../screens/access/index.js").then((m) => ({ Component: m.AccessScreen })) },
+  { path: "access", element: <AccessRedirect /> },
 ];
 
 /** A chatter's own part of Workboard (owner, 2026-11-10): their shifts with their reports, sales only — no pay, nobody else's. */

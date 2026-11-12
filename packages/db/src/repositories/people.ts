@@ -54,6 +54,9 @@ export interface PersonOnboardingStepRow {
 export interface PersonImportNoteRow {
   code: string;
   text: string;
+  /** The owner's «Сверено» (ISO); absent or null — not yet. */
+  settledAt?: string | null;
+  settledByUserId?: number | null;
 }
 
 export interface PersonRow {
@@ -202,7 +205,14 @@ export interface PersonLoginRow {
   disabledAt: Date | null;
   deletedAt: Date | null;
   updatedAt: Date;
+  /** The latest use of the login: a device token's or a web session's, whichever is later; null — never. */
+  lastSeenAt: Date | null;
 }
+
+/** A login's latest use: its device tokens' last use and its web sessions' last request (live or ended). */
+const LAST_SEEN = sql`greatest(
+  (select max(d.last_used_at) from device_tokens d where d.user_id = u.id),
+  (select max(s.last_seen_at) from auth_sessions s where s.user_id = u.id)) as last_seen_at`;
 
 function loginOf(row: Row): PersonLoginRow {
   return {
@@ -214,6 +224,7 @@ function loginOf(row: Row): PersonLoginRow {
     disabledAt: nullableDate(row.disabled_at),
     deletedAt: nullableDate(row.deleted_at),
     updatedAt: date(row.updated_at),
+    lastSeenAt: nullableDate(row.last_seen_at),
   };
 }
 
@@ -221,7 +232,7 @@ export async function listPersonLoginRows(db: Database, personIds?: readonly num
   const where = personIds === undefined ? sql`` : sql`where l.person_id = any(${ids(personIds)})`;
   const result = await db.execute<Row>(sql`
     select l.person_id, u.id as user_id, u.username, u.role, (u.password_hash is not null) as has_password, u.disabled_at,
-           u.deleted_at, u.updated_at
+           u.deleted_at, u.updated_at, ${LAST_SEEN}
       from person_logins l join users u on u.id = l.user_id
       ${where}
      order by l.person_id, u.id`);
@@ -232,7 +243,7 @@ export async function listPersonLoginRows(db: Database, personIds?: readonly num
 export async function listUnlinkedLoginRows(db: Database): Promise<PersonLoginRow[]> {
   const result = await db.execute<Row>(sql`
     select null::bigint as person_id, u.id as user_id, u.username, u.role, (u.password_hash is not null) as has_password,
-           u.disabled_at, u.deleted_at, u.updated_at
+           u.disabled_at, u.deleted_at, u.updated_at, ${LAST_SEEN}
       from users u
      where not exists (select 1 from person_logins l where l.user_id = u.id)
      order by u.id`);

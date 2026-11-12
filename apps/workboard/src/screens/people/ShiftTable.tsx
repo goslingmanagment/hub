@@ -90,7 +90,7 @@ export function ShiftTable({ card, userId, canOpen }: { card: PersonCard; userId
       key: "worked",
       header: "Длительность",
       numeric: true,
-      hint: "Время работы без пауз. Если были паузы, их длина — в подсказке у числа.",
+      hint: "Время работы без пауз. Если были паузы, их длина в подсказке у числа.",
       sortValue: (row) => row.workedMinutes,
       cell: (row) => {
         const when = whenOf(row);

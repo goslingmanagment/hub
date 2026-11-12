@@ -25,14 +25,23 @@ function withSearch(path: string, params: URLSearchParams): string {
 }
 
 /**
- * The tabs of Человек (spec §4.4, D2): Работа · Продажи · Доступ. `shifts` is
- * the old Смены tab: its address redirects to Работа (app/routes.tsx).
+ * The tabs of Человек (spec §4.4, D2): Работа · Продажи · Доступ и входы ·
+ * График и условия. `shifts` is the old Смены tab: its address redirects to
+ * Работа (app/routes.tsx).
  */
-export type PersonTab = "work" | "shifts" | "sales" | "access";
+export type PersonTab = "work" | "shifts" | "sales" | "access" | "schedule";
 
-/** `/people/:userId` (the «Работа» tab) or one of its tabs, with the period and page carried. */
+/**
+ * `/people/:userId` (the «Работа» tab) or one of its tabs, with the period and page carried. The address of a login:
+ * it opens the card of the person holding it (`/people/<code>`, screens/people/PersonScreen.tsx).
+ */
 export function personPath(userId: number, search: URLSearchParams | string = "", tab: PersonTab = "work"): string {
   return withSearch(`/people/${userId}${tab === "work" ? "" : `/${tab}`}`, carryParams(search));
+}
+
+/** A person's card by the registry's code, `/people/<code>[/tab]`, with the period and page carried. */
+export function personCodePath(code: string, search: URLSearchParams | string = "", tab: PersonTab = "work"): string {
+  return withSearch(`/people/${encodeURIComponent(code)}${tab === "work" ? "" : `/${tab}`}`, carryParams(search));
 }
 
 /**

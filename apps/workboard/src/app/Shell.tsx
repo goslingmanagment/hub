@@ -1,4 +1,4 @@
-import { ArrowLeft, Banknote, CalendarClock, ChevronsUpDown, Inbox, KeyRound, LogOut, Monitor, Moon, Smartphone, Sun, TrendingUp, Users } from "lucide-react";
+import { ArrowLeft, Banknote, CalendarClock, ChevronsUpDown, Inbox, LogOut, Monitor, Moon, Smartphone, Sun, TrendingUp, Users } from "lucide-react";
 import { Suspense, type ReactNode } from "react";
 import { NavLink, Navigate, Outlet, useLocation, useMatches, type UIMatch } from "react-router";
 import { CountBadge, ErrorState, Menu, Skeleton, Tooltip, type IconComponent, type MenuEntry } from "@agency_hub_core/ui";
@@ -41,9 +41,8 @@ const WORK: readonly NavItem[] = [
   { to: "/payouts", label: "Выплаты", icon: Banknote, roles: OWNER },
 ];
 
-const ADMIN: readonly NavItem[] = [
-  { to: "/access", label: "Доступ", icon: KeyRound, roles: OWNER },
-];
+/** Under the line, before the way out. «Доступ» lives in «Люди» now (a person's card, «Доступ и входы»). */
+const ADMIN: readonly NavItem[] = [];
 
 /**
  * The way out to the console, for the team (a page load): on this host, or —

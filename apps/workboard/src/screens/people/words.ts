@@ -109,3 +109,60 @@ export function dayWords(day: string): string {
 export function capitalized(text: string): string {
   return text.charAt(0).toUpperCase() + text.slice(1);
 }
+
+// ─────────────────────────────────────────────── The registry's words (registry.ts)
+
+/** The role of a person of the registry, as the owner says it. */
+export const PERSON_ROLE_WORD: Readonly<Record<string, string>> = {
+  owner: "Владелец",
+  team_lead: "Тимлид",
+  chatter: "Чаттер",
+  content_manager: "Контент-менеджер",
+  contractor: "Подрядчик",
+  agent: "Агент",
+  service: "Служебный",
+};
+
+/** The registry's states, the owner's words: приглашён → оформлен → работает → ушёл. */
+export const PERSON_STATE_WORD: Readonly<Record<string, string>> = {
+  invited: "приглашён",
+  set_up: "оформлен",
+  working: "работает",
+  left: "ушёл",
+};
+
+export const WEEKDAY_ORDER = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"] as const;
+export type Weekday = (typeof WEEKDAY_ORDER)[number];
+export const WEEKDAY_WORD: Readonly<Record<Weekday, string>> = { mon: "пн", tue: "вт", wed: "ср", thu: "чт", fri: "пт", sat: "сб", sun: "вс" };
+
+/** «пн–пт», «пн, ср, пт», «пн–ср, сб»; every day — «каждый день»; none given — "". */
+export function weekdaysWords(days: readonly string[] | null | undefined): string {
+  if (!days || days.length === 0) return "";
+  const set = new Set(days);
+  if (WEEKDAY_ORDER.every((day) => set.has(day))) return "каждый день";
+  const runs: Weekday[][] = [];
+  for (const day of WEEKDAY_ORDER) {
+    if (!set.has(day)) continue;
+    const run = runs.at(-1);
+    const previous = WEEKDAY_ORDER[WEEKDAY_ORDER.indexOf(day) - 1];
+    if (run && previous !== undefined && run.at(-1) === previous) run.push(day);
+    else runs.push([day]);
+  }
+  return runs.map((run) => (run.length >= 3 ? `${WEEKDAY_WORD[run[0]!]}–${WEEKDAY_WORD[run.at(-1)!]}` : run.map((day) => WEEKDAY_WORD[day]).join(", "))).join(", ");
+}
+
+/** A slot as the list and the card say it: «08:00–16:00», with its days «пн–пт» when they are set. */
+export function slotWords(slot: { start: string; end: string; weekdays: readonly string[] | null }): { hours: string; days: string } {
+  return { hours: `${slot.start}–${slot.end}`, days: weekdaysWords(slot.weekdays) };
+}
+
+const LATIN: Readonly<Record<string, string>> = {
+  а: "a", б: "b", в: "v", г: "g", д: "d", е: "e", ё: "e", ж: "zh", з: "z", и: "i", й: "y", к: "k", л: "l", м: "m", н: "n", о: "o",
+  п: "p", р: "r", с: "s", т: "t", у: "u", ф: "f", х: "h", ц: "ts", ч: "ch", ш: "sh", щ: "sch", ъ: "", ы: "y", ь: "", э: "e", ю: "yu", я: "ya",
+};
+
+/** A person's code from the name, as /OS and ledger write them: «Гриша» → «grisha», «Анна К.» → «anna-k». */
+export function codeFromName(name: string): string {
+  const latin = [...name.trim().toLowerCase()].map((letter) => LATIN[letter] ?? letter).join("");
+  return latin.replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 63).replace(/-+$/g, "");
+}

@@ -14,6 +14,7 @@ import {
   PERSON_SLOT_MIN_MINUTES,
   personProposalChangeSchema,
   type AdminPersonCreateBody,
+  type AdminPersonImportNoteSettleBody,
   type AdminPersonPayTermBody,
   type AdminPersonResponse,
   type AdminPersonUpdateBody,
@@ -203,7 +204,13 @@ async function loadParts(db: Db, personIds?: readonly number[]): Promise<PeopleP
 }
 
 function loginView(login: PersonLoginRow): PersonLogin {
-  return { userId: login.userId, username: login.username, role: login.role, state: loginState(login) };
+  return {
+    userId: login.userId,
+    username: login.username,
+    role: login.role,
+    state: loginState(login),
+    lastSeenAt: login.lastSeenAt?.toISOString() ?? null,
+  };
 }
 
 /** The person's line for every page, and each page's own line, as they hold on `today`. */
@@ -240,7 +247,7 @@ function personView(row: PersonRow, parts: PeopleParts, now: Date): Person {
     rights: (parts.rights.get(row.id) ?? []).map((right) => ({ right: right.right, grantedAt: right.grantedAt.toISOString() })),
     onboarding: row.onboarding.map((step) => ({ step: step.step, doneAt: step.doneAt ?? null, note: step.note ?? null })),
     note: row.note,
-    importNotes: row.importNotes,
+    importNotes: row.importNotes.map((note) => ({ code: note.code, text: note.text, settledAt: note.settledAt ?? null })),
     origin: row.origin,
     openProposals: parts.openProposals.get(row.id) ?? 0,
     createdAt: row.createdAt.toISOString(),
@@ -567,9 +574,12 @@ async function createPersonTx(
   origin: PersonRowOrigin,
   importNotes: PersonImportNoteRow[] = [],
 ): Promise<CreatedPerson> {
-  const { code, kind: givenKind, invite, ...fields } = body;
+  const { code, kind: givenKind, invite, payTerms, ...fields } = body;
   const kind = givenKind ?? "human";
   if (invite && kind !== "human") throw new BadRequestError("Only a human is invited");
+  if (payTerms && new Set(payTerms.map((term) => `${term.modelSlug.toLowerCase()}\u0000${term.validFrom}`)).size !== payTerms.length) {
+    throw new BadRequestError("A model's pay term from one day is given twice");
+  }
   const state = fields.state ?? "invited";
   const subject: Subject = { id: null, kind, role: fields.role, state, leftOn: null };
   const change = await resolveChange(db, subject, fields);
@@ -596,6 +606,8 @@ async function createPersonTx(
   }
   // The record is written; the rest hangs off it through the same edit.
   row = await applyChange(db, row, { ...change, patch: {} }, audit);
+  // Money, in the same transaction: a refused term (a model that does not exist, not a human) leaves nothing behind.
+  for (const term of payTerms ?? []) row = await setPayTermTx(db, row, term, audit);
   let created: CreatedPerson["invite"] = null;
   if (invite) {
     // createInvite runs in a savepoint of this transaction: a taken login rolls the person back too.
@@ -679,6 +691,39 @@ export async function setPersonPayTerm(app: Pick<AppContext, "db">, code: string
   return withAuditTransaction(app, async (db) => {
     const person = await requirePerson(db, code, { lock: true });
     return personDetail(db, await setPayTermTx(db, person, body, audit), now);
+  });
+}
+
+/**
+ * «Сверено» on one of the person's import notes, or taken back: the owner looked into what the import found. The note is
+ * named by its place and its code, so a list read before another change is never marked by mistake (409).
+ */
+export async function settlePersonImportNote(
+  app: Pick<AppContext, "db">,
+  code: string,
+  body: AdminPersonImportNoteSettleBody,
+  audit: AuditContext,
+  now = new Date(),
+) {
+  return withAuditTransaction(app, async (db) => {
+    const person = await requirePerson(db, code, { lock: true });
+    const note = person.importNotes[body.index];
+    if (!note || note.code !== body.code) {
+      throw new ConflictError("The person's import notes are not as read: read them again", { reason: "import_notes_changed" });
+    }
+    const notes: PersonImportNoteRow[] = person.importNotes.map((one, index) => {
+      if (index !== body.index) return one;
+      return body.settled
+        ? { code: one.code, text: one.text, settledAt: now.toISOString(), settledByUserId: audit.actorUserId ?? null }
+        : { code: one.code, text: one.text };
+    });
+    const updated = await updatePersonRow(db, person.id, { importNotes: notes });
+    await recordAudit({ db }, {
+      ...audit,
+      eventType: "person.import_note_settled",
+      metadata: { code: person.code, note: note.code, index: body.index, settled: body.settled },
+    });
+    return personDetail(db, updated, now);
   });
 }
 
