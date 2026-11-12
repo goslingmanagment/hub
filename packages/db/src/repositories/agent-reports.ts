@@ -70,7 +70,9 @@ function reportOf(row: AgentReportDbRow): AgentReportRow {
 
 const META = sql.raw(
   "r.slug, r.title, r.section, r.team_leads, r.valid_hours, r.version, r.published_at, r.published_by_key_id, "
-  + "k.name as key_name, octet_length(r.body) as bytes",
+  // The page is signed by the agent the key belongs to (the people registry), by the key's own name only while it
+  // belongs to nobody.
+  + "coalesce(ap.display_name, k.name) as key_name, octet_length(r.body) as bytes",
 );
 
 /**
@@ -109,7 +111,9 @@ export async function putAgentReport(db: Database, input: AgentReportPutInput): 
           is not distinct from (r.title, r.section, r.body, r.team_leads, r.valid_hours)
       ) as changed
     from put r
-    left join agent_keys k on k.id = r.published_by_key_id`);
+    left join agent_keys k on k.id = r.published_by_key_id
+    left join person_agent_keys pk on pk.agent_key_id = k.id
+    left join people ap on ap.id = pk.person_id`);
   const row = result.rows[0]!;
   return { report: reportOf(row), changed: row.changed };
 }
@@ -120,6 +124,8 @@ export async function listAgentReports(db: Database, options: { teamLeadsOnly: b
     select ${META}
     from agent_reports r
     left join agent_keys k on k.id = r.published_by_key_id
+    left join person_agent_keys pk on pk.agent_key_id = k.id
+    left join people ap on ap.id = pk.person_id
     where ${options.teamLeadsOnly ? sql`r.team_leads` : sql`true`}
     order by r.published_at desc, r.slug`);
   return result.rows.map(reportOf);
@@ -131,6 +137,8 @@ export async function findAgentReport(db: Database, slug: string): Promise<Agent
     select ${META}, r.body
     from agent_reports r
     left join agent_keys k on k.id = r.published_by_key_id
+    left join person_agent_keys pk on pk.agent_key_id = k.id
+    left join people ap on ap.id = pk.person_id
     where r.slug = ${slug}`);
   const row = result.rows[0];
   return row ? { ...reportOf(row), body: row.body ?? "" } : null;
