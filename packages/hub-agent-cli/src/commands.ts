@@ -1301,6 +1301,172 @@ function albumTitle(values: HubOptionValues): string {
   return title;
 }
 
+// --- an OnlyFans vault album's price before «да» (vault-album-draft, 8-docs 2026-11-12-of-vault-album) ---
+
+type VaultAlbumQuote = KernelOperationResponse<"agentVaultAlbumQuote">;
+
+/** How long the draft waits for a walk of the page's albums Hub asked for, and how often it asks again meanwhile. */
+export const VAULT_WALK_WAIT_MS = 3 * 60_000;
+export const VAULT_WALK_POLL_MS = 20_000;
+
+function readAlbumRef(values: HubOptionValues): string | null {
+  const ref = readString(values, "album-ref")?.trim();
+  if (ref === undefined) return null;
+  if (!/^[0-9A-Za-z_-]{1,64}$/.test(ref)) throw new HubUsageError(`--album-ref is an album id as the dry run printed it, got "${ref}"`);
+  return ref;
+}
+
+function readMaxCredits(values: HubOptionValues): number | null {
+  const credits = readNumber(values, "max-credits");
+  if (credits === undefined) return null;
+  if (!Number.isSafeInteger(credits) || credits < 0) throw new HubUsageError(`--max-credits is a whole number of credits, got "${String(credits)}"`);
+  return credits;
+}
+
+/** A stand-in hash for a file whose bytes are not read (yet, or ever: over the link limit); it matches nothing in Hub. */
+function unreadSha256(index: number, item: HubUploadItem): string {
+  return createHash("sha256").update(`unread\u0000${index}\u0000${item.name}\u0000${item.byteSize}`).digest("hex");
+}
+
+/** The quote of these files, in the folder's order; every call counted. */
+function vaultQuoter(client: KernelClient, pageLabel: string, title: string, albumRef: string | null, count: () => void) {
+  return (files: readonly HubHashedItem[]): Promise<VaultAlbumQuote> => {
+    count();
+    return client.agentVaultAlbumQuote({
+      params: { pageLabel },
+      body: {
+        title,
+        ...(albumRef === null ? {} : { albumRef }),
+        files: files.map((file) => ({ sha256: file.sha256, byteSize: file.byteSize, name: file.name.slice(0, 255) })),
+      },
+    });
+  };
+}
+
+/** A file's marks in the album list: its credits, already on the page, over the link limit. */
+function vaultQuoteFileMarks(file: VaultAlbumQuote["files"][number] | undefined): Record<string, unknown> {
+  if (file === undefined) return {};
+  return { credits: file.credits, ...(file.onPage ? { onPage: true } : {}), ...(file.tooBig ? { tooBig: true } : {}) };
+}
+
+type VaultQuoteSummary = ReturnType<typeof vaultQuoteSummary>;
+
+/** What a person must hear before «да», from the quote alone: no number here is the CLI's own. */
+function vaultQuoteSummary(quote: VaultAlbumQuote, items: readonly HubUploadItem[]) {
+  const named = (position: number) => ({ position: position + 1, name: items[position]?.name ?? `#${position + 1}` });
+  const account = quote.account;
+  return {
+    price: { credits: quote.credits, usd: quote.usd },
+    /** The albums' day: ceiling, spent, left; the last balance Hub read (null: never read). */
+    account: account === null ? null : {
+      dailyCredits: account.dailyCredits, spentToday: account.spentToday, left: account.left, balance: account.balance,
+      fitsToday: quote.credits <= account.left,
+    },
+    albumFound: {
+      kind: quote.album.kind,
+      albumRef: quote.album.albumRef,
+      mediaCount: quote.album.mediaCount,
+      similar: quote.album.similar,
+      knownAt: quote.album.knownAt,
+      /** Hub is still reading the page's albums: a look-alike or the album itself may yet turn up. */
+      walkPending: quote.album.walkRequested && quote.album.kind !== "found",
+    },
+    /** Over the link limit: not uploaded, not drafted, added by hand after the album — they land on top. */
+    byHand: quote.files.filter((file) => file.tooBig).map((file) => ({ ...named(file.position), size: formatHubBytes(file.byteSize) })),
+    linkMax: quote.linkMaxBytes === null ? null : formatHubBytes(quote.linkMaxBytes),
+    /** Hub uploaded these bytes to the page before: not paid, they keep their old place by date. */
+    onPage: quote.files.filter((file) => file.onPage).map((file) => named(file.position)),
+    /** The album's order top first when it will not be the folder's; null: the folder's. */
+    expectedOrder: quote.expectedOrder === null ? null : quote.expectedOrder.map((position, place) => ({ place: place + 1, ...named(position) })),
+    sending: quote.sending,
+  };
+}
+
+/** The dry run's last word for an OnlyFans page: what goes into the one question. */
+function vaultQuoteNext(priced: VaultQuoteSummary, inHub: number): string {
+  const { albumFound: album } = priced;
+  const parts = ["Nothing uploaded or drafted. Into the one question to the owner (several pages: one question, each page's price and the sum):"
+    + " the order (position 1 on top), the count and size" + (inHub > 0 ? ` (${inHub} files are in Hub already)` : "")
+    + `; the price ${priced.price.credits} credits ≈ $${priced.price.usd}`
+    + (priced.account === null ? "" : `; left today ${priced.account.left} of ${priced.account.dailyCredits}, balance ${priced.account.balance ?? "unknown"}`)];
+  if (album.kind === "found") parts.push(`the album is the page's ${album.albumRef} (${album.mediaCount ?? "?"} files)`);
+  if (album.kind === "new") parts.push("the album is new");
+  if (album.kind === "similar") {
+    parts.push("no album has exactly this title, these are alike (albumFound.similar): ask «в него?» — yes: --album-ref <its albumRef>; a new one on purpose: --new-album");
+  }
+  if (album.walkPending) parts.push("Hub is still reading the page's albums: run --dry-run again in a few minutes before asking");
+  if (priced.byHand.length > 0) parts.push(`${priced.byHand.length} files over ${priced.linkMax} do not go (byHand): added by hand after the album, they land on top`);
+  if (priced.onPage.length > 0) parts.push(`${priced.onPage.length} files Hub uploaded to the page before (onPage): not paid, they keep their old place`);
+  if (priced.expectedOrder !== null) parts.push("the order will NOT be the folder's: say so and show expectedOrder");
+  if (!priced.sending.on) parts.push(`sending is held now (${priced.sending.why}): the ceiling and the balance are the owner's`);
+  if (priced.account !== null && !priced.account.fitsToday) parts.push("the price is over what is left today: the album waits for the day's room, or the owner raises the ceiling");
+  parts.push(`On «да»: the same command without --dry-run, with --max-credits ${priced.price.credits}`);
+  return `${parts.join("; ")}.`;
+}
+
+/** Why the real run stops before any byte goes to Hub; null: it goes on. */
+export function vaultQuoteStop(
+  priced: Pick<VaultQuoteSummary, "albumFound" | "price">,
+  given: { albumRef: string | null; newAlbum: boolean; maxCredits: number; filesToSend: number },
+): { code: string; next: string } | null {
+  const chosen = given.albumRef !== null || given.newAlbum;
+  if (priced.albumFound.kind === "similar" && !chosen) {
+    return {
+      code: "album_title_similar",
+      next: "Nothing uploaded or drafted: the page has no album with exactly this title, but these are alike (albumFound.similar)."
+        + " Ask the person «в него?»: yes — run again with --album-ref <its albumRef>; a new album on purpose — with --new-album.",
+    };
+  }
+  if (priced.albumFound.walkPending && !chosen) {
+    return {
+      code: "album_list_not_read",
+      next: "Nothing uploaded or drafted: Hub is still reading the page's albums, so an album like this one may be there."
+        + " Run the same command again in a few minutes; or, on the person's word, name the album (--album-ref) or say it is new (--new-album).",
+    };
+  }
+  if (priced.price.credits > given.maxCredits) {
+    return {
+      code: "price_over_max_credits",
+      next: `Nothing uploaded or drafted: the album now costs ${priced.price.credits} credits, over --max-credits ${given.maxCredits}`
+        + " the person agreed to. Name the new price and ask again.",
+    };
+  }
+  if (given.filesToSend === 0) {
+    return {
+      code: "every_file_by_hand",
+      next: "Nothing uploaded or drafted: every file is over the link limit (byHand), so they are all added by hand.",
+    };
+  }
+  return null;
+}
+
+/**
+ * An OnlyFans album's run in one line, for `publication-get`'s note: the step,
+ * done of all, the file going up now, credits spent of the price, and the files
+ * that did not land by group. Null: not an OnlyFans album.
+ */
+export function albumRunLine(run: KernelOperationResponse<"agentPublicationGet">["albumRun"] | null): string | null {
+  if (run === null || run === undefined) return null;
+  const step = run.step === null ? "not started" : run.step === "done" ? "done" : `step ${run.step}`;
+  const landed = run.done + run.reused;
+  const parts = [`Album ${step}: ${landed} of ${run.files} files in (${run.done} uploaded, ${run.reused} taken without paying)`];
+  if (run.currentFile !== null) parts.push(`now ${run.currentFile}`);
+  parts.push(`credits ${run.spentCredits} spent of ${run.estimateCredits}`);
+  const group = (state: string) => run.fileList.filter((file) => file.state === state).map((file) => file.name);
+  const groups: Array<[string, string[]]> = [
+    ["refused (a re-send pays only for them)", group("failed")],
+    ["outcome unknown (never re-sent without a person looking at the vault)", group("unknown")],
+    ["too big (added by hand, they land on top)", group("too_big")],
+    ["not tried", [...group("not_tried"), ...(run.step === "done" ? group("pending") : [])]],
+  ];
+  for (const [label, names] of groups) {
+    if (names.length > 0) parts.push(`${label}: ${names.length} — ${names.slice(0, 20).join(", ")}${names.length > 20 ? ", …" : ""}`);
+  }
+  if (run.stopReason !== null) parts.push(`uploads stopped: ${run.stopReason}`);
+  if (run.account !== null) parts.push(`the albums' day: ${run.account.left} of ${run.account.dailyCredits} left, balance ${run.account.balance ?? "unknown"}`);
+  return `${parts.join("; ")}.`;
+}
+
 /**
  * `vault-album-draft`: the folder read and checked, the page checked, every
  * file's SHA-256 read (twins stop it there, before any upload), Hub asked
@@ -1315,6 +1481,10 @@ async function draftVaultAlbum(client: KernelClient, values: HubOptionValues, de
   const dryRun = readFlag(values, "dry-run");
   const parallel = readParallel(values);
   const givenKey = readIdempotencyKey(values);
+  const albumRef = readAlbumRef(values);
+  const newAlbum = readFlag(values, "new-album");
+  if (albumRef !== null && newAlbum) throw new HubUsageError("--album-ref names the page's album; --new-album says there is none: one of them");
+  const maxCredits = readMaxCredits(values);
   // The draft's shape now, so a bad --publish-at stops the call before the uploads, not after them.
   checkedDraft(agentPublicationCreateBodySchema, {
     kind: "vault_album", text: title, media: [{ source: "file", fileId: 1 }],
@@ -1338,7 +1508,12 @@ async function draftVaultAlbum(client: KernelClient, values: HubOptionValues, de
   }
   // The key's right and the page, before the first byte.
   const targets = await client.agentPublicationTargets({ params: { pageLabel } });
-  if (targets.platform !== "fansly") throw new HubUsageError(`vault albums are Fansly's; ${pageLabel} is an ${targets.platform} page`);
+  const onlyfans = targets.platform === "onlyfans";
+  if (targets.platform !== "fansly" && !onlyfans) throw new HubUsageError(`vault albums are Fansly's and OnlyFans'; ${pageLabel} is a ${targets.platform} page`);
+  if (onlyfans && !dryRun && maxCredits === null) {
+    throw new HubUsageError("an OnlyFans album costs OnlyFansAPI credits: run --dry-run first, name its price to the owner, and on"
+      + " their «да» run this with --max-credits <that price> (the run stops before any byte when the price is higher)");
+  }
 
   const bytes = items.reduce((sum, item) => sum + item.byteSize, 0);
   const photos = items.filter((item) => item.mimeType.startsWith("image/")).length;
@@ -1355,9 +1530,19 @@ async function draftVaultAlbum(client: KernelClient, values: HubOptionValues, de
     skipped: listing.skipped,
   };
 
-  // Twins and the files Hub holds, from the bytes, before any upload.
-  const hashed = await hashedFiles(deps, items);
   let calls = 1;
+  // OnlyFans: the price asked before the files are read, so an old list of the page's albums is walked meanwhile.
+  const quoter = onlyfans ? vaultQuoter(client, pageLabel, title, albumRef, () => { calls += 1; }) : null;
+  const early = quoter === null ? null : await quoter(items.map((item, index) => ({ ...item, sha256: unreadSha256(index, item) })));
+  // A file over the link limit never goes (added by hand): its bytes are not read either.
+  const sendable = (item: HubUploadItem) => early?.linkMaxBytes == null || item.byteSize <= early.linkMaxBytes;
+
+  // Twins and the files Hub holds, from the bytes, before any upload.
+  const hashedSendable = await hashedFiles(deps, items.filter(sendable));
+  const hashed: HubHashedItem[] = [];
+  for (const [index, item] of items.entries()) {
+    hashed.push(sendable(item) ? hashedSendable.shift()! : { ...item, sha256: unreadSha256(index, item) });
+  }
   const duplicates = hubFileTwins(hashed);
   if (duplicates.length > 0) {
     return new HubCompositeResult({
@@ -1368,6 +1553,20 @@ async function draftVaultAlbum(client: KernelClient, values: HubOptionValues, de
     }, duplicates.length, { calls, failed: duplicates.length });
   }
 
+  let quote: VaultAlbumQuote | null = null;
+  if (quoter !== null) {
+    quote = await quoter(hashed);
+    // The page's albums are being walked: the album may yet be found, or a look-alike turn up. Waited for a bounded time.
+    const deadline = deps.now() + VAULT_WALK_WAIT_MS;
+    while (quote.album.walkRequested && quote.album.kind !== "found" && deps.now() < deadline) {
+      deps.progress("hub: Hub is reading the page's albums anew, the album is looked for again in a moment");
+      await deps.sleep(VAULT_WALK_POLL_MS);
+      quote = await quoter(hashed);
+    }
+  }
+  const priced = quote === null ? null : vaultQuoteSummary(quote, hashed);
+  const tooBig = new Set(quote?.files.filter((file) => file.tooBig).map((file) => file.position) ?? []);
+
   if (dryRun) {
     // Asked without keeping anything: a dry run changes nothing in Hub.
     const lookup = hubLookup(client, pageLabel);
@@ -1376,39 +1575,59 @@ async function draftVaultAlbum(client: KernelClient, values: HubOptionValues, de
       found = await hubFilesHeld((files, keep) => {
         calls += 1;
         return lookup(files, keep);
-      }, hashed, false);
+      }, hashed.filter((_item, index) => !tooBig.has(index)), false);
     } catch {
       // An older Hub, or no answer: the real run asks again, and uploads every file when it cannot.
     }
     const held = found;
-    const inHub = held === null ? [] : hashed.filter((item) => held.has(item.sha256));
+    const inHub = held === null ? [] : hashed.filter((item, index) => !tooBig.has(index) && held.has(item.sha256));
     const inHubBytes = inHub.reduce((sum, item) => sum + item.byteSize, 0);
+    const album = plan.album.map((entry, index) => ({
+      ...entry,
+      ...(!tooBig.has(index) && held?.has(hashed[index]!.sha256) ? { inHub: true } : {}),
+      ...(quote === null ? {} : vaultQuoteFileMarks(quote.files[index])),
+    }));
     return new HubCompositeResult({
       dryRun: true,
       ...plan,
-      album: plan.album.map((entry, index) => (held?.has(hashed[index]!.sha256) ? { ...entry, inHub: true } : entry)),
+      album,
       /** null: Hub could not be asked which files it holds. */
       inHub: held === null ? null : { files: inHub.length, bytes: inHubBytes, size: formatHubBytes(inHubBytes) },
-      next: "Nothing uploaded or drafted. Show the owner the order (position 1 is the top of the album), the count and the"
-        + " size" + (inHub.length > 0 ? ` (${inHub.length} of the files are in Hub already, inHub: they do not go up again)` : "")
-        + "; on their word run the same command without --dry-run.",
+      ...(priced ?? {}),
+      next: priced === null
+        ? "Nothing uploaded or drafted. Show the owner the order (position 1 is the top of the album), the count and the"
+          + " size" + (inHub.length > 0 ? ` (${inHub.length} of the files are in Hub already, inHub: they do not go up again)` : "")
+          + "; on their word run the same command without --dry-run."
+        : vaultQuoteNext(priced, inHub.length),
     }, 0, { calls, failed: 0 });
   }
 
+  if (priced !== null) {
+    const stop = vaultQuoteStop(priced, { albumRef, newAlbum, maxCredits: maxCredits!, filesToSend: hashed.length - tooBig.size });
+    if (stop !== null) {
+      return new HubCompositeResult({ ...plan, ...priced, drafted: false, stopped: stop.code, next: stop.next }, 1, { calls, failed: 1 });
+    }
+  }
+  // Files over the link limit stay out of Hub and out of the draft: listed for the person (byHand).
+  const toSend = hashed.filter((_item, index) => !tooBig.has(index));
+  const sentPlan = plan.album.filter((_entry, index) => !tooBig.has(index));
+
   const { outcomes, attempts, lookups } = await sendHubFiles({
-    pageLabel, items: hashed, parallel, upload: deps.upload, lookup: hubLookup(client, pageLabel),
+    pageLabel, items: toSend, parallel, upload: deps.upload, lookup: hubLookup(client, pageLabel),
     sleep: deps.sleep, now: deps.now, progress: deps.progress,
   });
   calls += lookups + attempts;
   const uploads = uploadsOf(outcomes);
-  const album = plan.album.map((entry, index) => ({ ...entry, ...uploadResult(outcomes[index]!, false, false) }));
+  const album = sentPlan.map((entry, index) => ({ ...entry, ...uploadResult(outcomes[index]!, false, false) }));
+  /** What the answers below carry of the price (OnlyFans): the person hears it all again with the draft. */
+  const priceFacts = priced === null ? {} : { price: priced.price, account: priced.account, byHand: priced.byHand, sending: priced.sending };
   if (uploads.failed > 0) {
     // Too large, a type Hub refuses, Hub's room full: sending again changes nothing.
     const refusedByHub = outcomes.some((outcome) => !outcome.ok && "error" in outcome
       && outcome.error instanceof KernelApiError && [413, 415, 507].includes(outcome.error.status ?? 0));
     const inHub = uploads.files - uploads.failed;
     return new HubCompositeResult({
-      ...plan, album, uploads, drafted: false,
+      ...plan, album, uploads, ...priceFacts, drafted: false,
       next: refusedByHub
         ? "Nothing drafted: Hub refused some files (album[].error says why). Tell the owner; once that is dealt with, run"
           + " the same command again: the files in Hub by then do not go up again."
@@ -1422,11 +1641,12 @@ async function draftVaultAlbum(client: KernelClient, values: HubOptionValues, de
   const fileIds = outcomes.map((outcome) => (outcome as HubUploadDone).file.id);
 
   // Each card is named as the pack names its file (0349), whatever name Hub first kept the same bytes under.
-  const names = items.map((item) => item.name.trim().slice(0, 200));
+  const names = toSend.map((item) => item.name.trim().slice(0, 200));
   const body = checkedDraft(agentPublicationCreateBodySchema, {
     kind: "vault_album",
     text: title,
     media: fileIds.map((fileId, index) => ({ source: "file", fileId, name: names[index]! })),
+    ...(albumRef === null ? {} : { vaultAlbumRef: albumRef }),
     publishAt: publishAt ?? new Date(deps.now()).toISOString(),
     idempotencyKey: givenKey ?? hubVaultAlbumIdempotencyKey(pageLabel, title, fileIds, names),
   });
@@ -1440,7 +1660,7 @@ async function draftVaultAlbum(client: KernelClient, values: HubOptionValues, de
       const delay = CREATE_RETRY_DELAYS_MS[attempt - 1];
       if (delay === undefined || !createRetryable(error)) {
         return new HubCompositeResult({
-          ...plan, album, uploads, ...createFailure(error, pageLabel), error: callErrorMeta(error),
+          ...plan, album, uploads, ...priceFacts, ...createFailure(error, pageLabel), error: callErrorMeta(error),
         }, 1, { calls, failed: 1 });
       }
       deps.progress(`hub: drafting failed (${error instanceof KernelApiError ? error.status ?? error.code : "error"}), again in ${delay / 1000} s`);
@@ -1461,7 +1681,7 @@ async function draftVaultAlbum(client: KernelClient, values: HubOptionValues, de
         title: publication.text,
         vaultAlbumRef: publication.vaultAlbumRef,
       },
-      folder, totals: plan.totals, album, skipped: plan.skipped, uploads,
+      folder, totals: plan.totals, album, skipped: plan.skipped, uploads, ...priceFacts,
       next: `Nothing new drafted: this page, title and files are publication ${publication.id}, drafted before and now`
         + ` ${publication.status}${publication.statusReason === null ? "" : ` (${publication.statusReason})`}. Follow it with`
         + ` hub publication-get --id ${publication.id}. To send the album again (its files that did not land, its order),`
@@ -1483,9 +1703,14 @@ async function draftVaultAlbum(client: KernelClient, values: HubOptionValues, de
       blocked: publication.blocked,
       findings: publication.findings,
     },
-    folder, totals: plan.totals, album, skipped: plan.skipped, uploads,
+    folder, totals: plan.totals, album, skipped: plan.skipped, uploads, ...priceFacts,
     next: `Drafted publication ${publication.id}, version ${publication.version}.`
-      + (publication.vaultAlbumRef === null
+      + (priced === null ? "" : ` Its price: ${priced.price.credits} credits (≈ $${priced.price.usd}), within --max-credits ${maxCredits}.`
+        + (priced.byHand.length > 0 ? ` ${priced.byHand.length} files are over the link limit and not in the draft: added by hand after the album, they land on top (byHand).` : "")
+        + (priced.sending.on ? "" : ` Sending is held now (${priced.sending.why}): once approved, the album waits for it up to 12 hours.`))
+      + (publication.vaultAlbumRef === null && priced !== null
+        ? " Hub reads the page's albums afresh before it sends: the one with this title gets the files, none — Hub makes it."
+        : publication.vaultAlbumRef === null
         ? " Hub makes a new album with this title once it is approved, unless by then the page has one with it (then"
           + " that one gets the files): say so to the owner — an album of this title made by hand within the last day"
           + " Hub may not know yet, and it would get a twin."
@@ -2261,12 +2486,18 @@ export const HUB_COMMANDS: readonly HubCommand[] = [
   {
     name: "publication-get",
     operation: "agentPublicationGet",
-    summary: "One publication of your pages: a draft's findings re-checked now, and its status journal.",
+    summary: "One publication of your pages: a draft's findings re-checked now, and its status journal. An OnlyFans"
+      + " vault album carries albumRun, and the note says it in one line: the step, files in of all, the file going up,"
+      + " credits spent of the price, the files that did not land by group.",
     options: {
       id: { kind: "number", describe: "The publication id (required)" },
     },
     hint: publicationHint,
-    run: (client, values) => client.agentPublicationGet({ params: { id: requireId(values, "id") } }),
+    run: async (client, values) => {
+      const publication = await client.agentPublicationGet({ params: { id: requireId(values, "id") } });
+      const progress = albumRunLine(publication.albumRun ?? null);
+      return progress === null ? publication : new HubNotedResult(publication, progress);
+    },
   },
   {
     name: "publication-targets",
@@ -2489,16 +2720,21 @@ export const HUB_COMMANDS: readonly HubCommand[] = [
     operation: "agentPublicationCreate",
     composite: true,
     summary:
-      "COMPOSITE. A Fansly vault album from a pack's folder: its photos and videos (not subfolders, not hidden files) in"
-      + " name order, IMG_2 before IMG_10, the first on top of the album; uploaded into Hub as publication-file-upload"
-      + " does, then drafted as one vault_album. A folder holding the same file twice stops before any upload; the"
-      + " same command again after a break sends only the files Hub lacks. --dry-run lists the order, names, sizes,"
-      + " totals and the files Hub holds already, and uploads nothing: show that to the owner first. A person approves"
-      + " the draft: the owner in Hub, or publication-approve only on the owner's «да» in the chat. Needs"
-      + " write:publication_drafts.",
+      "COMPOSITE. A Fansly or OnlyFans vault album from a pack's folder: its photos and videos (not subfolders, not hidden"
+      + " files) in name order, IMG_2 before IMG_10, the first on top of the album; uploaded into Hub as"
+      + " publication-file-upload does, then drafted as one vault_album. A folder holding the same file twice stops before"
+      + " any upload; the same command again after a break sends only the files Hub lacks. --dry-run lists the order,"
+      + " names, sizes, totals and the files Hub holds already, and uploads nothing: show that to the owner first. On"
+      + " OnlyFans it also asks Hub's price (agentVaultAlbumQuote, waiting up to 3 minutes for a fresh read of the page's"
+      + " albums): credits and dollars, the albums' day ceiling, spent, left, the balance, the album found / new / similar"
+      + " titles, the files over the link limit (byHand: never uploaded nor drafted, added by hand), the files already on"
+      + " the page, the order when it is not the folder's, whether sending is on; the real run needs --max-credits and"
+      + " stops before any byte when the price is above it, or when only a similar title exists (--album-ref or"
+      + " --new-album). A person approves the draft: the owner in Hub, or publication-approve only on the owner's «да» in"
+      + " the chat. Needs write:publication_drafts.",
     arguments: { name: "<folder>", describe: "The pack's folder", min: 1, max: 1 },
     options: {
-      "page-label": { kind: "string", describe: "The Fansly page (required)" },
+      "page-label": { kind: "string", describe: "The Fansly or OnlyFans page (required); one page per command" },
       title: {
         kind: "string",
         describe: `The album's title (required; one line, at most ${PUBLICATION_VAULT_ALBUM_TITLE_MAX} characters): the`
@@ -2513,6 +2749,19 @@ export const HUB_COMMANDS: readonly HubCommand[] = [
         kind: "boolean",
         describe: "Only check the folder and the page, compare the files with what Hub holds and list the album; nothing is"
           + " uploaded or drafted",
+      },
+      "max-credits": {
+        kind: "number",
+        describe: "OnlyFans, required without --dry-run: the price in credits the person said «да» to; a higher price stops"
+          + " the run before any byte goes to Hub",
+      },
+      "album-ref": {
+        kind: "string",
+        describe: "The page's album by its id (albumFound.similar / albumFound.albumRef of the dry run): the files go into it",
+      },
+      "new-album": {
+        kind: "boolean",
+        describe: "OnlyFans: the title is new on purpose, beside the similar titles the dry run named (on the person's word)",
       },
       ...UPLOAD_OPTIONS,
       "idempotency-key": {

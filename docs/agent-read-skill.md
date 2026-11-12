@@ -554,8 +554,8 @@ and removes the rest, 50 a request at the page's pace. Notes:
 
 ## Drafting wall posts (`hub publication-*`)
 
-Hub publishes posts on the pages' walls, Fansly and OnlyFans, and fills Fansly
-vault albums. **Agents prepare, a person approves, Hub publishes.** Your key
+Hub publishes posts on the pages' walls, Fansly and OnlyFans, and fills vault
+albums on both. **Agents prepare, a person approves, Hub publishes.** Your key
 needs `write:publication_drafts` (the owner grants it per key); without it every
 `publication-*` command is a 403 `agent_capability_missing`, and the CLI prints
 that hint. With `approve:publications` as well, you approve drafts yourself —
@@ -623,7 +623,8 @@ The path of one post:
    and only with one, previews). At most 4, and 20 files in all.
    `--expires-at` takes a post off the wall (`none`: never). The answer is the
    draft with Hub's `findings` and `blocked`.
-   **A vault album** (Fansly, `--kind vault_album`): `--text` is the album's
+   **A vault album** (Fansly and OnlyFans, `--kind vault_album`; OnlyFans is
+   below): `--text` is the album's
    title, the files in `--media` order are the album as it should be — new
    files go up into the vault, the album with that title is made when the page
    has none, and every file is added in one request so the album shows them in
@@ -664,7 +665,41 @@ The path of one post:
    and the files Hub holds already (`inHub`) and uploads nothing — show that to
    the owner first. Both refuse, before any upload, a file Hub would refuse
    (HEIC, not a photo or video, empty); the album also a folder holding the same
-   file twice (`duplicates`).
+   file twice (`duplicates`). One page per command; several pages are one
+   question to the person and one run per page (the bytes go to Hub once: the
+   model's files serve each of its pages).
+
+   **An OnlyFans vault album** costs OnlyFansAPI credits, and its order is the
+   files' upload time: Hub uploads them one by one from the folder's end, so the
+   first is on top; a file added later (a re-send, by hand) lands on top; files
+   have no names there; a file uploaded by hand Hub does not recognise and
+   uploads again. The price comes before «да»: `POST
+   /api/v1/agent/pages/<page>/vault-album-quote` (`{title, albumRef?, files:
+   [{sha256, byteSize, name}]}`, sends nothing to the platform) answers the
+   album (`new`, `found` with its id and file count, `similar` titles), per
+   file its credits, `onPage` (Hub uploaded these bytes to the page before:
+   not paid, they keep their old date) and `tooBig` (over the link limit
+   `linkMaxBytes`: added by hand), `expectedOrder` when it is not the folder's,
+   the sum in credits and dollars, the albums' day account (ceiling, spent,
+   left, balance) and whether sending is on and why not; `walkRequested: true`
+   means Hub's list of the page's albums is older than an hour and a walk is
+   asked for — ask again in a minute or two. `vault-album-draft` asks it
+   before reading the files and again with their hashes, waits up to 3 minutes
+   for that walk, and on `--dry-run` prints `price`, `account`, `albumFound`,
+   `byHand`, `linkMax`, `onPage`, `expectedOrder`, `sending`. The real run
+   needs `--max-credits <the price the person said «да» to>` and stops before
+   any byte goes to Hub when the price is above it
+   (`stopped: price_over_max_credits`); a similar title without an exact one
+   stops it (`album_title_similar`) unless `--album-ref <id>` names the album
+   or `--new-album` says it is new on purpose; a walk still running stops it
+   the same way (`album_list_not_read`). Files over the link limit are not
+   uploaded to Hub nor drafted: `byHand` names them. «Да» allows the upload
+   and the approval of those albums at that price; Hub keeps the price with
+   the approval and stops the uploads at +10 % over it. An album dearer than
+   the whole day's ceiling goes back to `draft` (`album_over_daily_credits`).
+   `publication-get` carries `albumRun` (step, files by outcome, the file
+   going up, credits spent of the estimate, the stop reason) and a one-line
+   `note` of it.
 3. **Follow it.** `hub publication-list --page-label lilly-1 [--status draft]
    [--from … --to …]` (by publish time) and `hub publication-get --id <id>`
    (a draft's findings re-checked now, the status journal). To poll your own:
@@ -731,6 +766,17 @@ lost: a person checks the wall; for a vault album, Hub does not know whether
 Fansly applied its last step — the album made, the files added: do not send it
 again or retry, tell the owner, Dima), `missed` (a story not started in time),
 `withdrawn` (taken off the schedule), `cancelled` (by a person before sending).
+
+A vault album's outcome, both platforms:
+
+| Outcome | Status | Do |
+|---|---|---|
+| Out | `published`, no reason | Nothing: Hub read the album back, every file in place (ready), the order shown before «да». |
+| Out, not whole | `published` with `files_failed` / `files_unknown` / `files_too_big` / `files_not_tried` | Name every file. Refused: a re-send pays only for them. Unknown: Hub waits for the late result itself and a re-send takes the file without paying; uploading it anew only after a person looked at the vault and agreed to the price. Too big: by hand, they land on top. |
+| Not confirmed | `unknown` | Resend nothing; tell the owner, who checks the album on the page. |
+| Refused | `rejected` | Name the reason; what landed stays in the vault, a re-send does not pay for it. |
+| Not sent | `missed`, `not_sent:…` | Name the reason (switch, key, ceiling, balance, `album_title_ambiguous`); the ceiling and the balance are the owner's. |
+| Back to draft | `draft`, `album_over_daily_credits` | Split the pack, or ask the owner to raise the ceiling. |
 
 ## Taking a post off the schedule or the wall (`hub publication-withdraw`, `hub post-withdraw`, `hub post-delete`, `hub publication-queue`)
 
@@ -1203,7 +1249,9 @@ key. Download it to `~/.hub/hub.mjs`, copy the key and run
 `pbpaste | node "$HOME/.hub/hub.mjs" setup` (Windows: `powershell -NoProfile
 -Command Get-Clipboard | node "$HOME/.hub/hub.mjs" setup`; in a terminal, `setup`
 alone asks for it without showing it): that checks the key against Hub, then
-writes the credentials and the skill `hub-vault` for Claude. The key stays out of
+writes the credentials and the skill `hub-vault` for Claude (Fansly and OnlyFans
+albums: the price question, several pages in one question, the outcomes); a
+release that changes the skill rewrites an installed one on the next run. The key stays out of
 the command line, the shell's history and the chat; `--key <key>` still works. Before every other
 command this file compares itself with the release, replaces itself and runs again
 when they differ, so it follows the contract; offline it runs as it is. Give such
@@ -1300,7 +1348,7 @@ Global flags: `--base-url`, `--fail-on-partial`, `--pretty`, `--help`.
 | `hub media-look` | Frames (≤ 512 px) of a file of the page on Fansly — a post in its schedule or a published one (`--post-ref`, `--publication-id`), a file of its own vault (`--media-ref`): a video's sample or cover, a photo; `--out DIR` writes them as JPEGs. One request for a scheduled post, two for the others, one look. Reads a queued look again up to `--wait`. Needs `look:media`. |
 | `hub media-look-get` | A media look by its id, finished now when the page's engine has answered; `--out DIR` as above. Needs `look:media`. |
 | `hub publication-file-upload` | COMPOSITE: files from disk (bare paths) into Hub for a page's model: those Hub holds (by SHA-256) are not sent again, the others streamed whole, a lost network waited for; per file `media: "file:<id>"` for a draft. Progress on stderr. |
-| `hub vault-album-draft` | COMPOSITE: a Fansly vault album draft from a pack's folder (a bare path), its files in name order, the first on top; again after a break it sends only what Hub lacks; `--dry-run` lists it and uploads nothing. |
+| `hub vault-album-draft` | COMPOSITE: a Fansly or OnlyFans vault album draft from a pack's folder (a bare path), its files in name order, the first on top; again after a break it sends only what Hub lacks; `--dry-run` lists it and uploads nothing (OnlyFans: with Hub's price, the day's account, the album found / new / similar, the files by hand). OnlyFans needs `--max-credits`; `--album-ref` / `--new-album` answer a similar title. |
 | `hub queue-preview` | How many fans a rule or a list puts in a fan queue, what it leaves out, the rule in Hub's words and a few fans. Nothing is written. Needs `write:fan_queues`. |
 | `hub queue-create` | Create a fan queue, only after the «да» of the person who asked; `--requested-by` and `--idempotency-key` required. |
 | `hub queue-list` | Your pages' fan queues: today's sends by person, what is left. |
