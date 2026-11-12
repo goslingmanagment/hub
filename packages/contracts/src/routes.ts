@@ -8344,7 +8344,7 @@ export type RouteSchemas = typeof baseRouteSchemas
   & typeof peopleMessageRouteSchemas
   & typeof saleClaimRouteSchemas
   & typeof saleChainRouteSchemas
-  & typeof erasureRouteSchemas;
+  & typeof erasureRouteSchemas
   & typeof saleDecisionRouteSchemas;
 export const routeSchemas: RouteSchemas = {
   ...baseRouteSchemas,

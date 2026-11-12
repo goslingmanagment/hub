@@ -62,6 +62,7 @@ export * from "./repositories/people-messages.ts";
 export * from "./repositories/sale-claims.ts";
 // The sale's chain of money (package T): a sale by its platform reference, a person's shift holding it.
 export * from "./repositories/sale-chain.ts";
+export * from "./repositories/sale-decision-feed.ts";
 // OnlyFans unlocks paired with their purchases, one to one (the shift report, «Продажи»).
 export * from "./repositories/onlyfans-unlocks.ts";
 // Chat Memory week 5: the numbers of a chatter's shift.

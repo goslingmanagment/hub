@@ -239,6 +239,9 @@ const SANCTIONED_DELETER_FILES = [
   // The ledger's feed of shift-report versions (0408): a version held back for an agent key is released from that
   // key's held list once the key may read it and it is served. Queue hygiene of Hub's own bookkeeping, never a fact.
   "packages/db/src/repositories/shift-handins.ts",
+  // The ledger's feed of decisions (0409): a change held back for an agent key is released from that key's held list
+  // once served. Queue hygiene of Hub's own bookkeeping, never a fact.
+  "packages/db/src/repositories/sale-decision-feed.ts",
   "packages/db/src/repositories/top-spenders.ts",
   "packages/db/src/repositories/transactions.ts",
   "packages/db/src/repositories/voice-profiles.ts",
