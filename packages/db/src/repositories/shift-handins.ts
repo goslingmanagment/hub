@@ -7,8 +7,8 @@ import type { Database } from "../client.ts";
 // made, the immutable submitted versions, and «мимо площадки». Raw SQL: the
 // tables are the migration's alone. Nothing here writes the old
 // `shift_reports` / `shift_report_*` tables (0311, 0318). A version is never
-// changed (the database refuses it); a draft's mark is replaced or taken off by
-// the person's own edit; an off-platform line is withdrawn, never deleted.
+// changed (the database refuses it); a draft's mark is replaced by
+// the person's own edit (an empty one stays an empty row); an off-platform line is withdrawn. Nothing is deleted.
 
 type Row = Record<string, unknown>;
 
@@ -194,7 +194,7 @@ export async function listHandinMarks(db: Database, handinId: number): Promise<H
 
 /**
  * What the person says of one sale: the statement and the note together. Neither — the line is back to the rule's
- * word and its row goes (a draft edit, not a record: the record is the submitted version).
+ * word (the row stays, empty: nothing here deletes; the record is the submitted version).
  */
 export async function setHandinMark(
   db: Database,
@@ -209,9 +209,7 @@ export async function setHandinMark(
     at: Date;
   },
 ): Promise<void> {
-  if (input.statement === null && input.note === null) {
-    await db.execute(sql`delete from shift_handin_marks where handin_id = ${input.handinId} and transaction_id = ${input.transactionId}`);
-  } else {
+  {
     await db.execute(sql`
       insert into shift_handin_marks (handin_id, transaction_id, statement, share_with_user_id, note, updated_at, updated_by_user_id, updated_by_agent_key_id)
       values (${input.handinId}, ${input.transactionId}, ${input.statement}, ${input.shareWithUserId}, ${input.note},

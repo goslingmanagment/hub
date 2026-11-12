@@ -1,4 +1,5 @@
 import type { KernelOperationResponse, ShiftReportBody, ShiftReportLine } from "@agency_hub_core/contracts";
+import { millsPercentOf, millsRoundedTo, millsToNumber } from "@agency_hub_core/shared";
 
 import { demoError, hashString, intBetween, rng, type DemoHandlers, type DemoReply, type DemoRequest } from "../core.ts";
 import { DEMO_USERS, demoPage, demoUserByRole, type DemoUser } from "../world.ts";
@@ -72,7 +73,7 @@ function line(sale: DemoSale, user: DemoUser, word: Word | undefined): ShiftRepo
   let amountMills = near ? 0 : sale.netMills;
   let disputed = false;
   if (!near && statement === "not_mine") amountMills = 0;
-  if (!near && statement === "share") amountMills = Math.round(sale.netMills / 2);
+  if (!near && statement === "share") amountMills = millsToNumber(millsPercentOf(sale.netMills, 50));
   if (near && statement === "mine") {
     amountMills = sale.netMills;
     disputed = true;
@@ -113,7 +114,7 @@ function line(sale: DemoSale, user: DemoUser, word: Word | undefined): ShiftRepo
 }
 
 /** Hub's rule of sums: a page is its lines rounded half up to the cent, the total is the pages. */
-const toCent = (mills: number) => Math.sign(mills) * Math.round(Math.abs(mills) / 10) * 10;
+const toCent = (mills: number) => millsToNumber(millsRoundedTo(mills, "cent"));
 
 type Claimable = KernelOperationResponse<"shiftReportClaimable">["sales"][number];
 

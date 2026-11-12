@@ -6,6 +6,7 @@
  * just said, before Hub's fresh answer comes back.
  */
 import type { ShiftReportBody, ShiftReportLine, ShiftReportStatement } from "@agency_hub_core/contracts";
+import { millsPercentOf, millsRoundedTo, millsToNumber } from "@agency_hub_core/shared";
 
 export type Line = ShiftReportLine;
 
@@ -73,14 +74,14 @@ export function minePages(body: Pick<ShiftReportBody, "lines" | "pages">): PageG
 /** «Рядом, но не ваши по правилу». */
 export const nearLines = (body: Pick<ShiftReportBody, "lines">) => body.lines.filter((line) => line.group === "near");
 
-/** Half of a net, rounded half away from zero, as Hub's money.ts does it. */
+/** Half of a net, as Hub's money.ts does it. */
 function half(mills: number): number {
-  return Math.sign(mills) * Math.round(Math.abs(mills) / 2);
+  return millsToNumber(millsPercentOf(mills, 50));
 }
 
-/** Mills rounded half away from zero to the whole cent, as Hub's money.ts `millsRoundedTo(…, "cent")`. */
+/** Mills rounded half away from zero to the whole cent, Hub's money.ts. */
 function toCent(mills: number): number {
-  return Math.sign(mills) * Math.round(Math.abs(mills) / 10) * 10;
+  return millsToNumber(millsRoundedTo(mills, "cent"));
 }
 
 /** What a line counts after the person's word: the same rule as Hub's (shift-handin-rules.ts `lineAmount`). */
