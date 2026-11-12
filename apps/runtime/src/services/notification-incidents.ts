@@ -12,6 +12,7 @@ import {
 import { sanitizeError, type Platform, type SanitizeErrorOptions } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
+import { notificationLanguage, said, type NotificationLanguage } from "./notification-ru.ts";
 
 const STREAM_FAILURE_THRESHOLD = 3;
 const INCIDENT_ERROR_OPTIONS = {
@@ -490,8 +491,9 @@ function openTitleForIncident(
 /** The open title without its siren, for the daily digest's lines. */
 export function incidentTitleForKind(
   input: { kind: NotificationIncidentKind; subKey?: string | null },
+  language: NotificationLanguage = "en",
 ): string {
-  return openTitleForIncident(input).replace(/^🚨\s*/u, "");
+  return said(openTitleForIncident(input), language).replace(/^🚨\s*/u, "");
 }
 
 /**
@@ -525,13 +527,15 @@ export function openMessageForIncident(
     subKey?: string | null;
     errorSummary: string | null;
   },
+  language: NotificationLanguage = "en",
 ) {
+  const ru = language === "ru";
   return [
-    openTitleForIncident(input),
-    ...(input.pageLabel ? [`Page: ${input.pageLabel}${input.platform ? ` (${input.platform})` : ""}`] : []),
-    ...(input.stream ? [`Stream: ${input.stream}`] : []),
-    `${input.kind === "ofapi_platform_notice" ? "Notice" : "Error"}: ${sanitizeError(
-      input.errorSummary || "Unknown error",
+    said(openTitleForIncident(input), language),
+    ...(input.pageLabel ? [`${ru ? "Страница" : "Page"}: ${input.pageLabel}${input.platform ? ` (${input.platform})` : ""}`] : []),
+    ...(input.stream ? [`${ru ? "Поток" : "Stream"}: ${input.stream}`] : []),
+    `${input.kind === "ofapi_platform_notice" ? (ru ? "Письмо" : "Notice") : (ru ? "Ошибка" : "Error")}: ${sanitizeError(
+      input.errorSummary || (ru ? "Неизвестная ошибка" : "Unknown error"),
       INCIDENT_ERROR_OPTIONS,
     ).message}`,
   ].join("\n");
@@ -693,16 +697,17 @@ export function resolveMessageForIncident(
      *  resolve that is not the condition's own recovery says why. */
     resolution?: string | null;
   },
+  language: NotificationLanguage = "en",
 ) {
-  const detail = resolveDetailForIncident(input);
+  const detail = said(resolveDetailForIncident(input), language);
   const reason = incidentResolutionReason(input.resolution);
 
   return [
-    "✅ Resolved",
+    language === "ru" ? "✅ Решено" : "✅ Resolved",
     input.pageLabel
       ? `${detail}: ${input.pageLabel}${input.platform ? ` (${input.platform})` : ""}`
       : detail,
-    ...(reason === null ? [] : [`Reason: ${reason}`]),
+    ...(reason === null ? [] : [`${language === "ru" ? "Причина" : "Reason"}: ${said(reason, language)}`]),
   ].join("\n");
 }
 
@@ -735,7 +740,7 @@ async function openIncidentAndNotify(
       ? openMessageForIncident({
         ...input,
         errorSummary: input.errorSummary ?? null,
-      })
+      }, await notificationLanguage(app))
       : null;
     await openNotificationIncidentWithRecoveryGuard(app.db, {
       incidentKey: incidentKey(input),
@@ -892,6 +897,7 @@ async function resolveIncidentOutcome(app: IncidentApp, input: ResolveIncidentIn
     ...(input.resolution === undefined ? {} : { resolution: input.resolution }),
   };
   try {
+    const language = input.deliveryMode === "critical_outbox" ? await notificationLanguage(app) : "en";
     const resolved = await recoverAndResolveNotificationIncident(app.db, {
       incidentKey: incidentKey(input),
       recoveredAt,
@@ -901,7 +907,7 @@ async function resolveIncidentOutcome(app: IncidentApp, input: ResolveIncidentIn
         ? {
           outbox: {
             channel: "telegram" as const,
-            messageText: resolveMessageForIncident(input),
+            messageText: resolveMessageForIncident(input, language),
             pagingPolicy: "ai_critical" as const,
             maxAttempts: MAX_OPEN_DELIVERY_ATTEMPTS,
           },

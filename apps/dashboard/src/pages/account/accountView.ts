@@ -14,8 +14,8 @@ import { CHATTER_SITE_ORIGIN } from "@/lib/sites";
 // appear here — `tests/dashboard-copy-vocabulary.test.ts` scans every
 // string in this directory and fails if one does.
 
-/** The one static guide both clients and the "done" screen link to. */
-export const START_GUIDE_URL = `${CHATTER_SITE_ORIGIN}/fansly/start.html`;
+/** The one static guide both clients and the "done" screen link to (the old /fansly/start.html answers 301). */
+export const START_GUIDE_URL = `${CHATTER_SITE_ORIGIN}/start.html`;
 
 interface ClientOffer {
   platform: Platform;
@@ -32,7 +32,8 @@ const CLIENT_OFFERS = new Map<Platform, ClientOffer>([
   ["fansly", {
     platform: "fansly",
     label: "Установить расширение для Fansly",
-    href: `${CHATTER_SITE_ORIGIN}/fansly/`,
+    // The install section of the site: /fansly/ only redirects to the site's top.
+    href: `${CHATTER_SITE_ORIGIN}/#install`,
   }],
 ]);
 
@@ -88,10 +89,10 @@ export function roleLabel(role: string): string {
 // --- The password a person chooses through a link (§4.2, shared rule) ---
 
 export const PASSWORD_HINT =
-  `Не короче ${PASSWORD_MIN_LENGTH} символов. Подойдёт любая фраза, которую помнишь только ты.`;
+  `Не короче ${PASSWORD_MIN_LENGTH} символов. Подойдёт любая фраза, которую помните только вы.`;
 
 /** One wording for "we have seen this password before", wherever it is caught. */
-const TOO_SIMPLE_MESSAGE = "Такой пароль слишком простой — его легко угадать. Придумай другой.";
+const TOO_SIMPLE_MESSAGE = "Такой пароль слишком простой: его легко угадать. Придумайте другой.";
 
 const POLICY_MESSAGES: Record<string, string> = {
   too_short: `Пароль должен быть не короче ${PASSWORD_MIN_LENGTH} символов.`,
@@ -131,20 +132,20 @@ export function changePasswordProblem(
 // --- Link states -------------------------------------------------------
 
 /** One sentence for every way a link can be unusable — state, 404 or 409. */
-export const LINK_UNUSABLE_MESSAGE = "Ссылка недействительна. Попроси новую у владельца.";
+export const LINK_UNUSABLE_MESSAGE = "Ссылка недействительна. Попросите новую у владельца.";
 
 export type LinkKind = "invite" | "password_reset";
 
 export function joinHeadline(kind: LinkKind, username: string): string {
   return kind === "password_reset"
-    ? `${username}, придумай новый пароль`
-    : `Привет, ${username}! Придумай пароль для ChatGoose`;
+    ? `${username}, придумайте новый пароль`
+    : `Здравствуйте, ${username}! Придумайте пароль для ChatGoose`;
 }
 
 export function joinSubheadline(kind: LinkKind): string {
   return kind === "password_reset"
-    ? "Все прежние входы завершены — после нового пароля войди заново на каждом устройстве."
-    : "Логин уже есть — осталось придумать пароль, с которым ты будешь входить.";
+    ? "Все прежние входы завершены: после нового пароля войдите заново на каждом устройстве."
+    : "Логин уже есть, осталось придумать пароль, с которым вы будете входить.";
 }
 
 export function doneHeadline(kind: LinkKind): string {
@@ -175,13 +176,13 @@ export function redeemFailureMessage(
     // does, it gets the same sentence the local check would have given, so the
     // person never sees two different wordings for one rule.
     if (error?.reason === "common") return TOO_SIMPLE_MESSAGE;
-    return "Такой пароль не подходит: он слишком простой или слишком короткий. Придумай другой.";
+    return "Такой пароль не подходит: он слишком простой или слишком короткий. Придумайте другой.";
   }
   if (status === 429) {
-    return "Слишком много попыток. Подожди минуту и попробуй снова.";
+    return "Слишком много попыток. Подождите минуту и попробуйте снова.";
   }
   if (status === 404 || status === 409) return LINK_UNUSABLE_MESSAGE;
-  return "Не получилось сохранить пароль. Попробуй ещё раз.";
+  return "Не получилось сохранить пароль. Попробуйте ещё раз.";
 }
 
 /** The secret arrives in the URL fragment and nowhere else (§4.1 п.2). */

@@ -102,7 +102,7 @@ export function shiftWhen(shift: ShiftSpanLike): ShiftWhen {
   const worked = workedMinutes === null ? null : formatDuration(Math.max(0, Math.round(workedMinutes)));
   const withPauses = workedMinutes !== null && spanMinutes - workedMinutes >= 1 ? `${formatDuration(spanMinutes)} с паузами` : null;
   const payDayNote = overnight
-    ? `Ночь с ${weekdayOf(firstDay)} на ${weekdayOf(lastDay)}: в сетке и в выплатах — ${formatWeekdayDay(payDay)}, где большая часть смены.`
+    ? `Ночь с ${weekdayOf(firstDay)} на ${weekdayOf(lastDay)}: в сетке и в выплатах это ${formatWeekdayDay(payDay)}, где большая часть смены.`
     : null;
   return { payDay, firstDay, lastDay, overnight, days, time, label: `${days} ${time}`, worked, withPauses, spanMinutes, payDayNote };
 }

@@ -59,7 +59,7 @@ import "./my-shifts.css";
  */
 
 /** What a missing report asks of the chatter. */
-const MISSING_NEXT = "попроси в чате: /smena";
+const MISSING_NEXT = "попросите в чате: /smena";
 
 /** «за эту неделю», «за 26 окт. – 1 нояб.», «за 14 дней». */
 function periodWords(period: ResolvedPeriod): string {
@@ -103,8 +103,8 @@ function PagesCell({ row }: { row: MyShiftRow }) {
       {row.shift === null && (
         <Tooltip
           content={row.report?.source === "post"
-            ? "Hub не видел в этот день твоей работы в расширении ChatGoose: к какой смене относится отчёт, неизвестно."
-            : "Hub не видел в это время твоей работы в расширении ChatGoose: отчёт собрали без смены."}
+            ? "Hub не видел в этот день вашей работы в расширении ChatGoose: к какой смене относится отчёт, неизвестно."
+            : "Hub не видел в это время вашей работы в расширении ChatGoose: отчёт собрали без смены."}
           align="start"
         >
           <span className="mys-pages__note">смена в Hub не найдена</span>
@@ -124,7 +124,7 @@ function TotalCell({ row }: { row: MyShiftRow }) {
   if (row.totalMills !== null) return <Money mills={row.totalMills} strong />;
   if (row.hubMills === null) return <span className="ui-muted">—</span>;
   return (
-    <Tooltip content="Продажи смены, как их видит Hub: это не отчёт. Сумма отчёта может быть другой — в нём делят продажи с коллегами и добавляют то, чего нет в Hub." align="end">
+    <Tooltip content="Продажи смены, как их видит Hub: это не отчёт. Сумма отчёта может быть другой: в нём делят продажи с коллегами и добавляют то, чего нет в Hub." align="end">
       <span className="mys-hub">по данным Hub <Money mills={row.hubMills} muted /></span>
     </Tooltip>
   );
@@ -222,14 +222,14 @@ function FactsLine({ facts, previous, versus, unavailable, onRetry, retrying }: 
     items.push({
       label: "В час",
       value: <Money mills={facts.perHourMills} />,
-      hint: "Сумма отчётов на отработанное время, без пауз — по сменам, у которых есть отчёт.",
+      hint: "Сумма отчётов на отработанное время без пауз. Считаются только смены, у которых есть отчёт.",
     });
   }
   return (
     <div className="mys-facts">
       <Facts items={items} label="Итог периода" />
       {facts.withoutReport > 0 && (
-        <Tooltip content={`Смена закончилась, а отчёта по ней нет. ${MISSING_NEXT[0]!.toUpperCase()}${MISSING_NEXT.slice(1)} — агент соберёт его по продажам смены.`} align="end">
+        <Tooltip content={`Смена закончилась, а отчёта по ней нет. ${MISSING_NEXT[0]!.toUpperCase()}${MISSING_NEXT.slice(1)}. Агент соберёт его по продажам смены.`} align="end">
           <Badge tone="warning" className="mys-facts__mark">{withoutReportWords(facts.withoutReport)}</Badge>
         </Tooltip>
       )}
@@ -268,7 +268,7 @@ function NowRow({ shift }: { shift: StatsShift }) {
         <Tooltip content="Продажи смены, как их видит Hub, пока она идёт: это не отчёт." align="end">
           <span className="mys-hub">по данным Hub <Money mills={shift.salesNetMills} muted /></span>
         </Tooltip>
-        <span className="mys-now__note">отчёт — в конце смены</span>
+        <span className="mys-now__note">отчёт в конце смены</span>
       </span>
     </section>
   );
@@ -359,8 +359,8 @@ export function MyShiftsScreen() {
               action={elsewhere ? <LinkButton to={{ pathname: location.pathname, search: elsewhere.search }}>{elsewhere.label}</LinkButton> : undefined}
             >
               {beforeHub && since !== null
-                ? `Hub видит твою работу в расширении ChatGoose с ${formatDay(since)}`
-                : "Смена появится здесь, когда ты поработаешь в расширении ChatGoose, а отчёт — когда его соберут в конце смены."}
+                ? `Hub видит вашу работу в расширении ChatGoose с ${formatDay(since)}`
+                : "Смена появится здесь, когда вы поработаете в расширении ChatGoose, а отчёт появится, когда его соберут в конце смены."}
             </EmptyState>
           )}
         />
@@ -382,7 +382,7 @@ export function MyShiftsScreen() {
       <div className="wb-content mys">
         {window.clipped && (
           <Notice title={`Смены видны не больше чем за ${MY_SHIFTS_MAX_DAYS} день`}>
-            Чтобы увидеть {formatDayRange(period.from, addDays(window.from, -1))}, выбери эти дни отдельно. Сейчас показаны {formatDayRange(window.from, window.to)}.
+            Чтобы увидеть {formatDayRange(period.from, addDays(window.from, -1))}, выберите эти дни отдельно. Сейчас показаны {formatDayRange(window.from, window.to)}.
           </Notice>
         )}
         {nowShift && <NowRow shift={nowShift} />}

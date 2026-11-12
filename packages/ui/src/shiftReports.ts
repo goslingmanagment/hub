@@ -56,7 +56,7 @@ export const REPORT_STATUS_WORDS = {
 } as const;
 
 /** What a chatter does with a report that is only composed. */
-export const REPORT_DRAFT_NEXT = "проверь и отправь в Отчётность";
+export const REPORT_DRAFT_NEXT = "проверьте и отправьте в Отчётность";
 
 /** The state in a word; an unknown one as it came. */
 export function reportStatusWord(status: string): string {
@@ -116,9 +116,9 @@ export const POST_FLAG_WORDS: Readonly<Record<string, string>> = {
 export const POST_FLAG_HINTS: Readonly<Record<string, string>> = {
   unknown_author: "Ledger не понял, чей это пост: отправитель не записан за человеком, и #тега нет. Пост не входит в оплату, пока автора не привяжут в ledger.",
   no_date: "В посте не прочиталась дата отчёта. Пост не входит в оплату, пока его не поправят.",
-  date_mismatch: "Дата в посте дальше суток от дня отправки — скорее всего, опечатка. Пост не входит в оплату, пока его не поправят.",
+  date_mismatch: "Дата в посте дальше суток от дня отправки: скорее всего, опечатка. Пост не входит в оплату, пока его не поправят.",
   sum_mismatch: "Суммы по страницам не дают «Общий доход» поста. Пост не входит в оплату, пока его не поправят.",
-  unknown_page: "Имя страницы в посте ledger не знает: эта строка не входит в оплату, остальные — да.",
+  unknown_page: "Имя страницы в посте ledger не знает: эта строка не входит в оплату, остальные входят.",
   tag_mismatch: "#тег поста указывает на другого человека; ledger считает автором отправителя.",
   duplicate: "Та же страница того же дня есть в другом посте; считается последний.",
 };

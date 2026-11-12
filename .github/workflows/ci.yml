@@ -223,6 +223,22 @@ jobs:
             exit 1
           fi
 
+      # The token values have one source (packages/look/src/tokens.ts); the
+      # console's and Workboard's CSS copies are written from it. A value
+      # edited by hand in a copy, or changed without regenerating, fails here.
+      - name: Look tokens are regenerated (tokens.ts ↔ the two CSS copies)
+        if: matrix.part == 'typecheck'
+        run: |
+          node --import tsx/esm packages/look/generate.ts
+          generated=(packages/ui/src/styles/tokens.css apps/dashboard/src/styles/tokens.css)
+          drift="$(git status --porcelain --untracked-files=all -- "${generated[@]}")"
+          if [ -n "$drift" ]; then
+            printf '%s\n' "$drift"
+            git --no-pager diff -- "${generated[@]}"
+            echo "::error::Token CSS is stale: run node --import tsx/esm packages/look/generate.ts and commit both copies."
+            exit 1
+          fi
+
       # Check backend types once. Docker explicitly consumes this successful
       # check; direct Docker builds still check.
       - name: Typecheck

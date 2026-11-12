@@ -75,7 +75,7 @@ function WhoAmI() {
       <p className="ac-login">{data.user.username}</p>
       <p className="ac-role">{roleLabel(data.user.role)}</p>
       {groups.length === 0
-        ? <p className="ac-muted">Страницы пока не назначены — попроси владельца.</p>
+        ? <p className="ac-muted">Страницы пока не назначены: попросите владельца.</p>
         : (
           <dl className="kv ac-pages">
             {groups.map((group) => (
@@ -103,7 +103,7 @@ function Devices() {
       {devices.isLoading && <Lines />}
       {devices.isError && <Retry text="Не удалось загрузить список." busy={devices.isFetching} onRetry={() => void devices.refetch()} />}
       {devices.data?.length === 0 && (
-        <p className="ac-muted">Пока ни одного устройства. Войди в расширении или в приложении — оно появится здесь.</p>
+        <p className="ac-muted">Пока ни одного устройства. Войдите в расширении или в приложении, и оно появится здесь.</p>
       )}
       {devices.data && devices.data.length > 0 && (
         <ul className="ac-rows">
@@ -124,7 +124,7 @@ function Devices() {
         </ul>
       )}
 
-      {revokeOne.isError && <p role="alert" className="field-error">Не получилось выйти. Попробуй ещё раз.</p>}
+      {revokeOne.isError && <p role="alert" className="field-error">Не получилось выйти. Попробуйте ещё раз.</p>}
 
       <div className="ac-foot">
         {confirming
@@ -145,7 +145,7 @@ function Devices() {
             </div>
           )
           : <button type="button" onClick={() => setConfirming(true)} className="btn btn-sm">Выйти на всех устройствах</button>}
-        {revokeAll.isError && <p role="alert" className="field-error">Не получилось. Попробуй ещё раз.</p>}
+        {revokeAll.isError && <p role="alert" className="field-error">Не получилось. Попробуйте ещё раз.</p>}
       </div>
     </Section>
   );
@@ -162,7 +162,7 @@ function ChangePassword() {
   if (change.isSuccess) {
     return (
       <Section title="Сменить пароль">
-        <p className="ac-text">Пароль изменён. Все прежние входы завершены — войди заново с новым паролем.</p>
+        <p className="ac-text">Пароль изменён. Все прежние входы завершены: войдите заново с новым паролем.</p>
         <button
           type="button"
           // A full page load, so nothing cached under the dead session survives.
@@ -195,8 +195,8 @@ function ChangePassword() {
     ? (change.error instanceof KernelApiError && change.error.status === 401
       ? "Текущий пароль не подошёл."
       : change.error instanceof KernelApiError && change.error.status === 400
-        ? "Новый пароль не подходит. Придумай другой."
-        : "Не получилось сменить пароль. Попробуй ещё раз.")
+        ? "Новый пароль не подходит. Придумайте другой."
+        : "Не получилось сменить пароль. Попробуйте ещё раз.")
     : null;
   const edit = (set: (value: string) => void) => (value: string) => {
     set(value);
@@ -215,7 +215,7 @@ function ChangePassword() {
           <input type="password" autoComplete="new-password" value={next} disabled={change.isPending} required
             onChange={(event) => edit(setNext)(event.target.value)} className="input" />
         </Field>
-        <Field label="Повтори новый пароль">
+        <Field label="Повторите новый пароль">
           <input type="password" autoComplete="new-password" value={confirmation} disabled={change.isPending} required
             onChange={(event) => edit(setConfirmation)(event.target.value)} className="input" />
         </Field>
@@ -307,9 +307,7 @@ function Spend() {
 /** A chatter's way to their shifts, quiet, above the page: «Мои смены» is their home. */
 function ToShifts() {
   return (
-    <a href={CHATTER_SHIFTS} className="ac-back">
-      <span aria-hidden="true">←</span> Мои смены
-    </a>
+    <a href={CHATTER_SHIFTS} className="ac-back">Мои смены</a>
   );
 }
 

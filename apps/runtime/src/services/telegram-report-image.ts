@@ -1,13 +1,10 @@
-import { formatUsdFromMills } from "@agency_hub_core/shared";
-
+import type { NotificationLanguage } from "./notification-ru.ts";
 import {
   type DailyRevenueTelegramReport,
-  formatDeltaCompact,
+  type ReportWords,
   formatPageLabel,
-  formatReportDate,
-  formatShare,
-  formatUsdCompact,
   groupPagesByModel,
+  reportWords,
 } from "./telegram-report.ts";
 
 type ReportData = Omit<DailyRevenueTelegramReport, "text" | "parseMode">;
@@ -28,8 +25,8 @@ function metricDirection(metric: Metric): "up" | "down" | "flat" {
   return metric.deltaPct > 0 ? "up" : "down";
 }
 
-function deltaCell(metric: Metric): string {
-  return `<td class="delta ${metricDirection(metric)}">${escapeHtml(formatDeltaCompact(metric))}</td>`;
+function deltaCell(metric: Metric, w: ReportWords): string {
+  return `<td class="delta ${metricDirection(metric)}">${escapeHtml(w.delta(metric))}</td>`;
 }
 
 /**
@@ -37,56 +34,58 @@ function deltaCell(metric: Metric): string {
  * real table with tabular figures so every amount lines up in a column — the one
  * thing a Telegram text message cannot do without looking like a code block.
  */
-export function buildDailyRevenueReportHtml(report: ReportData): string {
+export function buildDailyRevenueReportHtml(report: ReportData, language: NotificationLanguage = "en"): string {
+  const w = reportWords(language);
   const y = report.agency.metrics.yesterday;
   const rows: string[] = [];
 
   rows.push(
-    `<tr class="win"><td>7-day</td><td class="num">${formatUsdCompact(report.agency.metrics.days7.currentMills)}</td>${deltaCell(report.agency.metrics.days7)}<td></td></tr>`,
-    `<tr class="win"><td>30-day</td><td class="num">${formatUsdCompact(report.agency.metrics.days30.currentMills)}</td>${deltaCell(report.agency.metrics.days30)}<td></td></tr>`,
+    `<tr class="win"><td>${w.days7Row}</td><td class="num">${w.compact(report.agency.metrics.days7.currentMills)}</td>${deltaCell(report.agency.metrics.days7, w)}<td></td></tr>`,
+    `<tr class="win"><td>${w.days30Row}</td><td class="num">${w.compact(report.agency.metrics.days30.currentMills)}</td>${deltaCell(report.agency.metrics.days30, w)}<td></td></tr>`,
   );
 
   const pagesByModel = groupPagesByModel(report.pages);
 
   if (report.models.length === 0) {
-    rows.push(`<tr class="spacer"><td colspan="4"></td></tr><tr class="empty"><td colspan="4">No data</td></tr>`);
+    rows.push(`<tr class="spacer"><td colspan="4"></td></tr><tr class="empty"><td colspan="4">${w.noData}</td></tr>`);
   } else {
     for (const model of report.models) {
       const dir = metricDirection(model.metrics.yesterday);
       rows.push(`<tr class="spacer"><td colspan="4"></td></tr>`);
       rows.push(
         `<tr class="model"><td><span class="dot ${dir}"></span>${escapeHtml(model.label)}</td>`
-          + `<td class="num">${formatUsdFromMills(model.metrics.yesterday.currentMills)}</td>`
-          + `${deltaCell(model.metrics.yesterday)}`
-          + `<td class="share">${formatShare(model.metrics.yesterday.currentMills, y.currentMills)}</td></tr>`,
+          + `<td class="num">${w.money(model.metrics.yesterday.currentMills)}</td>`
+          + `${deltaCell(model.metrics.yesterday, w)}`
+          + `<td class="share">${w.share(model.metrics.yesterday.currentMills, y.currentMills)}</td></tr>`,
       );
 
       for (const page of pagesByModel.get(model.label) ?? []) {
         // Fixed label order (see groupPagesByModel); zeros show inline as $0.00.
         rows.push(
           `<tr class="page"><td>${escapeHtml(formatPageLabel(page.label))}</td>`
-            + `<td class="num">${formatUsdFromMills(page.metrics.yesterday.currentMills)}</td>`
-            + `${deltaCell(page.metrics.yesterday)}<td></td></tr>`,
+            + `<td class="num">${w.money(page.metrics.yesterday.currentMills)}</td>`
+            + `${deltaCell(page.metrics.yesterday, w)}<td></td></tr>`,
         );
       }
     }
 
     if (report.modelOverflow) {
       rows.push(
-        `<tr class="more"><td>+${report.modelOverflow.modelCount} more models</td>`
-          + `<td class="num">${formatUsdFromMills(report.modelOverflow.metrics.yesterday.currentMills)}</td><td></td><td></td></tr>`,
+        `<tr class="more"><td>${w.moreModels(report.modelOverflow.modelCount)}</td>`
+          + `<td class="num">${w.money(report.modelOverflow.metrics.yesterday.currentMills)}</td><td></td><td></td></tr>`,
       );
     }
   }
 
   if (report.overflow) {
     rows.push(
-      `<tr class="more"><td>+${report.overflow.pageCount} more pages</td>`
-        + `<td class="num">${formatUsdFromMills(report.overflow.metrics.yesterday.currentMills)}</td><td></td><td></td></tr>`,
+      `<tr class="more"><td>${w.morePages(report.overflow.pageCount)}</td>`
+        + `<td class="num">${w.money(report.overflow.metrics.yesterday.currentMills)}</td><td></td><td></td></tr>`,
     );
   }
 
   const heroDir = metricDirection(y);
+  const heroDelta = w.delta(y);
   return `<!doctype html><html><head><meta charset="utf-8"><style>
 *{margin:0;padding:0;box-sizing:border-box}
 body{background:transparent;font-family:-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,"Liberation Sans",sans-serif}
@@ -113,10 +112,10 @@ td{padding:3px 0;vertical-align:baseline}
 .spacer td{height:6px;padding:0}
 .foot{margin-top:16px;font-size:12px;color:#a3a6ac;font-style:italic}
 </style></head><body><div id="card">
-<div class="head">Revenue · ${escapeHtml(formatReportDate(report.reportDate))}</div>
-<div class="hero"><span class="amt">${formatUsdFromMills(y.currentMills)}</span><span class="pill ${heroDir}">${escapeHtml(formatDeltaCompact(y))}</span></div>
+<div class="head">${escapeHtml(w.title(report.reportDate))}</div>
+<div class="hero"><span class="amt">${w.money(y.currentMills)}</span>${heroDelta === "" ? "" : `<span class="pill ${heroDir}">${escapeHtml(heroDelta)}</span>`}</div>
 <table>${rows.join("")}</table>
-<div class="foot">Windows: 00:00-00:00 MSK · excluding current day</div>
+<div class="foot">${w.windowsImage}</div>
 </div></body></html>`;
 }
 
@@ -147,7 +146,7 @@ interface PlaywrightPage {
  * image for the public-profile resolver). Launch-per-render is fine for a
  * once-daily + manual report; the caller falls back to a text message on failure.
  */
-export async function renderDailyRevenueReportImage(report: ReportData): Promise<Buffer> {
+export async function renderDailyRevenueReportImage(report: ReportData, language: NotificationLanguage = "en"): Promise<Buffer> {
   const chromium = await loadPlaywrightChromium();
   const browser = await chromium.launch({
     headless: true,
@@ -164,7 +163,7 @@ export async function renderDailyRevenueReportImage(report: ReportData): Promise
       deviceScaleFactor: 2,
     });
     const page = await context.newPage();
-    await page.setContent(buildDailyRevenueReportHtml(report), { waitUntil: "load" });
+    await page.setContent(buildDailyRevenueReportHtml(report, language), { waitUntil: "load" });
     return await page.locator("#card").screenshot({ type: "png" });
   } finally {
     await browser.close();

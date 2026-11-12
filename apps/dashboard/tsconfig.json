@@ -13,6 +13,8 @@
       "@agency_hub_core/shared": ["../../packages/shared/src/browser.ts"],
       "@agency_hub_core/contracts": ["../../packages/contracts/src/index.ts"],
       "@kernel/sdk": ["../../packages/sdk/src/index.ts"],
+      "@agency_hub_core/look": ["../../packages/look/src/index.ts"],
+      "@agency_hub_core/look/*": ["../../packages/look/src/*"],
       "@agency_hub_core/ui": ["../../packages/ui/src/index.ts"],
       "@agency_hub_core/ui/*": ["../../packages/ui/src/*"]
     },

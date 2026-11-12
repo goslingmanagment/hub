@@ -36,6 +36,7 @@ export default defineConfig(({ mode }) => {
       alias: {
         "@": resolve(__dirname, "src"),
         "@agency_hub_core/ui": resolve(root, "packages/ui/src"),
+        "@agency_hub_core/look": resolve(root, "packages/look/src"),
         "@agency_hub_core/shared": resolve(root, "packages/shared/src/browser.ts"),
         "@agency_hub_core/contracts": resolve(root, "packages/contracts/src/index.ts"),
         "@kernel/sdk": resolve(root, "packages/sdk/src/index.ts"),

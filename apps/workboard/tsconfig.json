@@ -11,6 +11,8 @@
     "jsx": "react-jsx",
     "paths": {
       "@/*": ["./src/*"],
+      "@agency_hub_core/look": ["../../packages/look/src/index.ts"],
+      "@agency_hub_core/look/*": ["../../packages/look/src/*"],
       "@agency_hub_core/ui": ["../../packages/ui/src/index.ts"],
       "@agency_hub_core/ui/*": ["../../packages/ui/src/*"],
       "@agency_hub_core/shared": ["../../packages/shared/src/browser.ts"],

@@ -69,10 +69,10 @@ export function JoinPage() {
   if (inspect.isError) {
     const status = inspect.error instanceof KernelApiError ? inspect.error.status : null;
     if (status === 429) {
-      return <Unusable message="Слишком много попыток. Подожди минуту и открой ссылку снова." />;
+      return <Unusable message="Слишком много попыток. Подождите минуту и откройте ссылку снова." />;
     }
     if (status === 404 || status === 409) return <Unusable message={LINK_UNUSABLE_MESSAGE} />;
-    return <Unusable message="Не удалось проверить ссылку. Обнови страницу через минуту." />;
+    return <Unusable message="Не удалось проверить ссылку. Обновите страницу через минуту." />;
   }
 
   const link = inspect.data;
@@ -96,7 +96,7 @@ export function JoinPage() {
         <p className="entry-login">{username}</p>
         {offers.length > 0 && (
           <>
-            <p className="entry-text mt-6">Этим логином и паролем входи в:</p>
+            <p className="entry-text mt-6">Этим логином и паролем входите в:</p>
             <div className="mt-3 flex flex-col gap-2">
               {offers.map((offer) => (
                 <a key={offer.platform} href={offer.href} className="btn btn-primary entry-submit">
@@ -108,7 +108,7 @@ export function JoinPage() {
         )}
         <div className="entry-after">
           <a href={`${CHATTER_SITE_ORIGIN}${CHATTER_HOME}`} className="btn entry-submit">Открыть «Мои смены»</a>
-          <p className="entry-hint">Здесь твои смены и отчёты по ним.</p>
+          <p className="entry-hint">Здесь ваши смены и отчёты по ним.</p>
         </div>
         <p className="entry-text mt-6">
           <a href={START_GUIDE_URL} className="link">Как начать</a>
@@ -171,7 +171,7 @@ export function JoinPage() {
         </div>
 
         <div className="flex flex-col gap-2">
-          <label htmlFor="join-password-again" className="field-label mb-0">Повтори пароль</label>
+          <label htmlFor="join-password-again" className="field-label mb-0">Повторите пароль</label>
           <input
             id="join-password-again"
             type="password"

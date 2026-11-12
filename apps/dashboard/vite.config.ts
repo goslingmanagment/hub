@@ -76,6 +76,8 @@ export default defineConfig(({ mode }) => {
         "@kernel/sdk": resolve(__dirname, "../../packages/sdk/src/index.ts"),
         // The shared design system and helpers (packages/ui): format, plural, theme, the Hub client.
         "@agency_hub_core/ui": resolve(__dirname, "../../packages/ui/src"),
+        // Hub's look as data: token values, formats, the dictionary (packages/look).
+        "@agency_hub_core/look": resolve(__dirname, "../../packages/look/src"),
       },
     },
     build: { rollupOptions: { output: { manualChunks } } },

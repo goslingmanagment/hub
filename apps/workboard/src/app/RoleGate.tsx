@@ -26,8 +26,8 @@ function NotForChatter() {
   useWorkboardTitle();
   return (
     <div className="wb-content">
-      <EmptyState title="Этот раздел — для владельца и тимлидов" action={<LinkButton variant="primary" to={homePath("chatter")}>Мои смены</LinkButton>}>
-        Твои смены и отчёты по ним — в «Моих сменах».
+      <EmptyState title="Этот раздел для владельца и тимлидов" action={<LinkButton variant="primary" to={homePath("chatter")}>Мои смены</LinkButton>}>
+        Ваши смены и отчёты по ним в «Моих сменах».
       </EmptyState>
     </div>
   );
