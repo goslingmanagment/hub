@@ -706,10 +706,14 @@ export interface Section {
   /** Under the rule at the bottom of the menu. */
   lower?: boolean;
   /**
-   * The section's places in another product, after its tabs: they open it on the
-   * model of the chosen page (ContentOps keeps a model's content at `/<model>/<path>`).
+   * The section's places elsewhere, after its tabs. ContentOps': they open it on
+   * the model of the chosen page (it keeps a model's content at `/<model>/<path>`).
+   * Workboard's: a list whose one place is a Workboard screen, linked from here
+   * (a page load on this host), for the roles that open it.
    */
-  outside?: { site: "contentops"; label: string; links: readonly { label: string; path: string }[] };
+  outside?:
+    | { site: "contentops"; label: string; links: readonly { label: string; path: string }[] }
+    | { site: "workboard"; links: readonly { label: string; to: string; title: string; ownerOnly?: boolean }[] };
   nav: "tabs" | "side" | "none";
   tabs: readonly SectionTab[];
 }
@@ -735,6 +739,10 @@ export const SECTIONS: readonly Section[] = [
       tab("costs", "Расходы", "costs-ai", "costs-anthropic", "costs-onlyfans-api"),
       tab("transactions", "Операции", "transactions"),
     ],
+    // The shift reports' list has one place, Команда → Выплаты → Отчёты (L2, 12.11); Деньги links it.
+    outside: { site: "workboard", links: [
+      { label: "Отчёты смен", to: "/workboard/payouts?view=reports", title: "Отчёты смен в Команда, Выплаты", ownerOnly: true },
+    ] },
   },
   {
     id: "fans", label: "Фаны", title: "Фаны", icon: "Heart", nav: "tabs",

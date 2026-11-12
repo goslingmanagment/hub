@@ -69,10 +69,20 @@ function SubRow({ sectionTab, role, screen, search }: { sectionTab: SectionTab; 
  * Библиотека), on the model of the chosen page, or of the first page when every
  * page is chosen; the model is named, so the link says where it leads.
  */
-function OutsideLinks({ outside }: { outside: NonNullable<Section["outside"]> }) {
+function OutsideLinks({ outside, role }: { outside: NonNullable<Section["outside"]>; role: Role }) {
   const filter = usePageFilter();
   const { pages, findPageByLabel } = useDashboardShell();
   const page = findPageByLabel(filter.page ?? undefined) ?? pages.find((item) => item.platform !== "telegram") ?? null;
+  if (outside.site === "workboard") {
+    // A Workboard screen on this host: a page load, the same tab.
+    const links = outside.links.filter((link) => !link.ownerOnly || role === "owner");
+    if (links.length === 0) return null;
+    return (
+      <span className="section-outside">
+        {links.map((link) => <a key={link.to} className="section-tab" href={link.to} title={link.title}>{link.label}</a>)}
+      </span>
+    );
+  }
   return (
     <span className="section-outside">
       <span className="section-outside-label">{outside.label}{page ? ` · ${page.modelName}` : ""}</span>
@@ -98,7 +108,7 @@ function SectionRow({ section, role, screen, search }: { section: Section; role:
         items={tabs.filter((item) => !item.more).map(itemOf)}
         more={tabs.filter((item) => item.more).map(itemOf)}
         current={currentTo}
-        end={section.outside ? <OutsideLinks outside={section.outside} /> : undefined}
+        end={section.outside ? <OutsideLinks outside={section.outside} role={role} /> : undefined}
       />
       {currentTab && <SubRow sectionTab={currentTab} role={role} screen={screen} search={search} />}
     </>
