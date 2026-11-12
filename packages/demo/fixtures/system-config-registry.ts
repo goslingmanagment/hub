@@ -1237,6 +1237,36 @@ export const DEMO_CONFIG_DESCRIPTORS: readonly DemoConfigDescriptor[] = [
     "destructive": false
   },
   {
+    "key": "onlyfansVaultDailyCredits",
+    "envName": "ONLYFANS_VAULT_DAILY_CREDITS",
+    "configField": "onlyfansVaultDailyCredits",
+    "kind": "number",
+    "subsystem": "OFAPI",
+    "label": "Vault albums: OnlyFans credits per day",
+    "default": "0",
+    "editability": "editable",
+    "runtimeApply": "live",
+    "comparable": true,
+    "note": "Vault album uploads' own day ceiling, outside the common OnlyFansAPI day budget and the per-user limits, so albums never eat the credits reads need and reads never eat the albums'. An upload costs about 3 credits per MB. The balance floor and onlyfansVaultReserveCredits still apply. 0 pauses album uploads. Read live per request.",
+    "costWarning": "Raising lets OnlyFans vault album uploads spend more OnlyFansAPI credits per UTC day.",
+    "destructive": false
+  },
+  {
+    "key": "onlyfansVaultReserveCredits",
+    "envName": "ONLYFANS_VAULT_RESERVE_CREDITS",
+    "configField": "onlyfansVaultReserveCredits",
+    "kind": "number",
+    "subsystem": "OFAPI",
+    "label": "Vault albums: balance kept for reads",
+    "default": "2000",
+    "editability": "editable",
+    "runtimeApply": "live",
+    "comparable": true,
+    "note": "OnlyFansAPI balance a vault album upload never spends into: an upload waits when the balance after it would fall below this (or below ofapiCreditFloor, whichever is higher). 2000 is about three days of reads. Read live per request.",
+    "costWarning": null,
+    "destructive": false
+  },
+  {
     "key": "publicationFilesDir",
     "envName": "PUBLICATION_FILES_DIR",
     "configField": "publicationFilesDir",
