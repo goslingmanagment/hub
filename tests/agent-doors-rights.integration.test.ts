@@ -55,7 +55,8 @@ let server: Awaited<ReturnType<typeof buildApiServer>> | null = null;
 let ownerCookie = "";
 let chatterId = 0;
 let shiftAt = "";
-const saleRefs: { a: string; b: string } = { a: "", b: "" };
+const saleRefs: { a: string; b: string; ppv: string } = { a: "", b: "", ppv: "" };
+let pricedAt = "";
 
 const q = (text: string, values: unknown[] = []) => testDb!.pool.query(text, values);
 const asKey = (name: KeyName, method: "GET" | "POST", url: string, payload?: Record<string, unknown>) =>
@@ -139,6 +140,22 @@ describe("agent doors: who reads, and what", () => {
       [page, fanId, ref, at(offset)])).rows[0].id);
     saleRefs.a = String(await sale(pageA, fanA, "tx-a", 60));
     saleRefs.b = String(await sale(pageB, fanB, "tx-b", 200));
+    // Before the shift, on page A: a PPV sent without an author, a plain message without one, and a deleted one; then
+    // the fan buys the PPV in the shift. The report check's reading of the archive counts the first two, never the third.
+    const page = (ref: string, offset: number, text: string, price: number | null, deleted: boolean) => q(
+      `insert into message_archive (account_id, platform, conversation_ref, message_ref, sender_role, is_sent_by_me, occurred_at, text_plain,
+         media_metadata, message_type, is_tip, tip_amount_mills, price_mills, deleted_at)
+       values ($1, 'fansly', 'conv-a', $2, 'model', true, $3, $4, '[]'::jsonb, 1, false, 0, $5, $6)`,
+      [pageA, ref, at(offset), text, price, deleted ? at(offset + 1) : null]);
+    await page("9500001001", -60, "priced   for\nyou", 20_000, false);
+    await page("9500001002", -50, "no author here", null, false);
+    await page("9500001003", -40, "deleted one", 20_000, true);
+    pricedAt = at(-60).toISOString();
+    saleRefs.ppv = String(Number((await q(
+      `insert into transactions (platform_account_id, fan_id, transaction_id, raw_type, canonical_type, transaction_state, raw_status,
+         gross_amount_mills, source_destination_amount_mills, creator_net_amount_mills, occurred_at, source, currency)
+       values ($1, $2, 'tx-ppv', 'message_purchase', 'message_purchase', 'posted', 'ok', 20000, 20000, 16000, $3, 'fansly:rest', 'USD') returning id`,
+      [pageA, fanA, at(100)])).rows[0].id));
 
     server = await buildApiServer(app);
     await server.ready();
@@ -266,6 +283,19 @@ describe("agent doors: who reads, and what", () => {
       expect(noMoney.watches[0]!.fanMessages[0]!.tipMills).toBeNull();
     });
 
+    it("never gives back the message that set the mark: the archive's time goes to the microsecond", async (context) => {
+      if (!testDb) return context.skip();
+      const first = agentFanWatchResponseSchema.parse((await asKey("full", "POST", "/api/v1/agent/team/fan-watch", body("mia-1"))).json());
+      const mark = first.watches[0]!.fanMessages.at(-1)!.archivedAt;
+      const [watch] = body("mia-1").watches;
+      const again = await asKey("full", "POST", "/api/v1/agent/team/fan-watch", { watches: [{ ...watch!, archivedAfter: mark }] });
+      expect(again.statusCode, again.body).toBe(200);
+      expect(agentFanWatchResponseSchema.parse(again.json()).watches[0]!.fanMessages).toEqual([]);
+      const before = new Date(Date.parse(mark) - 1).toISOString();
+      const earlier = await asKey("full", "POST", "/api/v1/agent/team/fan-watch", { watches: [{ ...watch!, archivedAfter: before }] });
+      expect(agentFanWatchResponseSchema.parse(earlier.json()).watches[0]!.fanMessages.map((message) => message.archivedAt)).toEqual([mark]);
+    });
+
     it("answers the plane's 404 for a page outside the grant and 403 without read:messages", async (context) => {
       if (!testDb) return context.skip();
       const outside = await asKey("full", "POST", "/api/v1/agent/team/fan-watch", body("mia-2"));
@@ -289,6 +319,26 @@ describe("agent doors: who reads, and what", () => {
       expect(body.sales[0]!.lastWriter?.name).toBe("chat");
       expect(body.notFound).toEqual(expect.arrayContaining([{ saleRef: saleRefs.b }, { pageLabel: "mia-2", transactionRef: "tx-b" }]));
       expect(response.body).not.toContain("tx-b\",\"kind");
+    });
+
+    it("gives the fan's chat as the report check reads the archive: the priced message, the authors of 7 days, the last author", async (context) => {
+      if (!testDb) return context.skip();
+      const ask = (as: KeyName) => asKey(as, "POST", "/api/v1/agent/team/sale-context", { sales: [{ saleRef: saleRefs.ppv }, { saleRef: saleRefs.a }] });
+      const response = await ask("full");
+      expect(response.statusCode, response.body).toBe(200);
+      const body = agentSaleContextResponseSchema.parse(response.json());
+      const ppv = body.sales.find((sale) => sale.saleRef === saleRefs.ppv)!;
+      expect(ppv.archive).toEqual({
+        conversationRef: "conv-a", partnerUsername: "watched", fanRecordUsername: "watched", partnerUsernames: ["watched"],
+        pricedMessage: { sentAt: pricedAt, sender: null, text: "priced   for\nyou" },
+        pageMessages7d: [{ name: "chat", messages: 30 }, { name: null, messages: 2 }],
+        lastAuthored60d: { name: "chat", at: expect.any(String), within48h: true },
+      });
+      const tip = body.sales.find((sale) => sale.saleRef === saleRefs.a)!;
+      expect(tip.archive.pricedMessage).toBeNull();
+      expect(tip.archive.pageMessages7d).toEqual([{ name: "chat", messages: 30 }, { name: null, messages: 2 }]);
+      const plain = agentSaleContextResponseSchema.parse((await ask("plain")).json());
+      expect(plain.sales.find((sale) => sale.saleRef === saleRefs.ppv)!.archive.pricedMessage).toMatchObject({ sender: null, text: null });
     });
 
     it("refuses a key without read:money or read:team", async (context) => {

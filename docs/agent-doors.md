@@ -22,9 +22,9 @@ capture, delivery) is `agent-read-skill.md`; the CLI is `hub` (`hub <command> --
 | People | `POST /api/v1/agent/people/proposals`, `GET …/proposals` | `propose:people` | A change about a person, or a new person; it waits for the owner. Never pay terms |
 | Shifts | `GET /api/v1/agent/team/shift-review` (`hub shift-review`) | `read:team` + `read:money` | «Разбор смены» of one shift on the key's pages and the shift audit's numbers from it. Texts with `read:messages`; the AI's own texts never |
 | Shifts and sales | `POST /api/v1/agent/team/sales` | `read:team` + `read:money` | The team's work and every sale on the key's pages in a window (≤ 31 days), with the facts whose a sale is: holders, the bought PPV's sender, post tip, Campaign, last writer, marks, the owner's split |
-| Sales (report check) | `POST /api/v1/agent/team/sale-context` (`hub sale-context`) | `read:team` + `read:money` | Each sale's fan, the PPV it bought (its text with `read:messages`), who wrote to the fan in 48 h, 7 days, last in 60 days |
+| Sales (report check) | `POST /api/v1/agent/team/sale-context` (`hub sale-context`) | `read:team` + `read:money` | Each sale's fan, the PPV it bought (its text with `read:messages`), who wrote to the fan in 48 h, 7 days, last in 60 days; `archive`: the fan's chat as the report check reads the archive (the priced message, the page's messages of 7 days by author, the last author of 60 days) |
 | Sales (chain of money) | `GET /api/v1/agent/team/sale-chain` (`hub sale-chain <id>`) | `read:team` + `read:money` | From one sale: whose it is (home, why, the owner's decision, an open claim), the shift, the report of that day (Hub's version or the ledger's post), accrual and payout as states. Never a pay sum |
-| Fans (watch) | `POST /api/v1/agent/team/fan-watch` (`hub fan-watch`) | `read:messages` | A watched fan's new messages on a page since a mark, and when the page last wrote to them. Tips with `read:money` |
+| Fans (watch) | `POST /api/v1/agent/team/fan-watch` (`hub fan-watch`) | `read:messages` | A watched fan's new messages on a page since a mark (the archive's time, to the microsecond), and when the page last wrote to them. Tips with `read:money` |
 | Fans and messages | `hub resolve`, `person`, `timeline`, `threads`, `transcript`, `search` | `read:messages` and others | The read plane: `agent-read-skill.md` |
 | Money | `hub dataset` (`transactions`, `fan_spend_*`, …) | `read:datasets` + `read:money` | Typed dataset queries per page |
 | Matters | `POST /api/v1/agent/matters`, `…/close`, `…/comment` | `write:matters` | Open, close, comment a matter by its reason key, for a person (by login) or a role. The agent's own kinds only |
@@ -114,7 +114,7 @@ every service sees it within a minute (within the hour while Hub cannot be reach
 |---|---|---|
 | `/OS scripts/shift_audit.py collect` | messages, threads, follows, subscriptions, automated messages, broadcasts, AI events, activity minutes of the shift, over psql; money over `hub dataset` | `hub shift-review --person <code> --at <ISO>`: `review` (the shift, its pages, chats with messages, waits, sales, follows, AI by page and chat) and `numbers` |
 | Gengar's fan watch (`work/watch-fan/watch.py`) | the fan's messages after a mark and the page's last message in that chat | `hub fan-watch --file watches.json`; carry `archivedAt` of the newest message as the next `archivedAfter` |
-| Gengar's report check (`shift-sales-report/report_check.py`) | fan names, the bought PPV, its author and text, writers 7 days, last writer 60 days | `hub sale-context --file sales.json`, sales by Hub's id or by a page's platform transaction id |
+| Gengar's report check (`shift-sales-report/report_check.py`) | fan names, the bought PPV, its author and text, writers 7 days, last writer 60 days | `hub sale-context --file sales.json`, sales by Hub's id or by a page's platform transaction id; the check's own facts are `archive` (Hub's are `ppv`, `writers7d`, `lastWriter`: they differ, see below) |
 
 `numbers` (by page and in total) carries the audit's `collect` summary: `chats`, `messages` (the audit's `out`),
 `fanMessages` (`fan`), `follows`, `followsWritten` (`wrote`), `followsWrittenSoon` (`w30`), `reactivations`
@@ -127,3 +127,11 @@ message is the chatter's by its author on every page; a message deleted a minute
 as seen; a mass message is the one of «Смены»; a page's own facts (followers, money) count on the pages the shift
 worked. The lists the audit draws (gantt, long waits, backlog, signals, hours) come from `review.chats` and
 `review.waits`.
+
+`archive` (the report check) is the archive as `report_check.py` read it over psql, so the check keeps its numbers:
+the fan's latest chat on the page by the fan's platform id; in it the page's latest message priced at the sale's
+gross and sent at or before it (the check's PPV; Hub's own match is `ppv`, by the bought media or the OnlyFans
+unlock), the page's messages of the 7 days before by author with no author counted (`writers7d` counts only reported
+sends), and the last message with an author in the 60 days before, by the archive's time (`lastWriter` goes by the
+send's report, a minute or so earlier). Deleted messages are left out. Moving the check to Hub's facts changes its
+numbers: that is the owner's decision, not this door's.
