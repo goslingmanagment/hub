@@ -40,6 +40,12 @@ export function reportDateOfShift(work: { startedAt: number; endedAt: number }):
   return shiftReportDay(work.startedAt, work.endedAt);
 }
 
+/**
+ * The Moscow day a sale is reported on when no work of a person holds it (the owner gave it to someone with no shift
+ * then): the report date of its instant, its Moscow day. Pure.
+ */
+export const reportDateOfSale = (at: number): string => reportDateOfShift({ startedAt: at, endedAt: at });
+
 /** A computed shift as its row holds it. Pure. */
 export function shiftRowFactsOf(userId: number, work: ComputedWork): ShiftRowFacts {
   return {

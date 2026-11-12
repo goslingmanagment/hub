@@ -142,6 +142,8 @@ export interface ReviewMoney {
   split: SalesSplit;
   /** Before the shift, no shift's: sales to the chatter's fans from the last shift's end to this one's start. */
   beforeNetMills: number;
+  /** The person's money of the shift's day the rule gives them with no work to hold it (`withoutShiftSales`). */
+  withoutShiftNetMills: number;
   /** The chatter's PPVs of the shift bought after it, by the shift that held each purchase (null — none; `tail` — the rule's line). */
   later: Array<{ holder: string | null; tail?: string; netMills: number }>;
   /** By the one rule (`ruleFrom`): the shift's sales no person's shift has, by their line (the pot, waiting, the owner's decision). */
@@ -263,6 +265,7 @@ export function indexOf(data: TeamShiftReviewResponse, waits: readonly ReviewWai
     origins: salesByOrigin(data),
     split: salesSplit(data),
     beforeNetMills: data.beforeSales.reduce((sum, sale) => sum + Number(sale.netMills), 0),
+    withoutShiftNetMills: (data.withoutShiftSales ?? []).reduce((sum, sale) => sum + Number(sale.netMills), 0),
     later: [...later.values()],
     notCounted: [...notCounted].map(([label, netMills]) => ({ label, netMills })),
   };

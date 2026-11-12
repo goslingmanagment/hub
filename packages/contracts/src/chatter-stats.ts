@@ -170,6 +170,12 @@ export const chatterStatsSchema = z.object({
    * or later has the sales their homes give it (none counts for two), dated by its report date. Absent — off.
    */
   ruleFrom: businessDate.optional(),
+  /**
+   * With `ruleFrom`: the sales of the window and the one before the rule gives the chatter's person with no work of
+   * theirs to hold them (the owner's decision to someone who had no shift then), each its share, on the sale's report
+   * day: in `totals`, `daily`, `previous` and the rest of the person's money, never in a shift's. The oldest first.
+   */
+  withoutShift: z.array(statsSaleSchema.omit({ overlap: true }).extend({ date: businessDate })).optional(),
   serverNow: isoTimestamp,
 });
 
@@ -207,11 +213,16 @@ export const teamShiftSalesQuerySchema = z.object({
   pageLabel: z.string().min(1).max(120).optional(),
 });
 
-/** Where «вне смен» shows a sale: a look-in's, the page's pot, a PPV waiting for its sender, the owner's decision, nobody's. */
-export const OUTSIDE_SALE_HOMES = ["visit", "pot", "waiting", "decide", "nobody"] as const;
+/**
+ * Where «вне смен» shows a sale: a look-in's, a person's with no work of theirs to hold it (the owner gave it to someone
+ * who had no shift then), the page's pot, a PPV waiting for its sender, the owner's decision, nobody's.
+ */
+export const OUTSIDE_SALE_HOMES = ["visit", "person", "pot", "waiting", "decide", "nobody"] as const;
 
 /** The one rule's lines of «вне смен» (with `ruleFrom` only). */
-const ruleLines = { potNetMills: mills.optional(), waitingNetMills: mills.optional(), decideNetMills: mills.optional() };
+const ruleLines = {
+  personNetMills: mills.optional(), potNetMills: mills.optional(), waitingNetMills: mills.optional(), decideNetMills: mills.optional(),
+};
 
 const dayMoneySchema = z.object({
   date: businessDate,
@@ -235,7 +246,10 @@ export const teamShiftSalesResponseSchema = z.object({
    * have the activity for all of it.
    */
   previous: periodTotalsSchema.nullable(),
-  /** Everyone with a shift in the window or the one before, the most money first. */
+  /**
+   * Everyone with a shift in the window or the one before, the most money first. With `ruleFrom`, a login's money is its
+   * shifts' and what the rule gives its person with no work to hold it (`outside` line `person`), on the sale's day.
+   */
   chatters: z.array(periodTotalsSchema.extend({
     userId: intId,
     username: z.string(),
@@ -257,9 +271,11 @@ export const teamShiftSalesResponseSchema = z.object({
    * The window's sales no shift holds, outside the money above: `visits` — a look-in's, its person the last to write to
    * the fan (as a visit's sales); `nobody` — the rest. By the Moscow day of the sale (one per day of the window, the
    * oldest first) and by page (the most first), and each sale, the oldest first. With `ruleFrom`, a sale the rule places
-   * is where its home is when that is no person's shift, with three lines more: `pot` — the page's pot (a tip under a
-   * post, a Campaign contribution); `waiting` — a PPV waiting for its sender's next shift; `decide` — several shifts held
-   * it and none of their people wrote last, no slot settles it: the owner's to decide.
+   * is where its home is when that is no person's shift, with four lines more: `person` — the rule gives it a person
+   * with no work of theirs to hold it (the owner's decision to someone who had no shift then): it counts in that
+   * person's row on the sale's day too, never in a shift's; `pot` — the page's pot (a tip under a post, a Campaign
+   * contribution); `waiting` — a PPV waiting for its sender's next shift; `decide` — several shifts held it and none of
+   * their people wrote last, no slot settles it: the owner's to decide. A sale the rule splits has a row per part.
    */
   outside: z.object({
     visitsNetMills: mills,
@@ -273,7 +289,7 @@ export const teamShiftSalesResponseSchema = z.object({
       fanName: z.string().nullable(),
       kind: z.enum(CHATTER_SALE_KINDS),
       netMills: mills,
-      /** The look-in's person; null — nobody's. */
+      /** The look-in's person; with `home` `person`, the person's name; null — nobody's. */
       visitBy: z.string().nullable(),
       /** With `ruleFrom`: its line. */
       home: z.enum(OUTSIDE_SALE_HOMES).optional(),

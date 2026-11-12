@@ -5,7 +5,7 @@ import { SALE_LAST_WRITER_HOURS, lastWriterQuery, moscowDayOf } from "./chatter-
 import { computeSaleHomes, registrySlots } from "./sale-homes.ts";
 import { SALE_HOME_REASON_TEXT, type SaleHome, type SaleHomeReason } from "./sale-rule.ts";
 import type { ScreenHome } from "./sale-rule-screens.ts";
-import { reportDateOfShift } from "./shift-rows.ts";
+import { reportDateOfSale, reportDateOfShift } from "./shift-rows.ts";
 import { teamShiftSalesRead, type TeamShiftSalesRead } from "./team-shift-sales.ts";
 
 /**
@@ -35,6 +35,8 @@ export interface Credit {
   mills: number;
   /** Counted by the rule (a ruled shift's credit), else by the old count. */
   ruled: boolean;
+  /** The rule gives it the person with no work to hold it: their row's on the sale's day, no shift's (not the team's). */
+  withoutShift?: boolean;
 }
 
 export interface BeforeAfterSale {
@@ -81,34 +83,50 @@ export interface BeforeAfterReport {
 }
 
 const LINE_TEXT: Readonly<Record<string, string>> = {
-  visit: "заход", pot: "общак", waiting: "ждёт смены отправителя", decide: "ждёт решения", nobody: "ничья",
+  visit: "заход", person: "без смены", pot: "общак", waiting: "ждёт смены отправителя", decide: "ждёт решения", nobody: "ничья",
 };
 
 const mskStart = (day: string) => Date.parse(`${day}T00:00:00+03:00`);
 const dayAfter = (day: string, by = 1) => new Date(Date.parse(`${day}T00:00:00Z`) + by * DAY_MS).toISOString().slice(0, 10);
 const keyOf = (credits: readonly Credit[]) => credits.map((one) => `${one.userId}|${one.day}|${one.mills}`).sort().join(",");
 
-/** The current window's credits and lines of one read, by sale. Pure. */
-export function creditsOfRead(read: Pick<TeamShiftSalesRead, "money" | "outside">): {
+/**
+ * The current window's credits and lines of one read, by sale: a shift's, and a person's with no work to hold it (in
+ * their row on the sale's day); a split's parts outside the shifts each on its line, joined. Pure.
+ */
+export function creditsOfRead(read: Pick<TeamShiftSalesRead, "money" | "outside" | "withoutShift"> & { response: Pick<TeamShiftSalesRead["response"], "chatters"> }): {
   credits: Map<number, Credit[]>;
   lines: Map<number, string>;
+  /** Each line's mills, by sale. */
+  parts: Map<number, Array<{ home: string; mills: number }>>;
   sales: Map<number, ShiftSale>;
 } {
   const credits = new Map<number, Credit[]>();
   const sales = new Map<number, ShiftSale>();
+  const credit = (id: number, one: Credit) => credits.set(id, [...(credits.get(id) ?? []), one]);
   for (const one of read.money) {
     if (!one.current) continue;
     for (const sale of one.own) {
-      credits.set(sale.transactionId, [...(credits.get(sale.transactionId) ?? []), { userId: one.userId, person: one.username, day: one.date, mills: sale.netMills, ruled: one.ruled }]);
+      credit(sale.transactionId, { userId: one.userId, person: one.username, day: one.date, mills: sale.netMills, ruled: one.ruled });
       if (!sales.has(sale.transactionId)) sales.set(sale.transactionId, sale);
     }
   }
-  const lines = new Map<number, string>();
-  for (const one of read.outside) {
-    lines.set(one.sale.transactionId, one.visitBy === null ? one.home : `${one.home}:${one.visitBy}`);
-    sales.set(one.sale.transactionId, one.sale);
+  const names = new Map(read.response.chatters.map((one) => [one.userId, one.username]));
+  for (const one of read.withoutShift) {
+    credit(one.sale.transactionId, {
+      userId: one.userId, person: names.get(one.userId) ?? `hub:${one.userId}`, day: one.day, mills: one.sale.netMills, ruled: true, withoutShift: true,
+    });
   }
-  return { credits, lines, sales };
+  const lines = new Map<number, string>();
+  const parts = new Map<number, Array<{ home: string; mills: number }>>();
+  for (const one of read.outside) {
+    const id = one.sale.transactionId;
+    const line = one.visitBy === null ? one.home : `${one.home}:${one.visitBy}`;
+    lines.set(id, lines.has(id) ? `${lines.get(id)!} + ${line}` : line);
+    parts.set(id, [...(parts.get(id) ?? []), { home: one.home, mills: one.sale.netMills }]);
+    if (!sales.has(id)) sales.set(id, one.sale);
+  }
+  return { credits, lines, parts, sales };
 }
 
 const sameHome = (a: ScreenHome | undefined, b: SaleHome | undefined) => a !== undefined && b !== undefined && a.kind === b.kind && a.reason === b.reason
@@ -138,7 +156,13 @@ export async function runBeforeAfter(db: Database, input: { first: string; last:
     freshOf.set(id, home);
     if (home.kind !== "shift") return;
     for (const share of home.shares) {
-      const work = share.workRef === null ? undefined : works.get(share.workRef);
+      // A share on no work (the owner gave it to someone with no shift then): the person's, on the sale's report day.
+      if (share.workRef === null) {
+        const day = reportDateOfSale(Date.parse(sale.occurredAt));
+        if (inRange(day)) ruleCredits.set(id, [...(ruleCredits.get(id) ?? []), { userId: share.userId, person: `hub:${share.userId}`, day, mills: share.mills, ruled: true, withoutShift: true }]);
+        continue;
+      }
+      const work = works.get(share.workRef);
       if (work === undefined || work.kind !== "shift") continue;
       const day = reportDateOfShift({ startedAt: Date.parse(work.startedAt), endedAt: Date.parse(work.endedAt) });
       if (inRange(day)) ruleCredits.set(id, [...(ruleCredits.get(id) ?? []), { userId: share.userId, person: work.username, day, mills: share.mills, ruled: true }]);
@@ -188,19 +212,16 @@ export async function runBeforeAfter(db: Database, input: { first: string; last:
   for (const credits of after.credits.values()) for (const credit of credits) dayRow(credit).afterMills += credit.mills;
   for (const credits of ruleCredits.values()) for (const credit of credits) dayRow(credit).ruleMills += credit.mills;
 
-  const linesOf = (lines: ReadonlyMap<number, string>) => {
+  const linesOf = (parts: ReadonlyMap<number, ReadonlyArray<{ home: string; mills: number }>>) => {
     const out: Record<string, number> = {};
-    for (const [id, line] of lines) {
-      const kind = line.split(":")[0]!;
-      out[kind] = (out[kind] ?? 0) + (saleInfo.get(id)?.netMills ?? 0);
-    }
+    for (const list of parts.values()) for (const part of list) out[part.home] = (out[part.home] ?? 0) + part.mills;
     return out;
   };
-  const sumOf = (map: ReadonlyMap<number, Credit[]>) => [...map.values()].flat().reduce((total, one) => total + one.mills, 0);
   // The team as «Вся команда» counts it: a sale once.
+  // A person's money with no work to hold it is in their row and «вне смен», not in the team's shifts.
   const teamOf = (map: ReadonlyMap<number, Credit[]>) => [...map.values()].reduce((total, credits) => {
     const old = credits.filter((one) => !one.ruled);
-    return total + credits.filter((one) => one.ruled).reduce((sum, one) => sum + one.mills, 0) + (old[0]?.mills ?? 0);
+    return total + credits.filter((one) => one.ruled && one.withoutShift !== true).reduce((sum, one) => sum + one.mills, 0) + (old[0]?.mills ?? 0);
   }, 0);
   return {
     first,
@@ -208,8 +229,8 @@ export async function runBeforeAfter(db: Database, input: { first: string; last:
     screensFrom,
     homes: input.live ? "live" : "stored",
     hubNow: now.toISOString(),
-    team: { beforeMills: teamOf(before.credits), afterMills: teamOf(after.credits), ruleMills: sumOf(ruleCredits) },
-    outside: { before: linesOf(before.lines), after: linesOf(after.lines) },
+    team: { beforeMills: teamOf(before.credits), afterMills: teamOf(after.credits), ruleMills: teamOf(ruleCredits) },
+    outside: { before: linesOf(before.parts), after: linesOf(after.parts) },
     days: [...dayRows.values()].sort((a, b) => a.person.localeCompare(b.person) || a.day.localeCompare(b.day)),
     moved,
     unplaced,
@@ -229,8 +250,10 @@ const shortDay = (day: string) => `${day.slice(8, 10)}.${day.slice(5, 7)}`;
 const whereText = (credits: readonly Credit[], line: string | null) => {
   if (credits.length > 0) return credits.map((one) => `${one.person} ${usd(one.mills)} (${shortDay(one.day)})`).join(" + ");
   if (line === null) return "нигде в этом периоде";
-  const [kind, who] = line.split(":");
-  return `вне смен: ${LINE_TEXT[kind!] ?? kind}${who === undefined ? "" : ` (${who})`}`;
+  return `вне смен: ${line.split(" + ").map((part) => {
+    const [kind, who] = part.split(":");
+    return `${LINE_TEXT[kind!] ?? kind}${who === undefined ? "" : ` (${who})`}`;
+  }).join(" + ")}`;
 };
 
 /** «Было и стало» as the owner reads it (Russian, Markdown). */
@@ -246,7 +269,7 @@ export function formatBeforeAfter(report: BeforeAfterReport): string {
   lines.push("## Итог", "");
   lines.push(`| | Было | Стало | Правило |`, "|---|---|---|---|");
   lines.push(`| Вся команда, продажи за смены | ${usd(report.team.beforeMills)} | ${usd(report.team.afterMills)} | ${usd(report.team.ruleMills)} |`);
-  for (const kind of ["visit", "pot", "waiting", "decide", "nobody"]) {
+  for (const kind of ["visit", "person", "pot", "waiting", "decide", "nobody"]) {
     const was = report.outside.before[kind] ?? 0;
     const becomes = report.outside.after[kind] ?? 0;
     if (was !== 0 || becomes !== 0) lines.push(`| вне смен: ${LINE_TEXT[kind]} | ${usd(was)} | ${usd(becomes)} | |`);

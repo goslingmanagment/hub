@@ -94,6 +94,7 @@ function salesHint(index: ReviewIndex): { hint: ReactNode; bar: NonNullable<Tile
   ].filter((row) => row.mills > 0);
   const around = [
     money.beforeNetMills > 0 ? { key: "before", label: "до смены, ничьи", mills: money.beforeNetMills } : null,
+    money.withoutShiftNetMills !== 0 ? { key: "without", label: "в этот день без смены, по решению", mills: money.withoutShiftNetMills } : null,
     ...money.notCounted.map((one) => ({ key: `home-${one.label}`, label: `в смену, ${one.label}`, mills: one.netMills })),
     ...money.later.map((one) => ({
       key: `later-${one.tail ?? one.holder ?? ""}`,

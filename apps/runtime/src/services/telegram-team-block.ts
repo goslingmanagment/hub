@@ -11,7 +11,7 @@ import { formatUsdFromMills } from "@agency_hub_core/shared";
 import type { AppContext } from "../bootstrap.ts";
 import { dayOfShift, moscowDayOf, netOf, readPeopleWork } from "./chatter-shifts.ts";
 import { awaitingGivingOf, customOrdersReadOn, waitsSince } from "./custom-orders/readers.ts";
-import { openWindowFrom, readScreenHomes, readScreensRule, ruledSale, ruledWork } from "./sale-rule-screens.ts";
+import { LOGINS_ALONE, homeCredit, openWindowFrom, readScreenHomes, readScreensRule, ruledSale, ruledWork } from "./sale-rule-screens.ts";
 import { reportDateOfShift } from "./shift-rows.ts";
 
 /**
@@ -97,7 +97,14 @@ export async function loadTeamBlockFacts(app: Pick<AppContext, "db"> & Partial<P
     const homes = await readScreenHomes(app.db, {
       sales, openFrom: openWindowFrom(input.now, [...people.values()].flatMap((person) => person.work)), now: input.now, live: rule.live,
     });
-    const waiting = sales.filter((sale) => homes.get(sale.transactionId)?.kind === "decide");
+    // Whom a home credits is the one function's (`homeCredit`), with no screens' cut on purpose: a sale waiting for the
+    // owner's decision waits whatever a screen's old count shows (the ledger reads the home, not the screen), so no old
+    // shift's count and no work is asked — only the line of what no person takes.
+    const waiting = sales.flatMap((sale) => {
+      const home = homes.get(sale.transactionId);
+      const outside = home === undefined ? null : homeCredit({ home, sale, pieces: new Map(), logins: LOGINS_ALONE }).outside;
+      return outside?.line === "decide" ? [{ ...sale, netMills: outside.mills }] : [];
+    });
     decide = { sales: waiting.length, netMills: netOf(waiting) };
   }
   const [customs, waiting, winBack] = await Promise.all([
