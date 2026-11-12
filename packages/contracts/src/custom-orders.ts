@@ -48,6 +48,17 @@ export function parseCustomOrderCode(text: string): number | null {
   const id = Number(match[1]);
   return Number.isSafeInteger(id) ? id : null;
 }
+/**
+ * The order's number from a code somewhere in a line of text (a card's title «📦 Описание заказа К-123»): the Latin
+ * or the Cyrillic letter, as a Russian keyboard types it, with its hyphen or right before the number. Null — the
+ * line holds no code. A code is always printed with the Latin letter (`customOrderCode`).
+ */
+export function findCustomOrderCode(text: string): number | null {
+  const match = /(?:^|[^\p{L}\p{N}])[KkКк](?:\s*-\s*)?([1-9]\d{0,15})(?!\d)/u.exec(text);
+  if (!match) return null;
+  const id = Number(match[1]);
+  return Number.isSafeInteger(id) ? id : null;
+}
 export const customOrderCodeSchema = z.string().trim().min(2).max(24).refine((value) => parseCustomOrderCode(value) !== null, {
   message: "a custom order code is K-<number>",
 });

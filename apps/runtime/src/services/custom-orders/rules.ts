@@ -1,5 +1,6 @@
 import { millsToWholeCents } from "@agency_hub_core/shared";
 import {
+  findCustomOrderCode,
   cardOf,
   CUSTOM_STATE_WORDS,
   customOrderCode,
@@ -196,8 +197,8 @@ export function parseCardText(text: string): { card: CustomOrderCard; deadlineOn
       current = section.key;
       const rest = line.replace(section.match, "").trim();
       if (section.key === "header") {
-        const found = /K-([1-9]\d{0,15})/u.exec(rest);
-        code = found ? Number(found[1]) : null;
+        // «K-123» as people type it: the Latin letter or the Cyrillic one of a Russian keyboard.
+        code = findCustomOrderCode(rest);
         values.set("header", []);
         continue;
       }
@@ -238,17 +239,27 @@ export function buyerHandleOf(buyer: string | null | undefined): string | null {
 }
 
 /**
- * Whether a buyer's string (an order no fan of the page was matched for keeps it as the card named him) names this
- * fan: his profile link, @handle, username or the platform's number. A name alone («Том») names nobody.
+ * How a buyer's string (an order no fan of the page was matched for keeps it as the card named him) names this
+ * fan; null — it does not.
+ *   number — by the platform's number: the number itself, or a profile link or a chat address that carries it. It
+ *            is his alone by itself.
+ *   login  — by his login: an explicit reference to it (a profile link with it, `@handle`; any letter case), or a
+ *            bare word — the whole string, or its part in brackets as the team writes «Имя (ник)» — that is the
+ *            username letter for letter. A bare word that only looks like it («Alex» where the fan is `alex`) is a
+ *            name, and a name names nobody. A login is his alone only while no other fan of the order's page
+ *            carries it: the caller checks that (the erasure).
  */
-export function buyerNamesFan(buyer: string, fan: { platform: string; platformUserId: string; username: string | null }): boolean {
+export function buyerNamesFan(buyer: string, fan: { platform: string; platformUserId: string; username: string | null }): "number" | "login" | null {
   const handle = buyerHandleOf(buyer);
-  if (handle === null) return false;
-  if (handle === fan.platformUserId) return true;
+  if (handle === null) return null;
+  if (handle === fan.platformUserId) return "number";
   const parsed = fanInputOf(fan.platform, handle);
-  if (parsed === null) return false;
-  if (parsed.platformUserId !== null) return parsed.platformUserId === fan.platformUserId;
-  return fan.username !== null && parsed.username !== null && parsed.username.toLowerCase() === fan.username.toLowerCase();
+  if (parsed === null) return null;
+  if (parsed.platformUserId !== null) return parsed.platformUserId === fan.platformUserId ? "number" : null;
+  if (fan.username === null || parsed.username === null) return null;
+  const explicit = handle.startsWith("@") || /(?:fansly\.com|onlyfans\.com)\//iu.test(handle);
+  const his = explicit ? parsed.username.toLowerCase() === fan.username.toLowerCase() : parsed.username === fan.username;
+  return his ? "login" : null;
 }
 
 /** The card's fields that hold the fan's own words — what he asked for, the name said, his references: erased with him. */

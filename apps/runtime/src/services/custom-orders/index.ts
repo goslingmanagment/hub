@@ -82,6 +82,7 @@ import {
   type CustomPart,
   type CustomViewer,
 } from "./rules.ts";
+import { waitingCustomSaleIds } from "./readers.ts";
 
 /**
  * Заказ кастома (ecosystem plan 2026-11-12, package I): the core every door
@@ -241,7 +242,8 @@ export async function readCustomOrdersBoard(
   const pageIds = pageId !== null ? [pageId] : everything ? "all" as const : viewer.pageIds;
   const [rows, lookalikes, leads] = await Promise.all([
     listCustomOrders(app.db, { pageIds, unknownPage: everything || viewer.role === "team_lead", doneSince: new Date(now.getTime() - DONE_DAYS * DAY_MS), limit: BOARD_LIMIT + 1 }),
-    listCustomLookalikeSales(app.db, { from: new Date(now.getTime() - DONE_DAYS * DAY_MS), to: now, limit: 200 }),
+    // The last week's, and the older ones a matter still waits about: «Записать» or «Не кастом» closes it here.
+    listCustomLookalikeSales(app.db, { from: new Date(now.getTime() - DONE_DAYS * DAY_MS), to: now, limit: 200, alsoIds: await waitingCustomSaleIds(app.db) }),
     customLeads(app.db),
   ]);
   const visible = rows.filter((row) => seesOrder(viewer, row));
@@ -936,8 +938,12 @@ export async function createCustomOrderOnBoard(
     if (sale === null || !seesOrder(viewer, { pageId: sale.pageId })) throw new NotFoundError("The sale was not found");
     pageId = sale.pageId;
     fanId = sale.fanId;
+    // A sale of the fan no order took, of the last month — or, whatever its day, one a matter «похоже на кастом без
+    // заказа» still waits about (an order that holds it already refuses the payment below).
     const offered = await paymentCandidatesOf(app.db, { pageId, fanId }, ["tip", "subscription"], now, 200);
-    if (!offered.some((one) => one.transactionId === sale.transactionId)) throw notSuggested("The sale pays another order already");
+    if (!offered.some((one) => one.transactionId === sale.transactionId) && !(await waitingCustomSaleIds(app.db)).includes(sale.transactionId)) {
+      throw notSuggested("The sale pays another order already");
+    }
     payment = sale.transactionId;
   } else {
     const page = await findPageSummaryByLabel(app.db, body.pageLabel!);
@@ -964,7 +970,7 @@ export async function dismissCustomLookalike(app: CustomApp, principal: AuthPrin
   requireSessionUser(principal);
   const viewer = await customViewerOf(app, principal);
   const transactionId = Number(transactionRef);
-  const rows = await listCustomLookalikeSales(app.db, { from: new Date(now.getTime() - 60 * DAY_MS), to: now, limit: 1000 });
+  const rows = await listCustomLookalikeSales(app.db, { from: new Date(now.getTime() - 60 * DAY_MS), to: now, limit: 1000, alsoIds: await waitingCustomSaleIds(app.db) });
   const row = lookalikesFor(viewer, rows).find((one) => one.transactionId === transactionId);
   if (row === undefined) throw new NotFoundError("The sale was not found");
   return { dismissed: await dismissCustomSale(app.db, { transactionId, userId: principal.user.id }) };

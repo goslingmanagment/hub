@@ -95,6 +95,12 @@ export interface ErasurePlan {
   targets: ErasureTarget[];
   /** Observations shared with other fans' lineage — reported, never touched. */
   sharedObservations: number;
+  /**
+   * Fan scope: custom orders known only by a buyer's string that names this fan's login — and another fan's of the
+   * order's page. Reported, never touched: whose order it is is a person's to say (confirm the fan on the order,
+   * or clear it by hand).
+   */
+  customOrdersLeftAmbiguous: number;
   totalRows: number;
   /** PR4 fence: the RESOLVED page ids at execution time. pages.label is
    * mutable, so the non-resurrection fence must never resolve a page scope
@@ -122,6 +128,8 @@ interface ResolvedScope {
   ofapiExclusiveObservationIds?: number[];
   ofapiExclusiveReceiptIds?: number[];
   ofapiSharedObservations?: number;
+  /** fan scope only: custom orders left because their buyer's login is not this fan's alone on their page. */
+  customOrdersLeftAmbiguous?: number;
 }
 
 type Db = Pick<AppContext, "db" | "config" | "logger" | "pool">;
@@ -1974,18 +1982,38 @@ async function fanHotTargets(app: Db, scope: ResolvedScope, _lineage: LedgerLine
   // link to him, the buyer's string, his chat, the card's posted text and its fields in his words (what he asked
   // for, the name said in the video, notes, references: CUSTOM_CARD_FAN_TEXTS). The price, the length, the face and
   // the parts stay. The order shows «фан стёрт» from then on (`fan_erased_at`). Before the fans row goes (its FK
-  // would only null the link). An order no fan was matched for is his when its buyer's string names him (his link,
-  // handle, username or number; `buyerNamesFan`) on one of the platform's pages or on no known page; a bare name
-  // («Том») names nobody and stays.
+  // would only null the link). An order no fan was matched for is his when its buyer's string names him
+  // (`buyerNamesFan`) on one of the platform's pages or on no known page: by the platform's number — his alone by
+  // itself — or by his login, and then only while no other fan of the order's page (of the platform's pages, for
+  // an order of no known page) carries that login. A login that is two fans' leaves the order as it is — erasing
+  // one of them must not blank the other's order — and the plan counts it (`customOrdersLeftAmbiguous`). A name
+  // («Том», or «Alex» where the fan is `alex`) names nobody and stays.
   const fanUsername = scope.fanId === null ? null
     : (await app.db.execute<{ username: string | null }>(sql`select username from fans where id = ${scope.fanId}`)).rows[0]?.username ?? null;
-  const buyerRows = await app.db.execute<{ id: string; buyer: string }>(sql`
-    select id::text as id, buyer from custom_orders
+  const buyerRows = await app.db.execute<{ id: string; buyer: string; page_id: string | null }>(sql`
+    select id::text as id, buyer, page_id::text as page_id from custom_orders
     where fan_id is null and buyer is not null and (page_id is null or page_id in ${scope.pageIds})`);
   const platform = scope.input.scopeType === "fan" ? scope.input.platform : "";
-  const byBuyer = buyerRows.rows
-    .filter((row) => buyerNamesFan(row.buyer, { platform, platformUserId: ref, username: fanUsername }))
-    .map((row) => Number(row.id));
+  const byBuyer: number[] = [];
+  let leftAmbiguous = 0;
+  for (const row of buyerRows.rows) {
+    const named = buyerNamesFan(row.buyer, { platform, platformUserId: ref, username: fanUsername });
+    if (named === null) continue;
+    if (named === "login") {
+      const orderPages = row.page_id === null ? scope.pageIds : [Number(row.page_id)];
+      const others = await countOf(app, sql`
+        select count(*)::text as n from fans f
+        where f.platform = ${platform} and lower(f.username) = lower(${fanUsername}) and f.id <> ${fanId}
+          and (exists (select 1 from page_fans pf where pf.fan_id = f.id and pf.platform_account_id in ${orderPages})
+            or exists (select 1 from page_dm_threads th where th.fan_id = f.id and th.platform_account_id in ${orderPages}))`);
+      if (others > 0) {
+        leftAmbiguous += 1;
+        continue;
+      }
+    }
+    byBuyer.push(Number(row.id));
+  }
+  scope.customOrdersLeftAmbiguous = leftAmbiguous;
   const customOrderPred = byBuyer.length === 0 ? sql`fan_id = ${fanId}` : sql`(fan_id = ${fanId} or id in ${byBuyer})`;
   // Its messages and its history keep the facts — which message did what and when, the states, the times — and
   // lose the words: an excerpt quotes the chat, an author is a Telegram name, a revision's request, a refusal's
@@ -2833,6 +2861,7 @@ function workToPlan(work: ErasureWork): ErasurePlan {
     scopeRef: work.scope.scopeRef,
     targets,
     sharedObservations: (work.lineage?.sharedObsIds.length ?? 0) + (work.scope.ofapiSharedObservations ?? 0),
+    customOrdersLeftAmbiguous: work.scope.customOrdersLeftAmbiguous ?? 0,
     totalRows: targets.reduce((sum, target) => sum + target.rows, 0),
     resolvedPageIds: [...new Set(work.scope.pageIds)].sort((left, right) => left - right),
     resolvedFanGroupIds: [...new Set(work.scope.fanGroupIds)].sort(),

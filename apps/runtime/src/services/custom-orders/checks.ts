@@ -4,6 +4,7 @@ import {
   listCustomLookalikeSales,
   listCustomOrderCardOwners,
   listCustomOrdersInStates,
+  listCustomSaleFates,
   listOnShiftUsersByPage,
   listOpenMattersOfKinds,
   listUsersWithPersonRight,
@@ -12,7 +13,9 @@ import {
   touchMatters,
   type CustomLookalikeRow,
   type CustomOrderRow,
+  type CustomSaleFate,
   type MatterActor,
+  type MatterCloseHow,
   type MatterOpenInput,
   type MatterOwner,
 } from "@agency_hub_core/db";
@@ -20,7 +23,7 @@ import {
 import type { AppContext } from "../../bootstrap.ts";
 import { ensureQueueCreated, type QueueCreationClient } from "../sync-queue.ts";
 import { applyCustomStep } from "./index.ts";
-import { customsLeadOwner } from "./readers.ts";
+import { CUSTOM_UNRECORDED_KIND, customsLeadOwner, unrecordedKey, unrecordedSaleOf } from "./readers.ts";
 import { deadlinePassed, dottedDay } from "./rules.ts";
 
 /**
@@ -35,8 +38,10 @@ import { deadlinePassed, dottedDay } from "./rules.ts";
  *   custom.shot_not_given    shot and not given for 12 h → the chatter who accepted it
  *   custom.give_on_shift     … and the person on shift on its page
  *   custom.unrecorded        a tier that includes a custom, or a tip whose note says so, with no order a day
- *                            later → the chatter who led the chat when they record customs, else the lead (an
- *                            order or «не кастом» closes it)
+ *                            later → the chatter who led the chat when they record customs, else the lead. Only
+ *                            what happens to the sale closes it: an order (resolved), «не кастом» (withdrawn),
+ *                            the sale itself gone (cause_gone). The week the pass looks back is for finding new
+ *                            sales: a matter whose sale still has neither an order nor a word stays open
  *   custom.card_without_order a Telegram card no order has (the reader of the models' groups reports it) → the lead
  *
  * A chatter gets a matter only with the right «записывает кастомы в системе» (records_customs, off by default):
@@ -56,8 +61,12 @@ const REFUSED_HOURS = 12;
 const NOT_GIVEN_HOURS = 12;
 /** A sale that looks like a custom gets its order within this long, or a matter. */
 const UNRECORDED_HOURS = 24;
-/** … looked for this far back. */
+/** … a new one is looked for this far back (a matter already open is followed whatever its sale's day). */
 const UNRECORDED_DAYS = 7;
+/** How a matter about such a sale closes, by what became of the sale; a sale that still waits closes nothing. */
+const UNRECORDED_CLOSES: Readonly<Record<CustomSaleFate, MatterCloseHow | null>> = {
+  recorded: "resolved", dismissed: "withdrawn", gone: "cause_gone", waits: null,
+};
 /** Given and no revision this long → closed by itself. */
 export const AUTO_CLOSE_HOURS = 72;
 
@@ -157,7 +166,7 @@ export function unrecordedFindings(input: { sales: readonly CustomLookalikeRow[]
     const chatter = sale.ledByUserIds.find((userId) => input.recorders.has(userId));
     const owner: MatterOwner = chatter === undefined ? input.lead : { userId: chatter };
     out.push({
-      key: `custom.unrecorded:${sale.transactionId}`,
+      key: unrecordedKey(sale.transactionId),
       title: `Похоже на кастом без заказа: ${sale.kind === "tier" ? "тир с кастомом" : "чаевые с запиской про кастом"}, ${sale.pageLabel}`,
       object: { type: "transaction", id: String(sale.transactionId) },
       pageIds: [sale.pageId],
@@ -269,11 +278,35 @@ export async function runCustomOrderChecks(app: Pick<AppContext, "db" | "logger"
   const findings = orderFindings({ orders, now, lead, recorders, onShift });
   for (const kind of Object.keys(findings) as Array<keyof typeof findings>) add(await reconcile(app, kind, findings[kind], now));
 
-  // A sale that looks like a custom, a day old and still without an order: its chatter's with the right, else the lead's.
+  // A sale that looks like a custom, a day old and still without an order: its chatter's with the right, else the
+  // lead's. New ones are looked for in the last week; the sales of the matters already open are read whatever their
+  // day, so a matter is kept (and its owner followed) while its sale has neither an order nor «не кастом».
+  const waiting = await listOpenMattersOfKinds(app.db, [CUSTOM_UNRECORDED_KIND]);
+  const saleIds = (matters: typeof waiting) => matters.map((matter) => unrecordedSaleOf(matter.key)).filter((id): id is number => id !== null);
   const sales = await listCustomLookalikeSales(app.db, {
     from: new Date(now.getTime() - UNRECORDED_DAYS * 24 * HOUR_MS), to: new Date(now.getTime() - UNRECORDED_HOURS * HOUR_MS), limit: 500,
+    alsoIds: saleIds(waiting),
   });
-  add(await reconcile(app, "custom.unrecorded", unrecordedFindings({ sales, recorders, lead }), now));
+  const unrecorded = unrecordedFindings({ sales, recorders, lead });
+  add(await reconcile(app, CUSTOM_UNRECORDED_KIND, unrecorded, now, () => true));
+  // A matter whose sale is not among them closes only by what became of the sale, and says which.
+  const found = new Set(unrecorded.map((finding) => finding.key));
+  const left = waiting.filter((matter) => !found.has(matter.key));
+  const fates = await listCustomSaleFates(app.db, saleIds(left));
+  const stillWaiting: string[] = [];
+  for (const matter of left) {
+    const how = UNRECORDED_CLOSES[fates.get(unrecordedSaleOf(matter.key) ?? 0) ?? "gone"];
+    if (how === null) {
+      stillWaiting.push(matter.key);
+      continue;
+    }
+    try {
+      if ((await closeMatter(app.db, { key: matter.key, how, writer: "server" }, SYSTEM, now)).transition === "closed") tally.closed += 1;
+    } catch (error) {
+      app.logger.error({ err: error, key: matter.key }, "custom checks: an unrecorded custom's matter could not be closed");
+    }
+  }
+  await touchMatters(app.db, stillWaiting, now);
 
   // A reported card that now belongs to an order: its matter closes (the cause is gone).
   const cardMatters = await listOpenMattersOfKinds(app.db, [CARD_KIND]);
