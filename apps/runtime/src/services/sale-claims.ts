@@ -122,6 +122,15 @@ const SYSTEM: MatterActor = { door: "system" };
 const OPEN_STATES = ["asked", "agreed", "owner"] as const;
 
 const moscowDay = (at: number) => new Date(at + 3 * HOUR_MS).toISOString().slice(0, 10);
+
+/** A long text cut for a title: at the last word that fits, with «…», never mid-word. */
+export function cutAtWord(text: string, max: number): string {
+  const flat = text.replace(/\s+/g, " ").trim();
+  if (flat.length <= max) return flat;
+  const cut = flat.slice(0, max);
+  const at = cut.lastIndexOf(" ");
+  return `${(at > max * 0.6 ? cut.slice(0, at) : cut).replace(/[\s,;:.—–-]+$/u, "")}…`;
+}
 const money = (mills: number) => formatUsdFromMills(mills);
 
 function viewOf(report: CurrentReport): ReportView {
@@ -286,7 +295,7 @@ async function syncClaimMatters(app: Pick<AppContext, "db" | "logger">, now: Dat
       source: "server",
       title: sale
         ? disputeTitle({ names: who, kind: sale.kind, netMills: sale.netMills, day: moscowDay(sale.occurredAt.getTime()) })
-        : `Вопрос «чья продажа» из ledger: ${first.question?.slice(0, 120) ?? "без продажи"}`,
+        : `Вопрос «чья продажа» из ledger: ${first.question ? cutAtWord(first.question, 120) : "без продажи"}`,
       object: first.transactionId === null ? { type: "sale_claim", id: String(first.id) } : { type: "transaction", id: String(first.transactionId) },
       pageIds: label === null ? [] : [pages.idOf.get(label)].filter((id): id is number => id !== undefined),
       owner: { role: "owner" },
