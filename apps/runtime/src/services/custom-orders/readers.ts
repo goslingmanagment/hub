@@ -1,5 +1,5 @@
-import { customOrderCode, type TeamCustomsResponse } from "@agency_hub_core/contracts";
-import { listCustomOrdersAwaitingGiving, type CustomOrderRow } from "@agency_hub_core/db";
+import type { TeamCustomsResponse } from "@agency_hub_core/contracts";
+import { listCustomOrdersAwaitingGiving, listUsersWithPersonRight, type CustomOrderRow, type MatterOwner } from "@agency_hub_core/db";
 
 import type { AppContext } from "../../bootstrap.ts";
 import { loadEffectiveConfigField } from "../effective-config.ts";
@@ -8,7 +8,8 @@ import { cardOf, priceMillsOf, whatOf } from "./rules.ts";
 /**
  * «Кастомы оплачены, не отданы» once the owner points it at the custom orders
  * (`customOrdersReadEnabled`, off by default): «Ждут вас» and «Решения» (through
- * `teamCustoms`), the morning report's line and the matters mirror. Off, each
+ * `teamCustoms`, and the customs row of «Ждут вас» read from matters), the morning
+ * report's line; the matters mirror then opens nothing of its old kind. Off, each
  * keeps reading the old table as before. The number counts the orders paid (a
  * sale, or the state) or shot and not given.
  */
@@ -19,6 +20,16 @@ type ReaderApp = Pick<AppContext, "db"> & Partial<Pick<AppContext, "config">>;
 export async function customOrdersReadOn(app: ReaderApp): Promise<boolean> {
   if (app.config === undefined) return false;
   return (await loadEffectiveConfigField(app.db, app.config, "customOrdersReadEnabled")) === true;
+}
+
+/**
+ * Who leads customs, the one rule: the person with the right «ведёт кастомы» (`customs_lead`, their living login),
+ * else the team lead's role. The custom checks give the lead's matters to it, and «Ждут вас»'s customs count is the
+ * role's only while nobody has the right (a person who has it reads their own matters instead).
+ */
+export async function customsLeadOwner(app: Pick<AppContext, "db">): Promise<MatterOwner> {
+  const leads = await listUsersWithPersonRight(app.db, "customs_lead");
+  return leads[0] === undefined ? { role: "team_lead" } : { userId: leads[0].userId };
 }
 
 export function awaitingGivingOf(app: ReaderApp, input: { pageIds: "all" | readonly number[]; limit: number }): Promise<CustomOrderRow[]> {
@@ -54,18 +65,4 @@ export function teamCustomsOfOrders(orders: readonly CustomOrderRow[], now: Date
       }),
     serverNow: now.toISOString(),
   };
-}
-
-/** The mirror's items of `custom.paid_not_delivered` from the orders: keyed by the order's code, never colliding with the old table's ids. */
-export function paidOrderItems(orders: readonly CustomOrderRow[], limit: number) {
-  const items = orders.map((order) => ({
-    key: `custom.paid_not_delivered:${customOrderCode(order.id)}`,
-    title: `Кастом оплачен, не отдан: ${order.pageLabel ?? "страница не подтверждена"}`,
-    object: { type: "custom_order", id: String(order.id) },
-    pageLabels: order.pageLabel === null ? [] : [order.pageLabel],
-    money: false,
-    evidence: { code: customOrderCode(order.id), state: order.state, paidAt: waitsSince(order).toISOString(), acceptedBy: order.acceptedBy },
-    link: `/workboard/customs/${customOrderCode(order.id)}`,
-  }));
-  return { items, capped: orders.length >= limit };
 }

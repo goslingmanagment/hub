@@ -3,14 +3,14 @@ import { Fragment, useEffect, useRef, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link, useLocation, useNavigate, useSearchParams } from "react-router";
 import type { Matter, TeamLedgerQuestion } from "@agency_hub_core/contracts";
-import { Button, ErrorState, Notice, Skeleton, fanText } from "@agency_hub_core/ui";
+import { Button, Disclosure, ErrorState, Notice, Skeleton, fanText } from "@agency_hub_core/ui";
 import { formatDay, formatDateTime, formatMills, formatWeekdayDay } from "@agency_hub_core/ui/format";
 import { partLabel, purposeLabel } from "@agency_hub_core/ui/heldSends";
 import { ruPlural } from "@agency_hub_core/ui/plural";
 import { postFlagWord } from "@agency_hub_core/ui/shiftReports";
 import { customsQuery, heldSendsQuery, saleQuestionsQuery } from "@/shared/decisions";
 import { consoleHref } from "@/shared/links";
-import { mattersListQuery } from "@/shared/matters";
+import { mattersListQuery, mattersWaitingQuery } from "@/shared/matters";
 import { ScreenHeader } from "@/shared/ScreenHeader";
 import { useMe } from "@/shared/useMe";
 import { usePageFilter } from "@/shared/usePageFilter";
@@ -36,7 +36,9 @@ import "./waiting.css";
 const MINUTE = 60_000;
 
 interface Line {
-  matter: Matter;
+  /** Unique on the screen: the matter's id, or a count row's id (`row:customs`). */
+  key: string;
+  matter: Matter | null;
   group: WaitingGroupId;
   since: string;
   title: ReactNode;
@@ -84,6 +86,7 @@ function lineOf(matter: Matter, context: Context): Line {
   const evidence = matter.evidence;
   const pages = matter.pageLabels;
   const base: Line = {
+    key: String(matter.id),
     matter,
     group: groupOf(matter.kind),
     since: waitingSince(matter),
@@ -247,7 +250,7 @@ function Group({ id, title, lines, now }: { id: WaitingGroupId; title: string; l
         <span className="wt-group__count">{lines.length}</span>
       </h2>
       <ul className="wt-lines">
-        {shown.map((line) => <LineRow key={line.matter.id} line={line} now={now} />)}
+        {shown.map((line) => <LineRow key={line.key} line={line} now={now} />)}
       </ul>
       {shown.length < lines.length && (
         <button type="button" className="wt-link wt-more" onClick={() => setAll(true)}>
@@ -258,6 +261,29 @@ function Group({ id, title, lines, now }: { id: WaitingGroupId; title: string; l
   );
 }
 
+/** Whom a matter waits for, as the line of «Ждут других» says it. */
+const ROLE_WORD: Readonly<Record<string, string>> = { owner: "владелец", team_lead: "тимлид", chatter: "чаттеры" };
+function whoseWord(matter: Matter): string {
+  // The person's name (as «Люди» and «Кастомы» say it), the login of a login that is nobody's.
+  return matter.owner.kind === "user" ? matter.owner.displayName ?? (matter.owner.username || `вход №${matter.owner.userId}`) : ROLE_WORD[matter.owner.role] ?? matter.owner.role;
+}
+
+/** The group a «Ждут вас» row of a count (no matter behind it: the custom orders' number) stands in. */
+const COUNT_ROW_GROUP: Readonly<Record<string, WaitingGroupId>> = { customs: "customs" };
+
+/** «Ждут вас»'s rows that are a count, not matters (the orders paid or shot and not given), as lines of the list. */
+function countLines(rows: ReadonlyArray<{ id: string; label: string; count: number | null; to: string; matterIds: readonly number[] }>, now: number): Line[] {
+  return rows.filter((row) => row.matterIds.length === 0 && row.count !== null && row.count > 0).map((row) => ({
+    key: `row:${row.id}`,
+    matter: null,
+    group: COUNT_ROW_GROUP[row.id] ?? "other",
+    since: new Date(now).toISOString(),
+    title: `${row.label}: ${row.count}`,
+    about: [],
+    action: <GoLink link={row.to}>Открыть доску</GoLink>,
+  }));
+}
+
 export function WaitingScreen() {
   const { isOwner } = useMe();
   const { page, setPage } = usePageFilter();
@@ -266,6 +292,8 @@ export function WaitingScreen() {
   const navigate = useNavigate();
   const pages = usePages();
   const list = useQuery({ ...mattersListQuery, refetchInterval: MINUTE });
+  // The rows of «Ждут вас»: a row that is a count without matters (the custom orders) is a line here too.
+  const rows = useQuery({ ...mattersWaitingQuery(), refetchInterval: MINUTE });
   const matters = list.data?.matters ?? [];
   const has = (kind: string) => matters.some((matter) => matter.kind === kind);
   const attemptId = search.get("send");
@@ -302,19 +330,28 @@ export function WaitingScreen() {
   const platformOf = (label: string) => pages.data?.find((one) => one.label === label)?.platform;
 
   const onPage = (matter: Matter) => page === null || matter.pageLabels.length === 0 || matter.pageLabels.includes(page);
-  const lines = matters.filter(onPage).map((matter) => lineOf(matter, context));
-  const elsewhere = page === null ? 0 : matters.filter((matter) => !onPage(matter) && groupOf(matter.kind) !== "info").length;
+  const now = list.data ? Date.parse(list.data.serverNow) : Date.now();
+  // What waits for the viewer themself is the list; what waits for someone else is oversight below, counted nowhere.
+  const mine = matters.filter((matter) => matter.mine);
+  const lines = [...mine.filter(onPage).map((matter) => lineOf(matter, context)), ...(page === null ? countLines(rows.data?.rows ?? [], now) : [])];
+  const elsewhere = page === null ? 0 : mine.filter((matter) => !onPage(matter) && groupOf(matter.kind) !== "info").length;
   const only = groupOfAnchor(location.hash);
   const shown = only === null ? lines : lines.filter((line) => line.group === only);
   const groups = WAITING_GROUPS.map((group) => ({
     ...group,
-    lines: shown.filter((line) => line.group === group.id).sort((left, right) => left.since.localeCompare(right.since) || left.matter.id - right.matter.id),
+    lines: shown.filter((line) => line.group === group.id).sort((left, right) => left.since.localeCompare(right.since) || left.key.localeCompare(right.key)),
   })).filter((group) => group.lines.length > 0);
+  const others = matters.filter((matter) => !matter.mine && onPage(matter))
+    .map((matter) => {
+      const line = lineOf(matter, context);
+      return { ...line, about: [`ждёт: ${whoseWord(matter)}`, ...line.about] };
+    })
+    .filter((line) => only === null || line.group === only)
+    .sort((left, right) => left.since.localeCompare(right.since) || left.key.localeCompare(right.key));
   const waiting = groups.filter((group) => group.id !== "info");
   const info = groups.find((group) => group.id === "info");
   const waitingCount = waiting.reduce((sum, group) => sum + group.lines.length, 0);
   const unchecked = uncheckedWords((list.data?.kinds ?? []).filter((kind) => kind.checked === "no").map((kind) => kind.kind));
-  const now = list.data ? Date.parse(list.data.serverNow) : Date.now();
   const onlyTitle = only === null ? null : WAITING_GROUPS.find((group) => group.id === only)?.title ?? null;
 
   // A link with an anchor lands at its group once the list has answered (the old screen's sections did the same).
@@ -383,6 +420,15 @@ export function WaitingScreen() {
               <div className="wt-sheet wt-sheet--info">
                 <Group id="info" title={info.title} lines={info.lines} now={now} />
               </div>
+            )}
+            {others.length > 0 && (
+              <Disclosure size="md" className="wt-others" summary={`Ждут других: ${others.length}`} hint="в ваше число не входят">
+                <div className="wt-sheet wt-sheet--info">
+                  <ul className="wt-lines">
+                    {others.map((line) => <LineRow key={line.key} line={line} now={now} />)}
+                  </ul>
+                </div>
+              </Disclosure>
             )}
           </>
         )}

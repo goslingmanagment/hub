@@ -34,7 +34,7 @@ import { MOSCOW_TIME_ZONE, toBusinessDate } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
 import { readSyncPageStatuses } from "../sync/inspect.ts";
-import { awaitingGivingOf, customOrdersReadOn, paidOrderItems } from "./custom-orders/readers.ts";
+import { customOrdersReadOn } from "./custom-orders/readers.ts";
 import { toSyncPageStatusWire } from "../sync/requests/wire.ts";
 import { getClientHealthView } from "./client-health-view.ts";
 import { readLedgerPayouts } from "./ledger-payouts.ts";
@@ -491,11 +491,10 @@ export async function runMattersMirror(
     return [{ kind: "send.held", items: heldSendItems(list.items.map((item) => ({ ...item, createdAt: item.createdAt.toISOString() }))) }];
   });
   await read(["custom.paid_not_delivered"], async () => {
-    // Package I: behind the owner's setting, the custom orders paid or shot and not given; off — the old table.
-    if (await customOrdersReadOn(app)) {
-      const paid = paidOrderItems(await awaitingGivingOf(app, { pageIds: "all", limit: CUSTOMS_LIMIT }), CUSTOMS_LIMIT);
-      return [{ kind: "custom.paid_not_delivered", items: paid.items, capped: paid.capped }];
-    }
+    // Package I: once the custom orders are customs' home (the owner's setting), the custom checks are the one writer of
+    // what waits about an order (`custom.not_at_model`, `custom.overdue`, …): this old kind opens nothing and its open
+    // matters close, cause gone. «Ждут вас»'s customs row then counts the orders themselves (services/matters.ts).
+    if (await customOrdersReadOn(app)) return [{ kind: "custom.paid_not_delivered", items: [] }];
     const customs = await listPageOpenCustoms(app.db, { pageIds: "all", limit: CUSTOMS_LIMIT });
     const paid = paidCustomItems(customs.map((custom) => ({ ...custom, paidAt: custom.paidAt?.toISOString() ?? null })));
     return [{ kind: "custom.paid_not_delivered", items: paid.items, capped: paid.capped }];

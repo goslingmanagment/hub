@@ -130,7 +130,11 @@ const username = z.string().trim().min(1).max(64);
 const pageLabel = z.string().trim().min(1).max(64);
 
 export const matterOwnerSchema = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("user"), userId: intId, username: z.string() }),
+  z.object({
+    kind: z.literal("user"), userId: intId, username: z.string(),
+    /** The person's name where the login is a person's (the people registry); null — a login of no person. */
+    displayName: z.string().nullable(),
+  }),
   z.object({ kind: z.literal("role"), role: z.enum(MATTER_OWNER_ROLE_NAMES) }),
 ]);
 
@@ -148,6 +152,12 @@ export const matterSchema = z.object({
   pageLabels: z.array(z.string()),
   owner: matterOwnerSchema,
   watcherUserIds: z.array(intId),
+  /**
+   * It waits for the viewer themself: their user's, or a role they hold (the owner's, and the team lead's while
+   * nobody holds that role). Otherwise the viewer reads it as oversight: it waits for someone else, and it is in no
+   * count of theirs («Ждут вас», the menu, the extension's icon).
+   */
+  mine: z.boolean(),
   /** The evidence carries money: only the owner is served such a matter. */
   money: z.boolean(),
   /** What the finding saw: ids, states, moments; money only in the owner's matters. */

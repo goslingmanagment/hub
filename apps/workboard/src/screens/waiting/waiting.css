@@ -194,9 +194,21 @@
     flex: none;
   }
 
+  /* What waits for other people: folded under the list, the owner's oversight. */
+  .wt-others .ui-disclosure__body {
+    margin-top: var(--ui-space-2);
+  }
+
   /* The chatter's strip above «Мои смены». */
   .wt-strip {
     margin-bottom: var(--ui-space-4);
+  }
+
+  .wt-strip__more {
+    margin-top: var(--ui-space-2);
+    color: var(--ui-text-2);
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
   }
 
   .wt-strip__title {
