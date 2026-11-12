@@ -22,6 +22,7 @@ import { useShiftReview, useShiftsAround, type ReviewFilter, type ReviewIndex, t
 import { Evidence } from "./Evidence.js";
 import { LOOK, focusOf, ordered } from "./look.js";
 import { Pulse } from "./Pulse.js";
+import { ReportLink } from "./ReportLink.js";
 import { ShiftStepper } from "./ShiftStepper.js";
 import { Transcript } from "./Transcript.js";
 import { useReviewParams, type ReviewChange, type ReviewParams } from "./useReviewParams.js";
@@ -549,6 +550,7 @@ function Loaded({ model, params, update, back, updatedAt, refreshing, onRefresh 
         actions={(
           <span className="review-actions">
             {shift.ongoing && <LiveRefresh updatedAt={updatedAt} onRefresh={onRefresh} refreshing={refreshing} />}
+            <ReportLink userId={shift.userId} start={shift.start} end={shift.end} label={`${shift.username}, ${when.days}`} />
             <ShiftStepper shift={shift} />
           </span>
         )}

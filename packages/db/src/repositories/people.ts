@@ -428,7 +428,7 @@ export async function rewritePersonScheduleSlot(db: Database, slotId: number, in
 
 export interface PersonRightRow {
   personId: number;
-  right: "customs_lead" | "records_customs";
+  right: "customs_lead" | "records_customs" | "submits_shift";
   grantedAt: Date;
 }
 

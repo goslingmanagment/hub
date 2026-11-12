@@ -13,7 +13,7 @@
  * (what the chatter posted, else the draft's total); Hub's figure shows only
  * where there is no report yet. Sales only — nothing here is pay.
  */
-import type { AccountShiftReport, ChatterStats } from "@agency_hub_core/contracts";
+import type { AccountShiftReport, ChatterStats, ShiftReportsListResponse } from "@agency_hub_core/contracts";
 import { addDays, daysInRange, moscowDayOf, moscowDayStart, type MoscowDay } from "@agency_hub_core/ui/moscow";
 import { formatDayRange, formatMills } from "@agency_hub_core/ui/format";
 import type { ResolvedPeriod } from "@agency_hub_core/ui/period";
@@ -140,8 +140,15 @@ export function comparisonOf(window: Pick<MyShiftsWindow, "days" | "previous">, 
  * - `unknown` — the reports did not come (the ledger is away), or the posts did not and the shift has no draft:
  *   nothing is said per row;
  * - `other` — a state the ledger added later, in its own word.
+ *
+ * With the person's switch «сдаёт смену в системе» on (ecosystem package F), a shift that began after it was
+ * turned on is Hub's report, opened by its row: `ongoing` «Идёт» (it may be handed in already), `due` «Сдайте
+ * смену», `handed` «Сдан». Rows before the switch keep their post.
  */
-export type RowState = "posted" | "draft" | "missing" | "ongoing" | "unknown" | "other";
+export type RowState = "posted" | "draft" | "missing" | "ongoing" | "unknown" | "other" | "due" | "handed";
+
+/** Hub's report of a shift row (`shiftReportsList`). */
+export type HubShiftReport = ShiftReportsListResponse["shifts"][number];
 
 export interface MyShiftRow {
   /** The shift's start, or `report:<id>` for a report Hub has no shift for. */
@@ -163,6 +170,10 @@ export interface MyShiftRow {
   /** Hub's own figure of the shift's sales, shown only where there is no report: null when there is one. */
   hubMills: number | null;
   state: RowState;
+  /** The shift's report in Hub (the switch on, a shift after it): the row opens it. Null — the old way. */
+  hub: HubShiftReport | null;
+  /** `totalMills` is a draft's, not handed in yet: said «предварительно». */
+  preliminary: boolean;
 }
 
 /** A draft's window; null — a post written without the agent (no window), or one that cannot be read. */
@@ -222,6 +233,8 @@ export function joinShifts(input: {
   reports: readonly AccountShiftReport[] | null;
   postsRead?: boolean;
   window: Pick<MyShiftsWindow, "startsAt" | "endsAt">;
+  /** Hub's shift reports (`shiftReportsList`); null or switched off — none. */
+  hub?: ShiftReportsListResponse | null;
 }): MyShiftRow[] {
   const { shifts, reports, window } = input;
   // «Отчёта нет» only when both the drafts and the posts came: else a shift without one may still have a post.
@@ -263,22 +276,28 @@ export function joinShifts(input: {
 
   const rows: Array<{ row: MyShiftRow; at: number; ongoing: boolean }> = shifts.map((shift, index) => {
     const report = reportOfShift.get(index) ?? null;
-    return {
-      row: {
-        key: shift.startedAt,
-        shift,
-        report,
-        when: shiftWhen({ startedAt: shift.startedAt, endedAt: shift.endedAt, ongoing: shift.ongoing, workedMinutes: shift.workedMinutes }),
-        pages: shift.pages,
-        workedMinutes: shift.workedMinutes,
-        totalMills: report?.totalMills ?? null,
-        draftMills: report === null ? null : changedFrom(report),
-        hubMills: report === null ? shift.salesNetMills : null,
-        state: report !== null ? reportState(report) : shift.ongoing ? "ongoing" : missingKnown ? "missing" : "unknown",
-      },
-      at: Date.parse(shift.startedAt),
-      ongoing: shift.ongoing,
+    const hub = hubReportOf(shift, input.hub ?? null);
+    const base: MyShiftRow = {
+      key: shift.startedAt,
+      shift,
+      report,
+      when: shiftWhen({ startedAt: shift.startedAt, endedAt: shift.endedAt, ongoing: shift.ongoing, workedMinutes: shift.workedMinutes }),
+      pages: shift.pages,
+      workedMinutes: shift.workedMinutes,
+      totalMills: report?.totalMills ?? null,
+      draftMills: report === null ? null : changedFrom(report),
+      hubMills: report === null ? shift.salesNetMills : null,
+      state: report !== null ? reportState(report) : shift.ongoing ? "ongoing" : missingKnown ? "missing" : "unknown",
+      hub,
+      preliminary: false,
     };
+    // Hub's report is the shift's report, one number from one service: handed in, its total; not yet, the draft's
+    // total «предварительно», and «Сдайте смену» (or «Идёт»).
+    const row: MyShiftRow = hub === null ? base
+      : hub.state === "submitted"
+        ? { ...base, state: "handed", totalMills: hub.totalMills, draftMills: null, hubMills: null }
+        : { ...base, state: shift.ongoing ? "ongoing" : "due", totalMills: hub.draftTotalMills, draftMills: null, hubMills: hub.draftTotalMills === null ? shift.salesNetMills : null, preliminary: hub.draftTotalMills !== null };
+    return { row, at: Date.parse(shift.startedAt), ongoing: shift.ongoing };
   });
 
   // 3. The reports of shifts Hub did not see.
@@ -298,6 +317,8 @@ export function joinShifts(input: {
         draftMills: changedFrom(report),
         hubMills: null,
         state: reportState(report),
+        hub: null,
+        preliminary: false,
       },
       at: own?.from ?? Date.parse(day),
       ongoing: false,
@@ -305,6 +326,24 @@ export function joinShifts(input: {
   });
 
   return rows.sort((a, b) => Number(b.ongoing) - Number(a.ongoing) || b.at - a.at).map((one) => one.row);
+}
+
+/**
+ * Hub's report row of a shift, when the person's switch is on and the shift began after it: the row of the same
+ * shift that ran with it the longest. Null — the old way. Pure.
+ */
+export function hubReportOf(shift: Pick<StatsShift, "startedAt" | "endedAt">, hub: ShiftReportsListResponse | null): HubShiftReport | null {
+  if (hub === null || !hub.enabled || hub.enabledSince === null) return null;
+  const since = Date.parse(hub.enabledSince);
+  const from = Date.parse(shift.startedAt);
+  const to = Math.max(from + 1, Date.parse(shift.endedAt));
+  let best: { row: HubShiftReport; overlap: number } | null = null;
+  for (const row of hub.shifts) {
+    if (Date.parse(row.startedAt) < since) continue;
+    const overlap = Math.min(to, Math.max(Date.parse(row.startedAt) + 1, Date.parse(row.endedAt))) - Math.max(from, Date.parse(row.startedAt));
+    if (overlap > 0 && (best === null || overlap > best.overlap)) best = { row, overlap };
+  }
+  return best?.row ?? null;
 }
 
 /** A report's state: posted once the chatter posted it, else the draft's own word. */

@@ -26,6 +26,15 @@ export const NARROW_WEB_SESSION_OPERATIONS = [
   "accountReports",
   // The chatter's strip «Ждут вас» above «Мои смены»: a narrow session reads as a chatter (their own, never money).
   "mattersList",
+  // Отчёт смены (ecosystem package F): the shift screen the extension opens, «Сдать смену» on it.
+  "shiftReport",
+  "shiftReportsList",
+  "shiftReportClaimable",
+  "shiftReportLineSet",
+  "shiftReportCommentSet",
+  "shiftReportOffPlatformAdd",
+  "shiftReportOffPlatformWithdraw",
+  "shiftReportSubmit",
 ] as const satisfies readonly KernelOperationKey[];
 
 /** Whether a narrow web session may call the route with this key. */
