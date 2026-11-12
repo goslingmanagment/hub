@@ -1,5 +1,5 @@
 import { pathSegment } from "./path.js";
-import { isChatterSite, isConsoleSite, peerSiteOrigin, signInHopHref } from "./sites.js";
+import { NO_SILENT_SIGNIN, isChatterSite, isConsoleSite, peerSiteOrigin, signInHopHref, silentSignInHref } from "./sites.js";
 import type { Period, PeriodOption } from "../stores/periodStore.js";
 
 /**
@@ -140,6 +140,30 @@ export function resolveLoginReturnPath(value: string | null | undefined): string
 export function isWorkboardPath(path: string): boolean {
   const pathname = path.split(/[?#]/)[0] ?? "";
   return pathname === "/workboard" || pathname.startsWith("/workboard/");
+}
+
+/**
+ * The sign-in page after a sign-out: it does not ask the other name, so a
+ * session left there from before the names shared one does not sign the
+ * person straight back in.
+ */
+export const SIGNED_OUT_LOGIN = `/login?${new URLSearchParams({ [NO_SILENT_SIGNIN.param]: NO_SILENT_SIGNIN.value }).toString()}`;
+
+/**
+ * The silent try of a sign-in page arrived at without a session (ecosystem plan
+ * §3.2, «вошёл в одном месте — вошёл везде»): one round trip asks the other of
+ * the two names; signed in there (a full session) → signed in here too, on this
+ * same page, which then leads on as for anyone signed in; nobody → this page
+ * again with the marker, which shows the form. Null — no other name (a local
+ * build on one name, a test), or the marker is already here: no try.
+ */
+export function silentSignInTry(search: URLSearchParams, returnTo: string): string | null {
+  if (search.get(NO_SILENT_SIGNIN.param) === NO_SILENT_SIGNIN.value) return null;
+  const other = peerSiteOrigin();
+  if (other === null || typeof window === "undefined") return null;
+  const back = new URLSearchParams(returnTo === "/" ? {} : { next: returnTo });
+  back.set(NO_SILENT_SIGNIN.param, NO_SILENT_SIGNIN.value);
+  return silentSignInHref(other, `${window.location.origin}/login?${back.toString()}`);
 }
 
 export function buildLoginRoute(returnTo: string): string {

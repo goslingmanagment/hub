@@ -21,6 +21,7 @@ import {
 } from "lucide-react";
 import { useLogout } from "@/api/queries";
 import { useWaitingCounts } from "@/api/waiting";
+import { SIGNED_OUT_LOGIN } from "@/lib/navigation";
 import { PALETTE_ARIA_SHORTCUT, PALETTE_SHORTCUT } from "@/lib/paletteShortcut";
 import { clearDashboardSession } from "@/lib/queryClient";
 import { matchScreen, menuOf, sectionHome, type Section } from "@/lib/sections";
@@ -109,7 +110,7 @@ function AccountMenu({ user }: { user: SidebarProps["user"] }) {
     try {
       await logout.mutateAsync();
       clearDashboardSession();
-      window.location.assign("/login");
+      window.location.assign(SIGNED_OUT_LOGIN);
     } catch { /* The mutation retains the failure; do not report an unconfirmed logout. */ }
   }
 

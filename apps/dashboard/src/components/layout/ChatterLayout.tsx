@@ -1,7 +1,7 @@
 import { Navigate, Outlet, useLocation } from "react-router";
 import { useAuthMe, useLogout } from "@/api/queries";
 import { KernelApiError } from "@/api/sdk";
-import { CHATTER_HOME, buildLoginRoute, chatterExit, leavesTheConsole } from "@/lib/navigation";
+import { CHATTER_HOME, SIGNED_OUT_LOGIN, buildLoginRoute, chatterExit, leavesTheConsole } from "@/lib/navigation";
 import { clearDashboardSession } from "@/lib/queryClient";
 import { isConsoleSite } from "@/lib/sites";
 import { LeaveForWorkboard } from "@/routes/ToWorkboard";
@@ -68,7 +68,7 @@ export function ChatterLayout() {
     try {
       await logout.mutateAsync();
       clearDashboardSession();
-      window.location.assign("/login");
+      window.location.assign(SIGNED_OUT_LOGIN);
     } catch { /* The mutation retains the failure; never claim an unconfirmed sign-out. */ }
   }
 

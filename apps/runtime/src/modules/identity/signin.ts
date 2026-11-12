@@ -108,6 +108,7 @@ export function registerSigninRoutes(server: ApiServer, ctx: ApiModuleContext) {
       throw new BadRequestError("A sign-in code is minted only on the console's or the team's name");
     }
     const { to, state } = request.query;
+    const silent = request.query.silent === "1";
     const session = await liveFullSession(appContext, request.cookies[SESSION_COOKIE_NAME]);
 
     // Another service's server: its registered callback, a code with no token in it.
@@ -140,14 +141,17 @@ export function registerSigninRoutes(server: ApiServer, ctx: ApiModuleContext) {
     // The code is bound to the browser first: the target sets its state cookie and comes back with its hash.
     if (state === undefined) {
       const begin = new URL(`${target}/api/v1/auth/sso/begin`);
-      begin.search = new URLSearchParams({ from: here, next }).toString();
+      begin.search = new URLSearchParams({ from: here, next, ...(silent ? { silent: "1" } : {}) }).toString();
       return reply.redirect(begin.href, 302);
     }
     if (!isStateDigest(state)) {
       throw new BadRequestError("`state` is not a state digest");
     }
     if (!session) {
-      return reply.redirect(signInFirst(here, { to: target, next, state }), 302);
+      // A silent try (the other name asking whether someone is signed in here):
+      // nobody → back where it came from, which shows its own sign-in page.
+      // Its `next` carries the marker that stops a second try (LoginPage).
+      return reply.redirect(silent ? next : signInFirst(here, { to: target, next, state }), 302);
     }
     const code = await mintSessionCode(appContext, {
       sessionToken: request.cookies[SESSION_COOKIE_NAME]!,
@@ -184,7 +188,8 @@ export function registerSigninRoutes(server: ApiServer, ctx: ApiModuleContext) {
     }
     const { state, digest } = newSsoState();
     reply.setCookie(ssoStateCookieName(appContext), state, { ...cookieSecurity(appContext), maxAge: SSO_STATE_TTL_SECONDS });
-    return reply.redirect(ssoAddress(from, { to: here, next, state: digest }), 302);
+    const silent = request.query.silent === "1" ? { silent: "1" } : {};
+    return reply.redirect(ssoAddress(from, { to: here, next, state: digest, ...silent }), 302);
   });
 
   server.get("/api/v1/auth/sso/accept", {

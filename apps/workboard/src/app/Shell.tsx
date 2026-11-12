@@ -3,7 +3,7 @@ import { Suspense, type ReactNode } from "react";
 import { NavLink, Navigate, Outlet, useLocation, useMatches, type UIMatch } from "react-router";
 import { CountBadge, ErrorState, Menu, Skeleton, Tooltip, type IconComponent, type MenuEntry } from "@agency_hub_core/ui";
 import { THEME_OPTIONS, useThemeStore, type ThemePreference } from "@agency_hub_core/ui/theme";
-import { peerOriginOf, siteOf } from "@agency_hub_core/ui/sites";
+import { NO_SILENT_SIGNIN, peerOriginOf, siteOf } from "@agency_hub_core/ui/sites";
 import { kernel, queryClient, signInHref } from "@/shared/hub";
 import { carryParams } from "@/shared/links";
 import { decisionParts, decisionsElsewhereText, decisionsFailedText, useDecisionCounts } from "@/shared/decisions";
@@ -170,7 +170,8 @@ function Account() {
       onSelect: () => {
         void kernel.logout().catch(() => undefined).finally(() => {
           queryClient.clear();
-          window.location.assign(signInHref(import.meta.env.BASE_URL));
+          // Signed out: the sign-in page does not ask the other name (no silent sign-back-in).
+          window.location.assign(`${signInHref(import.meta.env.BASE_URL)}&${NO_SILENT_SIGNIN.param}=${NO_SILENT_SIGNIN.value}`);
         });
       },
     },

@@ -1,8 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { NARROW_WEB_SESSION_OPERATIONS, routeSchemas, type RouteAuthPolicy } from "@agency_hub_core/contracts";
 
 import { crossOriginRefusal, type OriginCheckInput } from "../apps/runtime/src/api/origin-check.ts";
+import { silentSignInTry } from "../apps/dashboard/src/lib/navigation.ts";
 import {
   NARROW_SESSION_TOKEN_PREFIX,
   requireDashboardUser,
@@ -173,5 +174,34 @@ describe("the planted session's token, sealed by its code", () => {
     expect(openSessionToken("code-one", sealed)).toBe("session-token");
     expect(openSessionToken("code-two", sealed)).toBeNull();
     expect(openSessionToken("code-one", `${sealed.slice(0, -2)}xx`)).toBeNull();
+  });
+});
+
+// The sign-in page's silent try (LoginPage): once per arrival, never a loop.
+describe("the silent try of a sign-in page", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("asks the other name once, coming back to the same page with the marker", () => {
+    vi.stubGlobal("window", { location: { origin: "https://chatgoose.gosling-agency.ru" } });
+    const href = silentSignInTry(new URLSearchParams("next=/workboard/"), "/workboard/")!;
+    const url = new URL(href, "https://chatgoose.gosling-agency.ru");
+    expect(url.pathname).toBe("/api/v1/auth/sso/begin");
+    expect(url.searchParams.get("from")).toBe("https://hub.gosling-agency.ru");
+    expect(url.searchParams.get("silent")).toBe("1");
+    const back = new URL(url.searchParams.get("next")!);
+    expect(`${back.origin}${back.pathname}`).toBe("https://chatgoose.gosling-agency.ru/login");
+    expect(Object.fromEntries(back.searchParams)).toEqual({ next: "/workboard/", sso: "none" });
+    // Back on the page with the marker: no second try.
+    expect(silentSignInTry(back.searchParams, "/workboard/")).toBeNull();
+  });
+
+  it("works from the console's name to the team's, and not at all on a one-name build", () => {
+    vi.stubGlobal("window", { location: { origin: "https://hub.gosling-agency.ru" } });
+    expect(new URL(silentSignInTry(new URLSearchParams(), "/")!, "https://hub.gosling-agency.ru").searchParams.get("from"))
+      .toBe("https://chatgoose.gosling-agency.ru");
+    vi.stubGlobal("window", { location: { origin: "http://localhost:5173" } });
+    expect(silentSignInTry(new URLSearchParams(), "/")).toBeNull();
   });
 });
