@@ -56,6 +56,10 @@ describe("where an accept may lead (`next`)", () => {
     "/api/v1/admin/users",
     "/workboard/../api/v1/auth/logout",
     "/workboard/%2e%2e/api/v1/admin/users",
+    "/.//evil.example/x",
+    "/%2F/evil.example/x",
+    "/./workboard/",
+    "https://hub.gosling-agency.ru/.//evil.example/x",
     "https://hub.gosling-agency.ru/api/v1/auth/sso?to=x",
     "/workboard/my shifts",
     "/workboard/\u0000",
@@ -72,10 +76,17 @@ describe("where an accept may lead (`next`)", () => {
     expect(resolveBrowserNext("http://tasks.localhost:5173/", team, local)).toBeNull();
   });
 
+  // The same table in hub, TaskIndex, the monitor and ContentOps (ecosystem R9): what a service redirects to stays a
+  // path of its origin after normalisation.
   it("gives a client only a path of its own", () => {
     expect(resolveClientNext(undefined)).toBe("/");
     expect(resolveClientNext("/plan?week=2")).toBe("/plan?week=2");
-    for (const next of ["https://evil.example/", "//evil.example", "/\\evil", "plan"]) {
+    expect(resolveClientNext("/plan?week=2#top")).toBe("/plan?week=2#top");
+    expect(resolveClientNext("/plan?u=https://x.example//y")).toBe("/plan?u=https://x.example//y");
+    for (const next of [
+      "https://evil.example/", "//evil.example", "/\\evil", "plan", "/.//evil.example/x", "/%2F/evil.example/x",
+      "/%2f%2fevil.example", "/%5Cevil.example", "/./x", "/../x", "/x/../../evil", "/%2e%2e/x", "/\tx",
+    ]) {
       expect(resolveClientNext(next), next).toBeNull();
     }
   });
