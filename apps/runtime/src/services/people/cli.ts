@@ -26,7 +26,8 @@ import { readPersonForOwner, updatePerson } from "./index.ts";
 // Two edits of a person's card for the owner's word given in chat (the card in Workboard «Люди» does the same):
 //   pnpm cli people:right <code> --grant <right...> --revoke <right...> --owner-user-id <id>
 //   pnpm cli people:agent-key <agentCode> --link <keyName...> --unlink <keyName...> --owner-user-id <id>
-// Both go through the registry's own edit (`updatePerson`): the same checks and the same audit rows, source cli.
+//   pnpm cli people:telegram <code> --user-id <id> --owner-user-id <id>
+// All go through the registry's own edit (`updatePerson`): the same checks and the same audit rows, source cli.
 
 async function requireOwner(app: Awaited<ReturnType<typeof createAppContext>>, ownerUserId: number) {
   const owner = await findUserById(app.db, ownerUserId);
@@ -104,6 +105,25 @@ export function registerPeopleCommands(program: Command) {
         const after = [...new Set([...before.filter((right) => !revoke.includes(right)), ...grant])];
         const updated = await updatePerson(app, code, { rights: after }, { source: "cli", actorUserId: owner.id });
         console.log(JSON.stringify({ code, before, after: updated.person.rights.map((right) => right.right) }));
+      } finally {
+        await app.close();
+      }
+    });
+
+  program
+    .command("people:telegram")
+    .description("Set whose Telegram account a person writes from (the card's field); audited like the card")
+    .argument("<code>", "the person's code")
+    .requiredOption("--user-id <id>", "the person's Telegram id", positiveInt)
+    .requiredOption("--owner-user-id <id>", "the active owner who asked for it", positiveInt)
+    .action(async (code: string, options: { userId: number; ownerUserId: number }) => {
+      const app = await createAppContext();
+      try {
+        const owner = await requireOwner(app, options.ownerUserId);
+        const before = (await readPersonForOwner(app, code)).person.telegram.userId;
+        const updated = await updatePerson(app, code, { telegram: { userId: options.userId } }, { source: "cli", actorUserId: owner.id });
+        // Whether it is set, never the id itself: the output lands in logs.
+        console.log(JSON.stringify({ code, had: before !== null, has: updated.person.telegram.userId !== null }));
       } finally {
         await app.close();
       }
