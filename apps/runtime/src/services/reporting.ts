@@ -47,8 +47,10 @@ import {
   listFanNotesForPages,
   listFanSummariesForPages,
   getRevenueBreakdownForExactPeriod,
+  getRevenuePageTotalsForExactPeriod,
 } from "@agency_hub_core/db";
 import {
+  BUSINESS_TIME_ZONE,
   millsToNumber,
   resolveBusinessDateRangeForPlatform,
   resolveRevenueComparisonPeriodBoundsForPlatform,
@@ -580,9 +582,30 @@ async function getPageRevenueReportInUtcDays(
   };
 }
 
+/**
+ * A custom window cut at an instant: [from, min(to, until)), Hub's Moscow days. An instant before the window's start
+ * leaves an empty window, never a reversed one.
+ */
+function cutCustomPeriod(custom: { from: string; to: string }, until: Date): { from: Date; to: Date } {
+  // A custom window is its own dates: the clock takes no part in it.
+  const window = resolvePeriodBounds("custom", until, custom, BUSINESS_TIME_ZONE);
+  const from = window.from!;
+  const end = window.to!.getTime() < until.getTime() ? window.to! : until;
+  return { from, to: end.getTime() < from.getTime() ? from : end };
+}
+
 export async function getOverviewRevenueReport(
   app: AppContext,
-  input: PeriodInput & { pageIds?: number[] },
+  input: PeriodInput & {
+    pageIds?: number[];
+    /**
+     * Cut a custom window at this instant: only what occurred before it. «Деньги → Месяц» asks the month's income up to
+     * the ledger's cut, to compare like with like. A part of a day is not in the Moscow-dated rollup, so the whole cut
+     * window is read from the transactions (the rows the rollup is built from: active, reportable, creator net). No
+     * comparison.
+     */
+    until?: Date;
+  },
 ): Promise<OverviewRevenueResponse> {
   // Pin one clock across current/previous totals and disclosed boundaries.
   input = { ...input, now: input.now ?? new Date() };
@@ -591,16 +614,26 @@ export async function getOverviewRevenueReport(
   const pageRows = await listRevenuePages(app.db, input.pageIds);
   const modelRows = await listRevenueModels(app.db, input.pageIds);
   const groupedPageIds = groupPageIdsByPlatform(pageRows);
-  const [totals, previousTotals] = await Promise.all([
-    getRevenuePageTotalsByPlatform(app, groupedPageIds, input),
-    getRevenuePageTotalsByPlatform(app, groupedPageIds, { ...input, comparison: true }),
-  ]);
+  // The cut window, with the pages of this report as its scope; null — the report's own window, from the rollup.
+  const cut = input.until !== undefined && input.period === "custom" && input.custom
+    ? { pageIds: pageRows.map((page) => page.id), period: cutCustomPeriod(input.custom, input.until) }
+    : null;
+  const [totals, previousTotals] = cut
+    ? [await getRevenuePageTotalsForExactPeriod(app.db, cut), []]
+    : await Promise.all([
+      getRevenuePageTotalsByPlatform(app, groupedPageIds, input),
+      getRevenuePageTotalsByPlatform(app, groupedPageIds, { ...input, comparison: true }),
+    ]);
   const totalsByPageId = new Map(totals.map((row) => [row.pageId, row.netEarningsMills]));
   const previousByPageId = new Map(previousTotals.map((row) => [row.pageId, row.netEarningsMills]));
-  const current = await getRevenueBreakdownForGroups(app, groupedPageIds, input);
+  const current = cut
+    ? { bounds: cut.period, rows: await getRevenueBreakdownForExactPeriod(app.db, cut) }
+    : await getRevenueBreakdownForGroups(app, groupedPageIds, input);
   const currentRows = current.rows;
   const currentTotal = summarizeRevenueRows(currentRows).netEarningsMills;
-  const comparison = await getRevenueComparisonForGroups(app, groupedPageIds, input);
+  const comparison = cut
+    ? { bounds: null, rows: [] as RevenueBreakdownRow[] }
+    : await getRevenueComparisonForGroups(app, groupedPageIds, input);
 
   const pages = pageRows.map((page) => ({
     pageId: page.id,
@@ -636,11 +669,15 @@ export async function getOverviewRevenueReport(
         input,
         current.bounds,
         currentRows,
-        buildPlatformRevenueWindows(
-          Array.from(groupedPageIds.keys()),
-          input,
-          input.now ?? new Date(),
-        ),
+        cut
+          ? [...groupedPageIds.keys()].sort().map((platform) => ({
+            platform, from: cut.period.from.toISOString(), to: cut.period.to.toISOString(), comparisonFrom: null, comparisonTo: null,
+          }))
+          : buildPlatformRevenueWindows(
+            Array.from(groupedPageIds.keys()),
+            input,
+            input.now ?? new Date(),
+          ),
       ),
       currentTotal,
       comparison.bounds,

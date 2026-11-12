@@ -21,7 +21,9 @@ import type { KernelOperationKey } from "./sdk-runtime.ts";
  * anything else. Never on it: a route of the account's credentials (devices,
  * password), where a person is paid, any owner or team-lead route, the
  * hand-off's own mint (a narrow session never travels to another name).
- * Services read a narrow session as a chatter whatever the role.
+ * A read on it that could carry where a person is paid leaves it out for a
+ * narrow session (the hand-off's integration test walks every read of the
+ * list for it). Services read a narrow session as a chatter whatever the role.
  */
 export const NARROW_WEB_SESSION_OPERATIONS = [
   "me",
@@ -53,7 +55,8 @@ export const NARROW_WEB_SESSION_OPERATIONS = [
   "customSaleDismiss",
   // The page filter of «Кастомы»: the pages the person reaches.
   "pages",
-  // «Начало» (package J): a newcomer's way, read; where payouts go is shown, never written from here.
+  // «Начало» (package J): a newcomer's way, read. Of where payouts go it carries only whether it is written and when:
+  // Hub leaves the text out for a narrow session (`ownPayoutDetailsSchema`), and nothing is written from here.
   "accountStart",
 ] as const satisfies readonly KernelOperationKey[];
 

@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link, useSearchParams } from "react-router";
-import { MOSCOW_TIME_ZONE, toBusinessDate } from "@agency_hub_core/shared";
+import { MOSCOW_TIME_ZONE, millsToWholeCents, toBusinessDate } from "@agency_hub_core/shared";
 import type { TeamLedgerMonthCard } from "@agency_hub_core/contracts";
 import { kernel, KernelApiError } from "@/api/sdk";
 import { NoAnswerPanel, StatusPanel } from "@/components/shared/StatusPanel";
@@ -11,10 +11,16 @@ import { PeriodStepper } from "@/components/ui/PeriodStepper";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { formatDateTime, formatMills } from "@/lib/format";
 import { monthCheck } from "./check";
-import { monthWindow, stepMonth } from "./window";
+import { monthCut, monthWindow, stepMonth } from "./window";
 
 /** The ledger's money, or «—» where it has none (a field it did not count is never a zero). */
 const money = (mills: number | null) => (mills === null ? "—" : formatMills(mills));
+
+/**
+ * Hub's own income in the check's line, as the whole cents the check compares (the ledger keeps whole cents, Hub
+ * keeps mills): the line's own arithmetic then holds to the cent, «Доход страниц» = this ∓ the difference it names.
+ */
+const hubCents = (mills: number) => formatMills(millsToWholeCents(mills) * 10);
 
 const MONTHS = ["январь", "февраль", "март", "апрель", "май", "июнь", "июль", "август", "сентябрь", "октябрь", "ноябрь", "декабрь"];
 const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
@@ -40,8 +46,12 @@ const STATES: ReadonlyArray<{ key: keyof TeamLedgerMonthCard; label: string; mea
  * with Hub's payouts key). Hub counts nothing here: the card is the ledger's, and
  * its first line, «Доход страниц», is set beside Hub's own income of the same
  * Moscow month (the custom window Главная counts) with «равно Главной» or the
- * difference named. Honest states: a month the ledger could not prove, a ledger
- * that does not answer, an older ledger without the read.
+ * difference named. The card is of the ledger's cut (`asOf`): while the cut is
+ * inside the month, Hub's income is asked up to the same moment (one more read
+ * of the same income), so the two are compared like with like and a shortfall
+ * of the ledger is never excused as its hourly lag. Honest states: a month the
+ * ledger could not prove, a ledger that does not answer, an older ledger
+ * without the read.
  */
 export function MonthPage() {
   const [search, setSearch] = useSearchParams();
@@ -61,6 +71,14 @@ export function MonthPage() {
     queryFn: () => kernel.overviewRevenue({ query: { period: "custom", from: days.from, to: days.to } }),
     meta: { suppressGlobalError: true },
   });
+  // The card covers the month up to the ledger's cut: Hub's own income up to the same moment, to compare like with like.
+  const cut = card.data?.card ? monthCut(month, card.data.card.asOf) : null;
+  const hubAtCut = useQuery({
+    queryKey: ["overviewRevenue", "custom", days.from, days.to, "until", cut],
+    queryFn: () => kernel.overviewRevenue({ query: { period: "custom", ...monthWindow(month, cut) } }),
+    enabled: cut !== null,
+    meta: { suppressGlobalError: true },
+  });
   const go = (next: string) => {
     const query = new URLSearchParams(search);
     if (next === current) query.delete("month");
@@ -69,7 +87,14 @@ export function MonthPage() {
   };
 
   const data = card.data;
-  const fresh = card.dataUpdatedAt ? { at: card.dataUpdatedAt, refreshing: card.isFetching || hub.isFetching, onRefresh: () => void Promise.all([card.refetch(), hub.refetch()]) } : undefined;
+  const fresh = card.dataUpdatedAt
+    ? {
+      at: card.dataUpdatedAt,
+      refreshing: card.isFetching || hub.isFetching || hubAtCut.isFetching,
+      // The card first: a new cut asks Hub's income up to it by itself (its key), the same cut is asked again.
+      onRefresh: () => void Promise.all([card.refetch(), hub.refetch(), ...(cut === null ? [] : [hubAtCut.refetch()])]),
+    }
+    : undefined;
 
   return (
     <div className="space-y-6">
@@ -110,21 +135,35 @@ export function MonthPage() {
           />
         </div>
       ) : (
-        <Card card={data.card} hub={hub} current={month === current} />
+        <Card card={data.card} hub={hub} cut={cut} hubAtCut={hubAtCut} />
       )}
     </div>
   );
 }
 
-function Card({ card, hub, current }: {
+/** One read of Hub's own income, as the card needs it. */
+interface HubIncome {
+  data?: { netEarningsMills: number } | undefined;
+  isError: boolean;
+  isLoading: boolean;
+  refetch: () => unknown;
+}
+
+function Card({ card, hub, cut, hubAtCut }: {
   card: TeamLedgerMonthCard;
-  hub: { data?: { netEarningsMills: number } | undefined; isError: boolean; isLoading: boolean; refetch: () => unknown };
-  /** The month goes on: the ledger takes the facts once an hour. */
-  current: boolean;
+  /** Hub's own income of the whole month: what Главная has for it now. */
+  hub: HubIncome;
+  /** The ledger's cut when the card covers the month only up to it (`monthCut`); null — the whole month. */
+  cut: string | null;
+  /** Hub's own income of the month up to that cut (asked only when there is one). */
+  hubAtCut: HubIncome;
 }) {
-  const hubMills = hub.data?.netEarningsMills ?? null;
+  // Like beside like: a card of a cut inside the month against Hub's income up to that cut, else the whole month.
+  const like = cut === null ? hub : hubAtCut;
+  const likeMills = like.data?.netEarningsMills ?? null;
+  const nowMills = hub.data?.netEarningsMills ?? null;
   // To the cent: the ledger keeps whole cents, Hub keeps mills; both are compared as the cents they print.
-  const check = hubMills === null || card.pagesNetMills === null ? null : monthCheck({ pagesNetMills: card.pagesNetMills, hubMills, current, asOf: card.asOf });
+  const check = likeMills === null || card.pagesNetMills === null ? null : monthCheck({ pagesNetMills: card.pagesNetMills, hubMills: likeMills, cut });
   return (
     <>
       {card.status === "unknown" && (
@@ -139,25 +178,30 @@ function Card({ card, hub, current }: {
             <p className="month-value">{money(card.pagesNetMills)}</p>
             <p className="month-means">Что заплатили фаны на страницах за месяц, после комиссии площадок.</p>
             <p className="month-check">
-              {hub.isLoading ? <Skeleton width={220} />
+              {like.isLoading ? <Skeleton width={220} />
                 : card.pagesNetMills === null ? null
-                : hubMills === null ? (
+                : likeMills === null ? (
                   <span className="text-text-muted">
-                    Главную за месяц проверить не удалось. <button type="button" className="link" onClick={() => void hub.refetch()}>Повторить</button>
+                    {cut === null ? "Главную за месяц проверить не удалось." : `Главную на ${formatDateTime(cut)} проверить не удалось.`}{" "}
+                    <button type="button" className="link" onClick={() => void like.refetch()}>Повторить</button>
                   </span>
                 )
-                  : check?.kind === "equal" ? <span className="month-equal">равно Главной: {formatMills(hubMills)}</span>
-                    // The month goes on: a ledger behind Главная is its hourly take of the facts, not a difference.
-                    : check?.kind === "behind" ? (
-                      <span className="text-text-muted">
-                        Главная сейчас: {formatMills(hubMills)}. {check.asOf
-                          ? `Ledger взял факты по ${formatDateTime(check.asOf)} и берёт новые раз в час: разница — продажи после этого, не расхождение.`
-                          : "Ledger берёт факты раз в час: разница — продажи после его последнего раза, не расхождение."}
-                      </span>
+                  : check?.kind === "equal" ? <span className="month-equal">равно Главной: {hubCents(likeMills)}</span>
+                    // The month is not whole in the card yet, and nothing is missing from it: when the ledger last took
+                    // the facts, and that newer sales follow.
+                    : check?.kind === "equal_so_far" ? (
+                      <>
+                        <span className="month-equal">равно Главной на {formatDateTime(check.cut)}: {hubCents(likeMills)}</span>{" "}
+                        <span className="text-text-muted">
+                          Ledger взял факты по это время и берёт новые раз в час: продажи после него появятся здесь в течение часа.
+                          {nowMills !== null && millsToWholeCents(nowMills) !== millsToWholeCents(likeMills) ? ` Главная сейчас: ${hubCents(nowMills)}.` : ""}
+                        </span>
+                      </>
                     )
+                      // A difference as of the ledger's own cut is a difference, whether the month goes on or not.
                       : check?.kind === "differs" ? (
                         <span className="month-differs">
-                          Главная за этот месяц: {formatMills(hubMills)}, ledger {check.deltaMills > 0 ? "больше" : "меньше"} на {formatMills(Math.abs(check.deltaMills))}
+                          {check.cut === null ? "Главная за этот месяц" : `Главная на ${formatDateTime(check.cut)}`}: {hubCents(likeMills)}, ledger {check.deltaMills > 0 ? "больше" : "меньше"} на {formatMills(Math.abs(check.deltaMills))}
                         </span>
                       ) : null}
             </p>

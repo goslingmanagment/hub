@@ -178,6 +178,8 @@ export const STAFF_STATUS: Readonly<Record<string, StatusWord>> = {
 
 export const AGENT_KEY_STATUS: Readonly<Record<string, StatusWord>> = {
   active: status("Активен", "good"),
+  // A replacement was issued for it: it works out its day and ends by itself. Nothing to do about it.
+  replaced: status("Заменяется", "moving"),
   revoked: status("Отозван", "off"),
   expired: status("Истёк", "off"),
 };

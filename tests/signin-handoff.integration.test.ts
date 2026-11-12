@@ -46,6 +46,9 @@ const TASKS = "http://tasks.test";
 const CLIENT_CALLBACK = "http://co.test/auth/hub/callback";
 const TASKS_CALLBACK = `${TASKS}/auth/hub/callback`;
 const STATE_COOKIE = "agency_hub_sso_state";
+/** Where a person is paid, invented: the mark is looked for in every answer a narrow session gets. */
+const PAYOUT_MARK = "77102-payout-mark";
+const PAYOUT = `Bybit UID ${PAYOUT_MARK}`;
 
 let testDb: StartedTestDatabase | null = null;
 let app: AppContext;
@@ -485,6 +488,46 @@ describe("the narrow web session from the extension", () => {
     const full = cookieSet(login, SESSION_COOKIE_NAME)!;
     expect(full).not.toBe(session);
     expect((await me(TEAM, full)).json()).not.toHaveProperty("narrow");
+  });
+
+  it("learns only whether where the person is paid is written, never the text — on no read of its list", async (context) => {
+    if (!server) return context.skip();
+    // The person of the registry writes where they are paid, with the password behind the session. The sessions are
+    // made by the service, not through the sign-in route: its per-address limit is this file's other tests'.
+    const passwordSession = async (username: string) =>
+      ({ [SESSION_COOKIE_NAME]: (await loginWithPassword(app, { username, password: `${username}-password-for-tests` })).sessionToken });
+    const person = await request("POST", `${HUB}/api/v1/admin/people`, {
+      cookies: await passwordSession("owner"),
+      headers: { origin: HUB },
+      payload: { code: "chatter-a", displayName: "Чаттер А", role: "chatter", state: "working", workingPageLabels: [], logins: { add: [users.chatterA] } },
+    });
+    expect(person.statusCode, person.body).toBe(200);
+    const full = await passwordSession("chatter-a");
+    const written = await request("PUT", `${TEAM}/api/v1/account/payout-details`, {
+      cookies: full, headers: { origin: TEAM }, payload: { text: PAYOUT },
+    });
+    expect(written.statusCode, written.body).toBe(200);
+    const withPassword = await request("GET", `${TEAM}/api/v1/account/start`, { cookies: full });
+    expect((withPassword.json() as { payoutDetails: { text: string } }).payoutDetails.text).toBe(PAYOUT);
+
+    // The same person's session opened from the extension: written, and when; the text is not in the answer at all.
+    const { session } = await narrowSession("chatter-a", "chatter-a-password-for-tests");
+    const cookies = { [SESSION_COOKIE_NAME]: session! };
+    const start = await request("GET", `${TEAM}/api/v1/account/start`, { cookies });
+    expect(start.statusCode, start.body).toBe(200);
+    const narrowDetails = (start.json() as { payoutDetails: { text: string | null; updatedAt: string } | null }).payoutDetails;
+    expect(narrowDetails).toEqual({ text: null, updatedAt: (withPassword.json() as { payoutDetails: { updatedAt: string } }).payoutDetails.updatedAt });
+    expect(start.body).not.toContain(PAYOUT_MARK);
+    // Nor on any other read of the narrow list (web-session-scopes.ts): a route that joins it is walked here.
+    let walked = 0;
+    for (const row of server.routePolicyTable) {
+      if (row.method !== "GET" || !(NARROW_WEB_SESSION_OPERATIONS as readonly string[]).includes(row.routeKey)) continue;
+      walked += 1;
+      const url = row.url.replace(/:[A-Za-z]+/g, "1").replace("*", "x");
+      const response = await request("GET", `${TEAM}${url}`, { cookies });
+      expect(response.body, row.routeKey).not.toContain(PAYOUT_MARK);
+    }
+    expect(walked).toBeGreaterThan(5);
   });
 
   it("dies with its device token", async (context) => {

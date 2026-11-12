@@ -61,6 +61,7 @@ import {
   canonicalCapabilities,
   issueAgentKey,
   listAgentKeysDetailed,
+  replaceAgentKey,
   updateAgentKeyCapabilities,
   updateAgentKeyPages,
 } from "./services/agent-keys.ts";
@@ -4006,7 +4007,9 @@ export function buildProgram() {
 
   // A new key, for the owner's word given in chat. The same service as the
   // dashboard: audited as agent_key.issued, source cli, under the owner who
-  // asked. The token goes to stdout this once and is stored nowhere.
+  // asked. The token goes to stdout this once and is stored nowhere. An agent
+  // who holds a live key gets none beside it (409): its pages and capabilities
+  // change in place, and the key itself is replaced with agent-keys:replace.
   program
     .command("agent-keys:issue")
     .description("Issue an agent key and print its token once; audited")
@@ -4041,6 +4044,49 @@ export function buildProgram() {
           capabilities: issued.key.capabilities,
           pageLabels: issued.key.pageLabels,
           expiresAt: issued.key.expiresAt,
+        }));
+      } finally {
+        await app.close();
+      }
+    });
+
+  // A key replaced without downtime, for the owner's word given in chat. An agent holds one live key, so a new
+  // one is not issued beside it (agent-keys:issue refuses), and revoking first would stop the agent — and close
+  // every session of a service that signs in with the key. The same service as the dashboard's «Выпустить на
+  // замену» (services/agent-keys.ts): the new key is the same agent's with the old key's pages and capabilities
+  // exactly; the old key works 24 hours more and ends by itself. Audited as agent_key.issued and
+  // agent_key.replaced, source cli, under the owner who asked. The token goes to stdout this once.
+  program
+    .command("agent-keys:replace")
+    .description("Issue a key as the replacement of an agent's live key (same agent, pages, capabilities); the old key works 24 h more; prints the token once; audited")
+    .argument("<keyName>", "the live key to replace, as the dashboard lists it")
+    .requiredOption("--name <newKeyName>", "the new key's own name")
+    .requiredOption("--days <days>", "days until the new key expires, at most 365", parsePositiveInt)
+    .requiredOption("--owner-user-id <id>", "the active owner who asked for it", parsePositiveInt)
+    .action(async (keyName: string, options: { name: string; days: number; ownerUserId: number }) => {
+      const name = options.name.trim();
+      if (name === "") throw new Error("--name must not be blank");
+      const app = await createAppContext();
+      try {
+        const owner = await findUserById(app.db, options.ownerUserId);
+        if (!owner || owner.role !== "owner" || owner.disabledAt !== null || owner.deletedAt !== null) {
+          throw new Error(`Active owner required: user ID ${options.ownerUserId}`);
+        }
+        const key = (await listAgentKeys(app.db)).find((candidate) => candidate.name === keyName);
+        if (!key) throw new Error(`No agent key named ${keyName}`);
+        const issued = await replaceAgentKey(
+          app,
+          { id: key.id, name, expiresInDays: options.days },
+          { source: "cli", actorUserId: owner.id },
+        );
+        console.log(JSON.stringify({
+          token: issued.token,
+          name: issued.key.name,
+          agent: issued.key.agent?.code ?? null,
+          capabilities: issued.key.capabilities,
+          pageLabels: issued.key.pageLabels,
+          expiresAt: issued.key.expiresAt,
+          replaced: { name: issued.replaced.name, worksUntil: issued.replaced.expiresAt },
         }));
       } finally {
         await app.close();

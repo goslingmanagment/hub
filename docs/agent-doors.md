@@ -13,6 +13,9 @@ capture, delivery) is `agent-read-skill.md`; the CLI is `hub` (`hub <command> --
   A key is issued for an agent (`agentCode`, or `agent-keys:issue --agent <code>` on the server); only a
   service's own key (`signin:*`, `introspect:agent_keys` alone) has none. A key issued before the registry is
   linked on the agent's card, never re-issued.
+- An agent holds one live key: its rights and pages change in place (`agent-keys:capabilities`, `agent-keys:pages`).
+  A key is replaced without downtime by issuing the new one as its replacement («Выпустить на замену», or
+  `agent-keys:replace <name> --name <new>`): the same agent, pages and rights, and the old key works 24 hours more.
 
 ## Doors by object
 

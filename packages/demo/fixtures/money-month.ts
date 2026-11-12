@@ -6,11 +6,13 @@ import { demoError, isDemoReply, queryString, type DemoHandlers, type DemoReques
 import { clockOf, revenueHandlers } from "./money-revenue.ts";
 
 /**
- * Деньги → Месяц (`teamLedgerMonth`): the ledger's month card. Its «Доход страниц» is the demo Hub's own income of
- * the same Moscow month (the custom window Главная counts), so the card reads «равно Главной»; the rest are the
- * shares a ledger card has. Scenarios (`hub-demo-scenario`): `month-unknown` — the ledger could not prove the month;
- * `month-absent` — an older ledger without the read; `month-differs` — the ledger read $12.40 less than Hub;
- * `month-down` — the ledger does not answer; `month-never` — the ledger never computed the month.
+ * Деньги → Месяц (`teamLedgerMonth`): the ledger's month card. The demo ledger took Hub's facts 40 minutes ago (its
+ * cut, `asOf`): its «Доход страниц» is the demo Hub's own income of the same Moscow month up to that moment, so a
+ * month that goes on reads «равно Главной на …» while Главная has grown since, and a month that is over reads «равно
+ * Главной»; the rest are the shares a ledger card has. Scenarios (`hub-demo-scenario`): `month-unknown` — the ledger
+ * could not prove the month; `month-absent` — an older ledger without the read; `month-differs` — the ledger read
+ * $12.40 less than Hub had by the cut; `month-down` — the ledger does not answer; `month-never` — the ledger never
+ * computed the month.
  */
 
 type Month = KernelOperationResponse<"teamLedgerMonth">;
@@ -44,7 +46,13 @@ function teamLedgerMonth(request: DemoRequest): Month | ReturnType<typeof demoEr
       },
     };
   }
-  const revenue = revenueHandlers.overviewRevenue!({ ...request, query: { period: "custom", from: days.from, to: days.to } });
+  // What the ledger read from Hub: the month's income up to its cut. The read's end is exclusive (the next month's first day).
+  const asOf = new Date(now.getTime() - 40 * 60_000);
+  const [year, number] = month.split("-").map(Number) as [number, number];
+  const nextMonth = new Date(Date.UTC(year, number, 1)).toISOString().slice(0, 7);
+  const revenue = revenueHandlers.overviewRevenue!({
+    ...request, query: { period: "custom", from: days.from, to: `${nextMonth}-01`, until: asOf.toISOString() },
+  });
   const hub = isDemoReply(revenue) ? 0 : revenue.netEarningsMills;
   const pagesNet = part(hub, 100) - (request.scenario === "month-differs" ? 12_400 : 0);
   const offPlatform = month < now.toISOString().slice(0, 7) ? 410_000 : 150_000;
@@ -68,7 +76,7 @@ function teamLedgerMonth(request: DemoRequest): Month | ReturnType<typeof demoEr
     card: {
       status: unknown ? "unknown" : "proven",
       reason: unknown ? "проверка карточки не прошла: сумма выводов не сходится с переводами на $4.20" : null,
-      asOf: new Date(now.getTime() - 40 * 60_000).toISOString(),
+      asOf: asOf.toISOString(),
       computedAt: new Date(now.getTime() - 12 * 60_000).toISOString(),
       pagesNetMills: pagesNet,
       offPlatformMills: offPlatform,

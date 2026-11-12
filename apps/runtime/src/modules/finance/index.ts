@@ -132,6 +132,8 @@ export function registerFinanceRoutes(server: ApiServer, ctx: ApiModuleContext) 
       now,
       period: query.period,
       ...(query.period === "custom" ? { custom: { from: query.from, to: query.to } } : {}),
+      // Деньги → Месяц: the month's income up to the ledger's cut.
+      ...(query.period === "custom" && query.until !== undefined ? { until: new Date(query.until) } : {}),
       ...(pageIds === undefined ? {} : { pageIds }),
     });
   });

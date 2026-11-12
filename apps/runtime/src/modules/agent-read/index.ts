@@ -5,6 +5,7 @@ import {
   introspectAgentKey,
   issueAgentKey,
   listAgentKeysDetailed,
+  replaceAgentKey,
   revokeAgentKeyById,
   updateAgentKeyCapabilities,
 } from "../../services/agent-keys.ts";
@@ -244,6 +245,15 @@ export function registerAgentReadRoutes(server: ApiServer, ctx: ApiModuleContext
     } finally {
       await scope.finish(1);
     }
+  });
+
+  // A key issued as the replacement of an agent's live key: the same agent, pages and capabilities, and the old
+  // key works one more day instead of being revoked first. Its response carries a token: `no-store`, like issuance.
+  server.post("/api/v1/agent/keys/:id/replace", {
+    schema: routeSchemas.agentKeyReplace,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    return replaceAgentKey(appContext, { id: request.params.id, ...request.body }, auditCtx(principal));
   });
 
   server.post("/api/v1/agent/keys/:id/revoke", {

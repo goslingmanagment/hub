@@ -2,16 +2,22 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 
 import {
   AGENT_KEY_MAX_LIFETIME_DAYS,
+  AGENT_KEY_REPLACEMENT_GRACE_HOURS,
+  AgentHoldsLiveKeyError,
+  AgentKeyReplacementError,
   createFanslyPage,
   createModel,
   findAgentKeyByDigest,
+  findPersonRowByCode,
+  insertAgentKey,
+  insertPersonAgentKey,
   insertPersonRow,
 } from "@agency_hub_core/db";
 import { sha256Hex } from "@agency_hub_core/shared";
 
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
-import { updateAgentKeyPages } from "../apps/runtime/src/services/agent-keys.ts";
+import { replaceAgentKey, updateAgentKeyPages } from "../apps/runtime/src/services/agent-keys.ts";
 import { AGENT_KEY_TOKEN_PREFIX, createUserAccount } from "../apps/runtime/src/services/auth.ts";
 import {
   resetIntegrationDatabase,
@@ -241,6 +247,231 @@ describe("agent read plane: key issuance", () => {
     expect(live.rows.map((row) => row.name)).toEqual(["audit-third"]);
     expect((await testDb.pool.query("select name from agent_keys order by id")).rows.map((row) => row.name))
       .toEqual(["audit-first", "audit-loose", "audit-third"]);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  // Review round 2: «one live key per agent» left no way to replace a key without downtime (revoke first, and every
+  // session of a service that signs in with the key closes at once). A key is issued AS THE REPLACEMENT of the
+  // agent's live key: the same agent, pages and capabilities, and the old key ends itself a day later.
+  const HOUR_MS = 3_600_000;
+  const replace = (cookie: string, id: number, payload: Record<string, unknown>, headers?: Record<string, string>) => server!.inject({
+    method: "POST", url: `/api/v1/agent/keys/${id}/replace`, headers: headers ?? { cookie }, payload,
+  });
+  const works = async (token: string) =>
+    (await server!.inject({ method: "GET", url: "/api/v1/agent/capabilities", headers: { authorization: `Bearer ${token}` } })).statusCode;
+  const keyRow = async (id: number) => (await testDb!.pool.query<{ expires_at: Date; replaced_at: Date | null; revoked_at: Date | null }>(
+    "select expires_at, replaced_at, revoked_at from agent_keys where id = $1", [id])).rows[0]!;
+
+  it("replaces an agent's live key without downtime: the same agent, pages and rights; the old key works one more day and ends", async (context) => {
+    if (!testDb || !server) {
+      context.skip();
+      return;
+    }
+    const cookie = await loginCookie("dima", "owner-secret");
+    const first = await server.inject({ method: "POST", url: "/api/v1/agent/keys", headers: { cookie },
+      payload: createBody({ capabilities: ["read:datasets", "write:publication_drafts"], pageLabels: ["lora-2", "lora-1"] }) });
+    expect(first.statusCode, first.body).toBe(200);
+    const old = first.json() as { token: string; key: { id: number; expiresAt: string } };
+
+    const before = Date.now();
+    const replaced = await replace(cookie, old.key.id, { name: "customs-audit-next", expiresInDays: 30 });
+    expect(replaced.statusCode, replaced.body).toBe(200);
+    // The response that carries a token is never cached.
+    expect(replaced.headers["cache-control"]).toBe("no-store");
+    const next = replaced.json() as { token: string; key: Record<string, unknown> & { id: number } };
+    expect(next.token.startsWith(AGENT_KEY_TOKEN_PREFIX)).toBe(true);
+    expect(next.token).not.toBe(old.token);
+    expect(next.key).toMatchObject({
+      name: "customs-audit-next",
+      agent: { code: "audit-bot", displayName: "audit-bot", state: "working" },
+      capabilities: ["read:datasets", "write:publication_drafts"],
+      pageLabels: ["lora-2", "lora-1"],
+      isActive: true,
+      replacedAt: null,
+    });
+
+    // No downtime: both keys work now, and a service that asks whose they are gets the same agent for both.
+    expect(await works(old.token)).toBe(200);
+    expect(await works(next.token)).toBe(200);
+    const service = await server.inject({ method: "POST", url: "/api/v1/agent/keys", headers: { cookie },
+      payload: createBody({ name: "ledger-server", agentCode: undefined, capabilities: ["introspect:agent_keys"] }) });
+    const whose = async (token: string) => (await server!.inject({
+      method: "POST", url: "/api/v1/agent/keys/introspect",
+      headers: { authorization: `Bearer ${(service.json() as { token: string }).token}` }, payload: { keyDigest: sha256Hex(token) },
+    })).json() as { active: boolean; agent?: { code: string } };
+    expect(await whose(old.token)).toMatchObject({ active: true, agent: { code: "audit-bot" } });
+    expect(await whose(next.token)).toMatchObject({ active: true, agent: { code: "audit-bot" } });
+
+    // The old key: marked replaced, its end a day ahead instead of months, and using it no longer moves that end.
+    const grace = AGENT_KEY_REPLACEMENT_GRACE_HOURS * HOUR_MS;
+    expect(AGENT_KEY_REPLACEMENT_GRACE_HOURS).toBe(24);
+    const marked = await keyRow(old.key.id);
+    expect(marked.revoked_at).toBeNull();
+    expect(marked.replaced_at).not.toBeNull();
+    expect(marked.expires_at.getTime()).toBeGreaterThanOrEqual(before + grace - 5_000);
+    expect(marked.expires_at.getTime()).toBeLessThanOrEqual(Date.now() + grace + 5_000);
+    expect(marked.expires_at.getTime()).toBeLessThan(new Date(old.key.expiresAt).getTime());
+    expect(await works(old.token)).toBe(200);
+    expect((await keyRow(old.key.id)).expires_at.getTime()).toBe(marked.expires_at.getTime());
+    // The new key's own end slides on use as any key's does.
+    expect((await keyRow(next.key.id)).replaced_at).toBeNull();
+    expect((await keyRow(next.key.id)).expires_at.getTime()).toBeGreaterThan(Date.now() + 80 * 24 * HOUR_MS);
+
+    const listed = (await server.inject({ method: "GET", url: "/api/v1/agent/keys", headers: { cookie } })).json() as Array<{ id: number; isActive: boolean; replacedAt: string | null; expiresAt: string }>;
+    expect(listed.find((key) => key.id === old.key.id)).toMatchObject({ isActive: true, replacedAt: marked.replaced_at!.toISOString(), expiresAt: marked.expires_at.toISOString() });
+    expect(listed.find((key) => key.id === next.key.id)).toMatchObject({ isActive: true, replacedAt: null });
+
+    // Both rows of the change are audited, and neither carries a token.
+    const audit = await testDb.pool.query<{ event_type: string; metadata: Record<string, unknown> }>(
+      "select event_type, metadata from audit_events where event_type in ('agent_key.issued', 'agent_key.replaced') and (metadata->>'agentKeyId')::bigint in ($1, $2) order by id",
+      [old.key.id, next.key.id]);
+    expect(audit.rows.map((row) => row.event_type)).toEqual(["agent_key.issued", "agent_key.issued", "agent_key.replaced"]);
+    expect(audit.rows[1]!.metadata).toMatchObject({ agentKeyId: next.key.id, agentCode: "audit-bot", replacesKeyId: old.key.id, replacesKeyName: "customs-audit" });
+    expect(audit.rows[2]!.metadata).toMatchObject({ agentKeyId: old.key.id, name: "customs-audit", replacedByKeyId: next.key.id, expiresAt: marked.expires_at.toISOString() });
+    expect(JSON.stringify(audit.rows)).not.toContain(next.token);
+    expect(JSON.stringify(audit.rows)).not.toContain(old.token);
+
+    // A day on the old key has ended by itself: the agent holds one live key again.
+    await testDb.pool.query("update agent_keys set expires_at = now() - interval '1 minute', created_at = now() - interval '2 days' where id = $1", [old.key.id]);
+    expect(await works(old.token)).toBe(401);
+    expect(await works(next.token)).toBe(200);
+    expect(await whose(old.token)).toMatchObject({ active: false });
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("lets nothing else give an agent a second live key, one replacement at a time, and keeps the pair equal", async (context) => {
+    if (!testDb || !server) {
+      context.skip();
+      return;
+    }
+    const cookie = await loginCookie("dima", "owner-secret");
+    const first = await server.inject({ method: "POST", url: "/api/v1/agent/keys", headers: { cookie }, payload: createBody({ capabilities: ["read:datasets"] }) });
+    const oldId = (first.json() as { key: { id: number } }).key.id;
+    const second = await replace(cookie, oldId, { name: "customs-audit-next" });
+    expect(second.statusCode, second.body).toBe(200);
+    const nextId = (second.json() as { key: { id: number } }).key.id;
+
+    // While the old key lives: no plain issuance, no key linked on the card, and no second replacement of either key.
+    const plain = await server.inject({ method: "POST", url: "/api/v1/agent/keys", headers: { cookie }, payload: createBody({ name: "third" }) });
+    expect(plain.statusCode, plain.body).toBe(409);
+    expect(plain.json()).toMatchObject({ reason: "agent_holds_live_key" });
+    const loose = await server.inject({ method: "POST", url: "/api/v1/agent/keys", headers: { cookie },
+      payload: createBody({ name: "loose", agentCode: undefined, capabilities: ["introspect:agent_keys"] }) });
+    const linked = await server.inject({ method: "PATCH", url: "/api/v1/admin/people/audit-bot", headers: { cookie },
+      payload: { agentKeys: { add: [(loose.json() as { key: { id: number } }).key.id] } } });
+    expect(linked.statusCode, linked.body).toBe(409);
+    for (const id of [oldId, nextId]) {
+      const again = await replace(cookie, id, { name: `again-${id}` });
+      expect(again.statusCode, again.body).toBe(409);
+      expect(again.json()).toMatchObject({ reason: "agent_holds_live_key" });
+    }
+
+    // The two keys stay equal for the day: neither changes in place while the other lives.
+    const patch = (id: number) => server!.inject({ method: "PATCH", url: `/api/v1/agent/keys/${id}`, headers: { cookie }, payload: { capabilities: ["read:datasets", "read:money"] } });
+    for (const id of [oldId, nextId]) {
+      const refused = await patch(id);
+      expect(refused.statusCode, refused.body).toBe(409);
+      expect(refused.json()).toMatchObject({ reason: "agent_key_being_replaced" });
+      await expect(updateAgentKeyPages(appContext, { id, add: ["lora-1"], remove: [] }, { source: "cli", actorUserId: null }))
+        .rejects.toMatchObject({ statusCode: 409 });
+    }
+    const grants = await testDb.pool.query<{ capabilities: string[]; pages: string[] }>("select capabilities, page_ids::text[] as pages from agent_keys where id in ($1, $2)", [oldId, nextId]);
+    expect(grants.rows).toEqual([{ capabilities: ["read:datasets"], pages: [expect.any(String)] }, { capabilities: ["read:datasets"], pages: [expect.any(String)] }]);
+    expect((await testDb.pool.query("select name from agent_keys order by id")).rows.map((row) => row.name)).toEqual(["customs-audit", "customs-audit-next", "loose"]);
+
+    // The old key revoked ahead of its day: the new one is the agent's one key, changed in place and replaceable again.
+    expect((await server.inject({ method: "POST", url: `/api/v1/agent/keys/${oldId}/revoke`, headers: { cookie } })).statusCode).toBe(200);
+    expect((await patch(nextId)).statusCode).toBe(200);
+    const third = await replace(cookie, nextId, { name: "customs-audit-third" });
+    expect(third.statusCode, third.body).toBe(200);
+    expect((third.json() as { key: { capabilities: string[] } }).key.capabilities).toEqual(["read:money", "read:datasets"]);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("refuses to replace a dead key, a key no agent holds, a taken name, and everyone but the owner's session", async (context) => {
+    if (!testDb || !server) {
+      context.skip();
+      return;
+    }
+    const cookie = await loginCookie("dima", "owner-secret");
+    const issue = async (payload: Record<string, unknown>) => (await server!.inject({ method: "POST", url: "/api/v1/agent/keys", headers: { cookie }, payload })).json() as { token: string; key: { id: number } };
+    const live = await issue(createBody());
+    const body = { name: "next" };
+
+    expect((await replace(cookie, 999_999, body)).statusCode).toBe(404);
+    expect((await replace(cookie, live.key.id, body, {})).statusCode).toBe(401);
+    expect((await replace(cookie, live.key.id, body, { cookie: await loginCookie("lead", "lead-secret") })).statusCode).toBe(403);
+    // A machine principal that could mint its own successor would never end.
+    expect([401, 403]).toContain((await replace(cookie, live.key.id, body, { authorization: `Bearer ${live.token}` })).statusCode);
+    // The old key's name stays its own; a lifetime past the ceiling is refused, not clamped.
+    expect((await replace(cookie, live.key.id, { name: "customs-audit" })).statusCode).toBe(409);
+    expect((await replace(cookie, live.key.id, { name: "next", expiresInDays: AGENT_KEY_MAX_LIFETIME_DAYS + 1 })).statusCode).toBe(400);
+
+    // A key no agent holds is not held to one at a time: nothing to replace, a second one is simply issued.
+    const service = await issue(createBody({ name: "taskindex-server", agentCode: undefined, capabilities: ["signin:taskindex"] }));
+    const noAgent = await replace(cookie, service.key.id, body);
+    expect(noAgent.statusCode, noAgent.body).toBe(409);
+    expect(noAgent.json()).toMatchObject({ reason: "key_without_agent" });
+
+    const revoked = await issue(createBody({ name: "revoked", agentCode: "audit-bot-2" }));
+    await server.inject({ method: "POST", url: `/api/v1/agent/keys/${revoked.key.id}/revoke`, headers: { cookie } });
+    expect((await replace(cookie, revoked.key.id, body)).statusCode).toBe(409);
+    const expired = await issue(createBody({ name: "expired", agentCode: "audit-bot-3" }));
+    await testDb.pool.query("update agent_keys set expires_at = now() - interval '1 minute', created_at = now() - interval '1 day' where id = $1", [expired.key.id]);
+    expect((await replace(cookie, expired.key.id, body)).statusCode).toBe(409);
+
+    // Every refusal minted nothing and marked nothing.
+    expect((await testDb.pool.query("select name from agent_keys order by id")).rows.map((row) => row.name))
+      .toEqual(["customs-audit", "taskindex-server", "revoked", "expired"]);
+    expect((await testDb.pool.query("select count(*)::int as n from agent_keys where replaced_at is not null")).rows[0].n).toBe(0);
+
+    // The CLI's path is the same service (agent-keys:replace), audited under the owner who asked.
+    const owner = Number((await testDb.pool.query<{ id: string }>("select id::text from users where username = 'dima'")).rows[0]!.id);
+    const byCli = await replaceAgentKey(appContext, { id: live.key.id, name: "customs-audit-cli", expiresInDays: 90 }, { source: "cli", actorUserId: owner });
+    expect(byCli.key).toMatchObject({ name: "customs-audit-cli", agent: { code: "audit-bot" }, capabilities: ["read:messages", "read:money"], pageLabels: ["lora-2"] });
+    expect(byCli.replaced).toMatchObject({ id: live.key.id, name: "customs-audit", isActive: true });
+    expect(byCli.replaced.replacedAt).not.toBeNull();
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("holds the rule where the link is written: a replacement is the agent's one live key and an equal grant, or nothing", async (context) => {
+    if (!testDb || !server) {
+      context.skip();
+      return;
+    }
+    const agent = (await findPersonRowByCode(testDb.db, "audit-bot"))!;
+    const other = (await findPersonRowByCode(testDb.db, "audit-bot-2"))!;
+    const pageId = Number((await testDb.pool.query<{ id: string }>("select id::text from pages where label = 'lora-2'")).rows[0]!.id);
+    let n = 0;
+    const key = async (capabilities: string[], pageIds: number[] = [pageId]) => {
+      n += 1;
+      return insertAgentKey(testDb!.db, {
+        name: `rule-${n}`, keyPrefix: `${AGENT_KEY_TOKEN_PREFIX}rule${n}`, keyDigest: sha256Hex(`rule-${n}`), capabilities, pageIds,
+        expiresAt: new Date(Date.now() + 30 * 24 * HOUR_MS), createdBy: null,
+      });
+    };
+    const link = (input: { personId: number; agentKeyId: number; replacesKeyId?: number }) =>
+      testDb!.db.transaction((tx) => insertPersonAgentKey(tx, { ...input, linkedByUserId: null }));
+    const live = await key(["read:datasets", "read:money"]);
+    await link({ personId: agent.id, agentKeyId: live.id });
+    const foreign = await key(["read:datasets", "read:money"]);
+    await link({ personId: other.id, agentKeyId: foreign.id });
+
+    // A narrower, a wider, another page's: not the replaced key's grant.
+    for (const candidate of [await key(["read:datasets"]), await key(["read:datasets", "read:money", "read:messages"]), await key(["read:datasets", "read:money"], [pageId, pageId + 1])]) {
+      await expect(link({ personId: agent.id, agentKeyId: candidate.id, replacesKeyId: live.id })).rejects.toBeInstanceOf(AgentKeyReplacementError);
+    }
+    // Another agent's key, and one that does not exist, are not this agent's live key.
+    const equal = await key(["read:money", "read:datasets"]);
+    await expect(link({ personId: agent.id, agentKeyId: equal.id, replacesKeyId: foreign.id })).rejects.toBeInstanceOf(AgentKeyReplacementError);
+    await expect(link({ personId: agent.id, agentKeyId: equal.id, replacesKeyId: 999_999 })).rejects.toBeInstanceOf(AgentKeyReplacementError);
+    // Without naming what it replaces, a second live key is refused as before.
+    await expect(link({ personId: agent.id, agentKeyId: equal.id })).rejects.toBeInstanceOf(AgentHoldsLiveKeyError);
+    expect((await keyRow(live.id)).replaced_at).toBeNull();
+
+    // The equal grant, in any order of its capabilities: linked, and the replaced key marked in the same write.
+    await link({ personId: agent.id, agentKeyId: equal.id, replacesKeyId: live.id });
+    expect((await keyRow(live.id)).replaced_at).not.toBeNull();
+    // A third key while two live: refused whichever of the two it names.
+    const third = await key(["read:datasets", "read:money"]);
+    await expect(link({ personId: agent.id, agentKeyId: third.id, replacesKeyId: equal.id })).rejects.toBeInstanceOf(AgentHoldsLiveKeyError);
+    await expect(link({ personId: agent.id, agentKeyId: third.id, replacesKeyId: live.id })).rejects.toBeInstanceOf(AgentHoldsLiveKeyError);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("sets Cache-Control: no-store on the response that carries the token", async (context) => {
