@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { NARROW_WEB_SESSION_OPERATIONS } from "@agency_hub_core/contracts";
-import { insertAgentKey } from "@agency_hub_core/db";
+import { deleteSpentHandoffCodes, insertAgentKey } from "@agency_hub_core/db";
 import { sha256Hex } from "@agency_hub_core/shared";
 
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
@@ -12,9 +12,20 @@ import {
   SESSION_COOKIE_NAME,
   createUserAccount,
   issueDeviceTokenWithPassword,
+  loginWithPassword,
+  logoutSessionToken,
   setUserPassword,
 } from "../apps/runtime/src/services/auth.ts";
 import { NARROW_WEB_SESSION_REFUSAL_MESSAGE } from "../apps/runtime/src/services/narrow-web-session.ts";
+import {
+  acceptHandoffCode,
+  checkServerGrant,
+  liveFullSession,
+  mintServerCode,
+  mintSessionCode,
+  newSsoState,
+  redeemServerCode,
+} from "../apps/runtime/src/services/signin-handoff.ts";
 import { startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 import { fixtureUserId } from "./helpers/user-identity.ts";
@@ -653,5 +664,43 @@ describe("another service's server", () => {
       cookies: { [STATE_COOKIE]: browser.state },
     });
     expect(cookieSet(asBrowser, SESSION_COOKIE_NAME)).toBeUndefined();
+  });
+});
+
+describe("the nightly sweep of one-time codes", () => {
+  it("drops used and expired codes an hour on, and keeps a service's grant while its Hub session lives", async (context) => {
+    if (!server) return context.skip();
+    // Only this test's codes are looked at: the file's other tests leave theirs. The codes are made by the service
+    // itself, not through the routes: this file has spent their per-address limits by now.
+    const marker = Number((await app.pool.query("select coalesce(max(id), 0) as id from auth_handoff_codes")).rows[0].id);
+    const mine = async () => (await app.pool.query(
+      "select kind, used_at is not null as used from auth_handoff_codes where id > $1 order by id", [marker])).rows;
+    const sessionToken = (await loginWithPassword(app, { username: "owner", password: "owner-password-for-tests" })).sessionToken;
+    const live = (await liveFullSession(app, sessionToken))!;
+    const own = { sessionToken, sessionId: live.session.id, userId: live.user.id };
+    const audit = { source: "cli", actorUserId: null };
+    // A redeemed service code: its grant is what ContentOps re-checks the sign-in with.
+    const serverCode = await mintServerCode(app, { sessionId: own.sessionId, userId: own.userId, client: "contentops", next: "/" });
+    const { grant } = await redeemServerCode(app, { client: "contentops", code: serverCode }, audit);
+    // A browser code used at once, and one asked for and never used (the hand-off is a GET: anyone can mint rows).
+    const used = newSsoState();
+    const usedCode = await mintSessionCode(app, { ...own, target: TEAM, stateDigest: used.digest, next: `${TEAM}/workboard/` });
+    expect((await acceptHandoffCode(app, { code: usedCode, here: TEAM, stateCookie: used.state, currentSessionToken: undefined })).kind).toBe("cookie");
+    await mintSessionCode(app, { ...own, target: TEAM, stateDigest: newSsoState().digest, next: `${TEAM}/workboard/` });
+    expect(await mine()).toEqual([{ kind: "server", used: true }, { kind: "session", used: true }, { kind: "session", used: false }]);
+
+    // Within the hour nothing goes.
+    await deleteSpentHandoffCodes(app.db, new Date());
+    expect(await mine()).toHaveLength(3);
+    // Two hours on: the used and the expired codes go; the redeemed grant of a living session stays and still checks.
+    const later = new Date(Date.now() + 2 * 3_600_000);
+    await deleteSpentHandoffCodes(app.db, later);
+    expect(await mine()).toEqual([{ kind: "server", used: true }]);
+    expect(await checkServerGrant(app, { client: "contentops", grant })).toMatchObject({ active: true });
+    // Signed out: the grant's session is gone, so is the code.
+    await logoutSessionToken(app, sessionToken);
+    await deleteSpentHandoffCodes(app.db, later);
+    expect(await mine()).toEqual([]);
+    expect(await checkServerGrant(app, { client: "contentops", grant })).toEqual({ active: false });
   });
 });

@@ -118,11 +118,14 @@ const PEOPLE: readonly PersonSpec[] = [
     telegram: { userId: 700_000_011, handle: "sonya_content", tag: null }, note: "Без входа хаба: работает в ContentOps и своим ключом агента." },
   { id: 12, code: "traffic-tim", name: "Тимур (трафик)", kind: "human", role: "contractor", state: "working", logins: [], pages: [], slots: [] },
   { id: 13, code: "helper-bot", name: "Помощник в чате", kind: "agent", role: "agent", state: "working", logins: [], pages: [], slots: [],
-    keys: [{ id: 10, name: "Очереди фанов", state: "active" }, { id: 7, name: "Исследователь архива", state: "active" }] },
+    keys: [{ id: 7, name: "Исследователь архива", state: "active" }] },
   { id: 14, code: "contentops", name: "Сервер ContentOps", kind: "agent", role: "agent", state: "working", logins: [], pages: [], slots: [],
     keys: [{ id: 9, name: "ContentOps", state: "active" }] },
   { id: 15, code: "capture-server", name: "Сервер захвата", kind: "service", role: "service", state: "working", logins: [], pages: [], slots: [],
     note: "Служебный: проверки «вход без человека» и «смена без отчёта» его не трогают." },
+  // One live key per agent (Hub refuses a second): the queue builder is an agent of its own.
+  { id: 16, code: "queue-bot", name: "Сборщик очередей", kind: "agent", role: "agent", state: "working", logins: [], pages: [], slots: [],
+    keys: [{ id: 10, name: "Очереди фанов", state: "active" }] },
 ];
 
 const MODEL_NAMES: Readonly<Record<string, string>> = Object.fromEntries(DEMO_MODELS.map((model) => [model.slug, model.name]));

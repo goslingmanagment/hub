@@ -32,6 +32,7 @@ import {
   type TeamPeopleResponse,
 } from "@agency_hub_core/contracts";
 import {
+  AgentHoldsLiveKeyError,
   countOpenPersonProposals,
   decidePersonProposal as decideProposalRow,
   deletePersonAgentKey,
@@ -484,6 +485,8 @@ async function resolveChange(db: Db, subject: Subject, fields: ChangeFields): Pr
 
 /** Maps the registry's unique indexes to the 409 the owner can act on. */
 function conflictOf(error: unknown): never {
+  // One live key per agent (people.ts insertPersonAgentKey): the services give a key its agent's rights.
+  if (error instanceof AgentHoldsLiveKeyError) throw new ConflictError(error.message, { reason: "agent_holds_live_key" });
   if (isUniqueViolation(error, "people_code_key")) throw new ConflictError("Another person has this code", { reason: "code_taken" });
   if (isUniqueViolation(error, "people_telegram_user_id_uidx")) {
     throw new ConflictError("Another person has this Telegram id", { reason: "telegram_taken" });
