@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 
 import {
   isMatterMirrorKind,
+  isMatterServerKind,
   type AgentMatterCloseBody,
   type AgentMatterCommentBody,
   type AgentMatterCommentResponse,
@@ -361,7 +362,7 @@ export interface AgentMatterScope {
 
 /** Opens (or updates, or reopens) an agent's matter by its key. */
 export async function agentOpenMatter(app: MattersApp, scope: AgentMatterScope, body: AgentMatterOpenBody, now: Date = new Date()): Promise<AgentMatterResponse> {
-  if (isMatterMirrorKind(body.kind)) throw notAgents(body.key);
+  if (isMatterMirrorKind(body.kind) || isMatterServerKind(body.kind)) throw notAgents(body.key);
   const owner: MatterOwner = "user" in body.owner ? { userId: (await personOf(app, body.owner.user)).userId } : { role: body.owner.role };
   const watcherUserIds: number[] = [];
   for (const watcher of body.watchers ?? []) watcherUserIds.push((await personOf(app, watcher)).userId);

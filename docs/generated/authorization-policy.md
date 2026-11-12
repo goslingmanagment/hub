@@ -26,7 +26,7 @@ for at password sign-in (`client: "chat-extension"`): it reaches only the
 64 routes marked "yes", and every route marked "no" refuses it with 403.
 A full device token is not affected.
 
-## Routes (438)
+## Routes (441)
 
 | Method | Path | Route key | Kind | Roles | Page scope | chat-extension token |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -261,6 +261,8 @@ A full device token is not affected.
 | POST | `/api/v1/agent/resolve` | `agentResolve` | `agentKey` | — | — | no |
 | POST | `/api/v1/agent/search/messages` | `agentSearchMessages` | `agentKey` | — | — | no |
 | GET | `/api/v1/agent/sync/pages` | `agentSyncStatus` | `agentKey` | — | — | no |
+| PUT | `/api/v1/agent/system/copies` | `agentSystemCopies` | `agentKey` | — | — | no |
+| PUT | `/api/v1/agent/system/routines` | `agentSystemRoutines` | `agentKey` | — | — | no |
 | POST | `/api/v1/agent/team/sales` | `agentTeamSales` | `agentKey` | — | — | no |
 | GET | `/api/v1/agent/threads` | `agentThreads` | `agentKey` | — | — | no |
 | POST | `/api/v1/ai/features/:feature` | `aiFeatureStream` | `apiKey` | — | — | yes |
@@ -443,6 +445,7 @@ A full device token is not affected.
 | GET | `/api/v1/sync/pages/:pageLabel/work` | `syncPageWork` | `owner-session` | — | — | no |
 | GET | `/api/v1/sync/pages/:pageLabel/work/:workId` | `syncPageWorkGet` | `owner-session` | — | — | no |
 | GET | `/api/v1/sync/requests` | `syncRequests` | `session` | — | — | no |
+| GET | `/api/v1/system/state` | `systemState` | `owner-session` | — | — | no |
 | GET | `/api/v1/team/authorship` | `teamAuthorship` | `session` | — | — | no |
 | GET | `/api/v1/team/chatter-numbers` | `teamChatterNumbers` | `session` | — | — | no |
 | GET | `/api/v1/team/chatter-stats` | `teamChatterStats` | `session` | — | — | no |

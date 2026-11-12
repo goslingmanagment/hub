@@ -53,6 +53,7 @@ const CAPABILITY_HELP: Readonly<Record<AgentCapability, string>> = {
   "signin:taskindex": "«Войти через хаб» для сервера TaskIndex: обменять одноразовый код входа на «кто это и владелец ли» и потом проверять, жив ли этот вход. Сессию Hub сервер не получает, страниц это право не касается",
   "signin:monitor": "«Войти через хаб» для сервера server-monitor: обменять одноразовый код входа на «кто это и владелец ли» и потом проверять, жив ли этот вход. Сессию Hub сервер не получает, страниц это право не касается",
   "write:reports": "Публиковать страницы-отчёты: сводку трафика и другие доски агента. Их читает владелец, а тимлиды только те, что агент им открыл. Данных Hub через это право агент не читает",
+  "write:system_state": "Присылать состояние рутин и копий своего места (мака, ПК): когда что запускалось и чем кончилось, когда снята копия. Больше ничего не пишет и не читает",
 };
 
 const CAPABILITY_SHORT: Readonly<Record<AgentCapability, string>> = {
@@ -77,6 +78,7 @@ const CAPABILITY_SHORT: Readonly<Record<AgentCapability, string>> = {
   "signin:taskindex": "Вход через Hub для TaskIndex",
   "signin:monitor": "Вход через Hub для server-monitor",
   "write:reports": "Публиковать отчёты",
+  "write:system_state": "Присылать состояние рутин и копий",
 };
 
 const INPUT = "input";

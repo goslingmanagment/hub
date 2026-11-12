@@ -152,6 +152,16 @@ same 404 as a missing one), a chatter's session none (403); a device token, an
 agent key and an anonymous request are refused. The rows are held by
 `agent-reports.integration`.
 
+«Состояние» (`/system/state`, package P of the ecosystem plan): only the
+owner's session reads the state of every routine and copy; a team lead, a
+chatter, a device token and an agent key do not. A key with
+`write:system_state` sends a reporter's whole list of routines and copies
+(`/agent/system/routines`, `/agent/system/copies`), never as Hub's own reporter
+`hub` and never over a routine another reporter keeps (409); without the
+capability it is 403. The matters Hub's server keeps for it (`routine.*`,
+`copy.stale`, `reporter.silent`) are 409 for every agent key. The rows are held
+by `system-state-rights.integration`.
+
 Agent keys are the owner's too: only the owner's cookie session issues, lists,
 revokes and changes one. A live key's capabilities change in place (owner,
 2026-10-24): the whole new set replaces the old one, the key sees it on its

@@ -127,6 +127,13 @@ export const AGENT_CAPABILITIES = [
    * read in the app. Nothing of the hub's data is read through it.
    */
   "write:reports",
+  /**
+   * «Состояние» (ecosystem plan, package P): a reporter sends its whole list of
+   * routines and copies (`agentSystemRoutines`, `agentSystemCopies`): when each
+   * last ran and what it came to, when each copy was taken. Writes nothing
+   * else and reads nothing back; the page grant does not widen it.
+   */
+  "write:system_state",
 ] as const;
 
 export type AgentCapability = (typeof AGENT_CAPABILITIES)[number];

@@ -394,6 +394,12 @@ export const SCREENS: readonly Screen[] = [
     crumbs: () => [{ label: "Система", to: "/system/collection" }, { label: "Отчёты агентов", to: "/system/reports" }],
   },
   {
+    id: "system-state", path: "/system/state", label: "Состояние", title: "Состояние", section: "system", ownerOnly: true,
+    why: "Всё, что работает само: на сервере, на маке и на ПК, и копии. Проблемы наверху.",
+    pageFilter: "none",
+    keywords: "рутины копии бэкапы мак openclaw launchd задачи расписание здоровье",
+  },
+  {
     id: "system-onlyfans-api", path: "/system/onlyfans-api", label: "Состояние", title: "OnlyFans API", section: "system", ownerOnly: true,
     why: "Включён ли он, что это значит и где что лежит.",
     pageFilter: "none",
@@ -650,6 +656,7 @@ export const SECTIONS: readonly Section[] = [
       tab("history", "Заявки на историю", "system-history-requests"),
       tab("agent-keys", "Доступ ИИ-агентов", "system-agent-keys"),
       tab("reports", "Отчёты агентов", "system-reports", "system-report"),
+      tab("state", "Состояние", "system-state"),
       {
         ...tab("onlyfans-api", "OnlyFans API", "system-onlyfans-api", "system-onlyfans-collection", "system-onlyfans-tools", "system-onlyfans-media", "system-onlyfans-exports", "system-onlyfans-actions"),
       },

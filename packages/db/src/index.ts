@@ -45,6 +45,8 @@ export * from "./repositories/fan-customs.ts";
 export * from "./repositories/matters.ts";
 // Agent reports: named markdown pages an agent key publishes (0390, package O).
 export * from "./repositories/agent-reports.ts";
+// «Состояние»: reporters, their routines and copies, and Hub's own schedules (0391).
+export * from "./repositories/system-state.ts";
 // Chat Memory week 4: the draft shift report (0311).
 export * from "./repositories/shift-reports.ts";
 // Shifts as rows with a stable id (0379), whose each sale is by the one rule and the screens' switch to it (0380, 0381).

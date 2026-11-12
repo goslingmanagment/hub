@@ -27,6 +27,8 @@ export interface DemoRequest {
   now: Date;
   /** Whom the demo console shows: switch with /__demo/role?as=team_lead. */
   role: DemoRole;
+  /** A screen's other demo state, from the `hub-demo-scenario` cookie (Система → Состояние: `healthy`). */
+  scenario?: string | undefined;
 }
 
 /** An answer with a status other than 200 (an error, a 201, an empty 204).
