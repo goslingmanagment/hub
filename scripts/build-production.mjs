@@ -15,6 +15,7 @@ const workspaceAliases = {
   "@agency_hub_core/fansly": path.join(workspaceRoot, "packages/fansly/src/index.ts"),
   "@agency_hub_core/platform-core": path.join(workspaceRoot, "packages/platform-core/src/index.ts"),
   "@agency_hub_core/shared": path.join(workspaceRoot, "packages/shared/src/index.ts"),
+  "@agency_hub_core/look": path.join(workspaceRoot, "packages/look/src/index.ts"),
 };
 
 const runtimeExternal = [

@@ -13,7 +13,10 @@ import { millsToRoundedDollars,
   millsFromInteger,
 } from "@agency_hub_core/shared";
 
+import { formatMills, formatWeekdayDay, ruPlural, WORDS } from "@agency_hub_core/look";
+
 import type { AppContext } from "../bootstrap.ts";
+import { notificationLanguage, type NotificationLanguage } from "./notification-ru.ts";
 import { sendTelegramMessage, sendTelegramPhoto, type TelegramSendResult } from "./telegram.ts";
 import { renderDailyRevenueReportImage } from "./telegram-report-image.ts";
 import { loadTeamBlockFacts, renderTeamBlock } from "./telegram-team-block.ts";
@@ -198,6 +201,66 @@ export function formatUsdCompact(mills: bigint): string {
   return `${sign}$${Math.abs(dollars).toLocaleString("en-US")}`;
 }
 
+const NBSP = "\u00a0";
+const MINUS = "\u2212";
+
+/**
+ * The report's words in each language (`telegramRussian`): the same rows,
+ * amounts, deltas and order. The Russian side reads the English figure and
+ * says it the way Hub's screens do (a real minus, «5 %», «×22»), so the two can
+ * never show different numbers.
+ */
+const REPORT_WORDS = {
+  en: {
+    title: (reportDate: string) => `Revenue · ${formatReportDate(reportDate)}`,
+    money: (mills: bigint) => formatUsdFromMills(mills),
+    compact: formatUsdCompact,
+    delta: formatDeltaCompact,
+    share: formatShare,
+    days7: "7d",
+    days30: "30d",
+    days7Row: "7-day",
+    days30Row: "30-day",
+    noData: "No data",
+    moreModels: (count: number) => `+${count} more models`,
+    morePages: (count: number) => `+${count} more pages`,
+    windows: "Windows: 00:00-00:00 MSK · excl. current day",
+    windowsImage: "Windows: 00:00-00:00 MSK · excluding current day",
+    captionJoin: " — ",
+  },
+  ru: {
+    title: (reportDate: string) => `${WORDS.income} · ${formatWeekdayDay(reportDate)}`,
+    money: (mills: bigint) => formatMills(mills),
+    compact: (mills: bigint) => formatUsdCompact(mills).replace(/^-/, MINUS),
+    delta: (metric: RevenueMetric) => {
+      const english = formatDeltaCompact(metric);
+      if (english === "new") return "с нуля";
+      if (english === "—") return "";
+      const times = /^(\d+)x$/.exec(english);
+      if (times) return `×${times[1]}`;
+      const percent = /^([+-]?)(\d+)%$/.exec(english);
+      return percent ? `${percent[1] === "-" ? MINUS : percent[1]}${percent[2]}${NBSP}%` : english;
+    },
+    share: (partMills: bigint, totalMills: bigint) => formatShare(partMills, totalMills).replace(/%$/, `${NBSP}%`),
+    days7: "7 дней",
+    days30: "30 дней",
+    days7Row: "7 дней",
+    days30Row: "30 дней",
+    noData: "Нет данных",
+    moreModels: (count: number) => `Ещё ${count} ${ruPlural(count, "модель", "модели", "моделей")}`,
+    morePages: (count: number) => `Ещё ${count} ${ruPlural(count, "страница", "страницы", "страниц")}`,
+    windows: "Сутки по Москве, с 00:00 до 00:00, без текущего дня",
+    windowsImage: "Сутки по Москве, с 00:00 до 00:00, без текущего дня",
+    captionJoin: ": ",
+  },
+} satisfies Record<NotificationLanguage, unknown>;
+
+export type ReportWords = (typeof REPORT_WORDS)[NotificationLanguage];
+
+export function reportWords(language: NotificationLanguage = "en"): ReportWords {
+  return REPORT_WORDS[language];
+}
+
 // Display priority for named (non-numbered) pages within a model. Numbered pages
 // (…-1, …-2, …) always come first in numeric order; then pages whose label
 // contains one of these tokens, in THIS order; then everything else alphabetically.
@@ -279,36 +342,42 @@ export function groupPagesByModel<T extends { modelLabel: string; label: string 
  * table. Without a monospace block, columns can't be aligned, so each entity is
  * one self-contained line.
  */
-export function renderDailyRevenueTelegramReport(report: Omit<DailyRevenueTelegramReport, "text" | "parseMode">) {
+export function renderDailyRevenueTelegramReport(
+  report: Omit<DailyRevenueTelegramReport, "text" | "parseMode">,
+  language: NotificationLanguage = "en",
+) {
+  const w = reportWords(language);
   const y = report.agency.metrics.yesterday;
   const lines: string[] = [];
+  // A delta the Russian side leaves unsaid (nothing on either day) leaves no trailing space.
+  const after = (text: string) => (text === "" ? "" : ` ${text}`);
 
-  lines.push(`📊 <b>Revenue · ${escapeHtml(formatReportDate(report.reportDate))}</b>`);
-  lines.push(`${modelDot(y.deltaPct)} <b>${formatUsdFromMills(y.currentMills)}</b> ${formatDeltaCompact(y)}`);
+  lines.push(`📊 <b>${escapeHtml(w.title(report.reportDate))}</b>`);
+  lines.push(`${modelDot(y.deltaPct)} <b>${w.money(y.currentMills)}</b>${after(w.delta(y))}`);
   lines.push(
-    `<i>7d</i> ${formatUsdCompact(report.agency.metrics.days7.currentMills)} ${formatDeltaCompact(report.agency.metrics.days7)}`
-      + `  ·  <i>30d</i> ${formatUsdCompact(report.agency.metrics.days30.currentMills)} ${formatDeltaCompact(report.agency.metrics.days30)}`,
+    `<i>${w.days7}</i> ${w.compact(report.agency.metrics.days7.currentMills)}${after(w.delta(report.agency.metrics.days7))}`
+      + `  ·  <i>${w.days30}</i> ${w.compact(report.agency.metrics.days30.currentMills)}${after(w.delta(report.agency.metrics.days30))}`,
   );
 
   const pagesByModel = groupPagesByModel(report.pages);
 
   if (report.models.length === 0) {
     lines.push("");
-    lines.push("<i>No data</i>");
+    lines.push(`<i>${w.noData}</i>`);
   } else {
     for (const model of report.models) {
-      const share = formatShare(model.metrics.yesterday.currentMills, y.currentMills);
+      const share = w.share(model.metrics.yesterday.currentMills, y.currentMills);
       lines.push("");
       lines.push(
         `${modelDot(model.metrics.yesterday.deltaPct)} <b>${escapeHtml(model.label)}</b> `
-          + `${formatUsdFromMills(model.metrics.yesterday.currentMills)} ${formatDeltaCompact(model.metrics.yesterday)} · ${share}`,
+          + `${w.money(model.metrics.yesterday.currentMills)}${after(w.delta(model.metrics.yesterday))} · ${share}`,
       );
 
       for (const page of pagesByModel.get(model.label) ?? []) {
         // Fixed label order (see groupPagesByModel); zero-revenue pages show
         // inline as $0.00 in their usual position rather than collapsed.
         lines.push(
-          `   ${escapeHtml(formatPageLabel(page.label))} ${formatUsdFromMills(page.metrics.yesterday.currentMills)} ${formatDeltaCompact(page.metrics.yesterday)}`,
+          `   ${escapeHtml(formatPageLabel(page.label))} ${w.money(page.metrics.yesterday.currentMills)}${after(w.delta(page.metrics.yesterday))}`,
         );
       }
     }
@@ -316,14 +385,14 @@ export function renderDailyRevenueTelegramReport(report: Omit<DailyRevenueTelegr
     if (report.modelOverflow) {
       lines.push("");
       lines.push(
-        `<i>+${report.modelOverflow.modelCount} more models</i> ${formatUsdFromMills(report.modelOverflow.metrics.yesterday.currentMills)}`,
+        `<i>${w.moreModels(report.modelOverflow.modelCount)}</i> ${w.money(report.modelOverflow.metrics.yesterday.currentMills)}`,
       );
     }
   }
 
   if (report.overflow) {
     lines.push(
-      `<i>+${report.overflow.pageCount} more pages</i> ${formatUsdFromMills(report.overflow.metrics.yesterday.currentMills)}`,
+      `<i>${w.morePages(report.overflow.pageCount)}</i> ${w.money(report.overflow.metrics.yesterday.currentMills)}`,
     );
   }
 
@@ -334,7 +403,7 @@ export function renderDailyRevenueTelegramReport(report: Omit<DailyRevenueTelegr
 
   // Windows are Hub's business days: Moscow midnight to midnight, as on the dashboard.
   lines.push("");
-  lines.push("<i>Windows: 00:00-00:00 MSK · excl. current day</i>");
+  lines.push(`<i>${w.windows}</i>`);
 
   return lines.join("\n");
 }
@@ -358,6 +427,7 @@ export async function buildDailyRevenueTelegramReport(
   app: Pick<AppContext, "db"> & Partial<Pick<AppContext, "logger">>,
   now = new Date(),
   factsAt = new Date(),
+  language: NotificationLanguage = "en",
 ): Promise<DailyRevenueTelegramReport> {
   const currentBusinessDayStart = startOfReportBusinessDay(now);
   const previousBusinessDayStart = addUtcDays(currentBusinessDayStart, -1);
@@ -474,16 +544,18 @@ export async function buildDailyRevenueTelegramReport(
 
   return {
     ...report,
-    text: renderDailyRevenueTelegramReport(report),
+    text: renderDailyRevenueTelegramReport(report, language),
     parseMode: "HTML" as const,
   };
 }
 
 /** Short text caption that rides with the image (shown in the push preview). */
-function buildDailyRevenueReportCaption(report: DailyRevenueTelegramReport): string {
+export function buildDailyRevenueReportCaption(report: DailyRevenueTelegramReport, language: NotificationLanguage = "en"): string {
+  const w = reportWords(language);
   const y = report.agency.metrics.yesterday;
-  const head = `📊 <b>Revenue · ${escapeHtml(formatReportDate(report.reportDate))}</b> — `
-    + `<b>${formatUsdFromMills(y.currentMills)}</b> ${formatDeltaCompact(y)}`;
+  const delta = w.delta(y);
+  const head = `📊 <b>${escapeHtml(w.title(report.reportDate))}</b>${w.captionJoin}`
+    + `<b>${w.money(y.currentMills)}</b>${delta === "" ? "" : ` ${delta}`}`;
   // A caption holds at most 1024 characters; the team block rides along while it fits.
   const withTeam = report.team.length === 0 ? head : `${head}\n\n${report.team.join("\n")}`;
   return withTeam.length <= 1000 ? withTeam : head;
@@ -497,12 +569,13 @@ function buildDailyRevenueReportCaption(report: DailyRevenueTelegramReport): str
 async function deliverDailyRevenueReport(
   app: Pick<AppContext, "config" | "db" | "logger">,
   report: DailyRevenueTelegramReport,
+  language: NotificationLanguage,
 ): Promise<TelegramSendResult> {
   try {
-    const image = await renderDailyRevenueReportImage(report);
+    const image = await renderDailyRevenueReportImage(report, language);
     const photoDelivery = await sendTelegramPhoto(app, {
       photo: image,
-      caption: buildDailyRevenueReportCaption(report),
+      caption: buildDailyRevenueReportCaption(report, language),
       parseMode: "HTML",
     });
     if (photoDelivery.status !== "failed") {
@@ -542,8 +615,9 @@ export async function sendDailyRevenueTelegramReport(
     };
   }
 
-  const report = await buildDailyRevenueTelegramReport(app, now, factsAt);
-  const delivery = await deliverDailyRevenueReport(app, report);
+  const language = await notificationLanguage(app);
+  const report = await buildDailyRevenueTelegramReport(app, now, factsAt, language);
+  const delivery = await deliverDailyRevenueReport(app, report, language);
 
   await insertDeliveryAttempt(app.db, {
     kind: "daily_report_scheduled",
@@ -570,8 +644,9 @@ export async function sendManualDailyRevenueTelegramReport(
   delivery: TelegramSendResult;
   report: DailyRevenueTelegramReport | null;
 }> {
-  const report = await buildDailyRevenueTelegramReport(app, now);
-  const delivery = await deliverDailyRevenueReport(app, report);
+  const language = await notificationLanguage(app);
+  const report = await buildDailyRevenueTelegramReport(app, now, new Date(), language);
+  const delivery = await deliverDailyRevenueReport(app, report, language);
 
   await insertDeliveryAttempt(app.db, {
     kind: "daily_report_manual",

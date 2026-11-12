@@ -15,6 +15,7 @@ import type { Platform } from "@agency_hub_core/shared";
 import type { AppContext } from "../bootstrap.ts";
 import { incidentTitleForKind, parseIncidentSubKey } from "./notification-incidents.ts";
 import { formatDurationShort } from "./notification-paging-policy.ts";
+import { durationRu, notificationLanguage, timesRu, type NotificationLanguage } from "./notification-ru.ts";
 import { sendTelegramMessage, type TelegramSendResult } from "./telegram.ts";
 
 // The one daily line about alerting. Standing incidents that
@@ -42,10 +43,11 @@ export function subjectLabel(input: {
   subKey: string | null;
   pageLabel: string | null;
   platform: Platform | null;
+  language?: NotificationLanguage;
 }): string {
-  const title = incidentTitleForKind({ kind: input.kind, subKey: input.subKey });
+  const title = incidentTitleForKind({ kind: input.kind, subKey: input.subKey }, input.language);
   return input.pageLabel
-    ? `${title} — ${input.pageLabel}${input.platform ? ` (${input.platform})` : ""}`
+    ? `${title}${input.language === "ru" ? " · " : " — "}${input.pageLabel}${input.platform ? ` (${input.platform})` : ""}`
     : title;
 }
 
@@ -57,15 +59,46 @@ export interface AlertDigestInput {
   /** Д2: the window's pages by where their opening ended — a page counts
    *  once it reached Telegram, not once it was enqueued. */
   pageDelivery: { delivered: number; missed: number; queued: number };
+  language?: NotificationLanguage;
 }
 
 function countOf(count: number, singular: string, plural: string) {
   return `${count} ${count === 1 ? singular : plural}`;
 }
 
+/** The digest's words in each language; the lines, counts and order are one. */
+const DIGEST_WORDS = {
+  en: {
+    title: (windowMs: number) => `🩺 <b>Alerts · last ${formatDurationShort(windowMs)}</b>`,
+    openNow: "<b>Open now</b>",
+    age: formatDurationShort,
+    more: (count: number) => `• … and ${count} more`,
+    delivered: (count: number) => `${countOf(count, "page", "pages")} delivered`,
+    missed: (count: number) => `${count} not delivered`,
+    queued: (count: number) => `${count} still queued`,
+    quiet: (count: number) => `${count} quiet episode${count === 1 ? "" : "s"} healed before paging`,
+    window: "<b>Window</b>",
+    group: (count: number, longestMs: number) => `${count} episode${count === 1 ? "" : "s"}, longest ${formatDurationShort(longestMs)}`,
+  },
+  ru: {
+    title: (windowMs: number) => `🩺 <b>Сбои за ${durationRu(windowMs)}</b>`,
+    openNow: "<b>Открыты сейчас</b>",
+    age: durationRu,
+    more: (count: number) => `• … и ещё ${count}`,
+    delivered: (count: number) => `доставлено оповещений: ${count}`,
+    missed: (count: number) => `не доставлено: ${count}`,
+    queued: (count: number) => `в очереди: ${count}`,
+    quiet: (count: number) => `прошло само до оповещения: ${count}`,
+    window: "<b>За это время</b>",
+    group: (count: number, longestMs: number) => `${timesRu(count)}, дольше всего ${durationRu(longestMs)}`,
+  },
+} satisfies Record<NotificationLanguage, unknown>;
+
 /** Null when there is nothing worth a message. Exported for the text tests. */
 export function renderAlertDigest(input: AlertDigestInput): string | null {
   const windowMs = input.windowMs ?? ALERT_DIGEST_WINDOW_MS;
+  const language = input.language ?? "en";
+  const words = DIGEST_WORDS[language];
   const quiet = input.cycles.filter((cycle) => !cycle.paged);
   const { delivered, missed, queued } = input.pageDelivery;
   const pages = delivered + missed + queued;
@@ -73,10 +106,10 @@ export function renderAlertDigest(input: AlertDigestInput): string | null {
     return null;
   }
 
-  const lines: string[] = [`🩺 <b>Alerts · last ${formatDurationShort(windowMs)}</b>`];
+  const lines: string[] = [words.title(windowMs)];
 
   if (input.open.length > 0) {
-    lines.push("", "<b>Open now</b>");
+    lines.push("", words.openNow);
     const sorted = [...input.open].sort((a, b) => a.openedAt.getTime() - b.openedAt.getTime());
     for (const incident of sorted.slice(0, MAX_OPEN_LINES)) {
       const subKey = parseIncidentSubKey({
@@ -89,27 +122,28 @@ export function renderAlertDigest(input: AlertDigestInput): string | null {
         subKey,
         pageLabel: incident.pageLabel,
         platform: incident.platform,
+        language,
       });
-      const age = formatDurationShort(input.now.getTime() - incident.openedAt.getTime());
+      const age = words.age(input.now.getTime() - incident.openedAt.getTime());
       lines.push(`• ${escapeHtml(label)} · ${age}`);
     }
     if (sorted.length > MAX_OPEN_LINES) {
-      lines.push(`• … and ${sorted.length - MAX_OPEN_LINES} more`);
+      lines.push(words.more(sorted.length - MAX_OPEN_LINES));
     }
   }
 
   const summary = [
     ...(pages > 0
       ? [
-        `${countOf(delivered, "page", "pages")} delivered`,
-        `${missed} not delivered`,
-        `${queued} still queued`,
+        words.delivered(delivered),
+        words.missed(missed),
+        words.queued(queued),
       ]
       : []),
-    quiet.length > 0 ? `${quiet.length} quiet episode${quiet.length === 1 ? "" : "s"} healed before paging` : null,
+    quiet.length > 0 ? words.quiet(quiet.length) : null,
   ].filter((part): part is string => part !== null);
   if (summary.length > 0) {
-    lines.push("", `<b>Window</b>: ${summary.join(" · ")}`);
+    lines.push("", `${words.window}: ${summary.join(" · ")}`);
   }
 
   if (quiet.length > 0) {
@@ -125,6 +159,7 @@ export function renderAlertDigest(input: AlertDigestInput): string | null {
         subKey,
         pageLabel: cycle.pageLabel,
         platform: cycle.platform,
+        language,
       });
       const end = cycle.resolvedAt ?? input.now;
       const durationMs = Math.max(0, end.getTime() - cycle.openedAt.getTime());
@@ -135,30 +170,33 @@ export function renderAlertDigest(input: AlertDigestInput): string | null {
     }
     const ordered = [...groups.values()].sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
     for (const group of ordered.slice(0, MAX_QUIET_LINES)) {
-      lines.push(
-        `• ${escapeHtml(group.label)}: ${group.count} episode${group.count === 1 ? "" : "s"}, `
-        + `longest ${formatDurationShort(group.longestMs)}`,
-      );
+      lines.push(`• ${escapeHtml(group.label)}: ${words.group(group.count, group.longestMs)}`);
     }
     if (ordered.length > MAX_QUIET_LINES) {
-      lines.push(`• … and ${ordered.length - MAX_QUIET_LINES} more`);
+      lines.push(words.more(ordered.length - MAX_QUIET_LINES));
     }
   }
 
   return lines.join("\n");
 }
 
-export async function buildAlertDigest(
-  app: Pick<AppContext, "db">,
-  now = new Date(),
-): Promise<string | null> {
+/** The digest's facts as of `now` (reads only): one read renders both languages alike. */
+export async function loadAlertDigestInput(app: Pick<AppContext, "db">, now = new Date()): Promise<AlertDigestInput> {
   const since = new Date(now.getTime() - ALERT_DIGEST_WINDOW_MS);
   const [open, cycles, pageDelivery] = await Promise.all([
     listNotificationIncidentsWithPages(app.db, { status: "open", limit: 200 }),
     listNotificationIncidentCyclesSince(app.db, { since }),
     summarizeNotificationPageDelivery(app.db, { since }),
   ]);
-  return renderAlertDigest({ now, open: open.items, cycles, pageDelivery });
+  return { now, open: open.items, cycles, pageDelivery };
+}
+
+export async function buildAlertDigest(
+  app: Pick<AppContext, "db">,
+  now = new Date(),
+  language: NotificationLanguage = "en",
+): Promise<string | null> {
+  return renderAlertDigest({ ...await loadAlertDigestInput(app, now), language });
 }
 
 export type AlertDigestDelivery =
@@ -191,7 +229,7 @@ export async function sendScheduledAlertDigest(
     return { status: "skipped", reason: "already_sent" };
   }
 
-  const text = await buildAlertDigest(app, now);
+  const text = await buildAlertDigest(app, now, await notificationLanguage(app));
   if (text === null) {
     return { status: "skipped", reason: "empty" };
   }

@@ -15,6 +15,7 @@ import {
   type SyncStream,
 } from "@agency_hub_core/db";
 import type { PgBoss, Queue } from "pg-boss";
+import { formatDateTime, formatTimeOfDay, moscowDayOf, MOSCOW_LABEL } from "@agency_hub_core/look";
 
 import type { AppContext } from "../bootstrap.ts";
 import { NOTIFICATION_DELIVERY_OUTBOX_QUEUE } from "./notification-delivery-outbox.ts";
@@ -32,6 +33,7 @@ import {
   type NotificationPagingDecision,
   type NotificationPagingPolicy,
 } from "./notification-paging-policy.ts";
+import { durationRu, notificationLanguage, timesRu, type NotificationLanguage } from "./notification-ru.ts";
 import {
   CRON_SWEEP_WORK_OPTIONS,
   ensureQueueCreated,
@@ -102,7 +104,8 @@ export interface NotificationPagingSweepResult {
   failed: number;
 }
 
-type SweepApp = Pick<AppContext, "db" | "logger">;
+/** `config`, when the caller has it, carries the env default of the message language (`telegramRussian`). */
+type SweepApp = Pick<AppContext, "db" | "logger"> & Partial<Pick<AppContext, "config">>;
 
 function toMs(value: Date | string): number {
   return (value instanceof Date ? value : new Date(value)).getTime();
@@ -124,6 +127,7 @@ export function renderPagingOpenMessage(input: {
   policy: NotificationPagingPolicy;
   episodesInWindow: number;
   now: Date;
+  language?: NotificationLanguage;
 }): string {
   const { candidate, decision, policy, now } = input;
   const base = openMessageForIncident({
@@ -133,7 +137,20 @@ export function renderPagingOpenMessage(input: {
     stream: candidate.stream as SyncStream | null,
     subKey: subKeyOf(candidate),
     errorSummary: candidate.errorSummary,
-  });
+  }, input.language);
+  if (input.language === "ru") {
+    if (decision.mode === "sustained") {
+      const episodes = policy.flap && input.episodesInWindow > 1
+        ? ` · ${timesRu(input.episodesInWindow)} за последние ${durationRu(policy.flap.windowMs)}`
+        : "";
+      return `${base}\nДлится ${durationRu(now.getTime() - candidate.openedAt.getTime())}${episodes}`;
+    }
+    if (decision.mode === "flapping" && policy.flap) {
+      return `${base}\nМигает: ${timesRu(input.episodesInWindow)} за последние ${durationRu(policy.flap.windowMs)}, `
+        + `и каждый раз проходит раньше ожидания в ${durationRu(policy.openHoldMs)}`;
+    }
+    return base;
+  }
   if (decision.mode === "sustained") {
     const openFor = formatDurationShort(now.getTime() - candidate.openedAt.getTime());
     const episodes = policy.flap && input.episodesInWindow > 1
@@ -155,6 +172,7 @@ export function renderPagingResolvedMessage(input: {
   pagedMode: "immediate" | "sustained" | "flapping" | null;
   resolvedAt: Date;
   now: Date;
+  language?: NotificationLanguage;
 }): string {
   const { candidate } = input;
   const base = resolveMessageForIncident({
@@ -164,7 +182,13 @@ export function renderPagingResolvedMessage(input: {
     stream: candidate.stream as SyncStream | null,
     subKey: subKeyOf(candidate),
     resolution: candidate.resolution,
-  });
+  }, input.language);
+  if (input.language === "ru") {
+    const quietRu = durationRu(input.now.getTime() - input.resolvedAt.getTime());
+    if (!input.pagedOpenedAt) return `${base}\nТихо ${quietRu}`;
+    const spanRu = durationRu(input.resolvedAt.getTime() - input.pagedOpenedAt.getTime());
+    return `${base}\nТихо ${quietRu} · ${input.pagedMode === "flapping" ? "мигало" : "длилось"} ${spanRu}`;
+  }
   const quiet = formatDurationShort(input.now.getTime() - input.resolvedAt.getTime());
   if (!input.pagedOpenedAt) {
     return `${base}\nQuiet for ${quiet}`;
@@ -175,8 +199,10 @@ export function renderPagingResolvedMessage(input: {
 }
 
 /** Д2: the first line of a missed-alerts summary. */
-export function renderMissedAlertsHeader(): string {
-  return "📵 Not delivered in time — these alerts opened and resolved before Telegram accepted them:";
+export function renderMissedAlertsHeader(language: NotificationLanguage = "en"): string {
+  return language === "ru"
+    ? "📵 Не доставлено вовремя: эти оповещения открылись и закрылись раньше, чем их принял Telegram:"
+    : "📵 Not delivered in time — these alerts opened and resolved before Telegram accepted them:";
 }
 
 function formatUtcMinute(date: Date, withDay: boolean): string {
@@ -192,6 +218,7 @@ export function renderMissedAlertsLine(input: {
   pagedOpenedAt: Date | null;
   pagedMode: "immediate" | "sustained" | "flapping" | null;
   resolvedAt: Date;
+  language?: NotificationLanguage;
 }): string {
   const { candidate } = input;
   const label = subjectLabel({
@@ -199,8 +226,18 @@ export function renderMissedAlertsLine(input: {
     subKey: subKeyOf(candidate),
     pageLabel: candidate.pageLabel,
     platform: candidate.platform,
+    ...(input.language === undefined ? {} : { language: input.language }),
   });
   const openedAt = input.pagedOpenedAt ?? candidate.openedAt;
+  if (input.language === "ru") {
+    // Moscow time, said so: «12 нояб., 18:32–18:42 по Москве (10 мин)».
+    const start = formatDateTime(openedAt.toISOString(), { yearUnlessCurrent: true });
+    const end = moscowDayOf(openedAt) === moscowDayOf(input.resolvedAt)
+      ? `–${formatTimeOfDay(input.resolvedAt)}`
+      : ` – ${formatDateTime(input.resolvedAt.toISOString(), { yearUnlessCurrent: true })}`;
+    const lasted = durationRu(input.resolvedAt.getTime() - openedAt.getTime());
+    return `• ${label} · ${input.pagedMode === "flapping" ? "мигало " : ""}${start}${end} ${MOSCOW_LABEL} (${lasted})`;
+  }
   const sameDay = openedAt.toISOString().slice(0, 10) === input.resolvedAt.toISOString().slice(0, 10);
   const span = `${formatUtcMinute(openedAt, true)} → ${formatUtcMinute(input.resolvedAt, !sameDay)} UTC`
     + ` (${formatDurationShort(input.resolvedAt.getTime() - openedAt.getTime())})`;
@@ -212,6 +249,7 @@ async function evaluateCandidate(
   candidate: NotificationPagingCandidate,
   now: Date,
   result: NotificationPagingSweepResult,
+  language: NotificationLanguage = "en",
 ): Promise<void> {
   const paging = candidate.paging;
   const standing = paging?.pagedAt !== null && paging?.pagedAt !== undefined
@@ -300,6 +338,7 @@ async function evaluateCandidate(
       policy,
       episodesInWindow: window.count,
       now,
+      language,
     });
     await app.db.transaction(async (tx) => {
       const txDb = tx as unknown as Database;
@@ -359,12 +398,13 @@ async function evaluateCandidate(
       pagedAt,
       mode: decision.silent ? "manual" : "missed",
       summary: {
-        header: renderMissedAlertsHeader(),
+        header: renderMissedAlertsHeader(language),
         line: renderMissedAlertsLine({
           candidate,
           pagedOpenedAt,
           pagedMode,
           resolvedAt: decision.transitionAt,
+          language,
         }),
         transitionAt: decision.transitionAt,
         maxChars: MISSED_ALERTS_SUMMARY_MAX_CHARS,
@@ -396,6 +436,7 @@ async function evaluateCandidate(
             pagedMode,
             resolvedAt: decision.transitionAt,
             now,
+            language,
           }),
           pagingPolicy: "sync_failure",
           maxAttempts: ALERT_DELIVERY_MAX_ATTEMPTS,
@@ -452,9 +493,11 @@ export async function runNotificationPagingSweep(
     excludeKinds: NOTIFICATION_PAGING_EXCLUDED_KINDS,
   });
   result.examined = candidates.length;
+  // One language for the whole pass, read before any transaction (a failed read sends English).
+  const language = candidates.length > 0 ? await notificationLanguage(app) : "en";
   for (const candidate of candidates) {
     try {
-      await evaluateCandidate(app, candidate, now, result);
+      await evaluateCandidate(app, candidate, now, result, language);
     } catch (error) {
       result.failed += 1;
       app.logger.warn({

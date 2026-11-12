@@ -141,8 +141,8 @@ export const SCREENS: readonly Screen[] = [
     keywords: "расходы счёт csv выгрузка",
   },
   {
-    id: "costs-onlyfans-api", path: "/money/costs/onlyfans-api", label: "OnlyFans API", title: "OnlyFans API: по 1 ноября", section: "money", ownerOnly: true,
-    why: "Сколько кредитов осталось и на что они ушли, по 1 ноября.",
+    id: "costs-onlyfans-api", path: "/money/costs/onlyfans-api", label: "OnlyFans API", title: "OnlyFans API", section: "money", ownerOnly: true,
+    why: "Сколько кредитов осталось и на что они ушли.",
     pageFilter: "all",
     keywords: "кредиты расходы ofapi",
   },
@@ -373,7 +373,7 @@ export const SCREENS: readonly Screen[] = [
   },
   {
     id: "system-onlyfans-api", path: "/system/onlyfans-api", label: "Состояние", title: "OnlyFans API", section: "system", ownerOnly: true,
-    why: "Выключено с 1 ноября: что это значит и где что лежит.",
+    why: "Включён ли он, что это значит и где что лежит.",
     pageFilter: "none",
     keywords: "ofapi вебхук",
   },
@@ -625,7 +625,6 @@ export const SECTIONS: readonly Section[] = [
       tab("agent-keys", "Доступ ИИ-агентов", "system-agent-keys"),
       {
         ...tab("onlyfans-api", "OnlyFans API", "system-onlyfans-api", "system-onlyfans-collection", "system-onlyfans-tools", "system-onlyfans-media", "system-onlyfans-exports", "system-onlyfans-actions"),
-        note: "выключено с 1 ноября",
       },
       {
         ...tab("dev", "Для разработчика", "system-dev-log", "system-dev-run", "system-dev-queue", "system-dev-database", "system-dev-extension", "system-dev-config"),

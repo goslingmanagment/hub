@@ -3328,6 +3328,32 @@ export function buildProgram() {
       }
     });
 
+  telegram
+    .command("compare")
+    .description("Hub's Telegram messages in English and Russian from one read of the same facts (the daily report, the "
+      + "alert digest, the latest incidents beside what Telegram really got); reads only, sends nothing")
+    .option("--incidents <n>", "how many of the latest incidents", parsePositiveInt, 20)
+    .option("--images <dir>", "also render the report image in both languages into this directory")
+    .option("--json", "machine-readable output")
+    .action(async (options: { incidents: number; images?: string; json?: boolean }) => {
+      const app = await createAppContext();
+      try {
+        const { compareNotificationLanguages } = await import("./services/notification-compare.ts");
+        const messages = await compareNotificationLanguages(app, { incidents: options.incidents, imagesDir: options.images ?? null });
+        if (options.json) {
+          console.log(JSON.stringify(messages, null, 2));
+          return;
+        }
+        for (const message of messages) {
+          console.log(`\n════ ${message.what}`);
+          if (message.sent !== undefined) console.log(`── sent (as Telegram got it)\n${message.sent}`);
+          console.log(`── en\n${message.en}\n── ru\n${message.ru}`);
+        }
+      } finally {
+        await app.close();
+      }
+    });
+
   program
     .command("status")
     .option("--page <label>")

@@ -89,6 +89,7 @@ import {
 } from "../../services/ofapi-export-quotes.ts";
 import { getOfapiSpendComparison } from "../../services/ofapi-spend-comparison.ts";
 import { getPageSummary } from "../../services/reporting.ts";
+import { notificationLanguage } from "../../services/notification-ru.ts";
 import { getStatusDetail, listStatus } from "../../services/sync.ts";
 import {
   getPageMessagesSyncBlock,
@@ -1248,7 +1249,9 @@ export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
     if (resolved) {
       // Best-effort send "Manually resolved" to Telegram
       const delivery = await sendTelegramMessage(appContext, {
-        text: `✅ Manually resolved\nIncident: ${incidentKey}`,
+        text: (await notificationLanguage(appContext)) === "ru"
+          ? `✅ Закрыто вручную\nСбой: ${incidentKey}`
+          : `✅ Manually resolved\nIncident: ${incidentKey}`,
       });
 
       await insertDeliveryAttempt(appContext.db, {

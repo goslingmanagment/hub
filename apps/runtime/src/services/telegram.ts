@@ -11,7 +11,10 @@ import {
 } from "@agency_hub_core/shared";
 import type { Dispatcher } from "undici";
 
+import { formatDateTimeMsk } from "@agency_hub_core/look";
+
 import type { AppContext } from "../bootstrap.ts";
+import { notificationLanguage } from "./notification-ru.ts";
 import { fetchWithEgress } from "./egress/fetch.ts";
 import { resolveEgress } from "./egress/resolver.ts";
 
@@ -628,10 +631,13 @@ export async function sendTelegramTestMessage(
   app: Pick<AppContext, "config" | "logger" | "db">,
   now = new Date(),
 ) {
+  const russian = (await notificationLanguage(app)) === "ru";
   return sendTelegramMessage(app, {
-    text: [
-      "✅ Agency Hub Core Telegram test",
-      `UTC: ${now.toISOString()}`,
-    ].join("\n"),
+    text: russian
+      ? ["✅ Проверка Telegram от Hub", `Время: ${formatDateTimeMsk(now)}`].join("\n")
+      : [
+        "✅ Agency Hub Core Telegram test",
+        `UTC: ${now.toISOString()}`,
+      ].join("\n"),
   });
 }

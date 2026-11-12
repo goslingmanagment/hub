@@ -122,7 +122,7 @@ export function DailyReportCard({ settings, writesUnavailable, update, muted }: 
         <div className="switch-row settings-switch-row">
           <div className="switch-text">
             <span className="font-medium">Присылать каждый день</span>
-            <small>Сводка дохода за прошедшие сутки, они закрываются в 02:00 по Москве. В этот же час приходит сводка сбоев.</small>
+            <small>Сводка дохода за прошедшие сутки по Москве, с 00:00 до 00:00. В этот же час приходит сводка сбоев.</small>
           </div>
           <div className="switch-control">
             <select

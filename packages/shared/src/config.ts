@@ -110,6 +110,8 @@ const envSchema = z.object({
   TELEGRAM_BOT_TOKEN: optionalTrimmedStringSchema,
   TELEGRAM_CHAT_ID: optionalTrimmedStringSchema,
   TELEGRAM_REPORT_HOUR: optionalTelegramHourSchema,
+  // Hub's Telegram messages in Russian (alerts, the daily report, the digest): the owner's live switch, off = English.
+  TELEGRAM_RUSSIAN: booleanSchema.default(false),
   SERVICE_EGRESS_PROXY_URL: optionalTrimmedStringSchema,
   SERVICE_EGRESS_PROXY_USERNAME: optionalTrimmedStringSchema,
   SERVICE_EGRESS_PROXY_PASSWORD: optionalTrimmedStringSchema,
@@ -467,6 +469,8 @@ export interface AppConfig {
   telegramChatId: string | null;
   telegramEnabled: boolean;
   telegramReportHourUtc: number;
+  /** Hub's Telegram messages in Russian (`TELEGRAM_RUSSIAN`, live): the same facts, recipients and schedule. */
+  telegramRussian?: boolean;
   serviceEgressProxyUrl: string | null;
   serviceEgressProxyUsername: string | null;
   serviceEgressProxyPassword: string | null;
@@ -874,6 +878,7 @@ export function loadConfig(
     telegramChatId,
     telegramEnabled,
     telegramReportHourUtc: parsed.TELEGRAM_REPORT_HOUR ?? 9,
+    telegramRussian: parsed.TELEGRAM_RUSSIAN,
     serviceEgressProxyUrl: serviceEgressProxy.url,
     serviceEgressProxyUsername: serviceEgressProxy.username,
     serviceEgressProxyPassword: serviceEgressProxy.password,

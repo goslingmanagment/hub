@@ -13,6 +13,7 @@ export default defineConfig({
       "@agency_hub_core/db": path.resolve("packages/db/src/index.ts"),
       "@agency_hub_core/fansly": path.resolve("packages/fansly/src/index.ts"),
       "@agency_hub_core/ui": path.resolve("packages/ui/src"),
+      "@agency_hub_core/look": path.resolve("packages/look/src"),
       "@/": path.resolve("apps/dashboard/src") + "/",
       "react": path.resolve("apps/dashboard/node_modules/react"),
       "react-dom": path.resolve("apps/dashboard/node_modules/react-dom"),

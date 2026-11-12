@@ -44,7 +44,8 @@ export function daysToHours(days: number): number {
 /** The chatters' site (/join opens there) and the one that goes with a console's origin: ./sites.ts. */
 export { CHATTER_SITE_ORIGIN, chatterSiteOriginFor } from "./sites.js";
 
-export const START_GUIDE_URL = `${CHATTER_SITE_ORIGIN}/fansly/start.html`;
+/** The chatters' guide (the old /fansly/start.html answers 301). */
+export const START_GUIDE_URL = `${CHATTER_SITE_ORIGIN}/start.html`;
 
 /** The secret travels in the fragment: it never reaches a server log as a path. */
 export function buildJoinLink(consoleOrigin: string, secret: string): string {
