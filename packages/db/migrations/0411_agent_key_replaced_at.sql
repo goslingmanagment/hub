@@ -1,5 +1,5 @@
 -- agency-hub:rollback-compatible — one nullable column: the previous image never names it, and its reads and writes of agent_keys pass as before.
--- 0999_agent_key_replaced_at.sql
+-- 0411_agent_key_replaced_at.sql
 --
 -- A key being replaced (review round 2). An agent holds one live key at a time (person_agent_keys, its one
 -- writer insertPersonAgentKey), which left no way to replace a key without downtime: the old one had to be

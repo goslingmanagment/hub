@@ -1,5 +1,5 @@
 -- agency-hub:rollback-compatible — one check widened, a column with a default, a nullable column, and stale parts taken off the orders in revision: the previous image never writes a request's part or names the columns, and reads the shorter parts_done as it read it before.
--- 0999_custom_order_revision_rounds.sql
+-- 0410_custom_order_revision_rounds.sql
 --
 -- Заказ кастома, readiness by the current round, per part (final review, round 2, 2026-11-12). A delivery marked
 -- whole for one part closed every open revision request of the order, and a delivery that had been sent back for
