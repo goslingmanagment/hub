@@ -29,6 +29,8 @@ export interface LegacyRule {
   drop?: readonly string[];
   /** A fixed anchor; otherwise the old one is kept. */
   hash?: string;
+  /** The anchor when the old address has none: a section of a screen of sections (`/system/dev#queue`). */
+  anchor?: string;
 }
 
 export interface LegacyTarget {
@@ -60,10 +62,12 @@ export function legacyTarget(rule: LegacyRule, params: RouteParams, search: stri
   }
   if (rule.pageFromPath && params.pageLabel !== undefined) query.set("page", params.pageLabel);
   for (const [key, value] of Object.entries(rule.set ?? {})) query.set(key, value);
-  const pathname = typeof rule.to === "function" ? rule.to(params, query) : fillPath(rule.to, params);
+  const target = typeof rule.to === "function" ? rule.to(params, query) : fillPath(rule.to, params);
+  // A target may name its section itself: `/system/onlyfans-api#collection`.
+  const [pathname = "", section] = target.split("#");
   for (const name of rule.drop ?? []) query.delete(name);
   const text = query.toString();
-  return { pathname, search: text ? `?${text}` : "", hash: rule.hash ?? hash };
+  return { pathname, search: text ? `?${text}` : "", hash: rule.hash ?? (hash || (section ? `#${section}` : rule.anchor ?? "")) };
 }
 
 /** Addresses that are only old now: a route of their own, numbers as in §8.2. */
@@ -100,9 +104,9 @@ export const LEGACY_ROUTES: ReadonlyArray<LegacyRule & { path: string }> = [
       return page ? `/pages/${pathSegment(page)}/promo` : "/system/onlyfans-api";
     },
   },
-  { path: "ofapi-media", to: "/system/onlyfans-api/media" }, // 17
-  { path: "ofapi-exports", to: "/system/onlyfans-api/exports" }, // 18
-  { path: "ofapi-actions", to: "/system/onlyfans-api/actions" }, // 19
+  { path: "ofapi-media", to: "/system/onlyfans-api", anchor: "#media" }, // 17
+  { path: "ofapi-exports", to: "/system/onlyfans-api", anchor: "#exports" }, // 18
+  { path: "ofapi-actions", to: "/system/onlyfans-api", anchor: "#actions" }, // 19
   { path: "ofapi-credits", to: "/money/costs/onlyfans-api" }, // 20
   { path: "usage", to: "/money/costs/ai" }, // 21
   { path: "ai-spend", to: "/money/costs/ai" }, // 22
@@ -126,6 +130,12 @@ export const LEGACY_ROUTES: ReadonlyArray<LegacyRule & { path: string }> = [
     },
   },
   { path: "dev/client-health", to: "/system/dev/extension" }, // §7.1, row 50
+  // The six screens of the OnlyFans API are one screen of sections (12.11): each old address opens its section.
+  { path: "system/onlyfans-api/collection", to: "/system/onlyfans-api", anchor: "#collection" },
+  { path: "system/onlyfans-api/tools", to: "/system/onlyfans-api", anchor: "#tools" },
+  { path: "system/onlyfans-api/media", to: "/system/onlyfans-api", anchor: "#media" },
+  { path: "system/onlyfans-api/exports", to: "/system/onlyfans-api", anchor: "#exports" },
+  { path: "system/onlyfans-api/actions", to: "/system/onlyfans-api", anchor: "#actions" },
   // The roots of the new sections (65–69).
   { path: "money", to: "/money/costs/ai" },
   { path: "money/income", to: "/" },
@@ -163,8 +173,8 @@ const SETTINGS_TAB_TARGET: Readonly<Record<string, string>> = {
   users: workboardHref("access"),
   personas: "/settings/ai/personas",
   notifications: "/settings/notifications",
-  collection: "/system/onlyfans-api/collection",
-  ofapi: "/system/onlyfans-api/tools",
+  collection: "/system/onlyfans-api#collection",
+  ofapi: "/system/onlyfans-api#tools",
   agentKeys: "/system/agent-keys",
   features: "/settings/ai/features",
   configuration: "/system/dev/config",

@@ -393,8 +393,8 @@ export function GoLinks({ page, owner }: { page: SummaryPage; owner: boolean }) 
     links.push({ label: "Настройки публикации", to: q("/publications", { panel: "settings" }) });
   }
   if (page.platform === "onlyfans") {
-    links.push({ label: "Медиатека OnlyFans", to: "/system/onlyfans-api/media" });
-    links.push({ label: "Выгрузки", to: "/system/onlyfans-api/exports" });
+    links.push({ label: "Медиатека OnlyFans", to: "/system/onlyfans-api#media" });
+    links.push({ label: "Выгрузки", to: "/system/onlyfans-api#exports" });
   }
   if (owner) links.push({ label: "Изменить страницу", to: `/settings/pages#page-${page.label}` });
   if (links.length === 0) return null;

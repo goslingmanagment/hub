@@ -279,7 +279,7 @@ export function OfapiMediaPage() {
           <StatusPanel
             title="Нет страниц OnlyFans"
             description={owner ? "Добавьте или привяжите страницу в правилах сбора." : "Страницы OnlyFans пока не добавлены."}
-            action={owner ? <Link className="btn btn-sm" to="/system/onlyfans-api/collection">Правила сбора</Link> : undefined}
+            action={owner ? <Link className="btn btn-sm" to="/system/onlyfans-api#collection">Правила сбора</Link> : undefined}
           />
         </div>
       )}
@@ -288,7 +288,7 @@ export function OfapiMediaPage() {
           <StatusPanel
             title="Страница не привязана к OnlyFans API"
             description="Загрузка файлов и медиатека доступны только для страницы с привязанным аккаунтом OnlyFans API."
-            action={owner ? <Link className="btn btn-sm" to="/system/onlyfans-api/collection">Правила сбора</Link> : undefined}
+            action={owner ? <Link className="btn btn-sm" to="/system/onlyfans-api#collection">Правила сбора</Link> : undefined}
           />
         </div>
       )}

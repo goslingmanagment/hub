@@ -92,13 +92,11 @@ function PagesCard({ off }: { off: boolean }) {
   );
 }
 
-/** «OnlyFans API → Состояние»: switched off since 1 November, what that means and where everything lies (§8). */
-export function StatePage() {
+/** What is said once above every section of «OnlyFans API»: switched off since 1 November, or on, or not known (§8). */
+export function OfapiStateNotice() {
   const ofapi = useOfapi();
-  const webhook = useAdminOfapiWebhookStatus();
   return (
-    <div className="space-y-6 sys-screen">
-      <PageHeader fresh={freshOf(webhook, [], ofapi.status === "off")} />
+    <>
       {ofapi.status === "off" && (
         <Notice tone="off" detail="Включается ключом в настройках сервера: это делает разработчик.">
           <b className="font-medium">OnlyFans API выключен с 1 ноября.</b> Hub ничего не покупает и не отправляет через него. Настройки и собранные данные сохранены.
@@ -106,6 +104,17 @@ export function StatePage() {
       )}
       {ofapi.status === "on" && <Notice>OnlyFans API подключён. Hub покупает данные по правилам сбора.</Notice>}
       <OfapiUnknownNotice ofapi={ofapi} />
+    </>
+  );
+}
+
+/** «OnlyFans API → Состояние»: what it means and where everything lies (§8); its notice is the screen's (OfapiStateNotice). */
+export function StatePage() {
+  const ofapi = useOfapi();
+  const webhook = useAdminOfapiWebhookStatus();
+  return (
+    <div className="space-y-6 sys-screen">
+      <PageHeader fresh={freshOf(webhook, [], ofapi.status === "off")} />
       <WhereItLives ofapi={ofapi.status} />
       <PagesCard off={ofapi.status === "off"} />
       <WebhookCard ofapi={ofapi.status} />

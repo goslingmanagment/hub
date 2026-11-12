@@ -172,7 +172,7 @@ export function OfapiCostsPage() {
     <Notice
       tone="off"
       action={<Link className="btn btn-sm" to="/system/onlyfans-api">Состояние</Link>}
-      detail={<Link className="link" to="/system/onlyfans-api/collection">Правила сбора</Link>}
+      detail={<Link className="link" to="/system/onlyfans-api#collection">Правила сбора</Link>}
     >
       <b>OnlyFans API выключен с 1 ноября.</b> Баланс и траты ниже — по 1 ноября.
     </Notice>

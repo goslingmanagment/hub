@@ -1,6 +1,6 @@
 /**
  * Group system: Система (design/screens/system.md). Every screen here is the
- * owner's, but two: a team lead reads «Медиа» and «Выгрузки» of the OnlyFans API.
+ * owner's, but one: a team lead reads «Медиа» and «Выгрузки» of the OnlyFans API.
  */
 import { Route } from "react-router";
 import { named, Owner } from "./shared.js";
@@ -14,12 +14,7 @@ const AgentReportsPage = named(() => import("@/pages/system/reports/AgentReports
 const AgentReportPage = named(() => import("@/pages/system/reports/AgentReportPage"), "AgentReportPage");
 const SystemStatePage = named(() => import("@/pages/system/state/SystemStatePage"), "SystemStatePage");
 const PeopleMessagesPage = named(() => import("@/pages/system/people-messages/PeopleMessagesPage"), "PeopleMessagesPage");
-const StatePage = named(() => import("@/pages/system/onlyfans-api/StatePage"), "StatePage");
-const RulesPage = named(() => import("@/pages/system/onlyfans-api/rules/CollectionTab"), "CollectionTab");
-const ToolsPage = named(() => import("@/pages/system/onlyfans-api/ToolsPage"), "ToolsPage");
-const OfapiMediaPage = named(() => import("@/pages/system/onlyfans-api/OfapiMediaPage"), "OfapiMediaPage");
-const OfapiExportsPage = named(() => import("@/pages/system/onlyfans-api/OfapiExportsPage"), "OfapiExportsPage");
-const OfapiActions = named(() => import("@/pages/system/onlyfans-api/OfapiActions"), "OfapiActions");
+const OnlyfansApiScreen = named(() => import("@/pages/system/onlyfans-api/OnlyfansApiScreen"), "OnlyfansApiScreen");
 const LogPage = named(() => import("@/pages/system/dev/LogPage"), "LogPage");
 const SyncStatusPage = named(() => import("@/pages/system/dev/SyncStatusPage"), "SyncStatusPage");
 const QueuePage = named(() => import("@/pages/system/dev/QueuePage"), "QueuePage");
@@ -40,10 +35,6 @@ export function systemRoutes() {
         <Route path="system/reports/:slug" element={<AgentReportPage />} />
         <Route path="system/state" element={<SystemStatePage />} />
         <Route path="system/people-messages" element={<PeopleMessagesPage />} />
-        <Route path="system/onlyfans-api" element={<StatePage />} />
-        <Route path="system/onlyfans-api/collection" element={<RulesPage />} />
-        <Route path="system/onlyfans-api/tools" element={<ToolsPage />} />
-        <Route path="system/onlyfans-api/actions" element={<OfapiActions />} />
         <Route path="system/dev/log" element={<LogPage />} />
         <Route path="system/dev/log/:runId" element={<SyncStatusPage />} />
         <Route path="system/dev/queue" element={<QueuePage />} />
@@ -51,9 +42,8 @@ export function systemRoutes() {
         <Route path="system/dev/extension" element={<ClientHealthPage />} />
         <Route path="system/dev/config" element={<ConfigurationTab />} />
       </Route>
-      {/* A team lead reads these two, as before; their writes are the owner's on the server. */}
-      <Route path="system/onlyfans-api/media" element={<OfapiMediaPage />} />
-      <Route path="system/onlyfans-api/exports" element={<OfapiExportsPage />} />
+      {/* One screen of sections; a team lead reads «Медиа» and «Выгрузки» there, as before (their writes are the owner's on the server). */}
+      <Route path="system/onlyfans-api" element={<OnlyfansApiScreen />} />
     </>
   );
 }

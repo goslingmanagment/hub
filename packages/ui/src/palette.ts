@@ -10,6 +10,7 @@
 import {
   SCREENS,
   SECTIONS,
+  screenParts,
   screenVisible,
   tabOfScreen,
   tabRow,
@@ -76,6 +77,18 @@ export function screenCommands(role: Role): Command<never>[] {
         // System are short, and are always listed in full.
         searchOnly: screen.deep === true || (group === "Разделы" && !firstOfTab.has(screen.id)),
       });
+      // A screen of sections: each is found by its own name and old words, and opens at its anchor.
+      for (const part of screenParts(screen, role)) {
+        commands.push({
+          id: `part:${screen.id}:${part.id}`,
+          label: part.label,
+          group,
+          to: `${screen.path}#${part.id}`,
+          hint: `${section.label} · ${screen.label}`,
+          keywords: `${screen.label} ${screen.keywords ?? ""} ${part.keywords ?? ""}`,
+          searchOnly: true,
+        });
+      }
     }
   }
   return commands;

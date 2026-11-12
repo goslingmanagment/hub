@@ -216,7 +216,7 @@ export function OfapiExportsPage() {
     {((jobs.isError && jobs.data) || (visitors.isError && visitors.data)) && <Notice tone="warning">Показаны прежние данные. Нажмите на время обновления, чтобы проверить текущее состояние.</Notice>}
     {notice && <Notice role="status">{notice}</Notice>}
     {pages.isPending && <p role="status" className="text-text-secondary">Загружаем страницы…</p>}
-    {pages.data && !pages.isError && pages.data.pages.length === 0 && <div className="card"><StatusPanel title="Нет страниц OnlyFans" description={owner ? "Добавьте или привяжите страницу в правилах сбора." : "Страницы OnlyFans пока не добавлены."} action={owner ? <Link className="btn btn-sm" to="/system/onlyfans-api/collection">Правила сбора</Link> : undefined} /></div>}
+    {pages.data && !pages.isError && pages.data.pages.length === 0 && <div className="card"><StatusPanel title="Нет страниц OnlyFans" description={owner ? "Добавьте или привяжите страницу в правилах сбора." : "Страницы OnlyFans пока не добавлены."} action={owner ? <Link className="btn btn-sm" to="/system/onlyfans-api#collection">Правила сбора</Link> : undefined} /></div>}
     {windowError && <Notice tone="danger" role="alert">{windowError}</Notice>}
     {unbound && <Notice tone="warning">Страница не привязана к OnlyFans API: новые выгрузки для неё недоступны.</Notice>}
     {unconfirmedQuote && <UnconfirmedExportQuoteNotice

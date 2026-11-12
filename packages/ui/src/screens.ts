@@ -78,6 +78,21 @@ export interface Crumb {
   to?: string;
 }
 
+/**
+ * A section of a screen that holds several things on one page (OnlyFans API,
+ * Разработчик): its anchor in the address (`/system/dev#queue`; `#config-<key>`
+ * opens `config` too), its name and its one sentence. The screen draws them in
+ * this order; the search finds each by its name and old words.
+ */
+export interface ScreenPart {
+  id: string;
+  label: string;
+  why: string;
+  /** The owner's alone on a screen a team lead opens too. */
+  ownerOnly?: boolean;
+  keywords?: string;
+}
+
 export interface Screen {
   id: string;
   /** A route pattern. */
@@ -120,6 +135,8 @@ export interface Screen {
   notSearched?: boolean;
   /** The address's filters can make the period not the screen's to choose. */
   forcedPeriod?: (search: URLSearchParams) => ForcedPeriod | null;
+  /** The screen is one page of sections (ScreenPart), each opened by its anchor. */
+  parts?: readonly ScreenPart[];
 }
 
 const COMMON_PERIODS: readonly PeriodKey[] = ["today", "7d", "30d", "all"];
@@ -500,40 +517,20 @@ export const SCREENS: readonly Screen[] = [
     keywords: "telegram телеграм бот отправка напоминания отчётность карточка выплата приглашение",
   },
   {
-    id: "system-onlyfans-api", path: "/system/onlyfans-api", label: "Состояние", title: "OnlyFans API", section: "system", ownerOnly: true,
-    why: "Включён ли он, что это значит и где что лежит.",
+    // Six screens until 12.11 (five never opened in 14 days): one page of sections now, each at its anchor.
+    // A team lead opens it too and gets «Медиа» and «Выгрузки» alone, as before.
+    id: "system-onlyfans-api", path: "/system/onlyfans-api", label: "OnlyFans API", title: "OnlyFans API", section: "system",
+    why: "OnlyFans API: включён ли, что собирал и что с ним можно сделать.",
     pageFilter: "none",
-    keywords: "ofapi вебхук",
-  },
-  {
-    id: "system-onlyfans-collection", path: "/system/onlyfans-api/collection", label: "Правила сбора", title: "Правила сбора OnlyFans API", section: "system", ownerOnly: true,
-    why: "Что и как часто собирал Hub и сколько кредитов это стоило.",
-    pageFilter: "none",
-    keywords: "сбор onlyfans ofapi",
-  },
-  {
-    id: "system-onlyfans-tools", path: "/system/onlyfans-api/tools", label: "События и ключ", title: "События и ключ", section: "system", ownerOnly: true,
-    why: "События и восстановление, сохранённые ответы, права ключа, словарь слов.",
-    pageFilter: "none",
-    keywords: "ofapi вебхук запрещённые слова",
-  },
-  {
-    id: "system-onlyfans-media", path: "/system/onlyfans-api/media", label: "Медиа", title: "Медиатека OnlyFans", section: "system",
-    why: "Каталог и загрузки медиатеки OnlyFans.",
-    pageFilter: "none",
-    keywords: "ofapi файлы волт",
-  },
-  {
-    id: "system-onlyfans-exports", path: "/system/onlyfans-api/exports", label: "Выгрузки", title: "Выгрузки", section: "system",
-    why: "Выгрузки OnlyFans API и посетители профиля по дням.",
-    pageFilter: "none",
-    keywords: "ofapi посетители",
-  },
-  {
-    id: "system-onlyfans-actions", path: "/system/onlyfans-api/actions", label: "Действия с аккаунтом", title: "Действия с аккаунтом", section: "system", ownerOnly: true,
-    why: "Сырые действия OnlyFans API и их история. Без ключа не выполняются.",
-    pageFilter: "none",
-    keywords: "управление аккаунтом ofapi",
+    keywords: "ofapi onlyfans",
+    parts: [
+      { id: "state", label: "Состояние", why: "Включён ли он, что это значит и где что лежит.", ownerOnly: true, keywords: "вебхук страницы кредиты приём событий" },
+      { id: "collection", label: "Правила сбора", why: "Что и как часто собирал Hub и сколько кредитов это стоило.", ownerOnly: true, keywords: "сбор onlyfans" },
+      { id: "tools", label: "События и ключ", why: "События и восстановление, сохранённые ответы, права ключа, словарь слов.", ownerOnly: true, keywords: "вебхук запрещённые слова" },
+      { id: "media", label: "Медиа", why: "Каталог и загрузки медиатеки OnlyFans.", keywords: "медиатека файлы волт" },
+      { id: "exports", label: "Выгрузки", why: "Выгрузки OnlyFans API и посетители профиля по дням.", keywords: "посетители" },
+      { id: "actions", label: "Действия с аккаунтом", why: "Сырые действия OnlyFans API и их история. Без ключа не выполняются.", ownerOnly: true, keywords: "управление аккаунтом" },
+    ],
   },
   {
     id: "system-dev-log", path: "/system/dev/log", label: "Журнал сбора", title: "Журнал сбора OnlyFans", section: "system", ownerOnly: true,
@@ -654,6 +651,17 @@ export function headerPeriodOf(screen: Screen): ScreenPeriod | null {
 /** The period the address's filters force on this screen today, if any. */
 export function forcedPeriodOf(screen: Screen, search: URLSearchParams): ForcedPeriod | null {
   return screen.forcedPeriod?.(search) ?? null;
+}
+
+/** The sections of a screen of parts that this role opens, in the screen's order. */
+export function screenParts(screen: Pick<Screen, "parts">, role: Role): ScreenPart[] {
+  return (screen.parts ?? []).filter((part) => !part.ownerOnly || role === "owner");
+}
+
+/** The section an address's anchor opens: `#queue` opens `queue`, `#config-<key>` opens `config` on that key. */
+export function partOfAnchor(parts: readonly ScreenPart[], hash: string): ScreenPart | null {
+  const anchor = decodedPath(hash.replace(/^#/, ""));
+  return parts.find((part) => anchor === part.id || anchor.startsWith(`${part.id}-`)) ?? null;
 }
 
 /** Without `roles`, a screen is the owner's and team leads' (`ownerOnly`: the owner's alone), never a chatter's. */
@@ -782,9 +790,7 @@ export const SECTIONS: readonly Section[] = [
       tab("reports", "Отчёты агентов", "system-reports", "system-report"),
       tab("state", "Состояние", "system-state"),
       tab("people-messages", "Сообщения людям", "system-people-messages"),
-      {
-        ...tab("onlyfans-api", "OnlyFans API", "system-onlyfans-api", "system-onlyfans-collection", "system-onlyfans-tools", "system-onlyfans-media", "system-onlyfans-exports", "system-onlyfans-actions"),
-      },
+      tab("onlyfans-api", "OnlyFans API", "system-onlyfans-api"),
       {
         ...tab("dev", "Для разработчика", "system-dev-log", "system-dev-run", "system-dev-queue", "system-dev-database", "system-dev-extension", "system-dev-config"),
         listedInSideMenu: true,
