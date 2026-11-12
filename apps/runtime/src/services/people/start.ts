@@ -7,6 +7,8 @@
 //
 // Where payouts go is money-adjacent: read here only for the person's own
 // session and for the owner's card; nothing else of the registry carries it.
+// A narrow session of the person (from the extension, no password) is told
+// only whether it is written (`ownPayoutDetailsView`).
 
 import {
   PERSON_START_STEPS,
@@ -14,6 +16,7 @@ import {
   type AccountPayoutDetailsBody,
   type AccountPayoutDetailsResponse,
   type AccountStartResponse,
+  type OwnPayoutDetails,
   type PayoutDetails,
   type PersonStart,
   type PersonStartStepId,
@@ -166,6 +169,16 @@ export function payoutDetailsView(row: PersonPayoutDetailsRow | null): PayoutDet
   return row === null ? null : { text: row.details, updatedAt: row.updatedAt.toISOString() };
 }
 
+/**
+ * The same for the person's own session. A narrow session (opened from the extension, no password) never touches
+ * where a person is paid: it is told that it is written and when, and the text stays here — whoever sits at the
+ * person's unlocked computer does not read a card or wallet number off «Начало».
+ */
+export function ownPayoutDetailsView(row: PersonPayoutDetailsRow | null, principal: Pick<HumanAuthPrincipal, "narrowDeviceTokenId">): OwnPayoutDetails {
+  const view = payoutDetailsView(row);
+  return view === null || principal.narrowDeviceTokenId === undefined ? view : { text: null, updatedAt: view.updatedAt };
+}
+
 /** For the owner's card: the way and where payouts go, of one person. */
 export async function readStartForOwner(db: Db, row: PersonRow, now: Date): Promise<{ start: PersonStart | null; payoutDetails: PayoutDetails }> {
   const facts = (await loadStartFacts(db, [row])).get(row.id) ?? EMPTY_FACTS;
@@ -186,7 +199,7 @@ export async function readAccountStart(app: Pick<AppContext, "db">, principal: H
     person: { code: row.code, displayName: row.displayName },
     username: principal.user.username,
     start: personStart(row, facts, now),
-    payoutDetails: payoutDetailsView(facts.payout),
+    payoutDetails: ownPayoutDetailsView(facts.payout, principal),
     // «Сдаёт смену в системе» (package F): off — the text says today's way, Генгар and «Отчётность».
     submitsShift: rights.some((right) => right.right === "submits_shift"),
     serverNow: now.toISOString(),

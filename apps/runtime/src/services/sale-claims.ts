@@ -10,10 +10,10 @@ import type {
 } from "@agency_hub_core/contracts";
 import { formatUsdFromMills } from "@agency_hub_core/shared";
 import {
+  cancelSaleDecision,
   closeMatter,
   decideOffPlatform,
   findHandinByShift,
-  findHandinShift,
   findHandinPersonBy,
   findHandinPersonOfUser,
   findLatestHandinShift,
@@ -40,7 +40,9 @@ import {
   listSaleDecisions,
   listUnownedSales,
   listVisiblePages,
+  lockSaleSettlements,
   openMatter,
+  supersedeSaleDecision,
   updateSaleClaim,
   type CurrentReport,
   type Database,
@@ -68,6 +70,7 @@ import {
   nobodyWeekTitle,
   offPlatformTitle,
   reportSums,
+  settledShareOf,
   settledVersion,
   shareAfter,
   type DerivedClaim,
@@ -76,7 +79,7 @@ import {
 } from "./sale-claim-rules.ts";
 import { SALE_RULE, SALE_HOME_REASON_TEXT, type SaleHomeReason } from "./sale-rule.ts";
 import { dayWords } from "./shift-handin-rules.ts";
-import { SHIFT_REPORT_AFTER_PAID_KIND, ledgerDayPaid, saleLineFacts, type HandinActor } from "./shift-handins.ts";
+import { SHIFT_REPORT_AFTER_PAID_KIND, draftLineOfSale, ledgerDayPaid, saleLineFacts, type HandinActor } from "./shift-handins.ts";
 
 /**
  * Заявки и договорённости (ecosystem plan 2026-11-12, package G): what people
@@ -502,28 +505,57 @@ async function paidDaysOf(app: ClaimsApp, reports: ReadonlyArray<{ shiftId: numb
   return out;
 }
 
+/** A version the system made of a report: which, and whether the ledger had said its day paid. */
+interface MadeVersion {
+  shiftId: number;
+  version: number;
+  versionId: number;
+  dayPaid: boolean | null;
+}
+
+/** Whether two lines count the same: the amount, the dispute and what it claims, and what settled it. */
+const countsAlike = (a: HandinVersionLine, b: HandinVersionLine) => a.amountMills === b.amountMills && a.disputed === b.disputed
+  && (a.claimedMills ?? null) === (b.claimedMills ?? null) && (a.settled ?? null) === (b.settled ?? null);
+
 /**
- * A new version of a handed-in report with one sale's line at what the settlement gives (made by the system, the reason
- * kept in `made_for`); nothing when the line already says it. Run in the caller's transaction (the report locked): it
- * checks only Hub's own versions under the lock; whether the day is paid was read before it (`paidDaysOf`).
+ * A new version of a handed-in report with one sale's line changed (made by the system, the reason kept in `made_for`);
+ * nothing when the line already says it. `to` — what the line becomes: settled at an amount (the owner's decision, the
+ * sides' agreement), or, a settlement gone, the line as the shift's draft has it now (`line`; null — the sale is no line
+ * of that draft: it counts nothing here). Run in the caller's transaction (the report locked): it checks only Hub's own
+ * versions under the lock; whether the day is paid was read before it (`paidDaysOf`). The version keeps the report's
+ * date: only the person's own hand-in dates a report, and the day asked of the ledger is the day written.
  */
 async function settleReport(
   db: Database,
-  input: { shiftId: number; transactionId: number; amountMills: number; settled: "agreed" | "owner"; madeFor: HandinVersionMadeFor; by: SettleBy; at: Date; dayPaid: boolean | null },
-): Promise<{ shiftId: number; version: number; versionId: number; dayPaid: boolean | null } | null> {
+  input: {
+    shiftId: number; transactionId: number;
+    to: { amountMills: number; settled: "agreed" | "owner" } | { line: HandinVersionLine | null };
+    madeFor: HandinVersionMadeFor; by: SettleBy; at: Date; dayPaid: boolean | null;
+  },
+): Promise<MadeVersion | null> {
   const handin = await findHandinByShift(db, input.shiftId, { lock: true });
   if (handin === null || handin.state !== "submitted") return null;
   const current = (await listCurrentHandinVersions(db, [handin.id])).get(handin.id);
   if (current === undefined) return null;
   const line = current.lines.find((one) => one.transactionId === input.transactionId);
   if (line === undefined) return null;
-  if (line.amountMills === input.amountMills && !line.disputed) return null;
-  const made = settledVersion({
-    lines: current.lines, pages: current.pages.map((page) => page.pageLabel), offPlatform: current.offPlatform,
-    transactionId: input.transactionId, amountMills: input.amountMills, settled: input.settled,
-  });
+  const pages = current.pages.map((page) => page.pageLabel);
+  let made: { lines: HandinVersionLine[]; pages: Array<{ pageLabel: string; amountMills: number }>; totalMills: number };
+  if ("line" in input.to) {
+    const { claimedMills: _claimed, settled: _settled, ...rest } = line;
+    const next: HandinVersionLine = input.to.line ?? { ...rest, amountMills: 0, disputed: false, statement: null, shareWithUserId: null };
+    if (countsAlike(line, next)) return null;
+    const lines = current.lines.map((one) => (one.transactionId === input.transactionId ? next : one));
+    made = { lines, ...reportSums(lines, pages, current.offPlatform) };
+  } else {
+    if (line.amountMills === input.to.amountMills && !line.disputed) return null;
+    const settled = settledVersion({
+      lines: current.lines, pages, offPlatform: current.offPlatform,
+      transactionId: input.transactionId, amountMills: input.to.amountMills, settled: input.to.settled,
+    });
+    made = { ...settled, lines: settled.lines as HandinVersionLine[] };
+  }
   const dayPaid = input.dayPaid;
-  const shift = await findHandinShift(db, input.shiftId);
   // Telegram's door is an agent's «со слов» alone; the system's version on the owner's word is the owner's Workboard.
   const telegram = input.by.door === "telegram" && input.by.agentKeyId !== null && input.by.telegramMessageRef !== null && input.by.telegramSenderId !== null;
   const version = await insertHandinVersion(db, {
@@ -535,24 +567,25 @@ async function settleReport(
     telegramSenderId: telegram ? input.by.telegramSenderId : null,
     totalMills: made.totalMills,
     pages: made.pages,
-    lines: made.lines as HandinVersionLine[],
+    lines: made.lines,
     offPlatform: current.offPlatform,
     comment: current.comment,
     dayPaid,
     ruleVersion: SALE_RULE.version,
     madeFor: input.madeFor,
-    reportDate: shift?.reportDate ?? handin.reportDate,
+    reportDate: handin.reportDate,
     at: input.at,
   });
+  const amountMills = made.lines.find((one) => one.transactionId === input.transactionId)?.amountMills ?? 0;
   await insertHandinEvent(db, {
     handinId: handin.id, event: "shift_report.settled", door: "system", actorUserId: input.by.actorUserId, agentKeyId: input.by.agentKeyId,
-    onBehalfOfUserId: null, changes: { version: version.version, transactionId: input.transactionId, amountMills: input.amountMills, madeFor: input.madeFor }, at: input.at,
+    onBehalfOfUserId: null, changes: { version: version.version, transactionId: input.transactionId, amountMills, madeFor: input.madeFor }, at: input.at,
   });
   return { shiftId: input.shiftId, version: version.version, versionId: version.id, dayPaid };
 }
 
 /** After a settlement: the report of a paid day changed is the owner's matter (as a hand-in after the ledger paid it). */
-async function afterPaid(app: ClaimsApp, made: ReadonlyArray<{ shiftId: number; version: number; versionId: number; dayPaid: boolean | null }>, now: Date) {
+async function afterPaid(app: ClaimsApp, made: readonly MadeVersion[], now: Date) {
   for (const one of made) {
     if (one.dayPaid !== true) continue;
     await openMatter(app.db, {
@@ -572,13 +605,21 @@ async function afterPaid(app: ClaimsApp, made: ReadonlyArray<{ shiftId: number; 
   }
 }
 
-/** The sale's Moscow day computed again: its home follows the agreement or the decision at once (never a day before the rule). */
-async function refreshHomeOf(app: ClaimsApp, occurredAt: Date | null, now: Date) {
+/**
+ * The sale's Moscow day computed again (never a day before the rule), on `db` — the pool, or the caller's transaction
+ * when what follows in it reads the home (a cancel: the reports go back to the rule's home, so it is computed first and
+ * a failure fails the cancel whole).
+ */
+async function refreshHomeWithin(db: Database, occurredAt: Date | null, now: Date): Promise<void> {
   if (occurredAt === null || occurredAt.getTime() < SALE_RULE.since) return;
-  const day = moscowDay(occurredAt.getTime());
-  const from = new Date(`${day}T00:00:00+03:00`);
-  await refreshSaleHomes(app.db, { from, to: new Date(Math.min(now.getTime(), from.getTime() + DAY_MS)), now }).catch((error: unknown) => {
-    app.logger.warn({ day, err: error instanceof Error ? error.message : String(error) }, "sale claims: the sale's home was not computed again; the hourly job will");
+  const from = new Date(`${moscowDay(occurredAt.getTime())}T00:00:00+03:00`);
+  await refreshSaleHomes(db, { from, to: new Date(Math.min(now.getTime(), from.getTime() + DAY_MS)), now });
+}
+
+/** The sale's Moscow day computed again after a commit: its home follows the agreement or the decision at once. */
+async function refreshHomeOf(app: ClaimsApp, occurredAt: Date | null, now: Date) {
+  await refreshHomeWithin(app.db, occurredAt, now).catch((error: unknown) => {
+    app.logger.warn({ at: occurredAt?.toISOString(), err: error instanceof Error ? error.message : String(error) }, "sale claims: the sale's home was not computed again; the hourly job will");
   });
 }
 
@@ -618,12 +659,13 @@ export async function answerSaleClaim(
   const by: SettleBy = actor.kind === "person"
     ? { door, actorUserId: actor.userId, agentKeyId: null, telegramMessageRef: null, telegramSenderId: null }
     : { door, actorUserId: null, agentKeyId: actor.agentKeyId, telegramMessageRef: actor.sourceRef, telegramSenderId: actor.telegramUserId };
-  const made: Array<{ shiftId: number; version: number; versionId: number; dayPaid: boolean | null }> = [];
+  const made: MadeVersion[] = [];
   const sale = found.transactionId === null ? undefined : (await listHandinSalesByIds(db, [found.transactionId]))[0];
   const paid = input.answer !== "agree" || found.transactionId === null ? new Map<number, boolean | null>()
     : await paidDaysOf(app, await listCurrentReportsOfSales(db, [found.transactionId]));
   await db.transaction(async (tx) => {
     const txDb = tx as unknown as Database;
+    await lockSaleSettlements(txDb);
     const claim = await findSaleClaim(txDb, input.claimId, { lock: true });
     if (claim === null || !answerable(claim)) throw new ConflictError("This claim is already answered or decided", { reason: "claim_closed" });
     await updateSaleClaim(txDb, claim.id, {
@@ -644,7 +686,7 @@ export async function answerSaleClaim(
         first: claim.claimantUserId, second: claim.sideUserId, statement: claim.statement,
       });
       const one = await settleReport(txDb, {
-        shiftId: report.shiftId, transactionId: claim.transactionId, amountMills: amount, settled: "agreed",
+        shiftId: report.shiftId, transactionId: claim.transactionId, to: { amountMills: amount, settled: "agreed" },
         madeFor: { kind: "claim", claimId: claim.id, transactionId: claim.transactionId, outcome: "agreed" }, by, at: now,
         dayPaid: paid.get(report.shiftId) ?? null,
       });
@@ -708,9 +750,7 @@ export async function decideSaleDispute(
       kind: decision.kind, shares: decision.shares, pot: null, outcome, note, decidedByUserId: principal.user.id, decidedAt: now,
       saidBy: null, source: "dispute", ledgerDecisionId: null, ledgerRef: null,
     },
-    open,
     madeFor: () => ({ kind: "claim", claimId: open[0]!.id, transactionId, outcome }),
-    amountFor: (report, net) => shareAfter({ netMills: net, userId: report.userId, outcome, first: first ?? 0, second, statement: null }),
     by: { door: "workboard", actorUserId: principal.user.id, agentKeyId: null, telegramMessageRef: null, telegramSenderId: null },
   }, sale, now);
   return { decided: true, versions: applied.versions.map((one) => ({ shiftId: one.shiftId, version: one.version })), savedAt: now.toISOString() };
@@ -722,46 +762,49 @@ export async function decideSaleDispute(
  * (a new version, settled; the ledger asked about paid days before any lock), the sale's home computed again and the
  * matters closed by the claims' pass. The owner's decision of a dispute and a decision recorded «со слов» through the
  * agent's door both go here, so they behave the same.
+ *
+ * Everything is read where it is written: in the transaction, in the sale settlements' turn (`lockSaleSettlements`) —
+ * the claims open then, the reports handed in then, the people's logins then — never what was read before the wait for
+ * the ledger. A share is its person's by any of their logins (`settledShareOf`, the one a later draft counts by); a
+ * line another report of the person already holds stays at nothing here.
  */
 export async function applySaleDecision(
   app: ClaimsApp,
   input: {
     transactionId: number;
     insert: Omit<SaleDecisionInsert, "transactionId" | "pageId" | "ruleHome">;
-    /** The open claims and questions of the sale it decides. */
-    open: readonly SaleClaimRow[];
     /** Why the reports' new versions were made. */
     madeFor: (decisionId: number | null) => HandinVersionMadeFor;
-    /** What it gives a report's person, of the sale's net. */
-    amountFor: (report: CurrentReport, net: number) => number;
     by: SettleBy;
+    /**
+     * The caller's own checks, run first in the decision's transaction, before anything is written (the agent's door:
+     * what the decision replaces and what it answers, read there). It throws to refuse. What it returns the decision
+     * takes with it: `supersedes` — another decision it replaces (one with no sale: the sale's own active one is
+     * superseded by the write itself), `answers` — a question it closes that the sale's open claims do not hold.
+     */
+    first?: (txDb: Database) => Promise<{ supersedes?: number | null; answers?: number | null }>;
   },
   sale: HandinSaleRow | undefined,
   now: Date,
-): Promise<{ decisionId: number | null; versions: Array<{ shiftId: number; version: number; versionId: number; dayPaid: boolean | null }> }> {
+): Promise<{ decisionId: number | null; versions: MadeVersion[] }> {
   const { db } = app;
   const { transactionId } = input;
-  const made: Array<{ shiftId: number; version: number; versionId: number; dayPaid: boolean | null }> = [];
+  const made: MadeVersion[] = [];
   const paid = await paidDaysOf(app, await listCurrentReportsOfSales(db, [transactionId]));
   let decisionId: number | null = null;
   await db.transaction(async (tx) => {
     const txDb = tx as unknown as Database;
+    await lockSaleSettlements(txDb);
+    const also = (await input.first?.(txDb)) ?? {};
     const saved = await insertSaleDecision(txDb, { ...input.insert, transactionId, pageId: sale?.pageId ?? null, ruleHome: sale?.home?.home ?? null }, now);
     decisionId = saved?.id ?? null;
-    for (const claim of input.open) await updateSaleClaim(txDb, claim.id, { state: "decided", decisionId, closedAt: now }, now);
-    // Every report that holds the sale gets what the decision gives its person.
-    const reports = await listCurrentReportsOfSales(txDb, [transactionId]);
-    const net = reports.flatMap((report) => report.lines).find((line) => line.transactionId === transactionId)?.netMills ?? sale?.netMills ?? 0;
-    for (const report of reports) {
-      const line = report.lines.find((one) => one.transactionId === transactionId);
-      const amount = input.amountFor(report, net);
-      if (line === undefined || (line.amountMills === 0 && !line.disputed && amount === 0)) continue;
-      const one = await settleReport(txDb, {
-        shiftId: report.shiftId, transactionId, amountMills: amount, settled: "owner",
-        madeFor: input.madeFor(decisionId), by: input.by, at: now, dayPaid: paid.get(report.shiftId) ?? null,
-      });
-      if (one !== null) made.push(one);
+    if (also.supersedes != null && !(await supersedeSaleDecision(txDb, { id: also.supersedes, at: now }))) {
+      throw new ConflictError("The decision it replaces is not active", { reason: "not_active" });
     }
+    made.push(...await followDecision(txDb, {
+      transactionId, decisionId, decision: { kind: input.insert.kind, shares: input.insert.shares }, answers: also.answers ?? null,
+      madeFor: input.madeFor(decisionId), by: input.by, at: now, paid, saleNet: sale?.netMills ?? 0,
+    }));
   });
   await afterPaid(app, made, now);
   await refreshHomeOf(app, sale?.occurredAt ?? null, now);
@@ -769,6 +812,132 @@ export async function applySaleDecision(
     app.logger.warn({ transactionId, err: error instanceof Error ? error.message : String(error) }, "sale claims: the pass after a decision failed; the next one will");
   });
   return { decisionId, versions: made };
+}
+
+/**
+ * In the caller's transaction (the settlements' turn taken), a decision that rules a sale from now is followed: every
+ * claim and question of the sale open now is decided with it (and `answers`, a question the sale's own do not hold),
+ * and every handed-in report that holds the sale gets what it gives the report's person — their share under any of
+ * their logins; a line another report of the person already holds stays at nothing here. Made on the sale, or tied to
+ * it: the same.
+ */
+async function followDecision(
+  txDb: Database,
+  input: {
+    transactionId: number; decisionId: number | null; answers?: number | null;
+    decision: { kind: SaleDecisionRow["kind"]; shares: ReadonlyArray<{ userId: number; percent: number }> };
+    madeFor: HandinVersionMadeFor; by: SettleBy; at: Date; paid: ReadonlyMap<number, boolean | null>; saleNet: number;
+  },
+): Promise<MadeVersion[]> {
+  const { transactionId, decisionId, at } = input;
+  const made: MadeVersion[] = [];
+  const open = await listSaleClaims(txDb, { transactionIds: [transactionId], states: ["owner", "asked", "agreed"] });
+  for (const id of new Set([...open.map((claim) => claim.id), ...(input.answers == null ? [] : [input.answers])])) {
+    await updateSaleClaim(txDb, id, { state: "decided", decisionId, closedAt: at }, at);
+  }
+  const reports = await listCurrentReportsOfSales(txDb, [transactionId]);
+  const people = await listHandinPeopleOfUsers(txDb, reports.map((report) => report.userId));
+  const net = reports.flatMap((report) => report.lines).find((line) => line.transactionId === transactionId)?.netMills ?? input.saleNet;
+  for (const report of reports) {
+    const line = report.lines.find((one) => one.transactionId === transactionId);
+    // Another report of the person holds the sale: it counts there, nothing here.
+    if (line === undefined || line.alreadyIn != null) continue;
+    const amount = settledShareOf({
+      netMills: net, userIds: new Set(people.get(report.userId)?.userIds ?? [report.userId]), decision: input.decision, agreed: [],
+    })?.amountMills ?? 0;
+    if (line.amountMills === 0 && !line.disputed && amount === 0) continue;
+    const one = await settleReport(txDb, {
+      shiftId: report.shiftId, transactionId, to: { amountMills: amount, settled: "owner" },
+      madeFor: input.madeFor, by: input.by, at, dayPaid: input.paid.get(report.shiftId) ?? null,
+    });
+    if (one !== null) made.push(one);
+  }
+  return made;
+}
+
+/** Where a claim a decision had closed waits again: where it was — the other side's to answer, or the owner's. */
+function waitsAgain(claim: SaleClaimRow, now: Date): Pick<SaleClaimRow, "state" | "decisionId" | "closedAt" | "escalatedAt" | "escalatedWhy"> {
+  const owner = claim.kind === "imported" || (claim.kind === "question" ? claim.askedOf !== "chatters" : claim.escalatedAt !== null);
+  return {
+    state: owner ? "owner" : "asked", decisionId: null, closedAt: null,
+    escalatedAt: owner ? claim.escalatedAt ?? now : claim.escalatedAt,
+    escalatedWhy: owner ? claim.escalatedWhy ?? (claim.kind === "imported" ? "imported" : "question") : claim.escalatedWhy,
+  };
+}
+
+/**
+ * A decision cancelled, and what follows it — the path a decision takes, the other way (final review, round 2). In one
+ * transaction, in the settlements' turn: the decision is cancelled; nothing else decides its sale then (a decision it
+ * had replaced does not come back), so the agreements a decision of the sale overrode stand again, the sale's home is
+ * computed without it, and every handed-in report whose line a decision had settled gets a new version with what rules
+ * now — the line as the shift's draft has it: an agreement of the two sides, else the rule with the person's own word,
+ * what handing in again would write. The claims and questions a decision had closed wait again where they stand again:
+ * a question always, a claim when the reports make it again. A day the ledger paid raises the owner's matter as after a
+ * decision (asked before any lock).
+ * `check` — the caller's own check of the decision as the transaction reads it (the agent's door: its page, whose it
+ * is and whose message cancels it), on the connection it is read on; it throws to refuse and is asked once before the
+ * ledger too, so a refusal costs no call.
+ */
+export async function cancelSaleDecisionApplied(
+  app: ClaimsApp,
+  input: { decisionId: number; note: string; by: SettleBy; check: (decision: SaleDecisionRow | null, db: Database) => Promise<SaleDecisionRow> },
+  now: Date,
+): Promise<{ versions: MadeVersion[] }> {
+  const { db } = app;
+  const before = await input.check((await listSaleDecisions(db, { ids: [input.decisionId] }))[0] ?? null, db);
+  const paid = before.transactionId === null ? new Map<number, boolean | null>() : await paidDaysOf(app, await listCurrentReportsOfSales(db, [before.transactionId]));
+  const made: MadeVersion[] = [];
+  await db.transaction(async (tx) => {
+    const txDb = tx as unknown as Database;
+    await lockSaleSettlements(txDb);
+    const decision = await input.check((await listSaleDecisions(txDb, { ids: [input.decisionId] }))[0] ?? null, txDb);
+    if (!(await cancelSaleDecision(txDb, { id: decision.id, note: input.note, at: now }))) {
+      throw new ConflictError("Only an active decision is cancelled", { reason: "not_active" });
+    }
+    const saleId = decision.transactionId;
+    const unruled = saleId !== null && !(await listActiveSaleDecisions(txDb, [saleId])).has(saleId);
+    // What a decision closed and nothing decides now: the claims and questions of the sale, when no decision rules it
+    // (also the ones a decision this one had replaced closed), and a question with no sale that this one answered.
+    const closed = new Map<number, SaleClaimRow>();
+    for (const claim of await listSaleClaims(txDb, { decisionIds: [decision.id], states: ["decided"] })) {
+      if (claim.transactionId === null) closed.set(claim.id, claim);
+    }
+    if (unruled) {
+      for (const claim of await listSaleClaims(txDb, { transactionIds: [saleId], states: ["decided"] })) if (claim.decisionId !== null) closed.set(claim.id, claim);
+    }
+    const agreed = [...closed.values()].filter((claim) => claim.answer === "agree");
+    for (const claim of agreed) await updateSaleClaim(txDb, claim.id, { state: "agreed", decisionId: null, closedAt: claim.answeredAt }, now);
+    let again: DerivedClaim[] = [];
+    if (unruled) {
+      await refreshHomeWithin(txDb, (await listHandinSalesByIds(txDb, [saleId]))[0]?.occurredAt ?? null, now);
+      const settled = (await listCurrentReportsOfSales(txDb, [saleId]))
+        .filter((report) => report.lines.some((line) => line.transactionId === saleId && line.settled === "owner"));
+      // Every report first, then every line, then the versions: each draft reads the other reports as they stand before any of them changes.
+      for (const report of settled) await findHandinByShift(txDb, report.shiftId, { lock: true });
+      const lines: Array<HandinVersionLine | null> = [];
+      for (const report of settled) lines.push(await draftLineOfSale(txDb, report.shiftId, saleId, now));
+      for (const [at, report] of settled.entries()) {
+        const one = await settleReport(txDb, {
+          shiftId: report.shiftId, transactionId: saleId, to: { line: lines[at] ?? null },
+          madeFor: { kind: "decision", decisionId: decision.id, transactionId: saleId, outcome: "cancelled" },
+          by: input.by, at: now, dayPaid: paid.get(report.shiftId) ?? null,
+        });
+        if (one !== null) made.push(one);
+      }
+      again = deriveClaims((await listCurrentReportsOfSales(txDb, [saleId])).map(viewOf)).filter((one) => one.transactionId === saleId);
+    }
+    for (const claim of closed.values()) {
+      if (claim.answer === "agree") continue;
+      const stands = claim.kind === "question" || claim.kind === "imported"
+        || again.some((one) => one.kind === claim.kind && one.claimantHandinId === claim.claimantHandinId && one.sideUserId === claim.sideUserId);
+      if (stands) await updateSaleClaim(txDb, claim.id, waitsAgain(claim, now), now);
+    }
+  });
+  await afterPaid(app, made, now);
+  await runSaleClaims(app, now).catch((error: unknown) => {
+    app.logger.warn({ decisionId: input.decisionId, err: error instanceof Error ? error.message : String(error) }, "sale claims: the pass after a cancelled decision failed; the next one will");
+  });
+  return { versions: made };
 }
 
 // ── «Мимо площадки» ──────────────────────────────────────────────────────────
@@ -838,7 +1007,8 @@ export async function decideOffPlatformLine(
       handin, door: "workboard", actorUserId: principal.user.id, agentKeyId: null, telegramMessageRef: null, telegramSenderId: null,
       totalMills: sums.totalMills, pages: sums.pages, lines: current.lines, offPlatform, comment: current.comment, dayPaid,
       ruleVersion: SALE_RULE.version, madeFor: { kind: "off_platform", offPlatformId: row.id, decision: state },
-      reportDate: (await findHandinShift(txDb, row.shiftId))?.reportDate ?? handin.reportDate, at: now,
+      // The report's own date, the one the ledger was asked about above: only the person's hand-in dates a report.
+      reportDate: handin.reportDate, at: now,
     });
     await insertHandinEvent(txDb, {
       handinId: handin.id, event: "shift_report.off_platform_decided", door: "workboard", actorUserId: principal.user.id, agentKeyId: null,
@@ -880,6 +1050,7 @@ export async function keepSalesNobody(app: ClaimsApp, principal: HumanAuthPrinci
   const sales = week.sales.filter((sale) => wanted === null || wanted.has(sale.transactionId));
   await app.db.transaction(async (tx) => {
     const txDb = tx as unknown as Database;
+    await lockSaleSettlements(txDb);
     for (const sale of sales) {
       await insertSaleDecision(txDb, {
         transactionId: sale.transactionId, pageId: sale.pageId, kind: "nobody", shares: [], pot: null, outcome: "nobody", ruleHome: sale.home,
@@ -943,9 +1114,28 @@ export async function linkUnlinkedDecision(app: ClaimsApp, principal: HumanAuthP
   if (decision === undefined || !decision.needsLink) throw new NotFoundError("No such decision waiting for a sale");
   const pageLabel = typeof decision.ledgerRef?.pageLabel === "string" ? decision.ledgerRef.pageLabel : null;
   if (pageLabel !== null && pageLabel !== sale.pageLabel) throw new BadRequestError("The sale is of another page", { reason: "page_mismatch" });
-  const linked = await app.db.transaction(async (tx) => linkSaleDecision(tx as unknown as Database, { id: input.decisionId, transactionId: sale.transactionId, pageId: sale.pageId, at: now }));
+  // Tied to its sale, it rules the sale from now exactly as a decision made on it (and replaces the one that ruled it):
+  // the sale's open claims are decided with it and the reports that hold the sale get what it gives. The ledger is
+  // asked about paid days before any lock.
+  const paid = await paidDaysOf(app, await listCurrentReportsOfSales(app.db, [sale.transactionId]));
+  const made: MadeVersion[] = [];
+  const linked = await app.db.transaction(async (tx) => {
+    const txDb = tx as unknown as Database;
+    await lockSaleSettlements(txDb);
+    if (!(await linkSaleDecision(txDb, { id: input.decisionId, transactionId: sale.transactionId, pageId: sale.pageId, at: now }))) return false;
+    made.push(...await followDecision(txDb, {
+      transactionId: sale.transactionId, decisionId: decision.id, decision,
+      madeFor: { kind: "decision", decisionId: decision.id, transactionId: sale.transactionId, outcome: "said" },
+      by: { door: "workboard", actorUserId: principal.user.id, agentKeyId: null, telegramMessageRef: null, telegramSenderId: null },
+      at: now, paid, saleNet: sale.netMills,
+    }));
+    return true;
+  });
+  await afterPaid(app, made, now);
   if (linked) await refreshHomeOf(app, sale.occurredAt, now);
-  await syncUnlinkedDecisions(app, now);
+  await runSaleClaims(app, now).catch((error: unknown) => {
+    app.logger.warn({ decisionId: input.decisionId, err: error instanceof Error ? error.message : String(error) }, "sale claims: the pass after a decision was tied to its sale failed; the next one will");
+  });
   return { linked, savedAt: now.toISOString() };
 }
 

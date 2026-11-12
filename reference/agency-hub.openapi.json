@@ -1065,7 +1065,7 @@
         "tags": [
           "client"
         ],
-        "description": "Workboard «Начало». The person of the session's login (null when the login is nobody's): the extension installed and signed in, the pages opened, the first active minute, where payouts go — the caller's own, never anyone else's. A narrow session (from the extension) reads it too; writing where payouts go needs a password (accountPayoutDetailsSet is refused to it). Database only.",
+        "description": "Workboard «Начало». The person of the session's login (null when the login is nobody's): the extension installed and signed in, the pages opened, the first active minute, where payouts go — the caller's own, never anyone else's. A narrow session (from the extension) reads it too, without where payouts go: `payoutDetails.text` is null for it (written, and when, is all it learns), and writing it needs a password (accountPayoutDetailsSet is refused to it). Database only.",
         "security": [
           {
             "cookieAuth": []
@@ -1290,7 +1290,10 @@
                           "type": "object",
                           "properties": {
                             "text": {
-                              "type": "string"
+                              "type": [
+                                "string",
+                                "null"
+                              ]
                             },
                             "updatedAt": {
                               "type": "string"
@@ -110359,6 +110362,13 @@
                         "minLength": 1,
                         "maxLength": 500
                       },
+                      "part": {
+                        "type": "string",
+                        "enum": [
+                          "video",
+                          "photos"
+                        ]
+                      },
                       "onBehalfOf": {
                         "type": "string",
                         "minLength": 1,
@@ -126512,6 +126522,17 @@
                         "isActive": {
                           "type": "boolean"
                         },
+                        "replacedAt": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?(Z|[+-]\\d{2}:\\d{2})$"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
                         "agent": {
                           "anyOf": [
                             {
@@ -126581,6 +126602,7 @@
                         "revokedAt",
                         "lastUsedAt",
                         "isActive",
+                        "replacedAt",
                         "agent",
                         "lastCall"
                       ],
@@ -126876,6 +126898,17 @@
                       "isActive": {
                         "type": "boolean"
                       },
+                      "replacedAt": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?(Z|[+-]\\d{2}:\\d{2})$"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
                       "agent": {
                         "anyOf": [
                           {
@@ -126945,6 +126978,7 @@
                       "revokedAt",
                       "lastUsedAt",
                       "isActive",
+                      "replacedAt",
                       "agent",
                       "lastCall"
                     ],
@@ -127460,6 +127494,17 @@
                     "isActive": {
                       "type": "boolean"
                     },
+                    "replacedAt": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?(Z|[+-]\\d{2}:\\d{2})$"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
                     "agent": {
                       "anyOf": [
                         {
@@ -127529,8 +127574,604 @@
                     "revokedAt",
                     "lastUsedAt",
                     "isActive",
+                    "replacedAt",
                     "agent",
                     "lastCall"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/agent/keys/{id}/replace": {
+      "post": {
+        "summary": "Issue a key as the replacement of an agent's live key: the same agent, pages and capabilities; the old key works one more day",
+        "tags": [
+          "agent"
+        ],
+        "description": "Returns the new key's raw token exactly once. The replaced key is not revoked: its expiry becomes 24 hours ahead (never later than it was), stops sliding on use, and it ends by itself; revoke it earlier once the new key is installed. 409: the key is revoked, expired or no agent's (`key_without_agent`); the agent already holds two live keys, a replacement in flight (`agent_holds_live_key`); the name is taken.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  },
+                  "expiresInDays": {
+                    "default": 90,
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 10000
+                  }
+                },
+                "required": [
+                  "name"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "token": {
+                      "type": "string"
+                    },
+                    "key": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "integer",
+                          "exclusiveMinimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "name": {
+                          "type": "string"
+                        },
+                        "keyPrefix": {
+                          "type": "string"
+                        },
+                        "capabilities": {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "enum": [
+                              "read:messages",
+                              "read:money",
+                              "read:observations_envelope",
+                              "read:datasets",
+                              "request:hydration",
+                              "write:publication_drafts",
+                              "approve:publications",
+                              "approve:vault_albums",
+                              "write:fan_queues",
+                              "read:content",
+                              "read:team",
+                              "withdraw:publications",
+                              "delete:posts",
+                              "look:media",
+                              "write:matters",
+                              "read:pay_terms",
+                              "propose:people",
+                              "signin:contentops",
+                              "signin:taskindex",
+                              "signin:monitor",
+                              "write:reports",
+                              "write:system_state",
+                              "introspect:agent_keys",
+                              "write:customs",
+                              "write:shift_reports"
+                            ]
+                          }
+                        },
+                        "pageLabels": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "expiresAt": {
+                          "type": "string",
+                          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?(Z|[+-]\\d{2}:\\d{2})$"
+                        },
+                        "createdAt": {
+                          "type": "string",
+                          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?(Z|[+-]\\d{2}:\\d{2})$"
+                        },
+                        "revokedAt": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?(Z|[+-]\\d{2}:\\d{2})$"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "lastUsedAt": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?(Z|[+-]\\d{2}:\\d{2})$"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "isActive": {
+                          "type": "boolean"
+                        },
+                        "replacedAt": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?(Z|[+-]\\d{2}:\\d{2})$"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "agent": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "code": {
+                                  "type": "string"
+                                },
+                                "displayName": {
+                                  "type": "string"
+                                },
+                                "state": {
+                                  "type": "string",
+                                  "enum": [
+                                    "invited",
+                                    "set_up",
+                                    "working",
+                                    "left"
+                                  ]
+                                }
+                              },
+                              "required": [
+                                "code",
+                                "displayName",
+                                "state"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "lastCall": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "at": {
+                                  "type": "string",
+                                  "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?(Z|[+-]\\d{2}:\\d{2})$"
+                                },
+                                "operation": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "at",
+                                "operation"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "name",
+                        "keyPrefix",
+                        "capabilities",
+                        "pageLabels",
+                        "expiresAt",
+                        "createdAt",
+                        "revokedAt",
+                        "lastUsedAt",
+                        "isActive",
+                        "replacedAt",
+                        "agent",
+                        "lastCall"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "replaced": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "integer",
+                          "exclusiveMinimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "name": {
+                          "type": "string"
+                        },
+                        "keyPrefix": {
+                          "type": "string"
+                        },
+                        "capabilities": {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "enum": [
+                              "read:messages",
+                              "read:money",
+                              "read:observations_envelope",
+                              "read:datasets",
+                              "request:hydration",
+                              "write:publication_drafts",
+                              "approve:publications",
+                              "approve:vault_albums",
+                              "write:fan_queues",
+                              "read:content",
+                              "read:team",
+                              "withdraw:publications",
+                              "delete:posts",
+                              "look:media",
+                              "write:matters",
+                              "read:pay_terms",
+                              "propose:people",
+                              "signin:contentops",
+                              "signin:taskindex",
+                              "signin:monitor",
+                              "write:reports",
+                              "write:system_state",
+                              "introspect:agent_keys",
+                              "write:customs",
+                              "write:shift_reports"
+                            ]
+                          }
+                        },
+                        "pageLabels": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "expiresAt": {
+                          "type": "string",
+                          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?(Z|[+-]\\d{2}:\\d{2})$"
+                        },
+                        "createdAt": {
+                          "type": "string",
+                          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?(Z|[+-]\\d{2}:\\d{2})$"
+                        },
+                        "revokedAt": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?(Z|[+-]\\d{2}:\\d{2})$"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "lastUsedAt": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?(Z|[+-]\\d{2}:\\d{2})$"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "isActive": {
+                          "type": "boolean"
+                        },
+                        "replacedAt": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?(Z|[+-]\\d{2}:\\d{2})$"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "agent": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "code": {
+                                  "type": "string"
+                                },
+                                "displayName": {
+                                  "type": "string"
+                                },
+                                "state": {
+                                  "type": "string",
+                                  "enum": [
+                                    "invited",
+                                    "set_up",
+                                    "working",
+                                    "left"
+                                  ]
+                                }
+                              },
+                              "required": [
+                                "code",
+                                "displayName",
+                                "state"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "lastCall": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "at": {
+                                  "type": "string",
+                                  "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?(Z|[+-]\\d{2}:\\d{2})$"
+                                },
+                                "operation": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "at",
+                                "operation"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "name",
+                        "keyPrefix",
+                        "capabilities",
+                        "pageLabels",
+                        "expiresAt",
+                        "createdAt",
+                        "revokedAt",
+                        "lastUsedAt",
+                        "isActive",
+                        "replacedAt",
+                        "agent",
+                        "lastCall"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "token",
+                    "key",
+                    "replaced"
                   ],
                   "additionalProperties": false
                 }
@@ -177853,7 +178494,7 @@
         "tags": [
           "agent"
         ],
-        "description": "Database only. A sale Hub knows: it behaves as the owner's decision of a dispute — the reports holding it get a new version, the open claims and questions of the sale are decided, the home is computed again. A sale with an active decision needs `supersedes` (409 `decision_exists`). A sale not named yet waits for the owner to tie it.",
+        "description": "Database only. A sale Hub knows: it behaves as the owner's decision of a dispute — the reports holding it get a new version, the open claims and questions of the sale are decided, the home is computed again. A sale with an active decision needs `supersedes` (409 `decision_exists`). A sale not named yet waits for the owner to tie it. What it replaces and answers is checked in the transaction that writes: of the key's pages, about the same sale (409 `other_sale`). A decision the owner made himself in Workboard is replaced only when the message's sender (`telegramUserId`) is the owner's Telegram account in the people registry (else 409 `owner_decision`).",
         "requestBody": {
           "required": true,
           "content": {
@@ -178437,7 +179078,7 @@
         "tags": [
           "agent"
         ],
-        "description": "Database only. Every source: the owner's disputes, the ones carried over from the ledger, the ones recorded «со слов».",
+        "description": "Database only. Every source: the owner's disputes, the ones carried over from the ledger, the ones recorded «со слов». The fan is named as Hub's own rows name him; a note is the team's free text, as written.",
         "parameters": [
           {
             "schema": {
@@ -179419,11 +180060,11 @@
     },
     "/api/v1/agent/sale-decisions/cancel": {
       "post": {
-        "summary": "Cancel a decision «со слов», with why (needs write:shift_reports)",
+        "summary": "Cancel a decision recorded «со слов» or carried over, with why (needs write:shift_reports)",
         "tags": [
           "agent"
         ],
-        "description": "Database only. The sale's home is computed again without it; a report handed in keeps its version until the person hands it in again.",
+        "description": "Database only. The sale's home is computed again without it, and every report handed in that the decision settled gets a new version with what rules now (`versions`): an agreement of the two sides, else the rule with the person's own word. The claims and questions it decided wait again. A decision the owner made himself in Workboard is cancelled only when the message's sender (`telegramUserId`) is the owner's Telegram account in the people registry (else 409 `owner_decision`).",
         "requestBody": {
           "required": true,
           "content": {
@@ -179927,7 +180568,7 @@
         "tags": [
           "agent"
         ],
-        "description": "Database only. A change is placed when the feed first finds it committed, after every place given before: a change committed late comes after the cursor, never passed. No fan's name.",
+        "description": "Database only. A change is placed when the feed first finds it committed, after every place given before: a change committed late comes after the cursor, never passed. A change held back for the key's pages gets a new place at the end once the key may read it. `limit` counts places: a page may carry fewer changes than asked while `more` is true. The structured fields carry no fan's name; `note` is the team's free text, as written.",
         "parameters": [
           {
             "schema": {
@@ -180215,6 +180856,9 @@
                     "next": {
                       "type": "string"
                     },
+                    "more": {
+                      "type": "boolean"
+                    },
                     "serverNow": {
                       "type": "string"
                     }
@@ -180223,6 +180867,7 @@
                     "changes",
                     "held",
                     "next",
+                    "more",
                     "serverNow"
                   ],
                   "additionalProperties": false
@@ -184499,7 +185144,7 @@
         "tags": [
           "agent"
         ],
-        "description": "Database only. A version is served as soon as it is committed, in the order the feed placed it (`seq`): a version committed after a later one is placed after it, so `next` never passes a version not served yet. A version with a line on a page outside the key's grant is held back and listed in `held` on every read until the key may read it; then it is served in `reports` at its own place.",
+        "description": "Database only. A version is served as soon as it is committed, in the order the feed placed it (`seq`): a version committed after a later one is placed after it, so `next` never passes a version not served yet. A version with a line on a page outside the key's grant is held back and listed in `held` on every read until the key may read it; then it gets a new place at the end of the feed and comes in `reports` through the cursor (a lost answer is asked again and brings it again). `limit` counts places: a page may carry fewer reports than asked while `more` is true.",
         "parameters": [
           {
             "schema": {
@@ -184984,6 +185629,9 @@
                     "next": {
                       "type": "string"
                     },
+                    "more": {
+                      "type": "boolean"
+                    },
                     "serverNow": {
                       "type": "string"
                     }
@@ -184992,6 +185640,7 @@
                     "reports",
                     "held",
                     "next",
+                    "more",
                     "serverNow"
                   ],
                   "additionalProperties": false
@@ -215967,7 +216616,7 @@
         "tags": [
           "client"
         ],
-        "description": "Database-only. A device token's; the custom must be of the fan's card and of a page the caller works. `paid` takes a tip of `customPayments`, `delivered` a message of the custom's `deliveryCandidates` (else 409 `not_suggested`). A delivered or cancelled custom is final: a change answers `changed: false`.",
+        "description": "Database-only. A device token's; the custom must be of the fan's card and of a page the caller works. `paid` takes a tip of `customPayments`, `delivered` a message of the custom's `deliveryCandidates` (else 409 `not_suggested`). A delivered or cancelled custom is final: a change answers `changed: false`. A step that is not the caller's — cancelling or editing an order another person took — is 409 `not_allowed`, as on the board; their own order they cancel at any step before it is given.",
         "requestBody": {
           "required": true,
           "content": {
@@ -232212,6 +232861,13 @@
                         "type": "string",
                         "minLength": 1,
                         "maxLength": 500
+                      },
+                      "part": {
+                        "type": "string",
+                        "enum": [
+                          "video",
+                          "photos"
+                        ]
                       }
                     },
                     "required": [
@@ -239086,6 +239742,17 @@
             "in": "query",
             "name": "to",
             "required": true
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+            },
+            "in": "query",
+            "name": "until",
+            "required": false,
+            "description": "Count only what occurred before this instant (exclusive), inside the window. Read from the transactions; no comparison."
           }
         ],
         "security": [

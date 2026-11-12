@@ -195,6 +195,15 @@
     gap: 8px;
   }
 
+  /* «Правка»: what is still waited for, line by line inside its notice. */
+  .cus-waits,
+  .cus-waits__line {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    overflow-wrap: anywhere;
+  }
+
   .cus-grid {
     display: grid;
     grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);

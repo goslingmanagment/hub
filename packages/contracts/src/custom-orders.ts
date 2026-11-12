@@ -48,6 +48,17 @@ export function parseCustomOrderCode(text: string): number | null {
   const id = Number(match[1]);
   return Number.isSafeInteger(id) ? id : null;
 }
+/**
+ * The order's number from a code somewhere in a line of text (a card's title «📦 Описание заказа К-123»): the Latin
+ * or the Cyrillic letter, as a Russian keyboard types it, with its hyphen or right before the number. Null — the
+ * line holds no code. A code is always printed with the Latin letter (`customOrderCode`).
+ */
+export function findCustomOrderCode(text: string): number | null {
+  const match = /(?:^|[^\p{L}\p{N}])[KkКк](?:\s*-\s*)?([1-9]\d{0,15})(?!\d)/u.exec(text);
+  if (!match) return null;
+  const id = Number(match[1]);
+  return Number.isSafeInteger(id) ? id : null;
+}
 export const customOrderCodeSchema = z.string().trim().min(2).max(24).refine((value) => parseCustomOrderCode(value) !== null, {
   message: "a custom order code is K-<number>",
 });
@@ -178,9 +189,13 @@ export const customOrderSchema = z.object({
   origin: z.enum(CUSTOM_ORDER_ORIGINS),
   /** Days past the deadline while the model has not delivered it whole; null — not overdue. */
   overdueDays: z.number().int().positive().nullable(),
-  /** The parts the model delivered whole. */
+  /**
+   * The parts ready in the current round: delivered whole after the last revision request about them (a delivery
+   * that was sent back for revision does not count), or said whole by a person («снят»). The wanted parts not
+   * here are what the order still waits for (`waitedParts`).
+   */
   partsDone: z.array(z.enum(["video", "photos"])),
-  /** Revision requests not fixed yet. */
+  /** Revision requests not fixed yet: «правка» while there is one. */
   openRevisions: z.number().int().nonnegative(),
   /** Grows with every change; an agent's edit names the one it read. */
   version: z.number().int().positive(),
@@ -197,17 +212,25 @@ export const CUSTOM_ORDER_MESSAGE_KINDS = ["repost", "delivery", "revision", "co
 export const customOrderMessageSchema = z.object({
   /** The Telegram message: what the row is known by, or the evidence of an event; null — an event with no message. */
   telegramRef: z.string().nullable(),
-  /** The sender's own id of the event (`contentops:delivery:<id>`); null — a Telegram message of the groups. */
+  /**
+   * The sender's own id of the event (`contentops:delivery:<id>`; a person's «Правка» on the board is named by the
+   * hub, `workboard:revision:<n>`); null — a Telegram message of the groups.
+   */
   eventRef: z.string().nullable(),
   ordinal: z.number().int().nonnegative(),
   kind: z.enum(CUSTOM_ORDER_MESSAGE_KINDS),
+  /** A delivery: its part. A revision request: the part it is about; null — the whole order. */
   part: z.enum(["video", "photos"]).nullable(),
   /** A delivery: that part is whole now; null — not said (an older delivery). */
   complete: z.boolean().nullable(),
+  /** The message's own time (null — not given: the hub counts it from when it kept it). */
   at: isoTimestamp.nullable(),
   author: z.string().nullable(),
   excerpt: z.string().nullable(),
-  /** A revision request: when it was fixed. */
+  /**
+   * A revision request: when it was fixed — every part it is about came whole after it, or a word («снят», the
+   * reader's «исправлено»). Null — open; open again when the delivery that had answered it is taken back.
+   */
   doneAt: isoTimestamp.nullable(),
   /** A delivery taken back (a retraction): its part no longer counts. */
   retractedAt: isoTimestamp.nullable(),
@@ -321,7 +344,8 @@ export const customOrderActionBodySchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("at_model"), telegramRef: telegramRefInputSchema.optional() }).strict(),
   z.object({ action: z.literal("partly"), note: note.optional() }).strict(),
   z.object({ action: z.literal("shot") }).strict(),
-  z.object({ action: z.literal("revision"), note: note.optional() }).strict(),
+  /** «Правка»: a request about one part (`part`), or — none named — about the whole order. */
+  z.object({ action: z.literal("revision"), note: note.optional(), part: z.enum(["video", "photos"]).optional() }).strict(),
   z.object({ action: z.literal("refused"), reason: note }).strict(),
   z.object({ action: z.literal("given"), messageRef: ref }).strict(),
   z.object({ action: z.literal("close") }).strict(),
@@ -424,21 +448,32 @@ export const agentCustomOrderUpdateBodySchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("at_model"), telegramRef: telegramRefInputSchema.optional(), onBehalfOf: login.optional() }).strict(),
   /**
    * The model delivered (a file, an album, the line «6-08 го хард.mov»): the message is kept with its excerpt;
-   * `complete` — that part is whole now. Every wanted part whole — shot; else partly. While a revision is open
-   * the order stays «правка» until a delivery with `complete` answers it (it closes the open requests).
+   * `complete` — that part is whole now. The order's readiness is by its current round, per part: a part is ready
+   * when a whole delivery of it is newer than the last revision request about it (by `message.at`, the message's
+   * own time; without it the hub counts the delivery from now), so a delivery from before a request answers
+   * nothing, whenever it is reported. A whole delivery fixes only the requests whose every part is ready now, never
+   * the other part's. Every wanted part ready and no request open — shot; «правка» while one is open; else partly.
    * `eventRef` — the sender's own id of the delivery (ContentOps'): known by it, the link then optional evidence.
    */
   z.object({
     action: z.literal("delivery"), eventRef: customOrderEventRefSchema.optional(), message: agentMessageSchema,
     part: z.enum(["video", "photos"]).optional(), complete: z.boolean().default(true), onBehalfOf: login.optional(),
   }).strict(),
+  /**
+   * A state by a message of the model's group (`ref`): partly, shot, refused. Taken once per message: the same step
+   * by a message the order's history already has changes nothing (`unchanged`), whatever the order's state is now.
+   */
   z.object({ action: z.literal("partly"), ref: telegramRefInputSchema, note: note.optional(), onBehalfOf: login.optional() }).strict(),
   /** Every part is whole: «снят». Open revision requests are fixed by it. */
   z.object({ action: z.literal("shot"), ref: telegramRefInputSchema, onBehalfOf: login.optional() }).strict(),
-  /** A revision request (several in one message: `ordinal` 1, 2…); a repeat changes nothing. */
+  /**
+   * A revision request (several in one message: `ordinal` 1, 2…); a repeat changes nothing. `part` — the part it is
+   * about (the video, the photos); without it the request is about the whole order and waits for every wanted part
+   * to come whole again.
+   */
   z.object({
     action: z.literal("revision"), eventRef: customOrderEventRefSchema.optional(), message: agentMessageSchema,
-    ordinal: z.number().int().min(0).max(50).default(0), text: note, onBehalfOf: login.optional(),
+    ordinal: z.number().int().min(0).max(50).default(0), text: note, part: z.enum(["video", "photos"]).optional(), onBehalfOf: login.optional(),
   }).strict(),
   /** A revision request is fixed (a new version came and the reader or a person saw it): by its link and ordinal, or its eventRef. */
   z.object({
@@ -447,8 +482,11 @@ export const agentCustomOrderUpdateBodySchema = z.discriminatedUnion("action", [
   }).strict(),
   /**
    * A delivery taken back (ContentOps «это другой заказ»): `retracts` names it — its eventRef, or the Telegram link
-   * of the message it came with (every delivery of that message). Its part stops counting and the state follows the
-   * parts that stay. The retraction is an event of its own (`eventRef`); `message` — its evidence and author.
+   * of the message it came with (every delivery of that message). Its part stops counting unless a whole delivery
+   * that stays is newer than the last request about it; the requests it had answered are open again, and the state
+   * follows («правка», or what the parts that stay say). «Снят» that a person set by hand on the board stays: the
+   * retraction is then only a line of the order's history. The retraction is an event of its own (`eventRef`);
+   * `message` — its evidence and author.
    */
   z.object({
     action: z.literal("retract"), eventRef: customOrderEventRefSchema,

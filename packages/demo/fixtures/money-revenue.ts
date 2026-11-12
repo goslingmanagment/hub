@@ -105,13 +105,22 @@ function maxIso(values: Array<number | null>): string | null {
 
 // --- Overview: the revenue report ---
 
+/** `until` of a custom window (Деньги → Месяц: the month's income up to the ledger's cut): the window ends there, no comparison. */
+function cutAt(window: PlatformWindow, untilMs: number): PlatformWindow {
+  const fromMs = window.fromMs ?? untilMs;
+  const toMs = Math.max(fromMs, Math.min(window.toMs ?? untilMs, untilMs));
+  return { platform: window.platform, fromMs: window.fromMs, toMs, comparisonFromMs: null, comparisonToMs: null };
+}
+
 function overviewRevenue(request: DemoRequest): KernelOperationResponse<"overviewRevenue"> {
   const now = clockOf(request);
   const period = periodOf(request, "7d");
   const custom = customOf(request);
   const pages = visiblePages(request);
-  const windows = windowsFor(pages, period, now, custom);
-  const comparing = period !== "all";
+  const until = period === "custom" ? Date.parse(queryString(request, "until") ?? "") : Number.NaN;
+  const cut = Number.isFinite(until);
+  const windows = windowsFor(pages, period, now, custom).map((window) => (cut ? cutAt(window, until) : window));
+  const comparing = period !== "all" && !cut;
 
   const all = emptyTotals();
   const allPrevious = emptyTotals();

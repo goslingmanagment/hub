@@ -17,7 +17,9 @@ import { isoTimestamp, platformEnum } from "./primitives.ts";
  * working yet (state invited or set up) and holds a login. The person reads it
  * on Workboard's «Начало», the owner on the person's card («Ввод: 3 из 5»).
  * Where payouts go is money-adjacent: the person's own session and the owner's
- * only, never a team lead's, another chatter's, or an agent key's.
+ * only, never a team lead's, another chatter's, or an agent key's. The person's
+ * narrow session (from the extension, no password) learns only whether it is
+ * written, never the text (`ownPayoutDetailsSchema`).
  */
 
 export const PERSON_START_STEPS = ["install", "extension", "pages", "activity", "payout"] as const;
@@ -68,14 +70,25 @@ export const payoutDetailsSchema = z.object({
   updatedAt: isoTimestamp,
 }).nullable();
 
+/**
+ * The same, as the person's own session reads it. A narrow session (opened from the extension, no password:
+ * web-session-scopes.ts) learns only WHETHER they are written and when: Hub leaves the text out of its answer
+ * (`text` null), and the screen shows the way to the password instead. Null as a whole — not written.
+ */
+export const ownPayoutDetailsSchema = z.object({
+  /** As the person wrote it; null — written, and this session (a narrow one) is not told what. */
+  text: z.string().nullable(),
+  updatedAt: isoTimestamp,
+}).nullable();
+
 export const accountStartResponseSchema = z.object({
   /** The person of the session's login; null — the login is nobody's in the registry (no «Начало»). */
   person: z.object({ code: z.string(), displayName: z.string() }).nullable(),
   /** The session's login: the one to type in the extension. */
   username: z.string(),
   start: personStartSchema.nullable(),
-  /** The person's own; never anyone else's. */
-  payoutDetails: payoutDetailsSchema,
+  /** The person's own; never anyone else's. A narrow session gets it without the text. */
+  payoutDetails: ownPayoutDetailsSchema,
   /** The person hands shifts in through Hub (right «сдаёт смену в системе»); false — through Генгар and «Отчётность». */
   submitsShift: z.boolean(),
   serverNow: isoTimestamp,
@@ -93,6 +106,7 @@ export const accountPayoutDetailsResponseSchema = z.object({
 export type PersonStart = z.infer<typeof personStartSchema>;
 export type PersonStartStep = z.infer<typeof personStartStepSchema>;
 export type PayoutDetails = z.infer<typeof payoutDetailsSchema>;
+export type OwnPayoutDetails = z.infer<typeof ownPayoutDetailsSchema>;
 export type AccountStartResponse = z.infer<typeof accountStartResponseSchema>;
 export type AccountPayoutDetailsBody = z.infer<typeof accountPayoutDetailsBodySchema>;
 export type AccountPayoutDetailsResponse = z.infer<typeof accountPayoutDetailsResponseSchema>;

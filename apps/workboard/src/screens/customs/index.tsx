@@ -1,7 +1,10 @@
 import { Copy, MoreHorizontal } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router";
-import { CUSTOM_STATE_WORDS, type CustomLookalikeSale, type CustomOrder, type CustomOrderAction, type CustomOrderActionBody, type CustomOrderCard, type CustomOrderDetailResponse } from "@agency_hub_core/contracts";
+import {
+  CUSTOM_STATE_WORDS, waitedParts, wantedParts,
+  type CustomLookalikeSale, type CustomOrder, type CustomOrderAction, type CustomOrderActionBody, type CustomOrderCard, type CustomOrderDetailResponse,
+} from "@agency_hub_core/contracts";
 import {
   Badge,
   Button,
@@ -33,11 +36,13 @@ import {
   COLUMNS,
   DOOR_WORDS,
   EVENT_WORDS,
+  PART_WORDS,
   PAYMENT_KIND_WORDS,
   STATE_TONE,
   columnOf,
   deadlineWords,
   fanWords,
+  partsWords,
   stepFailure,
   telegramHref,
   useCustomBoard,
@@ -45,6 +50,7 @@ import {
   useCustomOrder,
   useCustomStep,
   useDismissSale,
+  type CustomPart,
 } from "./data";
 import "./customs.css";
 
@@ -327,7 +333,7 @@ const STEP_LABEL: Partial<Record<CustomOrderAction, string>> = {
   cancel: "Отменить заказ",
 };
 
-function bodyOf(ask: Ask, value: string): CustomOrderActionBody | null {
+function bodyOf(ask: Ask, value: string, part: CustomPart | null): CustomOrderActionBody | null {
   const text = value.trim();
   if (ask.required && text === "") return null;
   switch (ask.action) {
@@ -335,7 +341,7 @@ function bodyOf(ask: Ask, value: string): CustomOrderActionBody | null {
     case "card": return { action: "card", telegramRef: text };
     case "deadline": return { action: "deadline", deadlineOn: text === "" ? null : text };
     case "partly": return text === "" ? { action: "partly" } : { action: "partly", note: text };
-    case "revision": return text === "" ? { action: "revision" } : { action: "revision", note: text };
+    case "revision": return { action: "revision", ...(text === "" ? {} : { note: text }), ...(part === null ? {} : { part }) };
     case "refused": return { action: "refused", reason: text };
     case "cancel": return text === "" ? { action: "cancel" } : { action: "cancel", reason: text };
     case "shot": return { action: "shot" };
@@ -344,11 +350,13 @@ function bodyOf(ask: Ask, value: string): CustomOrderActionBody | null {
   }
 }
 
-function StepModal({ ask, code, initial, onClose }: { ask: Ask; code: string; initial: string; onClose: () => void }) {
+/** `parts` — what the card orders: «Правка» of an order with two parts says which one it is about. */
+function StepModal({ ask, code, initial, parts, onClose }: { ask: Ask; code: string; initial: string; parts: readonly CustomPart[]; onClose: () => void }) {
   const step = useCustomStep(code);
   const [value, setValue] = useState(initial);
+  const [part, setPart] = useState<CustomPart | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
-  const body = bodyOf(ask, value);
+  const body = bodyOf(ask, value, part);
   const submit = () => {
     if (body === null || step.isPending) return;
     step.mutate(body, {
@@ -376,6 +384,14 @@ function StepModal({ ask, code, initial, onClose }: { ask: Ask; code: string; in
         {ask.field === "date" && <Field label="До какого дня, по Москве">{(control) => <TextInput {...control} type="date" value={value} onChange={(event) => setValue(event.target.value)} />}</Field>}
         {ask.field === "telegram" && <Field label="Ссылка на сообщение в Telegram" hint={ask.hint}>{(control) => <TextInput {...control} placeholder="https://t.me/c/…" value={value} onChange={(event) => setValue(event.target.value)} />}</Field>}
         {(ask.field === "note" || ask.field === "reason") && <Field label={ask.field === "reason" ? "Причина" : "Что именно"} hint={ask.hint}>{(control) => <Textarea {...control} rows={3} value={value} onChange={(event) => setValue(event.target.value)} />}</Field>}
+        {ask.action === "revision" && parts.length > 1 && (
+          <Field label="О чём правка" hint="Заказ будет ждать новую сдачу только этой части. «Весь заказ» — ждать заново каждую.">{(control) => (
+            <Select {...control} value={part ?? ""} onChange={(event) => setPart(parts.find((one) => one === event.target.value) ?? null)}>
+              <option value="">Весь заказ</option>
+              {parts.map((one) => <option key={one} value={one}>Только {PART_WORDS[one]}</option>)}
+            </Select>
+          )}</Field>
+        )}
         {!ask.field && <p>Отметить заказ {code}: «{ask.confirm}»?</p>}
         {failure && <Notice tone="danger">{failure}</Notice>}
       </div>
@@ -469,6 +485,33 @@ function Deliveries({ detail, onGiven, pending }: { detail: CustomOrderDetailRes
   );
 }
 
+/**
+ * «Правка»: what the order still waits for. A part is ready again only by a whole delivery newer than the last
+ * request about it (Hub's round), so the parts not ready are named, with the requests not fixed.
+ */
+function RevisionWaits({ detail }: { detail: CustomOrderDetailResponse }) {
+  const { order } = detail;
+  const waited = waitedParts(order);
+  if (order.state !== "revision" || waited.length === 0) return null;
+  const ready = wantedParts(order.card).filter((part) => !waited.includes(part));
+  const open = detail.messages.filter((message) => message.kind === "revision" && message.doneAt === null);
+  return (
+    <Notice tone="warning" title={`Ждём после правки: ${partsWords(waited)}`}>
+      {ready.length > 0 && <p className="cus-waits__line">Уже готово: {partsWords(ready)}.</p>}
+      {open.length === 0 ? <p className="cus-waits__line">Запросы на правку закрыты, новая сдача ещё не записана.</p> : (
+        <ul className="cus-waits">
+          {open.map((message) => (
+            <li key={`${message.eventRef ?? message.telegramRef}:${message.ordinal}`}>
+              Не исправлено: {message.excerpt ? `«${message.excerpt}»` : "правка без текста"}
+              {message.part !== null && <span className="cus-muted"> · {PART_WORDS[message.part]}</span>}
+            </li>
+          ))}
+        </ul>
+      )}
+    </Notice>
+  );
+}
+
 function OrderBody({ detail }: { detail: CustomOrderDetailResponse }) {
   const { order, serverNow, actions } = detail;
   const may = (action: CustomOrderAction) => actions.includes(action);
@@ -477,6 +520,8 @@ function OrderBody({ detail }: { detail: CustomOrderDetailResponse }) {
   const [editing, setEditing] = useState(false);
   const fan = fanWords(order);
   const deadline = deadlineWords(order, serverNow);
+  // «Правка» with its open requests listed below says what it is about there, not twice.
+  const waitsListed = order.state === "revision" && waitedParts(order).length > 0 && detail.messages.some((message) => message.kind === "revision" && message.doneAt === null);
   const row = ROW_BY_STATE[order.state] ?? { main: null, frequent: [] };
   const allowed = (item: RowItem) => item === "copy" || (may(item) && ASKS[item] !== undefined);
   const main = row.main !== null && allowed(row.main) ? row.main : null;
@@ -498,9 +543,10 @@ function OrderBody({ detail }: { detail: CustomOrderDetailResponse }) {
       <div className="cus-facts">
         <StateBadge order={order} />
         <span className="cus-muted">с <TimeMsk at={order.stateAt} /></span>
-        {order.stateNote && <span>{order.stateNote}</span>}
+        {order.stateNote && !waitsListed && <span>{order.stateNote}</span>}
         {deadline && <span className={deadline.late ? "cus-late" : undefined}>{deadline.text}</span>}
       </div>
+      <RevisionWaits detail={detail} />
       <div className="cus-actions">
         {main !== null && <Button variant="primary" onClick={() => setAsk(ASKS[main]!)}>{STEP_LABEL[main]}</Button>}
         {frequent.map((item) => item === "copy"
@@ -596,6 +642,8 @@ function OrderBody({ detail }: { detail: CustomOrderDetailResponse }) {
                       : <a href={telegramHref(message.telegramRef)} target="_blank" rel="noreferrer">{message.at ? <TimeMsk at={message.at} /> : "сообщение"}</a>}
                     <span>
                       {message.author ? `${message.author}: ` : ""}{message.excerpt ?? ({ repost: "копия карточки", delivery: "сдача", revision: "правка", confirmation: "подтверждение", note: "заметка" })[message.kind]}
+                      {message.kind === "revision" && message.part !== null && <span className="cus-muted"> · {PART_WORDS[message.part]}</span>}
+                      {message.kind === "revision" && message.doneAt !== null && <span className="cus-muted"> · исправлено</span>}
                       {message.retractedAt !== null && <span className="cus-muted"> · отозвана</span>}
                     </span>
                   </li>
@@ -617,7 +665,7 @@ function OrderBody({ detail }: { detail: CustomOrderDetailResponse }) {
         </div>
       </div>
 
-      {ask && <StepModal ask={ask} code={order.code} initial={ask.action === "deadline" ? order.deadlineOn ?? "" : ""} onClose={() => setAsk(null)} />}
+      {ask && <StepModal ask={ask} code={order.code} initial={ask.action === "deadline" ? order.deadlineOn ?? "" : ""} parts={wantedParts(order.card)} onClose={() => setAsk(null)} />}
       {editing && <EditCardModal detail={detail} onClose={() => setEditing(false)} />}
     </>
   );

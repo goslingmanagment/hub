@@ -29,6 +29,8 @@ export interface DemoRequest {
   role: DemoRole;
   /** A screen's other demo state, from the `hub-demo-scenario` cookie (Система → Состояние: `healthy`). */
   scenario?: string | undefined;
+  /** The narrow web session the extension opens (`/__demo/role?as=chatter&narrow=1`): a read that Hub answers it with less does so here too. */
+  narrow?: boolean;
   /** A cookie of the demo browser: a fixture's own switch (the board «Кастомы» reads `hub-demo-customs`). */
   cookie?: (name: string) => string | undefined;
 }

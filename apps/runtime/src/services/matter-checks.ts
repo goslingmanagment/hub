@@ -211,9 +211,10 @@ export function peopleCheckItems(snapshot: PeopleCheckSnapshot, now: Date): Reco
     });
   }
 
-  // An agent key about to end, or ended and still not revoked (a month of it, then it is history).
+  // An agent key about to end, or ended and still not revoked (a month of it, then it is history). A key a
+  // replacement was issued for ends by itself a day later: that is the replacement at work, nobody's matter.
   for (const key of snapshot.agentKeys) {
-    if (key.revokedAt !== null) continue;
+    if (key.revokedAt !== null || key.replacedAt !== null) continue;
     const left = key.expiresAt.getTime() - now.getTime();
     if (left > AGENT_KEY_EXPIRING_DAYS * DAY || left < -30 * DAY) continue;
     const person = key.personId === null ? undefined : personById.get(key.personId);

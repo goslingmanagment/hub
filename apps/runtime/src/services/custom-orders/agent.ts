@@ -198,12 +198,10 @@ export async function agentUpdateCustomOrder(app: AgentApp, scope: AgentCustomSc
       step = { action: "partly", note: body.note, ref: ref(body.ref) };
       break;
     case "shot":
-      // The same message again: the same state from it is nothing new.
-      if (order.state === "shot" && order.stateRef === ref(body.ref)) return unchanged();
       step = { action: "shot", ref: ref(body.ref) };
       break;
     case "revision":
-      step = { action: "revision", message: message(body.message, body.eventRef), ordinal: body.ordinal, note: body.text };
+      step = { action: "revision", message: message(body.message, body.eventRef), ordinal: body.ordinal, note: body.text, part: body.part };
       break;
     case "revision_done":
       step = {
@@ -219,7 +217,6 @@ export async function agentUpdateCustomOrder(app: AgentApp, scope: AgentCustomSc
       break;
     }
     case "refused":
-      if (order.state === "refused" && order.stateRef === ref(body.ref)) return unchanged();
       step = { action: "refused", reason: body.reason, ref: ref(body.ref) };
       break;
     case "cancel":
@@ -233,8 +230,10 @@ export async function agentUpdateCustomOrder(app: AgentApp, scope: AgentCustomSc
       step = { action: "card", telegramRef: ref(body.telegramRef) };
       break;
   }
-  // A repeat of a step that changes nothing (a revision request or a delivery already kept) answers `unchanged`;
-  // a step not from the order's state is 409 `not_allowed` (the reader reports it).
+  // A step that names a message or an event the order already keeps changes nothing and answers `unchanged` — a
+  // delivery, a revision, and a state by a message (partly, shot, refused) alike, whatever the order's state is now
+  // (the one rule is in `applyCustomStep`); a new step not from the order's state is 409 `not_allowed` (the reader
+  // reports it).
   const actor: CustomActor = {
     door: "api", agentKeyId: scope.principal.agentKeyId,
     onBehalfOfUserId: body.onBehalfOf === undefined ? null : await personOf(app, body.onBehalfOf),

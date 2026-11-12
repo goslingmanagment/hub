@@ -131,6 +131,18 @@ export async function findPersonRowById(db: Database, id: number): Promise<Perso
   return row === undefined ? null : personOf(row);
 }
 
+/**
+ * Whether a Telegram account is the owner's own: a person of the registry whose role is owner, who has not left, holds
+ * this Telegram id. No id asked, or an owner the registry gives no Telegram id — false: nothing is the owner's word
+ * until the registry says whose account it is.
+ */
+export async function isOwnerTelegramUser(db: Database, telegramUserId: number): Promise<boolean> {
+  if (!Number.isSafeInteger(telegramUserId) || telegramUserId <= 0) return false;
+  const result = await db.execute<Row>(sql`
+    select 1 from people where role = 'owner' and kind = 'human' and state <> 'left' and telegram_user_id = ${telegramUserId} limit 1`);
+  return result.rows.length > 0;
+}
+
 /** The people any of whose parts changed at or after `since`: the record, a login's row, a key's revocation. */
 export async function listPersonRowsChangedSince(db: Database, since: Date): Promise<PersonRow[]> {
   const result = await db.execute<Row>(sql`
@@ -315,31 +327,105 @@ export async function findPersonIdOfAgentKey(db: Database, agentKeyId: number): 
  * An agent holds one live key at a time. The services (ledger, TaskIndex, ContentOps) learn from Hub only WHOSE a key
  * is (`agentKeyIntrospect` answers the agent) and give it that agent's rights: a second live key of the same agent,
  * however narrow in Hub, would carry them too. A key no agent holds (a reporter, a mirror) is answered inactive there.
+ *
+ * The one exception is a REPLACEMENT: a new key issued in place of the agent's live key, so that a key is replaced
+ * without downtime. The two are equal — the new key carries the old one's pages and capabilities exactly — and the
+ * old one ends by itself AGENT_KEY_REPLACEMENT_GRACE_HOURS later, so the agent's rights are carried by nothing they
+ * were not carried by before.
  */
 export class AgentHoldsLiveKeyError extends Error {
   constructor(readonly personId: number, readonly liveKeyName: string) {
-    super(`The agent already holds a live key «${liveKeyName}»: revoke it first, or keep this key without an agent`);
+    super(`The agent already holds a live key «${liveKeyName}»: its pages and capabilities change in place, and a new key is `
+      + "issued as its replacement (the old one then works one more day); or revoke it first, or keep this key without an agent");
     this.name = "AgentHoldsLiveKeyError";
   }
+}
+
+/** How long a replaced key keeps working: the time to put the new key wherever the old one is installed. */
+export const AGENT_KEY_REPLACEMENT_GRACE_HOURS = 24;
+
+/** A link that names the key it replaces, and is not that key's replacement. Carries the rule, never a statement. */
+export class AgentKeyReplacementError extends Error {
+  constructor(readonly reason: "not_agents_live_key" | "grant_differs", message: string) {
+    super(message);
+    this.name = "AgentKeyReplacementError";
+  }
+}
+
+function sameSet(left: readonly string[], right: readonly string[]): boolean {
+  const a = new Set(left);
+  const b = new Set(right);
+  return a.size === b.size && [...a].every((value) => b.has(value));
 }
 
 /**
  * Links a key to its agent: the one writer of `person_agent_keys`, whoever links (issuance, the person's card, the
  * CLI, an accepted proposal). Refused with AgentHoldsLiveKeyError while the agent holds another live key (not
  * revoked, not expired); the person's row is locked first, so two links at once cannot both pass.
+ *
+ * `replacesKeyId` — the link is a replacement of that key, the only way an agent comes to hold two live keys. It
+ * must be the agent's ONE live key (a second replacement while the first's old key still lives is refused), and the
+ * new key must carry its pages and capabilities exactly (AgentKeyReplacementError otherwise). In the same write the
+ * replaced key is marked (`replaced_at`) and its end becomes the grace ahead, never later than it was; from then its
+ * end no longer slides on use (`recordAgentKeyUse`). The agent's live keys are locked while this is decided, so
+ * neither grant changes under the comparison.
  */
-export async function insertPersonAgentKey(db: Database, input: { personId: number; agentKeyId: number; linkedByUserId: number | null }) {
+export async function insertPersonAgentKey(
+  db: Database,
+  input: { personId: number; agentKeyId: number; linkedByUserId: number | null; replacesKeyId?: number },
+) {
   await db.execute(sql`select id from people where id = ${input.personId} for update`);
-  const live = await db.execute<{ name: string }>(sql`
-    select k.name from person_agent_keys pak join agent_keys k on k.id = pak.agent_key_id
+  const live = await db.execute<Row>(sql`
+    select k.id, k.name, k.capabilities, k.page_ids::text[] as page_ids
+      from person_agent_keys pak join agent_keys k on k.id = pak.agent_key_id
      where pak.person_id = ${input.personId} and pak.agent_key_id <> ${input.agentKeyId}
        and k.revoked_at is null and k.expires_at > now()
-     order by k.id limit 1`);
-  const holding = live.rows[0];
+     order by k.id
+       for update of k`);
+  const others = live.rows.map((row) => ({
+    id: Number(row.id), name: String(row.name), capabilities: row.capabilities as string[], pageIds: row.page_ids as string[],
+  }));
+  const replaced = input.replacesKeyId === undefined ? undefined : others.find((key) => key.id === input.replacesKeyId);
+  if (input.replacesKeyId !== undefined && replaced === undefined) {
+    throw new AgentKeyReplacementError("not_agents_live_key", `Key ${input.replacesKeyId} is not a live key of this agent: there is nothing to replace`);
+  }
+  const holding = others.find((key) => key.id !== replaced?.id);
   if (holding !== undefined) throw new AgentHoldsLiveKeyError(input.personId, holding.name);
+  if (replaced !== undefined) {
+    const fresh = await db.execute<Row>(sql`select capabilities, page_ids::text[] as page_ids from agent_keys where id = ${input.agentKeyId}`);
+    const mine = fresh.rows[0];
+    if (mine === undefined || !sameSet(mine.capabilities as string[], replaced.capabilities) || !sameSet(mine.page_ids as string[], replaced.pageIds)) {
+      throw new AgentKeyReplacementError("grant_differs", `A replacement carries the pages and capabilities of «${replaced.name}» exactly`);
+    }
+    await db.execute(sql`
+      update agent_keys
+         set replaced_at = now(),
+             expires_at = least(expires_at, now() + ${`${AGENT_KEY_REPLACEMENT_GRACE_HOURS} hours`}::interval)
+       where id = ${replaced.id}`);
+  }
   await db.execute(sql`
     insert into person_agent_keys (agent_key_id, person_id, linked_by_user_id)
     values (${input.agentKeyId}, ${input.personId}, ${input.linkedByUserId})`);
+}
+
+/**
+ * The other key of a replacement in its grace day: the agent's other live key, when one of the two is marked replaced.
+ * The pair is equal until the old one ends, so neither is changed in place meanwhile (the callers refuse). Null — the
+ * key is in no replacement: the agent's only live key, no agent's, or beside a key from before the one-key rule.
+ */
+export async function findReplacementPairKey(db: Database, agentKeyId: number): Promise<{ id: number; name: string } | null> {
+  const result = await db.execute<Row>(sql`
+    select k.id, k.name
+      from person_agent_keys mine
+      join agent_keys me on me.id = mine.agent_key_id
+      join person_agent_keys pak on pak.person_id = mine.person_id and pak.agent_key_id <> mine.agent_key_id
+      join agent_keys k on k.id = pak.agent_key_id
+     where mine.agent_key_id = ${agentKeyId}
+       and k.revoked_at is null and k.expires_at > now()
+       and (k.replaced_at is not null or me.replaced_at is not null)
+     order by k.id limit 1`);
+  const row = result.rows[0];
+  return row === undefined ? null : { id: Number(row.id), name: String(row.name) };
 }
 
 export async function deletePersonAgentKey(db: Database, input: { personId: number; agentKeyId: number }): Promise<boolean> {

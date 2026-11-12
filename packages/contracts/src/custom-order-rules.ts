@@ -20,13 +20,20 @@ const ALL: readonly CustomOrderState[] = [...NOT_ENDED, "closed", "cancelled"];
 
 // ── Steps and states ────────────────────────────────────────────────────────
 
-/** The board's steps, and the readers' own: a delivery message, a revision fixed, another message, a delivery taken back. */
-export type CustomStepName = CustomOrderAction | "delivery" | "revision_done" | "message" | "retract";
+/**
+ * The board's steps, and the readers' own: a delivery message, a revision fixed, another message, a delivery taken
+ * back; and the server's own `settle` — the order put where its kept messages say (an import stores messages
+ * without a step).
+ */
+export type CustomStepName = CustomOrderAction | "delivery" | "revision_done" | "message" | "retract" | "settle";
 
 const BOARD_ACTIONS: ReadonlySet<string> = new Set(CUSTOM_ORDER_ACTIONS);
 export function isBoardAction(step: CustomStepName): step is CustomOrderAction {
   return BOARD_ACTIONS.has(step);
 }
+
+/** The states a delivery moves the order from (to «сдан частично», «снят» or back to «правка»). */
+export const DELIVERY_MOVES_FROM: readonly CustomOrderState[] = ["recorded", "paid", "at_model", "partly", "revision"];
 
 /** The states each step may be taken from. A step that moves the order names its new state in `STEP_TO`. */
 export const STEP_FROM: Readonly<Record<CustomStepName, readonly CustomOrderState[]>> = {
@@ -52,10 +59,8 @@ export const STEP_FROM: Readonly<Record<CustomStepName, readonly CustomOrderStat
   revision_done: NOT_ENDED,
   message: ALL,
   retract: ALL,
+  settle: DELIVERY_MOVES_FROM,
 };
-
-/** The states a delivery moves the order from (to «сдан частично», «снят» or back to «правка»). */
-export const DELIVERY_MOVES_FROM: readonly CustomOrderState[] = ["recorded", "paid", "at_model", "partly", "revision"];
 
 export const STEP_TO: Partial<Readonly<Record<CustomOrderAction, CustomOrderState>>> = {
   at_model: "at_model",
@@ -135,6 +140,11 @@ export function wantedParts(card: CustomOrderCard): Array<"video" | "photos"> {
   if (card.wantsVideo !== false) parts.push("video");
   if ((card.wantsPhotos ?? 0) > 0) parts.push("photos");
   return parts.length === 0 ? ["photos"] : parts;
+}
+
+/** The parts the order still waits for: the card orders them and they are not ready in the current round. */
+export function waitedParts(order: { card: CustomOrderCard; partsDone: ReadonlyArray<"video" | "photos"> }): Array<"video" | "photos"> {
+  return wantedParts(order.card).filter((part) => !order.partsDone.includes(part));
 }
 
 /** Days past the deadline while the model has not delivered it whole (as ContentOps counts «просрочено»); null — not overdue. */

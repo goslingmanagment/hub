@@ -1982,7 +1982,7 @@ export function customStepBody(values: HubOptionValues, deps: HubRunDeps) {
       body = { ref: requireString(values, "message") };
       break;
     case "revision":
-      body = { message: customMessage(values), ordinal, text: requireString(values, "text") };
+      body = { message: customMessage(values), ordinal, text: requireString(values, "text"), part: readEnum(values, "part", ["video", "photos"] as const) };
       break;
     case "revision_done":
       body = { telegramRef: requireString(values, "message"), ordinal };
@@ -2040,7 +2040,7 @@ const CUSTOM_COMMANDS: HubCommand[] = [
     operation: "agentCustomOrders",
     summary:
       "Custom orders of this key's pages and of no known page, the newest first: the state as the server keeps it, overdueDays"
-      + " (past the deadline and not delivered whole), the deadline, the parts delivered whole, the open revision requests,"
+      + " (past the deadline and not delivered whole), the deadline, the parts ready in the current round, the open revision requests,"
       + " the messages already recorded, the version and the card text with its code. --card or --code finds one order in"
       + " any state. No money. Exit 0 — answered; 4 — refused or no answer. Needs write:customs.",
     example: "hub custom list --card https://t.me/c/2600000001/3/10017",
@@ -2110,21 +2110,25 @@ const CUSTOM_COMMANDS: HubCommand[] = [
     summary:
       "One step of an order, from what the models' group says (--step): at_model (the card reached the model's group; --card its copy"
       + " there), delivery (the model delivered: --message, --excerpt her line verbatim, --part video|photos, --complete when that part"
-      + " is whole), partly | shot (--message), revision (a request: --message, --text, --ordinal for several in one message),"
-      + " revision_done (--message, --ordinal), refused (the model's refusal: --message, --reason), cancel (--reason: a return, a"
-      + " duplicate card), message (--kind repost | confirmation | note, --message), edit (only the changed fields: --card-file,"
-      + " --deadline, --source-file, --if-version), card (attach --card). The same message again changes nothing (`outcome`:"
-      + " unchanged). Exit 0 — changed or unchanged; 4 — refused (409 version_changed, edited_by_person, not_allowed: read"
-      + " `error.reason`) or no answer. Never a payment or «отдали»: those are people's. Needs write:customs.",
+      + " is whole), partly | shot (--message), revision (a request: --message, --text, --part when it is about one part, --ordinal"
+      + " for several in one message), revision_done (--message, --ordinal), refused (the model's refusal: --message, --reason),"
+      + " cancel (--reason: a return, a duplicate card), message (--kind repost | confirmation | note, --message), edit (only the"
+      + " changed fields: --card-file, --deadline, --source-file, --if-version), card (attach --card). Readiness is by the round,"
+      + " per part: a whole delivery makes its part ready only when it is newer than the last request about that part (by --at,"
+      + " the message's own time: give it, or an old message reported now counts as new), and fixes only the requests whose"
+      + " every part is ready; `partsDone` is what is ready, the other wanted parts are waited for. The same message again"
+      + " changes nothing (`outcome`: unchanged). Exit 0 — changed or unchanged; 4 — refused (409 version_changed,"
+      + " edited_by_person, not_allowed: read `error.reason`) or no answer. Never a payment or «отдали»: those are people's."
+      + " Needs write:customs.",
     example: 'hub custom step K-123 --step delivery --message https://t.me/c/2600000001/3/10030 --excerpt "6-08 название.mov" --part video --complete',
     arguments: CUSTOM_CODE_ARGUMENT,
     options: {
       step: { kind: "string", describe: `The step (required): ${CUSTOM_STEPS.join(" | ")}` },
       message: { kind: "string", describe: "The model's (or the team's) message: https://t.me/c/<chat>/<topic>/<msg> or tg:…" },
-      at: { kind: "string", describe: "When the message was sent, ISO 8601" },
+      at: { kind: "string", describe: "When the message was sent, ISO 8601: what came after a revision request is told by it (default: now)" },
       author: { kind: "string", describe: "Who sent it, as Telegram names them" },
       excerpt: { kind: "string", describe: "A short verbatim excerpt (a delivery: the model's line with the file's name)" },
-      part: { kind: "string", describe: "A delivery's part: video | photos (default: the first the card orders)" },
+      part: { kind: "string", describe: "video | photos. A delivery's part (default: the first the card orders); a revision: the part it is about (default: the whole order)" },
       complete: { kind: "boolean", describe: "A delivery: that part is whole now (without it the part waits for more)" },
       ordinal: { kind: "number", describe: "Several revision requests in one message: 1, 2… (default 0)" },
       text: { kind: "string", describe: "A revision's request, or what a partial delivery is about" },

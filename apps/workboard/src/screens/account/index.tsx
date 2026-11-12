@@ -33,7 +33,8 @@ import "./account.css";
  * narrow session (from the extension, no password) reads none of it: one panel
  * with the way to the password instead (NARROW_WEB_SESSION_PASSWORD_ONLY).
  * Where payouts go is everyone's here, as on a newcomer's «Начало» (the same
- * card; a narrow session reads it, with the way to the password).
+ * card; a narrow session sees only whether it is written, with the way to the
+ * password).
  */
 export function AccountScreen() {
   const { narrow } = useMe();

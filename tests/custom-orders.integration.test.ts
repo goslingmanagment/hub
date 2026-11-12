@@ -1,14 +1,14 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { agentCustomOrderResponseSchema, customOrderDetailResponseSchema, customOrdersBoardResponseSchema } from "@agency_hub_core/contracts";
-import { createFanslyPage, createModel, insertAgentKey } from "@agency_hub_core/db";
+import { addCustomOrderMessage, createFanslyPage, createModel, insertAgentKey } from "@agency_hub_core/db";
 import { sha256Hex } from "@agency_hub_core/shared";
 
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import { AGENT_KEY_TOKEN_PREFIX, assignPageToUser, createUserAccount, setUserPassword } from "../apps/runtime/src/services/auth.ts";
 import { applyCustomOrdersImport, customOrdersImportArgsSchema, planCustomOrdersImport } from "../apps/runtime/src/services/custom-orders/import.ts";
-import { recordCustomOrder } from "../apps/runtime/src/services/custom-orders/index.ts";
+import { recordCustomOrder, settleCustomOrders } from "../apps/runtime/src/services/custom-orders/index.ts";
 import { executeErasure, planErasure } from "../apps/runtime/src/services/erasure/index.ts";
 import { startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
@@ -208,10 +208,10 @@ describe("custom orders: who sees and moves what", () => {
     expect(cards.json()).toMatchObject({ matched: [{ telegramRef: "tg:2600000002/6/200", code: order.code }], opened: 1 });
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
-  /** A fresh order of lora-1 at the model, no Telegram card yet. */
-  async function atModel(task: string): Promise<string> {
+  /** A fresh order of lora-1 at the model, no Telegram card yet: a video, and photos when the card names how many. */
+  async function atModel(task: string, wantsPhotos?: number): Promise<string> {
     const id = await recordCustomOrder(app, {
-      pageId: pages["lora-1"]!, fanId: null, buyer: null, conversationRef: null, card: { task }, deadlineOn: null,
+      pageId: pages["lora-1"]!, fanId: null, buyer: null, conversationRef: null, card: { task, ...(wantsPhotos ? { wantsPhotos } : {}) }, deadlineOn: null,
       acceptedByUserId: users.alice!, origin: "extension", actor: { door: "extension", userId: users.alice! },
     });
     expect((await act("carol", `K-${id}`, { action: "at_model" })).statusCode).toBe(200);
@@ -220,7 +220,9 @@ describe("custom orders: who sees and moves what", () => {
   const step = async (code: string, payload: Record<string, unknown>) => {
     const response = await agent(`/api/v1/agent/custom-orders/${code}`, payload);
     expect(response.statusCode, response.body).toBe(200);
-    return response.json() as { order: { state: string; partsDone: string[]; openRevisions: number; messages: Array<Record<string, unknown>> }; outcome: string; event?: unknown };
+    return response.json() as {
+      order: { state: string; stateNote: string | null; partsDone: string[]; openRevisions: number; messages: Array<Record<string, unknown>> }; outcome: string; event?: unknown;
+    };
   };
 
   it("keeps a revision open until its own round is delivered whole: a part of the new version is not «снят»", async (context) => {
@@ -239,11 +241,13 @@ describe("custom orders: who sees and moves what", () => {
     expect((await act("carol", code, { action: "revision", note: "фан просит другое начало" })).statusCode).toBe(200);
     const boardPiece = await step(code, { action: "delivery", message: { telegramRef: "tg:2600000001/3/504" }, part: "video", complete: false });
     expect(boardPiece.order.state).toBe("revision");
-    // The reader's «исправлено» closes the last open request: the parts are whole, so shot.
+    // The reader's «исправлено» fixes its own request. The board's one is a request too and is still open: «правка» is
+    // about it now, until the whole new version comes.
     await step(code, { action: "revision", message: { telegramRef: "tg:2600000001/3/505" }, ordinal: 0, text: "короче" });
     const done = await step(code, { action: "revision_done", telegramRef: "tg:2600000001/3/505", ordinal: 0 });
-    expect(done.order).toMatchObject({ state: "revision", openRevisions: 0 });
-    expect((await step(code, { action: "delivery", message: { telegramRef: "tg:2600000001/3/506" }, part: "video", complete: true })).order.state).toBe("shot");
+    expect(done.order).toMatchObject({ state: "revision", openRevisions: 1, stateNote: "фан просит другое начало" });
+    expect((await step(code, { action: "delivery", message: { telegramRef: "tg:2600000001/3/506" }, part: "video", complete: true })).order)
+      .toMatchObject({ state: "shot", openRevisions: 0 });
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("keeps an event by the sender's own id: a delivery with no card, its repeat, a retraction, and says which event it stored", async (context) => {
@@ -274,6 +278,198 @@ describe("custom orders: who sees and moves what", () => {
     const unknown = await agent(`/api/v1/agent/custom-orders/${code}`, { action: "retract", eventRef: "contentops:retraction:x-4", retracts: "contentops:delivery:never", reason: "нет такой" });
     expect(unknown.statusCode).toBe(409);
     expect(unknown.json()).toMatchObject({ reason: "unknown_event" });
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  // The readiness of an order is by its current round, per part (review round 2). ContentOps links a delivery per
+  // part, each marked whole; the daily routine repeats what it sees in the model's group.
+  const contentops = (kind: "delivery" | "retraction", n: number) => `contentops:${kind}:7d0c6a52-0000-4000-8000-0000000001${String(n).padStart(2, "0")}`;
+  const group = (message: number) => `tg:2600000001/3/${message}`;
+
+  it("answers two revision requests only when both parts came again: the video's new version alone is not «снят»", async (context) => {
+    if (!testDb || !server) return context.skip();
+    const code = await atModel("Ролик и фото, две правки", 5);
+    expect((await step(code, { action: "delivery", message: { telegramRef: group(1001) }, part: "video" })).order).toMatchObject({ state: "partly", partsDone: ["video"] });
+    expect((await step(code, { action: "delivery", message: { telegramRef: group(1002) }, part: "photos" })).order.state).toBe("shot");
+    // Two requests in one message of the group: «исправить видео», «заменить фото».
+    await step(code, { action: "revision", message: { telegramRef: group(1003) }, ordinal: 1, text: "исправить звук в видео" });
+    expect((await step(code, { action: "revision", message: { telegramRef: group(1003) }, ordinal: 2, text: "заменить фото" })).order).toMatchObject({ state: "revision", openRevisions: 2 });
+    // ContentOps' ordinary linking of the new video: its part, whole. The photos were not replaced.
+    const video = await step(code, { action: "delivery", eventRef: contentops("delivery", 1), message: { excerpt: "CUS-11 · видео", author: "ContentOps" }, part: "video", complete: true });
+    expect(video.order).toMatchObject({ state: "revision", openRevisions: 2, partsDone: ["video"] });
+    const photos = await step(code, { action: "delivery", eventRef: contentops("delivery", 2), message: { excerpt: "CUS-11 · фото", author: "ContentOps" }, part: "photos", complete: true });
+    expect(photos.order).toMatchObject({ state: "shot", openRevisions: 0, partsDone: ["video", "photos"] });
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("fixes a request about one part with that part alone: the video's new version leaves «заменить фото» open", async (context) => {
+    if (!testDb || !server) return context.skip();
+    const code = await atModel("Ролик и фото, правка по частям", 5);
+    await step(code, { action: "delivery", message: { telegramRef: group(1401) }, part: "video" });
+    expect((await step(code, { action: "delivery", message: { telegramRef: group(1402) }, part: "photos" })).order.state).toBe("shot");
+    // The request names its part: «заменить фото» sends back the photos only, the video stays ready.
+    const photosAsked = await step(code, { action: "revision", message: { telegramRef: group(1403) }, ordinal: 1, text: "заменить фото", part: "photos" });
+    expect(photosAsked.order).toMatchObject({ state: "revision", openRevisions: 1, partsDone: ["video"] });
+    const bothAsked = await step(code, { action: "revision", message: { telegramRef: group(1403) }, ordinal: 2, text: "исправить звук в видео", part: "video" });
+    expect(bothAsked.order).toMatchObject({ state: "revision", openRevisions: 2, partsDone: [] });
+    // The new video fixes the video's request and nothing else; «правка» is about the photos now.
+    const video = await step(code, { action: "delivery", eventRef: contentops("delivery", 21), message: { excerpt: "CUS-14 · видео", author: "ContentOps" }, part: "video", complete: true });
+    expect(video.order).toMatchObject({ state: "revision", openRevisions: 1, partsDone: ["video"], stateNote: "заменить фото" });
+    expect(video.order.messages.filter((message) => message.kind === "revision").map((message) => [message.part, message.doneAt === null]))
+      .toEqual([["photos", true], ["video", false]]);
+    const photos = await step(code, { action: "delivery", eventRef: contentops("delivery", 22), message: { excerpt: "CUS-14 · фото", author: "ContentOps" }, part: "photos", complete: true });
+    expect(photos.order).toMatchObject({ state: "shot", openRevisions: 0, partsDone: ["video", "photos"] });
+
+    // The same on the board: the lead's «Правка» about the photos is a request of its own, and the video stays ready.
+    const board = await act("carol", code, { action: "revision", note: "фото темные", part: "photos" });
+    expect(board.statusCode, board.body).toBe(200);
+    const asked = customOrderDetailResponseSchema.parse(board.json());
+    expect(asked.order).toMatchObject({ state: "revision", openRevisions: 1, partsDone: ["video"], stateNote: "фото темные" });
+    expect(asked.messages.at(-1)).toMatchObject({ kind: "revision", part: "photos", telegramRef: null, eventRef: expect.stringMatching(/^workboard:revision:\d+$/), excerpt: "фото темные", doneAt: null });
+    const lighter = await step(code, { action: "delivery", eventRef: contentops("delivery", 23), message: { excerpt: "CUS-14 · фото", author: "ContentOps" }, part: "photos", complete: true });
+    expect(lighter.order).toMatchObject({ state: "shot", openRevisions: 0, partsDone: ["video", "photos"] });
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("returns to «правка» when the replacement is taken back: the delivery sent for revision does not count", async (context) => {
+    if (!testDb || !server) return context.skip();
+    const code = await atModel("Ролик, замену отозвали");
+    expect((await step(code, { action: "delivery", message: { telegramRef: group(1101) }, part: "video" })).order.state).toBe("shot");
+    expect((await step(code, { action: "revision", message: { telegramRef: group(1102) }, text: "переснять начало" })).order).toMatchObject({ state: "revision", openRevisions: 1 });
+    const replacement = await step(code, { action: "delivery", eventRef: contentops("delivery", 11), message: { excerpt: "CUS-12 · видео", author: "ContentOps" }, part: "video", complete: true });
+    expect(replacement.order).toMatchObject({ state: "shot", openRevisions: 0, partsDone: ["video"] });
+    // It was another order's file: the order waits for its revision again, the request it had answered is open.
+    const back = await step(code, { action: "retract", eventRef: contentops("retraction", 12), retracts: contentops("delivery", 11), reason: "это файл другого заказа" });
+    expect(back.order).toMatchObject({ state: "revision", stateNote: "переснять начало", openRevisions: 1, partsDone: [] });
+    expect(back.order.messages.find((message) => message.kind === "revision")?.doneAt).toBeNull();
+    // The real replacement answers it again.
+    const again = await step(code, { action: "delivery", eventRef: contentops("delivery", 13), message: { excerpt: "CUS-13 · видео", author: "ContentOps" }, part: "video", complete: true });
+    expect(again.order).toMatchObject({ state: "shot", openRevisions: 0, partsDone: ["video"] });
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("answers a revision of the whole order part by part: «снят» only when every part came after it", async (context) => {
+    if (!testDb || !server) return context.skip();
+    const code = await atModel("Ролик и фото, правка всего заказа", 5);
+    await step(code, { action: "delivery", message: { telegramRef: group(1201) }, part: "video" });
+    expect((await step(code, { action: "delivery", message: { telegramRef: group(1202) }, part: "photos" })).order.state).toBe("shot");
+    expect((await step(code, { action: "revision", message: { telegramRef: group(1203) }, text: "другой свет, переснять всё" })).order).toMatchObject({ state: "revision", openRevisions: 1 });
+    const video = await step(code, { action: "delivery", message: { telegramRef: group(1204) }, part: "video", complete: true });
+    expect(video.order).toMatchObject({ state: "revision", openRevisions: 1, partsDone: ["video"] });
+    const photos = await step(code, { action: "delivery", message: { telegramRef: group(1205) }, part: "photos", complete: true });
+    expect(photos.order).toMatchObject({ state: "shot", openRevisions: 0, partsDone: ["video", "photos"] });
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("takes an old message of the model's group as old, whenever the routine reports it: it answers no later request", async (context) => {
+    if (!testDb || !server) return context.skip();
+    const code = await atModel("Ролик, рутина повторяет старое");
+    const at = (hour: number) => `2026-11-10T${String(hour).padStart(2, "0")}:00:00+03:00`;
+    const first = { action: "delivery", message: { telegramRef: group(1301), at: at(10), excerpt: "6-08 первый.mov" }, part: "video" };
+    expect((await step(code, first)).order.state).toBe("shot");
+    expect((await step(code, { action: "revision", message: { telegramRef: group(1303), at: at(12) }, text: "без музыки" })).order.state).toBe("revision");
+    // The routine repeats every message it sees: the delivery it reported before…
+    expect(await step(code, first)).toMatchObject({ outcome: "unchanged", order: { state: "revision", openRevisions: 1 } });
+    // …and one it had missed, sent before the request (11:00): kept, and it answers nothing.
+    const missed = await step(code, { action: "delivery", message: { telegramRef: group(1302), at: at(11), excerpt: "6-08 второй дубль.mov" }, part: "video", complete: true });
+    expect(missed).toMatchObject({ outcome: "changed", event: { ref: group(1302), result: "stored" }, order: { state: "revision", openRevisions: 1, partsDone: [] } });
+    // The new version, sent after the request, does.
+    const fixed = await step(code, { action: "delivery", message: { telegramRef: group(1304), at: at(13), excerpt: "6-08 без музыки.mov" }, part: "video", complete: true });
+    expect(fixed.order).toMatchObject({ state: "shot", openRevisions: 0, partsDone: ["video"] });
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("takes a state by a message once: the routine's repeat of an old refusal, «снят» or «частично» changes nothing", async (context) => {
+    if (!testDb || !server) return context.skip();
+    // The model refused by a message; the lead sent the order to the model again; the next day the routine reports
+    // the same message once more.
+    const refusedOnce = await atModel("Ролик, отказ и снова к модели");
+    const refusal = { action: "refused", ref: group(1501), reason: "не снимаю такое" };
+    expect((await step(refusedOnce, refusal)).order.state).toBe("refused");
+    expect((await act("carol", refusedOnce, { action: "at_model" })).statusCode).toBe(200);
+    expect(await step(refusedOnce, refusal)).toMatchObject({ outcome: "unchanged", order: { state: "at_model" } });
+    // A new refusal, by another message, is a refusal.
+    expect((await step(refusedOnce, { ...refusal, ref: group(1502) })).order.state).toBe("refused");
+
+    // «Снят» by a message, then a revision: the old «снят» again does not close the request.
+    const shotOnce = await atModel("Ролик, снят и правка");
+    const shot = { action: "shot", ref: group(1511) };
+    expect((await step(shotOnce, shot)).order.state).toBe("shot");
+    expect((await step(shotOnce, { action: "revision", message: { telegramRef: group(1512) }, text: "переснять конец" })).order.state).toBe("revision");
+    expect(await step(shotOnce, shot)).toMatchObject({ outcome: "unchanged", order: { state: "revision", openRevisions: 1 } });
+
+    // «Сдан частично» by a message; the order moved on: its repeat is nothing new, not a step the state refuses.
+    const partlyOnce = await atModel("Ролик, частично и снят");
+    const partly = { action: "partly", ref: group(1521), note: "первая половина" };
+    expect((await step(partlyOnce, partly)).order.state).toBe("partly");
+    expect((await step(partlyOnce, { action: "delivery", message: { telegramRef: group(1522) }, part: "video", complete: true })).order.state).toBe("shot");
+    expect(await step(partlyOnce, partly)).toMatchObject({ outcome: "unchanged", order: { state: "shot" } });
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("keeps «снят» a person set by hand when a delivery is taken back afterwards: the retraction is a line of the history", async (context) => {
+    if (!testDb || !server) return context.skip();
+    const history = async (code: string) => customOrderDetailResponseSchema.parse((await get("boss", `/api/v1/custom-orders/${code}`)).json()).history.map((item) => item.event);
+    // The lead sets «Снят» herself; ContentOps links a file to the order later and then takes the link back.
+    const byHand = await atModel("Ролик, снят рукой");
+    expect((await act("carol", byHand, { action: "shot" })).statusCode).toBe(200);
+    await step(byHand, { action: "delivery", eventRef: contentops("delivery", 31), message: { excerpt: "CUS-15 · видео", author: "ContentOps" }, part: "video", complete: true });
+    const back = await step(byHand, { action: "retract", eventRef: contentops("retraction", 32), retracts: contentops("delivery", 31), reason: "это файл другого заказа" });
+    expect(back).toMatchObject({ outcome: "changed", order: { state: "shot", partsDone: ["video"] } });
+    expect(await history(byHand)).toContain("custom_order.retracted");
+
+    // The same after a revision she answered by hand: the delivery that was sent back does not count, her word does.
+    const afterRevision = await atModel("Ролик, правка и снят рукой");
+    await step(afterRevision, { action: "delivery", message: { telegramRef: group(1601) }, part: "video" });
+    await step(afterRevision, { action: "revision", message: { telegramRef: group(1602) }, text: "без музыки" });
+    expect((await act("carol", afterRevision, { action: "shot" })).statusCode).toBe(200);
+    await step(afterRevision, { action: "delivery", eventRef: contentops("delivery", 33), message: { excerpt: "CUS-16 · видео", author: "ContentOps" }, part: "video", complete: true });
+    const stays = await step(afterRevision, { action: "retract", eventRef: contentops("retraction", 34), retracts: contentops("delivery", 33), reason: "не тот файл" });
+    expect(stays.order).toMatchObject({ state: "shot", openRevisions: 0, partsDone: ["video"] });
+    // A request after her word opens a new round all the same.
+    expect((await step(afterRevision, { action: "revision", message: { telegramRef: group(1603) }, text: "фан просит другое начало" })).order)
+      .toMatchObject({ state: "revision", openRevisions: 1, partsDone: [] });
+
+    // The reader's «снят» by a message is no person's hand: a delivery taken back after it still takes the part.
+    const byReader = await atModel("Ролик, снят читателем");
+    expect((await step(byReader, { action: "shot", ref: group(1611) })).order.state).toBe("shot");
+    await step(byReader, { action: "delivery", eventRef: contentops("delivery", 35), message: { excerpt: "CUS-17 · видео", author: "ContentOps" }, part: "video", complete: true });
+    const gone = await step(byReader, { action: "retract", eventRef: contentops("retraction", 36), retracts: contentops("delivery", 35), reason: "не тот файл" });
+    expect(gone.order).toMatchObject({ state: "at_model", partsDone: [] });
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("puts an order where its kept messages say when they were stored without a step, never one a person moved after them", async (context) => {
+    if (!testDb || !server) return context.skip();
+    /** As the import leaves an order: «у модели», a delivery message of the model's group kept, no step taken by it. */
+    const imported = async (task: string, message: number) => {
+      const id = await recordCustomOrder(app, {
+        pageId: pages["lora-1"]!, fanId: null, buyer: null, conversationRef: null, card: { task }, deadlineOn: null, acceptedByUserId: null,
+        origin: "import", state: "at_model", actor: { door: "system" },
+      });
+      await addCustomOrderMessage(app.db, {
+        orderId: id, telegramRef: group(message), ordinal: 0, kind: "delivery", part: null, postedAt: new Date(Date.now() - 7 * 86_400_000),
+        author: "Модель", excerpt: "6-08 готово.mov", at: new Date(Date.now() - 3_600_000),
+      });
+      return id;
+    };
+    const stuck = await imported("Ролик, сдача лежит с переноса", 1701);
+    const moved = await imported("Ролик, после переноса его вела ведущая", 1702);
+    // The routine's repeat of the kept message can no longer apply it: the order stays «у модели».
+    expect(await step(`K-${stuck}`, { action: "delivery", message: { telegramRef: group(1701) }, part: "video" }))
+      .toMatchObject({ outcome: "unchanged", order: { state: "at_model", partsDone: [] } });
+    // The lead looked at the other one and said «частично» herself, after the message: her step stays.
+    expect((await act("carol", `K-${moved}`, { action: "partly", note: "нет второй половины" })).statusCode).toBe(200);
+
+    const orderIds = [stuck, moved];
+    const state = async (id: number) => (await testDb!.pool.query("select state, parts_done from custom_orders where id = $1", [id])).rows[0];
+    // The dry run says what each holds and what its messages say, and writes nothing.
+    expect(await settleCustomOrders(app, { apply: false, orderIds })).toEqual([
+      { code: `K-${stuck}`, state: "at_model", byMessages: "shot", partsDone: [], partsByMessages: ["video"], outcome: "differs" },
+      { code: `K-${moved}`, state: "partly", byMessages: "shot", partsDone: [], partsByMessages: ["video"], outcome: "by_hand" },
+    ]);
+    expect(await state(stuck)).toEqual({ state: "at_model", parts_done: [] });
+    // Applied: the stuck one is «снят» with a line in its history; the one a person moved is left.
+    expect((await settleCustomOrders(app, { apply: true, orderIds })).map((row) => [row.code, row.outcome]))
+      .toEqual([[`K-${stuck}`, "settled"], [`K-${moved}`, "by_hand"]]);
+    expect(await state(stuck)).toEqual({ state: "shot", parts_done: ["video"] });
+    expect(await state(moved)).toEqual({ state: "partly", parts_done: [] });
+    const detail = customOrderDetailResponseSchema.parse((await get("boss", `/api/v1/custom-orders/K-${stuck}`)).json());
+    expect(detail.history.at(-1)).toMatchObject({ event: "custom_order.settled", door: "system", changes: { from: "at_model", to: "shot" } });
+    // Once more: nothing left to settle.
+    expect((await settleCustomOrders(app, { apply: true, orderIds })).filter((row) => row.outcome !== "by_hand")).toEqual([]);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("answers a card that carries an order's code with that order: one custom, one order", async (context) => {
@@ -376,7 +572,8 @@ describe("custom orders: who sees and moves what", () => {
     const texts = JSON.stringify(detail.history.map((item) => item.changes));
     expect(texts).not.toContain("Том");
     expect(detail.history.map((item) => item.event)).toEqual(expect.arrayContaining(["custom_order.delivery", "custom_order.revision"]));
-    expect(detail.order).toMatchObject({ state: "revision", fanErased: true, stateNote: null, partsDone: ["video"] });
+    // (The video was sent back by the revision: no part is ready.)
+    expect(detail.order).toMatchObject({ state: "revision", fanErased: true, stateNote: null, partsDone: [] });
     // The card keeps what the order is (its price, its length), not the fan's words.
     expect(detail.order.card).toEqual({ price: "100$", duration: "5 минут" });
     const named = customOrderDetailResponseSchema.parse((await get("boss", `/api/v1/custom-orders/K-${byName}`)).json());

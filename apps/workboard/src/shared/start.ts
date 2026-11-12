@@ -7,7 +7,8 @@ import { useMe } from "./useMe.js";
  * «Начало», a newcomer's way to the first shift (`accountStart`: the session's
  * own person, never anyone else's). The menu, the home address, the screen and
  * the account's payout card read the same entry, a narrow session (from the
- * extension) too; it only does not write where payouts go
+ * extension) too; of where payouts go it is told only that it is written and
+ * when (Hub leaves the text out), and it does not write it
  * (`accountPayoutDetailsSet` needs the password).
  */
 

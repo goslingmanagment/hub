@@ -320,7 +320,9 @@ export async function applyCustomOrdersImport(app: ImportApp, plan: CustomOrders
     });
     await app.db.transaction(async (tx) => {
       const db = tx as unknown as Database;
-      if (order.partsDone.length > 0) await updateCustomOrderFields(db, id, { partsDone: order.partsDone }, now);
+      // The parts the old order calls whole stand as a word — unless it is in revision: the round before a revision
+      // does not count (rules.ts, roundOf), the order waits for every part again.
+      if (order.partsDone.length > 0 && order.state !== "revision") await updateCustomOrderFields(db, id, { partsDone: order.partsDone }, now);
       for (const message of order.messages) {
         await addCustomOrderMessage(db, {
           orderId: id, telegramRef: message.ref, ordinal: message.ordinal, kind: message.kind, part: null,

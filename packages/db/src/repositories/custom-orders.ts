@@ -42,7 +42,10 @@ export interface CustomOrderRow {
   origin: CustomOrderOriginRow;
   contentopsRef: string | null;
   sourceText: string | null;
+  /** The parts ready in the current round (services/custom-orders/rules.ts, `roundOf`). */
   partsDone: Array<"video" | "photos">;
+  /** When a person last set «снят» by hand on the board (0410): their word stands for every part until a newer revision request. */
+  shotByHandAt: Date | null;
   personFields: string[];
   version: number;
   openRevisions: number;
@@ -90,6 +93,7 @@ function orderOf(row: Row): CustomOrderRow {
     contentopsRef: (row.contentops_ref as string | null) ?? null,
     sourceText: (row.source_text as string | null) ?? null,
     partsDone: ((row.parts_done as string[] | null) ?? []).filter((part): part is "video" | "photos" => part === "video" || part === "photos"),
+    shotByHandAt: date(row.shot_by_hand_at),
     personFields: (row.person_fields as string[] | null) ?? [],
     version: Number(row.version ?? 1),
     openRevisions: Number(row.open_revisions ?? 0),
@@ -113,7 +117,7 @@ const ORDER_SELECT = sql`
       order by th.last_message_at desc nulls last limit 1) end) as conversation_ref,
     o.card, o.deadline_on::text as deadline_on, o.state, o.state_at, o.state_note, o.state_ref,
     o.given_message_ref, o.given_at, o.accepted_by_user_id, u.username as accepted_by, ap.display_name as accepted_by_name, o.origin, o.contentops_ref,
-    o.source_text, o.parts_done, o.person_fields, o.version,
+    o.source_text, o.parts_done, o.shot_by_hand_at, o.person_fields, o.version,
     (select count(*) from custom_order_messages mm where mm.order_id = o.id and mm.kind = 'revision' and mm.done_at is null) as open_revisions,
     o.created_at, o.updated_at,
     coalesce(pay.gross, 0) as paid_gross, coalesce(pay.net, 0) as paid_net, coalesce(pay.n, 0) as payments, pay.first_at as first_paid_at,
@@ -310,6 +314,7 @@ export interface CustomOrderFieldsPatch {
   conversationRef?: string | null;
   sourceText?: string | null;
   partsDone?: readonly string[];
+  shotByHandAt?: Date;
   personFields?: readonly string[];
 }
 
@@ -324,6 +329,7 @@ export async function updateCustomOrderFields(db: Database, orderId: number, pat
   if (patch.conversationRef !== undefined) sets.push(sql`conversation_ref = ${patch.conversationRef}`);
   if (patch.sourceText !== undefined) sets.push(sql`source_text = ${patch.sourceText}`);
   if (patch.partsDone !== undefined) sets.push(sql`parts_done = ${texts(patch.partsDone)}`);
+  if (patch.shotByHandAt !== undefined) sets.push(sql`shot_by_hand_at = ${patch.shotByHandAt.toISOString()}::timestamptz`);
   if (patch.personFields !== undefined) sets.push(sql`person_fields = ${texts(patch.personFields)}`);
   await db.execute(sql`update custom_orders set ${sql.join(sets, sql`, `)} where id = ${orderId}`);
 }
@@ -394,6 +400,7 @@ export interface CustomOrderMessageRow {
   eventRef: string | null;
   ordinal: number;
   kind: CustomOrderMessageKindRow;
+  /** A delivery: its part. A revision request: the part it is about; null — the whole order. */
   part: "video" | "photos" | null;
   /** A delivery: that part whole; null — not said (recorded before 0406). */
   complete: boolean | null;
@@ -439,7 +446,7 @@ export async function addCustomOrderMessage(
   return existing.rows[0]?.kind === input.kind ? "already" : "taken";
 }
 
-/** A revision request fixed; false — none open by that message (or event ref) and ordinal. */
+/** A revision request fixed by a word (it stays fixed); false — none open by that message (or event ref) and ordinal. */
 export async function markCustomOrderRevisionDone(
   db: Database,
   input: { orderId: number; telegramRef: string | null; eventRef?: string | null; ordinal: number; at: Date },
@@ -451,11 +458,29 @@ export async function markCustomOrderRevisionDone(
   return (result.rowCount ?? 0) > 0;
 }
 
-/** Every open revision request of the order fixed (a whole new version came, or «снят»): how many. */
+/** Every open revision request of the order fixed by a word («снят»): how many. Such a request stays fixed. */
 export async function closeCustomOrderRevisions(db: Database, input: { orderId: number; at: Date }): Promise<number> {
   const result = await db.execute(sql`
     update custom_order_messages set done_at = ${input.at.toISOString()}::timestamptz
     where order_id = ${input.orderId} and kind = 'revision' and done_at is null`);
+  return result.rowCount ?? 0;
+}
+
+/** These open revision requests fixed by the round itself: every part they are about came whole after them. */
+export async function answerCustomOrderRevisions(db: Database, input: { orderId: number; ids: readonly number[]; at: Date }): Promise<number> {
+  if (input.ids.length === 0) return 0;
+  const result = await db.execute(sql`
+    update custom_order_messages set done_at = ${input.at.toISOString()}::timestamptz, done_by_delivery = true
+    where order_id = ${input.orderId} and id = any(${ids(input.ids)}) and kind = 'revision' and done_at is null`);
+  return result.rowCount ?? 0;
+}
+
+/** These requests open again: the delivery that had answered them was taken back. Never one fixed by a word. */
+export async function reopenCustomOrderRevisions(db: Database, input: { orderId: number; ids: readonly number[] }): Promise<number> {
+  if (input.ids.length === 0) return 0;
+  const result = await db.execute(sql`
+    update custom_order_messages set done_at = null, done_by_delivery = false
+    where order_id = ${input.orderId} and id = any(${ids(input.ids)}) and kind = 'revision' and done_by_delivery`);
   return result.rowCount ?? 0;
 }
 
@@ -481,17 +506,51 @@ export async function retractCustomOrderDeliveries(
   };
 }
 
-/** The order's deliveries not taken back: how many, and the parts one of them made whole (`complete` not false). */
-export async function listCustomOrderLiveDeliveries(db: Database, orderId: number): Promise<{ count: number; wholeParts: Array<"video" | "photos"> }> {
+/** A delivery or a revision request of an order, as its round reads it (services/custom-orders/rules.ts, `roundOf`). */
+export interface CustomOrderRoundRow {
+  id: number;
+  kind: "delivery" | "revision";
+  /** A delivery: its part. A request: the part it is about; null — the whole order. */
+  part: "video" | "photos" | null;
+  /** The message's own time; when its sender gave none, when the hub kept it. */
+  at: Date;
+  complete: boolean | null;
+  retracted: boolean;
+  done: boolean;
+  /** A request the round itself fixed (0410); false — fixed by a word, or open. */
+  doneByDelivery: boolean;
+  /** The Telegram message (its own link, or an event's evidence) and its words: what the state «правка» names. */
+  telegramRef: string | null;
+  excerpt: string | null;
+}
+
+/** Every delivery and revision request of the order, the oldest first (by its own time, then as the hub kept them). */
+export async function listCustomOrderRoundMessages(db: Database, orderId: number): Promise<CustomOrderRoundRow[]> {
   const result = await db.execute<Row>(sql`
-    select count(*)::int as n,
-      coalesce(array_agg(distinct part) filter (where part is not null and complete is not false), '{}'::text[]) as parts
-    from custom_order_messages where order_id = ${orderId} and kind = 'delivery' and retracted_at is null`);
-  const row = result.rows[0];
-  return {
-    count: Number(row?.n ?? 0),
-    wholeParts: ((row?.parts as string[] | null) ?? []).filter((part): part is "video" | "photos" => part === "video" || part === "photos"),
-  };
+    select id, kind, part, coalesce(posted_at, added_at) as at, complete, retracted_at, done_at, done_by_delivery,
+      coalesce(telegram_ref, evidence_ref) as telegram_ref, excerpt
+    from custom_order_messages
+    where order_id = ${orderId} and kind in ('delivery', 'revision')
+    order by coalesce(posted_at, added_at), id`);
+  return result.rows.map((row) => ({
+    id: Number(row.id),
+    kind: row.kind as "delivery" | "revision",
+    part: (row.part as "video" | "photos" | null) ?? null,
+    at: date(row.at)!,
+    complete: (row.complete as boolean | null) ?? null,
+    retracted: row.retracted_at !== null && row.retracted_at !== undefined,
+    done: row.done_at !== null && row.done_at !== undefined,
+    doneByDelivery: row.done_by_delivery === true,
+    telegramRef: (row.telegram_ref as string | null) ?? null,
+    excerpt: (row.excerpt as string | null) ?? null,
+  }));
+}
+
+/** What the order's state is about, while the state itself stays: «правка» follows the requests still open. */
+export async function setCustomOrderStateNote(db: Database, orderId: number, input: { note: string | null; ref: string | null }, at: Date): Promise<void> {
+  await db.execute(sql`
+    update custom_orders set state_note = ${input.note}, state_ref = ${input.ref}, updated_at = ${at.toISOString()}::timestamptz
+    where id = ${orderId}`);
 }
 
 /** The messages of these orders, each order's in their order. */
@@ -614,11 +673,16 @@ export interface CustomLookalikeRow {
  * Sales between `from` and `to` that look like a custom and have no order: a new subscription to a tier that
  * includes a custom (a benefit or the name with «free» and «custom»), or a tip whose note speaks of a custom. Not
  * a sale an order holds, not one marked «не кастом», not one of a fan whose order on the page was recorded from
- * seven days before it to a day after.
+ * seven days before it to a day after. `alsoIds` — sales looked at whatever their day (the ones a matter still
+ * waits about): the window only limits which new sales are found.
  */
-export async function listCustomLookalikeSales(db: Database, input: { from: Date; to: Date; limit: number }): Promise<CustomLookalikeRow[]> {
+export async function listCustomLookalikeSales(
+  db: Database,
+  input: { from: Date; to: Date; limit: number; alsoIds?: readonly number[] },
+): Promise<CustomLookalikeRow[]> {
   const from = input.from.toISOString();
   const to = input.to.toISOString();
+  const looked = sql`((t.occurred_at >= ${from}::timestamptz and t.occurred_at < ${to}::timestamptz) or t.id = any(${ids(input.alsoIds ?? [])}))`;
   const result = await db.execute<Row>(sql`
     with custom_tiers as (
       select t.page_id, t.tier_ref, t.name from page_subscription_tiers t
@@ -634,14 +698,12 @@ export async function listCustomLookalikeSales(db: Database, input: { from: Date
           and ps.source_created_at between t.occurred_at - interval '2 hours' and t.occurred_at + interval '2 hours'
         order by ps.source_created_at desc limit 1) ps on true
       join custom_tiers ct on ct.page_id = t.platform_account_id and ct.tier_ref = ps.subscription_tier_id
-      where t.canonical_type = 'subscription' and t.is_active and t.gross_amount_mills > 0
-        and t.occurred_at >= ${from}::timestamptz and t.occurred_at < ${to}::timestamptz
+      where t.canonical_type = 'subscription' and t.is_active and t.gross_amount_mills > 0 and ${looked}
       union all
       select t.id, t.platform_account_id, t.fan_id, t.gross_amount_mills, t.occurred_at, 'tip_note', tc.tip_message_text
       from transactions t
       join transaction_tip_contexts tc on tc.account_id = t.platform_account_id and tc.platform_tip_id = t.correlation_id
-      where t.canonical_type = 'tip' and t.is_active and t.gross_amount_mills > 0
-        and t.occurred_at >= ${from}::timestamptz and t.occurred_at < ${to}::timestamptz
+      where t.canonical_type = 'tip' and t.is_active and t.gross_amount_mills > 0 and ${looked}
         and tc.tip_message_text ~* '(custom|кастом)'
     )
     select s.id, s.page_id, p.label as page_label, p.platform, s.fan_id, f.platform_user_id as fan_ref, f.username as fan_username,
@@ -688,6 +750,33 @@ export async function dismissCustomSale(db: Database, input: { transactionId: nu
     insert into custom_sale_dismissals (transaction_id, user_id) values (${input.transactionId}, ${input.userId})
     on conflict (transaction_id) do nothing`);
   return (result.rowCount ?? 0) > 0;
+}
+
+/**
+ * What became of a sale that looked like a custom with no order: `recorded` — an order holds it now, or the fan's
+ * order on the page was recorded beside it; `dismissed` — «не кастом»; `gone` — the sale is no more (refunded,
+ * erased); `waits` — none of these: it still has neither an order nor a word.
+ */
+export type CustomSaleFate = "recorded" | "dismissed" | "gone" | "waits";
+
+export async function listCustomSaleFates(db: Database, transactionIds: readonly number[]): Promise<Map<number, CustomSaleFate>> {
+  const fates = new Map<number, CustomSaleFate>();
+  if (transactionIds.length === 0) return fates;
+  const result = await db.execute<Row>(sql`
+    select asked.id,
+      t.id is not null and t.is_active and t.gross_amount_mills > 0 as live,
+      exists (select 1 from custom_sale_dismissals d where d.transaction_id = asked.id) as dismissed,
+      exists (select 1 from custom_order_payments cp where cp.transaction_id = asked.id)
+        or (t.id is not null and exists (
+          select 1 from custom_orders o
+          where o.page_id = t.platform_account_id and o.fan_id = t.fan_id and o.state <> 'cancelled'
+            and o.created_at between t.occurred_at - interval '7 days' and t.occurred_at + interval '24 hours')) as recorded
+    from unnest(${ids(transactionIds)}) as asked(id)
+    left join transactions t on t.id = asked.id`);
+  for (const row of result.rows) {
+    fates.set(Number(row.id), row.recorded === true ? "recorded" : row.dismissed === true ? "dismissed" : row.live === true ? "waits" : "gone");
+  }
+  return fates;
 }
 
 /** The live logins of the people who hold a narrow right (person_rights), the lowest id first. */
@@ -737,6 +826,27 @@ export async function findPageFanByInput(
     limit 2`);
   if (result.rows.length !== 1) return null;
   return { fanId: Number(result.rows[0]!.id), platformUserId: String(result.rows[0]!.platform_user_id) };
+}
+
+/**
+ * Whether the order's history has this step taken by this message already (`custom_order.refused` by `tg:…`): the
+ * daily routine repeats every message it sees, and a step by a message already taken is nothing new.
+ */
+export async function hasCustomOrderStepByRef(db: Database, input: { orderId: number; event: string; ref: string }): Promise<boolean> {
+  const result = await db.execute(sql`
+    select 1 from object_events
+    where object_type = 'custom_order' and object_id = ${String(input.orderId)} and event = ${input.event} and changes ->> 'ref' = ${input.ref}
+    limit 1`);
+  return result.rows.length > 0;
+}
+
+/** When a person last moved the order's state by their own hand (the board, the extension); null — never. */
+export async function findCustomOrderLastHandMove(db: Database, orderId: number): Promise<Date | null> {
+  const result = await db.execute<Row>(sql`
+    select max(created_at) as at from object_events
+    where object_type = 'custom_order' and object_id = ${String(orderId)} and actor_user_id is not null
+      and event = any(${texts(["at_model", "partly", "shot", "revision", "refused", "given", "closed", "cancelled"].map((step) => `custom_order.${step}`))})`);
+  return date(result.rows[0]?.at);
 }
 
 /** One step of an order's history (object_events, 0382). */

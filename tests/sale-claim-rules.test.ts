@@ -213,4 +213,17 @@ describe("what a settlement gives, in mills", () => {
     ]);
     expect(sums).toEqual({ pages: [{ pageLabel: "page-a", amountMills: 10_000 }, { pageLabel: "page-b", amountMills: 50_000 }], totalMills: 60_000 });
   });
+
+  it("names the page of every line the report carries, with nothing where nothing is counted", () => {
+    // A shift that held page-a; «Рядом» has a sale of page-d (its slot's page), and a disputed «моё» on page-e claims and counts 0.
+    const sums = reportSums([
+      line(1, { group: "mine", amountMills: 10_000 }),
+      line(2, { pageLabel: "page-d" }),
+      line(3, { pageLabel: "page-e", statement: "mine", disputed: true, claimedMills: 36_000 }),
+    ], ["page-a"], []);
+    expect(sums).toEqual({
+      pages: [{ pageLabel: "page-a", amountMills: 10_000 }, { pageLabel: "page-d", amountMills: 0 }, { pageLabel: "page-e", amountMills: 0 }],
+      totalMills: 10_000,
+    });
+  });
 });

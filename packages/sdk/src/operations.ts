@@ -156,6 +156,7 @@ export const kernelOperations = {
   agentKeyCreate: { method: "POST", path: "/api/v1/agent/keys" },
   agentKeyIntrospect: { method: "POST", path: "/api/v1/agent/keys/introspect" },
   agentKeyList: { method: "GET", path: "/api/v1/agent/keys" },
+  agentKeyReplace: { method: "POST", path: "/api/v1/agent/keys/:id/replace" },
   agentKeyRevoke: { method: "POST", path: "/api/v1/agent/keys/:id/revoke" },
   agentKeyUpdate: { method: "PATCH", path: "/api/v1/agent/keys/:id" },
   agentMatterClose: { method: "POST", path: "/api/v1/agent/matters/close" },

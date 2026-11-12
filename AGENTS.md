@@ -69,7 +69,8 @@ the owner's machine (outside this repository); a change that moves a home or add
 - **People**: the registry (`apps/runtime/src/services/people`, tables `people`, `person_*`). A login is not a person
   (`person_logins`); never rename `users.username`: scripts outside the repo match by it. Pay terms are money:
   owner-only, never serialised into anyone else's session. Where a person is paid (`person_payout_details`, written by
-  the person on Workboard «Начало», `services/people/start.ts`) is the person's own session's and the owner's card's only.
+  the person on Workboard «Начало», `services/people/start.ts`) is the person's own session's and the owner's card's only;
+  a narrow session (from the extension, no password) is told only whether it is written, never the text.
   A newcomer's way to the first shift is read live from the facts (`start.ts`), never ticked by hand.
 - **Whose a sale is**: only `apps/runtime/src/services/sale-rule.ts`, written to `sale_homes` (`sale-homes.ts`);
   schedule slots and «left the team» come from the people registry. Never compute it anywhere else. Screens follow
@@ -87,7 +88,10 @@ the owner's machine (outside this repository); a change that moves a home or add
   `sale_claims`, `sale_owner_decisions`). They reach the rule as its inputs (`sale-homes.ts`), never around it; a
   claim alone moves no home. Hub is their only home: what the chat agent records «со слов» comes through
   `services/sale-decisions-door.ts` (`hub sale decide|ask|…`), a decision on a known sale through the owner's own path
-  (`applySaleDecision`); the ledger reads them from Hub and writes none.
+  (`applySaleDecision`), its cancel through `cancelSaleDecisionApplied`; the ledger reads them from Hub and writes none.
+  Whoever writes whose a sale is (a decision made, replaced, cancelled or tied; an agreement) or a report's version
+  from its draft takes `lockSaleSettlements` first in the transaction — then decisions and claims, then reports —
+  reads there what it writes from, and never holds it across a call to the ledger.
 - **A sale's chain of money** (whose, shift, report, accrual, payout): one read, `services/sale-chain.ts`
   (`saleChain`, agents `agentSaleChain` / `hub sale-chain`), it computes nothing anew and says «неизвестно» when a
   source does not answer. Shown only by `SaleChainTrigger` (`packages/ui/src/components/SaleChain.tsx`): the sale's amount.
@@ -113,6 +117,9 @@ the owner's machine (outside this repository); a change that moves a home or add
   in `packages/db/src/repositories/people.ts`). An agent holds ONE live key at a time: the services (ledger, TaskIndex,
   ContentOps) learn only the agent from Hub (`agentKeyIntrospect`) and give a key that agent's rights, so a second
   key of the agent would carry them too. A key no agent holds (a reporter, a mirror) is inactive in the services.
+  A key's pages and capabilities change in place; a new key is issued only AS THE REPLACEMENT of the live one
+  (`replaceAgentKey`, `agent-keys:replace`): the same pages and capabilities, and the old key ends itself 24 hours on
+  (`agent_keys.replaced_at`: no slide). The pair stays equal: neither changes in place while both live.
 - **Pages agents write for people**: agent reports (`services/agent-reports.ts`, `hub report put`).
 - **Whether routines and copies work**: «Система → Состояние» (`services/system-state.ts`, tables `system_routines`,
   `system_copies`): a reporter sends its whole list (`write:system_state`, the Mac's is `scripts/system-state/`), Hub

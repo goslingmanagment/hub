@@ -83,6 +83,12 @@ export function columnOf(order: Pick<CustomOrder, "state">): ColumnId | null {
   return COLUMNS.find((column) => column.states.includes(order.state))?.id ?? null;
 }
 
+/** A part of an order, as the card orders it. */
+export type CustomPart = CustomOrder["partsDone"][number];
+export const PART_WORDS: Record<CustomPart, string> = { video: "видео", photos: "фото" };
+/** «видео», «видео и фото». */
+export const partsWords = (parts: readonly CustomPart[]) => parts.map((part) => PART_WORDS[part]).join(" и ");
+
 export const STATE_TONE: Partial<Record<CustomOrderState, "success" | "warning" | "danger" | "info" | "off">> = {
   partly: "info",
   revision: "warning",
@@ -136,6 +142,7 @@ export const EVENT_WORDS: Record<string, string> = {
   "custom_order.card": "Привязана карточка из Telegram",
   "custom_order.message": "Сообщение в группе модели",
   "custom_order.retracted": "Сдача отозвана",
+  "custom_order.settled": "Шаг пересчитан по сообщениям",
 };
 
 export const DOOR_WORDS: Record<string, string> = {

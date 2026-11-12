@@ -12,6 +12,7 @@ import {
   STEP_FROM,
   STEP_TO,
   stepsFor,
+  wantedParts,
   whatOf,
   overdueDaysOf,
   type CustomOrder,
@@ -43,6 +44,9 @@ interface DemoOrder {
   payments: Array<{ ref: string; kind: string; gross: number; at: number; note: string | null }>;
   givenAt: number | null;
   refs: string[];
+  /** The parts ready in the current round, and the order's messages (deliveries, revision requests). */
+  partsDone: CustomOrder["partsDone"];
+  messages: CustomOrderDetailResponse["messages"];
   history: CustomOrderDetailResponse["history"];
 }
 
@@ -91,8 +95,39 @@ function seedOrders(count: number, now: number): DemoOrder[] {
     const history: DemoOrder["history"] = [{ at: isoAt(createdAt), event: "custom_order.recorded", actor: imported ? null : nameOf(acceptor), onBehalfOf: null, door: imported ? "system" : index % 2 === 0 ? "extension" : "api", changes: {} }];
     if (paid && !imported) history.push({ at: isoAt(createdAt + 20 * 60_000), event: "custom_order.payment", actor: nameOf(acceptor), onBehalfOf: null, door: "extension", changes: {} });
     if (!["recorded", "paid"].includes(state)) history.push({ at: isoAt(createdAt + 6 * HOUR), event: "custom_order.at_model", actor: "Катя", onBehalfOf: null, door: "workboard", changes: {} });
-    if (["shot", "given", "closed", "revision"].includes(state)) history.push({ at: isoAt(stepAt), event: "custom_order.delivery", actor: "Читатель групп", onBehalfOf: null, door: "api", changes: {} });
-    if (state === "partly" || state === "revision" || state === "refused") history.push({ at: isoAt(stepAt), event: `custom_order.${state}`, actor: "Катя", onBehalfOf: null, door: "workboard", changes: {} });
+    // An order in revision is a video with photos, one part back: both came, the group asked to fix each, and only
+    // the new video is here — «Правка» waits for the photos.
+    const revised = state === "revision";
+    const firstAt = createdAt + Math.round((stepAt - createdAt) * 0.6);
+    const videoAgainAt = stepAt + Math.round((now - stepAt) / 2);
+    const message = (n: number, fields: Partial<DemoOrder["messages"][number]> & Pick<DemoOrder["messages"][number], "kind" | "at">): DemoOrder["messages"][number] => ({
+      telegramRef: `tg:${DEMO_CHAT}/3/${20_000 + (101 + index) * 10 + n}`, eventRef: null, ordinal: 0, part: null, complete: null, author: "Модель", excerpt: null,
+      doneAt: null, retractedAt: null, ...fields,
+    });
+    const messages: DemoOrder["messages"] = revised
+      ? [
+        message(1, { kind: "delivery", part: "video", complete: true, at: isoAt(firstAt), excerpt: "6-12 кастом.mov" }),
+        message(2, { kind: "delivery", part: "photos", complete: true, at: isoAt(firstAt + 20 * 60_000), excerpt: "5 фото к кастому" }),
+        message(3, { kind: "revision", ordinal: 1, part: "video", at: isoAt(stepAt), author: "Катя", excerpt: "Фан просит без музыки", doneAt: isoAt(videoAgainAt) }),
+        message(3, { kind: "revision", ordinal: 2, part: "photos", at: isoAt(stepAt), author: "Катя", excerpt: "Фото тёмные: переснять у окна" }),
+        message(4, {
+          kind: "delivery", eventRef: `contentops:delivery:demo-${101 + index}`, part: "video", complete: true, at: isoAt(videoAgainAt), author: "ContentOps",
+          excerpt: `ContentOps: CUS-${301 + index} · видео · 1 файл`,
+        }),
+      ]
+      : ["shot", "given", "closed", "partly"].includes(state)
+        ? [message(1, { kind: "delivery", part: "video", complete: true, at: isoAt(stepAt), excerpt: "6-12 кастом в красном.mov" })]
+        : [];
+    if (revised) {
+      history.push({ at: isoAt(firstAt), event: "custom_order.delivery", actor: "Читатель групп", onBehalfOf: null, door: "api", changes: {} });
+      history.push({ at: isoAt(firstAt + 20 * 60_000), event: "custom_order.delivery", actor: "Читатель групп", onBehalfOf: null, door: "api", changes: {} });
+      history.push({ at: isoAt(stepAt), event: "custom_order.revision", actor: "Читатель групп", onBehalfOf: null, door: "api", changes: {} });
+      history.push({ at: isoAt(stepAt), event: "custom_order.revision", actor: "Читатель групп", onBehalfOf: null, door: "api", changes: {} });
+      history.push({ at: isoAt(videoAgainAt), event: "custom_order.delivery", actor: "ContentOps", onBehalfOf: null, door: "api", changes: {} });
+    } else if (["shot", "given", "closed"].includes(state)) {
+      history.push({ at: isoAt(stepAt), event: "custom_order.delivery", actor: "Читатель групп", onBehalfOf: null, door: "api", changes: {} });
+    }
+    if (state === "partly" || state === "refused") history.push({ at: isoAt(stepAt), event: `custom_order.${state}`, actor: "Катя", onBehalfOf: null, door: "workboard", changes: {} });
     if (state === "given" || state === "closed") history.push({ at: isoAt(stepAt + 3 * HOUR), event: "custom_order.given", actor: nameOf(acceptor), onBehalfOf: null, door: "extension", changes: {} });
     orders.push({
       id: 101 + index,
@@ -101,8 +136,9 @@ function seedOrders(count: number, now: number): DemoOrder[] {
       buyer: imported ? `${fan.username} (${fan.username})` : null,
       card: {
         price,
-        duration: TASKS[index % TASKS.length]!.startsWith("10 фото") ? "10 фото" : `${4 + (index % 5)} минут`,
+        duration: TASKS[index % TASKS.length]!.startsWith("10 фото") ? "10 фото" : `${4 + (index % 5)} минут${revised ? " + 5 фото" : ""}`,
         task: TASKS[index % TASKS.length]!,
+        ...(revised ? { photos: "5 фото в том же образе, свет тёплый", wantsPhotos: 5 } : {}),
         clothes: CLOTHES[index % CLOTHES.length]!,
         notes: "Снимаешь вертикально.",
         urgency: ["Средняя", "Высокая", "Низкая"][index % 3]!,
@@ -110,13 +146,15 @@ function seedOrders(count: number, now: number): DemoOrder[] {
       deadlineOn,
       state,
       stateAt: ["recorded", "paid"].includes(state) ? createdAt : stepAt,
-      stateNote: state === "refused" ? "Модель не снимает такие сцены" : state === "revision" ? "Фан просит без музыки" : state === "partly" ? "Видео есть, фото ещё ждём" : null,
+      stateNote: state === "refused" ? "Модель не снимает такие сцены" : revised ? "Фото тёмные: переснять у окна" : state === "partly" ? "Видео есть, фото ещё ждём" : null,
       acceptedBy: imported ? null : acceptor,
       origin: imported ? "import" : index % 2 === 0 ? "extension" : "agent",
       createdAt,
       payments: paid && !imported ? [{ ref: String(8_000_000 + index), kind: index % 3 === 0 ? "subscription" : "tip", gross, at: createdAt - 15 * 60_000, note: null }] : [],
       givenAt: state === "given" || state === "closed" ? stepAt + 3 * HOUR : null,
       refs: [`tg:${DEMO_CHAT}/3/${10_000 + index}`],
+      partsDone: ["shot", "given", "closed", "revision"].includes(state) ? ["video"] : [],
+      messages,
       history,
     });
   }
@@ -181,8 +219,8 @@ function wire(order: DemoOrder, now: number): CustomOrder {
     contentopsRef: null,
     origin: order.origin,
     overdueDays: overdueDaysOf(order, new Date(now)),
-    partsDone: ["shot", "given", "closed"].includes(order.state) ? ["video"] : [],
-    openRevisions: order.state === "revision" ? 1 : 0,
+    partsDone: order.partsDone,
+    openRevisions: order.messages.filter((message) => message.kind === "revision" && message.doneAt === null).length,
     version: order.history.length,
     createdAt: isoAt(order.createdAt),
     updatedAt: isoAt(order.stateAt),
@@ -209,12 +247,7 @@ function detail(request: DemoRequest, order: DemoOrder): CustomOrderDetailRespon
       fan: wired.fan === null ? null : { platform: wired.fan.platform, fanRef: wired.fan.fanRef, username: wired.fan.username },
     }),
     sourceText: order.origin === "import" ? renderCardText({ id: order.id, card: order.card, deadlineOn: order.deadlineOn, createdAt: new Date(order.createdAt), buyer: order.buyer, fan: null }).replace(/ K-\d+/u, "") : null,
-    messages: ["shot", "given", "closed", "revision", "partly"].includes(order.state)
-      ? [{
-        telegramRef: `tg:${DEMO_CHAT}/3/${20_000 + order.id}`, eventRef: null, ordinal: 0, kind: "delivery", part: "video", complete: true,
-        at: isoAt(order.stateAt), author: "Модель", excerpt: "6-12 кастом в красном.mov", doneAt: null, retractedAt: null,
-      }]
-      : [],
+    messages: order.messages,
     payments: order.payments.map((payment) => ({ transactionRef: payment.ref, kind: payment.kind, grossMills: payment.gross, netMills: Math.round(payment.gross * 0.8), at: isoAt(payment.at), note: payment.note })),
     paymentSuggestions: fanRef !== null && order.state !== "cancelled" && order.payments.length < 2
       ? [{ transactionRef: String(7_000_000 + order.id), kind: "tip", grossMills: 50_000, netMills: 40_000, at: isoAt(order.createdAt + 40 * 60_000), note: order.id % 2 === 0 ? "for the custom" : null }]
@@ -281,7 +314,25 @@ function act(request: DemoRequest, order: DemoOrder, body: CustomOrderActionBody
     case "unpay": order.payments = order.payments.filter((payment) => payment.ref !== body.transactionRef); break;
     case "given": order.givenAt = now; move("given"); break;
     case "refused": move("refused", body.reason); break;
-    case "partly": case "revision": move(STEP_TO[body.action]!, body.note ?? null); break;
+    case "partly": move("partly", body.note ?? null); break;
+    case "revision": {
+      // As Hub does: the request is a message of the order, and it sends back the parts it is about.
+      const wanted = wantedParts(order.card);
+      const about = body.part !== undefined && wanted.includes(body.part) ? [body.part] : wanted;
+      order.partsDone = order.partsDone.filter((part) => !about.includes(part));
+      order.messages.push({
+        telegramRef: null, eventRef: `workboard:revision:${order.history.length + 1}`, ordinal: 0, kind: "revision", part: body.part ?? null, complete: null,
+        at: isoAt(now), author: null, excerpt: body.note ?? null, doneAt: null, retractedAt: null,
+      });
+      move("revision", body.note ?? null);
+      break;
+    }
+    case "shot":
+      // «Снят» by a person: every part whole, every open request fixed.
+      order.partsDone = wantedParts(order.card);
+      order.messages = order.messages.map((message) => (message.kind === "revision" && message.doneAt === null ? { ...message, doneAt: isoAt(now) } : message));
+      move("shot");
+      break;
     case "cancel": order.payments = []; move("cancelled", body.reason ?? null); break;
     default: move(STEP_TO[body.action]!);
   }
@@ -328,7 +379,8 @@ export const wbCustomsHandlers: DemoHandlers = {
       id: 101 + store.length + 1000, page: sale.pageLabel, fanRef: sale.fan?.fanRef ?? null, buyer: null, card: body.card, deadlineOn: null,
       state: "paid", stateAt: now, stateNote: null, acceptedBy: user.username, origin: "workboard", createdAt: now,
       payments: [{ ref: sale.transactionRef, kind: sale.kind === "tier" ? "subscription" : "tip", gross: sale.grossMills, at: Date.parse(sale.at), note: sale.kind === "tip_note" ? sale.detail : null }],
-      givenAt: null, refs: [], history: [{ at: isoAt(now), event: "custom_order.recorded", actor: user.name, onBehalfOf: null, door: "workboard", changes: {} }],
+      givenAt: null, refs: [], partsDone: [], messages: [],
+      history: [{ at: isoAt(now), event: "custom_order.recorded", actor: user.name, onBehalfOf: null, door: "workboard", changes: {} }],
     };
     store.push(order);
     return detail(request, order);
