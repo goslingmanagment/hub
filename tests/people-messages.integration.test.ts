@@ -1,11 +1,13 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { peopleMessagePressResponseSchema, peopleMessagesResponseSchema, peopleMessageSwitchResponseSchema } from "@agency_hub_core/contracts";
-import { createFanslyPage, createModel, insertCustomOrder, openMatter, setConfigOverride } from "@agency_hub_core/db";
+import { createFanslyPage, createModel, insertCustomOrder, insertCustomOrderEvent, openMatter, setConfigOverride } from "@agency_hub_core/db";
+import { PEOPLE_MESSAGE_ERASED_TEXT } from "@agency_hub_core/shared";
 
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import { createUserAccount, setUserPassword } from "../apps/runtime/src/services/auth.ts";
+import { executeErasure, planErasure } from "../apps/runtime/src/services/erasure/index.ts";
 import { runPeopleMessages } from "../apps/runtime/src/services/people-messages/index.ts";
 import type { PeopleTransport, PeopleTransportInput } from "../apps/runtime/src/services/people-messages/transport.ts";
 import { startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
@@ -156,7 +158,7 @@ describe("messages to people from the server: both locks, one attempt, one messa
     await runPeopleMessages(withToken(), { now: at(41), transport: stub });
     expect(calls).toHaveLength(1);
     expect(calls[0]).toMatchObject({ chatId: "1001", topicId: null });
-    expect(calls[0]!.text).toMatch(/^Кастом K-\d+ снят, отдайте его фану\./u);
+    expect(calls[0]!.text).toMatch(/^Кастом K-\d+ снят, отдайте его фану: http\S+\/workboard\/customs\/K-\d+$/u);
     expect((await rows()).at(-1)).toMatchObject({ state: "sent", reason: null, userId: kateId });
 
     // Den has no Telegram id: held, whatever the locks.
@@ -195,6 +197,11 @@ describe("messages to people from the server: both locks, one attempt, one messa
     expect(switched).toMatchObject({ kind: "payout.text", on: true, audit: { by: "boss" } });
     expect(switched.sentence).toMatch(/Пока нет токена бота/u);
 
+    // Without the token Workboard shows nothing beside «Скопировать»: the screens stay as they were.
+    const place = await asSession("boss", "GET", "/api/v1/system/people-messages/recipient?kind=payout.text&person=kate");
+    expect(place.statusCode, place.body).toBe(200);
+    expect(place.json()).toMatchObject({ shown: false, sendable: false, label: null });
+
     const pressed = await asSession("boss", "POST", "/api/v1/system/people-messages/press", { kind: "payout.text", person: "kate", text: "Выплата: текст для теста" });
     expect(pressed.statusCode, pressed.body).toBe(200);
     expect(peopleMessagePressResponseSchema.parse(pressed.json())).toMatchObject({ state: "held", reason: "no_token" });
@@ -206,5 +213,36 @@ describe("messages to people from the server: both locks, one attempt, one messa
     expect(payout).toMatchObject({ on: true, lastSwitch: { on: true } });
     expect(payout.held[0]).toMatchObject({ text: "Выплата: текст для теста", reason: "no_token" });
     expect(calls).toHaveLength(2);
+  });
+
+  it("an erased fan's card keeps its message row and loses the text", async (context) => {
+    if (!testDb) return context.skip();
+    const fanId = Number((await testDb.pool.query<{ id: string }>(
+      "insert into fans (platform, platform_user_id, username) values ('fansly', '7400000099', 'erasedbuyer') returning id",
+    )).rows[0]!.id);
+    await testDb.pool.query("insert into page_fans (fan_id, platform_account_id, is_subscriber) values ($1, $2, true)", [fanId, pageId]);
+    const moved = at(70);
+    const orderId = await insertCustomOrder(app.db, {
+      pageId, fanId, buyer: null, conversationRef: null, card: { task: "Танец", price: "100$" }, deadlineOn: null,
+      state: "at_model", acceptedByUserId: kateId, origin: "workboard", contentopsRef: null, sourceText: null, at: moved,
+    });
+    await insertCustomOrderEvent(app.db, { orderId, event: "custom_order.at_model", door: "workboard", userId: kateId, changes: { from: "paid" }, at: moved });
+    await runPeopleMessages(app, { now: at(71), transport: stub });
+    const card = (await testDb.pool.query<{ text: string; state: string; held_reason: string }>(
+      "select text, state, held_reason from people_messages where kind = 'custom.card.to_model' and object_id = $1", [String(orderId)])).rows;
+    expect(card).toHaveLength(1);
+    expect(card[0]!.text).toContain("erasedbuyer");
+    expect(card[0]).toMatchObject({ state: "held", held_reason: "no_chat" });
+
+    const erasureApp = { db: app.db, pool: testDb.pool, config: app.config, logger: app.logger } as never;
+    const scope = { scopeType: "fan", platform: "fansly", fanRef: "7400000099" } as const;
+    expect((await planErasure(erasureApp, scope)).targets).toContainEqual(expect.objectContaining({ target: "people_messages", action: "anonymize", rows: 1 }));
+    await executeErasure(erasureApp, scope, { initiatedBy: await fixtureUserId(app, "boss") });
+    const after = (await testDb.pool.query<{ text: string; state: string; kind: string }>(
+      "select kind, text, state from people_messages where object_id = $1 and object_type = 'custom_order'", [String(orderId)])).rows;
+    expect(after).toEqual([{ kind: "custom.card.to_model", text: PEOPLE_MESSAGE_ERASED_TEXT, state: "held" }]);
+    // Nothing else lost its text.
+    const others = await testDb.pool.query<{ n: string }>("select count(*)::text as n from people_messages where text = $1", [PEOPLE_MESSAGE_ERASED_TEXT]);
+    expect(others.rows[0]!.n).toBe("1");
   });
 });

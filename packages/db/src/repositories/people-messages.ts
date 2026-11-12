@@ -2,7 +2,7 @@ import { sql } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
 
-// Сообщения людям (0999, package S): the server's sender's rows, and the reads
+// Сообщения людям (0403, package S): the server's sender's rows, and the reads
 // of the facts that fire its kinds. What a row says and when it may send are
 // the service's (apps/runtime/src/services/people-messages/): this file reads
 // and writes rows. Raw SQL: the table is the migration's alone.
@@ -250,14 +250,34 @@ export async function listPeopleMessagePersons(db: Database, userIds: readonly n
   return out;
 }
 
-/** A person by registry code: the login the message is about (the first one), name and Telegram id. */
+/** A person by registry code, else by a login's username (the ledger's slug): their first login, name and Telegram id. */
 export async function findPeopleMessagePersonByCode(db: Database, code: string): Promise<PeopleMessagePerson | null> {
   const result = await db.execute<Row>(sql`
     select (select min(pl.user_id) from person_logins pl where pl.person_id = p.id) as user_id, p.code, p.display_name, p.telegram_user_id
-    from people p where p.code = ${code}`);
+    from people p where p.code = ${code}
+    union all
+    select u.id, p.code, coalesce(p.display_name, u.username), p.telegram_user_id
+    from users u left join person_logins pl on pl.user_id = u.id left join people p on p.id = pl.person_id
+    where u.username = ${code} and not exists (select 1 from people p2 where p2.code = ${code})
+    limit 1`);
   const row = result.rows[0];
   if (row === undefined || row.user_id === null) return null;
-  return { userId: Number(row.user_id), personCode: String(row.code), name: String(row.display_name), telegramUserId: num(row.telegram_user_id) };
+  return { userId: Number(row.user_id), personCode: text(row.code), name: String(row.display_name), telegramUserId: num(row.telegram_user_id) };
+}
+
+/**
+ * Why Telegram refused the person's newest send, when it did and nothing went to them after: `never_wrote` (the bot
+ * cannot start a conversation) or `blocked`. The transport writes the refusal as the error's prefix.
+ */
+export async function findPeopleMessageRefusal(db: Database, userId: number): Promise<"never_wrote" | "blocked" | null> {
+  const result = await db.execute<Row>(sql`
+    select state, error from people_messages
+    where recipient = 'person' and recipient_user_id = ${userId} and state in ('sent', 'failed')
+    order by id desc limit 1`);
+  const row = result.rows[0];
+  if (row === undefined || row.state !== "failed") return null;
+  const error = text(row.error) ?? "";
+  return error.startsWith("never_wrote:") ? "never_wrote" : error.startsWith("blocked:") ? "blocked" : null;
 }
 
 /** The models by slug, for the chats' words. */

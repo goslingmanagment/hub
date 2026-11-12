@@ -1,6 +1,6 @@
 import { routeSchemas } from "@agency_hub_core/contracts";
 
-import { pressPeopleMessage, readPeopleMessages, switchPeopleMessageKind } from "../../services/people-messages/index.ts";
+import { pressPeopleMessage, readPeopleMessageRecipient, readPeopleMessages, switchPeopleMessageKind } from "../../services/people-messages/index.ts";
 import { telegramPeopleTransport } from "../../services/people-messages/transport.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
 
@@ -22,6 +22,9 @@ export function registerPeopleMessageRoutes(server: ApiServer, ctx: ApiModuleCon
     const principal = await requirePrincipal(request);
     return switchPeopleMessageKind(appContext, principal, request.params.kind, request.body);
   });
+
+  server.get("/api/v1/system/people-messages/recipient", { schema: routeSchemas.peopleMessageRecipient }, async (request) =>
+    readPeopleMessageRecipient(appContext, request.query));
 
   server.post("/api/v1/system/people-messages/press", { schema: routeSchemas.peopleMessagePress }, async (request) => {
     const principal = await requirePrincipal(request);

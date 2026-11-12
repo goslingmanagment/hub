@@ -13,6 +13,9 @@
 //
 // The bot token is not here: it is the env secret PEOPLE_TELEGRAM_BOT_TOKEN.
 
+/** What a message's stored text becomes when the fan it names is erased (the row, its kind, time and state stay). */
+export const PEOPLE_MESSAGE_ERASED_TEXT = "текст стёрт вместе с фаном";
+
 /** Every kind, in the owner's list order (stop-list М1–М3). */
 export const PEOPLE_MESSAGE_KINDS = [
   "shift.report.copy",

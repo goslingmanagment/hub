@@ -129,13 +129,13 @@ export const PEOPLE_MESSAGE_KIND_SPECS: readonly PeopleMessageKindSpec[] = [
     audience: "person",
     toWhom: "Чаттеру, который принял заказ (в личку)",
     when: "Когда открывается дело «Кастом снят, отдайте фану»: снят и 12 часов не отдан, у тех, кто записывает кастомы в системе",
-    template: "Кастом ‹K-номер› снят, отдайте его фану.\nФан: ‹ссылка на фана›\nСтраница: ‹страница›\nЗаказ: ‹ссылка на заказ в Workboard›",
+    template: "Кастом ‹K-номер› снят, отдайте его фану: ‹ссылка на заказ в Workboard›",
     cap: 3,
     quiet: true,
     connected: true,
     triggerNote: null,
     needs: [TOKEN_NEED, PERSON_NEED],
-    onSentence: "С этой минуты чаттер, принявший снятый кастом, получает от бота одно сообщение в личку: какой заказ, какому фану и где он лежит. Ночью сообщение ждёт утра.",
+    onSentence: "С этой минуты чаттер, принявший снятый кастом, получает от бота одно сообщение в личку: номер заказа и ссылку на него. Фана в сообщении нет, он виден в заказе. Ночью сообщение ждёт утра.",
   },
   {
     kind: "claim.confirm",
@@ -196,4 +196,48 @@ export function peopleMessageQuietWords(spec: PeopleMessageKindSpec): string {
 export function peopleMessageCapWords(spec: PeopleMessageKindSpec): string {
   const who = spec.audience === "group" ? "в один раздел" : "одному человеку";
   return `Не больше ${spec.cap} в сутки ${who}: следующие задерживаются`;
+}
+
+// ── The owner's press: its words ─────────────────────────────────────────────
+
+type PressHeldReason = "kind_off" | "no_token" | "no_telegram" | "no_chat" | "cap" | "before_on";
+export type PeopleMessageRefusal = "never_wrote" | "blocked";
+
+const PRESS_HELD_WHY: Readonly<Record<PressHeldReason, string>> = {
+  kind_off: "вид выключен",
+  no_token: "нет токена бота",
+  no_telegram: "в карточке человека нет Telegram id",
+  no_chat: "не задан чат",
+  cap: "сегодня этому человеку уже ушёл дневной предел таких сообщений",
+  before_on: "событие было до включения вида",
+};
+
+const REFUSAL_WHY: Readonly<Record<PeopleMessageRefusal, string>> = {
+  never_wrote: "человек ещё не писал боту, а бот не может начать разговор сам",
+  blocked: "человек заблокировал бота",
+};
+
+/** The press's button, to whom: «Отправить Алексу в Telegram»; a name without its case: «Отправить в Telegram: Rick». */
+export function peopleMessagePressLabel(name: string, toWhom: string | null): string {
+  return toWhom === null ? `Отправить в Telegram: ${name}` : `Отправить ${toWhom} в Telegram`;
+}
+
+/** The one quiet line in place of the button: why the press cannot reach the person. */
+export function peopleMessageCannotLine(why: "no_telegram" | PeopleMessageRefusal): string {
+  return `Не отправить в Telegram: ${why === "no_telegram" ? PRESS_HELD_WHY.no_telegram : REFUSAL_WHY[why]}.`;
+}
+
+/** What became of the press, in one sentence: never a silent success. `toWhom` — «Алексу», else the name. */
+export function peopleMessagePressWords(
+  outcome: { state: "held" | "sending" | "sent" | "failed" | "unknown" | "duplicate"; reason: PressHeldReason | null; refusal?: PeopleMessageRefusal | undefined },
+  toWhom: string,
+): string {
+  switch (outcome.state) {
+    case "sent": return `Отправлено ${toWhom} в Telegram.`;
+    case "held": return `Не отправлено: ${PRESS_HELD_WHY[outcome.reason ?? "kind_off"]}. Сообщение задержано на сервере.`;
+    case "failed": return `Не отправлено: ${outcome.refusal ? REFUSAL_WHY[outcome.refusal] : "Telegram отказал"}. Скопируйте текст и отправьте сами.`;
+    case "unknown": return "Неизвестно, ушло ли: Telegram не ответил. Само не повторится, спросите человека.";
+    case "duplicate": return "Это сообщение уже отправлялось: второй раз не уходит.";
+    default: return "Отправляется.";
+  }
 }

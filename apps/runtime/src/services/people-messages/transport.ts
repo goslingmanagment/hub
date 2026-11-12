@@ -26,8 +26,17 @@ export interface PeopleTransportInput {
 
 export type PeopleTransportResult =
   | { status: "sent"; messageId: number | null }
-  | { status: "failed"; error: string }
+  /** `refusal`: the person never wrote to the bot (it cannot start a conversation), or blocked it. */
+  | { status: "failed"; error: string; refusal?: "never_wrote" | "blocked" }
   | { status: "unknown"; error: string };
+
+/** Telegram's refusals that are the person's, not the bot's: the next press would be refused the same way. */
+export function refusalOf(description: string | null): "never_wrote" | "blocked" | undefined {
+  const raw = (description ?? "").toLowerCase();
+  if (raw.includes("bot was blocked")) return "blocked";
+  if (raw.includes("can't initiate") || raw.includes("chat not found")) return "never_wrote";
+  return undefined;
+}
 
 export type PeopleTransport = (input: PeopleTransportInput) => Promise<PeopleTransportResult>;
 
@@ -60,7 +69,9 @@ export function telegramPeopleTransport(app: Pick<AppContext, "config" | "db" | 
       }
       // An answer that is not a success: Telegram did not take it (a 5xx may have, and is not known).
       const error = friendlyTelegramError(response.status, body?.description ?? null);
-      return response.status >= 500 ? { status: "unknown", error } : { status: "failed", error };
+      if (response.status >= 500) return { status: "unknown", error };
+      const refusal = refusalOf(body?.description ?? null);
+      return refusal === undefined ? { status: "failed", error } : { status: "failed", error, refusal };
     } catch (error) {
       const described = redactSensitiveText(sanitizeError(error, { format: "chain", maxChars: 300, truncation: "clip" }).message);
       app.logger.warn({ component: "people-messages", idempotencyKey: input.idempotencyKey, failureKind: classifyTransportFailure(error) }, "people message: the attempt did not answer");

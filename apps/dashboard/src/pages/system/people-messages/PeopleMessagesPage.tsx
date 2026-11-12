@@ -1,5 +1,12 @@
 import { useState } from "react";
-import type { PeopleMessageKindView, PeopleMessageRow, PeopleMessagesResponse, PeopleMessageSwitchResponse } from "@agency_hub_core/contracts";
+import {
+  PEOPLE_MESSAGE_QUIET_FROM_HOUR,
+  PEOPLE_MESSAGE_QUIET_TO_HOUR,
+  type PeopleMessageKindView,
+  type PeopleMessageRow,
+  type PeopleMessagesResponse,
+  type PeopleMessageSwitchResponse,
+} from "@agency_hub_core/contracts";
 import { toast } from "sonner";
 import { usePeopleMessages, usePeopleMessageSwitch } from "@/api/peopleMessages";
 import { ConfirmModal } from "@/components/shared/ConfirmModal";
@@ -51,6 +58,14 @@ function HeldList({ rows }: { rows: readonly PeopleMessageRow[] }) {
   );
 }
 
+/** A personal kind's rules in one line under its title: the night and the day's cap. */
+function rulesLine(kind: PeopleMessageKindView): string | null {
+  const cap = `не больше ${kind.cap} в день одному человеку`;
+  if (kind.audience === "person") return `Не ночью: с ${PEOPLE_MESSAGE_QUIET_FROM_HOUR}:00 до ${PEOPLE_MESSAGE_QUIET_TO_HOUR}:00 по Москве; ${cap}.`;
+  if (kind.audience === "press") return `По вашему нажатию; ${cap}.`;
+  return null;
+}
+
 function switchLine(kind: PeopleMessageKindView): string {
   if (kind.lastSwitch === null) return "Ни разу не включался";
   return `${kind.lastSwitch.on ? "Включил" : "Выключил"}: ${kind.lastSwitch.by}, ${moscow(kind.lastSwitch.at)}`;
@@ -71,7 +86,8 @@ function KindCard({ kind, tokenSet, onTurn, done }: {
       <div className="card-header flex flex-wrap items-center justify-between gap-3">
         <div className="min-w-0">
           <h2 id={titleId} className="card-title">{kind.title}</h2>
-          <span className="card-description">{kind.toWhom}{kind.audience === "press" ? ", по вашему нажатию" : ""}</span>
+          <span className="card-description">{kind.toWhom}</span>
+          {rulesLine(kind) !== null && <span className="card-description block">{rulesLine(kind)}</span>}
         </div>
         <div className="flex items-center gap-3">
           <StatusBadge tone={status.tone}>{status.word}</StatusBadge>

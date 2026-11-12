@@ -1,14 +1,19 @@
 import {
   PEOPLE_MESSAGE_KIND_SPECS,
+  peopleMessageCannotLine,
   peopleMessageCapWords,
+  peopleMessagePressLabel,
+  peopleMessagePressWords,
   peopleMessageQuietWords,
   type KernelOperationResponse,
   type PeopleMessageKindView,
   type PeopleMessageRow,
 } from "@agency_hub_core/contracts";
+import { nameToWhom } from "@agency_hub_core/look/words";
 import type { PeopleMessageKind } from "@agency_hub_core/shared";
 
-import { hoursAgo, iso, type DemoHandlers, type DemoRequest } from "../core.ts";
+import { demoError, hoursAgo, iso, queryString, type DemoHandlers, type DemoRequest } from "../core.ts";
+import { DEMO_USERS } from "../world.ts";
 
 /**
  * Система → «Сообщения людям» in the demo: the server's sender as merged — no
@@ -16,6 +21,10 @@ import { hoursAgo, iso, type DemoHandlers, type DemoRequest } from "../core.ts";
  * on the invented agency. Chats: Mia Hart has both, Nova Lane only
  * «Отчётность», Ivy Rose none. A switch pressed in the demo turns the kind on
  * for this demo server's run (nothing is sent anywhere: there is no server).
+ *
+ * The cookie `hub-demo-people-messages` plays the owner's «да» (demo only): `on` — the bot token «set» and the payout
+ * text and the invitation on, so Workboard shows «Отправить … в Telegram»; a press then says it was sent. `held` and
+ * `failed` — the same, and a press says it was held (the day's cap) or refused by Telegram.
  */
 
 type Answer = KernelOperationResponse<"peopleMessages">;
@@ -71,7 +80,7 @@ const CARD = [
 const CARD_IVY = CARD.replace("K-14", "K-17").replace("sunnyriver", "lakeshore").replace("Имя: Рик", "Имя: Том");
 
 const MISSING_TEXT = (when: string, shiftId: number) => `Смена ${when} не сдана. Сдайте её, пожалуйста: https://chatgoose.example/workboard/my/shifts/${shiftId}`;
-const SHOT_TEXT = "Кастом K-11 снят, отдайте его фану.\nФан: https://fansly.com/northwind/posts\nСтраница: mia-1\nЗаказ: https://chatgoose.example/workboard/customs/K-11";
+const SHOT_TEXT = "Кастом K-11 снят, отдайте его фану: https://chatgoose.example/workboard/customs/K-11";
 
 interface HeldSeed {
   id: number;
@@ -127,13 +136,32 @@ const MISSING: Readonly<Partial<Record<PeopleMessageKind, string>>> = {
 const turnedOn = new Map<PeopleMessageKind, Date>();
 let version = 0;
 
+/** The owner's «да» of the demo: the token «set» and the two kinds sent by a press on. */
+function sayYes(request: DemoRequest): "sent" | "held" | "failed" | null {
+  const value = request.cookie?.("hub-demo-people-messages");
+  return value === "on" ? "sent" : value === "held" ? "held" : value === "failed" ? "failed" : null;
+}
+
+/** Who the press reaches in the demo: the team's logins and the newcomer have Telegram; Оля never wrote to the bot. */
+function pressPerson(request: DemoRequest): { name: string; telegram: boolean; refusal: "never_wrote" | null } | null {
+  const slug = queryString(request, "person") ?? (request.body as { person?: string } | null)?.person;
+  const raw = queryString(request, "userId") ?? (request.body as { userId?: number } | null)?.userId;
+  const userId = raw === undefined ? null : Number(raw);
+  if (slug === "nika" || userId === 10) return { name: "Ника", telegram: true, refusal: null };
+  const user = DEMO_USERS.find((one) => one.username === slug || one.id === userId);
+  if (user) return { name: user.name, telegram: true, refusal: user.username === "olya.m" ? "never_wrote" : null };
+  if (slug === "vika") return { name: "Вика", telegram: false, refusal: null };
+  return userId !== null && userId >= 1000 ? { name: "новичок", telegram: false, refusal: null } : null;
+}
+
 function view(request: DemoRequest): Answer {
   const now = request.now;
+  const yes = sayYes(request) !== null;
   const kinds: PeopleMessageKindView[] = PEOPLE_MESSAGE_KIND_SPECS.map((spec) => {
     const held = (HELD[spec.kind] ?? []).map((seed): PeopleMessageRow => ({
       id: seed.id, at: iso(hoursAgo(now, seed.hours)), to: seed.to, about: seed.about, text: seed.text, state: "held", reason: seed.reason, words: REASON_WORDS[seed.reason],
     }));
-    const onSince = turnedOn.get(spec.kind) ?? null;
+    const onSince = turnedOn.get(spec.kind) ?? (yes && spec.audience === "press" ? hoursAgo(now, 2) : null);
     const missingChats = spec.audience !== "group" ? [] : MODELS.filter((model) => !(spec.kind === "shift.report.copy" ? model.reports : model.customs));
     return {
       kind: spec.kind,
@@ -160,8 +188,10 @@ function view(request: DemoRequest): Answer {
     };
   });
   return {
-    tokenSet: false,
-    sentence: "Отправка невозможна: нет токена. Все сообщения задерживаются на сервере и никуда не уходят.",
+    tokenSet: yes,
+    sentence: yes
+      ? "Токен бота задан: включённые виды отправляются, выключенные задерживаются."
+      : "Отправка невозможна: нет токена. Все сообщения задерживаются на сервере и никуда не уходят.",
     kindsVersion: version === 0 ? null : version,
     chats: MODELS,
     kinds,
@@ -171,6 +201,22 @@ function view(request: DemoRequest): Answer {
 
 export const peopleMessagesHandlers: DemoHandlers = {
   peopleMessages: (request) => view(request),
+  peopleMessageRecipient: (request) => {
+    const kind = queryString(request, "kind") as "payout.text" | "newcomer.invite";
+    if (request.role !== "owner") return demoError(403, "Forbidden", "Owner only");
+    if (sayYes(request) === null) return { kind, shown: false, sendable: false, label: null, why: null };
+    const person = pressPerson(request);
+    if (person === null || !person.telegram) return { kind, shown: true, sendable: false, label: null, why: peopleMessageCannotLine("no_telegram") };
+    if (person.refusal !== null) return { kind, shown: true, sendable: false, label: null, why: peopleMessageCannotLine(person.refusal) };
+    return { kind, shown: true, sendable: true, label: peopleMessagePressLabel(person.name, nameToWhom(person.name)), why: null };
+  },
+  peopleMessagePress: (request) => {
+    if (request.role !== "owner") return demoError(403, "Forbidden", "Owner only");
+    const person = pressPerson(request);
+    const outcome = sayYes(request) ?? "held";
+    const state = outcome === "sent" ? { state: "sent" as const, reason: null } : outcome === "held" ? { state: "held" as const, reason: "cap" as const } : { state: "failed" as const, reason: null };
+    return { id: 77, ...state, words: peopleMessagePressWords(state, nameToWhom(person?.name ?? "") ?? person?.name ?? "") };
+  },
   peopleMessageSwitch: (request) => {
     const kind = request.params.kind as PeopleMessageKind;
     const body = request.body as { on: boolean };

@@ -1,8 +1,8 @@
-import { Copy, Send } from "lucide-react";
+import { Copy } from "lucide-react";
 import { useState } from "react";
 import { Button, Field, Modal, Notice, Textarea, TimeMsk, toast } from "@agency_hub_core/ui";
 import { buildJoinLink, currentOrigin, telegramMessage, type LinkKind } from "@agency_hub_core/ui/teamAccess";
-import { usePeopleMessagePress, usePeopleMessageSendable } from "@/shared/peopleMessages";
+import { PeopleMessageSend } from "@/shared/peopleMessages";
 
 /**
  * The one and only place a fresh link is ever visible (the console's
@@ -28,9 +28,6 @@ export function LinkReveal({ link, onClose }: { link: RevealedLink; onClose: () 
   const [copied, setCopied] = useState<"link" | "message" | null>(null);
   const joinLink = buildJoinLink(currentOrigin(), link.secret);
   const message = telegramMessage(link.kind, link.username, joinLink, link.name);
-  // Сообщения людям: «Отправить в Telegram» only while the owner turned the invitation on and the bot is set.
-  const sendable = usePeopleMessageSendable("newcomer.invite") && link.kind === "invite";
-  const press = usePeopleMessagePress();
 
   async function copy(value: string, what: "link" | "message") {
     try {
@@ -64,12 +61,9 @@ export function LinkReveal({ link, onClose }: { link: RevealedLink; onClose: () 
             <Button variant="primary" icon={Copy} onClick={() => void copy(message, "message")}>
               {copied === "message" ? "Скопировано" : "Скопировать сообщение"}
             </Button>
-            {sendable && (
-              <Button icon={Send} disabled={press.isPending || press.isSuccess} onClick={() => press.mutate({ kind: "newcomer.invite", userId: link.userId, text: message })}>
-                {press.isSuccess ? "Отправлено боту" : "Отправить в Telegram"}
-              </Button>
-            )}
             <span className="access-hint">Ссылка уже внутри сообщения.</span>
+            {/* Сообщения людям: only for an invitation, while the owner turned it on and the bot is set. */}
+            {link.kind === "invite" && <PeopleMessageSend kind="newcomer.invite" who={{ userId: link.userId }} text={message} />}
           </div>
         </div>
 

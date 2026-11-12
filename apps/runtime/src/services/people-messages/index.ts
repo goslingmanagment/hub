@@ -1,15 +1,19 @@
 import { createHash } from "node:crypto";
 
 import {
-  buyerLinkOf,
   customOrderCode,
   PEOPLE_MESSAGE_KIND_SPECS,
+  peopleMessageCannotLine,
   peopleMessageCapWords,
   peopleMessageKindSpec,
+  peopleMessagePressLabel,
+  peopleMessagePressWords,
   peopleMessageQuietWords,
   type PeopleMessageKindSpec,
   type PeopleMessagePressBody,
   type PeopleMessagePressResponse,
+  type PeopleMessageRecipientQuery,
+  type PeopleMessageRecipientResponse,
   type PeopleMessageRow as PeopleMessageWire,
   type PeopleMessagesResponse,
   type PeopleMessageSwitchBody,
@@ -27,6 +31,7 @@ import {
   findNewestMatterKeyOfKind,
   findNewestPeopleMessage,
   findPeopleMessagePersonByCode,
+  findPeopleMessageRefusal,
   getConfigOverride,
   insertPeopleMessage,
   listConfigAudit,
@@ -52,6 +57,8 @@ import {
   type PeopleMessageKind,
   type PeopleMessageKindsOn,
 } from "@agency_hub_core/shared";
+
+import { nameToWhom } from "@agency_hub_core/look";
 
 import type { AppContext } from "../../bootstrap.ts";
 import { auditCtx } from "../../api/request-auth.ts";
@@ -215,9 +222,7 @@ async function reminderOf(app: MessagesApp, matter: MatterRow): Promise<Outgoing
     const order = Number.isSafeInteger(orderId) ? await findCustomOrder(app.db, orderId) : null;
     if (order === null) return null;
     const code = customOrderCode(order.id);
-    const fan = order.fanErasedAt === null && order.platform !== null && order.fanRef !== null
-      ? buyerLinkOf({ platform: order.platform, fanRef: order.fanRef, username: order.fanUsername })
-      : order.buyer ?? "-";
+    // No fan in Telegram: no link, no name, no page. The order's page shows the fan to whoever opens it.
     return {
       kind: "custom.shot.give",
       key: `custom.shot.give:${matter.key}`,
@@ -225,12 +230,7 @@ async function reminderOf(app: MessagesApp, matter: MatterRow): Promise<Outgoing
       objectType: "matter",
       objectId: matter.key,
       about: `заказ ${code}`,
-      text: [
-        `Кастом ${code} снят, отдайте его фану.`,
-        `Фан: ${fan}`,
-        `Страница: ${order.pageLabel ?? "не подтверждена"}`,
-        `Заказ: ${teamLink(app, matter.link ?? `/workboard/customs/${code}`)}`,
-      ].join("\n"),
+      text: `Кастом ${code} снят, отдайте его фану: ${teamLink(app, matter.link ?? `/workboard/customs/${code}`)}`,
       eventAt: matter.openedAt,
     };
   }
@@ -291,6 +291,8 @@ export interface DeliveryOutcome {
   id: number | null;
   state: PeopleMessagePressResponse["state"];
   reason: HeldReason | null;
+  /** A failed attempt that Telegram refused because of the person. */
+  refusal?: "never_wrote" | "blocked" | undefined;
 }
 
 /**
@@ -339,10 +341,11 @@ async function deliver(app: MessagesApp, message: Outgoing, switches: Switches, 
     id: row.id,
     state: result.status,
     telegramMessageId: result.status === "sent" ? result.messageId : null,
-    error: result.status === "sent" ? null : result.error.slice(0, 500),
+    // A refusal that is the person's goes first, so the press's place can say why the next one would fail too.
+    error: result.status === "sent" ? null : `${result.status === "failed" && result.refusal ? `${result.refusal}: ` : ""}${result.error}`.slice(0, 500),
     at: new Date(),
   });
-  return { id: row.id, state: result.status, reason: null };
+  return { id: row.id, state: result.status, reason: null, refusal: result.status === "failed" ? result.refusal : undefined };
 }
 
 export interface PeopleMessagesTally {
@@ -386,12 +389,30 @@ export async function ensurePeopleMessagesSchedule(boss: QueueCreationClient) {
 
 const digest = (text: string) => createHash("sha256").update(text).digest("hex").slice(0, 16);
 
-function outcomeWords(outcome: DeliveryOutcome): string {
-  if (outcome.state === "duplicate") return "Это сообщение уже было: второй раз не отправляется";
-  if (outcome.state === "held") return `Не отправлено, ${HELD_WORDS[outcome.reason ?? "kind_off"]}`;
-  if (outcome.state === "sending") return "Отправляется";
-  const words = STATE_WORDS[outcome.state];
-  return words.charAt(0).toUpperCase() + words.slice(1);
+/** «Алексу», else the name as it is («Rick»). */
+function toWhomOf(name: string): string {
+  return nameToWhom(name) ?? name;
+}
+
+async function pressPersonOf(app: MessagesApp, who: { person?: string | undefined; userId?: number | undefined }) {
+  if ((who.person === undefined) === (who.userId === undefined)) throw new BadRequestError("Name the person by code or by login, one of them");
+  return who.person !== undefined
+    ? findPeopleMessagePersonByCode(app.db, who.person)
+    : (await listPeopleMessagePersons(app.db, [who.userId!])).get(who.userId!) ?? null;
+}
+
+/** `peopleMessageRecipient`: the button's words, or why the press cannot reach the person. No call to Telegram. */
+export async function readPeopleMessageRecipient(app: MessagesApp, query: PeopleMessageRecipientQuery): Promise<PeopleMessageRecipientResponse> {
+  const switches = await switchesOf(app);
+  const shown = switches.locks.tokenSet && switches.locks.kindsOn[query.kind] !== undefined;
+  if (!shown) return { kind: query.kind, shown: false, sendable: false, label: null, why: null };
+  const person = await pressPersonOf(app, query);
+  if (person === null || person.telegramUserId === null) {
+    return { kind: query.kind, shown: true, sendable: false, label: null, why: peopleMessageCannotLine("no_telegram") };
+  }
+  const refusal = await findPeopleMessageRefusal(app.db, person.userId);
+  if (refusal !== null) return { kind: query.kind, shown: true, sendable: false, label: null, why: peopleMessageCannotLine(refusal) };
+  return { kind: query.kind, shown: true, sendable: true, label: peopleMessagePressLabel(person.name, nameToWhom(person.name)), why: null };
 }
 
 /** `peopleMessagePress`: the payout text or the invitation, by the owner's press, through the same door as every kind. */
@@ -402,10 +423,7 @@ export async function pressPeopleMessage(
   options: { now?: Date; transport: PeopleTransport },
 ): Promise<PeopleMessagePressResponse> {
   const now = options.now ?? new Date();
-  if ((body.person === undefined) === (body.userId === undefined)) throw new BadRequestError("Name the person by code or by login, one of them");
-  const person = body.person !== undefined
-    ? await findPeopleMessagePersonByCode(app.db, body.person)
-    : (await listPeopleMessagePersons(app.db, [body.userId!])).get(body.userId!) ?? null;
+  const person = await pressPersonOf(app, body);
   if (person === null) throw new NotFoundError("No such person");
   const invite = body.kind === "newcomer.invite";
   const kept = invite ? withoutJoinSecret(body.text) : body.text;
@@ -429,7 +447,7 @@ export async function pressPeopleMessage(
     targetUserId: person.userId,
     metadata: { kind: body.kind, state: outcome.state, reason: outcome.reason, messageId: outcome.id },
   });
-  return { id: outcome.id, state: outcome.state, reason: outcome.reason, words: outcomeWords(outcome) };
+  return { id: outcome.id, state: outcome.state, reason: outcome.reason, words: peopleMessagePressWords(outcome, toWhomOf(person.name)) };
 }
 
 // ── The owner's switch ──────────────────────────────────────────────────────

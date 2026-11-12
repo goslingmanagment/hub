@@ -119,6 +119,27 @@ export const peopleMessagePressBodySchema = z.object({
 });
 export type PeopleMessagePressBody = z.infer<typeof peopleMessagePressBodySchema>;
 
+/** Whom the press would reach: the button's place on Workboard asks before it shows anything. */
+export const peopleMessageRecipientQuerySchema = z.object({
+  kind: peopleMessagePressKindSchema,
+  person: z.string().trim().min(1).max(63).optional(),
+  userId: z.coerce.number().int().positive().optional(),
+});
+export type PeopleMessageRecipientQuery = z.infer<typeof peopleMessageRecipientQuerySchema>;
+
+export const peopleMessageRecipientResponseSchema = z.object({
+  kind: peopleMessagePressKindSchema,
+  /** The kind is on and the bot token is set: the place shows the button or the line; false — nothing, as before. */
+  shown: z.boolean(),
+  /** The button may be pressed: the person has a Telegram id and the bot was not refused by them. */
+  sendable: z.boolean(),
+  /** The button's words, to whom: «Отправить Алексу в Telegram». */
+  label: z.string().nullable(),
+  /** Why it cannot be sent, one quiet line; null — it can, or nothing is shown. */
+  why: z.string().nullable(),
+});
+export type PeopleMessageRecipientResponse = z.infer<typeof peopleMessageRecipientResponseSchema>;
+
 export const peopleMessagePressResponseSchema = z.object({
   /** The message's row; null — the same message was already made (`duplicate`). */
   id: z.number().int().nullable(),

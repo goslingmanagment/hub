@@ -1,5 +1,5 @@
 -- agency-hub:rollback-compatible — one new table nothing of the previous image names.
--- 0999_people_messages.sql
+-- 0403_people_messages.sql
 --
 -- Сообщения людям (ecosystem plan 2026-11-12, package S): every message the server's own sender
 -- makes for a person or a work chat in Telegram, with what it is and what became of it. The
@@ -59,4 +59,4 @@ create index if not exists people_messages_kind_created_idx on people_messages (
 create index if not exists people_messages_sending_idx on people_messages (attempted_at) where state = 'sending';
 
 comment on table people_messages is
-  'Сообщения людям (0999, package S): every message the server''s sender made, held or sent; one per idempotency key, never repeated by itself.';
+  'Сообщения людям (0403, package S): every message the server''s sender made, held or sent; one per idempotency key, never repeated by itself.';

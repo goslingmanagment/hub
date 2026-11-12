@@ -427,6 +427,7 @@ export const kernelOperations = {
   pageTransactions: { method: "GET", path: "/api/v1/pages/:pageLabel/transactions" },
   pages: { method: "GET", path: "/api/v1/pages" },
   peopleMessagePress: { method: "POST", path: "/api/v1/system/people-messages/press" },
+  peopleMessageRecipient: { method: "GET", path: "/api/v1/system/people-messages/recipient" },
   peopleMessageSwitch: { method: "POST", path: "/api/v1/system/people-messages/kinds/:kind" },
   peopleMessages: { method: "GET", path: "/api/v1/system/people-messages" },
   publicVaultUploadFile: { method: "GET", path: "/api/v1/public/vault-upload-files/:token" },

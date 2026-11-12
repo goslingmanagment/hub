@@ -1,11 +1,11 @@
 import type { ReactNode } from "react";
-import { Copy, Send } from "lucide-react";
+import { Copy } from "lucide-react";
 import type { TeamLedgerPayoutPersonResponse, TeamLedgerPayoutPrepareResponse } from "@agency_hub_core/contracts";
 import { millsToDollarsNumber } from "@agency_hub_core/shared";
 import { Button, Money, Notice, Skeleton, Table, Tooltip, type Column } from "@agency_hub_core/ui";
 import { formatDay, formatDayRange } from "@agency_hub_core/ui/format";
 import { useOwnerCard } from "@/screens/people/registry";
-import { usePeopleMessagePress, usePeopleMessageSendable } from "@/shared/peopleMessages";
+import { PeopleMessageSend } from "@/shared/peopleMessages";
 import { copyText } from "./copy";
 import { usePayoutPrepare } from "./ledger";
 
@@ -50,9 +50,6 @@ export function PayoutBrief({ slug, name, adjustments, fallback }: {
   fallback?: ReactNode;
 }) {
   const prepare = usePayoutPrepare(slug);
-  // Сообщения людям: «Отправить в Telegram» only while the owner turned the payout text on and the bot is set.
-  const sendable = usePeopleMessageSendable("payout.text");
-  const press = usePeopleMessagePress();
   if (prepare.isLoading) return <Skeleton width="100%" height={120} radius={8} />;
   // No payout tab in the ledger (404) or the ledger did not answer: the panel's numbers above still stand.
   if (prepare.isError || prepare.data === undefined) return <>{fallback ?? null}</>;
@@ -124,11 +121,8 @@ export function PayoutBrief({ slug, name, adjustments, fallback }: {
                 Скопировать
               </Button>
             </Tooltip>
-            {sendable && (
-              <Button variant="secondary" icon={Send} disabled={press.isPending || press.isSuccess} onClick={() => press.mutate({ kind: "payout.text", person: slug, text: message })}>
-                {press.isSuccess ? "Отправлено боту" : "Отправить в Telegram"}
-              </Button>
-            )}
+            {/* Сообщения людям: only while the owner turned the payout text on and the bot is set. */}
+            <PeopleMessageSend kind="payout.text" who={{ person: slug }} text={message} />
           </div>
         </>
       )}

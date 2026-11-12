@@ -2,6 +2,8 @@ import {
   peopleMessageKindParamsSchema,
   peopleMessagePressBodySchema,
   peopleMessagePressResponseSchema,
+  peopleMessageRecipientQuerySchema,
+  peopleMessageRecipientResponseSchema,
   peopleMessagesResponseSchema,
   peopleMessageSwitchBodySchema,
   peopleMessageSwitchResponseSchema,
@@ -38,6 +40,15 @@ export const peopleMessageRouteSchemas = {
     params: peopleMessageKindParamsSchema,
     body: peopleMessageSwitchBodySchema,
     response: { 200: peopleMessageSwitchResponseSchema, ...ownerErrors },
+  },
+  peopleMessageRecipient: {
+    auth: { kind: "owner-session" }, tags: ["admin"],
+    summary: "Whether the owner's press would reach the person: the button's words, or the one line why it cannot",
+    description: "Database only, no call to Telegram. Shown only with the kind on and the bot token set. A person "
+      + "without a Telegram id in the registry, or one whose last send Telegram refused because they never wrote to the "
+      + "bot or blocked it, gets the line instead of the button.",
+    querystring: peopleMessageRecipientQuerySchema,
+    response: { 200: peopleMessageRecipientResponseSchema, ...ownerErrors },
   },
   peopleMessagePress: {
     auth: { kind: "owner-session" }, tags: ["admin"],
