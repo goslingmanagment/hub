@@ -242,6 +242,9 @@ export async function recordSaleDecision(
   let decisionId: number | null = null;
   let versions: Array<{ shiftId: number; version: number }> = [];
   if (knownSale !== null) {
+    // Asked once before the decision's path too, so a refusal does not wait for the ledger; the read that counts is the
+    // one in the transaction (`first`).
+    await named(db);
     // A known sale: exactly the owner's decision of a dispute — reports, claims, home, matters.
     const applied = await applySaleDecision(app, {
       transactionId: knownSale.transactionId,
