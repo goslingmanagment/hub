@@ -117,10 +117,10 @@ export const MATTER_OWNER_ROLE_NAMES = ["owner", "team_lead", "chatter"] as cons
 
 /**
  * «Ждут вас»'s rows, in the screen's order (apps/dashboard/src/api/waiting.ts); after them the matters no old row
- * counts (package K): people and access, the ledger's checks, and every other kind.
+ * counts (package K): ContentOps' (`contentops.*`), people and access, the ledger's checks, and every other kind.
  */
 export const WAITING_ROW_IDS = [
-  "drafts", "unknown", "questions", "reports", "customs", "held", "login", "failures", "extension", "history", "people", "ledger", "other",
+  "drafts", "unknown", "questions", "reports", "customs", "held", "login", "failures", "extension", "history", "content", "people", "ledger", "other",
 ] as const;
 export type WaitingRowId = (typeof WAITING_ROW_IDS)[number];
 /** «Решения»'s queues, in the screen's order (apps/workboard/src/shared/decisions.ts). */

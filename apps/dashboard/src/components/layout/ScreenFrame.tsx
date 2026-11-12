@@ -1,5 +1,5 @@
 import { Suspense, useLayoutEffect, useMemo, useState, type ReactNode } from "react";
-import { ChevronRight } from "lucide-react";
+import { ArrowUpRight, ChevronRight } from "lucide-react";
 import { Link, Outlet, useLocation, useNavigate, useSearchParams } from "react-router";
 import { useAuthMe } from "@/api/queries";
 import { useOfapiStatus } from "@/api/waiting";
@@ -20,6 +20,8 @@ import {
   type Section,
   type SectionTab,
 } from "@agency_hub_core/ui/screens";
+import { contentopsHref } from "@agency_hub_core/ui/sites";
+import { useDashboardShell } from "./DashboardShellContext.js";
 import { PageScopeGate } from "./PageScopeGate.js";
 import { PageFilterChip } from "./PageFilterChip.js";
 import { PeriodControl, PeriodMissingNote } from "./PeriodControl.js";
@@ -62,14 +64,52 @@ function SubRow({ sectionTab, role, screen, search }: { sectionTab: SectionTab; 
   return <SectionTabs sub label={sectionTab.label} items={items} current={current >= 0 ? items[current]?.to : undefined} />;
 }
 
+/**
+ * The section's places in another product (Контент: ContentOps' План, Приехало,
+ * Библиотека), on the model of the chosen page, or of the first page when every
+ * page is chosen; the model is named, so the link says where it leads.
+ */
+function OutsideLinks({ outside, role }: { outside: NonNullable<Section["outside"]>; role: Role }) {
+  const filter = usePageFilter();
+  const { pages, findPageByLabel } = useDashboardShell();
+  const page = findPageByLabel(filter.page ?? undefined) ?? pages.find((item) => item.platform !== "telegram") ?? null;
+  if (outside.site === "workboard") {
+    // A Workboard screen on this host: a page load, the same tab.
+    const links = outside.links.filter((link) => !link.ownerOnly || role === "owner");
+    if (links.length === 0) return null;
+    return (
+      <span className="section-outside">
+        {links.map((link) => <a key={link.to} className="section-tab" href={link.to} title={link.title}>{link.label}</a>)}
+      </span>
+    );
+  }
+  return (
+    <span className="section-outside">
+      <span className="section-outside-label">{outside.label}{page ? ` · ${page.modelName}` : ""}</span>
+      {outside.links.map((link) => (
+        <a key={link.path} className="section-tab section-tab-outside" href={contentopsHref(page?.modelSlug ?? null, link.path)} target="_blank" rel="noreferrer">
+          {link.label}
+          <ArrowUpRight size={14} aria-hidden="true" />
+        </a>
+      ))}
+    </span>
+  );
+}
+
 function SectionRow({ section, role, screen, search }: { section: Section; role: Role; screen: Screen; search: URLSearchParams }) {
   const tabs = visibleSectionTabs(section, role);
   const currentTab = tabOfScreen(section, screen.id);
-  const items: SectionTabItem[] = tabs.map((item) => ({ to: linkTo(tabRow(item, role)[0]!, search), label: item.label }));
-  const current = tabs.findIndex((item) => item.id === currentTab?.id);
+  const itemOf = (item: SectionTab): SectionTabItem => ({ to: linkTo(tabRow(item, role)[0]!, search), label: item.label });
+  const currentTo = currentTab && tabs.includes(currentTab) ? itemOf(currentTab).to : undefined;
   return (
     <>
-      <SectionTabs label={section.title} items={items} current={current >= 0 ? items[current]?.to : undefined} />
+      <SectionTabs
+        label={section.title}
+        items={tabs.filter((item) => !item.more).map(itemOf)}
+        more={tabs.filter((item) => item.more).map(itemOf)}
+        current={currentTo}
+        end={section.outside ? <OutsideLinks outside={section.outside} role={role} /> : undefined}
+      />
       {currentTab && <SubRow sectionTab={currentTab} role={role} screen={screen} search={search} />}
     </>
   );

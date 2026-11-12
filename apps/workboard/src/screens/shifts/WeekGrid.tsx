@@ -186,7 +186,7 @@ function PerHourCell({ row, comparable, versus }: { row: GridRow; comparable: bo
  * longer period has a column per 7 days back from today (D4), which opens
  * those days. The chatter's name opens their card for the same period.
  */
-export function WeekGrid({ model, isOwner, versus, loading = false, refreshing = false, weekly, page, columns }: {
+export function WeekGrid({ model, isOwner, versus, loading = false, refreshing = false, weekly, page, columns, mine = false }: {
   model: ShiftsModel | undefined;
   isOwner: boolean;
   /** «Сравнение с 26 окт. – 1 нояб.»: what a change compares with, on its hover. */
@@ -198,6 +198,8 @@ export function WeekGrid({ model, isOwner, versus, loading = false, refreshing =
   page: string | null;
   /** The columns to show while loading. */
   columns: readonly GridColumn[];
+  /** Only the viewer's own rows («Мои смены» of the owner): no team row. */
+  mine?: boolean;
 }) {
   const { back } = useBackState("Смены");
   const shown = model?.columns ?? columns;
@@ -251,7 +253,7 @@ export function WeekGrid({ model, isOwner, versus, loading = false, refreshing =
   ];
 
   // One person in the grid (a page one chatter works): the team's row would only repeat theirs.
-  const rows = model ? (model.chatters.length > 1 ? [model.team, ...model.chatters] : model.chatters) : [];
+  const rows = model ? (model.chatters.length > 1 && !mine ? [model.team, ...model.chatters] : model.chatters) : [];
   const last = shown.at(-1);
   const description = [
     page ? `Только работа на ${page}.` : null,

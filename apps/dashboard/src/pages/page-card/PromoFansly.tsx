@@ -1,4 +1,4 @@
-import { useParams } from "react-router";
+import { useRoutePageLabel } from "@/components/layout/usePageFilter";
 import type { PagePromoResponse } from "@agency_hub_core/contracts";
 import { usePagePromo } from "@/api/page-promo";
 import { ChartTable } from "@/components/charts/ChartTable";
@@ -281,7 +281,7 @@ function Rank({ months, current }: { months: Promo["months"]; current: Promo["cu
 
 /** «Продвижение» of a Fansly page: links, prices and promotions, the rank. Reads only (§9.5). */
 export function PromoFansly() {
-  const { pageLabel = "" } = useParams<{ pageLabel: string }>();
+  const pageLabel = useRoutePageLabel() ?? "";
   const query = usePagePromo(decodeRouteSegment(pageLabel));
   if (!query.data) {
     return query.isError ? <NoAnswerPanel retry={query.refetch} /> : <div className="pc-promo"><TableSkeleton rows={6} columns={7} /><TableSkeleton rows={3} columns={5} /></div>;

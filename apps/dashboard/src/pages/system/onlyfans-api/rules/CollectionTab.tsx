@@ -847,7 +847,7 @@ function CategoryRow(props: {
   const oneOffAction = view.group === "one_off" && (
     <div>
       {view.entry.id === "vault_files"
-        ? <Link className="btn btn-sm" to="/system/onlyfans-api/media" onClick={(event) => event.stopPropagation()}>Загрузить свой файл…</Link>
+        ? <Link className="btn btn-sm" to="/system/onlyfans-api#media" onClick={(event) => event.stopPropagation()}>Загрузить свой файл…</Link>
         : (
           <button
             type="button"
@@ -1071,7 +1071,7 @@ export function CategoryEditor(props: {
             <div>
               <div className="mb-1 font-semibold text-text-primary">Загрузка своего файла</div>
               <p className="text-text-secondary">Файл, страницу и назначение выбирают на отдельном экране. Перед отправкой проверьте источник и потолок кредитов; готовый результат можно передать в чат.</p>
-              <Link className="btn btn-sm mt-3" to="/system/onlyfans-api/media">Загрузить свой файл…</Link>
+              <Link className="btn btn-sm mt-3" to="/system/onlyfans-api#media">Загрузить свой файл…</Link>
             </div>
           ) : (
             <div>
@@ -1272,7 +1272,7 @@ export function JobsCard(props: { snapshot: OfapiCollectionSnapshot; scope: Coll
                   {jobReasonText(job) && <div className="cell-second">{jobReasonText(job)}</div>}
                   <div className="mt-2 flex flex-wrap gap-2 empty:hidden">
                     {job.category === "vault_files"
-                      ? <Link className="btn btn-sm" to="/system/onlyfans-api/media">Открыть загрузку</Link>
+                      ? <Link className="btn btn-sm" to="/system/onlyfans-api#media">Открыть загрузку</Link>
                       : ["paused", "blocked", "budget_exhausted"].includes(job.state) && (
                         <button
                           type="button"
@@ -1746,7 +1746,7 @@ export function JobModal(props: {
   if (props.category === "vault_files" || !entry?.supportsOneOff) return (
     <ModalShell title={categoryLabel(props.category, entry?.label)} onClose={props.onClose}>
       {props.category === "vault_files"
-        ? <Link className="btn" to="/system/onlyfans-api/media">Загрузить свой файл…</Link>
+        ? <Link className="btn" to="/system/onlyfans-api#media">Загрузить свой файл…</Link>
         : <p className="text-sm text-text-secondary">Для этой категории настройте действующий сбор. Разовые задачи недоступны.</p>}
     </ModalShell>
   );

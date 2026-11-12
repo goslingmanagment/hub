@@ -28,6 +28,8 @@ import { addDays, daysInRange, moscowDayEnd, moscowDayOf, moscowDayStart, type M
 import { periodChunks, type ResolvedPeriod } from "@agency_hub_core/ui/period";
 import { median } from "@agency_hub_core/ui/shiftReview";
 import { shiftWhen, type ShiftWhen } from "@agency_hub_core/ui/shiftWhen";
+import { LOGINS_ONLY, type PeopleIndex } from "@agency_hub_core/ui/people";
+import { loginsByPerson } from "./byPerson.js";
 import { kernel } from "@/shared/hub";
 import { shiftSalesQuery } from "@/shared/reads";
 import { perHourMills, qualityOfChatterNumbers, type ShiftQuality } from "@/shared/metrics";
@@ -375,10 +377,11 @@ export function muchAi(quality: ShiftQuality, norms: TeamNorms): boolean {
 
 // ─────────────────────────────────────────────────────────── The period's model
 
-export function buildModel(sales: SalesResponse, numbers: NumbersResponse | undefined, window: ShiftsWindow): ShiftsModel {
+export function buildModel(sales: SalesResponse, numbers: NumbersResponse | undefined, window: ShiftsWindow, people: PeopleIndex = LOGINS_ONLY): ShiftsModel {
   const today = moscowDayOf(sales.serverNow);
   const knownSince = sales.knownSince === null ? null : moscowDayOf(sales.knownSince);
-  const journal = journalOf(sales, numbers);
+  // A shift is a login's (its review, its link); its name is the person's.
+  const journal = journalOf(sales, numbers).map((shift) => ({ ...shift, username: people.nameOf(shift.userId, shift.username) }));
   const columns = columnsOf(sales.team.daily.map((day) => day.date), today, knownSince);
   const comparable = sales.previous !== null;
   const team: GridRow = {
@@ -390,15 +393,18 @@ export function buildModel(sales: SalesResponse, numbers: NumbersResponse | unde
     gone: false,
     cells: cellsOf(columns, sales.team.daily, journal),
   };
-  const chatters = sales.chatters.map((chatter): GridRow => ({
+  // One row a person: their logins' numbers summed (Hub counts by login; the team's row is Hub's own sum, unchanged).
+  const chatters = loginsByPerson(sales.chatters, people).map((chatter): GridRow => ({
     userId: chatter.userId,
     username: chatter.username,
     totals: totalsOf(chatter),
     previous: chatter.previous === null ? null : totalsOf(chatter.previous),
     unmatched: comparable && chatter.previous === null && chatter.shifts > 0,
     gone: chatter.shifts === 0,
-    cells: cellsOf(columns, chatter.daily, journal.filter((shift) => shift.userId === chatter.userId)),
-  }));
+    cells: cellsOf(columns, chatter.daily, journal.filter((shift) => chatter.userIds.includes(shift.userId))),
+  }))
+    // The owner's or a team lead's login without a shift here is not a row of who works shifts («Люди» lists them so).
+    .filter((row) => !row.gone || (row.userId !== null && people.worksShifts(row.userId)));
   // Who worked first (Hub's order: the most money first); who did not, below.
   chatters.sort((left, right) => Number(left.gone) - Number(right.gone));
   return { window, columns, team, chatters, journal, comparable, knownSince, norms: normsOf(numbers, window), today, outside: sales.outside };

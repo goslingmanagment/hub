@@ -33,7 +33,7 @@ import { reportQuestionsQueryOptions, saleQuestionsQueryOptions, teamCustomsQuer
  */
 export interface WaitingRow {
   /** The old rows; while the owner's switch reads matters, also «Люди и доступ», «Проверки ledger», «Другие дела» (package K). */
-  id: "drafts" | "unknown" | "questions" | "reports" | "customs" | "held" | "login" | "failures" | "extension" | "history" | "people" | "ledger" | "other";
+  id: "drafts" | "unknown" | "questions" | "reports" | "customs" | "held" | "login" | "failures" | "extension" | "history" | "content" | "people" | "ledger" | "other";
   label: string;
   /** null: the read failed, or the state it depends on could not be checked. */
   count: number | null;
@@ -186,8 +186,8 @@ export function useWaitingCounts(role: string): WaitingCounts {
 
   if (owner) {
     const draftCount = failedOr(drafts, (data) => data.publications.length);
-    push({ id: "drafts", label: "Посты на утверждение", count: draftCount, capped: draftCount === LIST_LIMIT, to: "/publications?status=draft&window=all&page=all" });
-    push({ id: "unknown", label: "Публикации: исход неизвестен", count: failedOr(unknown, (data) => data.publications.length), to: "/publications?status=unknown&window=all&page=all" });
+    push({ id: "drafts", label: "Посты на утверждение", count: draftCount, capped: draftCount === LIST_LIMIT, to: "/content/publications?status=draft&window=all&page=all" });
+    push({ id: "unknown", label: "Публикации: исход неизвестен", count: failedOr(unknown, (data) => data.publications.length), to: "/content/publications?status=unknown&window=all&page=all" });
     push({ id: "questions", label: "Чья продажа: вопросы ждут вашего слова", count: failedOr(questions, (count) => count), to: workboardHref("decisions", "", "questions") });
     push({ id: "reports", label: "Отчёты смен ждут решения", count: failedOr(reports, (count) => count), to: workboardHref("decisions", "", "reports") });
   }
@@ -216,7 +216,7 @@ export function useWaitingCounts(role: string): WaitingCounts {
       id: "extension",
       label: "Критичные сбои расширения",
       count: failedOr(extension, (data) => data.counters.filter((counter) => counter.code.startsWith("p1.")).reduce((sum, counter) => sum + counter.total, 0)),
-      to: "/system/dev/extension",
+      to: "/system/dev#extension",
     });
     if (ofapi === "on" || ofapiUnanswered) {
       push({

@@ -1,6 +1,6 @@
 import { ChevronRight } from "lucide-react";
 import type { ReactNode } from "react";
-import { useLocation, useSearchParams } from "react-router";
+import { useLocation, useParams, useSearchParams } from "react-router";
 import { Bar, Button, Disclosure, EmptyState, ErrorState, Money, Notice, PageLabel, Person, Segmented, Tabs, Tooltip, cx, type Column } from "@agency_hub_core/ui";
 import { formatDayRange } from "@agency_hub_core/ui/format";
 import { ruPlural } from "@agency_hub_core/ui/plural";
@@ -17,11 +17,15 @@ import "./sales.css";
  * days than the period. A share in a cell is the package's RateBar.
  */
 
+/**
+ * The tabs; a `sleeping` one (not opened in 14 days, L2 12.11: «Возврат фанов» had one attempt ever) is not in the
+ * row, its address still opens it and the row shows it while it is the one open.
+ */
 export const TABS = [
-  { tab: "price", label: "Цена" },
-  { tab: "speed", label: "Скорость ответа" },
-  { tab: "win-back", label: "Возврат фанов" },
-  { tab: "greetings", label: "Приветствия и охват" },
+  { tab: "price", label: "Цена", sleeping: false },
+  { tab: "speed", label: "Скорость ответа", sleeping: false },
+  { tab: "win-back", label: "Возврат фанов", sleeping: true },
+  { tab: "greetings", label: "Приветствия и охват", sleeping: true },
 ] as const;
 
 export type SalesTab = (typeof TABS)[number]["tab"];
@@ -64,6 +68,7 @@ export function SalesHeader({ meta, updatedAt, onRefresh, refreshing, stale = fa
   stale?: boolean;
 }) {
   const location = useLocation();
+  const { tab: current } = useParams();
   const carried = carryParams(location.search);
   const by = new URLSearchParams(location.search).get("by");
   if (by === "chatters") carried.set("by", by);
@@ -80,7 +85,7 @@ export function SalesHeader({ meta, updatedAt, onRefresh, refreshing, stale = fa
       onRefresh={onRefresh}
       refreshing={refreshing}
       stale={stale}
-      tabs={<Tabs label="Разделы" items={TABS.map((item) => ({ to: { pathname: `/sales/${item.tab}`, search: search ? `?${search}` : "" }, label: item.label }))} />}
+      tabs={<Tabs label="Разделы" items={TABS.filter((item) => !item.sleeping || item.tab === current).map((item) => ({ to: { pathname: `/sales/${item.tab}`, search: search ? `?${search}` : "" }, label: item.label }))} />}
     />
   );
 }

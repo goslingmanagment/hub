@@ -78,10 +78,10 @@ function RowActions({ row }: { row: CollectionRow }) {
       <RowMenu
         label={`Ещё: ${label}`}
         items={telegram
-          ? [{ label: "Карточка страницы", onSelect: () => navigate(buildPageRoute(label)) }]
+          ? [{ label: "Открыть на Главной", onSelect: () => navigate(buildPageRoute(label)) }]
           : [
             { label: "Сбор данных страницы", onSelect: () => navigate(collectionRoute(label)) },
-            { label: "Карточка страницы", onSelect: () => navigate(buildPageRoute(label)) },
+            { label: "Открыть на Главной", onSelect: () => navigate(buildPageRoute(label)) },
             { label: "Сбои страницы", onSelect: () => navigate(`/system/failures?page=${encodeURIComponent(label)}`) },
             { label: "Заявки на историю страницы", onSelect: () => navigate(`/system/history-requests?page=${encodeURIComponent(label)}`) },
           ]}

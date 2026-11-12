@@ -74,8 +74,8 @@ const BY_ITSELF = "Обычно проходит сам.";
 
 const COLLECTION: FailureFix = { label: "Сбор данных", to: "/system/collection" };
 const AI_MONEY: FailureFix = { label: "Деньги на ИИ", to: "/money/costs/ai" };
-const DATABASE: FailureFix = { label: "База данных", to: "/system/dev/database" };
-const QUEUE: FailureFix = { label: "Очередь задач", to: "/system/dev/queue" };
+const DATABASE: FailureFix = { label: "База данных", to: "/system/dev#database" };
+const QUEUE: FailureFix = { label: "Очередь задач", to: "/system/dev#queue" };
 const OFAPI: FailureFix = { label: "OnlyFans API", to: "/system/onlyfans-api" };
 
 function pageCollection(page: string | null): FailureFix {
@@ -205,14 +205,14 @@ export function failureWords(item: Pick<NotificationsIncidentItem, "kind" | "inc
     case "publishing_stopped":
       return says("Hub сам выключил публикацию страницы.", "Посмотрите причину и включите снова.", {
         label: "Настройки публикации",
-        to: page === null ? "/publications?panel=settings" : `/publications?page=${encodeURIComponent(page)}&panel=settings`,
+        to: page === null ? "/content/publications?panel=settings" : `/content/publications?page=${encodeURIComponent(page)}&panel=settings`,
       });
     case "publication_not_published":
       return says("Утверждённый пост не вышел вовремя.", "Посмотрите пост и решите, что с ним делать.", {
         label: "К публикациям",
         to: page === null
-          ? "/publications?status=not_published&window=last7"
-          : `/publications?page=${encodeURIComponent(page)}&status=not_published&window=last7`,
+          ? "/content/publications?status=not_published&window=last7"
+          : `/content/publications?page=${encodeURIComponent(page)}&status=not_published&window=last7`,
       });
     case "ofapi_platform_notice":
       return says(

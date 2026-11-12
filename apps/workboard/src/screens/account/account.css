@@ -1,0 +1,70 @@
+/*
+ * «Аккаунт и устройства»: one narrow column of sheets, as the console's
+ * cabinet had it; the stats side by side. Tokens only.
+ */
+@layer components {
+  .account-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+    max-width: 760px;
+  }
+  .account-login { font-size: 20px; line-height: 28px; font-weight: 600; color: var(--ui-text); }
+  .account-muted { font-size: 14px; line-height: 20px; color: var(--ui-text-2); }
+  .account-gap { margin-top: 16px; }
+  .account-error { margin-top: 12px; font-size: 14px; line-height: 20px; color: var(--ui-bad-text); }
+  .account-pages { display: grid; gap: 8px; margin-top: 16px; }
+  .account-pages__row { display: grid; grid-template-columns: 120px minmax(0, 1fr); gap: 12px; align-items: baseline; }
+  .account-pages__row dt { font-size: 14px; line-height: 20px; color: var(--ui-text-2); }
+  .account-pages__row dd { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; }
+  .account-rows { display: flex; flex-direction: column; }
+  .account-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 12px 0;
+    border-bottom: 1px solid var(--ui-line);
+  }
+  .account-row:first-child { padding-top: 0; }
+  .account-row__title { font-weight: 500; color: var(--ui-text); overflow-wrap: anywhere; }
+  .account-foot { margin-top: 16px; }
+  .account-confirm { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
+  .account-confirm__actions { display: flex; gap: 8px; flex-shrink: 0; }
+  .account-form { display: flex; flex-direction: column; gap: 16px; max-width: 420px; }
+  .account-submit { align-self: flex-start; }
+  .account-stats { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; padding: 4px 24px 20px; }
+  .account-stat { font-size: 24px; line-height: 32px; font-weight: 600; font-variant-numeric: tabular-nums; color: var(--ui-text); }
+  .account-block { border-top: 1px solid var(--ui-line); padding-top: 16px; }
+  .account-block--pad { padding: 16px 24px 20px; }
+  .account-subtitle { padding: 0 24px 8px; font-size: 14px; line-height: 20px; font-weight: 600; color: var(--ui-text); }
+  .account-block--pad .account-subtitle { padding: 0 0 8px; }
+  .account-chart {
+    display: flex;
+    align-items: flex-end;
+    gap: 3px;
+    height: 120px;
+    margin: 4px 24px 0;
+    border-bottom: 1px solid var(--ui-line);
+  }
+  .account-chart__day { display: flex; align-items: flex-end; flex: 1 1 0; height: 100%; }
+  .account-chart__bar { display: block; width: 100%; border-radius: 3px 3px 0 0; background: var(--ui-accent-fill); }
+  .account-chart__axis {
+    display: flex;
+    justify-content: space-between;
+    margin: 4px 24px 0;
+    font-size: 13px;
+    line-height: 18px;
+    color: var(--ui-text-3);
+  }
+  .account-table { margin: 12px 24px 16px; }
+  .account-features { display: flex; flex-direction: column; gap: 8px; }
+  .account-features li { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 16px; align-items: baseline; }
+  .account-features__name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .account-features__cost { font-variant-numeric: tabular-nums; text-align: right; min-width: 80px; }
+  .account-guide { font-size: 14px; line-height: 20px; }
+  @media (max-width: 640px) {
+    .account-row { flex-direction: column; align-items: flex-start; }
+    .account-pages__row { grid-template-columns: minmax(0, 1fr); gap: 4px; }
+  }
+}

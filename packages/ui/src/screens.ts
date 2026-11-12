@@ -71,11 +71,26 @@ export interface ScreenPeriod {
   default?: PeriodKey;
 }
 
-export type SectionId = "home" | "waiting" | "money" | "fans" | "stats" | "publications" | "traffic" | "team" | "applications" | "settings" | "system" | "page";
+export type SectionId = "home" | "waiting" | "money" | "fans" | "stats" | "content" | "traffic" | "team" | "applications" | "settings" | "system";
 
 export interface Crumb {
   label: string;
   to?: string;
+}
+
+/**
+ * A section of a screen that holds several things on one page (OnlyFans API,
+ * Разработчик): its anchor in the address (`/system/dev#queue`; `#config-<key>`
+ * opens `config` too), its name and its one sentence. The screen draws them in
+ * this order; the search finds each by its name and old words.
+ */
+export interface ScreenPart {
+  id: string;
+  label: string;
+  why: string;
+  /** The owner's alone on a screen a team lead opens too. */
+  ownerOnly?: boolean;
+  keywords?: string;
 }
 
 export interface Screen {
@@ -120,6 +135,8 @@ export interface Screen {
   notSearched?: boolean;
   /** The address's filters can make the period not the screen's to choose. */
   forcedPeriod?: (search: URLSearchParams) => ForcedPeriod | null;
+  /** The screen is one page of sections (ScreenPart), each opened by its anchor. */
+  parts?: readonly ScreenPart[];
 }
 
 const COMMON_PERIODS: readonly PeriodKey[] = ["today", "7d", "30d", "all"];
@@ -128,6 +145,13 @@ const STATS_PERIODS: readonly PeriodKey[] = ["7d", "30d", "90d", "180d", "365d"]
 
 const REPORTED: readonly Platform[] = ["fansly", "onlyfans"];
 const FANSLY: readonly Platform[] = ["fansly"];
+
+/** Настройки › Модели и страницы › the page: where a page's own Fansly screens sit. */
+const pageCrumbs = (page?: string): Crumb[] => [
+  { label: "Настройки", to: "/settings/pages" },
+  { label: "Модели и страницы", to: "/settings/pages" },
+  ...(page ? [{ label: page, to: `/settings/pages#page-${pathSegment(page)}` }] : []),
+];
 
 const fansCrumbs = (page?: string): Crumb[] => [
   { label: "Фаны", to: "/fans" },
@@ -289,14 +313,23 @@ export const SCREENS: readonly Screen[] = [
     keywords: "аналитика трафик",
   },
 
-  // ── Публикации ─────────────────────────────────────────────────────────
+  // ── Контент ────────────────────────────────────────────────────────────
+  // Публикации and Рассылки here; План, Приехало and Библиотека are ContentOps' (links of the section).
   {
-    id: "publications", path: "/publications", label: "Публикации", title: "Публикации", section: "publications", ownerOnly: true,
+    id: "publications", path: "/content/publications", label: "Публикации", title: "Публикации", section: "content", ownerOnly: true,
     why: "Что и когда выйдет на стенах страниц.",
     pageFilter: "any", platforms: REPORTED,
     platformsNote: "Hub не публикует в Telegram.",
     telegramNote: { title: "Hub не публикует в Telegram", text: "У страниц Telegram публикаций нет." },
     keywords: "посты стена расписание утвердить настройки публикации",
+  },
+  {
+    // A page's mass messages (a tab of the page's card until 12.11).
+    id: "content-mass-messages", path: "/content/mass-messages", label: "Рассылки", title: "Рассылки", section: "content", ownerOnly: true,
+    why: "Массовые рассылки страницы: что ушло, кому и сколько принесло.",
+    pageFilter: "one", onePageWay: "picker", platforms: FANSLY,
+    platformsNote: "Рассылки Hub собирает только у страниц Fansly.", platformsShort: "только Fansly",
+    keywords: "рассылки массовые сообщения mass messages",
   },
 
   // ── Трафик ─────────────────────────────────────────────────────────────
@@ -306,6 +339,14 @@ export const SCREENS: readonly Screen[] = [
     why: "Каналы трафика: что работает и что ждёт решения. Сводку пишет агент трафика.",
     pageFilter: "none",
     keywords: "трафик каналы подрядчики циклы доска сводка агент",
+  },
+  {
+    // A page's promo (a tab of the page's card until 12.11): Fansly's own, or the OnlyFans links as of 1 November.
+    id: "traffic-promo", path: "/traffic/promo", label: "Продвижение", title: "Трафик: продвижение", section: "traffic", ownerOnly: true,
+    why: "Ссылки и промо страницы: откуда пришли подписчики и деньги.",
+    pageFilter: "one", onePageWay: "picker", platforms: REPORTED,
+    platformsNote: "Hub не собирает данные Telegram.",
+    keywords: "продвижение промо ссылки трекинг кампании маркетинг ofapi marketing",
   },
 
   // ── Команда: Workboard ─────────────────────────────────────────────────
@@ -348,7 +389,8 @@ export const SCREENS: readonly Screen[] = [
     id: "sales", path: "/workboard/sales", label: "Что продаёт", title: "Что продаёт", section: "team", app: "workboard", icon: "TrendingUp",
     why: "Что и по какой цене покупают, как быстро отвечают.",
     pageFilter: "any",
-    keywords: "продажи цена скорость ответа ppv платные возврат фанов подходы приветствия кто ждал пустые часы рассылки",
+    // «Возврат фанов» and «Приветствия и охват» left its tabs on 12.11 (0 opened in 14 days): their addresses still open.
+    keywords: "продажи цена скорость ответа ppv платные",
   },
   {
     // People's pay is the owner's alone (the ledger's answer reaches no other session).
@@ -395,6 +437,23 @@ export const SCREENS: readonly Screen[] = [
     pageFilter: "none",
     deep: true, notSearched: true,
     crumbs: () => [{ label: "Настройки", to: "/settings/pages" }, { label: "Модели и страницы", to: "/settings/pages" }],
+  },
+  {
+    // A page's own Fansly screens (they were tabs of the page's card, which left on 12.11): under its row here.
+    id: "settings-page-account", path: "/settings/pages/:pageLabel/account", label: "Аккаунт на Fansly", title: "Аккаунт на Fansly", section: "settings", ownerOnly: true,
+    why: "Как страница выглядит и как настроена на самом Fansly.",
+    pageFilter: "none", platforms: FANSLY,
+    platformsNote: "Этот экран есть только у страниц Fansly.",
+    deep: true, notSearched: true,
+    crumbs: (params) => pageCrumbs(params.pageLabel),
+  },
+  {
+    id: "settings-page-login", path: "/settings/pages/:pageLabel/login", label: "Вход в Fansly", title: "Вход в Fansly", section: "settings", ownerOnly: true,
+    why: "Браузер страницы входит в Fansly со своего устройства и IP.",
+    pageFilter: "none", platforms: FANSLY,
+    platformsNote: "Этот экран есть только у страниц Fansly.",
+    deep: true, notSearched: true,
+    crumbs: (params) => pageCrumbs(params.pageLabel),
   },
   {
     id: "settings-personas", path: "/settings/ai/personas", label: "Персоны", title: "Персоны ИИ", section: "settings", ownerOnly: true,
@@ -500,116 +559,46 @@ export const SCREENS: readonly Screen[] = [
     keywords: "telegram телеграм бот отправка напоминания отчётность карточка выплата приглашение",
   },
   {
-    id: "system-onlyfans-api", path: "/system/onlyfans-api", label: "Состояние", title: "OnlyFans API", section: "system", ownerOnly: true,
-    why: "Включён ли он, что это значит и где что лежит.",
+    // Six screens until 12.11 (five never opened in 14 days): one page of sections now, each at its anchor.
+    // A team lead opens it too and gets «Медиа» and «Выгрузки» alone, as before.
+    id: "system-onlyfans-api", path: "/system/onlyfans-api", label: "OnlyFans API", title: "OnlyFans API", section: "system",
+    why: "OnlyFans API: включён ли, что собирал и что с ним можно сделать.",
     pageFilter: "none",
-    keywords: "ofapi вебхук",
+    keywords: "ofapi onlyfans",
+    parts: [
+      { id: "state", label: "Состояние", why: "Включён ли он, что это значит и где что лежит.", ownerOnly: true, keywords: "вебхук страницы кредиты приём событий" },
+      { id: "collection", label: "Правила сбора", why: "Что и как часто собирал Hub и сколько кредитов это стоило.", ownerOnly: true, keywords: "сбор onlyfans" },
+      { id: "tools", label: "События и ключ", why: "События и восстановление, сохранённые ответы, права ключа, словарь слов.", ownerOnly: true, keywords: "вебхук запрещённые слова" },
+      { id: "media", label: "Медиа", why: "Каталог и загрузки медиатеки OnlyFans.", keywords: "медиатека файлы волт" },
+      { id: "exports", label: "Выгрузки", why: "Выгрузки OnlyFans API и посетители профиля по дням.", keywords: "посетители" },
+      { id: "actions", label: "Действия с аккаунтом", why: "Сырые действия OnlyFans API и их история. Без ключа не выполняются.", ownerOnly: true, keywords: "управление аккаунтом" },
+    ],
   },
   {
-    id: "system-onlyfans-collection", path: "/system/onlyfans-api/collection", label: "Правила сбора", title: "Правила сбора OnlyFans API", section: "system", ownerOnly: true,
-    why: "Что и как часто собирал Hub и сколько кредитов это стоило.",
+    // Six screens until 12.11 (none opened in 14 days): one page of sections now, each at its anchor;
+    // `#config-<key>` opens «Все параметры» on that key. «Расширение: замеры» keeps its own period, drawn in its section.
+    id: "system-dev", path: "/system/dev", label: "Разработчик", title: "Разработчик", section: "system", ownerOnly: true,
+    why: "Для разработчика: журнал сбора, очередь, база, замеры расширения и все параметры сервера.",
     pageFilter: "none",
-    keywords: "сбор onlyfans ofapi",
-  },
-  {
-    id: "system-onlyfans-tools", path: "/system/onlyfans-api/tools", label: "События и ключ", title: "События и ключ", section: "system", ownerOnly: true,
-    why: "События и восстановление, сохранённые ответы, права ключа, словарь слов.",
-    pageFilter: "none",
-    keywords: "ofapi вебхук запрещённые слова",
-  },
-  {
-    id: "system-onlyfans-media", path: "/system/onlyfans-api/media", label: "Медиа", title: "Медиатека OnlyFans", section: "system",
-    why: "Каталог и загрузки медиатеки OnlyFans.",
-    pageFilter: "none",
-    keywords: "ofapi файлы волт",
-  },
-  {
-    id: "system-onlyfans-exports", path: "/system/onlyfans-api/exports", label: "Выгрузки", title: "Выгрузки", section: "system",
-    why: "Выгрузки OnlyFans API и посетители профиля по дням.",
-    pageFilter: "none",
-    keywords: "ofapi посетители",
-  },
-  {
-    id: "system-onlyfans-actions", path: "/system/onlyfans-api/actions", label: "Действия с аккаунтом", title: "Действия с аккаунтом", section: "system", ownerOnly: true,
-    why: "Сырые действия OnlyFans API и их история. Без ключа не выполняются.",
-    pageFilter: "none",
-    keywords: "управление аккаунтом ofapi",
-  },
-  {
-    id: "system-dev-log", path: "/system/dev/log", label: "Журнал сбора", title: "Журнал сбора OnlyFans", section: "system", ownerOnly: true,
-    why: "События старого сбора OnlyFans: последние 100 записей.",
-    pageFilter: "none",
-    keywords: "журнал аномалии синка наблюдение",
+    period: { class: "own", options: ["today", "7d", "30d"], default: "7d" },
+    periodInBody: true,
+    keywords: "для разработчика наблюдение",
+    parts: [
+      { id: "log", label: "Журнал сбора", why: "События старого сбора OnlyFans: последние 100 записей.", keywords: "журнал аномалии синка" },
+      { id: "queue", label: "Очередь задач", why: "Фоновые задачи сервера: последние 100 записей." },
+      { id: "database", label: "База данных", why: "Размер таблиц и миграции.", keywords: "db" },
+      { id: "extension", label: "Расширение: замеры", why: "Скорость, версии и счётчики расширения. Без имён людей, страниц и фанов.", keywords: "client health" },
+      { id: "config", label: "Все параметры", why: "Полный список параметров сервера. Меняйте, только если понимаете последствия.", keywords: "конфигурация настройки сервера" },
+    ],
   },
   {
     id: "system-dev-run", path: "/system/dev/log/:runId", label: "Запуск сбора", title: "Запуск сбора", section: "system", ownerOnly: true,
     why: "Один запуск сбора: события и обращения к площадке.",
     pageFilter: "none",
     deep: true, notSearched: true,
-    crumbs: () => [{ label: "Система", to: "/system/collection" }, { label: "Для разработчика", to: "/system/dev/log" }, { label: "Журнал сбора", to: "/system/dev/log" }],
-  },
-  {
-    id: "system-dev-queue", path: "/system/dev/queue", label: "Очередь задач", title: "Очередь задач", section: "system", ownerOnly: true,
-    why: "Фоновые задачи сервера: последние 100 записей.",
-    pageFilter: "none",
-    keywords: "наблюдение",
-  },
-  {
-    id: "system-dev-database", path: "/system/dev/database", label: "База данных", title: "База данных", section: "system", ownerOnly: true,
-    why: "Размер таблиц и миграции.",
-    pageFilter: "none",
-    keywords: "наблюдение db",
-  },
-  {
-    id: "system-dev-extension", path: "/system/dev/extension", label: "Расширение: замеры", title: "Расширение: замеры", section: "system", ownerOnly: true,
-    why: "Скорость, версии и счётчики расширения. Без имён людей, страниц и фанов.",
-    pageFilter: "none",
-    period: { class: "own", options: ["today", "7d", "30d"], default: "7d" },
-    keywords: "client health наблюдение",
-  },
-  {
-    id: "system-dev-config", path: "/system/dev/config", label: "Все параметры", title: "Все параметры", section: "system", ownerOnly: true,
-    why: "Полный список параметров сервера. Меняйте, только если понимаете последствия.",
-    pageFilter: "none",
-    keywords: "конфигурация настройки сервера",
+    crumbs: () => [{ label: "Система", to: "/system/collection" }, { label: "Разработчик", to: "/system/dev" }, { label: "Журнал сбора", to: "/system/dev#log" }],
   },
 
-  // ── Карточка страницы: объект, а не ветка меню ─────────────────────────
-  {
-    id: "page", path: "/pages/:pageLabel", label: "Сводка", title: "Страница", section: "page",
-    why: "Сводка страницы.",
-    pageFilter: "none",
-    period: { class: "shared", options: COMMON_PERIODS },
-    notSearched: true,
-  },
-  {
-    id: "page-account", path: "/pages/:pageLabel/account", label: "Аккаунт на Fansly", title: "Аккаунт на Fansly", section: "page", ownerOnly: true,
-    why: "Как страница выглядит и как настроена на самом Fansly.",
-    pageFilter: "none", platforms: FANSLY,
-    platformsNote: "Этот экран есть только у страниц Fansly.",
-    notSearched: true,
-  },
-  {
-    id: "page-promo", path: "/pages/:pageLabel/promo", label: "Продвижение", title: "Продвижение", section: "page", ownerOnly: true,
-    why: "Ссылки и промо страницы.",
-    pageFilter: "none", platforms: REPORTED,
-    platformsNote: "Hub не собирает данные Telegram.",
-    notSearched: true,
-  },
-  {
-    id: "page-mass-messages", path: "/pages/:pageLabel/mass-messages", label: "Рассылки", title: "Рассылки", section: "page", ownerOnly: true,
-    why: "Массовые рассылки страницы.",
-    pageFilter: "none", platforms: FANSLY,
-    platformsNote: "Этот экран есть только у страниц Fansly.",
-    notSearched: true,
-  },
-  {
-    id: "page-browser-login", path: "/pages/:pageLabel/browser-login", label: "Вход в Fansly", title: "Вход в Fansly", section: "page", ownerOnly: true,
-    why: "Браузер страницы входит в Fansly со своего устройства и IP.",
-    pageFilter: "none", platforms: FANSLY,
-    platformsNote: "Этот экран есть только у страниц Fansly.",
-    notSearched: true,
-  },
 ];
 
 const SCREEN_BY_ID: ReadonlyMap<string, Screen> = new Map(SCREENS.map((screen) => [screen.id, screen]));
@@ -656,6 +645,17 @@ export function forcedPeriodOf(screen: Screen, search: URLSearchParams): ForcedP
   return screen.forcedPeriod?.(search) ?? null;
 }
 
+/** The sections of a screen of parts that this role opens, in the screen's order. */
+export function screenParts(screen: Pick<Screen, "parts">, role: Role): ScreenPart[] {
+  return (screen.parts ?? []).filter((part) => !part.ownerOnly || role === "owner");
+}
+
+/** The section an address's anchor opens: `#queue` opens `queue`, `#config-<key>` opens `config` on that key. */
+export function partOfAnchor(parts: readonly ScreenPart[], hash: string): ScreenPart | null {
+  const anchor = decodedPath(hash.replace(/^#/, ""));
+  return parts.find((part) => anchor === part.id || anchor.startsWith(`${part.id}-`)) ?? null;
+}
+
 /** Without `roles`, a screen is the owner's and team leads' (`ownerOnly`: the owner's alone), never a chatter's. */
 export function screenVisible(screen: Screen, role: Role): boolean {
   if (screen.roles) return screen.roles.includes(role);
@@ -685,6 +685,8 @@ export interface SectionTab {
   note?: string;
   /** The tab's screens are listed in the side menu, not in a row above the screen. */
   listedInSideMenu?: boolean;
+  /** Not in the row itself: under «Ещё» at its end (a list nobody opened, kept: it costs nothing). */
+  more?: boolean;
 }
 
 export interface Section {
@@ -703,11 +705,22 @@ export interface Section {
   count?: MenuCount;
   /** Under the rule at the bottom of the menu. */
   lower?: boolean;
+  /**
+   * The section's places elsewhere, after its tabs. ContentOps': they open it on
+   * the model of the chosen page (it keeps a model's content at `/<model>/<path>`).
+   * Workboard's: a list whose one place is a Workboard screen, linked from here
+   * (a page load on this host), for the roles that open it.
+   */
+  outside?:
+    | { site: "contentops"; label: string; links: readonly { label: string; path: string }[] }
+    | { site: "workboard"; links: readonly { label: string; to: string; title: string; ownerOnly?: boolean }[] };
   nav: "tabs" | "side" | "none";
   tabs: readonly SectionTab[];
 }
 
 const tab = (id: string, label: string, ...screens: string[]): SectionTab => ({ id, label, screens });
+/** A tab under «Ещё» (L2, 12.11: not opened in 14 days, not a duplicate). */
+const moreTab = (id: string, label: string, ...screens: string[]): SectionTab => ({ id, label, screens, more: true });
 
 /** The menu's order is this table's: Главная, Ждут вас, the console's sections, «Команда» last above the rule. */
 export const SECTIONS: readonly Section[] = [
@@ -726,33 +739,43 @@ export const SECTIONS: readonly Section[] = [
       tab("costs", "Расходы", "costs-ai", "costs-anthropic", "costs-onlyfans-api"),
       tab("transactions", "Операции", "transactions"),
     ],
+    // The shift reports' list has one place, Команда → Выплаты → Отчёты (L2, 12.11); Деньги links it.
+    outside: { site: "workboard", links: [
+      { label: "Отчёты смен", to: "/workboard/payouts?view=reports", title: "Отчёты смен в Команда, Выплаты", ownerOnly: true },
+    ] },
   },
   {
     id: "fans", label: "Фаны", title: "Фаны", icon: "Heart", nav: "tabs",
     tabs: [
       tab("fans", "Платящие", "fans", "fan", "fan-any-page"),
-      tab("subscribers", "Подписчики", "fans-subscribers"),
-      tab("followers", "Фолловеры", "fans-followers"),
-      tab("gone", "Ушли", "fans-gone"),
       tab("by-spend", "По сумме трат", "fans-by-spend", "fans-by-spend-list"),
+      moreTab("subscribers", "Подписчики", "fans-subscribers"),
+      moreTab("followers", "Фолловеры", "fans-followers"),
+      moreTab("gone", "Ушли", "fans-gone"),
     ],
   },
   {
     id: "stats", label: "Статистика", title: "Статистика Fansly", icon: "ChartColumn", ownerOnly: true, nav: "tabs",
     tabs: [
       tab("stats", "Главное", "stats"),
-      tab("content", "Контент", "stats-content"),
-      tab("audience", "Аудитория", "stats-audience"),
       tab("income", "Доход Fansly", "stats-income"),
+      moreTab("content", "Контент", "stats-content"),
+      moreTab("audience", "Аудитория", "stats-audience"),
     ],
   },
   {
-    id: "publications", label: "Публикации", title: "Публикации", icon: "Newspaper", ownerOnly: true, nav: "none",
-    tabs: [tab("publications", "Публикации", "publications")],
+    // «Публикации» until 12.11: the content, the hub's part and ContentOps' (the model of the chosen page).
+    id: "content", label: "Контент", title: "Контент", icon: "Newspaper", ownerOnly: true, nav: "tabs",
+    tabs: [tab("publications", "Публикации", "publications"), tab("mass-messages", "Рассылки", "content-mass-messages")],
+    outside: { site: "contentops", label: "ContentOps", links: [
+      { label: "План", path: "plan" },
+      { label: "Приехало", path: "inbox" },
+      { label: "Библиотека", path: "library" },
+    ] },
   },
   {
     id: "traffic", label: "Трафик", title: "Трафик", icon: "Megaphone", ownerOnly: true, nav: "tabs",
-    tabs: [tab("summary", "Сводка", "traffic")],
+    tabs: [tab("summary", "Сводка", "traffic"), tab("promo", "Продвижение", "traffic-promo")],
   },
   {
     id: "applications", label: "Анкеты", title: "Анкеты моделей", icon: "ClipboardList", ownerOnly: true, nav: "none",
@@ -767,7 +790,7 @@ export const SECTIONS: readonly Section[] = [
   {
     id: "settings", label: "Настройки", title: "Настройки", icon: "Settings", ownerOnly: true, lower: true, nav: "side",
     tabs: [
-      tab("pages", "Модели и страницы", "settings-pages", "settings-connect", "settings-connect-profile"),
+      tab("pages", "Модели и страницы", "settings-pages", "settings-connect", "settings-connect-profile", "settings-page-account", "settings-page-login"),
       tab("ai", "ИИ", "settings-personas", "settings-persona", "settings-new-persona", "settings-features", "settings-feature", "settings-limits"),
       tab("notifications", "Оповещения", "settings-notifications"),
     ],
@@ -782,13 +805,8 @@ export const SECTIONS: readonly Section[] = [
       tab("reports", "Отчёты агентов", "system-reports", "system-report"),
       tab("state", "Состояние", "system-state"),
       tab("people-messages", "Сообщения людям", "system-people-messages"),
-      {
-        ...tab("onlyfans-api", "OnlyFans API", "system-onlyfans-api", "system-onlyfans-collection", "system-onlyfans-tools", "system-onlyfans-media", "system-onlyfans-exports", "system-onlyfans-actions"),
-      },
-      {
-        ...tab("dev", "Для разработчика", "system-dev-log", "system-dev-run", "system-dev-queue", "system-dev-database", "system-dev-extension", "system-dev-config"),
-        listedInSideMenu: true,
-      },
+      tab("onlyfans-api", "OnlyFans API", "system-onlyfans-api"),
+      tab("dev", "Разработчик", "system-dev", "system-dev-run"),
     ],
   },
 ];
@@ -915,17 +933,27 @@ export function menuItemAt(pathname: string): string | null {
   return section.group ? screen.id : section.id;
 }
 
-// ── A page's card ────────────────────────────────────────────────────────
+// ── A page's own screens ─────────────────────────────────────────────────
 
-/** The tabs of a page's card, as its platform and the viewer's role have them. */
-export function pageCardTabs(page: { label: string; platform: string }, role: Role): { to: string; label: string; screenId: string }[] {
-  const base = `/pages/${pathSegment(page.label)}`;
-  const rows: { to: string; label: string; screenId: string }[] = [{ to: base, label: "Сводка", screenId: "page" }];
-  for (const [id, segment] of [["page-account", "account"], ["page-promo", "promo"], ["page-mass-messages", "mass-messages"]] as const) {
+/**
+ * What a page has of its own beside the filter (its card left on 12.11: the
+ * page is a filter now), as its platform and the viewer's role have them: its
+ * Fansly account and login under Настройки, its promo under Трафик, its mass
+ * messages under Публикации.
+ */
+export function pagePlaces(page: { label: string; platform: string }, role: Role): { to: string; label: string; screenId: string }[] {
+  const label = pathSegment(page.label);
+  const query = new URLSearchParams({ page: page.label }).toString();
+  const rows: { to: string; label: string; screenId: string }[] = [];
+  for (const [id, to] of [
+    ["settings-page-account", `/settings/pages/${label}/account`],
+    ["traffic-promo", `/traffic/promo?${query}`],
+    ["content-mass-messages", `/content/mass-messages?${query}`],
+  ] as const) {
     const screen = screenById(id);
     if (!screenVisible(screen, role)) continue;
     if (screen.platforms && !(screen.platforms as readonly string[]).includes(page.platform)) continue;
-    rows.push({ to: `${base}/${segment}`, label: screen.label, screenId: id });
+    rows.push({ to, label: screen.label, screenId: id });
   }
   return rows;
 }

@@ -5,7 +5,7 @@
  * server finds. The search only navigates and changes the theme: it writes nothing.
  */
 import { screenCommands, themeCommands, type Command as PlaceCommand } from "@agency_hub_core/ui/palette";
-import { pageCardTabs, type Role } from "@agency_hub_core/ui/screens";
+import { pagePlaces, type Role } from "@agency_hub_core/ui/screens";
 import { configHomeHref } from "@/pages/settings/featureCatalog";
 import { buildFanProfileNavigation, buildFansRoute, buildPageCollectionRoute, buildPageRoute, buildPageSectionRoute, type FanProfileNavigationState } from "./navigation.js";
 import { platformName } from "./platformUrls.js";
@@ -41,11 +41,11 @@ function pageCommands(pages: readonly CommandPage[], role: Role): Command[] {
       ] : []),
       ...(owner && isFansly ? [{ label: "Статистика", to: `/stats?page=${encodeURIComponent(page.label)}`, keywords: "аналитика" }] : []),
       ...(owner && hasData ? [
-        { label: "Публикации", to: `/publications?page=${encodeURIComponent(page.label)}` },
+        { label: "Публикации", to: `/content/publications?page=${encodeURIComponent(page.label)}` },
         { label: "Сбор данных", to: buildPageCollectionRoute(page.label), keywords: "синк" },
       ] : []),
       ...(owner && isFansly ? [{ label: "Войти в Fansly", to: buildPageSectionRoute(page.label, "browser-login"), keywords: "вход в браузер" }] : []),
-      ...pageCardTabs(page, role).slice(1).map((tab) => ({ label: tab.label, to: tab.to })),
+      ...pagePlaces(page, role).map((place) => ({ label: place.label, to: place.to })),
     ];
     for (const view of views) {
       commands.push({

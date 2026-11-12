@@ -119,7 +119,7 @@ export function publicationItems(
     pageLabels: [publication.pageLabel],
     money: false,
     evidence: { publicationId: publication.id, kind: publication.kind, publishAt: publication.publishAt, version: publication.version },
-    link: `/publications?status=${status}&window=all&page=all`,
+    link: `/content/publications?status=${status}&window=all&page=all`,
   }));
 }
 
@@ -189,7 +189,7 @@ export function loginItems(labels: readonly string[]): MirrorItem[] {
     pageLabels: [label],
     money: false,
     evidence: { pageLabel: label },
-    link: `/pages/${encodeURIComponent(label)}/browser-login`,
+    link: `/settings/pages/${encodeURIComponent(label)}/login`,
   }));
 }
 
@@ -237,7 +237,7 @@ export function extensionItems(counters: ReadonlyArray<{ code: string; total: nu
     pageLabels: [],
     money: false,
     evidence: { code: counter.code, total: counter.total, from: range.from, to: range.to },
-    link: "/system/dev/extension",
+    link: "/system/dev#extension",
   }));
 }
 

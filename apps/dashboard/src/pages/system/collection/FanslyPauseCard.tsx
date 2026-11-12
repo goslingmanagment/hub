@@ -54,7 +54,7 @@ export function FanslyPauseCard({ filteredPage }: { filteredPage: string | null 
             </div>
           </div>
         )}
-        <Link to={`/system/dev/config#config-${KEY}`} className="link sys-pause-all">Все параметры</Link>
+        <Link to={`/system/dev#config-${KEY}`} className="link sys-pause-all">Все параметры</Link>
       </div>
     </section>
   );

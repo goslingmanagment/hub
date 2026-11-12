@@ -222,7 +222,7 @@ export function OfapiMarketing() {
       {cardPage === undefined && <label className="w-full sm:w-64"><span className="field-label">Страница</span><select disabled={busy || !pages.length} className="select" value={page?.pageLabel ?? ""} onChange={e => selectPage(e.target.value)}>{pages.map(row => <option key={row.pageId} value={row.pageLabel}>{row.pageLabel}</option>)}</select></label>}
       <button type="button" className="btn" disabled={busy} onClick={() => void run(async () => {}, "Данные перечитаны из Hub. Запросов к OnlyFans API не было.")}>Обновить</button>
       {links.data && <span className="order-last w-full text-xs text-text-muted sm:order-none sm:w-auto sm:pb-2" title={`Прочитано ${moscowDateTime(links.data.generatedAt)} МСК`}>Данные обновляются 4 раза в сутки · экран перечитывает их каждые 5 минут</span>}
-      <Link className="link ml-auto pb-2 text-sm" to="/system/onlyfans-api/collection">Настройки сбора</Link>
+      <Link className="link ml-auto pb-2 text-sm" to="/system/onlyfans-api#collection">Настройки сбора</Link>
     </div>
     {(error || links.error) && <p role="alert" className="notice notice-danger">{error || links.error?.message}</p>}
     {links.isPending && <p role="status" className="text-sm text-text-muted">Загружаем ссылки…</p>}

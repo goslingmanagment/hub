@@ -265,7 +265,7 @@ function RoutedConfiguration() {
       hash={hash}
       feature={feature}
       navigationState={state}
-      allSettingsHref="/system/dev/config"
+      allSettingsHref="/system/dev#config"
       {...(feature ? { featureBackTo: featureReturnHref(feature, params) } : {})}
     />
   );
@@ -357,7 +357,7 @@ export function ConfigurationView({ hash, feature = null, featureBackTo, allSett
             </Link>
             <Link
               className="link"
-              to={allSettingsHref ?? "/system/dev/config"}
+              to={allSettingsHref ?? "/system/dev#config"}
               state={navigationState}
             >
               Все настройки
@@ -488,7 +488,7 @@ export function ConfigurationView({ hash, feature = null, featureBackTo, allSett
               ? "Показаны также связанные настройки, необходимые для проверки зависимостей."
               : "Здесь собраны только настройки этой функции. Сохраняйте изменения по одному."}
           </p>
-          <Link className="link settings-bottom-link" to={allSettingsHref ?? "/system/dev/config"} state={navigationState}>Все параметры</Link>
+          <Link className="link settings-bottom-link" to={allSettingsHref ?? "/system/dev#config"} state={navigationState}>Все параметры</Link>
         </div>
       )}
       <details className="help">

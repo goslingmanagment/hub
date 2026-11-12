@@ -30,6 +30,7 @@ import { addDays, daysInRange, type MoscowDay } from "@agency_hub_core/ui/moscow
 import type { ResolvedPeriod } from "@agency_hub_core/ui/period";
 import { REPLY_FAST_SECONDS, REPLY_NORM_SECONDS } from "@agency_hub_core/ui/shiftReview";
 import { kernel } from "@/shared/hub";
+import { LOGINS_ONLY, type PeopleIndex } from "@agency_hub_core/ui/people";
 
 // ---------------------------------------------------------------- The window
 
@@ -228,7 +229,23 @@ export function cheapShare(line: Pick<PpvLine, "total" | "byPrice">): number | n
   return line.total.sent > 0 && cheap ? cheap.sent / line.total.sent : null;
 }
 
-export function priceView(data: PpvResponse, page: string | null): PriceView {
+/**
+ * A person's logins as one: Hub answers by login, a team screen is about the person (packages/ui/src/people.ts).
+ * The group's first login is the one that sent the most (the row opens it; the card is the person's either way).
+ */
+function byPerson<T extends { userId: number; username: string }>(rows: readonly T[], people: PeopleIndex, weight: (row: T) => number): { userId: number; name: string; rows: T[] }[] {
+  const groups = new Map<string, T[]>();
+  for (const row of rows) {
+    const key = people.keyOf(row.userId);
+    groups.set(key, [...(groups.get(key) ?? []), row]);
+  }
+  return [...groups.values()].map((group) => {
+    const lead = [...group].sort((left, right) => weight(right) - weight(left))[0]!;
+    return { userId: lead.userId, name: people.nameOf(lead.userId, lead.username), rows: group };
+  });
+}
+
+export function priceView(data: PpvResponse, page: string | null, people: PeopleIndex = LOGINS_ONLY): PriceView {
   const pages: PpvLine[] = data.pages
     .filter((one) => page === null || one.pageLabel === page)
     .map((one) => ({
@@ -252,14 +269,14 @@ export function priceView(data: PpvResponse, page: string | null): PriceView {
     byPrice,
     withoutAuthor: pages.reduce((sum, one) => sum + (one.withoutAuthor ?? 0), 0),
   };
-  const chatters: PpvLine[] = data.chatters.map((one) => ({
-    key: `chatter:${one.userId}`,
+  const chatters: PpvLine[] = byPerson(data.chatters, people, (one) => one.total.sent).map((person) => ({
+    key: `chatter:${person.userId}`,
     kind: "chatter",
-    name: one.username,
-    userId: one.userId,
+    name: person.name,
+    userId: person.userId,
     platform: null,
-    total: sumPpv([one.total]),
-    byPrice: priceCells([one.byPrice]),
+    total: sumPpv(person.rows.map((one) => one.total)),
+    byPrice: priceCells(person.rows.map((one) => one.byPrice)),
     withoutAuthor: null,
   }));
   const firstPpv = priceCells(data.pages.filter((one) => page === null || one.pageLabel === page).map((one) => one.firstPpv));
@@ -365,7 +382,7 @@ export function repliesIn(line: Pick<ReplyLine, "byDelay">, buckets: readonly st
 export const FAST = ["under5m"] as const;
 export const SLOW = ["1to6h", "over6h"] as const;
 
-export function speedView(data: RepliesResponse, page: string | null): SpeedView {
+export function speedView(data: RepliesResponse, page: string | null, people: PeopleIndex = LOGINS_ONLY): SpeedView {
   const shown = data.pages.filter((one) => page === null || one.pageLabel === page);
   const pages: ReplyLine[] = shown.map((one) => ({
     key: `page:${one.pageLabel}`,
@@ -376,13 +393,13 @@ export function speedView(data: RepliesResponse, page: string | null): SpeedView
     byDelay: delayCells([one.byDelay]),
   }));
   const byDelay = delayCells(shown.map((one) => one.byDelay));
-  const chatters: ReplyLine[] = data.chatters.map((one) => ({
-    key: `chatter:${one.userId}`,
+  const chatters: ReplyLine[] = byPerson(data.chatters, people, (one) => one.total.replies).map((person) => ({
+    key: `chatter:${person.userId}`,
     kind: "chatter",
-    name: one.username,
-    userId: one.userId,
-    total: sumReplies([one.total]),
-    byDelay: delayCells([one.byDelay]),
+    name: person.name,
+    userId: person.userId,
+    total: sumReplies(person.rows.map((one) => one.total)),
+    byDelay: delayCells(person.rows.map((one) => one.byDelay)),
   }));
   return { from: data.from, to: data.to, all: { key: "all", kind: "page", name: page ?? "Все страницы", userId: null, total: sumReplies(byDelay), byDelay }, pages, chatters };
 }

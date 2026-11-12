@@ -27,6 +27,7 @@ import { ShiftStepper } from "./ShiftStepper.js";
 import { Transcript } from "./Transcript.js";
 import { useReviewParams, type ReviewChange, type ReviewParams } from "./useReviewParams.js";
 import "./review.css";
+import { usePeopleIndex } from "@/shared/people";
 
 /**
  * Разбор смены (spec §4.2): one chatter's shift opened up, the core of
@@ -296,8 +297,9 @@ function Problem({ back, kind, retry, retrying, userId, at }: {
 }) {
   const location = useLocation();
   const around = useShiftsAround(at, kind !== "error");
+  const people = usePeopleIndex();
   const own = (around.data?.shifts ?? []).filter((one) => one.userId === userId);
-  const name = own[0]?.username ?? null;
+  const name = own[0] ? people.nameOf(userId, own[0].username) : null;
   const target = Date.parse(at);
   const nearest = [...own].sort((a, b) => Math.abs(Date.parse(a.startedAt) - target) - Math.abs(Date.parse(b.startedAt) - target))[0] ?? null;
   const when = `${formatWeekdayDay(at)}, ${formatTimeOfDay(at)}`;
@@ -386,7 +388,9 @@ function Loaded({ model, params, update, back, updatedAt, refreshing, onRefresh 
   onRefresh: () => void;
 }) {
   const { index } = model;
-  const { shift } = index;
+  const people = usePeopleIndex();
+  // The shift is a login's; its name is the person's (packages/ui/src/people.ts).
+  const shift = useMemo(() => ({ ...index.shift, username: people.nameOf(index.shift.userId, index.shift.username) }), [index.shift, people]);
   const when = whenOf(shift);
   useWeekOfShift(when.payDay);
   // The page narrows the chats only where the shift has more than one page.

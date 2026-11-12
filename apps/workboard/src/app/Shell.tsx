@@ -1,6 +1,6 @@
 import { ArrowLeft, Banknote, CalendarClock, ChevronsUpDown, Flag, Inbox, LogOut, Monitor, Moon, Package, Smartphone, Sun, TrendingUp, Users } from "lucide-react";
 import { Suspense, useState, type ReactNode } from "react";
-import { NavLink, Navigate, Outlet, useLocation, useMatches, type UIMatch } from "react-router";
+import { NavLink, Navigate, Outlet, useLocation, useMatches, useNavigate, type UIMatch } from "react-router";
 import { useQuery } from "@tanstack/react-query";
 import { CountBadge, ErrorState, Menu, Skeleton, type IconComponent, type MenuEntry } from "@agency_hub_core/ui";
 import { PlaceFrame } from "@agency_hub_core/ui/components/Place";
@@ -37,8 +37,6 @@ const EXITS: readonly { href: () => string; label: string; roles: readonly Role[
   { href: consoleHref, label: "Hub", roles: TEAM },
 ];
 
-/** A chatter's account — devices, password, their AI spend — is the console's page on this host (a page load). */
-const ACCOUNT_HREF = "/account";
 
 const ROLE_WORD: Record<string, string> = { owner: "Владелец", team_lead: "Тимлид", chatter: "Чаттер" };
 const THEME_ICON: Record<ThemePreference, IconComponent> = { system: Monitor, light: Sun, dark: Moon };
@@ -123,6 +121,7 @@ function useScreenKey(): string {
  */
 function Account() {
   const { user, role, accountRole, narrow } = useMe();
+  const navigate = useNavigate();
   const theme = useThemeStore((state) => state.theme);
   const setTheme = useThemeStore((state) => state.setTheme);
   if (!user) return null;
@@ -130,7 +129,7 @@ function Account() {
   const chatter = role === "chatter";
   // A narrow session (from the extension) does not change the account's devices or password.
   const items: MenuEntry[] = [
-    ...(chatter && !narrow ? [{ label: "Аккаунт и устройства", icon: Smartphone, onSelect: () => window.location.assign(ACCOUNT_HREF) }, { separator: true as const }] : []),
+    ...(chatter && !narrow ? [{ label: "Аккаунт и устройства", icon: Smartphone, onSelect: () => navigate("/account") }, { separator: true as const }] : []),
     { group: "Тема" },
     ...THEME_OPTIONS.map((option) => ({
       label: option.label,
@@ -221,6 +220,7 @@ function TeamSide() {
 function PlaceShell({ children }: { children: ReactNode }) {
   const { user, role, accountRole } = useMe();
   const location = useLocation();
+  const navigate = useNavigate();
   const { page } = usePageFilter();
   const [searchOpen, setSearchOpen] = useState(false);
   const waiting = useWaitingCount(true);
@@ -238,7 +238,7 @@ function PlaceShell({ children }: { children: ReactNode }) {
         current={menuItemAt(`${base()}${location.pathname}`)}
         hrefOf={hrefOf}
         counts={{ waiting }}
-        account={{ name: user.username, role: accountRole, signOut }}
+        account={{ name: user.username, role: accountRole, signOut, onAccount: () => navigate("/account") }}
         searchOpen={searchOpen}
         setSearchOpen={setSearchOpen}
       >

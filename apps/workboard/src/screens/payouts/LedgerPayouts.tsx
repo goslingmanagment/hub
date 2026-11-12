@@ -11,6 +11,7 @@ import { reportOfDay, useLedgerReports, usePayoutPerson, type LedgerRow, type Le
 import { PayoutBrief } from "./PayoutBrief";
 import { ReportDetail } from "./ReportDetail";
 import { reportRowOf, sourceWord } from "./reportRows";
+import { usePeopleIndex } from "@/shared/people";
 
 /**
  * «Выплаты → Долги» from the agency ledger: four numbers, then a row per person
@@ -42,11 +43,16 @@ function Strip({ strip }: { strip: readonly StripDay[] }) {
   );
 }
 
-/** The app's one way to show a person: their Hub login; the ledger's name beside it when it says more. */
+/**
+ * The app's one way to show a person: the registry's display name of their Hub login (packages/ui/src/people.ts);
+ * the ledger's name beside it when it says more than the name and the login.
+ */
 function PersonCell({ row }: { row: LedgerRow }) {
   const { person } = row;
-  const name = person.hubUser?.username ?? person.name;
-  const own = person.hubUser !== null && person.name.trim().toLowerCase() !== name.toLowerCase() ? person.name : null;
+  const people = usePeopleIndex();
+  const name = person.hubUser ? people.nameOf(person.hubUser.userId, person.hubUser.username) : person.name;
+  const said = new Set([name, person.hubUser?.username ?? ""].map((word) => word.trim().toLowerCase()));
+  const own = person.hubUser !== null && !said.has(person.name.trim().toLowerCase()) ? person.name : null;
   const hint = person.status === "left" ? ["не работает", own].filter(Boolean).join(" · ") : person.hubUser === null ? "не связан с Hub" : own;
   return <Person name={name} status={person.status === "left" ? "disabled" : "away"} hint={hint} />;
 }
@@ -323,6 +329,8 @@ function panelDays(person: TeamLedgerPayoutPerson, read: TeamLedgerPayoutPersonR
  */
 export function LedgerPersonDrawer({ row, view, period, onClose }: { row: LedgerRow; view: LedgerView; period: ResolvedPeriod; onClose: () => void }) {
   const { person } = row;
+  const people = usePeopleIndex();
+  const shownName = person.hubUser ? people.nameOf(person.hubUser.userId, person.hubUser.username) : person.name;
   const pay = usePayoutPerson(person.slug, period);
   const days = panelDays(person, pay.data);
   const adjustments: readonly Adjustment[] = pay.data?.adjustments ?? [];
@@ -373,8 +381,8 @@ export function LedgerPersonDrawer({ row, view, period, onClose }: { row: Ledger
       open
       onClose={onClose}
       size="lg"
-      title={person.hubUser ? <PersonLink userId={person.hubUser.userId} name={person.hubUser.username} backLabel="Выплаты" /> : person.name}
-      subtitle={[person.hubUser && person.name.toLowerCase() !== person.hubUser.username.toLowerCase() ? person.name : null, formatDayRange(view.from, view.to)].filter(Boolean).join(" · ")}
+      title={person.hubUser ? <PersonLink userId={person.hubUser.userId} name={shownName} backLabel="Выплаты" /> : person.name}
+      subtitle={[person.hubUser && ![shownName, person.hubUser.username].some((word) => word.toLowerCase() === person.name.toLowerCase()) ? person.name : null, formatDayRange(view.from, view.to)].filter(Boolean).join(" · ")}
       footer={<Button onClick={onClose}>Закрыть</Button>}
     >
       <div className="payouts-drawer">

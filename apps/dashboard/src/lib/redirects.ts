@@ -29,6 +29,8 @@ export interface LegacyRule {
   drop?: readonly string[];
   /** A fixed anchor; otherwise the old one is kept. */
   hash?: string;
+  /** The anchor when the old address has none: a section of a screen of sections (`/system/dev#queue`). */
+  anchor?: string;
 }
 
 export interface LegacyTarget {
@@ -60,10 +62,12 @@ export function legacyTarget(rule: LegacyRule, params: RouteParams, search: stri
   }
   if (rule.pageFromPath && params.pageLabel !== undefined) query.set("page", params.pageLabel);
   for (const [key, value] of Object.entries(rule.set ?? {})) query.set(key, value);
-  const pathname = typeof rule.to === "function" ? rule.to(params, query) : fillPath(rule.to, params);
+  const target = typeof rule.to === "function" ? rule.to(params, query) : fillPath(rule.to, params);
+  // A target may name its section itself: `/system/onlyfans-api#collection`.
+  const [pathname = "", section] = target.split("#");
   for (const name of rule.drop ?? []) query.delete(name);
   const text = query.toString();
-  return { pathname, search: text ? `?${text}` : "", hash: rule.hash ?? hash };
+  return { pathname, search: text ? `?${text}` : "", hash: rule.hash ?? (hash || (section ? `#${section}` : rule.anchor ?? "")) };
 }
 
 /** Addresses that are only old now: a route of their own, numbers as in §8.2. */
@@ -82,12 +86,19 @@ export const LEGACY_ROUTES: ReadonlyArray<LegacyRule & { path: string }> = [
     },
   },
   { path: "pages", to: "/settings/pages" }, // 3
+  // A page's card left on 12.11: the page is a filter. Its «Сводка» is Главная on the page (the block of
+  // operations of an old address goes to Операции: pageCardLegacyRule), its tabs found their sections.
+  { path: "pages/:pageLabel", to: "/", pageFromPath: true },
+  { path: "pages/:pageLabel/account", to: "/settings/pages/:pageLabel/account" },
+  { path: "pages/:pageLabel/browser-login", to: "/settings/pages/:pageLabel/login" },
+  { path: "pages/:pageLabel/promo", to: "/traffic/promo", pageFromPath: true },
+  { path: "pages/:pageLabel/mass-messages", to: "/content/mass-messages", pageFromPath: true },
   { path: "pages/:pageLabel/subscribers", to: "/fans/subscribers", pageFromPath: true }, // 5
   { path: "pages/:pageLabel/followers", to: "/fans/followers", pageFromPath: true }, // 6
   { path: "pages/:pageLabel/top-supporters", to: "/fans", pageFromPath: true }, // 7
   { path: "pages/:pageLabel/deleted-fans", to: "/fans/gone", pageFromPath: true }, // 8
-  { path: "pages/:pageLabel/profile", to: "/pages/:pageLabel/account" }, // 9
-  { path: "pages/:pageLabel/settings", to: "/pages/:pageLabel/account", hash: "#fansly-settings" }, // 10
+  { path: "pages/:pageLabel/profile", to: "/settings/pages/:pageLabel/account" }, // 9
+  { path: "pages/:pageLabel/settings", to: "/settings/pages/:pageLabel/account", hash: "#fansly-settings" }, // 10
   { path: "pages/:pageLabel/spender-autolists/:bucketKey", to: "/fans/by-spend/:bucketKey", pageFromPath: true }, // 11
   { path: "pages/:pageLabel/fans/:platform/:platformUserId", to: "/fans/:pageLabel/:platform/:platformUserId" }, // 12
   { path: "browser-profiles/new", to: "/settings/pages/connect", rename: { page: "forPage" } }, // 13
@@ -97,48 +108,63 @@ export const LEGACY_ROUTES: ReadonlyArray<LegacyRule & { path: string }> = [
     to: (_, query) => {
       const page = query.get("page");
       query.delete("page");
-      return page ? `/pages/${pathSegment(page)}/promo` : "/system/onlyfans-api";
+      if (page) query.set("page", page);
+      return page ? "/traffic/promo" : "/system/onlyfans-api";
     },
   },
-  { path: "ofapi-media", to: "/system/onlyfans-api/media" }, // 17
-  { path: "ofapi-exports", to: "/system/onlyfans-api/exports" }, // 18
-  { path: "ofapi-actions", to: "/system/onlyfans-api/actions" }, // 19
+  { path: "ofapi-media", to: "/system/onlyfans-api", anchor: "#media" }, // 17
+  { path: "ofapi-exports", to: "/system/onlyfans-api", anchor: "#exports" }, // 18
+  { path: "ofapi-actions", to: "/system/onlyfans-api", anchor: "#actions" }, // 19
   { path: "ofapi-credits", to: "/money/costs/onlyfans-api" }, // 20
   { path: "usage", to: "/money/costs/ai" }, // 21
   { path: "ai-spend", to: "/money/costs/ai" }, // 22
-  { path: "publication-settings", to: "/publications", set: { panel: "settings" } }, // 23
+  { path: "publication-settings", to: "/content/publications", set: { panel: "settings" } }, // 23
+  // Публикации are a tab of «Контент» since 12.11: the old address with every parameter and its anchor.
+  { path: "publications", to: "/content/publications" },
+  { path: "content", to: "/content/publications" },
   // 24–31, the old addresses of «Команда»: Workboard's now (lib/workboard.ts).
   { path: "agent-hydration", to: "/system/history-requests" }, // 32
   { path: "incidents", to: "/system/failures" }, // 33
   { path: "analytics", to: "/stats", rename: { range: "period" } }, // 34
   { path: "notifications", drop: ["tab"], to: (_, query) => (query.get("tab") === "incidents" ? "/system/failures" : "/settings/notifications") }, // 39, 40
-  { path: "dev", to: "/system/dev/log" }, // 58
-  { path: "dev/log", to: "/system/dev/log" }, // 59
-  { path: "dev/queue", to: "/system/dev/queue" }, // 60
-  { path: "dev/db-stats", to: "/system/dev/database" }, // 61
-  { path: "dev/incidents", to: "/system/dev/log", set: { problems: "1" } }, // 62
+  { path: "dev", to: "/system/dev", anchor: "#log" }, // 58
+  { path: "dev/log", to: "/system/dev", anchor: "#log" }, // 59
+  { path: "dev/queue", to: "/system/dev", anchor: "#queue" }, // 60
+  { path: "dev/db-stats", to: "/system/dev", anchor: "#database" }, // 61
+  { path: "dev/incidents", to: "/system/dev", set: { problems: "1" }, anchor: "#log" }, // 62
   {
     path: "dev/sync-status", // 63, 64
     to: (_, query) => {
       const run = query.get("runId");
       query.delete("runId");
-      return run ? `/system/dev/log/${pathSegment(run)}` : "/system/dev/log";
+      return run ? `/system/dev/log/${pathSegment(run)}` : "/system/dev#log";
     },
   },
-  { path: "dev/client-health", to: "/system/dev/extension" }, // §7.1, row 50
+  { path: "dev/client-health", to: "/system/dev", anchor: "#extension" }, // §7.1, row 50
+  // The six screens of «Для разработчика» are one screen «Разработчик» of sections (12.11); a run stays a page.
+  { path: "system/dev/log", to: "/system/dev", anchor: "#log" },
+  { path: "system/dev/queue", to: "/system/dev", anchor: "#queue" },
+  { path: "system/dev/database", to: "/system/dev", anchor: "#database" },
+  { path: "system/dev/extension", to: "/system/dev", anchor: "#extension" },
+  { path: "system/dev/config", to: "/system/dev", anchor: "#config" },
+  // The six screens of the OnlyFans API are one screen of sections (12.11): each old address opens its section.
+  { path: "system/onlyfans-api/collection", to: "/system/onlyfans-api", anchor: "#collection" },
+  { path: "system/onlyfans-api/tools", to: "/system/onlyfans-api", anchor: "#tools" },
+  { path: "system/onlyfans-api/media", to: "/system/onlyfans-api", anchor: "#media" },
+  { path: "system/onlyfans-api/exports", to: "/system/onlyfans-api", anchor: "#exports" },
+  { path: "system/onlyfans-api/actions", to: "/system/onlyfans-api", anchor: "#actions" },
   // The roots of the new sections (65–69).
   { path: "money", to: "/money/costs/ai" },
   { path: "money/income", to: "/" },
   { path: "money/costs", to: "/money/costs/ai" },
   { path: "settings/ai", to: "/settings/ai/personas" },
   { path: "system", to: "/system/collection" },
-  { path: "system/dev", to: "/system/dev/log" },
 ];
 
-// Four addresses are alive: the same path is a new screen, some of its old
-// parameters are not. Each answers with a rule or stays where it is.
+// Addresses that are alive, or old with a parameter of their own: the same path
+// is a new screen, some of its old parameters are not.
 
-/** `/pages/:pageLabel`: the old block of operations (4). */
+/** `/pages/:pageLabel`: the old block of operations (4); without it the rule above (Главная on the page). */
 export function pageCardLegacyRule(query: URLSearchParams): LegacyRule | null {
   return query.has("type") || query.has("txOffset")
     ? { to: "/money/transactions", pageFromPath: true, rename: { txOffset: "offset" }, set: { period: "all", reportableOnly: "false" } }
@@ -163,11 +189,11 @@ const SETTINGS_TAB_TARGET: Readonly<Record<string, string>> = {
   users: workboardHref("access"),
   personas: "/settings/ai/personas",
   notifications: "/settings/notifications",
-  collection: "/system/onlyfans-api/collection",
-  ofapi: "/system/onlyfans-api/tools",
+  collection: "/system/onlyfans-api#collection",
+  ofapi: "/system/onlyfans-api#tools",
   agentKeys: "/system/agent-keys",
   features: "/settings/ai/features",
-  configuration: "/system/dev/config",
+  configuration: "/system/dev#config",
   engine: "/system/collection",
   sync: "/system/collection",
 };
