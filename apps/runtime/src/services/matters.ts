@@ -3,6 +3,9 @@ import { createHash } from "node:crypto";
 import {
   isMatterCheckKind,
   isMatterInfoKind,
+  WAITING_GROUPS,
+  waitingGroupLink,
+  waitingGroupOf,
   isCustomOrderCheckKind,
   isMatterMirrorKind,
   isMatterPersonStartKind,
@@ -133,6 +136,9 @@ const WAITING_ROW_SPECS: readonly WaitingRowSpec[] = [
   { id: "history", kinds: ["history.request"], teamLead: false, label: "Заявки на историю", to: "/workboard/decisions#system" },
 ];
 
+/** The team lead's row kinds (customs, held sends): the owner's only while he is the acting team lead. */
+const TEAM_LEAD_KINDS: ReadonlySet<string> = new Set(WAITING_ROW_SPECS.filter((spec) => spec.teamLead).flatMap((spec) => [...spec.kinds]));
+
 /** The kinds a role reads in «Ждут вас»: the owner every one, a team lead customs and held sends, a chatter none. */
 export function waitingKindsOf(role: MatterOwnerRole): MatterMirrorKind[] {
   if (role === "chatter") return [];
@@ -253,6 +259,38 @@ export function buildWaitingRows(input: {
     total: rows.reduce((sum, row) => sum + (row.count ?? 0), 0),
     failed: rows.filter((row) => row.count === null).map((row) => row.id),
   };
+}
+
+/**
+ * «Ждут вас» by the list's groups (contracts waiting-groups.ts, the one table): a group per kind of the viewer's own
+ * open matters, in the list's order, never «Для сведения»; counted as the list counts — one per matter, and the
+ * custom orders' number in «Кастомы» where they are customs' home. A group is `checked: false` when a source of it
+ * (a kind the viewer's checks keep, `trackedKinds`, or a kind of its open matters) did not answer lately; such a group
+ * is shown with what it has, and a group with nothing and everything answered is left out.
+ */
+export function buildWaitingGroups(input: {
+  matters: readonly WaitingMatter[];
+  kindState: (kind: string) => MatterKindState;
+  trackedKinds: readonly string[];
+  customOrders?: number | null;
+}): MattersWaitingResponse["groups"] {
+  const groups: MattersWaitingResponse["groups"] = [];
+  for (const group of WAITING_GROUPS) {
+    if (group.id === "info") continue;
+    const kinds = new Set([
+      ...input.trackedKinds.filter((kind) => waitingGroupOf(kind) === group.id && input.kindState(kind).applicable),
+      ...input.matters.filter((matter) => waitingGroupOf(matter.kind) === group.id).map((matter) => matter.kind),
+    ]);
+    let count = input.matters.filter((matter) => waitingGroupOf(matter.kind) === group.id).length;
+    let checked = [...kinds].every((kind) => input.kindState(kind).checked);
+    if (group.id === "customs" && input.customOrders !== undefined) {
+      if (input.customOrders === null) checked = false;
+      else count += input.customOrders;
+    }
+    if (count === 0 && checked) continue;
+    groups.push({ id: group.id, title: group.title, count, checked, to: waitingGroupLink(group.id) });
+  }
+  return groups;
 }
 
 /**
@@ -389,12 +427,25 @@ export async function readMattersWaiting(app: MattersApp, principal: HumanAuthPr
   const pageId = await pageIdOf(app, query.pageLabel, pages.idOf);
   const teamLeadRows = heldRoles.includes("team_lead");
   const orders = teamLeadRows ? await customOrdersCount(app, viewer, pageId) : undefined;
+  const rows = buildWaitingRows({
+    role: viewer.role, matters, kindState, labelOf: (id) => pages.labelOf.get(id), teamLeadRows,
+    ...(orders === undefined ? {} : { customOrders: orders === null ? null : orders.all }),
+  });
+  // The kinds the viewer's own checks keep, so a group whose source failed shows even with nothing open in it.
+  const trackedKinds = viewer.role === "chatter" ? [] : [
+    ...waitingKindsOf(viewer.role).filter((kind) => viewer.role !== "owner" || teamLeadRows || !TEAM_LEAD_KINDS.has(kind)),
+    ...(viewer.role === "owner" ? MATTER_CHECK_KINDS.filter((kind) => !isMatterInfoKind(kind)) : []),
+  ];
+  const groups = viewer.role === "chatter" ? [] : buildWaitingGroups({
+    matters: matters.filter((matter) => !isMatterInfoKind(matter.kind)), kindState, trackedKinds,
+    ...(orders === undefined ? {} : { customOrders: orders === null ? null : orders.all }),
+  });
   return {
     active: active === true,
-    ...buildWaitingRows({
-      role: viewer.role, matters, kindState, labelOf: (id) => pages.labelOf.get(id), teamLeadRows,
-      ...(orders === undefined ? {} : { customOrders: orders === null ? null : orders.all }),
-    }),
+    ...rows,
+    groups,
+    // The owner's number is the list's: the sum of its groups (the Home's chips). A team lead's stays the rows'.
+    total: viewer.role === "owner" ? groups.reduce((sum, group) => sum + group.count, 0) : rows.total,
     decisions: buildDecisions({ role: viewer.role, matters, kindState, pageId, ...(orders === undefined ? {} : { customOrders: orders }) }),
     serverNow: now.toISOString(),
   };

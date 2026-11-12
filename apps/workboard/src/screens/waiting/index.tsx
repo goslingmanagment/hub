@@ -45,6 +45,8 @@ interface Line {
   title: ReactNode;
   about: ReactNode[];
   action: ReactNode;
+  /** What the line counts for in its group's number: a matter 1, a count row its count (the Home counts the same way). */
+  weight?: number;
 }
 
 interface Context {
@@ -301,7 +303,7 @@ function Group({ id, title, lines, now }: { id: WaitingGroupId; title: string; l
     <section className="wt-group" id={id} aria-labelledby={`wt-${id}`}>
       <h2 className="wt-group__title" id={`wt-${id}`}>
         {title}
-        <span className="wt-group__count">{lines.length}</span>
+        <span className="wt-group__count">{lines.reduce((sum, line) => sum + (line.weight ?? 1), 0)}</span>
       </h2>
       <ul className="wt-lines">
         {shown.map((line) => <LineRow key={line.key} line={line} now={now} />)}
@@ -329,6 +331,7 @@ const COUNT_ROW_GROUP: Readonly<Record<string, WaitingGroupId>> = { customs: "cu
 function countLines(rows: ReadonlyArray<{ id: string; label: string; count: number | null; to: string; matterIds: readonly number[] }>, now: number): Line[] {
   return rows.filter((row) => row.matterIds.length === 0 && row.count !== null && row.count > 0).map((row) => ({
     key: `row:${row.id}`,
+    weight: row.count ?? 0,
     matter: null,
     group: COUNT_ROW_GROUP[row.id] ?? "other",
     since: new Date(now).toISOString(),

@@ -229731,6 +229731,52 @@
                         "additionalProperties": false
                       }
                     },
+                    "groups": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "enum": [
+                              "questions",
+                              "reports",
+                              "customs",
+                              "held",
+                              "publications",
+                              "content",
+                              "people",
+                              "ledger",
+                              "system",
+                              "other",
+                              "info"
+                            ]
+                          },
+                          "title": {
+                            "type": "string"
+                          },
+                          "count": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "checked": {
+                            "type": "boolean"
+                          },
+                          "to": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "title",
+                          "count",
+                          "checked",
+                          "to"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
                     "total": {
                       "type": "integer",
                       "minimum": 0,
@@ -229878,6 +229924,7 @@
                   "required": [
                     "active",
                     "rows",
+                    "groups",
                     "total",
                     "failed",
                     "decisions",

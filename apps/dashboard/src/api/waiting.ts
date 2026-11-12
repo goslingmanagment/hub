@@ -32,8 +32,10 @@ import { reportQuestionsQueryOptions, saleQuestionsQueryOptions, teamCustomsQuer
  * none: without `?page=` it shows every page.
  */
 export interface WaitingRow {
+  /** The chip's own words (a group of the list): shown instead of the row's short label. */
+  title?: string;
   /** The old rows; while the owner's switch reads matters, also «Люди и доступ», «Проверки ledger», «Другие дела» (package K). */
-  id: "drafts" | "unknown" | "questions" | "reports" | "customs" | "held" | "login" | "failures" | "extension" | "history" | "content" | "people" | "ledger" | "other";
+  id: "drafts" | "unknown" | "questions" | "reports" | "customs" | "held" | "login" | "failures" | "extension" | "history" | "content" | "people" | "ledger" | "other" | "publications" | "system";
   label: string;
   /** null: the read failed, or the state it depends on could not be checked. */
   count: number | null;
@@ -230,10 +232,17 @@ export function useWaitingCounts(role: string): WaitingCounts {
 
   const queries = [drafts, unknown, questions, reports, customs, held, overview, enginePages, incidents, extension, history];
   if (active && fromMatters.data) {
-    // The same rows, counts and links from matters (services/matters.ts buildWaitingRows), and the new kinds after them.
-    const matterRows: WaitingRow[] = fromMatters.data.rows.map((row) => ({
-      id: row.id, label: row.label, count: row.count, capped: row.capped, page: row.pageLabel ?? undefined, to: row.to,
-    }));
+    // The owner's chips are the list's groups (contracts waiting-groups.ts, counted by Hub): the list's titles and
+    // numbers, summing to the menu's number. A group whose source did not answer says «не удалось проверить», or «N+»
+    // when it has some. A team lead keeps the rows (services/matters.ts buildWaitingRows).
+    const matterRows: WaitingRow[] = role === "owner"
+      ? fromMatters.data.groups.map((group) => ({
+        id: group.id as WaitingRow["id"], label: group.title, title: group.title,
+        count: !group.checked && group.count === 0 ? null : group.count, capped: !group.checked, to: group.to,
+      }))
+      : fromMatters.data.rows.map((row) => ({
+        id: row.id, label: row.label, count: row.count, capped: row.capped, page: row.pageLabel ?? undefined, to: row.to,
+      }));
     return {
       rows: matterRows,
       total: fromMatters.data.total,

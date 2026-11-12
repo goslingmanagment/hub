@@ -1,57 +1,19 @@
-import { MATTER_INFO_KINDS } from "@agency_hub_core/contracts";
+import { WAITING_GROUPS, waitingGroupOf, type WaitingGroupId } from "@agency_hub_core/contracts";
 import { ruPlural } from "@agency_hub_core/ui/plural";
 import { contentopsHref } from "@agency_hub_core/ui/sites";
 
 /**
- * «Ждут вас»: which group a matter's kind is in, and the words for a kind
- * that could not be checked. A kind this file does not know (another
- * package's, an agent's) goes to «Другие дела» and shows its own title, link
- * and age: nothing here has to change for a new kind.
+ * «Ждут вас»: the anchors of the groups, the words for a kind that could not be
+ * checked, and how long a line waits. A kind no group knows (an agent's own)
+ * goes to «Другие дела» and shows its own title, link and age.
  */
 
-export type WaitingGroupId = "questions" | "reports" | "customs" | "held" | "publications" | "content" | "people" | "ledger" | "system" | "other" | "info";
-
-export interface WaitingGroup {
-  id: WaitingGroupId;
-  title: string;
-}
-
-/** The groups in the list's order: the old sections of «Решения» first (their anchors still open them), what only informs last. */
-export const WAITING_GROUPS: readonly WaitingGroup[] = [
-  { id: "questions", title: "Чья продажа" },
-  { id: "reports", title: "Отчёты смен" },
-  { id: "customs", title: "Кастомы" },
-  { id: "held", title: "Зависшие отправки" },
-  { id: "publications", title: "Публикации" },
-  // ContentOps' findings (`contentops.*`): decided in ContentOps, each line opens it there (contentopsLink).
-  { id: "content", title: "Контент" },
-  { id: "people", title: "Люди и доступ" },
-  { id: "ledger", title: "Проверки ledger" },
-  { id: "system", title: "Сбор, сбои и рутины" },
-  { id: "other", title: "Другие дела" },
-  { id: "info", title: "Для сведения" },
-];
-
-const INFO: ReadonlySet<string> = new Set(MATTER_INFO_KINDS);
-
-export function groupOf(kind: string): WaitingGroupId {
-  if (INFO.has(kind)) return "info";
-  if (kind === "ledger.sale_question" || kind === "sale.dispute" || kind === "sale.nobody_week" || kind === "sale.decisions.unlinked") return "questions";
-  if (kind === "off_platform.pending") return "reports";
-  if (kind === "ledger.report_post" || kind === "ledger.paid_day_changed") return "reports";
-  if (kind === "report.post_fix") return "reports";
-  if (kind.startsWith("custom.")) return "customs";
-  if (kind === "send.held") return "held";
-  if (kind.startsWith("publication.")) return "publications";
-  if (kind.startsWith("contentops.")) return "content";
-  // The people checks' (package K) and a newcomer's way (package J: `person.no_pages`, `person.onboarding_stuck`).
-  if (kind.startsWith("people.") || kind.startsWith("person.")) return "people";
-  if (kind === "ledger.check" || kind === "ledger.sheet_column" || kind === "ledger.off_platform") return "ledger";
-  if (kind === "page.login_needed" || kind === "incident.open" || kind === "extension.critical" || kind === "history.request") return "system";
-  // The system state's (routines, copies, the Mac's reporter): the same place as the failures.
-  if (kind.startsWith("routine.") || kind.startsWith("copy.") || kind.startsWith("reporter.")) return "system";
-  return "other";
-}
+/**
+ * The groups, their titles and order, and which group a kind is in: the one table in contracts (waiting-groups.ts),
+ * which Hub's server counts the console Home's chips by too. Nothing is grouped here.
+ */
+export { WAITING_GROUPS, type WaitingGroup, type WaitingGroupId } from "@agency_hub_core/contracts";
+export const groupOf = waitingGroupOf;
 
 /** An address's anchor (`/decisions#held`): the list of that group alone. Today's four and the new rows' of the console's Home. */
 export function groupOfAnchor(hash: string): WaitingGroupId | null {
