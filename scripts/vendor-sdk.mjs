@@ -104,103 +104,32 @@ writeFileSync(
 );
 
 const toShared = [["@agency_hub_core/shared", "../shared/index"]];
-for (const file of [
-  // House primitives (mills, platformEnum, the error body): routes.ts and
-  // routes-agent.ts both import them, so the vendored copy needs the module.
-  "primitives.ts",
-  "routes.ts",
-  // The Agent Read Plane operations. routes.ts spreads them into routeSchemas,
-  // so a vendored SDK without this file cannot compile at all.
-  "routes-agent.ts",
-  // Owner administration of the plane's keys (slice B). routes.ts spreads these
-  // into routeSchemas too, so the same rule applies: no file, no compile.
-  "routes-agent-keys.ts",
-  // The Fansly Sync Engine's owner routes; routes.ts spreads them in too.
-  "routes-sync.ts",
-  // The chat extension's routes; routes.ts spreads them in too.
-  "routes-client.ts",
-  // Wall posts through Hub (owner and agent drafts, their files); routes.ts spreads both route sets in too.
-  "publications.ts",
-  "routes-publications.ts",
-  "publication-files.ts",
-  "routes-publication-files.ts",
-  // Fan queues (agent and client routes); routes.ts spreads them in, the barrel re-exports both.
-  "fan-queues.ts",
-  "routes-fan-queues.ts",
-  // «Рассылки» kept by Hub (client routes); routes.ts spreads them in, the barrel re-exports both.
-  "outreach.ts",
-  "routes-outreach.ts",
-  // A chatter's own statistics in the cabinet (#987); routes.ts spreads them in, the barrel re-exports both.
-  "chatter-stats.ts",
-  "routes-chatter-stats.ts",
-  // Narrow device-token profiles: the barrel re-exports them.
-  "client-token-scopes.ts",
-  // One sign-in across the names (#1213): the hand-off routes and the narrow web session's list; routes.ts spreads
-  // the routes in, the barrel re-exports both.
-  "routes-signin.ts",
-  "web-session-scopes.ts",
-  // Matters (#1210) and the people registry (#1212): routes.ts spreads their routes in, the barrel re-exports both.
-  "matters.ts",
-  "routes-matters.ts",
-  "people.ts",
-  "routes-people.ts",
-  "routes-ofapi-vendor.ts",
-  "ofapi-vendor-usage.ts",
-  "routes-ofapi-collection.ts",
-  // «Ссылки OnlyFans» (traffic PR 12): routes.ts spreads them in, the barrel re-exports both.
-  "of-links.ts",
-  "routes-of-links.ts",
-  // A page browser's login and screen (Project Browser PR 15): routes.ts spreads them in.
-  "routes-page-browser.ts",
-  // The operator screen's read (`GET /api/v1/ops/live`): routes.ts spreads it in.
-  "routes-ops-live.ts",
-  // The Anthropic accounts on the usage screen (`/api/v1/admin/ai/accounts`): routes.ts spreads them in.
-  "routes-ai-accounts.ts",
-  // Hi's persona openers (\`/api/v1/admin/ai/openers\`, #876): routes.ts spreads them in.
-  "routes-ai-openers.ts",
-  // The owner's AI spend analytics (`/api/v1/admin/ai/spend…`, #915): routes.ts spreads them in.
-  "routes-ai-spend.ts",
-  // The owner's shift review and the model questionnaires: routes.ts spreads them in, the barrel re-exports both.
-  "routes-shift-review.ts",
-  // The shift review's pure rules; the barrel re-exports them.
-  "shift-review-rules.ts",
-  "routes-model-applications.ts",
-  // The team's work and sale facts for the agency ledger (`read:team`, #1100) and the ledger's
-  // payout reads (#1103): routes.ts spreads both in, the barrel re-exports both.
-  "agent-team.ts",
-  "routes-team-ledger.ts",
-  // The chatter's own shift reports from the ledger (cabinet «Отчёт смены»): routes.ts spreads them in.
-  "routes-account-reports.ts",
-  "routes-ofapi-marketing.ts",
-  "ofapi-smart-links.ts",
-  "routes-ofapi-banned-words.ts",
-  "routes-ofapi-read-collections.ts",
-  "routes-ofapi-exports.ts",
-    "routes-ofapi-media.ts",
-  "ofapi-actions.ts",
-  "ofapi-actions-collections.ts",
-  "ofapi-actions-publishing.ts",
-  "ofapi-actions-account.ts",
-  "routes-ofapi-actions.ts",
-  // Media looks (look:media): the barrel re-exports both and routes.ts spreads the routes in.
-  "media-looks.ts",
-  "routes-media-looks.ts",
-  // Agent reports (write:reports): the barrel re-exports both and routes.ts spreads the routes in.
-  "agent-reports.ts",
-  "routes-agent-reports.ts",
-  "sdk-runtime.ts",
-  "authorization-policy.ts",
-  "contract-hash.ts",
-  // Agent Read Plane vocabularies. The barrel re-exports all three, and this
-  // staging list is a fixed whitelist — omitting a barrel dependency fails the
-  // vendor compile outright (TS2307) and breaks every client re-vendor. That
-  // has now happened twice, so tests/vendor-sdk-staging.test.ts DERIVES the
-  // requirement from the barrel instead of pinning names one at a time.
-  "agent-read-registry.ts",
-  "agent-read-capabilities.ts",
-  "agent-read-datasets.ts",
-  "index.ts",
-]) {
+// The contracts the SDK needs: everything the barrel reaches by relative imports, followed to the end. This used to
+// be a fixed list of file names, and every package that added a contract file broke the vendor compile (TS2307) for
+// all clients until someone added the name by hand. Now a new file is staged the moment the barrel (or anything it
+// imports) names it.
+function contractFilesFromBarrel() {
+  const root = join(coreRoot, "packages/contracts/src");
+  const seen = new Set();
+  const queue = ["index.ts"];
+  while (queue.length > 0) {
+    const file = queue.pop();
+    if (seen.has(file)) continue;
+    seen.add(file);
+    const source = readFileSync(join(root, file), "utf8");
+    // `from "./x.ts"` of imports and re-exports, and side-effect `import "./x.ts"`.
+    for (const match of source.matchAll(/(?:from|import)\s+"(\.\/[^"]+)"/g)) {
+      const next = match[1].slice(2).endsWith(".ts") ? match[1].slice(2) : `${match[1].slice(2)}.ts`;
+      if (next.includes("/")) {
+        console.error(`vendor-sdk: ${file} imports ${match[1]}: the staging is flat, a contract in a subfolder needs the script taught`);
+        process.exit(1);
+      }
+      queue.push(next);
+    }
+  }
+  return [...seen].sort();
+}
+for (const file of contractFilesFromBarrel()) {
   stageFile(`packages/contracts/src/${file}`, join(staging, `src/contracts/${file}`), toShared);
 }
 

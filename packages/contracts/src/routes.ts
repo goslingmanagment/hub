@@ -5971,8 +5971,6 @@ const baseRouteSchemas = {
   ...mediaLookRouteSchemas,
   ...fanQueueRouteSchemas,
   ...agentTeamRouteSchemas,
-  ...agentDoorRouteSchemas,
-  ...agentKeyIntrospectRouteSchemas,
   ...outreachRouteSchemas,
   ...chatterStatsRouteSchemas,
   ...publicationFileRouteSchemas,
@@ -7182,15 +7180,7 @@ const baseRouteSchemas = {
   ...aiOpenerRouteSchemas,
   ...shiftReviewRouteSchemas,
   ...teamLedgerRouteSchemas,
-  ...matterRouteSchemas,
-  ...agentReportRouteSchemas,
   ...accountReportsRouteSchemas,
-  ...accountPayRouteSchemas,
-  ...peopleRouteSchemas,
-  ...signinRouteSchemas,
-  ...systemStateRouteSchemas,
-  ...customOrderRouteSchemas,
-  ...shiftHandinRouteSchemas,
   adminAiPersonasList: {
     auth: { kind: "owner-session" },
     tags: ["admin"],
@@ -8323,16 +8313,29 @@ const baseRouteSchemas = {
   },
 } as const;
 
-// Keep the owner action union, the Agent Read Plane (with its key administration)
-// and the Sync Engine's owner routes behind named groups in declarations.
-// Flattening them into one registry exceeds TypeScript's declaration
-// serialization limit (TS7056) when the SDK is compiled for external clients.
+// Keep the owner action union, the Agent Read Plane (with its key administration),
+// the Sync Engine's owner routes and every group that lives in its own module
+// behind named groups in declarations. Flattening them into one registry exceeds
+// TypeScript's declaration serialization limit (TS7056) when the SDK is compiled
+// for external clients: it did again on 2026-11-12, when the day's packages spread
+// ten more groups into `baseRouteSchemas`. A NEW group goes here, never into the
+// base object: `baseRouteSchemas` only holds the routes still written inline.
 export type RouteSchemas = typeof baseRouteSchemas
   & typeof ofapiActionRouteSchemas
   & typeof agentRouteSchemas
   & typeof agentKeyAdminRouteSchemas
   & typeof syncRouteSchemas
-  & typeof clientRouteSchemas;
+  & typeof clientRouteSchemas
+  & typeof agentDoorRouteSchemas
+  & typeof agentKeyIntrospectRouteSchemas
+  & typeof matterRouteSchemas
+  & typeof agentReportRouteSchemas
+  & typeof accountPayRouteSchemas
+  & typeof peopleRouteSchemas
+  & typeof signinRouteSchemas
+  & typeof systemStateRouteSchemas
+  & typeof customOrderRouteSchemas
+  & typeof shiftHandinRouteSchemas;
 export const routeSchemas: RouteSchemas = {
   ...baseRouteSchemas,
   ...ofapiActionRouteSchemas,
@@ -8340,6 +8343,16 @@ export const routeSchemas: RouteSchemas = {
   ...agentKeyAdminRouteSchemas,
   ...syncRouteSchemas,
   ...clientRouteSchemas,
+  ...agentDoorRouteSchemas,
+  ...agentKeyIntrospectRouteSchemas,
+  ...matterRouteSchemas,
+  ...agentReportRouteSchemas,
+  ...accountPayRouteSchemas,
+  ...peopleRouteSchemas,
+  ...signinRouteSchemas,
+  ...systemStateRouteSchemas,
+  ...customOrderRouteSchemas,
+  ...shiftHandinRouteSchemas,
 };
 export type AuthState = z.infer<typeof authStateSchema>;
 export type AuthUser = z.infer<typeof authUserSchema>;
