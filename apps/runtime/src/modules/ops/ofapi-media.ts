@@ -14,6 +14,10 @@ import {
   handoffOfapiMedia,
   readOfapiMedia,
 } from "../../services/ofapi-media-catalog.ts";
+import {
+  readOnlyfansVaultListsWire,
+  requestOwnerOnlyfansVaultListWalk,
+} from "../../services/onlyfans-vault-lists.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
 export function registerOfapiMediaRoutes(
   server: ApiServer,
@@ -32,6 +36,26 @@ export function registerOfapiMediaRoutes(
       if (!canAccessPage(principal, request.query.pageId))
         throw new ForbiddenError();
       return readOfapiMedia(app, request.query);
+    },
+  );
+  server.get(
+    "/api/v1/admin/ofapi/media/vault-lists",
+    { schema: ofapiMediaRouteSchemas.ofapiVaultListsGet },
+    async (request) => {
+      const principal = await requirePrincipal(request);
+      requireDashboardUser(principal);
+      if (!canAccessPage(principal, request.query.pageId))
+        throw new ForbiddenError();
+      return readOnlyfansVaultListsWire(app, request.query.pageId);
+    },
+  );
+  server.post(
+    "/api/v1/admin/ofapi/media/vault-lists/refresh",
+    { schema: ofapiMediaRouteSchemas.ofapiVaultListsRefresh },
+    async (request) => {
+      const principal = await requirePrincipal(request);
+      requireOwner(principal);
+      return requestOwnerOnlyfansVaultListWalk(app, request.body.pageId, principal.user.id);
     },
   );
   server.post(

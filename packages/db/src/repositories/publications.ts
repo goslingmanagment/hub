@@ -847,7 +847,8 @@ export async function getPublicationFiles(db: Database, fileIds: readonly number
  * The page's vault albums titled exactly `title` (0323): the creator albums
  * Hub collected (its own albums, not Fansly's All / Posts / Messages, and not
  * gone from the last full listing), and the ones Hub made for its vault-album
- * publications that no listing has collected yet.
+ * publications that no listing has collected yet. An OnlyFans page's albums
+ * are its custom vault lists as Hub last walked them (0394), not missing.
  */
 export async function findPageVaultAlbumRefs(db: Database, pageId: number, title: string): Promise<string[]> {
   const result = await db.execute<Row>(sql`
@@ -855,18 +856,24 @@ export async function findPageVaultAlbumRefs(db: Database, pageId: number, title
      where a.page_id = ${pageId} and a.vault_kind = 'creator' and a.album_type is null
        and a.missing_since is null and a.title = ${title}
     union
+    select l.list_ref from onlyfans_vault_lists l
+      join pages pg on pg.id = l.page_id and pg.platform::text = 'onlyfans'
+     where l.page_id = ${pageId} and l.list_type = 'custom' and l.missing_since is null and l.name = ${title}
+    union
     select p.vault_album_ref from publications p
      where p.page_id = ${pageId} and p.kind = 'vault_album' and p.vault_album_ref is not null and p.text = ${title}
        -- Once collected, the listing's row speaks for it (its title now, or gone).
        and not exists (select 1 from creator_vault_albums seen
                         where seen.page_id = p.page_id and seen.vault_kind = 'creator' and seen.album_ref = p.vault_album_ref)
+       and not exists (select 1 from onlyfans_vault_lists seen
+                        where seen.page_id = p.page_id and seen.list_ref = p.vault_album_ref)
   `);
   return result.rows.map((row) => String(row.album_ref)).sort();
 }
 
 /**
  * Whether `albumRef` is one of the page's vault albums as Hub knows them, by
- * the same two sources as `findPageVaultAlbumRefs` but by id, whatever its
+ * the same sources as `findPageVaultAlbumRefs` but by id, whatever its
  * title: a creator album of the listing (not gone from the last full one), or
  * an album a vault-album publication of the page holds that no listing has
  * collected yet (once collected, the listing's row speaks for it).
@@ -877,10 +884,16 @@ export async function isPageVaultAlbum(db: Database, pageId: number, albumRef: s
      where a.page_id = ${pageId} and a.vault_kind = 'creator' and a.album_type is null
        and a.missing_since is null and a.album_ref = ${albumRef}
     union all
+    select 1 from onlyfans_vault_lists l
+      join pages pg on pg.id = l.page_id and pg.platform::text = 'onlyfans'
+     where l.page_id = ${pageId} and l.list_type = 'custom' and l.missing_since is null and l.list_ref = ${albumRef}
+    union all
     select 1 from publications p
      where p.page_id = ${pageId} and p.kind = 'vault_album' and p.vault_album_ref = ${albumRef}
        and not exists (select 1 from creator_vault_albums seen
                         where seen.page_id = p.page_id and seen.vault_kind = 'creator' and seen.album_ref = p.vault_album_ref)
+       and not exists (select 1 from onlyfans_vault_lists seen
+                        where seen.page_id = p.page_id and seen.list_ref = p.vault_album_ref)
     limit 1
   `);
   return result.rows.length > 0;

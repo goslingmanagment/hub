@@ -26,7 +26,7 @@ for at password sign-in (`client: "chat-extension"`): it reaches only the
 64 routes marked "yes", and every route marked "no" refuses it with 403.
 A full device token is not affected.
 
-## Routes (442)
+## Routes (444)
 
 | Method | Path | Route key | Kind | Roles | Page scope | chat-extension token |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -131,6 +131,8 @@ A full device token is not affected.
 | POST | `/api/v1/admin/ofapi/media/sources` | `ofapiMediaSourceCreate` | `owner-session` | — | — | no |
 | POST | `/api/v1/admin/ofapi/media/uploads` | `ofapiMediaUploadCreate` | `owner-session` | — | — | no |
 | POST | `/api/v1/admin/ofapi/media/uploads/:jobId/resume` | `ofapiMediaUploadResume` | `owner-session` | — | — | no |
+| GET | `/api/v1/admin/ofapi/media/vault-lists` | `ofapiVaultListsGet` | `session` | — | — | no |
+| POST | `/api/v1/admin/ofapi/media/vault-lists/refresh` | `ofapiVaultListsRefresh` | `owner-session` | — | — | no |
 | GET | `/api/v1/admin/ofapi/profile-visitors` | `ofapiProfileVisitorsGet` | `session` | — | — | no |
 | GET | `/api/v1/admin/ofapi/spend/comparison` | `adminOfapiSpendComparison` | `owner-session` | — | — | no |
 | POST | `/api/v1/admin/ofapi/vendor-usage` | `ofapiVendorUsageRefresh` | `owner-session` | — | — | no |

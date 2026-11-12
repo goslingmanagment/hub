@@ -20,6 +20,9 @@ export const ofapiCollectionActionOptions = [
   z.strictObject({ action: z.literal("user_list_remove_user"), pageId, listId: userListId, userId: nativeId }),
   // The provider offers a toggle, not an idempotent desired-state setter.
   z.strictObject({ action: z.literal("user_list_pin_toggle"), pageId, listId: userListId, userId: nativeId }),
+  // A read of the page's vault lists (lightweight), 30 a page at most: OnlyFansAPI
+  // answers a validation error to more. Hub's album walk reads them all this way.
+  z.strictObject({ action: z.literal("vault_lists_list"), pageId, limit: z.number().int().min(1).max(30), offset: z.number().int().min(0).max(1_000_000) }),
   z.strictObject({ action: z.literal("vault_list_create"), pageId, name: vaultListName }),
   z.strictObject({ action: z.literal("vault_list_update"), pageId, listId, name: vaultListName }),
   z.strictObject({ action: z.literal("vault_list_delete"), pageId, listId }),

@@ -76,7 +76,45 @@ const media = z.object({
   observedAt: z.string(),
   observationId: z.number(),
 });
+/** An OnlyFans page's vault lists as Hub last walked them (0394), and its walk state. */
+export const ofapiVaultListsWireSchema = z.object({
+  pageId: z.number(),
+  lists: z.array(z.object({
+    listRef: z.string(),
+    name: z.string(),
+    /** custom (an album), posts, messages, stories, streams, ... */
+    type: z.string(),
+    mediaCount: z.number().nullable(),
+    firstSeenAt: z.string(),
+    lastSeenAt: z.string(),
+    /** Set only by a complete walk that no longer listed it. */
+    missingSince: z.string().nullable(),
+  })),
+  walk: z.object({
+    /** A walk asked for and not answered yet: the screen says «обновляется». */
+    requestedAt: z.string().nullable(),
+    completedAt: z.string().nullable(),
+    completedRequests: z.number().nullable(),
+    failedAt: z.string().nullable(),
+    failure: z.string().nullable(),
+  }),
+});
+export type OfapiVaultListsWire = z.infer<typeof ofapiVaultListsWireSchema>;
 export const ofapiMediaRouteSchemas = {
+  ofapiVaultListsGet: {
+    auth: { kind: "session" },
+    tags: ["ops"],
+    summary: "An OnlyFans page's vault lists (albums) as Hub last walked them, and the walk's state",
+    querystring: z.object({ pageId: z.coerce.number().int().positive() }),
+    response: { 200: ofapiVaultListsWireSchema, ...errors },
+  },
+  ofapiVaultListsRefresh: {
+    auth: { kind: "owner-session" },
+    tags: ["ops"],
+    summary: "Ask for a walk of an OnlyFans page's vault lists (reads only, at most 12 requests); the minutely job answers it",
+    body: z.object({ pageId: z.number().int().positive() }).strict(),
+    response: { 200: ofapiVaultListsWireSchema, ...errors },
+  },
   ofapiMediaUploadResume: {
     auth: { kind: "owner-session" },
     tags: ["ops"],
