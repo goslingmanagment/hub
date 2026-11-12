@@ -641,7 +641,8 @@ function OrderBody({ detail }: { detail: CustomOrderDetailResponse }) {
                       ? <span>{message.at ? <TimeMsk at={message.at} /> : "сообщение"}</span>
                       : <a href={telegramHref(message.telegramRef)} target="_blank" rel="noreferrer">{message.at ? <TimeMsk at={message.at} /> : "сообщение"}</a>}
                     <span>
-                      {message.author ? `${message.author}: ` : ""}{message.excerpt ?? ({ repost: "копия карточки", delivery: "сдача", revision: "правка", confirmation: "подтверждение", note: "заметка" })[message.kind]}
+                      {/* The writer once: ContentOps signs its own excerpts with its name. */}
+                      {message.author && !(message.excerpt ?? "").startsWith(`${message.author}: `) ? `${message.author}: ` : ""}{message.excerpt ?? ({ repost: "копия карточки", delivery: "сдача", revision: "правка", confirmation: "подтверждение", note: "заметка" })[message.kind]}
                       {message.kind === "revision" && message.part !== null && <span className="cus-muted"> · {PART_WORDS[message.part]}</span>}
                       {message.kind === "revision" && message.doneAt !== null && <span className="cus-muted"> · исправлено</span>}
                       {message.retractedAt !== null && <span className="cus-muted"> · отозвана</span>}
