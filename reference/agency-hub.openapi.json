@@ -111335,6 +111335,311 @@
         }
       }
     },
+    "/api/v1/agent/erasures": {
+      "get": {
+        "summary": "Every fan erasure Hub completed, after a cursor: the platform and the fan's ref, for the ledger to blank its own copies (needs read:team and read:money)",
+        "tags": [
+          "agent"
+        ],
+        "description": "Database only. An erasure is served once it completed (dry runs, page and model scopes never); erasures run one at a time under one lock, so they complete in the order of their ids and `next` never passes one not served yet. An erasure none of whose pages is in the key's grant is left out, and `next` moves past it.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{1,18}$"
+            },
+            "in": "query",
+            "name": "since",
+            "required": false
+          },
+          {
+            "schema": {
+              "default": 200,
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 500
+            },
+            "in": "query",
+            "name": "limit",
+            "required": false
+          }
+        ],
+        "security": [
+          {
+            "agentKeyAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "erasures": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "integer",
+                            "exclusiveMinimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "platform": {
+                            "type": "string",
+                            "enum": [
+                              "onlyfans",
+                              "fansly"
+                            ]
+                          },
+                          "fanRef": {
+                            "type": "string"
+                          },
+                          "erasedAt": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "platform",
+                          "fanRef",
+                          "erasedAt"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "next": {
+                      "type": "string"
+                    },
+                    "serverNow": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "erasures",
+                    "next",
+                    "serverNow"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/agent/fan-queues": {
       "get": {
         "summary": "The fan queues of the key's pages with their progress today and what is left (needs write:fan_queues)",
@@ -189432,6 +189737,129 @@
                                 "type": "null"
                               }
                             ]
+                          },
+                          "archive": {
+                            "type": "object",
+                            "properties": {
+                              "conversationRef": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "partnerUsername": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "fanRecordUsername": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "partnerUsernames": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string"
+                                }
+                              },
+                              "pricedMessage": {
+                                "anyOf": [
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "sentAt": {
+                                        "type": "string"
+                                      },
+                                      "sender": {
+                                        "type": [
+                                          "string",
+                                          "null"
+                                        ]
+                                      },
+                                      "text": {
+                                        "type": [
+                                          "string",
+                                          "null"
+                                        ]
+                                      }
+                                    },
+                                    "required": [
+                                      "sentAt",
+                                      "sender",
+                                      "text"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "pageMessages7d": {
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "name": {
+                                      "type": [
+                                        "string",
+                                        "null"
+                                      ]
+                                    },
+                                    "messages": {
+                                      "type": "integer",
+                                      "minimum": 0,
+                                      "maximum": 9007199254740991
+                                    }
+                                  },
+                                  "required": [
+                                    "name",
+                                    "messages"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              },
+                              "lastAuthored60d": {
+                                "anyOf": [
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "name": {
+                                        "type": "string"
+                                      },
+                                      "at": {
+                                        "type": "string"
+                                      },
+                                      "within48h": {
+                                        "type": "boolean"
+                                      }
+                                    },
+                                    "required": [
+                                      "name",
+                                      "at",
+                                      "within48h"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              }
+                            },
+                            "required": [
+                              "conversationRef",
+                              "partnerUsername",
+                              "fanRecordUsername",
+                              "partnerUsernames",
+                              "pricedMessage",
+                              "pageMessages7d",
+                              "lastAuthored60d"
+                            ],
+                            "additionalProperties": false
                           }
                         },
                         "required": [
@@ -189449,7 +189877,8 @@
                           "campaign",
                           "writers48h",
                           "writers7d",
-                          "lastWriter"
+                          "lastWriter",
+                          "archive"
                         ],
                         "additionalProperties": false
                       }
@@ -208453,6 +208882,15 @@
                               ],
                               "additionalProperties": false
                             }
+                          },
+                          "code": {
+                            "type": "string"
+                          },
+                          "stepLabel": {
+                            "type": "string"
+                          },
+                          "stepAt": {
+                            "type": "string"
                           }
                         },
                         "required": [
@@ -210505,6 +210943,15 @@
                                   ],
                                   "additionalProperties": false
                                 }
+                              },
+                              "code": {
+                                "type": "string"
+                              },
+                              "stepLabel": {
+                                "type": "string"
+                              },
+                              "stepAt": {
+                                "type": "string"
                               }
                             },
                             "required": [
@@ -211427,6 +211874,15 @@
                                   ],
                                   "additionalProperties": false
                                 }
+                              },
+                              "code": {
+                                "type": "string"
+                              },
+                              "stepLabel": {
+                                "type": "string"
+                              },
+                              "stepAt": {
+                                "type": "string"
                               }
                             },
                             "required": [
@@ -212709,6 +213165,15 @@
                                   ],
                                   "additionalProperties": false
                                 }
+                              },
+                              "code": {
+                                "type": "string"
+                              },
+                              "stepLabel": {
+                                "type": "string"
+                              },
+                              "stepAt": {
+                                "type": "string"
                               }
                             },
                             "required": [
@@ -213562,6 +214027,15 @@
                                   ],
                                   "additionalProperties": false
                                 }
+                              },
+                              "code": {
+                                "type": "string"
+                              },
+                              "stepLabel": {
+                                "type": "string"
+                              },
+                              "stepAt": {
+                                "type": "string"
                               }
                             },
                             "required": [
@@ -215352,6 +215826,15 @@
                             ]
                           },
                           "createdAt": {
+                            "type": "string"
+                          },
+                          "code": {
+                            "type": "string"
+                          },
+                          "stepLabel": {
+                            "type": "string"
+                          },
+                          "stepAt": {
                             "type": "string"
                           }
                         },
@@ -230517,23 +231000,11 @@
     },
     "/api/v1/matters/waiting": {
       "get": {
-        "summary": "«Ждут вас» and «Решения» read from matters: the same rows, counts and links as the screens' own reads",
+        "summary": "«Ждут вас» read from matters, by the list's groups (waiting-groups.ts): the chips, the menu's number and the list's counts",
         "tags": [
           "admin"
         ],
-        "description": "Database only. A row whose source did not answer lately has `count: null` («не удалось проверить»). `active` is the owner's switch: until it is on, the screens keep their own reads and Hub compares the two counts in the background (matter_checks).",
-        "parameters": [
-          {
-            "schema": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 64
-            },
-            "in": "query",
-            "name": "pageLabel",
-            "required": false
-          }
-        ],
+        "description": "Database only. What waits for the viewer themself, every role grouped by the one table; the number is the groups' sum. A group whose source did not answer lately has `checked: false` («не удалось проверить») and is in `failed`. `active` is the owner's switch: until it is on, the screens keep their own reads and Hub compares the two counts in the background (matter_checks).",
         "security": [
           {
             "cookieAuth": []
@@ -230549,78 +231020,6 @@
                   "properties": {
                     "active": {
                       "type": "boolean"
-                    },
-                    "rows": {
-                      "type": "array",
-                      "items": {
-                        "type": "object",
-                        "properties": {
-                          "id": {
-                            "type": "string",
-                            "enum": [
-                              "drafts",
-                              "unknown",
-                              "questions",
-                              "reports",
-                              "customs",
-                              "held",
-                              "login",
-                              "failures",
-                              "extension",
-                              "history",
-                              "content",
-                              "people",
-                              "ledger",
-                              "other"
-                            ]
-                          },
-                          "label": {
-                            "type": "string"
-                          },
-                          "count": {
-                            "anyOf": [
-                              {
-                                "type": "integer",
-                                "minimum": 0,
-                                "maximum": 9007199254740991
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          },
-                          "capped": {
-                            "type": "boolean"
-                          },
-                          "pageLabel": {
-                            "type": [
-                              "string",
-                              "null"
-                            ]
-                          },
-                          "to": {
-                            "type": "string"
-                          },
-                          "matterIds": {
-                            "type": "array",
-                            "items": {
-                              "type": "integer",
-                              "exclusiveMinimum": 0,
-                              "maximum": 9007199254740991
-                            }
-                          }
-                        },
-                        "required": [
-                          "id",
-                          "label",
-                          "count",
-                          "capped",
-                          "pageLabel",
-                          "to",
-                          "matterIds"
-                        ],
-                        "additionalProperties": false
-                      }
                     },
                     "groups": {
                       "type": "array",
@@ -230693,135 +231092,24 @@
                       "items": {
                         "type": "string",
                         "enum": [
-                          "drafts",
-                          "unknown",
                           "questions",
                           "reports",
                           "customs",
                           "held",
-                          "login",
-                          "failures",
-                          "extension",
-                          "history",
+                          "publications",
                           "content",
                           "people",
                           "ledger",
-                          "other"
+                          "system",
+                          "other",
+                          "info"
                         ]
                       }
                     },
-                    "decisions": {
-                      "type": "object",
-                      "properties": {
-                        "questions": {
-                          "anyOf": [
-                            {
-                              "type": "integer",
-                              "minimum": 0,
-                              "maximum": 9007199254740991
-                            },
-                            {
-                              "type": "null"
-                            }
-                          ]
-                        },
-                        "reports": {
-                          "anyOf": [
-                            {
-                              "type": "integer",
-                              "minimum": 0,
-                              "maximum": 9007199254740991
-                            },
-                            {
-                              "type": "null"
-                            }
-                          ]
-                        },
-                        "reportParts": {
-                          "anyOf": [
-                            {
-                              "type": "object",
-                              "properties": {
-                                "posts": {
-                                  "type": "integer",
-                                  "minimum": 0,
-                                  "maximum": 9007199254740991
-                                },
-                                "changes": {
-                                  "type": "integer",
-                                  "minimum": 0,
-                                  "maximum": 9007199254740991
-                                }
-                              },
-                              "required": [
-                                "posts",
-                                "changes"
-                              ],
-                              "additionalProperties": false
-                            },
-                            {
-                              "type": "null"
-                            }
-                          ]
-                        },
-                        "customs": {
-                          "anyOf": [
-                            {
-                              "type": "integer",
-                              "minimum": 0,
-                              "maximum": 9007199254740991
-                            },
-                            {
-                              "type": "null"
-                            }
-                          ]
-                        },
-                        "held": {
-                          "anyOf": [
-                            {
-                              "type": "integer",
-                              "minimum": 0,
-                              "maximum": 9007199254740991
-                            },
-                            {
-                              "type": "null"
-                            }
-                          ]
-                        },
-                        "total": {
-                          "type": "integer",
-                          "minimum": 0,
-                          "maximum": 9007199254740991
-                        },
-                        "elsewhere": {
-                          "type": "integer",
-                          "minimum": 0,
-                          "maximum": 9007199254740991
-                        },
-                        "failed": {
-                          "type": "array",
-                          "items": {
-                            "type": "string",
-                            "enum": [
-                              "questions",
-                              "reports",
-                              "customs",
-                              "held"
-                            ]
-                          }
-                        }
-                      },
-                      "required": [
-                        "questions",
-                        "reports",
-                        "reportParts",
-                        "customs",
-                        "held",
-                        "total",
-                        "elsewhere",
-                        "failed"
-                      ],
-                      "additionalProperties": false
+                    "customOrders": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
                     },
                     "serverNow": {
                       "type": "string"
@@ -230829,11 +231117,10 @@
                   },
                   "required": [
                     "active",
-                    "rows",
                     "groups",
                     "total",
                     "failed",
-                    "decisions",
+                    "customOrders",
                     "serverNow"
                   ],
                   "additionalProperties": false
@@ -246507,6 +246794,15 @@
                               ],
                               "additionalProperties": false
                             }
+                          },
+                          "code": {
+                            "type": "string"
+                          },
+                          "stepLabel": {
+                            "type": "string"
+                          },
+                          "stepAt": {
+                            "type": "string"
                           }
                         },
                         "required": [
@@ -271167,7 +271463,7 @@
         "tags": [
           "client"
         ],
-        "description": "Any session (the narrow one the extension opens included): the owner every sale with pay sums; a chatter a sale of their own shifts, reports or claims on a page they may open, their own pay as states (sums with «видит свои деньги»); a team lead a sale of their pages without pay sums. Another sale is 404. Database and the ledger's reads the payout panel and «Выплаты → Отчёты» already make; a source that does not answer is «неизвестно».",
+        "description": "Any session (the narrow one the extension opens included): the owner every sale with pay sums; a chatter a sale of their own shifts, reports or claims on a page they may open, their own pay as states (sums with «видит свои деньги»); a team lead a sale of their pages without anyone's pay (accrual and payout «видит только владелец»). Another sale is 404. Database and the ledger's reads the payout panel and «Выплаты → Отчёты» already make; a source that does not answer is «неизвестно».",
         "parameters": [
           {
             "schema": {
@@ -291287,6 +291583,28 @@
                         }
                       ]
                     },
+                    "termsHubFrom": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "basisHubFrom": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
                     "generatedAt": {
                       "type": "string"
                     },
@@ -291572,6 +291890,8 @@
                     "accrualFrom",
                     "factsFrom",
                     "reportsFrom",
+                    "termsHubFrom",
+                    "basisHubFrom",
                     "generatedAt",
                     "people",
                     "checks",

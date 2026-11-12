@@ -22,9 +22,9 @@ capture, delivery) is `agent-read-skill.md`; the CLI is `hub` (`hub <command> --
 | People | `POST /api/v1/agent/people/proposals`, `GET …/proposals` | `propose:people` | A change about a person, or a new person; it waits for the owner. Never pay terms |
 | Shifts | `GET /api/v1/agent/team/shift-review` (`hub shift-review`) | `read:team` + `read:money` | «Разбор смены» of one shift on the key's pages and the shift audit's numbers from it. Texts with `read:messages`; the AI's own texts never |
 | Shifts and sales | `POST /api/v1/agent/team/sales` | `read:team` + `read:money` | The team's work and every sale on the key's pages in a window (≤ 31 days), with the facts whose a sale is: holders, the bought PPV's sender, post tip, Campaign, last writer, marks, the owner's split |
-| Sales (report check) | `POST /api/v1/agent/team/sale-context` (`hub sale-context`) | `read:team` + `read:money` | Each sale's fan, the PPV it bought (its text with `read:messages`), who wrote to the fan in 48 h, 7 days, last in 60 days |
+| Sales (report check) | `POST /api/v1/agent/team/sale-context` (`hub sale-context`) | `read:team` + `read:money` | Each sale's fan, the PPV it bought (its text with `read:messages`), who wrote to the fan in 48 h, 7 days, last in 60 days; `archive`: the fan's chat as the report check reads the archive (the priced message, the page's messages of 7 days by author, the last author of 60 days) |
 | Sales (chain of money) | `GET /api/v1/agent/team/sale-chain` (`hub sale-chain <id>`) | `read:team` + `read:money` | From one sale: whose it is (home, why, the owner's decision, an open claim), the shift, the report of that day (Hub's version or the ledger's post), accrual and payout as states. Never a pay sum |
-| Fans (watch) | `POST /api/v1/agent/team/fan-watch` (`hub fan-watch`) | `read:messages` | A watched fan's new messages on a page since a mark, and when the page last wrote to them. Tips with `read:money` |
+| Fans (watch) | `POST /api/v1/agent/team/fan-watch` (`hub fan-watch`) | `read:messages` | A watched fan's new messages on a page since a mark (the archive's time, to the microsecond), and when the page last wrote to them. Tips with `read:money` |
 | Fans and messages | `hub resolve`, `person`, `timeline`, `threads`, `transcript`, `search` | `read:messages` and others | The read plane: `agent-read-skill.md` |
 | Money | `hub dataset` (`transactions`, `fan_spend_*`, …) | `read:datasets` + `read:money` | Typed dataset queries per page |
 | Matters | `POST /api/v1/agent/matters`, `…/close`, `…/comment` | `write:matters` | Open, close, comment a matter by its reason key, for a person (by login) or a role. The agent's own kinds only |
@@ -35,6 +35,7 @@ capture, delivery) is `agent-read-skill.md`; the CLI is `hub` (`hub <command> --
 | Custom orders | `GET/POST /api/v1/agent/custom-orders`, `POST …/custom-orders/:code`, `POST …/custom-orders/cards` (`hub custom list\|create\|step\|cards`) | `write:customs` | Record an order from the card (Gengar's `/tz`), write what the models' group says (at the model, deliveries in parts, revisions, refusals, cancels, messages), report cards with no order. Never a payment or «отдали»: those are people's |
 | Shift reports «со слов» | `GET /api/v1/agent/shift-reports/draft`, `GET …/claimable`, `POST …/line`, `…/comment`, `…/off-platform`, `…/submit` (`hub shift-report show\|claimable\|line\|comment\|off-platform\|submit`) | `write:shift_reports` | Gengar's `/smena` fills and hands in the report of a person whose switch «сдаёт смену в системе» is on, from the person's own words: below |
 | Shift reports (the ledger's feed) | `GET /api/v1/agent/shift-reports` | `read:team` + `read:money` | Every version handed in, after a cursor: what the ledger accrues and pays from |
+| Erasures (the ledger's feed) | `GET /api/v1/agent/erasures` | `read:team` + `read:money` | Every fan erasure Hub completed, after a cursor: the platform and the fan's ref, for the ledger to blank its own copies: below |
 | Claims | — | — | No agent door on Hub yet: it comes with its own package. Until then the ledger holds them |
 | Keys (for services) | `POST /api/v1/agent/keys/introspect` | `introspect:agent_keys` | Another service asks who an agent's hub key is: below |
 
@@ -83,6 +84,31 @@ What stays the ledger's: accrued and paid. The ledger reads every handed-in vers
 (`GET /api/v1/agent/shift-reports`); nothing about a shift handed in here is saved to the ledger another way. A
 person whose switch is off reports exactly as before.
 
+## Erasures: the ledger's own copies
+
+A fan's erasure in Hub (`erasure:run --scope fan`, the owner's act) clears Hub's rows; the ledger keeps its own
+copies of what Hub served it — the report lines' notes, «мимо площадки», the comments, the old decisions' and
+questions' words, its sales' payloads — which Hub cannot reach. The ledger reads the erasures and blanks them itself.
+
+`GET /api/v1/agent/erasures?since=<next>&limit=<1..500, 200>` (`read:team` + `read:money`, the capabilities of the
+ledger's key for its shift reports' feed):
+
+```json
+{ "erasures": [{ "id": 41, "platform": "fansly", "fanRef": "123456789", "erasedAt": "2026-11-12T18:00:00.000Z" }],
+  "next": "41", "serverNow": "2026-11-12T18:05:00.000Z" }
+```
+
+- `id` is the erasure's tombstone in Hub (`erasure_log`) and the cursor; `fanRef` is the fan's platform id as the
+  fan scope named him (`fan:<platform>:<ref>`). That is everything the tombstone keeps of him, and everything served:
+  no name, and no list of his sales — Hub's anonymized sales are not tied back to him anywhere, and a list here would
+  tie them again. The ledger finds his sales by the fan id its own sales carry.
+- Served once the erasure completed. Dry runs, unfinished executions and page and model scopes are never served.
+  Erasures run one at a time under one lock, so they complete in the order of their ids: `next` never passes one
+  not served yet. Keep `next` and ask again with it; nothing new answers the same `next`.
+- An erasure none of whose pages is in the key's grant is left out, and `next` moves past it.
+- After Hub's database is restored from a copy, the erasures since the copy are re-run there and get new ids, and
+  Hub's ids start again from the copy's: `docs/runbooks/business-backup.md`, «Restoring for real».
+
 ## «Кто этот ключ»: another service accepts a hub key
 
 For ledger, ContentOps and TaskIndex, which accept `Authorization: Bearer <hub agent key>` next to their own keys.
@@ -114,7 +140,7 @@ every service sees it within a minute (within the hour while Hub cannot be reach
 |---|---|---|
 | `/OS scripts/shift_audit.py collect` | messages, threads, follows, subscriptions, automated messages, broadcasts, AI events, activity minutes of the shift, over psql; money over `hub dataset` | `hub shift-review --person <code> --at <ISO>`: `review` (the shift, its pages, chats with messages, waits, sales, follows, AI by page and chat) and `numbers` |
 | Gengar's fan watch (`work/watch-fan/watch.py`) | the fan's messages after a mark and the page's last message in that chat | `hub fan-watch --file watches.json`; carry `archivedAt` of the newest message as the next `archivedAfter` |
-| Gengar's report check (`shift-sales-report/report_check.py`) | fan names, the bought PPV, its author and text, writers 7 days, last writer 60 days | `hub sale-context --file sales.json`, sales by Hub's id or by a page's platform transaction id |
+| Gengar's report check (`shift-sales-report/report_check.py`) | fan names, the bought PPV, its author and text, writers 7 days, last writer 60 days | `hub sale-context --file sales.json`, sales by Hub's id or by a page's platform transaction id; the check's own facts are `archive` (Hub's are `ppv`, `writers7d`, `lastWriter`: they differ, see below) |
 
 `numbers` (by page and in total) carries the audit's `collect` summary: `chats`, `messages` (the audit's `out`),
 `fanMessages` (`fan`), `follows`, `followsWritten` (`wrote`), `followsWrittenSoon` (`w30`), `reactivations`
@@ -127,3 +153,11 @@ message is the chatter's by its author on every page; a message deleted a minute
 as seen; a mass message is the one of «Смены»; a page's own facts (followers, money) count on the pages the shift
 worked. The lists the audit draws (gantt, long waits, backlog, signals, hours) come from `review.chats` and
 `review.waits`.
+
+`archive` (the report check) is the archive as `report_check.py` read it over psql, so the check keeps its numbers:
+the fan's latest chat on the page by the fan's platform id; in it the page's latest message priced at the sale's
+gross and sent at or before it (the check's PPV; Hub's own match is `ppv`, by the bought media or the OnlyFans
+unlock), the page's messages of the 7 days before by author with no author counted (`writers7d` counts only reported
+sends), and the last message with an author in the 60 days before, by the archive's time (`lastWriter` goes by the
+send's report, a minute or so earlier). Deleted messages are left out. Moving the check to Hub's facts changes its
+numbers: that is the owner's decision, not this door's.

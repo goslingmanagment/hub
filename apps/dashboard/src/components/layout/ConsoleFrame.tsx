@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { PlaceFrame } from "@agency_hub_core/ui/components/Place";
 import { carriedHref, consoleDays, placeName, waitingCount, waitingQuery } from "@agency_hub_core/ui/place";
 import { matchScreen, menuItemAt, placeMenu, type MenuItem } from "@agency_hub_core/ui/screens";
+import { usePeopleIndex } from "@/api/people";
 import { useLogout } from "@/api/queries";
 import { kernel } from "@/api/sdk";
 import { ACCOUNT_SCREEN, SIGNED_OUT_LOGIN } from "@/lib/navigation";
@@ -19,7 +20,7 @@ import { usePeriodStore } from "@/stores/periodStore";
  * console shows and its period when Workboard has it too (30 or 14 days).
  */
 export function ConsoleFrame({ user, searchOpen, setSearchOpen, children }: {
-  user: { username: string; role: string };
+  user: { id: number; username: string; role: string };
   searchOpen: boolean;
   setSearchOpen: (open: boolean) => void;
   children: ReactNode;
@@ -29,6 +30,8 @@ export function ConsoleFrame({ user, searchOpen, setSearchOpen, children }: {
   const remembered = usePageFilterStore((state) => state.page);
   const storedPeriod = usePeriodStore((state) => state.period);
   const waiting = useQuery({ ...waitingQuery(kernel), meta: { suppressGlobalError: true } });
+  // Named as every screen names people: the registry's person holding the login (Workboard's foot says the same).
+  const people = usePeopleIndex(user.role);
 
   // What this screen shows: the page in the address (or every page by link), else the one picked by hand;
   // its period when it has the remembered one, else that one.
@@ -57,7 +60,7 @@ export function ConsoleFrame({ user, searchOpen, setSearchOpen, children }: {
       hrefOf={hrefOf}
       counts={{ waiting: waitingCount(waiting) }}
       account={{
-        name: user.username,
+        name: people.nameOf(user.id, user.username),
         role: user.role,
         signOut: () => void signOut(),
         signingOut: logout.isPending,

@@ -31,6 +31,8 @@ import { createFanslyPage, createModel } from "@agency_hub_core/db";
 
 import {
   FAN_REF_ERASURE_COLUMNS,
+  FAN_TEXT_ERASURE_COLUMNS,
+  FAN_TEXT_ERASURE_TABLES,
   planErasure,
 } from "../apps/runtime/src/services/erasure/index.ts";
 import {
@@ -228,5 +230,65 @@ describe("erasure column-shape ratchet (§9.3)", () => {
     expect(targeted).toContain("message_media_offers");
     // The precedent that proves the FK guard cannot find these on its own.
     expect(targeted).toContain("creator_post_tips");
+  });
+
+  // Words have no column shape: a note, a question, a title can be called anything. So for the work objects about a
+  // sale the census is by table — every text or JSON column of FAN_TEXT_ERASURE_TABLES says whether a fan's erasure
+  // clears it, holds no words, or holds words tied to no fan — and a new one fails here until it says which.
+  it("accounts for every text and JSON column of the work objects about a sale", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    await resetIntegrationDatabase(testDb.pool);
+
+    const discovered = (await testDb.pool.query<{ table_name: string; column_name: string }>(
+      `select table_name, column_name
+         from information_schema.columns
+        where table_schema = 'public'
+          and table_name = any($1::text[])
+          and udt_name in ('text', 'varchar', 'bpchar', 'json', 'jsonb', '_text', '_varchar', '_bpchar', '_json', '_jsonb')
+        order by table_name, column_name`,
+      [[...FAN_TEXT_ERASURE_TABLES]],
+    )).rows.map((row) => `${row.table_name}.${row.column_name}`);
+    // Non-vacuous: every table is there, with the words this census exists for.
+    for (const table of FAN_TEXT_ERASURE_TABLES) {
+      expect(discovered.some((column) => column.startsWith(`${table}.`)), `${table}: no text column found`).toBe(true);
+    }
+    expect(discovered).toContain("sale_claims.claimant_note");
+    expect(discovered).toContain("shift_handin_versions.lines");
+
+    const declared = new Map(FAN_TEXT_ERASURE_COLUMNS.map((entry) => [entry.column, entry]));
+    expect(declared.size).toBe(FAN_TEXT_ERASURE_COLUMNS.length);
+    expect(
+      discovered.filter((column) => !declared.has(column)),
+      "A text or JSON column of a work-object table is not accounted for by fan erasure (words about a fan in it "
+        + "would survive a fan's erasure unseen): add it to FAN_TEXT_ERASURE_COLUMNS in "
+        + "apps/runtime/src/services/erasure/index.ts — cleared (with the fanHotTargets target that clears it), "
+        + "no_words, or unlinked — with the reason.",
+    ).toEqual([]);
+
+    const model = await createModel(testDb.db, { slug: "ratchet3", name: "Ratchet3" });
+    const page = model ? await createFanslyPage(testDb.db, { modelId: model.id, label: "ratchet-page-3" }) : undefined;
+    if (!page) {
+      throw new Error("Expected the ratchet test page to be created");
+    }
+    const plan = await planErasure(
+      { db: testDb.db, pool: testDb.pool, config: {}, logger: {} } as never,
+      { scopeType: "fan", platform: "fansly", fanRef: "fan-ratchet-probe" },
+    );
+    const hot = plan.targets.filter((target) => target.plane === "hot");
+    for (const entry of FAN_TEXT_ERASURE_COLUMNS) {
+      expect(discovered, `${entry.column}: declared but not a text column of a census table`).toContain(entry.column);
+      expect(entry.why.trim(), `${entry.column}: a stance needs its reason`).not.toBe("");
+      if (entry.stance === "cleared") {
+        expect(
+          hot.some((target) => target.target === entry.target && target.action === "anonymize"),
+          `${entry.column}: declared cleared by "${entry.target}", which the fan-scope plan does not anonymize`,
+        ).toBe(true);
+      } else {
+        expect(entry.target, `${entry.column}: only a cleared column names a target`).toBeUndefined();
+      }
+    }
   });
 });

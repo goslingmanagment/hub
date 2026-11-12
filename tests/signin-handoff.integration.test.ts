@@ -704,3 +704,24 @@ describe("the nightly sweep of one-time codes", () => {
     expect(await checkServerGrant(app, { client: "contentops", grant })).toEqual({ active: false });
   });
 });
+
+describe("the frame headers of Hub's answers", () => {
+  it("lets only Hub frame its pages, and the hand-off not even Hub", async (context) => {
+    if (!server) return context.skip();
+    const health = await request("GET", `${HUB}/api/v1/health`);
+    expect(health.headers["x-frame-options"]).toBe("SAMEORIGIN");
+    expect(health.headers["content-security-policy"]).toBe("frame-ancestors 'self'");
+    const nobody = await request("GET", `${TEAM}/api/v1/auth/introspect`);
+    expect(nobody.statusCode).toBe(401);
+    expect(nobody.headers["x-frame-options"]).toBe("SAMEORIGIN");
+    // A route that is stricter stays stricter: the sign-in hand-off is never framed.
+    // From an address of its own: this file has spent the hand-off's per-address limit by now.
+    const handoff = await server.inject({
+      method: "GET", url: `/api/v1/auth/sso?${new URLSearchParams({ to: TEAM, next: "/workboard/" })}`,
+      headers: { host: new URL(HUB).host }, remoteAddress: "198.51.100.77",
+    });
+    expect(handoff.statusCode, handoff.body).toBe(302);
+    expect(handoff.headers["x-frame-options"]).toBe("DENY");
+    expect(handoff.headers["content-security-policy"]).toBe("frame-ancestors 'none'");
+  });
+});

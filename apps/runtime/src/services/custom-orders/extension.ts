@@ -18,7 +18,7 @@ import {
   recordCustomOrder,
   type CustomStep,
 } from "./index.ts";
-import { cardOf, extensionStateOf, mayTakeStep, priceMillsOf, priceTextOf } from "./rules.ts";
+import { cardOf, extensionStateOf, extensionStepOf, mayTakeStep, priceMillsOf, priceTextOf } from "./rules.ts";
 
 /**
  * The released extension's block «Кастомы» (Chat Memory week 4: the tab
@@ -52,12 +52,14 @@ function extensionCustomOf(principal: HumanAuthPrincipal, order: CustomOrderRow,
     priceMills: priceMillsOf(card.price),
     state,
     paymentMills: order.payments > 0 ? order.paidGrossMills : null,
-    paidAt: iso(order.firstPaidAt ?? (state === "paid" ? order.stateAt : null)),
+    // Paid on the board with no sale linked: since that step. Past it (at the model, shot) the payment's day is unknown.
+    paidAt: iso(order.firstPaidAt ?? (order.state === "paid" ? order.stateAt : null)),
     deliveredMessageRef: order.givenMessageRef,
     deliveredAt: iso(order.givenAt),
     createdBy: order.acceptedBy ?? (order.origin === "import" ? "перенесён" : "Генгар"),
     createdAt: order.createdAt.toISOString(),
     deliveryCandidates: candidates,
+    ...extensionStepOf(order),
   };
 }
 
@@ -163,6 +165,7 @@ export async function extensionHandoffCustoms(db: Database, input: { pageId: num
         state: extensionStateOf(order),
         paidAt: iso(order.firstPaidAt),
         createdAt: order.createdAt.toISOString(),
+        ...extensionStepOf(order),
       };
     });
 }

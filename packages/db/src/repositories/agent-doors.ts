@@ -191,8 +191,12 @@ export async function listShiftAiUse(
 export interface FanWatchRow {
   /** The fan's chats on the page matched by the username (0 — none: the watch is wrong). */
   chats: number;
-  /** The fan's messages after `since` that reached the archive after `archivedAfter`, oldest first. */
-  messages: Array<{ ref: string; at: Date; archivedAt: Date; text: string; media: boolean; tipMills: number | null }>;
+  /**
+   * The fan's messages after `since` that reached the archive after `archivedAfter`, oldest first. `archivedAt` is the
+   * archive's own time to the microsecond (ISO, UTC): a Date would cut it to the millisecond, and the message that set
+   * a watch's mark would come back as new.
+   */
+  messages: Array<{ ref: string; at: Date; archivedAt: string; text: string; media: boolean; tipMills: number | null }>;
   /** The page's newest message in those chats, any time; null — none. */
   pageLastAt: Date | null;
 }
@@ -205,7 +209,7 @@ export interface FanWatchRow {
  */
 export async function readFanWatch(
   db: Database,
-  input: { pageId: number; username: string; since: Date; archivedAfter: Date; limit: number },
+  input: { pageId: number; username: string; since: Date; archivedAfter: string | null; limit: number },
 ): Promise<FanWatchRow> {
   const result = await db.execute<Row>(sql`
     with th as (
@@ -218,13 +222,14 @@ export async function readFanWatch(
         case when ma.is_tip and ma.tip_amount_mills > 0 then ma.tip_amount_mills end as tip_mills
         from message_archive ma join th on th.platform_account_id = ma.account_id and th.platform_conversation_id = ma.conversation_ref
        where ma.account_id = ${input.pageId} and ma.sender_role = 'fan' and ma.deleted_at is null
-         and ma.archived_at > ${input.archivedAfter.toISOString()}::timestamptz
+         and ma.archived_at > ${input.archivedAfter ?? "1970-01-01T00:00:00Z"}::timestamptz
          and ma.occurred_at > ${input.since.toISOString()}::timestamptz
        order by ma.occurred_at, ma.id
        limit ${input.limit}
     )
     select (select count(*)::int from th) as chats,
-      coalesce((select json_agg(json_build_object('ref', message_ref, 'at', occurred_at, 'archived', archived_at, 'text', text,
+      coalesce((select json_agg(json_build_object('ref', message_ref, 'at', occurred_at,
+        'archived', to_char(archived_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'), 'text', text,
         'media', media, 'tip', tip_mills) order by occurred_at) from fan), '[]'::json) as messages,
       (select max(ma.occurred_at) from message_archive ma join th
           on th.platform_account_id = ma.account_id and th.platform_conversation_id = ma.conversation_ref
@@ -236,7 +241,7 @@ export async function readFanWatch(
     messages: messages.map((message) => ({
       ref: String(message.ref),
       at: new Date(message.at),
-      archivedAt: new Date(message.archived),
+      archivedAt: message.archived,
       text: message.text,
       media: message.media === true,
       tipMills: message.tip === null ? null : Number(message.tip),
@@ -334,6 +339,101 @@ export async function listSaleContext(
       lastWriter60d: last === null ? null : { userId: Number(last.user_id), username: last.username, at: new Date(last.at) },
     };
   });
+}
+
+export interface SaleArchiveRow {
+  transactionId: number;
+  conversationRef: string | null;
+  partnerUsername: string | null;
+  fanRecordUsername: string | null;
+  partnerUsernames: string[];
+  pricedMessage: { sentAt: Date; sender: string | null; text: string | null } | null;
+  pageMessages7d: Array<{ name: string | null; messages: number }>;
+  lastAuthored60d: { name: string; at: Date; within48h: boolean } | null;
+}
+
+/**
+ * The fan's chat of each sale as the shift report check read it over psql (`enrich` and `fan_names` of
+ * skills/shift-sales-report/report_check.py), kept so the check's numbers stay the same off `ssh … psql`: the fan's
+ * latest chat on the page by the fan's platform id (`page_dm_threads.partner_platform_user_id`), and in it the page's
+ * messages that are not deleted (`message_archive`, authors from `client_send_attributions`). Hub's own facts of the
+ * same sale are `listSaleContext` and `listSaleFacts`; nothing here decides whose a sale is.
+ */
+export async function listSaleArchive(
+  db: Database,
+  input: { transactionIds: readonly number[] },
+): Promise<Map<number, SaleArchiveRow>> {
+  if (input.transactionIds.length === 0) return new Map();
+  const result = await db.execute<Row>(sql`
+    with sales as (
+      select t.id, t.platform_account_id as page_id, t.canonical_type::text as kind, t.occurred_at as ts,
+        coalesce(t.gross_amount_mills, 0) as gross, f.platform_user_id as fan_ref
+        from transactions t
+        left join fans f on f.id = t.fan_id
+       where t.id = any(${ids(input.transactionIds)})
+    )
+    select s.id, th.platform_conversation_id as conv, th.partner_username,
+      (select fr.username from fans fr where fr.platform_user_id = s.fan_ref limit 1) as fan_record_username,
+      (select json_agg(n.name order by n.name) from (
+          select distinct x.partner_username as name from page_dm_threads x
+           where x.platform_account_id = s.page_id and x.partner_platform_user_id = s.fan_ref and x.partner_username is not null
+        ) n) as partner_usernames,
+      ppv.sent_at as ppv_sent_at, ppv.sender as ppv_sender, ppv.text as ppv_text, ppv.found as ppv_found,
+      (select json_agg(json_build_object('name', w.name, 'messages', w.messages) order by w.messages desc, w.name nulls last)
+         from (
+           select u.username as name, count(*)::int as messages
+             from message_archive ma
+             left join client_send_attributions a on a.platform = ma.platform and a.page_id = ma.account_id
+               and a.platform_message_id = ma.message_ref
+             left join users u on u.id = a.user_id
+            where ma.account_id = s.page_id and ma.conversation_ref = th.platform_conversation_id and ma.sender_role = 'model'
+              and ma.occurred_at < s.ts and ma.occurred_at >= s.ts - interval '7 days' and ma.deleted_at is null
+            group by 1) w) as writers,
+      lw.name as last_name, lw.at as last_at, lw.recent as last_recent
+      from sales s
+      left join lateral (
+        select platform_conversation_id, partner_username from page_dm_threads
+         where platform_account_id = s.page_id and partner_platform_user_id = s.fan_ref
+         order by last_message_at desc nulls last limit 1) th on true
+      left join lateral (
+        select true as found, ma.occurred_at as sent_at, u.username as sender, left(ma.text_plain, 2000) as text
+          from message_archive ma
+          left join client_send_attributions a on a.platform = ma.platform and a.page_id = ma.account_id
+            and a.platform_message_id = ma.message_ref
+          left join users u on u.id = a.user_id
+         where s.kind = 'message_purchase' and ma.account_id = s.page_id and ma.conversation_ref = th.platform_conversation_id
+           and ma.sender_role = 'model' and ma.price_mills = s.gross and ma.occurred_at <= s.ts and ma.deleted_at is null
+         order by ma.occurred_at desc limit 1) ppv on true
+      left join lateral (
+        select u.username as name, ma.occurred_at as at, (ma.occurred_at >= s.ts - interval '48 hours') as recent
+          from message_archive ma
+          join client_send_attributions a on a.platform = ma.platform and a.page_id = ma.account_id
+            and a.platform_message_id = ma.message_ref
+          join users u on u.id = a.user_id
+         where ma.account_id = s.page_id and ma.conversation_ref = th.platform_conversation_id and ma.sender_role = 'model'
+           and ma.occurred_at < s.ts and ma.occurred_at >= s.ts - interval '60 days' and ma.deleted_at is null
+         order by ma.occurred_at desc limit 1) lw on true`);
+  return new Map(result.rows.map((row) => {
+    const writers = (row.writers as Array<{ name: string | null; messages: number }> | null) ?? [];
+    return [Number(row.id), {
+      transactionId: Number(row.id),
+      conversationRef: row.conv === null || row.conv === undefined ? null : String(row.conv),
+      partnerUsername: row.partner_username === null || row.partner_username === undefined ? null : String(row.partner_username),
+      fanRecordUsername: row.fan_record_username === null || row.fan_record_username === undefined ? null : String(row.fan_record_username),
+      partnerUsernames: ((row.partner_usernames as string[] | null) ?? []).map(String),
+      pricedMessage: row.ppv_found !== true ? null : {
+        sentAt: new Date(row.ppv_sent_at as string | Date),
+        sender: row.ppv_sender === null || row.ppv_sender === undefined ? null : String(row.ppv_sender),
+        text: row.ppv_text === null || row.ppv_text === undefined ? null : String(row.ppv_text),
+      },
+      pageMessages7d: writers.map((writer) => ({ name: writer.name ?? null, messages: Number(writer.messages) })),
+      lastAuthored60d: row.last_name === null || row.last_name === undefined ? null : {
+        name: String(row.last_name),
+        at: new Date(row.last_at as string | Date),
+        within48h: row.last_recent === true,
+      },
+    }];
+  }));
 }
 
 /** The archive's text of page messages by their platform ids (at most 2,000 characters each), by `<pageId>:<ref>`. */

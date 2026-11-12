@@ -14,10 +14,11 @@ import { usePageFilter } from "@/shared/usePageFilter";
 import { usePeriod } from "@/shared/usePeriod";
 import { useMe } from "@/shared/useMe";
 import { AuthorlessLine } from "./Authorless.js";
-import { AUTHORSHIP_MAX_DAYS, SHIFTS_MAX_DAYS, buildModel, shiftsWindow, useShiftsPeriod, windowColumns } from "./data.js";
+import { AUTHORSHIP_MAX_DAYS, SHIFTS_MAX_DAYS, buildModel, shiftsWindow, useShiftsPeriod, useShiftsReports, windowColumns } from "./data.js";
 import { HowItCounts } from "./HowItCounts.js";
 import { Journal } from "./Journal.js";
 import { NowOnShift } from "./NowOnShift.js";
+import { reportNotes } from "./reports.js";
 import { WaitingLine } from "./WaitingLine.js";
 import { WeekGrid, sentence } from "./WeekGrid.js";
 import "./shifts.css";
@@ -70,6 +71,13 @@ export function ShiftsScreen() {
     chatters: full.chatters.filter((row) => row.userId !== null && own.has(row.userId)),
     journal: full.journal.filter((shift) => own.has(shift.userId)),
   } : full), [full, own]);
+  // The owner's: where the day's report pays by another sum than the rule's shifts of it (reports.ts).
+  const ruleFrom = sales.data?.ruleFrom ?? null;
+  const reports = useShiftsReports(window, isOwner && ruleFrom !== null);
+  const notes = useMemo(
+    () => reportNotes({ shifts: model?.journal ?? [], reports, page, ruleFrom, people }),
+    [model, reports, page, ruleFrom, people],
+  );
   const everyone = new URLSearchParams(location.search);
   everyone.delete("mine");
 
@@ -98,6 +106,8 @@ export function ShiftsScreen() {
     void queryClient.invalidateQueries({ queryKey: ["decisions"] });
     // Решения's people list, which ["decisions"] covered before it became the shared entry.
     void queryClient.invalidateQueries({ queryKey: usersQuery.queryKey, exact: true });
+    // The reports behind «в отчёте $…», the entry «Выплаты → Отчёты» shares.
+    void queryClient.invalidateQueries({ queryKey: ["payouts", "reports"] });
   };
 
   let body;
@@ -159,6 +169,8 @@ export function ShiftsScreen() {
           loading={!model}
           refreshing={refreshing}
           page={page}
+          reportNotes={notes}
+          ruled={ruleFrom !== null}
         />
       </>
     );

@@ -1,5 +1,6 @@
 import { registerOfapiVendorRoutes } from "../modules/ofapi-vendor/index.ts";
 import { registerModelApplicationRoutes } from "../modules/model-applications/index.ts";
+import { pageHeaders } from "./page-headers.ts";
 import { existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -83,6 +84,7 @@ import { registerPeopleRoutes } from "../modules/people/index.ts";
 import { registerShiftHandinRoutes } from "../modules/shift-handins/index.ts";
 import { registerSaleClaimRoutes } from "../modules/sale-claims/index.ts";
 import { registerSaleChainRoutes } from "../modules/sale-chain/index.ts";
+import { registerErasureRoutes } from "../modules/erasures/index.ts";
 import { registerFanQueueRoutes } from "../modules/fan-queues/index.ts";
 import { registerMatterRoutes } from "../modules/matters/index.ts";
 import { registerAgentReportRoutes } from "../modules/agent-reports/index.ts";
@@ -255,6 +257,13 @@ export async function buildApiServer(appContext: AppContext) {
   // Fleet-verify: the desktop stamps x-client-version on every call;
   // one "Desktop client version observed" log line per (version, address)
   // gives the exit check its data source.
+  // Never framed by another site; HTTPS only in production (api/page-headers.ts). First, so a
+  // route may make them stricter.
+  const headersOfPages = pageHeaders(appContext.config.isProduction);
+  server.addHook("onRequest", async (_request, reply) => {
+    reply.headers(headersOfPages);
+  });
+
   server.addHook("onRequest", async (request) => {
     recordClientVersionObservation({
       version: request.headers["x-client-version"],
@@ -723,6 +732,7 @@ export async function buildApiServer(appContext: AppContext) {
   registerShiftHandinRoutes(server, moduleContext);
   registerSaleClaimRoutes(server, moduleContext);
   registerSaleChainRoutes(server, moduleContext);
+  registerErasureRoutes(server, moduleContext);
   // «Рассылки» kept by Hub: the page's outreaches, shared by its team, and each fan's send claimed once.
   registerOutreachRoutes(server, moduleContext);
   // Their files: the upload streams raw bytes to disk (its own body-parser scope).

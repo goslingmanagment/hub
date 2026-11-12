@@ -34,7 +34,7 @@ export function registerMatterRoutes(server: ApiServer, ctx: ApiModuleContext) {
 
   server.get("/api/v1/matters/waiting", { schema: routeSchemas.mattersWaiting }, async (request) => {
     const principal = await requirePrincipal(request);
-    return readMattersWaiting(appContext, principal, request.query);
+    return readMattersWaiting(appContext, principal);
   });
 
   server.get("/api/v1/client/matters", { schema: routeSchemas.clientMatters }, async (request) => {

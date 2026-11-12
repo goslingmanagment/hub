@@ -2,11 +2,14 @@ import {
   MATTER_INFO_KINDS, WAITING_GROUPS, waitingGroupLink, waitingGroupOf, waitingToneOf, worstWaitingTone, type KernelOperationResponse, type Matter,
 } from "@agency_hub_core/contracts";
 
+import { formatDay } from "@agency_hub_core/look/format";
+
 import { isDemoReply, type DemoHandlers, type DemoRequest } from "../core.ts";
 import { DEMO_USERS } from "../world.ts";
 import { demoClaimMatters } from "./sale-claims.ts";
 import { teamCustoms } from "./team-extra.ts";
 import { teamQuestionsHandlers } from "./team-questions.ts";
+import { demoReportDays } from "./team-reports.ts";
 import { DAY, HOUR, MIN, isoAt, viewerPages } from "./team-world.ts";
 import { wbHeldHandlers } from "./wb-admin.ts";
 
@@ -193,6 +196,22 @@ function visible(request: DemoRequest): Matter[] {
         owner: { kind: "user", userId: chatter.id, username: chatter.username, displayName: chatter.name }, agoMs,
       });
     }
+    // Their post in «Отчётность» whose sum the ledger cannot accrue (`report.post_fix`): the newest posted day before
+    // the shifts were handed in at Hub (5 days, shift-reports.ts), whose row in «Мои смены» opens to the post.
+    const handedFrom = isoAt(now - 5 * DAY).slice(0, 10);
+    const changed = demoReportDays(request.now)
+      .filter((day) => day.user.id === chatter.id && day.date < handedFrom && day.pages.some((one) => one.postedMills !== null))
+      .sort((left, right) => right.date.localeCompare(left.date))[0];
+    if (changed && scenario !== "matters-6") {
+      seeds.push({
+        kind: "report.post_fix", key: `report.post_fix:${changed.posts[0]?.id ?? 8840}`,
+        title: `Отчёт за ${formatDay(`${changed.date}T12:00:00+03:00`)} не начислен: строки аккаунтов не дают итог. Поправьте пост в «Отчётности»`,
+        pages: changed.pages.map((one) => one.pageLabel),
+        owner: { kind: "user", userId: chatter.id, username: chatter.username, displayName: chatter.name },
+        evidence: { postId: changed.posts[0]?.id ?? 8840, reportDate: changed.date, day: changed.date, flags: ["sum_mismatch"] },
+        link: `/workboard/my/shifts?week=${changed.date}&report=${changed.date}`, agoMs: 4 * HOUR,
+      });
+    }
   }
   // What waits for the person who leads customs (the invented agency's: kate.v): the owner reads it as oversight.
   const lead = DEMO_USERS.find((user) => user.username === "kate.v")!;
@@ -246,47 +265,10 @@ function mattersList(request: DemoRequest): ListAnswer {
   return { matters, kinds, serverNow: request.now.toISOString() };
 }
 
-const ROWS: ReadonlyArray<{ id: WaitingAnswer["rows"][number]["id"]; label: string; to: string; of: (kind: string) => boolean; teamLead?: boolean }> = [
-  { id: "drafts", label: "Посты на утверждение", to: "/workboard/decisions#publications", of: (kind) => kind === "publication.draft" },
-  { id: "unknown", label: "Публикации: исход неизвестен", to: "/workboard/decisions#publications", of: (kind) => kind === "publication.unknown" },
-  { id: "questions", label: "Чья продажа: вопросы ждут вашего слова", to: "/workboard/decisions#questions", of: (kind) => kind === "ledger.sale_question" },
-  { id: "reports", label: "Отчёты смен ждут решения", to: "/workboard/decisions#reports", of: (kind) => kind === "ledger.report_post" || kind === "ledger.paid_day_changed" },
-  { id: "customs", label: "Кастомы оплачены, не отданы", to: "/workboard/decisions#customs", of: (kind) => kind === "custom.paid_not_delivered", teamLead: true },
-  { id: "held", label: "Проверить отправки", to: "/workboard/decisions#held", of: (kind) => kind === "send.held", teamLead: true },
-  { id: "login", label: "Нужен вход в Fansly", to: "/workboard/decisions#system", of: (kind) => kind === "page.login_needed" },
-  { id: "failures", label: "Сбои", to: "/workboard/decisions#system", of: (kind) => kind === "incident.open" },
-  { id: "extension", label: "Критичные сбои расширения", to: "/workboard/decisions#system", of: (kind) => kind === "extension.critical" },
-  { id: "history", label: "Заявки на историю", to: "/workboard/decisions#system", of: (kind) => kind === "history.request" },
-  { id: "content", label: "Контент", to: "/workboard/decisions#content", of: (kind) => kind.startsWith("contentops.") },
-  { id: "people", label: "Люди и доступ", to: "/workboard/decisions#people", of: (kind) => kind.startsWith("people.") && kind !== "people.access_idle" },
-  { id: "ledger", label: "Проверки ledger", to: "/workboard/decisions#ledger", of: (kind) => kind === "ledger.check" || kind === "ledger.sheet_column" || kind === "ledger.off_platform" },
-  { id: "other", label: "Другие дела", to: "/workboard/decisions", of: (kind) => !MIRRORED.includes(kind) && !CHECKS.includes(kind) && !kind.startsWith("contentops.") },
-];
-
 function mattersWaiting(request: DemoRequest): WaitingAnswer {
   // Only what waits for the viewer themself; the owner here holds no team lead's role (the agency has team leads).
   const matters = request.role === "chatter" ? [] : visible(request).filter((matter) => matter.mine);
-  const rows = ROWS.filter((row) => (request.role === "owner" ? !row.teamLead : row.teamLead || row.id === "other")).flatMap((row) => {
-    const mine = matters.filter((matter) => row.of(matter.kind));
-    if (mine.length === 0) return [];
-    const one = row.id === "login" && mine.length === 1 ? mine[0]!.pageLabels[0] ?? null : null;
-    return [{
-      id: row.id, label: one ? `${row.label}: ${one}` : row.label, count: mine.length, capped: false, pageLabel: one,
-      to: row.to, matterIds: mine.map((matter) => matter.id),
-    }];
-  });
-  const page = typeof request.query.pageLabel === "string" ? request.query.pageLabel : null;
-  const onPage = (matter: Matter) => page === null || matter.pageLabels.length === 0 || matter.pageLabels.includes(page);
-  const owner = request.role === "owner";
-  const count = (kinds: readonly string[], mine: boolean) => (mine ? matters.filter((matter) => kinds.includes(matter.kind) && onPage(matter)).length : null);
-  const questions = count(["ledger.sale_question"], owner);
-  const posts = count(["ledger.report_post"], owner);
-  const changes = count(["ledger.paid_day_changed"], owner);
-  const customs = count(["custom.paid_not_delivered"], true);
-  const held = count(["send.held"], true);
-  const total = (questions ?? 0) + (posts ?? 0) + (changes ?? 0) + (customs ?? 0) + (held ?? 0);
-  const all = matters.filter((matter) => ["ledger.sale_question", "ledger.report_post", "custom.paid_not_delivered", "send.held"].includes(matter.kind)).length;
-  // The list's groups, as Hub counts them (the one table): the owner's Home chips and his number.
+  // The list's groups, as Hub counts them (the one table), for every role: the Home's chips and the number.
   const waiting = matters.filter((matter) => !MATTER_INFO_KINDS.includes(matter.kind));
   const groups = request.role === "chatter" ? [] : WAITING_GROUPS.filter((group) => group.id !== "info").flatMap((group) => {
     const inGroup = waiting.filter((matter) => waitingGroupOf(matter.kind) === group.id);
@@ -295,20 +277,10 @@ function mattersWaiting(request: DemoRequest): WaitingAnswer {
   });
   return {
     active: request.scenario !== "matters-off",
-    rows,
     groups,
-    total: owner ? groups.reduce((sum, group) => sum + group.count, 0) : rows.reduce((sum, row) => sum + (row.count ?? 0), 0),
+    total: groups.reduce((sum, group) => sum + group.count, 0),
     failed: [],
-    decisions: {
-      questions,
-      reports: posts === null || changes === null ? null : posts + changes,
-      reportParts: posts === null || changes === null ? null : { posts, changes },
-      customs,
-      held,
-      total,
-      elsewhere: page === null ? 0 : Math.max(0, all - (total - (changes ?? 0))),
-      failed: [],
-    },
+    customOrders: 0,
     serverNow: request.now.toISOString(),
   };
 }

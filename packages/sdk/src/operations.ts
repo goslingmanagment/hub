@@ -137,6 +137,7 @@ export const kernelOperations = {
   agentCustomOrderUpdate: { method: "POST", path: "/api/v1/agent/custom-orders/:code" },
   agentCustomOrders: { method: "GET", path: "/api/v1/agent/custom-orders" },
   agentDatasetQuery: { method: "POST", path: "/api/v1/agent/pages/:pageLabel/datasets/:dataset/query" },
+  agentErasuresFeed: { method: "GET", path: "/api/v1/agent/erasures" },
   agentFanQueueAppend: { method: "POST", path: "/api/v1/agent/fan-queues/:queueId/fans" },
   agentFanQueueCreate: { method: "POST", path: "/api/v1/agent/pages/:pageLabel/fan-queues" },
   agentFanQueueGet: { method: "GET", path: "/api/v1/agent/fan-queues/:queueId" },

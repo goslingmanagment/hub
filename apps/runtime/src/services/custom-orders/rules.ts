@@ -1,6 +1,8 @@
 import { millsToWholeCents } from "@agency_hub_core/shared";
 import {
   cardOf,
+  CUSTOM_STATE_WORDS,
+  customOrderCode,
   type CustomOrderCard,
   type CustomOrderState,
 } from "@agency_hub_core/contracts";
@@ -36,13 +38,20 @@ export {
 
 /**
  * The extension's four states (CLIENT_FAN_CUSTOM_STATES) for an order: the released extension knows no other.
- * In work it is `paid` once a sale pays it (or it says so), else `ordered`; given or closed is `delivered`; a
- * cancelled order or the model's refusal is `cancelled`.
+ * `ordered` («ждёт оплаты») is only a recorded order no sale pays yet. Every other step in work — paid, at the
+ * model, delivered in part, shot, in revision — is `paid`: its wording is the least wrong of the four, the order
+ * is past its payment (often written in the card, not linked to a sale) and waits to be given, so «Отдали» stays.
+ * Given or closed is `delivered`; a cancelled order or the model's refusal is `cancelled`.
  */
 export function extensionStateOf(order: { state: CustomOrderState; payments: number }): "ordered" | "paid" | "delivered" | "cancelled" {
   if (order.state === "given" || order.state === "closed") return "delivered";
   if (order.state === "cancelled" || order.state === "refused") return "cancelled";
-  return order.state === "paid" || order.payments > 0 ? "paid" : "ordered";
+  return order.state === "recorded" && order.payments === 0 ? "ordered" : "paid";
+}
+
+/** The order's real step for the extension, shown as it is: its code, the board's word for its state, since when. */
+export function extensionStepOf(order: { id: number; state: CustomOrderState; stateAt: Date }): { code: string; stepLabel: string; stepAt: string } {
+  return { code: customOrderCode(order.id), stepLabel: CUSTOM_STATE_WORDS[order.state], stepAt: order.stateAt.toISOString() };
 }
 
 const SECTIONS: ReadonlyArray<{ key: keyof CustomOrderCard | "buyer" | "deadline" | "header"; match: RegExp }> = [

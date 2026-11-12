@@ -29,7 +29,6 @@ let server: Awaited<ReturnType<typeof buildApiServer>> | null = null;
 const users: Record<string, number> = {};
 const cookies: Record<string, string> = {};
 let aliceToken = "";
-let shiftId = 0;
 
 const START = new Date("2026-11-12T12:00:00.000Z");
 const SUM_MICROS = 123_450_000;
@@ -105,11 +104,6 @@ describe("report.post_fix: the author's own post to fix", () => {
       );
       if (userId !== null) await testDb.pool.query("insert into person_logins (user_id, person_id) values ($1, $2)", [userId, person.rows[0].id]);
     }
-    const shift = await testDb.pool.query(
-      `insert into shifts (user_id, state, started_at, ended_at, worked_minutes, messages, report_date)
-       values ($1, 'closed', '2026-11-10T15:00:00Z', '2026-11-10T23:00:00Z', 480, 120, '2026-11-10') returning id`, [users.alice],
-    );
-    shiftId = Number(shift.rows[0].id);
 
     server = await buildApiServer(app);
     await server.ready();
@@ -137,8 +131,9 @@ describe("report.post_fix: the author's own post to fix", () => {
       ["report.post_fix:705", users.alice, null, false],
     ]);
     expect(rows[0].title).toContain("Отчёт за 10 нояб. не начислен");
-    expect(rows[0].link).toBe(`/workboard/my/shifts/${shiftId}`);
-    expect(rows[1].link).toBe("/workboard/my/shifts");
+    // Where the author sees the post's numbers against Hub's: that day's report, open in «Мои смены», the day's week.
+    expect(rows[0].link).toBe("/workboard/my/shifts?week=2026-11-10&report=2026-11-10");
+    expect(rows[1].link).toBe("/workboard/my/shifts?week=2026-11-11&report=2026-11-11");
     // No sum anywhere a chatter reads: neither the post's total, nor its lines.
     for (const row of rows) {
       const text = `${row.title as string} ${row.evidence as string}`;

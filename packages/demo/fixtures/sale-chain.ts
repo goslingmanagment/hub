@@ -18,7 +18,7 @@ import { demoPersonPay } from "./team-ledger.ts";
  *  - A console row (by the page and the platform's id): the shift that held the page at that moment, or nobody's;
  *    a sale before 2 Nov is the old way.
  * The rights are Hub's: the owner every sale with the pay sums; the chatter only a sale of their own shifts, their own
- * person, their sums (the scenario `pay-off` hides them); a team lead their pages, no pay sums. Лена has no payout tab
+ * person, their sums (the scenario `pay-off` hides them); a team lead their pages, nobody's pay. Лена has no payout tab
  * in the book: her links say «неизвестно».
  *
  * Invented data only.
@@ -181,7 +181,7 @@ function person(share: Home["shares"][number], sale: Sale, home: Home, viewer: V
       words: `смена ${DAY_MONTH.format(new Date(entry.shift.start))}, ${CLOCK.format(new Date(entry.shift.start))}–${CLOCK.format(new Date(entry.shift.end))}${entry.shift.ongoing ? ", идёт" : ""}`,
       link: reportPath, amountMills: null,
     };
-  const postLink = viewer.kind === "owner" ? "/workboard/payouts?tab=reports" : own ? "/workboard/my/shifts" : null;
+  const postLink = viewer.kind === "owner" ? "/workboard/payouts?view=reports" : own ? "/workboard/my/shifts" : null;
   let report: Link;
   // A console row's sale names no line of the demo's shifts: the shift's version stands for the one holding it.
   const line = entry?.handed?.line ?? (entry !== null && entry.handed !== null && entry.line === null ? { amountMills: share.mills, statement: null, disputed: false } : null);
@@ -190,7 +190,7 @@ function person(share: Home["shares"][number], sale: Sale, home: Home, viewer: V
     const said = line.statement === "not_mine" ? ", «не моё»" : line.statement === "share" ? ", «делим»" : line.statement === "mine" ? ", «моё»" : "";
     report = {
       state: line.disputed ? "open" : "done",
-      words: `сдан в системе: версия ${entry.handed.version}, ${when(entry.handed.submittedAt)}; ${counted}${said}${line.disputed ? ", спорная" : ""}`,
+      words: `сдан: версия ${entry.handed.version}, ${when(entry.handed.submittedAt)}; ${counted}${said}${line.disputed ? ", спорная" : ""}`,
       link: reportPath, amountMills: line.amountMills,
     };
   } else if (entry !== null && entry.back > SWITCH_DAYS) {
@@ -202,6 +202,11 @@ function person(share: Home["shares"][number], sale: Sale, home: Home, viewer: V
     };
   } else {
     report = { state: "wait", words: `отчёта за ${date} в ledger пока нет`, link: postLink, amountMills: null };
+  }
+  // Another person's pay is the owner's to see: a team lead reads neither its sums nor its states.
+  if (viewer.kind === "team_lead") {
+    const ownerOnly: Link = { state: "none", words: "видит только владелец", link: null, amountMills: null };
+    return { userId: share.user.id, name: share.user.name, shareMills: share.mills, reportDate, shift, report, accrual: ownerOnly, payout: ownerOnly };
   }
   const payLink = viewer.kind === "owner" ? `/workboard/payouts?person=${encodeURIComponent(share.user.username)}` : own ? "/workboard/my/shifts" : null;
   return { userId: share.user.id, name: share.user.name, shareMills: share.mills, reportDate, shift, report, ...payLinks(share.user, reportDate, sums.pay, payLink, request.now) };

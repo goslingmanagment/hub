@@ -172,6 +172,10 @@ function teamLedgerPayouts(request: DemoRequest): Answer | ReturnType<typeof dem
     generatedAt: new Date(now - 4_000).toISOString(),
     factsFrom: addDays(today, -FACTS_FROM_DAYS),
     reportsFrom: addDays(today, -REPORTS_FROM_DAYS),
+    // As today: the payout sheets price the days and the posts are the reports. `terms-hub` — the ledger takes the
+    // terms from Hub's registry from a week ago (the line on «График и условия» is gone).
+    termsHubFrom: request.scenario === "terms-hub" ? addDays(today, -7) : null,
+    basisHubFrom: null,
     people: PEOPLE.map((person) => personOf(person, from, to, today, accrualFrom, request.now)),
     checks: {
       // The sheets collector stopped four hours ago: the ledger's own word is «stale», yet the debts are fresh, so only

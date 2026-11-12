@@ -52,6 +52,21 @@ export const MATTER_MIRROR_KINDS = [
 ] as const;
 export type MatterMirrorKind = (typeof MATTER_MIRROR_KINDS)[number];
 
+/** Whom a mirrored kind waits for: the owner's role, or the team lead's (customs paid and not given, held sends). */
+export const MATTER_MIRROR_KIND_ROLES: Readonly<Record<MatterMirrorKind, "owner" | "team_lead">> = {
+  "publication.draft": "owner",
+  "publication.unknown": "owner",
+  "ledger.sale_question": "owner",
+  "ledger.report_post": "owner",
+  "ledger.paid_day_changed": "owner",
+  "custom.paid_not_delivered": "team_lead",
+  "send.held": "team_lead",
+  "page.login_needed": "owner",
+  "incident.open": "owner",
+  "extension.critical": "owner",
+  "history.request": "owner",
+};
+
 const MIRROR_KIND_SET: ReadonlySet<string> = new Set(MATTER_MIRROR_KINDS);
 export function isMatterMirrorKind(kind: string): kind is MatterMirrorKind {
   return MIRROR_KIND_SET.has(kind);
@@ -115,17 +130,6 @@ export const MATTER_STATES = ["open", "closed"] as const;
 export const MATTER_CLOSED_HOWS = ["resolved", "withdrawn", "cause_gone"] as const;
 export const MATTER_SOURCE_NAMES = ["server", "agent", "ledger", "contentops", "person"] as const;
 export const MATTER_OWNER_ROLE_NAMES = ["owner", "team_lead", "chatter"] as const;
-
-/**
- * «Ждут вас»'s rows, in the screen's order (apps/dashboard/src/api/waiting.ts); after them the matters no old row
- * counts (package K): ContentOps' (`contentops.*`), people and access, the ledger's checks, and every other kind.
- */
-export const WAITING_ROW_IDS = [
-  "drafts", "unknown", "questions", "reports", "customs", "held", "login", "failures", "extension", "history", "content", "people", "ledger", "other",
-] as const;
-export type WaitingRowId = (typeof WAITING_ROW_IDS)[number];
-/** «Решения»'s queues, in the screen's order (apps/workboard/src/shared/decisions.ts). */
-export const DECISION_QUEUE_IDS = ["questions", "reports", "customs", "held"] as const;
 
 const username = z.string().trim().min(1).max(64);
 const pageLabel = z.string().trim().min(1).max(64);
@@ -195,36 +199,17 @@ export const mattersListResponseSchema = z.object({
   serverNow: isoTimestamp,
 });
 
-export const mattersWaitingQuerySchema = z.object({
-  /** «Решения» on one page (a matter of no page is every page's). «Ждут вас» is never cut by page. */
-  pageLabel: pageLabel.optional(),
-}).strict();
-
-export const mattersWaitingRowSchema = z.object({
-  id: z.enum(WAITING_ROW_IDS),
-  label: z.string(),
-  /** null: «не удалось проверить» — the source did not answer lately; never a zero for it. */
-  count: z.number().int().nonnegative().nullable(),
-  /** The source's read hit its limit: there are at least this many. */
-  capped: z.boolean(),
-  /** The one page the row is about, when it is about one (a single Fansly page that needs a login). */
-  pageLabel: z.string().nullable(),
-  /** The one place it is done, as «Ждут вас» links it. */
-  to: z.string(),
-  /** The row's matters (for the extension counter, the row's count of events, not of matters). */
-  matterIds: z.array(intId),
-});
+/** «Ждут вас» is never cut by page: no parameters. */
+export const mattersWaitingQuerySchema = z.object({}).strict();
 
 export const mattersWaitingResponseSchema = z.object({
   /** The owner's switch (`mattersReadEnabled`): the screens read this answer instead of their own sources. */
   active: z.boolean(),
-  /** «Ждут вас»: the viewer's rows in the screen's order, none with a zero. */
-  rows: z.array(mattersWaitingRowSchema),
   /**
-   * «Ждут вас» by the list's groups (waiting-groups.ts, the one table): a group per kind the viewer's own open
-   * matters fall in, in the list's order, never «Для сведения»; the console Home's chips. A group's count is the list's
-   * (one per matter; the custom orders' count where they are customs' home); `checked: false` — a source of the group
-   * did not answer lately. The owner's `total` is their sum; a team lead's stays the sum of `rows`.
+   * «Ждут вас» by the list's groups (waiting-groups.ts, the one table) — for every role, in both apps: a group per
+   * kind the viewer's own open matters fall in, in the list's order, never «Для сведения»; the console Home's chips. A
+   * group's count is the list's (one per matter; the custom orders' count where they are customs' home); `checked:
+   * false` — a source of the group did not answer lately.
    */
   groups: z.array(z.object({
     id: z.enum(WAITING_GROUP_IDS),
@@ -235,22 +220,15 @@ export const mattersWaitingResponseSchema = z.object({
     tone: z.enum(WAITING_TONES).nullable(),
     to: z.string(),
   })),
-  /** The sum of what did answer: the menu's number (the owner's: of `groups`, the list's numbers). */
+  /** The menu's number, the list's: the sum of `groups`. */
   total: z.number().int().nonnegative(),
-  /** The rows that could not be checked. */
-  failed: z.array(z.enum(WAITING_ROW_IDS)),
-  /** «Решения»: its four queues, on the asked page; null — not checked or not the viewer's. */
-  decisions: z.object({
-    questions: z.number().int().nonnegative().nullable(),
-    reports: z.number().int().nonnegative().nullable(),
-    reportParts: z.object({ posts: z.number().int().nonnegative(), changes: z.number().int().nonnegative() }).nullable(),
-    customs: z.number().int().nonnegative().nullable(),
-    held: z.number().int().nonnegative().nullable(),
-    total: z.number().int().nonnegative(),
-    /** With a page: what waits on the other pages. 0 without one. */
-    elsewhere: z.number().int().nonnegative(),
-    failed: z.array(z.enum(DECISION_QUEUE_IDS)),
-  }),
+  /** The groups that could not be checked (`checked: false`): the number is «N?», never a quiet zero. */
+  failed: z.array(z.enum(WAITING_GROUP_IDS)),
+  /**
+   * Of «Кастомы»'s count, the custom orders paid or shot and not given that wait for the viewer (no matter stands
+   * for them: the list draws them as one line to the board); 0 — none, not read, or the orders are not customs' home.
+   */
+  customOrders: z.number().int().nonnegative(),
   serverNow: isoTimestamp,
 });
 
@@ -332,7 +310,6 @@ export type Matter = z.infer<typeof matterSchema>;
 export type MattersListQuery = z.infer<typeof mattersListQuerySchema>;
 export type MattersListResponse = z.infer<typeof mattersListResponseSchema>;
 export type MattersWaitingQuery = z.infer<typeof mattersWaitingQuerySchema>;
-export type MattersWaitingRow = z.infer<typeof mattersWaitingRowSchema>;
 export type MattersWaitingResponse = z.infer<typeof mattersWaitingResponseSchema>;
 export type ClientMattersResponse = z.infer<typeof clientMattersResponseSchema>;
 export type AgentMatterOpenBody = z.infer<typeof agentMatterOpenBodySchema>;

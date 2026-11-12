@@ -68,6 +68,23 @@ export const STEP_TO: Partial<Readonly<Record<CustomOrderAction, CustomOrderStat
   cancel: "cancelled",
 };
 
+/**
+ * Each state in people's words: the one table for every door that names an order's step — the board «Кастомы»
+ * in Workboard and the extension's fan panel (the wire's `stepLabel`, shown as it is).
+ */
+export const CUSTOM_STATE_WORDS: Readonly<Record<CustomOrderState, string>> = {
+  recorded: "Записан",
+  paid: "Оплачен",
+  at_model: "У модели",
+  partly: "Сдан частично",
+  shot: "Снят",
+  revision: "Правка",
+  refused: "Отказ модели",
+  given: "Отдан фану",
+  closed: "Закрыт",
+  cancelled: "Отменён",
+};
+
 /** Who looks at an order: a person of a role, the lead (the right «ведёт кастомы»), and the pages they reach. */
 export interface CustomViewer {
   userId: number;

@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import type { AccountPay, AccountPayResponse } from "@agency_hub_core/contracts";
 import { hubErrorStatus } from "@agency_hub_core/ui/hubClient";
-import { addDays, moscowDayOf, moscowDayStart, type MoscowDay } from "@agency_hub_core/ui/moscow";
+import { shiftReportDay, type MoscowDay } from "@agency_hub_core/ui/moscow";
 import { kernel } from "@/shared/hub";
 import type { MyShiftRow, MyShiftsWindow } from "./model.js";
 
@@ -45,21 +45,6 @@ export function useMyMoney(window: Pick<MyShiftsWindow, "from" | "to">): MyMoney
   };
 }
 
-const TWO_HOURS = 2 * 60 * 60_000;
-
-/**
- * The day the ledger accrues a shift on (its `ReportDate`): the Moscow day it began — or the next one, for a shift
- * begun within two hours of midnight that lies mostly after it. Pure.
- */
-export function ledgerDayOf(startedAt: string, endedAt: string): MoscowDay {
-  const start = Date.parse(startedAt);
-  const day = moscowDayOf(start);
-  const midnight = Date.parse(moscowDayStart(addDays(day, 1)));
-  const before = midnight - start;
-  const end = Date.parse(endedAt);
-  return before <= TWO_HOURS && end > midnight && end - midnight > before ? addDays(day, 1) : day;
-}
-
 /**
  * Which row shows which day's accrual: the row holding that date's report first (Hub's handed-in report, else the
  * ledger's), else the first row of the day as the screen lists them; a day shows on one row only (two shifts of a
@@ -74,7 +59,8 @@ export function accrualOfRows(rows: readonly MyShiftRow[], days: readonly MoneyD
     if (row.shift?.ongoing) return null;
     if (row.hub !== null) return row.hub.reportDate;
     if (row.report !== null) return row.report.reportDate;
-    return row.shift === null ? null : ledgerDayOf(row.shift.startedAt, row.shift.endedAt);
+    // The day the ledger accrues the shift on: the one report day of a shift (`shiftReportDay`).
+    return row.shift === null ? null : shiftReportDay(row.shift.startedAt, row.shift.endedAt);
   };
   // The rows with a report of the date first, then the rest in the screen's order.
   const ordered = [...rows.filter(reported), ...rows.filter((row) => !reported(row))];

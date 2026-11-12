@@ -1,6 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { RotateCw } from "lucide-react";
-import { useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useLocation } from "react-router";
 import {
   Badge,
@@ -146,7 +146,7 @@ function StateCell({ row }: { row: MyShiftRow }) {
     case "posted":
       return (
         <span className="mys-state">
-          <Badge tone="success" bare className="mys-state__badge">Отправлен</Badge>
+          <Badge tone="success" bare className="mys-state__badge">Пост отправлен</Badge>
           {/* The chatter's right, not an alarm: said quietly, under the word. */}
           {row.draftMills !== null && <span className="mys-state__was">в черновике было {formatMills(row.draftMills)}</span>}
         </span>
@@ -340,6 +340,15 @@ export function MyShiftsScreen() {
     else updated.delete(row.key);
     return updated;
   });
+  // `?report=<day>` (a post to fix, «Ждут вас»): that day's report opens in its row, once the rows are here.
+  const askedDay = new URLSearchParams(location.search).get("report");
+  const opened = useRef<string | null>(null);
+  useEffect(() => {
+    if (!rows || askedDay === null || opened.current === location.key) return;
+    opened.current = location.key;
+    const asked = rows.filter((row) => row.hub === null && row.report?.reportDate === askedDay).map((row) => row.key);
+    if (asked.length > 0) setOpen((current) => new Set([...current, ...asked]));
+  }, [rows, askedDay, location.key]);
 
   let meta: ReactNode;
   // No shift in the period: the empty state says it; a line of zeros would say nothing more.

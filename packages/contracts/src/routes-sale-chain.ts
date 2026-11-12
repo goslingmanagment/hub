@@ -8,8 +8,8 @@
  *
  * Who reads what: the owner everything, pay included; a chatter a sale of their own shifts, reports or claims on a
  * page they may open — the home, their own report, their accrual and payout as states, their own sums only with their
- * switch «видит свои деньги»; a team lead a sale of their pages, no pay sums; an agent key (read:team + read:money)
- * a sale of its pages, no pay sums. Another sale is not found. A link whose source did not answer says «неизвестно»
+ * switch «видит свои деньги»; a team lead a sale of their pages — whose it is, the shift and the report, never another
+ * person's accrual or payout, not even as a state; an agent key (read:team + read:money) a sale of its pages, no pay sums. Another sale is not found. A link whose source did not answer says «неизвестно»
  * and why, never a guess.
  */
 import { z } from "zod";
@@ -32,7 +32,7 @@ export const SALE_CHAIN_STATES = ["done", "wait", "open", "none", "unknown"] as 
 
 export const saleChainLinkSchema = z.object({
   state: z.enum(SALE_CHAIN_STATES),
-  /** One line in Russian: «сдан в системе: версия 2, 11 нояб., 23:10», «к выплате», «неизвестно: ledger не ответил». */
+  /** One line in Russian: «сдан: версия 2, 11 нояб., 23:10», «к выплате», «неизвестно: ledger не ответил». */
   words: z.string(),
   /** Where it is seen: a Workboard or console path; null — no screen of it for this reader. */
   link: z.string().nullable(),
@@ -105,7 +105,8 @@ export const saleChainRouteSchemas = {
     summary: "From one sale, its chain of money: whose it is, the shift, the report, the accrual, the payout",
     description: "Any session (the narrow one the extension opens included): the owner every sale with pay sums; a chatter a "
       + "sale of their own shifts, reports or claims on a page they may open, their own pay as states (sums with "
-      + "«видит свои деньги»); a team lead a sale of their pages without pay sums. Another sale is 404. Database and "
+      + "«видит свои деньги»); a team lead a sale of their pages without anyone's pay (accrual and payout «видит только "
+      + "владелец»). Another sale is 404. Database and "
       + "the ledger's reads the payout panel and «Выплаты → Отчёты» already make; a source that does not answer is «неизвестно».",
     querystring: saleChainQuerySchema,
     response: { 200: saleChainResponseSchema, ...errors },

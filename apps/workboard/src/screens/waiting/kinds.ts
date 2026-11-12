@@ -49,21 +49,8 @@ export function uncheckedWords(kinds: readonly string[]): string[] {
   return words;
 }
 
-/**
- * Since when a matter waits: the moment its own finding names (a send's, a
- * question's, a payment's, a red check's first run), else when it was opened.
- */
-export function waitingSince(matter: { kind: string; openedAt: string; evidence: Record<string, unknown> }): string {
-  const fields = ["sentAt", "askedAt", "paidAt", "postedAt", "openedAt", "requestedAt", "failingSince", "saidAt", "publishAt"];
-  for (const field of fields) {
-    const value = matter.evidence[field];
-    if (typeof value !== "string") continue;
-    const at = Date.parse(value);
-    // A publication's moment is when it goes out, not when it waits: only a past one counts.
-    if (!Number.isNaN(at) && at <= Date.now() && at <= Date.parse(matter.openedAt) + 60_000) return new Date(at).toISOString();
-  }
-  return matter.openedAt;
-}
+/** Since when a matter waits — since its reason began: the one function (contracts waiting-groups.ts). */
+export { waitingSinceOf as waitingSince } from "@agency_hub_core/contracts";
 
 /** «12 мин», «5 ч», «3 дня»: how long it waits, short. */
 export function waitedFor(sinceIso: string, now: number): string {
