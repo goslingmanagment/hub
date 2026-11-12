@@ -42,8 +42,9 @@ import { dayWords, shiftWords } from "./shift-handin-rules.ts";
  *
  * Who reads what (`ChainViewer`): the owner everything, pay sums included; a chatter a sale of their own shifts,
  * reports or claims on a page they may open — the home, their own report, their accrual and payout as states, their
- * sums only with «видит свои деньги»; a team lead a sale of their pages, no pay sums; an agent key a sale of its pages,
- * no pay sums. Another sale is not found (404), never an empty chain.
+ * sums only with «видит свои деньги»; a team lead a sale of their pages — whose it is, the shift and the report, never
+ * another person's accrual or payout, not even as a state (the ledger is not asked); an agent key (read:money) a sale
+ * of its pages, no pay sums. Another sale is not found (404), never an empty chain.
  */
 
 type ChainApp = Pick<AppContext, "db" | "config" | "logger">;
@@ -259,6 +260,9 @@ export function payLinksOf(input: {
   return { accrual, payout };
 }
 
+/** «Начисление» and «Выплата» of another person for a reader who sees no pay but their own (a team lead). */
+const OWNER_ONLY: SaleChainLink = { state: "none", words: "видит только владелец", link: null, amountMills: null };
+
 // ── The read ─────────────────────────────────────────────────────────────────
 
 function unknownWords(error: unknown): string {
@@ -341,7 +345,7 @@ export async function readSaleChain(
     const handedIn = reports.filter((report) => logins.includes(report.userId)).at(-1) ?? null;
     let report: SaleChainLink;
     let model: string | null = null;
-    const postLink = viewer.kind === "owner" ? `/workboard/payouts?tab=reports` : own ? "/workboard/my/shifts" : null;
+    const postLink = viewer.kind === "owner" ? `/workboard/payouts?view=reports` : own ? "/workboard/my/shifts" : null;
     if (handedIn !== null) {
       report = hubReportLinkOf({ report: handedIn, transactionId: sale.transactionId, own, sums });
     } else if (person === null) {
@@ -358,23 +362,28 @@ export async function readSaleChain(
     }
 
     // Начисление, Выплата: the ledger's day of the person; read up to a month on, so the payout that paid it is in.
-    let pay: TeamLedgerPayoutPersonResponse | null = null;
-    let why: string | null = null;
-    if (person === null) {
-      why = "вход не связан с человеком в реестре";
-    } else {
-      const today = moscowToday(now);
-      const monthOn = new Date(Date.parse(`${reportDate}T00:00:00Z`) + 30 * 86_400_000).toISOString().slice(0, 10);
-      const until = today < monthOn ? today : monthOn;
-      const payTo = until < reportDate ? reportDate : until;
-      try {
-        pay = await readTeamLedgerPayoutPerson(app, { person: person.code, from: reportDate, to: payTo }, { ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}), now });
-      } catch (error) {
-        why = unknownWords(error);
+    // Another person's pay is the owner's to see (an agent with read:money its states): a team lead's read asks nothing.
+    let accrual = OWNER_ONLY;
+    let payout = OWNER_ONLY;
+    if (viewer.kind !== "team_lead") {
+      let pay: TeamLedgerPayoutPersonResponse | null = null;
+      let why: string | null = null;
+      if (person === null) {
+        why = "вход не связан с человеком в реестре";
+      } else {
+        const today = moscowToday(now);
+        const monthOn = new Date(Date.parse(`${reportDate}T00:00:00Z`) + 30 * 86_400_000).toISOString().slice(0, 10);
+        const until = today < monthOn ? today : monthOn;
+        const payTo = until < reportDate ? reportDate : until;
+        try {
+          pay = await readTeamLedgerPayoutPerson(app, { person: person.code, from: reportDate, to: payTo }, { ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}), now });
+        } catch (error) {
+          why = unknownWords(error);
+        }
       }
+      const payLink = viewer.kind === "owner" && person !== null ? `/workboard/payouts?person=${encodeURIComponent(person.code)}` : own ? "/workboard/my/shifts" : null;
+      ({ accrual, payout } = payLinksOf({ pay, unknown: why, reportDate, model, sums, link: payLink }));
     }
-    const payLink = viewer.kind === "owner" && person !== null ? `/workboard/payouts?person=${encodeURIComponent(person.code)}` : own ? "/workboard/my/shifts" : null;
-    const { accrual, payout } = payLinksOf({ pay, unknown: why, reportDate, model, sums, link: payLink });
     out.push({
       userId,
       name: names.get(userId) ?? person?.displayName ?? `#${userId}`,

@@ -124,6 +124,13 @@ function lineOf(matter: Matter, context: Context): Line {
         action: telegram ? <TelegramLink href={telegram}>Пост</TelegramLink> : null,
       };
     }
+    case "report.post_fix": {
+      // The author's line opens their report of the day in «Мои смены» (the matter's link); the owner's (oversight),
+      // «Выплаты → Отчёты» of that week: where each reader sees the post's numbers against Hub's.
+      if (matter.mine) return base;
+      const day = text(evidence.day);
+      return { ...base, action: <GoLink link={`/workboard/payouts?view=reports${day === null ? "" : `&week=${day}`}&questions=1`} /> };
+    }
     case "ledger.paid_day_changed": {
       const was = number(evidence.postedMills);
       const now = number(evidence.newMills);
@@ -331,21 +338,19 @@ function whoseWord(matter: Matter): string {
   return matter.owner.kind === "user" ? matter.owner.displayName ?? (matter.owner.username || `вход №${matter.owner.userId}`) : ROLE_WORD[matter.owner.role] ?? matter.owner.role;
 }
 
-/** The group a «Ждут вас» row of a count (no matter behind it: the custom orders' number) stands in. */
-const COUNT_ROW_GROUP: Readonly<Record<string, WaitingGroupId>> = { customs: "customs" };
-
-/** «Ждут вас»'s rows that are a count, not matters (the orders paid or shot and not given), as lines of the list. */
-function countLines(rows: ReadonlyArray<{ id: string; label: string; count: number | null; to: string; matterIds: readonly number[] }>, now: number): Line[] {
-  return rows.filter((row) => row.matterIds.length === 0 && row.count !== null && row.count > 0).map((row) => ({
-    key: `row:${row.id}`,
-    weight: row.count ?? 0,
+/** «Кастомы»'s orders paid or shot and not given (no matter stands for them): one line of the group, its count its weight. */
+function orderLines(orders: number, now: number): Line[] {
+  if (orders <= 0) return [];
+  return [{
+    key: "orders:customs",
+    weight: orders,
     matter: null,
-    group: COUNT_ROW_GROUP[row.id] ?? "other",
+    group: "customs",
     since: new Date(now).toISOString(),
-    title: `${row.label}: ${row.count}`,
+    title: `Кастомы оплачены, не отданы: ${orders}`,
     about: [],
-    action: <GoLink link={row.to}>Открыть доску</GoLink>,
-  }));
+    action: <GoLink link="/workboard/customs">Открыть доску</GoLink>,
+  }];
 }
 
 export function WaitingScreen() {
@@ -356,8 +361,8 @@ export function WaitingScreen() {
   const navigate = useNavigate();
   const pages = usePages();
   const list = useQuery({ ...mattersListQuery, refetchInterval: MINUTE });
-  // The rows of «Ждут вас»: a row that is a count without matters (the custom orders) is a line here too.
-  const rows = useQuery({ ...mattersWaitingQuery(), refetchInterval: MINUTE });
+  // «Ждут вас» by its groups: the custom orders, a count without matters, are a line here too.
+  const waitingRead = useQuery({ ...mattersWaitingQuery(), refetchInterval: MINUTE });
   const matters = list.data?.matters ?? [];
   const has = (kind: string) => matters.some((matter) => matter.kind === kind);
   const attemptId = search.get("send");
@@ -410,7 +415,7 @@ export function WaitingScreen() {
   const now = list.data ? Date.parse(list.data.serverNow) : Date.now();
   // What waits for the viewer themself is the list; what waits for someone else is oversight below, counted nowhere.
   const mine = matters.filter((matter) => matter.mine);
-  const lines = [...mine.filter(onPage).map((matter) => lineOf(matter, context)), ...(page === null ? countLines(rows.data?.rows ?? [], now) : [])];
+  const lines = [...mine.filter(onPage).map((matter) => lineOf(matter, context)), ...(page === null ? orderLines(waitingRead.data?.customOrders ?? 0, now) : [])];
   const elsewhere = page === null ? 0 : mine.filter((matter) => !onPage(matter) && groupOf(matter.kind) !== "info").length;
   const only = groupOfAnchor(location.hash);
   const shown = only === null ? lines : lines.filter((line) => line.group === only);

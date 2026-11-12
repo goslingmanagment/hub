@@ -12,11 +12,11 @@ import {
   isMatterMirrorKind,
   isMatterPersonStartKind,
   isMatterServerKind,
-  LEDGER_CHECK_KINDS,
   MATTER_CHECK_KIND_PERIODS,
   MATTER_CHECK_KINDS,
   MATTER_INFO_KINDS,
-  PEOPLE_CHECK_KINDS,
+  MATTER_MIRROR_KIND_ROLES,
+  MATTER_MIRROR_KINDS,
   isShiftReportMatterKind,
   isReportPostMatterKind,
   isSaleClaimMatterKind,
@@ -30,10 +30,7 @@ import {
   type MatterMirrorKind,
   type MattersListQuery,
   type MattersListResponse,
-  type MattersWaitingQuery,
   type MattersWaitingResponse,
-  type MattersWaitingRow,
-  type WaitingRowId,
 } from "@agency_hub_core/contracts";
 import {
   closeMatter,
@@ -67,7 +64,7 @@ import { AppError, ConflictError, NotFoundError } from "./errors.ts";
  * (`matterVisibility`): the owner every matter; a team lead their own and
  * their role's on their pages; a chatter their own; a matter with money the
  * owner's alone. A kind Hub mirrors whose source did not answer lately is «не
- * проверено» (`count: null`), never a zero. Database only.
+ * проверено» (`checked: false` of its group), never a zero. Database only.
  *
  * Reading is not waiting: «Ждут вас», its number on the menu and on the
  * Home, and the extension's icon count only what waits for the viewer THEMSELF
@@ -109,158 +106,27 @@ export function matterKindChecked(check: MatterCheckRow | undefined, kind: strin
   return period === null || now.getTime() - check.answeredAt.getTime() <= 3 * period + MINUTE;
 }
 
-// ── «Ждут вас» and «Решения», from matters ──────────────────────────────────
+// ── «Ждут вас», from matters ────────────────────────────────────────────────
 
-interface WaitingRowSpec {
-  id: WaitingRowId;
-  kinds: readonly MatterMirrorKind[];
-  /** A team lead's row too (the rest are the owner's). */
-  teamLead: boolean;
-  label: string;
-  to: string;
+/** The mirrored kinds whose matters wait for one of these roles (MATTER_MIRROR_KIND_ROLES). */
+function mirroredKindsOf(roles: readonly MatterOwnerRole[]): MatterMirrorKind[] {
+  return MATTER_MIRROR_KINDS.filter((kind) => roles.includes(MATTER_MIRROR_KIND_ROLES[kind]));
 }
 
-/**
- * «Ждут вас»'s rows: the same words and order as apps/dashboard/src/api/waiting.ts. Each row leads to the one list
- * filtered to its group (`/workboard/decisions#<group>`, Workboard's screens/waiting/kinds.ts), not to the screens of
- * its kinds (L2, 12.11): the list's line of a matter carries the matter's own link.
- */
-const WAITING_ROW_SPECS: readonly WaitingRowSpec[] = [
-  { id: "drafts", kinds: ["publication.draft"], teamLead: false, label: "Посты на утверждение", to: "/workboard/decisions#publications" },
-  { id: "unknown", kinds: ["publication.unknown"], teamLead: false, label: "Публикации: исход неизвестен", to: "/workboard/decisions#publications" },
-  { id: "questions", kinds: ["ledger.sale_question"], teamLead: false, label: "Чья продажа: вопросы ждут вашего слова", to: "/workboard/decisions#questions" },
-  { id: "reports", kinds: ["ledger.report_post", "ledger.paid_day_changed"], teamLead: false, label: "Отчёты смен ждут решения", to: "/workboard/decisions#reports" },
-  { id: "customs", kinds: ["custom.paid_not_delivered"], teamLead: true, label: "Кастомы оплачены, не отданы", to: "/workboard/decisions#customs" },
-  { id: "held", kinds: ["send.held"], teamLead: true, label: "Проверить отправки", to: "/workboard/decisions#held" },
-  { id: "login", kinds: ["page.login_needed"], teamLead: false, label: "Нужен вход в Fansly", to: "/workboard/decisions#system" },
-  { id: "failures", kinds: ["incident.open"], teamLead: false, label: "Сбои", to: "/workboard/decisions#system" },
-  { id: "extension", kinds: ["extension.critical"], teamLead: false, label: "Критичные сбои расширения", to: "/workboard/decisions#system" },
-  { id: "history", kinds: ["history.request"], teamLead: false, label: "Заявки на историю", to: "/workboard/decisions#system" },
-];
-
-/** The team lead's row kinds (customs, held sends): the owner's only while he is the acting team lead. */
-const TEAM_LEAD_KINDS: ReadonlySet<string> = new Set(WAITING_ROW_SPECS.filter((spec) => spec.teamLead).flatMap((spec) => [...spec.kinds]));
-
-/** The kinds a role reads in «Ждут вас»: the owner every one, a team lead customs and held sends, a chatter none. */
-export function waitingKindsOf(role: MatterOwnerRole): MatterMirrorKind[] {
-  if (role === "chatter") return [];
-  return WAITING_ROW_SPECS.filter((spec) => role === "owner" || spec.teamLead).flatMap((spec) => [...spec.kinds]);
-}
-
-/**
- * The rows after the old ones (package K): matters no old row counts. The
- * people's and the ledger's checks are the owner's; every other kind (another
- * package's, an agent's) is whoever's it is. A kind that only informs is in
- * none: it waits for nobody.
- */
-const FAMILY_ROW_SPECS: ReadonlyArray<{ id: Extract<WaitingRowId, "content" | "people" | "ledger" | "other">; label: string; to: string; checks: readonly string[] }> = [
-  // ContentOps' findings (its key writes `contentops.*`, the owner's): a group of the list, «Контент».
-  { id: "content", label: "Контент", to: "/workboard/decisions#content", checks: [] },
-  { id: "people", label: "Люди и доступ", to: "/workboard/decisions#people", checks: PEOPLE_CHECK_KINDS.filter((kind) => !isMatterInfoKind(kind)) },
-  { id: "ledger", label: "Проверки ledger", to: "/workboard/decisions#ledger", checks: LEDGER_CHECK_KINDS },
-  // Another package's or an agent's kinds land in several groups of the list: the whole list, nothing hidden.
-  { id: "other", label: "Другие дела", to: "/workboard/decisions", checks: [] },
-];
-
-/** The family row a kind no old row counts belongs to; null — an old row's kind, or one that only informs. */
-export function waitingFamilyOf(kind: string): "content" | "people" | "ledger" | "other" | null {
-  if (isMatterMirrorKind(kind) || isMatterInfoKind(kind)) return null;
-  if (kind.startsWith("contentops.")) return "content";
-  // A newcomer's way (package J): the people's family, as the checks' of people and access.
-  if ((kind.startsWith("people.") && isMatterCheckKind(kind)) || isMatterPersonStartKind(kind)) return "people";
-  if ((LEDGER_CHECK_KINDS as readonly string[]).includes(kind)) return "ledger";
-  return "other";
-}
-
-/** What the builders need of each mirrored kind. */
+/** What the groups need of each kind. */
 export interface MatterKindState {
   checked: boolean;
   /** Shown at all (the OnlyFans history requests only while the OnlyFans API is on). */
   applicable: boolean;
-  capped: boolean;
 }
 
 type WaitingMatter = Pick<MatterRow, "id" | "kind" | "pageIds" | "evidence">;
 
-/** The events a counter matter stands for (`extension.critical`: its 7 days' total), else 1. */
+/** The events a counter matter stands for (`extension.critical`: its 7 days' total), else 1: the mirror's tally. */
 export function matterWeight(matter: Pick<MatterRow, "kind" | "evidence">): number {
   if (matter.kind !== "extension.critical") return 1;
   const total = matter.evidence.total;
   return typeof total === "number" && Number.isSafeInteger(total) && total > 0 ? total : 0;
-}
-
-/**
- * «Ждут вас» from the viewer's open matters: the rows in the screen's order,
- * none with a zero, a row whose source is not known with `count: null`.
- */
-export function buildWaitingRows(input: {
-  role: MatterOwnerRole;
-  /** The viewer's OWN open matters (`heldRolesOf`): what waits for them, never for someone else. */
-  matters: readonly WaitingMatter[];
-  kindState: (kind: string) => MatterKindState;
-  labelOf: (pageId: number) => string | undefined;
-  /** The owner holds the team lead's role (nobody else does): its rows are his; default — he does. */
-  teamLeadRows?: boolean;
-  /**
-   * The custom orders are the home of customs (`customOrdersReadEnabled`): the customs row is the number of the
-   * viewer's orders paid or shot and not given (null — the read failed), leading to the board; undefined — the old
-   * kind's matters, as before.
-   */
-  customOrders?: number | null;
-}): Pick<MattersWaitingResponse, "rows" | "total" | "failed"> {
-  const rows: MattersWaitingRow[] = [];
-  const teamLeadRows = input.teamLeadRows ?? true;
-  for (const spec of WAITING_ROW_SPECS) {
-    if (input.role === "chatter" || (input.role === "team_lead" && !spec.teamLead)) continue;
-    // The team lead's rows (customs, held sends) are the owner's only while he is the acting team lead.
-    if (input.role === "owner" && spec.teamLead && !teamLeadRows) continue;
-    if (spec.id === "customs" && input.customOrders !== undefined) {
-      if (input.customOrders !== 0) {
-        rows.push({ id: "customs", label: spec.label, count: input.customOrders, capped: false, pageLabel: null, to: "/workboard/customs", matterIds: [] });
-      }
-      continue;
-    }
-    const states = spec.kinds.map(input.kindState);
-    if (!states.every((state) => state.applicable)) continue;
-    const kinds = new Set<string>(spec.kinds);
-    const mine = input.matters.filter((matter) => kinds.has(matter.kind));
-    const checked = states.every((state) => state.checked);
-    const count = checked ? mine.reduce((sum, matter) => sum + matterWeight(matter), 0) : null;
-    if (count === 0) continue;
-    const { to } = spec;
-    let { label } = spec;
-    let pageLabel: string | null = null;
-    if (spec.id === "login") {
-      const pages = mine.flatMap((matter) => matter.pageIds).map(input.labelOf).filter((one): one is string => one !== undefined);
-      if (pages.length === 1) {
-        pageLabel = pages[0]!;
-        label = `Нужен вход в Fansly: ${pageLabel}`;
-      }
-    }
-    rows.push({
-      id: spec.id,
-      label,
-      count,
-      capped: checked && states.some((state) => state.capped),
-      pageLabel,
-      to,
-      matterIds: mine.map((matter) => matter.id),
-    });
-  }
-  // The checks' rows: the owner's checks count for the owner only; a team lead sees «другие» of their own.
-  for (const spec of FAMILY_ROW_SPECS) {
-    if (input.role === "chatter" || (input.role === "team_lead" && spec.id !== "other")) continue;
-    const mine = input.matters.filter((matter) => waitingFamilyOf(matter.kind) === spec.id);
-    const checked = spec.checks.every((kind) => input.kindState(kind).checked) && mine.every((matter) => input.kindState(matter.kind).checked);
-    const count = checked ? mine.length : null;
-    if (count === 0) continue;
-    rows.push({ id: spec.id, label: spec.label, count, capped: false, pageLabel: null, to: spec.to, matterIds: mine.map((matter) => matter.id) });
-  }
-  return {
-    rows,
-    total: rows.reduce((sum, row) => sum + (row.count ?? 0), 0),
-    failed: rows.filter((row) => row.count === null).map((row) => row.id),
-  };
 }
 
 /**
@@ -300,59 +166,6 @@ export function buildWaitingGroups(input: {
   return groups;
 }
 
-/**
- * «Решения»'s four queues from the viewer's open matters, on one page or all
- * (a matter of no page is every page's): the rule of
- * apps/workboard/src/shared/decisions.ts. The questions and the reports are the
- * owner's: a team lead's are null and not a failure.
- */
-export function buildDecisions(input: {
-  role: MatterOwnerRole;
-  /** The viewer's OWN open matters, as for the rows. */
-  matters: readonly WaitingMatter[];
-  kindState: (kind: string) => MatterKindState;
-  pageId: number | null;
-  /** The custom orders are customs' home: their count of the page (or of all), as the customs row; undefined — the old kind. */
-  customOrders?: { onPage: number; all: number } | null;
-}): MattersWaitingResponse["decisions"] {
-  const owner = input.role === "owner";
-  const onPage = (matter: WaitingMatter) => input.pageId === null || matter.pageIds.length === 0 || matter.pageIds.includes(input.pageId);
-  const of = (kind: MatterMirrorKind) => input.matters.filter((matter) => matter.kind === kind);
-  const known = (kinds: readonly MatterMirrorKind[]) => kinds.every((kind) => input.kindState(kind).checked);
-  const queue = (kinds: readonly MatterMirrorKind[], mine: boolean) => {
-    if (!mine || !known(kinds)) return { count: null, all: 0 };
-    const matters = kinds.flatMap(of);
-    return { count: matters.filter(onPage).length, all: matters.length };
-  };
-  const staff = input.role === "owner" || input.role === "team_lead";
-  const questions = queue(["ledger.sale_question"], owner);
-  const posts = queue(["ledger.report_post"], owner);
-  const changes = queue(["ledger.paid_day_changed"], owner);
-  const customs = input.customOrders === undefined ? queue(["custom.paid_not_delivered"], staff)
-    : !staff || input.customOrders === null ? { count: null, all: 0 } : { count: input.customOrders.onPage, all: input.customOrders.all };
-  const held = queue(["send.held"], staff);
-  const reportParts = posts.count === null || changes.count === null ? null : { posts: posts.count, changes: changes.count };
-  const reports = reportParts === null ? null : reportParts.posts + reportParts.changes;
-  const failed: MattersWaitingResponse["decisions"]["failed"] = [];
-  if (owner && questions.count === null) failed.push("questions");
-  if (owner && reports === null) failed.push("reports");
-  if (staff && customs.count === null) failed.push("customs");
-  if (staff && held.count === null) failed.push("held");
-  const elsewhere = input.pageId === null ? 0
-    : (questions.all - (questions.count ?? questions.all)) + (posts.all - (posts.count ?? posts.all))
-      + (customs.all - (customs.count ?? customs.all)) + (held.all - (held.count ?? held.all));
-  return {
-    questions: questions.count,
-    reports,
-    reportParts,
-    customs: customs.count,
-    held: held.count,
-    total: (questions.count ?? 0) + (reports ?? 0) + (customs.count ?? 0) + (held.count ?? 0),
-    elsewhere,
-    failed,
-  };
-}
-
 // ── The doors ───────────────────────────────────────────────────────────────
 
 type MattersApp = Pick<AppContext, "db" | "config">;
@@ -384,19 +197,17 @@ export function matterIsMine(matter: Pick<MatterRow, "owner">, viewer: MatterVie
 }
 
 /**
- * The customs row while the custom orders are customs' home: the orders paid or shot and not given, of the viewer's
- * pages (the owner every page), all and on `pageId`; null — the read failed; undefined — the old kind counts. It is
- * the lead's line: the viewer's only while customs are led by the team lead's role they hold (`customsLeadOwner`).
- * When a person leads customs it is nobody's (zero): that person reads their own matters, the owner sees them under
- * «Ждут других» and has the board.
+ * «Кастомы»'s orders while the custom orders are customs' home: the orders paid or shot and not given, of the viewer's
+ * pages (the owner every page); null — the read failed; undefined — the old kind counts. It is the lead's line: the
+ * viewer's only while customs are led by the team lead's role they hold (`customsLeadOwner`). When a person leads
+ * customs it is nobody's (zero): that person reads their own matters, the owner sees them under «Ждут других» and has
+ * the board.
  */
-async function customOrdersCount(app: MattersApp, viewer: MatterViewer, pageId: number | null): Promise<{ onPage: number; all: number } | null | undefined> {
+async function customOrdersCount(app: MattersApp, viewer: MatterViewer): Promise<number | null | undefined> {
   if (viewer.role === "chatter" || !(await customOrdersReadOn(app))) return undefined;
-  if ("userId" in (await customsLeadOwner(app))) return { onPage: 0, all: 0 };
+  if ("userId" in (await customsLeadOwner(app))) return 0;
   try {
-    const orders = await awaitingGivingOf(app, { pageIds: viewer.role === "owner" ? "all" : viewer.pageIds, limit: 5000 });
-    const onPage = pageId === null ? orders.length : orders.filter((order) => order.pageId === null || order.pageId === pageId).length;
-    return { onPage, all: orders.length };
+    return (await awaitingGivingOf(app, { pageIds: viewer.role === "owner" ? "all" : viewer.pageIds, limit: 5000 })).length;
   } catch {
     return null;
   }
@@ -407,8 +218,8 @@ function kindStates(checks: readonly MatterCheckRow[], now: Date): (kind: string
   return (kind) => {
     const check = byKind.get(kind);
     // A kind nobody checks (an agent's) is known as it is: its matters are what its writer said.
-    if (check === undefined && matterKindPeriodMs(kind) === null) return { checked: true, applicable: true, capped: false };
-    return { checked: matterKindChecked(check, kind, now), applicable: check?.applicable ?? true, capped: check?.capped ?? false };
+    if (check === undefined && matterKindPeriodMs(kind) === null) return { checked: true, applicable: true };
+    return { checked: matterKindChecked(check, kind, now), applicable: check?.applicable ?? true };
   };
 }
 
@@ -419,41 +230,37 @@ async function pageIdOf(app: MattersApp, pageLabel: string | undefined, idOf: Ma
   return id;
 }
 
-/** `mattersWaiting`: «Ждут вас» and «Решения» from matters, for a dashboard session. */
-export async function readMattersWaiting(app: MattersApp, principal: HumanAuthPrincipal, query: MattersWaitingQuery, now: Date = new Date()): Promise<MattersWaitingResponse> {
+/**
+ * `mattersWaiting`: «Ждут вас» from matters, for a dashboard session — the list's groups for every role (the one
+ * table), so the number, the chips and the list are one count: a team lead's number is what their list shows.
+ */
+export async function readMattersWaiting(app: MattersApp, principal: HumanAuthPrincipal, now: Date = new Date()): Promise<MattersWaitingResponse> {
   const viewer = matterViewerOf(principal);
   const heldRoles = await heldRolesOf(app, viewer);
-  const [matters, checks, pages, active] = await Promise.all([
-    // What waits for the viewer themself: the old rows' kinds and, after them, the rest (package K).
+  const [matters, checks, active] = await Promise.all([
+    // What waits for the viewer themself.
     viewer.role === "chatter" ? Promise.resolve([]) : listVisibleMatters(app.db, { viewer, state: "open", heldRoles, limit: 5000 }),
     listMatterChecks(app.db),
-    listMatterPageLabels(app.db),
     loadEffectiveConfigField(app.db, app.config, "mattersReadEnabled"),
   ]);
   const kindState = kindStates(checks, now);
-  const pageId = await pageIdOf(app, query.pageLabel, pages.idOf);
-  const teamLeadRows = heldRoles.includes("team_lead");
-  const orders = teamLeadRows ? await customOrdersCount(app, viewer, pageId) : undefined;
-  const rows = buildWaitingRows({
-    role: viewer.role, matters, kindState, labelOf: (id) => pages.labelOf.get(id), teamLeadRows,
-    ...(orders === undefined ? {} : { customOrders: orders === null ? null : orders.all }),
-  });
-  // The kinds the viewer's own checks keep, so a group whose source failed shows even with nothing open in it.
+  const orders = heldRoles.includes("team_lead") ? await customOrdersCount(app, viewer) : undefined;
+  // The kinds the viewer's own sources keep — the mirrored ones of the roles they hold, the owner's checks — so a
+  // group whose source failed shows even with nothing open in it.
   const trackedKinds = viewer.role === "chatter" ? [] : [
-    ...waitingKindsOf(viewer.role).filter((kind) => viewer.role !== "owner" || teamLeadRows || !TEAM_LEAD_KINDS.has(kind)),
+    ...mirroredKindsOf(heldRoles),
     ...(viewer.role === "owner" ? MATTER_CHECK_KINDS.filter((kind) => !isMatterInfoKind(kind)) : []),
   ];
   const groups = viewer.role === "chatter" ? [] : buildWaitingGroups({
     matters: matters.filter((matter) => !isMatterInfoKind(matter.kind)), kindState, trackedKinds,
-    ...(orders === undefined ? {} : { customOrders: orders === null ? null : orders.all }),
+    ...(orders === undefined ? {} : { customOrders: orders }),
   });
   return {
     active: active === true,
-    ...rows,
     groups,
-    // The owner's number is the list's: the sum of its groups (the Home's chips). A team lead's stays the rows'.
-    total: viewer.role === "owner" ? groups.reduce((sum, group) => sum + group.count, 0) : rows.total,
-    decisions: buildDecisions({ role: viewer.role, matters, kindState, pageId, ...(orders === undefined ? {} : { customOrders: orders }) }),
+    total: groups.reduce((sum, group) => sum + group.count, 0),
+    failed: groups.filter((group) => !group.checked).map((group) => group.id),
+    customOrders: orders ?? 0,
     serverNow: now.toISOString(),
   };
 }
@@ -499,8 +306,10 @@ export async function readMattersList(app: MattersApp, principal: HumanAuthPrinc
   const usernameOf = await listMatterUsernames(app.db, rows.flatMap((row) => ("userId" in row.owner ? [row.owner.userId] : [])));
   // The person's name where the login is a person's (the name «Люди» and «Кастомы» show): one read for all.
   const checkOf = new Map(checks.map((check) => [check.kind, check]));
-  // The kinds the server keeps for this viewer: the mirrored ones of their rows, and the owner's checks (package K).
-  const mirrored = new Set<string>([...waitingKindsOf(viewer.role), ...(viewer.role === "owner" ? MATTER_CHECK_KINDS : [])]);
+  // The kinds the server keeps for this viewer: the mirrored ones they read (the owner every one, a team lead their
+  // role's), and the owner's checks (package K).
+  const readRoles: MatterOwnerRole[] = viewer.role === "owner" ? ["owner", "team_lead"] : viewer.role === "team_lead" ? ["team_lead"] : [];
+  const mirrored = new Set<string>([...mirroredKindsOf(readRoles), ...(viewer.role === "owner" ? MATTER_CHECK_KINDS : [])]);
   const kinds = [...new Set([...mirrored, ...counts.keys()])].sort().map((kind) => {
     const isMirrored = mirrored.has(kind);
     const check = checkOf.get(kind);

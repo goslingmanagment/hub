@@ -226,15 +226,18 @@ describe("matters", () => {
     };
     const owner = await waiting("boss");
     expect(owner.active).toBe(false);
-    expect(owner.rows.find((row) => row.id === "failures")).toMatchObject({ count: 1, to: "/workboard/decisions#system" });
-    // The checks of package K never ran here (their pass is runMatterChecks): «не проверено» too, never a zero.
-    expect(owner.rows.filter((row) => row.count === null).map((row) => row.id)).toEqual(["questions", "reports", "people", "ledger"]);
+    expect(owner.groups.find((group) => group.id === "system")).toMatchObject({ count: 1, checked: true, tone: "bad", to: "/workboard/decisions#system" });
+    // The ledger is not connected, and the checks of package K never ran here (their pass is runMatterChecks):
+    // «не проверено», never a zero.
+    expect(owner.groups.filter((group) => !group.checked).map((group) => [group.id, group.count])).toEqual([
+      ["questions", 0], ["reports", 0], ["people", 0], ["ledger", 0],
+    ]);
     expect(owner.failed).toEqual(["questions", "reports", "people", "ledger"]);
-    expect(owner.decisions).toMatchObject({ questions: null, reports: null, customs: 0, held: 0, failed: ["questions", "reports"] });
-    // A team lead's «Ждут вас» is customs and held sends, both empty, and the rest of their own and their role's on
-    // their pages in «Другие дела» (package K): the role's matter on lora-1 of the rights test; nothing failed.
+    expect(owner.total).toBe(owner.groups.reduce((sum, group) => sum + group.count, 0));
+    // A team lead's «Ждут вас»: their own and their role's on their pages, by the list's groups — the role's matter on
+    // lora-1 of the rights test in «Другие дела»; customs and held sends answered and are empty; nothing failed.
     const lead = await waiting("lead");
-    expect(lead.rows.map((row) => [row.id, row.count])).toEqual([["other", 1]]);
+    expect(lead.groups.map((group) => [group.id, group.count])).toEqual([["other", 1]]);
     expect(lead).toMatchObject({ total: 1, failed: [] });
 
     const checks = new Map((await listMatterChecks(app.db)).map((check) => [check.kind, check]));

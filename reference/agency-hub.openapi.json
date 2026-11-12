@@ -230822,23 +230822,11 @@
     },
     "/api/v1/matters/waiting": {
       "get": {
-        "summary": "«Ждут вас» and «Решения» read from matters: the same rows, counts and links as the screens' own reads",
+        "summary": "«Ждут вас» read from matters, by the list's groups (waiting-groups.ts): the chips, the menu's number and the list's counts",
         "tags": [
           "admin"
         ],
-        "description": "Database only. A row whose source did not answer lately has `count: null` («не удалось проверить»). `active` is the owner's switch: until it is on, the screens keep their own reads and Hub compares the two counts in the background (matter_checks).",
-        "parameters": [
-          {
-            "schema": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 64
-            },
-            "in": "query",
-            "name": "pageLabel",
-            "required": false
-          }
-        ],
+        "description": "Database only. What waits for the viewer themself, every role grouped by the one table; the number is the groups' sum. A group whose source did not answer lately has `checked: false` («не удалось проверить») and is in `failed`. `active` is the owner's switch: until it is on, the screens keep their own reads and Hub compares the two counts in the background (matter_checks).",
         "security": [
           {
             "cookieAuth": []
@@ -230854,78 +230842,6 @@
                   "properties": {
                     "active": {
                       "type": "boolean"
-                    },
-                    "rows": {
-                      "type": "array",
-                      "items": {
-                        "type": "object",
-                        "properties": {
-                          "id": {
-                            "type": "string",
-                            "enum": [
-                              "drafts",
-                              "unknown",
-                              "questions",
-                              "reports",
-                              "customs",
-                              "held",
-                              "login",
-                              "failures",
-                              "extension",
-                              "history",
-                              "content",
-                              "people",
-                              "ledger",
-                              "other"
-                            ]
-                          },
-                          "label": {
-                            "type": "string"
-                          },
-                          "count": {
-                            "anyOf": [
-                              {
-                                "type": "integer",
-                                "minimum": 0,
-                                "maximum": 9007199254740991
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          },
-                          "capped": {
-                            "type": "boolean"
-                          },
-                          "pageLabel": {
-                            "type": [
-                              "string",
-                              "null"
-                            ]
-                          },
-                          "to": {
-                            "type": "string"
-                          },
-                          "matterIds": {
-                            "type": "array",
-                            "items": {
-                              "type": "integer",
-                              "exclusiveMinimum": 0,
-                              "maximum": 9007199254740991
-                            }
-                          }
-                        },
-                        "required": [
-                          "id",
-                          "label",
-                          "count",
-                          "capped",
-                          "pageLabel",
-                          "to",
-                          "matterIds"
-                        ],
-                        "additionalProperties": false
-                      }
                     },
                     "groups": {
                       "type": "array",
@@ -230998,135 +230914,24 @@
                       "items": {
                         "type": "string",
                         "enum": [
-                          "drafts",
-                          "unknown",
                           "questions",
                           "reports",
                           "customs",
                           "held",
-                          "login",
-                          "failures",
-                          "extension",
-                          "history",
+                          "publications",
                           "content",
                           "people",
                           "ledger",
-                          "other"
+                          "system",
+                          "other",
+                          "info"
                         ]
                       }
                     },
-                    "decisions": {
-                      "type": "object",
-                      "properties": {
-                        "questions": {
-                          "anyOf": [
-                            {
-                              "type": "integer",
-                              "minimum": 0,
-                              "maximum": 9007199254740991
-                            },
-                            {
-                              "type": "null"
-                            }
-                          ]
-                        },
-                        "reports": {
-                          "anyOf": [
-                            {
-                              "type": "integer",
-                              "minimum": 0,
-                              "maximum": 9007199254740991
-                            },
-                            {
-                              "type": "null"
-                            }
-                          ]
-                        },
-                        "reportParts": {
-                          "anyOf": [
-                            {
-                              "type": "object",
-                              "properties": {
-                                "posts": {
-                                  "type": "integer",
-                                  "minimum": 0,
-                                  "maximum": 9007199254740991
-                                },
-                                "changes": {
-                                  "type": "integer",
-                                  "minimum": 0,
-                                  "maximum": 9007199254740991
-                                }
-                              },
-                              "required": [
-                                "posts",
-                                "changes"
-                              ],
-                              "additionalProperties": false
-                            },
-                            {
-                              "type": "null"
-                            }
-                          ]
-                        },
-                        "customs": {
-                          "anyOf": [
-                            {
-                              "type": "integer",
-                              "minimum": 0,
-                              "maximum": 9007199254740991
-                            },
-                            {
-                              "type": "null"
-                            }
-                          ]
-                        },
-                        "held": {
-                          "anyOf": [
-                            {
-                              "type": "integer",
-                              "minimum": 0,
-                              "maximum": 9007199254740991
-                            },
-                            {
-                              "type": "null"
-                            }
-                          ]
-                        },
-                        "total": {
-                          "type": "integer",
-                          "minimum": 0,
-                          "maximum": 9007199254740991
-                        },
-                        "elsewhere": {
-                          "type": "integer",
-                          "minimum": 0,
-                          "maximum": 9007199254740991
-                        },
-                        "failed": {
-                          "type": "array",
-                          "items": {
-                            "type": "string",
-                            "enum": [
-                              "questions",
-                              "reports",
-                              "customs",
-                              "held"
-                            ]
-                          }
-                        }
-                      },
-                      "required": [
-                        "questions",
-                        "reports",
-                        "reportParts",
-                        "customs",
-                        "held",
-                        "total",
-                        "elsewhere",
-                        "failed"
-                      ],
-                      "additionalProperties": false
+                    "customOrders": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
                     },
                     "serverNow": {
                       "type": "string"
@@ -231134,11 +230939,10 @@
                   },
                   "required": [
                     "active",
-                    "rows",
                     "groups",
                     "total",
                     "failed",
-                    "decisions",
+                    "customOrders",
                     "serverNow"
                   ],
                   "additionalProperties": false
@@ -271472,7 +271276,7 @@
         "tags": [
           "client"
         ],
-        "description": "Any session (the narrow one the extension opens included): the owner every sale with pay sums; a chatter a sale of their own shifts, reports or claims on a page they may open, their own pay as states (sums with «видит свои деньги»); a team lead a sale of their pages without pay sums. Another sale is 404. Database and the ledger's reads the payout panel and «Выплаты → Отчёты» already make; a source that does not answer is «неизвестно».",
+        "description": "Any session (the narrow one the extension opens included): the owner every sale with pay sums; a chatter a sale of their own shifts, reports or claims on a page they may open, their own pay as states (sums with «видит свои деньги»); a team lead a sale of their pages without anyone's pay (accrual and payout «видит только владелец»). Another sale is 404. Database and the ledger's reads the payout panel and «Выплаты → Отчёты» already make; a source that does not answer is «неизвестно».",
         "parameters": [
           {
             "schema": {

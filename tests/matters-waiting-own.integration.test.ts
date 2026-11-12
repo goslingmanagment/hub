@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
-import { clientMattersResponseSchema, mattersListResponseSchema, mattersWaitingResponseSchema } from "@agency_hub_core/contracts";
+import { clientMattersResponseSchema, isMatterInfoKind, mattersListResponseSchema, mattersWaitingResponseSchema } from "@agency_hub_core/contracts";
 import { createFanslyPage, createModel, openMatter, type MatterOpenInput } from "@agency_hub_core/db";
 
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
@@ -47,11 +47,11 @@ function matter(key: string, over: Partial<MatterOpenInput>): MatterOpenInput {
 }
 const SYSTEM = { door: "system" } as const;
 
-/** The «Другие дела» row's count of a session's «Ждут вас»: every matter here is of a kind no old row counts. */
+/** The «Другие дела» group's count of a session's «Ждут вас»: every matter here is of a kind no package's list names. */
 async function otherCount(who: string): Promise<number> {
   const response = await asSession(who, "/api/v1/matters/waiting");
   expect(response.statusCode, response.body).toBe(200);
-  return mattersWaitingResponseSchema.parse(response.json()).rows.find((row) => row.id === "other")?.count ?? 0;
+  return mattersWaitingResponseSchema.parse(response.json()).groups.find((group) => group.id === "other")?.count ?? 0;
 }
 async function list(who: string) {
   const response = await asSession(who, "/api/v1/matters?kind=own.test");
@@ -119,28 +119,28 @@ describe("«Ждут вас»: what waits for the viewer themself", () => {
     const waiting = async () => mattersWaitingResponseSchema.parse((await asSession("boss", "/api/v1/matters/waiting")).json());
     Object.assign(app.config, { customOrdersReadEnabled: true });
     try {
-      // Nobody leads customs and nobody holds the team lead's role: the owner's row, counted.
+      // Nobody leads customs and nobody holds the team lead's role: the owner's line of «Кастомы», counted.
       const acting = await waiting();
-      expect(acting.rows.find((row) => row.id === "customs")).toMatchObject({ count: 1, to: "/workboard/customs", matterIds: [] });
-      expect(acting.decisions.customs).toBe(1);
+      expect(acting.customOrders).toBe(1);
+      expect(acting.groups.find((group) => group.id === "customs")).toMatchObject({ count: 1, to: "/workboard/decisions#customs" });
       const withRow = acting.total;
 
-      // A person leads customs: the count is nobody's — in no row and no number of the owner's.
+      // A person leads customs: the count is nobody's — in no group and no number of the owner's.
       const person = await testDb.pool.query(
         "insert into people (code, display_name, kind, role, state, origin) values ('carol', 'Кэрол', 'human', 'chatter', 'working', 'owner') returning id",
       );
       await testDb.pool.query("insert into person_logins (user_id, person_id) values ($1, $2)", [users.carol, person.rows[0].id]);
       await testDb.pool.query("insert into person_rights (person_id, \"right\") values ($1, 'customs_lead')", [person.rows[0].id]);
       const led = await waiting();
-      expect(led.rows.find((row) => row.id === "customs")).toBeUndefined();
-      expect(led.decisions.customs).toBe(0);
+      expect(led.customOrders).toBe(0);
+      expect(led.groups.find((group) => group.id === "customs")?.count ?? 0).toBe(0);
       expect(led.total).toBe(withRow - 1);
       // The lead's matters are oversight for the owner, under the person's name.
       const lines = mattersListResponseSchema.parse((await asSession("boss", "/api/v1/matters?kind=own.test")).json()).matters;
       expect(lines.find((one) => one.key === "own.test:carol")?.owner).toMatchObject({ kind: "user", username: "carol", displayName: "Кэрол" });
 
       await testDb.pool.query("delete from person_rights where person_id = $1", [person.rows[0].id]);
-      expect((await waiting()).rows.find((row) => row.id === "customs")).toMatchObject({ count: 1 });
+      expect((await waiting()).groups.find((group) => group.id === "customs")).toMatchObject({ count: 1 });
     } finally {
       Object.assign(app.config, { customOrdersReadEnabled: false });
     }
@@ -159,9 +159,18 @@ describe("«Ждут вас»: what waits for the viewer themself", () => {
     expect((await list("boss")).find(([key]) => key === "own.test:team-lead")).toEqual(["own.test:team-lead", false]);
 
     expect(await otherCount("lead")).toBe(1);
-    // A team lead's answer is as before: the number is the sum of the rows.
+    // A team lead's own matter of a group the owner's rows were alone in: the list shows it, so the number counts it.
+    await openMatter(app.db, matter("contentops.test:lead", { owner: { role: "team_lead" }, pageIds: [pages["lora-1"]!] }), SYSTEM);
     const lead = mattersWaitingResponseSchema.parse((await asSession("lead", "/api/v1/matters/waiting")).json());
-    expect(lead.total).toBe(lead.rows.reduce((sum, row) => sum + (row.count ?? 0), 0));
+    // Customs and held sends: «не проверено» (the mirror of package D has not run yet), never a zero.
+    expect(lead.groups.map((group) => [group.id, group.count, group.checked])).toEqual([
+      ["customs", 0, false], ["held", 0, false], ["content", 1, true], ["other", 1, true],
+    ]);
+    expect(lead.failed).toEqual(["customs", "held"]);
+    // A team lead's number is what their list shows: every own matter that waits, by the list's groups.
+    const leadList = mattersListResponseSchema.parse((await asSession("lead", "/api/v1/matters")).json()).matters;
+    expect(lead.total).toBe(leadList.filter((one) => one.mine && !isMatterInfoKind(one.kind)).length);
+    expect(lead.total).toBe(lead.groups.reduce((sum, group) => sum + group.count, 0));
     expect(await list("lead")).toEqual([["own.test:team-lead", true]]);
     expect(await list("alice")).toEqual([["own.test:alice", true]]);
     expect(await clientCount("alice")).toBe(1);

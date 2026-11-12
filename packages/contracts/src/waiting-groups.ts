@@ -92,3 +92,38 @@ export function worstWaitingTone(tones: Iterable<WaitingTone | null>): WaitingTo
 export function waitingGroupLink(id: WaitingGroupId): string {
   return `/workboard/decisions#${id}`;
 }
+
+/** The kinds whose finding names when their reason began under a word of its own (the system state's, a shift's report). */
+const SINCE_OF_KIND: Readonly<Record<string, string>> = {
+  // The input empty since; silent since the last run or the last report; the newest copy taken then.
+  "routine.empty": "emptySince",
+  "routine.silent": "lastRunAt",
+  "reporter.silent": "lastReportAt",
+  "copy.stale": "takenAt",
+  // The shift ended and its report was not handed in.
+  "shift.report.missing": "endedAt",
+};
+
+/**
+ * The moments the other findings name: a state entered (a custom order's, a newcomer's step), a send's, a question's,
+ * a payment's, a post's, a failure's opening, a request's, a red check's first run, a word said, a publication's.
+ */
+const SINCE_FIELDS = ["since", "sentAt", "askedAt", "paidAt", "postedAt", "openedAt", "requestedAt", "failingSince", "saidAt", "publishAt"] as const;
+
+/**
+ * Since when a matter waits: since its reason began, as its own finding names it, else since it was opened — never
+ * the moment a matter row was opened (or reopened) today while its cause is days old. Only a past moment no later than
+ * the opening counts (a publication's moment is when it goes out, not when it waits). The age both apps show and the
+ * list's «дольше ждёт» order are this.
+ */
+export function waitingSinceOf(matter: { kind: string; openedAt: string; evidence: Record<string, unknown> }, now: number = Date.now()): string {
+  const own = SINCE_OF_KIND[matter.kind];
+  const opened = Date.parse(matter.openedAt);
+  for (const field of own === undefined ? SINCE_FIELDS : [own, ...SINCE_FIELDS]) {
+    const value = matter.evidence[field];
+    if (typeof value !== "string") continue;
+    const at = Date.parse(value);
+    if (!Number.isNaN(at) && at <= now && at <= opened + 60_000) return new Date(at).toISOString();
+  }
+  return matter.openedAt;
+}
