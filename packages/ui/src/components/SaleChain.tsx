@@ -103,12 +103,14 @@ export function SaleChainTrigger({ load, children, renderLink, align = "end", cl
   className?: string;
 }) {
   const [open, setOpen] = useState(false);
+  // The strip grows once it loads: it opens on the side with more room, chosen when pressed, and keeps it.
+  const [side, setSide] = useState<"top" | "bottom">("bottom");
   const [read, setRead] = useState<Read>({ state: "loading" });
   const button = useRef<HTMLButtonElement>(null);
   const box = useRef<HTMLDivElement>(null);
   const close = useCallback(() => setOpen(false), []);
   useDismiss(open, close, [box, button], button);
-  const style = useAnchoredPosition(button, box, open, { align });
+  const style = useAnchoredPosition(button, box, open, { align, side });
   const fetchChain = useCallback(() => {
     setRead({ state: "loading" });
     load().then(
@@ -131,7 +133,11 @@ export function SaleChainTrigger({ load, children, renderLink, align = "end", cl
         aria-expanded={open}
         aria-haspopup="dialog"
         title="Цепочка денег: от продажи до выплаты"
-        onClick={() => setOpen(!open)}
+        onClick={() => {
+          const top = button.current?.getBoundingClientRect().top ?? 0;
+          if (!open) setSide(top > window.innerHeight / 2 ? "top" : "bottom");
+          setOpen(!open);
+        }}
       >
         {children}
       </button>

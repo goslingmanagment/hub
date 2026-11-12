@@ -307,6 +307,53 @@ function writable(request: DemoRequest): Found | DemoReply {
   return found;
 }
 
+/** A demo shift row as the sale's chain (sale-chain.ts) reads it: its line of the sale, the newest handed-in version. */
+export interface DemoChainShift {
+  owner: DemoUser;
+  id: number;
+  shift: DemoShift;
+  back: number;
+  reportDate: string;
+  /** The shift's line of the sale (its draft); null — the shift holds the moment, not this line. */
+  line: ShiftReportLine | null;
+  handed: { version: number; submittedAt: string; line: ShiftReportLine | null } | null;
+  /** The pages' sums of the newest version, else of the draft. */
+  pages: ShiftReportBody["pages"];
+}
+
+/**
+ * Цепочка продажи (sale-chain.ts): every active chatter's shift with a line of the sale, or every shift that held a
+ * page at a moment (a console row's sale, which no line names).
+ */
+export function demoChainShifts(now: Date, pick: { transactionId: number } | { pageLabel: string; at: number }): DemoChainShift[] {
+  const out: DemoChainShift[] = [];
+  const today = Date.parse(`${mskDay(now.getTime())}T00:00:00Z`);
+  for (const owner of DEMO_USERS.filter((user) => user.role === "chatter" && user.active)) {
+    for (const shift of shiftsOf(owner, now)) {
+      const id = shiftIdOf(shift, owner);
+      const back = Math.round((today - Date.parse(`${mskDay(shift.start)}T00:00:00Z`)) / DAY_MS);
+      if ("pageLabel" in pick) {
+        if (!(shift.start <= pick.at && pick.at <= shift.end && shift.pages.includes(pick.pageLabel))) continue;
+      } else if (!salesOf(shift, back, owner).some((sale) => lineIdOf(sale) === pick.transactionId)
+        && !demoClaimedLines(now, owner.id, id).some((row) => row.transactionId === pick.transactionId)
+        && !(kept.get(id)?.words.has(pick.transactionId) ?? false)) {
+        continue;
+      }
+      seed({ shift, back, id, owner }, now);
+      const body = bodyOf(shift, back, owner, id, now);
+      const line = "transactionId" in pick ? body.lines.find((row) => row.transactionId === pick.transactionId) ?? null : null;
+      if ("transactionId" in pick && line === null) continue;
+      const latest = keptOf(id).versions.at(-1) ?? null;
+      out.push({
+        owner, id, shift, back, reportDate: mskDay(shift.start), line,
+        handed: latest === null ? null : { version: latest.version, submittedAt: latest.submittedAt, line: "transactionId" in pick ? latest.body.lines.find((row) => row.transactionId === pick.transactionId) ?? null : null },
+        pages: (latest?.body ?? body).pages,
+      });
+    }
+  }
+  return out;
+}
+
 const isReply = (value: unknown): value is DemoReply => typeof value === "object" && value !== null && "demoReply" in value;
 
 export const shiftReportHandlers: DemoHandlers = {

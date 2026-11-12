@@ -61,13 +61,13 @@ function FactsList({ facts }: { facts: ShiftReportLineFacts }) {
 
 function SaleLine({ sale }: { sale: NonNullable<SaleDisputeResponse["sale"]> }) {
   return (
-    <p className="wt-sale">
+    <div className="wt-sale">
       <PageLabel label={sale.pageLabel} />
       <Fan name={sale.fan.name} username={sale.fan.username} fanRef={sale.fan.fanRef ?? ""} showLogin />
       <span className="wt-sale__kind">{kindWord(sale.kind)}</span>
       <span className="wt-sale__when">{formatDateTime(sale.occurredAt)}</span>
       <span className="wt-sale__money"><ChainMoney saleId={sale.transactionId}><Money mills={sale.netMills} strong /></ChainMoney></span>
-    </p>
+    </div>
   );
 }
 

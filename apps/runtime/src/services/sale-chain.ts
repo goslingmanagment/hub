@@ -357,14 +357,18 @@ export async function readSaleChain(
       }
     }
 
-    // Начисление, Выплата: the ledger's day of the person.
+    // Начисление, Выплата: the ledger's day of the person; read up to a month on, so the payout that paid it is in.
     let pay: TeamLedgerPayoutPersonResponse | null = null;
     let why: string | null = null;
     if (person === null) {
       why = "вход не связан с человеком в реестре";
     } else {
+      const today = new Date(now.getTime() + 3 * 3_600_000).toISOString().slice(0, 10);
+      const monthOn = new Date(Date.parse(`${reportDate}T00:00:00Z`) + 30 * 86_400_000).toISOString().slice(0, 10);
+      const until = today < monthOn ? today : monthOn;
+      const payTo = until < reportDate ? reportDate : until;
       try {
-        pay = await readTeamLedgerPayoutPerson(app, { person: person.code, from: reportDate, to: reportDate }, { ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}), now });
+        pay = await readTeamLedgerPayoutPerson(app, { person: person.code, from: reportDate, to: payTo }, { ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}), now });
       } catch (error) {
         why = unknownWords(error);
       }
@@ -390,7 +394,8 @@ export async function readSaleChain(
       case "nobody": note = "ничья: ни в чей отчёт не входит, пока её не заявят"; break;
       case "waiting": note = "PPV ждёт смены отправителя: цепочка продолжится после неё"; break;
       case "decide": note = "пока владелец не решит, продажа ни в чей отчёт не входит"; break;
-      default: note = sale.occurredAt.getTime() < SALE_RULE.since ? "до правила продажи считались по постам, без дома продажи" : null;
+      // Before the rule, «Чья» says it already.
+      default: note = null;
     }
   } else if (viewer.kind === "chatter" && shown.length === 0) {
     note = "продажа не ваша по правилу: отчёты и деньги других людей вам не видны";

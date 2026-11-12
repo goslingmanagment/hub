@@ -85,6 +85,9 @@ the owner's machine (outside this repository); a change that moves a home or add
 - **What people say about a sale**: claims, agreements and the owner's decisions (`services/sale-claims.ts`, tables
   `sale_claims`, `sale_owner_decisions`). They reach the rule as its inputs (`sale-homes.ts`), never around it; a
   claim alone moves no home.
+- **A sale's chain of money** (whose, shift, report, accrual, payout): one read, `services/sale-chain.ts`
+  (`saleChain`, agents `agentSaleChain` / `hub sale-chain`), it computes nothing anew and says «неизвестно» when a
+  source does not answer. Shown only by `SaleChainTrigger` (`packages/ui/src/components/SaleChain.tsx`): the sale's amount.
 - **A custom order**: `services/custom-orders/` (table `custom_orders`, code `K-123`): one order from the fan's chat
   to the fan's hands. Doors: the extension's fan panel, Workboard «Кастомы», agents (`hub custom …`); ContentOps
   reads orders and reports files, it never closes one. Its checks (`custom-orders/checks.ts`) are the one writer of
