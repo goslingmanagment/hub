@@ -33,7 +33,7 @@ export function AgentReportsPage() {
         <StatusPanel
           title="Отчётов пока нет"
           description="Агенты ещё не публиковали страниц. Ключу агента для этого нужно право «Публиковать отчёты»."
-          action={<Link to="/system/agent-keys" className="btn btn-sm">Доступ ИИ-агентов</Link>}
+          action={<Link to="/system/agent-keys" className="btn btn-sm">Агенты и ключи</Link>}
         />
       ) : (
         <section className="card" aria-labelledby="agent-reports-title">
