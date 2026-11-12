@@ -34,4 +34,4 @@ end
 $$;
 
 comment on function shift_handin_versions_immutable() is
-  'A handed-in version never changes; the one exception is a fan''s erasure clearing notes inside lines (setting agency_hub.erasure = shift_handin_lines, 0408).';
+  'A handed-in version never changes; the one exception is a fan''s erasure clearing notes inside lines (setting agency_hub.erasure = shift_handin_lines, 0407).';
