@@ -37,7 +37,7 @@ export interface WaitingRow {
   /** A group's tone (contracts waiting-groups.ts): `bad` something is broken, `warn` its outcome is not known. */
   tone?: "bad" | "warn" | null;
   /** The old reads' rows (the switch off); while the owner's switch reads matters, the list's groups (WaitingGroupId). */
-  id: "drafts" | "unknown" | "login" | "failures" | "extension" | "history" | Exclude<WaitingGroupId, "info">;
+  id: "drafts" | "unknown" | "login" | "failures" | "extension" | "history" | WaitingGroupId;
   label: string;
   /** null: the read failed, or the state it depends on could not be checked. */
   count: number | null;
