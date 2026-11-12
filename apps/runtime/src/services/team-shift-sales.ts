@@ -1,5 +1,5 @@
 import type { TeamShiftSalesQuery, TeamShiftSalesResponse } from "@agency_hub_core/contracts";
-import { listFirstChatterActivities, listSaleLastWriters, listShiftSales, type ShiftSale } from "@agency_hub_core/db";
+import { listFirstChatterActivities, listSaleLastWriters, listShiftSales, type Database, type ShiftSale } from "@agency_hub_core/db";
 import { addUtcDays, startOfBusinessDay } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
@@ -286,14 +286,23 @@ export async function readTeamShiftSales(
   const now = new Date();
   const { days, until } = input.query;
   const pages = await teamReadPages(app, principal, { pageLabel: input.query.pageLabel, pageScope: input.pageScope });
+  return teamShiftSalesOf(app.db, { days, until, now, pages });
+}
+
+/** `teamShiftSales` of the pages, read as the screen reads it, for whoever may (the route above, the comparison tool). */
+export async function teamShiftSalesOf(
+  db: Database,
+  input: { days: number; until?: string | undefined; now: Date; pages: "all" | readonly number[] },
+): Promise<TeamShiftSalesResponse> {
+  const { days, until, now, pages } = input;
   const window = shiftSalesWindow({ days, now, until });
   // A day on each side, so a shift the window's edge cuts is whole.
   const readFrom = new Date(window.previousFrom - DAY_MS);
   const readTo = new Date(Math.min(now.getTime(), window.to + DAY_MS));
 
   const [people, firstActivity] = await Promise.all([
-    readPeopleWork(app.db, { from: readFrom, to: readTo, now, pages }),
-    listFirstChatterActivities(app.db),
+    readPeopleWork(db, { from: readFrom, to: readTo, now, pages }),
+    listFirstChatterActivities(db),
   ]);
   const pieces = (kind: ComputedWork["kind"]) => [...people].flatMap(([userId, person]) => person.work
     .filter((work) => work.kind === kind)
@@ -301,11 +310,11 @@ export async function readTeamShiftSales(
   const shifts = pieces("shift");
   const visits = pieces("visit");
   // Every page's sales, a page nobody had open in the window too: its money is outside the shifts, never out of sight.
-  const sales = await listShiftSales(app.db, { pageIds: pages, from: readFrom, to: readTo });
+  const sales = await listShiftSales(db, { pageIds: pages, from: readFrom, to: readTo });
   const held = shifts.map((shift) => ({ ...shift, held: salesOfWork(shift.work, sales) }));
   // The window's sales no shift holds: a look-in's when its person last wrote to the fan, else nobody's.
   const outside = salesNoShiftHolds({ from: window.from, to: window.to, sales, shifts: held });
-  const lastWriters = await listSaleLastWriters(app.db, {
+  const lastWriters = await listSaleLastWriters(db, {
     hours: SALE_LAST_WRITER_HOURS,
     sales: lastWriterQuery([...contestedSales(held), ...outside.filter((sale) => visitsAround(visits, sale).length > 0)]),
   });

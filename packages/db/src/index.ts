@@ -45,6 +45,9 @@ export * from "./repositories/fan-customs.ts";
 export * from "./repositories/matters.ts";
 // Chat Memory week 4: the draft shift report (0311).
 export * from "./repositories/shift-reports.ts";
+// Shifts as rows with a stable id (0379), whose each sale is by the one rule and the screens' switch to it (0380, 0381).
+export * from "./repositories/shift-rows.ts";
+export * from "./repositories/sale-homes.ts";
 // OnlyFans unlocks paired with their purchases, one to one (the shift report, «Продажи»).
 export * from "./repositories/onlyfans-unlocks.ts";
 // Chat Memory week 5: the numbers of a chatter's shift.

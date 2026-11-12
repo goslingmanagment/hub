@@ -36,6 +36,8 @@ import {
   runClientSendArchiveSweep,
 } from "./services/client-send-custody-archive.ts";
 import { MATTERS_MIRROR_QUEUE, runMattersMirror } from "./services/matters-mirror.ts";
+import { SALE_HOMES_QUEUE, runSaleHomesTick } from "./services/sale-homes.ts";
+import { SHIFT_ROWS_QUEUE, runShiftRowsTick } from "./services/shift-rows.ts";
 import {
   OBSERVATIONS_PARTITIONS_QUEUE,
   runObservationsPartitionCheck,
@@ -420,6 +422,13 @@ export async function startWorkerServices(
     if (tally.opened + tally.closed + tally.failed.length + tally.mismatched.length > 0) {
       app.logger.info(tally, "Matters mirror pass complete");
     }
+  });
+  // Shifts as rows with a stable id, and whose each sale is by the one rule: in shadow, no screen reads them yet.
+  await boss.work(SHIFT_ROWS_QUEUE, CRON_SWEEP_WORK_OPTIONS, async () => {
+    await runShiftRowsTick(app);
+  });
+  await boss.work(SALE_HOMES_QUEUE, CRON_SWEEP_WORK_OPTIONS, async () => {
+    await runSaleHomesTick(app);
   });
 
   await boss.work(DB_DISK_USAGE_CHECK_QUEUE, CRON_SWEEP_WORK_OPTIONS, async () => {
