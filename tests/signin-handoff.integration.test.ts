@@ -182,6 +182,68 @@ describe("the session planted on another name", () => {
   });
 });
 
+describe("the silent try of a name arrived at without a session", () => {
+  /** What the sign-in page of `here` sends to: ask `other`, come back to this page with the marker. */
+  function silentBegin(here: string, other: string): { url: string; back: string } {
+    const back = `${here}/login?next=%2Fworkboard%2F&sso=none`;
+    return { url: `${here}/api/v1/auth/sso/begin?${new URLSearchParams({ from: other, next: back, silent: "1" })}`, back };
+  }
+
+  async function silentTry(here: string, other: string, otherCookies: Cookies) {
+    const { url, back } = silentBegin(here, other);
+    const begun = await request("GET", url);
+    expect(begun.statusCode, begun.body).toBe(302);
+    const state = cookieSet(begun, STATE_COOKIE)!;
+    const asked = String(begun.headers.location);
+    expect(new URL(asked).searchParams.get("silent")).toBe("1");
+    const answered = await request("GET", asked, { cookies: otherCookies });
+    expect(answered.statusCode, answered.body).toBe(302);
+    return { back, state, location: String(answered.headers.location) };
+  }
+
+  it("signs the person in with the other name's session, in both directions", async (context) => {
+    if (!server) return context.skip();
+    for (const [signedOn, arrivedAt] of [[HUB, TEAM], [TEAM, HUB]] as const) {
+      // A session from before the names shared one: on one name only.
+      const session = await signIn("owner", signedOn);
+      const { back, state, location } = await silentTry(arrivedAt, signedOn, { [SESSION_COOKIE_NAME]: session });
+      expect(location.startsWith(`${arrivedAt}/api/v1/auth/sso/accept?code=`), location).toBe(true);
+      const accepted = await request("GET", location, { cookies: { [STATE_COOKIE]: state } });
+      expect(accepted.headers.location).toBe(back);
+      expect(cookieSet(accepted, SESSION_COOKIE_NAME)).toBe(session);
+      expect((await me(arrivedAt, session)).json()).toMatchObject({ user: { username: "owner" } });
+    }
+  });
+
+  it("with nobody signed in on the other name, comes straight back to the marked sign-in page — no code, no second page", async (context) => {
+    if (!server || !testDb) return context.skip();
+    const codes = async () => Number((await testDb!.pool.query<{ n: string }>("select count(*)::text as n from auth_handoff_codes")).rows[0]!.n);
+    const before = await codes();
+    const { back, location } = await silentTry(TEAM, HUB, {});
+    expect(location).toBe(back);
+    expect(new URL(location).searchParams.get("sso")).toBe("none");
+    expect(await codes()).toBe(before);
+  });
+
+  it("does not take a narrow session for a sign-in", async (context) => {
+    if (!server) return context.skip();
+    const device = await issueDeviceTokenWithPassword(app, {
+      username: "chatter-a", password: "chatter-a-password-for-tests", label: "Firefox", clientVersion: null, clientProfile: "chat-extension",
+    });
+    const link = await request("POST", `${HUB}/api/v1/auth/web-link`, { headers: { authorization: `Bearer ${device.token}` }, payload: {} });
+    const narrow = cookieSet(await request("GET", (link.json() as { url: string }).url), SESSION_COOKIE_NAME)!;
+    const { back, location } = await silentTry(HUB, TEAM, { [SESSION_COOKIE_NAME]: narrow });
+    expect(location).toBe(back);
+  });
+
+  it("without `silent`, nobody still gets the sign-in page of the name asked", async (context) => {
+    if (!server) return context.skip();
+    const begun = await request("GET", `${TEAM}/api/v1/auth/sso/begin?${new URLSearchParams({ from: HUB, next: "/workboard/" })}`);
+    const asked = await request("GET", String(begun.headers.location));
+    expect(String(asked.headers.location).startsWith(`${HUB}/login?`)).toBe(true);
+  });
+});
+
 describe("a one-time code", () => {
   it("is accepted once", async (context) => {
     if (!server) return context.skip();

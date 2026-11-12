@@ -175441,7 +175441,7 @@
         "tags": [
           "auth"
         ],
-        "description": "A browser navigation, never a fetch. With a session on this name: a code bound to the target (60 s, single use) and a redirect to the target's `authSsoAccept`, or to a client's registered callback with `code`, `state` and `next`. A browser target without `state` is sent to its `authSsoBegin` first, which binds the code to the browser. Without a session (or with a narrow one): the sign-in page, then on. `next` outside the allow-list of names and paths: 400.",
+        "description": "A browser navigation, never a fetch. With a session on this name: a code bound to the target (60 s, single use) and a redirect to the target's `authSsoAccept`, or to a client's registered callback with `code`, `state` and `next`. A browser target without `state` is sent to its `authSsoBegin` first, which binds the code to the browser. Without a session (or with a narrow one): the sign-in page, then on — or, with `silent=1`, straight back to `next`. `next` outside the allow-list of names and paths: 400.",
         "parameters": [
           {
             "schema": {
@@ -175471,6 +175471,17 @@
             },
             "in": "query",
             "name": "state",
+            "required": false
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "1"
+              ]
+            },
+            "in": "query",
+            "name": "silent",
             "required": false
           }
         ],
@@ -175682,6 +175693,17 @@
             },
             "in": "query",
             "name": "next",
+            "required": false
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "1"
+              ]
+            },
+            "in": "query",
+            "name": "silent",
             "required": false
           }
         ],

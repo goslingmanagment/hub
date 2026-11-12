@@ -4,7 +4,7 @@
 // with Workboard: packages/ui/src/sites.ts.
 import { peerOriginOf, siteOf } from "@agency_hub_core/ui/sites";
 
-export { CHATTER_SITE_ORIGIN, peerOriginOf, signInHopHref } from "@agency_hub_core/ui/sites";
+export { CHATTER_SITE_ORIGIN, NO_SILENT_SIGNIN, peerOriginOf, signInHopHref, silentSignInHref } from "@agency_hub_core/ui/sites";
 
 /** What the browser tab is called there; index.html names the console. */
 export const CHATTER_SITE_TITLE = "ChatGoose";

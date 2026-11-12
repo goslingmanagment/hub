@@ -70,3 +70,21 @@ export function peerOriginOf(origin: string): string | null {
 export function signInHopHref(target: string, next: string): string {
   return `/api/v1/auth/sso?${new URLSearchParams({ to: target, next }).toString()}`;
 }
+
+/**
+ * The sign-in page's marker (`/login?…&sso=none`): do not ask the other name.
+ * Set on the way back from a silent try, so it happens once per arrival, and
+ * after a sign-out, so nobody is signed back in from the other name.
+ */
+export const NO_SILENT_SIGNIN = { param: "sso", value: "none" } as const;
+
+/**
+ * The silent try of a name arrived at without a session: ask the other name
+ * whether someone is signed in there (its full session only). Yes → that
+ * session is planted here and the browser lands on `next`; nobody → straight
+ * to `next`. Opened with a page load, on this name; `next` is a URL on this
+ * name that carries NO_SILENT_SIGNIN, so it never loops.
+ */
+export function silentSignInHref(other: string, next: string): string {
+  return `/api/v1/auth/sso/begin?${new URLSearchParams({ from: other, next, silent: "1" }).toString()}`;
+}

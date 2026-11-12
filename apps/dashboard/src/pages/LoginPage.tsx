@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useNavigate, Navigate, useSearchParams } from "react-router";
 import { useLogin, useAuthMe } from "@/api/queries";
 import { KernelApiError } from "@/api/sdk";
-import { afterSignIn, chatterExit, isSigninContinuation, leavesTheConsole, resolveLoginReturnPath, resolveRoleHome } from "@/lib/navigation";
+import { afterSignIn, chatterExit, isSigninContinuation, leavesTheConsole, resolveLoginReturnPath, resolveRoleHome, silentSignInTry } from "@/lib/navigation";
 import { isChatterSite, isConsoleSite } from "@/lib/sites";
 
 // One sign-in screen for two names. A chatter signs in to the product they
@@ -56,6 +56,12 @@ export function LoginPage() {
   }
 
   if (leaving !== null) return <LeaveFor href={leaving} />;
+
+  // Nobody signed in on this name: ask the other name once, silently, before
+  // showing the form (silentSignInTry; the marker on the way back stops a second try).
+  const notSignedIn = authQuery.isError && authQuery.error instanceof KernelApiError && authQuery.error.status === 401;
+  const silentTry = notSignedIn ? silentSignInTry(params, returnTo) : null;
+  if (silentTry !== null) return <LeaveFor href={silentTry} />;
 
   // Already signed in on this name (not by this form a moment ago: its own
   // success decides where to go, after `me` was read back): another name's way
