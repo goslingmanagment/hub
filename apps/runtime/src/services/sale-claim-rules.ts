@@ -259,6 +259,34 @@ export function shareAfter(input: { netMills: number; userId: number; outcome: O
   return splitShares(net, decision.shares).find((share) => share.userId === userId)?.mills ?? 0;
 }
 
+/**
+ * What a settled sale gives a person in every later draft and version (review R2-a): the owner's active decision over
+ * every person (their share by it, 0 when they have none; «никому» and a pot give no person anything), else an
+ * agreement over its two parties (`shareAfter`'s arithmetic, the one `settleReport` wrote). Null — not settled for
+ * this person: their words count as before. Contesting it again is a new claim, never a side effect of a hand-in.
+ * `userIds` — the person's logins. Pure.
+ */
+export function settledShareOf(input: {
+  netMills: number;
+  userIds: ReadonlySet<number>;
+  decision: Pick<DecisionView, "kind" | "shares"> | null;
+  agreed: ReadonlyArray<{ claimantUserId: number | null; sideUserId: number | null; statement: "mine" | "share" | null }>;
+}): { amountMills: number; settled: "owner" | "agreed" } | null {
+  if (input.decision !== null) {
+    if (input.decision.kind !== "split") return { amountMills: 0, settled: "owner" };
+    const shares = splitShares(input.netMills, input.decision.shares.filter((share) => share.percent > 0));
+    return { amountMills: shares.filter((share) => input.userIds.has(share.userId)).reduce((sum, share) => sum + share.mills, 0), settled: "owner" };
+  }
+  for (const claim of input.agreed) {
+    if (claim.claimantUserId === null || claim.sideUserId === null) continue;
+    const party = input.userIds.has(claim.claimantUserId) ? claim.claimantUserId : input.userIds.has(claim.sideUserId) ? claim.sideUserId : null;
+    if (party === null) continue;
+    const amountMills = shareAfter({ netMills: input.netMills, userId: party, outcome: "agreed", first: claim.claimantUserId, second: claim.sideUserId, statement: claim.statement });
+    return { amountMills, settled: "agreed" };
+  }
+  return null;
+}
+
 /** A version's lines with one sale's line settled at an amount, and the sums made again. Pure. */
 export function settledVersion(input: {
   lines: readonly ReportLine[];

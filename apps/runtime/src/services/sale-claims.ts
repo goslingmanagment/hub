@@ -446,13 +446,30 @@ interface SettleBy {
 }
 
 /**
+ * Whether the ledger paid the day of each report, by shift: asked once per person and day, before any report is locked
+ * — the ledger's HTTP (up to 20 s a call) never runs under a lock. A report that appears after this read is «not known».
+ */
+async function paidDaysOf(app: ClaimsApp, reports: ReadonlyArray<{ shiftId: number; userId: number; reportDate: string }>): Promise<Map<number, boolean | null>> {
+  const codes = await listHandinPeopleOfUsers(app.db, reports.map((report) => report.userId));
+  const byDay = new Map<string, boolean | null>();
+  const out = new Map<number, boolean | null>();
+  for (const report of reports) {
+    const personCode = codes.get(report.userId)?.code ?? null;
+    const key = `${personCode ?? `#${report.userId}`}:${report.reportDate}`;
+    if (!byDay.has(key)) byDay.set(key, await ledgerDayPaid(app, { personCode, reportDate: report.reportDate }));
+    out.set(report.shiftId, byDay.get(key) ?? null);
+  }
+  return out;
+}
+
+/**
  * A new version of a handed-in report with one sale's line at what the settlement gives (made by the system, the reason
- * kept in `made_for`); nothing when the line already says it. Run in the caller's transaction (the report locked).
+ * kept in `made_for`); nothing when the line already says it. Run in the caller's transaction (the report locked): it
+ * checks only Hub's own versions under the lock; whether the day is paid was read before it (`paidDaysOf`).
  */
 async function settleReport(
-  app: ClaimsApp,
   db: Database,
-  input: { shiftId: number; transactionId: number; amountMills: number; settled: "agreed" | "owner"; madeFor: HandinVersionMadeFor; by: SettleBy; at: Date; personCode: string | null },
+  input: { shiftId: number; transactionId: number; amountMills: number; settled: "agreed" | "owner"; madeFor: HandinVersionMadeFor; by: SettleBy; at: Date; dayPaid: boolean | null },
 ): Promise<{ shiftId: number; version: number; versionId: number; dayPaid: boolean | null } | null> {
   const handin = await findHandinByShift(db, input.shiftId, { lock: true });
   if (handin === null || handin.state !== "submitted") return null;
@@ -465,7 +482,7 @@ async function settleReport(
     lines: current.lines, pages: current.pages.map((page) => page.pageLabel), offPlatform: current.offPlatform,
     transactionId: input.transactionId, amountMills: input.amountMills, settled: input.settled,
   });
-  const dayPaid = await ledgerDayPaid(app, { personCode: input.personCode, reportDate: handin.reportDate });
+  const dayPaid = input.dayPaid;
   // Telegram's door is an agent's «со слов» alone; the system's version on the owner's word is the owner's Workboard.
   const telegram = input.by.door === "telegram" && input.by.agentKeyId !== null && input.by.telegramMessageRef !== null && input.by.telegramSenderId !== null;
   const version = await insertHandinVersion(db, {
@@ -561,6 +578,8 @@ export async function answerSaleClaim(
     : { door, actorUserId: null, agentKeyId: actor.agentKeyId, telegramMessageRef: actor.sourceRef, telegramSenderId: actor.telegramUserId };
   const made: Array<{ shiftId: number; version: number; versionId: number; dayPaid: boolean | null }> = [];
   const sale = found.transactionId === null ? undefined : (await listHandinSalesByIds(db, [found.transactionId]))[0];
+  const paid = input.answer !== "agree" || found.transactionId === null ? new Map<number, boolean | null>()
+    : await paidDaysOf(app, await listCurrentReportsOfSales(db, [found.transactionId]));
   await db.transaction(async (tx) => {
     const txDb = tx as unknown as Database;
     const claim = await findSaleClaim(txDb, input.claimId, { lock: true });
@@ -573,7 +592,6 @@ export async function answerSaleClaim(
     if (input.answer !== "agree" || claim.transactionId === null || claim.claimantUserId === null) return;
     // Agreed: every report that counts the sale gets what the agreement gives — the claimant all (or a half), the side none (or the other half).
     const reports = await listCurrentReportsOfSales(txDb, [claim.transactionId]);
-    const codes = await listHandinPeopleOfUsers(txDb, reports.map((report) => report.userId));
     const net = reports.flatMap((report) => report.lines).find((line) => line.transactionId === claim.transactionId)?.netMills ?? sale?.netMills ?? 0;
     for (const report of reports) {
       const mine = report.userId === claim.claimantUserId;
@@ -583,10 +601,10 @@ export async function answerSaleClaim(
         netMills: net, userId: mine ? claim.claimantUserId : claim.sideUserId!, outcome: "agreed",
         first: claim.claimantUserId, second: claim.sideUserId, statement: claim.statement,
       });
-      const one = await settleReport(app, txDb, {
+      const one = await settleReport(txDb, {
         shiftId: report.shiftId, transactionId: claim.transactionId, amountMills: amount, settled: "agreed",
         madeFor: { kind: "claim", claimId: claim.id, transactionId: claim.transactionId, outcome: "agreed" }, by, at: now,
-        personCode: codes.get(report.userId)?.code ?? null,
+        dayPaid: paid.get(report.shiftId) ?? null,
       });
       if (one !== null) made.push(one);
     }
@@ -644,6 +662,7 @@ export async function decideSaleDispute(
   const sale = (await listHandinSalesByIds(db, [transactionId]))[0];
   const made: Array<{ shiftId: number; version: number; versionId: number; dayPaid: boolean | null }> = [];
   const by: SettleBy = { door: "workboard", actorUserId: principal.user.id, agentKeyId: null, telegramMessageRef: null, telegramSenderId: null };
+  const paid = await paidDaysOf(app, await listCurrentReportsOfSales(db, [transactionId]));
   await db.transaction(async (tx) => {
     const txDb = tx as unknown as Database;
     const saved = await insertSaleDecision(txDb, {
@@ -654,16 +673,15 @@ export async function decideSaleDispute(
     for (const claim of open) await updateSaleClaim(txDb, claim.id, { state: "decided", decisionId: saved?.id ?? null, closedAt: now }, now);
     // Every report that counts the sale gets what the decision gives its person.
     const reports = await listCurrentReportsOfSales(txDb, [transactionId]);
-    const codes = await listHandinPeopleOfUsers(txDb, reports.map((report) => report.userId));
     const net = reports.flatMap((report) => report.lines).find((line) => line.transactionId === transactionId)?.netMills ?? sale?.netMills ?? 0;
     for (const report of reports) {
       const line = report.lines.find((one) => one.transactionId === transactionId);
       if (line === undefined || (line.amountMills === 0 && !line.disputed)) continue;
       const amount = shareAfter({ netMills: net, userId: report.userId, outcome, first: first ?? 0, second, statement: null });
-      const one = await settleReport(app, txDb, {
+      const one = await settleReport(txDb, {
         shiftId: report.shiftId, transactionId, amountMills: amount, settled: "owner",
         madeFor: { kind: "claim", claimId: open[0]!.id, transactionId, outcome }, by, at: now,
-        personCode: codes.get(report.userId)?.code ?? null,
+        dayPaid: paid.get(report.shiftId) ?? null,
       });
       if (one !== null) made.push(one);
     }
@@ -718,6 +736,9 @@ export async function decideOffPlatformLine(
   const state = input.decision === "confirm" ? "confirmed" as const : "rejected" as const;
   const note = input.note === null || input.note.trim() === "" ? null : input.note.trim();
   const person = await findHandinPersonOfUser(db, row.userId);
+  // Asked before the report is locked: the ledger's HTTP never runs under the lock.
+  const reportDate = (await findHandinByShift(db, row.shiftId))?.reportDate ?? null;
+  const dayPaid = reportDate === null ? null : await ledgerDayPaid(app, { personCode: person?.code ?? null, reportDate });
   let made: { version: number; versionId: number; dayPaid: boolean | null; shiftId: number } | null = null;
   await db.transaction(async (tx) => {
     const txDb = tx as unknown as Database;
@@ -736,7 +757,6 @@ export async function decideOffPlatformLine(
     const offPlatform = current.offPlatform.map((line) => (line.id === row.id ? { ...line, state, pageLabel: label } : line));
     if (!offPlatform.some((line) => line.id === row.id)) offPlatform.push({ id: row.id, amountMills: row.amountMills, fromWhom: "", whatFor: "", state, pageLabel: label });
     const sums = reportSums(current.lines, reportPages, offPlatform);
-    const dayPaid = await ledgerDayPaid(app, { personCode: person?.code ?? null, reportDate: handin.reportDate });
     const version = await insertHandinVersion(txDb, {
       handin, door: "workboard", actorUserId: principal.user.id, agentKeyId: null, telegramMessageRef: null, telegramSenderId: null,
       totalMills: sums.totalMills, pages: sums.pages, lines: current.lines, offPlatform, comment: current.comment, dayPaid,

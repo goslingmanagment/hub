@@ -483,26 +483,48 @@ export async function listReportedSales(
 }
 
 /** The ledger's feed: versions made after the cursor (`afterId`), oldest first, settled for `settleSeconds` at least. */
+/**
+ * The ledger's feed order (0405, review R2-b): every version committed and not placed yet gets its place, after every
+ * place given before, in id order, one read at a time (an advisory lock). A version whose transaction commits later is
+ * invisible now and is placed by a later read, after every place given now: a cursor of places never passes a version
+ * the feed has not served. Returns how many were placed.
+ */
+export async function placeHandinVersionsInFeed(db: Database): Promise<number> {
+  return db.transaction(async (raw) => {
+    const tx = raw as unknown as Database;
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended('shift_handin_feed', 0))`);
+    const placed = await tx.execute(sql`
+      insert into shift_handin_feed (seq, version_id)
+      select (select coalesce(max(seq), 0) from shift_handin_feed) + row_number() over (order by v.id), v.id
+      from shift_handin_versions v
+      where not exists (select 1 from shift_handin_feed f where f.version_id = v.id)
+      order by v.id`);
+    return Number((placed as { rowCount?: number | null }).rowCount ?? 0);
+  });
+}
+
+/** The versions placed after a place of the feed, in the feed's order, those with a line off the pages left out. */
 export async function listHandinVersionsAfter(
   db: Database,
-  input: { afterId: number; limit: number; settleSeconds: number; pageIds: readonly number[] },
-): Promise<Array<HandinVersionRow & { shiftId: number; userId: number; personCode: string | null; reportDate: string }>> {
+  input: { afterSeq: number; limit: number; pageIds: readonly number[] },
+): Promise<Array<HandinVersionRow & { seq: number; shiftId: number; userId: number; personCode: string | null; reportDate: string }>> {
   const result = await db.execute<Row>(sql`
-    select ${VERSION_COLUMNS}, h.shift_id, h.user_id, p.code as person_code, to_char(h.report_date, 'YYYY-MM-DD') as report_date
-    from shift_handin_versions v
+    select ${VERSION_COLUMNS}, f.seq, h.shift_id, h.user_id, p.code as person_code, to_char(h.report_date, 'YYYY-MM-DD') as report_date
+    from shift_handin_feed f
+    join shift_handin_versions v on v.id = f.version_id
     join shift_handins h on h.id = v.handin_id
     left join people p on p.id = h.person_id
-    where v.id > ${input.afterId}
-      and v.submitted_at <= clock_timestamp() - make_interval(secs => ${input.settleSeconds})
+    where f.seq > ${input.afterSeq}
       and not exists (
         select 1 from jsonb_array_elements(v.lines) as line
         join pages pg on pg.label = line ->> 'pageLabel'
         where not (pg.id = any(${ids(input.pageIds)}))
       )
-    order by v.id
+    order by f.seq
     limit ${input.limit}`);
   return result.rows.map((row) => ({
     ...versionOf(row),
+    seq: num(row.seq),
     shiftId: num(row.shift_id),
     userId: num(row.user_id),
     personCode: text(row.person_code),
