@@ -154,7 +154,7 @@ export const LEGACY_ROUTES: ReadonlyArray<LegacyRule & { path: string }> = [
   { path: "system/onlyfans-api/exports", to: "/system/onlyfans-api", anchor: "#exports" },
   { path: "system/onlyfans-api/actions", to: "/system/onlyfans-api", anchor: "#actions" },
   // The roots of the new sections (65–69).
-  { path: "money", to: "/money/costs/ai" },
+  { path: "money", to: "/money/month" },
   { path: "money/income", to: "/" },
   { path: "money/costs", to: "/money/costs/ai" },
   { path: "settings/ai", to: "/settings/ai/personas" },

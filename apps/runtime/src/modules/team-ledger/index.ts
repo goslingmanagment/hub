@@ -1,5 +1,6 @@
 import { routeSchemas } from "@agency_hub_core/contracts";
 
+import { readTeamLedgerMonth } from "../../services/ledger-month.ts";
 import { readLedgerPayoutPrepare, readLedgerPayouts } from "../../services/ledger-payouts.ts";
 import { readTeamLedgerPayoutPerson } from "../../services/ledger-person-pay.ts";
 import { readTeamLedgerQuestions } from "../../services/ledger-questions.ts";
@@ -29,6 +30,11 @@ export function registerTeamLedgerRoutes(server: ApiServer, ctx: ApiModuleContex
   // One person's pay in the period (ledger #80): each day with its state, the adjustments with their memo, the payouts.
   server.get("/api/v1/team/ledger-payouts/person", { schema: routeSchemas.teamLedgerPayoutPerson }, async (request) => {
     return readTeamLedgerPayoutPerson(appContext, request.query);
+  });
+
+  // Деньги → Месяц: the ledger's month card (its GET /v1/payouts/month/{month}); Hub only passes it on, in mills.
+  server.get("/api/v1/team/ledger-month", { schema: routeSchemas.teamLedgerMonth }, async (request) => {
+    return readTeamLedgerMonth(appContext, request.query);
   });
 
   server.get("/api/v1/team/ledger-reports", { schema: routeSchemas.teamLedgerReports }, async (request) => {

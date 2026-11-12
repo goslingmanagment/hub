@@ -178,3 +178,44 @@
     .data-table tr.row-detail > td { padding: 12px 16px 16px; }
   }
 }
+
+/* ── Деньги → Месяц: the ledger's month card ───────────────────────────── */
+@layer components {
+  .month-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+  .month-bar-note { font-size: 14px; line-height: 20px; color: var(--color-text-muted); }
+  .month-head {
+    display: grid;
+    grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
+    gap: 24px 48px;
+    padding: 20px 24px 24px;
+  }
+  @media (max-width: 1100px) { .month-head { grid-template-columns: minmax(0, 1fr); } }
+  .month-label { font-size: 14px; line-height: 20px; font-weight: 500; color: var(--color-text-secondary); }
+  .month-value { margin-top: 4px; font-size: 32px; line-height: 40px; font-weight: 600; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; color: var(--color-text-primary); }
+  .month-means { margin-top: 4px; font-size: 14px; line-height: 20px; color: var(--color-text-secondary); }
+  .month-check { margin-top: 12px; font-size: 14px; line-height: 20px; }
+  .month-equal { color: var(--color-success-text, var(--color-text-primary)); font-weight: 500; }
+  .month-differs { color: var(--color-warning-text, var(--color-text-primary)); font-weight: 500; }
+  .month-side { display: grid; align-content: start; gap: 16px; }
+  .month-line { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 16px; padding-bottom: 12px; border-bottom: 1px solid var(--color-border); }
+  .month-line:last-child { border-bottom: 0; padding-bottom: 0; }
+  .month-line-label { font-size: 15px; line-height: 22px; color: var(--color-text-primary); }
+  .month-line-value { font-size: 15px; line-height: 22px; text-align: right; font-variant-numeric: tabular-nums; color: var(--color-text-primary); }
+  .month-line-strong { font-weight: 600; }
+  .month-line-means { grid-column: 1 / -1; font-size: 14px; line-height: 20px; color: var(--color-text-secondary); }
+  .month-states { display: grid; padding: 0 24px 12px; }
+  .month-states > li {
+    display: grid;
+    grid-template-columns: 140px minmax(0, 1fr) auto;
+    gap: 4px 16px;
+    align-items: baseline;
+    padding: 12px 0;
+    border-top: 1px solid var(--color-border);
+  }
+  @media (max-width: 767px) { .month-states > li { grid-template-columns: minmax(0, 1fr) auto; } .month-state-means { grid-column: 1 / -1; grid-row: 2; } }
+  .month-state-label { font-size: 15px; line-height: 22px; font-weight: 500; color: var(--color-text-primary); }
+  .month-state-means { font-size: 14px; line-height: 20px; color: var(--color-text-secondary); }
+  .month-state-value { font-size: 15px; line-height: 22px; text-align: right; font-variant-numeric: tabular-nums; color: var(--color-text-primary); }
+  .month-foot { display: grid; gap: 8px; font-size: 14px; line-height: 20px; color: var(--color-text-muted); }
+  .month-notes { display: grid; gap: 4px; list-style: disc; padding-left: 20px; color: var(--color-text-secondary); }
+}
