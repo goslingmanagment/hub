@@ -327,8 +327,14 @@ export const agentShiftReportsFeedQuerySchema = z.object({
 });
 
 export const agentShiftReportsFeedItemSchema = z.object({
-  /** The version's own id: the feed's order. */
+  /** The version's own id. */
   id: intId,
+  /**
+   * Its place in the feed (review R2-b): given when the feed first finds the version committed, after every place given
+   * before. The feed's order and its cursor: `next` is the last place served. Every version written before 0405 has its
+   * id as its place.
+   */
+  seq: intId,
   /** The person's code (the ledger's slug); null — a login no person holds. */
   person: z.string().nullable(),
   hubUserId: intId,
@@ -384,7 +390,7 @@ export const agentShiftReportsFeedItemSchema = z.object({
 
 export const agentShiftReportsFeedResponseSchema = z.object({
   reports: z.array(agentShiftReportsFeedItemSchema),
-  /** Ask again with `since` = this; the same as asked when nothing is new. */
+  /** Ask again with `since` = this (the last place served); the same as asked when nothing is new. */
   next: z.string(),
   serverNow: isoTimestamp,
 });
@@ -519,8 +525,9 @@ export const shiftHandinRouteSchemas = {
   agentShiftReportsFeed: {
     auth: { kind: "agentKey" }, tags: ["agent"],
     summary: "Every version of every shift report handed in, after a cursor: the ledger's feed (needs read:team and read:money)",
-    description: "Database only. A version is served once it is 10 seconds old, in the order it was made; a version with a line "
-      + "on a page outside the key's grant is left out.",
+    description: "Database only. A version is served as soon as it is committed, in the order the feed placed it (`seq`): a "
+      + "version committed after a later one is placed after it, so `next` never passes a version not served yet. A "
+      + "version with a line on a page outside the key's grant is left out.",
     querystring: agentShiftReportsFeedQuerySchema,
     response: { 200: agentShiftReportsFeedResponseSchema, ...agentErrors },
   },

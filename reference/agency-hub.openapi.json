@@ -179545,7 +179545,7 @@
         "tags": [
           "agent"
         ],
-        "description": "Database only. A version is served once it is 10 seconds old, in the order it was made; a version with a line on a page outside the key's grant is left out.",
+        "description": "Database only. A version is served as soon as it is committed, in the order the feed placed it (`seq`): a version committed after a later one is placed after it, so `next` never passes a version not served yet. A version with a line on a page outside the key's grant is left out.",
         "parameters": [
           {
             "schema": {
@@ -179587,6 +179587,11 @@
                         "type": "object",
                         "properties": {
                           "id": {
+                            "type": "integer",
+                            "exclusiveMinimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "seq": {
                             "type": "integer",
                             "exclusiveMinimum": 0,
                             "maximum": 9007199254740991
@@ -179917,6 +179922,7 @@
                         },
                         "required": [
                           "id",
+                          "seq",
                           "person",
                           "hubUserId",
                           "shiftId",

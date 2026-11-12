@@ -23,6 +23,7 @@ import {
   insertHandinEvent,
   insertHandinVersion,
   insertOffPlatform,
+  listActiveSaleDecisions,
   listCurrentHandinVersions,
   listHandinAgentKeyNames,
   listHandinColleagues,
@@ -41,10 +42,12 @@ import {
   listHandinsOfShifts,
   listHandinVersions,
   listHandinVersionsAfter,
+  placeHandinVersionsInFeed,
   listMatterPageLabels,
   listOffPlatform,
   listPersonWorkingPageRows,
   listReportedSales,
+  listSaleClaims,
   listSaleFacts,
   listSaleHomes,
   listVisiblePages,
@@ -70,7 +73,7 @@ import type { AppContext } from "../bootstrap.ts";
 import type { AgentAuthPrincipal, HumanAuthPrincipal } from "./auth.ts";
 import { BadRequestError, ConflictError, ForbiddenError, NotFoundError } from "./errors.ts";
 import { readLedgerPayouts } from "./ledger-payouts.ts";
-import { reportSums } from "./sale-claim-rules.ts";
+import { reportSums, settledShareOf } from "./sale-claim-rules.ts";
 import { claimsOfReport, runSaleClaims } from "./sale-claims.ts";
 import { SALE_RULE, slotRuns, type RuleSlot, type SaleHomeKind, type SaleHomeReason } from "./sale-rule.ts";
 import { computeSaleHomes, registrySlots, ruleWorksOf } from "./sale-homes.ts";
@@ -229,6 +232,8 @@ interface DraftFacts {
   works: Map<string, { userId: number; kind: string }>;
   /** A near sale's bought PPV sender, by transaction. */
   senders: Map<number, number>;
+  /** What a sale the owner decided or the sides agreed on gives the person, by transaction (review R2-a). */
+  settled: Map<number, { amountMills: number; settled: "owner" | "agreed" }>;
 }
 
 /** The shift's own work among the rule's works: the person's shift that ran with it the longest. */
@@ -395,6 +400,21 @@ async function draftFacts(
   classified.sort((a, b) => (a.group === b.group ? a.sale.occurredAt - b.sale.occurredAt : a.group === "mine" ? -1 : 1));
 
   const senders = new Map(classified.flatMap((one) => (one.sale.ppvSenderUserId === null ? [] : [[one.sale.transactionId, one.sale.ppvSenderUserId] as const])));
+
+  // A sale the owner decided or the two sides agreed on: the person's line counts what that gives them, settled, in
+  // every later draft — their old «моё» no longer takes the money back, nor opens the dispute again (review R2-a).
+  const saleIds = classified.map((one) => one.sale.transactionId);
+  const decisions = await listActiveSaleDecisions(db, saleIds);
+  const agreed = await listSaleClaims(db, { transactionIds: saleIds, states: ["agreed"] });
+  const settled = new Map<number, { amountMills: number; settled: "owner" | "agreed" }>();
+  for (const one of classified) {
+    const id = one.sale.transactionId;
+    const share = settledShareOf({
+      netMills: one.sale.netMills, userIds: context.userIds, decision: decisions.get(id) ?? null,
+      agreed: agreed.filter((claim) => claim.transactionId === id),
+    });
+    if (share !== null) settled.set(id, share);
+  }
   return {
     computedAt: now,
     classified,
@@ -402,6 +422,7 @@ async function draftFacts(
     live: new Map(live.answer.sales.map((sale) => [Number(sale.transactionRef), sale])),
     works: new Map(works.map((work) => [work.ref, { userId: work.userId, kind: work.kind }])),
     senders,
+    settled,
   };
 }
 
@@ -500,18 +521,27 @@ async function lineDetails(db: Database, subject: Subject, facts: DraftFacts, ca
   return out;
 }
 
-/** The person's words on the facts: the version's lines, as they would be handed in now. Pure. */
-export function draftLines(facts: Pick<DraftFacts, "classified" | "senders">, marks: readonly HandinMarkRow[]): HandinVersionLine[] {
+/**
+ * The person's words on the facts: the version's lines, as they would be handed in now. A sale the owner decided or the
+ * sides agreed on counts what that gives the person (`facts.settled`), settled and not disputed, whatever the word.
+ * Pure.
+ */
+export function draftLines(facts: Pick<DraftFacts, "classified" | "senders"> & Partial<Pick<DraftFacts, "settled">>, marks: readonly HandinMarkRow[]): HandinVersionLine[] {
   const markOf = new Map(marks.map((mark) => [mark.transactionId, mark]));
   return facts.classified.map((one) => {
     const mark = markOf.get(one.sale.transactionId);
     // A word the line no longer takes (the rule moved the sale) is set aside, not applied.
     const takes = (word: ShiftReportStatement) => (one.claimed === true ? word === "mine" : statementAllowed(one.group, word));
     const statement = mark?.statement != null && takes(mark.statement) ? mark.statement : null;
-    const { amountMills, disputed } = lineAmount({
+    const plain = lineAmount({
       group: one.group, netMills: one.sale.netMills, shareMills: one.shareMills, homeKind: one.sale.home.kind, statement, alreadyIn: one.alreadyIn !== null,
       claimed: one.claimed === true, otherReport: one.otherReport === true,
     });
+    // Settled: what it gives, for a line the person said something of or that counts either way. Another report of the
+    // person holding it still counts it there, not here.
+    const given = facts.settled?.get(one.sale.transactionId) ?? null;
+    const settled = given !== null && one.alreadyIn === null && (statement !== null || plain.amountMills > 0 || given.amountMills > 0) ? given : null;
+    const { amountMills, disputed } = settled === null ? plain : { amountMills: settled.amountMills, disputed: false };
     return {
       transactionId: one.sale.transactionId,
       offPlatformId: null,
@@ -534,6 +564,7 @@ export function draftLines(facts: Pick<DraftFacts, "classified" | "senders">, ma
       added: one.added,
       disputed,
       alreadyIn: one.alreadyIn,
+      ...(settled === null ? {} : { settled: settled.settled }),
     };
   });
 }
@@ -616,6 +647,31 @@ function offPlatformWire(row: HandinVersionOffPlatform) {
   };
 }
 
+/**
+ * What a reader may see of a report (a draft or a version): the lines and pages of their pages, «мимо площадки» only
+ * uncut, and the sums made of exactly that. The one projection of rights the body, its totals, the versions' history
+ * and the list of shifts read (review R2-c). `cutTo` null — the whole report.
+ */
+function projectionOf(input: {
+  lines: readonly HandinVersionLine[];
+  offPlatform: readonly HandinVersionOffPlatform[];
+  shiftPages: readonly string[];
+  cutTo: Set<string> | null;
+}) {
+  const cut = input.cutTo;
+  const lines = cut === null ? input.lines : input.lines.filter((line) => line.pageLabel !== null && cut.has(line.pageLabel));
+  const pages = cut === null ? input.shiftPages : input.shiftPages.filter((page) => cut.has(page));
+  // A colleague reads the report's sales, not what the person says came past the platform: nor its sums.
+  const offPlatform = cut === null ? input.offPlatform : [];
+  return { lines, pages, offPlatform, sums: linesPageSums(lines, pages, offPlatform), cut: cut !== null && pages.length < input.shiftPages.length };
+}
+
+/** A version's total as the reader may see it: the stored one whole, else its projection's. */
+function versionTotalFor(version: HandinVersionRow, cutTo: Set<string> | null): number {
+  if (cutTo === null) return version.totalMills;
+  return projectionOf({ lines: version.lines, offPlatform: version.offPlatform, shiftPages: version.pages.map((page) => page.pageLabel), cutTo }).sums.totalMills;
+}
+
 function bodyOf(input: {
   source: "draft" | "version";
   version: HandinVersionRow | null;
@@ -627,22 +683,18 @@ function bodyOf(input: {
   computedAt: Date;
   context: ViewContext;
 }): ShiftReportBody {
-  const visible = input.cutTo === null ? input.lines : input.lines.filter((line) => line.pageLabel !== null && input.cutTo!.has(line.pageLabel));
-  const pages = input.cutTo === null ? input.shiftPages : input.shiftPages.filter((page) => input.cutTo!.has(page));
-  // A colleague reads the report's sales, not what the person says came past the platform: nor its sums.
-  const sums = linesPageSums(visible, pages, input.cutTo === null ? input.offPlatform : []);
+  const seen = projectionOf(input);
   return {
     source: input.source,
     version: input.version?.version ?? null,
     submittedAt: input.version?.submittedAt.toISOString() ?? null,
     door: input.version?.door ?? null,
-    lines: visible.map((line) => wireLine(line, input.context)).filter((line): line is ShiftReportLine => line !== null),
-    // A colleague reads the report's sales, not what the person says came past the platform.
-    offPlatform: input.cutTo === null ? input.offPlatform.map(offPlatformWire) : [],
+    lines: seen.lines.map((line) => wireLine(line, input.context)).filter((line): line is ShiftReportLine => line !== null),
+    offPlatform: seen.offPlatform.map(offPlatformWire),
     comment: input.comment,
-    pages: sums.pages.map((page) => ({ ...page, platform: input.context.catalog.info.get(page.pageLabel)?.platform ?? "fansly" })),
-    totalMills: sums.totalMills,
-    cut: input.cutTo !== null && pages.length < input.shiftPages.length,
+    pages: seen.sums.pages.map((page) => ({ ...page, platform: input.context.catalog.info.get(page.pageLabel)?.platform ?? "fansly" })),
+    totalMills: seen.sums.totalMills,
+    cut: seen.cut,
     computedAt: input.computedAt.toISOString(),
   };
 }
@@ -661,17 +713,26 @@ export function madeForWords(madeFor: HandinVersionMadeFor | null, actorName: st
   }
 }
 
-function versionSummary(version: HandinVersionRow, names: Map<number, string>, keyNames: Map<number, string>) {
+/**
+ * A version in the history, as the reader may see it (the body's projection, review R2-c): a cut reader gets the total
+ * of their pages, and why the system made it only when it is a sale of theirs (never «мимо площадки»).
+ */
+function versionSummary(version: HandinVersionRow, names: Map<number, string>, keyNames: Map<number, string>, cutTo: Set<string> | null) {
   const actor = version.agentKeyId !== null
     ? `${keyNames.get(version.agentKeyId) ?? "агент"}, со слов`
     : names.get(version.actorUserId ?? -1) ?? "";
+  const why = version.madeFor;
+  const madeFor = cutTo === null || why === null ? why
+    : why.kind === "claim" && version.lines.some((line) => line.transactionId === why.transactionId && line.pageLabel !== null && cutTo.has(line.pageLabel))
+      ? why
+      : null;
   return {
     version: version.version,
     submittedAt: version.submittedAt.toISOString(),
     door: version.door,
     by: actor,
-    totalMills: version.totalMills,
-    madeFor: madeForWords(version.madeFor, version.agentKeyId !== null ? null : names.get(version.actorUserId ?? -1) ?? null),
+    totalMills: versionTotalFor(version, cutTo),
+    madeFor: madeForWords(madeFor, version.agentKeyId !== null ? null : names.get(version.actorUserId ?? -1) ?? null),
   };
 }
 
@@ -809,8 +870,8 @@ async function readSubject(app: HandinApp, actor: HandinActor, subject: Subject,
     enabled: subject.enabled,
     canEdit: own && subject.enabled,
     state: handin?.state ?? "open",
-    latest: latest === null ? null : versionSummary(latest, names, keyNames),
-    versions: [...versions].reverse().map((version) => versionSummary(version, names, keyNames)),
+    latest: latest === null ? null : versionSummary(latest, names, keyNames, access.cutTo),
+    versions: [...versions].reverse().map((version) => versionSummary(version, names, keyNames, access.cutTo)),
     view,
     afterSubmission,
     posts: own && latest !== null ? postsOf(latest, subject, context) : [],
@@ -911,9 +972,7 @@ export async function listShiftReports(
     shifts: shifts.map((shift) => {
       const handin = handins.get(shift.id) ?? null;
       const version = handin === null ? null : versions.get(handin.id) ?? null;
-      const total = version === null ? null
-        : cutTo === null ? version.totalMills
-          : version.pages.filter((page) => cutTo!.has(page.pageLabel)).reduce((sum, page) => sum + page.amountMills, 0);
+      const total = version === null ? null : versionTotalFor(version, cutTo);
       return {
         draftTotalMills: drafts.get(shift.id) ?? null,
         shiftId: shift.id,
@@ -1227,19 +1286,24 @@ export async function saleLineFacts(app: HandinApp, shiftId: number, transaction
 
 // ── The ledger's feed ────────────────────────────────────────────────────────
 
-const FEED_SETTLE_SECONDS = 10;
-
-/** `agentShiftReportsFeed`: every version after the cursor, in the order made. */
+/**
+ * `agentShiftReportsFeed`: every version after the cursor, in the feed's order. The versions committed since the last
+ * read are placed first (0405, `placeHandinVersionsInFeed`): a version is placed only once committed, after every place
+ * given before, so a version whose transaction commits after a later one's is served after it — the cursor (`next`, a
+ * place) never passes a version not served yet, however the hand-ins interleave (review R2-b).
+ */
 export async function readShiftReportsFeed(
   app: HandinApp,
   input: { pageIds: readonly number[]; since?: string | undefined; limit: number },
   now: Date = new Date(),
 ): Promise<AgentShiftReportsFeedResponse> {
-  const afterId = input.since === undefined ? 0 : Number(input.since);
-  const rows = await listHandinVersionsAfter(app.db, { afterId, limit: input.limit, settleSeconds: FEED_SETTLE_SECONDS, pageIds: input.pageIds });
+  const afterSeq = input.since === undefined ? 0 : Number(input.since);
+  await placeHandinVersionsInFeed(app.db);
+  const rows = await listHandinVersionsAfter(app.db, { afterSeq, limit: input.limit, pageIds: input.pageIds });
   return {
     reports: rows.map((row) => ({
       id: row.id,
+      seq: row.seq,
       person: row.personCode,
       hubUserId: row.userId,
       shiftId: row.shiftId,
@@ -1279,7 +1343,7 @@ export async function readShiftReportsFeed(
         byUserId: row.actorUserId,
       },
     })),
-    next: String(rows.at(-1)?.id ?? afterId),
+    next: String(rows.at(-1)?.seq ?? afterSeq),
     serverNow: now.toISOString(),
   };
 }
