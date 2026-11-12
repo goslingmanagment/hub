@@ -1357,6 +1357,10 @@ Global flags: `--base-url`, `--fail-on-partial`, `--pretty`, `--help`.
 | `hub queue-add` | Add fans to a fan queue by a rule or a list. |
 | `hub report put <slug>` | Publish a page people read in the app from a markdown file (`--title`, `--section traffic\|team\|content\|system`, `--file`, `--valid-hours N`, `--team-leads`): `traffic` is the owner's «Трафик → Сводка», every page is in «Система → Отчёты агентов». The same slug again replaces the page. Needs `write:reports`. |
 | `hub report list` | The published pages without their text: slug, title, version, when, by which key, stale or not. Needs `write:reports`. |
+| `hub custom list` | Custom orders of your pages and of no known page: state, `overdueDays`, deadline, parts delivered whole, open revisions, recorded messages, `version`, the card text with its code; `--card <tg link>` or `--code K-…` finds one, `--page`, `--state open\|all\|<state>`. Needs `write:customs`. |
+| `hub custom create` | Record an order from the card's fields (`--file` JSON) and the fan's link (`--page`, `--fan`, `--accepted-by`, `--card`); the same card again answers its order. Prints the code for the card's title. |
+| `hub custom step <code>` | One step from the models' group: `--step at_model\|delivery\|partly\|shot\|revision\|revision_done\|refused\|cancel\|message\|edit\|card` with `--message`, `--excerpt`, `--part`, `--complete`, `--ordinal`, `--text`, `--reason`, `--kind`, `--card-file`, `--if-version`. A repeat is `unchanged`; 409 `version_changed` / `edited_by_person` / `not_allowed` exit 4 with `error.reason`. Never a payment or «отдали». |
+| `hub custom cards` | COMPOSITE: attach cards to orders and report the cards with no order (`--file` {attach, unmatched, complete}); an unmatched card is the lead's matter until it is attached. |
 
 Two operations are deliberately absent: observation PAYLOADS and hydration
 DECISIONS are owner only. Your key cannot reach them, and a command for them would

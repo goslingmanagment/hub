@@ -23,6 +23,10 @@ import {
   agentMatterCloseBodySchema,
   agentMatterCommentBodySchema,
   agentMatterOpenBodySchema,
+  agentCustomCardsBodySchema,
+  agentCustomOrderCreateBodySchema,
+  agentCustomOrderUpdateBodySchema,
+  CUSTOM_ORDER_STATES,
   agentResolveHintEnum,
   agentSenderRoleEnum,
   agentSyncResourceKeyEnum,
@@ -1864,6 +1868,296 @@ const MATTER_COMMANDS: HubCommand[] = [
   },
 ];
 
+// --- custom orders (write:customs) -----------------------------------------
+
+const CUSTOM_CAPABILITY_HINT =
+  "This key lacks write:customs: the owner grants it to the key (dashboard, Система, Доступ ИИ-агентов)";
+
+/** The machine reason of a refusal (`version_changed`, `edited_by_person`…), from the hub's error body. */
+function refusalReason(error: unknown): string | null {
+  const reason = (error as { body?: { reason?: unknown } } | null)?.body?.reason;
+  return typeof reason === "string" ? reason : null;
+}
+
+/** What a refusal of the custom orders' door means, and what to do. */
+function customHint(error: { status: number | null; code: string | null }): string | null {
+  const reason = refusalReason(error);
+  if (error.status === 403 && error.code !== "forbidden") return CUSTOM_CAPABILITY_HINT;
+  if (error.status === 409 && reason === "version_changed") {
+    return "version_changed: the order changed since the version you read. Read it again (hub custom list --code K-…) and send only"
+      + " what still differs from the card";
+  }
+  if (error.status === 409 && reason === "edited_by_person") {
+    return "edited_by_person: a person edited these fields on the board (the message names them). They are the person's now:"
+      + " leave them and say the difference in your summary";
+  }
+  if (error.status === 409 && reason === "not_allowed") {
+    return "not_allowed: the order's state takes no such step (read its `state`): a delivery to an order already given, a refusal"
+      + " of an order not at the model…";
+  }
+  if (error.status === 409 && reason === "taken") return "taken: this Telegram card belongs to another order (hub custom list --card <ref>)";
+  if (error.status === 409 && reason === "person_unknown") return "No living Hub login of that name: check --accepted-by / --on-behalf-of";
+  if (error.status === 404) return "No such order, or its page is outside this key's grant (an order of no known page is every key's)";
+  return null;
+}
+
+const CUSTOM_STEPS = [
+  "at_model", "delivery", "partly", "shot", "revision", "revision_done", "refused", "cancel", "message", "edit", "card",
+] as const;
+type CustomStepName = (typeof CUSTOM_STEPS)[number];
+const CUSTOM_MESSAGE_KINDS = ["repost", "confirmation", "note"] as const;
+/** `--state`: the door's own two (open, all), or one state of an order (read from all, filtered here). */
+const CUSTOM_LIST_STATES = ["open", "all", ...CUSTOM_ORDER_STATES] as const;
+
+/** A JSON object from `--<name>` (a file, or - for stdin). */
+function readJsonObject(values: HubOptionValues, deps: HubRunDeps, name: string): Record<string, unknown> | undefined {
+  const path = readString(values, name);
+  if (path === undefined) return undefined;
+  const text = deps.readFile(path === "-" ? "/dev/stdin" : path);
+  if (text === null) throw new HubUsageError(`--${name} ${path} cannot be read`);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw new HubUsageError(`--${name} ${path} is not JSON`);
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) throw new HubUsageError(`--${name} ${path} is not a JSON object`);
+  return parsed as Record<string, unknown>;
+}
+
+/** The model's message: its link (`--message`), when, who and a short verbatim excerpt. */
+function customMessage(values: HubOptionValues) {
+  return defined({
+    telegramRef: requireString(values, "message"),
+    at: readString(values, "at"),
+    author: readString(values, "author"),
+    excerpt: readString(values, "excerpt"),
+  });
+}
+
+/** `custom step`'s body: one step of the order, its message and words from the flags. */
+export function customStepBody(values: HubOptionValues, deps: HubRunDeps) {
+  const step: CustomStepName = requireEnum(values, "step", CUSTOM_STEPS);
+  const onBehalfOf = readString(values, "on-behalf-of");
+  const ordinal = readNumber(values, "ordinal");
+  let body: Record<string, unknown>;
+  switch (step) {
+    case "at_model":
+      body = { telegramRef: readString(values, "card") };
+      break;
+    case "card":
+      body = { telegramRef: requireString(values, "card") };
+      break;
+    case "delivery":
+      body = { message: customMessage(values), part: readEnum(values, "part", ["video", "photos"] as const), complete: readFlag(values, "complete") };
+      break;
+    case "partly":
+      body = { ref: requireString(values, "message"), note: readString(values, "text") };
+      break;
+    case "shot":
+      body = { ref: requireString(values, "message") };
+      break;
+    case "revision":
+      body = { message: customMessage(values), ordinal, text: requireString(values, "text") };
+      break;
+    case "revision_done":
+      body = { telegramRef: requireString(values, "message"), ordinal };
+      break;
+    case "refused":
+      body = { ref: requireString(values, "message"), reason: requireString(values, "reason") };
+      break;
+    case "cancel":
+      body = { reason: requireString(values, "reason") };
+      break;
+    case "message":
+      body = { kind: requireEnum(values, "kind", CUSTOM_MESSAGE_KINDS), message: customMessage(values) };
+      break;
+    case "edit": {
+      const card = readJsonObject(values, deps, "card-file");
+      const deadline = readString(values, "deadline");
+      const sourceFile = readString(values, "source-file");
+      if (card === undefined && deadline === undefined && sourceFile === undefined) {
+        throw new HubUsageError("an edit says what changed: --card-file (only the changed fields; null empties one), --deadline or --source-file");
+      }
+      body = {
+        card: card ?? {},
+        deadlineOn: deadline === undefined ? undefined : deadline === "none" ? null : deadline,
+        sourceText: sourceFile === undefined ? undefined : readTextFile(deps, sourceFile),
+        ifVersion: readNumber(values, "if-version"),
+      };
+      break;
+    }
+  }
+  return checkedDraft(agentCustomOrderUpdateBodySchema, defined({ action: step, ...defined(body), onBehalfOf }));
+}
+
+/** `custom create`'s body: the card's JSON from --file, the flags laid over it. */
+export function customCreateBody(values: HubOptionValues, deps: HubRunDeps) {
+  const fromFile = readJsonObject(values, deps, "file") ?? {};
+  return checkedDraft(agentCustomOrderCreateBodySchema, {
+    ...fromFile,
+    ...defined({
+      pageLabel: readString(values, "page"),
+      fan: readString(values, "fan"),
+      acceptedBy: readString(values, "accepted-by"),
+      telegramRef: readString(values, "card"),
+      deadlineOn: readString(values, "deadline"),
+      onBehalfOf: readString(values, "on-behalf-of"),
+    }),
+  });
+}
+
+const CUSTOM_CODE_ARGUMENT = { name: "code", describe: "the order's code, K-<number>", min: 1, max: 1 };
+
+const CUSTOM_COMMANDS: HubCommand[] = [
+  {
+    name: "custom list",
+    operation: "agentCustomOrders",
+    summary:
+      "Custom orders of this key's pages and of no known page, the newest first: the state as the server keeps it, overdueDays"
+      + " (past the deadline and not delivered whole), the deadline, the parts delivered whole, the open revision requests,"
+      + " the messages already recorded, the version and the card text with its code. --card or --code finds one order in"
+      + " any state. No money. Exit 0 — answered; 4 — refused or no answer. Needs write:customs.",
+    example: "hub custom list --card https://t.me/c/2600000001/3/10017",
+    options: {
+      state: { kind: "string", describe: `open (default: not given and not ended) | all | one state: ${CUSTOM_ORDER_STATES.join(" | ")}` },
+      page: { kind: "string", describe: "Only this page's orders (an order of no known page shows on every page)" },
+      card: { kind: "string", describe: "The order of this Telegram card: https://t.me/c/<chat>/<topic>/<msg> or tg:<chat>/<topic>/<msg>" },
+      code: { kind: "string", describe: "The order of this code, K-<number>" },
+      limit: { kind: "number", describe: "At most this many orders" },
+    },
+    hint: customHint,
+    run: async (client, values) => {
+      const state = readEnum(values, "state", CUSTOM_LIST_STATES);
+      const page = readString(values, "page");
+      const answer = await client.agentCustomOrders({
+        query: defined({
+          state: state === undefined || state === "open" ? "open" as const : "all" as const,
+          code: readString(values, "code"),
+          telegramRef: readString(values, "card"),
+          limit: readNumber(values, "limit"),
+        }),
+      });
+      const orders = answer.orders.filter((order) => (page === undefined || order.pageLabel === page || order.pageLabel === null)
+        && (state === undefined || state === "open" || state === "all" || order.state === state));
+      return { ...answer, orders };
+    },
+  },
+  {
+    name: "custom create",
+    operation: "agentCustomOrderCreate",
+    summary:
+      "Record a custom order from the card's fields (--file, a JSON object: card, pageLabel, fan, acceptedBy, deadlineOn, telegramRef,"
+      + " postedAt, author, sourceText) and the fan's link; flags override the file. A fan that matches no fan of the page stays the"
+      + " buyer's string; no page — the order waits for a person to confirm it. The same Telegram card again answers its order"
+      + " (`outcome`: unchanged). Prints the order's code: put «K-…» into the card's title. Exit 0 — recorded or already there;"
+      + " 4 — refused or no answer. Needs write:customs.",
+    example: "hub custom create --file card.json --page lora-1 --fan https://fansly.com/fan_name/posts --accepted-by alice",
+    options: {
+      file: { kind: "string", describe: "The order as a JSON object (required): {card: {task, price, duration, …}, …}; - for stdin" },
+      page: { kind: "string", describe: "The fan's page, of this key's grant" },
+      fan: { kind: "string", describe: "The fan: a profile link, a username or the platform's number" },
+      "accepted-by": { kind: "string", describe: "The Hub login of the chatter who took the order" },
+      card: { kind: "string", describe: "The card's message in Telegram, when it is posted already" },
+      deadline: { kind: "string", describe: "The deadline, YYYY-MM-DD (Moscow)" },
+      "on-behalf-of": { kind: "string", describe: "The Hub login on whose word the agent writes" },
+    },
+    hint: customHint,
+    run: async (client, values, deps) => {
+      if (readString(values, "file") === undefined) throw new HubUsageError("--file is required: the order as a JSON object");
+      const answer = await client.agentCustomOrderCreate({ body: customCreateBody(values, deps) });
+      const code = answer.order.code;
+      return new HubNotedResult(answer, answer.outcome === "created"
+        ? `Recorded ${code}: put «${code}» into the card's title (its cardText has it).`
+        : `This card has its order already: ${code} (version ${answer.order.version}).`);
+    },
+  },
+  {
+    name: "custom step",
+    operation: "agentCustomOrderUpdate",
+    summary:
+      "One step of an order, from what the models' group says (--step): at_model (the card reached the model's group; --card its copy"
+      + " there), delivery (the model delivered: --message, --excerpt her line verbatim, --part video|photos, --complete when that part"
+      + " is whole), partly | shot (--message), revision (a request: --message, --text, --ordinal for several in one message),"
+      + " revision_done (--message, --ordinal), refused (the model's refusal: --message, --reason), cancel (--reason: a return, a"
+      + " duplicate card), message (--kind repost | confirmation | note, --message), edit (only the changed fields: --card-file,"
+      + " --deadline, --source-file, --if-version), card (attach --card). The same message again changes nothing (`outcome`:"
+      + " unchanged). Exit 0 — changed or unchanged; 4 — refused (409 version_changed, edited_by_person, not_allowed: read"
+      + " `error.reason`) or no answer. Never a payment or «отдали»: those are people's. Needs write:customs.",
+    example: 'hub custom step K-123 --step delivery --message https://t.me/c/2600000001/3/10030 --excerpt "6-08 название.mov" --part video --complete',
+    arguments: CUSTOM_CODE_ARGUMENT,
+    options: {
+      step: { kind: "string", describe: `The step (required): ${CUSTOM_STEPS.join(" | ")}` },
+      message: { kind: "string", describe: "The model's (or the team's) message: https://t.me/c/<chat>/<topic>/<msg> or tg:…" },
+      at: { kind: "string", describe: "When the message was sent, ISO 8601" },
+      author: { kind: "string", describe: "Who sent it, as Telegram names them" },
+      excerpt: { kind: "string", describe: "A short verbatim excerpt (a delivery: the model's line with the file's name)" },
+      part: { kind: "string", describe: "A delivery's part: video | photos (default: the first the card orders)" },
+      complete: { kind: "boolean", describe: "A delivery: that part is whole now (without it the part waits for more)" },
+      ordinal: { kind: "number", describe: "Several revision requests in one message: 1, 2… (default 0)" },
+      text: { kind: "string", describe: "A revision's request, or what a partial delivery is about" },
+      reason: { kind: "string", describe: "Why the model refused, or why the order is cancelled" },
+      kind: { kind: "string", describe: `A message's kind: ${CUSTOM_MESSAGE_KINDS.join(" | ")} (a repost also becomes a card of the order)` },
+      card: { kind: "string", describe: "A Telegram card: its copy in the model's group (at_model), or one to attach (card)" },
+      "card-file": { kind: "string", describe: "An edit: the changed card fields as a JSON object (null empties a field); - for stdin" },
+      deadline: { kind: "string", describe: "An edit: the deadline YYYY-MM-DD (Moscow), or none" },
+      "source-file": { kind: "string", describe: "An edit: the card's whole text as posted, from a file" },
+      "if-version": { kind: "number", describe: "An edit: refuse it (409 version_changed) if the order changed since this version" },
+      "on-behalf-of": { kind: "string", describe: "The Hub login on whose word the agent writes" },
+    },
+    hint: customHint,
+    run: (client, values, deps, args) => client.agentCustomOrderUpdate({ params: { code: args[0]! }, body: customStepBody(values, deps) }),
+  },
+  {
+    name: "custom cards",
+    operation: "agentCustomCards",
+    composite: true,
+    summary:
+      "COMPOSITE (several calls): what the reader of the models' groups found about cards, from --file {\"attach\": [{\"code\":"
+      + " \"K-123\", \"telegramRef\": \"…\"}], \"unmatched\": [{\"telegramRef\", \"postedAt\", \"where\"}], \"complete\": true}: each"
+      + " attach is the order's card from now on; the unmatched ones become the lead's matter «Карточка кастома без заказа»"
+      + " (`complete`: the list is every unmatched card now, the others' matters close). Prints each call; any refused call"
+      + " exits 4. Needs write:customs.",
+    example: "hub custom cards --file cards.json",
+    options: {
+      file: { kind: "string", describe: "The cards as a JSON object (required): attach, unmatched, complete; - for stdin" },
+    },
+    hint: customHint,
+    run: async (client, values, deps) => {
+      const file = readJsonObject(values, deps, "file");
+      if (file === undefined) throw new HubUsageError("--file is required: {attach: [...], unmatched: [...], complete}");
+      const attach = Array.isArray(file.attach) ? file.attach as Array<{ code?: unknown; telegramRef?: unknown }> : [];
+      const unmatched = Array.isArray(file.unmatched) ? file.unmatched : [];
+      const report = checkedDraft(agentCustomCardsBodySchema, { cards: unmatched, complete: file.complete === true });
+      const attached: Array<Record<string, unknown>> = [];
+      let failed = 0;
+      for (const one of attach) {
+        if (typeof one.code !== "string" || typeof one.telegramRef !== "string") throw new HubUsageError("each attach is {code, telegramRef}");
+        try {
+          const answer = await client.agentCustomOrderUpdate({
+            params: { code: one.code },
+            body: checkedDraft(agentCustomOrderUpdateBodySchema, { action: "card", telegramRef: one.telegramRef }),
+          });
+          attached.push({ code: one.code, telegramRef: one.telegramRef, ok: true, outcome: answer.outcome });
+        } catch (error) {
+          failed += 1;
+          attached.push({ code: one.code, telegramRef: one.telegramRef, ok: false, error: { ...compositeError(error), reason: refusalReason(error), hint: customHint(error as KernelApiError) } });
+        }
+      }
+      let reported: Record<string, unknown> | null = null;
+      if (report.cards.length > 0 || report.complete) {
+        try {
+          reported = { ok: true, ...(await client.agentCustomCards({ body: report })) };
+        } catch (error) {
+          failed += 1;
+          reported = { ok: false, error: { ...compositeError(error), reason: refusalReason(error) } };
+        }
+      }
+      return new HubCompositeResult({ attached, unmatched: reported }, failed, { calls: attached.length + (reported === null ? 0 : 1), failed });
+    },
+  },
+];
+
 // --- agent reports (write:reports) -----------------------------------------
 
 const REPORT_CAPABILITY_HINT =
@@ -3222,6 +3516,7 @@ export const HUB_COMMANDS: readonly HubCommand[] = [
     run: (client) => client.agentReportList(),
   },
   ...MATTER_COMMANDS,
+  ...CUSTOM_COMMANDS,
 ];
 
 /** A command by its words: one (`threads`) or two (`report put`). */

@@ -83,7 +83,7 @@ export function registerCustomOrderRoutes(server: ApiServer, ctx: ApiModuleConte
       const answer = await agentListCustomOrders(appContext, customScope, request.query);
       await writeAgentAudit(db, {
         agentKeyId: principal.agentKeyId, operation: "agentCustomOrders", pageIds: scope.pageIds, verbatimText: true,
-        requestSummary: { rowCount: answer.orders.length },
+        requestSummary: { returned: answer.orders.length },
       });
       return answer;
     }, (answer) => answer.orders.length);
@@ -121,7 +121,7 @@ export function registerCustomOrderRoutes(server: ApiServer, ctx: ApiModuleConte
       const answer = await agentReportCustomCards(appContext, customScope, request.body);
       await writeAgentAudit(db, {
         agentKeyId: principal.agentKeyId, operation: "agentCustomCards", pageIds: [], verbatimText: false,
-        requestSummary: { rowCount: request.body.cards.length, outcome: `opened ${answer.opened}, closed ${answer.closed}` },
+        requestSummary: { returned: request.body.cards.length, outcome: `opened:${answer.opened}.closed:${answer.closed}` },
       });
       return answer;
     });

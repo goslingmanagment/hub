@@ -209,6 +209,8 @@ function errorDocument(command: HubCommand, error: unknown): Record<string, unkn
         category: error.category,
         status: error.status,
         code: error.code,
+        // The machine reason of a refusal (409 `version_changed`, `edited_by_person`, `matter_not_agents`…), when the hub gave one.
+        ...(typeof (error.body as { reason?: unknown } | null)?.reason === "string" ? { reason: (error.body as { reason: string }).reason } : {}),
         message: boundedMessage(error.message),
         ...(hint === null ? {} : { hint }),
       },
