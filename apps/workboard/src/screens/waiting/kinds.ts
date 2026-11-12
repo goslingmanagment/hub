@@ -35,6 +35,7 @@ export function groupOf(kind: string): WaitingGroupId {
   if (INFO.has(kind)) return "info";
   if (kind === "ledger.sale_question") return "questions";
   if (kind === "ledger.report_post" || kind === "ledger.paid_day_changed") return "reports";
+  if (kind === "report.post_fix") return "reports";
   if (kind.startsWith("custom.")) return "customs";
   if (kind === "send.held") return "held";
   if (kind.startsWith("publication.")) return "publications";
@@ -60,6 +61,7 @@ const UNCHECKED_WORD: Readonly<Record<string, string>> = {
   "ledger.sale_question": "вопросы «чья продажа»",
   "ledger.report_post": "отчёты смен",
   "ledger.paid_day_changed": "отчёты смен",
+  "report.post_fix": "отчёты смен",
   "custom.paid_not_delivered": "кастомы",
   "send.held": "зависшие отправки",
   "page.login_needed": "вход в Fansly",

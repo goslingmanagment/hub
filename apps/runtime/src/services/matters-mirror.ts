@@ -1,5 +1,7 @@
 import {
+  REPORT_POST_FIXABLE_FLAGS,
   type MatterMirrorKind,
+  type ReportPostMatterKind,
   type SyncBlocksPage,
   type SyncPagesResponse,
   type TeamLedgerPayoutsResponse,
@@ -13,7 +15,9 @@ import {
   listMatterChecks,
   listMatterPageLabels,
   listNotificationIncidentsWithPages,
+  listChatterLoginsOfPeople,
   listOpenMattersOfKinds,
+  listShiftIdsByUserDay,
   listPageOpenCustoms,
   listSyncPages,
   listVisibleMatters,
@@ -29,7 +33,7 @@ import {
   type MatterOwner,
   type MatterSource,
 } from "@agency_hub_core/db";
-import { incidentKindWord } from "@agency_hub_core/look";
+import { formatDay, incidentKindWord } from "@agency_hub_core/look";
 import { MOSCOW_TIME_ZONE, toBusinessDate } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
@@ -72,6 +76,8 @@ export interface MirrorItem {
   money: boolean;
   evidence: Record<string, unknown>;
   link: string | null;
+  /** Whom this one waits for when not the kind's (a chatter's own post to fix). */
+  owner?: MatterOwner;
 }
 
 /** Who writes a kind and whom it waits for: the owner, or (customs and held sends) the team leads, as the screens show them. */
@@ -292,6 +298,50 @@ export function reportPostItems(reports: Pick<TeamLedgerReportsResponse, "posts"
     }));
 }
 
+/** Why a post cannot be accrued, as its author reads it, by the first fixable flag (REPORT_POST_FIXABLE_FLAGS). */
+const POST_FIX_WORDS: Readonly<Record<(typeof REPORT_POST_FIXABLE_FLAGS)[number], string>> = {
+  sum_mismatch: "строки аккаунтов не дают итог. Поправьте пост в «Отчётности»",
+  date_mismatch: "в посте стоит не та дата. Поправьте пост в «Отчётности»",
+  no_date: "дата в посте не читается. Поправьте пост в «Отчётности»",
+  duplicate: "за этот день два поста, оставьте один",
+};
+
+/**
+ * The posts of the days the reports accrue from whose author can fix what keeps them out of the pay (a fixable flag):
+ * one matter per post for the author's living chatter login (`loginOf`: the ledger's code is the registry's), never
+ * money — no sum in the title or the evidence. A post of nobody's chatter login opens nothing. The link is the
+ * author's shift of that day in «Мои смены» (`shiftOf`, `${userId}:${day}`), else the list.
+ */
+export function reportPostFixItems(
+  reports: Pick<TeamLedgerReportsResponse, "posts">,
+  payouts: Pick<TeamLedgerPayoutsResponse, "reportsFrom">,
+  loginOf: ReadonlyMap<string, number>,
+  shiftOf: ReadonlyMap<string, number>,
+): MirrorItem[] {
+  const from = payouts.reportsFrom;
+  if (!from) return [];
+  const items: MirrorItem[] = [];
+  for (const post of reports.posts) {
+    const flags = REPORT_POST_FIXABLE_FLAGS.filter((flag) => post.flags.includes(flag));
+    const day = post.reportDate ?? moscowDay(post.postedAt);
+    if (flags.length === 0 || day === null || day < from) continue;
+    const userId = post.person.slug === null ? undefined : loginOf.get(post.person.slug);
+    if (userId === undefined) continue;
+    const shiftId = shiftOf.get(`${userId}:${day}`);
+    items.push({
+      key: `report.post_fix:${post.id}`,
+      title: `Отчёт за ${formatDay(`${day}T12:00:00+03:00`)} не начислен: ${POST_FIX_WORDS[flags[0]!]}`,
+      object: { type: "ledger_report_post", id: String(post.id) },
+      pageLabels: [...new Set(post.pages.map((line) => line.pageLabel).filter((label): label is string => label !== null))],
+      money: false,
+      evidence: { postId: post.id, reportDate: post.reportDate, day, postedAt: post.postedAt, flags, telegram: post.link },
+      link: shiftId === undefined ? "/workboard/my/shifts" : `/workboard/my/shifts/${shiftId}`,
+      owner: { userId },
+    });
+  }
+  return items;
+}
+
 /** Paid days whose report changed since (`pendingChangesOf`): a person's pay, on every page. */
 export function paidDayChangeItems(payouts: Pick<TeamLedgerPayoutsResponse, "people">): MirrorItem[] {
   return payouts.people.flatMap((person) => person.pendingChanges.map((change) => ({
@@ -321,8 +371,9 @@ export interface KindAnswer {
 }
 
 export interface MattersMirrorTally {
-  answered: MatterMirrorKind[];
-  failed: MatterMirrorKind[];
+  /** The mirrored kinds, and the authors' posts to fix that ride the reports' read. */
+  answered: Array<MatterMirrorKind | ReportPostMatterKind>;
+  failed: Array<MatterMirrorKind | ReportPostMatterKind>;
   /** The kinds whose matters, read back, differ from the old list's count. */
   mismatched: MatterMirrorKind[];
   opened: number;
@@ -370,7 +421,7 @@ export async function reconcileMatters(
       title: item.title.slice(0, 300),
       object: item.object,
       pageIds: [...new Set(item.pageLabels.map((label) => idOf.get(label)).filter((id): id is number => id !== undefined))],
-      owner: meta.owner,
+      owner: item.owner ?? meta.owner,
       money: item.money,
       evidence: item.evidence,
       link: item.link,
@@ -538,19 +589,78 @@ export async function runMattersMirror(
     const answer = await readTeamLedgerQuestions(app, { ...ledgerRead, now });
     return [{ kind: "ledger.sale_question", items: saleQuestionItems(answer.owner) }];
   });
+  // The same read gives the authors their own posts to fix (`report.post_fix`): answered or not with it.
+  let reportReads: { reports: TeamLedgerReportsResponse; payouts: TeamLedgerPayoutsResponse } | null = null;
+  let reportError: unknown = undefined;
   await read(["ledger.report_post", "ledger.paid_day_changed"], async () => {
     const window = reportQuestionsWindow(today);
-    const [reports, payouts] = await Promise.all([
-      readTeamLedgerReports(app, window, { ...ledgerRead, now }),
-      readLedgerPayouts(app, window, { ...ledgerRead, now }),
-    ]);
+    try {
+      const [reports, payouts] = await Promise.all([
+        readTeamLedgerReports(app, window, { ...ledgerRead, now }),
+        readLedgerPayouts(app, window, { ...ledgerRead, now }),
+      ]);
+      reportReads = { reports, payouts };
+    } catch (error) {
+      reportError = error;
+      throw error;
+    }
     return [
-      { kind: "ledger.report_post", items: reportPostItems(reports, payouts) },
-      { kind: "ledger.paid_day_changed", items: paidDayChangeItems(payouts) },
+      { kind: "ledger.report_post", items: reportPostItems(reportReads.reports, reportReads.payouts) },
+      { kind: "ledger.paid_day_changed", items: paidDayChangeItems(reportReads.payouts) },
     ];
   });
+  if (reportReads !== null || reportError !== undefined) {
+    const done = await mirrorReportPostFix(app, reportReads, reportError, { idOf, now, wasFailing: checks.get(POST_FIX_KIND)?.error != null });
+    tally.opened += done.opened;
+    tally.closed += done.closed;
+    if (done.answered) tally.answered.push(POST_FIX_KIND);
+    else tally.failed.push(POST_FIX_KIND);
+  }
 
   return tally;
+}
+
+const POST_FIX_KIND: ReportPostMatterKind = "report.post_fix";
+
+/**
+ * `report.post_fix` from the reports' read of this pass: the authors' own posts to fix, kept as matters; a read
+ * that did not answer (or a ledger that does not let Hub read the posts) leaves them as they are, «не проверено».
+ */
+async function mirrorReportPostFix(
+  app: MirrorApp,
+  reads: { reports: TeamLedgerReportsResponse; payouts: TeamLedgerPayoutsResponse } | null,
+  error: unknown,
+  input: { idOf: ReadonlyMap<string, number>; now: Date; wasFailing: boolean },
+): Promise<{ answered: boolean; opened: number; closed: number }> {
+  const fail = async (cause: unknown) => {
+    if (!input.wasFailing) app.logger.warn({ kind: POST_FIX_KIND, err: cause }, "matters mirror: the source did not answer; the kind reads «не проверено»");
+    await recordMatterCheckFailed(app.db, { kind: POST_FIX_KIND, at: input.now, error: errorText(cause) }).catch((recordError: unknown) => {
+      app.logger.error({ kind: POST_FIX_KIND, err: recordError }, "matters mirror: the failed check could not be recorded");
+    });
+    return { answered: false, opened: 0, closed: 0 };
+  };
+  if (reads === null) return fail(error);
+  if (!reads.reports.postsRead) return fail(new Error("the ledger does not let Hub read the posts"));
+  try {
+    const authors = [...new Set(reads.reports.posts.map((post) => post.person.slug).filter((slug): slug is string => slug !== null))];
+    const loginOf = await listChatterLoginsOfPeople(app.db, authors);
+    const pairs = reads.reports.posts.flatMap((post) => {
+      const userId = post.person.slug === null ? undefined : loginOf.get(post.person.slug);
+      const day = post.reportDate ?? moscowDay(post.postedAt);
+      return userId === undefined || day === null ? [] : [{ userId, day }];
+    });
+    const shiftOf = await listShiftIdsByUserDay(app.db, pairs);
+    const items = reportPostFixItems(reads.reports, reads.payouts, loginOf, shiftOf);
+    const done = await reconcileMatters(app, { kind: POST_FIX_KIND, source: "ledger", owner: { role: "owner" }, items }, input.idOf, input.now);
+    const open = (await listOpenMattersOfKinds(app.db, [POST_FIX_KIND])).length;
+    await recordMatterCheckAnswered(app.db, {
+      kind: POST_FIX_KIND, at: input.now, applicable: true, capped: false, legacyCount: new Set(items.map((item) => item.key)).size, matterCount: open,
+    });
+    if (input.wasFailing) app.logger.info({ kind: POST_FIX_KIND }, "matters mirror: the source answers again");
+    return { answered: true, ...done };
+  } catch (cause) {
+    return fail(cause);
+  }
 }
 
 export async function ensureMattersMirrorQueue(boss: QueueCreationClient, createdQueues?: Set<string>) {
