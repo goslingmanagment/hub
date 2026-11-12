@@ -4,12 +4,15 @@
  * agent collected, or the report handed in in Hub — as the ledger reads it (`teamLedgerReports`, the read «Выплаты →
  * Отчёты» and the sale chain use, one request for the period). Where the report of a person's day has another sum than
  * the rule's shifts of that day, the day's last shift says it, as «Выплаты → Долги» says «в таблице $…»: the report's
- * sum alone, once a day. Nothing when they are equal to the cent, when there is no report (a draft not sent is none
+ * sum alone, once a day. Nothing when they are equal or cents apart (rounding), when there is no report (a draft not sent is none
  * yet), before the rule, while a shift of that day goes on, or when the ledger did not answer.
  */
 import type { TeamLedgerReportDay, TeamLedgerReportsResponse } from "@agency_hub_core/contracts";
 import { formatMills } from "@agency_hub_core/ui/format";
 import { shiftReportDay, type MoscowDay } from "@agency_hub_core/ui/moscow";
+
+/** A report and the rule this close say the same: no sale is this small (half a dollar), cents apart are rounding. */
+const ROUNDING_APART_MILLS = 500;
 import type { PeopleIndex } from "@agency_hub_core/ui/people";
 
 /** What a journal row brings: a login's shift and its money by the rule. */
@@ -84,8 +87,9 @@ export function reportNotes(input: {
     const reportMills = reported.get(key);
     if (reportMills === undefined || day.ongoing) continue;
     const ruleMills = day.shifts.reduce((sum, shift) => sum + shift.salesNetMills, 0);
-    // To the cent, as both print: a report is in cents, the rule's sales keep their thousandths.
-    if (formatMills(reportMills) === formatMills(ruleMills)) continue;
+    // The same sum, or rounding apart: a report adds up lines already rounded to the cent, the rule's sales keep their
+    // thousandths, so a day of many sales may print a few cents off. Less than the smallest sale is not a sale.
+    if (formatMills(reportMills) === formatMills(ruleMills) || Math.abs(reportMills - ruleMills) < ROUNDING_APART_MILLS) continue;
     const last = day.shifts.reduce((latest, shift) => (shift.startedAt > latest.startedAt ? shift : latest));
     out.set(last.key, { reportMills, ofDay: day.shifts.length > 1 });
   }

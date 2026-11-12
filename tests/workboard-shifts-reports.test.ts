@@ -55,6 +55,10 @@ describe("«в отчёте $…» on «Смены»", () => {
   it("nothing when equal to the cent, when there is no report, or before the rule", () => {
     const one = shift(11, "2026-11-10 10:00", "2026-11-10 18:00", 246_404);
     expect(notes([one], [day(11, "2026-11-10", [page("mia-1", 246_400)])]).size).toBe(0);
+    // Cents apart is rounding (the report adds rounded lines), not a discrepancy; half a dollar is one.
+    const cents = shift(11, "2026-11-10 10:00", "2026-11-10 18:00", 51_990);
+    expect(notes([cents], [day(11, "2026-11-10", [page("mia-1", 52_000)])]).size).toBe(0);
+    expect(notes([cents], [day(11, "2026-11-10", [page("mia-1", 52_490)])]).size).toBe(1);
     expect(notes([one], []).size).toBe(0);
     expect(notes([one], [day(11, "2026-11-10", [page("mia-1", 100_000)])], null, null).size).toBe(0);
     const old = shift(11, "2026-11-01 10:00", "2026-11-01 18:00", 10_000);
