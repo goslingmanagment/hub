@@ -70,7 +70,7 @@ export function OfapiVaultListsCard({ pageId, owner, writeOff }: { pageId: numbe
         )}
       </div>
       {error && <div className="px-6 pt-4"><Notice tone="danger" role="alert">{error}</Notice></div>}
-      <div className="overflow-x-auto">
+      <div className="max-h-96 overflow-auto">
         <table className="data-table">
           <thead>
             <tr>

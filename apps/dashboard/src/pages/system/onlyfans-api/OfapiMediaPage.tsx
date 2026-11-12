@@ -292,6 +292,7 @@ export function OfapiMediaPage() {
           />
         </div>
       )}
+      {!unbound && pageId > 0 && <OfapiVaultListsCard pageId={pageId} owner={owner} writeOff={writeOff} />}
       {!unbound && (
         <section className="card" aria-labelledby="media-catalog-title">
           <div className="card-header">
@@ -440,7 +441,6 @@ export function OfapiMediaPage() {
           )}
         </section>
       )}
-      {!unbound && pageId > 0 && <OfapiVaultListsCard pageId={pageId} owner={owner} writeOff={writeOff} />}
       {!unbound && (
         <section className="card" aria-labelledby="media-uploads-title">
           <div className="card-header">
