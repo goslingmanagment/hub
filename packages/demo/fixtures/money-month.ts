@@ -1,5 +1,7 @@
 import type { KernelOperationResponse } from "@agency_hub_core/contracts";
 
+import { millsFromCents, millsPercentOf, millsToNumber, millsToWholeCents } from "@agency_hub_core/shared";
+
 import { demoError, isDemoReply, queryString, type DemoHandlers, type DemoRequest } from "../core.ts";
 import { clockOf, revenueHandlers } from "./money-revenue.ts";
 
@@ -13,7 +15,7 @@ import { clockOf, revenueHandlers } from "./money-revenue.ts";
 
 type Month = KernelOperationResponse<"teamLedgerMonth">;
 
-const MODELS = [["Mia Hart", 0.78], ["Nova Lane", 0.17], ["Ivy Rose", 0.05]] as const;
+const MODELS = [["Mia Hart", 78], ["Nova Lane", 17], ["Ivy Rose", 5]] as const;
 
 function monthDays(month: string): { from: string; to: string } {
   const [year, number] = month.split("-").map(Number) as [number, number];
@@ -21,8 +23,8 @@ function monthDays(month: string): { from: string; to: string } {
   return { from: `${month}-01`, to: `${month}-${String(last).padStart(2, "0")}` };
 }
 
-/** Whole cents in mills: the ledger's money is to the cent. */
-const cents = (mills: number) => Math.round(mills / 10) * 10;
+/** A whole percent of an amount, in whole cents: the ledger's money is to the cent. */
+const part = (mills: number, percent: number) => millsToNumber(millsFromCents(millsToWholeCents(millsPercentOf(mills, percent))));
 
 function teamLedgerMonth(request: DemoRequest): Month | ReturnType<typeof demoError> {
   if (request.role !== "owner") return demoError(403, "forbidden", "Только владелец");
@@ -44,21 +46,21 @@ function teamLedgerMonth(request: DemoRequest): Month | ReturnType<typeof demoEr
   }
   const revenue = revenueHandlers.overviewRevenue!({ ...request, query: { period: "custom", from: days.from, to: days.to } });
   const hub = isDemoReply(revenue) ? 0 : revenue.netEarningsMills;
-  const pagesNet = cents(hub) - (request.scenario === "month-differs" ? 12_400 : 0);
+  const pagesNet = part(hub, 100) - (request.scenario === "month-differs" ? 12_400 : 0);
   const offPlatform = month < now.toISOString().slice(0, 7) ? 410_000 : 150_000;
-  const earned = cents(pagesNet * 0.42) + cents(offPlatform * 0.5);
-  const arrived = cents(earned * 0.55);
-  const riding = cents(earned * 0.2);
-  const onPage = cents(earned * 0.15);
-  const hold = cents(earned * 0.08);
+  const earned = part(pagesNet, 42) + part(offPlatform, 50);
+  const arrived = part(earned, 55);
+  const riding = part(earned, 20);
+  const onPage = part(earned, 15);
+  const hold = part(earned, 8);
   const stuck = earned - arrived - riding - onPage - hold;
   const models = MODELS.map(([model, share]) => ({
     model,
-    pagesNetMills: cents(pagesNet * share),
+    pagesNetMills: part(pagesNet, share),
     offPlatformMills: model === "Mia Hart" ? offPlatform : 0,
-    earnedMills: cents(earned * share),
-    arrivedMills: cents(arrived * share),
-    ridingMills: cents(riding * share),
+    earnedMills: part(earned, share),
+    arrivedMills: part(arrived, share),
+    ridingMills: part(riding, share),
   }));
   const unknown = request.scenario === "month-unknown";
   return {
