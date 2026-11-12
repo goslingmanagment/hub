@@ -289,7 +289,11 @@ export async function insertSaleClaim(db: Database, input: SaleClaimInsert, at: 
   return id === undefined ? null : findSaleClaim(db, num(id));
 }
 
-/** Changes a claim: the fields given, and when. */
+/**
+ * Changes a claim: the fields given, and when. `ifState` — only while the claim is in the state the caller read it in:
+ * a writer outside the settlements' turn (the claims' pass) never writes over what was committed after its read.
+ * False — nothing was changed: no such claim, or it is in another state now.
+ */
 export async function updateSaleClaim(
   db: Database,
   id: number,
@@ -298,7 +302,8 @@ export async function updateSaleClaim(
     | "escalatedAt" | "escalatedWhy" | "decisionId" | "closedAt" | "claimantVersion" | "claimantNote" | "sideShiftId" | "transactionId" | "pageId"
     | "answerText" | "closeNote" | "question">>,
   at: Date,
-): Promise<void> {
+  options: { ifState?: SaleClaimState } = {},
+): Promise<boolean> {
   const sets = [sql`updated_at = ${at.toISOString()}::timestamptz`];
   const put = (column: string, value: unknown, cast = "") => sets.push(sql`${sql.raw(column)} = ${value}${sql.raw(cast)}`);
   const iso = (value: Date | null | undefined) => (value == null ? null : value.toISOString());
@@ -325,7 +330,35 @@ export async function updateSaleClaim(
   if (patch.answerText !== undefined) put("answer_text", patch.answerText);
   if (patch.closeNote !== undefined) put("close_note", patch.closeNote);
   if (patch.question !== undefined) put("question", patch.question);
-  await db.execute(sql`update sale_claims set ${sql.join(sets, sql`, `)} where id = ${id}`);
+  const only = options.ifState === undefined ? sql`` : sql` and state = ${options.ifState}`;
+  const result = await db.execute(sql`update sale_claims set ${sql.join(sets, sql`, `)} where id = ${id}${only}`);
+  return (result.rowCount ?? 0) > 0;
+}
+
+/**
+ * A withdrawn claim its report makes again: the same row is the claim again (there is one row per report, sale and
+ * side), written as a new one would be — the kind and the word, the note, the version and the moment of now, asked of
+ * the side or the owner's at once — and with nothing of its first life: no answer, no decision, not closed, and asked
+ * now (`created_at`: the day the side has to answer counts from it). False — it is not withdrawn: nothing changed.
+ */
+export async function reopenSaleClaim(
+  db: Database,
+  id: number,
+  input: Pick<SaleClaimInsert, "pageId" | "kind" | "claimantVersion" | "statement" | "shareWithUserId" | "claimantNote" | "claimedAt" | "sideShiftId" | "state">
+    & { escalatedAt: Date | null; escalatedWhy: SaleClaimEscalation | null },
+  at: Date,
+): Promise<boolean> {
+  const now = at.toISOString();
+  const result = await db.execute(sql`
+    update sale_claims set page_id = ${input.pageId}, kind = ${input.kind}, claimant_version = ${input.claimantVersion},
+      statement = ${input.statement}, share_with_user_id = ${input.shareWithUserId}, claimant_note = ${input.claimantNote},
+      claimed_at = ${input.claimedAt.toISOString()}::timestamptz, side_shift_id = ${input.sideShiftId}, state = ${input.state},
+      escalated_at = ${input.escalatedAt?.toISOString() ?? null}::timestamptz, escalated_why = ${input.escalatedWhy},
+      answer = null, answer_note = null, answered_at = null, answered_by_user_id = null, answered_by_agent_key_id = null,
+      answer_door = null, answer_ref = null, decision_id = null, closed_at = null,
+      created_at = ${now}::timestamptz, updated_at = ${now}::timestamptz
+    where id = ${id} and state = 'withdrawn' and kind in ('claim', 'double')`);
+  return (result.rowCount ?? 0) > 0;
 }
 
 // ── The owner's decisions ────────────────────────────────────────────────────
