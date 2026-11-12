@@ -59,6 +59,9 @@ export interface AlbumReasonPart {
 
 const names = (list: string | undefined) => (list === undefined || list === "" ? [] : list.split(",").map((entry) => entry.split("=")[0] ?? entry));
 
+/** A step's reason that says the answer was lost or differed (the album is `unknown`): never «не создан», «не добавились». */
+const NOT_CONFIRMED = /_found$|unknown|no_answer|answer_|attempt_missing|request_unreadable/;
+
 /** One part of an album's reason, or null when it is not an album's. */
 function albumPart(part: string): AlbumReasonPart | null {
   const [head = "", ...rest] = part.split(":");
@@ -80,9 +83,9 @@ function albumPart(part: string): AlbumReasonPart | null {
     case "album_gone": return { text: "Альбома больше нет на странице", names: [] };
     case "album_contents_not_read": return { text: "Hub не прочитал, что уже в альбоме", names: [] };
     case "album_create":
-      return { text: /_found$|unknown|no_answer|answer_/.test(tail) ? "Ответ на создание альбома потерян" : tail.endsWith("_not_read") ? "Альбомы не прочитались после создания" : "Альбом не создан", names: [] };
+      return { text: NOT_CONFIRMED.test(tail) ? "Ответ на создание альбома потерян" : tail.endsWith("_not_read") ? "Альбомы не прочитались после создания" : "Альбом не создан", names: [] };
     case "album_media":
-      return { text: tail === "not_sent" ? "Файлы залиты, в альбом не добавлены" : "Файлы не добавились в альбом", names: [] };
+      return { text: tail === "not_sent" ? "Файлы залиты, в альбом не добавлены" : NOT_CONFIRMED.test(tail) ? "Добавление в альбом не подтверждено" : "Файлы не добавились в альбом", names: [] };
     case "album_rename": return { text: "Файлы не переименованы", names: [] };
     case "album_read": return { text: "Альбом не прочитался после заливки", names: [] };
     case "no_file_landed": return { text: "Ни один файл не залит", names: [] };

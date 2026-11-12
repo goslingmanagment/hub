@@ -843,8 +843,14 @@ export async function getPublicationFiles(db: Database, fileIds: readonly number
  * owner action checks before it sends (ofapi-action-media.ts), so an approval
  * never passes a file the send would refuse.
  */
+/** What a platform's album title may carry at its edges and a pack's title never does: Hub and the
+ *  CLI trim a title, so the lookup trims the platform's too (29 of 150 live Fansly albums end or
+ *  begin with a space, 2026-11-12: a pack named as one of them would have made its twin). */
+const TITLE_EDGES = " \t\n\r\u00a0";
+
 /**
- * The page's vault albums titled exactly `title` (0323): the creator albums
+ * The page's vault albums titled exactly `title` (0323; a trimmed title, and
+ * the platform's is compared without the spaces at its edges): the creator albums
  * Hub collected (its own albums, not Fansly's All / Posts / Messages, and not
  * gone from the last full listing), and the ones Hub made for its vault-album
  * publications that no listing has collected yet. An OnlyFans page's albums
@@ -854,11 +860,11 @@ export async function findPageVaultAlbumRefs(db: Database, pageId: number, title
   const result = await db.execute<Row>(sql`
     select a.album_ref from creator_vault_albums a
      where a.page_id = ${pageId} and a.vault_kind = 'creator' and a.album_type is null
-       and a.missing_since is null and a.title = ${title}
+       and a.missing_since is null and btrim(a.title, ${TITLE_EDGES}) = ${title}
     union
     select l.list_ref from onlyfans_vault_lists l
       join pages pg on pg.id = l.page_id and pg.platform::text = 'onlyfans'
-     where l.page_id = ${pageId} and l.list_type = 'custom' and l.missing_since is null and l.name = ${title}
+     where l.page_id = ${pageId} and l.list_type = 'custom' and l.missing_since is null and btrim(l.name, ${TITLE_EDGES}) = ${title}
     union
     select p.vault_album_ref from publications p
      where p.page_id = ${pageId} and p.kind = 'vault_album' and p.vault_album_ref is not null and p.text = ${title}

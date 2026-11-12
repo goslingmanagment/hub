@@ -1035,6 +1035,9 @@ export async function resolveUnknownPublication(db: Database, input: {
     await transitionPublication(tx, { id: record.id, from: "unknown", to: "not_published", actor, reason: "answered_did_not_go_out" });
     const { id } = await insertPublication(tx, {
       ...contentOf(record),
+      // An album goes at its time, within 12 hours of it, and its approval does not look at the
+      // time: with the old one the replacement would be missed the minute it is approved.
+      ...(record.kind === "vault_album" ? { publishAt: new Date() } : {}),
       pageId: record.pageId,
       author: { kind: "human", userId: input.userId },
       idempotencyKey: null,
