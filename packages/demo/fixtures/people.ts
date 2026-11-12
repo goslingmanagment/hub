@@ -112,7 +112,8 @@ const PEOPLE: readonly PersonSpec[] = [
     slots: [{ start: "16:00", end: "00:00", weekdays: WEEK, fromDays: 131, toDays: 12 }], leftDaysAgo: 12,
     telegram: { userId: 700_000_009, handle: "lena_r", tag: "#лена" }, terms: [{ model: "mia-hart", share: 2000, fix: 0, fromDays: 131 }] },
   // The newcomer: her way to the first shift is read live («Ввод», person-start.ts), nothing noted by hand.
-  { id: 10, code: "nika", name: "Ника", kind: "human", role: "chatter", state: "invited", logins: [10], pages: ["mia-3"], slots: [] },
+  { id: 10, code: "nika", name: "Ника", kind: "human", role: "chatter", state: "invited", logins: [10], pages: ["mia-3"], slots: [],
+    telegram: { userId: 700_000_010, handle: "nika_new", tag: null } },
   { id: 11, code: "sonya", name: "Соня", kind: "human", role: "content_manager", state: "working", logins: [], pages: [], slots: [],
     telegram: { userId: 700_000_011, handle: "sonya_content", tag: null }, note: "Без входа хаба: работает в ContentOps и своим ключом агента." },
   { id: 12, code: "traffic-tim", name: "Тимур (трафик)", kind: "human", role: "contractor", state: "working", logins: [], pages: [], slots: [] },

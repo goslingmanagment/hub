@@ -8,6 +8,7 @@ import { peopleHandlers } from "./people.ts";
 import { personStartHandlers } from "./person-start.ts";
 import { publishOfHandlers } from "./publish-of.ts";
 import { settingsHandlers } from "./settings.ts";
+import { saleClaimHandlers } from "./sale-claims.ts";
 import { shiftReportHandlers } from "./shift-reports.ts";
 import { shellHandlers } from "./shell.ts";
 import { systemHandlers } from "./system.ts";
@@ -42,6 +43,8 @@ const AREAS: Readonly<Record<string, DemoHandlers>> = {
   "shift-reports": shiftReportHandlers,
   // «Начало»: a newcomer's way to the first shift, by the scenario's stage, and where they are paid (person-start.ts).
   "person-start": personStartHandlers,
+  // Заявки: claims of a sale, their answers, the owner's disputes and «мимо площадки», kept in memory (sale-claims.ts).
+  "sale-claims": saleClaimHandlers,
   settings: settingsHandlers,
   system: systemHandlers,
 };

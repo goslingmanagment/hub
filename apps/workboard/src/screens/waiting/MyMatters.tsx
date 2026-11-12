@@ -23,13 +23,18 @@ function Go({ link }: { link: string }) {
   return <a href={consoleHref(link)} className="wt-go">Открыть</a>;
 }
 
+/** A claim of a colleague on your sale (package G) waits a day for your answer, then goes to the owner. */
+const CLAIM_KIND = "sale.claim";
+
 function Row({ matter, now }: { matter: Matter; now: number }) {
   const since = waitingSince(matter);
+  const answerBy = matter.kind === CLAIM_KIND && typeof matter.evidence.answerBy === "string" ? matter.evidence.answerBy : null;
+  const about = [matter.pageLabels.join(", "), answerBy === null ? "" : `ответьте до ${formatDateTime(answerBy)}, потом решит владелец`].filter((part) => part !== "");
   return (
     <li className="wt-line">
       <div className="wt-line__main">
         <span className="wt-line__title">{matter.title}</span>
-        {matter.pageLabels.length > 0 && <span className="wt-line__about">{matter.pageLabels.join(", ")}</span>}
+        {about.length > 0 && <span className="wt-line__about">{about.join(" · ")}</span>}
       </div>
       <span className="wt-line__age" title={`С ${formatDateTime(since, { yearUnlessCurrent: true })}`}>{waitedFor(since, now)}</span>
       <span className="wt-line__go">{matter.link ? <Go link={matter.link} /> : null}</span>
@@ -46,7 +51,9 @@ export function MyMatters() {
   const matters = (list.data?.matters ?? [])
     .filter((matter) => matter.mine && !isMatterInfoKind(matter.kind))
     .map((matter) => ({ matter, since: waitingSince(matter) }))
-    .sort((left, right) => left.since.localeCompare(right.since) || left.matter.id - right.matter.id);
+    // A claim to answer comes first: it has a day before it goes to the owner. Then the longest waiting.
+    .sort((left, right) => Number(right.matter.kind === CLAIM_KIND) - Number(left.matter.kind === CLAIM_KIND)
+      || left.since.localeCompare(right.since) || left.matter.id - right.matter.id);
   if (matters.length === 0) return null;
   const now = list.data ? Date.parse(list.data.serverNow) : Date.now();
   const shown = all ? matters : matters.slice(0, STRIP_SHOWN);

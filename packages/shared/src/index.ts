@@ -27,6 +27,7 @@ export * from "./logger.ts";
 export * from "./money.ts";
 export * from "./name-spelling.ts";
 export * from "./page-allowlist.ts";
+export * from "./people-messages.ts";
 export * from "./platform-sync.ts";
 export * from "./password-policy.ts";
 export * from "./proxy.ts";

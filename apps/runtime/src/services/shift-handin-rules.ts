@@ -130,12 +130,16 @@ export function classifySale(sale: DraftSale, context: DraftContext): Classified
   return null;
 }
 
-/** A sale the person added by hand («Добавить → продажу») as a line of the draft. Pure. */
+/**
+ * A sale the person added by hand («Добавить → продажу») as a line of the draft. When the rule's home already gives the
+ * person a share — the other side agreed, the owner decided (package G) — that share is what it counts. Pure.
+ */
 export function claimedSale(sale: DraftSale, context: Pick<DraftContext, "userIds" | "reported" | "handinId">, otherReport: boolean): ClassifiedSale {
   const other = sale.home.shares.find((share) => !context.userIds.has(share.userId)) ?? null;
+  const own = sale.home.shares.filter((share) => context.userIds.has(share.userId)).reduce((sum, share) => sum + share.mills, 0);
   const reported = context.reported.get(sale.transactionId);
   const alreadyIn = reported !== undefined && reported.handinId !== context.handinId ? { shiftId: reported.shiftId, reportDate: reported.reportDate } : null;
-  return { sale, group: "mine", added: true, claimed: true, otherReport, shareMills: 0, toUserId: other?.userId ?? null, alreadyIn };
+  return { sale, group: "mine", added: true, claimed: true, otherReport, shareMills: own, toUserId: other?.userId ?? null, alreadyIn };
 }
 
 /**
@@ -207,6 +211,8 @@ export function lineAmount(input: {
     return { amountMills: input.shareMills, disputed: false };
   }
   if (input.statement !== "mine") return { amountMills: 0, disputed: false };
+  // The rule's home already gives the person a share of a sale they added (agreed, decided): that share, settled.
+  if (input.claimed === true && input.shareMills > 0) return { amountMills: input.shareMills, disputed: false };
   return { amountMills: input.netMills, disputed: input.homeKind !== "nobody" || input.otherReport === true };
 }
 
@@ -271,10 +277,14 @@ export function reasonWords(input: {
       case "owner_claim": return "ничья, отдана вам владельцем";
       case "owner_split": return "раздел владельца";
       case "marks": return "по меткам чаттеров";
+      case "agreed": return "по согласию второй стороны";
       default: return "ваша по правилу";
     }
   }
   const who = input.toName ?? "коллеге";
+  if (input.reason === "owner_nobody") return "владелец решил: никому";
+  if (input.reason === "owner_pot") return "владелец решил: в общак";
+  if (input.reason === "agreed" && input.homeKind === "nobody") return "ничья: все сказали «не моё»";
   switch (input.homeKind) {
     case "pot":
       return input.reason === "campaign" ? "общак: Campaign OnlyFans" : "общак: чаевые под постом";
@@ -303,6 +313,7 @@ export function reasonWords(input: {
     case "owner_claim": return `ничья, отдана владельцем: ${who}`;
     case "owner_split": return `раздел владельца: ${who}`;
     case "marks": return `по меткам чаттеров: ${who}`;
+    case "agreed": return `по согласию: ${who}`;
     default: return `по правилу: ${who}`;
   }
 }
@@ -387,7 +398,8 @@ export function postTexts(input: {
   pages: readonly PostPage[];
   lines: readonly PostLine[];
   comment: string;
-  offPlatform: ReadonlyArray<{ amountMills: number; fromWhom: string; whatFor: string }>;
+  /** A confirmed one is already in its page's sum (package G); a pending one is said to wait. */
+  offPlatform: ReadonlyArray<{ amountMills: number; fromWhom: string; whatFor: string; state?: string; pageLabel?: string | null }>;
 }): Array<{ modelSlug: string; modelName: string; text: string }> {
   const models: Array<{ slug: string; name: string }> = [];
   for (const page of input.pages) {
@@ -436,7 +448,9 @@ export function postTexts(input: {
     if (input.comment.trim() !== "") out.push(input.comment.trim());
     if (index === 0) {
       for (const line of input.offPlatform) {
-        out.push(`Мимо площадки, ждёт подтверждения владельца: ${money(line.amountMills)} от ${line.fromWhom}, ${line.whatFor}`);
+        out.push(line.state === "confirmed"
+          ? `Мимо площадки, подтверждено владельцем${line.pageLabel ? ` (в сумме ${line.pageLabel})` : ""}: ${money(line.amountMills)} от ${line.fromWhom}, ${line.whatFor}`
+          : `Мимо площадки, ждёт подтверждения владельца: ${money(line.amountMills)} от ${line.fromWhom}, ${line.whatFor}`);
       }
     }
     return { modelSlug: model.slug, modelName: model.name, text: out.join("\n") };

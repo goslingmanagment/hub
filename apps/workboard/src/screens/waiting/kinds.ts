@@ -33,8 +33,10 @@ const INFO: ReadonlySet<string> = new Set(MATTER_INFO_KINDS);
 
 export function groupOf(kind: string): WaitingGroupId {
   if (INFO.has(kind)) return "info";
-  if (kind === "ledger.sale_question") return "questions";
+  if (kind === "ledger.sale_question" || kind === "sale.dispute" || kind === "sale.nobody_week" || kind === "sale.decisions.unlinked") return "questions";
+  if (kind === "off_platform.pending") return "reports";
   if (kind === "ledger.report_post" || kind === "ledger.paid_day_changed") return "reports";
+  if (kind === "report.post_fix") return "reports";
   if (kind.startsWith("custom.")) return "customs";
   if (kind === "send.held") return "held";
   if (kind.startsWith("publication.")) return "publications";
@@ -60,6 +62,7 @@ const UNCHECKED_WORD: Readonly<Record<string, string>> = {
   "ledger.sale_question": "вопросы «чья продажа»",
   "ledger.report_post": "отчёты смен",
   "ledger.paid_day_changed": "отчёты смен",
+  "report.post_fix": "отчёты смен",
   "custom.paid_not_delivered": "кастомы",
   "send.held": "зависшие отправки",
   "page.login_needed": "вход в Fansly",

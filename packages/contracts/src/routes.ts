@@ -30,10 +30,12 @@ import { customOrderRouteSchemas } from "./routes-custom-orders.ts";
 import { accountReportsRouteSchemas } from "./routes-account-reports.ts";
 import { peopleRouteSchemas } from "./routes-people.ts";
 import { shiftHandinRouteSchemas } from "./routes-shift-handins.ts";
+import { saleClaimRouteSchemas } from "./routes-sale-claims.ts";
 // One sign-in across the names Hub serves: the one-time code between names (ecosystem plan §3.2).
 import { signinRouteSchemas } from "./routes-signin.ts";
 // Система → «Состояние»: every routine and copy, from the owner's place (ecosystem plan, package P).
 import { systemStateRouteSchemas } from "./routes-system-state.ts";
+import { peopleMessageRouteSchemas } from "./routes-people-messages.ts";
 import {
   PERIOD_OPTIONS,
   SPENDER_PERIOD_OPTIONS,
@@ -8335,7 +8337,9 @@ export type RouteSchemas = typeof baseRouteSchemas
   & typeof signinRouteSchemas
   & typeof systemStateRouteSchemas
   & typeof customOrderRouteSchemas
-  & typeof shiftHandinRouteSchemas;
+  & typeof shiftHandinRouteSchemas
+  & typeof peopleMessageRouteSchemas
+  & typeof saleClaimRouteSchemas;
 export const routeSchemas: RouteSchemas = {
   ...baseRouteSchemas,
   ...ofapiActionRouteSchemas,
@@ -8353,6 +8357,8 @@ export const routeSchemas: RouteSchemas = {
   ...systemStateRouteSchemas,
   ...customOrderRouteSchemas,
   ...shiftHandinRouteSchemas,
+  ...peopleMessageRouteSchemas,
+  ...saleClaimRouteSchemas,
 };
 export type AuthState = z.infer<typeof authStateSchema>;
 export type AuthUser = z.infer<typeof authUserSchema>;

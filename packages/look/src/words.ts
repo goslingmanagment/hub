@@ -96,3 +96,20 @@ export function incidentKindWord(kind: string): string | null {
 /** The AI buttons: proper names, the same everywhere, never translated. */
 export const AI_BUTTONS = ["Reply", "Fix", "Hi", "Ping", "Recap", "Coach"] as const;
 export type AiButton = (typeof AI_BUTTONS)[number];
+
+const CYRILLIC_NAME = /^[А-ЯЁ][а-яё]+$/u;
+
+/**
+ * A Russian first name «кому»: Алекс → Алексу, Андрей → Андрею, Никита → Никите, Катя → Кате, Мария → Марии.
+ * Only the first word, only a Cyrillic name with a known ending; null otherwise (a Latin name, a name ending in
+ * «ь», «о», «е»…): the caller then says it without the case («Отправить в Telegram: Rick»).
+ */
+export function nameToWhom(name: string): string | null {
+  const first = name.trim().split(/\s+/u)[0] ?? "";
+  if (!CYRILLIC_NAME.test(first)) return null;
+  if (/ия$/u.test(first)) return `${first.slice(0, -2)}ии`;
+  if (/[ая]$/u.test(first)) return `${first.slice(0, -1)}е`;
+  if (/й$/u.test(first)) return `${first.slice(0, -1)}ю`;
+  if (/[бвгджзклмнпрстфхцчшщ]$/u.test(first)) return `${first}у`;
+  return null;
+}

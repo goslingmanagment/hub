@@ -93,6 +93,8 @@ export function amountAfter(line: Line, statement: ShiftReportStatement | null):
     return { amountMills: line.rule.shareMills, disputed: false };
   }
   if (statement !== "mine") return { amountMills: 0, disputed: false };
+  // The rule already gives the person a share of a sale they added (agreed, decided): that share, settled.
+  if (isClaimed(line) && line.rule.shareMills > 0) return { amountMills: line.rule.shareMills, disputed: false };
   return { amountMills: line.netMills, disputed: line.rule.home !== "nobody" || (line.facts?.otherReports.length ?? 0) > 0 };
 }
 

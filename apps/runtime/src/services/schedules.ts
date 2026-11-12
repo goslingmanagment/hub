@@ -25,6 +25,7 @@ import { ensureSaleHomesQueue, ensureSaleHomesSchedule } from "./sale-homes.ts";
 import { ensureShiftRowsQueue, ensureShiftRowsSchedule } from "./shift-rows.ts";
 import { ensureSystemStateQueue, ensureSystemStateSchedule } from "./system-state-tick.ts";
 import { ensurePeopleStartQueue, ensurePeopleStartSchedule } from "./people/start-tick.ts";
+import { ensurePeopleMessagesQueue, ensurePeopleMessagesSchedule } from "./people-messages/index.ts";
 import { ensureObservationsPartitionQueue, ensureObservationsPartitionSchedule } from "./observations-partitions.ts";
 import { ensureMattersMirrorQueue, ensureMattersMirrorSchedule } from "./matters-mirror.ts";
 import { ensureCustomChecksQueue, ensureCustomChecksSchedule } from "./custom-orders/checks.ts";
@@ -128,6 +129,7 @@ export async function ensureAllQueues(
   await ensureSaleHomesQueue(boss, createdQueues);
   await ensureSystemStateQueue(boss, createdQueues);
   await ensurePeopleStartQueue(boss, createdQueues);
+  await ensurePeopleMessagesQueue(boss, createdQueues);
 }
 
 export async function registerAllSchedules(
@@ -193,5 +195,6 @@ export async function registerAllSchedules(
     ensureSaleHomesSchedule(boss),
     ensureSystemStateSchedule(boss),
     ensurePeopleStartSchedule(boss),
+    ensurePeopleMessagesSchedule(boss),
   ]);
 }

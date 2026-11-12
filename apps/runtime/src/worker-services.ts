@@ -40,9 +40,12 @@ import { runMatterChecks } from "./services/matter-checks.ts";
 import { CUSTOM_CHECKS_QUEUE, runCustomOrderChecks } from "./services/custom-orders/checks.ts";
 import { SALE_HOMES_QUEUE, runSaleHomesTick } from "./services/sale-homes.ts";
 import { runShiftReportMatters } from "./services/shift-handin-matters.ts";
+import { runSaleClaims } from "./services/sale-claims.ts";
 import { SHIFT_ROWS_QUEUE, runShiftRowsTick } from "./services/shift-rows.ts";
 import { SYSTEM_STATE_QUEUE, runSystemStateTick } from "./services/system-state-tick.ts";
 import { PEOPLE_START_QUEUE, runPeopleStartTick } from "./services/people/start-tick.ts";
+import { PEOPLE_MESSAGES_QUEUE, runPeopleMessages } from "./services/people-messages/index.ts";
+import { telegramPeopleTransport } from "./services/people-messages/transport.ts";
 import {
   OBSERVATIONS_PARTITIONS_QUEUE,
   runObservationsPartitionCheck,
@@ -453,6 +456,10 @@ export async function startWorkerServices(
     await runShiftReportMatters(app).catch((error: unknown) => {
       app.logger.warn({ err: error instanceof Error ? error.message : String(error) }, "shift report matters failed; the rows are synced");
     });
+    // Заявки (package G): claims to the other side, a day's silence and disagreement to the owner, «мимо площадки», the week's nobody's sales.
+    await runSaleClaims(app).catch((error: unknown) => {
+      app.logger.warn({ err: error instanceof Error ? error.message : String(error) }, "sale claims pass failed; the rows are synced");
+    });
   });
   await boss.work(SALE_HOMES_QUEUE, CRON_SWEEP_WORK_OPTIONS, async () => {
     await runSaleHomesTick(app);
@@ -466,6 +473,11 @@ export async function startWorkerServices(
   await boss.work(PEOPLE_START_QUEUE, CRON_SWEEP_WORK_OPTIONS, async () => {
     const tally = await runPeopleStartTick(app);
     if (tally.opened + tally.closed > 0) app.logger.info(tally, "People start pass complete");
+  });
+  // Сообщения людям: every kind's new events written once; held unless the bot token is set and the kind is on.
+  await boss.work(PEOPLE_MESSAGES_QUEUE, CRON_SWEEP_WORK_OPTIONS, async () => {
+    const tally = await runPeopleMessages(app, { transport: telegramPeopleTransport(app) });
+    if (tally.made + tally.staleUnknown > 0) app.logger.info(tally, "People messages pass complete");
   });
 
   await boss.work(DB_DISK_USAGE_CHECK_QUEUE, CRON_SWEEP_WORK_OPTIONS, async () => {

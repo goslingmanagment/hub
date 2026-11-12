@@ -182,6 +182,7 @@ export async function readTeamLedgerReports(
       pages: group.pages,
       postedMills: sum(group.pages.map((page) => page.postedMills)),
       draftMills: sum(group.pages.map((page) => page.draftMills)),
+      hubMills: sum(group.pages.map((page) => page.hubMills)),
       postedAt,
       draft: draft === null ? null : accountReportOf(draft),
       postIds: group.postIds,

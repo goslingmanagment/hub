@@ -499,6 +499,93 @@
 
   /* ------------------------------------------------------------ A phone */
 
+  /* ------------------------------------------------------------ Claims (package G) */
+
+  /* The line a matter brought the reader to: a quiet band that fades, the line stays where it is. */
+  .shf-sale--focus {
+    animation: shf-focus 2.4s ease-out 1;
+    border-radius: var(--ui-radius);
+  }
+
+  @keyframes shf-focus {
+    from { background: var(--ui-accent-soft); }
+    to { background: transparent; }
+  }
+
+  .shf-claims-on {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-top: 6px;
+  }
+
+  /* Someone's claim of your sale, waiting for your answer: the one thing on the line to act on. */
+  .shf-claim {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 10px 12px;
+    border: 1px solid var(--ui-warn-line);
+    border-radius: var(--ui-radius);
+    background: var(--ui-warn-soft);
+  }
+
+  .shf-claim--owner {
+    border-color: var(--ui-line);
+    background: var(--ui-hover-soft);
+  }
+
+  .shf-claim__title {
+    margin: 0;
+    color: var(--ui-text);
+    font-weight: 600;
+  }
+
+  .shf-claim__note {
+    margin: 0;
+    color: var(--ui-text);
+    font-style: italic;
+  }
+
+  .shf-claim__what {
+    margin: 0;
+    color: var(--ui-text-2);
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+  }
+
+  .shf-claim__answer {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    margin-top: 4px;
+  }
+
+  .shf-claim__answer .ui-input {
+    flex: 1 1 260px;
+  }
+
+  /* Where a claim stands: one line under the sale, coloured only when the owner has it. */
+  .shf-claim-line {
+    margin: 0;
+    color: var(--ui-text-2);
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+  }
+
+  .shf-claim-line--owner {
+    color: var(--ui-warn-text);
+  }
+
+  .shf-claim-line--done {
+    color: var(--ui-good-text);
+  }
+
+  .shf-claims-loose {
+    border-color: var(--ui-warn-line);
+  }
+
   @media (max-width: 640px) {
     .shf-card,
     .shf-near,

@@ -144,6 +144,8 @@ export const DEV_SEED_BLANKED_ENV: readonly string[] = [
   "OPENROUTER_API_KEY",
   "ELEVENLABS_API_KEY",
   "TELEGRAM_BOT_TOKEN",
+  // The bot of «Сообщения людям»: the seed messages nobody.
+  "PEOPLE_TELEGRAM_BOT_TOKEN",
   // The FANSLY BLOCKLIST reader's Telegram account.
   "TG_READER_API_HASH",
   "TG_READER_SESSION",

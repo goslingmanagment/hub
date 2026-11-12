@@ -494,6 +494,12 @@ export const SCREENS: readonly Screen[] = [
     keywords: "рутины копии бэкапы мак openclaw launchd задачи расписание здоровье",
   },
   {
+    id: "system-people-messages", path: "/system/people-messages", label: "Сообщения людям", title: "Сообщения людям", section: "system", ownerOnly: true,
+    why: "Что сервер сам написал бы людям в Telegram: каждый вид, его текст и что задержано. Включается по одному.",
+    pageFilter: "none",
+    keywords: "telegram телеграм бот отправка напоминания отчётность карточка выплата приглашение",
+  },
+  {
     id: "system-onlyfans-api", path: "/system/onlyfans-api", label: "Состояние", title: "OnlyFans API", section: "system", ownerOnly: true,
     why: "Включён ли он, что это значит и где что лежит.",
     pageFilter: "none",
@@ -775,6 +781,7 @@ export const SECTIONS: readonly Section[] = [
       tab("agent-keys", "Агенты и ключи", "system-agent-keys"),
       tab("reports", "Отчёты агентов", "system-reports", "system-report"),
       tab("state", "Состояние", "system-state"),
+      tab("people-messages", "Сообщения людям", "system-people-messages"),
       {
         ...tab("onlyfans-api", "OnlyFans API", "system-onlyfans-api", "system-onlyfans-collection", "system-onlyfans-tools", "system-onlyfans-media", "system-onlyfans-exports", "system-onlyfans-actions"),
       },

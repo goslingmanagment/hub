@@ -83,6 +83,7 @@ const HUB_SCHEDULE_TITLES: Readonly<Record<string, string>> = {
   "ofapi.pending.reconcile": "OnlyFans API: зависшие операции",
   "ofapi.typed-export.sweep": "OnlyFans API: выгрузки",
   "ops.metrics.sample": "Замеры работы Hub",
+  "people-messages.sweep": "Сообщения людям: отправка с сервера",
   "people.start": "Ввод новичков: дела владельцу",
   "projections.dm-reconcile.sweep": "Сверка личных сообщений",
   "projections.message-archive.sweep": "Архив сообщений",

@@ -2,6 +2,7 @@ import type { KernelOperationResponse, Matter } from "@agency_hub_core/contracts
 
 import { isDemoReply, type DemoHandlers, type DemoRequest } from "../core.ts";
 import { DEMO_USERS } from "../world.ts";
+import { demoClaimMatters } from "./sale-claims.ts";
 import { teamCustoms } from "./team-extra.ts";
 import { teamQuestionsHandlers } from "./team-questions.ts";
 import { DAY, HOUR, MIN, isoAt, viewerPages } from "./team-world.ts";
@@ -78,6 +79,8 @@ function standing(request: DemoRequest): Seed[] {
       });
     }
   }
+  // Заявки (package G): the owner's disputes, «мимо площадки», the week's nobody's sales; the chatter's claims to answer.
+  seeds.push(...demoClaimMatters(request.now));
   seeds.push({
     kind: "ledger.report_post", key: "ledger.report_post:8812", title: "Пост в «Отчётности» не разобран", pages: ["mia-1"], money: true,
     evidence: { postId: 8812, reportDate: isoAt(now - 3 * DAY).slice(0, 10), postedAt: isoAt(now - 2.2 * DAY), flags: ["unknown_author"], totalMills: 124_200, telegram: CHAT },

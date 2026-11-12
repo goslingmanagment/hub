@@ -23,10 +23,10 @@ body remain handler-checked and are noted per route in the service layer.
 
 The `chat-extension token` column is the narrow device token a client asks
 for at password sign-in (`client: "chat-extension"`): it reaches only the
-72 routes marked "yes", and every route marked "no" refuses it with 403.
+73 routes marked "yes", and every route marked "no" refuses it with 403.
 A full device token is not affected.
 
-## Routes (478)
+## Routes (494)
 
 | Method | Path | Route key | Kind | Roles | Page scope | chat-extension token |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -271,6 +271,8 @@ A full device token is not affected.
 | GET | `/api/v1/agent/reports` | `agentReportList` | `agentKey` | — | — | no |
 | PUT | `/api/v1/agent/reports/:slug` | `agentReportPut` | `agentKey` | — | — | no |
 | POST | `/api/v1/agent/resolve` | `agentResolve` | `agentKey` | — | — | no |
+| GET | `/api/v1/agent/sale-claims` | `agentSaleClaims` | `agentKey` | — | — | no |
+| POST | `/api/v1/agent/sale-claims/answer` | `agentSaleClaimAnswer` | `agentKey` | — | — | no |
 | POST | `/api/v1/agent/search/messages` | `agentSearchMessages` | `agentKey` | — | — | no |
 | GET | `/api/v1/agent/shift-reports` | `agentShiftReportsFeed` | `agentKey` | — | — | no |
 | GET | `/api/v1/agent/shift-reports/claimable` | `agentShiftReportClaimable` | `agentKey` | — | — | no |
@@ -385,6 +387,8 @@ A full device token is not affected.
 | GET | `/api/v1/models` | `models` | `session` | — | — | no |
 | GET | `/api/v1/models/:modelSlug/revenue/daily` | `modelRevenueDaily` | `session` | — | — | no |
 | POST | `/api/v1/ofapi/webhook` | `ofapiWebhookReceive` | `hmac` | — | — | — |
+| GET | `/api/v1/off-platform` | `offPlatformPending` | `owner-session` | — | — | no |
+| POST | `/api/v1/off-platform/:offPlatformId/decide` | `offPlatformDecide` | `owner-session` | — | — | no |
 | GET | `/api/v1/openapi.json` | `openApiJson` | `owner-session` | — | — | no |
 | GET | `/api/v1/ops/live` | `opsLive` | `monitoring` | owner | — | no |
 | GET | `/api/v1/ops/metrics` | `opsMetrics` | `monitoring` | — | — | no |
@@ -463,6 +467,14 @@ A full device token is not affected.
 | GET | `/api/v1/public/vault-upload-files/:token` | `publicVaultUploadFile` | `public` | — | — | — |
 | GET | `/api/v1/reports` | `reportsList` | `session` | — | — | no |
 | GET | `/api/v1/reports/:slug` | `reportGet` | `session` | — | — | no |
+| POST | `/api/v1/sale-claims/:claimId/answer` | `saleClaimAnswer` | `any` | — | — | yes |
+| POST | `/api/v1/sale-decisions/:decisionId/link` | `saleDecisionLink` | `owner-session` | — | — | no |
+| GET | `/api/v1/sale-decisions/unlinked` | `saleDecisionsUnlinked` | `owner-session` | — | — | no |
+| GET | `/api/v1/sale-disputes/:transactionId` | `saleDispute` | `owner-session` | — | — | no |
+| GET | `/api/v1/sale-disputes/claim/:claimId` | `saleDisputeOfClaim` | `owner-session` | — | — | no |
+| POST | `/api/v1/sale-disputes/decide` | `saleDisputeDecide` | `owner-session` | — | — | no |
+| GET | `/api/v1/sale-nobody` | `saleNobody` | `owner-session` | — | — | no |
+| POST | `/api/v1/sale-nobody/keep` | `saleNobodyKeep` | `owner-session` | — | — | no |
 | GET | `/api/v1/shift-reports` | `shiftReportsList` | `any` | — | — | yes |
 | GET | `/api/v1/shift-reports/:shiftId` | `shiftReport` | `any` | — | — | yes |
 | GET | `/api/v1/shift-reports/:shiftId/claimable` | `shiftReportClaimable` | `any` | — | — | yes |
@@ -481,6 +493,10 @@ A full device token is not affected.
 | GET | `/api/v1/sync/pages/:pageLabel/work` | `syncPageWork` | `owner-session` | — | — | no |
 | GET | `/api/v1/sync/pages/:pageLabel/work/:workId` | `syncPageWorkGet` | `owner-session` | — | — | no |
 | GET | `/api/v1/sync/requests` | `syncRequests` | `session` | — | — | no |
+| GET | `/api/v1/system/people-messages` | `peopleMessages` | `owner-session` | — | — | no |
+| POST | `/api/v1/system/people-messages/kinds/:kind` | `peopleMessageSwitch` | `owner-session` | — | — | no |
+| POST | `/api/v1/system/people-messages/press` | `peopleMessagePress` | `owner-session` | — | — | no |
+| GET | `/api/v1/system/people-messages/recipient` | `peopleMessageRecipient` | `owner-session` | — | — | no |
 | GET | `/api/v1/system/state` | `systemState` | `owner-session` | — | — | no |
 | GET | `/api/v1/team/authorship` | `teamAuthorship` | `session` | — | — | no |
 | GET | `/api/v1/team/chatter-numbers` | `teamChatterNumbers` | `session` | — | — | no |

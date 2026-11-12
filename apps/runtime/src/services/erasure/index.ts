@@ -3,7 +3,7 @@ import { readFile, readdir, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import { sql, type SQL } from "drizzle-orm";
-import { decryptJsonWithKeyVersion, fanslyWsCaptureContainsSubject } from "@agency_hub_core/shared";
+import { decryptJsonWithKeyVersion, fanslyWsCaptureContainsSubject, PEOPLE_MESSAGE_ERASED_TEXT } from "@agency_hub_core/shared";
 
 import {
   type CapturePayloadErasureSubject,
@@ -1697,6 +1697,27 @@ async function fanHotTargets(app: Db, scope: ResolvedScope, _lineage: LedgerLine
       delete from ai_media_descriptions where ${mediaDescriptionPred}`),
   });
 
+  // Transactions are the fan's by his id or by his ref on the scope's pages (the money's anonymization below).
+  const txnPred = sql`fan_id = ${fanId} or (platform_account_id in ${scope.pageIds}
+    and (correlation_account_id = ${ref} or sender_id = ${ref}))`;
+
+  // Сообщения людям (0403, package S): a message the server made of the fan's order (its card) or of a handed-in
+  // report that holds his sale (the post) keeps its row — kind, to whom, when, state — and loses its text. Before the
+  // order and the transactions lose the fan: the predicate follows them.
+  const peopleMessagePred = sql`text <> ${PEOPLE_MESSAGE_ERASED_TEXT} and (
+    (object_type = 'custom_order' and object_id in (select id::text from custom_orders where fan_id = ${fanId}))
+    or (object_type = 'shift_handin_version' and object_id in (
+      select v.id::text from shift_handin_versions v cross join lateral jsonb_array_elements(v.lines) as line
+      where (line ->> 'transactionId') ~ '^[0-9]+$'
+        and (line ->> 'transactionId')::bigint in (select id from transactions where ${txnPred}))))`;
+  targets.push({
+    plane: "hot",
+    target: "people_messages",
+    action: "anonymize",
+    rows: await countOf(app, sql`select count(*)::text as n from people_messages where ${peopleMessagePred}`),
+    run: (tx) => execCount(tx, sql`update people_messages set text = ${PEOPLE_MESSAGE_ERASED_TEXT} where ${peopleMessagePred}`),
+  });
+
   // Custom orders (0399, package I): the order is the agency's work and stays; what names the fan goes — the
   // link to him, the buyer's string, his chat, the name said in the video and the card's posted text. The order
   // shows «фан стёрт» from then on (`fan_erased_at`). Before the fans row goes (its FK would only null the link).
@@ -1713,9 +1734,7 @@ async function fanHotTargets(app: Db, scope: ResolvedScope, _lineage: LedgerLine
       where ${customOrderPred}`),
   });
 
-  // Transactions: the money moved — anonymize, never delete (fan scope).
-  const txnPred = sql`fan_id = ${fanId} or (platform_account_id in ${scope.pageIds}
-    and (correlation_account_id = ${ref} or sender_id = ${ref}))`;
+  // Transactions: the money moved — anonymize, never delete (fan scope; `txnPred` above).
   // The chatters' notes on the fan's sales (0311) are free text about him:
   // cleared before the transactions lose the fan; the marks stay (the money).
   const markNotePred = sql`note is not null and transaction_id in (select id from transactions where ${txnPred})`;
@@ -1904,6 +1923,11 @@ async function pageHotTargets(app: Db, scope: ResolvedScope): Promise<WorkTarget
     ["shift_report_credits", "page_id"],
     // Whose each of the page's sales is by the one rule (0380).
     ["sale_homes", "page_id"],
+    // Claims and agreements (0404): the page's claims before the owner's decisions they name, and the confirmed
+    // «мимо площадки» counted on the page (its words may name a fan).
+    ["sale_claims", "page_id"],
+    ["sale_owner_decisions", "page_id"],
+    ["off_platform_sales", "page_id"],
     // Chat Memory week 2: the facts lane's runs over the page's chats (0313).
     ["fan_fact_runs", "page_id"],
     // …and the page's chats an owner's rebuild reads again (0322).
