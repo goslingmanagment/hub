@@ -159,6 +159,7 @@ const LEDGER_JOB_TITLES: Readonly<Record<string, string>> = {
   "transit": "Ledger: деньги в пути",
   "payroll": "Ledger: долги и «К выплате»",
   "report-posts": "Ledger: разбор постов «Отчётности»",
+  "hub-reports": "Ledger: сданные отчёты смен из Hub",
   "checks": "Ledger: проверки",
 };
 
