@@ -163,7 +163,7 @@ export function DisputeModal({ transactionId, claimId, onClose }: { transactionI
                   : <>
                     {"Решение встанет выше правила. "}
                     {data.reports.length > 0
-                      ? `Новую версию с вашим решением получат отчёты, сданные в системе: ${data.reports.map((one) => `${one.name} за ${formatDay(one.reportDate)}`).join(", ")}; сдавать заново не нужно. `
+                      ? `Новую версию с вашим решением получат отчёты, сданные в системе (сдавать заново не нужно): ${data.reports.map((one) => `${one.name} за ${formatDay(one.reportDate)}`).join(", ")} `
                       : "Отчётов, сданных в системе, с этой продажей нет. "}
                     {"Отчёт постом в «Отчётности» никто не пересчитает: решение возьмёт следующий отчёт."}
                   </>}
