@@ -26,10 +26,11 @@ for at password sign-in (`client: "chat-extension"`): it reaches only the
 72 routes marked "yes", and every route marked "no" refuses it with 403.
 A full device token is not affected.
 
-## Routes (474)
+## Routes (476)
 
 | Method | Path | Route key | Kind | Roles | Page scope | chat-extension token |
 | --- | --- | --- | --- | --- | --- | --- |
+| GET | `/api/v1/account/pay` | `accountPay` | `any-session` | — | — | no |
 | GET | `/api/v1/account/reports` | `accountReports` | `any-session` | — | — | no |
 | GET | `/api/v1/account/stats` | `accountChatterStats` | `any-session` | — | — | no |
 | GET | `/api/v1/admin/ai/accounts` | `adminAiAccountsList` | `owner-session` | — | — | no |
@@ -486,6 +487,7 @@ A full device token is not affected.
 | GET | `/api/v1/team/empty-hours` | `teamEmptyHours` | `session` | — | — | no |
 | GET | `/api/v1/team/greetings` | `teamGreetings` | `session` | — | — | no |
 | GET | `/api/v1/team/ledger-payouts` | `teamLedgerPayouts` | `owner-session` | — | — | no |
+| GET | `/api/v1/team/ledger-payouts/person` | `teamLedgerPayoutPerson` | `owner-session` | — | — | no |
 | GET | `/api/v1/team/ledger-payouts/prepare` | `teamLedgerPayoutPrepare` | `owner-session` | — | — | no |
 | GET | `/api/v1/team/ledger-questions` | `teamLedgerQuestions` | `owner-session` | — | — | no |
 | GET | `/api/v1/team/ledger-reports` | `teamLedgerReports` | `owner-session` | — | — | no |

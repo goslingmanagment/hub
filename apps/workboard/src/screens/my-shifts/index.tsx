@@ -46,6 +46,7 @@ import {
   type MyShiftsFacts,
   type StatsShift,
 } from "./data";
+import { useMyMoneyParts } from "./MyMoney";
 import "./my-shifts.css";
 
 /**
@@ -317,6 +318,8 @@ export function MyShiftsScreen() {
   // A shift whose report is Hub's opens its own screen (ecosystem package F); the others open in place, as before.
   const backHere = useRowBackState("Мои смены");
   const facts = useMemo(() => (rows ? factsOf(rows, reports !== null && postsRead) : undefined), [rows, reports, postsRead]);
+  // «Мои деньги» (ecosystem package H1): nothing until the person's switch is on.
+  const money = useMyMoneyParts(window, COLUMNS, rows);
   const unavailable: Unavailable = data === undefined ? null : data.reports === null ? "reports" : postsRead ? null : "posts";
 
   // The shift going on is shown once: as the journal's first row when the period holds it, else above the journal
@@ -366,7 +369,7 @@ export function MyShiftsScreen() {
         <Table
           label="Мои смены"
           className="mys-journal"
-          columns={COLUMNS}
+          columns={money.columns}
           rows={rows ?? []}
           rowKey={(row) => row.key}
           rowHref={(row) => (row.hub === null ? undefined : `/my/shifts/${row.hub.shiftId}`)}
@@ -413,6 +416,7 @@ export function MyShiftsScreen() {
           </Notice>
         )}
         {nowShift && <NowRow shift={nowShift} />}
+        {money.block}
         {body}
       </div>
     </>

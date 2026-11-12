@@ -61,7 +61,7 @@ interface PersonSpec {
   pages: string[];
   slots: SlotSpec[];
   telegram?: { userId: number; handle: string; tag: string | null };
-  rights?: Array<"customs_lead" | "records_customs" | "submits_shift">;
+  rights?: Array<"customs_lead" | "records_customs" | "submits_shift" | "sees_own_pay">;
   leftDaysAgo?: number;
   note?: string;
   notes?: { code: string; text: string; settledDaysAgo?: number }[];
@@ -84,7 +84,7 @@ const PEOPLE: readonly PersonSpec[] = [
     telegram: { userId: 700_000_003, handle: "oleg_lead", tag: null } },
   { id: 4, code: "alex", name: "Алекс", kind: "human", role: "chatter", state: "working", logins: [4], pages: ["mia-1", "mia-2"],
     slots: [{ start: "08:00", end: "16:00", weekdays: WEEK, fromDays: 60 }],
-    telegram: { userId: 700_000_004, handle: "alex_k", tag: "#alex" },
+    telegram: { userId: 700_000_004, handle: "alex_k", tag: "#alex" }, rights: ["sees_own_pay"],
     terms: [{ model: "mia-hart", share: 2000, fix: 0, fromDays: 140 }, { model: "mia-hart", share: 2500, fix: 5_000, fromDays: 30 }] },
   { id: 5, code: "kate", name: "Катя", kind: "human", role: "chatter", state: "working", logins: [5], pages: ["mia-1"],
     slots: [{ start: "16:00", end: "00:00", weekdays: LATE, fromDays: 40 }],
@@ -160,7 +160,7 @@ interface Rec {
   pages: string[];
   slots: SlotRec[];
   telegram: Person["telegram"];
-  rights: { right: "customs_lead" | "records_customs" | "submits_shift"; grantedAt: string }[];
+  rights: { right: "customs_lead" | "records_customs" | "submits_shift" | "sees_own_pay"; grantedAt: string }[];
   note: string | null;
   notes: PersonImportNote[];
   origin: Person["origin"];

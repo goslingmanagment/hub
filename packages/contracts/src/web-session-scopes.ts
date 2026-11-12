@@ -35,6 +35,8 @@ export const NARROW_WEB_SESSION_OPERATIONS = [
   "shiftReportOffPlatformAdd",
   "shiftReportOffPlatformWithdraw",
   "shiftReportSubmit",
+  // «Мои деньги» on «Мои смены» (ecosystem package H1): the person's own sums, behind their switch.
+  "accountPay",
 ] as const satisfies readonly KernelOperationKey[];
 
 /** Whether a narrow web session may call the route with this key. */

@@ -428,7 +428,7 @@ export async function rewritePersonScheduleSlot(db: Database, slotId: number, in
 
 export interface PersonRightRow {
   personId: number;
-  right: "customs_lead" | "records_customs" | "submits_shift";
+  right: "customs_lead" | "records_customs" | "submits_shift" | "sees_own_pay";
   grantedAt: Date;
 }
 
@@ -441,6 +441,22 @@ export async function listPersonRightRows(db: Database, personIds?: readonly num
     right: row.right as PersonRightRow["right"],
     grantedAt: date(row.granted_at),
   }));
+}
+
+/**
+ * The person a login is, for «Мои деньги» (ecosystem package H1): their code (the ledger's slug) and since when their
+ * switch «видит свои деньги» is on (null — off). Null — the login is nobody's. Only the login's own person: a login
+ * belongs to one person at most (person_logins' key is the user).
+ */
+export async function findOwnPayPerson(db: Database, userId: number): Promise<{ personId: number; code: string; seesOwnPaySince: Date | null } | null> {
+  const result = await db.execute<Row>(sql`
+    select p.id, p.code,
+      (select r.granted_at from person_rights r where r.person_id = p.id and r."right" = 'sees_own_pay') as sees_since
+    from person_logins l join people p on p.id = l.person_id
+    where l.user_id = ${userId}`);
+  const row = result.rows[0];
+  if (!row) return null;
+  return { personId: Number(row.id), code: String(row.code), seesOwnPaySince: nullableDate(row.sees_since) };
 }
 
 /** The person's rights become exactly `rights`; a right kept keeps its grant time. */

@@ -1,6 +1,7 @@
 import { routeSchemas } from "@agency_hub_core/contracts";
 
 import { readLedgerPayoutPrepare, readLedgerPayouts } from "../../services/ledger-payouts.ts";
+import { readTeamLedgerPayoutPerson } from "../../services/ledger-person-pay.ts";
 import { readTeamLedgerQuestions } from "../../services/ledger-questions.ts";
 import { readTeamLedgerReports } from "../../services/ledger-team-reports.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
@@ -23,6 +24,11 @@ export function registerTeamLedgerRoutes(server: ApiServer, ctx: ApiModuleContex
   // One person's payout brief (ledger L5): the transfer, the lines, the blockers and the chatter's message draft.
   server.get("/api/v1/team/ledger-payouts/prepare", { schema: routeSchemas.teamLedgerPayoutPrepare }, async (request) => {
     return readLedgerPayoutPrepare(appContext, request.query);
+  });
+
+  // One person's pay in the period (ledger #80): each day with its state, the adjustments with their memo, the payouts.
+  server.get("/api/v1/team/ledger-payouts/person", { schema: routeSchemas.teamLedgerPayoutPerson }, async (request) => {
+    return readTeamLedgerPayoutPerson(appContext, request.query);
   });
 
   server.get("/api/v1/team/ledger-reports", { schema: routeSchemas.teamLedgerReports }, async (request) => {

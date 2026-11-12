@@ -30,6 +30,352 @@
     "schemas": {}
   },
   "paths": {
+    "/api/v1/account/pay": {
+      "get": {
+        "summary": "The caller's own pay from the agency ledger, behind the person's switch: accrued, to pay, paid, by day",
+        "tags": [
+          "client"
+        ],
+        "description": "Workboard «Мои смены» → «Мои деньги»; read-only. The person is the session user's, found through the people registry; the query names only the window (Moscow days, at most 61). The switch off — `enabled` false and no sums. Sums only, no pay terms. 503 when the ledger is not connected or did not answer.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            },
+            "in": "query",
+            "name": "from",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            },
+            "in": "query",
+            "name": "to",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "enabled": {
+                      "type": "boolean"
+                    },
+                    "from": {
+                      "type": "string",
+                      "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                    },
+                    "to": {
+                      "type": "string",
+                      "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                    },
+                    "pay": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "accruedMills": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "paidMills": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "balanceMills": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "oldestUnpaidDate": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "lastPayout": {
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "date": {
+                                      "type": "string",
+                                      "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                                    },
+                                    "amountMills": {
+                                      "type": "integer",
+                                      "minimum": -9007199254740991,
+                                      "maximum": 9007199254740991
+                                    }
+                                  },
+                                  "required": [
+                                    "date",
+                                    "amountMills"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "days": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "date": {
+                                    "type": "string",
+                                    "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                                  },
+                                  "amountMills": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "state": {
+                                    "type": "string",
+                                    "enum": [
+                                      "paid",
+                                      "to_pay",
+                                      "none"
+                                    ]
+                                  },
+                                  "paidMills": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "unpaidMills": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  }
+                                },
+                                "required": [
+                                  "date",
+                                  "amountMills",
+                                  "state",
+                                  "paidMills",
+                                  "unpaidMills"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
+                            "reportsFrom": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "stale": {
+                              "type": "boolean"
+                            },
+                            "generatedAt": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "accruedMills",
+                            "paidMills",
+                            "balanceMills",
+                            "oldestUnpaidDate",
+                            "lastPayout",
+                            "days",
+                            "reportsFrom",
+                            "stale",
+                            "generatedAt"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "serverNow": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "enabled",
+                    "from",
+                    "to",
+                    "pay",
+                    "serverNow"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/account/reports": {
       "get": {
         "summary": "The caller's own shift reports from the agency ledger: drafted and posted pages, amounts, sales counted and held out",
@@ -72399,14 +72745,15 @@
                     ]
                   },
                   "rights": {
-                    "maxItems": 3,
+                    "maxItems": 4,
                     "type": "array",
                     "items": {
                       "type": "string",
                       "enum": [
                         "customs_lead",
                         "records_customs",
-                        "submits_shift"
+                        "submits_shift",
+                        "sees_own_pay"
                       ]
                     }
                   },
@@ -73041,7 +73388,8 @@
                                 "enum": [
                                   "customs_lead",
                                   "records_customs",
-                                  "submits_shift"
+                                  "submits_shift",
+                                  "sees_own_pay"
                                 ]
                               },
                               "grantedAt": {
@@ -74555,7 +74903,8 @@
                                     "enum": [
                                       "customs_lead",
                                       "records_customs",
-                                      "submits_shift"
+                                      "submits_shift",
+                                      "sees_own_pay"
                                     ]
                                   },
                                   "grantedAt": {
@@ -75330,7 +75679,8 @@
                                 "enum": [
                                   "customs_lead",
                                   "records_customs",
-                                  "submits_shift"
+                                  "submits_shift",
+                                  "sees_own_pay"
                                 ]
                               },
                               "grantedAt": {
@@ -76081,14 +76431,15 @@
                     ]
                   },
                   "rights": {
-                    "maxItems": 3,
+                    "maxItems": 4,
                     "type": "array",
                     "items": {
                       "type": "string",
                       "enum": [
                         "customs_lead",
                         "records_customs",
-                        "submits_shift"
+                        "submits_shift",
+                        "sees_own_pay"
                       ]
                     }
                   },
@@ -76650,7 +77001,8 @@
                                 "enum": [
                                   "customs_lead",
                                   "records_customs",
-                                  "submits_shift"
+                                  "submits_shift",
+                                  "sees_own_pay"
                                 ]
                               },
                               "grantedAt": {
@@ -77719,7 +78071,8 @@
                                 "enum": [
                                   "customs_lead",
                                   "records_customs",
-                                  "submits_shift"
+                                  "submits_shift",
+                                  "sees_own_pay"
                                 ]
                               },
                               "grantedAt": {
@@ -78805,7 +79158,8 @@
                                 "enum": [
                                   "customs_lead",
                                   "records_customs",
-                                  "submits_shift"
+                                  "submits_shift",
+                                  "sees_own_pay"
                                 ]
                               },
                               "grantedAt": {
@@ -156357,7 +156711,8 @@
                               "enum": [
                                 "customs_lead",
                                 "records_customs",
-                                "submits_shift"
+                                "submits_shift",
+                                "sees_own_pay"
                               ]
                             }
                           },
@@ -156878,14 +157233,15 @@
                             ]
                           },
                           "rights": {
-                            "maxItems": 3,
+                            "maxItems": 4,
                             "type": "array",
                             "items": {
                               "type": "string",
                               "enum": [
                                 "customs_lead",
                                 "records_customs",
-                                "submits_shift"
+                                "submits_shift",
+                                "sees_own_pay"
                               ]
                             }
                           },
@@ -157198,14 +157554,15 @@
                             ]
                           },
                           "rights": {
-                            "maxItems": 3,
+                            "maxItems": 4,
                             "type": "array",
                             "items": {
                               "type": "string",
                               "enum": [
                                 "customs_lead",
                                 "records_customs",
-                                "submits_shift"
+                                "submits_shift",
+                                "sees_own_pay"
                               ]
                             }
                           },
@@ -279143,12 +279500,20 @@
                             "string",
                             "null"
                           ]
+                        },
+                        "debtsStale": {
+                          "type": "boolean"
+                        },
+                        "sheetsStale": {
+                          "type": "boolean"
                         }
                       },
                       "required": [
                         "stale",
                         "lastSheetsCollectAt",
-                        "lastRebuildAt"
+                        "lastRebuildAt",
+                        "debtsStale",
+                        "sheetsStale"
                       ],
                       "additionalProperties": false
                     },
@@ -279243,6 +279608,513 @@
             }
           },
           "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/team/ledger-payouts/person": {
+      "get": {
+        "summary": "One person's pay in a window from the agency ledger: days with their state, adjustments with their memo, payouts",
+        "tags": [
+          "admin"
+        ],
+        "description": "Read from the ledger's GET /v1/payouts/person with Hub's payouts key. The days are Moscow days, at most 62. 404 — the ledger has no payout tab of the person; 503 — the ledger is not connected or did not answer.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"
+            },
+            "in": "query",
+            "name": "person",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            },
+            "in": "query",
+            "name": "from",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            },
+            "in": "query",
+            "name": "to",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "slug": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "from": {
+                      "type": "string",
+                      "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                    },
+                    "to": {
+                      "type": "string",
+                      "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                    },
+                    "accrualFrom": {
+                      "type": "string",
+                      "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                    },
+                    "factsFrom": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "reportsFrom": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "generatedAt": {
+                      "type": "string"
+                    },
+                    "accruedMills": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "paidMills": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "balanceMills": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "oldestUnpaidDate": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "lastPayout": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "date": {
+                              "type": "string",
+                              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                            },
+                            "document": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "amountMills": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            }
+                          },
+                          "required": [
+                            "date",
+                            "document",
+                            "amountMills"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "days": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "date": {
+                            "type": "string",
+                            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                          },
+                          "model": {
+                            "type": "string"
+                          },
+                          "amountMills": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          },
+                          "worked": {
+                            "type": "boolean"
+                          },
+                          "source": {
+                            "type": "string"
+                          },
+                          "state": {
+                            "type": "string",
+                            "enum": [
+                              "paid",
+                              "to_pay",
+                              "none"
+                            ]
+                          },
+                          "paidMills": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          },
+                          "unpaidMills": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          },
+                          "paidBy": {
+                            "type": "array",
+                            "items": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            }
+                          }
+                        },
+                        "required": [
+                          "date",
+                          "model",
+                          "amountMills",
+                          "worked",
+                          "source",
+                          "state",
+                          "paidMills",
+                          "unpaidMills",
+                          "paidBy"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "adjustments": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "date": {
+                            "type": "string",
+                            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                          },
+                          "amountMills": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          },
+                          "memo": {
+                            "type": "string"
+                          },
+                          "document": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
+                        },
+                        "required": [
+                          "date",
+                          "amountMills",
+                          "memo",
+                          "document"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "payouts": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "date": {
+                            "type": "string",
+                            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                          },
+                          "document": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "amountMills": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          }
+                        },
+                        "required": [
+                          "date",
+                          "document",
+                          "amountMills"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "checks": {
+                      "type": "object",
+                      "properties": {
+                        "stale": {
+                          "type": "boolean"
+                        },
+                        "lastRebuildAt": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "stale",
+                        "lastRebuildAt"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "serverNow": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "slug",
+                    "name",
+                    "from",
+                    "to",
+                    "accrualFrom",
+                    "factsFrom",
+                    "reportsFrom",
+                    "generatedAt",
+                    "accruedMills",
+                    "paidMills",
+                    "balanceMills",
+                    "oldestUnpaidDate",
+                    "lastPayout",
+                    "days",
+                    "adjustments",
+                    "payouts",
+                    "checks",
+                    "serverNow"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
             "description": "Default Response",
             "content": {
               "application/json": {
@@ -279424,13 +280296,37 @@
                             "type": "integer",
                             "minimum": -9007199254740991,
                             "maximum": 9007199254740991
+                          },
+                          "from": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "to": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
                           }
                         },
                         "required": [
                           "kind",
                           "model",
                           "text",
-                          "shownMills"
+                          "shownMills",
+                          "from",
+                          "to"
                         ],
                         "additionalProperties": false
                       }
@@ -281193,7 +282089,8 @@
                                   "enum": [
                                     "customs_lead",
                                     "records_customs",
-                                    "submits_shift"
+                                    "submits_shift",
+                                    "sees_own_pay"
                                   ]
                                 },
                                 "grantedAt": {

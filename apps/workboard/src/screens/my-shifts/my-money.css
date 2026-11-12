@@ -1,0 +1,110 @@
+/*
+ * «Мои деньги» on «Мои смены» (MyMoney.tsx): one sheet above the journal, the
+ * look of «Сейчас на смене»; and the day's accrual under a row's report sum. Tokens only.
+ */
+@layer components {
+  .mym {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 12px 32px;
+    min-height: 56px;
+    padding: 16px 24px;
+    border: 1px solid var(--ui-line);
+    border-radius: var(--ui-radius-lg);
+    background: var(--ui-surface);
+  }
+
+  .mym__title {
+    flex: none;
+    min-width: 120px;
+    color: var(--ui-text);
+    font-weight: 600;
+  }
+
+  .mym__facts {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  .mym__away {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    color: var(--ui-text-2);
+  }
+
+  .mym__note {
+    width: 100%;
+    color: var(--ui-text-3);
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+  }
+
+  /* The day's accrual under a row's report sum: one quiet line; still owed, a shade darker. */
+  .mym-total {
+    display: inline-flex;
+    flex-direction: column;
+    align-items: flex-end;
+  }
+
+  .mym-line {
+    color: var(--ui-text-3);
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+    font-weight: 400;
+  }
+
+  .mym-line--due {
+    color: var(--ui-text-2);
+  }
+
+  /* Under a laptop's width the title stands over the three numbers. */
+  @media (max-width: 1100px) {
+    .mym__title {
+      width: 100%;
+    }
+  }
+
+  @media (max-width: 640px) {
+    .mym {
+      gap: 8px 16px;
+      padding: 12px 16px;
+    }
+
+    .mym__title {
+      width: 100%;
+    }
+
+    /* Three tiles side by side do not fit a phone: one under another, the hairlines gone. */
+    .mym__facts.ui-facts--grid {
+      grid-template-columns: minmax(0, 1fr);
+      row-gap: 12px;
+    }
+
+    .mym__facts.ui-facts--stacked .ui-fact {
+      padding: 0;
+      border-left: 0;
+    }
+
+    /* The journal's rows stack (my-shifts.css): the report's sum keeps its place on the first line, the day's
+       accrual goes under everything else of the row, where the clock's line cannot run into it. */
+    .mys-journal .ui-table tbody td.mys-col-total:has(.mym-total),
+    .mys-journal .mym-total {
+      display: contents;
+    }
+
+    .mys-journal .mym-total__sum {
+      grid-column: 2;
+      grid-row: 1;
+      justify-self: end;
+    }
+
+    .mys-journal .mym-total > .ui-tooltip-anchor {
+      grid-column: 1 / -1;
+      grid-row: 4;
+      margin-top: 4px;
+      padding-left: 24px;
+    }
+  }
+}

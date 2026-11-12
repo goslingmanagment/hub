@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { readLedgerPayoutPrepare, readLedgerPayouts } from "../apps/runtime/src/services/ledger-payouts.ts";
+import { payMillsOf, readLedgerPayoutPrepare, readLedgerPayouts } from "../apps/runtime/src/services/ledger-payouts.ts";
 
 /** Money from the agency ledger: micro-dollars in, mills out, never a wrong sum on a changed answer. */
 
@@ -69,6 +69,20 @@ function fetchReturning(status: number, body: unknown, seen: { url?: string; aut
   }) as unknown as typeof fetch;
 }
 
+describe("payMillsOf", () => {
+  // Production 12.11: a debt of 2214.548000 read as $2214.54 on the screen while `ledger payables` printed 2214.55.
+  it("reads pay to the ledger's own cent, half to even, as `ledger payables` prints it", () => {
+    expect(payMillsOf(2_214_548_000)).toBe(2_214_550);
+    expect(payMillsOf(626_825_834)).toBe(626_830);
+    expect(payMillsOf(129_533_334)).toBe(129_530);
+    expect(payMillsOf(48_795_000)).toBe(48_800);
+    expect(payMillsOf(48_785_000)).toBe(48_780);
+    expect(payMillsOf(-1_234_565_000)).toBe(-1_234_560);
+    expect(payMillsOf(-1_234_575_000)).toBe(-1_234_580);
+    expect(payMillsOf(0)).toBe(0);
+  });
+});
+
 describe("readLedgerPayouts", () => {
   it("passes the ledger's money on in mills, empty lists and the Hub user filled in", async () => {
     const seen: { url?: string; auth?: string | undefined } = {};
@@ -131,7 +145,8 @@ describe("readLedgerPayouts", () => {
     expect(after.people[0]).toMatchObject({
       hubUser: { userId: 5, username: "Kate.V" },
       days: [{ source: "reports" }, { source: "posts-v2", amountMills: 1_000 }],
-      pendingChanges: [{ id: 7, day: "2026-11-03", model: "Mia", postedMills: 45_670, newMills: 48_795, reason: "пост изменён после выплаты" }],
+      // Pay reads as the ledger prints it, to its cent (half to even): 48.795 → 48.80, never Hub's truncated 48.79.
+      pendingChanges: [{ id: 7, day: "2026-11-03", model: "Mia", postedMills: 45_670, newMills: 48_800, reason: "пост изменён после выплаты" }],
     });
     expect(after.people[1]!.pendingChanges).toEqual([{ id: 8, day: "2026-11-01", model: "", postedMills: 10_000, newMills: 9_000, reason: "" }]);
   });
