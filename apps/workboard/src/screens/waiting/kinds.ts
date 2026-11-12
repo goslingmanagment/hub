@@ -24,7 +24,7 @@ export const WAITING_GROUPS: readonly WaitingGroup[] = [
   { id: "publications", title: "Публикации" },
   { id: "people", title: "Люди и доступ" },
   { id: "ledger", title: "Проверки ledger" },
-  { id: "system", title: "Сбор и сбои" },
+  { id: "system", title: "Сбор, сбои и рутины" },
   { id: "other", title: "Другие дела" },
   { id: "info", title: "Для сведения" },
 ];
@@ -41,6 +41,8 @@ export function groupOf(kind: string): WaitingGroupId {
   if (kind.startsWith("people.")) return "people";
   if (kind === "ledger.check" || kind === "ledger.sheet_column" || kind === "ledger.off_platform") return "ledger";
   if (kind === "page.login_needed" || kind === "incident.open" || kind === "extension.critical" || kind === "history.request") return "system";
+  // The system state's (routines, copies, the Mac's reporter): the same place as the failures.
+  if (kind.startsWith("routine.") || kind.startsWith("copy.") || kind.startsWith("reporter.")) return "system";
   return "other";
 }
 

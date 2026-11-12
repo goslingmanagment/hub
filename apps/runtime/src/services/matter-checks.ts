@@ -97,10 +97,9 @@ const PAID_ROLES: ReadonlySet<string> = new Set(["chatter", "team_lead"]);
 
 export type PeopleCheckKind = Extract<MatterCheckKind, `people.${string}`>;
 
-/** Where a person is opened: the person's card through one of their living logins, else the list of people. */
-function personLink(snapshot: PeopleCheckSnapshot, personId: number, tab = ""): string {
-  const login = snapshot.logins.find((one) => one.personId === personId && one.living);
-  return login === undefined ? "/workboard/people" : `/workboard/people/${login.userId}${tab}`;
+/** Where a person is opened: their card in Workboard «Люди» (`/people/:code`, a tab of it). */
+function personLink(code: string, tab = ""): string {
+  return `/workboard/people/${encodeURIComponent(code)}${tab}`;
 }
 
 /**
@@ -141,7 +140,7 @@ export function peopleCheckItems(snapshot: PeopleCheckSnapshot, now: Date): Reco
             person: person.code, leftOn: person.leftOn, logins: living.map((login) => login.username), deviceTokens: tokens,
             agentKeys: keys.map((key) => key.name),
           },
-          link: personLink(snapshot, person.id, "/access"),
+          link: personLink(person.code, "/access"),
         });
       }
       continue;
@@ -158,7 +157,7 @@ export function peopleCheckItems(snapshot: PeopleCheckSnapshot, now: Date): Reco
           pageLabels: [],
           money: false,
           evidence: { person: person.code, role: person.role },
-          link: personLink(snapshot, person.id),
+          link: personLink(person.code),
         });
       }
       if ((snapshot.workingPages.get(person.id) ?? []).length === 0) {
@@ -169,7 +168,7 @@ export function peopleCheckItems(snapshot: PeopleCheckSnapshot, now: Date): Reco
           pageLabels: [],
           money: false,
           evidence: { person: person.code, role: person.role },
-          link: personLink(snapshot, person.id),
+          link: personLink(person.code),
         });
       }
     }
@@ -187,7 +186,7 @@ export function peopleCheckItems(snapshot: PeopleCheckSnapshot, now: Date): Reco
         pageLabels: without,
         money: false,
         evidence: { person: person.code, pages: without, logins: living.map((login) => login.username) },
-        link: personLink(snapshot, person.id, "/access"),
+        link: personLink(person.code, "/access"),
       });
     }
   }
