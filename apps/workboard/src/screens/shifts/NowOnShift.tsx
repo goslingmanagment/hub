@@ -8,6 +8,7 @@ import { shiftDurationHint } from "@agency_hub_core/ui/shiftWhen";
 import { ShiftLink, personPath, shiftPath, useBackState } from "@/shared/links";
 import { UNANSWERED_NOW_LABEL } from "@/shared/metrics";
 import { useMe } from "@/shared/useMe";
+import { usePeopleIndex } from "@/shared/people";
 import { useNowOnShift, type NowShift } from "./data.js";
 
 /**
@@ -20,8 +21,14 @@ import { useNowOnShift, type NowShift } from "./data.js";
 export function NowOnShift({ page, only = null }: { page: string | null; only?: ReadonlySet<number> | null }) {
   const read = useNowOnShift(page);
   const { sales } = read;
-  // «Мои смены» of the owner: their own shifts alone.
-  const state = read.state && only ? { ...read.state, shifts: read.state.shifts.filter((shift) => only.has(shift.userId)), last: read.state.last && only.has(read.state.last.userId) ? read.state.last : null } : read.state;
+  const people = usePeopleIndex();
+  // «Мои смены» of the owner: their own shifts alone. Each named by its person.
+  const shown = read.state && only ? { ...read.state, shifts: read.state.shifts.filter((shift) => only.has(shift.userId)), last: read.state.last && only.has(read.state.last.userId) ? read.state.last : null } : read.state;
+  const state = shown && {
+    ...shown,
+    shifts: shown.shifts.map((shift) => ({ ...shift, username: people.nameOf(shift.userId, shift.username) })),
+    last: shown.last && { ...shown.last, username: people.nameOf(shown.last.userId, shown.last.username) },
+  };
   const { isOwner } = useMe();
   const location = useLocation();
   const { back } = useBackState("Смены");

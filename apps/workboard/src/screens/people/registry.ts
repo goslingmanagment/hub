@@ -31,6 +31,7 @@ import type {
 import { KernelApiError } from "@agency_hub_core/ui/hubClient";
 import { kernel } from "@/shared/hub";
 import { usersQuery } from "@/shared/reads";
+import { PEOPLE_REGISTRY_KEY, teamPeopleQuery } from "@agency_hub_core/ui/people";
 
 export type TeamPeople = KernelOperationResponse<"teamPeople">;
 export type RegistryPerson = TeamPeople["people"][number];
@@ -42,17 +43,13 @@ export type Proposal = OwnerCard["proposals"][number];
 export type CreatedPerson = KernelOperationResponse<"adminPersonCreate">;
 
 const MINUTE = 60_000;
-export const REGISTRY_KEY = ["people", "registry"] as const;
+export const REGISTRY_KEY = PEOPLE_REGISTRY_KEY;
 const cardKey = (code: string) => ["people", "person", code] as const;
 const OPEN_PROPOSALS_KEY = ["people", "proposals", "open"] as const;
 
-/** Everyone of the registry (`teamPeople`): the list and every card read the same entry. */
+/** Everyone of the registry (`teamPeople`): the list, every card and every team screen's names read the same entry. */
 export function useTeamPeople() {
-  return useQuery({
-    queryKey: REGISTRY_KEY,
-    queryFn: () => kernel.teamPeople(),
-    staleTime: MINUTE,
-  });
+  return useQuery(teamPeopleQuery(kernel));
 }
 
 /** The owner's card of one person (`adminPerson`): never enabled for anyone else. */

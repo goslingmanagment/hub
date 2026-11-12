@@ -1,5 +1,6 @@
 import { useAuthMe } from "@/api/queries";
 import { useTeamShifts } from "@/api/team";
+import { usePeopleIndex } from "@/api/people";
 import { useWaitingCounts, type WaitingRow } from "@/api/waiting";
 import { AppLink } from "@/components/shared/AppLink";
 import { formatDuration, formatTimeOfDay } from "@/lib/format";
@@ -70,8 +71,9 @@ function WaitingLine({ role }: { role: string }) {
   );
 }
 
-function ShiftsLine() {
+function ShiftsLine({ role }: { role: string }) {
   const shifts = useTeamShifts(lastDay());
+  const people = usePeopleIndex(role);
   const data = shifts.data;
   const now = data ? Date.parse(data.serverNow) : Date.now();
   const ongoing = data?.shifts
@@ -92,7 +94,7 @@ function ShiftsLine() {
         {data && ongoing.length === 0 && (
           <span className="text-text-muted">
             {last
-              ? `Никого. Последняя смена: ${last.username}, закончилась в ${formatTimeOfDay(last.endedAt)}`
+              ? `Никого. Последняя смена: ${people.nameOf(last.userId, last.username)}, закончилась в ${formatTimeOfDay(last.endedAt)}`
               : "Никого. За сутки смен не было"}
           </span>
         )}
@@ -102,7 +104,7 @@ function ShiftsLine() {
           const minutes = Math.max(0, Math.round((now - Date.parse(shift.startedAt)) / 60_000));
           return (
             <a key={shift.userId} href={workboardPersonHref(shift.userId)} className="home-strip-item">
-              <span className="font-medium">{shift.username}</span>
+              <span className="font-medium">{people.nameOf(shift.userId, shift.username)}</span>
               <span className="text-text-secondary">{shown.slice(0, 2).join(", ")}{shown.length > 2 ? ` +${shown.length - 2}` : ""}</span>
               <span className="text-text-muted">{formatDuration(minutes)}</span>
             </a>
@@ -120,7 +122,7 @@ export function HomeStrip() {
   return (
     <section className="home-strip card" aria-label="Что ждёт вас и кто на смене">
       <WaitingLine role={role} />
-      <ShiftsLine />
+      <ShiftsLine role={role} />
     </section>
   );
 }

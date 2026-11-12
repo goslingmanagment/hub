@@ -7,6 +7,7 @@ import { formatTimeOfDay, formatWeekdayDay } from "@agency_hub_core/ui/format";
 import { shiftWhen } from "@agency_hub_core/ui/shiftWhen";
 import { personPath, shiftPath, useBackState } from "@/shared/links";
 import { prefetchReview, useShiftsAround, type ReviewShift } from "./data.js";
+import { usePeopleIndex } from "@/shared/people";
 
 /**
  * ← the chatter's previous shift · «Другая смена» · next shift → (spec §4.2).
@@ -21,6 +22,7 @@ import { prefetchReview, useShiftsAround, type ReviewShift } from "./data.js";
 const LONG_LABEL = 28;
 
 export function ShiftStepper({ shift }: { shift: ReviewShift }) {
+  const people = usePeopleIndex();
   const client = useQueryClient();
   const location = useLocation();
   const navigate = useNavigate();
@@ -88,7 +90,7 @@ export function ShiftStepper({ shift }: { shift: ReviewShift }) {
               const label = shiftWhen(one);
               // Their shifts overlap this one: the clock says enough.
               return {
-                label: `${one.username} · ${label.time}`,
+                label: `${people.nameOf(one.userId, one.username)} · ${label.time}`,
                 hint: label.worked ?? undefined,
                 onSelect: () => go(one.userId, one.startedAt),
               };

@@ -9,6 +9,7 @@ import { useReportEdge } from "@/shared/ReportBody";
 import { postProblemWords } from "@/shared/reportPosts";
 import { ReportDetail } from "./ReportDetail";
 import { hasQuestion, reportFacts, reportRows, type ReportRow } from "./reportRows";
+import { usePeopleIndex } from "@/shared/people";
 
 /**
  * «Выплаты → Отчёты»: every chatter's report of the period, the newest day first, one row per person and day — when,
@@ -30,7 +31,8 @@ function WhenCell({ row }: { row: ReportRow }) {
 
 function WhoCell({ row }: { row: ReportRow }) {
   const { person } = row;
-  if (person.hubUser) return <PersonLink userId={person.hubUser.userId} name={person.hubUser.username} backLabel="Выплаты" />;
+  const people = usePeopleIndex();
+  if (person.hubUser) return <PersonLink userId={person.hubUser.userId} name={people.nameOf(person.hubUser.userId, person.hubUser.username)} backLabel="Выплаты" />;
   return <Person name={person.name} hint={person.slug === null ? "ledger не знает, чей пост" : "не связан с Hub"} />;
 }
 

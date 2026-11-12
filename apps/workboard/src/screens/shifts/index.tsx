@@ -6,6 +6,7 @@ import { formatDay, formatDayRange } from "@agency_hub_core/ui/format";
 import { addDays, daysInRange } from "@agency_hub_core/ui/moscow";
 import { currentWeek, stepWeek, withPeriod, type ResolvedPeriod } from "@agency_hub_core/ui/period";
 import { useMattersActive } from "@/shared/matters";
+import { usePeopleIndex } from "@/shared/people";
 import { SHIFT_SALES_KEY, usersQuery } from "@/shared/reads";
 import { liveLogins, personOfLogin, useTeamPeople } from "@/screens/people/registry";
 import { ScreenHeader } from "@/shared/ScreenHeader";
@@ -62,7 +63,8 @@ export function ShiftsScreen() {
   const mine = search.get("mine") === "1";
   const { active: waitingFromMatters } = useMattersActive();
   const own = useOwnLogins(mine);
-  const full = useMemo(() => (sales.data ? buildModel(sales.data, numbers.data, window) : undefined), [sales.data, numbers.data, window]);
+  const people = usePeopleIndex();
+  const full = useMemo(() => (sales.data ? buildModel(sales.data, numbers.data, window, people) : undefined), [sales.data, numbers.data, window, people]);
   const model = useMemo(() => (full && own ? {
     ...full,
     chatters: full.chatters.filter((row) => row.userId !== null && own.has(row.userId)),
