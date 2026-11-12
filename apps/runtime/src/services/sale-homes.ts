@@ -1,7 +1,10 @@
 import type { AgentTeamSale, AgentTeamSalesResponse, AgentTeamWork } from "@agency_hub_core/contracts";
 import {
+  listActiveSaleDecisions,
+  listCurrentReportsOfSales,
   listPersonLoginRows,
   listPersonScheduleSlotRows,
+  listSaleClaims,
   listShiftRows,
   listUserLeaveFacts,
   listVisiblePages,
@@ -17,10 +20,12 @@ import {
 import type { AppContext } from "../bootstrap.ts";
 import { readAgentTeamSales } from "./agent-team-sales.ts";
 import { moscowDayOf } from "./chatter-shifts.ts";
+import { ruleDecisionOf, ruleMarksOf, type ClaimView, type ReportView } from "./sale-claim-rules.ts";
 import {
   RULE_WEEKDAYS,
   SALE_RULE,
   homesOfSales,
+  type RuleMark,
   type RuleSale,
   type RuleSlot,
   type RuleWeekday,
@@ -39,7 +44,8 @@ import { ensureQueueCreated, type QueueCreationClient } from "./sync-queue.ts";
  *
  * The job recomputes the sales of this Moscow week and the one before every
  * hour — a new sale, a new send attribution, a shift that closed, a PPV whose
- * sender's next shift came: whatever changed the facts changes the home — and
+ * sender's next shift came, a statement handed in, an answer, the owner's
+ * decision (sale-claims.ts): whatever changed the facts changes the home — and
  * writes a row only when it changed. `sale-homes:refresh` recomputes any range.
  * The schedule slots of a junction and who has left the team come from the
  * people registry (0384) beside Hub's logins. In shadow: no screen reads the
@@ -128,14 +134,78 @@ export function ruleWorksOf(works: readonly AgentTeamWork[]): RuleWork[] {
 }
 
 /**
+ * What people said of a sale and what the owner decided, as the rule's inputs (package G): the statements of handed-in
+ * reports and the claims' answers (`marks`), the owner's decision (`resolution`, `claimedBy`, «никому», a pot).
+ */
+export interface SaleRuleInput {
+  marks: RuleMark[];
+  resolution: Array<{ userId: number; percent: number }> | null;
+  claimedBy: number | null;
+  ownerNobody: boolean;
+  ownerPot: string | null;
+}
+
+/**
+ * The rule's inputs of the sales named, by sale ref: the newest versions of the reports holding them, their claims and
+ * the owner's active decisions. A sale nobody said anything of and the owner never decided has none. In turn.
+ */
+export async function saleRuleInputs(db: Database, transactionIds: readonly number[]): Promise<Map<string, SaleRuleInput>> {
+  if (transactionIds.length === 0) return new Map();
+  const reports = await listCurrentReportsOfSales(db, transactionIds);
+  const claims = await listSaleClaims(db, { transactionIds });
+  const decisions = await listActiveSaleDecisions(db, transactionIds);
+  const views: ReportView[] = reports.map((report) => ({
+    handinId: report.handinId, shiftId: report.shiftId, userId: report.userId, version: report.version, submittedAt: report.submittedAt.getTime(), lines: report.lines,
+  }));
+  const marks = ruleMarksOf({ reports: views, claims: claims as readonly ClaimView[] });
+  const out = new Map<string, SaleRuleInput>();
+  const wanted = new Set(transactionIds);
+  for (const [sale, list] of marks) {
+    if (!wanted.has(sale)) continue;
+    out.set(String(sale), { marks: list, resolution: null, claimedBy: null, ownerNobody: false, ownerPot: null });
+  }
+  for (const [sale, decision] of decisions) {
+    const input = out.get(String(sale)) ?? { marks: [], resolution: null, claimedBy: null, ownerNobody: false, ownerPot: null };
+    out.set(String(sale), { ...input, ...ruleDecisionOf(decision) });
+  }
+  return out;
+}
+
+/**
  * The sales of an answer as the rule reads them. `pageIds` — the pages' ids by label; `leftAt` — when each person left
- * the team; `claimedBy` — the owner's claims by sale (Hub keeps none yet). Pure.
+ * the team; `claimedBy` — the owner's claims by sale; `inputs` — what people said and the owner decided (package G),
+ * which replace the answer's marks and split (the old shift-report tables, empty) when given. Pure.
  */
 export function ruleSalesOf(
   sales: readonly AgentTeamSale[],
-  options: { pageIds: ReadonlyMap<string, number>; leftAt: ReadonlyMap<number, number>; claimedBy?: ReadonlyMap<string, number> },
+  options: {
+    pageIds: ReadonlyMap<string, number>;
+    leftAt: ReadonlyMap<number, number>;
+    claimedBy?: ReadonlyMap<string, number>;
+    inputs?: ReadonlyMap<string, SaleRuleInput>;
+  },
 ): RuleSale[] {
-  return sales.map((sale) => ({
+  return sales.map((sale) => {
+    const base = ruleSaleOf(sale, options);
+    if (options.inputs === undefined) return base;
+    const input = options.inputs.get(sale.transactionRef);
+    if (input === undefined) return { ...base, marks: [], resolution: null };
+    return {
+      ...base,
+      marks: input.marks,
+      resolution: input.resolution,
+      claimedBy: input.claimedBy ?? base.claimedBy,
+      ownerNobody: input.ownerNobody,
+      ownerPot: input.ownerPot,
+    };
+  });
+}
+
+function ruleSaleOf(
+  sale: AgentTeamSale,
+  options: { pageIds: ReadonlyMap<string, number>; leftAt: ReadonlyMap<number, number>; claimedBy?: ReadonlyMap<string, number> },
+): RuleSale {
+  return ({
     ref: sale.transactionRef,
     pageId: options.pageIds.get(sale.pageLabel) ?? null,
     kind: sale.kind,
@@ -153,7 +223,7 @@ export function ruleSalesOf(
     })),
     resolution: sale.resolution,
     claimedBy: options.claimedBy?.get(sale.transactionRef) ?? null,
-  }));
+  });
 }
 
 /** The moment the answer's works are known up to: a PPV whose wait runs past it still waits (as the ledger reads it). Pure. */
@@ -208,7 +278,9 @@ export async function computeSaleHomes(
   const answer = await readAgentTeamSales(db, { from: input.from, to: input.to, now: input.now, pages: pages.map((page) => ({ id: page.id, label: page.label })) });
   const leftAt = await usersLeftAt(db, sendersOf(answer));
   const slots = await (input.slots ?? NO_SLOTS).slotsFor({ from: new Date(answer.workFrom), to: new Date(answer.workTo) });
-  const homes = homesOfSales(ruleSalesOf(answer.sales, { pageIds, leftAt }), ruleWorksOf(answer.works), slots, ruleNowOf(answer), rule);
+  // What people said in their handed-in reports and what the owner decided, instead of the old shift-report tables.
+  const inputs = await saleRuleInputs(db, answer.sales.map((sale) => Number(sale.transactionRef)).filter(Number.isSafeInteger));
+  const homes = homesOfSales(ruleSalesOf(answer.sales, { pageIds, leftAt, inputs }), ruleWorksOf(answer.works), slots, ruleNowOf(answer), rule);
   return { answer, homes, pageIds };
 }
 

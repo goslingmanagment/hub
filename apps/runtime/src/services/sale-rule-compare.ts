@@ -7,7 +7,7 @@ import { formatUsdFromMills, millsToNumber, sumMills } from "@agency_hub_core/sh
 
 import { readAgentTeamSales } from "./agent-team-sales.ts";
 import { dayOfWork, moscowDayOf } from "./chatter-shifts.ts";
-import { ruleNowOf, ruleSalesOf, ruleWorksOf, sendersOf, usersLeftAt, type SaleSlotProvider } from "./sale-homes.ts";
+import { ruleNowOf, ruleSalesOf, ruleWorksOf, saleRuleInputs, sendersOf, usersLeftAt, type SaleRuleInput, type SaleSlotProvider } from "./sale-homes.ts";
 import {
   LEDGER_GO_RULE,
   SALE_HOME_REASON_TEXT,
@@ -361,6 +361,8 @@ export function compareSaleRule(input: {
   workboard: ReadonlyArray<{ userId: number; username: string; daily: ReadonlyArray<{ date: string; salesNetMills: number }> }>;
   /** The platform's reference of each Hub sale: Gengar's layouts name a sale by it. */
   platformRefOf: ReadonlyMap<string, string>;
+  /** What people said and the owner decided (package G), as `sale_homes` reads them; absent — the answer's own (old) marks. */
+  inputs?: ReadonlyMap<string, SaleRuleInput>;
 }): SaleRuleComparison {
   const { ledger } = input;
   const notes: string[] = [];
@@ -383,7 +385,7 @@ export function compareSaleRule(input: {
     const works = new Map(answer.works.map((work) => [work.ref, work]));
     for (const work of answer.works) hubWorksAll.set(work.ref, work);
     const dayOf = dayOfIn(works);
-    const ruleSales = ruleSalesOf(answer.sales, { pageIds: input.pageIds, leftAt: input.leftAt });
+    const ruleSales = ruleSalesOf(answer.sales, { pageIds: input.pageIds, leftAt: input.leftAt, ...(input.inputs === undefined ? {} : { inputs: input.inputs }) });
     const ruleWorks = ruleWorksOf(answer.works);
     const now = ruleNowOf(answer);
     const homes = homesOfSales(ruleSales, ruleWorks, input.slots, now, SALE_RULE);
@@ -602,6 +604,7 @@ export async function runSaleRuleComparison(db: Database, input: {
     workboard: workboard.chatters,
     platformRefOf: new Map([...await listSalePlatformRefs(db, [...new Set(hub.flatMap(({ answer }) => answer.sales.map((sale) => Number(sale.transactionRef))))])]
       .map(([id, ref]) => [String(id), ref])),
+    inputs: await saleRuleInputs(db, [...new Set(hub.flatMap(({ answer }) => answer.sales.map((sale) => Number(sale.transactionRef))))]),
   });
 }
 

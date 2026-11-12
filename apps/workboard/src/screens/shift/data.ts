@@ -84,6 +84,21 @@ export function useOffPlatform(shiftId: number) {
   return { add, withdraw };
 }
 
+/** «Согласен» / «Не согласен» on a claim of another person (package G); the report read again after it. */
+export function useClaimAnswer(shiftId: number) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { claimId: number; answer: "agree" | "disagree"; note: string | null }) => kernel.saleClaimAnswer({
+      params: { claimId: input.claimId },
+      body: { answer: input.answer, note: input.note },
+    }),
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: shiftKey(shiftId) });
+      void queryClient.invalidateQueries({ queryKey: ["matters"] });
+    },
+  });
+}
+
 /** «Сдать смену»: Hub answers the report as it is now, with the new version. */
 export function useSubmit(shiftId: number) {
   const queryClient = useQueryClient();

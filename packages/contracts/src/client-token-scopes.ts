@@ -116,6 +116,8 @@ export const CLIENT_TOKEN_PROFILES = {
       "shiftReportOffPlatformAdd",
       "shiftReportOffPlatformWithdraw",
       "shiftReportSubmit",
+      // Заявки (ecosystem package G): the other side answers a claim on the extension's «Смена».
+      "saleClaimAnswer",
       // chatspace-tab-state-v1: the always-on ChatSpace tab's report (the server's own hub user).
       "clientChatspaceTabState",
       // onlyfans-feed-v1: what the page's ChatSpace already received, passed on

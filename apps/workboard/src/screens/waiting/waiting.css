@@ -218,6 +218,247 @@
     font-weight: 600;
   }
 
+  /* ------------------------------------------------------------ Package G's windows */
+
+  .wt-modal {
+    display: flex;
+    flex-direction: column;
+    gap: var(--ui-space-3);
+  }
+
+  .wt-modal__block {
+    display: flex;
+    flex-direction: column;
+    gap: var(--ui-space-2);
+  }
+
+  .wt-modal__title {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: var(--ui-space-2);
+    margin: 0;
+    font-size: var(--ui-fs-15);
+    line-height: var(--ui-lh-15);
+    font-weight: 600;
+  }
+
+  .wt-modal__hint {
+    margin: 0;
+    color: var(--ui-text-2);
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+  }
+
+  /* The sale: page, fan, kind, when, and its net on the right. */
+  .wt-sale {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: var(--ui-space-1) var(--ui-space-3);
+    margin: 0;
+    padding: var(--ui-space-3) var(--ui-space-4);
+    border-radius: var(--ui-radius);
+    background: var(--ui-hover-soft);
+    font-size: var(--ui-fs-15);
+    line-height: var(--ui-lh-15);
+  }
+
+  .wt-sale__kind,
+  .wt-sale__when {
+    color: var(--ui-text-2);
+  }
+
+  .wt-sale__money {
+    margin-left: auto;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .wt-home,
+  .wt-question {
+    margin: 0;
+    color: var(--ui-text-2);
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+  }
+
+  .wt-home__label {
+    color: var(--ui-text);
+    font-weight: 500;
+  }
+
+  /* The two people side by side: what each said, what their report counts. */
+  .wt-parties {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: var(--ui-space-3);
+  }
+
+  .wt-party {
+    display: flex;
+    flex-direction: column;
+    gap: var(--ui-space-1);
+    padding: var(--ui-space-3) var(--ui-space-4);
+    border: 1px solid var(--ui-line);
+    border-radius: var(--ui-radius);
+  }
+
+  .wt-party__name {
+    margin: 0;
+    font-size: var(--ui-fs-15);
+    line-height: var(--ui-lh-15);
+    font-weight: 600;
+  }
+
+  .wt-party__says {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    color: var(--ui-text);
+  }
+
+  .wt-party__counted {
+    margin: 0;
+    color: var(--ui-text-2);
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+  }
+
+  .wt-facts {
+    margin: 0;
+    padding: var(--ui-space-2) var(--ui-space-3);
+    border-radius: var(--ui-radius);
+    background: var(--ui-hover-soft);
+    color: var(--ui-text-2);
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+    list-style: none;
+  }
+
+  .wt-facts li + li {
+    margin-top: 2px;
+  }
+
+  /* The answers: each says what it gives under its name. */
+  .wt-outcomes {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: var(--ui-space-2);
+  }
+
+  .wt-outcome {
+    height: auto;
+    min-height: 52px;
+    flex-direction: column;
+    align-items: flex-start;
+    justify-content: center;
+    gap: 2px;
+    padding-block: var(--ui-space-2);
+    text-align: left;
+    white-space: normal;
+  }
+
+  .wt-outcome__label {
+    font-weight: 600;
+  }
+
+  .wt-outcome__gives {
+    color: var(--ui-text-2);
+    font-size: var(--ui-fs-13);
+    line-height: var(--ui-lh-13);
+    font-weight: 400;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* «Мимо площадки»: a line, the page it counts on, the two answers. */
+  .wt-off__head {
+    margin: 0;
+  }
+
+  .wt-off__total {
+    color: var(--ui-text-2);
+  }
+
+  .wt-offs {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    border-top: 1px solid var(--ui-line-soft);
+  }
+
+  .wt-off {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--ui-space-2) var(--ui-space-3);
+    padding: var(--ui-space-3) 0;
+    border-bottom: 1px solid var(--ui-line-soft);
+  }
+
+  .wt-off__what,
+  .wt-off__why {
+    margin: 0;
+  }
+
+  .wt-off__why {
+    color: var(--ui-text-2);
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+  }
+
+  .wt-off__act {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--ui-space-2);
+  }
+
+  /* A list of sales: when, what, how much (and an action). */
+  .wt-nobody {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    border-top: 1px solid var(--ui-line-soft);
+  }
+
+  .wt-nobody__line {
+    display: grid;
+    grid-template-columns: 132px minmax(0, 1fr) auto auto;
+    align-items: baseline;
+    gap: var(--ui-space-3);
+    padding: var(--ui-space-2) 0;
+    border-bottom: 1px solid var(--ui-line-soft);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .wt-nobody__when {
+    color: var(--ui-text-3);
+  }
+
+  .wt-nobody__what {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 2px var(--ui-space-3);
+    min-width: 0;
+  }
+
+  .wt-nobody__why {
+    color: var(--ui-text-2);
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+  }
+
+  .wt-nobody__total {
+    margin: 0;
+    text-align: right;
+  }
+
+  .wt-unlinked__id {
+    align-self: center;
+  }
+
   @media (max-width: 640px) {
     .wt-line {
       grid-template-columns: minmax(0, 1fr) auto;

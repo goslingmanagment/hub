@@ -1923,6 +1923,11 @@ async function pageHotTargets(app: Db, scope: ResolvedScope): Promise<WorkTarget
     ["shift_report_credits", "page_id"],
     // Whose each of the page's sales is by the one rule (0380).
     ["sale_homes", "page_id"],
+    // Claims and agreements (0404): the page's claims before the owner's decisions they name, and the confirmed
+    // «мимо площадки» counted on the page (its words may name a fan).
+    ["sale_claims", "page_id"],
+    ["sale_owner_decisions", "page_id"],
+    ["off_platform_sales", "page_id"],
     // Chat Memory week 2: the facts lane's runs over the page's chats (0313).
     ["fan_fact_runs", "page_id"],
     // …and the page's chats an owner's rebuild reads again (0322).

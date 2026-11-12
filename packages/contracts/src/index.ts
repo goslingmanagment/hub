@@ -101,6 +101,8 @@ export * from "./routes-shift-handins.ts";
 export * from "./people-messages.ts";
 export * from "./people-message-kinds.ts";
 export * from "./routes-people-messages.ts";
+export * from "./sale-claims.ts";
+export * from "./routes-sale-claims.ts";
 
 export * from "./routes-ofapi-banned-words.ts";
 export * from "./routes-model-applications.ts";

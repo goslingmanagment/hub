@@ -35,6 +35,8 @@ export const NARROW_WEB_SESSION_OPERATIONS = [
   "shiftReportOffPlatformAdd",
   "shiftReportOffPlatformWithdraw",
   "shiftReportSubmit",
+  // Заявки (ecosystem package G): the other side answers a claim on their shift report.
+  "saleClaimAnswer",
   // «Мои деньги» on «Мои смены» (ecosystem package H1): the person's own sums, behind their switch.
   "accountPay",
 ] as const satisfies readonly KernelOperationKey[];

@@ -1,9 +1,10 @@
 import type { KernelOperationResponse, ShiftReportBody, ShiftReportLine } from "@agency_hub_core/contracts";
 import { millsPercentOf, millsRoundedTo, millsToNumber } from "@agency_hub_core/shared";
 
-import { demoError, hashString, intBetween, rng, type DemoHandlers, type DemoReply, type DemoRequest } from "../core.ts";
+import { demoError, intBetween, rng, type DemoHandlers, type DemoReply, type DemoRequest } from "../core.ts";
 import { DEMO_USERS, demoPage, demoUserByRole, type DemoUser } from "../world.ts";
 import { DAY_MS, MINUTE_MS, chatterWorld, mskDay, type DemoSale, type DemoShift } from "./account-model.ts";
+import { demoClaimedLines, demoLineId, demoLineOutcome, demoOffPlatformOf, demoOwnShare, demoReportClaims, demoShiftId, onDemoSettle } from "./sale-claims.ts";
 
 /**
  * Отчёт смены (ecosystem package F) in the demo: the demo chatter's shifts as
@@ -24,20 +25,20 @@ type List = KernelOperationResponse<"shiftReportsList">;
 const SWITCH_DAYS = 5;
 
 interface Word { statement: ShiftReportLine["statement"]; shareWithUserId: number | null; shareWithName: string | null; note: string | null }
-interface Version { version: number; submittedAt: string; door: "workboard" | "telegram"; by: string; body: ShiftReportBody }
+interface Version { version: number; submittedAt: string; door: "workboard" | "telegram"; by: string; madeFor: string | null; body: ShiftReportBody }
 interface Kept {
   words: Map<number, Word>;
   comment: string;
-  offPlatform: Array<{ id: number; amountMills: number; fromWhom: string; whatFor: string; state: "pending" | "confirmed" | "rejected" }>;
+  offPlatform: Array<{ id: number; amountMills: number; fromWhom: string; whatFor: string; state: "pending" | "confirmed" | "rejected"; pageLabel: string | null }>;
   versions: Version[];
 }
 
 const kept = new Map<number, Kept>();
 let nextOffPlatformId = 900;
 
-/** A shift row's id: the Moscow day it is reported on, so it stays the same across requests. */
-const shiftIdOf = (shift: DemoShift) => Number(mskDay(shift.start).replaceAll("-", "").slice(2));
-const lineIdOf = (sale: DemoSale) => (hashString(sale.ref) % 900_000_000) + 1;
+/** A shift row's id: the Moscow day it is reported on and whose (sale-claims.ts), so it stays the same across requests. */
+const shiftIdOf = (shift: DemoShift, user: DemoUser) => demoShiftId(shift, user);
+const lineIdOf = (sale: DemoSale) => demoLineId(sale);
 const userOf = (username: string | null) => DEMO_USERS.find((user) => user.username === username) ?? null;
 
 function shiftsOf(user: DemoUser, now: Date) {
@@ -65,7 +66,23 @@ function keptOf(id: number): Kept {
   return one;
 }
 
-function line(sale: DemoSale, user: DemoUser, word: Word | undefined): ShiftReportLine {
+function line(sale: DemoSale, user: DemoUser, word: Word | undefined, now: Date): ShiftReportLine {
+  const share = word === undefined ? demoOwnShare(now, lineIdOf(sale), user.id) : null;
+  const plain = plainLine(sale, user, share === null ? word : { statement: "share", ...share });
+  // A claim on it settled (package G): agreed by the other side, or the owner's decision.
+  const outcome = demoLineOutcome(now, plain.transactionId, user.id);
+  if (outcome === null) return plain;
+  return {
+    ...plain,
+    group: outcome.mine ? "mine" : "near",
+    rule: { ...plain.rule, reason: outcome.reason, words: outcome.words, toName: outcome.toName, shareMills: outcome.mine ? outcome.amountMills : 0 },
+    statement: null, shareWithUserId: null, shareWithName: null,
+    amountMills: outcome.amountMills,
+    disputed: false,
+  };
+}
+
+function plainLine(sale: DemoSale, user: DemoUser, word: Word | undefined): ShiftReportLine {
   const sender = sale.kind === "ppv" ? userOf(sale.ppvSender) : null;
   const near = (sender !== null && sender.id !== user.id) || sale.overlap;
   const other = sender !== null && sender.id !== user.id ? sender : sale.overlap ? DEMO_USERS.find((one) => one.id !== user.id && one.role === "chatter" && one.pages.includes(sale.pageLabel)) ?? null : null;
@@ -151,7 +168,9 @@ function claimedLine(sale: Claimable, word: Word): ShiftReportLine {
 
 function bodyOf(shift: DemoShift, back: number, user: DemoUser, id: number, now: Date): ShiftReportBody {
   const one = keptOf(id);
-  const lines = salesOf(shift, back, user).map((sale) => line(sale, user, one.words.get(lineIdOf(sale))));
+  const lines = salesOf(shift, back, user).map((sale) => line(sale, user, one.words.get(lineIdOf(sale)), now));
+  // The sales the person claimed of a colleague's (package G): lines added by hand.
+  for (const claimed of demoClaimedLines(now, user.id, id)) if (!lines.some((row) => row.transactionId === claimed.transactionId)) lines.push(claimed);
   const known = new Set(lines.map((row) => row.transactionId));
   for (const sale of claimableOf(user, now)) {
     const word = one.words.get(sale.transactionId);
@@ -159,13 +178,16 @@ function bodyOf(shift: DemoShift, back: number, user: DemoUser, id: number, now:
   }
   lines.sort((a, b) => (a.group === b.group ? a.occurredAt.localeCompare(b.occurredAt) : a.group === "mine" ? -1 : 1));
   const labels = [...new Set([...shift.pages, ...lines.map((row) => row.pageLabel)])];
+  const offPlatform = [...one.offPlatform, ...demoOffPlatformOf(now, id)];
+  // Hub's rule of sums: a page is its lines and its confirmed «мимо площадки», rounded to the cent.
   const pages = labels.map((pageLabel) => ({
     pageLabel,
     platform: demoPage(pageLabel)?.platform ?? "fansly",
-    amountMills: toCent(lines.filter((row) => row.pageLabel === pageLabel).reduce((sum, row) => sum + row.amountMills, 0)),
+    amountMills: toCent(lines.filter((row) => row.pageLabel === pageLabel).reduce((sum, row) => sum + row.amountMills, 0)
+      + offPlatform.filter((row) => row.state === "confirmed" && row.pageLabel === pageLabel).reduce((sum, row) => sum + row.amountMills, 0)),
   }));
   return {
-    source: "draft", version: null, submittedAt: null, door: null, lines, offPlatform: [...one.offPlatform], comment: one.comment, pages,
+    source: "draft", version: null, submittedAt: null, door: null, lines, offPlatform, comment: one.comment, pages,
     totalMills: pages.reduce((sum, page) => sum + page.amountMills, 0), cut: false, computedAt: now.toISOString(),
   };
 }
@@ -192,7 +214,7 @@ interface Found { shift: DemoShift; back: number; id: number; owner: DemoUser }
 function find(request: DemoRequest, id: number): Found | null {
   for (const owner of DEMO_USERS.filter((user) => user.role === "chatter" && user.active)) {
     const shifts = shiftsOf(owner, request.now);
-    const at = shifts.findIndex((shift) => shiftIdOf(shift) === id);
+    const at = shifts.findIndex((shift) => shiftIdOf(shift, owner) === id);
     if (at >= 0) {
       const today = mskDay(request.now.getTime());
       const back = Math.round((Date.parse(`${today}T00:00:00Z`) - Date.parse(`${mskDay(shifts[at]!.start)}T00:00:00Z`)) / DAY_MS);
@@ -210,7 +232,9 @@ function seed(found: Found, now: Date) {
   if (salesOf(found.shift, found.back, found.owner).length === 0) return;
   const body = bodyOf(found.shift, found.back, found.owner, found.id, now);
   const at = new Date(found.shift.end + 7 * MINUTE_MS).toISOString();
-  one.versions.push({ version: 1, submittedAt: at, door: found.back === 4 ? "telegram" : "workboard", by: found.back === 4 ? "Генгар, со слов" : found.owner.name, body: { ...body, source: "version", version: 1, submittedAt: at, door: found.back === 4 ? "telegram" : "workboard", lines: body.lines.map((row) => ({ ...row, facts: null })) } });
+  // A version keeps the claims' state of its moment: a settled claim is a later version of its own.
+  const unsettled = { ...body, lines: body.lines.map((row) => ({ ...row, facts: null })) };
+  one.versions.push({ version: 1, submittedAt: at, door: found.back === 4 ? "telegram" : "workboard", by: found.back === 4 ? "Генгар, со слов" : found.owner.name, madeFor: null, body: { ...unsettled, source: "version", version: 1, submittedAt: at, door: found.back === 4 ? "telegram" : "workboard" } });
 }
 
 function reportOf(request: DemoRequest, found: Found): Report | DemoReply {
@@ -223,7 +247,7 @@ function reportOf(request: DemoRequest, found: Found): Report | DemoReply {
   const latest = one.versions.at(-1) ?? null;
   const draft = bodyOf(found.shift, found.back, found.owner, found.id, request.now);
   const view = own || (latest === null && viewer.role !== "chatter") ? draft : latest?.body ?? null;
-  const summary = (version: Version) => ({ version: version.version, submittedAt: version.submittedAt, door: version.door, by: version.by, totalMills: version.body.totalMills });
+  const summary = (version: Version) => ({ version: version.version, submittedAt: version.submittedAt, door: version.door, by: version.by, totalMills: version.body.totalMills, madeFor: version.madeFor });
   let afterSubmission: Report["afterSubmission"] = null;
   if (own && latest) {
     const held = new Set(latest.body.lines.map((row) => row.transactionId));
@@ -246,9 +270,30 @@ function reportOf(request: DemoRequest, found: Found): Report | DemoReply {
     afterSubmission,
     posts: own && latest ? postOf(latest.body, found.shift, found.owner) : [],
     colleagues: own ? DEMO_USERS.filter((user) => user.active && user.id !== found.owner.id && user.role === "chatter" && user.pages.some((page) => found.shift.pages.includes(page))).map((user) => ({ userId: user.id, name: user.name })) : [],
+    claims: demoReportClaims({ now: request.now, shiftId: found.id, ownerId: found.owner.id, lineIds: new Set((view?.lines ?? draft.lines).map((row) => row.transactionId)), own }),
     serverNow: request.now.toISOString(),
   };
 }
+
+/** A settled claim or «мимо площадки» decided (sale-claims.ts): the report's next version, made by the system. */
+onDemoSettle((shiftId, change, now) => {
+  const one = kept.get(shiftId);
+  const latest = one?.versions.at(-1);
+  if (one === undefined || latest === undefined) return;
+  const lines = latest.body.lines.map((row) => (change.kind === "line" && row.transactionId === change.transactionId ? { ...row, amountMills: change.amountMills, disputed: false } : row));
+  const offPlatform = change.kind === "off_platform" ? demoOffPlatformOf(now, shiftId) : latest.body.offPlatform;
+  const pages = latest.body.pages.map((page) => ({
+    ...page,
+    amountMills: toCent(lines.filter((row) => row.pageLabel === page.pageLabel && (row.group === "mine" || row.amountMills !== 0)).reduce((sum, row) => sum + row.amountMills, 0)
+      + offPlatform.filter((row) => row.state === "confirmed" && row.pageLabel === page.pageLabel).reduce((sum, row) => sum + row.amountMills, 0)),
+  }));
+  const version = one.versions.length + 1;
+  const at = now.toISOString();
+  one.versions.push({
+    version, submittedAt: at, door: "workboard", by: "Hub", madeFor: change.madeFor,
+    body: { ...latest.body, lines, offPlatform, pages, totalMills: pages.reduce((sum, page) => sum + page.amountMills, 0), version, submittedAt: at },
+  });
+});
 
 function idOf(request: DemoRequest): number {
   return Number(request.params.shiftId);
@@ -281,7 +326,7 @@ export const shiftReportHandlers: DemoHandlers = {
       enabled: true,
       enabledSince: new Date(since).toISOString(),
       shifts: shifts.map((shift) => {
-        const id = shiftIdOf(shift);
+        const id = shiftIdOf(shift, owner);
         const found = find(request, id);
         if (found) seed(found, request.now);
         const latest = keptOf(id).versions.at(-1) ?? null;
@@ -327,7 +372,7 @@ export const shiftReportHandlers: DemoHandlers = {
     const found = writable(request);
     if (isReply(found)) return found;
     const body = request.body as { amountMills: number; fromWhom: string; whatFor: string };
-    const row = { id: nextOffPlatformId++, amountMills: body.amountMills, fromWhom: body.fromWhom, whatFor: body.whatFor, state: "pending" as const };
+    const row = { id: nextOffPlatformId++, amountMills: body.amountMills, fromWhom: body.fromWhom, whatFor: body.whatFor, state: "pending" as const, pageLabel: null };
     keptOf(found.id).offPlatform.push(row);
     return { line: row, savedAt: request.now.toISOString() };
   },
@@ -345,7 +390,7 @@ export const shiftReportHandlers: DemoHandlers = {
     const body = bodyOf(found.shift, found.back, found.owner, found.id, request.now);
     const version = one.versions.length + 1;
     const at = request.now.toISOString();
-    one.versions.push({ version, submittedAt: at, door: "workboard", by: found.owner.name, body: { ...body, source: "version", version, submittedAt: at, door: "workboard", lines: body.lines.map((row) => ({ ...row, facts: null })) } });
+    one.versions.push({ version, submittedAt: at, door: "workboard", by: found.owner.name, madeFor: null, body: { ...body, source: "version", version, submittedAt: at, door: "workboard", lines: body.lines.map((row) => ({ ...row, facts: null })) } });
     return reportOf(request, found);
   },
 };

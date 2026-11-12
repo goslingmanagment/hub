@@ -1,7 +1,7 @@
 import { ChevronRight, Copy, Plus, X } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { useParams } from "react-router";
-import type { ShiftReportBody, ShiftReportClaimableResponse, ShiftReportResponse } from "@agency_hub_core/contracts";
+import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useParams, useSearchParams } from "react-router";
+import type { ShiftReportBody, ShiftReportClaim, ShiftReportClaimableResponse, ShiftReportResponse } from "@agency_hub_core/contracts";
 import {
   Badge,
   Button,
@@ -44,6 +44,7 @@ import {
   type Line,
   type LineWord,
 } from "./data";
+import { ClaimOnLine, LooseClaims } from "./Claims";
 import "./shift.css";
 
 /**
@@ -111,6 +112,37 @@ function WordChip({ line }: { line: Line }) {
   }
   if (line.added) return <Badge tone="neutral" className="shf-chip">долёт</Badge>;
   return null;
+}
+
+// ───────────────────────────────────────────────────────────── Claims on lines (package G)
+
+interface LineClaims {
+  shiftId: number;
+  /** The reader's own report: the claims speak to them; else in the third person. */
+  own: boolean;
+  /** The claims of each sale of the report, by transaction. */
+  of: ReadonlyMap<number, readonly ShiftReportClaim[]>;
+  /** The sale the address names (`?sale=`): the line a matter brought the reader to. */
+  focus: number | null;
+}
+
+const ClaimsContext = createContext<LineClaims>({ shiftId: 0, own: true, of: new Map(), focus: null });
+
+/** A line's claims under it, and the line marked when the address names it. */
+function useLineClaims(line: Line) {
+  const context = useContext(ClaimsContext);
+  const claims = context.of.get(line.transactionId) ?? [];
+  const focused = context.focus === line.transactionId;
+  const ref = useRef<HTMLLIElement>(null);
+  useEffect(() => {
+    if (focused) ref.current?.scrollIntoView({ block: "center" });
+  }, [focused]);
+  const below = claims.length === 0 ? null : (
+    <div className="shf-claims-on">
+      {claims.map((claim) => <ClaimOnLine key={claim.id} claim={claim} shiftId={context.shiftId} netMills={line.netMills} own={context.own} />)}
+    </div>
+  );
+  return { below, focused, ref, id: `sale-${line.transactionId}` };
 }
 
 // ───────────────────────────────────────────────────────────── «Почему»: the facts behind the reason
@@ -246,9 +278,10 @@ function MineMenu({ line, edit, onNote }: { line: Line; edit: Editing; onNote: (
 function MineSale({ line, edit, showFan }: { line: Line; edit: Editing; showFan: boolean }) {
   const [noting, setNoting] = useState(false);
   const why = useWhy(line, edit.shiftStart);
+  const claims = useLineClaims(line);
   const off = line.amountMills === 0 && line.netMills > 0;
   return (
-    <li className={off ? "shf-sale shf-sale--off" : "shf-sale"}>
+    <li ref={claims.ref} id={claims.id} className={`${off ? "shf-sale shf-sale--off" : "shf-sale"}${claims.focused ? " shf-sale--focus" : ""}`}>
       <span className="shf-sale__time">{clockOf(line.occurredAt)}</span>
       <div className="shf-sale__main">
         <p className="shf-sale__what">
@@ -265,6 +298,7 @@ function MineSale({ line, edit, showFan }: { line: Line; edit: Editing; showFan:
             edit.say({ transactionId: line.transactionId, ...wordOf(line), note: note === "" ? null : note });
           }} />
           : line.note && <p className="shf-sale__note">{line.note}</p>}
+        {claims.below}
       </div>
       <span className="shf-sale__money">
         {(line.statement === "share" || line.statement === "not_mine") && line.rule.shareMills !== line.amountMills && <Money mills={line.rule.shareMills} muted className="shf-was" />}
@@ -277,7 +311,8 @@ function MineSale({ line, edit, showFan }: { line: Line; edit: Editing; showFan:
 
 /** A fan of a page: their sales in one line («ппв ×3 $36.00 · подписка $4.00»), opened to the single sales. */
 function FanRow({ group, edit }: { group: FanGroup; edit: Editing }) {
-  const [open, setOpen] = useState(group.marked);
+  const claims = useContext(ClaimsContext);
+  const [open, setOpen] = useState(group.marked || group.lines.some((line) => claims.focus === line.transactionId || claims.of.has(line.transactionId)));
   if (group.lines.length === 1) {
     return <ul className="shf-sales shf-sales--single"><MineSale line={group.lines[0]!} edit={edit} showFan /></ul>;
   }
@@ -324,9 +359,10 @@ function MineSection({ body, edit, own }: { body: ShiftReportBody; edit: Editing
 function NearSale({ line, edit }: { line: Line; edit: Editing }) {
   const [claiming, setClaiming] = useState(false);
   const why = useWhy(line, edit.shiftStart);
+  const claims = useLineClaims(line);
   const claimed = line.statement === "mine";
   return (
-    <li className={claimed ? "shf-sale" : "shf-sale shf-sale--near"}>
+    <li ref={claims.ref} id={claims.id} className={`${claimed ? "shf-sale" : "shf-sale shf-sale--near"}${claims.focused ? " shf-sale--focus" : ""}`}>
       <span className="shf-sale__time">{clockOf(line.occurredAt)}</span>
       <div className="shf-sale__main">
         <p className="shf-sale__what">
@@ -344,6 +380,7 @@ function NearSale({ line, edit }: { line: Line; edit: Editing }) {
             edit.say({ transactionId: line.transactionId, statement: "mine", shareWithUserId: null, shareWithName: null, note });
           }} />
           : line.note && <p className="shf-sale__note">{line.note}</p>}
+        {claims.below}
       </div>
       <span className="shf-sale__money">
         {claimed ? <Money mills={line.amountMills} /> : <Money mills={line.netMills} muted />}
@@ -359,13 +396,14 @@ function NearSale({ line, edit }: { line: Line; edit: Editing }) {
 
 function NearSection({ body, edit, own }: { body: ShiftReportBody; edit: Editing; own: boolean }) {
   const lines = nearLines(body);
+  const claims = useContext(ClaimsContext);
   if (lines.length === 0) return null;
   const claimed = lines.filter((line) => line.statement === "mine").length;
   return (
     <Disclosure
       size="md"
       className="shf-near"
-      defaultOpen={claimed > 0}
+      defaultOpen={claimed > 0 || lines.some((line) => claims.focus === line.transactionId || claims.of.has(line.transactionId))}
       summary={own ? "Рядом, но не ваши по правилу" : "Рядом, но не его по правилу"}
       hint={own
         ? `${plural(lines.length, "продажа", "продажи", "продаж")} на ваших страницах${claimed > 0 ? `, ${claimed} вы взяли себе` : ""}`
@@ -467,7 +505,7 @@ function AddSection({ shiftId, body, editable, own, say }: { shiftId: number; bo
       <header className="shf-card__head">
         <h2 id="shf-add" className="shf-card__title">{editable ? "Добавить" : "Мимо площадки"}</h2>
         <span className="shf-card__hint">
-          {editable ? "продажу, которой нет в отчёте, или деньги мимо площадки" : own ? "ждут подтверждения владельца и в итог не входят" : "со слов, ждут подтверждения владельца"}
+          {editable ? "продажу, которой нет в отчёте, или деньги мимо площадки" : own ? "в итог входят, когда владелец подтвердит" : "со слов: в итог входят, когда владелец подтвердит"}
         </span>
         {editable && !adding && (
           <span className="shf-card__action shf-add-actions">
@@ -478,14 +516,14 @@ function AddSection({ shiftId, body, editable, own, say }: { shiftId: number; bo
       </header>
       {body.offPlatform.length > 0 && (
         <>
-          {editable && <p className="shf-off-label">Мимо площадки: ждут подтверждения владельца и в итог не входят</p>}
+          {editable && <p className="shf-off-label">Мимо площадки: в итог входят, когда владелец подтвердит</p>}
           <ul className="shf-sales">
             {body.offPlatform.map((line) => (
               <li key={line.id} className="shf-sale shf-sale--off-platform">
                 <span className="shf-sale__time" />
                 <div className="shf-sale__main">
                   <p className="shf-sale__what"><span>{line.fromWhom}</span><span className="shf-sale__kind">{line.whatFor}</span></p>
-                  <p className="shf-sale__reason">{line.state === "pending" ? "ждёт подтверждения владельца" : line.state === "confirmed" ? "владелец подтвердил" : "владелец не подтвердил"}</p>
+                  <p className="shf-sale__reason">{line.state === "pending" ? "ждёт подтверждения владельца" : line.state === "confirmed" ? `владелец подтвердил${line.pageLabel ? `: в сумме ${line.pageLabel}` : ""}` : "владелец отклонил: в итог не входит"}</p>
                 </div>
                 <span className="shf-sale__money"><Money mills={line.amountMills} muted={line.state !== "confirmed"} /></span>
                 <span className="shf-sale__act">
@@ -581,12 +619,13 @@ function HandedState({ report }: { report: ShiftReportResponse }) {
   const latest = report.latest!;
   const first = report.versions.at(-1);
   const how = [
-    latest.door === "telegram" ? "со слов, через Генгара" : null,
-    report.versions.length > 1 && first ? `версия ${latest.version}, первая в ${formatTimeOfDay(first.submittedAt)}` : null,
+    latest.madeFor !== null ? `версия ${latest.version} (${latest.madeFor})` : null,
+    latest.madeFor === null && latest.door === "telegram" ? "со слов, через Генгара" : null,
+    latest.madeFor === null && report.versions.length > 1 && first ? `версия ${latest.version}, первая в ${formatTimeOfDay(first.submittedAt)}` : null,
   ].filter((part): part is string => part !== null).join(", ");
   return (
     <span className="shf-totals__handed">
-      <Badge tone="success">Сдан в {formatTimeOfDay(latest.submittedAt)}</Badge>
+      <Badge tone="success">Сдан в {formatTimeOfDay((latest.madeFor !== null ? report.versions.find((one) => one.madeFor === null) ?? latest : latest).submittedAt)}</Badge>
       {how !== "" && <span className="shf-totals__how">{how}</span>}
     </span>
   );
@@ -655,7 +694,9 @@ function ScreenSkeleton() {
 
 export function ShiftScreen() {
   const params = useParams();
+  const [search] = useSearchParams();
   const shiftId = Number(params.shiftId);
+  const focusParam = Number(search.get("sale"));
   const { role } = useMe();
   const back = useBackTarget(role === "chatter" ? { to: "/my/shifts", label: "Мои смены" } : { to: "/shifts", label: "Смены" });
   const read = useShiftReport(shiftId);
@@ -690,6 +731,15 @@ export function ShiftScreen() {
   const edit: Editing = { editable, shiftStart: report.shift.startedAt, colleagues: report.colleagues, say: (word) => lineWord.mutate(word) };
   const body = report.view;
   const hint = shiftDurationHint(when);
+  // The claims of the report's sales: each under its line; one of the reader's sales that is not a line, above.
+  const lineIds = new Set(body?.lines.map((line) => line.transactionId) ?? []);
+  const claimsOf = new Map<number, ShiftReportClaim[]>();
+  for (const claim of report.claims) {
+    if (claim.transactionId === null || !lineIds.has(claim.transactionId)) continue;
+    claimsOf.set(claim.transactionId, [...(claimsOf.get(claim.transactionId) ?? []), claim]);
+  }
+  const loose = report.claims.filter((claim) => claim.direction === "incoming" && (claim.transactionId === null || !lineIds.has(claim.transactionId)));
+  const lineClaims: LineClaims = { shiftId, own, of: claimsOf, focus: Number.isSafeInteger(focusParam) && focusParam > 0 ? focusParam : null };
 
   let status: ReactNode;
   if (handed) status = null;
@@ -734,6 +784,8 @@ export function ShiftScreen() {
           </Notice>
         )}
         {fixing && <p className="shf-fixing">Вы исправляете сданный отчёт: отметки сохраняются сразу, а в отчёт попадут, когда вы сдадите его заново.</p>}
+        <ClaimsContext.Provider value={lineClaims}>
+        {own && <LooseClaims claims={loose} shiftId={shiftId} />}
         {body === null ? (
           <EmptyState title="Смена ещё не сдана">Отчёт появится здесь, когда {report.shift.personName} сдаст смену.</EmptyState>
         ) : (
@@ -747,6 +799,7 @@ export function ShiftScreen() {
             {!editable && body.source === "draft" && !own && <p className="shf-cut">Черновик: смена ещё не сдана, суммы предварительные.</p>}
           </>
         )}
+        </ClaimsContext.Provider>
       </div>
     </>
   );

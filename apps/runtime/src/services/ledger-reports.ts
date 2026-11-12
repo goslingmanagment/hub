@@ -107,6 +107,13 @@ const ledgerReportDaysSchema = z.object({
     posted_at: nullable(z.string()),
     report_id: nullable(z.number().int().positive()),
     post_id: nullable(z.number().int().positive()),
+    // The report handed in in Hub for the person and day (ledger#82; an older ledger sends none): its page, how the post
+    // compares, what the day accrues from.
+    hub_micros: nullable(micros).optional().default(null),
+    hub_diff_micros: nullable(micros).optional().default(null),
+    hub_state: nullable(z.string()).optional().default(null),
+    basis: nullable(z.string()).optional().default(null),
+    accrue_micros: nullable(micros).optional().default(null),
   })),
 });
 
@@ -181,6 +188,9 @@ export function reportPageOf(day: LedgerReportDay): TeamLedgerReportPage {
     diffMills: diff === 0 ? null : diff,
     state: day.state,
     postedAt: day.posted_at,
+    hubMills: day.hub_micros === null ? null : millsOf(day.hub_micros),
+    hubState: day.hub_state,
+    basis: day.basis,
   };
 }
 
@@ -198,6 +208,9 @@ export function draftPages(draft: LedgerReport): TeamLedgerReportPage[] {
       diffMills: diff === 0 ? null : diff,
       state: page.post_state !== "" ? page.post_state : posted === null ? "draft_only" : diff === 0 ? "posted_equal" : "posted_changed",
       postedAt: posted === null ? null : draft.posted_at,
+      hubMills: null,
+      hubState: null,
+      basis: null,
     };
   });
 }

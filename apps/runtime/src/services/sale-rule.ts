@@ -37,6 +37,15 @@ import { SALE_LAST_WRITER_HOURS, dayOfWork, moscowDayOf } from "./chatter-shifts
  *     sale_claims) is theirs whole, on no work. A claim moves no other home:
  *     when later facts find a holder, the claim stops applying.
  *
+ * Before all of it but 4 (plan §4.1, `ownerAndAgreementFirst`): the owner's
+ * decision of a sale — his split, «никому», a pot — and the statements of the
+ * people the rule gives it to agreeing to give it away, in Go's own forms
+ * only: one «моё» with every person of the home saying «не моё», two «делим»
+ * naming each other with the rest of the home saying «не моё», everyone of the
+ * home saying «не моё». A claim alone never moves a home (a nobody's sale, a
+ * pot's, one the owner must decide keep theirs); at a junction Go's marks stand
+ * as they are (a lone «моё» there settles it). Go: off.
+ *
  * The same examples pin this file and ledger's Go (tests/sale-rule.test.ts is
  * split_test.go case by case). Money is mills, split through money.ts as the
  * ledger splits it.
@@ -63,6 +72,8 @@ export const SALE_RULE = {
   senderLeftGoesToHolders: true,
   /** At a junction where no holder wrote last, the one holder whose schedule slot runs takes it (owner, 2026-11-12). Go: off. */
   junctionToSlotOwner: true,
+  /** The owner's decision and the agreeing statements of the people the rule names come before the rule (plan §4.1). Go: off. */
+  ownerAndAgreementFirst: true,
 } as const;
 
 export type SaleRuleConfig = {
@@ -72,10 +83,13 @@ export type SaleRuleConfig = {
   readonly lastWriterHours: number;
   readonly senderLeftGoesToHolders: boolean;
   readonly junctionToSlotOwner: boolean;
+  readonly ownerAndAgreementFirst: boolean;
 };
 
 /** Ledger's Go `internal/split` as it stands: the owner's newer answers off. For the comparison with `fact_homes`. */
-export const LEDGER_GO_RULE: SaleRuleConfig = { ...SALE_RULE, version: "ledger-go", senderLeftGoesToHolders: false, junctionToSlotOwner: false };
+export const LEDGER_GO_RULE: SaleRuleConfig = {
+  ...SALE_RULE, version: "ledger-go", senderLeftGoesToHolders: false, junctionToSlotOwner: false, ownerAndAgreementFirst: false,
+};
 
 /** The kinds of a home. */
 export const SALE_HOME_KINDS = ["shift", "visit", "pot", "waiting", "decide", "nobody", "before_rule", "unknown"] as const;
@@ -107,6 +121,9 @@ export const SALE_HOME_REASONS = [
   "marks",
   "owner_split",
   "owner_claim",
+  "owner_nobody",
+  "owner_pot",
+  "agreed",
 ] as const;
 export type SaleHomeReason = (typeof SALE_HOME_REASONS)[number];
 
@@ -135,6 +152,9 @@ export const SALE_HOME_REASON_TEXT: Readonly<Record<SaleHomeReason, string>> = {
   marks: "по меткам чаттеров",
   owner_split: "раздел владельца",
   owner_claim: "ничья, отдана по слову владельца",
+  owner_nobody: "владелец решил: никому",
+  owner_pot: "владелец решил: в общак",
+  agreed: "по согласию: тот, чья она по правилу, согласился",
 };
 
 /** The days of the week a slot runs on, as the people registry writes them (0384 `person_schedule_slots.weekdays`). */
@@ -205,6 +225,10 @@ export interface RuleSale {
   resolution: ReadonlyArray<{ userId: number; percent: number }> | null;
   /** Whom the owner gives the sale if it is nobody's (ledger's sale_claims); null — nobody. */
   claimedBy: number | null;
+  /** The owner decided the sale is nobody's («никому»). */
+  ownerNobody?: boolean;
+  /** The owner gave the sale to a pot (its slug); null — not. */
+  ownerPot?: string | null;
 }
 
 export interface SaleShare {
@@ -311,6 +335,10 @@ const homeOf = (
 
 function home(rule: SaleRuleConfig, sale: RuleSale, ix: Index, now: number): SaleHome {
   const found = ruleHome(rule, sale, ix, now);
+  if (rule.ownerAndAgreementFirst && found.kind !== "before_rule") {
+    const first = ownerOrAgreed(sale, found, ix);
+    if (first !== null) return first;
+  }
   if (found.kind === "nobody" && sale.claimedBy !== null) {
     return homeOf("shift", "owner_claim", {
       shares: [{ workRef: null, userId: sale.claimedBy, percent: 100, mills: sale.netMills }], slotJunction: found.slotJunction,
@@ -436,6 +464,100 @@ function beforeRule(rule: SaleRuleConfig, work: RuleWork): boolean {
 
 function whole(work: RuleWork, net: number, reason: SaleHomeReason): SaleHome {
   return homeOf(work.kind, reason, { shares: [{ workRef: work.ref, userId: work.userId, percent: 100, mills: net }] });
+}
+
+// ─── The owner's decision and agreeing statements first (plan §4.1) ──────────
+
+/**
+ * The home the owner's decision gives, or the people the rule names agreeing to give it away; null — neither, the
+ * rule's home stands. At a junction Go's own marks and the owner's split already settled it (`decide`).
+ */
+function ownerOrAgreed(sale: RuleSale, found: SaleHome, ix: Index): SaleHome | null {
+  if (sale.ownerNobody === true) return homeOf("nobody", "owner_nobody", { slotJunction: found.slotJunction });
+  if (sale.ownerPot != null && sale.ownerPot !== "") return homeOf("pot", "owner_pot", { pot: sale.ownerPot });
+  const resolution = sale.resolution ?? [];
+  if (resolution.length > 0) {
+    if (found.reason === "owner_split") return null;
+    return sharesHome(splitShares(sale.netMills, resolution, (user) => workRefFor(user, sale, found, ix)), "owner_split", ix);
+  }
+  return agreedHome(sale, found, ix);
+}
+
+/**
+ * The owner's split as shares of the net: in the order given, the last share takes the rounding, so the shares sum to
+ * the net exactly (as `decide` splits it). `workRefOf` names each person's work. Pure.
+ */
+export function splitShares(
+  net: number,
+  resolution: ReadonlyArray<{ userId: number; percent: number }>,
+  workRefOf: (userId: number) => string | null = () => null,
+): SaleShare[] {
+  let given = 0;
+  return resolution.map((share, at): SaleShare => {
+    const mills = at === resolution.length - 1 ? net - given : millsToNumber(millsPercentOf(net, share.percent));
+    given += mills;
+    return { workRef: workRefOf(share.userId), userId: share.userId, percent: share.percent, mills };
+  });
+}
+
+/** Halves of a net as two «делим» naming each other give them: the odd mill to the lower user id. Pure. */
+export function halvesOf(net: number, a: number, b: number): Array<{ userId: number; mills: number }> {
+  const low = Math.min(a, b);
+  const high = Math.max(a, b);
+  const first = millsToNumber(millsPercentOf(net, 50));
+  return [{ userId: low, mills: first }, { userId: high, mills: net - first }];
+}
+
+/** A person's work for a share: the one the rule's home already names, else their work holding the sale (a shift first). */
+function workRefFor(user: number, sale: RuleSale, found: SaleHome, ix: Index): string | null {
+  const share = found.shares.find((one) => one.userId === user && one.workRef !== null);
+  if (share) return share.workRef;
+  let visit: string | null = null;
+  for (const ref of sale.holders) {
+    const at = ix.byRef.get(ref);
+    if (at === undefined) continue;
+    const work = ix.works[at]!;
+    if (work.userId !== user) continue;
+    if (work.kind === "shift") return work.ref;
+    visit ??= work.ref;
+  }
+  return visit;
+}
+
+/**
+ * The people the rule's home names agreeing to give it away, in Go's forms (`judgeMarks`), every mark confirmed (in a
+ * handed-in report or an answer): one «моё» of another person with each of them saying «не моё»; two «делим» naming
+ * each other with the rest of them saying «не моё»; each of them saying «не моё» — nobody's. A home that names nobody
+ * (nobody's, a pot's, the owner's to decide, before the rule) is never moved by words alone.
+ */
+function agreedHome(sale: RuleSale, found: SaleHome, ix: Index): SaleHome | null {
+  if (found.reason === "marks" || found.reason === "owner_claim") return null;
+  const people = found.kind === "waiting"
+    ? (sale.ppvSender === null ? [] : [sale.ppvSender.userId])
+    : [...new Set(found.shares.map((share) => share.userId))];
+  if (people.length === 0) return null;
+  const marks = sale.marks.filter((mark) => mark.confirmed);
+  if (marks.length === 0) return null;
+  const saysNotMine = (user: number) => marks.some((mark) => mark.userId === user && mark.mark === "not_mine");
+  const net = sale.netMills;
+  const settled = judgeMarks(marks);
+  if (settled.kind === "mine") {
+    const user = settled.users[0]!;
+    if (people.includes(user) || !people.every(saysNotMine)) return null;
+    const mark = markOf(marks, user);
+    const mills = mark.ownAmountMills !== null && mark.ownAmountMills < net ? mark.ownAmountMills : net;
+    return sharesHome([{ workRef: workRefFor(user, sale, found, ix), userId: user, percent: percentOfNet(mills, net), mills }], "agreed", ix);
+  }
+  if (settled.kind === "share") {
+    const [a, b] = settled.users as [number, number];
+    if (!people.every((user) => user === a || user === b || saysNotMine(user))) return null;
+    const halves = halvesOf(net, a, b);
+    const same = found.shares.length === 2 && halves.every((half) => found.shares.some((share) => share.userId === half.userId && share.mills === half.mills));
+    if (same) return null;
+    return sharesHome(halves.map((half) => ({ workRef: workRefFor(half.userId, sale, found, ix), userId: half.userId, percent: 50, mills: half.mills })), "agreed", ix);
+  }
+  if (settled.kind === "not_mine" && people.every(saysNotMine)) return homeOf("nobody", "agreed", { slotJunction: found.slotJunction });
+  return null;
 }
 
 // ─── marks.go ────────────────────────────────────────────────────────────────

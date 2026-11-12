@@ -32,12 +32,15 @@ import {
   findNewestPeopleMessage,
   findPeopleMessagePersonByCode,
   findPeopleMessageRefusal,
+  findSaleClaim,
   getConfigOverride,
   insertPeopleMessage,
   listConfigAudit,
   listCurrentHandinVersionsSubmitted,
   listCustomOrdersMovedToModel,
   listExistingPeopleMessageKeys,
+  listHandinNames,
+  listHandinSalesByIds,
   listHeldPeopleMessages,
   listOpenMattersOfKinds,
   listPeopleMessageModels,
@@ -59,6 +62,7 @@ import {
 } from "@agency_hub_core/shared";
 
 import { nameToWhom } from "@agency_hub_core/look";
+import { formatUsdFromMills } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../../bootstrap.ts";
 import { auditCtx } from "../../api/request-auth.ts";
@@ -117,6 +121,9 @@ const MATTER_LOOKBACK_MS = 48 * HOUR_MS;
 const SENDING_STALE_MS = 15 * MINUTE_MS;
 const HELD_SHOWN = 5;
 const SHOT_NOT_GIVEN_KIND = "custom.shot_not_given";
+/** A colleague's claim on a person's sale waiting for their answer (package G, sale-claims.ts). */
+const SALE_CLAIM_KIND = "sale.claim";
+const REMINDER_KINDS = { [SHIFT_REPORT_MISSING_KIND]: "shift.report.missing", [SHOT_NOT_GIVEN_KIND]: "custom.shot.give", [SALE_CLAIM_KIND]: "claim.confirm" } as const;
 
 /** A message the service makes: what the rules judge, and the text sent when it differs from the one kept. */
 interface Outgoing extends MessageCandidate {
@@ -217,6 +224,25 @@ async function reminderOf(app: MessagesApp, matter: MatterRow): Promise<Outgoing
       eventAt: matter.openedAt,
     };
   }
+  if (matter.kind === SALE_CLAIM_KIND) {
+    // «Подтвердите договорённость»: who claims, the sale's amount and page, the link to the line. No fan in Telegram.
+    const claim = await findSaleClaim(app.db, Number(matter.object?.id ?? Number.NaN));
+    const sale = claim?.transactionId == null ? undefined : (await listHandinSalesByIds(app.db, [claim.transactionId]))[0];
+    if (claim === null || sale === undefined || claim.claimantUserId === null) return null;
+    const who = (await listHandinNames(app.db, [claim.claimantUserId])).get(claim.claimantUserId) ?? "Коллега";
+    const what = `${formatUsdFromMills(sale.netMills)} на ${sale.pageLabel}`;
+    return {
+      kind: "claim.confirm",
+      key: `claim.confirm:${matter.key}`,
+      recipient,
+      objectType: "matter",
+      objectId: matter.key,
+      about: `заявка: ${who}, ${what}`,
+      text: `${claim.statement === "share" ? `${who} предлагает делить продажу ${what} пополам` : `${who} считает продажу ${what} своей`}. `
+        + `Подтвердите договорённость или ответьте в Workboard: ${teamLink(app, matter.link ?? "/workboard/my/shifts")}`,
+      eventAt: matter.openedAt,
+    };
+  }
   if (matter.kind === SHOT_NOT_GIVEN_KIND) {
     const orderId = Number(matter.object?.id ?? Number.NaN);
     const order = Number.isSafeInteger(orderId) ? await findCustomOrder(app.db, orderId) : null;
@@ -270,9 +296,9 @@ async function candidatesOf(app: MessagesApp, chats: PeopleMessageChats, now: Da
   await guarded("reminders", async () => {
     // The people's night: no reminder is made; in the morning the matter, if still open, makes it.
     if (inQuietHours(now)) return [];
-    const matters = (await listOpenMattersOfKinds(app.db, [SHIFT_REPORT_MISSING_KIND, SHOT_NOT_GIVEN_KIND]))
+    const matters = (await listOpenMattersOfKinds(app.db, Object.keys(REMINDER_KINDS)))
       .filter((matter) => now.getTime() - matter.openedAt.getTime() <= MATTER_LOOKBACK_MS && "userId" in matter.owner);
-    const kindOf = (matter: MatterRow) => (matter.kind === SHIFT_REPORT_MISSING_KIND ? "shift.report.missing" : "custom.shot.give");
+    const kindOf = (matter: MatterRow) => REMINDER_KINDS[matter.kind as keyof typeof REMINDER_KINDS];
     const done = await listExistingPeopleMessageKeys(app.db, matters.map((matter) => `${kindOf(matter)}:${matter.key}`));
     const reminders: Outgoing[] = [];
     for (const matter of matters) {
@@ -512,7 +538,7 @@ const MISSING: Readonly<Record<PeopleMessageKind, string>> = {
   "custom.card.to_model": "Заказов в системе пока нет: пример появится с первым.",
   "shift.report.missing": "Дел «Сдайте смену» пока не было: смену в системе ещё никто не сдаёт.",
   "custom.shot.give": "Дел «Кастом снят, отдайте фану» пока не было.",
-  "claim.confirm": "Заявок «моё / делим» в системе пока нет.",
+  "claim.confirm": "Заявок «моё / делим» ещё не было: смену в системе ещё никто не сдаёт.",
   "payout.text": "Пример появится после первого нажатия: текст даёт расчёт выплаты ledger, сейчас он в «Выплате» человека под «Скопировать».",
   "newcomer.invite": "Пример появится после первого нажатия: сейчас текст в окне приглашения под «Скопировать сообщение».",
 };
@@ -533,14 +559,13 @@ async function exampleOf(app: MessagesApp, kind: PeopleMessageKind, chats: Peopl
       return card === null ? null : { text: card.text, about: `последний заказ: ${card.about.replace(/^заказ /u, "")}` };
     }
     case "shift.report.missing":
-    case "custom.shot.give": {
-      const key = await findNewestMatterKeyOfKind(app.db, kind === "shift.report.missing" ? SHIFT_REPORT_MISSING_KIND : SHOT_NOT_GIVEN_KIND);
+    case "custom.shot.give":
+    case "claim.confirm": {
+      const key = await findNewestMatterKeyOfKind(app.db, kind === "shift.report.missing" ? SHIFT_REPORT_MISSING_KIND : kind === "claim.confirm" ? SALE_CLAIM_KIND : SHOT_NOT_GIVEN_KIND);
       const matter = key === null ? null : await findMatterByKey(app.db, key);
       const one = matter === null ? null : await reminderOf(app, matter);
       return one === null ? null : { text: one.text, about: `последнее дело: ${one.about}, ${one.recipient.kind === "person" ? one.recipient.name : ""}`.replace(/, $/u, "") };
     }
-    case "claim.confirm":
-      return null;
     case "payout.text":
     case "newcomer.invite": {
       const newest = await findNewestPeopleMessage(app.db, kind);

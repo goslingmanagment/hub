@@ -30,6 +30,7 @@ import { customOrderRouteSchemas } from "./routes-custom-orders.ts";
 import { accountReportsRouteSchemas } from "./routes-account-reports.ts";
 import { peopleRouteSchemas } from "./routes-people.ts";
 import { shiftHandinRouteSchemas } from "./routes-shift-handins.ts";
+import { saleClaimRouteSchemas } from "./routes-sale-claims.ts";
 // One sign-in across the names Hub serves: the one-time code between names (ecosystem plan §3.2).
 import { signinRouteSchemas } from "./routes-signin.ts";
 // Система → «Состояние»: every routine and copy, from the owner's place (ecosystem plan, package P).
@@ -8337,7 +8338,8 @@ export type RouteSchemas = typeof baseRouteSchemas
   & typeof systemStateRouteSchemas
   & typeof customOrderRouteSchemas
   & typeof shiftHandinRouteSchemas
-  & typeof peopleMessageRouteSchemas;
+  & typeof peopleMessageRouteSchemas
+  & typeof saleClaimRouteSchemas;
 export const routeSchemas: RouteSchemas = {
   ...baseRouteSchemas,
   ...ofapiActionRouteSchemas,
@@ -8356,6 +8358,7 @@ export const routeSchemas: RouteSchemas = {
   ...customOrderRouteSchemas,
   ...shiftHandinRouteSchemas,
   ...peopleMessageRouteSchemas,
+  ...saleClaimRouteSchemas,
 };
 export type AuthState = z.infer<typeof authStateSchema>;
 export type AuthUser = z.infer<typeof authUserSchema>;

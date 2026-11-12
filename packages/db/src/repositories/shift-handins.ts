@@ -235,6 +235,10 @@ export interface OffPlatformRow {
   whatFor: string;
   state: OffPlatformState;
   createdAt: Date;
+  /** The page a confirmed amount counts on (0404); null — not decided, or decided before pages were named. */
+  pageId: number | null;
+  decidedAt: Date | null;
+  decidedNote: string | null;
 }
 
 function offPlatformOf(row: Row): OffPlatformRow {
@@ -247,13 +251,18 @@ function offPlatformOf(row: Row): OffPlatformRow {
     whatFor: String(row.what_for),
     state: row.state as OffPlatformState,
     createdAt: date(row.created_at),
+    pageId: nullableNum(row.page_id),
+    decidedAt: nullableDate(row.decided_at),
+    decidedNote: text(row.decided_note),
   };
 }
+
+const OFF_PLATFORM_COLUMNS = sql`id, handin_id, user_id, amount_mills, from_whom, what_for, state, created_at, page_id, decided_at, decided_note`;
 
 /** The report's off-platform lines, oldest first, the withdrawn ones left out. */
 export async function listOffPlatform(db: Database, handinId: number): Promise<OffPlatformRow[]> {
   const result = await db.execute<Row>(sql`
-    select id, handin_id, user_id, amount_mills, from_whom, what_for, state, created_at
+    select ${OFF_PLATFORM_COLUMNS}
     from off_platform_sales where handin_id = ${handinId} and state <> 'withdrawn' order by id`);
   return result.rows.map(offPlatformOf);
 }
@@ -266,7 +275,7 @@ export async function insertOffPlatform(
     insert into off_platform_sales (handin_id, user_id, amount_mills, from_whom, what_for, created_at, created_by_user_id, created_by_agent_key_id)
     values (${input.handinId}, ${input.userId}, ${input.amountMills}, ${input.fromWhom}, ${input.whatFor}, ${input.at.toISOString()}::timestamptz,
       ${input.byUserId}, ${input.byAgentKeyId})
-    returning id, handin_id, user_id, amount_mills, from_whom, what_for, state, created_at`);
+    returning ${OFF_PLATFORM_COLUMNS}`);
   await touchDraft(db, input.handinId, input.at);
   return offPlatformOf(result.rows[0]!);
 }
@@ -308,6 +317,8 @@ export interface HandinVersionLine {
   added: boolean;
   /** Counted as the person claims it while the rule gives it to someone else: until the other side or the owner agrees. */
   disputed: boolean;
+  /** A claim on it settled (0404): the other side agreed, or the owner decided; the amount is what that gives. Absent — not settled. */
+  settled?: "agreed" | "owner";
 }
 
 export interface HandinVersionPage {
@@ -321,7 +332,17 @@ export interface HandinVersionOffPlatform {
   fromWhom: string;
   whatFor: string;
   state: OffPlatformState;
+  /** A confirmed amount's page: it counts in that page's sum (0404). Absent — none. */
+  pageLabel?: string | null;
 }
+
+/**
+ * Why the system made a version on someone's decision (0404): a claim settled — agreed by the other side or decided by
+ * the owner — or the owner's word on «мимо площадки». Null — the person handed it in.
+ */
+export type HandinVersionMadeFor =
+  | { kind: "claim"; claimId: number; transactionId: number; outcome: "agreed" | "first" | "second" | "half" | "nobody" }
+  | { kind: "off_platform"; offPlatformId: number; decision: "confirmed" | "rejected" };
 
 export interface HandinVersionRow {
   id: number;
@@ -340,10 +361,12 @@ export interface HandinVersionRow {
   comment: string;
   dayPaid: boolean | null;
   ruleVersion: string;
+  /** Made by the system on a decision; null — handed in by the person. */
+  madeFor: HandinVersionMadeFor | null;
 }
 
 const VERSION_COLUMNS = sql`v.id, v.handin_id, v.version, v.submitted_at, v.door, v.actor_user_id, v.agent_key_id, v.telegram_message_ref,
-  v.telegram_sender_id, v.total_mills, v.pages, v.lines, v.off_platform, v.comment, v.day_paid, v.rule_version`;
+  v.telegram_sender_id, v.total_mills, v.pages, v.lines, v.off_platform, v.comment, v.day_paid, v.rule_version, v.made_for`;
 
 function versionOf(row: Row): HandinVersionRow {
   return {
@@ -363,7 +386,14 @@ function versionOf(row: Row): HandinVersionRow {
     comment: String(row.comment ?? ""),
     dayPaid: row.day_paid === null || row.day_paid === undefined ? null : Boolean(row.day_paid),
     ruleVersion: String(row.rule_version),
+    madeFor: madeForOf(row.made_for),
   };
+}
+
+function madeForOf(value: unknown): HandinVersionMadeFor | null {
+  if (value === null || value === undefined) return null;
+  const parsed: unknown = typeof value === "string" ? JSON.parse(value) : value;
+  return typeof parsed === "object" && parsed !== null && "kind" in parsed ? (parsed as HandinVersionMadeFor) : null;
 }
 
 /**
@@ -386,20 +416,23 @@ export async function insertHandinVersion(
     comment: string;
     dayPaid: boolean | null;
     ruleVersion: string;
+    /** Made by the system on a decision (0404); absent — the person handed it in. */
+    madeFor?: HandinVersionMadeFor | null;
     at: Date;
   },
 ): Promise<HandinVersionRow> {
   const version = (input.handin.currentVersion ?? 0) + 1;
   const at = input.at.toISOString();
+  const madeFor = input.madeFor == null ? null : JSON.stringify(input.madeFor);
   const result = await db.execute<Row>(sql`
     insert into shift_handin_versions (handin_id, version, submitted_at, door, actor_user_id, agent_key_id, telegram_message_ref,
-      telegram_sender_id, total_mills, pages, lines, off_platform, comment, day_paid, rule_version)
+      telegram_sender_id, total_mills, pages, lines, off_platform, comment, day_paid, rule_version, made_for)
     values (${input.handin.id}, ${version}, ${at}::timestamptz, ${input.door}, ${input.actorUserId}, ${input.agentKeyId},
       ${input.telegramMessageRef}, ${input.telegramSenderId}, ${input.totalMills}, ${JSON.stringify(input.pages)}::jsonb,
       ${JSON.stringify(input.lines)}::jsonb, ${JSON.stringify(input.offPlatform)}::jsonb, ${input.comment}, ${input.dayPaid},
-      ${input.ruleVersion})
+      ${input.ruleVersion}, ${madeFor}::jsonb)
     returning id, handin_id, version, submitted_at, door, actor_user_id, agent_key_id, telegram_message_ref,
-      telegram_sender_id, total_mills, pages, lines, off_platform, comment, day_paid, rule_version`);
+      telegram_sender_id, total_mills, pages, lines, off_platform, comment, day_paid, rule_version, made_for`);
   await db.execute(sql`
     update shift_handins set state = 'submitted', current_version = ${version}, submitted_at = ${at}::timestamptz,
       updated_at = clock_timestamp()

@@ -81,6 +81,7 @@ import { registerMediaLookRoutes } from "../modules/media-looks/index.ts";
 import { registerTeamLedgerRoutes } from "../modules/team-ledger/index.ts";
 import { registerPeopleRoutes } from "../modules/people/index.ts";
 import { registerShiftHandinRoutes } from "../modules/shift-handins/index.ts";
+import { registerSaleClaimRoutes } from "../modules/sale-claims/index.ts";
 import { registerFanQueueRoutes } from "../modules/fan-queues/index.ts";
 import { registerMatterRoutes } from "../modules/matters/index.ts";
 import { registerAgentReportRoutes } from "../modules/agent-reports/index.ts";
@@ -719,6 +720,7 @@ export async function buildApiServer(appContext: AppContext) {
   registerCustomOrderRoutes(server, moduleContext);
   // Отчёт смены: the shift and its report — the person's session and device token, an agent «со слов», the ledger's feed.
   registerShiftHandinRoutes(server, moduleContext);
+  registerSaleClaimRoutes(server, moduleContext);
   // «Рассылки» kept by Hub: the page's outreaches, shared by its team, and each fan's send claimed once.
   registerOutreachRoutes(server, moduleContext);
   // Their files: the upload streams raw bytes to disk (its own body-parser scope).
