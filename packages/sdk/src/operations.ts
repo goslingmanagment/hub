@@ -340,6 +340,8 @@ export const kernelOperations = {
   ofapiTypedExportList: { method: "GET", path: "/api/v1/admin/ofapi/exports" },
   ofapiTypedExportResume: { method: "POST", path: "/api/v1/admin/ofapi/exports/:jobId/resume" },
   ofapiTypedExportRows: { method: "GET", path: "/api/v1/admin/ofapi/exports/:jobId/rows" },
+  ofapiVaultListsGet: { method: "GET", path: "/api/v1/admin/ofapi/media/vault-lists" },
+  ofapiVaultListsRefresh: { method: "POST", path: "/api/v1/admin/ofapi/media/vault-lists/refresh" },
   ofapiVendorUsageRefresh: { method: "POST", path: "/api/v1/admin/ofapi/vendor-usage" },
   ofapiWebhookReceive: { method: "POST", path: "/api/v1/ofapi/webhook" },
   openApiJson: { method: "GET", path: "/api/v1/openapi.json" },

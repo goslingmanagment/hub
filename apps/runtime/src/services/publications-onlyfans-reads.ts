@@ -344,3 +344,87 @@ export async function readOnlyfansQueue(ctx: OnlyfansReadContext, input: { from:
     intentIds,
   };
 }
+
+// ---------------------------------------------------------------------------
+// The page's vault lists (8-docs 2026-11-12-of-vault-album, plan PR 3): GET
+// /media/vault/lists, lightweight, 30 a page (OnlyFansAPI answers more with a
+// validation error), by offset until the list ends. Complete only when a page
+// said there is no more and every page read and parsed; anything else is cut
+// short and proves nothing about a list being gone.
+// ---------------------------------------------------------------------------
+
+export const ONLYFANS_VAULT_LISTS_PAGE = 30;
+/** About 8–9 pages for the real pages; the screen's button promises at most 12 requests. */
+export const ONLYFANS_VAULT_LISTS_MAX_REQUESTS = 12;
+
+export interface OnlyfansVaultList {
+  id: string;
+  name: string;
+  /** custom, posts, messages, stories, streams, media_stickers, ... */
+  type: string;
+  mediaCount: number | null;
+}
+
+const countOf = (value: unknown): number | null => typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
+
+/** One vault list of a lightweight answer (id, name, type, canUpdate, mediaCount) or of a full one (the per-kind counts). */
+export function parseOnlyfansVaultList(raw: unknown): OnlyfansVaultList | null {
+  const list = object(raw);
+  const id = idOf(list?.id);
+  if (!list || !id || typeof list.name !== "string" || typeof list.type !== "string" || list.type.length === 0) return null;
+  const kinds = [list.photosCount, list.videosCount, list.gifsCount, list.audiosCount].map(countOf);
+  const summed = kinds.every((count): count is number => count !== null) ? kinds.reduce((sum, count) => sum + count, 0) : null;
+  return { id, name: list.name, type: list.type, mediaCount: countOf(list.mediaCount) ?? summed };
+}
+
+export type OnlyfansVaultListsPage = { ok: true; list: unknown[]; hasMore: boolean; intentId: string } | { ok: false; reason: string; intentId: string };
+
+export interface OnlyfansVaultListsWalk {
+  lists: OnlyfansVaultList[];
+  /** Reached the end: every page read and parsed, no list seen twice. */
+  complete: boolean;
+  /** Why not complete; null when complete. */
+  reason: string | null;
+  requests: number;
+  intentIds: string[];
+}
+
+/**
+ * Walk the pages `readPage` returns from offset 0 until one says there is no
+ * more, at most `maxRequests`. Whatever was seen is returned either way. A
+ * list seen twice means the order moved under the walk (a list was made
+ * meanwhile): the walk is not complete, since another may have been skipped.
+ */
+export async function walkOnlyfansVaultListPages(
+  readPage: (offset: number) => Promise<OnlyfansVaultListsPage>,
+  maxRequests = ONLYFANS_VAULT_LISTS_MAX_REQUESTS,
+): Promise<OnlyfansVaultListsWalk> {
+  const seen = new Map<string, OnlyfansVaultList>();
+  const intentIds: string[] = [];
+  const cut = (reason: string): OnlyfansVaultListsWalk => ({ lists: [...seen.values()], complete: false, reason, requests: intentIds.length, intentIds });
+  let shifted = false;
+  for (let offset = 0; intentIds.length < maxRequests; offset += ONLYFANS_VAULT_LISTS_PAGE) {
+    const page = await readPage(offset);
+    intentIds.push(page.intentId);
+    if (!page.ok) return cut(page.reason);
+    for (const raw of page.list) {
+      const list = parseOnlyfansVaultList(raw);
+      if (!list) return cut("vault_list_unreadable");
+      if (seen.has(list.id)) shifted = true;
+      seen.set(list.id, list);
+    }
+    if (!page.hasMore) return shifted ? cut("order_moved") : { lists: [...seen.values()], complete: true, reason: null, requests: intentIds.length, intentIds };
+    if (page.list.length === 0) return cut("empty_page_with_more");
+  }
+  return cut("read_budget");
+}
+
+/** Every vault list of the page, as owner-action reads marked `publication_read`. */
+export async function readOnlyfansVaultLists(ctx: OnlyfansReadContext, maxRequests = ONLYFANS_VAULT_LISTS_MAX_REQUESTS): Promise<OnlyfansVaultListsWalk> {
+  return walkOnlyfansVaultListPages(async (offset) => {
+    const read = await readAction(ctx, { action: "vault_lists_list", pageId: ctx.pageId, limit: ONLYFANS_VAULT_LISTS_PAGE, offset } as OfapiAction);
+    if (read.kind !== "confirmed") return { ok: false, reason: read.kind === "failed" ? read.reason : "vault_lists_absent", intentId: read.intentId };
+    const data = object(read.data);
+    return { ok: true, list: Array.isArray(data?.list) ? data.list : [], hasMore: data?.hasMore === true, intentId: read.intentId };
+  }, maxRequests);
+}

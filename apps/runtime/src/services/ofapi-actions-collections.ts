@@ -37,6 +37,8 @@ export function ofapiCollectionRequest(command: OfapiCollectionAction, accountId
       return request("DELETE", `${userLists}/${list}/users/${user}`, "ack");
     case "user_list_pin_toggle":
       return request("POST", `${userLists}/${list}/users/${user}/pin`, "ack");
+    case "vault_lists_list":
+      return { ...request("GET", vaultLists, "read"), query: { limit: String(command.limit), offset: String(command.offset), lightweight: "true" } };
     case "vault_list_create":
       return request("POST", vaultLists, "resource", { name: command.name });
     case "vault_list_update":
@@ -92,6 +94,9 @@ export function ofapiCollectionResultConfirmed(command: OfapiCollectionAction, r
   const data = record(responseData);
   if (!data || negativeReceipt(data)) return false;
   switch (command.action) {
+    case "vault_lists_list":
+      return typeof data.hasMore === "boolean" && Array.isArray(data.list)
+        && data.list.every(item => returnedId(record(item)?.id) !== null);
     case "user_list_create":
     case "vault_list_create":
       return returnedId(data.id) !== null;

@@ -110,7 +110,7 @@ export function planOfapiReadCollection(
     )
       throw new Error(`Unsupported collection selection ${entry}`);
     const query: Record<string, string> = {};
-    if (def.query.limit) query.limit = def.id === "fans_expired" ? "20" : "50";
+    if (def.query.limit) query.limit = def.id === "fans_expired" ? "20" : def.id === "vault_lists" ? "30" : "50";
     if (def.query.offset) query.offset = "0";
     Object.assign(query, def.fixedQuery);
     if (def.scope === "smart_link" && !def.detail) query.account_ids = accountId;

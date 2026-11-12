@@ -78,6 +78,7 @@ import {
   runOnlyfansChecksTick,
 } from "./services/publications-onlyfans-checks.ts";
 import { refreshOnlyfansQueueSnapshots } from "./services/publications-onlyfans-queue.ts";
+import { answerOnlyfansVaultListWalks } from "./services/onlyfans-vault-lists.ts";
 import { runFanslyChecksTick } from "./services/publications-fansly-checks.ts";
 import { followFanslyDeletions } from "./services/publications-fansly-delete.ts";
 import { followFanslyWithdrawals } from "./services/publications-fansly-withdraw.ts";
@@ -669,8 +670,10 @@ export async function startWorkerServices(
     // ...and each OnlyFans page's schedule: hourly while Hub posts are in it,
     // daily otherwise, at once on the owner's "Обновить" (plan PR 5b).
     const queueReads = await refreshOnlyfansQueueSnapshots(app);
-    if (report.checked > 0 || queueReads > 0) {
-      app.logger?.info({ component: "publications_onlyfans_checks", ...report, queueReads }, "publications: OnlyFans checks");
+    // ...and the vault lists (albums) of a page the owner asked to walk (vault album plan PR 3).
+    const vaultListWalks = await answerOnlyfansVaultListWalks(app);
+    if (report.checked > 0 || queueReads > 0 || vaultListWalks > 0) {
+      app.logger?.info({ component: "publications_onlyfans_checks", ...report, queueReads, vaultListWalks }, "publications: OnlyFans checks");
     }
   });
 

@@ -27,3 +27,15 @@ export function useOfapiMedia(pageId: number, offset: number) {
     meta: { suppressGlobalError: true },
   });
 }
+/** The page's OnlyFans vault lists (albums) as Hub last walked them; polled faster while a walk is asked for. */
+export function useOfapiVaultLists(pageId: number) {
+  return useQuery({
+    queryKey: ["ofapi", "vault-lists", pageId],
+    enabled: pageId > 0,
+    queryFn: () => kernel.ofapiVaultListsGet({ query: { pageId } }),
+    refetchInterval: (query) => (query.state.data?.walk.requestedAt ? 5000 : 30000),
+    meta: { suppressGlobalError: true },
+  });
+}
+export const requestOfapiVaultListsWalk = (pageId: number) =>
+  kernel.ofapiVaultListsRefresh({ body: { pageId } });

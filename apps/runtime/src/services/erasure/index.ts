@@ -1961,6 +1961,9 @@ async function pageHotTargets(app: Db, scope: ResolvedScope): Promise<WorkTarget
     ["post_comments", "page_id"],
     ["subject_refresh_state", "page_id"],
     ["creator_vault_albums", "page_id"],
+    // OnlyFans vault lists as Hub last walked them, and the page's walk state (0394).
+    ["onlyfans_vault_lists", "page_id"],
+    ["onlyfans_vault_list_walks", "page_id"],
     ["page_subscription_tiers", "page_id"],
     ["page_walls", "page_id"],
     ["page_automated_messages", "page_id"],

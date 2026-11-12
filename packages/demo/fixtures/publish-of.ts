@@ -14,6 +14,7 @@ import {
   profileVisitors,
 } from "./publish-of-ofapi.ts";
 import { demoPublications, publicationQueues, publicationSettings } from "./publish-of-publications.ts";
+import { ofapiVaultLists } from "./publish-of-vault-lists.ts";
 
 /** Demo answers of this area's screens (see demo/core.ts): «Публикации» and
  *  OnlyFans through the vendor (links, Smart Links, media, exports, actions). */
@@ -114,6 +115,12 @@ export const publishOfHandlers: DemoHandlers = {
     const offset = Math.max(0, queryNumber(request, "offset", 0));
     const limit = Math.min(100, Math.max(1, queryNumber(request, "limit", 50)));
     return ofapiMedia(request.now, page, offset, limit);
+  },
+
+  ofapiVaultListsGet: (request) => {
+    const page = mappedPage(request);
+    if (!isPage(page)) return page;
+    return ofapiVaultLists(request.now, page);
   },
 
   ofapiTypedExportList: (request) => {

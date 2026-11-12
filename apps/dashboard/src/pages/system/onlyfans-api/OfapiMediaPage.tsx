@@ -11,6 +11,7 @@ import { RowMenu } from "@/components/ui/RowMenu";
 import { OFAPI_OFF_WORD } from "@/lib/statusWords";
 import { useOfapi } from "../shared.js";
 import { OfapiOffBar } from "./OfapiOffBar.js";
+import { OfapiVaultListsCard } from "./OfapiVaultListsCard.js";
 import { formatDateTime } from "@/lib/format";
 import { ruPlural } from "@/lib/plural";
 
@@ -439,6 +440,7 @@ export function OfapiMediaPage() {
           )}
         </section>
       )}
+      {!unbound && pageId > 0 && <OfapiVaultListsCard pageId={pageId} owner={owner} writeOff={writeOff} />}
       {!unbound && (
         <section className="card" aria-labelledby="media-uploads-title">
           <div className="card-header">
