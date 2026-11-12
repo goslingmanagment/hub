@@ -141,6 +141,12 @@ export const AGENT_READ_AUDIT_SUMMARY_SHAPES = {
   /** «Кто этот ключ» (0396): the key a service asked about (its id; null — no such key), and the answer in
    *  `outcome` (`active`, `inactive`). */
   subjectKeyId: "count",
+  /** A vault album's price before «да» (8-docs 2026-11-12-of-vault-album): how many files it priced
+   *  (`mediaCount`), the price in OnlyFansAPI credits, whether the album was `found`, `new` or only
+   *  `similar` titles exist, and whether Hub asked for a fresh walk of the page's albums. */
+  credits: "count",
+  albumKind: "identifier",
+  walkRequested: "flag",
 } as const satisfies Record<string, AgentReadAuditSummaryShape>;
 
 export type AgentReadAuditSummaryKey = keyof typeof AGENT_READ_AUDIT_SUMMARY_SHAPES;
