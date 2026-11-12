@@ -11,6 +11,7 @@ import { sha256Hex } from "@agency_hub_core/shared";
 
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
+import { updateAgentKeyPages } from "../apps/runtime/src/services/agent-keys.ts";
 import { AGENT_KEY_TOKEN_PREFIX, createUserAccount } from "../apps/runtime/src/services/auth.ts";
 import {
   resetIntegrationDatabase,
@@ -455,5 +456,115 @@ describe("agent read plane: key issuance", () => {
     expect(await capabilitiesAudit()).toHaveLength(0);
     const stored = await findAgentKeyByDigest(testDb.db, sha256Hex(token));
     expect(stored?.capabilities).toEqual(["read:datasets"]);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  // Owner, 2026-11-12: a live key's pages change in place (CLI agent-keys:pages)
+  // instead of a new key being issued and installed again.
+  async function pagesAudit() {
+    const result = await testDb!.pool.query<{ source: string; actor_user_id: string | null; metadata: Record<string, unknown> }>(
+      `select source, actor_user_id::text, metadata from audit_events
+       where event_type = 'agent_key.pages_updated' order by id`,
+    );
+    return result.rows;
+  }
+
+  it("the owner adds and removes a live key's pages: the token reaches the new page, the change is audited", async (context) => {
+    if (!testDb || !server) {
+      context.skip();
+      return;
+    }
+    const cookie = await loginCookie("dima", "owner-secret");
+    const created = await server.inject({
+      method: "POST",
+      url: "/api/v1/agent/keys",
+      headers: { cookie },
+      payload: createBody({ capabilities: ["write:publication_drafts"] }),
+    });
+    const { token, key } = created.json() as { token: string; key: { id: number } };
+    const drafts = (label: string) => server!.inject({
+      method: "GET",
+      url: `/api/v1/agent/pages/${label}/publications`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect((await drafts("lora-1")).statusCode).not.toBe(200);
+
+    const owner = await testDb.pool.query<{ id: string }>("select id::text from users where username = 'dima'");
+    const ownerId = Number(owner.rows[0]!.id);
+    const widened = await updateAgentKeyPages(
+      appContext,
+      { id: key.id, add: ["lora-1"], remove: [], note: "one more page" },
+      { source: "cli", actorUserId: ownerId },
+    );
+    expect(widened).toMatchObject({ pageLabels: ["lora-2", "lora-1"], capabilities: ["write:publication_drafts"] });
+    expect((await drafts("lora-1")).statusCode).toBe(200);
+
+    const moved = await updateAgentKeyPages(
+      appContext,
+      { id: key.id, add: [], remove: ["lora-2"], note: "not hers any more" },
+      { source: "cli", actorUserId: ownerId },
+    );
+    expect(moved.pageLabels).toEqual(["lora-1"]);
+    expect((await drafts("lora-2")).statusCode).not.toBe(200);
+
+    // Adding a page the key already has changes nothing and audits nothing.
+    await updateAgentKeyPages(appContext, { id: key.id, add: ["lora-1"], remove: [] }, { source: "cli", actorUserId: ownerId });
+
+    const audit = await pagesAudit();
+    expect(audit).toEqual([
+      {
+        source: "cli",
+        actor_user_id: owner.rows[0]!.id,
+        metadata: { agentKeyId: key.id, name: "customs-audit", before: ["lora-2"], after: ["lora-2", "lora-1"], note: "one more page" },
+      },
+      {
+        source: "cli",
+        actor_user_id: owner.rows[0]!.id,
+        metadata: { agentKeyId: key.id, name: "customs-audit", before: ["lora-2", "lora-1"], after: ["lora-1"], note: "not hers any more" },
+      },
+    ]);
+    expect(JSON.stringify(audit)).not.toContain(token);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("refuses an unknown page, a key left with no page, and a revoked or expired key", async (context) => {
+    if (!testDb || !server) {
+      context.skip();
+      return;
+    }
+    const cookie = await loginCookie("dima", "owner-secret");
+    const issue = async (name: string) => {
+      const created = await server!.inject({
+        method: "POST",
+        url: "/api/v1/agent/keys",
+        headers: { cookie },
+        payload: createBody({ name }),
+      });
+      return (created.json() as { key: { id: number } }).key.id;
+    };
+    const audit = { source: "cli", actorUserId: null };
+    const keyId = await issue("pages-a");
+
+    await expect(updateAgentKeyPages(appContext, { id: keyId, add: ["lora-9"], remove: [] }, audit))
+      .rejects.toMatchObject({ statusCode: 404 });
+    await expect(updateAgentKeyPages(appContext, { id: keyId, add: [], remove: ["lora-1"] }, audit))
+      .rejects.toMatchObject({ statusCode: 400 });
+    await expect(updateAgentKeyPages(appContext, { id: keyId, add: [], remove: ["lora-2"] }, audit))
+      .rejects.toMatchObject({ statusCode: 400 });
+
+    const revokedId = await issue("pages-revoked");
+    await server.inject({ method: "POST", url: `/api/v1/agent/keys/${revokedId}/revoke`, headers: { cookie } });
+    await expect(updateAgentKeyPages(appContext, { id: revokedId, add: ["lora-1"], remove: [] }, audit))
+      .rejects.toMatchObject({ statusCode: 409 });
+
+    const expiredId = await issue("pages-expired");
+    await testDb.pool.query(
+      "update agent_keys set expires_at = now() - interval '1 minute', created_at = now() - interval '1 day' where id = $1",
+      [expiredId],
+    );
+    await expect(updateAgentKeyPages(appContext, { id: expiredId, add: ["lora-1"], remove: [] }, audit))
+      .rejects.toMatchObject({ statusCode: 409 });
+
+    expect(await pagesAudit()).toHaveLength(0);
+    const pages = await testDb.pool.query<{ page_ids: string[] }>("select page_ids::text[] from agent_keys order by id");
+    expect(pages.rows.every((row) => row.page_ids.length === 1)).toBe(true);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 });

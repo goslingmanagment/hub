@@ -57,7 +57,13 @@ import {
 } from "@agency_hub_core/shared";
 
 import { createAppContext } from "./bootstrap.ts";
-import { canonicalCapabilities, issueAgentKey, updateAgentKeyCapabilities } from "./services/agent-keys.ts";
+import {
+  canonicalCapabilities,
+  issueAgentKey,
+  listAgentKeysDetailed,
+  updateAgentKeyCapabilities,
+  updateAgentKeyPages,
+} from "./services/agent-keys.ts";
 import { registerSyncEngineCommands } from "./sync/cli.ts";
 import { registerPeopleCommands } from "./services/people/cli.ts";
 import { AiGatewayTerminalStreamConsumer, buildAiGatewayTerminalRecord } from "./services/ai-gateway.ts";
@@ -3940,6 +3946,54 @@ export function buildProgram() {
           before,
           after: updated.capabilities,
           pageLabels: updated.pageLabels,
+          expiresAt: updated.expiresAt,
+        }));
+      } finally {
+        await app.close();
+      }
+    });
+
+  // An agent key's pages widened or narrowed in place, for the owner's word given
+  // in chat (owner, 2026-11-12), so a key that needs one more page is not issued
+  // anew and installed again on its user's computer. services/agent-keys.ts: a
+  // live key only, added labels resolved like issuance, a removed label must be
+  // one of the key's pages, never a key left with none; audited as
+  // agent_key.pages_updated (before, after, note), source cli, under the owner
+  // who asked. The key sees it on its next request.
+  program
+    .command("agent-keys:pages")
+    .description("Add or remove pages of a live agent key (its capabilities stay); audited")
+    .argument("<keyName>", "the key's name, as the dashboard lists it")
+    .option("--add <label...>", "page labels to grant")
+    .option("--remove <label...>", "page labels to take away")
+    .requiredOption("--owner-user-id <id>", "the active owner who asked for it", parsePositiveInt)
+    .requiredOption("--note <why>", "why; stored in the audit row")
+    .action(async (keyName: string, options: { add?: string[]; remove?: string[]; ownerUserId: number; note: string }) => {
+      const add = [...new Set(options.add ?? [])];
+      const remove = [...new Set(options.remove ?? [])];
+      if (add.length === 0 && remove.length === 0) throw new Error("Pass --add and/or --remove");
+      const both = add.filter((label) => remove.includes(label));
+      if (both.length > 0) throw new Error(`Both added and removed: ${both.join(", ")}`);
+      const note = options.note.trim();
+      if (note === "") throw new Error("--note must not be blank");
+      const app = await createAppContext();
+      try {
+        const owner = await findUserById(app.db, options.ownerUserId);
+        if (!owner || owner.role !== "owner" || owner.disabledAt !== null || owner.deletedAt !== null) {
+          throw new Error(`Active owner required: user ID ${options.ownerUserId}`);
+        }
+        const key = (await listAgentKeysDetailed(app)).find((candidate) => candidate.name === keyName);
+        if (!key) throw new Error(`No agent key named ${keyName}`);
+        const updated = await updateAgentKeyPages(
+          app,
+          { id: key.id, add, remove, note },
+          { source: "cli", actorUserId: owner.id },
+        );
+        console.log(JSON.stringify({
+          name: updated.name,
+          before: key.pageLabels,
+          after: updated.pageLabels,
+          capabilities: updated.capabilities,
           expiresAt: updated.expiresAt,
         }));
       } finally {

@@ -13,6 +13,7 @@ import {
   listPagesByIds,
   revokeAgentKey,
   setAgentKeyCapabilities,
+  setAgentKeyPages,
   type AgentKeyPersonRow,
   type AgentKeyRow,
 } from "@agency_hub_core/db";
@@ -48,13 +49,15 @@ import { BadRequestError, ConflictError, NotFoundError } from "./errors.ts";
  *    exactly one place where each rule is decided.
  * 3. **The page grant is explicit page ids, resolved from labels at issuance.**
  *    A page created tomorrow is granted by nothing, and a key's pages are widened
- *    only by issuing a new one. Labels are resolved through the same
- *    `findPageSummaryByLabel` the rest of the admin surface uses, so an unknown or
- *    inactive label is a 404 rather than a silently narrower key. CAPABILITIES are
- *    the one part of a live key the owner changes in place (owner, 2026-10-24):
+ *    only by an explicit owner act (a new key, or `updateAgentKeyPages`). Labels
+ *    are resolved through the same `findPageSummaryByLabel` the rest of the admin
+ *    surface uses, so an unknown or inactive label is a 404 rather than a silently
+ *    narrower key. CAPABILITIES change in place (owner, 2026-10-24):
  *    the whole new set replaces the old one, the change and its audit row (before
  *    and after) commit together, and the key sees it on its next request because
- *    the authenticator reads the row on every request and caches nothing.
+ *    the authenticator reads the row on every request and caches nothing. PAGES
+ *    change in place the same way, from the CLI only (owner, 2026-11-12): named
+ *    pages added or removed, never a key left with none.
  * 4. **A key belongs to an agent** (ecosystem plan §3.3): issuance names the
  *    agent person (kind agent, not gone) and links it in the same transaction
  *    as the key and its audit. Only a service's own key (sign-in and «who is
@@ -387,4 +390,104 @@ export async function introspectAgentKey(
     ...cache,
     subjectKeyId: row.agentKeyId,
   };
+}
+
+/**
+ * Adds and removes pages of a live key, by label. The same rules as
+ * `updateAgentKeyCapabilities`: the row is locked, so "before" in the audit row
+ * is the grant this change replaced; a revoked or expired key is a 409; a change
+ * that leaves the grant as it was writes nothing and audits nothing.
+ *
+ * An added label resolves the way issuance resolves it (`findPageSummaryByLabel`:
+ * an unknown or inactive page is a 404). A removed label must be one of the key's
+ * current pages, so a typo is refused rather than silently removing nothing. A
+ * key is never left with no page: that is a key that reads nothing, and closing a
+ * key is `revokeAgentKeyById`'s job.
+ */
+export async function updateAgentKeyPages(
+  app: AppContext,
+  input: { id: number; add: readonly string[]; remove: readonly string[]; note?: string },
+  audit: AgentKeyAudit,
+): Promise<AgentKeyItem> {
+  const both = input.add.filter((label) => input.remove.includes(label));
+  if (both.length > 0) {
+    throw new BadRequestError(`Both added and removed: ${both.join(", ")}`);
+  }
+  const added: { id: number; label: string }[] = [];
+  for (const label of input.add) {
+    const page = await findPageSummaryByLabel(app.db, label);
+    if (!page) {
+      throw new NotFoundError(`Page "${label}" not found`);
+    }
+    added.push({ id: page.id, label: page.label });
+  }
+
+  const row = await withAuditTransaction(app, async (dbTx) => {
+    const existing = await getAgentKeyById(dbTx, input.id, { forUpdate: true });
+    if (!existing) {
+      throw new NotFoundError(`Agent key ${input.id} not found`);
+    }
+    if (existing.revokedAt !== null) {
+      throw new ConflictError(`Agent key "${existing.name}" is revoked; issue a new key instead`);
+    }
+    const now = new Date();
+    if (existing.expiresAt.getTime() <= now.getTime()) {
+      throw new ConflictError(`Agent key "${existing.name}" has expired; issue a new key instead`);
+    }
+
+    const current = existing.pageIds.length === 0 ? [] : await listPagesByIds(dbTx, existing.pageIds);
+    const labelById = new Map(current.map((page) => [page.id, page.label]));
+    const label = (pageId: number) => labelById.get(pageId) ?? `#${pageId}`;
+    const removedIds = new Set<number>();
+    for (const wanted of input.remove) {
+      const pageId = existing.pageIds.find((id) => label(id) === wanted);
+      if (pageId === undefined) {
+        throw new BadRequestError(`Agent key "${existing.name}" has no page "${wanted}"`);
+      }
+      removedIds.add(pageId);
+    }
+
+    const afterIds = existing.pageIds.filter((pageId) => !removedIds.has(pageId));
+    for (const page of added) {
+      labelById.set(page.id, page.label);
+      if (!afterIds.includes(page.id)) afterIds.push(page.id);
+    }
+    if (afterIds.length === 0) {
+      throw new BadRequestError(
+        `Agent key "${existing.name}" would be left with no page; revoke it instead`,
+      );
+    }
+
+    const before = existing.pageIds.map(label);
+    const after = afterIds.map(label);
+    if (before.length === after.length && before.every((pageLabel, index) => pageLabel === after[index])) {
+      return existing;
+    }
+
+    let updated: AgentKeyRow | null;
+    try {
+      updated = await setAgentKeyPages(dbTx, { id: existing.id, pageIds: afterIds, now });
+    } catch (error) {
+      rethrowAsHttp(error);
+    }
+    if (!updated) {
+      throw new ConflictError(`Agent key "${existing.name}" is no longer active`);
+    }
+
+    await recordAudit({ db: dbTx }, {
+      ...audit,
+      eventType: "agent_key.pages_updated",
+      metadata: {
+        agentKeyId: existing.id,
+        name: existing.name,
+        before,
+        after,
+        ...(input.note === undefined ? {} : { note: input.note }),
+      },
+    });
+    return updated;
+  });
+
+  const labelById = await resolvePageLabels(app, [row]);
+  return agentKeyItem(row, labelById);
 }
