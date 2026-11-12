@@ -7,17 +7,20 @@ import { useMe } from "./useMe.js";
  * waits for a person. The owner's switch (`mattersReadEnabled`, said by
  * `mattersWaiting` as `active`) decides whether Workboard reads matters: off,
  * every screen keeps its own reads exactly as before; on, «Решения» becomes
- * the list «Ждут вас» at the same address, its badge and the «Ждут решения»
- * line of Смены count matters.
+ * the list «Ждут вас» at the same address and its badge counts matters (the
+ * «Ждут решения» line of Смены is the old reads' alone).
  */
 
 const MINUTE = 60_000;
 
-/** «Ждут вас» and «Решения» counted from matters, and the switch: the team's read (a chatter is refused it). */
-export function mattersWaitingQuery(pageLabel: string | null = null) {
+/**
+ * «Ждут вас» counted from matters by the list's groups, and the switch: the team's read (a chatter is refused it). The
+ * key is the menu's (packages/ui/src/place.ts `waitingQuery`): one answer for the badge and the list.
+ */
+export function mattersWaitingQuery() {
   return queryOptions({
-    queryKey: ["matters", "waiting", pageLabel ?? ""] as const,
-    queryFn: () => kernel.mattersWaiting({ query: pageLabel === null ? {} : { pageLabel } }),
+    queryKey: ["matters", "waiting", ""] as const,
+    queryFn: () => kernel.mattersWaiting({ query: {} }),
     staleTime: 30_000,
   });
 }

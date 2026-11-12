@@ -1,7 +1,7 @@
 import { useCallback } from "react";
 import { useQueries, useQuery } from "@tanstack/react-query";
 import { MOSCOW_TIME_ZONE, toBusinessDate } from "@agency_hub_core/shared";
-import type { NotificationsIncidentItem, SyncBlocksPage } from "@agency_hub_core/contracts";
+import type { NotificationsIncidentItem, SyncBlocksPage, WaitingGroupId } from "@agency_hub_core/contracts";
 
 import { isOfapiOffFailure } from "@/lib/failures";
 import { buildPageSectionRoute } from "@/lib/navigation";
@@ -36,8 +36,8 @@ export interface WaitingRow {
   title?: string;
   /** A group's tone (contracts waiting-groups.ts): `bad` something is broken, `warn` its outcome is not known. */
   tone?: "bad" | "warn" | null;
-  /** The old rows; while the owner's switch reads matters, also «Люди и доступ», «Проверки ledger», «Другие дела» (package K). */
-  id: "drafts" | "unknown" | "questions" | "reports" | "customs" | "held" | "login" | "failures" | "extension" | "history" | "content" | "people" | "ledger" | "other" | "publications" | "system";
+  /** The old reads' rows (the switch off); while the owner's switch reads matters, the list's groups (WaitingGroupId). */
+  id: "drafts" | "unknown" | "login" | "failures" | "extension" | "history" | Exclude<WaitingGroupId, "info">;
   label: string;
   /** null: the read failed, or the state it depends on could not be checked. */
   count: number | null;
@@ -64,13 +64,18 @@ function failedOr<T>(query: { data: T | undefined; isError: boolean }, count: (d
  * §0.2). `off` is said only when every process reported the key unset; a process
  * that does not know makes the answer `unknown`, and so does no answer. A team lead
  * cannot read the config: always `unknown`, without a request.
+ *
+ * The config is a large read and the key changes by the owner's hand (a change in
+ * the console refreshes it): a screen reads it when it opens, not on a timer. Only
+ * the old «Ждут вас» (`poll`, the switch off) reads it every five minutes, for its
+ * history row; read from matters, that state is the server's.
  */
-export function useOfapiStatusQuery(role: string): { status: OfapiStatus; isLoading: boolean; refetch: () => void } {
+export function useOfapiStatusQuery(role: string, options: { enabled?: boolean; poll?: boolean } = {}): { status: OfapiStatus; isLoading: boolean; refetch: () => void } {
   const config = useQuery({
     queryKey: ["admin", "config"],
     queryFn: () => kernel.adminConfig(),
-    enabled: role === "owner",
-    refetchInterval: 5 * MINUTE,
+    enabled: role === "owner" && options.enabled !== false,
+    ...(options.poll ? { refetchInterval: 5 * MINUTE } : {}),
     meta: { suppressGlobalError: true },
   });
   const { refetch } = config;
@@ -124,7 +129,9 @@ export function useWaitingCounts(role: string): WaitingCounts {
   const active = fromMatters.data?.active === true;
   const legacy = !team || (!active && (fromMatters.data !== undefined || fromMatters.isError));
   const owner = role === "owner" && legacy;
-  const { status: ofapi, isLoading: ofapiLoading, refetch: refetchOfapi } = useOfapiStatusQuery(role);
+  // The OnlyFans key's state is a matter's while matters are read (the history requests' and the failures' rows):
+  // only the old reads ask the config, every five minutes.
+  const { status: ofapi, isLoading: ofapiLoading, refetch: refetchOfapi } = useOfapiStatusQuery(role, { enabled: legacy, poll: true });
   const today = toBusinessDate(new Date(), MOSCOW_TIME_ZONE);
   const week = clientHealthRange("7d", today);
 
@@ -234,17 +241,13 @@ export function useWaitingCounts(role: string): WaitingCounts {
 
   const queries = [drafts, unknown, questions, reports, customs, held, overview, enginePages, incidents, extension, history];
   if (active && fromMatters.data) {
-    // The owner's chips are the list's groups (contracts waiting-groups.ts, counted by Hub): the list's titles and
+    // Every role's chips are the list's groups (contracts waiting-groups.ts, counted by Hub): the list's titles and
     // numbers, summing to the menu's number. A group whose source did not answer says «не удалось проверить», or «N+»
-    // when it has some. A team lead keeps the rows (services/matters.ts buildWaitingRows).
-    const matterRows: WaitingRow[] = role === "owner"
-      ? fromMatters.data.groups.map((group) => ({
-        id: group.id as WaitingRow["id"], label: group.title, title: group.title, tone: group.tone,
-        count: !group.checked && group.count === 0 ? null : group.count, capped: !group.checked, to: group.to,
-      }))
-      : fromMatters.data.rows.map((row) => ({
-        id: row.id, label: row.label, count: row.count, capped: row.capped, page: row.pageLabel ?? undefined, to: row.to,
-      }));
+    // when it has some.
+    const matterRows: WaitingRow[] = fromMatters.data.groups.map((group) => ({
+      id: group.id, label: group.title, title: group.title, tone: group.tone,
+      count: !group.checked && group.count === 0 ? null : group.count, capped: !group.checked, to: group.to,
+    }));
     return {
       rows: matterRows,
       total: fromMatters.data.total,

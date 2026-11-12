@@ -13,7 +13,6 @@ import {
   reportPostItems,
   reportQuestionsWindow,
 } from "../apps/runtime/src/services/matters-mirror.ts";
-import { buildDecisions, buildWaitingRows, type MatterKindState } from "../apps/runtime/src/services/matters.ts";
 
 // The mirror of «Ждут вас» and «Решения» (package D) ports the screens' rules
 // to the server. A port that drifts from its screen is a count that differs
@@ -103,32 +102,5 @@ describe("the matters mirror keeps the screens' rules", () => {
     expect(reportPostItems(reports, payouts).map((item) => Number(item.object!.id))).toEqual(unparsedPostsToDecide(reports, payouts).map((one) => one.id));
     expect(reportPostItems(reports, { reportsFrom: null } as never)).toEqual([]);
     expect(paidDayChangeItems(payouts).map((item) => Number(item.object!.id))).toEqual(pendingChangesOf(payouts).map((one) => one.id));
-  });
-
-  it("counts «Ждут вас» and «Решения» as the screens do: a source without an answer is not a zero, a page cuts only Решения", () => {
-    const known: MatterKindState = { checked: true, applicable: true, capped: false };
-    const matters = [
-      { id: 1, kind: "send.held", pageIds: [10], evidence: {} },
-      { id: 2, kind: "send.held", pageIds: [11], evidence: {} },
-      { id: 3, kind: "ledger.paid_day_changed", pageIds: [], evidence: {} },
-      { id: 4, kind: "ledger.report_post", pageIds: [11], evidence: {} },
-      { id: 5, kind: "page.login_needed", pageIds: [10], evidence: {} },
-      { id: 6, kind: "extension.critical", pageIds: [], evidence: { total: 3 } },
-      { id: 7, kind: "history.request", pageIds: [10], evidence: {} },
-    ];
-    const kindState = (kind: string): MatterKindState => (kind === "ledger.sale_question" ? { ...known, checked: false }
-      : kind === "history.request" ? { ...known, applicable: false } : known);
-    const owner = buildWaitingRows({ role: "owner", matters, kindState, labelOf: (id) => `p${id}` });
-    expect(owner.rows.map((row) => [row.id, row.count])).toEqual([["questions", null], ["reports", 2], ["held", 2], ["login", 1], ["extension", 3]]);
-    expect(owner.rows.find((row) => row.id === "login")).toMatchObject({ pageLabel: "p10", to: "/workboard/decisions#system" });
-    expect(owner.total).toBe(8);
-    expect(owner.failed).toEqual(["questions"]);
-    expect(buildWaitingRows({ role: "team_lead", matters, kindState, labelOf: () => undefined }).rows.map((row) => row.id)).toEqual(["held"]);
-
-    const onPage = buildDecisions({ role: "owner", matters, kindState, pageId: 10 });
-    expect(onPage).toMatchObject({ questions: null, reports: 1, reportParts: { posts: 0, changes: 1 }, customs: 0, held: 1, failed: ["questions"] });
-    // The other page's post and send; the changed day is on every page.
-    expect(onPage.elsewhere).toBe(2);
-    expect(buildDecisions({ role: "team_lead", matters, kindState, pageId: null })).toMatchObject({ questions: null, reports: null, held: 2, failed: [] });
   });
 });

@@ -9,6 +9,7 @@ import { sha256Hex } from "@agency_hub_core/shared";
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import { AGENT_KEY_TOKEN_PREFIX, createUserAccount, setUserPassword } from "../apps/runtime/src/services/auth.ts";
+import { readSaleChain } from "../apps/runtime/src/services/sale-chain.ts";
 import { startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { listenOnLoopback } from "./helpers/network.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
@@ -16,7 +17,8 @@ import { fixtureUserId } from "./helpers/user-identity.ts";
 
 // Цепочка продажи (package T): who reads a sale's chain and how much of it. The owner every sale with the pay sums; a
 // chatter only a sale of their own shifts (their own person alone, pay sums only with «видит свои деньги»); a team lead
-// a sale of their pages without pay sums; an agent key read:team + read:money, its pages, without pay sums. Another
+// a sale of their pages without anyone's pay, not even its states; an agent key read:team + read:money, its pages,
+// without pay sums. Another
 // sale is 404. A ledger that is not connected or does not answer is «неизвестно», never «оплачено». Money and rights.
 
 vi.mock("argon2", () => import("./helpers/cheap-argon2.ts"));
@@ -33,6 +35,8 @@ let server: Awaited<ReturnType<typeof buildApiServer>> | null = null;
 let ledger: Server | null = null;
 /** The ledger answers 500 to every read (it is down). */
 let broken = false;
+/** How many times a person's pay was asked of the ledger. */
+let payReads = 0;
 const cookies: Record<string, string> = {};
 let pageOne = 0;
 let pageTwo = 0;
@@ -148,7 +152,10 @@ describe("a sale's chain of money: who reads it and how much", () => {
       };
       if (request.headers.authorization !== "Bearer test-chain-key") return answer(401, { error: "unauthorized" });
       if (broken) return answer(500, { error: "down" });
-      if (url.pathname === "/v1/payouts/person") return answer(200, ledgerPay(url.searchParams.get("person") ?? "", from, to));
+      if (url.pathname === "/v1/payouts/person") {
+        payReads += 1;
+        return answer(200, ledgerPay(url.searchParams.get("person") ?? "", from, to));
+      }
       if (url.pathname === "/v1/reports") return answer(200, { from, to, reports: [] });
       if (url.pathname === "/v1/report-days") return answer(200, { from, to, days: [] });
       return answer(404, { error: "not found" });
@@ -242,15 +249,27 @@ describe("a sale's chain of money: who reads it and how much", () => {
     expect((await asSession("anna", `/api/v1/sales/chain?saleId=${sales.other}`)).statusCode).toBe(404);
   });
 
-  it("gives a team lead a sale of their pages without pay sums", async (context) => {
+  it("gives a team lead a sale of their pages: whose it is, the shift and the report, never another person's pay", async (context) => {
     if (!testDb || !server) return context.skip();
+    const before = payReads;
     const chain = await chainOf("lead", sales.anna);
     expect(chain.people).toHaveLength(1);
     expect(chain.people[0]).toMatchObject({ name: "anna", shareMills: 20_000 });
-    expect(chain.people[0]!.accrual.state).toBe("done");
-    expect(chain.people[0]!.payout.state).toBe("done");
-    expect(chain.people[0]!.accrual.link).toBeNull();
+    expect(chain.home.state).toBe("done");
+    expect(chain.people[0]!.shift.state).toBe("done");
+    expect(chain.people[0]!.report.state).not.toBe("none");
+    // Accrual and payout are anna's pay: not «done» or «к выплате» to a team lead, only that the owner sees them.
+    for (const link of [chain.people[0]!.accrual, chain.people[0]!.payout]) {
+      expect(link).toEqual({ state: "none", words: "видит только владелец", link: null, amountMills: null });
+    }
     expectNoPaySums(chain);
+    // The service itself: the ledger is not even asked for the person's pay on a team lead's read.
+    const direct = await readSaleChain(app, { kind: "team_lead", pageIds: [pageOne] }, { saleId: sales.anna });
+    expect(direct.people.map((one) => [one.accrual.state, one.payout.state])).toEqual([["none", "none"]]);
+    expect(payReads).toBe(before);
+    // The owner's read of the same sale asks it.
+    await chainOf("boss", sales.anna);
+    expect(payReads).toBeGreaterThan(before);
     expect((await asSession("lead", `/api/v1/sales/chain?saleId=${sales.other}`)).statusCode).toBe(404);
   });
 

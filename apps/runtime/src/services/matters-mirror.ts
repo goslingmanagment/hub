@@ -1,4 +1,5 @@
 import {
+  MATTER_MIRROR_KIND_ROLES,
   REPORT_POST_FIXABLE_FLAGS,
   type MatterMirrorKind,
   type ReportPostMatterKind,
@@ -17,7 +18,6 @@ import {
   listNotificationIncidentsWithPages,
   listChatterLoginsOfPeople,
   listOpenMattersOfKinds,
-  listShiftIdsByUserDay,
   listPageOpenCustoms,
   listSyncPages,
   listVisibleMatters,
@@ -80,20 +80,10 @@ export interface MirrorItem {
   owner?: MatterOwner;
 }
 
-/** Who writes a kind and whom it waits for: the owner, or (customs and held sends) the team leads, as the screens show them. */
-const KIND_META: Record<MatterMirrorKind, { source: MatterSource; owner: MatterOwner }> = {
-  "publication.draft": { source: "server", owner: { role: "owner" } },
-  "publication.unknown": { source: "server", owner: { role: "owner" } },
-  "ledger.sale_question": { source: "ledger", owner: { role: "owner" } },
-  "ledger.report_post": { source: "ledger", owner: { role: "owner" } },
-  "ledger.paid_day_changed": { source: "ledger", owner: { role: "owner" } },
-  "custom.paid_not_delivered": { source: "server", owner: { role: "team_lead" } },
-  "send.held": { source: "server", owner: { role: "team_lead" } },
-  "page.login_needed": { source: "server", owner: { role: "owner" } },
-  "incident.open": { source: "server", owner: { role: "owner" } },
-  "extension.critical": { source: "server", owner: { role: "owner" } },
-  "history.request": { source: "server", owner: { role: "owner" } },
-};
+/** Who writes a kind and whom it waits for: the owner, or (customs and held sends) the team leads (MATTER_MIRROR_KIND_ROLES). */
+function kindMeta(kind: MatterMirrorKind): { source: MatterSource; owner: MatterOwner } {
+  return { source: kind.startsWith("ledger.") ? "ledger" : "server", owner: { role: MATTER_MIRROR_KIND_ROLES[kind] } };
+}
 
 const SYSTEM: MatterActor = { door: "system" };
 /** What the screens read at most: «Ждут вас»'s publications list, the team's customs. */
@@ -309,14 +299,14 @@ const POST_FIX_WORDS: Readonly<Record<(typeof REPORT_POST_FIXABLE_FLAGS)[number]
 /**
  * The posts of the days the reports accrue from whose author can fix what keeps them out of the pay (a fixable flag):
  * one matter per post for the author's living chatter login (`loginOf`: the ledger's code is the registry's), never
- * money — no sum in the title or the evidence. A post of nobody's chatter login opens nothing. The link is the
- * author's shift of that day in «Мои смены» (`shiftOf`, `${userId}:${day}`), else the list.
+ * money — no sum in the title or the evidence. A post of nobody's chatter login opens nothing. The link is where the
+ * author sees the post's numbers against Hub's: that day's report, open in its row of «Мои смены», the week of the
+ * day (`?report=`); the owner's line of it opens «Выплаты → Отчёты» (Workboard's list makes that address).
  */
 export function reportPostFixItems(
   reports: Pick<TeamLedgerReportsResponse, "posts">,
   payouts: Pick<TeamLedgerPayoutsResponse, "reportsFrom">,
   loginOf: ReadonlyMap<string, number>,
-  shiftOf: ReadonlyMap<string, number>,
 ): MirrorItem[] {
   const from = payouts.reportsFrom;
   if (!from) return [];
@@ -327,7 +317,6 @@ export function reportPostFixItems(
     if (flags.length === 0 || day === null || day < from) continue;
     const userId = post.person.slug === null ? undefined : loginOf.get(post.person.slug);
     if (userId === undefined) continue;
-    const shiftId = shiftOf.get(`${userId}:${day}`);
     items.push({
       key: `report.post_fix:${post.id}`,
       title: `Отчёт за ${formatDay(`${day}T12:00:00+03:00`)} не начислен: ${POST_FIX_WORDS[flags[0]!]}`,
@@ -335,7 +324,7 @@ export function reportPostFixItems(
       pageLabels: [...new Set(post.pages.map((line) => line.pageLabel).filter((label): label is string => label !== null))],
       money: false,
       evidence: { postId: post.id, reportDate: post.reportDate, day, postedAt: post.postedAt, flags, telegram: post.link },
-      link: shiftId === undefined ? "/workboard/my/shifts" : `/workboard/my/shifts/${shiftId}`,
+      link: `/workboard/my/shifts?week=${day}&report=${day}`,
       owner: { userId },
     });
   }
@@ -395,7 +384,7 @@ export async function reconcileMatterKind(
   idOf: ReadonlyMap<string, number>,
   now: Date,
 ): Promise<{ opened: number; closed: number }> {
-  return reconcileMatters(app, { kind: answer.kind, ...KIND_META[answer.kind], items: answer.items }, idOf, now);
+  return reconcileMatters(app, { kind: answer.kind, ...kindMeta(answer.kind), items: answer.items }, idOf, now);
 }
 
 /** The same for any kind the server keeps (the mirrors' and the checks' of package K): its writer and owner are the caller's. */
@@ -644,13 +633,7 @@ async function mirrorReportPostFix(
   try {
     const authors = [...new Set(reads.reports.posts.map((post) => post.person.slug).filter((slug): slug is string => slug !== null))];
     const loginOf = await listChatterLoginsOfPeople(app.db, authors);
-    const pairs = reads.reports.posts.flatMap((post) => {
-      const userId = post.person.slug === null ? undefined : loginOf.get(post.person.slug);
-      const day = post.reportDate ?? moscowDay(post.postedAt);
-      return userId === undefined || day === null ? [] : [{ userId, day }];
-    });
-    const shiftOf = await listShiftIdsByUserDay(app.db, pairs);
-    const items = reportPostFixItems(reads.reports, reads.payouts, loginOf, shiftOf);
+    const items = reportPostFixItems(reads.reports, reads.payouts, loginOf);
     const done = await reconcileMatters(app, { kind: POST_FIX_KIND, source: "ledger", owner: { role: "owner" }, items }, input.idOf, input.now);
     const open = (await listOpenMattersOfKinds(app.db, [POST_FIX_KIND])).length;
     await recordMatterCheckAnswered(app.db, {

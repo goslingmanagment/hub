@@ -12,6 +12,7 @@ import {
   SHIFT_REPORT_MATTER_KINDS,
   WAITING_GROUPS,
   waitingGroupOf,
+  waitingSinceOf,
 } from "@agency_hub_core/contracts";
 
 import { buildWaitingGroups, type MatterKindState } from "../apps/runtime/src/services/matters.ts";
@@ -43,7 +44,7 @@ describe("«Ждут вас»: one table of groups", () => {
   });
 
   it("counts the Home's chips as the list does: one per matter, the custom orders in «Кастомы», nothing for what informs", () => {
-    const known: MatterKindState = { checked: true, applicable: true, capped: false };
+    const known: MatterKindState = { checked: true, applicable: true };
     const matters = [
       { id: 1, kind: "sale.dispute", pageIds: [], evidence: {} },
       { id: 2, kind: "ledger.sale_question", pageIds: [], evidence: {} },
@@ -65,7 +66,7 @@ describe("«Ждут вас»: one table of groups", () => {
   });
 
   it("gives a group the worst tone of its matters: broken over unknown over none; not checked is at least unknown", () => {
-    const known: MatterKindState = { checked: true, applicable: true, capped: false };
+    const known: MatterKindState = { checked: true, applicable: true };
     const tones = (matters: Array<{ id: number; kind: string }>, kindState: (kind: string) => MatterKindState = () => known) =>
       Object.fromEntries(buildWaitingGroups({ matters: matters.map((one) => ({ ...one, pageIds: [], evidence: {} })), kindState, trackedKinds: [] })
         .map((group) => [group.id, group.tone]));
@@ -78,5 +79,31 @@ describe("«Ждут вас»: one table of groups", () => {
     // A group whose source did not answer is at least orange, a red one stays red.
     const notChecked = (kind: string): MatterKindState => (kind === "ledger.sale_question" || kind === "incident.open" ? { ...known, checked: false } : known);
     expect(tones([{ id: 1, kind: "ledger.sale_question" }, { id: 2, kind: "incident.open" }], notChecked)).toEqual({ questions: "warn", system: "bad" });
+  });
+
+  it("ages a matter since its reason began, not since its row was opened (or reopened) today", () => {
+    const now = Date.parse("2026-11-12T12:00:00.000Z");
+    const ago = (hours: number) => new Date(now - hours * 3_600_000).toISOString();
+    const opened = ago(6);
+    const since = (kind: string, evidence: Record<string, unknown>) => waitingSinceOf({ kind, openedAt: opened, evidence }, now);
+    // A routine's input empty for 8 days: 8 days, not the 6 hours since its matter was opened.
+    expect(since("routine.empty", { routineKey: "mail", emptySince: ago(8 * 24), thresholdSeconds: 3600 })).toBe(ago(8 * 24));
+    // Silent since its last run, a reporter since its last report, a copy since it was taken, a report since its shift ended.
+    expect(since("routine.silent", { lastRunAt: ago(30) })).toBe(ago(30));
+    expect(since("reporter.silent", { lastReportAt: ago(9) })).toBe(ago(9));
+    expect(since("copy.stale", { takenAt: ago(60) })).toBe(ago(60));
+    expect(since("shift.report.missing", { endedAt: ago(20) })).toBe(ago(20));
+    // A state entered (a custom order's, a newcomer's step), a red check's first run, a send, a question.
+    expect(since("custom.not_at_model", { code: "K-1", since: ago(26) })).toBe(ago(26));
+    expect(since("ledger.check", { failingSince: ago(40) })).toBe(ago(40));
+    expect(since("send.held", { sentAt: ago(7) })).toBe(ago(7));
+    // A routine's last run says nothing of when its failures began; a moment after the opening (a publication's) is not one.
+    expect(since("routine.failed", { lastRunAt: ago(1) })).toBe(opened);
+    expect(since("publication.draft", { publishAt: ago(-24) })).toBe(opened);
+    expect(since("agent.reminder", {})).toBe(opened);
+    // The list's «дольше ждёт» order follows it: the empty input of 8 days before a send of 7 hours.
+    const order = [{ kind: "send.held", evidence: { sentAt: ago(7) } }, { kind: "routine.empty", evidence: { emptySince: ago(8 * 24) } }]
+      .sort((left, right) => since(left.kind, left.evidence).localeCompare(since(right.kind, right.evidence)));
+    expect(order.map((one) => one.kind)).toEqual(["routine.empty", "send.held"]);
   });
 });

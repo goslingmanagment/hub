@@ -156,16 +156,3 @@ export async function listChatterLoginsOfPeople(db: Database, codes: readonly st
      order by p.code, u.id`);
   return new Map(result.rows.map((row) => [String(row.code), Number(row.user_id)]));
 }
-
-/** The shift of a login on a report day (`${userId}:${day}` → its id): the latest that is not dropped or merged. */
-export async function listShiftIdsByUserDay(db: Database, pairs: ReadonlyArray<{ userId: number; day: string }>): Promise<Map<string, number>> {
-  if (pairs.length === 0) return new Map();
-  const result = await db.execute<Row>(sql`
-    select distinct on (s.user_id, s.report_date) s.user_id, s.report_date::text as report_date, s.id
-      from shifts s
-      join unnest(${sql.param(pairs.map((pair) => String(pair.userId)))}::bigint[], ${sql.param(pairs.map((pair) => pair.day))}::date[])
-        as asked(user_id, report_date) on asked.user_id = s.user_id and asked.report_date = s.report_date
-     where s.state in ('going', 'closed')
-     order by s.user_id, s.report_date, s.started_at desc, s.id desc`);
-  return new Map(result.rows.map((row) => [`${Number(row.user_id)}:${String(row.report_date).slice(0, 10)}`, Number(row.id)]));
-}

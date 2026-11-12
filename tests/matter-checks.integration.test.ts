@@ -209,8 +209,9 @@ describe("matter checks (package K)", () => {
     const checks = new Map((await listMatterChecks(app.db)).map((check) => [check.kind, check]));
     expect(checks.get("ledger.check")?.error).toContain("does not open");
     const owner = mattersWaitingResponseSchema.parse((await asSession("boss", "/api/v1/matters/waiting")).json());
-    expect(owner.rows.find((row) => row.id === "ledger")).toMatchObject({ count: null });
-    expect(owner.rows.find((row) => row.id === "people")).toMatchObject({ count: 6 });
+    expect(owner.groups.find((group) => group.id === "ledger")).toMatchObject({ checked: false });
+    expect(owner.failed).toContain("ledger");
+    expect(owner.groups.find((group) => group.id === "people")).toMatchObject({ count: 6, checked: true });
   });
 
   it("rights: a chatter only their own and never money, on every door; a team lead theirs and their role's on their pages; no check reaches either", async (context) => {
@@ -248,10 +249,11 @@ describe("matter checks (package K)", () => {
     })).json());
     expect(client).toMatchObject({ count: 1, matters: [{ title: "Дело k.rights:alice" }] });
 
-    // A team lead's «Ждут вас»: no row of people or of the ledger, ever.
+    // A team lead's «Ждут вас»: no group of people or of the ledger, ever — their own matters by the list's groups.
     // (Customs and held sends are «не проверено» here: the mirror of package D never ran in this test.)
     const lead = mattersWaitingResponseSchema.parse((await asSession("lead", "/api/v1/matters/waiting")).json());
-    expect(lead.rows.map((row) => [row.id, row.count])).toEqual([["customs", null], ["held", null], ["other", 1]]);
+    expect(lead.groups.map((group) => [group.id, group.count, group.checked])).toEqual([["customs", 0, false], ["held", 0, false], ["other", 1, true]]);
+    expect(lead).toMatchObject({ total: 1, failed: ["customs", "held"] });
     // A narrow session (from the extension) reads as a chatter whatever the person's role.
     const narrowOwner = { authMethod: "session", user: { id: users.boss!, role: "owner" }, assignedPageIds: [], narrowDeviceTokenId: 1 } as unknown as HumanAuthPrincipal;
     expect(matterViewerOf(narrowOwner).role).toBe("chatter");
