@@ -191,6 +191,14 @@ describe("custom orders: who sees and moves what", () => {
     expect(agentCustomOrderResponseSchema.parse((await agent(`/api/v1/agent/custom-orders/${order.code}`, revision)).json()).outcome).toBe("changed");
     const repeat = agentCustomOrderResponseSchema.parse((await agent(`/api/v1/agent/custom-orders/${order.code}`, revision)).json());
     expect(repeat).toMatchObject({ outcome: "unchanged", order: { state: "revision", openRevisions: 1 } });
+
+    // The reader's reads and reports (both answered 500 once: their audit lines broke the audit's own shapes).
+    const listed = await server!.inject({ method: "GET", url: `/api/v1/agent/custom-orders?code=${order.code}`, headers: { authorization: `Bearer ${WRITER}` } });
+    expect(listed.statusCode, listed.body).toBe(200);
+    expect(listed.json().orders.map((one: { code: string }) => one.code)).toEqual([order.code]);
+    const cards = await agent("/api/v1/agent/custom-orders/cards", { cards: [{ telegramRef: "tg:2600000001/3/400" }, { telegramRef: "tg:2600000002/6/200" }], complete: true });
+    expect(cards.statusCode, cards.body).toBe(200);
+    expect(cards.json()).toMatchObject({ matched: [{ telegramRef: "tg:2600000002/6/200", code: order.code }], opened: 1 });
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("keeps the order through the fan's erasure: its preview says anonymize, and the order stays without the fan", async (context) => {
