@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useNavigate, Navigate, useSearchParams } from "react-router";
+import { PLACES } from "@agency_hub_core/look";
 import { useLogin, useAuthMe } from "@/api/queries";
 import { KernelApiError } from "@/api/sdk";
 import { afterSignIn, chatterExit, isSigninContinuation, leavesTheConsole, resolveLoginReturnPath, resolveRoleHome, silentSignInTry } from "@/lib/navigation";
@@ -8,10 +9,12 @@ import { isChatterSite, isConsoleSite } from "@/lib/sites";
 // One sign-in screen for two names. A chatter signs in to the product they
 // use, so on their site it carries that product's wordmark — the one
 // ChatterLayout and /join show — and not the name of a console they never see.
+// The console's is the one word its sidebar and browser titles say: one word,
+// one tone (the wordmark's strong one), no muted half.
 function Wordmark() {
   return isChatterSite()
     ? <><span>Chat</span>Goose</>
-    : <><span>Agency</span>Hub</>;
+    : <>{PLACES.hub}</>;
 }
 
 /** Back to Workboard, or on to the other name, after the sign-in: outside the console's router, so a page load. */

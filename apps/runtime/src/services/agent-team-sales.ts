@@ -7,11 +7,8 @@ import {
 } from "@agency_hub_core/contracts";
 import {
   listActiveSaleDecisions,
-  listConfirmedMarkKeys,
   listSaleFacts,
   listSaleLastWriters,
-  listShiftMarks,
-  listShiftResolutions,
   listShiftSales,
   listUserRoles,
   type Database,
@@ -27,11 +24,11 @@ import { saleKindOf } from "./chatter-stats.ts";
  * Facts only, the same facts «Заработок» and «Разбор смены» read: a shift
  * holds a sale by `workHoldsSale`, a look-in only one to a fan its person wrote
  * to last; the bought PPV's sender, a post tip and a Campaign contribution by
- * `listSaleFacts`; the last writer within SALE_LAST_WRITER_HOURS; the chatters'
- * marks and the owner's split as Hub's old shift-report tables hold them (no
- * longer written). Whose a sale is, and what
- * anyone is paid, the ledger decides (owner, 2026-11-08). Database only,
- * read-only.
+ * `listSaleFacts`; the last writer within SALE_LAST_WRITER_HOURS; the owner's
+ * decision of the sale (`resolution`, `decision`). `marks` is always empty: the
+ * old shift-report tables that fed it hold nothing and are read no more; the
+ * field stays for the ledger's parser. Whose a sale is, and what anyone is
+ * paid, the ledger decides (owner, 2026-11-08). Database only, read-only.
  */
 
 const DAY_MS = 86_400_000;
@@ -63,9 +60,8 @@ export function holdersOf(
 /** A sale's decision as the facts carry it: a split's shares are the owner's `resolution`; any kind is `decision`. */
 function decided(
   decision: { kind: string; shares: ReadonlyArray<{ userId: number; percent: number }>; pot: string | null } | undefined,
-  old: Array<{ userId: number; percent: number }> | null,
 ): Pick<AgentTeamSale, "resolution" | "decision"> {
-  if (decision === undefined || (decision.kind !== "split" && decision.kind !== "nobody" && decision.kind !== "pot")) return { resolution: old, decision: null };
+  if (decision === undefined || (decision.kind !== "split" && decision.kind !== "nobody" && decision.kind !== "pot")) return { resolution: null, decision: null };
   const resolution = decision.kind === "split" ? decision.shares.filter((share) => share.percent > 0).map((share) => ({ userId: share.userId, percent: share.percent })) : null;
   return { resolution, decision: { kind: decision.kind, pot: decision.kind === "pot" ? decision.pot : null } };
 }
@@ -85,25 +81,10 @@ export async function readAgentTeamSales(
   const ids = sales.map((sale) => sale.transactionId);
   const facts = await listSaleFacts(db, { transactionIds: ids });
   const lastWriters = await listSaleLastWriters(db, { hours: SALE_LAST_WRITER_HOURS, sales: lastWriterQuery(sales) });
-  // `marks` and `resolution` keep their shape for the ledger, which parses them: Hub's marks flow is gone (the
-  // chatter's posted report is what a shift pays), so nothing writes these tables any more and they answer what
-  // they held — today, nothing. Kept until the ledger stops reading them; the tables are never dropped.
-  const marks = await listShiftMarks(db, { transactionIds: ids });
-  const confirmed = await listConfirmedMarkKeys(db, { transactionIds: ids });
-  const resolutions = await listShiftResolutions(db, { transactionIds: ids });
   // Hub's own decisions of the sales (review R2b-5): the one home of «чья продажа» — the owner's disputes, the ones
   // carried over from the ledger and the ones recorded «со слов» — reach the ledger's rule here.
   const decisions = await listActiveSaleDecisions(db, ids);
   const factOf = new Map(facts.map((fact) => [fact.transactionId, fact]));
-  const marksOf = new Map<number, AgentTeamSale["marks"]>();
-  for (const mark of marks) {
-    const list = marksOf.get(mark.transactionId) ?? [];
-    list.push({
-      userId: mark.userId, mark: mark.mark, shareWithUserId: mark.shareWithUserId, amountMills: mark.amountMills,
-      confirmed: confirmed.has(`${mark.userId}:${mark.transactionId}`),
-    });
-    marksOf.set(mark.transactionId, list);
-  }
 
   const allWorks = [...people].flatMap(([userId, person]) => person.work.map((work) => ({ userId, username: person.username, work })));
   const senders = facts.flatMap((fact) => (fact.ppvSender === null ? [] : [fact.ppvSender.userId]));
@@ -145,8 +126,9 @@ export async function readAgentTeamSales(
       campaign: fact?.campaign ?? false,
       lastWriterUserId: lastWriter,
       writers: fact?.writers ?? [],
-      marks: marksOf.get(sale.transactionId) ?? [],
-      ...decided(decisions.get(sale.transactionId), resolutions.get(sale.transactionId) ?? null),
+      // Kept for the ledger, which parses it: Hub's marks flow is gone, and the tables that held it are read no more.
+      marks: [],
+      ...decided(decisions.get(sale.transactionId)),
     };
   });
 

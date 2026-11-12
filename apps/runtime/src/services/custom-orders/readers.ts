@@ -4,25 +4,13 @@ import {
 } from "@agency_hub_core/db";
 
 import type { AppContext } from "../../bootstrap.ts";
-import { loadEffectiveConfigField } from "../effective-config.ts";
 import { cardOf, priceMillsOf, whatOf } from "./rules.ts";
 
 /**
- * «Кастомы оплачены, не отданы» once the owner points it at the custom orders
- * (`customOrdersReadEnabled`, off by default): «Ждут вас» and «Решения» (through
- * `teamCustoms`, and the customs row of «Ждут вас» read from matters), the morning
- * report's line; the matters mirror then opens nothing of its old kind. Off, each
- * keeps reading the old table as before. The number counts the orders paid (a
- * sale, or the state) or shot and not given.
+ * «Кастомы оплачены, не отданы», read from the custom orders: «Ждут вас» and «Решения» (through `teamCustoms`, and
+ * the customs row of «Ждут вас»), the morning report's line. The number counts the orders paid (a sale, or the state)
+ * or shot and not given.
  */
-
-type ReaderApp = Pick<AppContext, "db"> & Partial<Pick<AppContext, "config">>;
-
-/** The owner's setting; a caller without the config (a report built in a test) reads the old table. */
-export async function customOrdersReadOn(app: ReaderApp): Promise<boolean> {
-  if (app.config === undefined) return false;
-  return (await loadEffectiveConfigField(app.db, app.config, "customOrdersReadEnabled")) === true;
-}
 
 /**
  * Who leads customs, the one rule: the person with the right «ведёт кастомы» (`customs_lead`, their living login),
@@ -52,7 +40,7 @@ export async function waitingCustomSaleIds(db: Database): Promise<number[]> {
     .map((matter) => unrecordedSaleOf(matter.key)).filter((id): id is number => id !== null);
 }
 
-export function awaitingGivingOf(app: ReaderApp, input: { pageIds: "all" | readonly number[]; limit: number }): Promise<CustomOrderRow[]> {
+export function awaitingGivingOf(app: Pick<AppContext, "db">, input: { pageIds: "all" | readonly number[]; limit: number }): Promise<CustomOrderRow[]> {
   return listCustomOrdersAwaitingGiving(app.db, input);
 }
 

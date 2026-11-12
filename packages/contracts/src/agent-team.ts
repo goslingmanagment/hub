@@ -8,9 +8,10 @@ import { errorResponseSchema, intId, isoDateTime, isoTimestamp, mills } from "./
  * docs/plans/2026-11-09-release-2.md in the ledger repo): every piece of the
  * team's work and every sale on the key's pages in a window, with the facts the
  * ledger's split rules read — who held the page, who sent the bought PPV, a tip
- * under a post or to a Campaign, who wrote to the fan last, the chatters' marks
- * and the owner's split. Facts only: whose a sale is, and what anyone is paid,
- * is the ledger's (owner, 2026-11-08). Needs `read:team` and `read:money`.
+ * under a post or to a Campaign, who wrote to the fan last, and the owner's
+ * decision of the sale (`marks`, the chatters' own of Hub's old shift report, is
+ * always empty now). Facts only: whose a sale is, and what anyone is paid, is
+ * the ledger's (owner, 2026-11-08). Needs `read:team` and `read:money`.
  */
 
 /** The longest window of one read, days. */
@@ -77,7 +78,10 @@ const agentTeamSaleSchema = z.object({
   lastWriterUserId: intId.nullable(),
   /** Everyone who wrote to the fan on the page in those 48 hours, most messages first. */
   writers: z.array(z.object({ userId: intId, username: z.string(), messages: count })),
-  /** The chatters' marks of the sale in their shift reports. */
+  /**
+   * Always empty: the chatters' marks of the sale in Hub's old shift-report tables, which hold nothing and are read no
+   * more (a shift's report is its hand-in). The field stays for the ledger, which parses it.
+   */
   marks: z.array(z.object({
     userId: intId,
     mark: z.enum(["mine", "share", "not_mine"]),
@@ -90,7 +94,7 @@ const agentTeamSaleSchema = z.object({
   /**
    * The owner's split of the sale, percent per person; null — none. Hub's active decision of the sale (the owner's
    * dispute, one carried over from the ledger, one recorded «со слов» through the agent's door) when it shares the
-   * sale out — a nobody's sale given to a person included; else what the old shift-report tables held (nothing now).
+   * sale out — a nobody's sale given to a person included; else null.
    */
   resolution: z.array(z.object({ userId: intId, percent: z.number().int().min(0).max(100) })).nullable(),
   /**

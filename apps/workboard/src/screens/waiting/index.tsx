@@ -8,7 +8,7 @@ import { formatDay, formatDateTime, formatMills, formatWeekdayDay } from "@agenc
 import { partLabel, purposeLabel } from "@agency_hub_core/ui/heldSends";
 import { ruPlural } from "@agency_hub_core/ui/plural";
 import { postFlagWord } from "@agency_hub_core/ui/shiftReports";
-import { customsQuery, heldSendsQuery, saleQuestionsQuery } from "@/shared/decisions";
+import { heldSendsQuery, saleQuestionsQuery } from "@/shared/decisions";
 import { consoleHref } from "@/shared/links";
 import { mattersListQuery, mattersWaitingQuery } from "@/shared/matters";
 import { ScreenHeader } from "@/shared/ScreenHeader";
@@ -17,7 +17,7 @@ import { usePageFilter } from "@/shared/usePageFilter";
 import { usePages } from "@/shared/usePages";
 import { ResolveSendModal } from "../decisions/HeldSends";
 import { DisputeModal, NobodyModal, OffPlatformModal, UnlinkedModal } from "./Disputes";
-import { useFanNames, type Custom, type FanRefOnPage, type HeldSend, type KnownFan } from "../decisions/data";
+import { useFanNames, type FanRefOnPage, type HeldSend, type KnownFan } from "../decisions/data";
 import { WAITING_GROUPS, contentopsLink, groupOf, groupOfAnchor, uncheckedWords, waitedFor, waitingSince, type WaitingGroupId } from "./kinds";
 import "./waiting.css";
 
@@ -51,7 +51,6 @@ interface Line {
 
 interface Context {
   question: (id: unknown) => TeamLedgerQuestion | undefined;
-  custom: (id: unknown) => Custom | undefined;
   held: (id: string) => HeldSend | undefined;
   fanOf: (fan: FanRefOnPage) => KnownFan | undefined;
   openSend: (attemptId: string) => void;
@@ -140,17 +139,6 @@ function lineOf(matter: Matter, context: Context): Line {
         about: [was !== null && now !== null ? `было ${formatMills(was)}, стало ${formatMills(now)}` : null, model, "войдёт в выплату после вашего «да» в ledger"]
           .filter((part): part is string => part !== null),
         action: matter.link ? <GoLink link={matter.link}>В выплатах</GoLink> : null,
-      };
-    }
-    case "custom.paid_not_delivered": {
-      const custom = context.custom(evidence.customId);
-      if (!custom) return base;
-      return {
-        ...base,
-        title: custom.description,
-        about: [fanWords(context.fanOf(custom), custom.fanRef), custom.pageLabel, custom.priceMills === null ? null : formatMills(custom.priceMills), `записал ${custom.createdBy}`]
-          .filter((part): part is string => part !== null),
-        action: <span className="wt-quiet">отметит чаттер</span>,
       };
     }
     case "send.held": {
@@ -367,13 +355,11 @@ export function WaitingScreen() {
   const has = (kind: string) => matters.some((matter) => matter.kind === kind);
   const attemptId = search.get("send");
 
-  // What a line needs beyond its matter: the question's words, the custom's order, the held send itself.
+  // What a line needs beyond its matter: the question's words, the held send itself.
   const questions = useQuery({ ...saleQuestionsQuery, enabled: isOwner && has("ledger.sale_question"), refetchInterval: 5 * MINUTE });
-  const customs = useQuery({ ...customsQuery, enabled: has("custom.paid_not_delivered"), refetchInterval: MINUTE });
   const held = useQuery({ ...heldSendsQuery({ limit: 100, offset: 0 }), enabled: has("send.held") || attemptId !== null, refetchInterval: MINUTE });
   const fans: FanRefOnPage[] = [
     ...(questions.data?.owner ?? []).flatMap((question) => (question.fanRef === null || question.pageLabel === "" ? [] : [{ pageLabel: question.pageLabel, fanRef: question.fanRef }])),
-    ...(customs.data?.customs ?? []).filter((custom) => custom.state === "paid"),
     ...(held.data?.items ?? []),
   ];
   const fanOf = useFanNames(fans);
@@ -392,7 +378,6 @@ export function WaitingScreen() {
   });
   const context: Context = {
     question: (id) => questions.data?.owner.find((one) => one.id === id),
-    custom: (id) => customs.data?.customs.find((one) => one.id === id),
     held: (id) => held.data?.items.find((one) => one.attemptId === id),
     fanOf,
     openSend: (id) => setSend(id),

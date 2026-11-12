@@ -1,7 +1,6 @@
 import {
   listFansWaitingSince,
   listFirstChatterActivities,
-  listPageOpenCustoms,
   listShiftSales,
   listWinBackResults,
   type PageWaitingRow,
@@ -10,7 +9,7 @@ import { formatUsdFromMills } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
 import { dayOfShift, moscowDayOf, netOf, readPeopleWork } from "./chatter-shifts.ts";
-import { awaitingGivingOf, customOrdersReadOn, waitsSince } from "./custom-orders/readers.ts";
+import { awaitingGivingOf, waitsSince } from "./custom-orders/readers.ts";
 import { LOGINS_ALONE, homeCredit, openWindowFrom, readScreenHomes, readScreensRule, ruledSale, ruledWork } from "./sale-rule-screens.ts";
 import { reportDateOfShift } from "./shift-rows.ts";
 
@@ -35,7 +34,7 @@ const WIN_BACK_DAYS = 14;
 
 export interface TeamBlockFacts {
   shifts: number;
-  /** Customs paid and not delivered yet (an ordered, unpaid one waits for the fan, not the team). */
+  /** The custom orders paid or shot and not given yet (one not paid waits for the fan, not the team). */
   customsOpen: number;
   oldestCustomPaidAt: Date | null;
   waiting: PageWaitingRow[];
@@ -74,7 +73,7 @@ export function renderTeamBlock(facts: TeamBlockFacts, now: Date): string[] {
 }
 
 /** The facts of the block for the business day [from, to), as of `now`. */
-export async function loadTeamBlockFacts(app: Pick<AppContext, "db"> & Partial<Pick<AppContext, "config">>, input: { from: Date; to: Date; now: Date }): Promise<TeamBlockFacts> {
+export async function loadTeamBlockFacts(app: Pick<AppContext, "db">, input: { from: Date; to: Date; now: Date }): Promise<TeamBlockFacts> {
   const [people, firstActivity, rule] = await Promise.all([
     readPeopleWork(app.db, { from: new Date(input.from.getTime() - DAY_MS), to: input.now, now: input.now, pages: "all" }),
     listFirstChatterActivities(app.db),
@@ -107,24 +106,17 @@ export async function loadTeamBlockFacts(app: Pick<AppContext, "db"> & Partial<P
     });
     decide = { sales: waiting.length, netMills: netOf(waiting) };
   }
-  const [customs, waiting, winBack] = await Promise.all([
-    listPageOpenCustoms(app.db, { pageIds: "all", limit: 500 }),
+  // The custom orders paid or shot and not given, each since it waits.
+  const [orders, waiting, winBack] = await Promise.all([
+    awaitingGivingOf(app, { pageIds: "all", limit: 500 }),
     listFansWaitingSince(app.db, { now: input.now, minWaitHours: WAITING_HOURS, maxDays: WAITING_MAX_DAYS }),
     listWinBackResults(app.db, { from: new Date(input.now.getTime() - WIN_BACK_DAYS * DAY_MS), to: input.now, now: input.now, pages: "all" }),
   ]);
-  let paidOpen = customs.filter((custom) => custom.state === "paid").length;
-  let paid = customs.filter((custom) => custom.state === "paid").map((custom) => custom.paidAt).filter((at): at is Date => at !== null);
-  // Package I: behind the owner's setting, the custom orders paid or shot and not given; off — the old table.
-  if (await customOrdersReadOn(app)) {
-    const orders = await awaitingGivingOf(app, { pageIds: "all", limit: 500 });
-    paidOpen = orders.length;
-    paid = orders.map(waitsSince);
-  }
-  paid.sort((a, b) => a.getTime() - b.getTime());
+  const paid = orders.map(waitsSince).sort((a, b) => a.getTime() - b.getTime());
   return {
     shifts,
     ...(decide === undefined ? {} : { decide }),
-    customsOpen: paidOpen,
+    customsOpen: orders.length,
     oldestCustomPaidAt: paid[0] ?? null,
     waiting,
     winBack: {

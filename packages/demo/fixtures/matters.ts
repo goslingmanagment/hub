@@ -7,7 +7,6 @@ import { formatDay } from "@agency_hub_core/look/format";
 import { isDemoReply, type DemoHandlers, type DemoRequest } from "../core.ts";
 import { DEMO_USERS } from "../world.ts";
 import { demoClaimMatters } from "./sale-claims.ts";
-import { teamCustoms } from "./team-extra.ts";
 import { teamQuestionsHandlers } from "./team-questions.ts";
 import { demoReportDays } from "./team-reports.ts";
 import { DAY, HOUR, MIN, isoAt, viewerPages } from "./team-world.ts";
@@ -15,9 +14,9 @@ import { wbHeldHandlers } from "./wb-admin.ts";
 
 /**
  * Дела of the invented agency (packages D and K): «Ждут вас» as one list. The
- * owner's matters are the old sections of «Решения» (the same questions,
- * customs and held sends as their own fixtures, so a line shows their words),
- * the console's rows, and the new checks: people and access, the ledger's.
+ * owner's matters are the old sections of «Решения» (the same questions and
+ * held sends as their own fixtures, so a line shows their words), the
+ * console's rows, and the new checks: people and access, the ledger's.
  * The cookie `hub-demo-scenario` picks how many: `matters-0`, `matters-6`,
  * `matters-40`; `matters-off` is the owner's switch off (the screens read
  * their own sources). Without it, every matter of the agency as it stands
@@ -97,13 +96,6 @@ function standing(request: DemoRequest): Seed[] {
     evidence: { changeId: 77, day: isoAt(now - 11 * DAY).slice(0, 10), model: "Mia", person: "kate-v", postedMills: 38_000, newMills: 43_000 },
     link: "/workboard/payouts?person=kate-v", agoMs: 1.3 * DAY,
   });
-  for (const custom of teamCustoms(ownerRequest, DEMO_USERS[0]!.pages).customs.filter((one) => one.state === "paid")) {
-    seeds.push({
-      kind: "custom.paid_not_delivered", key: `custom.paid_not_delivered:${custom.id}`, title: `Кастом оплачен, не отдан: ${custom.pageLabel}`,
-      pages: [custom.pageLabel], owner: LEAD_ROLE, evidence: { customId: custom.id, paidAt: custom.paidAt, createdBy: custom.createdBy },
-      link: "/workboard/decisions#customs", agoMs: now - Date.parse(custom.paidAt ?? custom.createdAt),
-    });
-  }
   const held = wbHeldHandlers.clientSendCustodyList?.({ ...ownerRequest, query: { state: "held", limit: "100", offset: "0" } });
   if (held && !isDemoReply(held)) {
     for (const send of held.items) {
@@ -166,7 +158,7 @@ function filler(count: number): Seed[] {
 
 /** The owner's six: one of each sort, for a calm screen (`matters-6`). */
 function six(seeds: readonly Seed[]): Seed[] {
-  const want = ["ledger.sale_question", "custom.paid_not_delivered", "send.held", "people.page_without_access", "ledger.check", "incident.open"];
+  const want = ["ledger.sale_question", "publication.draft", "send.held", "people.page_without_access", "ledger.check", "incident.open"];
   return want.map((kind) => seeds.find((seed) => seed.kind === kind)).filter((seed): seed is Seed => seed !== undefined);
 }
 
@@ -244,7 +236,7 @@ function visible(request: DemoRequest): Matter[] {
 
 const MIRRORED = [
   "publication.draft", "publication.unknown", "ledger.sale_question", "ledger.report_post", "ledger.paid_day_changed",
-  "custom.paid_not_delivered", "send.held", "page.login_needed", "incident.open", "extension.critical", "history.request",
+  "send.held", "page.login_needed", "incident.open", "extension.critical", "history.request",
 ];
 const CHECKS = [
   "people.left_with_access", "people.login_unlinked", "people.no_pay_terms", "people.no_working_page", "people.page_without_access",
@@ -255,7 +247,7 @@ function mattersList(request: DemoRequest): ListAnswer {
   const matters = visible(request);
   const counts = new Map<string, number>();
   for (const matter of matters) counts.set(matter.kind, (counts.get(matter.kind) ?? 0) + 1);
-  const known = request.role === "owner" ? [...MIRRORED, ...CHECKS] : request.role === "team_lead" ? ["custom.paid_not_delivered", "send.held"] : [];
+  const known = request.role === "owner" ? [...MIRRORED, ...CHECKS] : request.role === "team_lead" ? ["send.held"] : [];
   const kinds = [...new Set([...known, ...counts.keys()])].sort().map((kind) => ({
     kind,
     open: counts.get(kind) ?? 0,

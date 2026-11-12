@@ -184,7 +184,7 @@ export async function listPageCustomOrdersInWork(db: Database, input: { pageId: 
 
 /**
  * The orders that wait to be given to the fan: paid (a payment, or the state) or shot, and not given — what
- * «Кастомы оплачены, не отданы» counts once the owner's setting points it at the orders. The oldest payment first.
+ * «Кастомы оплачены, не отданы» counts. The oldest payment first.
  */
 export async function listCustomOrdersAwaitingGiving(db: Database, input: { pageIds: "all" | readonly number[]; limit: number }): Promise<CustomOrderRow[]> {
   const pages = input.pageIds === "all" ? sql`true` : input.pageIds.length === 0 ? sql`false` : sql`o.page_id = any(${ids(input.pageIds)})`;

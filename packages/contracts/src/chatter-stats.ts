@@ -10,7 +10,7 @@ import { teamShiftSchema } from "./routes-client.ts";
 // A shift and a visit are what routes-client.ts says. The money of a shift is
 // the net of the sales on the pages it worked, from the chatter's first action
 // there to its end — a guide, not a basis for pay: what a sale pays whom is the
-// confirmed shift report's (Chat Memory week 4). A sale another chatter's shift
+// ledger's, from the shift's report. A sale another chatter's shift
 // holds by the same rule is the money of who last wrote to its fan; neither
 // wrote — it counts for both and is marked: Hub does not split it.
 
@@ -75,9 +75,11 @@ export const chatterStatsSchema = z.object({
     /** Of `salesNetMills`: sales that count for another chatter too (`overlap`). */
     overlapNetMills: mills,
     byKind: byKindSchema,
-    /** Credited by the confirmed shift reports of the window's shifts. */
+    /**
+     * Was: credited by the confirmed shift reports (Chat Memory week 4). Those reports are gone — a shift's report is
+     * its hand-in — so it is always 0, and `unconfirmedShifts` is every ended shift. Both stay for the answer's shape.
+     */
     confirmedNetMills: mills,
-    /** Ended shifts no confirmed report holds yet. */
     unconfirmedShifts: count,
     /** Messages with the chatter as their author. */
     messages: count,
@@ -115,7 +117,7 @@ export const chatterStatsSchema = z.object({
     ppvSent: count,
     fansWritten: count,
     fansPaid: count,
-    /** Credited by the confirmed report that holds the shift; null — not confirmed. */
+    /** Always null (see `totals.confirmedNetMills`): no confirmed report holds a shift any more. */
     confirmedNetMills: mills.nullable(),
     sales: z.array(statsSaleSchema),
   })),

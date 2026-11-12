@@ -250,10 +250,11 @@ describe("matter checks (package K)", () => {
     expect(client).toMatchObject({ count: 1, matters: [{ title: "Дело k.rights:alice" }] });
 
     // A team lead's «Ждут вас»: no group of people or of the ledger, ever — their own matters by the list's groups.
-    // (Customs and held sends are «не проверено» here: the mirror of package D never ran in this test.)
+    // (Held sends are «не проверено» here: the mirror of package D never ran in this test. «Кастомы» is read from the
+    // custom orders themselves, and none waits: no group.)
     const lead = mattersWaitingResponseSchema.parse((await asSession("lead", "/api/v1/matters/waiting")).json());
-    expect(lead.groups.map((group) => [group.id, group.count, group.checked])).toEqual([["customs", 0, false], ["held", 0, false], ["other", 1, true]]);
-    expect(lead).toMatchObject({ total: 1, failed: ["customs", "held"] });
+    expect(lead.groups.map((group) => [group.id, group.count, group.checked])).toEqual([["held", 0, false], ["other", 1, true]]);
+    expect(lead).toMatchObject({ total: 1, failed: ["held"] });
     // A narrow session (from the extension) reads as a chatter whatever the person's role.
     const narrowOwner = { authMethod: "session", user: { id: users.boss!, role: "owner" }, assignedPageIds: [], narrowDeviceTokenId: 1 } as unknown as HumanAuthPrincipal;
     expect(matterViewerOf(narrowOwner).role).toBe("chatter");
