@@ -1,3 +1,5 @@
+import { MOSCOW_TIME_ZONE, resolvePeriodBounds } from "@agency_hub_core/shared";
+import { monthWindow } from "../apps/dashboard/src/pages/money/month/window.ts";
 import { describe, expect, it } from "vitest";
 
 import { monthCardOf, monthDays, readTeamLedgerMonth } from "../apps/runtime/src/services/ledger-month.ts";
@@ -60,6 +62,15 @@ describe("the ledger's month card on Hub", () => {
     await expect(readTeamLedgerMonth(down, { month: "2026-11" }, { fetchImpl: down.fetchImpl })).rejects.toThrow(/answered GET/);
     const ok = app(answer(200, card));
     await expect(readTeamLedgerMonth(ok, { month: "2026-11" }, { fetchImpl: ok.fetchImpl })).resolves.toMatchObject({ served: true, card: { pagesNetMills: 12_539_230 } });
+  });
+
+  it("Hub's own income of the month is asked up to the next month's first day: the read's upper bound is exclusive", () => {
+    expect(monthWindow("2026-10")).toEqual({ from: "2026-10-01", to: "2026-11-01" });
+    expect(monthWindow("2026-12")).toEqual({ from: "2026-12-01", to: "2027-01-01" });
+    // The last day of the month is inside the window the read resolves, the next month's first instant is not.
+    const bounds = resolvePeriodBounds("custom", new Date("2026-11-12T12:00:00Z"), monthWindow("2026-10"), MOSCOW_TIME_ZONE);
+    expect(bounds.from.toISOString()).toBe("2026-09-30T21:00:00.000Z");
+    expect(bounds.to.toISOString()).toBe("2026-10-31T21:00:00.000Z");
   });
 
   it("a month is its Moscow days", () => {

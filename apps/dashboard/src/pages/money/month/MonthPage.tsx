@@ -10,6 +10,7 @@ import { PageHeader } from "@/components/ui/PageHeader";
 import { PeriodStepper } from "@/components/ui/PeriodStepper";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { formatDateTime, formatMills } from "@/lib/format";
+import { monthWindow, stepMonth } from "./window";
 
 /** The ledger's money, or «—» where it has none (a field it did not count is never a zero). */
 const money = (mills: number | null) => (mills === null ? "—" : formatMills(mills));
@@ -22,18 +23,6 @@ function monthWords(month: string): string {
   const [year, number] = month.split("-").map(Number) as [number, number];
   const name = MONTHS[number - 1] ?? month;
   return `${name[0]!.toUpperCase()}${name.slice(1)} ${year}`;
-}
-
-function stepMonth(month: string, by: number): string {
-  const [year, number] = month.split("-").map(Number) as [number, number];
-  const date = new Date(Date.UTC(year, number - 1 + by, 1));
-  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}`;
-}
-
-function monthDays(month: string): { from: string; to: string } {
-  const [year, number] = month.split("-").map(Number) as [number, number];
-  const last = new Date(Date.UTC(year, number, 0)).getUTCDate();
-  return { from: `${month}-01`, to: `${month}-${String(last).padStart(2, "0")}` };
 }
 
 /** Where the month's money is, in the ledger's words, each with one plain line of what it means. */
@@ -59,7 +48,7 @@ export function MonthPage() {
   const current = today.slice(0, 7);
   const asked = search.get("month");
   const month = asked && MONTH_RE.test(asked) && asked <= current ? asked : current;
-  const days = monthDays(month);
+  const days = monthWindow(month);
   const card = useQuery({
     queryKey: ["ledger-month", month],
     queryFn: () => kernel.teamLedgerMonth({ query: { month } }),
